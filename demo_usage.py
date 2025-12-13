@@ -52,6 +52,31 @@ def test_pynvml(max_devices=None):
         import pynvml
 
         pynvml.nvmlInit()
+
+        # Query version information
+        print("\nVersion Information:")
+        try:
+            driver_version = pynvml.nvmlSystemGetDriverVersion()
+            print(f"  Driver Version: {driver_version}")
+        except Exception as e:
+            print(f"  Driver Version: (error: {e})")
+
+        try:
+            nvml_version = pynvml.nvmlSystemGetNVMLVersion()
+            print(f"  NVML Version: {nvml_version}")
+        except Exception as e:
+            print(f"  NVML Version: (error: {e})")
+
+        try:
+            cuda_version = pynvml.nvmlSystemGetCudaDriverVersion()
+            # CUDA version is returned as an integer (e.g., 12080 for CUDA 12.8)
+            major = cuda_version // 1000
+            minor = (cuda_version % 1000) // 10
+            print(f"  CUDA Driver Version: {major}.{minor} (raw: {cuda_version})")
+        except Exception as e:
+            print(f"  CUDA Driver Version: (error: {e})")
+
+        print()
         device_count = pynvml.nvmlDeviceGetCount()
         print(f"Detected {device_count} GPU device(s)")
 
