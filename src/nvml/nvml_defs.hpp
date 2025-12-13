@@ -63,9 +63,25 @@ typedef struct nvmlPciInfo_st {
     unsigned int pciSubSystemId;
 } nvmlPciInfo_t;
 
+typedef struct nvmlPciInfo_v3_st {
+    char busId[32];
+    unsigned int domain;
+    unsigned int bus;
+    unsigned int device;
+    unsigned int pciDeviceId;
+    unsigned int pciSubSystemId;
+    char busIdLegacy[16];
+    unsigned int reserved0;
+    unsigned int reserved1;
+    unsigned int reserved2;
+    unsigned int reserved3;
+} nvmlPciInfo_v3_t;
+
 // Constants
 #define NVML_DEVICE_NAME_BUFFER_SIZE 64
 #define NVML_DEVICE_UUID_BUFFER_SIZE 80
+#define NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE 32
+#define NVML_DEVICE_PCI_BUS_ID_BUFFER_V2_SIZE 16
 
 #ifdef __cplusplus
 }

@@ -105,6 +105,150 @@ nvmlReturn_t nvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t *pci) {
     return NVML_SUCCESS;
 }
 
+nvmlReturn_t nvmlDeviceGetPciInfo_v3(nvmlDevice_t device, nvmlPciInfo_v3_t *pci) {
+    if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
+    Device* dev = (Device*)device;
+
+    // Fill in PCI info v3 from device
+    snprintf(pci->busId, sizeof(pci->busId), "%s", dev->pci_bus_id.c_str());
+    snprintf(pci->busIdLegacy, sizeof(pci->busIdLegacy), "%s", dev->pci_bus_id.c_str());
+    pci->domain = 0;
+    pci->bus = dev->index + 1;
+    pci->device = 0;
+    pci->pciDeviceId = 0x20B0;  // A100 device ID
+    pci->pciSubSystemId = 0x1450;
+    pci->reserved0 = 0;
+    pci->reserved1 = 0;
+    pci->reserved2 = 0;
+    pci->reserved3 = 0;
+
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetUtilizationRates(nvmlDevice_t device, nvmlUtilization_t *utilization) {
+    if (!device || !utilization) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Return fake utilization rates
+    // For a more realistic simulation, these could be randomized or based on actual allocations
+    utilization->gpu = 50;      // 50% GPU utilization
+    utilization->memory = 30;   // 30% memory utilization
+
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetPowerUsage(nvmlDevice_t device, unsigned int *power) {
+    if (!device || !power) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Return fake power usage in milliwatts
+    // A100 typical power is around 250-400W, so return 300W = 300000 mW
+    *power = 300000;  // 300W in milliwatts
+
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetPowerManagementLimit(nvmlDevice_t device, unsigned int *limit) {
+    if (!device || !limit) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Return fake power limit in milliwatts
+    // A100 max power is 400W
+    *limit = 400000;  // 400W in milliwatts
+
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetTemperature(nvmlDevice_t device, unsigned int sensorType, unsigned int *temp) {
+    if (!device || !temp) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Return fake temperature in Celsius
+    // sensorType: 0 = GPU core temperature
+    *temp = 65;  // 65°C
+
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {
+    if (!device || !clock) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Return fake clock speeds in MHz
+    // type: 0 = graphics clock, 1 = SM clock, 2 = memory clock
+    switch (type) {
+        case 0:  // Graphics clock
+            *clock = 1410;  // A100 boost clock
+            break;
+        case 1:  // SM clock
+            *clock = 1410;
+            break;
+        case 2:  // Memory clock
+            *clock = 1215;  // A100 memory clock
+            break;
+        default:
+            *clock = 1410;
+            break;
+    }
+
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetMaxClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {
+    if (!device || !clock) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Return fake max clock speeds in MHz
+    switch (type) {
+        case 0:  // Graphics clock
+            *clock = 1410;  // A100 max boost clock
+            break;
+        case 1:  // SM clock
+            *clock = 1410;
+            break;
+        case 2:  // Memory clock
+            *clock = 1215;  // A100 max memory clock
+            break;
+        default:
+            *clock = 1410;
+            break;
+    }
+
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetFanSpeed(nvmlDevice_t device, unsigned int *speed) {
+    if (!device || !speed) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Return fake fan speed percentage
+    *speed = 50;  // 50%
+
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetPerformanceState(nvmlDevice_t device, unsigned int *pState) {
+    if (!device || !pState) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Return fake performance state (P0 = maximum performance)
+    *pState = 0;  // P0
+
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetEncoderUtilization(nvmlDevice_t device, unsigned int *utilization, unsigned int *samplingPeriodUs) {
+    if (!device || !utilization || !samplingPeriodUs) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Return fake encoder utilization
+    *utilization = 0;  // 0% encoder utilization
+    *samplingPeriodUs = 1000000;  // 1 second sampling period
+
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetDecoderUtilization(nvmlDevice_t device, unsigned int *utilization, unsigned int *samplingPeriodUs) {
+    if (!device || !utilization || !samplingPeriodUs) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Return fake decoder utilization
+    *utilization = 0;  // 0% decoder utilization
+    *samplingPeriodUs = 1000000;  // 1 second sampling period
+
+    return NVML_SUCCESS;
+}
+
 const char* nvmlErrorString(nvmlReturn_t result) {
     switch (result) {
         case NVML_SUCCESS: return "Success";
