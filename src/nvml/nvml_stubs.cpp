@@ -91,4 +91,17 @@ const char* nvmlErrorString(nvmlReturn_t result) {
     }
 }
 
+// Versioned function aliases (NVML v2 API)
+nvmlReturn_t nvmlInit_v2() {
+    return nvmlInit();
+}
+
+nvmlReturn_t nvmlDeviceGetCount_v2(unsigned int *deviceCount) {
+    return nvmlDeviceGetCount(deviceCount);
+}
+
+nvmlReturn_t nvmlDeviceGetHandleByIndex_v2(unsigned int index, nvmlDevice_t *device) {
+    return nvmlDeviceGetHandleByIndex(index, device);
+}
+
 } // extern C
