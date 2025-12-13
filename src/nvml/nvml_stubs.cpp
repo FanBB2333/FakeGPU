@@ -5,6 +5,12 @@
 
 using namespace fake_gpu;
 
+// Version strings that nvidia-smi may search for
+extern "C" {
+const char nvml_version_string[] = "12.570.195.03";
+const char driver_version_string[] = "570.195.03";
+}
+
 // Helper to check init
 static bool check_init() {
     // In a real implementation we would check a flag, but GlobalState handles itself
@@ -119,6 +125,32 @@ nvmlReturn_t nvmlDeviceGetCount_v2(unsigned int *deviceCount) {
 
 nvmlReturn_t nvmlDeviceGetHandleByIndex_v2(unsigned int index, nvmlDevice_t *device) {
     return nvmlDeviceGetHandleByIndex(index, device);
+}
+
+// System query functions
+nvmlReturn_t nvmlSystemGetDriverVersion(char *version, unsigned int length) {
+    if (!version) return NVML_ERROR_INVALID_ARGUMENT;
+    snprintf(version, length, "570.195.03");
+    printf("[FakeNVML] nvmlSystemGetDriverVersion returning: %s\n", version);
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlSystemGetNVMLVersion(char *version, unsigned int length) {
+    if (!version) return NVML_ERROR_INVALID_ARGUMENT;
+    snprintf(version, length, "12.570.195");
+    printf("[FakeNVML] nvmlSystemGetNVMLVersion returning: %s\n", version);
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlSystemGetCudaDriverVersion(int *cudaDriverVersion) {
+    if (!cudaDriverVersion) return NVML_ERROR_INVALID_ARGUMENT;
+    *cudaDriverVersion = 12080;  // CUDA 12.8
+    printf("[FakeNVML] nvmlSystemGetCudaDriverVersion returning: %d\n", *cudaDriverVersion);
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlSystemGetCudaDriverVersion_v2(int *cudaDriverVersion) {
+    return nvmlSystemGetCudaDriverVersion(cudaDriverVersion);
 }
 
 } // extern C
