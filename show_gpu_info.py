@@ -2,15 +2,21 @@
 """Display GPU information using nvitop API."""
 
 from nvitop import Device
+import pynvml
 
 def main():
-    devices = Device.all()
+    # Initialize NVML to get device count
+    pynvml.nvmlInit()
+    device_count = pynvml.nvmlDeviceGetCount()
+    pynvml.nvmlShutdown()
 
     print("=" * 80)
     print("GPU Information (via nvitop)")
     print("=" * 80)
 
-    for device in devices:
+    # Create devices one at a time instead of using Device.all()
+    for i in range(device_count):
+        device = Device(i)
         print(f"\nGPU {device.index}: {device.name()}")
         print("-" * 80)
 
@@ -62,13 +68,17 @@ def main():
         except:
             print(f"  Fan Speed:           N/A")
 
-        # Clock speeds
+        # Clock speeds - use pynvml directly since nvitop's clock() has issues
         try:
-            gpu_clock = device.clock('graphics')
-            mem_clock = device.clock('memory')
+            import pynvml as nvml
+            nvml.nvmlInit()
+            handle = nvml.nvmlDeviceGetHandleByIndex(device.index)
+            gpu_clock = nvml.nvmlDeviceGetClockInfo(handle, 0)  # Graphics clock
+            mem_clock = nvml.nvmlDeviceGetClockInfo(handle, 2)  # Memory clock
+            nvml.nvmlShutdown()
             print(f"\n  GPU Clock:           {gpu_clock} MHz")
             print(f"  Memory Clock:        {mem_clock} MHz")
-        except:
+        except Exception as e:
             print(f"\n  Clock Speeds:        N/A")
 
         # Encoder/Decoder

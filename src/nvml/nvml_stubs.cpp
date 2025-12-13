@@ -189,6 +189,30 @@ nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsi
     return NVML_SUCCESS;
 }
 
+nvmlReturn_t nvmlDeviceGetClock(nvmlDevice_t device, unsigned int clockType, unsigned int clockId, unsigned int *clockMHz) {
+    if (!device || !clockMHz) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // clockType: 0 = graphics, 1 = SM, 2 = memory
+    // clockId: typically 0 for current clock
+    // Return fake clock speeds in MHz
+    switch (clockType) {
+        case 0:  // Graphics clock
+            *clockMHz = 1410;  // A100 boost clock
+            break;
+        case 1:  // SM clock
+            *clockMHz = 1410;
+            break;
+        case 2:  // Memory clock
+            *clockMHz = 1215;  // A100 memory clock
+            break;
+        default:
+            *clockMHz = 1410;
+            break;
+    }
+
+    return NVML_SUCCESS;
+}
+
 nvmlReturn_t nvmlDeviceGetMaxClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {
     if (!device || !clock) return NVML_ERROR_INVALID_ARGUMENT;
 
