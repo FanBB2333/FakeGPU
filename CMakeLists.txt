@@ -29,4 +29,11 @@ if(APPLE)
     set_target_properties(fake_gpu PROPERTIES SUFFIX ".dylib")
 else()
     set_target_properties(fake_gpu PROPERTIES SUFFIX ".so")
+    # Create symlink for libnvidia-ml.so.1 so PyTorch can find it via LD_LIBRARY_PATH
+    add_custom_command(TARGET fake_gpu POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+            $<TARGET_FILE_NAME:fake_gpu>
+            ${CMAKE_BINARY_DIR}/libnvidia-ml.so.1
+        COMMENT "Creating libnvidia-ml.so.1 symlink"
+    )
 endif()

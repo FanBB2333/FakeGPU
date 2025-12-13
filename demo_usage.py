@@ -2,11 +2,11 @@
 """
 Demo: run fakeGPU to emulate NVIDIA GPUs.
 
-Usage (run with LD_PRELOAD):
-    LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test all
-    LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test nvml --max-devices 2
-    LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test cuda --alloc-size 256
-    LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test pytorch
+Usage (run with LD_LIBRARY_PATH and LD_PRELOAD):
+    LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test all
+    LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test nvml --max-devices 2
+    LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test cuda --alloc-size 256
+    LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test pytorch
 
 What it does (simple view):
 1) NVML via pynvml: report device count and a few device names.
@@ -168,10 +168,10 @@ def print_usage_summary():
     print("=" * 70)
     print("How to run")
     print("=" * 70)
-    print("LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test all")
-    print("LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test nvml --max-devices 2")
-    print("LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test cuda --alloc-size 256")
-    print("LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test pytorch")
+    print("LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test all")
+    print("LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test nvml --max-devices 2")
+    print("LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test cuda --alloc-size 256")
+    print("LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test pytorch")
     print("Report file: fake_gpu_report.json (written at program exit)")
     print()
 
@@ -183,11 +183,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test all
-  LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test nvml --max-devices 2
-  LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test cuda --alloc-size 256
-  LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test pytorch
-  LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --no-summary
+  LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test all
+  LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test nvml --max-devices 2
+  LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test cuda --alloc-size 256
+  LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test pytorch
+  LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --no-summary
         """
     )
 

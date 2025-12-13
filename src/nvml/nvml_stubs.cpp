@@ -19,6 +19,12 @@ nvmlReturn_t nvmlInit() {
     return NVML_SUCCESS;
 }
 
+nvmlReturn_t nvmlInitWithFlags(unsigned int flags) {
+    printf("[FakeNVML] nvmlInitWithFlags called with flags=%u\n", flags);
+    GlobalState::instance().initialize();
+    return NVML_SUCCESS;
+}
+
 nvmlReturn_t nvmlShutdown() {
     printf("[FakeNVML] nvmlShutdown called\n");
     return NVML_SUCCESS;
@@ -62,6 +68,17 @@ nvmlReturn_t nvmlDeviceGetMemoryInfo(nvmlDevice_t device, nvmlMemory_t *memory) 
     Device* dev = (Device*)device;
     // Mock values
     memory->total = dev->total_memory;
+    memory->used = dev->used_memory;
+    memory->free = memory->total - memory->used;
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetMemoryInfo_v2(nvmlDevice_t device, nvmlMemory_v2_t *memory) {
+    if (!device || !memory) return NVML_ERROR_INVALID_ARGUMENT;
+    Device* dev = (Device*)device;
+    memory->version = nvmlMemory_v2;
+    memory->total = dev->total_memory;
+    memory->reserved = 0;
     memory->used = dev->used_memory;
     memory->free = memory->total - memory->used;
     return NVML_SUCCESS;

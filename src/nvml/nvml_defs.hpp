@@ -39,6 +39,16 @@ typedef struct nvmlMemory_st {
     unsigned long long used;
 } nvmlMemory_t;
 
+typedef struct nvmlMemory_v2_st {
+    unsigned int version;
+    unsigned long long total;
+    unsigned long long reserved;
+    unsigned long long free;
+    unsigned long long used;
+} nvmlMemory_v2_t;
+
+#define nvmlMemory_v2 2
+
 typedef struct nvmlUtilization_st {
     unsigned int gpu;
     unsigned int memory;
