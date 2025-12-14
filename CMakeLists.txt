@@ -10,7 +10,7 @@ add_subdirectory(src/nvml)
 add_subdirectory(src/cuda)
 add_subdirectory(src/monitor)
 
-# Main Shared Library
+# Main Shared Library for NVML
 # We link the OBJECT libraries from subdirectories to create one single shared library
 add_library(fake_gpu SHARED
     $<TARGET_OBJECTS:fake_gpu_core>
@@ -22,11 +22,22 @@ add_library(fake_gpu SHARED
 # Link dl library for dlopen/dlsym interception
 target_link_libraries(fake_gpu PRIVATE ${CMAKE_DL_LIBS})
 
+# CUDA Driver Library (libcuda.so.1)
+# This library intercepts CUDA Driver API calls
+add_library(fake_cuda SHARED
+    $<TARGET_OBJECTS:fake_gpu_core>
+    $<TARGET_OBJECTS:fake_gpu_cuda>
+    $<TARGET_OBJECTS:fake_gpu_monitor>
+)
+target_link_libraries(fake_cuda PRIVATE ${CMAKE_DL_LIBS})
+
 # Platform specific flags
 if(APPLE)
     # macOS specific linker flags for interposition if needed
     target_link_options(fake_gpu PRIVATE "-undefined" "dynamic_lookup")
     set_target_properties(fake_gpu PROPERTIES SUFFIX ".dylib")
+    target_link_options(fake_cuda PRIVATE "-undefined" "dynamic_lookup")
+    set_target_properties(fake_cuda PROPERTIES SUFFIX ".dylib")
 else()
     # Set OUTPUT_NAME to libnvidia-ml.so.1 so CMake sets the correct SONAME
     set_target_properties(fake_gpu PROPERTIES
@@ -40,5 +51,12 @@ else()
             libnvidia-ml.so.1
             ${CMAKE_BINARY_DIR}/libfake_gpu.so
         COMMENT "Creating libfake_gpu.so symlink for backward compatibility"
+    )
+
+    # Set OUTPUT_NAME to libcuda.so.1 for CUDA Driver API interception
+    set_target_properties(fake_cuda PROPERTIES
+        OUTPUT_NAME "cuda"
+        VERSION "1.0.0"
+        SOVERSION "1"
     )
 endif()

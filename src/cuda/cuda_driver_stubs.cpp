@@ -74,23 +74,97 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
         return CUDA_ERROR_INVALID_DEVICE;
     }
 
-    // Return fake but reasonable values
+    // Return fake but reasonable values for A100-like GPU
     switch (attrib) {
         case CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK:
             *pi = 1024;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X:
         case CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y:
-        case CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z:
             *pi = 1024;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z:
+            *pi = 64;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X:
         case CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Y:
         case CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z:
             *pi = 2147483647;
             break;
+        case CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK:
+            *pi = 49152;  // 48KB
+            break;
+        case CU_DEVICE_ATTRIBUTE_TOTAL_CONSTANT_MEMORY:
+            *pi = 65536;  // 64KB
+            break;
         case CU_DEVICE_ATTRIBUTE_WARP_SIZE:
             *pi = 32;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MAX_PITCH:
+            *pi = 2147483647;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK:
+            *pi = 65536;
+            break;
+        case CU_DEVICE_ATTRIBUTE_CLOCK_RATE:
+            *pi = 1410000;  // 1.41 GHz
+            break;
+        case CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT:
+            *pi = 512;
+            break;
+        case CU_DEVICE_ATTRIBUTE_GPU_OVERLAP:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT:
+            *pi = 108;  // A100 has 108 SMs
+            break;
+        case CU_DEVICE_ATTRIBUTE_KERNEL_EXEC_TIMEOUT:
+            *pi = 0;  // No timeout
+            break;
+        case CU_DEVICE_ATTRIBUTE_INTEGRATED:
+            *pi = 0;  // Discrete GPU
+            break;
+        case CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_COMPUTE_MODE:
+            *pi = 0;  // Default mode
+            break;
+        case CU_DEVICE_ATTRIBUTE_CONCURRENT_KERNELS:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_ECC_ENABLED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_PCI_BUS_ID:
+            *pi = dev;  // Use device index as bus ID
+            break;
+        case CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID:
+            *pi = 0;
+            break;
+        case CU_DEVICE_ATTRIBUTE_TCC_DRIVER:
+            *pi = 0;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE:
+            *pi = 1215000;  // 1.215 GHz
+            break;
+        case CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH:
+            *pi = 5120;  // 5120-bit for A100
+            break;
+        case CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE:
+            *pi = 41943040;  // 40MB
+            break;
+        case CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR:
+            *pi = 2048;
+            break;
+        case CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT:
+            *pi = 2;
+            break;
+        case CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID:
+            *pi = 0;
             break;
         case CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR:
             *pi = 8;  // Ampere
@@ -98,13 +172,119 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
         case CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR:
             *pi = 0;
             break;
-        case CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT:
-            *pi = 108;  // A100 has 108 SMs
+        case CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED:
+            *pi = 1;
             break;
-        case CU_DEVICE_ATTRIBUTE_TOTAL_CONSTANT_MEMORY:
+        case CU_DEVICE_ATTRIBUTE_GLOBAL_L1_CACHE_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_LOCAL_L1_CACHE_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR:
+            *pi = 167936;  // 164KB
+            break;
+        case CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR:
             *pi = 65536;
             break;
+        case CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD:
+            *pi = 0;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID:
+            *pi = 0;
+            break;
+        case CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO:
+            *pi = 2;
+            break;
+        case CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_COOPERATIVE_MULTI_DEVICE_LAUNCH:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN:
+            *pi = 166912;
+            break;
+        case CU_DEVICE_ATTRIBUTE_CAN_FLUSH_REMOTE_WRITES:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES:
+            *pi = 0;
+            break;
+        case CU_DEVICE_ATTRIBUTE_DIRECT_MANAGED_MEM_ACCESS_FROM_HOST:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_WIN32_HANDLE_SUPPORTED:
+            *pi = 0;
+            break;
+        case CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_WIN32_KMT_HANDLE_SUPPORTED:
+            *pi = 0;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MAX_BLOCKS_PER_MULTIPROCESSOR:
+            *pi = 32;
+            break;
+        case CU_DEVICE_ATTRIBUTE_GENERIC_COMPRESSION_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MAX_PERSISTING_L2_CACHE_SIZE:
+            *pi = 41943040;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MAX_ACCESS_POLICY_WINDOW_SIZE:
+            *pi = 134217728;
+            break;
+        case CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK:
+            *pi = 0;
+            break;
+        case CU_DEVICE_ATTRIBUTE_SPARSE_CUDA_ARRAY_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_READ_ONLY_HOST_REGISTER_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS:
+            *pi = 1;
+            break;
+        case CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING:
+            *pi = 0;
+            break;
+        case CU_DEVICE_ATTRIBUTE_MEMPOOL_SUPPORTED_HANDLE_TYPES:
+            *pi = 1;
+            break;
         default:
+            // For unknown attributes, return 0 (safe default)
             *pi = 0;
             break;
     }
@@ -270,6 +450,44 @@ CUresult cuDevicePrimaryCtxRelease(CUdevice dev) {
     return CUDA_SUCCESS;
 }
 
+CUresult cuDevicePrimaryCtxGetState(CUdevice dev, unsigned int *flags, int *active) {
+    GlobalState::instance().initialize();
+
+    int count = GlobalState::instance().get_device_count();
+    if (dev < 0 || dev >= count) {
+        return CUDA_ERROR_INVALID_DEVICE;
+    }
+
+    if (flags) *flags = 0;
+    if (active) *active = 1;  // Always report as active
+    printf("[FakeCUDA-Driver] cuDevicePrimaryCtxGetState for device %d, flags=0, active=1\n", dev);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuDevicePrimaryCtxSetFlags(CUdevice dev, unsigned int flags) {
+    GlobalState::instance().initialize();
+
+    int count = GlobalState::instance().get_device_count();
+    if (dev < 0 || dev >= count) {
+        return CUDA_ERROR_INVALID_DEVICE;
+    }
+
+    printf("[FakeCUDA-Driver] cuDevicePrimaryCtxSetFlags for device %d, flags=%u\n", dev, flags);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuDevicePrimaryCtxReset(CUdevice dev) {
+    GlobalState::instance().initialize();
+
+    int count = GlobalState::instance().get_device_count();
+    if (dev < 0 || dev >= count) {
+        return CUDA_ERROR_INVALID_DEVICE;
+    }
+
+    printf("[FakeCUDA-Driver] cuDevicePrimaryCtxReset for device %d\n", dev);
+    return CUDA_SUCCESS;
+}
+
 // Context stack management
 CUresult cuCtxPushCurrent(CUcontext ctx) {
     if (ctx == nullptr) {
@@ -310,6 +528,630 @@ CUresult cuGetErrorString(CUresult error, const char **pStr) {
 
 CUresult cuGetErrorName(CUresult error, const char **pStr) {
     return cuGetErrorString(error, pStr);
+}
+
+// Stream management
+CUresult cuStreamCreate(CUstream *phStream, unsigned int Flags) {
+    if (!phStream) return CUDA_ERROR_INVALID_VALUE;
+    // Return a fake stream pointer
+    *phStream = (CUstream)(uintptr_t)1;
+    printf("[FakeCUDA-Driver] cuStreamCreate returning fake stream\n");
+    return CUDA_SUCCESS;
+}
+
+CUresult cuStreamDestroy(CUstream hStream) {
+    printf("[FakeCUDA-Driver] cuStreamDestroy\n");
+    return CUDA_SUCCESS;
+}
+
+CUresult cuStreamSynchronize(CUstream hStream) {
+    printf("[FakeCUDA-Driver] cuStreamSynchronize (no-op)\n");
+    return CUDA_SUCCESS;
+}
+
+CUresult cuStreamQuery(CUstream hStream) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuStreamGetPriority(CUstream hStream, int *priority) {
+    if (priority) *priority = 0;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuStreamGetFlags(CUstream hStream, unsigned int *flags) {
+    if (flags) *flags = 0;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuStreamGetCtx(CUstream hStream, CUcontext *pctx) {
+    if (pctx) *pctx = (CUcontext)(uintptr_t)(current_context_device + 1);
+    return CUDA_SUCCESS;
+}
+
+// Event management
+CUresult cuEventCreate(CUevent *phEvent, unsigned int Flags) {
+    if (!phEvent) return CUDA_ERROR_INVALID_VALUE;
+    *phEvent = (CUevent)(uintptr_t)1;
+    printf("[FakeCUDA-Driver] cuEventCreate returning fake event\n");
+    return CUDA_SUCCESS;
+}
+
+CUresult cuEventDestroy(CUevent hEvent) {
+    printf("[FakeCUDA-Driver] cuEventDestroy\n");
+    return CUDA_SUCCESS;
+}
+
+CUresult cuEventRecord(CUevent hEvent, CUstream hStream) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuEventSynchronize(CUevent hEvent) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuEventQuery(CUevent hEvent) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUevent hEnd) {
+    if (pMilliseconds) *pMilliseconds = 0.0f;
+    return CUDA_SUCCESS;
+}
+
+// Context info
+CUresult cuCtxGetDevice(CUdevice *device) {
+    if (!device) return CUDA_ERROR_INVALID_VALUE;
+    *device = current_context_device;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxGetFlags(unsigned int *flags) {
+    if (flags) *flags = 0;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxGetLimit(size_t *pvalue, CUlimit limit) {
+    if (!pvalue) return CUDA_ERROR_INVALID_VALUE;
+    switch (limit) {
+        case CU_LIMIT_STACK_SIZE:
+            *pvalue = 8192;
+            break;
+        case CU_LIMIT_PRINTF_FIFO_SIZE:
+            *pvalue = 1048576;
+            break;
+        case CU_LIMIT_MALLOC_HEAP_SIZE:
+            *pvalue = 8388608;
+            break;
+        default:
+            *pvalue = 0;
+            break;
+    }
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxSetLimit(CUlimit limit, size_t value) {
+    printf("[FakeCUDA-Driver] cuCtxSetLimit (no-op)\n");
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxGetStreamPriorityRange(int *leastPriority, int *greatestPriority) {
+    if (leastPriority) *leastPriority = 0;
+    if (greatestPriority) *greatestPriority = -1;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxGetApiVersion(CUcontext ctx, unsigned int *version) {
+    if (version) *version = 12000;
+    return CUDA_SUCCESS;
+}
+
+// Memory info
+CUresult cuMemGetInfo(size_t *free, size_t *total) {
+    GlobalState::instance().initialize();
+    Device& dev = GlobalState::instance().get_device(current_context_device);
+    if (total) *total = dev.total_memory;
+    if (free) *free = dev.total_memory - dev.used_memory;
+    printf("[FakeCUDA-Driver] cuMemGetInfo: free=%zu, total=%zu\n",
+           free ? *free : 0, total ? *total : 0);
+    return CUDA_SUCCESS;
+}
+
+// Device UUID (v2)
+CUresult cuDeviceGetUuid_v2(CUuuid *uuid, CUdevice dev) {
+    if (!uuid) return CUDA_ERROR_INVALID_VALUE;
+    GlobalState::instance().initialize();
+
+    int count = GlobalState::instance().get_device_count();
+    if (dev < 0 || dev >= count) {
+        return CUDA_ERROR_INVALID_DEVICE;
+    }
+
+    Device& device = GlobalState::instance().get_device(dev);
+    // Copy first 16 bytes of UUID string
+    memset(uuid->bytes, 0, 16);
+    strncpy(uuid->bytes, device.uuid.c_str(), 16);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuDeviceTotalMem_v2(size_t *bytes, CUdevice dev) {
+    return cuDeviceTotalMem(bytes, dev);
+}
+
+// Additional context functions (v2 versions)
+CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev) {
+    return cuCtxCreate(pctx, flags, dev);
+}
+
+CUresult cuCtxDestroy_v2(CUcontext ctx) {
+    return cuCtxDestroy(ctx);
+}
+
+CUresult cuCtxPushCurrent_v2(CUcontext ctx) {
+    return cuCtxPushCurrent(ctx);
+}
+
+CUresult cuCtxPopCurrent_v2(CUcontext *pctx) {
+    return cuCtxPopCurrent(pctx);
+}
+
+CUresult cuDevicePrimaryCtxSetFlags_v2(CUdevice dev, unsigned int flags) {
+    return cuDevicePrimaryCtxSetFlags(dev, flags);
+}
+
+// Additional stub functions needed by CUDA runtime
+CUresult cuDeviceCanAccessPeer(int *canAccessPeer, CUdevice dev, CUdevice peerDev) {
+    if (canAccessPeer) *canAccessPeer = 1;  // Fake: all devices can access each other
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxEnablePeerAccess(CUcontext peerContext, unsigned int Flags) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxDisablePeerAccess(CUcontext peerContext) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuDeviceGetPCIBusId(char *pciBusId, int len, CUdevice dev) {
+    if (!pciBusId || len <= 0) return CUDA_ERROR_INVALID_VALUE;
+    snprintf(pciBusId, len, "0000:%02x:00.0", dev);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuDeviceGetByPCIBusId(CUdevice *dev, const char *pciBusId) {
+    if (!dev) return CUDA_ERROR_INVALID_VALUE;
+    *dev = 0;  // Default to device 0
+    return CUDA_SUCCESS;
+}
+
+CUresult cuModuleLoad(CUmodule *module, const char *fname) {
+    if (!module) return CUDA_ERROR_INVALID_VALUE;
+    *module = (CUmodule)(uintptr_t)1;
+    printf("[FakeCUDA-Driver] cuModuleLoad (fake)\n");
+    return CUDA_SUCCESS;
+}
+
+CUresult cuModuleLoadData(CUmodule *module, const void *image) {
+    if (!module) return CUDA_ERROR_INVALID_VALUE;
+    *module = (CUmodule)(uintptr_t)1;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuModuleLoadDataEx(CUmodule *module, const void *image, unsigned int numOptions, void *options, void **optionValues) {
+    if (!module) return CUDA_ERROR_INVALID_VALUE;
+    *module = (CUmodule)(uintptr_t)1;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuModuleLoadFatBinary(CUmodule *module, const void *fatCubin) {
+    if (!module) return CUDA_ERROR_INVALID_VALUE;
+    *module = (CUmodule)(uintptr_t)1;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuModuleUnload(CUmodule hmod) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuModuleGetFunction(CUfunction *hfunc, CUmodule hmod, const char *name) {
+    if (!hfunc) return CUDA_ERROR_INVALID_VALUE;
+    *hfunc = (CUfunction)(uintptr_t)1;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuModuleGetGlobal(CUdeviceptr *dptr, size_t *bytes, CUmodule hmod, const char *name) {
+    if (dptr) *dptr = 0;
+    if (bytes) *bytes = 0;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ,
+                        unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ,
+                        unsigned int sharedMemBytes, CUstream hStream, void **kernelParams, void **extra) {
+    printf("[FakeCUDA-Driver] cuLaunchKernel (no-op)\n");
+    return CUDA_SUCCESS;
+}
+
+CUresult cuFuncGetAttribute(int *pi, int attrib, CUfunction hfunc) {
+    if (pi) *pi = 0;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuFuncSetAttribute(CUfunction hfunc, int attrib, int value) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuFuncSetCacheConfig(CUfunction hfunc, int config) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxGetCacheConfig(int *pconfig) {
+    if (pconfig) *pconfig = 0;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxSetCacheConfig(int config) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxGetSharedMemConfig(int *pConfig) {
+    if (pConfig) *pConfig = 0;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxSetSharedMemConfig(int config) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flags) {
+    return cuMemAlloc(dptr, bytesize);
+}
+
+CUresult cuMemAllocHost(void **pp, size_t bytesize) {
+    if (!pp) return CUDA_ERROR_INVALID_VALUE;
+    *pp = malloc(bytesize);
+    if (!*pp) return CUDA_ERROR_OUT_OF_MEMORY;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemFreeHost(void *p) {
+    free(p);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemHostAlloc(void **pp, size_t bytesize, unsigned int Flags) {
+    return cuMemAllocHost(pp, bytesize);
+}
+
+CUresult cuMemHostRegister(void *p, size_t bytesize, unsigned int Flags) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemHostUnregister(void *p) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemHostGetDevicePointer(CUdeviceptr *pdptr, void *p, unsigned int Flags) {
+    if (pdptr) *pdptr = (CUdeviceptr)p;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemHostGetFlags(unsigned int *pFlags, void *p) {
+    if (pFlags) *pFlags = 0;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuPointerGetAttribute(void *data, int attribute, CUdeviceptr ptr) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuPointerGetAttributes(unsigned int numAttributes, int *attributes, void **data, CUdeviceptr ptr) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char uc, size_t N) {
+    memset((void*)dstDevice, uc, N);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemsetD16(CUdeviceptr dstDevice, unsigned short us, size_t N) {
+    unsigned short *p = (unsigned short*)dstDevice;
+    for (size_t i = 0; i < N; i++) p[i] = us;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemsetD32(CUdeviceptr dstDevice, unsigned int ui, size_t N) {
+    unsigned int *p = (unsigned int*)dstDevice;
+    for (size_t i = 0; i < N; i++) p[i] = ui;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemsetD8Async(CUdeviceptr dstDevice, unsigned char uc, size_t N, CUstream hStream) {
+    return cuMemsetD8(dstDevice, uc, N);
+}
+
+CUresult cuMemsetD32Async(CUdeviceptr dstDevice, unsigned int ui, size_t N, CUstream hStream) {
+    return cuMemsetD32(dstDevice, ui, N);
+}
+
+CUresult cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount, CUstream hStream) {
+    memcpy((void*)dst, (void*)src, ByteCount);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemcpyDtoHAsync(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount, CUstream hStream) {
+    return cuMemcpyDtoH(dstHost, srcDevice, ByteCount);
+}
+
+CUresult cuMemcpyHtoDAsync(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount, CUstream hStream) {
+    return cuMemcpyHtoD(dstDevice, srcHost, ByteCount);
+}
+
+CUresult cuMemcpyDtoDAsync(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteCount, CUstream hStream) {
+    return cuMemcpyDtoD(dstDevice, srcDevice, ByteCount);
+}
+
+CUresult cuMemcpy(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount) {
+    memcpy((void*)dst, (void*)src, ByteCount);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemcpyPeer(CUdeviceptr dstDevice, CUcontext dstContext, CUdeviceptr srcDevice, CUcontext srcContext, size_t ByteCount) {
+    memcpy((void*)dstDevice, (void*)srcDevice, ByteCount);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemcpyPeerAsync(CUdeviceptr dstDevice, CUcontext dstContext, CUdeviceptr srcDevice, CUcontext srcContext, size_t ByteCount, CUstream hStream) {
+    return cuMemcpyPeer(dstDevice, dstContext, srcDevice, srcContext, ByteCount);
+}
+
+CUresult cuStreamCreateWithPriority(CUstream *phStream, unsigned int flags, int priority) {
+    return cuStreamCreate(phStream, flags);
+}
+
+CUresult cuStreamGetId(CUstream hStream, unsigned long long *streamId) {
+    if (streamId) *streamId = (unsigned long long)(uintptr_t)hStream;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuStreamAddCallback(CUstream hStream, void *callback, void *userData, unsigned int flags) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuEventDestroy_v2(CUevent hEvent) {
+    return cuEventDestroy(hEvent);
+}
+
+CUresult cuStreamDestroy_v2(CUstream hStream) {
+    return cuStreamDestroy(hStream);
+}
+
+CUresult cuMemAlloc_v2(CUdeviceptr *dptr, size_t bytesize) {
+    return cuMemAlloc(dptr, bytesize);
+}
+
+CUresult cuMemFree_v2(CUdeviceptr dptr) {
+    return cuMemFree(dptr);
+}
+
+CUresult cuMemGetInfo_v2(size_t *free, size_t *total) {
+    return cuMemGetInfo(free, total);
+}
+
+CUresult cuMemcpyDtoH_v2(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount) {
+    return cuMemcpyDtoH(dstHost, srcDevice, ByteCount);
+}
+
+CUresult cuMemcpyHtoD_v2(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount) {
+    return cuMemcpyHtoD(dstDevice, srcHost, ByteCount);
+}
+
+CUresult cuMemcpyDtoD_v2(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteCount) {
+    return cuMemcpyDtoD(dstDevice, srcDevice, ByteCount);
+}
+
+CUresult cuMemcpyDtoHAsync_v2(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount, CUstream hStream) {
+    return cuMemcpyDtoH(dstHost, srcDevice, ByteCount);
+}
+
+CUresult cuMemcpyHtoDAsync_v2(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount, CUstream hStream) {
+    return cuMemcpyHtoD(dstDevice, srcHost, ByteCount);
+}
+
+CUresult cuMemcpyDtoDAsync_v2(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteCount, CUstream hStream) {
+    return cuMemcpyDtoD(dstDevice, srcDevice, ByteCount);
+}
+
+CUresult cuIpcGetMemHandle(void *pHandle, CUdeviceptr dptr) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuIpcOpenMemHandle(CUdeviceptr *pdptr, void *handle, unsigned int Flags) {
+    if (pdptr) *pdptr = 0;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuIpcCloseMemHandle(CUdeviceptr dptr) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuIpcGetEventHandle(void *pHandle, CUevent event) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuIpcOpenEventHandle(CUevent *phEvent, void *handle) {
+    if (phEvent) *phEvent = (CUevent)(uintptr_t)1;
+    return CUDA_SUCCESS;
+}
+
+// cuGetProcAddress - critical for CUDA runtime to find driver functions
+// This is a key function that allows the runtime to dynamically look up driver API functions
+CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsigned long long flags) {
+    if (!symbol || !pfn) return CUDA_ERROR_INVALID_VALUE;
+
+    // Reduce log spam - only log if not found
+    // printf("[FakeCUDA-Driver] cuGetProcAddress looking for: %s\n", symbol);
+
+    // Map of function names to their addresses
+    #define MAP_FUNC(name) if (strcmp(symbol, #name) == 0) { *pfn = (void*)name; return CUDA_SUCCESS; }
+
+    // Core functions
+    MAP_FUNC(cuInit)
+    MAP_FUNC(cuDriverGetVersion)
+    MAP_FUNC(cuDeviceGetCount)
+    MAP_FUNC(cuDeviceGet)
+    MAP_FUNC(cuDeviceGetName)
+    MAP_FUNC(cuDeviceGetAttribute)
+    MAP_FUNC(cuDeviceTotalMem)
+    MAP_FUNC(cuDeviceTotalMem_v2)
+    MAP_FUNC(cuDeviceGetUuid)
+    MAP_FUNC(cuDeviceGetUuid_v2)
+    MAP_FUNC(cuDeviceCanAccessPeer)
+    MAP_FUNC(cuDeviceGetPCIBusId)
+    MAP_FUNC(cuDeviceGetByPCIBusId)
+
+    // Context management
+    MAP_FUNC(cuCtxCreate)
+    MAP_FUNC(cuCtxCreate_v2)
+    MAP_FUNC(cuCtxDestroy)
+    MAP_FUNC(cuCtxDestroy_v2)
+    MAP_FUNC(cuCtxSetCurrent)
+    MAP_FUNC(cuCtxGetCurrent)
+    MAP_FUNC(cuCtxSynchronize)
+    MAP_FUNC(cuCtxPushCurrent)
+    MAP_FUNC(cuCtxPushCurrent_v2)
+    MAP_FUNC(cuCtxPopCurrent)
+    MAP_FUNC(cuCtxPopCurrent_v2)
+    MAP_FUNC(cuCtxGetDevice)
+    MAP_FUNC(cuCtxGetFlags)
+    MAP_FUNC(cuCtxGetLimit)
+    MAP_FUNC(cuCtxSetLimit)
+    MAP_FUNC(cuCtxGetStreamPriorityRange)
+    MAP_FUNC(cuCtxGetApiVersion)
+    MAP_FUNC(cuCtxEnablePeerAccess)
+    MAP_FUNC(cuCtxDisablePeerAccess)
+    MAP_FUNC(cuCtxGetCacheConfig)
+    MAP_FUNC(cuCtxSetCacheConfig)
+    MAP_FUNC(cuCtxGetSharedMemConfig)
+    MAP_FUNC(cuCtxSetSharedMemConfig)
+
+    // Primary context
+    MAP_FUNC(cuDevicePrimaryCtxRetain)
+    MAP_FUNC(cuDevicePrimaryCtxRelease)
+    MAP_FUNC(cuDevicePrimaryCtxGetState)
+    MAP_FUNC(cuDevicePrimaryCtxSetFlags)
+    MAP_FUNC(cuDevicePrimaryCtxSetFlags_v2)
+    MAP_FUNC(cuDevicePrimaryCtxReset)
+
+    // Memory management
+    MAP_FUNC(cuMemAlloc)
+    MAP_FUNC(cuMemAlloc_v2)
+    MAP_FUNC(cuMemFree)
+    MAP_FUNC(cuMemFree_v2)
+    MAP_FUNC(cuMemGetInfo)
+    MAP_FUNC(cuMemGetInfo_v2)
+    MAP_FUNC(cuMemAllocManaged)
+    MAP_FUNC(cuMemAllocHost)
+    MAP_FUNC(cuMemFreeHost)
+    MAP_FUNC(cuMemHostAlloc)
+    MAP_FUNC(cuMemHostRegister)
+    MAP_FUNC(cuMemHostUnregister)
+    MAP_FUNC(cuMemHostGetDevicePointer)
+    MAP_FUNC(cuMemHostGetFlags)
+    MAP_FUNC(cuPointerGetAttribute)
+    MAP_FUNC(cuPointerGetAttributes)
+
+    // Memory copy
+    MAP_FUNC(cuMemcpy)
+    MAP_FUNC(cuMemcpyDtoH)
+    MAP_FUNC(cuMemcpyDtoH_v2)
+    MAP_FUNC(cuMemcpyHtoD)
+    MAP_FUNC(cuMemcpyHtoD_v2)
+    MAP_FUNC(cuMemcpyDtoD)
+    MAP_FUNC(cuMemcpyDtoD_v2)
+    MAP_FUNC(cuMemcpyAsync)
+    MAP_FUNC(cuMemcpyDtoHAsync)
+    MAP_FUNC(cuMemcpyDtoHAsync_v2)
+    MAP_FUNC(cuMemcpyHtoDAsync)
+    MAP_FUNC(cuMemcpyHtoDAsync_v2)
+    MAP_FUNC(cuMemcpyDtoDAsync)
+    MAP_FUNC(cuMemcpyDtoDAsync_v2)
+    MAP_FUNC(cuMemcpyPeer)
+    MAP_FUNC(cuMemcpyPeerAsync)
+
+    // Memset
+    MAP_FUNC(cuMemsetD8)
+    MAP_FUNC(cuMemsetD16)
+    MAP_FUNC(cuMemsetD32)
+    MAP_FUNC(cuMemsetD8Async)
+    MAP_FUNC(cuMemsetD32Async)
+
+    // Stream management
+    MAP_FUNC(cuStreamCreate)
+    MAP_FUNC(cuStreamCreateWithPriority)
+    MAP_FUNC(cuStreamDestroy)
+    MAP_FUNC(cuStreamDestroy_v2)
+    MAP_FUNC(cuStreamSynchronize)
+    MAP_FUNC(cuStreamQuery)
+    MAP_FUNC(cuStreamWaitEvent)
+    MAP_FUNC(cuStreamGetPriority)
+    MAP_FUNC(cuStreamGetFlags)
+    MAP_FUNC(cuStreamGetCtx)
+    MAP_FUNC(cuStreamGetId)
+    MAP_FUNC(cuStreamAddCallback)
+
+    // Event management
+    MAP_FUNC(cuEventCreate)
+    MAP_FUNC(cuEventDestroy)
+    MAP_FUNC(cuEventDestroy_v2)
+    MAP_FUNC(cuEventRecord)
+    MAP_FUNC(cuEventSynchronize)
+    MAP_FUNC(cuEventQuery)
+    MAP_FUNC(cuEventElapsedTime)
+
+    // Module/Function
+    MAP_FUNC(cuModuleLoad)
+    MAP_FUNC(cuModuleLoadData)
+    MAP_FUNC(cuModuleLoadDataEx)
+    MAP_FUNC(cuModuleLoadFatBinary)
+    MAP_FUNC(cuModuleUnload)
+    MAP_FUNC(cuModuleGetFunction)
+    MAP_FUNC(cuModuleGetGlobal)
+    MAP_FUNC(cuLaunchKernel)
+    MAP_FUNC(cuFuncGetAttribute)
+    MAP_FUNC(cuFuncSetAttribute)
+    MAP_FUNC(cuFuncSetCacheConfig)
+
+    // IPC
+    MAP_FUNC(cuIpcGetMemHandle)
+    MAP_FUNC(cuIpcOpenMemHandle)
+    MAP_FUNC(cuIpcCloseMemHandle)
+    MAP_FUNC(cuIpcGetEventHandle)
+    MAP_FUNC(cuIpcOpenEventHandle)
+
+    // Error handling
+    MAP_FUNC(cuGetErrorString)
+    MAP_FUNC(cuGetErrorName)
+    MAP_FUNC(cuGetProcAddress)
+    MAP_FUNC(cuGetProcAddress_v2)
+
+    #undef MAP_FUNC
+
+    // For unknown symbols, return NULL but success (some symbols are optional)
+    // printf("[FakeCUDA-Driver] cuGetProcAddress: symbol '%s' not found, returning NULL\n", symbol);
+    *pfn = NULL;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuGetProcAddress_v2(const char *symbol, void **pfn, int cudaVersion, unsigned long long flags, void *symbolStatus) {
+    CUresult result = cuGetProcAddress(symbol, pfn, cudaVersion, flags);
+    // symbolStatus is used to indicate if the symbol was found
+    // We ignore it for now
+    return result;
 }
 
 } // extern "C"

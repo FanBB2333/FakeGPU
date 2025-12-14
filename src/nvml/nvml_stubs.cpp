@@ -1,5 +1,6 @@
 #include "nvml_defs.hpp"
 #include "../core/global_state.hpp"
+#include "../monitor/monitor.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -33,6 +34,8 @@ nvmlReturn_t nvmlInitWithFlags(unsigned int flags) {
 
 nvmlReturn_t nvmlShutdown() {
     printf("[FakeNVML] nvmlShutdown called\n");
+    // Dump the monitor report before shutdown
+    dump_monitor_report();
     return NVML_SUCCESS;
 }
 
