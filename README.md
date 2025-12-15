@@ -1,1 +1,124 @@
-# fakeGPU
+# FakeGPU
+
+A CUDA API interception library that simulates GPU devices in non-GPU environments, enabling basic operations for PyTorch and other deep learning frameworks.
+
+## Features
+
+- ✅ **CUDA Driver API** - Device management, memory allocation, kernel launch
+- ✅ **CUDA Runtime API** - cudaMalloc/Free, cudaMemcpy, Stream, Event
+- ✅ **cuBLAS/cuBLASLt** - Matrix operations (GEMM, PyTorch 2.x compatible)
+- ✅ **NVML API** - GPU information queries
+- ✅ **PyTorch Support** - Basic tensor ops, linear layers, neural networks
+
+## Quick Start
+
+### Build
+
+```bash
+cmake -S . -B build
+cmake --build build
+```
+
+Generated libraries:
+- `build/libcuda.so.1` - CUDA Driver API
+- `build/libcudart.so.12` - CUDA Runtime API
+- `build/libcublas.so.12` - cuBLAS/cuBLASLt API
+- `build/libnvidia-ml.so.1` - NVML API
+
+### Test
+
+**Comparison test (recommended):**
+```bash
+./test/run_comparison.sh
+```
+Runs identical tests on both real GPU and FakeGPU to verify correctness.
+
+**PyTorch test:**
+```bash
+LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
+LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
+python3 test/test_comparison.py --mode fake
+```
+
+### Usage
+
+```python
+import torch
+
+# All PyTorch CUDA operations are intercepted by FakeGPU
+device = torch.device('cuda:0')
+x = torch.randn(100, 100, device=device)
+y = torch.randn(100, 100, device=device)
+z = x @ y  # Matrix multiplication
+
+# Simple neural network
+model = torch.nn.Linear(100, 50).to(device)
+output = model(x)
+```
+
+**Runtime requires preloading all libraries:**
+```bash
+LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
+LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
+python your_script.py
+```
+
+## Test Results
+
+| Test | Status | Description |
+|------|--------|-------------|
+| Tensor creation | ✓ | Basic memory allocation |
+| Element-wise ops | ✓ | Add, multiply, trigonometric |
+| Matrix multiplication | ✓ | cuBLAS/cuBLASLt GEMM |
+| Linear layer | ✓ | PyTorch nn.Linear |
+| Neural network | ✓ | Multi-layer forward pass |
+| Memory transfer | ✓ | CPU ↔ GPU data copy |
+
+## Architecture
+
+```
+FakeGPU
+├── src/
+│   ├── core/          # Global state and device management
+│   ├── cuda/          # CUDA Driver/Runtime API stubs
+│   ├── cublas/        # cuBLAS/cuBLASLt API stubs
+│   ├── nvml/          # NVML API stubs
+│   └── monitor/       # Resource monitoring and reporting
+└── test/              # Test scripts
+```
+
+**Core Design:**
+- Uses `LD_PRELOAD` to intercept CUDA API calls
+- Device memory backed by system RAM (malloc/free)
+- Matrix operations return random values (no actual computation)
+- Kernel launches are no-ops (logging only)
+
+## Limitations
+
+- ❌ No real GPU computation (kernels are no-ops)
+- ❌ Complex models (Transformers) may require additional APIs
+- ❌ No multi-GPU synchronization
+- ⚠️ For testing and development environments only
+
+## Use Cases
+
+- ✅ Running GPU code tests in CI/CD environments
+- ✅ Debugging deep learning code on machines without GPUs
+- ✅ Validating CUDA API call logic
+- ✅ Prototyping and unit testing
+
+## Dependencies
+
+- CMake 3.14+
+- C++17 compiler
+- Python 3.8+ (for testing)
+- PyTorch 2.x (optional, for testing)
+
+## License
+
+MIT License
+
+## Documentation
+
+- [Test Guide](test/README.md) - Detailed testing instructions
+- [cuBLASLt Implementation](docs/cublaslt-fix.md) - cuBLASLt support details
