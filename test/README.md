@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-FakeGPU项目实现了完整的CUDA Driver API、CUDA Runtime API和NVML API拦截功能。PyTorch和Transformers已完全支持。
+FakeGPU项目实现了完整的CUDA Driver API、CUDA Runtime API、NVML API和cuBLAS API拦截功能。PyTorch和Transformers已完全支持。
 
 ### 已实现的功能
 
@@ -26,14 +26,42 @@ FakeGPU项目实现了完整的CUDA Driver API、CUDA Runtime API和NVML API拦�
   - 协作组: cudaLaunchCooperativeKernel等
   - 内部注册: __cudaRegisterFunction, __cudaRegisterVar等
 
+- **cuBLAS API** (libcublas.so.12):
+  - 句柄管理: cublasCreate, cublasDestroy, cublasSetStream等
+  - BLAS Level 1: 向量操作 (dot, axpy, scal, nrm2等)
+  - BLAS Level 2: 矩阵向量操作 (gemv, ger等)
+  - BLAS Level 3: 矩阵矩阵操作 (gemm, trsm, symm等)
+  - 批处理操作: gemmStridedBatched, gemmBatched等
+  - 混合精度: GemmEx, SgemmEx等
+  - 复数运算: Cgemm, Zgemm, Cdotu, Zdotu等
+  - 线性代数: getrfBatched, getrsBatched, geqrfBatched, gelsBatched等
+  - **总计**: 100+ cuBLAS函数已实现
+
 - **NVML API** (libnvidia-ml.so.1):
   - nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetMemoryInfo等
 
 ### 支持的框架
 
-- PyTorch 2.x (完全支持)
-- Transformers (完全支持)
-- 其他基于CUDA的深度学习框架
+- ✅ PyTorch 2.x (完全支持 - 包括矩阵运算)
+- ✅ Transformers (完全支持 - 可用于模型加载和推理)
+- ✅ 其他基于CUDA的深度学习框架
+
+### 当前功能
+
+FakeGPU + cuBLAS实现了完整的stub函数集合，可以成功:
+- ✅ 检测GPU设备和属性
+- ✅ 分配和管理内存
+- ✅ 加载模型和权重
+- ✅ 执行张量操作（element-wise和矩阵运算）
+- ✅ 记录资源消耗模式
+
+**重要**: FakeGPU返回随机值用于所有计算结果，不执行实际GPU计算。这是设计上的预期行为，主要用途是:
+1. 在无GPU环境下测试模型加载和设备管理代码
+2. 记录和分析硬件资源消耗模式
+3. 指导未来的硬件资源分配决策
+4. 开发和调试不需要实际计算结果的工具
+
+如果需要实际的计算结果，请使用真实GPU或CPU模式。
 
 ## 测试脚本说明
 

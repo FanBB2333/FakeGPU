@@ -43,6 +43,16 @@ add_library(fake_cudart SHARED
 target_link_libraries(fake_cudart PRIVATE ${CMAKE_DL_LIBS})
 target_include_directories(fake_cudart PRIVATE src/cuda src/core)
 
+# cuBLAS Library (libcublas.so.12)
+# This library intercepts cuBLAS calls and returns random values for profiling/monitoring
+add_library(fake_cublas SHARED
+    src/cublas/cublas_stubs.cpp
+    $<TARGET_OBJECTS:fake_gpu_core>
+    $<TARGET_OBJECTS:fake_gpu_monitor>
+)
+target_link_libraries(fake_cublas PRIVATE ${CMAKE_DL_LIBS})
+target_include_directories(fake_cublas PRIVATE src/cublas src/core)
+
 # Platform specific flags
 if(APPLE)
     # macOS specific linker flags for interposition if needed
@@ -75,6 +85,13 @@ else()
     # Set OUTPUT_NAME to libcudart.so.12 for CUDA Runtime API interception
     set_target_properties(fake_cudart PROPERTIES
         OUTPUT_NAME "cudart"
+        VERSION "12.0.0"
+        SOVERSION "12"
+    )
+
+    # Set OUTPUT_NAME to libcublas.so.12 for cuBLAS API interception
+    set_target_properties(fake_cublas PROPERTIES
+        OUTPUT_NAME "cublas"
         VERSION "12.0.0"
         SOVERSION "12"
     )
