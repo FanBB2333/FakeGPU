@@ -254,6 +254,80 @@ cublasStatus_t cublasGetStream(cublasHandle_t handle, void **streamId);
 cublasStatus_t cublasSetWorkspace_v2(cublasHandle_t handle, void *workspace, size_t workspaceSizeInBytes);
 cublasStatus_t cublasGetWorkspace_v2(cublasHandle_t handle, void **workspace, size_t *workspaceSizeInBytes);
 
+// ============================================================================
+// cuBLASLt (Lightweight BLAS) API - Modern GEMM interface used by PyTorch
+// ============================================================================
+
+typedef struct cublasLtContext *cublasLtHandle_t;
+typedef struct cublasLtMatmulDescOpaque *cublasLtMatmulDesc_t;
+typedef struct cublasLtMatrixLayoutOpaque *cublasLtMatrixLayout_t;
+typedef struct cublasLtMatmulPreferenceOpaque *cublasLtMatmulPreference_t;
+
+// Algorithm heuristic structures
+typedef struct {
+    int algo;
+    size_t workspaceSize;
+    int state;
+    float wavesCount;
+    int reserved[4];
+} cublasLtMatmulHeuristicResult_t;
+
+// cuBLASLt handle management
+cublasStatus_t cublasLtCreate(cublasLtHandle_t *lightHandle);
+cublasStatus_t cublasLtDestroy(cublasLtHandle_t lightHandle);
+
+// Descriptor creation/destruction
+cublasStatus_t cublasLtMatmulDescCreate(cublasLtMatmulDesc_t *matmulDesc, int computeType, int scaleType);
+cublasStatus_t cublasLtMatmulDescDestroy(cublasLtMatmulDesc_t matmulDesc);
+cublasStatus_t cublasLtMatmulDescSetAttribute(cublasLtMatmulDesc_t matmulDesc, int attr, const void *buf, size_t sizeInBytes);
+cublasStatus_t cublasLtMatmulDescGetAttribute(cublasLtMatmulDesc_t matmulDesc, int attr, void *buf, size_t sizeInBytes, size_t *sizeWritten);
+
+// Matrix layout creation/destruction
+cublasStatus_t cublasLtMatrixLayoutCreate(cublasLtMatrixLayout_t *matLayout, int type, uint64_t rows, uint64_t cols, int64_t ld);
+cublasStatus_t cublasLtMatrixLayoutDestroy(cublasLtMatrixLayout_t matLayout);
+cublasStatus_t cublasLtMatrixLayoutSetAttribute(cublasLtMatrixLayout_t matLayout, int attr, const void *buf, size_t sizeInBytes);
+cublasStatus_t cublasLtMatrixLayoutGetAttribute(cublasLtMatrixLayout_t matLayout, int attr, void *buf, size_t sizeInBytes, size_t *sizeWritten);
+
+// Matmul preference
+cublasStatus_t cublasLtMatmulPreferenceCreate(cublasLtMatmulPreference_t *pref);
+cublasStatus_t cublasLtMatmulPreferenceDestroy(cublasLtMatmulPreference_t pref);
+cublasStatus_t cublasLtMatmulPreferenceSetAttribute(cublasLtMatmulPreference_t pref, int attr, const void *buf, size_t sizeInBytes);
+cublasStatus_t cublasLtMatmulPreferenceGetAttribute(cublasLtMatmulPreference_t pref, int attr, void *buf, size_t sizeInBytes, size_t *sizeWritten);
+
+// Algorithm selection
+cublasStatus_t cublasLtMatmulAlgoGetHeuristic(
+    cublasLtHandle_t lightHandle,
+    cublasLtMatmulDesc_t operationDesc,
+    cublasLtMatrixLayout_t Adesc,
+    cublasLtMatrixLayout_t Bdesc,
+    cublasLtMatrixLayout_t Cdesc,
+    cublasLtMatrixLayout_t Ddesc,
+    cublasLtMatmulPreference_t preference,
+    int requestedAlgoCount,
+    cublasLtMatmulHeuristicResult_t heuristicResultsArray[],
+    int *returnAlgoCount
+);
+
+// Actual matmul execution
+cublasStatus_t cublasLtMatmul(
+    cublasLtHandle_t lightHandle,
+    cublasLtMatmulDesc_t computeDesc,
+    const void *alpha,
+    const void *A,
+    cublasLtMatrixLayout_t Adesc,
+    const void *B,
+    cublasLtMatrixLayout_t Bdesc,
+    const void *beta,
+    const void *C,
+    cublasLtMatrixLayout_t Cdesc,
+    void *D,
+    cublasLtMatrixLayout_t Ddesc,
+    const void *algo,
+    void *workspace,
+    size_t workspaceSizeInBytes,
+    void *stream
+);
+
 #ifdef __cplusplus
 }
 #endif

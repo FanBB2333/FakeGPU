@@ -3,6 +3,10 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
+
+# Disable torchvision to avoid operator registration error
+os.environ['TRANSFORMERS_NO_TORCHVISION'] = '1'
+
 from transformers import GPT2Config, GPT2LMHeadModel
 from torch.optim import AdamW
 import argparse

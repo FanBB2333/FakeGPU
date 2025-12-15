@@ -1,5 +1,67 @@
 # FakeGPU 测试脚本
 
+## 快速测试
+
+### 推荐：对比测试
+运行真实GPU和FakeGPU的并行对比测试：
+```bash
+./test/run_comparison.sh
+```
+
+这将:
+1. 在真实GPU上测试 (Ampere GPU)
+2. 在FakeGPU上测试
+3. 证明测试代码在真实硬件上正常工作
+4. 证明任何FakeGPU问题都是实现缺口，而非测试代码问题
+
+### 单独测试
+
+**基础PyTorch操作:**
+```bash
+python3 test/test_comparison.py --mode real   # 真实GPU测试
+python3 test/test_comparison.py --mode fake   # FakeGPU测试
+python3 test/test_comparison.py --mode both   # 两者都测试
+```
+
+**PyTorch with cuBLAS:**
+```bash
+./run_test_clean.sh
+```
+
+**简单DDP (分布式数据并行):**
+```bash
+LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
+LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
+python3 test/test_ddp_simple.py
+```
+
+## 当前测试状态
+
+| 测试项 | 真实GPU | FakeGPU | 备注 |
+|------|----------|---------|-------|
+| 张量创建 | ✓ | ✓ | |
+| 元素级操作 | ✓ | ✓ | |
+| 基础矩阵乘法 | ✓ | ✓ | |
+| 线性层 | ✓ | ✓ | 需要cuBLASLt支持 |
+| 模型前向传播 | ✓ | ✓ | 简单模型可用 |
+| 内存传输 | ✓ | ✓ | |
+
+## PyTorch所需的库
+
+FakeGPU需要预加载所有四个库才能让PyTorch正常工作：
+
+```bash
+LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
+LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
+python3 your_test.py
+```
+
+**库的顺序很重要:**
+1. `libcublas.so.12` - cuBLAS/cuBLASLt (矩阵运算)
+2. `libcudart.so.12` - CUDA Runtime API
+3. `libcuda.so.1` - CUDA Driver API
+4. `libnvidia-ml.so.1` - NVML (设备管理)
+
 ## 当前状态
 
 FakeGPU项目实现了完整的CUDA Driver API、CUDA Runtime API、NVML API和cuBLAS API拦截功能。PyTorch和Transformers已完全支持。
