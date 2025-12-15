@@ -28,6 +28,7 @@ typedef struct CUctx_st *CUcontext;
 typedef struct CUstream_st *CUstream;
 typedef struct CUevent_st *CUevent;
 typedef struct CUmod_st *CUmodule;
+typedef struct CUmemPoolHandle_st *CUmemoryPool;
 typedef struct CUfunc_st *CUfunction;
 typedef unsigned long long CUdeviceptr;
 

@@ -18,10 +18,85 @@ typedef struct dim3 {
 
 typedef struct cudaDeviceProp_st {
     char name[256];
+    char uuid[16];                  // UUID for device (16 bytes)
+    char luid[8];                   // LUID for device (8 bytes)
+    unsigned int luidDeviceNodeMask;
     size_t totalGlobalMem;
+    size_t sharedMemPerBlock;
+    int regsPerBlock;
+    int warpSize;
+    size_t memPitch;
+    int maxThreadsPerBlock;
+    int maxThreadsDim[3];
+    int maxGridSize[3];
+    int clockRate;
+    size_t totalConstMem;
     int major;
     int minor;
-    // ... add more if needed
+    size_t textureAlignment;
+    size_t texturePitchAlignment;
+    int deviceOverlap;
+    int multiProcessorCount;
+    int kernelExecTimeoutEnabled;
+    int integrated;
+    int canMapHostMemory;
+    int computeMode;
+    int maxTexture1D;
+    int maxTexture1DMipmap;
+    int maxTexture1DLinear;
+    int maxTexture2D[2];
+    int maxTexture2DMipmap[2];
+    int maxTexture2DLinear[3];
+    int maxTexture2DGather[2];
+    int maxTexture3D[3];
+    int maxTexture3DAlt[3];
+    int maxTextureCubemap;
+    int maxTexture1DLayered[2];
+    int maxTexture2DLayered[3];
+    int maxTextureCubemapLayered[2];
+    int maxSurface1D;
+    int maxSurface2D[2];
+    int maxSurface3D[3];
+    int maxSurface1DLayered[2];
+    int maxSurface2DLayered[3];
+    int maxSurfaceCubemap;
+    int maxSurfaceCubemapLayered[2];
+    size_t surfaceAlignment;
+    int concurrentKernels;
+    int ECCEnabled;
+    int pciBusID;
+    int pciDeviceID;
+    int pciDomainID;
+    int tccDriver;
+    int asyncEngineCount;
+    int unifiedAddressing;
+    int memoryClockRate;
+    int memoryBusWidth;
+    int l2CacheSize;
+    int persistingL2CacheMaxSize;
+    int maxThreadsPerMultiProcessor;
+    int streamPrioritiesSupported;
+    int globalL1CacheSupported;
+    int localL1CacheSupported;
+    size_t sharedMemPerMultiprocessor;
+    int regsPerMultiprocessor;
+    int managedMemory;
+    int isMultiGpuBoard;
+    int multiGpuBoardGroupID;
+    int hostNativeAtomicSupported;
+    int singleToDoublePrecisionPerfRatio;
+    int pageableMemoryAccess;
+    int concurrentManagedAccess;
+    int computePreemptionSupported;
+    int canUseHostPointerForRegisteredMem;
+    int cooperativeLaunch;
+    int cooperativeMultiDeviceLaunch;
+    size_t sharedMemPerBlockOptin;
+    int pageableMemoryAccessUsesHostPageTables;
+    int directManagedMemAccessFromHost;
+    int maxBlocksPerMultiProcessor;
+    int accessPolicyMaxWindowSize;
+    size_t reservedSharedMemPerBlock;
 } cudaDeviceProp;
 
 // API Declarations
@@ -36,7 +111,7 @@ typedef enum {
     cudaErrorInvalidValue = 11,
     cudaErrorInvalidDevice = 10,
     cudaErrorNoDevice = 100,
-    cudaErrorUnknown = 999
+    cudaErrorUnknown = 30
 } cudaError_t;
 
 typedef enum {
@@ -65,6 +140,8 @@ cudaError_t cudaDeviceSynchronize(void);
 cudaError_t cudaStreamSynchronize(cudaStream_t stream);
 cudaError_t cudaGetLastError(void);
 cudaError_t cudaPeekAtLastError(void);
+cudaError_t cudaRuntimeGetVersion(int *runtimeVersion);
+cudaError_t cudaDriverGetVersion(int *driverVersion);
 const char* cudaGetErrorString(cudaError_t error);
 const char* cudaGetErrorName(cudaError_t error);
 

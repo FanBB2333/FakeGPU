@@ -16,6 +16,7 @@ CUresult cuInit(unsigned int Flags) {
     printf("[FakeCUDA-Driver] cuInit called with flags=%u\n", Flags);
     GlobalState::instance().initialize();
     driver_initialized = true;
+    printf("[FakeCUDA-Driver] cuInit completed successfully\n");
     return CUDA_SUCCESS;
 }
 
@@ -73,6 +74,9 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
     if (dev < 0 || dev >= count) {
         return CUDA_ERROR_INVALID_DEVICE;
     }
+
+    // Log attribute queries for debugging
+    printf("[FakeCUDA-Driver] cuDeviceGetAttribute(dev=%d, attrib=%d)\n", dev, attrib);
 
     // Return fake but reasonable values for A100-like GPU
     switch (attrib) {
@@ -988,6 +992,86 @@ CUresult cuIpcOpenEventHandle(CUevent *phEvent, void *handle) {
     return CUDA_SUCCESS;
 }
 
+// Memory pool functions
+CUresult cuDeviceGetDefaultMemPool(CUmemoryPool *pool_out, CUdevice dev) {
+    if (pool_out) *pool_out = (CUmemoryPool)(uintptr_t)(dev + 1);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuDeviceGetMemPool(CUmemoryPool *pool, CUdevice dev) {
+    if (pool) *pool = (CUmemoryPool)(uintptr_t)(dev + 1);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuDeviceSetMemPool(CUdevice dev, CUmemoryPool pool) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemPoolCreate(CUmemoryPool *pool, const void *poolProps) {
+    if (pool) *pool = (CUmemoryPool)(uintptr_t)1;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemPoolDestroy(CUmemoryPool pool) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemAllocAsync(CUdeviceptr *dptr, size_t bytesize, CUstream hStream) {
+    return cuMemAlloc(dptr, bytesize);
+}
+
+CUresult cuMemFreeAsync(CUdeviceptr dptr, CUstream hStream) {
+    return cuMemFree(dptr);
+}
+
+CUresult cuMemAllocFromPoolAsync(CUdeviceptr *dptr, size_t bytesize, CUmemoryPool pool, CUstream hStream) {
+    return cuMemAlloc(dptr, bytesize);
+}
+
+CUresult cuMemPoolSetAttribute(CUmemoryPool pool, int attr, void *value) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemPoolGetAttribute(CUmemoryPool pool, int attr, void *value) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemPoolTrimTo(CUmemoryPool pool, size_t minBytesToKeep) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxResetPersistingL2Cache(void) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemGetAddressRange(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dptr) {
+    if (pbase) *pbase = dptr;
+    if (psize) *psize = 0;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuMemAllocPitch(CUdeviceptr *dptr, size_t *pPitch, size_t WidthInBytes, size_t Height, unsigned int ElementSizeBytes) {
+    size_t pitch = (WidthInBytes + 255) & ~255;
+    size_t size = pitch * Height;
+    CUresult result = cuMemAlloc(dptr, size);
+    if (pPitch) *pPitch = pitch;
+    return result;
+}
+
+CUresult cuDeviceGetP2PAttribute(int *value, int attrib, CUdevice srcDevice, CUdevice dstDevice) {
+    if (value) *value = 1;
+    return CUDA_SUCCESS;
+}
+
+CUresult cuCtxDetach(CUcontext ctx) {
+    return CUDA_SUCCESS;
+}
+
+CUresult cuDeviceGetTexture1DLinearMaxWidth(size_t *maxWidthInElements, int format, unsigned numChannels, CUdevice dev) {
+    if (maxWidthInElements) *maxWidthInElements = 134217728;
+    return CUDA_SUCCESS;
+}
+
 // cuGetProcAddress - critical for CUDA runtime to find driver functions
 // This is a key function that allows the runtime to dynamically look up driver API functions
 CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsigned long long flags) {
@@ -1139,10 +1223,29 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     MAP_FUNC(cuGetProcAddress)
     MAP_FUNC(cuGetProcAddress_v2)
 
+    // Memory pool functions
+    MAP_FUNC(cuDeviceGetDefaultMemPool)
+    MAP_FUNC(cuDeviceGetMemPool)
+    MAP_FUNC(cuDeviceSetMemPool)
+    MAP_FUNC(cuMemPoolCreate)
+    MAP_FUNC(cuMemPoolDestroy)
+    MAP_FUNC(cuMemAllocAsync)
+    MAP_FUNC(cuMemFreeAsync)
+    MAP_FUNC(cuMemAllocFromPoolAsync)
+    MAP_FUNC(cuMemPoolSetAttribute)
+    MAP_FUNC(cuMemPoolGetAttribute)
+    MAP_FUNC(cuMemPoolTrimTo)
+    MAP_FUNC(cuCtxResetPersistingL2Cache)
+    MAP_FUNC(cuMemGetAddressRange)
+    MAP_FUNC(cuMemAllocPitch)
+    MAP_FUNC(cuDeviceGetP2PAttribute)
+    MAP_FUNC(cuCtxDetach)
+    MAP_FUNC(cuDeviceGetTexture1DLinearMaxWidth)
+
     #undef MAP_FUNC
 
     // For unknown symbols, return NULL but success (some symbols are optional)
-    // printf("[FakeCUDA-Driver] cuGetProcAddress: symbol '%s' not found, returning NULL\n", symbol);
+    // printf("[FakeCUDA-Driver] cuGetProcAddress: symbol '%s' not found\n", symbol);
     *pfn = NULL;
     return CUDA_SUCCESS;
 }

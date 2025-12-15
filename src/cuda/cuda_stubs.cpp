@@ -79,17 +79,84 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, cudaMemcpyKind 
 cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
     if (!prop) return cudaErrorInvalidValue;
     GlobalState::instance().initialize();
-    
+
+    int count = GlobalState::instance().get_device_count();
+    if (device < 0 || device >= count) {
+        return cudaErrorInvalidDevice;
+    }
+
     Device& dev = GlobalState::instance().get_device(device);
-    if (dev.index < 0) return cudaErrorInvalidDevice;
-    
-    // Fill basic props
+
+    // Fill props - zero everything first
     memset(prop, 0, sizeof(cudaDeviceProp));
+
+    // Basic info
     snprintf(prop->name, 256, "%s", dev.name.c_str());
+
+    // UUID (16 bytes)
+    memset(prop->uuid, 0, 16);
+    snprintf(prop->uuid, 16, "GPU-%08x", device);
+
+    // LUID (8 bytes) - Windows only, zero for Linux
+    memset(prop->luid, 0, 8);
+    prop->luidDeviceNodeMask = 0;
+
     prop->totalGlobalMem = dev.total_memory;
     prop->major = 8; // Ampere
     prop->minor = 0;
-    
+
+    // Fill in realistic A100 values
+    prop->sharedMemPerBlock = 49152; // 48KB
+    prop->regsPerBlock = 65536;
+    prop->warpSize = 32;
+    prop->memPitch = 2147483647;
+    prop->maxThreadsPerBlock = 1024;
+    prop->maxThreadsDim[0] = 1024;
+    prop->maxThreadsDim[1] = 1024;
+    prop->maxThreadsDim[2] = 64;
+    prop->maxGridSize[0] = 2147483647;
+    prop->maxGridSize[1] = 65535;
+    prop->maxGridSize[2] = 65535;
+    prop->clockRate = 1410000; // 1.41 GHz
+    prop->totalConstMem = 65536; // 64KB
+    prop->multiProcessorCount = 108;
+    prop->kernelExecTimeoutEnabled = 0;
+    prop->integrated = 0;
+    prop->canMapHostMemory = 1;
+    prop->computeMode = 0;
+    prop->concurrentKernels = 1;
+    prop->ECCEnabled = 1;
+    prop->pciBusID = device;
+    prop->pciDeviceID = 0;
+    prop->pciDomainID = 0;
+    prop->tccDriver = 0;
+    prop->asyncEngineCount = 2;
+    prop->unifiedAddressing = 1;
+    prop->memoryClockRate = 1215000; // 1.215 GHz
+    prop->memoryBusWidth = 5120; // 5120-bit
+    prop->l2CacheSize = 41943040; // 40MB
+    prop->persistingL2CacheMaxSize = 41943040;
+    prop->maxThreadsPerMultiProcessor = 2048;
+    prop->streamPrioritiesSupported = 1;
+    prop->globalL1CacheSupported = 1;
+    prop->localL1CacheSupported = 1;
+    prop->sharedMemPerMultiprocessor = 167936; // 164KB
+    prop->regsPerMultiprocessor = 65536;
+    prop->managedMemory = 1;
+    prop->isMultiGpuBoard = 0;
+    prop->multiGpuBoardGroupID = 0;
+    prop->singleToDoublePrecisionPerfRatio = 2;
+    prop->pageableMemoryAccess = 1;
+    prop->concurrentManagedAccess = 1;
+    prop->computePreemptionSupported = 1;
+    prop->canUseHostPointerForRegisteredMem = 1;
+    prop->cooperativeLaunch = 1;
+    prop->cooperativeMultiDeviceLaunch = 1;
+    prop->sharedMemPerBlockOptin = 166912;
+    prop->directManagedMemAccessFromHost = 1;
+    prop->maxBlocksPerMultiProcessor = 32;
+
+    printf("[FakeCUDA] cudaGetDeviceProperties(%d) returning properties\n", device);
     return cudaSuccess;
 }
 
@@ -154,6 +221,22 @@ cudaError_t cudaGetLastError(void) {
 cudaError_t cudaPeekAtLastError(void) {
     printf("[FakeCUDA] cudaPeekAtLastError returning %d\n", last_error);
     return last_error;
+}
+
+cudaError_t cudaRuntimeGetVersion(int *runtimeVersion) {
+    if (!runtimeVersion) return cudaErrorInvalidValue;
+    // Report CUDA 12.0 (12000)
+    *runtimeVersion = 12000;
+    printf("[FakeCUDA] cudaRuntimeGetVersion returning 12000\n");
+    return cudaSuccess;
+}
+
+cudaError_t cudaDriverGetVersion(int *driverVersion) {
+    if (!driverVersion) return cudaErrorInvalidValue;
+    // Report CUDA 12.0 (12000)
+    *driverVersion = 12000;
+    printf("[FakeCUDA] cudaDriverGetVersion returning 12000\n");
+    return cudaSuccess;
 }
 
 const char* cudaGetErrorString(cudaError_t error) {
