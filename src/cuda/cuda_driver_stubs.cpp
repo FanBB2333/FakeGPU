@@ -1072,6 +1072,25 @@ CUresult cuDeviceGetTexture1DLinearMaxWidth(size_t *maxWidthInElements, int form
     return CUDA_SUCCESS;
 }
 
+// cuGetExportTable - internal NVIDIA API used by CUDA Runtime
+// This is undocumented and returns internal function tables
+// WARNING: Returning NULL causes the real libcudart to crash!
+// We need to either provide a real export table or avoid being used with real libcudart
+CUresult cuGetExportTable(const void **ppExportTable, const void *pExportTableId) {
+    // printf("[FakeCUDA-Driver] cuGetExportTable called with tableId=%p\n", pExportTableId);
+
+    // The CUDA runtime uses various export table IDs to get internal function tables
+    // Returning NULL with CUDA_SUCCESS causes segfault in real libcudart
+    // Return error to indicate the table is not available
+    if (ppExportTable) {
+        *ppExportTable = NULL;
+    }
+
+    // Return error - this may cause libcudart to fall back to other methods
+    // or fail gracefully instead of crashing
+    return CUDA_ERROR_NOT_INITIALIZED;
+}
+
 // cuGetProcAddress - critical for CUDA runtime to find driver functions
 // This is a key function that allows the runtime to dynamically look up driver API functions
 CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsigned long long flags) {
@@ -1222,6 +1241,7 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     MAP_FUNC(cuGetErrorName)
     MAP_FUNC(cuGetProcAddress)
     MAP_FUNC(cuGetProcAddress_v2)
+    MAP_FUNC(cuGetExportTable)
 
     // Memory pool functions
     MAP_FUNC(cuDeviceGetDefaultMemPool)
@@ -1245,7 +1265,7 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     #undef MAP_FUNC
 
     // For unknown symbols, return NULL but success (some symbols are optional)
-    // printf("[FakeCUDA-Driver] cuGetProcAddress: symbol '%s' not found\n", symbol);
+    // printf("[FakeCUDA-Driver] cuGetProcAddress: symbol '%s' NOT FOUND\n", symbol);
     *pfn = NULL;
     return CUDA_SUCCESS;
 }
