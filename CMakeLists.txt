@@ -31,6 +31,18 @@ add_library(fake_cuda SHARED
 )
 target_link_libraries(fake_cuda PRIVATE ${CMAKE_DL_LIBS})
 
+# CUDA Runtime Library (libcudart.so.12)
+# This library intercepts CUDA Runtime API calls and uses fake_cuda Driver API internally
+# We only include Driver API stubs, not Runtime API stubs from cuda_stubs.cpp
+add_library(fake_cudart SHARED
+    src/cuda/cudart_stubs.cpp
+    src/cuda/cuda_driver_stubs.cpp
+    $<TARGET_OBJECTS:fake_gpu_core>
+    $<TARGET_OBJECTS:fake_gpu_monitor>
+)
+target_link_libraries(fake_cudart PRIVATE ${CMAKE_DL_LIBS})
+target_include_directories(fake_cudart PRIVATE src/cuda src/core)
+
 # Platform specific flags
 if(APPLE)
     # macOS specific linker flags for interposition if needed
@@ -58,5 +70,12 @@ else()
         OUTPUT_NAME "cuda"
         VERSION "1.0.0"
         SOVERSION "1"
+    )
+
+    # Set OUTPUT_NAME to libcudart.so.12 for CUDA Runtime API interception
+    set_target_properties(fake_cudart PROPERTIES
+        OUTPUT_NAME "cudart"
+        VERSION "12.0.0"
+        SOVERSION "12"
     )
 endif()
