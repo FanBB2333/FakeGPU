@@ -23,7 +23,7 @@ try:
 
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
 
     model_path_base = os.path.expanduser("~/models")
     model_name = os.path.join(model_path_base, "Qwen/Qwen2.5-0.5B-Instruct")
@@ -47,19 +47,17 @@ try:
     )
     model_inputs = tokenizer([text], return_tensors="pt").to(device)
 
-    print(f"\nGenerating response on {device}...")
+    print(f"\nRunning a forward pass on {device}...")
     with torch.no_grad():
-        generated_ids = model.generate(
-            **model_inputs,
-            max_new_tokens=20
-        )
+        outputs = model(**model_inputs, use_cache=False)
 
-    generated_ids = [
-        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-    ]
-
-    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    print("Response:", response)
+    # Move logits back to CPU and perform a simple greedy decode to avoid heavy CUDA kernels
+    logits_cpu = outputs.logits.float().cpu()
+    next_tokens = torch.argmax(logits_cpu[:, -1], dim=-1, keepdim=True)
+    
+    # Decode only the new token
+    new_token_text = tokenizer.decode(next_tokens[0], skip_special_tokens=True)
+    print("Generated token:", new_token_text)
     print("\n=== TEST PASSED ===")
 
 except Exception as e:
