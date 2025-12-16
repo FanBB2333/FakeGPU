@@ -45,6 +45,44 @@ static T getScalar(const T *ptr, cublasPointerMode_t mode) {
     }
 }
 
+// Map cudaDataType_t enum values to element sizes (in bytes)
+static size_t getDataTypeSize(int dataType) {
+    switch (dataType) {
+        case 0: return 4;   // CUDA_R_32F
+        case 1: return 8;   // CUDA_R_64F
+        case 2: return 2;   // CUDA_R_16F
+        case 3: return 1;   // CUDA_R_8I
+        case 4: return 8;   // CUDA_C_32F (2x float)
+        case 5: return 16;  // CUDA_C_64F (2x double)
+        case 6: return 4;   // CUDA_C_16F (2x half)
+        case 7: return 2;   // CUDA_C_8I  (2x int8)
+        case 8: return 1;   // CUDA_R_8U
+        case 9: return 2;   // CUDA_C_8U  (2x uint8)
+        case 10: return 4;  // CUDA_R_32I
+        case 11: return 8;  // CUDA_C_32I
+        case 12: return 4;  // CUDA_R_32U
+        case 13: return 8;  // CUDA_C_32U
+        case 14: return 2;  // CUDA_R_16BF
+        case 15: return 4;  // CUDA_C_16BF
+        case 16: case 17:   // 4-bit types - treat as 1 byte per element
+        case 18: case 19:
+            return 1;
+        case 20: return 2;  // CUDA_R_16I
+        case 21: return 4;  // CUDA_C_16I
+        case 22: return 2;  // CUDA_R_16U
+        case 23: return 4;  // CUDA_C_16U
+        case 24: return 8;  // CUDA_R_64I
+        case 25: return 16; // CUDA_C_64I
+        case 26: return 8;  // CUDA_R_64U
+        case 27: return 16; // CUDA_C_64U
+        case 28: case 29: case 30: // FP8/FP6/FP4 variants
+        case 31: case 32: case 33:
+            return 1;
+        default:
+            return 4; // fallback to float size
+    }
+}
+
 extern "C" {
 
 // ============================================================================
@@ -561,18 +599,8 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 
-    // Determine element size based on Ctype
-    size_t element_size = 4;  // Default to float
-    if (Ctype == 0) element_size = 2;  // half
-    if (Ctype == 2) element_size = 8;  // double
-
-    size_t total_bytes = static_cast<size_t>(m) * n * element_size;
-
-    // Fill with random bytes
-    unsigned char *ptr = static_cast<unsigned char*>(C);
-    for (size_t i = 0; i < total_bytes; i++) {
-        ptr[i] = static_cast<unsigned char>(std::uniform_int_distribution<int>(0, 255)(g_rng));
-    }
+    // Don't fill output buffer - PyTorch manages memory and filling it with random data
+    // can corrupt its internal state. Just return success to let PyTorch continue.
 
     FGPU_LOG("[FakeCUBLAS] cublasGemmEx m=%d n=%d k=%d Atype=%d Btype=%d Ctype=%d computeType=%d\n",
            m, n, k, Atype, Btype, Ctype, computeType);
@@ -584,16 +612,8 @@ cublasStatus_t cublasGemmStridedBatchedEx(cublasHandle_t handle, cublasOperation
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 
-    size_t element_size = 4;
-    if (Ctype == 0) element_size = 2;
-    if (Ctype == 2) element_size = 8;
-
-    size_t total_bytes = static_cast<size_t>(m) * n * batchCount * element_size;
-
-    unsigned char *ptr = static_cast<unsigned char*>(C);
-    for (size_t i = 0; i < total_bytes; i++) {
-        ptr[i] = static_cast<unsigned char>(std::uniform_int_distribution<int>(0, 255)(g_rng));
-    }
+    // Don't fill output buffer - PyTorch manages memory and filling it with random data
+    // can corrupt its internal state. Just return success to let PyTorch continue.
 
     FGPU_LOG("[FakeCUBLAS] cublasGemmStridedBatchedEx m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
@@ -604,20 +624,8 @@ cublasStatus_t cublasGemmBatchedEx(cublasHandle_t handle, cublasOperation_t tran
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 
-    size_t element_size = 4;
-    if (Ctype == 0) element_size = 2;
-    if (Ctype == 2) element_size = 8;
-
-    size_t matrix_bytes = static_cast<size_t>(m) * n * element_size;
-
-    for (int i = 0; i < batchCount; i++) {
-        if (Carray[i]) {
-            unsigned char *ptr = static_cast<unsigned char*>(Carray[i]);
-            for (size_t j = 0; j < matrix_bytes; j++) {
-                ptr[j] = static_cast<unsigned char>(std::uniform_int_distribution<int>(0, 255)(g_rng));
-            }
-        }
-    }
+    // Don't fill output buffer - PyTorch manages memory and filling it with random data
+    // can corrupt its internal state. Just return success to let PyTorch continue.
 
     FGPU_LOG("[FakeCUBLAS] cublasGemmBatchedEx m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
@@ -1128,15 +1136,7 @@ cublasStatus_t cublasSgemmEx(cublasHandle_t handle, cublasOperation_t transa, cu
     if (!A || !B || !C || !alpha || !beta) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    size_t element_size = 4;  // Default float
-    if (Ctype == 0) element_size = 2;
-    if (Ctype == 2) element_size = 8;
-    
-    size_t total_bytes = static_cast<size_t>(m) * n * element_size;
-    unsigned char *ptr = static_cast<unsigned char*>(C);
-    for (size_t i = 0; i < total_bytes; i++) {
-        ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-    }
+    // Leave output buffer untouched; FakeGPU only needs to report success
     FGPU_LOG("[FakeCUBLAS] cublasSgemmEx m=%d n=%d k=%d\n", m, n, k);
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -1378,4 +1378,3 @@ cublasStatus_t cublasLtMatmul(
     // but we return success to let PyTorch continue
     return CUBLAS_STATUS_SUCCESS;
 }
-
