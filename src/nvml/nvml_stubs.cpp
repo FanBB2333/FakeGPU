@@ -1,5 +1,6 @@
 #include "nvml_defs.hpp"
 #include "../core/global_state.hpp"
+#include "../core/logging.hpp"
 #include "../monitor/monitor.hpp"
 #include <cstdio>
 #include <cstring>
@@ -21,19 +22,19 @@ static bool check_init() {
 extern "C" {
 
 nvmlReturn_t nvmlInit() {
-    printf("[FakeNVML] nvmlInit called\n");
+    FGPU_LOG("[FakeNVML] nvmlInit called\n");
     GlobalState::instance().initialize();
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlInitWithFlags(unsigned int flags) {
-    printf("[FakeNVML] nvmlInitWithFlags called with flags=%u\n", flags);
+    FGPU_LOG("[FakeNVML] nvmlInitWithFlags called with flags=%u\n", flags);
     GlobalState::instance().initialize();
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlShutdown() {
-    printf("[FakeNVML] nvmlShutdown called\n");
+    FGPU_LOG("[FakeNVML] nvmlShutdown called\n");
     // Dump the monitor report before shutdown
     dump_monitor_report();
     return NVML_SUCCESS;
@@ -42,7 +43,7 @@ nvmlReturn_t nvmlShutdown() {
 nvmlReturn_t nvmlDeviceGetCount(unsigned int *deviceCount) {
     if (!deviceCount) return NVML_ERROR_INVALID_ARGUMENT;
     *deviceCount = GlobalState::instance().get_device_count();
-    printf("[FakeNVML] nvmlDeviceGetCount returning %d\n", *deviceCount);
+    FGPU_LOG("[FakeNVML] nvmlDeviceGetCount returning %d\n", *deviceCount);
     return NVML_SUCCESS;
 }
 
@@ -54,7 +55,7 @@ nvmlReturn_t nvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device
     // Just cast index to device pointer for simplicity, or use address of Device object
     Device& dev = GlobalState::instance().get_device(index);
     *device = (nvmlDevice_t)&dev;
-    printf("[FakeNVML] nvmlDeviceGetHandleByIndex(%d) returning %p\n", index, *device);
+    FGPU_LOG("[FakeNVML] nvmlDeviceGetHandleByIndex(%d) returning %p\n", index, *device);
     return NVML_SUCCESS;
 }
 
@@ -302,21 +303,21 @@ nvmlReturn_t nvmlDeviceGetHandleByIndex_v2(unsigned int index, nvmlDevice_t *dev
 nvmlReturn_t nvmlSystemGetDriverVersion(char *version, unsigned int length) {
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
     snprintf(version, length, "570.195.03");
-    printf("[FakeNVML] nvmlSystemGetDriverVersion returning: %s\n", version);
+    FGPU_LOG("[FakeNVML] nvmlSystemGetDriverVersion returning: %s\n", version);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlSystemGetNVMLVersion(char *version, unsigned int length) {
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
     snprintf(version, length, "12.570.195");
-    printf("[FakeNVML] nvmlSystemGetNVMLVersion returning: %s\n", version);
+    FGPU_LOG("[FakeNVML] nvmlSystemGetNVMLVersion returning: %s\n", version);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlSystemGetCudaDriverVersion(int *cudaDriverVersion) {
     if (!cudaDriverVersion) return NVML_ERROR_INVALID_ARGUMENT;
     *cudaDriverVersion = 12080;  // CUDA 12.8
-    printf("[FakeNVML] nvmlSystemGetCudaDriverVersion returning: %d\n", *cudaDriverVersion);
+    FGPU_LOG("[FakeNVML] nvmlSystemGetCudaDriverVersion returning: %d\n", *cudaDriverVersion);
     return NVML_SUCCESS;
 }
 

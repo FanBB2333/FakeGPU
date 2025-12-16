@@ -1,4 +1,5 @@
 #include "global_state.hpp"
+#include "logging.hpp"
 
 #include <algorithm>
 
@@ -14,7 +15,7 @@ GlobalState::GlobalState() {
 
 void GlobalState::initialize() {
     std::lock_guard<std::mutex> lock(mutex);
-    printf("[GlobalState-%p] initialize called. Current devices: %lu\n", this, devices.size());
+    FGPU_LOG("[GlobalState-%p] initialize called. Current devices: %lu\n", this, devices.size());
     if (initialized) return;
 
     // Create 8 fake devices
@@ -22,7 +23,7 @@ void GlobalState::initialize() {
         devices.emplace_back(i);
     }
     initialized = true;
-    printf("[GlobalState-%p] Valid devices count after init: %lu\n", this, devices.size());
+    FGPU_LOG("[GlobalState-%p] Valid devices count after init: %lu\n", this, devices.size());
 }
 
 int GlobalState::get_device_count() const {

@@ -1,4 +1,5 @@
 #include "cublas_defs.hpp"
+#include "../core/logging.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -61,7 +62,7 @@ cublasStatus_t cublasCreate_v2(cublasHandle_t *handle) {
     *handle = reinterpret_cast<cublasHandle_t>(h);
     g_handles[*handle] = h;
 
-    printf("[FakeCUBLAS] cublasCreate_v2 handle=%p\n", *handle);
+    FGPU_LOG("[FakeCUBLAS] cublasCreate_v2 handle=%p\n", *handle);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -80,7 +81,7 @@ cublasStatus_t cublasDestroy_v2(cublasHandle_t handle) {
     delete it->second;
     g_handles.erase(it);
 
-    printf("[FakeCUBLAS] cublasDestroy_v2 handle=%p\n", handle);
+    FGPU_LOG("[FakeCUBLAS] cublasDestroy_v2 handle=%p\n", handle);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -94,7 +95,7 @@ cublasStatus_t cublasGetVersion_v2(cublasHandle_t handle, int *version) {
     }
 
     *version = 12000;  // cuBLAS 12.0
-    printf("[FakeCUBLAS] cublasGetVersion_v2 returning 12000\n");
+    FGPU_LOG("[FakeCUBLAS] cublasGetVersion_v2 returning 12000\n");
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -120,7 +121,7 @@ cublasStatus_t cublasSetStream_v2(cublasHandle_t handle, void *streamId) {
     }
 
     it->second->stream = streamId;
-    printf("[FakeCUBLAS] cublasSetStream_v2 stream=%p\n", streamId);
+    FGPU_LOG("[FakeCUBLAS] cublasSetStream_v2 stream=%p\n", streamId);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -161,7 +162,7 @@ cublasStatus_t cublasSetPointerMode_v2(cublasHandle_t handle, cublasPointerMode_
     }
 
     it->second->pointerMode = mode;
-    printf("[FakeCUBLAS] cublasSetPointerMode_v2 mode=%d\n", mode);
+    FGPU_LOG("[FakeCUBLAS] cublasSetPointerMode_v2 mode=%d\n", mode);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -194,7 +195,7 @@ cublasStatus_t cublasSetMathMode(cublasHandle_t handle, cublasMath_t mode) {
     }
 
     it->second->mathMode = mode;
-    printf("[FakeCUBLAS] cublasSetMathMode mode=%d\n", mode);
+    FGPU_LOG("[FakeCUBLAS] cublasSetMathMode mode=%d\n", mode);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -227,7 +228,7 @@ cublasStatus_t cublasSetAtomicsMode(cublasHandle_t handle, cublasAtomicsMode_t m
     }
 
     it->second->atomicsMode = mode;
-    printf("[FakeCUBLAS] cublasSetAtomicsMode mode=%d\n", mode);
+    FGPU_LOG("[FakeCUBLAS] cublasSetAtomicsMode mode=%d\n", mode);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -256,7 +257,7 @@ cublasStatus_t cublasIsamax_v2(cublasHandle_t handle, int n, const float *x, int
         return CUBLAS_STATUS_INVALID_VALUE;
     }
     *result = std::uniform_int_distribution<int>(0, n-1)(g_rng);
-    printf("[FakeCUBLAS] cublasIsamax_v2 n=%d result=%d\n", n, *result);
+    FGPU_LOG("[FakeCUBLAS] cublasIsamax_v2 n=%d result=%d\n", n, *result);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -306,7 +307,7 @@ cublasStatus_t cublasSaxpy_v2(cublasHandle_t handle, int n, const float *alpha, 
     }
     // y = alpha*x + y - just fill with random values
     fillRandom(y, n);
-    printf("[FakeCUBLAS] cublasSaxpy_v2 n=%d\n", n);
+    FGPU_LOG("[FakeCUBLAS] cublasSaxpy_v2 n=%d\n", n);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -394,7 +395,7 @@ cublasStatus_t cublasSgemv_v2(cublasHandle_t handle, cublasOperation_t trans, in
     int output_size = (trans == CUBLAS_OP_N) ? m : n;
     fillRandom(y, output_size);
 
-    printf("[FakeCUBLAS] cublasSgemv_v2 trans=%d m=%d n=%d\n", trans, m, n);
+    FGPU_LOG("[FakeCUBLAS] cublasSgemv_v2 trans=%d m=%d n=%d\n", trans, m, n);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -440,7 +441,7 @@ cublasStatus_t cublasSgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     size_t total_elements = static_cast<size_t>(m) * n;
     fillRandom(C, total_elements);
 
-    printf("[FakeCUBLAS] cublasSgemm_v2 m=%d n=%d k=%d (output %zu elements)\n", m, n, k, total_elements);
+    FGPU_LOG("[FakeCUBLAS] cublasSgemm_v2 m=%d n=%d k=%d (output %zu elements)\n", m, n, k, total_elements);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -452,7 +453,7 @@ cublasStatus_t cublasDgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     size_t total_elements = static_cast<size_t>(m) * n;
     fillRandom(C, total_elements);
 
-    printf("[FakeCUBLAS] cublasDgemm_v2 m=%d n=%d k=%d (output %zu elements)\n", m, n, k, total_elements);
+    FGPU_LOG("[FakeCUBLAS] cublasDgemm_v2 m=%d n=%d k=%d (output %zu elements)\n", m, n, k, total_elements);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -468,7 +469,7 @@ cublasStatus_t cublasHgemm(cublasHandle_t handle, cublasOperation_t transa, cubl
         C[i].x = dist(g_rng);
     }
 
-    printf("[FakeCUBLAS] cublasHgemm m=%d n=%d k=%d\n", m, n, k);
+    FGPU_LOG("[FakeCUBLAS] cublasHgemm m=%d n=%d k=%d\n", m, n, k);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -484,7 +485,7 @@ cublasStatus_t cublasSgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     size_t total_elements = static_cast<size_t>(m) * n * batchCount;
     fillRandom(C, total_elements);
 
-    printf("[FakeCUBLAS] cublasSgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
+    FGPU_LOG("[FakeCUBLAS] cublasSgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -496,7 +497,7 @@ cublasStatus_t cublasDgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     size_t total_elements = static_cast<size_t>(m) * n * batchCount;
     fillRandom(C, total_elements);
 
-    printf("[FakeCUBLAS] cublasDgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
+    FGPU_LOG("[FakeCUBLAS] cublasDgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -511,7 +512,7 @@ cublasStatus_t cublasHgemmStridedBatched(cublasHandle_t handle, cublasOperation_
         C[i].x = dist(g_rng);
     }
 
-    printf("[FakeCUBLAS] cublasHgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
+    FGPU_LOG("[FakeCUBLAS] cublasHgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -531,7 +532,7 @@ cublasStatus_t cublasSgemmBatched(cublasHandle_t handle, cublasOperation_t trans
         }
     }
 
-    printf("[FakeCUBLAS] cublasSgemmBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
+    FGPU_LOG("[FakeCUBLAS] cublasSgemmBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -547,7 +548,7 @@ cublasStatus_t cublasDgemmBatched(cublasHandle_t handle, cublasOperation_t trans
         }
     }
 
-    printf("[FakeCUBLAS] cublasDgemmBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
+    FGPU_LOG("[FakeCUBLAS] cublasDgemmBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -573,7 +574,7 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
         ptr[i] = static_cast<unsigned char>(std::uniform_int_distribution<int>(0, 255)(g_rng));
     }
 
-    printf("[FakeCUBLAS] cublasGemmEx m=%d n=%d k=%d Atype=%d Btype=%d Ctype=%d computeType=%d\n",
+    FGPU_LOG("[FakeCUBLAS] cublasGemmEx m=%d n=%d k=%d Atype=%d Btype=%d Ctype=%d computeType=%d\n",
            m, n, k, Atype, Btype, Ctype, computeType);
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -594,7 +595,7 @@ cublasStatus_t cublasGemmStridedBatchedEx(cublasHandle_t handle, cublasOperation
         ptr[i] = static_cast<unsigned char>(std::uniform_int_distribution<int>(0, 255)(g_rng));
     }
 
-    printf("[FakeCUBLAS] cublasGemmStridedBatchedEx m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
+    FGPU_LOG("[FakeCUBLAS] cublasGemmStridedBatchedEx m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -618,7 +619,7 @@ cublasStatus_t cublasGemmBatchedEx(cublasHandle_t handle, cublasOperation_t tran
         }
     }
 
-    printf("[FakeCUBLAS] cublasGemmBatchedEx m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
+    FGPU_LOG("[FakeCUBLAS] cublasGemmBatchedEx m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -632,7 +633,7 @@ cublasStatus_t cublasStrsm_v2(cublasHandle_t handle, cublasSideMode_t side, cubl
     }
 
     fillRandom(B, m * n);
-    printf("[FakeCUBLAS] cublasStrsm_v2 m=%d n=%d\n", m, n);
+    FGPU_LOG("[FakeCUBLAS] cublasStrsm_v2 m=%d n=%d\n", m, n);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -657,7 +658,7 @@ cublasStatus_t cublasStrsmBatched(cublasHandle_t handle, cublasSideMode_t side, 
         }
     }
 
-    printf("[FakeCUBLAS] cublasStrsmBatched m=%d n=%d batchCount=%d\n", m, n, batchCount);
+    FGPU_LOG("[FakeCUBLAS] cublasStrsmBatched m=%d n=%d batchCount=%d\n", m, n, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -686,7 +687,7 @@ cublasStatus_t cublasSsymm_v2(cublasHandle_t handle, cublasSideMode_t side, cubl
     }
 
     fillRandom(C, m * n);
-    printf("[FakeCUBLAS] cublasSsymm_v2 m=%d n=%d\n", m, n);
+    FGPU_LOG("[FakeCUBLAS] cublasSsymm_v2 m=%d n=%d\n", m, n);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -709,7 +710,7 @@ cublasStatus_t cublasSsyrk_v2(cublasHandle_t handle, cublasFillMode_t uplo, cubl
     }
 
     fillRandom(C, n * n);
-    printf("[FakeCUBLAS] cublasSsyrk_v2 n=%d k=%d\n", n, k);
+    FGPU_LOG("[FakeCUBLAS] cublasSsyrk_v2 n=%d k=%d\n", n, k);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -776,7 +777,7 @@ cublasStatus_t cublasStrmm_v2(cublasHandle_t handle, cublasSideMode_t side, cubl
     }
 
     fillRandom(C, m * n);
-    printf("[FakeCUBLAS] cublasStrmm_v2 m=%d n=%d\n", m, n);
+    FGPU_LOG("[FakeCUBLAS] cublasStrmm_v2 m=%d n=%d\n", m, n);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -863,7 +864,7 @@ cublasStatus_t cublasCgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     for (size_t i = 0; i < total_bytes; i++) {
         ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
     }
-    printf("[FakeCUBLAS] cublasCgemm_v2 m=%d n=%d k=%d\n", m, n, k);
+    FGPU_LOG("[FakeCUBLAS] cublasCgemm_v2 m=%d n=%d k=%d\n", m, n, k);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -876,7 +877,7 @@ cublasStatus_t cublasZgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     for (size_t i = 0; i < total_bytes; i++) {
         ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
     }
-    printf("[FakeCUBLAS] cublasZgemm_v2 m=%d n=%d k=%d\n", m, n, k);
+    FGPU_LOG("[FakeCUBLAS] cublasZgemm_v2 m=%d n=%d k=%d\n", m, n, k);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -890,7 +891,7 @@ cublasStatus_t cublasCgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     for (size_t i = 0; i < total_bytes; i++) {
         ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
     }
-    printf("[FakeCUBLAS] cublasCgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
+    FGPU_LOG("[FakeCUBLAS] cublasCgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -903,7 +904,7 @@ cublasStatus_t cublasZgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     for (size_t i = 0; i < total_bytes; i++) {
         ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
     }
-    printf("[FakeCUBLAS] cublasZgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
+    FGPU_LOG("[FakeCUBLAS] cublasZgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -972,7 +973,7 @@ cublasStatus_t cublasSgetrfBatched(cublasHandle_t handle, int n, float *const Aa
         if (Aarray[i]) fillRandom(Aarray[i], n * n);
         if (infoArray) infoArray[i] = 0;
     }
-    printf("[FakeCUBLAS] cublasSgetrfBatched n=%d batchSize=%d\n", n, batchSize);
+    FGPU_LOG("[FakeCUBLAS] cublasSgetrfBatched n=%d batchSize=%d\n", n, batchSize);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1109,7 +1110,7 @@ cublasStatus_t cublasZgelsBatched(cublasHandle_t handle, cublasOperation_t trans
 
 // Workspace management
 cublasStatus_t cublasSetWorkspace_v2(cublasHandle_t handle, void *workspace, size_t workspaceSizeInBytes) {
-    printf("[FakeCUBLAS] cublasSetWorkspace_v2 workspaceSize=%zu\n", workspaceSizeInBytes);
+    FGPU_LOG("[FakeCUBLAS] cublasSetWorkspace_v2 workspaceSize=%zu\n", workspaceSizeInBytes);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1136,7 +1137,7 @@ cublasStatus_t cublasSgemmEx(cublasHandle_t handle, cublasOperation_t transa, cu
     for (size_t i = 0; i < total_bytes; i++) {
         ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
     }
-    printf("[FakeCUBLAS] cublasSgemmEx m=%d n=%d k=%d\n", m, n, k);
+    FGPU_LOG("[FakeCUBLAS] cublasSgemmEx m=%d n=%d k=%d\n", m, n, k);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1165,7 +1166,7 @@ cublasStatus_t cublasLtCreate(cublasLtHandle_t *lightHandle) {
     *lightHandle = reinterpret_cast<cublasLtHandle_t>(handle);
     g_lt_handles[*lightHandle] = handle;
 
-    printf("[FakeCUBLASLt] cublasLtCreate handle=%p\n", *lightHandle);
+    FGPU_LOG("[FakeCUBLASLt] cublasLtCreate handle=%p\n", *lightHandle);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1180,7 +1181,7 @@ cublasStatus_t cublasLtDestroy(cublasLtHandle_t lightHandle) {
     free(it->second);
     g_lt_handles.erase(it);
 
-    printf("[FakeCUBLASLt] cublasLtDestroy handle=%p\n", lightHandle);
+    FGPU_LOG("[FakeCUBLASLt] cublasLtDestroy handle=%p\n", lightHandle);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1195,7 +1196,7 @@ cublasStatus_t cublasLtMatmulDescCreate(cublasLtMatmulDesc_t *matmulDesc, int co
     *matmulDesc = reinterpret_cast<cublasLtMatmulDesc_t>(desc);
     g_lt_matmul_descs[*matmulDesc] = desc;
 
-    printf("[FakeCUBLASLt] cublasLtMatmulDescCreate desc=%p computeType=%d scaleType=%d\n", *matmulDesc, computeType, scaleType);
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatmulDescCreate desc=%p computeType=%d scaleType=%d\n", *matmulDesc, computeType, scaleType);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1210,13 +1211,13 @@ cublasStatus_t cublasLtMatmulDescDestroy(cublasLtMatmulDesc_t matmulDesc) {
     free(it->second);
     g_lt_matmul_descs.erase(it);
 
-    printf("[FakeCUBLASLt] cublasLtMatmulDescDestroy desc=%p\n", matmulDesc);
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatmulDescDestroy desc=%p\n", matmulDesc);
     return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasLtMatmulDescSetAttribute(cublasLtMatmulDesc_t matmulDesc, int attr, const void *buf, size_t sizeInBytes) {
     // Just return success - we don't actually use the attributes
-    printf("[FakeCUBLASLt] cublasLtMatmulDescSetAttribute desc=%p attr=%d size=%zu\n", matmulDesc, attr, sizeInBytes);
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatmulDescSetAttribute desc=%p attr=%d size=%zu\n", matmulDesc, attr, sizeInBytes);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1236,7 +1237,7 @@ cublasStatus_t cublasLtMatrixLayoutCreate(cublasLtMatrixLayout_t *matLayout, int
     *matLayout = reinterpret_cast<cublasLtMatrixLayout_t>(layout);
     g_lt_matrix_layouts[*matLayout] = layout;
 
-    printf("[FakeCUBLASLt] cublasLtMatrixLayoutCreate layout=%p type=%d rows=%lu cols=%lu ld=%ld\n",
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatrixLayoutCreate layout=%p type=%d rows=%lu cols=%lu ld=%ld\n",
            *matLayout, type, rows, cols, ld);
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -1252,12 +1253,12 @@ cublasStatus_t cublasLtMatrixLayoutDestroy(cublasLtMatrixLayout_t matLayout) {
     free(it->second);
     g_lt_matrix_layouts.erase(it);
 
-    printf("[FakeCUBLASLt] cublasLtMatrixLayoutDestroy layout=%p\n", matLayout);
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatrixLayoutDestroy layout=%p\n", matLayout);
     return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasLtMatrixLayoutSetAttribute(cublasLtMatrixLayout_t matLayout, int attr, const void *buf, size_t sizeInBytes) {
-    printf("[FakeCUBLASLt] cublasLtMatrixLayoutSetAttribute layout=%p attr=%d size=%zu\n", matLayout, attr, sizeInBytes);
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatrixLayoutSetAttribute layout=%p attr=%d size=%zu\n", matLayout, attr, sizeInBytes);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1277,7 +1278,7 @@ cublasStatus_t cublasLtMatmulPreferenceCreate(cublasLtMatmulPreference_t *pref) 
     *pref = reinterpret_cast<cublasLtMatmulPreference_t>(preference);
     g_lt_preferences[*pref] = preference;
 
-    printf("[FakeCUBLASLt] cublasLtMatmulPreferenceCreate pref=%p\n", *pref);
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatmulPreferenceCreate pref=%p\n", *pref);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1292,12 +1293,12 @@ cublasStatus_t cublasLtMatmulPreferenceDestroy(cublasLtMatmulPreference_t pref) 
     free(it->second);
     g_lt_preferences.erase(it);
 
-    printf("[FakeCUBLASLt] cublasLtMatmulPreferenceDestroy pref=%p\n", pref);
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatmulPreferenceDestroy pref=%p\n", pref);
     return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasLtMatmulPreferenceSetAttribute(cublasLtMatmulPreference_t pref, int attr, const void *buf, size_t sizeInBytes) {
-    printf("[FakeCUBLASLt] cublasLtMatmulPreferenceSetAttribute pref=%p attr=%d size=%zu\n", pref, attr, sizeInBytes);
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatmulPreferenceSetAttribute pref=%p attr=%d size=%zu\n", pref, attr, sizeInBytes);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1338,7 +1339,7 @@ cublasStatus_t cublasLtMatmulAlgoGetHeuristic(
 
     *returnAlgoCount = algoCount;
 
-    printf("[FakeCUBLASLt] cublasLtMatmulAlgoGetHeuristic requested=%d returned=%d\n",
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatmulAlgoGetHeuristic requested=%d returned=%d\n",
            requestedAlgoCount, algoCount);
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -1370,7 +1371,7 @@ cublasStatus_t cublasLtMatmul(
     // In a real implementation, we'd extract matrix dimensions from the descriptors
     // and perform actual computation
 
-    printf("[FakeCUBLASLt] cublasLtMatmul A=%p B=%p D=%p workspace=%zu\n",
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatmul A=%p B=%p D=%p workspace=%zu\n",
            A, B, D, workspaceSizeInBytes);
 
     // We can't actually compute without knowing the dimensions,

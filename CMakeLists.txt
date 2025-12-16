@@ -4,6 +4,16 @@ project(FakeGPU VERSION 0.1)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Option to enable/disable debug logging
+option(ENABLE_FAKEGPU_LOGGING "Enable debug logging output" OFF)
+
+if(ENABLE_FAKEGPU_LOGGING)
+    add_compile_definitions(ENABLE_FAKEGPU_LOGGING)
+    message(STATUS "FakeGPU logging: ENABLED")
+else()
+    message(STATUS "FakeGPU logging: DISABLED")
+endif()
+
 # Source directories
 add_subdirectory(src/core)
 add_subdirectory(src/nvml)

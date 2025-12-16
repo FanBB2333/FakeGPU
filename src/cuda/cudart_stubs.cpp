@@ -1,5 +1,6 @@
 #include "cudart_defs.hpp"
 #include "cuda_driver_defs.hpp"
+#include "../core/logging.hpp"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -39,7 +40,7 @@ cudaError_t cudaGetDeviceCount(int *count) {
 
     CUresult result = cuDeviceGetCount(count);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaGetDeviceCount returning %d\n", *count);
+    FGPU_LOG("[FakeCUDART] cudaGetDeviceCount returning %d\n", *count);
     return last_error;
 }
 
@@ -63,7 +64,7 @@ cudaError_t cudaSetDevice(int device) {
     // Set as current context
     result = cuCtxSetCurrent(context);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaSetDevice(%d)\n", device);
+    FGPU_LOG("[FakeCUDART] cudaSetDevice(%d)\n", device);
     return last_error;
 }
 
@@ -142,7 +143,7 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
     cuDeviceGetAttribute(&prop->pciDomainID, CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID, device);
 
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGetDeviceProperties(%d)\n", device);
+    FGPU_LOG("[FakeCUDART] cudaGetDeviceProperties(%d)\n", device);
     return last_error;
 }
 
@@ -158,14 +159,14 @@ cudaError_t cudaDeviceReset(void) {
     }
 
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaDeviceReset()\n");
+    FGPU_LOG("[FakeCUDART] cudaDeviceReset()\n");
     return last_error;
 }
 
 cudaError_t cudaDeviceSynchronize(void) {
     CUresult result = cuCtxSynchronize();
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaDeviceSynchronize()\n");
+    FGPU_LOG("[FakeCUDART] cudaDeviceSynchronize()\n");
     return last_error;
 }
 
@@ -185,7 +186,7 @@ cudaError_t cudaMalloc(void **devPtr, size_t size) {
     if (result == CUDA_SUCCESS) {
         *devPtr = (void*)dptr;
         last_error = cudaSuccess;
-        printf("[FakeCUDART] cudaMalloc allocated %zu bytes at %p\n", size, *devPtr);
+        FGPU_LOG("[FakeCUDART] cudaMalloc allocated %zu bytes at %p\n", size, *devPtr);
     } else {
         last_error = convertDriverError(result);
     }
@@ -201,7 +202,7 @@ cudaError_t cudaFree(void *devPtr) {
 
     CUresult result = cuMemFree((CUdeviceptr)devPtr);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaFree(%p)\n", devPtr);
+    FGPU_LOG("[FakeCUDART] cudaFree(%p)\n", devPtr);
     return last_error;
 }
 
@@ -216,7 +217,7 @@ cudaError_t cudaMallocAsync(void **devPtr, size_t size, cudaStream_t stream) {
     if (result == CUDA_SUCCESS) {
         *devPtr = (void*)dptr;
         last_error = cudaSuccess;
-        printf("[FakeCUDART] cudaMallocAsync allocated %zu bytes at %p\n", size, *devPtr);
+        FGPU_LOG("[FakeCUDART] cudaMallocAsync allocated %zu bytes at %p\n", size, *devPtr);
     } else {
         last_error = convertDriverError(result);
     }
@@ -232,7 +233,7 @@ cudaError_t cudaFreeAsync(void *devPtr, cudaStream_t stream) {
 
     CUresult result = cuMemFree((CUdeviceptr)devPtr);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaFreeAsync(%p)\n", devPtr);
+    FGPU_LOG("[FakeCUDART] cudaFreeAsync(%p)\n", devPtr);
     return last_error;
 }
 
@@ -258,7 +259,7 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, cudaMemcpyKind 
     }
 
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaMemcpy count=%zu kind=%d\n", count, kind);
+    FGPU_LOG("[FakeCUDART] cudaMemcpy count=%zu kind=%d\n", count, kind);
     return last_error;
 }
 
@@ -273,7 +274,7 @@ cudaError_t cudaMemcpyPeer(void *dst, int dstDevice, const void *src, int srcDev
     // Simplified: just do memory copy
     memcpy(dst, src, count);
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaMemcpyPeer count=%zu from device %d to device %d\n", count, srcDevice, dstDevice);
+    FGPU_LOG("[FakeCUDART] cudaMemcpyPeer count=%zu from device %d to device %d\n", count, srcDevice, dstDevice);
     return last_error;
 }
 
@@ -281,14 +282,14 @@ cudaError_t cudaMemcpyPeerAsync(void *dst, int dstDevice, const void *src, int s
     // Simplified: just do memory copy
     memcpy(dst, src, count);
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaMemcpyPeerAsync count=%zu from device %d to device %d\n", count, srcDevice, dstDevice);
+    FGPU_LOG("[FakeCUDART] cudaMemcpyPeerAsync count=%zu from device %d to device %d\n", count, srcDevice, dstDevice);
     return last_error;
 }
 
 cudaError_t cudaMemset(void *devPtr, int value, size_t count) {
     memset(devPtr, value, count);
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaMemset ptr=%p value=%d count=%zu\n", devPtr, value, count);
+    FGPU_LOG("[FakeCUDART] cudaMemset ptr=%p value=%d count=%zu\n", devPtr, value, count);
     return last_error;
 }
 
@@ -317,21 +318,21 @@ cudaError_t cudaStreamCreate(cudaStream_t *pStream) {
 
     CUresult result = cuStreamCreate((CUstream*)pStream, 0);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaStreamCreate\n");
+    FGPU_LOG("[FakeCUDART] cudaStreamCreate\n");
     return last_error;
 }
 
 cudaError_t cudaStreamDestroy(cudaStream_t stream) {
     CUresult result = cuStreamDestroy((CUstream)stream);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaStreamDestroy\n");
+    FGPU_LOG("[FakeCUDART] cudaStreamDestroy\n");
     return last_error;
 }
 
 cudaError_t cudaStreamSynchronize(cudaStream_t stream) {
     CUresult result = cuStreamSynchronize((CUstream)stream);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaStreamSynchronize\n");
+    FGPU_LOG("[FakeCUDART] cudaStreamSynchronize\n");
     return last_error;
 }
 
@@ -353,14 +354,14 @@ cudaError_t cudaEventCreate(cudaEvent_t *event) {
 
     CUresult result = cuEventCreate((CUevent*)event, 0);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaEventCreate\n");
+    FGPU_LOG("[FakeCUDART] cudaEventCreate\n");
     return last_error;
 }
 
 cudaError_t cudaEventDestroy(cudaEvent_t event) {
     CUresult result = cuEventDestroy((CUevent)event);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaEventDestroy\n");
+    FGPU_LOG("[FakeCUDART] cudaEventDestroy\n");
     return last_error;
 }
 
@@ -406,12 +407,12 @@ cudaError_t cudaEventRecordWithFlags(cudaEvent_t event, cudaStream_t stream, uns
 cudaError_t cudaGetLastError(void) {
     cudaError_t err = last_error;
     last_error = cudaSuccess;  // Clear error
-    printf("[FakeCUDART] cudaGetLastError returning %d\n", err);
+    FGPU_LOG("[FakeCUDART] cudaGetLastError returning %d\n", err);
     return err;
 }
 
 cudaError_t cudaPeekAtLastError(void) {
-    printf("[FakeCUDART] cudaPeekAtLastError returning %d\n", last_error);
+    FGPU_LOG("[FakeCUDART] cudaPeekAtLastError returning %d\n", last_error);
     return last_error;
 }
 
@@ -465,7 +466,7 @@ cudaError_t cudaRuntimeGetVersion(int *runtimeVersion) {
 
     *runtimeVersion = 12000;  // CUDA 12.0
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaRuntimeGetVersion returning 12000\n");
+    FGPU_LOG("[FakeCUDART] cudaRuntimeGetVersion returning 12000\n");
     return last_error;
 }
 
@@ -477,7 +478,7 @@ cudaError_t cudaDriverGetVersion(int *driverVersion) {
 
     CUresult result = cuDriverGetVersion(driverVersion);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaDriverGetVersion returning %d\n", *driverVersion);
+    FGPU_LOG("[FakeCUDART] cudaDriverGetVersion returning %d\n", *driverVersion);
     return last_error;
 }
 
@@ -487,7 +488,7 @@ cudaError_t cudaDriverGetVersion(int *driverVersion) {
 
 cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
                              void **args, size_t sharedMem, cudaStream_t stream) {
-    printf("[FakeCUDART] cudaLaunchKernel (stub) Grid(%d,%d,%d) Block(%d,%d,%d)\n",
+    FGPU_LOG("[FakeCUDART] cudaLaunchKernel (stub) Grid(%d,%d,%d) Block(%d,%d,%d)\n",
            gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
 
     // No actual kernel execution
@@ -496,7 +497,7 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
 }
 
 cudaError_t cudaConfigureCall(dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream) {
-    printf("[FakeCUDART] cudaConfigureCall (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaConfigureCall (stub)\n");
     last_error = cudaSuccess;
     return last_error;
 }
@@ -508,13 +509,13 @@ cudaError_t cudaSetupArgument(const void *arg, size_t size, size_t offset) {
 }
 
 cudaError_t cudaLaunch(const void *func) {
-    printf("[FakeCUDART] cudaLaunch (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaLaunch (stub)\n");
     last_error = cudaSuccess;
     return last_error;
 }
 
 cudaError_t cudaLaunchKernelExC(const void *config, const void *func, void **args) {
-    printf("[FakeCUDART] cudaLaunchKernelExC (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaLaunchKernelExC (stub)\n");
     last_error = cudaSuccess;
     return last_error;
 }
@@ -525,7 +526,7 @@ cudaError_t cudaLaunchHostFunc(cudaStream_t stream, void (*fn)(void *userData), 
         fn(userData);
     }
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaLaunchHostFunc (executed host function)\n");
+    FGPU_LOG("[FakeCUDART] cudaLaunchHostFunc (executed host function)\n");
     return last_error;
 }
 
@@ -547,14 +548,14 @@ cudaError_t cudaMallocHost(void **ptr, size_t size) {
     }
 
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaMallocHost allocated %zu bytes\n", size);
+    FGPU_LOG("[FakeCUDART] cudaMallocHost allocated %zu bytes\n", size);
     return last_error;
 }
 
 cudaError_t cudaFreeHost(void *ptr) {
     free(ptr);
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaFreeHost\n");
+    FGPU_LOG("[FakeCUDART] cudaFreeHost\n");
     return last_error;
 }
 
@@ -572,21 +573,21 @@ cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags) {
     }
 
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaHostAlloc allocated %zu bytes\n", size);
+    FGPU_LOG("[FakeCUDART] cudaHostAlloc allocated %zu bytes\n", size);
     return last_error;
 }
 
 cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags) {
     // Simplified: just succeed
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaHostRegister ptr=%p size=%zu flags=%u\n", ptr, size, flags);
+    FGPU_LOG("[FakeCUDART] cudaHostRegister ptr=%p size=%zu flags=%u\n", ptr, size, flags);
     return last_error;
 }
 
 cudaError_t cudaHostUnregister(void *ptr) {
     // Simplified: just succeed
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaHostUnregister ptr=%p\n", ptr);
+    FGPU_LOG("[FakeCUDART] cudaHostUnregister ptr=%p\n", ptr);
     return last_error;
 }
 
@@ -609,14 +610,14 @@ cudaError_t cudaDeviceCanAccessPeer(int *canAccessPeer, int device, int peerDevi
 cudaError_t cudaDeviceEnablePeerAccess(int peerDevice, unsigned int flags) {
     // Simplified: just succeed
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaDeviceEnablePeerAccess(%d)\n", peerDevice);
+    FGPU_LOG("[FakeCUDART] cudaDeviceEnablePeerAccess(%d)\n", peerDevice);
     return last_error;
 }
 
 cudaError_t cudaDeviceDisablePeerAccess(int peerDevice) {
     // Simplified: just succeed
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaDeviceDisablePeerAccess(%d)\n", peerDevice);
+    FGPU_LOG("[FakeCUDART] cudaDeviceDisablePeerAccess(%d)\n", peerDevice);
     return last_error;
 }
 
@@ -657,7 +658,7 @@ cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned int flags)
 
     CUresult result = cuStreamCreate((CUstream*)pStream, flags);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaStreamCreateWithFlags flags=%u\n", flags);
+    FGPU_LOG("[FakeCUDART] cudaStreamCreateWithFlags flags=%u\n", flags);
     return last_error;
 }
 
@@ -670,7 +671,7 @@ cudaError_t cudaStreamCreateWithPriority(cudaStream_t *pStream, unsigned int fla
     // Simplified: ignore priority
     CUresult result = cuStreamCreate((CUstream*)pStream, flags);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaStreamCreateWithPriority flags=%u priority=%d\n", flags, priority);
+    FGPU_LOG("[FakeCUDART] cudaStreamCreateWithPriority flags=%u priority=%d\n", flags, priority);
     return last_error;
 }
 
@@ -706,14 +707,14 @@ cudaError_t cudaStreamWaitEvent(cudaStream_t stream, cudaEvent_t event, unsigned
 cudaError_t cudaStreamAddCallback(cudaStream_t stream, void (*callback)(cudaStream_t stream, cudaError_t status, void *userData), void *userData, unsigned int flags) {
     // Simplified: just succeed without actually adding callback
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaStreamAddCallback (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaStreamAddCallback (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaStreamUpdateCaptureDependencies(cudaStream_t stream, cudaGraphNode_t *dependencies, size_t numDependencies, unsigned int flags) {
     // Simplified: just succeed
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaStreamUpdateCaptureDependencies (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaStreamUpdateCaptureDependencies (stub)\n");
     return last_error;
 }
 
@@ -729,7 +730,7 @@ cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags) {
 
     CUresult result = cuEventCreate((CUevent*)event, flags);
     last_error = convertDriverError(result);
-    printf("[FakeCUDART] cudaEventCreateWithFlags flags=%u\n", flags);
+    FGPU_LOG("[FakeCUDART] cudaEventCreateWithFlags flags=%u\n", flags);
     return last_error;
 }
 
@@ -849,7 +850,7 @@ cudaError_t cudaMallocPitch(void **devPtr, size_t *pitch, size_t width, size_t h
     if (result == CUDA_SUCCESS) {
         *devPtr = (void*)dptr;
         last_error = cudaSuccess;
-        printf("[FakeCUDART] cudaMallocPitch allocated %zu bytes (pitch=%zu)\n", size, *pitch);
+        FGPU_LOG("[FakeCUDART] cudaMallocPitch allocated %zu bytes (pitch=%zu)\n", size, *pitch);
     } else {
         last_error = convertDriverError(result);
     }
@@ -869,7 +870,7 @@ cudaError_t cudaMalloc3D(void **devPtr, size_t width, size_t height, size_t dept
     if (result == CUDA_SUCCESS) {
         *devPtr = (void*)dptr;
         last_error = cudaSuccess;
-        printf("[FakeCUDART] cudaMalloc3D allocated %zu bytes\n", size);
+        FGPU_LOG("[FakeCUDART] cudaMalloc3D allocated %zu bytes\n", size);
     } else {
         last_error = convertDriverError(result);
     }
@@ -889,7 +890,7 @@ cudaError_t cudaMallocManaged(void **devPtr, size_t size, unsigned int flags) {
     if (result == CUDA_SUCCESS) {
         *devPtr = (void*)dptr;
         last_error = cudaSuccess;
-        printf("[FakeCUDART] cudaMallocManaged allocated %zu bytes\n", size);
+        FGPU_LOG("[FakeCUDART] cudaMallocManaged allocated %zu bytes\n", size);
     } else {
         last_error = convertDriverError(result);
     }
@@ -912,14 +913,14 @@ cudaError_t cudaMallocArray(void **array, const void *desc, size_t width, size_t
     }
 
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaMallocArray allocated %zu bytes\n", size);
+    FGPU_LOG("[FakeCUDART] cudaMallocArray allocated %zu bytes\n", size);
     return last_error;
 }
 
 cudaError_t cudaFreeArray(void *array) {
     free(array);
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaFreeArray\n");
+    FGPU_LOG("[FakeCUDART] cudaFreeArray\n");
     return last_error;
 }
 
@@ -1015,14 +1016,14 @@ cudaError_t cudaMemPoolCreate(cudaMemPool_t *memPool, const void *poolProps) {
     // Create a dummy memory pool
     *memPool = (cudaMemPool_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaMemPoolCreate\n");
+    FGPU_LOG("[FakeCUDART] cudaMemPoolCreate\n");
     return last_error;
 }
 
 cudaError_t cudaMemPoolDestroy(cudaMemPool_t memPool) {
     free(memPool);
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaMemPoolDestroy\n");
+    FGPU_LOG("[FakeCUDART] cudaMemPoolDestroy\n");
     return last_error;
 }
 
@@ -1161,14 +1162,14 @@ cudaError_t cudaGraphCreate(cudaGraph_t *pGraph, unsigned int flags) {
     // Create a dummy graph structure
     *pGraph = (cudaGraph_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphCreate\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphCreate\n");
     return last_error;
 }
 
 cudaError_t cudaGraphDestroy(cudaGraph_t graph) {
     free(graph);
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphDestroy\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphDestroy\n");
     return last_error;
 }
 
@@ -1180,7 +1181,7 @@ cudaError_t cudaGraphAddKernelNode(cudaGraphNode_t *pGraphNode, cudaGraph_t grap
 
     *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphAddKernelNode\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphAddKernelNode\n");
     return last_error;
 }
 
@@ -1192,7 +1193,7 @@ cudaError_t cudaGraphAddMemcpyNode(cudaGraphNode_t *pGraphNode, cudaGraph_t grap
 
     *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphAddMemcpyNode\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphAddMemcpyNode\n");
     return last_error;
 }
 
@@ -1204,7 +1205,7 @@ cudaError_t cudaGraphAddMemsetNode(cudaGraphNode_t *pGraphNode, cudaGraph_t grap
 
     *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphAddMemsetNode\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphAddMemsetNode\n");
     return last_error;
 }
 
@@ -1216,7 +1217,7 @@ cudaError_t cudaGraphAddHostNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph,
 
     *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphAddHostNode\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphAddHostNode\n");
     return last_error;
 }
 
@@ -1228,7 +1229,7 @@ cudaError_t cudaGraphAddChildGraphNode(cudaGraphNode_t *pGraphNode, cudaGraph_t 
 
     *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphAddChildGraphNode\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphAddChildGraphNode\n");
     return last_error;
 }
 
@@ -1240,7 +1241,7 @@ cudaError_t cudaGraphAddEmptyNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph
 
     *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphAddEmptyNode\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphAddEmptyNode\n");
     return last_error;
 }
 
@@ -1252,7 +1253,7 @@ cudaError_t cudaGraphAddEventRecordNode(cudaGraphNode_t *pGraphNode, cudaGraph_t
 
     *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphAddEventRecordNode\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphAddEventRecordNode\n");
     return last_error;
 }
 
@@ -1264,7 +1265,7 @@ cudaError_t cudaGraphAddEventWaitNode(cudaGraphNode_t *pGraphNode, cudaGraph_t g
 
     *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphAddEventWaitNode\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphAddEventWaitNode\n");
     return last_error;
 }
 
@@ -1276,7 +1277,7 @@ cudaError_t cudaGraphClone(cudaGraph_t *pGraphClone, cudaGraph_t originalGraph) 
 
     *pGraphClone = (cudaGraph_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphClone\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphClone\n");
     return last_error;
 }
 
@@ -1375,7 +1376,7 @@ cudaError_t cudaGraphInstantiate(cudaGraphExec_t *pGraphExec, cudaGraph_t graph,
 
     *pGraphExec = (cudaGraphExec_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphInstantiate\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphInstantiate\n");
     return last_error;
 }
 
@@ -1387,38 +1388,38 @@ cudaError_t cudaGraphInstantiateWithFlags(cudaGraphExec_t *pGraphExec, cudaGraph
 
     *pGraphExec = (cudaGraphExec_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphInstantiateWithFlags flags=%llu\n", flags);
+    FGPU_LOG("[FakeCUDART] cudaGraphInstantiateWithFlags flags=%llu\n", flags);
     return last_error;
 }
 
 cudaError_t cudaGraphExecDestroy(cudaGraphExec_t graphExec) {
     free(graphExec);
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphExecDestroy\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphExecDestroy\n");
     return last_error;
 }
 
 cudaError_t cudaGraphLaunch(cudaGraphExec_t graphExec, cudaStream_t stream) {
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphLaunch (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphLaunch (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaGraphUpload(cudaGraphExec_t graphExec, cudaStream_t stream) {
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphUpload (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaGraphUpload (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaGraphDebugDotPrint(cudaGraph_t graph, const char *path, unsigned int flags) {
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaGraphDebugDotPrint path=%s flags=%u (stub)\n", path ? path : "NULL", flags);
+    FGPU_LOG("[FakeCUDART] cudaGraphDebugDotPrint path=%s flags=%u (stub)\n", path ? path : "NULL", flags);
     return last_error;
 }
 
 cudaError_t cudaStreamBeginCapture(cudaStream_t stream, int mode) {
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaStreamBeginCapture mode=%d\n", mode);
+    FGPU_LOG("[FakeCUDART] cudaStreamBeginCapture mode=%d\n", mode);
     return last_error;
 }
 
@@ -1430,7 +1431,7 @@ cudaError_t cudaStreamEndCapture(cudaStream_t stream, cudaGraph_t *pGraph) {
 
     *pGraph = (cudaGraph_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaStreamEndCapture\n");
+    FGPU_LOG("[FakeCUDART] cudaStreamEndCapture\n");
     return last_error;
 }
 
@@ -1467,7 +1468,7 @@ cudaError_t cudaThreadExchangeStreamCaptureMode(int *mode) {
     int oldMode = *mode;
     *mode = 0;  // cudaStreamCaptureModeGlobal
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaThreadExchangeStreamCaptureMode old=%d new=0\n", oldMode);
+    FGPU_LOG("[FakeCUDART] cudaThreadExchangeStreamCaptureMode old=%d new=0\n", oldMode);
     return last_error;
 }
 
@@ -1503,13 +1504,13 @@ cudaError_t cudaCreateTextureObject(cudaTextureObject_t *pTexObject, const cudaR
     static cudaTextureObject_t nextTexId = 1;
     *pTexObject = nextTexId++;
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaCreateTextureObject id=%llu\n", *pTexObject);
+    FGPU_LOG("[FakeCUDART] cudaCreateTextureObject id=%llu\n", *pTexObject);
     return last_error;
 }
 
 cudaError_t cudaDestroyTextureObject(cudaTextureObject_t texObject) {
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaDestroyTextureObject id=%llu\n", texObject);
+    FGPU_LOG("[FakeCUDART] cudaDestroyTextureObject id=%llu\n", texObject);
     return last_error;
 }
 
@@ -1555,13 +1556,13 @@ cudaError_t cudaCreateSurfaceObject(cudaSurfaceObject_t *pSurfObject, const cuda
     static cudaSurfaceObject_t nextSurfId = 1;
     *pSurfObject = nextSurfId++;
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaCreateSurfaceObject id=%llu\n", *pSurfObject);
+    FGPU_LOG("[FakeCUDART] cudaCreateSurfaceObject id=%llu\n", *pSurfObject);
     return last_error;
 }
 
 cudaError_t cudaDestroySurfaceObject(cudaSurfaceObject_t surfObject) {
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaDestroySurfaceObject id=%llu\n", surfObject);
+    FGPU_LOG("[FakeCUDART] cudaDestroySurfaceObject id=%llu\n", surfObject);
     return last_error;
 }
 
@@ -1581,14 +1582,14 @@ cudaError_t cudaGetSurfaceObjectResourceDesc(cudaResourceDesc *pResDesc, cudaSur
 // ============================================================================
 
 cudaError_t cudaLaunchCooperativeKernel(const void *func, dim3 gridDim, dim3 blockDim, void **args, size_t sharedMem, cudaStream_t stream) {
-    printf("[FakeCUDART] cudaLaunchCooperativeKernel (stub) Grid(%d,%d,%d) Block(%d,%d,%d)\n",
+    FGPU_LOG("[FakeCUDART] cudaLaunchCooperativeKernel (stub) Grid(%d,%d,%d) Block(%d,%d,%d)\n",
            gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
     last_error = cudaSuccess;
     return last_error;
 }
 
 cudaError_t cudaLaunchCooperativeKernelMultiDevice(void *launchParamsList, unsigned int numDevices, unsigned int flags) {
-    printf("[FakeCUDART] cudaLaunchCooperativeKernelMultiDevice (stub) numDevices=%u\n", numDevices);
+    FGPU_LOG("[FakeCUDART] cudaLaunchCooperativeKernelMultiDevice (stub) numDevices=%u\n", numDevices);
     last_error = cudaSuccess;
     return last_error;
 }
@@ -1677,7 +1678,7 @@ cudaError_t cudaImportExternalMemory(void **extMem_out, const void *memHandleDes
 
     *extMem_out = malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaImportExternalMemory (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaImportExternalMemory (stub)\n");
     return last_error;
 }
 
@@ -1689,14 +1690,14 @@ cudaError_t cudaExternalMemoryGetMappedBuffer(void **devPtr, void *extMem, const
 
     *devPtr = malloc(1024);  // Dummy buffer
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaExternalMemoryGetMappedBuffer (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaExternalMemoryGetMappedBuffer (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaDestroyExternalMemory(void *extMem) {
     free(extMem);
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaDestroyExternalMemory (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaDestroyExternalMemory (stub)\n");
     return last_error;
 }
 
@@ -1708,26 +1709,26 @@ cudaError_t cudaImportExternalSemaphore(void **extSem_out, const void *semHandle
 
     *extSem_out = malloc(sizeof(void*));
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaImportExternalSemaphore (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaImportExternalSemaphore (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaSignalExternalSemaphoresAsync(const void **extSemArray, const void **paramsArray, unsigned int numExtSems, cudaStream_t stream) {
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaSignalExternalSemaphoresAsync (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaSignalExternalSemaphoresAsync (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaWaitExternalSemaphoresAsync(const void **extSemArray, const void **paramsArray, unsigned int numExtSems, cudaStream_t stream) {
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaWaitExternalSemaphoresAsync (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaWaitExternalSemaphoresAsync (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaDestroyExternalSemaphore(void *extSem) {
     free(extSem);
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaDestroyExternalSemaphore (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaDestroyExternalSemaphore (stub)\n");
     return last_error;
 }
 
@@ -1737,13 +1738,13 @@ cudaError_t cudaDestroyExternalSemaphore(void *extSem) {
 
 cudaError_t cudaProfilerStart(void) {
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaProfilerStart (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaProfilerStart (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaProfilerStop(void) {
     last_error = cudaSuccess;
-    printf("[FakeCUDART] cudaProfilerStop (stub)\n");
+    FGPU_LOG("[FakeCUDART] cudaProfilerStop (stub)\n");
     return last_error;
 }
 
@@ -1752,27 +1753,27 @@ cudaError_t cudaProfilerStop(void) {
 // ============================================================================
 
 void __cudaRegisterFunction(void **fatCubinHandle, const char *hostFun, char *deviceFun, const char *deviceName, int thread_limit, void *tid, void *bid, void *bDim, void *gDim, int *wSize) {
-    printf("[FakeCUDART] __cudaRegisterFunction hostFun=%s deviceName=%s\n", hostFun ? hostFun : "NULL", deviceName ? deviceName : "NULL");
+    FGPU_LOG("[FakeCUDART] __cudaRegisterFunction hostFun=%s deviceName=%s\n", hostFun ? hostFun : "NULL", deviceName ? deviceName : "NULL");
 }
 
 void __cudaRegisterVar(void **fatCubinHandle, char *hostVar, char *deviceAddress, const char *deviceName, int ext, size_t size, int constant, int global) {
-    printf("[FakeCUDART] __cudaRegisterVar deviceName=%s size=%zu constant=%d global=%d\n", deviceName ? deviceName : "NULL", size, constant, global);
+    FGPU_LOG("[FakeCUDART] __cudaRegisterVar deviceName=%s size=%zu constant=%d global=%d\n", deviceName ? deviceName : "NULL", size, constant, global);
 }
 
 void __cudaRegisterFatBinary(void *fatCubin) {
-    printf("[FakeCUDART] __cudaRegisterFatBinary\n");
+    FGPU_LOG("[FakeCUDART] __cudaRegisterFatBinary\n");
 }
 
 void __cudaRegisterFatBinaryEnd(void **fatCubinHandle) {
-    printf("[FakeCUDART] __cudaRegisterFatBinaryEnd\n");
+    FGPU_LOG("[FakeCUDART] __cudaRegisterFatBinaryEnd\n");
 }
 
 void __cudaUnregisterFatBinary(void **fatCubinHandle) {
-    printf("[FakeCUDART] __cudaUnregisterFatBinary\n");
+    FGPU_LOG("[FakeCUDART] __cudaUnregisterFatBinary\n");
 }
 
 void** __cudaRegisterFatBinaryEnd_v2(void **fatCubinHandle) {
-    printf("[FakeCUDART] __cudaRegisterFatBinaryEnd_v2\n");
+    FGPU_LOG("[FakeCUDART] __cudaRegisterFatBinaryEnd_v2\n");
     return fatCubinHandle;
 }
 

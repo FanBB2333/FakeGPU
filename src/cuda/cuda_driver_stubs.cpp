@@ -1,4 +1,6 @@
 #include "cuda_driver_defs.hpp"
+#include "../core/logging.hpp"
+#include "../core/logging.hpp"
 #include "../core/global_state.hpp"
 #include <cstdio>
 #include <cstring>
@@ -13,10 +15,10 @@ static bool driver_initialized = false;
 extern "C" {
 
 CUresult cuInit(unsigned int Flags) {
-    printf("[FakeCUDA-Driver] cuInit called with flags=%u\n", Flags);
+    FGPU_LOG("[FakeCUDA-Driver] cuInit called with flags=%u\n", Flags);
     GlobalState::instance().initialize();
     driver_initialized = true;
-    printf("[FakeCUDA-Driver] cuInit completed successfully\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuInit completed successfully\n");
     return CUDA_SUCCESS;
 }
 
@@ -24,7 +26,7 @@ CUresult cuDriverGetVersion(int *driverVersion) {
     if (!driverVersion) return CUDA_ERROR_INVALID_VALUE;
     // Report CUDA 12.0 (12000)
     *driverVersion = 12000;
-    printf("[FakeCUDA-Driver] cuDriverGetVersion returning 12000\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuDriverGetVersion returning 12000\n");
     return CUDA_SUCCESS;
 }
 
@@ -32,7 +34,7 @@ CUresult cuDeviceGetCount(int *count) {
     if (!count) return CUDA_ERROR_INVALID_VALUE;
     GlobalState::instance().initialize();
     *count = GlobalState::instance().get_device_count();
-    printf("[FakeCUDA-Driver] cuDeviceGetCount returning %d\n", *count);
+    FGPU_LOG("[FakeCUDA-Driver] cuDeviceGetCount returning %d\n", *count);
     return CUDA_SUCCESS;
 }
 
@@ -46,7 +48,7 @@ CUresult cuDeviceGet(CUdevice *device, int ordinal) {
     }
 
     *device = ordinal;
-    printf("[FakeCUDA-Driver] cuDeviceGet(%d) returning device %d\n", ordinal, *device);
+    FGPU_LOG("[FakeCUDA-Driver] cuDeviceGet(%d) returning device %d\n", ordinal, *device);
     return CUDA_SUCCESS;
 }
 
@@ -62,7 +64,7 @@ CUresult cuDeviceGetName(char *name, int len, CUdevice dev) {
     Device& device = GlobalState::instance().get_device(dev);
     strncpy(name, device.name.c_str(), len - 1);
     name[len - 1] = '\0';
-    printf("[FakeCUDA-Driver] cuDeviceGetName(%d) returning '%s'\n", dev, name);
+    FGPU_LOG("[FakeCUDA-Driver] cuDeviceGetName(%d) returning '%s'\n", dev, name);
     return CUDA_SUCCESS;
 }
 
@@ -76,7 +78,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
     }
 
     // Log attribute queries for debugging
-    printf("[FakeCUDA-Driver] cuDeviceGetAttribute(dev=%d, attrib=%d)\n", dev, attrib);
+    FGPU_LOG("[FakeCUDA-Driver] cuDeviceGetAttribute(dev=%d, attrib=%d)\n", dev, attrib);
 
     // Return fake but reasonable values for A100-like GPU
     switch (attrib) {
@@ -307,7 +309,7 @@ CUresult cuDeviceTotalMem(size_t *bytes, CUdevice dev) {
 
     Device& device = GlobalState::instance().get_device(dev);
     *bytes = device.total_memory;
-    printf("[FakeCUDA-Driver] cuDeviceTotalMem(%d) returning %zu bytes\n", dev, *bytes);
+    FGPU_LOG("[FakeCUDA-Driver] cuDeviceTotalMem(%d) returning %zu bytes\n", dev, *bytes);
     return CUDA_SUCCESS;
 }
 
@@ -338,12 +340,12 @@ CUresult cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev) {
     // Return a fake context pointer (just use device number + 1 to avoid NULL)
     *pctx = (CUcontext)(uintptr_t)(dev + 1);
     current_context_device = dev;
-    printf("[FakeCUDA-Driver] cuCtxCreate for device %d, context=%p\n", dev, *pctx);
+    FGPU_LOG("[FakeCUDA-Driver] cuCtxCreate for device %d, context=%p\n", dev, *pctx);
     return CUDA_SUCCESS;
 }
 
 CUresult cuCtxDestroy(CUcontext ctx) {
-    printf("[FakeCUDA-Driver] cuCtxDestroy(%p)\n", ctx);
+    FGPU_LOG("[FakeCUDA-Driver] cuCtxDestroy(%p)\n", ctx);
     return CUDA_SUCCESS;
 }
 
@@ -353,7 +355,7 @@ CUresult cuCtxSetCurrent(CUcontext ctx) {
     } else {
         current_context_device = (int)(uintptr_t)ctx - 1;
     }
-    printf("[FakeCUDA-Driver] cuCtxSetCurrent(%p) -> device %d\n", ctx, current_context_device);
+    FGPU_LOG("[FakeCUDA-Driver] cuCtxSetCurrent(%p) -> device %d\n", ctx, current_context_device);
     return CUDA_SUCCESS;
 }
 
@@ -364,7 +366,7 @@ CUresult cuCtxGetCurrent(CUcontext *pctx) {
 }
 
 CUresult cuCtxSynchronize(void) {
-    printf("[FakeCUDA-Driver] cuCtxSynchronize (no-op)\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuCtxSynchronize (no-op)\n");
     return CUDA_SUCCESS;
 }
 
@@ -384,7 +386,7 @@ CUresult cuMemAlloc(CUdeviceptr *dptr, size_t bytesize) {
     }
 
     *dptr = (CUdeviceptr)ptr;
-    printf("[FakeCUDA-Driver] cuMemAlloc allocated %zu bytes at 0x%llx on device %d\n",
+    FGPU_LOG("[FakeCUDA-Driver] cuMemAlloc allocated %zu bytes at 0x%llx on device %d\n",
            bytesize, *dptr, device);
     return CUDA_SUCCESS;
 }
@@ -396,7 +398,7 @@ CUresult cuMemFree(CUdeviceptr dptr) {
 
     if (GlobalState::instance().release_allocation(ptr, size, device)) {
         free(ptr);
-        printf("[FakeCUDA-Driver] cuMemFree(0x%llx) released %zu bytes from device %d\n",
+        FGPU_LOG("[FakeCUDA-Driver] cuMemFree(0x%llx) released %zu bytes from device %d\n",
                dptr, size, device);
         return CUDA_SUCCESS;
     }
@@ -407,21 +409,21 @@ CUresult cuMemFree(CUdeviceptr dptr) {
 CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount) {
     if (!dstHost || !srcDevice) return CUDA_ERROR_INVALID_VALUE;
     memcpy(dstHost, (void*)srcDevice, ByteCount);
-    printf("[FakeCUDA-Driver] cuMemcpyDtoH copied %zu bytes\n", ByteCount);
+    FGPU_LOG("[FakeCUDA-Driver] cuMemcpyDtoH copied %zu bytes\n", ByteCount);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemcpyHtoD(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount) {
     if (!dstDevice || !srcHost) return CUDA_ERROR_INVALID_VALUE;
     memcpy((void*)dstDevice, srcHost, ByteCount);
-    printf("[FakeCUDA-Driver] cuMemcpyHtoD copied %zu bytes\n", ByteCount);
+    FGPU_LOG("[FakeCUDA-Driver] cuMemcpyHtoD copied %zu bytes\n", ByteCount);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteCount) {
     if (!dstDevice || !srcDevice) return CUDA_ERROR_INVALID_VALUE;
     memcpy((void*)dstDevice, (void*)srcDevice, ByteCount);
-    printf("[FakeCUDA-Driver] cuMemcpyDtoD copied %zu bytes\n", ByteCount);
+    FGPU_LOG("[FakeCUDA-Driver] cuMemcpyDtoD copied %zu bytes\n", ByteCount);
     return CUDA_SUCCESS;
 }
 
@@ -438,7 +440,7 @@ CUresult cuDevicePrimaryCtxRetain(CUcontext *pctx, CUdevice dev) {
     // Return a fake context pointer (just use device number + 1 to avoid NULL)
     *pctx = (CUcontext)(uintptr_t)(dev + 1);
     current_context_device = dev;
-    printf("[FakeCUDA-Driver] cuDevicePrimaryCtxRetain for device %d, context=%p\n", dev, *pctx);
+    FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxRetain for device %d, context=%p\n", dev, *pctx);
     return CUDA_SUCCESS;
 }
 
@@ -450,7 +452,7 @@ CUresult cuDevicePrimaryCtxRelease(CUdevice dev) {
         return CUDA_ERROR_INVALID_DEVICE;
     }
 
-    printf("[FakeCUDA-Driver] cuDevicePrimaryCtxRelease for device %d\n", dev);
+    FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxRelease for device %d\n", dev);
     return CUDA_SUCCESS;
 }
 
@@ -464,7 +466,7 @@ CUresult cuDevicePrimaryCtxGetState(CUdevice dev, unsigned int *flags, int *acti
 
     if (flags) *flags = 0;
     if (active) *active = 1;  // Always report as active
-    printf("[FakeCUDA-Driver] cuDevicePrimaryCtxGetState for device %d, flags=0, active=1\n", dev);
+    FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxGetState for device %d, flags=0, active=1\n", dev);
     return CUDA_SUCCESS;
 }
 
@@ -476,7 +478,7 @@ CUresult cuDevicePrimaryCtxSetFlags(CUdevice dev, unsigned int flags) {
         return CUDA_ERROR_INVALID_DEVICE;
     }
 
-    printf("[FakeCUDA-Driver] cuDevicePrimaryCtxSetFlags for device %d, flags=%u\n", dev, flags);
+    FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxSetFlags for device %d, flags=%u\n", dev, flags);
     return CUDA_SUCCESS;
 }
 
@@ -488,7 +490,7 @@ CUresult cuDevicePrimaryCtxReset(CUdevice dev) {
         return CUDA_ERROR_INVALID_DEVICE;
     }
 
-    printf("[FakeCUDA-Driver] cuDevicePrimaryCtxReset for device %d\n", dev);
+    FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxReset for device %d\n", dev);
     return CUDA_SUCCESS;
 }
 
@@ -499,14 +501,14 @@ CUresult cuCtxPushCurrent(CUcontext ctx) {
     } else {
         current_context_device = (int)(uintptr_t)ctx - 1;
     }
-    printf("[FakeCUDA-Driver] cuCtxPushCurrent(%p) -> device %d\n", ctx, current_context_device);
+    FGPU_LOG("[FakeCUDA-Driver] cuCtxPushCurrent(%p) -> device %d\n", ctx, current_context_device);
     return CUDA_SUCCESS;
 }
 
 CUresult cuCtxPopCurrent(CUcontext *pctx) {
     if (!pctx) return CUDA_ERROR_INVALID_VALUE;
     *pctx = (CUcontext)(uintptr_t)(current_context_device + 1);
-    printf("[FakeCUDA-Driver] cuCtxPopCurrent returning context %p\n", *pctx);
+    FGPU_LOG("[FakeCUDA-Driver] cuCtxPopCurrent returning context %p\n", *pctx);
     return CUDA_SUCCESS;
 }
 
@@ -539,17 +541,17 @@ CUresult cuStreamCreate(CUstream *phStream, unsigned int Flags) {
     if (!phStream) return CUDA_ERROR_INVALID_VALUE;
     // Return a fake stream pointer
     *phStream = (CUstream)(uintptr_t)1;
-    printf("[FakeCUDA-Driver] cuStreamCreate returning fake stream\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuStreamCreate returning fake stream\n");
     return CUDA_SUCCESS;
 }
 
 CUresult cuStreamDestroy(CUstream hStream) {
-    printf("[FakeCUDA-Driver] cuStreamDestroy\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuStreamDestroy\n");
     return CUDA_SUCCESS;
 }
 
 CUresult cuStreamSynchronize(CUstream hStream) {
-    printf("[FakeCUDA-Driver] cuStreamSynchronize (no-op)\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuStreamSynchronize (no-op)\n");
     return CUDA_SUCCESS;
 }
 
@@ -580,12 +582,12 @@ CUresult cuStreamGetCtx(CUstream hStream, CUcontext *pctx) {
 CUresult cuEventCreate(CUevent *phEvent, unsigned int Flags) {
     if (!phEvent) return CUDA_ERROR_INVALID_VALUE;
     *phEvent = (CUevent)(uintptr_t)1;
-    printf("[FakeCUDA-Driver] cuEventCreate returning fake event\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuEventCreate returning fake event\n");
     return CUDA_SUCCESS;
 }
 
 CUresult cuEventDestroy(CUevent hEvent) {
-    printf("[FakeCUDA-Driver] cuEventDestroy\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuEventDestroy\n");
     return CUDA_SUCCESS;
 }
 
@@ -638,7 +640,7 @@ CUresult cuCtxGetLimit(size_t *pvalue, CUlimit limit) {
 }
 
 CUresult cuCtxSetLimit(CUlimit limit, size_t value) {
-    printf("[FakeCUDA-Driver] cuCtxSetLimit (no-op)\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuCtxSetLimit (no-op)\n");
     return CUDA_SUCCESS;
 }
 
@@ -659,7 +661,7 @@ CUresult cuMemGetInfo(size_t *free, size_t *total) {
     Device& dev = GlobalState::instance().get_device(current_context_device);
     if (total) *total = dev.total_memory;
     if (free) *free = dev.total_memory - dev.used_memory;
-    printf("[FakeCUDA-Driver] cuMemGetInfo: free=%zu, total=%zu\n",
+    FGPU_LOG("[FakeCUDA-Driver] cuMemGetInfo: free=%zu, total=%zu\n",
            free ? *free : 0, total ? *total : 0);
     return CUDA_SUCCESS;
 }
@@ -735,7 +737,7 @@ CUresult cuDeviceGetByPCIBusId(CUdevice *dev, const char *pciBusId) {
 CUresult cuModuleLoad(CUmodule *module, const char *fname) {
     if (!module) return CUDA_ERROR_INVALID_VALUE;
     *module = (CUmodule)(uintptr_t)1;
-    printf("[FakeCUDA-Driver] cuModuleLoad (fake)\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuModuleLoad (fake)\n");
     return CUDA_SUCCESS;
 }
 
@@ -776,7 +778,7 @@ CUresult cuModuleGetGlobal(CUdeviceptr *dptr, size_t *bytes, CUmodule hmod, cons
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ,
                         unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ,
                         unsigned int sharedMemBytes, CUstream hStream, void **kernelParams, void **extra) {
-    printf("[FakeCUDA-Driver] cuLaunchKernel (no-op)\n");
+    FGPU_LOG("[FakeCUDA-Driver] cuLaunchKernel (no-op)\n");
     return CUDA_SUCCESS;
 }
 
@@ -1077,7 +1079,7 @@ CUresult cuDeviceGetTexture1DLinearMaxWidth(size_t *maxWidthInElements, int form
 // WARNING: Returning NULL causes the real libcudart to crash!
 // We need to either provide a real export table or avoid being used with real libcudart
 CUresult cuGetExportTable(const void **ppExportTable, const void *pExportTableId) {
-    // printf("[FakeCUDA-Driver] cuGetExportTable called with tableId=%p\n", pExportTableId);
+    // FGPU_LOG("[FakeCUDA-Driver] cuGetExportTable called with tableId=%p\n", pExportTableId);
 
     // The CUDA runtime uses various export table IDs to get internal function tables
     // Returning NULL with CUDA_SUCCESS causes segfault in real libcudart
@@ -1097,7 +1099,7 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     if (!symbol || !pfn) return CUDA_ERROR_INVALID_VALUE;
 
     // Reduce log spam - only log if not found
-    // printf("[FakeCUDA-Driver] cuGetProcAddress looking for: %s\n", symbol);
+    // FGPU_LOG("[FakeCUDA-Driver] cuGetProcAddress looking for: %s\n", symbol);
 
     // Map of function names to their addresses
     #define MAP_FUNC(name) if (strcmp(symbol, #name) == 0) { *pfn = (void*)name; return CUDA_SUCCESS; }
@@ -1265,7 +1267,7 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     #undef MAP_FUNC
 
     // For unknown symbols, return NULL but success (some symbols are optional)
-    // printf("[FakeCUDA-Driver] cuGetProcAddress: symbol '%s' NOT FOUND\n", symbol);
+    // FGPU_LOG("[FakeCUDA-Driver] cuGetProcAddress: symbol '%s' NOT FOUND\n", symbol);
     *pfn = NULL;
     return CUDA_SUCCESS;
 }
