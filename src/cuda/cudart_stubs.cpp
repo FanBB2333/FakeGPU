@@ -1,5 +1,6 @@
 #include "cudart_defs.hpp"
 #include "cuda_driver_defs.hpp"
+#include "../core/global_state.hpp"
 #include "../core/logging.hpp"
 #include <cstdio>
 #include <cstring>
@@ -1114,8 +1115,24 @@ cudaError_t cudaDeviceGetMemPool(cudaMemPool_t *memPool, int device) {
 // Pointer Attributes
 // ============================================================================
 
-cudaError_t cudaPointerGetAttributes(void *attributes, const void *ptr) {
-    // Simplified: just succeed
+cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const void *ptr) {
+    if (!attributes || !ptr) {
+        last_error = cudaErrorInvalidValue;
+        return last_error;
+    }
+
+    memset(attributes, 0, sizeof(cudaPointerAttributes));
+
+    size_t alloc_size = 0;
+    int alloc_device = 0;
+    bool found = fake_gpu::GlobalState::instance().get_allocation_info(
+        const_cast<void*>(ptr), alloc_size, alloc_device);
+
+    attributes->type = found ? cudaMemoryTypeDevice : cudaMemoryTypeUnregistered;
+    attributes->device = found ? alloc_device : 0;
+    attributes->devicePointer = const_cast<void*>(ptr);
+    attributes->hostPointer = const_cast<void*>(ptr);
+
     last_error = cudaSuccess;
     return last_error;
 }

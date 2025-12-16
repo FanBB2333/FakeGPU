@@ -87,6 +87,16 @@ bool GlobalState::release_allocation(void* ptr, size_t& size, int& device) {
     return true;
 }
 
+bool GlobalState::get_allocation_info(void* ptr, size_t& size, int& device) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = allocations.find(ptr);
+    if (it == allocations.end()) return false;
+
+    size = it->second.first;
+    device = it->second.second;
+    return true;
+}
+
 } // namespace fake_gpu
 
 // Ensure initialization when the shared library is preloaded

@@ -21,6 +21,7 @@ public:
     // Allocation tracking
     bool register_allocation(void* ptr, size_t size, int device);
     bool release_allocation(void* ptr, size_t& size, int& device);
+    bool get_allocation_info(void* ptr, size_t& size, int& device) const;
 
 private:
     GlobalState();

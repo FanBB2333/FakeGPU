@@ -62,6 +62,26 @@ typedef enum CUevent_flags_enum {
     CU_EVENT_INTERPROCESS = 0x4
 } CUevent_flags;
 
+// Memory types
+typedef enum CUmemorytype_enum {
+    CU_MEMORYTYPE_HOST = 1,
+    CU_MEMORYTYPE_DEVICE = 2,
+    CU_MEMORYTYPE_ARRAY = 3,
+    CU_MEMORYTYPE_UNIFIED = 4
+} CUmemorytype;
+
+// Pointer attributes
+typedef enum CUpointer_attribute_enum {
+    CU_POINTER_ATTRIBUTE_CONTEXT = 1,
+    CU_POINTER_ATTRIBUTE_MEMORY_TYPE = 2,
+    CU_POINTER_ATTRIBUTE_DEVICE_POINTER = 3,
+    CU_POINTER_ATTRIBUTE_HOST_POINTER = 4,
+    CU_POINTER_ATTRIBUTE_SYNC_MEMOPS = 6,
+    CU_POINTER_ATTRIBUTE_BUFFER_ID = 7,
+    CU_POINTER_ATTRIBUTE_IS_MANAGED = 8,
+    CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL = 9
+} CUpointer_attribute;
+
 // Device attributes (extended list)
 typedef enum CUdevice_attribute_enum {
     CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK = 1,
@@ -170,6 +190,16 @@ CUresult cuMemFree(CUdeviceptr dptr);
 CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount);
 CUresult cuMemcpyHtoD(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount);
 CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteCount);
+CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flags);
+CUresult cuMemAllocHost(void **pp, size_t bytesize);
+CUresult cuMemFreeHost(void *p);
+CUresult cuMemHostAlloc(void **pp, size_t bytesize, unsigned int Flags);
+CUresult cuMemHostRegister(void *p, size_t bytesize, unsigned int Flags);
+CUresult cuMemHostUnregister(void *p);
+CUresult cuMemHostGetDevicePointer(CUdeviceptr *pdptr, void *p, unsigned int Flags);
+CUresult cuMemHostGetFlags(unsigned int *pFlags, void *p);
+CUresult cuPointerGetAttribute(void *data, CUpointer_attribute attribute, CUdeviceptr ptr);
+CUresult cuPointerGetAttributes(unsigned int numAttributes, CUpointer_attribute *attributes, void **data, CUdeviceptr ptr);
 
 // Primary context management
 CUresult cuDevicePrimaryCtxRetain(CUcontext *pctx, CUdevice dev);

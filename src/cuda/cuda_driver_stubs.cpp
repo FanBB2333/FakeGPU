@@ -392,6 +392,12 @@ CUresult cuMemAlloc(CUdeviceptr *dptr, size_t bytesize) {
 }
 
 CUresult cuMemFree(CUdeviceptr dptr) {
+    // Handle NULL pointer
+    if (dptr == 0) {
+        FGPU_LOG("[FakeCUDA-Driver] cuMemFree(NULL) - ignoring\n");
+        return CUDA_SUCCESS;
+    }
+
     void* ptr = (void*)dptr;
     size_t size;
     int device;
@@ -403,7 +409,10 @@ CUresult cuMemFree(CUdeviceptr dptr) {
         return CUDA_SUCCESS;
     }
 
-    return CUDA_ERROR_INVALID_VALUE;
+    // PyTorch's CachingAllocator may try to free pointers it doesn't own
+    // Return success to avoid crashes, but log a warning
+    FGPU_LOG("[FakeCUDA-Driver] cuMemFree(0x%llx) - pointer not tracked, assuming already freed\n", dptr);
+    return CUDA_SUCCESS;
 }
 
 CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount) {
@@ -851,11 +860,54 @@ CUresult cuMemHostGetFlags(unsigned int *pFlags, void *p) {
     return CUDA_SUCCESS;
 }
 
-CUresult cuPointerGetAttribute(void *data, int attribute, CUdeviceptr ptr) {
+CUresult cuPointerGetAttribute(void *data, CUpointer_attribute attribute, CUdeviceptr ptr) {
+    if (!data) return CUDA_ERROR_INVALID_VALUE;
+
+    GlobalState::instance().initialize();
+
+    size_t alloc_size = 0;
+    int alloc_device = 0;
+    bool found = GlobalState::instance().get_allocation_info((void*)ptr, alloc_size, alloc_device);
+    CUmemorytype mem_type = found ? CU_MEMORYTYPE_DEVICE : CU_MEMORYTYPE_HOST;
+
+    switch (attribute) {
+        case CU_POINTER_ATTRIBUTE_CONTEXT:
+            *(CUcontext*)data = (CUcontext)(uintptr_t)(alloc_device + 1);
+            break;
+        case CU_POINTER_ATTRIBUTE_MEMORY_TYPE:
+            *(CUmemorytype*)data = mem_type;
+            break;
+        case CU_POINTER_ATTRIBUTE_DEVICE_POINTER:
+            *(CUdeviceptr*)data = ptr;
+            break;
+        case CU_POINTER_ATTRIBUTE_HOST_POINTER:
+            *(void**)data = (void*)ptr;
+            break;
+        case CU_POINTER_ATTRIBUTE_IS_MANAGED:
+            *(unsigned int*)data = 0;
+            break;
+        case CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL:
+            *(int*)data = alloc_device;
+            break;
+        case CU_POINTER_ATTRIBUTE_SYNC_MEMOPS:
+            *(int*)data = 0;
+            break;
+        case CU_POINTER_ATTRIBUTE_BUFFER_ID:
+            *(unsigned long long*)data = 0;
+            break;
+        default:
+            break;
+    }
+
     return CUDA_SUCCESS;
 }
 
-CUresult cuPointerGetAttributes(unsigned int numAttributes, int *attributes, void **data, CUdeviceptr ptr) {
+CUresult cuPointerGetAttributes(unsigned int numAttributes, CUpointer_attribute *attributes, void **data, CUdeviceptr ptr) {
+    if (!attributes || !data) return CUDA_ERROR_INVALID_VALUE;
+
+    for (unsigned int i = 0; i < numAttributes; ++i) {
+        cuPointerGetAttribute(data[i], attributes[i], ptr);
+    }
     return CUDA_SUCCESS;
 }
 

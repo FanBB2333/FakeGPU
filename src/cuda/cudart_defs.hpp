@@ -258,7 +258,21 @@ cudaError_t cudaDeviceSetMemPool(int device, cudaMemPool_t memPool);
 cudaError_t cudaDeviceGetMemPool(cudaMemPool_t *memPool, int device);
 
 // Pointer Attributes
-cudaError_t cudaPointerGetAttributes(void *attributes, const void *ptr);
+typedef enum {
+    cudaMemoryTypeHost = 1,
+    cudaMemoryTypeDevice = 2,
+    cudaMemoryTypeManaged = 3,
+    cudaMemoryTypeUnregistered = 4
+} cudaMemoryType;
+
+typedef struct cudaPointerAttributes {
+    cudaMemoryType type;
+    int device;
+    void *devicePointer;
+    void *hostPointer;
+} cudaPointerAttributes;
+
+cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const void *ptr);
 
 // IPC (Inter-Process Communication)
 cudaError_t cudaIpcGetMemHandle(void *handle, void *devPtr);

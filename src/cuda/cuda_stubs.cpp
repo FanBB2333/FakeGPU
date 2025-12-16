@@ -63,10 +63,13 @@ cudaError_t cudaFree(void *devPtr) {
     int device = -1;
     bool tracked = GlobalState::instance().release_allocation(devPtr, size, device);
     if (!tracked) {
-        FGPU_LOG("[FakeCUDA] cudaFree warning: pointer not tracked\n");
-    } else {
-        FGPU_LOG("[FakeCUDA] cudaFree released %zu bytes from device %d\n", size, device);
+        // PyTorch's CachingAllocator may try to free pointers it doesn't own
+        // Return success but don't call free() to avoid double free
+        FGPU_LOG("[FakeCUDA] cudaFree warning: pointer not tracked, skipping free()\n");
+        return cudaSuccess;
     }
+
+    FGPU_LOG("[FakeCUDA] cudaFree released %zu bytes from device %d\n", size, device);
     free(devPtr);
     return cudaSuccess;
 }
