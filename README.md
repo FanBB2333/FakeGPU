@@ -73,6 +73,12 @@ LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:
 python your_script.py
 ```
 
+**Shortcut runner:**
+```bash
+./fgpu python your_script.py
+# Optional: FAKEGPU_BUILD_DIR=/path/to/build ./fgpu python your_script.py
+```
+
 ## Test Results
 
 | Test | Status | Description |
