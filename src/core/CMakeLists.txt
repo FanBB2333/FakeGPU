@@ -1,6 +1,7 @@
 add_library(fake_gpu_core OBJECT
     global_state.cpp
     device.cpp
+    gpu_profile.cpp
     # dl_intercept.cpp  # Disabled for now - too complex and causes recursion issues
 )
 

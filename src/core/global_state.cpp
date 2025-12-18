@@ -1,9 +1,23 @@
 #include "global_state.hpp"
 #include "logging.hpp"
+#include "gpu_profile.hpp"
 
 #include <algorithm>
 
 namespace fake_gpu {
+
+namespace {
+std::vector<GpuProfile> build_default_profiles() {
+    // Keep a single place for default GPU definitions to simplify adding new models.
+    constexpr int DEVICE_COUNT = 8;
+    std::vector<GpuProfile> profiles;
+    profiles.reserve(DEVICE_COUNT);
+    for (int i = 0; i < DEVICE_COUNT; ++i) {
+        profiles.push_back(GpuProfile::A100());
+    }
+    return profiles;
+}
+} // namespace
 
 GlobalState& GlobalState::instance() {
     static GlobalState* s_instance = new GlobalState();
@@ -21,12 +35,12 @@ void GlobalState::initialize() {
     // Pre-allocate to prevent reallocation during emplace_back
     // This is critical because nvitop holds Device* pointers from nvmlDeviceGetHandleByIndex
     // and vector reallocation would invalidate those pointers
-    constexpr int DEVICE_COUNT = 8;
-    devices.reserve(DEVICE_COUNT);
+    std::vector<GpuProfile> profiles = build_default_profiles();
+    devices.reserve(profiles.size());
     
-    // Create 8 fake devices
-    for (int i = 0; i < DEVICE_COUNT; ++i) {
-        devices.emplace_back(i);
+    // Create fake devices from the configured profiles
+    for (size_t i = 0; i < profiles.size(); ++i) {
+        devices.emplace_back(static_cast<int>(i), profiles[i]);
     }
     initialized = true;
     FGPU_LOG("[GlobalState-%p] Valid devices count after init: %lu\n", this, devices.size());
@@ -39,7 +53,7 @@ int GlobalState::get_device_count() const {
 Device& GlobalState::get_device(int index) {
     // In a real scenario, check bounds
     if (index < 0 || index >= devices.size()) {
-        static Device failure_dev(-1);
+        static Device failure_dev(-1, GpuProfile::A100());
         return failure_dev;
     }
     return devices[index];

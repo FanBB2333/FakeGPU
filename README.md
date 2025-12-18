@@ -116,6 +116,12 @@ FakeGPU
 - Matrix operations return random values (no actual computation)
 - Kernel launches are no-ops (logging only)
 
+### GPU Profiles
+
+- Default build still exposes 8 fake A100s, but the hardware traits now live in `src/core/gpu_profile.hpp|.cpp`.
+- Profiles track architecture (Ampere/Ada/Hopper ids), compute capability, clocks, memory/power limits, and supported data types (fp32/fp16/bf16/tf32/int8).
+- To add a new model, create another `GpuProfile::*` factory and wire it into the `build_default_profiles()` helper in `src/core/global_state.cpp`; the CUDA/NVML stubs will automatically surface the new values.
+
 ## Limitations
 
 - ❌ No real GPU computation (kernels are no-ops)

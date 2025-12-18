@@ -77,10 +77,12 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
         return CUDA_ERROR_INVALID_DEVICE;
     }
 
+    Device& device = GlobalState::instance().get_device(dev);
+
     // Log attribute queries for debugging
     FGPU_LOG("[FakeCUDA-Driver] cuDeviceGetAttribute(dev=%d, attrib=%d)\n", dev, attrib);
 
-    // Return fake but reasonable values for A100-like GPU
+    // Return fake but reasonable values pulled from the device profile
     switch (attrib) {
         case CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK:
             *pi = 1024;
@@ -98,7 +100,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 2147483647;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK:
-            *pi = 49152;  // 48KB
+            *pi = device.profile.shared_mem_per_block;
             break;
         case CU_DEVICE_ATTRIBUTE_TOTAL_CONSTANT_MEMORY:
             *pi = 65536;  // 64KB
@@ -110,10 +112,10 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 2147483647;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK:
-            *pi = 65536;
+            *pi = device.profile.regs_per_block;
             break;
         case CU_DEVICE_ATTRIBUTE_CLOCK_RATE:
-            *pi = 1410000;  // 1.41 GHz
+            *pi = device.profile.core_clock_mhz * 1000;  // kHz
             break;
         case CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT:
             *pi = 512;
@@ -122,7 +124,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 1;
             break;
         case CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT:
-            *pi = 108;  // A100 has 108 SMs
+            *pi = device.profile.sm_count;
             break;
         case CU_DEVICE_ATTRIBUTE_KERNEL_EXEC_TIMEOUT:
             *pi = 0;  // No timeout
@@ -146,22 +148,22 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = dev;  // Use device index as bus ID
             break;
         case CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID:
-            *pi = 0;
+            *pi = static_cast<int>(device.profile.pci_device_id);
             break;
         case CU_DEVICE_ATTRIBUTE_TCC_DRIVER:
             *pi = 0;
             break;
         case CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE:
-            *pi = 1215000;  // 1.215 GHz
+            *pi = device.profile.memory_clock_mhz * 1000;  // kHz
             break;
         case CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH:
-            *pi = 5120;  // 5120-bit for A100
+            *pi = device.profile.memory_bus_width_bits;
             break;
         case CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE:
-            *pi = 41943040;  // 40MB
+            *pi = device.profile.l2_cache_bytes;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR:
-            *pi = 2048;
+            *pi = device.profile.max_threads_per_multiprocessor;
             break;
         case CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT:
             *pi = 2;
@@ -173,10 +175,10 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 0;
             break;
         case CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR:
-            *pi = 8;  // Ampere
+            *pi = device.profile.compute_major;
             break;
         case CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR:
-            *pi = 0;
+            *pi = device.profile.compute_minor;
             break;
         case CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED:
             *pi = 1;
@@ -188,10 +190,10 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 1;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR:
-            *pi = 167936;  // 164KB
+            *pi = device.profile.shared_mem_per_sm;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR:
-            *pi = 65536;
+            *pi = device.profile.regs_per_multiprocessor;
             break;
         case CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY:
             *pi = 1;
@@ -224,7 +226,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 1;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN:
-            *pi = 166912;
+            *pi = device.profile.shared_mem_per_block_optin;
             break;
         case CU_DEVICE_ATTRIBUTE_CAN_FLUSH_REMOTE_WRITES:
             *pi = 1;
@@ -251,13 +253,13 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 0;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_BLOCKS_PER_MULTIPROCESSOR:
-            *pi = 32;
+            *pi = device.profile.max_blocks_per_multiprocessor;
             break;
         case CU_DEVICE_ATTRIBUTE_GENERIC_COMPRESSION_SUPPORTED:
             *pi = 1;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_PERSISTING_L2_CACHE_SIZE:
-            *pi = 41943040;
+            *pi = device.profile.l2_cache_bytes;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_ACCESS_POLICY_WINDOW_SIZE:
             *pi = 134217728;

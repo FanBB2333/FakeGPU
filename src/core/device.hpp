@@ -2,11 +2,13 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include "gpu_profile.hpp"
 
 namespace fake_gpu {
 
 struct Device {
     int index;
+    GpuProfile profile;
     std::string name;
     std::string uuid;
     uint64_t total_memory;
@@ -14,7 +16,7 @@ struct Device {
     uint64_t used_memory_peak;
     std::string pci_bus_id;
 
-    Device(int idx);
+    Device(int idx, const GpuProfile& profile);
 };
 
 } // namespace fake_gpu

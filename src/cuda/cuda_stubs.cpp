@@ -106,12 +106,12 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
     prop->luidDeviceNodeMask = 0;
 
     prop->totalGlobalMem = dev.total_memory;
-    prop->major = 8; // Ampere
-    prop->minor = 0;
+    prop->major = dev.profile.compute_major;
+    prop->minor = dev.profile.compute_minor;
 
-    // Fill in realistic A100 values
-    prop->sharedMemPerBlock = 49152; // 48KB
-    prop->regsPerBlock = 65536;
+    // Fill in realistic values from the profile
+    prop->sharedMemPerBlock = dev.profile.shared_mem_per_block;
+    prop->regsPerBlock = dev.profile.regs_per_block;
     prop->warpSize = 32;
     prop->memPitch = 2147483647;
     prop->maxThreadsPerBlock = 1024;
@@ -121,9 +121,9 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
     prop->maxGridSize[0] = 2147483647;
     prop->maxGridSize[1] = 65535;
     prop->maxGridSize[2] = 65535;
-    prop->clockRate = 1410000; // 1.41 GHz
+    prop->clockRate = dev.profile.core_clock_mhz * 1000; // kHz
     prop->totalConstMem = 65536; // 64KB
-    prop->multiProcessorCount = 108;
+    prop->multiProcessorCount = dev.profile.sm_count;
     prop->kernelExecTimeoutEnabled = 0;
     prop->integrated = 0;
     prop->canMapHostMemory = 1;
@@ -131,21 +131,21 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
     prop->concurrentKernels = 1;
     prop->ECCEnabled = 1;
     prop->pciBusID = device;
-    prop->pciDeviceID = 0;
+    prop->pciDeviceID = static_cast<int>(dev.profile.pci_device_id);
     prop->pciDomainID = 0;
     prop->tccDriver = 0;
     prop->asyncEngineCount = 2;
     prop->unifiedAddressing = 1;
-    prop->memoryClockRate = 1215000; // 1.215 GHz
-    prop->memoryBusWidth = 5120; // 5120-bit
-    prop->l2CacheSize = 41943040; // 40MB
-    prop->persistingL2CacheMaxSize = 41943040;
-    prop->maxThreadsPerMultiProcessor = 2048;
+    prop->memoryClockRate = dev.profile.memory_clock_mhz * 1000; // kHz
+    prop->memoryBusWidth = dev.profile.memory_bus_width_bits;
+    prop->l2CacheSize = dev.profile.l2_cache_bytes;
+    prop->persistingL2CacheMaxSize = dev.profile.l2_cache_bytes;
+    prop->maxThreadsPerMultiProcessor = dev.profile.max_threads_per_multiprocessor;
     prop->streamPrioritiesSupported = 1;
     prop->globalL1CacheSupported = 1;
     prop->localL1CacheSupported = 1;
-    prop->sharedMemPerMultiprocessor = 167936; // 164KB
-    prop->regsPerMultiprocessor = 65536;
+    prop->sharedMemPerMultiprocessor = dev.profile.shared_mem_per_sm;
+    prop->regsPerMultiprocessor = dev.profile.regs_per_multiprocessor;
     prop->managedMemory = 1;
     prop->isMultiGpuBoard = 0;
     prop->multiGpuBoardGroupID = 0;
@@ -156,9 +156,9 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
     prop->canUseHostPointerForRegisteredMem = 1;
     prop->cooperativeLaunch = 1;
     prop->cooperativeMultiDeviceLaunch = 1;
-    prop->sharedMemPerBlockOptin = 166912;
+    prop->sharedMemPerBlockOptin = dev.profile.shared_mem_per_block_optin;
     prop->directManagedMemAccessFromHost = 1;
-    prop->maxBlocksPerMultiProcessor = 32;
+    prop->maxBlocksPerMultiProcessor = dev.profile.max_blocks_per_multiprocessor;
 
     FGPU_LOG("[FakeCUDA] cudaGetDeviceProperties(%d) returning properties\n", device);
     return cudaSuccess;

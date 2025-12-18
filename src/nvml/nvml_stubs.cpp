@@ -119,8 +119,8 @@ nvmlReturn_t nvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t *pci) {
     pci->domain = 0;
     pci->bus = dev->index + 1;
     pci->device = 0;
-    pci->pciDeviceId = 0x20B010DE;  // A100 device ID (reversed: 0x10DE20B0)
-    pci->pciSubSystemId = 0x145010DE;
+    pci->pciDeviceId = dev->profile.pci_device_id;
+    pci->pciSubSystemId = dev->profile.pci_device_id;
 
     return NVML_SUCCESS;
 }
@@ -139,8 +139,8 @@ nvmlReturn_t nvmlDeviceGetPciInfo_v3(nvmlDevice_t device, nvmlPciInfo_v3_t *pci)
     pci->domain = 0;
     pci->bus = dev->index + 1;
     pci->device = 0;
-    pci->pciDeviceId = 0x20B010DE;  // A100 device ID
-    pci->pciSubSystemId = 0x145010DE;
+    pci->pciDeviceId = dev->profile.pci_device_id;
+    pci->pciSubSystemId = dev->profile.pci_device_id;
 
     return NVML_SUCCESS;
 }
@@ -170,8 +170,8 @@ nvmlReturn_t nvmlDeviceGetPowerUsage(nvmlDevice_t device, unsigned int *power) {
     if (!device || !power) return NVML_ERROR_INVALID_ARGUMENT;
 
     // Return fake power usage in milliwatts
-    // A100 typical power is around 250-400W, so return 300W = 300000 mW
-    *power = 300000;  // 300W in milliwatts
+    Device* dev = (Device*)device;
+    *power = dev->profile.typical_power_usage_mw;
 
     return NVML_SUCCESS;
 }
@@ -180,8 +180,8 @@ nvmlReturn_t nvmlDeviceGetPowerManagementLimit(nvmlDevice_t device, unsigned int
     if (!device || !limit) return NVML_ERROR_INVALID_ARGUMENT;
 
     // Return fake power limit in milliwatts
-    // A100 max power is 400W
-    *limit = 400000;  // 400W in milliwatts
+    Device* dev = (Device*)device;
+    *limit = dev->profile.max_power_limit_mw;
 
     return NVML_SUCCESS;
 }
@@ -208,21 +208,22 @@ nvmlReturn_t nvmlDeviceGetTemperatureV(nvmlDevice_t device, void *tempInfo) {
 
 nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {
     if (!device || !clock) return NVML_ERROR_INVALID_ARGUMENT;
+    Device* dev = (Device*)device;
 
     // Return fake clock speeds in MHz
     // type: 0 = graphics clock, 1 = SM clock, 2 = memory clock
     switch (type) {
         case 0:  // Graphics clock
-            *clock = 1410;  // A100 boost clock
+            *clock = dev->profile.core_clock_mhz;
             break;
         case 1:  // SM clock
-            *clock = 1410;
+            *clock = dev->profile.core_clock_mhz;
             break;
         case 2:  // Memory clock
-            *clock = 1215;  // A100 memory clock
+            *clock = dev->profile.memory_clock_mhz;
             break;
         default:
-            *clock = 1410;
+            *clock = dev->profile.core_clock_mhz;
             break;
     }
 
@@ -231,22 +232,23 @@ nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsi
 
 nvmlReturn_t nvmlDeviceGetClock(nvmlDevice_t device, unsigned int clockType, unsigned int clockId, unsigned int *clockMHz) {
     if (!device || !clockMHz) return NVML_ERROR_INVALID_ARGUMENT;
+    Device* dev = (Device*)device;
 
     // clockType: 0 = graphics, 1 = SM, 2 = memory
     // clockId: typically 0 for current clock
     // Return fake clock speeds in MHz
     switch (clockType) {
         case 0:  // Graphics clock
-            *clockMHz = 1410;  // A100 boost clock
+            *clockMHz = dev->profile.core_clock_mhz;
             break;
         case 1:  // SM clock
-            *clockMHz = 1410;
+            *clockMHz = dev->profile.core_clock_mhz;
             break;
         case 2:  // Memory clock
-            *clockMHz = 1215;  // A100 memory clock
+            *clockMHz = dev->profile.memory_clock_mhz;
             break;
         default:
-            *clockMHz = 1410;
+            *clockMHz = dev->profile.core_clock_mhz;
             break;
     }
 
@@ -255,20 +257,21 @@ nvmlReturn_t nvmlDeviceGetClock(nvmlDevice_t device, unsigned int clockType, uns
 
 nvmlReturn_t nvmlDeviceGetMaxClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {
     if (!device || !clock) return NVML_ERROR_INVALID_ARGUMENT;
+    Device* dev = (Device*)device;
 
     // Return fake max clock speeds in MHz
     switch (type) {
         case 0:  // Graphics clock
-            *clock = 1410;  // A100 max boost clock
+            *clock = dev->profile.core_clock_mhz;
             break;
         case 1:  // SM clock
-            *clock = 1410;
+            *clock = dev->profile.core_clock_mhz;
             break;
         case 2:  // Memory clock
-            *clock = 1215;  // A100 max memory clock
+            *clock = dev->profile.memory_clock_mhz;
             break;
         default:
-            *clock = 1410;
+            *clock = dev->profile.core_clock_mhz;
             break;
     }
 
@@ -463,60 +466,73 @@ nvmlReturn_t nvmlDeviceGetMPSComputeRunningProcesses_v3(nvmlDevice_t device, uns
 // Clock-related functions
 nvmlReturn_t nvmlDeviceGetMaxCustomerBoostClock(nvmlDevice_t device, unsigned int clockType, unsigned int *clockMHz) {
     if (!device || !clockMHz) return NVML_ERROR_INVALID_ARGUMENT;
-    *clockMHz = 1410;  // A100 boost clock
+    Device* dev = (Device*)device;
+    *clockMHz = dev->profile.core_clock_mhz;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetMinMaxClockOfPState(nvmlDevice_t device, unsigned int clockType, unsigned int pState, unsigned int *minClockMHz, unsigned int *maxClockMHz) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     if (minClockMHz) *minClockMHz = 210;
-    if (maxClockMHz) *maxClockMHz = 1410;
+    if (maxClockMHz) {
+        Device* dev = (Device*)device;
+        *maxClockMHz = dev->profile.core_clock_mhz;
+    }
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetApplicationsClock(nvmlDevice_t device, unsigned int clockType, unsigned int *clockMHz) {
     if (!device || !clockMHz) return NVML_ERROR_INVALID_ARGUMENT;
-    *clockMHz = 1410;
+    Device* dev = (Device*)device;
+    *clockMHz = dev->profile.core_clock_mhz;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetDefaultApplicationsClock(nvmlDevice_t device, unsigned int clockType, unsigned int *clockMHz) {
     if (!device || !clockMHz) return NVML_ERROR_INVALID_ARGUMENT;
-    *clockMHz = 1410;
+    Device* dev = (Device*)device;
+    *clockMHz = dev->profile.core_clock_mhz;
     return NVML_SUCCESS;
 }
 
 // Power management
 nvmlReturn_t nvmlDeviceGetEnforcedPowerLimit(nvmlDevice_t device, unsigned int *limit) {
     if (!device || !limit) return NVML_ERROR_INVALID_ARGUMENT;
-    *limit = 400000;  // 400W
+    Device* dev = (Device*)device;
+    *limit = dev->profile.max_power_limit_mw;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementLimitConstraints(nvmlDevice_t device, unsigned int *minLimit, unsigned int *maxLimit) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     if (minLimit) *minLimit = 100000;   // 100W min
-    if (maxLimit) *maxLimit = 400000;   // 400W max
+    if (maxLimit) {
+        Device* dev = (Device*)device;
+        *maxLimit = dev->profile.max_power_limit_mw;
+    }
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementDefaultLimit(nvmlDevice_t device, unsigned int *defaultLimit) {
     if (!device || !defaultLimit) return NVML_ERROR_INVALID_ARGUMENT;
-    *defaultLimit = 300000;  // 300W default
+    Device* dev = (Device*)device;
+    *defaultLimit = dev->profile.typical_power_usage_mw;
     return NVML_SUCCESS;
 }
 
 // Architecture info
 nvmlReturn_t nvmlDeviceGetArchitecture(nvmlDevice_t device, unsigned int *arch) {
     if (!device || !arch) return NVML_ERROR_INVALID_ARGUMENT;
-    *arch = 8;  // NVML_DEVICE_ARCH_AMPERE
+    Device* dev = (Device*)device;
+    *arch = static_cast<unsigned int>(dev->profile.architecture);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int *major, int *minor) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
-    if (major) *major = 8;
-    if (minor) *minor = 0;
+    Device* dev = (Device*)device;
+    if (major) *major = dev->profile.compute_major;
+    if (minor) *minor = dev->profile.compute_minor;
     return NVML_SUCCESS;
 }
 
@@ -764,7 +780,8 @@ nvmlReturn_t nvmlDeviceGetPowerSource(nvmlDevice_t device, unsigned int *powerSo
 nvmlReturn_t nvmlDeviceGetSupportedGraphicsClocks(nvmlDevice_t device, unsigned int memoryClockMHz, unsigned int *count, unsigned int *clocksMHz) {
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
     if (clocksMHz && *count > 0) {
-        clocksMHz[0] = 1410;
+        Device* dev = (Device*)device;
+        clocksMHz[0] = dev->profile.core_clock_mhz;
     }
     *count = 1;
     return NVML_SUCCESS;
@@ -773,7 +790,8 @@ nvmlReturn_t nvmlDeviceGetSupportedGraphicsClocks(nvmlDevice_t device, unsigned 
 nvmlReturn_t nvmlDeviceGetSupportedMemoryClocks(nvmlDevice_t device, unsigned int *count, unsigned int *clocksMHz) {
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
     if (clocksMHz && *count > 0) {
-        clocksMHz[0] = 1215;
+        Device* dev = (Device*)device;
+        clocksMHz[0] = dev->profile.memory_clock_mhz;
     }
     *count = 1;
     return NVML_SUCCESS;
