@@ -114,6 +114,10 @@ nvmlReturn_t nvmlDeviceGetPciInfo_v3(nvmlDevice_t device, nvmlPciInfo_v3_t *pci)
     if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
 
+    // Only fill the base fields that exist in nvmlPciInfo_t as well.
+    // nvitop loads nvmlDeviceGetPciInfo_v3 but allocates nvmlPciInfo_t (68 bytes),
+    // so touching the reserved fields would overflow the caller's buffer.
+    memset(pci, 0, sizeof(nvmlPciInfo_t));
     // Fill in both busId fields
     snprintf(pci->busIdLegacy, sizeof(pci->busIdLegacy), "%s", dev->pci_bus_id.c_str());
     snprintf(pci->busId, sizeof(pci->busId), "%s", dev->pci_bus_id.c_str());
@@ -122,11 +126,17 @@ nvmlReturn_t nvmlDeviceGetPciInfo_v3(nvmlDevice_t device, nvmlPciInfo_v3_t *pci)
     pci->device = 0;
     pci->pciDeviceId = 0x20B010DE;  // A100 device ID
     pci->pciSubSystemId = 0x145010DE;
-    pci->reserved0 = 0;
-    pci->reserved1 = 0;
-    pci->reserved2 = 0;
-    pci->reserved3 = 0;
 
+    return NVML_SUCCESS;
+}
+
+// nvmlDeviceGetTupleIndex is not part of public NVML, but nvitop queries it
+// when building snapshots for MIG-aware layouts. We just return the device
+// index to keep it happy.
+nvmlReturn_t nvmlDeviceGetTupleIndex(nvmlDevice_t device, unsigned int *tupleIndex) {
+    if (!device || !tupleIndex) return NVML_ERROR_INVALID_ARGUMENT;
+    Device* dev = (Device*)device;
+    *tupleIndex = dev->index;
     return NVML_SUCCESS;
 }
 
@@ -774,4 +784,3 @@ nvmlReturn_t nvmlDeviceGetSamples(nvmlDevice_t device, unsigned int type, unsign
 }
 
 } // extern C
-
