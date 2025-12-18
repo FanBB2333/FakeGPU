@@ -10,11 +10,11 @@ A CUDA API interception library that simulates GPU devices in non-GPU environmen
 - [x] **cuBLAS/cuBLASLt** - Matrix operations (GEMM, PyTorch 2.x compatible)
 - [x] **NVML API** - GPU information queries
 - [x] **PyTorch Support** - Basic tensor ops, linear layers, neural networks
+- [x] **GPU Tool Compatibility** - Compatible with existing GPU status monitoring tools (nvidia-smi, gpustat, etc.)
 
 ### Planned Features
 - [ ] **Python API Wrapper** - Package as Python library for easier integration
 - [ ] **Detailed Reporting** - More comprehensive documentation and analysis reports
-- [ ] **GPU Tool Compatibility** - Compatible with existing GPU status monitoring tools (nvidia-smi, gpustat, etc.)
 - [ ] **Multi-Node GPU Communication** - Simulate cross-node GPU communication (NCCL, etc.)
 - [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
 - [ ] **Preset GPU Info** - Add more preset GPU hardware configurations
@@ -77,6 +77,13 @@ python your_script.py
 ```bash
 ./fgpu python your_script.py
 # Optional: FAKEGPU_BUILD_DIR=/path/to/build ./fgpu python your_script.py
+```
+
+**GPU tools (nvidia-smi)**
+```bash
+# FakeGPU-simulated devices via NVML stubs
+./fgpu nvidia-smi
+# Temperatures may show N/A because the TemperatureV struct is not fully emulated yet.
 ```
 
 ## Test Results
