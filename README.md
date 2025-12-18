@@ -2,13 +2,21 @@
 
 A CUDA API interception library that simulates GPU devices in non-GPU environments, enabling basic operations for PyTorch and other deep learning frameworks.
 
-## Features
+## Timeline
 
-- ✅ **CUDA Driver API** - Device management, memory allocation, kernel launch
-- ✅ **CUDA Runtime API** - cudaMalloc/Free, cudaMemcpy, Stream, Event
-- ✅ **cuBLAS/cuBLASLt** - Matrix operations (GEMM, PyTorch 2.x compatible)
-- ✅ **NVML API** - GPU information queries
-- ✅ **PyTorch Support** - Basic tensor ops, linear layers, neural networks
+### Implemented Features
+- [x] **CUDA Driver API** - Device management, memory allocation, kernel launch
+- [x] **CUDA Runtime API** - cudaMalloc/Free, cudaMemcpy, Stream, Event
+- [x] **cuBLAS/cuBLASLt** - Matrix operations (GEMM, PyTorch 2.x compatible)
+- [x] **NVML API** - GPU information queries
+- [x] **PyTorch Support** - Basic tensor ops, linear layers, neural networks
+
+### Planned Features
+- [ ] **Python API Wrapper** - Package as Python library for easier integration
+- [ ] **Detailed Reporting** - More comprehensive documentation and analysis reports
+- [ ] **GPU Tool Compatibility** - Compatible with existing GPU status monitoring tools (nvidia-smi, gpustat, etc.)
+- [ ] **Multi-Node GPU Communication** - Simulate cross-node GPU communication (NCCL, etc.)
+- [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
 
 ## Quick Start
 
