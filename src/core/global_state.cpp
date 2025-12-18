@@ -18,8 +18,14 @@ void GlobalState::initialize() {
     FGPU_LOG("[GlobalState-%p] initialize called. Current devices: %lu\n", this, devices.size());
     if (initialized) return;
 
+    // Pre-allocate to prevent reallocation during emplace_back
+    // This is critical because nvitop holds Device* pointers from nvmlDeviceGetHandleByIndex
+    // and vector reallocation would invalidate those pointers
+    constexpr int DEVICE_COUNT = 8;
+    devices.reserve(DEVICE_COUNT);
+    
     // Create 8 fake devices
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < DEVICE_COUNT; ++i) {
         devices.emplace_back(i);
     }
     initialized = true;

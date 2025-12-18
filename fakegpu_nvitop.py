@@ -1,29 +1,28 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# IMPORTANT: Disable GC as early as possible, before any other imports
+import gc
+gc.disable()
+
 """Wrapper script to run nvitop with FakeGPU libraries.
 
 This script provides GPU monitoring using nvitop with FakeGPU's simulated GPUs.
-It forces exit with os._exit(0) to avoid Python cleanup segfaults.
+It uses gc.disable() and os._exit(0) to avoid Python cleanup crashes.
+
+Usage:
+    LD_PRELOAD=./build/libnvidia-ml.so.1:... python3 fakegpu_nvitop.py --once
+    # Or use the shell wrapper:
+    ./fakegpu_nvitop.sh --once
 """
 
 import os
 import sys
 
-# Ensure we're using FakeGPU libraries
-script_dir = os.path.dirname(os.path.abspath(__file__))
-build_dir = os.path.join(script_dir, 'build')
-
-# Check if we're already preloaded
-ld_preload = os.environ.get('LD_PRELOAD', '')
-if 'libnvidia-ml.so' not in ld_preload or 'build/' in ld_preload:
-    # Already using our libs, continue
-    pass
-
 
 def main():
-    # Import after env setup
+    """Run nvitop with FakeGPU, handling exit properly."""
     from nvitop.cli import main as nvitop_main
     
-    # Run nvitop with provided arguments
     try:
         exit_code = nvitop_main()
     except SystemExit as e:
@@ -33,9 +32,7 @@ def main():
         exit_code = 1
     
     # Force exit to avoid Python GC cleanup crash with FakeGPU
-    # This is necessary because FakeGPU's shared libraries can interfere
-    # with Python's garbage collector during normal cleanup
-    os._exit(exit_code if exit_code else 0)
+    os._exit(exit_code if isinstance(exit_code, int) else 0)
 
 
 if __name__ == '__main__':
