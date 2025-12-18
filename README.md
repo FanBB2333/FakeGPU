@@ -17,6 +17,8 @@ A CUDA API interception library that simulates GPU devices in non-GPU environmen
 - [ ] **GPU Tool Compatibility** - Compatible with existing GPU status monitoring tools (nvidia-smi, gpustat, etc.)
 - [ ] **Multi-Node GPU Communication** - Simulate cross-node GPU communication (NCCL, etc.)
 - [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
+- [ ] **Preset GPU Info** - Add more preset GPU hardware configurations
+- [ ] **Multi-Architecture & Data Types** - Support different GPU architectures and various data storage/memory types
 
 ## Quick Start
 
