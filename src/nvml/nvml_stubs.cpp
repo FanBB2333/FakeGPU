@@ -21,6 +21,21 @@ static bool check_init() {
 
 extern "C" {
 
+// Internal export table lookup used by newer nvidia-smi builds.
+// We don't expose any special tables, but we must return success so nvidia-smi
+// will proceed to the regular NVML entry points.
+nvmlReturn_t nvmlInternalGetExportTable(void **ppExportTable, const void *pExportTableId) {
+    if (!ppExportTable || !pExportTableId) return NVML_ERROR_INVALID_ARGUMENT;
+
+    // Log the first/last bytes of the requested GUID for debugging.
+    const unsigned char *id = static_cast<const unsigned char*>(pExportTableId);
+    FGPU_LOG("[FakeNVML] nvmlInternalGetExportTable id[0]=%02x id[15]=%02x\n", id[0], id[15]);
+
+    static const void* dummy_table[1] = {nullptr};
+    *ppExportTable = (void*)dummy_table;
+    return NVML_SUCCESS;
+}
+
 nvmlReturn_t nvmlInit() {
     FGPU_LOG("[FakeNVML] nvmlInit called\n");
     GlobalState::instance().initialize();
@@ -174,11 +189,21 @@ nvmlReturn_t nvmlDeviceGetPowerManagementLimit(nvmlDevice_t device, unsigned int
 nvmlReturn_t nvmlDeviceGetTemperature(nvmlDevice_t device, unsigned int sensorType, unsigned int *temp) {
     if (!device || !temp) return NVML_ERROR_INVALID_ARGUMENT;
 
+    FGPU_LOG("[FakeNVML] nvmlDeviceGetTemperature sensor=%u\n", sensorType);
+
     // Return fake temperature in Celsius
     // sensorType: 0 = GPU core temperature
     *temp = 65;  // 65°C
 
     return NVML_SUCCESS;
+}
+
+// Newer temperature query variant used by some tools (e.g., nvidia-smi)
+// The real signature takes a versioned struct pointer; we return NOT_SUPPORTED
+// so callers fall back to the basic nvmlDeviceGetTemperature path.
+nvmlReturn_t nvmlDeviceGetTemperatureV(nvmlDevice_t device, void *tempInfo) {
+    FGPU_LOG("[FakeNVML] nvmlDeviceGetTemperatureV (unsupported path)\n");
+    return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {
@@ -384,6 +409,12 @@ nvmlReturn_t nvmlDeviceGetDriverModel(nvmlDevice_t device, unsigned int *current
     return NVML_SUCCESS;
 }
 
+nvmlReturn_t nvmlDeviceGetVirtualizationMode(nvmlDevice_t device, nvmlGpuVirtualizationMode_t *pVirtualMode) {
+    if (!device || !pVirtualMode) return NVML_ERROR_INVALID_ARGUMENT;
+    *pVirtualMode = NVML_GPU_VIRTUALIZATION_MODE_NONE;
+    return NVML_SUCCESS;
+}
+
 // Process information - return empty lists (no running processes)
 // NVML uses fixed-size arrays, returning count=0 means no processes
 
@@ -536,6 +567,11 @@ nvmlReturn_t nvmlDeviceGetInforomVersion(nvmlDevice_t device, unsigned int objec
 nvmlReturn_t nvmlDeviceGetInforomImageVersion(nvmlDevice_t device, char *version, unsigned int length) {
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
     snprintf(version, length, "N/A");
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceValidateInforom(nvmlDevice_t device) {
+    if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     return NVML_SUCCESS;
 }
 

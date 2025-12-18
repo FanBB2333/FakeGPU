@@ -86,6 +86,15 @@ typedef struct nvmlPciInfo_v3_st {
 #define NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE 32
 #define NVML_DEVICE_PCI_BUS_ID_BUFFER_V2_SIZE 16
 
+// Virtualization mode
+typedef enum {
+    NVML_GPU_VIRTUALIZATION_MODE_NONE = 0,
+    NVML_GPU_VIRTUALIZATION_MODE_PASSTHROUGH = 1,
+    NVML_GPU_VIRTUALIZATION_MODE_VGPU = 2,
+    NVML_GPU_VIRTUALIZATION_MODE_HOST_VGPU = 3,
+    NVML_GPU_VIRTUALIZATION_MODE_HOST_VSGA = 4
+} nvmlGpuVirtualizationMode_t;
+
 #ifdef __cplusplus
 }
 #endif
