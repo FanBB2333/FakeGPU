@@ -21,18 +21,27 @@ import sys
 
 def main():
     """Run nvitop with FakeGPU, handling exit properly."""
-    from nvitop.cli import main as nvitop_main
+    # Use TUI's Device class which has fewer SNAPSHOT_KEYS and works better with FakeGPU
+    from nvitop.tui.library.device import Device
+    from nvitop.tui import TUI
     
-    try:
-        exit_code = nvitop_main()
-    except SystemExit as e:
-        exit_code = e.code if e.code is not None else 0
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        exit_code = 1
+    # Get devices using TUI's Device class
+    devices = Device.all()
+    
+    # Check for --once flag
+    once_mode = '--once' in sys.argv or '-1' in sys.argv
+    
+    # Create and run TUI
+    tui = TUI(devices, [], no_unicode=False)
+    
+    if once_mode:
+        tui.print()
+    else:
+        print("Interactive mode not supported with FakeGPU. Use --once flag.")
+        print("Example: ./fakegpu_nvitop.sh --once")
     
     # Force exit to avoid Python GC cleanup crash with FakeGPU
-    os._exit(exit_code if isinstance(exit_code, int) else 0)
+    os._exit(0)
 
 
 if __name__ == '__main__':
