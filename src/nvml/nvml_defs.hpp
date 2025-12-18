@@ -55,22 +55,25 @@ typedef struct nvmlUtilization_st {
 } nvmlUtilization_t;
 
 typedef struct nvmlPciInfo_st {
-    char busId[16];
+    // pynvml's nvmlPciInfo_t expects:
+    // busIdLegacy (16 bytes) + domain + bus + device + pciDeviceId + pciSubSystemId + busId (32 bytes)
+    char busIdLegacy[16];    // Legacy bus ID (16 bytes)
     unsigned int domain;
     unsigned int bus;
     unsigned int device;
     unsigned int pciDeviceId;
     unsigned int pciSubSystemId;
+    char busId[32];          // Current bus ID (32 bytes)
 } nvmlPciInfo_t;
 
 typedef struct nvmlPciInfo_v3_st {
-    char busId[32];
+    char busIdLegacy[16];
     unsigned int domain;
     unsigned int bus;
     unsigned int device;
     unsigned int pciDeviceId;
     unsigned int pciSubSystemId;
-    char busIdLegacy[16];
+    char busId[32];
     unsigned int reserved0;
     unsigned int reserved1;
     unsigned int reserved2;

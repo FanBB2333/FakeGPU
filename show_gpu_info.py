@@ -94,3 +94,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+    # Force exit to avoid Python cleanup segfault with FakeGPU
+    import os
+    os._exit(0)
+
