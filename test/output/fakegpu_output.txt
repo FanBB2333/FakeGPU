@@ -1,7 +1,7 @@
 `torch_dtype` is deprecated! Use `dtype` instead!
 Using device: cuda
-GPU: Fake NVIDIA A100-SXM4-80GB
-GPU Memory: 80.00 GB
+GPU: Fake NVIDIA B200
+GPU Memory: 192.00 GB
 
 Loading model from /home/l1ght/models/Qwen/Qwen2.5-0.5B-Instruct...
 Model loaded successfully!

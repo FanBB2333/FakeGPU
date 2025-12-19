@@ -118,9 +118,9 @@ FakeGPU
 
 ### GPU Profiles
 
-- Default build still exposes 8 fake A100s, but the hardware traits now live in `src/core/gpu_profile.hpp|.cpp`.
-- Profiles track architecture (Ampere/Ada/Hopper ids), compute capability, clocks, memory/power limits, and supported data types (fp32/fp16/bf16/tf32/int8).
-- To add a new model, create another `GpuProfile::*` factory and wire it into the `build_default_profiles()` helper in `src/core/global_state.cpp`; the CUDA/NVML stubs will automatically surface the new values.
+- Default build now exposes a cross-generation lineup (GTX 980 → P100 → V100 → T4 → A100 → L40S → H100 → B200) so tools see Maxwell through Blackwell without code changes. Definitions live in `src/core/gpu_profile.hpp|.cpp`.
+- Factory helpers exist for `GpuProfile::GTX980/P100/V100/T4/A40/A100/H100/L40S/B100/B200` and track architecture, compute capability, clocks, memory/power limits, and supported data types (fp32/fp16/bf16/tf32/int8/int4).
+- Per-architecture builders (`MaxwellProfile`, `PascalProfile`, `VoltaProfile`, `TuringProfile`, `AmpereProfile`, `AdaProfile`, `HopperProfile`, `BlackwellProfile`) take a `GpuProfileParams` blob so you can hydrate profiles from JSON/CSV and wire them into `build_default_profiles()` without touching the CUDA/NVML stubs.
 
 ## Limitations
 
