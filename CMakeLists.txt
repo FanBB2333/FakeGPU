@@ -14,6 +14,59 @@ else()
     message(STATUS "FakeGPU logging: DISABLED")
 endif()
 
+# Embed YAML GPU profiles at configure time so defaults are available without runtime files
+set(FAKEGPU_PROFILE_DIR "${CMAKE_SOURCE_DIR}/profiles")
+file(GLOB FAKEGPU_PROFILE_FILES "${FAKEGPU_PROFILE_DIR}/*.yaml")
+set(FAKEGPU_GENERATED_PROFILE_HEADER "${CMAKE_BINARY_DIR}/generated_profiles.hpp")
+
+if(FAKEGPU_PROFILE_FILES)
+    file(WRITE ${FAKEGPU_GENERATED_PROFILE_HEADER}
+"// Auto-generated from profiles/*.yaml - do not edit by hand\n"
+"#pragma once\n"
+"#include <string>\n"
+"#include <vector>\n"
+"namespace fake_gpu {\n"
+"struct ProfileYamlBlob {\n"
+"    const char* filename;\n"
+"    const char* yaml;\n"
+"};\n"
+"inline const std::vector<ProfileYamlBlob>& builtin_profile_yamls() {\n"
+"    static const std::vector<ProfileYamlBlob> kProfiles = {\n"
+)
+    set(_profile_idx 0)
+    foreach(_profile_path ${FAKEGPU_PROFILE_FILES})
+        file(READ ${_profile_path} _profile_content)
+        get_filename_component(_profile_name ${_profile_path} NAME)
+        file(APPEND ${FAKEGPU_GENERATED_PROFILE_HEADER}
+"        {\"${_profile_name}\", R\"fakegpu_${_profile_idx}(\n${_profile_content})fakegpu_${_profile_idx}\"},\n"
+)
+        math(EXPR _profile_idx "${_profile_idx} + 1")
+    endforeach()
+    file(APPEND ${FAKEGPU_GENERATED_PROFILE_HEADER}
+"    };\n"
+"    return kProfiles;\n"
+"}\n"
+"} // namespace fake_gpu\n"
+)
+else()
+    file(WRITE ${FAKEGPU_GENERATED_PROFILE_HEADER}
+"// Auto-generated: no YAML profiles were found\n"
+"#pragma once\n"
+"#include <string>\n"
+"#include <vector>\n"
+"namespace fake_gpu {\n"
+"struct ProfileYamlBlob {\n"
+"    const char* filename;\n"
+"    const char* yaml;\n"
+"};\n"
+"inline const std::vector<ProfileYamlBlob>& builtin_profile_yamls() {\n"
+"    static const std::vector<ProfileYamlBlob> kProfiles;\n"
+"    return kProfiles;\n"
+"}\n"
+"} // namespace fake_gpu\n"
+)
+endif()
+
 # Source directories
 add_subdirectory(src/core)
 add_subdirectory(src/nvml)

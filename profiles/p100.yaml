@@ -1,0 +1,23 @@
+id: p100
+name: Fake NVIDIA Tesla P100-PCIE-16GB
+architecture: pascal
+compute_minor: 0
+memory_bytes: 17179869184
+sm_count: 56
+memory_bus_width_bits: 4096
+core_clock_mhz: 1328
+memory_clock_mhz: 715
+l2_cache_bytes: 4194304
+shared_mem_per_sm: 65536
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 65536
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 250000
+max_power_limit_mw: 300000
+pci_device_id: 0x15F810DE
+supported_types:
+  - fp32
+  - fp16

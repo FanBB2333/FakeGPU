@@ -1,0 +1,23 @@
+id: v100
+name: Fake NVIDIA Tesla V100-SXM2-32GB
+architecture: volta
+compute_minor: 0
+memory_bytes: 34359738368
+sm_count: 80
+memory_bus_width_bits: 4096
+core_clock_mhz: 1380
+memory_clock_mhz: 877
+l2_cache_bytes: 6291456
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 98304
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 250000
+max_power_limit_mw: 300000
+pci_device_id: 0x1DB410DE
+supported_types:
+  - fp32
+  - fp16

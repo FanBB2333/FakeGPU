@@ -118,9 +118,9 @@ FakeGPU
 
 ### GPU Profiles
 
-- Default build now exposes a cross-generation lineup (GTX 980 → P100 → V100 → T4 → A100 → L40S → H100 → B200) so tools see Maxwell through Blackwell without code changes. Definitions live in `src/core/gpu_profile.hpp|.cpp`.
-- Factory helpers exist for `GpuProfile::GTX980/P100/V100/T4/A40/A100/H100/L40S/B100/B200` and track architecture, compute capability, clocks, memory/power limits, and supported data types (fp32/fp16/bf16/tf32/int8/int4).
-- Per-architecture builders (`MaxwellProfile`, `PascalProfile`, `VoltaProfile`, `TuringProfile`, `AmpereProfile`, `AdaProfile`, `HopperProfile`, `BlackwellProfile`) take a `GpuProfileParams` blob so you can hydrate profiles from JSON/CSV and wire them into `build_default_profiles()` without touching the CUDA/NVML stubs.
+- Default build exposes eight `Fake NVIDIA A100-SXM4-80GB` devices to mirror common server nodes.
+- GPU parameters are edited in YAML under `profiles/*.yaml`; CMake embeds these files at build time so no runtime file lookup is needed. Add or tweak a file, rerun `cmake -S . -B build`, and the new profiles are compiled in.
+- Presets cover multiple compute capabilities (Maxwell→Blackwell) and feed the existing helpers (`GpuProfile::GTX980/P100/V100/T4/A40/A100/H100/L40S/B100/B200`), which now prefer the YAML data and fall back to code defaults if parsing fails.
 
 ## Limitations
 

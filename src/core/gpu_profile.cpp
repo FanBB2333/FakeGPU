@@ -1,6 +1,13 @@
 #include "gpu_profile.hpp"
+#include "generated_profiles.hpp"
+#include "logging.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <limits>
+#include <optional>
+#include <sstream>
+#include <unordered_map>
 #include <utility>
 
 namespace fake_gpu {
@@ -72,6 +79,7 @@ bool GpuProfile::supports(GpuDataType type) const {
 }
 
 namespace {
+
 const MaxwellProfile kMaxwell;
 const PascalProfile kPascal;
 const VoltaProfile kVolta;
@@ -80,6 +88,285 @@ const AmpereProfile kAmpere;
 const HopperProfile kHopper;
 const AdaProfile kAda;
 const BlackwellProfile kBlackwell;
+
+std::string trim(const std::string& value) {
+    const size_t begin = value.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) return "";
+    const size_t end = value.find_last_not_of(" \t\r\n");
+    return value.substr(begin, end - begin + 1);
+}
+
+std::string to_lower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+struct ParsedYaml {
+    std::unordered_map<std::string, std::string> scalars;
+    std::unordered_map<std::string, std::vector<std::string>> lists;
+};
+
+bool parse_simple_yaml(const std::string& yaml, ParsedYaml& out, std::string& error) {
+    std::istringstream stream(yaml);
+    std::string line;
+    std::string current_list;
+    size_t line_no = 0;
+
+    while (std::getline(stream, line)) {
+        ++line_no;
+        std::string trimmed = trim(line);
+        if (trimmed.empty() || trimmed[0] == '#') continue;
+
+        if (trimmed.rfind("- ", 0) == 0) {
+            if (current_list.empty()) {
+                error = "List item without a preceding key on line " + std::to_string(line_no);
+                return false;
+            }
+            out.lists[current_list].push_back(trim(trimmed.substr(2)));
+            continue;
+        }
+
+        size_t colon = trimmed.find(':');
+        if (colon == std::string::npos) {
+            error = "Invalid line (missing colon) on line " + std::to_string(line_no);
+            return false;
+        }
+
+        std::string key = trim(trimmed.substr(0, colon));
+        std::string value = trim(trimmed.substr(colon + 1));
+        if (!value.empty()) {
+            out.scalars[key] = value;
+            current_list.clear();
+        } else {
+            current_list = key;
+            out.lists[key]; // ensure list exists
+        }
+    }
+    return true;
+}
+
+template <typename T>
+bool parse_integer(const std::string& text, T& out) {
+    try {
+        uint64_t raw = std::stoull(text, nullptr, 0);
+        if (raw > static_cast<uint64_t>(std::numeric_limits<T>::max())) return false;
+        out = static_cast<T>(raw);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::optional<GpuDataType> parse_data_type(const std::string& text) {
+    const std::string lower = to_lower(text);
+    if (lower == "fp32") return GpuDataType::FP32;
+    if (lower == "fp16") return GpuDataType::FP16;
+    if (lower == "bf16") return GpuDataType::BF16;
+    if (lower == "tf32") return GpuDataType::TF32;
+    if (lower == "int8") return GpuDataType::INT8;
+    if (lower == "int4") return GpuDataType::INT4;
+    return std::nullopt;
+}
+
+std::optional<GpuArch> parse_arch(const std::string& text) {
+    const std::string lower = to_lower(text);
+    if (lower == "maxwell") return GpuArch::Maxwell;
+    if (lower == "pascal") return GpuArch::Pascal;
+    if (lower == "volta") return GpuArch::Volta;
+    if (lower == "turing") return GpuArch::Turing;
+    if (lower == "ampere") return GpuArch::Ampere;
+    if (lower == "hopper") return GpuArch::Hopper;
+    if (lower == "ada") return GpuArch::Ada;
+    if (lower == "blackwell") return GpuArch::Blackwell;
+    return std::nullopt;
+}
+
+struct ProfileDefinition {
+    std::string id;
+    GpuArch arch = GpuArch::Unknown;
+    GpuProfileParams params;
+};
+
+const ArchProfile* get_arch_profile(GpuArch arch) {
+    switch (arch) {
+        case GpuArch::Maxwell: return &kMaxwell;
+        case GpuArch::Pascal: return &kPascal;
+        case GpuArch::Volta: return &kVolta;
+        case GpuArch::Turing: return &kTuring;
+        case GpuArch::Ampere: return &kAmpere;
+        case GpuArch::Hopper: return &kHopper;
+        case GpuArch::Ada: return &kAda;
+        case GpuArch::Blackwell: return &kBlackwell;
+        default: return nullptr;
+    }
+}
+
+GpuProfile build_profile_from_definition(const ProfileDefinition& def) {
+    if (const ArchProfile* arch_profile = get_arch_profile(def.arch)) {
+        return arch_profile->build(def.params);
+    }
+
+    // Fallback for unknown architecture identifiers
+    GpuProfile profile;
+    profile.name = def.params.name;
+    profile.architecture = def.arch;
+    profile.compute_major = static_cast<int>(def.arch);
+    profile.compute_minor = def.params.compute_minor;
+    profile.memory_bytes = def.params.memory_bytes;
+    profile.sm_count = def.params.sm_count;
+    profile.memory_bus_width_bits = def.params.memory_bus_width_bits;
+    profile.core_clock_mhz = def.params.core_clock_mhz;
+    profile.memory_clock_mhz = def.params.memory_clock_mhz;
+    profile.l2_cache_bytes = def.params.l2_cache_bytes;
+    profile.shared_mem_per_sm = def.params.shared_mem_per_sm;
+    profile.shared_mem_per_block = def.params.shared_mem_per_block;
+    profile.shared_mem_per_block_optin = def.params.shared_mem_per_block_optin;
+    profile.regs_per_block = def.params.regs_per_block;
+    profile.regs_per_multiprocessor = def.params.regs_per_multiprocessor;
+    profile.max_threads_per_multiprocessor = def.params.max_threads_per_multiprocessor;
+    profile.max_blocks_per_multiprocessor = def.params.max_blocks_per_multiprocessor;
+    profile.typical_power_usage_mw = def.params.typical_power_usage_mw;
+    profile.max_power_limit_mw = def.params.max_power_limit_mw;
+    profile.pci_device_id = def.params.pci_device_id;
+    profile.supported_types = def.params.supported_types.empty() ? std::vector<GpuDataType>{GpuDataType::FP32} : def.params.supported_types;
+    return profile;
+}
+
+bool parse_required_int(const ParsedYaml& parsed, const std::string& key, uint64_t& value, const char* filename) {
+    auto it = parsed.scalars.find(key);
+    if (it == parsed.scalars.end()) {
+        FGPU_LOG("[GpuProfile] Missing required key '%s' in %s\n", key.c_str(), filename);
+        return false;
+    }
+    if (!parse_integer(it->second, value)) {
+        FGPU_LOG("[GpuProfile] Failed to parse numeric key '%s' in %s (value=%s)\n", key.c_str(), filename, it->second.c_str());
+        return false;
+    }
+    return true;
+}
+
+std::optional<ProfileDefinition> parse_definition(const ProfileYamlBlob& blob) {
+    ParsedYaml parsed;
+    std::string error;
+    if (!parse_simple_yaml(blob.yaml, parsed, error)) {
+        FGPU_LOG("[GpuProfile] Failed to parse %s: %s\n", blob.filename, error.c_str());
+        return std::nullopt;
+    }
+
+    ProfileDefinition def;
+    const std::string filename = blob.filename ? std::string(blob.filename) : "";
+    const size_t dot = filename.find_last_of('.');
+    const std::string filename_id = dot == std::string::npos ? filename : filename.substr(0, dot);
+
+    auto id_it = parsed.scalars.find("id");
+    def.id = to_lower(id_it != parsed.scalars.end() ? id_it->second : filename_id);
+
+    auto name_it = parsed.scalars.find("name");
+    def.params.name = name_it != parsed.scalars.end() ? name_it->second : def.id;
+
+    auto arch_it = parsed.scalars.find("architecture");
+    if (arch_it == parsed.scalars.end()) {
+        FGPU_LOG("[GpuProfile] Missing 'architecture' key in %s\n", blob.filename);
+        return std::nullopt;
+    }
+    std::optional<GpuArch> arch = parse_arch(arch_it->second);
+    if (!arch.has_value()) {
+        FGPU_LOG("[GpuProfile] Unknown architecture '%s' in %s\n", arch_it->second.c_str(), blob.filename);
+        return std::nullopt;
+    }
+    def.arch = arch.value();
+
+    auto compute_minor_it = parsed.scalars.find("compute_minor");
+    if (compute_minor_it != parsed.scalars.end()) {
+        if (!parse_integer(compute_minor_it->second, def.params.compute_minor)) {
+            FGPU_LOG("[GpuProfile] Invalid compute_minor in %s: %s\n", blob.filename, compute_minor_it->second.c_str());
+            return std::nullopt;
+        }
+    }
+
+    uint64_t numeric_value = 0;
+    if (!parse_required_int(parsed, "memory_bytes", numeric_value, blob.filename)) return std::nullopt;
+    def.params.memory_bytes = numeric_value;
+    if (!parse_required_int(parsed, "sm_count", numeric_value, blob.filename)) return std::nullopt;
+    def.params.sm_count = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "memory_bus_width_bits", numeric_value, blob.filename)) return std::nullopt;
+    def.params.memory_bus_width_bits = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "core_clock_mhz", numeric_value, blob.filename)) return std::nullopt;
+    def.params.core_clock_mhz = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "memory_clock_mhz", numeric_value, blob.filename)) return std::nullopt;
+    def.params.memory_clock_mhz = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "l2_cache_bytes", numeric_value, blob.filename)) return std::nullopt;
+    def.params.l2_cache_bytes = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "shared_mem_per_sm", numeric_value, blob.filename)) return std::nullopt;
+    def.params.shared_mem_per_sm = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "shared_mem_per_block", numeric_value, blob.filename)) return std::nullopt;
+    def.params.shared_mem_per_block = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "shared_mem_per_block_optin", numeric_value, blob.filename)) return std::nullopt;
+    def.params.shared_mem_per_block_optin = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "regs_per_block", numeric_value, blob.filename)) return std::nullopt;
+    def.params.regs_per_block = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "regs_per_multiprocessor", numeric_value, blob.filename)) return std::nullopt;
+    def.params.regs_per_multiprocessor = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "max_threads_per_multiprocessor", numeric_value, blob.filename)) return std::nullopt;
+    def.params.max_threads_per_multiprocessor = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "max_blocks_per_multiprocessor", numeric_value, blob.filename)) return std::nullopt;
+    def.params.max_blocks_per_multiprocessor = static_cast<int>(numeric_value);
+    if (!parse_required_int(parsed, "typical_power_usage_mw", numeric_value, blob.filename)) return std::nullopt;
+    def.params.typical_power_usage_mw = static_cast<unsigned int>(numeric_value);
+    if (!parse_required_int(parsed, "max_power_limit_mw", numeric_value, blob.filename)) return std::nullopt;
+    def.params.max_power_limit_mw = static_cast<unsigned int>(numeric_value);
+    if (!parse_required_int(parsed, "pci_device_id", numeric_value, blob.filename)) return std::nullopt;
+    def.params.pci_device_id = static_cast<uint32_t>(numeric_value);
+
+    auto types_it = parsed.lists.find("supported_types");
+    if (types_it != parsed.lists.end()) {
+        for (const std::string& type_str : types_it->second) {
+            std::optional<GpuDataType> maybe_type = parse_data_type(type_str);
+            if (!maybe_type.has_value()) {
+                FGPU_LOG("[GpuProfile] Unknown data type '%s' in %s\n", type_str.c_str(), blob.filename);
+                return std::nullopt;
+            }
+            def.params.supported_types.push_back(maybe_type.value());
+        }
+    }
+    return def;
+}
+
+const std::vector<ProfileDefinition>& builtin_profile_definitions() {
+    static const std::vector<ProfileDefinition> kDefinitions = []() {
+        std::vector<ProfileDefinition> result;
+        for (const ProfileYamlBlob& blob : builtin_profile_yamls()) {
+            std::optional<ProfileDefinition> def = parse_definition(blob);
+            if (def.has_value()) {
+                result.push_back(def.value());
+            }
+        }
+        return result;
+    }();
+    return kDefinitions;
+}
+
+std::optional<GpuProfile> profile_from_yaml_id(const std::string& id) {
+    const std::string normalized = to_lower(id);
+    for (const ProfileDefinition& def : builtin_profile_definitions()) {
+        if (def.id == normalized) {
+            return build_profile_from_definition(def);
+        }
+    }
+    return std::nullopt;
+}
+
+GpuProfile build_profile_with_fallback(const std::string& id, GpuArch arch, const GpuProfileParams& params) {
+    std::optional<GpuProfile> yaml_profile = profile_from_yaml_id(id);
+    if (yaml_profile.has_value()) return yaml_profile.value();
+    if (const ArchProfile* builder = get_arch_profile(arch)) {
+        return builder->build(params);
+    }
+    ProfileDefinition fallback_def;
+    fallback_def.arch = arch;
+    fallback_def.params = params;
+    return build_profile_from_definition(fallback_def);
+}
 } // namespace
 
 GpuProfile GpuProfile::GTX980() {
@@ -102,7 +389,7 @@ GpuProfile GpuProfile::GTX980() {
     params.typical_power_usage_mw = 165000;
     params.max_power_limit_mw = 180000;
     params.pci_device_id = 0x13C010DE;
-    return kMaxwell.build(params);
+    return build_profile_with_fallback("gtx980", GpuArch::Maxwell, params);
 }
 
 GpuProfile GpuProfile::P100() {
@@ -125,7 +412,7 @@ GpuProfile GpuProfile::P100() {
     params.typical_power_usage_mw = 250000;
     params.max_power_limit_mw = 300000;
     params.pci_device_id = 0x15F810DE;
-    return kPascal.build(params);
+    return build_profile_with_fallback("p100", GpuArch::Pascal, params);
 }
 
 GpuProfile GpuProfile::V100() {
@@ -148,7 +435,7 @@ GpuProfile GpuProfile::V100() {
     params.typical_power_usage_mw = 250000;
     params.max_power_limit_mw = 300000;
     params.pci_device_id = 0x1DB410DE;
-    return kVolta.build(params);
+    return build_profile_with_fallback("v100", GpuArch::Volta, params);
 }
 
 GpuProfile GpuProfile::T4() {
@@ -171,7 +458,7 @@ GpuProfile GpuProfile::T4() {
     params.typical_power_usage_mw = 70000;
     params.max_power_limit_mw = 75000;
     params.pci_device_id = 0x1EB810DE;
-    return kTuring.build(params);
+    return build_profile_with_fallback("t4", GpuArch::Turing, params);
 }
 
 GpuProfile GpuProfile::A40() {
@@ -194,7 +481,7 @@ GpuProfile GpuProfile::A40() {
     params.typical_power_usage_mw = 300000;
     params.max_power_limit_mw = 350000;
     params.pci_device_id = 0x223510DE;
-    return kAmpere.build(params);
+    return build_profile_with_fallback("a40", GpuArch::Ampere, params);
 }
 
 GpuProfile GpuProfile::A100() {
@@ -217,7 +504,7 @@ GpuProfile GpuProfile::A100() {
     params.typical_power_usage_mw = 300000;  // 300W
     params.max_power_limit_mw = 400000;      // 400W
     params.pci_device_id = 0x20B010DE;
-    return kAmpere.build(params);
+    return build_profile_with_fallback("a100", GpuArch::Ampere, params);
 }
 
 GpuProfile GpuProfile::H100() {
@@ -240,7 +527,7 @@ GpuProfile GpuProfile::H100() {
     params.typical_power_usage_mw = 500000;
     params.max_power_limit_mw = 700000;
     params.pci_device_id = 0x233010DE;
-    return kHopper.build(params);
+    return build_profile_with_fallback("h100", GpuArch::Hopper, params);
 }
 
 GpuProfile GpuProfile::L40S() {
@@ -263,7 +550,7 @@ GpuProfile GpuProfile::L40S() {
     params.typical_power_usage_mw = 300000;
     params.max_power_limit_mw = 350000;
     params.pci_device_id = 0x26B010DE;
-    return kAda.build(params);
+    return build_profile_with_fallback("l40s", GpuArch::Ada, params);
 }
 
 GpuProfile GpuProfile::B100() {
@@ -286,7 +573,7 @@ GpuProfile GpuProfile::B100() {
     params.typical_power_usage_mw = 600000;
     params.max_power_limit_mw = 700000;
     params.pci_device_id = 0x26B410DE;
-    return kBlackwell.build(params);
+    return build_profile_with_fallback("b100", GpuArch::Blackwell, params);
 }
 
 GpuProfile GpuProfile::B200() {
@@ -309,7 +596,7 @@ GpuProfile GpuProfile::B200() {
     params.typical_power_usage_mw = 700000;
     params.max_power_limit_mw = 800000;
     params.pci_device_id = 0x26B510DE;
-    return kBlackwell.build(params);
+    return build_profile_with_fallback("b200", GpuArch::Blackwell, params);
 }
 
 const char* to_string(GpuArch arch) {

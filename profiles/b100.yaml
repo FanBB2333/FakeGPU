@@ -1,0 +1,27 @@
+id: b100
+name: Fake NVIDIA B100
+architecture: blackwell
+compute_minor: 0
+memory_bytes: 85899345920
+sm_count: 144
+memory_bus_width_bits: 5120
+core_clock_mhz: 1950
+memory_clock_mhz: 2300
+l2_cache_bytes: 65536000
+shared_mem_per_sm: 262144
+shared_mem_per_block: 131072
+shared_mem_per_block_optin: 262144
+regs_per_block: 65536
+regs_per_multiprocessor: 131072
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 600000
+max_power_limit_mw: 700000
+pci_device_id: 0x26B410DE
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4

@@ -5,6 +5,7 @@
 ## 构建与产物
 - 核心 CMake 目标：`libnvidia-ml.so.1`（NVML 拦截）、`libcuda.so.1`（Driver API 拦截）、`libcudart.so.12`（Runtime API 拦截）、`libcublas.so.12`（cuBLAS/cuBLASLt 拦截）。
 - 默认提供 8 张 “Fake NVIDIA A100-SXM4-80GB” 虚拟设备，显存用系统内存模拟。
+- 虚拟 GPU 参数集中保存在根目录 `profiles/*.yaml`，CMake 在编译阶段嵌入到二进制，运行时无需额外配置文件。
 
 ## 源码目录
 - `src/core/`  
@@ -24,6 +25,8 @@
   - `nvml_stubs.cpp`：`nvmlInit/Shutdown`、设备查询、显存/温度/功耗等信息的假实现，使用 `GlobalState` 设备数据。
 - `src/monitor/`  
   - `monitor.*`：进程退出或显式调用时生成 `fake_gpu_report.json`，记录各虚拟设备的显存使用峰值，避免重复输出（原子标记）。
+- `profiles/`  
+  - 一组统一格式的 YAML 预设，覆盖不同 Compute Capability（Maxwell → Blackwell），默认使用 `a100.yaml` 生成 8 张虚拟卡。修改或新增文件后重新运行 `cmake -S . -B build` 即可生效。
 
 ## 测试与示例
 - `test/`  

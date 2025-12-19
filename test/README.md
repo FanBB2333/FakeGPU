@@ -155,10 +155,9 @@ python test/test_pytorch_basic.py
 ```
 
 预期输出:
-- PyTorch成功检测到8个虚拟GPU (默认配置)
-- 设备按顺序覆盖不同架构："Fake NVIDIA B200", "Fake NVIDIA H100-SXM-80GB", "Fake NVIDIA A100-SXM4-80GB", "Fake NVIDIA L40S", "Fake NVIDIA T4", "Fake NVIDIA Tesla V100-SXM2-32GB", "Fake NVIDIA Tesla P100-PCIE-16GB", "Fake NVIDIA GeForce GTX 980"
-- 显存容量与型号对应（从 4GB Maxwell 到 192GB Blackwell）
-- 计算能力随型号变化（Maxwell 5.2 到 Blackwell 10.0），便于验证跨架构逻辑
+- PyTorch成功检测到8个虚拟GPU（默认全部为 `Fake NVIDIA A100-SXM4-80GB`）
+- 设备参数来自编译时打包的 `profiles/*.yaml`，如需切换到其他 Compute Capability（Turing/Hopper/Blackwell等）只需修改或新增 YAML 后重新 `cmake` 即可
+- 显存容量等参数随所选预设变化（默认 80GB，其他预设覆盖 4GB→192GB）
 - 成功创建张量并进行基本运算
 
 测试内容:

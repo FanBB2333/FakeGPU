@@ -92,7 +92,7 @@ Generated token: Hello
 FakeGPU:
 ```
 Using device: cuda
-GPU: Fake NVIDIA B200
+GPU: Fake NVIDIA A100-SXM4-80GB
 Model loaded successfully!
 Generated token: !
 === TEST PASSED ===

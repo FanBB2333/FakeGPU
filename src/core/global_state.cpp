@@ -8,17 +8,9 @@ namespace fake_gpu {
 
 namespace {
 std::vector<GpuProfile> build_default_profiles() {
-    // Keep a single place for default GPU definitions to simplify adding new models.
-    return {
-        GpuProfile::B200(),
-        GpuProfile::H100(),
-        GpuProfile::A100(),
-        GpuProfile::L40S(),
-        GpuProfile::T4(),
-        GpuProfile::V100(),
-        GpuProfile::P100(),
-        GpuProfile::GTX980(),
-    };
+    // Default to eight identical A100-class devices to mirror common server setups.
+    std::vector<GpuProfile> profiles(8, GpuProfile::A100());
+    return profiles;
 }
 } // namespace
 

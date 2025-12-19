@@ -1,0 +1,22 @@
+id: gtx980
+name: Fake NVIDIA GeForce GTX 980
+architecture: maxwell
+compute_minor: 2
+memory_bytes: 4294967296
+sm_count: 16
+memory_bus_width_bits: 256
+core_clock_mhz: 1216
+memory_clock_mhz: 1750
+l2_cache_bytes: 2097152
+shared_mem_per_sm: 65536
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 65536
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 165000
+max_power_limit_mw: 180000
+pci_device_id: 0x13C010DE
+supported_types:
+  - fp32

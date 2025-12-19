@@ -1,0 +1,27 @@
+id: h100
+name: Fake NVIDIA H100-SXM-80GB
+architecture: hopper
+compute_minor: 0
+memory_bytes: 85899345920
+sm_count: 132
+memory_bus_width_bits: 5120
+core_clock_mhz: 1800
+memory_clock_mhz: 1593
+l2_cache_bytes: 52428800
+shared_mem_per_sm: 229376
+shared_mem_per_block: 98304
+shared_mem_per_block_optin: 229376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 500000
+max_power_limit_mw: 700000
+pci_device_id: 0x233010DE
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
