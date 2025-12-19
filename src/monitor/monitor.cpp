@@ -5,6 +5,7 @@
 #include <fstream>
 #include <atomic>
 #include "../core/global_state.hpp"
+#include "../core/logging.hpp"
 
 namespace fake_gpu {
 
@@ -20,7 +21,7 @@ public:
     }
 
     ResourceMonitor() {
-        printf("[Monitor] Initialized\n");
+        FGPU_LOG("[Monitor] Initialized\n");
     }
 
     ~ResourceMonitor() {
@@ -46,11 +47,11 @@ private:
             const char* report_path = "fake_gpu_report.json";
             GlobalState& gs = GlobalState::instance();
             int count = gs.get_device_count();
-            printf("[Monitor] Dumping report to %s. GlobalState Addr: %p, Device Count: %d\n", report_path, (void*)&gs, count);
+            FGPU_LOG("[Monitor] Dumping report to %s. GlobalState Addr: %p, Device Count: %d\n", report_path, (void*)&gs, count);
 
             FILE* out = fopen(report_path, "w");
             if (!out) {
-                printf("[Monitor] Failed to open report file\n");
+                FGPU_LOG("[Monitor] Failed to open report file\n");
                 return;
             }
 
@@ -73,7 +74,7 @@ private:
             fclose(out);
             g_report_dumped.store(true);
         } catch (...) {
-            printf("[Monitor] Exception during report dump\n");
+            FGPU_LOG("[Monitor] Exception during report dump\n");
         }
     }
 };
