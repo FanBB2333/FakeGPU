@@ -1,0 +1,8 @@
+include CMakeLists.txt
+include LICENSE
+include README.md
+include fgpu
+recursive-include fakegpu *.py
+recursive-include profiles *.yaml
+recursive-include src *.cpp *.hpp *.h
+

@@ -20,6 +20,15 @@ research_poc/libintercept.dylib
 # Generated reports
 fake_gpu_report.json
 
+# Python build / packaging
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+.pytest_cache/
+
 # IDE / Editor
 .vscode/
 .idea/

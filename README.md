@@ -9,11 +9,11 @@ A CUDA API interception library that simulates GPU devices in non-GPU environmen
 - [x] **CUDA Runtime API** - cudaMalloc/Free, cudaMemcpy, Stream, Event
 - [x] **cuBLAS/cuBLASLt** - Matrix operations (GEMM, PyTorch 2.x compatible)
 - [x] **NVML API** - GPU information queries
+- [x] **Python API Wrapper** - `import fakegpu; fakegpu.init()` enables FakeGPU from inside Python
 - [x] **PyTorch Support** - Basic tensor ops, linear layers, neural networks
 - [x] **GPU Tool Compatibility** - Compatible with existing GPU status monitoring tools (nvidia-smi, gpustat, etc.)
 
 ### Planned Features
-- [ ] **Python API Wrapper** - Package as Python library for easier integration
 - [ ] **Detailed Reporting** - More comprehensive documentation and analysis reports
 - [ ] **Multi-Node GPU Communication** - Simulate cross-node GPU communication (NCCL, etc.)
 - [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
@@ -73,10 +73,26 @@ LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:
 python your_script.py
 ```
 
+**Python wrapper (no need to start Python with LD_PRELOAD):**
+```python
+import fakegpu
+
+# Call early (before importing torch / CUDA-using libraries)
+fakegpu.init()
+
+import torch
+```
+
 **Shortcut runner:**
 ```bash
 ./fgpu python your_script.py
 # Optional: FAKEGPU_BUILD_DIR=/path/to/build ./fgpu python your_script.py
+```
+
+**Python runner (installs `fakegpu` console script):**
+```bash
+fakegpu python your_script.py
+# or: python -m fakegpu python your_script.py
 ```
 
 **GPU tools (nvidia-smi)**

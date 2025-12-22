@@ -20,6 +20,11 @@ LD_PRELOAD=./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.
 python3 your_script.py
 ```
 
+**或在 Python 进程内动态启用（需在 import torch 之前调用）：**
+```bash
+python3 -c "import fakegpu; fakegpu.init(); import torch; print(torch.cuda.device_count())"
+```
+
 ### GPU监控
 
 **使用nvitop（Python API）：**
