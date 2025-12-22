@@ -1,5 +1,18 @@
 cmake_minimum_required(VERSION 3.14)
-project(FakeGPU VERSION 1.0.0)
+
+# Keep the project/package version in one place: fakegpu/_version.py
+set(FAKEGPU_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/fakegpu/_version.py")
+if(NOT EXISTS "${FAKEGPU_VERSION_FILE}")
+    message(FATAL_ERROR "Version file not found: ${FAKEGPU_VERSION_FILE}")
+endif()
+file(READ "${FAKEGPU_VERSION_FILE}" FAKEGPU_VERSION_FILE_CONTENTS)
+string(REGEX MATCH "__version__ *=[ \t]*\"([0-9]+\\.[0-9]+\\.[0-9]+)\"" FAKEGPU_VERSION_MATCH "${FAKEGPU_VERSION_FILE_CONTENTS}")
+if(NOT FAKEGPU_VERSION_MATCH)
+    message(FATAL_ERROR "Could not parse __version__ from: ${FAKEGPU_VERSION_FILE}")
+endif()
+set(FAKEGPU_VERSION "${CMAKE_MATCH_1}")
+
+project(FakeGPU VERSION "${FAKEGPU_VERSION}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
