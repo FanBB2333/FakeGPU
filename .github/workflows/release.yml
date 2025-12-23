@@ -40,11 +40,27 @@ jobs:
               raise SystemExit(f"Tag {tag!r} does not match expected {expected!r}")
           PY
 
-      - name: Build sdist
+      - name: Build sdist (Python source distribution)
         run: |
           python -m pip install --upgrade pip
           python -m pip install build
-          python -m build --sdist
+          python -m build --sdist --outdir dist
+          python - <<'PY'
+          from pathlib import Path
+
+          dist = Path("dist")
+          sdists = sorted(dist.glob("fakegpu-*.tar.gz"))
+          if not sdists:
+              raise SystemExit("No sdist found in dist/")
+
+          src = sdists[-1]
+          base = src.name.removesuffix(".tar.gz")
+          dst = dist / f"{base}-python-sdist.tar.gz"
+          if dst.exists():
+              dst.unlink()
+          src.rename(dst)
+          print(f"sdist: {dst}")
+          PY
 
       - name: Build wheel (manylinux x86_64)
         uses: pypa/cibuildwheel@v2.21.3
@@ -58,5 +74,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*.whl
+            dist/*-python-sdist.tar.gz
           generate_release_notes: true
