@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from setuptools import setup
+from setuptools import Distribution, setup
 from setuptools.command.build_py import build_py as _build_py
 
 try:
@@ -61,6 +61,13 @@ class build_py(_build_py):
         _copy_native_libs(native_out, package_native)
 
 
+class BinaryDistribution(Distribution):
+    def has_ext_modules(self) -> bool:
+        # Force installation into platlib so wheels containing ELF .so files are
+        # platlib-compliant (required by auditwheel).
+        return True
+
+
 if _bdist_wheel is not None:
 
     class bdist_wheel(_bdist_wheel):
@@ -80,4 +87,4 @@ else:
     cmdclass = {"build_py": build_py}
 
 
-setup(cmdclass=cmdclass)
+setup(cmdclass=cmdclass, distclass=BinaryDistribution)
