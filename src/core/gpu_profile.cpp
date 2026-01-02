@@ -101,6 +101,16 @@ std::string to_lower(std::string value) {
     return value;
 }
 
+std::string normalize_profile_id(std::string value) {
+    value = trim(to_lower(std::move(value)));
+    if (value.size() >= 5 && value.compare(value.size() - 5, 5, ".yaml") == 0) {
+        value.resize(value.size() - 5);
+    } else if (value.size() >= 4 && value.compare(value.size() - 4, 4, ".yml") == 0) {
+        value.resize(value.size() - 4);
+    }
+    return trim(value);
+}
+
 struct ParsedYaml {
     std::unordered_map<std::string, std::string> scalars;
     std::unordered_map<std::string, std::vector<std::string>> lists;
@@ -368,6 +378,38 @@ GpuProfile build_profile_with_fallback(const std::string& id, GpuArch arch, cons
     return build_profile_from_definition(fallback_def);
 }
 } // namespace
+
+std::vector<std::string> builtin_profile_ids() {
+    std::vector<std::string> ids;
+    for (const ProfileDefinition& def : builtin_profile_definitions()) {
+        ids.push_back(def.id);
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    return ids;
+}
+
+std::optional<GpuProfile> profile_from_preset_id(const std::string& id) {
+    const std::string normalized = normalize_profile_id(id);
+    if (normalized.empty()) return std::nullopt;
+
+    if (std::optional<GpuProfile> yaml_profile = profile_from_yaml_id(normalized); yaml_profile.has_value()) {
+        return yaml_profile.value();
+    }
+
+    if (normalized == "gtx980") return GpuProfile::GTX980();
+    if (normalized == "p100") return GpuProfile::P100();
+    if (normalized == "v100") return GpuProfile::V100();
+    if (normalized == "t4") return GpuProfile::T4();
+    if (normalized == "a40") return GpuProfile::A40();
+    if (normalized == "a100") return GpuProfile::A100();
+    if (normalized == "h100") return GpuProfile::H100();
+    if (normalized == "l40s") return GpuProfile::L40S();
+    if (normalized == "b100") return GpuProfile::B100();
+    if (normalized == "b200") return GpuProfile::B200();
+
+    return std::nullopt;
+}
 
 GpuProfile GpuProfile::GTX980() {
     GpuProfileParams params;

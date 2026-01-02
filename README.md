@@ -78,7 +78,9 @@ python your_script.py
 import fakegpu
 
 # Call early (before importing torch / CUDA-using libraries)
-fakegpu.init()
+fakegpu.init()  # default: 8x A100
+# Optional: fakegpu.init(profile="t4", device_count=2)
+# Optional: fakegpu.init(devices="a100:4,h100:4")
 
 import torch
 ```
@@ -86,12 +88,16 @@ import torch
 **Shortcut runner:**
 ```bash
 ./fgpu python your_script.py
+# Optional: ./fgpu --profile t4 --device-count 2 python your_script.py
+# Optional: ./fgpu --devices 't4,h100' python your_script.py
 # Optional: FAKEGPU_BUILD_DIR=/path/to/build ./fgpu python your_script.py
 ```
 
 **Python runner (installs `fakegpu` console script):**
 ```bash
 fakegpu python your_script.py
+# Optional: fakegpu --profile t4 --device-count 2 python your_script.py
+# Optional: fakegpu --devices 'a100:4,h100:4' python your_script.py
 # or: python -m fakegpu python your_script.py
 ```
 
@@ -137,6 +143,10 @@ FakeGPU
 - Default build exposes eight `Fake NVIDIA A100-SXM4-80GB` devices to mirror common server nodes.
 - GPU parameters are edited in YAML under `profiles/*.yaml`; CMake embeds these files at build time so no runtime file lookup is needed. Add or tweak a file, rerun `cmake -S . -B build`, and the new profiles are compiled in.
 - Presets cover multiple compute capabilities (Maxwell→Blackwell) and feed the existing helpers (`GpuProfile::GTX980/P100/V100/T4/A40/A100/H100/L40S/B100/B200`), which now prefer the YAML data and fall back to code defaults if parsing fails.
+- Select presets at runtime via environment variables:
+  - `FAKEGPU_PROFILE=<id>` + `FAKEGPU_DEVICE_COUNT=<n>` (uniform devices)
+  - `FAKEGPU_PROFILES=<spec>` (per-device spec, e.g. `a100:4,h100:4` or `t4,l40s`)
+- Python wrapper passes the same settings (must be called before importing CUDA-using libs like torch): `fakegpu.init(profile="t4", device_count=2)` or `fakegpu.init(devices="a100:4,h100:4")`.
 
 ## Limitations
 

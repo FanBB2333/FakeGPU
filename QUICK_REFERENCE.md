@@ -90,6 +90,10 @@ LD_PRELOAD=./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.
 
 ### 可选的环境变量
 ```bash
+FAKEGPU_PROFILE=a100                 # 统一设置GPU预设（例如: a100/h100/l40s/t4）
+FAKEGPU_DEVICE_COUNT=8               # 设置虚拟GPU数量（默认: 8）
+FAKEGPU_PROFILES=a100:4,h100:4       # 按设备配置（优先级高于 FAKEGPU_PROFILE）
+
 PYTORCH_NO_CUDA_MEMORY_CACHING=1     # 禁用PyTorch CUDA内存缓存
 TRANSFORMERS_NO_TORCHVISION=1        # 禁用torchvision
 TORCH_SDPA_KERNEL=math               # 使用数学kernel

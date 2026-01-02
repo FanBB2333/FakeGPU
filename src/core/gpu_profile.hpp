@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -146,6 +147,15 @@ struct GpuProfile {
     static GpuProfile B100();
     static GpuProfile B200();
 };
+
+// Returns the preset IDs compiled into the binary (from `profiles/*.yaml` at build time).
+std::vector<std::string> builtin_profile_ids();
+
+// Resolve a preset GPU profile by ID (case-insensitive). Supports:
+// - Built-in YAML profiles (any `id:` from `profiles/*.yaml` compiled into the binary)
+// - Factory presets (gtx980/p100/v100/t4/a40/a100/h100/l40s/b100/b200)
+// Returns nullopt if the ID is unknown.
+std::optional<GpuProfile> profile_from_preset_id(const std::string& id);
 
 const char* to_string(GpuArch arch);
 const char* to_string(GpuDataType type);

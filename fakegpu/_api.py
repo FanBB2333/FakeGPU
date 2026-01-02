@@ -95,6 +95,9 @@ def init(
     *,
     build_dir: str | os.PathLike[str] | None = None,
     lib_dir: str | os.PathLike[str] | None = None,
+    profile: str | None = None,
+    device_count: int | None = None,
+    devices: str | Sequence[str] | None = None,
     update_env: bool = True,
     force: bool = False,
 ) -> InitResult:
@@ -108,11 +111,17 @@ def init(
 
     with _state_lock:
         if _initialized and not force:
+            if profile is not None or device_count is not None or devices is not None:
+                raise RuntimeError(
+                    "fakegpu.init() has already run in this process; GPU preset settings must be provided before the first init()."
+                )
             return InitResult(lib_dir=_loaded_dir or library_dir(build_dir=build_dir, lib_dir=lib_dir), handles=dict(_handles))
 
         resolved_dir = library_dir(build_dir=build_dir, lib_dir=lib_dir)
         if update_env:
-            _apply_env_inplace(resolved_dir)
+            _apply_env_inplace(resolved_dir, profile=profile, device_count=device_count, devices=devices)
+        else:
+            _apply_config_env_inplace(profile=profile, device_count=device_count, devices=devices)
 
         mode = ctypes.RTLD_GLOBAL
         if hasattr(os, "RTLD_NOW"):
@@ -141,6 +150,9 @@ def env(
     *,
     build_dir: str | os.PathLike[str] | None = None,
     lib_dir: str | os.PathLike[str] | None = None,
+    profile: str | None = None,
+    device_count: int | None = None,
+    devices: str | Sequence[str] | None = None,
     base_env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """
@@ -151,6 +163,7 @@ def env(
 
     resolved_dir = library_dir(build_dir=build_dir, lib_dir=lib_dir)
     env_map = dict(os.environ) if base_env is None else dict(base_env)
+    _apply_config_env(env_map, profile=profile, device_count=device_count, devices=devices)
     _apply_env(env_map, resolved_dir)
     return env_map
 
@@ -160,6 +173,9 @@ def run(
     *,
     build_dir: str | os.PathLike[str] | None = None,
     lib_dir: str | os.PathLike[str] | None = None,
+    profile: str | None = None,
+    device_count: int | None = None,
+    devices: str | Sequence[str] | None = None,
     check: bool = True,
     **kwargs,
 ) -> subprocess.CompletedProcess[str]:
@@ -169,7 +185,7 @@ def run(
         list(cmd),
         check=check,
         text=True,
-        env=env(build_dir=build_dir, lib_dir=lib_dir),
+        env=env(build_dir=build_dir, lib_dir=lib_dir, profile=profile, device_count=device_count, devices=devices),
         **kwargs,
     )
     return completed
@@ -195,9 +211,35 @@ def _fallback_name(libname: str) -> str:
     return libname
 
 
-def _apply_env_inplace(resolved_dir: Path) -> None:
-    updated = env(lib_dir=resolved_dir, base_env=os.environ)  # type: ignore[arg-type]
+def _apply_env_inplace(
+    resolved_dir: Path, *, profile: str | None, device_count: int | None, devices: str | Sequence[str] | None
+) -> None:
+    updated = env(lib_dir=resolved_dir, profile=profile, device_count=device_count, devices=devices, base_env=os.environ)  # type: ignore[arg-type]
     os.environ.update(updated)
+
+def _apply_config_env_inplace(*, profile: str | None, device_count: int | None, devices: str | Sequence[str] | None) -> None:
+    updated = dict(os.environ)
+    _apply_config_env(updated, profile=profile, device_count=device_count, devices=devices)
+    os.environ.update(updated)
+
+
+def _apply_config_env(
+    env_map: dict[str, str], *, profile: str | None, device_count: int | None, devices: str | Sequence[str] | None
+) -> None:
+    if device_count is not None:
+        if int(device_count) <= 0:
+            raise ValueError("device_count must be > 0")
+        env_map["FAKEGPU_DEVICE_COUNT"] = str(int(device_count))
+
+    if profile is not None:
+        env_map["FAKEGPU_PROFILE"] = str(profile)
+
+    if devices is not None:
+        if isinstance(devices, str):
+            spec = devices
+        else:
+            spec = ",".join(devices)
+        env_map["FAKEGPU_PROFILES"] = spec
 
 
 def _apply_env(env_map: dict[str, str], resolved_dir: Path) -> None:
