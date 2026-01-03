@@ -12,12 +12,12 @@ A CUDA API interception library that simulates GPU devices in non-GPU environmen
 - [x] **Python API Wrapper** - `import fakegpu; fakegpu.init()` enables FakeGPU from inside Python
 - [x] **PyTorch Support** - Basic tensor ops, linear layers, neural networks
 - [x] **GPU Tool Compatibility** - Compatible with existing GPU status monitoring tools (nvidia-smi, gpustat, etc.)
+- [x] **Preset GPU Info** - Add more preset GPU hardware configurations
 
 ### Planned Features
 - [ ] **Detailed Reporting** - More comprehensive documentation and analysis reports
 - [ ] **Multi-Node GPU Communication** - Simulate cross-node GPU communication (NCCL, etc.)
 - [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
-- [ ] **Preset GPU Info** - Add more preset GPU hardware configurations
 - [ ] **Multi-Architecture & Data Types** - Support different GPU architectures and various data storage/memory types
 
 ## Quick Start
