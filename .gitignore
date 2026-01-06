@@ -1,12 +1,16 @@
 # Build directories
 build/
 build_asan/
+build*/
 cmake-build-*/
 
 # Compiled shared libraries
 *.so
+*.so.*
 *.dylib
+*.dylib.*
 *.dll
+*.dll.*
 
 # Compiled object files
 *.o

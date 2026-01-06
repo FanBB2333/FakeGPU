@@ -27,6 +27,15 @@ else()
     message(STATUS "FakeGPU logging: DISABLED")
 endif()
 
+# Option to enable CPU-based compute for selected operators (e.g. cuBLAS GEMM)
+option(ENABLE_FAKEGPU_CPU_SIMULATION "Execute supported FakeGPU operators on CPU for improved correctness" OFF)
+
+if(ENABLE_FAKEGPU_CPU_SIMULATION)
+    message(STATUS "FakeGPU CPU simulation: ENABLED")
+else()
+    message(STATUS "FakeGPU CPU simulation: DISABLED")
+endif()
+
 # Embed YAML GPU profiles at configure time so defaults are available without runtime files
 set(FAKEGPU_PROFILE_DIR "${CMAKE_SOURCE_DIR}/profiles")
 file(GLOB FAKEGPU_PROFILE_FILES "${FAKEGPU_PROFILE_DIR}/*.yaml")
@@ -128,6 +137,8 @@ add_library(fake_cublas SHARED
 )
 target_link_libraries(fake_cublas PRIVATE ${CMAKE_DL_LIBS})
 target_include_directories(fake_cublas PRIVATE src/cublas src/core)
+target_compile_definitions(fake_cublas PRIVATE FAKEGPU_CPU_SIMULATION=$<BOOL:${ENABLE_FAKEGPU_CPU_SIMULATION}>)
+target_link_libraries(fake_cublas PRIVATE m)
 
 # Platform specific flags
 if(APPLE)

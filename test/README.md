@@ -5,6 +5,7 @@
 ### 推荐：标准化一键测试
 ```bash
 ./ftest smoke          # C + Python (不需要 torch)
+./ftest cpu_sim        # 启用CPU精确模拟并验证算子正确性
 ./ftest python         # PyTorch 测试 (需要 torch)
 ./ftest all            # smoke + python
 ```

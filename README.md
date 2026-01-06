@@ -29,6 +29,12 @@ cmake -S . -B build
 cmake --build build
 ```
 
+Optional (enable CPU-backed compute for supported operators, default: OFF):
+```bash
+cmake -S . -B build -DENABLE_FAKEGPU_CPU_SIMULATION=ON
+cmake --build build
+```
+
 Generated libraries:
 - `build/libcuda.so.1` - CUDA Driver API
 - `build/libcudart.so.12` - CUDA Runtime API
