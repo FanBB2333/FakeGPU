@@ -15,9 +15,7 @@ cmake --build build
 
 ### 运行Python程序
 ```bash
-LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
-LD_PRELOAD=./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1:./build/libcublas.so.12 \
-python3 your_script.py
+./fgpu python3 your_script.py
 ```
 
 **或在 Python 进程内动态启用（需在 import torch 之前调用）：**
@@ -27,19 +25,25 @@ python3 -c "import fakegpu; fakegpu.init(); import torch; print(torch.cuda.devic
 
 ### GPU监控
 
-**使用nvitop（Python API）：**
+**nvitop（一次性）：**
 ```bash
-./fakegpu_nvitop.sh
+./run_nvitop_once.sh
+# 或：./fgpu nvitop --once
 ```
 
 **一次性查询：**
 ```bash
-LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
-LD_PRELOAD=./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1:./build/libcublas.so.12 \
-python3 -c "from nvitop import Device; [print(f'{i}: {d.name()}') for i, d in enumerate(Device.all())]"
+./fgpu python3 -c "from nvitop import Device; [print(f'{i}: {d.name()}') for i, d in enumerate(Device.all())]"
 ```
 
 ### 测试
+
+**标准化一键测试：**
+```bash
+./ftest smoke
+./ftest python
+./ftest all
+```
 
 **Qwen2.5模型测试：**
 ```bash
@@ -85,7 +89,7 @@ ldd ./build/libcublas.so.12
 ### 必需的环境变量
 ```bash
 LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH
-LD_PRELOAD=./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1:./build/libcublas.so.12
+LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1
 ```
 
 ### 可选的环境变量
@@ -139,15 +143,14 @@ fakeGPU/
 │   ├── test_load_qwen2_5.py  # Qwen2.5测试
 │   ├── run_full_comparison.sh # 完整对比测试
 │   └── output/                # 测试输出
-├── fakegpu_nvitop.sh         # nvitop便捷脚本
-├── test_nvitop_wrapper.py    # nvitop Python包装
-├── NVITOP_SOLUTION.md        # nvitop解决方案
+├── fgpu                      # 统一运行入口（设置 LD_PRELOAD/LD_LIBRARY_PATH）
+├── ftest                     # 标准化测试 runner
+├── run_nvitop_once.sh        # nvitop 一次性运行
 └── fake_gpu_report.json      # 运行时生成的报告
 ```
 
 ## 相关文档
 
 - [CLAUDE.md](CLAUDE.md) - 项目架构和设计
-- [NVITOP_SOLUTION.md](NVITOP_SOLUTION.md) - nvitop使用指南
 - [test/README_QWEN_TEST.md](test/README_QWEN_TEST.md) - Qwen2.5测试说明
 - [test/output/TEST_SUMMARY.md](test/output/TEST_SUMMARY.md) - 测试结果总结

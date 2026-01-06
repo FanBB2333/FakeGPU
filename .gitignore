@@ -45,3 +45,7 @@ Makefile
 compile_commands.json
 
 .CLAUDE.md
+
+# binary files
+fgpu
+ftest

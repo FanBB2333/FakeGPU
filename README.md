@@ -37,6 +37,13 @@ Generated libraries:
 
 ### Test
 
+**Standardized test runner (recommended):**
+```bash
+./ftest smoke          # C + Python (no torch needed)
+./ftest python         # PyTorch tests (requires torch)
+./ftest all            # smoke + python
+```
+
 **Comparison test (recommended):**
 ```bash
 ./test/run_comparison.sh
@@ -45,9 +52,7 @@ Runs identical tests on both real GPU and FakeGPU to verify correctness.
 
 **PyTorch test:**
 ```bash
-LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
-LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
-python3 test/test_comparison.py --mode fake
+./fgpu python3 test/test_comparison.py --mode fake
 ```
 
 ### Usage

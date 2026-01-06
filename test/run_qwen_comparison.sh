@@ -2,6 +2,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
+
 echo "=========================================="
 echo "Qwen2.5 Model Inference Comparison Test"
 echo "=========================================="
@@ -17,9 +21,7 @@ echo "=========================================="
 echo "This test uses fakeGPU to simulate GPU operations"
 echo ""
 
-LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
-LD_PRELOAD=./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1:./build/libcublas.so.12 \
-timeout 300 python3 test/test_load_qwen2_5.py 2>&1 | tee test/output/fakegpu_output.txt
+timeout 300 ./fgpu python3 test/test_load_qwen2_5.py 2>&1 | tee test/output/fakegpu_output.txt
 
 echo ""
 echo "FakeGPU test output saved to test/output/fakegpu_output.txt"

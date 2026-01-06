@@ -1,7 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-export LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH
-export LD_PRELOAD=./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1:./build/libcublas.so.12
+# Clean runner for a concise PyTorch + cuBLAS sanity test.
+# Uses the repo's standardized `./fgpu` wrapper to set LD_LIBRARY_PATH/LD_PRELOAD.
 
-# 只显示非调试信息的输出
-python3 test/test_load_qwen2_5_fixed.py 2>&1 | grep -v "^\[Fake\|^\[Global\|^\[Monitor"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+./fgpu python3 test/test_pytorch_with_cublas.py 2>&1 | grep -v "^\[Fake\|^\[Global\|^\[Monitor"

@@ -2,6 +2,13 @@
 
 ## 快速测试
 
+### 推荐：标准化一键测试
+```bash
+./ftest smoke          # C + Python (不需要 torch)
+./ftest python         # PyTorch 测试 (需要 torch)
+./ftest all            # smoke + python
+```
+
 ### 推荐：对比测试
 运行真实GPU和FakeGPU的并行对比测试：
 ```bash
@@ -19,7 +26,7 @@
 **基础PyTorch操作:**
 ```bash
 python3 test/test_comparison.py --mode real   # 真实GPU测试
-python3 test/test_comparison.py --mode fake   # FakeGPU测试
+./fgpu python3 test/test_comparison.py --mode fake   # FakeGPU测试
 python3 test/test_comparison.py --mode both   # 两者都测试
 ```
 
@@ -30,9 +37,7 @@ python3 test/test_comparison.py --mode both   # 两者都测试
 
 **简单DDP (分布式数据并行):**
 ```bash
-LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
-LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
-python3 test/test_ddp_simple.py
+./fgpu python3 test/test_ddp_simple.py
 ```
 
 ## 当前测试状态
@@ -50,6 +55,11 @@ python3 test/test_ddp_simple.py
 
 FakeGPU需要预加载所有四个库才能让PyTorch正常工作：
 
+```bash
+./fgpu python3 your_test.py
+```
+
+（高级用法）如果需要手动设置环境变量，可参考：
 ```bash
 LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
 LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \

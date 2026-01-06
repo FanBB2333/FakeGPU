@@ -80,15 +80,6 @@ bool GpuProfile::supports(GpuDataType type) const {
 
 namespace {
 
-const MaxwellProfile kMaxwell;
-const PascalProfile kPascal;
-const VoltaProfile kVolta;
-const TuringProfile kTuring;
-const AmpereProfile kAmpere;
-const HopperProfile kHopper;
-const AdaProfile kAda;
-const BlackwellProfile kBlackwell;
-
 std::string trim(const std::string& value) {
     const size_t begin = value.find_first_not_of(" \t\r\n");
     if (begin == std::string::npos) return "";
@@ -199,14 +190,38 @@ struct ProfileDefinition {
 
 const ArchProfile* get_arch_profile(GpuArch arch) {
     switch (arch) {
-        case GpuArch::Maxwell: return &kMaxwell;
-        case GpuArch::Pascal: return &kPascal;
-        case GpuArch::Volta: return &kVolta;
-        case GpuArch::Turing: return &kTuring;
-        case GpuArch::Ampere: return &kAmpere;
-        case GpuArch::Hopper: return &kHopper;
-        case GpuArch::Ada: return &kAda;
-        case GpuArch::Blackwell: return &kBlackwell;
+        case GpuArch::Maxwell: {
+            static const MaxwellProfile kMaxwell;
+            return &kMaxwell;
+        }
+        case GpuArch::Pascal: {
+            static const PascalProfile kPascal;
+            return &kPascal;
+        }
+        case GpuArch::Volta: {
+            static const VoltaProfile kVolta;
+            return &kVolta;
+        }
+        case GpuArch::Turing: {
+            static const TuringProfile kTuring;
+            return &kTuring;
+        }
+        case GpuArch::Ampere: {
+            static const AmpereProfile kAmpere;
+            return &kAmpere;
+        }
+        case GpuArch::Hopper: {
+            static const HopperProfile kHopper;
+            return &kHopper;
+        }
+        case GpuArch::Ada: {
+            static const AdaProfile kAda;
+            return &kAda;
+        }
+        case GpuArch::Blackwell: {
+            static const BlackwellProfile kBlackwell;
+            return &kBlackwell;
+        }
         default: return nullptr;
     }
 }

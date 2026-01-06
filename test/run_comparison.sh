@@ -5,6 +5,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
+
 echo "================================================================================"
 echo "COMPREHENSIVE GPU COMPARISON TEST"
 echo "================================================================================"
@@ -33,9 +37,7 @@ echo ""
 echo ""
 echo -e "${CYAN}[2/2] Testing on FakeGPU...${NC}"
 echo "--------------------------------------------------------------------------------"
-LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
-LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
-python3 test/test_comparison.py --mode fake 2>&1 | \
+./fgpu python3 test/test_comparison.py --mode fake 2>&1 | \
 grep -v -E "(FakeCUDART|FakeCUBLASLt|FakeCUBLAS|FakeCUDA-Driver|FakeNVML|GlobalState|Monitor)"
 
 echo ""
