@@ -12,18 +12,27 @@ if(NOT FAKEGPU_VERSION_MATCH)
 endif()
 set(FAKEGPU_VERSION "${CMAKE_MATCH_1}")
 
+# macOS: always build with AppleClang.
+# Homebrew/other GCC toolchains are not compatible with Apple SDK headers.
+if(APPLE)
+    if(EXISTS "/usr/bin/clang" AND EXISTS "/usr/bin/clang++")
+        set(CMAKE_C_COMPILER "/usr/bin/clang" CACHE FILEPATH "C compiler" FORCE)
+        set(CMAKE_CXX_COMPILER "/usr/bin/clang++" CACHE FILEPATH "C++ compiler" FORCE)
+    else()
+        find_program(_FAKEGPU_CLANG clang)
+        find_program(_FAKEGPU_CLANGXX clang++)
+        if(NOT _FAKEGPU_CLANG OR NOT _FAKEGPU_CLANGXX)
+            message(FATAL_ERROR "clang/clang++ not found. Install Xcode Command Line Tools to build FakeGPU on macOS.")
+        endif()
+        set(CMAKE_C_COMPILER "${_FAKEGPU_CLANG}" CACHE FILEPATH "C compiler" FORCE)
+        set(CMAKE_CXX_COMPILER "${_FAKEGPU_CLANGXX}" CACHE FILEPATH "C++ compiler" FORCE)
+    endif()
+endif()
+
 project(FakeGPU VERSION "${FAKEGPU_VERSION}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-if(APPLE AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
-    message(FATAL_ERROR
-        "Building FakeGPU with GCC on macOS is not supported due to Apple SDK header incompatibilities.\n"
-        "Use AppleClang (default), or reconfigure in a clean build directory with:\n"
-        "  cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++\n"
-    )
-endif()
 
 # Option to enable/disable debug logging
 option(ENABLE_FAKEGPU_LOGGING "Enable debug logging output" OFF)
