@@ -61,6 +61,12 @@ run_cpu_sim() {
   c++ -std=c++17 verification/test_cublas_cpu_sim.cpp -o "$out" \
     -L build_cpu_sim -lcublas -lcudart -lcuda -lnvidia-ml
   ./fgpu --build-dir build_cpu_sim "$out"
+
+  if "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
+    ./fgpu --build-dir build_cpu_sim "$PYTHON_BIN" verification/test_cpu_sim_matmul.py
+  else
+    echo "torch not found in current python; skipping PyTorch matmul correctness check."
+  fi
 }
 
 run_smoke() {
