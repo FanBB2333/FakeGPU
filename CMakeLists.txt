@@ -45,7 +45,7 @@ else()
 endif()
 
 # Option to enable CPU-based compute for selected operators (e.g. cuBLAS GEMM)
-option(ENABLE_FAKEGPU_CPU_SIMULATION "Execute supported FakeGPU operators on CPU for improved correctness" OFF)
+option(ENABLE_FAKEGPU_CPU_SIMULATION "Execute supported FakeGPU operators on CPU for improved correctness" ON)
 
 if(ENABLE_FAKEGPU_CPU_SIMULATION)
     message(STATUS "FakeGPU CPU simulation: ENABLED")
@@ -146,7 +146,8 @@ target_link_libraries(fake_cudart PRIVATE ${CMAKE_DL_LIBS})
 target_include_directories(fake_cudart PRIVATE src/cuda src/core)
 
 # cuBLAS Library (libcublas.so.12)
-# This library intercepts cuBLAS calls and returns random values for profiling/monitoring
+# This library intercepts cuBLAS/cuBLASLt calls; supported ops can run on CPU for correctness
+# (see ENABLE_FAKEGPU_CPU_SIMULATION).
 add_library(fake_cublas SHARED
     src/cublas/cublas_stubs.cpp
     $<TARGET_OBJECTS:fake_gpu_core>

@@ -29,9 +29,11 @@ cmake -S . -B build
 cmake --build build
 ```
 
-Optional (enable CPU-backed compute for supported operators, default: OFF):
+CPU-backed compute for supported cuBLAS/cuBLASLt operators is enabled by default (runs on CPU; no real GPU required).
+
+Optional (disable CPU simulation and fall back to stub/no-op behavior):
 ```bash
-cmake -S . -B build -DENABLE_FAKEGPU_CPU_SIMULATION=ON
+cmake -S . -B build -DENABLE_FAKEGPU_CPU_SIMULATION=OFF
 cmake --build build
 ```
 
@@ -52,6 +54,7 @@ Generated libraries:
 **Standardized test runner (recommended):**
 ```bash
 ./ftest smoke          # C + Python (no torch needed)
+./ftest cpu_sim        # CPU simulation correctness (validates cuBLAS ops; runs a PyTorch matmul check if torch is installed)
 ./ftest python         # PyTorch tests (requires torch)
 ./ftest all            # smoke + python
 ```
@@ -160,7 +163,8 @@ FakeGPU
 **Core Design:**
 - Uses `LD_PRELOAD` to intercept CUDA API calls
 - Device memory backed by system RAM (malloc/free)
-- Matrix operations return random values (no actual computation)
+- By default, supported cuBLAS/cuBLASLt ops are executed on CPU (CPU simulation)
+- Build with `-DENABLE_FAKEGPU_CPU_SIMULATION=OFF` to disable CPU simulation
 - Kernel launches are no-ops (logging only)
 
 ### GPU Profiles
@@ -175,7 +179,7 @@ FakeGPU
 
 ## Limitations
 
-- ❌ No real GPU computation (kernels are no-ops)
+- ❌ No real GPU execution (CUDA kernels are no-ops; supported cuBLAS/cuBLASLt ops run on CPU)
 - ❌ Complex models (Transformers) may require additional APIs
 - ❌ No multi-GPU synchronization
 - ⚠️ macOS: Official PyTorch wheels do not include CUDA, so FakeGPU only helps when running CUDA-enabled binaries (typically in Linux via Docker/VM).
