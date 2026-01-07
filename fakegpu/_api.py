@@ -3,18 +3,25 @@ from __future__ import annotations
 import ctypes
 import os
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
 
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
 _PRELOAD_LIBS: tuple[str, ...] = (
-    "libcublas.so.12",
-    "libcudart.so.12",
-    "libcuda.so.1",
-    "libnvidia-ml.so.1",
+    ("libcublas.dylib", "libcudart.dylib", "libcuda.dylib", "libnvidia-ml.dylib")
+    if _is_macos()
+    else ("libcublas.so.12", "libcudart.so.12", "libcuda.so.1", "libnvidia-ml.so.1")
 )
+
+_LIBRARY_PATH_VAR = "DYLD_LIBRARY_PATH" if _is_macos() else "LD_LIBRARY_PATH"
+_PRELOAD_VAR = "DYLD_INSERT_LIBRARIES" if _is_macos() else "LD_PRELOAD"
 
 _state_lock = threading.Lock()
 _initialized = False
@@ -156,7 +163,10 @@ def env(
     base_env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """
-    Build an environment dict that enables FakeGPU via LD_LIBRARY_PATH + LD_PRELOAD.
+    Build an environment dict that enables FakeGPU.
+
+    - Linux: `LD_LIBRARY_PATH` + `LD_PRELOAD`
+    - macOS: `DYLD_LIBRARY_PATH` + `DYLD_INSERT_LIBRARIES`
 
     Useful for subprocesses (equivalent to the repo's `./fgpu` script).
     """
@@ -208,6 +218,15 @@ def _fallback_name(libname: str) -> str:
         return "libcuda.so"
     if libname == "libnvidia-ml.so.1":
         return "libnvidia-ml.so"
+
+    if libname == "libcublas.dylib":
+        return "libcublas.12.dylib"
+    if libname == "libcudart.dylib":
+        return "libcudart.12.dylib"
+    if libname == "libcuda.dylib":
+        return "libcuda.1.dylib"
+    if libname == "libnvidia-ml.dylib":
+        return "libnvidia-ml.1.dylib"
     return libname
 
 
@@ -245,12 +264,12 @@ def _apply_config_env(
 def _apply_env(env_map: dict[str, str], resolved_dir: Path) -> None:
     dir_str = str(resolved_dir)
 
-    ld_library_path = env_map.get("LD_LIBRARY_PATH", "")
-    env_map["LD_LIBRARY_PATH"] = _prepend_path(dir_str, ld_library_path)
+    existing_lib_path = env_map.get(_LIBRARY_PATH_VAR, "")
+    env_map[_LIBRARY_PATH_VAR] = _prepend_path(dir_str, existing_lib_path)
 
     preload_paths = [str(resolved_dir / name) for name in _PRELOAD_LIBS]
-    existing_preload = env_map.get("LD_PRELOAD", "")
-    env_map["LD_PRELOAD"] = ":".join(preload_paths + ([existing_preload] if existing_preload else []))
+    existing_preload = env_map.get(_PRELOAD_VAR, "")
+    env_map[_PRELOAD_VAR] = ":".join(preload_paths + ([existing_preload] if existing_preload else []))
 
 
 def _prepend_path(prefix: str, existing: str) -> str:

@@ -142,11 +142,33 @@ target_link_libraries(fake_cublas PRIVATE m)
 
 # Platform specific flags
 if(APPLE)
-    # macOS specific linker flags for interposition if needed
+    # macOS: build dylibs with CUDA/NVML-compatible names so DYLD_* search works.
     target_link_options(fake_gpu PRIVATE "-undefined" "dynamic_lookup")
-    set_target_properties(fake_gpu PROPERTIES SUFFIX ".dylib")
     target_link_options(fake_cuda PRIVATE "-undefined" "dynamic_lookup")
-    set_target_properties(fake_cuda PROPERTIES SUFFIX ".dylib")
+
+    set_target_properties(fake_gpu PROPERTIES
+        OUTPUT_NAME "nvidia-ml"
+        VERSION "1.0.0"
+        SOVERSION "1"
+    )
+
+    set_target_properties(fake_cuda PROPERTIES
+        OUTPUT_NAME "cuda"
+        VERSION "1.0.0"
+        SOVERSION "1"
+    )
+
+    set_target_properties(fake_cudart PROPERTIES
+        OUTPUT_NAME "cudart"
+        VERSION "12.0.0"
+        SOVERSION "12"
+    )
+
+    set_target_properties(fake_cublas PROPERTIES
+        OUTPUT_NAME "cublas"
+        VERSION "12.0.0"
+        SOVERSION "12"
+    )
 else()
     # Set OUTPUT_NAME to libnvidia-ml.so.1 so CMake sets the correct SONAME
     set_target_properties(fake_gpu PROPERTIES

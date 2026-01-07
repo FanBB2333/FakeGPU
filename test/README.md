@@ -61,9 +61,17 @@ FakeGPU需要预加载所有四个库才能让PyTorch正常工作：
 ```
 
 （高级用法）如果需要手动设置环境变量，可参考：
+Linux:
 ```bash
 LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
 LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
+python3 your_test.py
+```
+
+macOS:
+```bash
+DYLD_LIBRARY_PATH=./build:$DYLD_LIBRARY_PATH \
+DYLD_INSERT_LIBRARIES=./build/libcublas.dylib:./build/libcudart.dylib:./build/libcuda.dylib:./build/libnvidia-ml.dylib \
 python3 your_test.py
 ```
 

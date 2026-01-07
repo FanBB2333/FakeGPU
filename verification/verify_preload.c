@@ -44,7 +44,7 @@ int main() {
     cudaFree = (cudaFree_t)dlsym(RTLD_DEFAULT, "cudaFree");
 
     if (!nvmlInit || !cudaGetDeviceCount) {
-        printf("Failed to load symbols. Make sure LD_PRELOAD is set correctly.\n");
+        printf("Failed to load symbols. Make sure FakeGPU is enabled (LD_PRELOAD/DYLD_INSERT_LIBRARIES or fakegpu.init()).\n");
         return 1;
     }
 

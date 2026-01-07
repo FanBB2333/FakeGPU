@@ -10,11 +10,11 @@ from ._api import env as fakegpu_env
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="fakegpu",
-        description="Run a command with FakeGPU libraries preloaded (LD_PRELOAD).",
+        description="Run a command with FakeGPU libraries preloaded (LD_PRELOAD/DYLD_INSERT_LIBRARIES).",
     )
     parser.add_argument(
         "--build-dir",
-        help="Path to a FakeGPU CMake build directory containing the .so files (default: $FAKEGPU_BUILD_DIR or ./build).",
+        help="Path to a FakeGPU CMake build directory containing the shared libraries (default: $FAKEGPU_BUILD_DIR or ./build).",
     )
     parser.add_argument(
         "--lib-dir",

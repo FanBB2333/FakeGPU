@@ -122,8 +122,9 @@ def main():
         print(f"Device {args.device_id}: {torch.cuda.get_device_name(args.device_id)}")
     print()
 
-    # Detect if we're running with FakeGPU
-    is_fake_gpu = 'LD_PRELOAD' in os.environ and 'libcuda' in os.environ.get('LD_PRELOAD', '')
+    # Detect if we're running with FakeGPU (Linux: LD_PRELOAD, macOS: DYLD_INSERT_LIBRARIES)
+    preload_var = "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
+    is_fake_gpu = preload_var in os.environ and "libcuda" in os.environ.get(preload_var, "")
 
     all_results = {}
 
@@ -136,7 +137,7 @@ def main():
             all_results['real'] = test_basic_operations(device)
         elif args.mode == 'real':
             print("\n✗ Real GPU not available or FakeGPU is active")
-            print("  Please run without LD_PRELOAD to test on real GPU")
+            print("  Please run without FakeGPU preloading to test on real GPU")
 
     if args.mode in ['fake', 'both']:
         if is_fake_gpu or args.mode == 'fake':

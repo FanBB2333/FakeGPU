@@ -16,12 +16,20 @@ except Exception:  # pragma: no cover - wheel may be absent in some build contex
 
 
 _ROOT = Path(__file__).resolve().parent
-_REQUIRED_LIBS = (
-    "libcublas.so.12",
-    "libcudart.so.12",
-    "libcuda.so.1",
-    "libnvidia-ml.so.1",
-)
+if sys.platform == "darwin":
+    _REQUIRED_LIBS = (
+        "libcublas.dylib",
+        "libcudart.dylib",
+        "libcuda.dylib",
+        "libnvidia-ml.dylib",
+    )
+else:
+    _REQUIRED_LIBS = (
+        "libcublas.so.12",
+        "libcudart.so.12",
+        "libcuda.so.1",
+        "libnvidia-ml.so.1",
+    )
 
 
 def _cmake_build(build_dir: Path) -> None:
@@ -43,8 +51,8 @@ def _copy_native_libs(src_dir: Path, dst_dir: Path) -> None:
 
 class build_py(_build_py):
     def run(self) -> None:
-        if not sys.platform.startswith("linux"):
-            raise RuntimeError("fakegpu currently supports Linux only")
+        if not (sys.platform.startswith("linux") or sys.platform == "darwin"):
+            raise RuntimeError("fakegpu currently supports Linux and macOS only")
 
         build_base = Path(self.get_finalized_command("build").build_base)
 

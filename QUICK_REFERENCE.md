@@ -72,11 +72,13 @@ stty sane
 ```
 
 ### 查看已实现的NVML函数
+Linux:
 ```bash
 nm -D ./build/libnvidia-ml.so.1 | grep ' T nvml'
 ```
 
 ### 查看库依赖
+Linux:
 ```bash
 ldd ./build/libnvidia-ml.so.1
 ldd ./build/libcuda.so.1
@@ -84,12 +86,28 @@ ldd ./build/libcudart.so.12
 ldd ./build/libcublas.so.12
 ```
 
+macOS:
+```bash
+nm -gU ./build/libnvidia-ml.dylib | rg '\\bnvml'
+otool -L ./build/libnvidia-ml.dylib
+otool -L ./build/libcuda.dylib
+otool -L ./build/libcudart.dylib
+otool -L ./build/libcublas.dylib
+```
+
 ## 环境变量
 
 ### 必需的环境变量
+Linux:
 ```bash
 LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH
 LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1
+```
+
+macOS:
+```bash
+DYLD_LIBRARY_PATH=./build:$DYLD_LIBRARY_PATH
+DYLD_INSERT_LIBRARIES=./build/libcublas.dylib:./build/libcudart.dylib:./build/libcuda.dylib:./build/libnvidia-ml.dylib
 ```
 
 ### 可选的环境变量
@@ -129,10 +147,10 @@ CUDA_LAUNCH_BLOCKING=1               # 同步CUDA调用（调试用）
 ```
 fakeGPU/
 ├── build/                      # 编译输出
-│   ├── libnvidia-ml.so.1      # NVML库
-│   ├── libcuda.so.1           # CUDA Driver库
-│   ├── libcudart.so.12        # CUDA Runtime库
-│   └── libcublas.so.12        # cuBLAS库
+│   ├── libnvidia-ml.*         # NVML库 (.so/.dylib)
+│   ├── libcuda.*              # CUDA Driver库 (.so/.dylib)
+│   ├── libcudart.*            # CUDA Runtime库 (.so/.dylib)
+│   └── libcublas.*            # cuBLAS库 (.so/.dylib)
 ├── src/                       # 源代码
 │   ├── core/                  # 核心实现
 │   ├── nvml/                  # NVML stubs
@@ -143,7 +161,7 @@ fakeGPU/
 │   ├── test_load_qwen2_5.py  # Qwen2.5测试
 │   ├── run_full_comparison.sh # 完整对比测试
 │   └── output/                # 测试输出
-├── fgpu                      # 统一运行入口（设置 LD_PRELOAD/LD_LIBRARY_PATH）
+├── fgpu                      # 统一运行入口（设置 LD_PRELOAD/DYLD_INSERT_LIBRARIES）
 ├── ftest                     # 标准化测试 runner
 ├── run_nvitop_once.sh        # nvitop 一次性运行
 └── fake_gpu_report.json      # 运行时生成的报告

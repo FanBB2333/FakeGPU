@@ -36,10 +36,16 @@ cmake --build build
 ```
 
 Generated libraries:
-- `build/libcuda.so.1` - CUDA Driver API
-- `build/libcudart.so.12` - CUDA Runtime API
-- `build/libcublas.so.12` - cuBLAS/cuBLASLt API
-- `build/libnvidia-ml.so.1` - NVML API
+- Linux:
+  - `build/libcuda.so.1` - CUDA Driver API
+  - `build/libcudart.so.12` - CUDA Runtime API
+  - `build/libcublas.so.12` - cuBLAS/cuBLASLt API
+  - `build/libnvidia-ml.so.1` - NVML API
+- macOS:
+  - `build/libcuda.dylib` - CUDA Driver API
+  - `build/libcudart.dylib` - CUDA Runtime API
+  - `build/libcublas.dylib` - cuBLAS/cuBLASLt API
+  - `build/libnvidia-ml.dylib` - NVML API
 
 ### Test
 
@@ -78,10 +84,18 @@ output = model(x)
 ```
 
 **Runtime requires preloading all libraries:**
+Linux:
 ```bash
 LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
 LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
 python your_script.py
+```
+
+macOS:
+```bash
+DYLD_LIBRARY_PATH=./build:$DYLD_LIBRARY_PATH \
+DYLD_INSERT_LIBRARIES=./build/libcublas.dylib:./build/libcudart.dylib:./build/libcuda.dylib:./build/libnvidia-ml.dylib \
+python3 your_script.py
 ```
 
 **Python wrapper (no need to start Python with LD_PRELOAD):**
@@ -164,6 +178,7 @@ FakeGPU
 - ❌ No real GPU computation (kernels are no-ops)
 - ❌ Complex models (Transformers) may require additional APIs
 - ❌ No multi-GPU synchronization
+- ⚠️ macOS: Official PyTorch wheels do not include CUDA, so FakeGPU only helps when running CUDA-enabled binaries (typically in Linux via Docker/VM).
 - ⚠️ For testing and development environments only
 
 ## Use Cases
