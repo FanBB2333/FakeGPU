@@ -7,7 +7,11 @@ set -euo pipefail
 BUILD_DIR=${BUILD_DIR:-build}
 REPORT=${REPORT:-fake_gpu_report.json}
 
-cmake -S . -B "$BUILD_DIR"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    cmake -S . -B "$BUILD_DIR" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+else
+    cmake -S . -B "$BUILD_DIR"
+fi
 cmake --build "$BUILD_DIR"
 
 if [[ "$(uname -s)" == "Darwin" ]]; then

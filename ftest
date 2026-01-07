@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 PYTHON_BIN="${FAKEGPU_PYTHON:-python3}"
+SMOKE_BUILD_DIR="${BUILD_DIR:-build}"
 
 usage() {
   cat <<'EOF'
@@ -15,6 +16,9 @@ Suites:
   cpu_sim   Build CPU simulation and validate cuBLAS ops
   python    Run PyTorch tests (requires torch)
   all       smoke + python
+
+Env:
+  BUILD_DIR=<path>     Build directory for smoke/python (default: build)
 EOF
 }
 
@@ -25,17 +29,25 @@ if [[ -z "${suite}" || "${suite}" == "-h" || "${suite}" == "--help" ]]; then
 fi
 
 build() {
-  cmake -S . -B build
-  cmake --build build
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    cmake -S . -B "$SMOKE_BUILD_DIR" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+  else
+    cmake -S . -B "$SMOKE_BUILD_DIR"
+  fi
+  cmake --build "$SMOKE_BUILD_DIR"
 }
 
 build_cpu_sim() {
-  cmake -S . -B build_cpu_sim -DENABLE_FAKEGPU_CPU_SIMULATION=ON
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    cmake -S . -B build_cpu_sim -DENABLE_FAKEGPU_CPU_SIMULATION=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+  else
+    cmake -S . -B build_cpu_sim -DENABLE_FAKEGPU_CPU_SIMULATION=ON
+  fi
   cmake --build build_cpu_sim
 }
 
 compile_verify_preload() {
-  local out="build/verify_preload"
+  local out="$SMOKE_BUILD_DIR/verify_preload"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     cc verification/verify_preload.c -o "$out"
   else
@@ -54,7 +66,7 @@ run_cpu_sim() {
 run_smoke() {
   build
   compile_verify_preload
-  ./fgpu build/verify_preload
+  ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$SMOKE_BUILD_DIR/verify_preload"
 }
 
 run_python() {
@@ -63,7 +75,7 @@ run_python() {
     return 0
   fi
   build
-  ./fgpu "$PYTHON_BIN" test/test_pytorch_basic.py
+  ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$PYTHON_BIN" test/test_pytorch_basic.py
 }
 
 case "$suite" in

@@ -17,6 +17,14 @@ project(FakeGPU VERSION "${FAKEGPU_VERSION}")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(APPLE AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
+    message(FATAL_ERROR
+        "Building FakeGPU with GCC on macOS is not supported due to Apple SDK header incompatibilities.\n"
+        "Use AppleClang (default), or reconfigure in a clean build directory with:\n"
+        "  cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++\n"
+    )
+endif()
+
 # Option to enable/disable debug logging
 option(ENABLE_FAKEGPU_LOGGING "Enable debug logging output" OFF)
 
@@ -148,32 +156,32 @@ if(APPLE)
 
     set_target_properties(fake_gpu PROPERTIES
         OUTPUT_NAME "nvidia-ml"
-        VERSION "1.0.0"
+        VERSION "${FAKEGPU_VERSION}"
         SOVERSION "1"
     )
 
     set_target_properties(fake_cuda PROPERTIES
         OUTPUT_NAME "cuda"
-        VERSION "1.0.0"
+        VERSION "${FAKEGPU_VERSION}"
         SOVERSION "1"
     )
 
     set_target_properties(fake_cudart PROPERTIES
         OUTPUT_NAME "cudart"
-        VERSION "12.0.0"
+        VERSION "${FAKEGPU_VERSION}"
         SOVERSION "12"
     )
 
     set_target_properties(fake_cublas PROPERTIES
         OUTPUT_NAME "cublas"
-        VERSION "12.0.0"
+        VERSION "${FAKEGPU_VERSION}"
         SOVERSION "12"
     )
 else()
     # Set OUTPUT_NAME to libnvidia-ml.so.1 so CMake sets the correct SONAME
     set_target_properties(fake_gpu PROPERTIES
         OUTPUT_NAME "nvidia-ml"
-        VERSION "1.0.0"
+        VERSION "${FAKEGPU_VERSION}"
         SOVERSION "1"
     )
     # Create symlink for backward compatibility with libfake_gpu.so name
@@ -187,21 +195,21 @@ else()
     # Set OUTPUT_NAME to libcuda.so.1 for CUDA Driver API interception
     set_target_properties(fake_cuda PROPERTIES
         OUTPUT_NAME "cuda"
-        VERSION "1.0.0"
+        VERSION "${FAKEGPU_VERSION}"
         SOVERSION "1"
     )
 
     # Set OUTPUT_NAME to libcudart.so.12 for CUDA Runtime API interception
     set_target_properties(fake_cudart PROPERTIES
         OUTPUT_NAME "cudart"
-        VERSION "12.0.0"
+        VERSION "${FAKEGPU_VERSION}"
         SOVERSION "12"
     )
 
     # Set OUTPUT_NAME to libcublas.so.12 for cuBLAS API interception
     set_target_properties(fake_cublas PROPERTIES
         OUTPUT_NAME "cublas"
-        VERSION "12.0.0"
+        VERSION "${FAKEGPU_VERSION}"
         SOVERSION "12"
     )
 endif()
