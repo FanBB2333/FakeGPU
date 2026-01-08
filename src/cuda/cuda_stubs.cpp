@@ -77,6 +77,22 @@ cudaError_t cudaFree(void *devPtr) {
 cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, cudaMemcpyKind kind) {
     FGPU_LOG("[FakeCUDA] cudaMemcpy count=%zu kind=%d\n", count, kind);
     memcpy(dst, src, count);
+    switch (kind) {
+        case cudaMemcpyHostToDevice:
+            GlobalState::instance().record_memcpy_h2d(dst, count);
+            break;
+        case cudaMemcpyDeviceToHost:
+            GlobalState::instance().record_memcpy_d2h(src, count);
+            break;
+        case cudaMemcpyDeviceToDevice:
+            GlobalState::instance().record_memcpy_d2d(dst, src, count);
+            break;
+        case cudaMemcpyHostToHost:
+            GlobalState::instance().record_memcpy_h2h(count);
+            break;
+        default:
+            break;
+    }
     return cudaSuccess;
 }
 
@@ -187,18 +203,36 @@ cudaError_t cudaGetDevice(int *device) {
 cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count, cudaMemcpyKind kind, cudaStream_t stream) {
     FGPU_LOG("[FakeCUDA] cudaMemcpyAsync count=%zu kind=%d stream=%p\n", count, kind, stream);
     memcpy(dst, src, count);
+    switch (kind) {
+        case cudaMemcpyHostToDevice:
+            GlobalState::instance().record_memcpy_h2d(dst, count);
+            break;
+        case cudaMemcpyDeviceToHost:
+            GlobalState::instance().record_memcpy_d2h(src, count);
+            break;
+        case cudaMemcpyDeviceToDevice:
+            GlobalState::instance().record_memcpy_d2d(dst, src, count);
+            break;
+        case cudaMemcpyHostToHost:
+            GlobalState::instance().record_memcpy_h2h(count);
+            break;
+        default:
+            break;
+    }
     return cudaSuccess;
 }
 
 cudaError_t cudaMemset(void *devPtr, int value, size_t count) {
     FGPU_LOG("[FakeCUDA] cudaMemset ptr=%p value=%d count=%zu\n", devPtr, value, count);
     memset(devPtr, value, count);
+    GlobalState::instance().record_memset(devPtr, count);
     return cudaSuccess;
 }
 
 cudaError_t cudaMemsetAsync(void *devPtr, int value, size_t count, cudaStream_t stream) {
     FGPU_LOG("[FakeCUDA] cudaMemsetAsync ptr=%p value=%d count=%zu stream=%p\n", devPtr, value, count, stream);
     memset(devPtr, value, count);
+    GlobalState::instance().record_memset(devPtr, count);
     return cudaSuccess;
 }
 

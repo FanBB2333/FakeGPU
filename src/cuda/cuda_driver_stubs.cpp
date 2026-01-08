@@ -342,6 +342,7 @@ CUresult cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev) {
     // Return a fake context pointer (just use device number + 1 to avoid NULL)
     *pctx = (CUcontext)(uintptr_t)(dev + 1);
     current_context_device = dev;
+    GlobalState::instance().set_current_device(dev);
     FGPU_LOG("[FakeCUDA-Driver] cuCtxCreate for device %d, context=%p\n", dev, *pctx);
     return CUDA_SUCCESS;
 }
@@ -357,6 +358,7 @@ CUresult cuCtxSetCurrent(CUcontext ctx) {
     } else {
         current_context_device = (int)(uintptr_t)ctx - 1;
     }
+    GlobalState::instance().set_current_device(current_context_device);
     FGPU_LOG("[FakeCUDA-Driver] cuCtxSetCurrent(%p) -> device %d\n", ctx, current_context_device);
     return CUDA_SUCCESS;
 }
@@ -420,6 +422,7 @@ CUresult cuMemFree(CUdeviceptr dptr) {
 CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount) {
     if (!dstHost || !srcDevice) return CUDA_ERROR_INVALID_VALUE;
     memcpy(dstHost, (void*)srcDevice, ByteCount);
+    GlobalState::instance().record_memcpy_d2h((void*)srcDevice, ByteCount);
     FGPU_LOG("[FakeCUDA-Driver] cuMemcpyDtoH copied %zu bytes\n", ByteCount);
     return CUDA_SUCCESS;
 }
@@ -427,6 +430,7 @@ CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount) {
 CUresult cuMemcpyHtoD(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount) {
     if (!dstDevice || !srcHost) return CUDA_ERROR_INVALID_VALUE;
     memcpy((void*)dstDevice, srcHost, ByteCount);
+    GlobalState::instance().record_memcpy_h2d((void*)dstDevice, ByteCount);
     FGPU_LOG("[FakeCUDA-Driver] cuMemcpyHtoD copied %zu bytes\n", ByteCount);
     return CUDA_SUCCESS;
 }
@@ -434,6 +438,7 @@ CUresult cuMemcpyHtoD(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCou
 CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteCount) {
     if (!dstDevice || !srcDevice) return CUDA_ERROR_INVALID_VALUE;
     memcpy((void*)dstDevice, (void*)srcDevice, ByteCount);
+    GlobalState::instance().record_memcpy_d2d((void*)dstDevice, (void*)srcDevice, ByteCount);
     FGPU_LOG("[FakeCUDA-Driver] cuMemcpyDtoD copied %zu bytes\n", ByteCount);
     return CUDA_SUCCESS;
 }
@@ -451,6 +456,7 @@ CUresult cuDevicePrimaryCtxRetain(CUcontext *pctx, CUdevice dev) {
     // Return a fake context pointer (just use device number + 1 to avoid NULL)
     *pctx = (CUcontext)(uintptr_t)(dev + 1);
     current_context_device = dev;
+    GlobalState::instance().set_current_device(dev);
     FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxRetain for device %d, context=%p\n", dev, *pctx);
     return CUDA_SUCCESS;
 }
@@ -915,18 +921,21 @@ CUresult cuPointerGetAttributes(unsigned int numAttributes, CUpointer_attribute 
 
 CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char uc, size_t N) {
     memset((void*)dstDevice, uc, N);
+    GlobalState::instance().record_memset((void*)dstDevice, N);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemsetD16(CUdeviceptr dstDevice, unsigned short us, size_t N) {
     unsigned short *p = (unsigned short*)dstDevice;
     for (size_t i = 0; i < N; i++) p[i] = us;
+    GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned short));
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemsetD32(CUdeviceptr dstDevice, unsigned int ui, size_t N) {
     unsigned int *p = (unsigned int*)dstDevice;
     for (size_t i = 0; i < N; i++) p[i] = ui;
+    GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned int));
     return CUDA_SUCCESS;
 }
 
@@ -940,6 +949,7 @@ CUresult cuMemsetD32Async(CUdeviceptr dstDevice, unsigned int ui, size_t N, CUst
 
 CUresult cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount, CUstream hStream) {
     memcpy((void*)dst, (void*)src, ByteCount);
+    GlobalState::instance().record_memcpy_d2d((void*)dst, (void*)src, ByteCount);
     return CUDA_SUCCESS;
 }
 
@@ -957,11 +967,15 @@ CUresult cuMemcpyDtoDAsync(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t 
 
 CUresult cuMemcpy(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount) {
     memcpy((void*)dst, (void*)src, ByteCount);
+    GlobalState::instance().record_memcpy_d2d((void*)dst, (void*)src, ByteCount);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemcpyPeer(CUdeviceptr dstDevice, CUcontext dstContext, CUdeviceptr srcDevice, CUcontext srcContext, size_t ByteCount) {
     memcpy((void*)dstDevice, (void*)srcDevice, ByteCount);
+    const int dst_device = dstContext ? (static_cast<int>(reinterpret_cast<uintptr_t>(dstContext)) - 1) : current_context_device;
+    const int src_device = srcContext ? (static_cast<int>(reinterpret_cast<uintptr_t>(srcContext)) - 1) : current_context_device;
+    GlobalState::instance().record_memcpy_peer(dst_device, src_device, ByteCount);
     return CUDA_SUCCESS;
 }
 

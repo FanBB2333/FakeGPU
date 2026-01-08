@@ -13,9 +13,9 @@ A CUDA API interception library that simulates GPU devices in non-GPU environmen
 - [x] **PyTorch Support** - Basic tensor ops, linear layers, neural networks
 - [x] **GPU Tool Compatibility** - Compatible with existing GPU status monitoring tools (nvidia-smi, gpustat, etc.)
 - [x] **Preset GPU Info** - Add more preset GPU hardware configurations
+- [x] **Detailed Reporting** - Writes `fake_gpu_report.json` with per-device peak memory, IO bytes, and cuBLAS/cuBLASLt FLOPs
 
 ### Planned Features
-- [ ] **Detailed Reporting** - More comprehensive documentation and analysis reports
 - [ ] **Multi-Node GPU Communication** - Simulate cross-node GPU communication (NCCL, etc.)
 - [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
 - [ ] **Multi-Architecture & Data Types** - Support different GPU architectures and various data storage/memory types
@@ -135,6 +135,18 @@ fakegpu python your_script.py
 ./fgpu nvidia-smi
 # Temperatures may show N/A because the TemperatureV struct is not fully emulated yet.
 ```
+
+### Reporting
+
+FakeGPU writes `fake_gpu_report.json` at program exit (also triggered by `nvmlShutdown()`), including:
+- Per-device `used_memory_peak` (peak VRAM requirement)
+- Per-device IO bytes/calls: H2D / D2H / D2D / peer copies + memset
+- Per-device compute FLOPs/calls for GEMM/Matmul (`cuBLAS` / `cuBLASLt`)
+
+Notes:
+- FLOPs are theoretical estimates (GEMM ≈ `2*m*n*k`, complex GEMM uses a larger factor); kernel launches are no-ops and not counted.
+- `host_io.memcpy_*` tracks Host↔Host copies (e.g. `cudaMemcpyHostToHost`).
+- Optional: set `FAKEGPU_REPORT_PATH=/path/to/report.json` to change the output location.
 
 ## Test Results
 

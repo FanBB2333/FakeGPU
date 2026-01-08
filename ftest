@@ -60,10 +60,11 @@ run_cpu_sim() {
   local out="build_cpu_sim/test_cublas_cpu_sim"
   c++ -std=c++17 verification/test_cublas_cpu_sim.cpp -o "$out" \
     -L build_cpu_sim -lcublas -lcudart -lcuda -lnvidia-ml
-  ./fgpu --build-dir build_cpu_sim "$out"
+  FAKEGPU_REPORT_PATH="build_cpu_sim/fake_gpu_report.json" ./fgpu --build-dir build_cpu_sim "$out"
+  "$PYTHON_BIN" verification/check_report.py --path build_cpu_sim/fake_gpu_report.json --expect-io --expect-flops
 
   if "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
-    ./fgpu --build-dir build_cpu_sim "$PYTHON_BIN" verification/test_cpu_sim_matmul.py
+    FAKEGPU_REPORT_PATH="build_cpu_sim/fake_gpu_report.json" ./fgpu --build-dir build_cpu_sim "$PYTHON_BIN" verification/test_cpu_sim_matmul.py
   else
     echo "torch not found in current python; skipping PyTorch matmul correctness check."
   fi
@@ -72,7 +73,8 @@ run_cpu_sim() {
 run_smoke() {
   build
   compile_verify_preload
-  ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$SMOKE_BUILD_DIR/verify_preload"
+  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$SMOKE_BUILD_DIR/verify_preload"
+  "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report.json"
 }
 
 run_python() {
@@ -81,7 +83,8 @@ run_python() {
     return 0
   fi
   build
-  ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$PYTHON_BIN" test/test_pytorch_basic.py
+  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$PYTHON_BIN" test/test_pytorch_basic.py
+  "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report.json"
 }
 
 case "$suite" in

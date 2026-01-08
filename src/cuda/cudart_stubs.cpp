@@ -253,6 +253,7 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, cudaMemcpyKind 
             break;
         case cudaMemcpyHostToHost:
             memcpy(dst, src, count);
+            fake_gpu::GlobalState::instance().record_memcpy_h2h(count);
             break;
         default:
             last_error = cudaErrorInvalidMemcpyDirection;
@@ -265,9 +266,30 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, cudaMemcpyKind 
 }
 
 cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count, cudaMemcpyKind kind, cudaStream_t stream) {
-    // Simplified: just do synchronous memcpy
-    memcpy(dst, src, count);
-    last_error = cudaSuccess;
+    // Simplified: execute synchronously and ignore stream.
+    CUresult result = CUDA_SUCCESS;
+
+    switch (kind) {
+        case cudaMemcpyHostToDevice:
+            result = cuMemcpyHtoD((CUdeviceptr)dst, src, count);
+            break;
+        case cudaMemcpyDeviceToHost:
+            result = cuMemcpyDtoH(dst, (CUdeviceptr)src, count);
+            break;
+        case cudaMemcpyDeviceToDevice:
+            result = cuMemcpyDtoD((CUdeviceptr)dst, (CUdeviceptr)src, count);
+            break;
+        case cudaMemcpyHostToHost:
+            memcpy(dst, src, count);
+            fake_gpu::GlobalState::instance().record_memcpy_h2h(count);
+            result = CUDA_SUCCESS;
+            break;
+        default:
+            last_error = cudaErrorInvalidMemcpyDirection;
+            return last_error;
+    }
+
+    last_error = convertDriverError(result);
     return last_error;
 }
 
@@ -275,6 +297,7 @@ cudaError_t cudaMemcpyPeer(void *dst, int dstDevice, const void *src, int srcDev
     // Simplified: just do memory copy
     memcpy(dst, src, count);
     last_error = cudaSuccess;
+    fake_gpu::GlobalState::instance().record_memcpy_peer(dstDevice, srcDevice, count);
     FGPU_LOG("[FakeCUDART] cudaMemcpyPeer count=%zu from device %d to device %d\n", count, srcDevice, dstDevice);
     return last_error;
 }
@@ -283,6 +306,7 @@ cudaError_t cudaMemcpyPeerAsync(void *dst, int dstDevice, const void *src, int s
     // Simplified: just do memory copy
     memcpy(dst, src, count);
     last_error = cudaSuccess;
+    fake_gpu::GlobalState::instance().record_memcpy_peer(dstDevice, srcDevice, count);
     FGPU_LOG("[FakeCUDART] cudaMemcpyPeerAsync count=%zu from device %d to device %d\n", count, srcDevice, dstDevice);
     return last_error;
 }
@@ -290,6 +314,7 @@ cudaError_t cudaMemcpyPeerAsync(void *dst, int dstDevice, const void *src, int s
 cudaError_t cudaMemset(void *devPtr, int value, size_t count) {
     memset(devPtr, value, count);
     last_error = cudaSuccess;
+    fake_gpu::GlobalState::instance().record_memset(devPtr, count);
     FGPU_LOG("[FakeCUDART] cudaMemset ptr=%p value=%d count=%zu\n", devPtr, value, count);
     return last_error;
 }
@@ -298,6 +323,7 @@ cudaError_t cudaMemsetAsync(void *devPtr, int value, size_t count, cudaStream_t 
     // Simplified: just do synchronous memset
     memset(devPtr, value, count);
     last_error = cudaSuccess;
+    fake_gpu::GlobalState::instance().record_memset(devPtr, count);
     return last_error;
 }
 

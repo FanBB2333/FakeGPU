@@ -123,6 +123,7 @@ void GlobalState::initialize() {
     for (size_t i = 0; i < profiles.size(); ++i) {
         devices.emplace_back(static_cast<int>(i), profiles[i]);
     }
+    device_stats.resize(devices.size());
     initialized = true;
     FGPU_LOG("[GlobalState-%p] Valid devices count after init: %lu\n", this, devices.size());
 }
@@ -164,6 +165,10 @@ bool GlobalState::register_allocation(void* ptr, size_t size, int device) {
 
     dev.used_memory += size;
     dev.used_memory_peak = std::max(dev.used_memory_peak, dev.used_memory);
+    if (DeviceRuntimeStats* stats = stats_for_device_nolock(device)) {
+        stats->alloc_calls += 1;
+        saturating_add_u64(stats->alloc_bytes, static_cast<uint64_t>(size));
+    }
     allocations[ptr] = {size, device};
     return true;
 }
@@ -184,6 +189,10 @@ bool GlobalState::release_allocation(void* ptr, size_t& size, int& device) {
         } else {
             dev.used_memory = 0;
         }
+        if (DeviceRuntimeStats* stats = stats_for_device_nolock(device)) {
+            stats->free_calls += 1;
+            saturating_add_u64(stats->free_bytes, static_cast<uint64_t>(size));
+        }
     }
     return true;
 }
@@ -196,6 +205,184 @@ bool GlobalState::get_allocation_info(void* ptr, size_t& size, int& device) cons
     size = it->second.first;
     device = it->second.second;
     return true;
+}
+
+void GlobalState::record_memcpy_h2d(const void* dst_device_ptr, size_t bytes) {
+    if (!dst_device_ptr || bytes == 0) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    const int device = resolve_device_for_ptr_nolock(dst_device_ptr, current_device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    if (!stats) return;
+    stats->memcpy_h2d_calls += 1;
+    saturating_add_u64(stats->memcpy_h2d_bytes, static_cast<uint64_t>(bytes));
+}
+
+void GlobalState::record_memcpy_d2h(const void* src_device_ptr, size_t bytes) {
+    if (!src_device_ptr || bytes == 0) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    const int device = resolve_device_for_ptr_nolock(src_device_ptr, current_device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    if (!stats) return;
+    stats->memcpy_d2h_calls += 1;
+    saturating_add_u64(stats->memcpy_d2h_bytes, static_cast<uint64_t>(bytes));
+}
+
+void GlobalState::record_memcpy_d2d(const void* dst_device_ptr, const void* src_device_ptr, size_t bytes) {
+    if (!dst_device_ptr || !src_device_ptr || bytes == 0) return;
+    std::lock_guard<std::mutex> lock(mutex);
+
+    const int dst_device = resolve_device_for_ptr_nolock(dst_device_ptr, -1);
+    const int src_device = resolve_device_for_ptr_nolock(src_device_ptr, -1);
+
+    if (dst_device >= 0 && src_device >= 0 && dst_device != src_device) {
+        DeviceRuntimeStats* src_stats = stats_for_device_nolock(src_device);
+        DeviceRuntimeStats* dst_stats = stats_for_device_nolock(dst_device);
+        if (src_stats) {
+            src_stats->memcpy_peer_tx_calls += 1;
+            saturating_add_u64(src_stats->memcpy_peer_tx_bytes, static_cast<uint64_t>(bytes));
+        }
+        if (dst_stats) {
+            dst_stats->memcpy_peer_rx_calls += 1;
+            saturating_add_u64(dst_stats->memcpy_peer_rx_bytes, static_cast<uint64_t>(bytes));
+        }
+        return;
+    }
+
+    const int device = (dst_device >= 0) ? dst_device : (src_device >= 0 ? src_device : current_device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    if (!stats) return;
+    stats->memcpy_d2d_calls += 1;
+    saturating_add_u64(stats->memcpy_d2d_bytes, static_cast<uint64_t>(bytes));
+}
+
+void GlobalState::record_memcpy_peer(int dst_device, int src_device, size_t bytes) {
+    if (bytes == 0) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (src_device >= 0) {
+        if (DeviceRuntimeStats* src_stats = stats_for_device_nolock(src_device)) {
+            src_stats->memcpy_peer_tx_calls += 1;
+            saturating_add_u64(src_stats->memcpy_peer_tx_bytes, static_cast<uint64_t>(bytes));
+        }
+    }
+    if (dst_device >= 0) {
+        if (DeviceRuntimeStats* dst_stats = stats_for_device_nolock(dst_device)) {
+            dst_stats->memcpy_peer_rx_calls += 1;
+            saturating_add_u64(dst_stats->memcpy_peer_rx_bytes, static_cast<uint64_t>(bytes));
+        }
+    }
+}
+
+void GlobalState::record_memcpy_h2h(size_t bytes) {
+    if (bytes == 0) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    host_io.memcpy_calls += 1;
+    saturating_add_u64(host_io.memcpy_bytes, static_cast<uint64_t>(bytes));
+}
+
+void GlobalState::record_memset(const void* dst_device_ptr, size_t bytes) {
+    if (!dst_device_ptr || bytes == 0) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    const int device = resolve_device_for_ptr_nolock(dst_device_ptr, current_device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    if (!stats) return;
+    stats->memset_calls += 1;
+    saturating_add_u64(stats->memset_bytes, static_cast<uint64_t>(bytes));
+}
+
+void GlobalState::record_cublas_gemm(const void* output_device_ptr, uint64_t flops) {
+    if (!output_device_ptr) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    if (!stats) return;
+    stats->cublas_gemm_calls += 1;
+    saturating_add_u64(stats->cublas_gemm_flops, flops);
+}
+
+void GlobalState::record_cublaslt_matmul(const void* output_device_ptr, uint64_t flops) {
+    if (!output_device_ptr) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    if (!stats) return;
+    stats->cublaslt_matmul_calls += 1;
+    saturating_add_u64(stats->cublaslt_matmul_flops, flops);
+}
+
+std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    std::vector<DeviceReportStats> snapshot;
+    snapshot.reserve(devices.size());
+
+    for (size_t i = 0; i < devices.size(); ++i) {
+        const Device& dev = devices[i];
+        DeviceReportStats entry;
+        entry.index = dev.index;
+        entry.name = dev.name;
+        entry.uuid = dev.uuid;
+        entry.total_memory = dev.total_memory;
+        entry.used_memory_current = dev.used_memory;
+        entry.used_memory_peak = dev.used_memory_peak;
+
+        if (i < device_stats.size()) {
+            const DeviceRuntimeStats& stats = device_stats[i];
+            entry.alloc_calls = stats.alloc_calls;
+            entry.alloc_bytes = stats.alloc_bytes;
+            entry.free_calls = stats.free_calls;
+            entry.free_bytes = stats.free_bytes;
+            entry.memcpy_h2d_calls = stats.memcpy_h2d_calls;
+            entry.memcpy_h2d_bytes = stats.memcpy_h2d_bytes;
+            entry.memcpy_d2h_calls = stats.memcpy_d2h_calls;
+            entry.memcpy_d2h_bytes = stats.memcpy_d2h_bytes;
+            entry.memcpy_d2d_calls = stats.memcpy_d2d_calls;
+            entry.memcpy_d2d_bytes = stats.memcpy_d2d_bytes;
+            entry.memcpy_peer_tx_calls = stats.memcpy_peer_tx_calls;
+            entry.memcpy_peer_tx_bytes = stats.memcpy_peer_tx_bytes;
+            entry.memcpy_peer_rx_calls = stats.memcpy_peer_rx_calls;
+            entry.memcpy_peer_rx_bytes = stats.memcpy_peer_rx_bytes;
+            entry.memset_calls = stats.memset_calls;
+            entry.memset_bytes = stats.memset_bytes;
+            entry.cublas_gemm_calls = stats.cublas_gemm_calls;
+            entry.cublas_gemm_flops = stats.cublas_gemm_flops;
+            entry.cublaslt_matmul_calls = stats.cublaslt_matmul_calls;
+            entry.cublaslt_matmul_flops = stats.cublaslt_matmul_flops;
+        }
+
+        snapshot.push_back(std::move(entry));
+    }
+
+    return snapshot;
+}
+
+HostIoStats GlobalState::snapshot_host_io() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return host_io;
+}
+
+int GlobalState::resolve_device_for_ptr_nolock(const void* ptr, int fallback_device) const {
+    if (!ptr) return fallback_device;
+    auto it = allocations.find(const_cast<void*>(ptr));
+    if (it == allocations.end()) return fallback_device;
+    return it->second.second;
+}
+
+GlobalState::DeviceRuntimeStats* GlobalState::stats_for_device_nolock(int device) {
+    if (device < 0 || device >= static_cast<int>(device_stats.size())) return nullptr;
+    return &device_stats[device];
+}
+
+const GlobalState::DeviceRuntimeStats* GlobalState::stats_for_device_nolock(int device) const {
+    if (device < 0 || device >= static_cast<int>(device_stats.size())) return nullptr;
+    return &device_stats[device];
+}
+
+void GlobalState::saturating_add_u64(uint64_t& target, uint64_t value) {
+    const uint64_t max_value = std::numeric_limits<uint64_t>::max();
+    if (target >= max_value - value) {
+        target = max_value;
+    } else {
+        target += value;
+    }
 }
 
 } // namespace fake_gpu
