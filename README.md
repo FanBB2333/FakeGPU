@@ -21,6 +21,67 @@ A CUDA API interception library that simulates GPU devices in non-GPU environmen
 - [ ] **Multi-Node GPU Communication** - Simulate cross-node GPU communication (NCCL, etc.)
 - [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
 
+## Operation Modes
+
+FakeGPU supports three operation modes, controlled by the `FAKEGPU_MODE` environment variable:
+
+### Simulate Mode (Default)
+```bash
+FAKEGPU_MODE=simulate ./fgpu python your_script.py
+```
+- All CUDA APIs return fake data
+- No real GPU required
+- Device memory backed by system RAM
+- Kernel launches are no-ops
+
+### Passthrough Mode
+```bash
+FAKEGPU_MODE=passthrough ./fgpu python your_script.py
+```
+- Forwards all CUDA calls to real GPU libraries
+- Results identical to running without FakeGPU
+- Useful for parity testing and debugging
+- Requires real GPU and CUDA installation
+
+### Hybrid Mode
+```bash
+FAKEGPU_MODE=hybrid FAKEGPU_OOM_POLICY=clamp ./fgpu python your_script.py
+```
+- Device info is virtualized (can report different GPU specs)
+- Compute operations use real GPU
+- OOM safety policies prevent crashes when virtual memory exceeds real GPU capacity
+
+**OOM Policies** (for Hybrid mode):
+- `clamp` (default): Report memory clamped to real GPU capacity
+- `managed`: Use `cudaMallocManaged` for oversubscription (relies on UVM)
+- `mapped_host`: Use `cudaHostAllocMapped` for overflow allocations
+- `spill_cpu`: Spill excess allocations to CPU memory
+
+**Environment Variables:**
+```bash
+FAKEGPU_MODE={simulate,passthrough,hybrid}  # Operation mode
+FAKEGPU_OOM_POLICY={clamp,managed,mapped_host,spill_cpu}  # OOM policy for hybrid mode
+FAKEGPU_REAL_CUDA_LIB_DIR=/path/to/cuda/lib  # Custom CUDA library path
+```
+
+**Report Output (Hybrid mode):**
+```json
+{
+  "report_version": 3,
+  "mode": "hybrid",
+  "oom_policy": "clamp",
+  "hybrid_stats": {
+    "real_alloc": {"count": 10, "bytes": 1073741824},
+    "managed_alloc": {"count": 0, "bytes": 0},
+    "spilled_alloc": {"count": 2, "bytes": 134217728}
+  },
+  "backing_gpus": [
+    {"index": 0, "total_memory": 25769803776, "used_memory": 1073741824}
+  ],
+  ...
+}
+```
+
 
 ## Quick Start
 

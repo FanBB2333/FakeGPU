@@ -8,6 +8,8 @@
 #include <limits>
 #include "../core/global_state.hpp"
 #include "../core/logging.hpp"
+#include "../core/backend_config.hpp"
+#include "../core/hybrid_memory_manager.hpp"
 
 namespace fake_gpu {
 
@@ -115,7 +117,50 @@ private:
             }
 
             fprintf(out, "{\n");
-            fprintf(out, "  \"report_version\": 2,\n");
+            fprintf(out, "  \"report_version\": 3,\n");
+
+            // Add mode information
+            const BackendConfig& config = BackendConfig::instance();
+            fprintf(out, "  \"mode\": \"%s\",\n", mode_name(config.mode()));
+            if (config.mode() == FakeGpuMode::Hybrid) {
+                fprintf(out, "  \"oom_policy\": \"%s\",\n", policy_name(config.oom_policy()));
+
+                // Add hybrid memory statistics
+                const auto& hybrid_stats = HybridMemoryManager::instance().get_stats();
+                fprintf(out, "  \"hybrid_stats\": {\n");
+                fprintf(out, "    \"real_alloc\": {\"count\": %llu, \"bytes\": %llu},\n",
+                        (unsigned long long)hybrid_stats.real_alloc_count,
+                        (unsigned long long)hybrid_stats.real_alloc_bytes);
+                fprintf(out, "    \"managed_alloc\": {\"count\": %llu, \"bytes\": %llu},\n",
+                        (unsigned long long)hybrid_stats.managed_alloc_count,
+                        (unsigned long long)hybrid_stats.managed_alloc_bytes);
+                fprintf(out, "    \"mapped_host_alloc\": {\"count\": %llu, \"bytes\": %llu},\n",
+                        (unsigned long long)hybrid_stats.mapped_host_alloc_count,
+                        (unsigned long long)hybrid_stats.mapped_host_alloc_bytes);
+                fprintf(out, "    \"spilled_alloc\": {\"count\": %llu, \"bytes\": %llu},\n",
+                        (unsigned long long)hybrid_stats.spilled_alloc_count,
+                        (unsigned long long)hybrid_stats.spilled_alloc_bytes);
+                fprintf(out, "    \"oom_fallback_count\": %llu\n",
+                        (unsigned long long)hybrid_stats.oom_fallback_count);
+                fprintf(out, "  },\n");
+
+                // Add real GPU info if available
+                int real_count = HybridMemoryManager::instance().get_real_device_count();
+                if (real_count > 0) {
+                    fprintf(out, "  \"backing_gpus\": [\n");
+                    for (int i = 0; i < real_count; ++i) {
+                        fprintf(out, "    {\n");
+                        fprintf(out, "      \"index\": %d,\n", i);
+                        fprintf(out, "      \"total_memory\": %llu,\n",
+                                (unsigned long long)HybridMemoryManager::instance().get_real_total_memory(i));
+                        fprintf(out, "      \"used_memory\": %llu\n",
+                                (unsigned long long)HybridMemoryManager::instance().get_real_used_memory(i));
+                        fprintf(out, "    }%s\n", (i < real_count - 1 ? "," : ""));
+                    }
+                    fprintf(out, "  ],\n");
+                }
+            }
+
             fprintf(out, "  \"host_io\": {\n");
             fprintf(out, "    \"memcpy_calls\": %llu,\n", (unsigned long long)host_io.memcpy_calls);
             fprintf(out, "    \"memcpy_bytes\": %llu\n", (unsigned long long)host_io.memcpy_bytes);

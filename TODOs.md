@@ -29,20 +29,20 @@
 
 ## 总体架构改造（两种模式共享）
 
-- [ ] **统一配置入口**
-  - [ ] `FAKEGPU_MODE={simulate,passthrough,hybrid}`（默认 `simulate` 保持现状）。
+- [x] **统一配置入口**
+  - [x] `FAKEGPU_MODE={simulate,passthrough,hybrid}`（默认 `simulate` 保持现状）。
   - [ ] CLI：`fakegpu --mode ...`、`./fgpu --mode ...`、`fakegpu.init(mode=...)`（Python wrapper）。
-  - [ ] 为所有 mode 提供清晰的 fallback：无法加载真实 CUDA 时自动回退到 `simulate` 并提示。
+  - [x] 为所有 mode 提供清晰的 fallback：无法加载真实 CUDA 时自动回退到 `simulate` 并提示。
 
-- [ ] **Backend 抽象**
-  - [ ] 为 `libcuda/libcudart/libcublas/libcublasLt/libnvidia-ml` 引入统一的 *dispatch layer*：
+- [x] **Backend 抽象**
+  - [x] 为 `libcuda/libcudart/libcublas/libcublasLt/libnvidia-ml` 引入统一的 *dispatch layer*：
     - `FakeBackend`（现有 stub + CPU sim）
     - `RealBackend`（dlopen/dlsym 转发到真实库）
     - `HybridBackend`（设备信息/内存策略可能由 Fake 控制，计算/部分 API 转发到 Real）
-  - [ ] 目标：每个 API 都能在运行时按 mode 选择实现，避免散落 `if (env)`。
+  - [x] 目标：每个 API 都能在运行时按 mode 选择实现，避免散落 `if (env)`。
 
 - [ ] **测试矩阵与基准数据（Golden）**
-  - [ ] 新增 `verification/golden/` 生成与读取工具（只在“有 GPU”的机器上生成）。
+  - [ ] 新增 `verification/golden/` 生成与读取工具（只在"有 GPU"的机器上生成）。
   - [ ] Golden 里至少保存：
     - prompt、tokenizer 版本、transformers/torch 版本、seed、关键 env
     - 生成的 token ids
@@ -56,20 +56,20 @@
 
 目标：在有真实 GPU 的机器上，`./fgpu --mode passthrough ...` 的结果 **与不使用 FakeGPU 完全一致**（至少达到 L1/L2）。
 
-- [ ] **真实库定位与加载**
-  - [ ] 增加 `FAKEGPU_REAL_CUDA_LIB_DIR`（或自动从 `ldconfig`/常见路径探测）。
-  - [ ] 在每个 FakeGPU so 内部 `dlopen()` 真实库（例如 `/usr/local/cuda/.../libcuda.so.1` 等），并 `dlsym()` 真实符号。
-  - [ ] 避免递归：不要用 `RTLD_DEFAULT`；优先用显式 handle + `dlsym(handle, ...)`。
+- [x] **真实库定位与加载**
+  - [x] 增加 `FAKEGPU_REAL_CUDA_LIB_DIR`（或自动从 `ldconfig`/常见路径探测）。
+  - [x] 在每个 FakeGPU so 内部 `dlopen()` 真实库（例如 `/usr/local/cuda/.../libcuda.so.1` 等），并 `dlsym()` 真实符号。
+  - [x] 避免递归：不要用 `RTLD_DEFAULT`；优先用显式 handle + `dlsym(handle, ...)`。
 
-- [ ] **完整转发链**
-  - [ ] `libcuda`：Driver API 全量转发（或至少覆盖 PyTorch/Transformers 路径）。
-  - [ ] `libcudart`：Runtime API 全量转发。
-  - [ ] `libcublas/libcublasLt`：全量转发。
-  - [ ] `libnvidia-ml`：可选择转发或仍用 Fake（取决于是否需要“虚拟设备展示”）。
+- [x] **完整转发链**
+  - [x] `libcuda`：Driver API 全量转发（或至少覆盖 PyTorch/Transformers 路径）。
+  - [x] `libcudart`：Runtime API 全量转发。
+  - [x] `libcublas/libcublasLt`：全量转发。
+  - [x] `libnvidia-ml`：可选择转发或仍用 Fake（取决于是否需要"虚拟设备展示"）。
 
 - [ ] **一致性与确定性**
   - [ ] 为 parity 测试提供推荐环境变量集合（如 `CUBLAS_WORKSPACE_CONFIG`、禁用 TF32、固定算法等）。
-  - [ ] 增加 `./ftest passthrough_parity`：同一脚本跑两次（直接 vs passthrough）并比较 token/logits。
+  - [x] 增加 `./ftest passthrough_parity`：同一脚本跑两次（直接 vs passthrough）并比较 token/logits。
 
 验收：
 - [ ] `test/test_load_qwen2_5.py` 在 `passthrough` 下生成 token 与直接跑一致（L1）。
@@ -81,32 +81,32 @@
 
 核心难点：**虚拟设备（比如宣称 80GB A100）与真实设备（比如 24GB 3090）不一致时，框架可能会分配超额导致 OOM**。
 
-建议把 OOM 安全策略做成可配置的 policy，并明确“保证级别”：
+建议把 OOM 安全策略做成可配置的 policy，并明确"保证级别"：
 
-- [ ] **策略（按推荐顺序）**
-  - [ ] `oom_policy=clamp`（最稳）：report 的 `total_memory`/`memGetInfo` 等不超过真实 GPU；避免框架误判。
-  - [ ] `oom_policy=managed`（中等）：拦截 `cudaMalloc` → `cudaMallocManaged`（或统一走 managed），依赖 UVM 进行 oversubscription（性能差但可避免 OOM）。
-  - [ ] `oom_policy=mapped_host`（进阶）：超额部分用 `cudaHostAllocMapped` + `cudaHostGetDevicePointer` 返回“device pointer”，允许 kernel 访问主存（零拷贝）。
-  - [ ] `oom_policy=spill+cpu`（混合兜底）：超额分配落到 Fake 内存；对可 CPU-sim 的算子走 CPU；不可 CPU-sim 的 kernel 直接报错（或强制回退到 simulate）。
+- [x] **策略（按推荐顺序）**
+  - [x] `oom_policy=clamp`（最稳）：report 的 `total_memory`/`memGetInfo` 等不超过真实 GPU；避免框架误判。
+  - [x] `oom_policy=managed`（中等）：拦截 `cudaMalloc` → `cudaMallocManaged`（或统一走 managed），依赖 UVM 进行 oversubscription（性能差但可避免 OOM）。
+  - [x] `oom_policy=mapped_host`（进阶）：超额部分用 `cudaHostAllocMapped` + `cudaHostGetDevicePointer` 返回"device pointer"，允许 kernel 访问主存（零拷贝）。
+  - [x] `oom_policy=spill+cpu`（混合兜底）：超额分配落到 Fake 内存；对可 CPU-sim 的算子走 CPU；不可 CPU-sim 的 kernel 直接报错（或强制回退到 simulate）。
 
-- [ ] **Reported vs Real 的一致性规则**
-  - [ ] `computeCapability` 建议 **不虚拟到高于真实**（避免 cubin 兼容问题）；name 可以虚拟，memory 可虚拟（但配合 policy）。
-  - [ ] NVML 与 CUDA Runtime/Driver 返回值保持一致（避免 torch/transformers 读到矛盾信息）。
+- [x] **Reported vs Real 的一致性规则**
+  - [x] `computeCapability` 建议 **不虚拟到高于真实**（避免 cubin 兼容问题）；name 可以虚拟，memory 可虚拟（但配合 policy）。
+  - [x] NVML 与 CUDA Runtime/Driver 返回值保持一致（避免 torch/transformers 读到矛盾信息）。
 
-- [ ] **内存预算与压力感知**
-  - [ ] 在 Hybrid 下引入 “allocation tracker + budget”：
+- [x] **内存预算与压力感知**
+  - [x] 在 Hybrid 下引入 "allocation tracker + budget"：
     - 真实显存 budget：通过真实 `cudaMemGetInfo`/NVML 查询。
     - 虚拟显存 budget：来自 profile。
-  - [ ] 对每次 `cudaMalloc/cudaMallocAsync/cuMemAlloc*` 做决策：走真实、走 managed、走 mapped_host、或 spill。
+  - [x] 对每次 `cudaMalloc/cudaMallocAsync/cuMemAlloc*` 做决策：走真实、走 managed、走 mapped_host、或 spill。
 
-- [ ] **可观测性**
-  - [ ] `fake_gpu_report.json` 增加：
+- [x] **可观测性**
+  - [x] `fake_gpu_report.json` 增加：
     - backing GPU 信息（真实设备 id/name/memory）
     - 真实分配 vs managed vs mapped_host vs spilled 的统计
     - OOM 次数/回退次数
 
 验收：
-- [ ] 在 “虚拟 80GB、真实 24GB” 配置下，运行 LLM 推理脚本不因显存 OOM 直接失败（至少能通过 managed/mapped_host 策略跑完）。
+- [ ] 在 "虚拟 80GB、真实 24GB" 配置下，运行 LLM 推理脚本不因显存 OOM 直接失败（至少能通过 managed/mapped_host 策略跑完）。
 - [ ] 在 `clamp` 策略下，保证行为与真实 GPU 接近（不会因为虚报而 OOM）。
 
 ---
