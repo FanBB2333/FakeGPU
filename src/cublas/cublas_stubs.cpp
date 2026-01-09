@@ -2,6 +2,8 @@
 #include "../core/global_state.hpp"
 #include "../core/logging.hpp"
 #include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -110,6 +112,64 @@ uint64_t gemm_flops_u64(uint64_t m, uint64_t n, uint64_t k, uint64_t batch_count
     flops *= static_cast<__int128>(batch_count);
     flops *= static_cast<__int128>(factor);
     return clamp_u128_to_u64(flops);
+}
+
+bool ascii_iequals(const char* a, const char* b) {
+    if (!a || !b) return false;
+    while (*a && *b) {
+        const unsigned char ca = static_cast<unsigned char>(*a);
+        const unsigned char cb = static_cast<unsigned char>(*b);
+        if (std::tolower(ca) != std::tolower(cb)) return false;
+        ++a;
+        ++b;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+enum class CpuGemmSimMode : uint8_t {
+    kAuto = 0,
+    kExact = 1,
+    kSkip = 2,
+};
+
+CpuGemmSimMode cpu_gemm_sim_mode() {
+    static CpuGemmSimMode mode = [] {
+        const char* env = std::getenv("FAKEGPU_CPU_GEMM_MODE");
+        if (!env || !*env) return CpuGemmSimMode::kAuto;
+        if (ascii_iequals(env, "exact")) return CpuGemmSimMode::kExact;
+        if (ascii_iequals(env, "skip") || ascii_iequals(env, "fast")) return CpuGemmSimMode::kSkip;
+        return CpuGemmSimMode::kAuto;
+    }();
+    return mode;
+}
+
+uint64_t cpu_gemm_max_ops() {
+    static uint64_t max_ops = [] {
+        constexpr uint64_t kDefaultMaxOps = 5'000'000ull;
+        const char* env = std::getenv("FAKEGPU_CPU_GEMM_MAX_OPS");
+        if (!env || !*env) return kDefaultMaxOps;
+        errno = 0;
+        char* end = nullptr;
+        const unsigned long long parsed = std::strtoull(env, &end, 10);
+        if (errno != 0 || end == env || !end || *end != '\0') return kDefaultMaxOps;
+        return static_cast<uint64_t>(parsed);
+    }();
+    return max_ops;
+}
+
+bool should_skip_cpu_gemm(uint64_t m, uint64_t n, uint64_t k, uint64_t batch_count) {
+    const CpuGemmSimMode mode = cpu_gemm_sim_mode();
+    if (mode == CpuGemmSimMode::kExact) return false;
+    if (mode == CpuGemmSimMode::kSkip) return true;
+
+    const uint64_t max_ops = cpu_gemm_max_ops();
+    if (max_ops == 0) return false;
+
+    __int128 ops = static_cast<__int128>(m);
+    ops *= static_cast<__int128>(n);
+    ops *= static_cast<__int128>(k);
+    ops *= static_cast<__int128>(batch_count);
+    return ops > static_cast<__int128>(max_ops);
 }
 
 const void* first_nonnull_ptr(const void* const* ptrs, int count) {
@@ -333,6 +393,13 @@ void gemm_col_major(
     int Ctype,
     int ldc
 ) {
+    if (m <= 0 || n <= 0) return;
+    if (should_skip_cpu_gemm(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1)) {
+        const size_t elem_size = getDataTypeSize(Ctype);
+        const size_t c_max_idx = static_cast<size_t>(m - 1) + static_cast<size_t>(n - 1) * static_cast<size_t>(ldc);
+        std::memset(C, 0, (c_max_idx + 1) * elem_size);
+        return;
+    }
     for (int col = 0; col < n; ++col) {
         for (int row = 0; row < m; ++row) {
             double acc = 0.0;
@@ -2769,6 +2836,22 @@ cublasStatus_t cublasLtMatmul(
     const size_t d_required = (lt_index(d_layout, d_layout.rows - 1, d_layout.cols - 1) + 1) * d_elem_size;
     if (!ensure_allocation_at_least(A, a_required) || !ensure_allocation_at_least(B, b_required) || !ensure_allocation_at_least(D, d_required) || (C && !ensure_allocation_at_least(C, c_required))) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+
+    if (should_skip_cpu_gemm(d_layout.rows, d_layout.cols, opA_cols, static_cast<uint64_t>(batchCount))) {
+        for (int batch = 0; batch < batchCount; ++batch) {
+            const int64_t d_batch = (d_layout.batchCount == 1) ? 0 : strideD * batch;
+            void* Db = reinterpret_cast<char*>(D) + d_batch * static_cast<int64_t>(d_elem_size);
+            std::memset(Db, 0, d_required);
+        }
+        FGPU_LOG("[FakeCUBLASLt] cublasLtMatmul skipped CPU compute (m=%llu n=%llu k=%llu batch=%d)\n",
+               static_cast<unsigned long long>(d_layout.rows),
+               static_cast<unsigned long long>(d_layout.cols),
+               static_cast<unsigned long long>(opA_cols),
+               batchCount);
+        fake_gpu::GlobalState::instance().record_cublaslt_matmul(
+            D, gemm_flops_u64(d_layout.rows, d_layout.cols, opA_cols, static_cast<uint64_t>(batchCount)));
+        return CUBLAS_STATUS_SUCCESS;
     }
 
     for (int batch = 0; batch < batchCount; ++batch) {

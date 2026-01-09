@@ -15,6 +15,7 @@ Suites:
   smoke     Build + run basic C/Python checks (no torch required)
   cpu_sim   Build CPU simulation and validate cuBLAS ops
   python    Run PyTorch tests (requires torch)
+  llm       Run LLM inference smoke test (requires torch + transformers + local model)
   all       smoke + python
 
 Env:
@@ -89,6 +90,29 @@ run_python() {
   "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report.json"
 }
 
+run_llm() {
+  if ! "$PYTHON_BIN" -c "import torch, transformers" >/dev/null 2>&1; then
+    echo "torch/transformers not found in current python; skipping LLM smoke test."
+    return 0
+  fi
+
+  local model_dir="$HOME/models/Qwen/Qwen2.5-0.5B-Instruct"
+  if [[ ! -d "$model_dir" ]]; then
+    echo "LLM model files not found at $model_dir; skipping LLM smoke test."
+    return 0
+  fi
+
+  build
+  local -a timeout_cmd=()
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=(timeout 300)
+  fi
+
+  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_llm.json" \
+    "${timeout_cmd[@]}" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$PYTHON_BIN" test/test_load_qwen2_5.py
+  "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report_llm.json"
+}
+
 case "$suite" in
   smoke)
     run_smoke
@@ -98,6 +122,9 @@ case "$suite" in
     ;;
   python)
     run_python
+    ;;
+  llm)
+    run_llm
     ;;
   all)
     run_smoke

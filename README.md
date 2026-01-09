@@ -11,14 +11,16 @@ A CUDA API interception library that simulates GPU devices in non-GPU environmen
 - [x] **NVML API** - GPU information queries
 - [x] **Python API Wrapper** - `import fakegpu; fakegpu.init()` enables FakeGPU from inside Python
 - [x] **PyTorch Support** - Basic tensor ops, linear layers, neural networks
+- [x] **Real Scenario Testing** - LLM inference smoke test (Qwen2.5-0.5B-Instruct)
 - [x] **GPU Tool Compatibility** - Compatible with existing GPU status monitoring tools (nvidia-smi, gpustat, etc.)
 - [x] **Preset GPU Info** - Add more preset GPU hardware configurations
 - [x] **Detailed Reporting** - Writes `fake_gpu_report.json` with per-device peak memory, IO bytes, and cuBLAS/cuBLASLt FLOPs
+- [x] **Multi-Architecture & Data Types** - Support different GPU architectures and various data storage/memory types
 
 ### Planned Features
 - [ ] **Multi-Node GPU Communication** - Simulate cross-node GPU communication (NCCL, etc.)
 - [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
-- [x] **Multi-Architecture & Data Types** - Support different GPU architectures and various data storage/memory types
+
 
 ## Quick Start
 
@@ -56,6 +58,7 @@ Generated libraries:
 ./ftest smoke          # C + Python (no torch needed)
 ./ftest cpu_sim        # CPU simulation correctness (validates cuBLAS ops; runs a PyTorch matmul check if torch is installed)
 ./ftest python         # PyTorch tests (requires torch)
+./ftest llm            # LLM inference smoke test (requires torch + transformers + local model files)
 ./ftest all            # smoke + python
 ```
 
