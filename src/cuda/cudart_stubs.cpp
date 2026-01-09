@@ -573,6 +573,7 @@ cudaError_t cudaMallocHost(void **ptr, size_t size) {
         last_error = cudaErrorMemoryAllocation;
         return last_error;
     }
+    fake_gpu::GlobalState::instance().register_host_allocation(*ptr, size, fake_gpu::GlobalState::instance().get_current_device());
 
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaMallocHost allocated %zu bytes\n", size);
@@ -580,6 +581,9 @@ cudaError_t cudaMallocHost(void **ptr, size_t size) {
 }
 
 cudaError_t cudaFreeHost(void *ptr) {
+    size_t size = 0;
+    int device = 0;
+    fake_gpu::GlobalState::instance().release_host_allocation(ptr, size, device);
     free(ptr);
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaFreeHost\n");
@@ -598,6 +602,7 @@ cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags) {
         last_error = cudaErrorMemoryAllocation;
         return last_error;
     }
+    fake_gpu::GlobalState::instance().register_host_allocation(*pHost, size, fake_gpu::GlobalState::instance().get_current_device());
 
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaHostAlloc allocated %zu bytes\n", size);
@@ -913,7 +918,7 @@ cudaError_t cudaMallocManaged(void **devPtr, size_t size, unsigned int flags) {
 
     // Simplified: use regular cudaMalloc
     CUdeviceptr dptr;
-    CUresult result = cuMemAlloc(&dptr, size);
+    CUresult result = cuMemAllocManaged(&dptr, size, flags);
     if (result == CUDA_SUCCESS) {
         *devPtr = (void*)dptr;
         last_error = cudaSuccess;
@@ -1151,11 +1156,27 @@ cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const vo
 
     size_t alloc_size = 0;
     int alloc_device = 0;
-    bool found = fake_gpu::GlobalState::instance().get_allocation_info(
-        const_cast<void*>(ptr), alloc_size, alloc_device);
+    fake_gpu::GlobalState::AllocationKind alloc_kind = fake_gpu::GlobalState::AllocationKind::Device;
+    bool found = fake_gpu::GlobalState::instance().get_allocation_info_ex(
+        const_cast<void*>(ptr), alloc_size, alloc_device, alloc_kind);
 
-    attributes->type = found ? cudaMemoryTypeDevice : cudaMemoryTypeUnregistered;
-    attributes->device = found ? alloc_device : 0;
+    if (!found) {
+        attributes->type = cudaMemoryTypeUnregistered;
+        attributes->device = 0;
+    } else {
+        switch (alloc_kind) {
+            case fake_gpu::GlobalState::AllocationKind::Device:
+                attributes->type = cudaMemoryTypeDevice;
+                break;
+            case fake_gpu::GlobalState::AllocationKind::Managed:
+                attributes->type = cudaMemoryTypeManaged;
+                break;
+            case fake_gpu::GlobalState::AllocationKind::Host:
+                attributes->type = cudaMemoryTypeHost;
+                break;
+        }
+        attributes->device = alloc_device;
+    }
     attributes->devicePointer = const_cast<void*>(ptr);
     attributes->hostPointer = const_cast<void*>(ptr);
 

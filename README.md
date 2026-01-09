@@ -18,7 +18,7 @@ A CUDA API interception library that simulates GPU devices in non-GPU environmen
 ### Planned Features
 - [ ] **Multi-Node GPU Communication** - Simulate cross-node GPU communication (NCCL, etc.)
 - [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
-- [ ] **Multi-Architecture & Data Types** - Support different GPU architectures and various data storage/memory types
+- [x] **Multi-Architecture & Data Types** - Support different GPU architectures and various data storage/memory types
 
 ## Quick Start
 

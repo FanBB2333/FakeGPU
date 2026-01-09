@@ -831,17 +831,38 @@ CUresult cuCtxSetSharedMemConfig(int config) {
 }
 
 CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flags) {
-    return cuMemAlloc(dptr, bytesize);
+    (void)flags;
+    if (!dptr) return CUDA_ERROR_INVALID_VALUE;
+
+    void* ptr = malloc(bytesize);
+    if (!ptr) {
+        return CUDA_ERROR_OUT_OF_MEMORY;
+    }
+
+    int device = current_context_device;
+    if (!GlobalState::instance().register_managed_allocation(ptr, bytesize, device)) {
+        free(ptr);
+        return CUDA_ERROR_OUT_OF_MEMORY;
+    }
+
+    *dptr = (CUdeviceptr)ptr;
+    FGPU_LOG("[FakeCUDA-Driver] cuMemAllocManaged allocated %zu bytes at 0x%llx on device %d\n",
+           bytesize, *dptr, device);
+    return CUDA_SUCCESS;
 }
 
 CUresult cuMemAllocHost(void **pp, size_t bytesize) {
     if (!pp) return CUDA_ERROR_INVALID_VALUE;
     *pp = malloc(bytesize);
     if (!*pp) return CUDA_ERROR_OUT_OF_MEMORY;
+    GlobalState::instance().register_host_allocation(*pp, bytesize, current_context_device);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemFreeHost(void *p) {
+    size_t size = 0;
+    int device = 0;
+    GlobalState::instance().release_host_allocation(p, size, device);
     free(p);
     return CUDA_SUCCESS;
 }
@@ -874,9 +895,26 @@ CUresult cuPointerGetAttribute(void *data, CUpointer_attribute attribute, CUdevi
     GlobalState::instance().initialize();
 
     size_t alloc_size = 0;
-    int alloc_device = 0;
-    bool found = GlobalState::instance().get_allocation_info((void*)ptr, alloc_size, alloc_device);
-    CUmemorytype mem_type = found ? CU_MEMORYTYPE_DEVICE : CU_MEMORYTYPE_HOST;
+    int alloc_device = current_context_device;
+    GlobalState::AllocationKind alloc_kind = GlobalState::AllocationKind::Device;
+    bool found = GlobalState::instance().get_allocation_info_ex((void*)ptr, alloc_size, alloc_device, alloc_kind);
+
+    CUmemorytype mem_type = CU_MEMORYTYPE_HOST;
+    unsigned int is_managed = 0;
+    if (found) {
+        switch (alloc_kind) {
+            case GlobalState::AllocationKind::Device:
+                mem_type = CU_MEMORYTYPE_DEVICE;
+                break;
+            case GlobalState::AllocationKind::Managed:
+                mem_type = CU_MEMORYTYPE_UNIFIED;
+                is_managed = 1;
+                break;
+            case GlobalState::AllocationKind::Host:
+                mem_type = CU_MEMORYTYPE_HOST;
+                break;
+        }
+    }
 
     switch (attribute) {
         case CU_POINTER_ATTRIBUTE_CONTEXT:
@@ -892,7 +930,7 @@ CUresult cuPointerGetAttribute(void *data, CUpointer_attribute attribute, CUdevi
             *(void**)data = (void*)ptr;
             break;
         case CU_POINTER_ATTRIBUTE_IS_MANAGED:
-            *(unsigned int*)data = 0;
+            *(unsigned int*)data = is_managed;
             break;
         case CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL:
             *(int*)data = alloc_device;

@@ -75,6 +75,8 @@ run_smoke() {
   compile_verify_preload
   FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$SMOKE_BUILD_DIR/verify_preload"
   "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report.json"
+  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_multi_arch.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" --devices "a100,h100,b100,b200" "$PYTHON_BIN" verification/test_multi_arch_compute_units.py
+  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_memory_types.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$PYTHON_BIN" verification/test_memory_types.py
 }
 
 run_python() {

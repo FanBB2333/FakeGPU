@@ -155,21 +155,30 @@ int GlobalState::get_current_device() const {
 
 bool GlobalState::register_allocation(void* ptr, size_t size, int device) {
     std::lock_guard<std::mutex> lock(mutex);
+    return register_allocation_nolock(ptr, size, device, AllocationKind::Device);
+}
+
+bool GlobalState::register_managed_allocation(void* ptr, size_t size, int device) {
+    std::lock_guard<std::mutex> lock(mutex);
+    return register_allocation_nolock(ptr, size, device, AllocationKind::Managed);
+}
+
+bool GlobalState::register_host_allocation(void* ptr, size_t size, int device) {
+    std::lock_guard<std::mutex> lock(mutex);
     if (!ptr) return false;
-    if (device < 0 || device >= static_cast<int>(devices.size())) return false;
-
-    Device& dev = devices[device];
-    if (dev.used_memory + size > dev.total_memory) {
-        return false; // not enough fake memory
+    if (device < 0 || device >= static_cast<int>(devices.size())) {
+        device = current_device;
     }
-
-    dev.used_memory += size;
-    dev.used_memory_peak = std::max(dev.used_memory_peak, dev.used_memory);
-    if (DeviceRuntimeStats* stats = stats_for_device_nolock(device)) {
-        stats->alloc_calls += 1;
-        saturating_add_u64(stats->alloc_bytes, static_cast<uint64_t>(size));
+    if (device < 0 || device >= static_cast<int>(devices.size())) {
+        device = 0;
     }
-    allocations[ptr] = {size, device};
+    if (allocations.find(ptr) != allocations.end()) return false;
+
+    AllocationRecord rec;
+    rec.size = size;
+    rec.device = device;
+    rec.kind = AllocationKind::Host;
+    allocations[ptr] = rec;
     return true;
 }
 
@@ -177,9 +186,10 @@ bool GlobalState::release_allocation(void* ptr, size_t& size, int& device) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = allocations.find(ptr);
     if (it == allocations.end()) return false;
+    if (it->second.kind == AllocationKind::Host) return false;
 
-    size = it->second.first;
-    device = it->second.second;
+    size = it->second.size;
+    device = it->second.device;
     allocations.erase(it);
 
     if (device >= 0 && device < static_cast<int>(devices.size())) {
@@ -197,13 +207,37 @@ bool GlobalState::release_allocation(void* ptr, size_t& size, int& device) {
     return true;
 }
 
+bool GlobalState::release_host_allocation(void* ptr, size_t& size, int& device) {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = allocations.find(ptr);
+    if (it == allocations.end()) return false;
+    if (it->second.kind != AllocationKind::Host) return false;
+
+    size = it->second.size;
+    device = it->second.device;
+    allocations.erase(it);
+    return true;
+}
+
 bool GlobalState::get_allocation_info(void* ptr, size_t& size, int& device) const {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = allocations.find(ptr);
     if (it == allocations.end()) return false;
+    if (it->second.kind == AllocationKind::Host) return false;
 
-    size = it->second.first;
-    device = it->second.second;
+    size = it->second.size;
+    device = it->second.device;
+    return true;
+}
+
+bool GlobalState::get_allocation_info_ex(void* ptr, size_t& size, int& device, AllocationKind& kind) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = allocations.find(ptr);
+    if (it == allocations.end()) return false;
+
+    size = it->second.size;
+    device = it->second.device;
+    kind = it->second.kind;
     return true;
 }
 
@@ -363,7 +397,8 @@ int GlobalState::resolve_device_for_ptr_nolock(const void* ptr, int fallback_dev
     if (!ptr) return fallback_device;
     auto it = allocations.find(const_cast<void*>(ptr));
     if (it == allocations.end()) return fallback_device;
-    return it->second.second;
+    if (it->second.kind == AllocationKind::Host) return fallback_device;
+    return it->second.device;
 }
 
 GlobalState::DeviceRuntimeStats* GlobalState::stats_for_device_nolock(int device) {
@@ -383,6 +418,31 @@ void GlobalState::saturating_add_u64(uint64_t& target, uint64_t value) {
     } else {
         target += value;
     }
+}
+
+bool GlobalState::register_allocation_nolock(void* ptr, size_t size, int device, AllocationKind kind) {
+    if (!ptr) return false;
+    if (device < 0 || device >= static_cast<int>(devices.size())) return false;
+    if (allocations.find(ptr) != allocations.end()) return false;
+
+    Device& dev = devices[device];
+    if (dev.used_memory + size > dev.total_memory) {
+        return false; // not enough fake memory
+    }
+
+    dev.used_memory += size;
+    dev.used_memory_peak = std::max(dev.used_memory_peak, dev.used_memory);
+    if (DeviceRuntimeStats* stats = stats_for_device_nolock(device)) {
+        stats->alloc_calls += 1;
+        saturating_add_u64(stats->alloc_bytes, static_cast<uint64_t>(size));
+    }
+
+    AllocationRecord rec;
+    rec.size = size;
+    rec.device = device;
+    rec.kind = kind;
+    allocations[ptr] = rec;
+    return true;
 }
 
 } // namespace fake_gpu

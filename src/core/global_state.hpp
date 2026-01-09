@@ -51,6 +51,12 @@ class GlobalState {
 public:
     static GlobalState& instance();
 
+    enum class AllocationKind {
+        Device,
+        Managed,
+        Host,
+    };
+
     void initialize();
     int get_device_count() const;
     Device& get_device(int index);
@@ -59,8 +65,12 @@ public:
 
     // Allocation tracking
     bool register_allocation(void* ptr, size_t size, int device);
+    bool register_managed_allocation(void* ptr, size_t size, int device);
+    bool register_host_allocation(void* ptr, size_t size, int device);
     bool release_allocation(void* ptr, size_t& size, int& device);
+    bool release_host_allocation(void* ptr, size_t& size, int& device);
     bool get_allocation_info(void* ptr, size_t& size, int& device) const;
+    bool get_allocation_info_ex(void* ptr, size_t& size, int& device, AllocationKind& kind) const;
 
     // IO tracking (best-effort)
     void record_memcpy_h2d(const void* dst_device_ptr, size_t bytes);
@@ -114,12 +124,21 @@ private:
     mutable std::mutex mutex;
 
     int current_device = 0;
-    std::unordered_map<void*, std::pair<size_t, int>> allocations;
+
+    struct AllocationRecord {
+        size_t size = 0;
+        int device = 0;
+        AllocationKind kind = AllocationKind::Device;
+    };
+
+    std::unordered_map<void*, AllocationRecord> allocations;
 
     int resolve_device_for_ptr_nolock(const void* ptr, int fallback_device) const;
     DeviceRuntimeStats* stats_for_device_nolock(int device);
     const DeviceRuntimeStats* stats_for_device_nolock(int device) const;
     static void saturating_add_u64(uint64_t& target, uint64_t value);
+
+    bool register_allocation_nolock(void* ptr, size_t size, int device, AllocationKind kind);
 };
 
 } // namespace fake_gpu
