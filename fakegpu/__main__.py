@@ -13,6 +13,16 @@ def main(argv: list[str] | None = None) -> int:
         description="Run a command with FakeGPU libraries preloaded (LD_PRELOAD/DYLD_INSERT_LIBRARIES).",
     )
     parser.add_argument(
+        "--mode",
+        choices=["simulate", "passthrough", "hybrid"],
+        help="FakeGPU mode. Equivalent to setting $FAKEGPU_MODE.",
+    )
+    parser.add_argument(
+        "--oom-policy",
+        choices=["clamp", "managed", "mapped_host", "spill_cpu"],
+        help="Hybrid OOM policy. Equivalent to setting $FAKEGPU_OOM_POLICY.",
+    )
+    parser.add_argument(
         "--build-dir",
         help="Path to a FakeGPU CMake build directory containing the shared libraries (default: $FAKEGPU_BUILD_DIR or ./build).",
     )
@@ -46,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
     child_env = fakegpu_env(
         build_dir=ns.build_dir,
         lib_dir=ns.lib_dir,
+        mode=ns.mode,
+        oom_policy=ns.oom_policy,
         profile=ns.profile,
         device_count=ns.device_count,
         devices=ns.devices,

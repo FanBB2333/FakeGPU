@@ -16,6 +16,7 @@ Suites:
   cpu_sim   Build CPU simulation and validate cuBLAS ops
   python    Run PyTorch tests (requires torch)
   llm       Run LLM inference smoke test (requires torch + transformers + local model)
+  passthrough_parity  Compare direct vs passthrough LLM outputs (requires real GPU + local model)
   all       smoke + python
 
 Env:
@@ -113,6 +114,50 @@ run_llm() {
   "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report_llm.json"
 }
 
+run_passthrough_parity() {
+  if ! "$PYTHON_BIN" -c "import torch, transformers" >/dev/null 2>&1; then
+    echo "torch/transformers not found in current python; skipping passthrough parity test."
+    return 0
+  fi
+
+  local model_dir="$HOME/models/Qwen/Qwen2.5-0.5B-Instruct"
+  if [[ ! -d "$model_dir" ]]; then
+    echo "LLM model files not found at $model_dir; skipping passthrough parity test."
+    return 0
+  fi
+
+  build
+  local -a timeout_cmd=()
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=(timeout 600)
+  fi
+
+  local baseline_out="$SMOKE_BUILD_DIR/passthrough_parity_baseline.pt"
+  local passthrough_out="$SMOKE_BUILD_DIR/passthrough_parity_passthrough.pt"
+
+  # Baseline: ensure FakeGPU preload env doesn't leak in.
+  local rc=0
+  env -u LD_PRELOAD -u DYLD_INSERT_LIBRARIES -u FAKEGPU_MODE -u FAKEGPU_OOM_POLICY \
+    "${timeout_cmd[@]}" "$PYTHON_BIN" verification/passthrough_parity_qwen2_5.py \
+      --out "$baseline_out" --model-dir "$model_dir" || rc=$?
+  if [[ "$rc" != "0" ]]; then
+    if [[ "$rc" == "2" ]]; then
+      echo "CUDA not available; skipping passthrough parity test."
+      return 0
+    fi
+    return "$rc"
+  fi
+
+  FAKEGPU_MODE=passthrough \
+    FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_passthrough_parity.json" \
+    "${timeout_cmd[@]}" ./fgpu --mode passthrough --build-dir "$SMOKE_BUILD_DIR" \
+      "$PYTHON_BIN" verification/passthrough_parity_qwen2_5.py \
+      --out "$passthrough_out" --model-dir "$model_dir"
+
+  "$PYTHON_BIN" verification/compare_parity_outputs.py \
+    --baseline "$baseline_out" --passthrough "$passthrough_out"
+}
+
 case "$suite" in
   smoke)
     run_smoke
@@ -125,6 +170,9 @@ case "$suite" in
     ;;
   llm)
     run_llm
+    ;;
+  passthrough_parity)
+    run_passthrough_parity
     ;;
   all)
     run_smoke

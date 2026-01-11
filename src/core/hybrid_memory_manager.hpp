@@ -14,6 +14,7 @@ namespace fake_gpu {
 // Allocation tracking for Hybrid mode
 struct HybridAllocation {
     void* ptr = nullptr;
+    void* backing_ptr = nullptr;  // e.g. host pointer for mapped host allocations
     size_t size = 0;
     int device = 0;
 
@@ -75,7 +76,14 @@ public:
             config.oom_policy() != OomPolicy::Clamp) {
             // Not in clamp mode, return virtual values
             reported_total = virtual_total;
-            reported_free = virtual_total - virtual_used;
+            reported_free = (virtual_total > virtual_used) ? (virtual_total - virtual_used) : 0;
+            return;
+        }
+
+        if (real_device_count_ <= 0) {
+            // No real backing device available; fall back to virtual values.
+            reported_total = virtual_total;
+            reported_free = (virtual_total > virtual_used) ? (virtual_total - virtual_used) : 0;
             return;
         }
 
@@ -83,7 +91,7 @@ public:
         int real_dev = device % real_device_count_;
         if (real_dev < 0 || real_dev >= real_device_count_) {
             reported_total = virtual_total;
-            reported_free = virtual_total - virtual_used;
+            reported_free = (virtual_total > virtual_used) ? (virtual_total - virtual_used) : 0;
             return;
         }
 
@@ -117,6 +125,11 @@ public:
             return AllocationDecision::UseReal;
         }
 
+        if (real_device_count_ <= 0) {
+            // No real GPU available; always spill so callers can continue in a degraded mode.
+            return AllocationDecision::SpillToCpu;
+        }
+
         int real_dev = device % real_device_count_;
         if (real_dev < 0 || real_dev >= real_device_count_) {
             return AllocationDecision::SpillToCpu;
@@ -128,6 +141,9 @@ public:
         if (size <= available) {
             return AllocationDecision::UseReal;
         }
+
+        // We're over the real budget: count this as an OOM fallback attempt (or OOM failure in clamp mode).
+        stats_.oom_fallback_count++;
 
         // Not enough real memory, apply OOM policy
         switch (config.oom_policy()) {
@@ -154,11 +170,12 @@ public:
     }
 
     // Track allocation
-    void record_allocation(void* ptr, size_t size, int device, HybridAllocation::Type type) {
+    void record_allocation(void* ptr, size_t size, int device, HybridAllocation::Type type, void* backing_ptr = nullptr) {
         std::lock_guard<std::mutex> lock(mutex_);
 
         HybridAllocation alloc;
         alloc.ptr = ptr;
+        alloc.backing_ptr = backing_ptr;
         alloc.size = size;
         alloc.device = device;
         alloc.type = type;
@@ -166,9 +183,11 @@ public:
 
         // Update memory tracking
         if (type == HybridAllocation::Type::RealDevice) {
-            int real_dev = device % real_device_count_;
-            if (real_dev >= 0 && real_dev < real_device_count_) {
-                real_used_memory_[real_dev] += size;
+            if (real_device_count_ > 0) {
+                int real_dev = device % real_device_count_;
+                if (real_dev >= 0 && real_dev < real_device_count_) {
+                    real_used_memory_[real_dev] += size;
+                }
             }
         }
 
@@ -207,6 +226,9 @@ public:
 
         // Update memory tracking
         if (out_alloc.type == HybridAllocation::Type::RealDevice) {
+            if (real_device_count_ <= 0) {
+                return true;
+            }
             int real_dev = out_alloc.device % real_device_count_;
             if (real_dev >= 0 && real_dev < real_device_count_) {
                 if (real_used_memory_[real_dev] >= out_alloc.size) {

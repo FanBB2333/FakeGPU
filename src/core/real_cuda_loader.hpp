@@ -62,11 +62,6 @@ public:
 
         // Load CUDA driver library first (libcuda.so)
         cuda_driver_handle_ = load_library(config.real_cuda_driver_path(), "libcuda.so");
-        if (!cuda_driver_handle_) {
-            // Try system default
-            cuda_driver_handle_ = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
-        }
-
         if (cuda_driver_handle_) {
             FGPU_LOG("[RealCudaLoader] Loaded real CUDA driver library\n");
         } else {
@@ -76,38 +71,26 @@ public:
 
         // Load CUDA runtime library (libcudart.so)
         cudart_handle_ = load_library(config.real_cudart_path(), "libcudart.so");
-        if (!cudart_handle_) {
-            cudart_handle_ = dlopen("libcudart.so.12", RTLD_NOW | RTLD_LOCAL);
-        }
-        if (!cudart_handle_) {
-            cudart_handle_ = dlopen("libcudart.so.11", RTLD_NOW | RTLD_LOCAL);
-        }
-
         if (cudart_handle_) {
             FGPU_LOG("[RealCudaLoader] Loaded real CUDA runtime library\n");
+        } else {
+            FGPU_LOG("[RealCudaLoader] WARNING: Could not load real CUDA runtime library\n");
         }
 
         // Load cuBLAS library
         cublas_handle_ = load_library(config.real_cublas_path(), "libcublas.so");
-        if (!cublas_handle_) {
-            cublas_handle_ = dlopen("libcublas.so.12", RTLD_NOW | RTLD_LOCAL);
-        }
-        if (!cublas_handle_) {
-            cublas_handle_ = dlopen("libcublas.so.11", RTLD_NOW | RTLD_LOCAL);
-        }
-
         if (cublas_handle_) {
             FGPU_LOG("[RealCudaLoader] Loaded real cuBLAS library\n");
+        } else {
+            FGPU_LOG("[RealCudaLoader] WARNING: Could not load real cuBLAS library\n");
         }
 
         // Load NVML library
         nvml_handle_ = load_library(config.real_nvml_path(), "libnvidia-ml.so");
-        if (!nvml_handle_) {
-            nvml_handle_ = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
-        }
-
         if (nvml_handle_) {
             FGPU_LOG("[RealCudaLoader] Loaded real NVML library\n");
+        } else {
+            FGPU_LOG("[RealCudaLoader] WARNING: Could not load real NVML library\n");
         }
 
         return is_available();

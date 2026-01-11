@@ -102,6 +102,8 @@ def init(
     *,
     build_dir: str | os.PathLike[str] | None = None,
     lib_dir: str | os.PathLike[str] | None = None,
+    mode: str | None = None,
+    oom_policy: str | None = None,
     profile: str | None = None,
     device_count: int | None = None,
     devices: str | Sequence[str] | None = None,
@@ -126,16 +128,23 @@ def init(
 
         resolved_dir = library_dir(build_dir=build_dir, lib_dir=lib_dir)
         if update_env:
-            _apply_env_inplace(resolved_dir, profile=profile, device_count=device_count, devices=devices)
+            _apply_env_inplace(
+                resolved_dir,
+                mode=mode,
+                oom_policy=oom_policy,
+                profile=profile,
+                device_count=device_count,
+                devices=devices,
+            )
         else:
-            _apply_config_env_inplace(profile=profile, device_count=device_count, devices=devices)
+            _apply_config_env_inplace(mode=mode, oom_policy=oom_policy, profile=profile, device_count=device_count, devices=devices)
 
-        mode = ctypes.RTLD_GLOBAL
+        dlopen_mode = ctypes.RTLD_GLOBAL
         if hasattr(os, "RTLD_NOW"):
-            mode |= os.RTLD_NOW
+            dlopen_mode |= os.RTLD_NOW
 
         handles: dict[str, ctypes.CDLL] = {}
-        for lib in _PRELOAD_LIBS:
+        for lib in _preload_libs_for_mode(os.environ.get("FAKEGPU_MODE")):
             path = resolved_dir / lib
             if not path.exists():
                 # Try common unversioned fallbacks (useful when packaging).
@@ -144,7 +153,7 @@ def init(
                     path = alt_path
                 else:
                     raise FileNotFoundError(f"Missing required FakeGPU library: {path}")
-            handles[lib] = ctypes.CDLL(str(path), mode=mode)
+            handles[lib] = ctypes.CDLL(str(path), mode=dlopen_mode)
 
         _handles.clear()
         _handles.update(handles)
@@ -157,6 +166,8 @@ def env(
     *,
     build_dir: str | os.PathLike[str] | None = None,
     lib_dir: str | os.PathLike[str] | None = None,
+    mode: str | None = None,
+    oom_policy: str | None = None,
     profile: str | None = None,
     device_count: int | None = None,
     devices: str | Sequence[str] | None = None,
@@ -173,7 +184,14 @@ def env(
 
     resolved_dir = library_dir(build_dir=build_dir, lib_dir=lib_dir)
     env_map = dict(os.environ) if base_env is None else dict(base_env)
-    _apply_config_env(env_map, profile=profile, device_count=device_count, devices=devices)
+    _apply_config_env(
+        env_map,
+        mode=mode,
+        oom_policy=oom_policy,
+        profile=profile,
+        device_count=device_count,
+        devices=devices,
+    )
     _apply_env(env_map, resolved_dir)
     return env_map
 
@@ -183,6 +201,8 @@ def run(
     *,
     build_dir: str | os.PathLike[str] | None = None,
     lib_dir: str | os.PathLike[str] | None = None,
+    mode: str | None = None,
+    oom_policy: str | None = None,
     profile: str | None = None,
     device_count: int | None = None,
     devices: str | Sequence[str] | None = None,
@@ -195,7 +215,15 @@ def run(
         list(cmd),
         check=check,
         text=True,
-        env=env(build_dir=build_dir, lib_dir=lib_dir, profile=profile, device_count=device_count, devices=devices),
+        env=env(
+            build_dir=build_dir,
+            lib_dir=lib_dir,
+            mode=mode,
+            oom_policy=oom_policy,
+            profile=profile,
+            device_count=device_count,
+            devices=devices,
+        ),
         **kwargs,
     )
     return completed
@@ -230,21 +258,62 @@ def _fallback_name(libname: str) -> str:
     return libname
 
 
+def _preload_libs_for_mode(mode: str | None) -> tuple[str, ...]:
+    # Mode-specific preloading:
+    # - simulate: preload all FakeGPU libs (full stubs)
+    # - hybrid: preload CUDA driver/runtime + NVML, but keep real cuBLAS/cuBLASLt for correctness
+    # - passthrough: preload CUDA driver/runtime only; keep real NVML/cuBLAS to avoid fake device info and math changes
+    mode_norm = (mode or "simulate").strip().lower()
+    if mode_norm == "hybrid":
+        return tuple(lib for lib in _PRELOAD_LIBS if "cublas" not in lib)
+    if mode_norm == "passthrough":
+        return tuple(lib for lib in _PRELOAD_LIBS if ("cublas" not in lib and "nvidia-ml" not in lib))
+    return _PRELOAD_LIBS
+
+
 def _apply_env_inplace(
-    resolved_dir: Path, *, profile: str | None, device_count: int | None, devices: str | Sequence[str] | None
+    resolved_dir: Path,
+    *,
+    mode: str | None,
+    oom_policy: str | None,
+    profile: str | None,
+    device_count: int | None,
+    devices: str | Sequence[str] | None,
 ) -> None:
-    updated = env(lib_dir=resolved_dir, profile=profile, device_count=device_count, devices=devices, base_env=os.environ)  # type: ignore[arg-type]
+    updated = env(
+        lib_dir=resolved_dir,
+        mode=mode,
+        oom_policy=oom_policy,
+        profile=profile,
+        device_count=device_count,
+        devices=devices,
+        base_env=os.environ,  # type: ignore[arg-type]
+    )
     os.environ.update(updated)
 
-def _apply_config_env_inplace(*, profile: str | None, device_count: int | None, devices: str | Sequence[str] | None) -> None:
+def _apply_config_env_inplace(
+    *, mode: str | None, oom_policy: str | None, profile: str | None, device_count: int | None, devices: str | Sequence[str] | None
+) -> None:
     updated = dict(os.environ)
-    _apply_config_env(updated, profile=profile, device_count=device_count, devices=devices)
+    _apply_config_env(updated, mode=mode, oom_policy=oom_policy, profile=profile, device_count=device_count, devices=devices)
     os.environ.update(updated)
 
 
 def _apply_config_env(
-    env_map: dict[str, str], *, profile: str | None, device_count: int | None, devices: str | Sequence[str] | None
+    env_map: dict[str, str],
+    *,
+    mode: str | None,
+    oom_policy: str | None,
+    profile: str | None,
+    device_count: int | None,
+    devices: str | Sequence[str] | None,
 ) -> None:
+    if mode is not None:
+        env_map["FAKEGPU_MODE"] = str(mode)
+
+    if oom_policy is not None:
+        env_map["FAKEGPU_OOM_POLICY"] = str(oom_policy)
+
     if device_count is not None:
         if int(device_count) <= 0:
             raise ValueError("device_count must be > 0")
@@ -264,10 +333,23 @@ def _apply_config_env(
 def _apply_env(env_map: dict[str, str], resolved_dir: Path) -> None:
     dir_str = str(resolved_dir)
 
-    existing_lib_path = env_map.get(_LIBRARY_PATH_VAR, "")
-    env_map[_LIBRARY_PATH_VAR] = _prepend_path(dir_str, existing_lib_path)
+    mode_norm = (env_map.get("FAKEGPU_MODE") or "simulate").strip().lower()
 
-    preload_paths = [str(resolved_dir / name) for name in _PRELOAD_LIBS]
+    existing_lib_path = env_map.get(_LIBRARY_PATH_VAR, "")
+    existing_lib_path = _remove_path(dir_str, existing_lib_path)
+    if mode_norm == "simulate":
+        # In simulate mode we want FakeGPU to win any later dlopen("libcuda.so.1"/"libcublas.so"...)
+        # resolution, so we intentionally put the build dir first.
+        env_map[_LIBRARY_PATH_VAR] = _prepend_path(dir_str, existing_lib_path)
+    else:
+        # In passthrough/hybrid we avoid shadowing real CUDA libraries (cuBLAS/cuDNN/etc).
+        # LD_PRELOAD uses absolute paths, so we do not need to add FakeGPU to the library search path.
+        if existing_lib_path:
+            env_map[_LIBRARY_PATH_VAR] = existing_lib_path
+        else:
+            env_map.pop(_LIBRARY_PATH_VAR, None)
+
+    preload_paths = [str(resolved_dir / name) for name in _preload_libs_for_mode(env_map.get("FAKEGPU_MODE"))]
     existing_preload = env_map.get(_PRELOAD_VAR, "")
     env_map[_PRELOAD_VAR] = ":".join(preload_paths + ([existing_preload] if existing_preload else []))
 
@@ -279,3 +361,10 @@ def _prepend_path(prefix: str, existing: str) -> str:
     if parts and parts[0] == prefix:
         return existing
     return ":".join([prefix] + parts)
+
+
+def _remove_path(prefix: str, existing: str) -> str:
+    if not existing:
+        return ""
+    parts = [p for p in existing.split(":") if p and p != prefix]
+    return ":".join(parts)

@@ -1,5 +1,7 @@
 #include "nvml_defs.hpp"
+#include "../core/backend_config.hpp"
 #include "../core/global_state.hpp"
+#include "../core/hybrid_memory_manager.hpp"
 #include "../core/logging.hpp"
 #include "../monitor/monitor.hpp"
 #include <cstdio>
@@ -163,7 +165,22 @@ nvmlReturn_t nvmlDeviceGetAddressingMode(nvmlDevice_t device, nvmlDeviceAddressi
 nvmlReturn_t nvmlDeviceGetMemoryInfo(nvmlDevice_t device, nvmlMemory_t *memory) {
     if (!device || !memory) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
-    // Mock values
+
+    const BackendConfig& config = BackendConfig::instance();
+    if (config.mode() == FakeGpuMode::Hybrid && config.oom_policy() == OomPolicy::Clamp) {
+        HybridMemoryManager::instance().initialize();
+        size_t reported_total = 0;
+        size_t reported_free = 0;
+        HybridMemoryManager::instance().get_clamped_memory_info(
+            dev->index, static_cast<size_t>(dev->total_memory), static_cast<size_t>(dev->used_memory),
+            reported_total, reported_free);
+        memory->total = reported_total;
+        memory->free = reported_free;
+        memory->used = reported_total - reported_free;
+        return NVML_SUCCESS;
+    }
+
+    // Virtual device info (simulate/hybrid non-clamp).
     memory->total = dev->total_memory;
     memory->used = dev->used_memory;
     memory->free = memory->total - memory->used;
@@ -174,8 +191,24 @@ nvmlReturn_t nvmlDeviceGetMemoryInfo_v2(nvmlDevice_t device, nvmlMemory_v2_t *me
     if (!device || !memory) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     memory->version = nvmlMemory_v2;
-    memory->total = dev->total_memory;
     memory->reserved = 0;
+
+    const BackendConfig& config = BackendConfig::instance();
+    if (config.mode() == FakeGpuMode::Hybrid && config.oom_policy() == OomPolicy::Clamp) {
+        HybridMemoryManager::instance().initialize();
+        size_t reported_total = 0;
+        size_t reported_free = 0;
+        HybridMemoryManager::instance().get_clamped_memory_info(
+            dev->index, static_cast<size_t>(dev->total_memory), static_cast<size_t>(dev->used_memory),
+            reported_total, reported_free);
+        memory->total = reported_total;
+        memory->free = reported_free;
+        memory->used = reported_total - reported_free;
+        return NVML_SUCCESS;
+    }
+
+    // Virtual device info (simulate/hybrid non-clamp).
+    memory->total = dev->total_memory;
     memory->used = dev->used_memory;
     memory->free = memory->total - memory->used;
     return NVML_SUCCESS;

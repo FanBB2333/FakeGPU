@@ -104,16 +104,30 @@ private:
             "/usr/local/cuda-12/lib64",
             "/usr/local/cuda-11/lib64",
             "/usr/lib/x86_64-linux-gnu",
+            "/usr/lib/wsl/lib",
             "/usr/lib64",
             nullptr
         };
 
+        auto pick_first_existing = [&](const std::string& dir, const char* const* candidates) -> std::string {
+            for (const char* const* name = candidates; *name; ++name) {
+                std::string path = dir + "/" + *name;
+                if (file_exists(path)) return path;
+            }
+            return "";
+        };
+
+        static const char* cuda_driver_candidates[] = {"libcuda.so.1", "libcuda.so", nullptr};
+        static const char* cudart_candidates[] = {"libcudart.so.12", "libcudart.so.11", "libcudart.so", nullptr};
+        static const char* cublas_candidates[] = {"libcublas.so.12", "libcublas.so.11", "libcublas.so", nullptr};
+        static const char* nvml_candidates[] = {"libnvidia-ml.so.1", "libnvidia-ml.so", nullptr};
+
         // If user specified a directory, use it
         if (!real_cuda_lib_dir_.empty()) {
-            real_cudart_path_ = real_cuda_lib_dir_ + "/libcudart.so";
-            real_cuda_driver_path_ = real_cuda_lib_dir_ + "/libcuda.so";
-            real_cublas_path_ = real_cuda_lib_dir_ + "/libcublas.so";
-            real_nvml_path_ = real_cuda_lib_dir_ + "/libnvidia-ml.so";
+            real_cuda_driver_path_ = pick_first_existing(real_cuda_lib_dir_, cuda_driver_candidates);
+            real_cudart_path_ = pick_first_existing(real_cuda_lib_dir_, cudart_candidates);
+            real_cublas_path_ = pick_first_existing(real_cuda_lib_dir_, cublas_candidates);
+            real_nvml_path_ = pick_first_existing(real_cuda_lib_dir_, nvml_candidates);
             return;
         }
 
@@ -121,10 +135,10 @@ private:
         for (const char** path = cuda_search_paths; *path; ++path) {
             std::string dir(*path);
 
-            // Check for libcudart.so
+            // Check for libcudart
             if (real_cudart_path_.empty()) {
-                std::string cudart = dir + "/libcudart.so";
-                if (file_exists(cudart)) {
+                std::string cudart = pick_first_existing(dir, cudart_candidates);
+                if (!cudart.empty()) {
                     real_cudart_path_ = cudart;
                     if (real_cuda_lib_dir_.empty()) {
                         real_cuda_lib_dir_ = dir;
@@ -132,26 +146,26 @@ private:
                 }
             }
 
-            // Check for libcuda.so (driver)
+            // Check for libcuda (driver)
             if (real_cuda_driver_path_.empty()) {
-                std::string cuda = dir + "/libcuda.so";
-                if (file_exists(cuda)) {
+                std::string cuda = pick_first_existing(dir, cuda_driver_candidates);
+                if (!cuda.empty()) {
                     real_cuda_driver_path_ = cuda;
                 }
             }
 
-            // Check for libcublas.so
+            // Check for libcublas
             if (real_cublas_path_.empty()) {
-                std::string cublas = dir + "/libcublas.so";
-                if (file_exists(cublas)) {
+                std::string cublas = pick_first_existing(dir, cublas_candidates);
+                if (!cublas.empty()) {
                     real_cublas_path_ = cublas;
                 }
             }
 
-            // Check for libnvidia-ml.so
+            // Check for libnvidia-ml
             if (real_nvml_path_.empty()) {
-                std::string nvml = dir + "/libnvidia-ml.so";
-                if (file_exists(nvml)) {
+                std::string nvml = pick_first_existing(dir, nvml_candidates);
+                if (!nvml.empty()) {
                     real_nvml_path_ = nvml;
                 }
             }
