@@ -37,6 +37,12 @@
 - L3：可配置网络时延/带宽模型，报告可用于资源与性能评估
 - L4：支持故障注入、超时、rank 丢失、网络抖动等调试场景
 
+需要额外明确的是，这里的 L0 ~ L4 是**总体能力分层**，不是 Phase 1 的直接交付承诺。
+
+- Phase 1 的最低验收应以 direct NCCL shim / communicator / collective MVP 为准
+- `torch.distributed.init_process_group` 和 DDP 主路径应放到后续阶段单独验收
+- 如果某个阶段只完成 direct API 语义正确，不应宣称已经覆盖框架级兼容性
+
 ### 2.3 可行性判断
 
 这项设计整体上是可行的，但前提是要把“多节点模拟”的边界定义清楚。
@@ -213,6 +219,16 @@ policies:
 
 FakeGPU 不应替代这些变量，而应读取它们并与 cluster config 做一致性校验。
 
+### 6.3 配置主从关系
+
+为避免启动路径含糊，建议明确以下规则：
+
+- `RANK` / `LOCAL_RANK` / `WORLD_SIZE` 这类运行时变量是**进程实例事实来源**
+- `FAKEGPU_CLUSTER_CONFIG` 是**静态拓扑与策略来源**
+- 启动时优先用运行时变量确定“当前进程是谁”，再用 cluster config 校验该 rank 是否存在、位于哪个 node、使用哪个 GPU profile
+- 如果 cluster config 与运行时变量不一致，应在初始化阶段立即失败，而不是尝试隐式修正
+- Phase 1 可以允许“无 cluster config”的最小模式，只依赖运行时变量和默认拓扑完成单机 smoke test
+
 ## 7. 总体架构
 
 建议引入以下新模块：
@@ -254,8 +270,9 @@ FakeGPU
 
 部署方式建议：
 
-- Phase 1：优先采用**同机单独守护进程**
-- Phase 2：多机 TCP coordinator
+- Phase 1：优先保证 **local coordinator 接口** 跑通；实现上可先支持同机单独守护进程，也允许保留 in-process / helper 形态用于开发与验证
+- Phase 2：将**同机单独守护进程**作为推荐默认部署
+- Phase 3+：多机 TCP coordinator
 
 推荐理由：
 
@@ -263,6 +280,8 @@ FakeGPU
 - rank0 崩溃时不会顺带拖死整个调度层
 - 日志、报告、超时诊断更容易集中管理
 - 后续扩到多机时迁移路径更清晰
+
+这里的关键是先把 coordinator 抽象边界做稳定，而不是在第一步就把部署形态做死。否则 Phase 1 会同时承担接口设计、进程生命周期、IPC 和 collective 语义四类复杂度。
 
 #### C. Collective Semantic Engine
 
@@ -327,6 +346,12 @@ FakeGPU
 
 不建议把多节点逻辑直接绑死在 `hybrid` 上，否则后续难以维护。
 
+模式稳定性建议进一步收敛：
+
+- Phase 1 / Phase 2 只正式承诺 `simulate + simulate`
+- `hybrid + simulate` 作为后续正式目标，但不应提前成为 Phase 1 的隐性约束
+- `proxy` / `passthrough` 在文档中保留为后期扩展路线即可，不应成为前两阶段的设计复杂度来源
+
 ## 9. API 接入点
 
 ### 9.1 第一阶段最小覆盖的 NCCL API
@@ -341,7 +366,9 @@ FakeGPU
 - `ncclAllReduce`
 - `ncclBroadcast`
 
-这组 API 对第一版是够用的，目标是先跑通最小 DDP/collective 主路径，而不是一开始就覆盖完整 NCCL 面。
+这组 API 对第一版是够用的，目标是先跑通最小 direct collective MVP，而不是一开始就覆盖完整 NCCL 面。
+
+更准确地说，这组 API 对第一版足够支撑 **direct NCCL collective MVP**；如果要把目标上升到 PyTorch DDP 主路径，通常还需要补足 barrier、group 语义，以及更多错误传播与时序细节。
 
 需要注意：
 
@@ -406,7 +433,7 @@ FakeGPU
 ### 10.3 不同模式下的 staging 策略
 
 - `simulate`：直接 `memcpy`，因为 fake device memory 本质是 host RAM
-- `hybrid`：优先走真实 `cudaMemcpyDtoH` / `cudaMemcpyHtoD`
+- `hybrid`：优先走真实 `cudaMemcpyDtoH` / `cudaMemcpyHtoD`，但这一步需要额外处理 stream 同步、buffer 生命周期与错误传播，不应与 `simulate` 版 staging 混为同一复杂度
 - `passthrough` + `proxy`：默认仍可使用 host staging；后续再优化为零拷贝或真实 NCCL proxy
 
 ### 10.4 大 tensor 处理
@@ -619,6 +646,10 @@ faults:
 - 失败 / 超时 / abort 次数
 - chunked transfer 的分片数量与回退次数
 
+建议补充一条实现约束：
+
+- Phase 1 / Phase 2 的 cluster report schema 可以标记为 experimental，只保证核心字段存在，不宜过早承诺长期稳定的 JSON 结构
+
 ## 16. 代码结构建议
 
 建议新增如下文件组织：
@@ -715,7 +746,7 @@ src/nccl/
 - 单机多进程
 - `FAKEGPU_DIST_MODE=simulate`
 - 只支持 `ncclCommInitRank`、`ncclCommDestroy`、`ncclAllReduce`、`ncclBroadcast`
-- coordinator 采用本地单独守护进程
+- coordinator 先保证 local coordinator 接口可用；可支持本地守护进程，但不把部署形态本身当作唯一验收条件
 - 控制面使用 Unix domain socket
 - 数据面优先使用 POSIX shared memory
 - 先只支持 host staging
@@ -723,14 +754,16 @@ src/nccl/
 
 验收：
 
-- `torch.distributed` 基本初始化通过
+- direct NCCL shim 的 init/destroy 与 basic collective smoke test 通过
 - 2/4 rank 的 AllReduce 语义正确
 - 参数不一致时能快速 fail，不出现静默 hang
+- `torch.distributed` 相关验证可作为探索性检查，但不作为 Phase 1 的硬门槛
 
 ### Phase 2：PyTorch DDP 主路径
 
 目标：
 
+- 跑通 `torch.distributed.init_process_group`
 - 支持 framework barrier
 - 支持 `all_gather`、`reduce_scatter`
 - 支持 group start/end
@@ -1000,8 +1033,9 @@ src/nccl/
 
 实施内容：
 
-- 用 Fake NCCL 跑通 `torch.distributed.init_process_group`
+- 在已有 direct collective MVP 之上，尝试接入 `torch.distributed.init_process_group`
 - 跑一个最小 `all_reduce` 和 `broadcast`
+- 该步骤应标记为 exploratory：如果发现 barrier / group / async error 等缺口，应把缺口回灌到后续步骤，而不是为了“通过 smoke test”临时堆补丁
 
 代码产物：
 
@@ -1015,9 +1049,8 @@ src/nccl/
 
 通过标准：
 
-- `torch.distributed` 初始化成功
-- 2 rank / 4 rank 的 smoke test 全通过
-- 生成基础 cluster log
+- 至少能稳定复现框架接入所需的缺口列表
+- 如果初始化成功，结果可作为 Phase 2 的前置验证收益，而不是反向提升 Phase 1 门槛
 
 #### Step 11：Framework Barrier 支持
 
@@ -1270,7 +1303,7 @@ src/nccl/
 - Milestone A：Step 1 ~ Step 5
   - 目标：把配置、coordinator、communicator、Fake NCCL 初始化链打通
 - Milestone B：Step 6 ~ Step 10
-  - 目标：拿到最小可用的 collective MVP
+  - 目标：拿到最小可用的 collective MVP，并完成一次框架接入摸底
 - Milestone C：Step 11 ~ Step 15
   - 目标：覆盖 DDP 主路径和基础 cluster report
 - Milestone D：Step 16 ~ Step 18
@@ -1307,8 +1340,8 @@ src/nccl/
 
 在真正进入开发前，建议先明确：
 
-1. 第一阶段是否只支持 PyTorch + NCCL，暂不支持其他 backend
-2. coordinator 是否强制采用单独守护进程
+1. 第一阶段是否只承诺 direct NCCL collective MVP，把 PyTorch 框架兼容性放到第二阶段
+2. coordinator 是否必须从第一天就是单独守护进程，还是先稳定 local coordinator 抽象
 3. cluster report 是单文件聚合，还是每 rank 一个文件再统一归并
 4. `proxy` 模式是否真的需要在第一轮就做，还是先把 `simulate` 做完整
 5. 是否要把多节点拓扑也做成类似 `profiles/*.yaml` 的内建预设
@@ -1318,11 +1351,11 @@ src/nccl/
 如果目标是尽快得到“可用的多节点模拟能力”，推荐路线是：
 
 1. 先引入独立的 distributed mode，不污染现有 compute mode
-2. 先做 Fake NCCL + 本地 coordinator 守护进程 + host staging
+2. 先做 Fake NCCL + local coordinator 抽象 + host staging
 3. 先做控制面/数据面分离，再补复杂 collective
 4. 先保证 collective 语义正确，再补 timing model
 5. 先支持单机多进程模拟多节点，再扩成真正多机
 6. `proxy/passthrough` 只在前面稳定后再引入
-7. 先围绕 PyTorch DDP 主路径打通，再考虑更泛化的分布式场景
+7. 先把 direct NCCL collective MVP 做扎实，再进入 PyTorch DDP 主路径
 
 这条路线和 FakeGPU 当前已有的模式分发、内存跟踪、报告体系是兼容的，后续拆任务和验证也最直接。
