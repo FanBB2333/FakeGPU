@@ -1231,6 +1231,162 @@ src/nccl/
 - 失败路径有明确错误，而不是 hang
 - 文档中记录新增配置项、限制和已知边界
 
+### 18.3 Codex 分批执行建议
+
+如果要让 codex 按批次完成，建议优先采用下面这套切分。原则是：
+
+- 每次只处理一组强耦合 Step
+- 每次都要包含代码、测试和最小验收
+- 不要跨越明显不同性质的工作边界，例如把配置解析、collective 语义、PyTorch 接入、多机扩展混在同一次里
+
+推荐分成 9 次：
+
+#### 第 1 次：Step 1
+
+范围：
+
+- [ ] Step 1：分布式配置读取与环境校验
+
+本次完成标准：
+
+- [ ] `BackendConfig` 增加 distributed 配置访问接口
+- [ ] 新增最小 `cluster_config` 骨架
+- [ ] 新增环境变量解析测试
+- [ ] 非法配置能明确失败
+
+#### 第 2 次：Step 2
+
+范围：
+
+- [ ] Step 2：Cluster YAML 解析与拓扑合法性校验
+
+本次完成标准：
+
+- [ ] 解析 `nodes`、`ranks`、`gpus`、`fabric`
+- [ ] 校验 rank 唯一性和 world size 一致性
+- [ ] 新增合法/非法 YAML 测试样例
+- [ ] 非法配置在启动前失败
+
+#### 第 3 次：Step 3 + Step 4
+
+范围：
+
+- [ ] Step 3：Coordinator 守护进程最小骨架
+- [ ] Step 4：控制面协议与 communicator 注册
+
+本次完成标准：
+
+- [ ] coordinator 能启动、响应 `ping`、优雅退出
+- [ ] 定义最小控制面消息格式
+- [ ] communicator registry 可处理 2 rank / 4 rank 注册
+- [ ] duplicate rank、缺失 rank、world size 不一致能快速报错
+
+#### 第 4 次：Step 5 + Step 6
+
+范围：
+
+- [ ] Step 5：Fake NCCL 最小初始化路径
+- [ ] Step 6：Shared Memory Staging Layer
+
+本次完成标准：
+
+- [ ] `libnccl.so` 最小 shim 可完成 init/destroy
+- [ ] communicator 初始化与销毁测试通过
+- [ ] staging buffer 可跨进程读写
+- [ ] shared memory 生命周期可正确清理
+
+#### 第 5 次：Step 7 + Step 8 + Step 9
+
+范围：
+
+- [ ] Step 7：AllReduce 语义执行器
+- [ ] Step 8：Broadcast 语义执行器
+- [ ] Step 9：参数一致性校验与超时快失败
+
+本次完成标准：
+
+- [ ] 2 rank / 4 rank `all_reduce(sum)` 语义正确
+- [ ] broadcast 在 root=0 和 root=last rank 下正确
+- [ ] mismatch 和 timeout 能在限定时间内失败
+- [ ] direct collective MVP 可稳定重复运行
+
+#### 第 6 次：Step 10
+
+范围：
+
+- [ ] Step 10：Torch Distributed 最小 smoke test
+
+本次完成标准：
+
+- [ ] 尝试接入 `torch.distributed.init_process_group`
+- [ ] 记录 barrier / group / async error 等缺口
+- [ ] 不为了通过 smoke test 临时跨越到后续 Step
+- [ ] 输出一份明确的缺口清单或探索结果
+
+#### 第 7 次：Step 11 + Step 12 + Step 13 + Step 14 + Step 15
+
+范围：
+
+- [ ] Step 11：Framework Barrier 支持
+- [ ] Step 12：GroupStart / GroupEnd 支持
+- [ ] Step 13：AllGather 与 ReduceScatter
+- [ ] Step 14：Cluster Report 基础版
+- [ ] Step 15：DDP 主路径验证
+
+本次完成标准：
+
+- [ ] barrier 能完成整组同步和超时失败
+- [ ] group 语义可批量提交并保持顺序
+- [ ] all_gather / reduce_scatter 语义正确
+- [ ] cluster report 生成并包含核心字段
+- [ ] 单机模拟 2 节点 x 4 rank 的 DDP 主路径可跑通
+
+#### 第 8 次：Step 16 + Step 17 + Step 18
+
+范围：
+
+- [ ] Step 16：拓扑配置接入
+- [ ] Step 17：时间模型与链路级统计
+- [ ] Step 18：Chunked Staging
+
+本次完成标准：
+
+- [ ] fabric 配置可进入模型计算
+- [ ] link 级统计出现在报告中
+- [ ] 慢链路下耗时高于快链路
+- [ ] 大 tensor 在 chunked 模式下可完成传输且结果一致
+
+#### 第 9 次：Step 19 + Step 20 + Step 21
+
+范围：
+
+- [ ] Step 19：Hybrid + Simulate 混合运行
+- [ ] Step 20：Proxy / Passthrough 试验版
+- [ ] Step 21：远端 Coordinator 与多机扩展
+
+本次完成标准：
+
+- [ ] `hybrid + simulate` 可完成 host staging 和 collective 同步
+- [ ] `proxy` 模式能与 baseline NCCL 做输出对比
+- [ ] TCP transport 可支持远端 coordinator
+- [ ] 网络异常时 communicator 可明确回收或失败
+
+### 18.4 批次使用建议
+
+如果你希望 codex 的每次任务更稳，可以遵循下面的投喂规则：
+
+- [ ] 一次只给一个批次，不要同时给多个批次
+- [ ] 明确写出“只做这些 Step，不要提前实现后续 Step”
+- [ ] 明确写出本次必须补哪些测试
+- [ ] 明确写出本次通过标准
+- [ ] 要求优先修根因，不要为了过 smoke test 堆临时补丁
+
+如果你希望风险更低，还可以把上面的 9 次进一步细化成 12 次，做法如下：
+
+- [ ] 把“第 4 次”拆成 Step 5 和 Step 6 两次
+- [ ] 把“第 7 次”拆成 Step 11 + Step 12、Step 13 + Step 14、Step 15 三次
+- [ ] 把“第 9 次”拆成 Step 19、Step 20、Step 21 三次
+
 ## 19. 主要风险
 
 ### 19.1 PyTorch 对 NCCL 行为细节依赖较重
