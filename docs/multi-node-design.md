@@ -1245,70 +1245,70 @@ src/nccl/
 
 范围：
 
-- [ ] Step 1：分布式配置读取与环境校验
+- [x] Step 1：分布式配置读取与环境校验
 
 本次完成标准：
 
-- [ ] `BackendConfig` 增加 distributed 配置访问接口
-- [ ] 新增最小 `cluster_config` 骨架
-- [ ] 新增环境变量解析测试
-- [ ] 非法配置能明确失败
+- [x] `BackendConfig` 增加 distributed 配置访问接口
+- [x] 新增最小 `cluster_config` 骨架
+- [x] 新增环境变量解析测试
+- [x] 非法配置能明确失败
 
 #### 第 2 次：Step 2
 
 范围：
 
-- [ ] Step 2：Cluster YAML 解析与拓扑合法性校验
+- [x] Step 2：Cluster YAML 解析与拓扑合法性校验
 
 本次完成标准：
 
-- [ ] 解析 `nodes`、`ranks`、`gpus`、`fabric`
-- [ ] 校验 rank 唯一性和 world size 一致性
-- [ ] 新增合法/非法 YAML 测试样例
-- [ ] 非法配置在启动前失败
+- [x] 解析 `nodes`、`ranks`、`gpus`、`fabric`
+- [x] 校验 rank 唯一性和 world size 一致性
+- [x] 新增合法/非法 YAML 测试样例
+- [x] 非法配置在启动前失败
 
 #### 第 3 次：Step 3 + Step 4
 
 范围：
 
-- [ ] Step 3：Coordinator 守护进程最小骨架
-- [ ] Step 4：控制面协议与 communicator 注册
+- [x] Step 3：Coordinator 守护进程最小骨架
+- [x] Step 4：控制面协议与 communicator 注册
 
 本次完成标准：
 
-- [ ] coordinator 能启动、响应 `ping`、优雅退出
-- [ ] 定义最小控制面消息格式
-- [ ] communicator registry 可处理 2 rank / 4 rank 注册
-- [ ] duplicate rank、缺失 rank、world size 不一致能快速报错
+- [x] coordinator 能启动、响应 `ping`、优雅退出
+- [x] 定义最小控制面消息格式
+- [x] communicator registry 可处理 2 rank / 4 rank 注册
+- [x] duplicate rank、缺失 rank、world size 不一致能快速报错
 
 #### 第 4 次：Step 5 + Step 6
 
 范围：
 
-- [ ] Step 5：Fake NCCL 最小初始化路径
-- [ ] Step 6：Shared Memory Staging Layer
+- [x] Step 5：Fake NCCL 最小初始化路径
+- [x] Step 6：Shared Memory Staging Layer
 
 本次完成标准：
 
-- [ ] `libnccl.so` 最小 shim 可完成 init/destroy
-- [ ] communicator 初始化与销毁测试通过
-- [ ] staging buffer 可跨进程读写
-- [ ] shared memory 生命周期可正确清理
+- [x] `libnccl.so` 最小 shim 可完成 init/destroy
+- [x] communicator 初始化与销毁测试通过
+- [x] staging buffer 可跨进程读写
+- [x] shared memory 生命周期可正确清理
 
 #### 第 5 次：Step 7 + Step 8 + Step 9
 
 范围：
 
-- [ ] Step 7：AllReduce 语义执行器
-- [ ] Step 8：Broadcast 语义执行器
-- [ ] Step 9：参数一致性校验与超时快失败
+- [x] Step 7：AllReduce 语义执行器
+- [x] Step 8：Broadcast 语义执行器
+- [x] Step 9：参数一致性校验与超时快失败
 
 本次完成标准：
 
-- [ ] 2 rank / 4 rank `all_reduce(sum)` 语义正确
-- [ ] broadcast 在 root=0 和 root=last rank 下正确
-- [ ] mismatch 和 timeout 能在限定时间内失败
-- [ ] direct collective MVP 可稳定重复运行
+- [x] 2 rank / 4 rank `all_reduce(sum)` 语义正确
+- [x] broadcast 在 root=0 和 root=last rank 下正确
+- [x] mismatch 和 timeout 能在限定时间内失败
+- [x] direct collective MVP 可稳定重复运行
 
 #### 第 6 次：Step 10
 
