@@ -373,6 +373,108 @@ void ClusterCoordinator::handle_client(int client_fd) {
                 }
             }
         }
+    } else if (request.command == "GROUP_PREPARE") {
+        CollectiveBatchPrepareRequest batch_request;
+        bool ok = false;
+        std::string error;
+
+        batch_request.comm_id = parse_required_int(request.fields, "comm_id", ok, error);
+        if (!ok) {
+            response = format_error_response("bad_request", error);
+        } else {
+            batch_request.rank = parse_required_int(request.fields, "rank", ok, error);
+            if (!ok) {
+                response = format_error_response("bad_request", error);
+            } else {
+                batch_request.base_seqno = parse_required_u64(request.fields, "base_seqno", ok, error);
+                if (!ok) {
+                    response = format_error_response("bad_request", error);
+                } else {
+                    batch_request.timeout_ms = parse_required_int(request.fields, "timeout_ms", ok, error);
+                    if (!ok) {
+                        response = format_error_response("bad_request", error);
+                    } else {
+                        const int op_count = parse_required_int(request.fields, "op_count", ok, error);
+                        if (!ok) {
+                            response = format_error_response("bad_request", error);
+                        } else if (op_count <= 0) {
+                            response = format_error_response("bad_request", "op_count must be > 0");
+                        } else {
+                            batch_request.operations.reserve(static_cast<std::size_t>(op_count));
+                            for (int index = 0; index < op_count && ok; ++index) {
+                                CollectiveBatchPlanItem item;
+                                const std::string prefix = "op" + std::to_string(index) + "_";
+
+                                auto type_it = request.fields.find(prefix + "type");
+                                auto dtype_it = request.fields.find(prefix + "dtype");
+                                auto reduce_it = request.fields.find(prefix + "reduce_op");
+                                if (type_it == request.fields.end()) {
+                                    ok = false;
+                                    error = "missing required field: " + prefix + "type";
+                                    break;
+                                }
+                                if (dtype_it == request.fields.end()) {
+                                    ok = false;
+                                    error = "missing required field: " + prefix + "dtype";
+                                    break;
+                                }
+                                if (reduce_it == request.fields.end()) {
+                                    ok = false;
+                                    error = "missing required field: " + prefix + "reduce_op";
+                                    break;
+                                }
+                                if (!parse_collective_type(type_it->second, item.type)) {
+                                    ok = false;
+                                    error = "unsupported collective type";
+                                    break;
+                                }
+                                if (!parse_collective_data_type(dtype_it->second, item.dtype)) {
+                                    ok = false;
+                                    error = "unsupported dtype";
+                                    break;
+                                }
+                                if (!parse_collective_reduce_op(reduce_it->second, item.reduce_op)) {
+                                    ok = false;
+                                    error = "unsupported reduce_op";
+                                    break;
+                                }
+
+                                item.count = parse_required_size(request.fields, (prefix + "count").c_str(), ok, error);
+                                if (!ok) {
+                                    break;
+                                }
+                                item.bytes = parse_required_size(request.fields, (prefix + "bytes").c_str(), ok, error);
+                                if (!ok) {
+                                    break;
+                                }
+                                item.root = parse_required_int(request.fields, (prefix + "root").c_str(), ok, error);
+                                if (!ok) {
+                                    break;
+                                }
+                                batch_request.operations.push_back(item);
+                            }
+
+                            if (!ok) {
+                                response = format_error_response("bad_request", error);
+                            } else {
+                                CollectiveBatchPrepareResult result =
+                                    communicator_registry_.prepare_collective_batch(batch_request);
+                                if (!result.ok) {
+                                    response = format_error_response(result.error_code, result.error_detail);
+                                } else {
+                                    response = format_ok_response({
+                                        {"comm_id", std::to_string(batch_request.comm_id)},
+                                        {"base_seqno", std::to_string(result.base_seqno)},
+                                        {"rank", std::to_string(batch_request.rank)},
+                                        {"op_count", std::to_string(batch_request.operations.size())},
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     } else if (request.command == "SHUTDOWN") {
         response = format_ok_response({
             {"status", "shutting_down"},

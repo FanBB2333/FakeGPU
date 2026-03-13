@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <unistd.h>
 
@@ -36,6 +37,19 @@ constexpr int kCoordinatorTimeoutMs = 1000;
 
 thread_local int g_group_depth = 0;
 thread_local std::string g_last_error;
+
+struct GroupCollectiveCall {
+    fake_gpu::distributed::CollectiveType type = fake_gpu::distributed::CollectiveType::AllReduce;
+    const void* sendbuff = nullptr;
+    void* recvbuff = nullptr;
+    std::size_t count = 0;
+    ncclDataType_t datatype = ncclFloat32;
+    fake_gpu::distributed::CollectiveReduceOp reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
+    int root = -1;
+    ncclComm_t comm = nullptr;
+};
+
+thread_local std::vector<GroupCollectiveCall> g_group_operations;
 
 void clear_last_error(ncclComm_t comm) {
     g_last_error.clear();
@@ -165,20 +179,29 @@ ncclResult_t map_response_error(const std::string& error_code) {
     }
     if (error_code == "duplicate_destroy" ||
         error_code == "duplicate_rank" ||
+        error_code == "duplicate_group_rank" ||
         error_code == "world_size_mismatch" ||
         error_code == "unknown_comm_id" ||
         error_code == "collective_type_mismatch" ||
+        error_code == "group_collective_type_mismatch" ||
         error_code == "dtype_mismatch" ||
+        error_code == "group_dtype_mismatch" ||
         error_code == "count_mismatch" ||
+        error_code == "group_count_mismatch" ||
         error_code == "root_mismatch" ||
+        error_code == "group_root_mismatch" ||
         error_code == "reduce_op_mismatch" ||
+        error_code == "group_reduce_op_mismatch" ||
         error_code == "bytes_mismatch" ||
+        error_code == "group_bytes_mismatch" ||
+        error_code == "group_size_mismatch" ||
         error_code == "duplicate_collective_rank" ||
         error_code == "duplicate_barrier_rank" ||
         error_code == "timeout_mismatch" ||
         error_code == "out_of_order_seqno" ||
         error_code == "stale_seqno" ||
         error_code == "rank_destroyed" ||
+        error_code == "empty_group" ||
         error_code == "unsupported_reduce_op" ||
         error_code == "unsupported_dtype" ||
         error_code == "unsupported_collective") {
@@ -187,6 +210,7 @@ ncclResult_t map_response_error(const std::string& error_code) {
     if (error_code == "timeout_waiting_for_ranks" ||
         error_code == "timeout_waiting_for_collective" ||
         error_code == "timeout_waiting_for_barrier" ||
+        error_code == "timeout_waiting_for_group" ||
         error_code == "staging_open_failed") {
         return ncclSystemError;
     }
@@ -214,6 +238,184 @@ bool validate_runtime_config(
         return false;
     }
     return true;
+}
+
+void clear_group_operations() {
+    g_group_operations.clear();
+}
+
+bool all_group_operations_share_comm(
+    const std::vector<GroupCollectiveCall>& operations,
+    ncclComm_t& comm) {
+    if (operations.empty()) {
+        comm = nullptr;
+        return true;
+    }
+    comm = operations.front().comm;
+    if (!comm) {
+        return false;
+    }
+    for (const GroupCollectiveCall& operation : operations) {
+        if (operation.comm != comm) {
+            return false;
+        }
+    }
+    return true;
+}
+
+ncclResult_t prepare_group_batch(
+    ncclComm_t comm,
+    const std::vector<GroupCollectiveCall>& operations) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "group contains a null communicator");
+    }
+    if (operations.empty()) {
+        clear_last_error(comm);
+        return ncclSuccess;
+    }
+
+    fake_gpu::distributed::DistributedConfig config;
+    std::string error;
+    if (!validate_runtime_config(comm, config, error)) {
+        return ncclInvalidUsage;
+    }
+
+    std::ostringstream request;
+    request << "GROUP_PREPARE"
+            << " comm_id=" << comm->comm_id
+            << " rank=" << comm->rank
+            << " base_seqno=" << comm->next_seqno
+            << " timeout_ms=" << kCoordinatorTimeoutMs
+            << " op_count=" << operations.size();
+
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+        const GroupCollectiveCall& operation = operations[index];
+        fake_gpu::distributed::CollectiveDataType mapped_dtype;
+        if (!map_dtype(operation.datatype, mapped_dtype)) {
+            return fail_with(comm, ncclInvalidArgument, "unsupported dtype in grouped collective");
+        }
+
+        const std::size_t bytes =
+            operation.count * fake_gpu::distributed::collective_data_type_size(mapped_dtype);
+        request << " op" << index << "_type="
+                << fake_gpu::distributed::collective_type_name(operation.type)
+                << " op" << index << "_dtype="
+                << fake_gpu::distributed::collective_data_type_name(mapped_dtype)
+                << " op" << index << "_count=" << operation.count
+                << " op" << index << "_root=" << operation.root
+                << " op" << index << "_reduce_op="
+                << fake_gpu::distributed::collective_reduce_op_name(operation.reduce_op)
+                << " op" << index << "_bytes=" << bytes;
+    }
+
+    fake_gpu::distributed::CoordinatorResponse response;
+    if (!fake_gpu::distributed::request_response_unix_socket(
+            config.coordinator_address,
+            request.str(),
+            response,
+            error)) {
+        return fail_with(comm, ncclSystemError, error);
+    }
+    if (!response.ok) {
+        return fail_with(
+            comm,
+            map_response_error(response.error_code),
+            response.error_detail.empty() ? response.error_code : response.error_detail);
+    }
+
+    int response_comm_id = -1;
+    std::uint64_t response_seqno = 0;
+    if (!parse_int_field(response, "comm_id", response_comm_id) ||
+        !parse_u64_field(response, "base_seqno", response_seqno) ||
+        response_comm_id != comm->comm_id ||
+        response_seqno != comm->next_seqno) {
+        return fail_with(comm, ncclInternalError, "group prepare response was inconsistent");
+    }
+
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t buffer_group_allreduce(
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    ncclRedOp_t op,
+    ncclComm_t comm) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (!sendbuff || !recvbuff) {
+        return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
+    }
+    if (count == 0) {
+        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+    }
+
+    fake_gpu::distributed::CollectiveReduceOp reduce_op;
+    if (!map_reduce_op(op, reduce_op)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
+    }
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(datatype, mapped_dtype)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+
+    GroupCollectiveCall call;
+    call.type = fake_gpu::distributed::CollectiveType::AllReduce;
+    call.sendbuff = sendbuff;
+    call.recvbuff = recvbuff;
+    call.count = count;
+    call.datatype = datatype;
+    call.reduce_op = reduce_op;
+    call.root = -1;
+    call.comm = comm;
+    g_group_operations.push_back(call);
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t buffer_group_broadcast(
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    int root,
+    ncclComm_t comm) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (!recvbuff) {
+        return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
+    }
+    if (comm->rank == root && !sendbuff) {
+        return fail_with(comm, ncclInvalidArgument, "root send buffer must not be null");
+    }
+    if (count == 0) {
+        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+    }
+    if (root < 0 || root >= comm->world_size) {
+        return fail_with(comm, ncclInvalidArgument, "broadcast root must be within [0, world_size)");
+    }
+
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(datatype, mapped_dtype)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+
+    GroupCollectiveCall call;
+    call.type = fake_gpu::distributed::CollectiveType::Broadcast;
+    call.sendbuff = sendbuff;
+    call.recvbuff = recvbuff;
+    call.count = count;
+    call.datatype = datatype;
+    call.reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
+    call.root = root;
+    call.comm = comm;
+    g_group_operations.push_back(call);
+    clear_last_error(comm);
+    return ncclSuccess;
 }
 
 ncclResult_t submit_collective(
@@ -364,6 +566,66 @@ ncclResult_t unsupported_step_api(ncclComm_t comm, const char* api, const char* 
         comm,
         ncclInvalidUsage,
         std::string(api) + " is not implemented yet; it is planned for " + step);
+}
+
+ncclResult_t flush_grouped_operations() {
+    if (g_group_operations.empty()) {
+        g_last_error.clear();
+        return ncclSuccess;
+    }
+
+    ncclComm_t comm = nullptr;
+    if (!all_group_operations_share_comm(g_group_operations, comm)) {
+        clear_group_operations();
+        return fail_with(nullptr, ncclInvalidUsage, "group currently requires all operations to use the same communicator");
+    }
+
+    ncclResult_t result = prepare_group_batch(comm, g_group_operations);
+    if (result != ncclSuccess) {
+        clear_group_operations();
+        return result;
+    }
+
+    for (const GroupCollectiveCall& operation : g_group_operations) {
+        if (operation.type == fake_gpu::distributed::CollectiveType::AllReduce) {
+            result = submit_collective(
+                "ALLREDUCE",
+                fake_gpu::distributed::CollectiveType::AllReduce,
+                operation.sendbuff,
+                operation.recvbuff,
+                operation.count,
+                operation.datatype,
+                operation.reduce_op,
+                -1,
+                operation.comm);
+        } else if (operation.type == fake_gpu::distributed::CollectiveType::Broadcast) {
+            const void* local_input = operation.recvbuff;
+            if (operation.comm->rank == operation.root) {
+                local_input = operation.sendbuff;
+            }
+            result = submit_collective(
+                "BROADCAST",
+                fake_gpu::distributed::CollectiveType::Broadcast,
+                local_input,
+                operation.recvbuff,
+                operation.count,
+                operation.datatype,
+                fake_gpu::distributed::CollectiveReduceOp::None,
+                operation.root,
+                operation.comm);
+        } else {
+            result = fail_with(operation.comm, ncclInvalidUsage, "unsupported grouped collective");
+        }
+
+        if (result != ncclSuccess) {
+            clear_group_operations();
+            return result;
+        }
+    }
+
+    clear_group_operations();
+    clear_last_error(comm);
+    return ncclSuccess;
 }
 
 }  // namespace
@@ -705,6 +967,9 @@ ncclResult_t ncclBroadcast(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
+    if (g_group_depth > 0) {
+        return buffer_group_broadcast(sendbuff, recvbuff, count, datatype, root, comm);
+    }
     const void* local_input = recvbuff;
     if (comm->rank == root) {
         local_input = sendbuff;
@@ -729,6 +994,9 @@ ncclResult_t ncclAllReduce(
     ncclRedOp_t op,
     ncclComm_t comm,
     cudaStream_t /*stream*/) {
+    if (g_group_depth > 0) {
+        return buffer_group_allreduce(sendbuff, recvbuff, count, datatype, op, comm);
+    }
     fake_gpu::distributed::CollectiveReduceOp reduce_op;
     if (!map_reduce_op(op, reduce_op)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
@@ -796,8 +1064,10 @@ ncclResult_t ncclGroupEnd(void) {
     if (g_group_depth > 0) {
         --g_group_depth;
     }
-    g_last_error.clear();
-    return ncclSuccess;
+    if (g_group_depth > 0) {
+        return ncclSuccess;
+    }
+    return flush_grouped_operations();
 }
 
 ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* sim_info) {
@@ -807,6 +1077,7 @@ ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* sim_info) {
     if (g_group_depth > 0) {
         --g_group_depth;
     }
+    clear_group_operations();
     g_last_error.clear();
     return ncclSuccess;
 }

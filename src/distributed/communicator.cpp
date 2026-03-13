@@ -34,6 +34,16 @@ struct BarrierState {
     std::condition_variable cv;
 };
 
+struct BatchState {
+    CollectiveBatchPrepareRequest request;
+    bool completed = false;
+    bool failed = false;
+    std::string failure_code;
+    std::string failure_detail;
+    std::unordered_map<int, CollectiveBatchPrepareRequest> participants;
+    std::condition_variable cv;
+};
+
 struct CommunicatorState {
     std::string unique_id;
     int world_size = 0;
@@ -47,6 +57,7 @@ struct CommunicatorState {
     std::unordered_map<int, bool> destroyed_ranks;
     std::unordered_map<std::uint64_t, std::shared_ptr<CollectiveState>> collectives;
     std::unordered_map<std::uint64_t, std::shared_ptr<BarrierState>> barriers;
+    std::unordered_map<std::uint64_t, std::shared_ptr<BatchState>> batches;
     std::condition_variable cv;
 };
 
@@ -88,6 +99,14 @@ CollectiveSubmitResult make_collective_error(std::string code, std::string detai
 
 BarrierSubmitResult make_barrier_error(std::string code, std::string detail) {
     BarrierSubmitResult result;
+    result.ok = false;
+    result.error_code = std::move(code);
+    result.error_detail = std::move(detail);
+    return result;
+}
+
+CollectiveBatchPrepareResult make_batch_error(std::string code, std::string detail) {
+    CollectiveBatchPrepareResult result;
     result.ok = false;
     result.error_code = std::move(code);
     result.error_detail = std::move(detail);
@@ -140,6 +159,23 @@ void fail_barrier_locked(
     }
 }
 
+void fail_batch_locked(
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::shared_ptr<BatchState>& batch,
+    std::string code,
+    std::string detail) {
+    state->failed = true;
+    state->failure_code = std::move(code);
+    state->failure_detail = std::move(detail);
+    if (batch) {
+        batch->failed = true;
+        batch->failure_code = state->failure_code;
+        batch->failure_detail = state->failure_detail;
+        batch->cv.notify_all();
+        state->batches.erase(batch->request.base_seqno);
+    }
+}
+
 bool collective_requests_match(
     const CollectiveSubmitRequest& expected,
     const CollectiveSubmitRequest& actual,
@@ -186,6 +222,85 @@ bool collective_requests_match(
             "expected bytes=" + std::to_string(expected.bytes) +
             ", got " + std::to_string(actual.bytes);
         return false;
+    }
+    return true;
+}
+
+bool batch_items_match(
+    const CollectiveBatchPlanItem& expected,
+    const CollectiveBatchPlanItem& actual,
+    std::string& error_code,
+    std::string& error_detail,
+    std::size_t index) {
+    if (expected.type != actual.type) {
+        error_code = "group_collective_type_mismatch";
+        error_detail =
+            "group op " + std::to_string(index) + " expected " +
+            collective_type_name(expected.type) + ", got " +
+            collective_type_name(actual.type);
+        return false;
+    }
+    if (expected.dtype != actual.dtype) {
+        error_code = "group_dtype_mismatch";
+        error_detail =
+            "group op " + std::to_string(index) + " expected " +
+            collective_data_type_name(expected.dtype) + ", got " +
+            collective_data_type_name(actual.dtype);
+        return false;
+    }
+    if (expected.count != actual.count) {
+        error_code = "group_count_mismatch";
+        error_detail =
+            "group op " + std::to_string(index) + " expected count=" +
+            std::to_string(expected.count) + ", got " + std::to_string(actual.count);
+        return false;
+    }
+    if (expected.root != actual.root) {
+        error_code = "group_root_mismatch";
+        error_detail =
+            "group op " + std::to_string(index) + " expected root=" +
+            std::to_string(expected.root) + ", got " + std::to_string(actual.root);
+        return false;
+    }
+    if (expected.reduce_op != actual.reduce_op) {
+        error_code = "group_reduce_op_mismatch";
+        error_detail =
+            "group op " + std::to_string(index) + " expected reduce_op=" +
+            collective_reduce_op_name(expected.reduce_op) + ", got " +
+            collective_reduce_op_name(actual.reduce_op);
+        return false;
+    }
+    if (expected.bytes != actual.bytes) {
+        error_code = "group_bytes_mismatch";
+        error_detail =
+            "group op " + std::to_string(index) + " expected bytes=" +
+            std::to_string(expected.bytes) + ", got " + std::to_string(actual.bytes);
+        return false;
+    }
+    return true;
+}
+
+bool batch_requests_match(
+    const CollectiveBatchPrepareRequest& expected,
+    const CollectiveBatchPrepareRequest& actual,
+    std::string& error_code,
+    std::string& error_detail) {
+    if (expected.operations.empty()) {
+        error_code = "empty_group";
+        error_detail = "group must contain at least one operation";
+        return false;
+    }
+    if (expected.operations.size() != actual.operations.size()) {
+        error_code = "group_size_mismatch";
+        error_detail =
+            "expected group size=" + std::to_string(expected.operations.size()) +
+            ", got " + std::to_string(actual.operations.size());
+        return false;
+    }
+    for (std::size_t index = 0; index < expected.operations.size(); ++index) {
+        if (!batch_items_match(expected.operations[index], actual.operations[index], error_code, error_detail, index)) {
+            return false;
+        }
     }
     return true;
 }
@@ -567,6 +682,123 @@ BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequ
     state->barriers.erase(request.seqno);
     barrier->cv.notify_all();
     return BarrierSubmitResult{true, request.seqno, "", ""};
+}
+
+CollectiveBatchPrepareResult CommunicatorRegistry::prepare_collective_batch(
+    const CollectiveBatchPrepareRequest& request) {
+    if (request.comm_id <= 0) {
+        return make_batch_error("invalid_comm_id", "comm_id must be > 0");
+    }
+    if (request.rank < 0) {
+        return make_batch_error("invalid_rank", "rank must be >= 0");
+    }
+    if (request.base_seqno == 0) {
+        return make_batch_error("invalid_seqno", "base_seqno must be > 0");
+    }
+    if (request.timeout_ms <= 0) {
+        return make_batch_error("invalid_timeout", "timeout_ms must be > 0");
+    }
+    if (request.operations.empty()) {
+        return make_batch_error("empty_group", "group must contain at least one operation");
+    }
+
+    RegistryImpl& registry = registry_impl();
+    std::shared_ptr<CommunicatorState> state;
+    std::shared_ptr<BatchState> batch;
+
+    std::unique_lock<std::mutex> lock(registry.mutex);
+    auto it = registry.active_by_comm_id.find(request.comm_id);
+    if (it == registry.active_by_comm_id.end()) {
+        return make_batch_error("unknown_comm_id", "communicator not found");
+    }
+
+    state = it->second;
+    if (state->participants.find(request.rank) == state->participants.end()) {
+        return make_batch_error("unknown_rank", "rank is not a member of this communicator");
+    }
+    if (state->destroyed_ranks.find(request.rank) != state->destroyed_ranks.end()) {
+        return make_batch_error("rank_destroyed", "rank already destroyed this communicator");
+    }
+    if (state->failed) {
+        return make_batch_error(state->failure_code, state->failure_detail);
+    }
+    if (request.rank >= state->world_size) {
+        return make_batch_error("invalid_rank", "rank must be within [0, world_size)");
+    }
+
+    if (request.base_seqno != state->next_seqno) {
+        if (request.base_seqno < state->next_seqno) {
+            return make_batch_error(
+                "stale_seqno",
+                "expected seqno " + std::to_string(state->next_seqno) +
+                    ", got " + std::to_string(request.base_seqno));
+        }
+        return make_batch_error(
+            "out_of_order_seqno",
+            "expected seqno " + std::to_string(state->next_seqno) +
+                ", got " + std::to_string(request.base_seqno));
+    }
+
+    auto batch_it = state->batches.find(request.base_seqno);
+    if (batch_it == state->batches.end()) {
+        batch = std::make_shared<BatchState>();
+        batch->request = request;
+        state->batches.emplace(request.base_seqno, batch);
+    } else {
+        batch = batch_it->second;
+    }
+
+    if (batch->request.timeout_ms != request.timeout_ms) {
+        fail_batch_locked(
+            state,
+            batch,
+            "timeout_mismatch",
+            "group timeout mismatch: expected timeout_ms=" +
+                std::to_string(batch->request.timeout_ms) + ", got " +
+                std::to_string(request.timeout_ms));
+        return make_batch_error(state->failure_code, state->failure_detail);
+    }
+
+    std::string error_code;
+    std::string error_detail;
+    if (!batch_requests_match(batch->request, request, error_code, error_detail)) {
+        fail_batch_locked(state, batch, std::move(error_code), std::move(error_detail));
+        return make_batch_error(state->failure_code, state->failure_detail);
+    }
+
+    if (!batch->participants.emplace(request.rank, request).second) {
+        fail_batch_locked(
+            state,
+            batch,
+            "duplicate_group_rank",
+            "rank already submitted this group base_seqno");
+        return make_batch_error(state->failure_code, state->failure_detail);
+    }
+
+    if (static_cast<int>(batch->participants.size()) != state->world_size) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.timeout_ms);
+        while (!batch->completed && !batch->failed && !state->failed) {
+            if (batch->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                fail_batch_locked(
+                    state,
+                    batch,
+                    "timeout_waiting_for_group",
+                    "timeout waiting for all ranks to join group base_seqno " +
+                        std::to_string(request.base_seqno));
+                return make_batch_error(state->failure_code, state->failure_detail);
+            }
+        }
+
+        if (batch->completed) {
+            return CollectiveBatchPrepareResult{true, request.base_seqno, "", ""};
+        }
+        return make_batch_error(state->failure_code, state->failure_detail);
+    }
+
+    batch->completed = true;
+    state->batches.erase(request.base_seqno);
+    batch->cv.notify_all();
+    return CollectiveBatchPrepareResult{true, request.base_seqno, "", ""};
 }
 
 }  // namespace fake_gpu::distributed

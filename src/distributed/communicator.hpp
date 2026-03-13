@@ -57,6 +57,30 @@ struct BarrierSubmitResult {
     std::string error_detail;
 };
 
+struct CollectiveBatchPlanItem {
+    CollectiveType type = CollectiveType::AllReduce;
+    CollectiveDataType dtype = CollectiveDataType::Float32;
+    std::size_t count = 0;
+    int root = -1;
+    CollectiveReduceOp reduce_op = CollectiveReduceOp::None;
+    std::size_t bytes = 0;
+};
+
+struct CollectiveBatchPrepareRequest {
+    int comm_id = -1;
+    int rank = -1;
+    std::uint64_t base_seqno = 0;
+    int timeout_ms = 0;
+    std::vector<CollectiveBatchPlanItem> operations;
+};
+
+struct CollectiveBatchPrepareResult {
+    bool ok = false;
+    std::uint64_t base_seqno = 0;
+    std::string error_code;
+    std::string error_detail;
+};
+
 class CommunicatorRegistry {
 public:
     CommunicatorRegistrationResult init_communicator(
@@ -68,6 +92,7 @@ public:
     CommunicatorDestroyResult destroy_communicator(int comm_id, int rank);
     CollectiveSubmitResult submit_collective(const CollectiveSubmitRequest& request);
     BarrierSubmitResult submit_barrier(const BarrierSubmitRequest& request);
+    CollectiveBatchPrepareResult prepare_collective_batch(const CollectiveBatchPrepareRequest& request);
 };
 
 }  // namespace fake_gpu::distributed

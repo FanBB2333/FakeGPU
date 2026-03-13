@@ -291,3 +291,9 @@ add_executable(fakegpu_collective_direct_test
 )
 target_include_directories(fakegpu_collective_direct_test PRIVATE src/nccl src/distributed)
 target_link_libraries(fakegpu_collective_direct_test PRIVATE fake_nccl fake_gpu Threads::Threads)
+
+add_executable(fakegpu_group_semantics_test
+    verification/test_group_semantics_main.cpp
+)
+target_include_directories(fakegpu_group_semantics_test PRIVATE src/nccl src/distributed)
+target_link_libraries(fakegpu_group_semantics_test PRIVATE fake_nccl fake_gpu Threads::Threads)
