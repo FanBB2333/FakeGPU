@@ -285,3 +285,9 @@ add_executable(fakegpu_staging_buffer_probe
 )
 target_include_directories(fakegpu_staging_buffer_probe PRIVATE src/distributed)
 target_link_libraries(fakegpu_staging_buffer_probe PRIVATE fake_gpu Threads::Threads)
+
+add_executable(fakegpu_collective_direct_test
+    verification/test_collective_direct.cpp
+)
+target_include_directories(fakegpu_collective_direct_test PRIVATE src/nccl src/distributed)
+target_link_libraries(fakegpu_collective_direct_test PRIVATE fake_nccl fake_gpu Threads::Threads)
