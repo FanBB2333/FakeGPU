@@ -3,6 +3,7 @@
 #include <string>
 #include <cstdlib>
 #include <cstring>
+#include "../distributed/cluster_config.hpp"
 
 namespace fake_gpu {
 
@@ -31,6 +32,10 @@ public:
 
     FakeGpuMode mode() const { return mode_; }
     OomPolicy oom_policy() const { return oom_policy_; }
+    const distributed::DistributedConfig& distributed_config() const { return distributed_config_; }
+    bool distributed_enabled() const { return distributed_config_.enabled(); }
+    bool has_configuration_error() const { return !configuration_error_.empty(); }
+    const std::string& configuration_error() const { return configuration_error_; }
 
     // Real library paths (can be overridden via env vars)
     const std::string& real_cuda_lib_dir() const { return real_cuda_lib_dir_; }
@@ -91,6 +96,11 @@ private:
         // Parse library paths
         if (const char* dir = std::getenv("FAKEGPU_REAL_CUDA_LIB_DIR")) {
             real_cuda_lib_dir_ = dir;
+        }
+
+        distributed_config_ = distributed::parse_distributed_config_from_env();
+        if (!distributed_config_.valid()) {
+            configuration_error_ = distributed_config_.validation_error;
         }
 
         // Try to find real library paths
@@ -195,6 +205,8 @@ private:
     std::string real_cuda_driver_path_;
     std::string real_cublas_path_;
     std::string real_nvml_path_;
+    distributed::DistributedConfig distributed_config_;
+    std::string configuration_error_;
 };
 
 // Helper function to get mode name

@@ -1,0 +1,23 @@
+version: 1
+cluster:
+  name: broken-cluster
+  default_backend: nccl
+
+nodes:
+  - id: node0
+    host: 127.0.0.1
+    ranks: [0, 2]
+    gpus:
+      - profile: a100
+      - profile: a100
+
+fabric:
+  intra_node:
+    type: nvlink
+    bandwidth_gbps: 300
+    latency_us: 3
+
+  inter_node:
+    type: infiniband
+    bandwidth_gbps: 200
+    latency_us: 15

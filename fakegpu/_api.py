@@ -104,6 +104,10 @@ def init(
     lib_dir: str | os.PathLike[str] | None = None,
     mode: str | None = None,
     oom_policy: str | None = None,
+    dist_mode: str | None = None,
+    cluster_config: str | os.PathLike[str] | None = None,
+    coordinator_addr: str | None = None,
+    coordinator_transport: str | None = None,
     profile: str | None = None,
     device_count: int | None = None,
     devices: str | Sequence[str] | None = None,
@@ -132,12 +136,26 @@ def init(
                 resolved_dir,
                 mode=mode,
                 oom_policy=oom_policy,
+                dist_mode=dist_mode,
+                cluster_config=cluster_config,
+                coordinator_addr=coordinator_addr,
+                coordinator_transport=coordinator_transport,
                 profile=profile,
                 device_count=device_count,
                 devices=devices,
             )
         else:
-            _apply_config_env_inplace(mode=mode, oom_policy=oom_policy, profile=profile, device_count=device_count, devices=devices)
+            _apply_config_env_inplace(
+                mode=mode,
+                oom_policy=oom_policy,
+                dist_mode=dist_mode,
+                cluster_config=cluster_config,
+                coordinator_addr=coordinator_addr,
+                coordinator_transport=coordinator_transport,
+                profile=profile,
+                device_count=device_count,
+                devices=devices,
+            )
 
         dlopen_mode = ctypes.RTLD_GLOBAL
         if hasattr(os, "RTLD_NOW"):
@@ -168,6 +186,10 @@ def env(
     lib_dir: str | os.PathLike[str] | None = None,
     mode: str | None = None,
     oom_policy: str | None = None,
+    dist_mode: str | None = None,
+    cluster_config: str | os.PathLike[str] | None = None,
+    coordinator_addr: str | None = None,
+    coordinator_transport: str | None = None,
     profile: str | None = None,
     device_count: int | None = None,
     devices: str | Sequence[str] | None = None,
@@ -188,6 +210,10 @@ def env(
         env_map,
         mode=mode,
         oom_policy=oom_policy,
+        dist_mode=dist_mode,
+        cluster_config=cluster_config,
+        coordinator_addr=coordinator_addr,
+        coordinator_transport=coordinator_transport,
         profile=profile,
         device_count=device_count,
         devices=devices,
@@ -203,6 +229,10 @@ def run(
     lib_dir: str | os.PathLike[str] | None = None,
     mode: str | None = None,
     oom_policy: str | None = None,
+    dist_mode: str | None = None,
+    cluster_config: str | os.PathLike[str] | None = None,
+    coordinator_addr: str | None = None,
+    coordinator_transport: str | None = None,
     profile: str | None = None,
     device_count: int | None = None,
     devices: str | Sequence[str] | None = None,
@@ -220,6 +250,10 @@ def run(
             lib_dir=lib_dir,
             mode=mode,
             oom_policy=oom_policy,
+            dist_mode=dist_mode,
+            cluster_config=cluster_config,
+            coordinator_addr=coordinator_addr,
+            coordinator_transport=coordinator_transport,
             profile=profile,
             device_count=device_count,
             devices=devices,
@@ -276,6 +310,10 @@ def _apply_env_inplace(
     *,
     mode: str | None,
     oom_policy: str | None,
+    dist_mode: str | None,
+    cluster_config: str | os.PathLike[str] | None,
+    coordinator_addr: str | None,
+    coordinator_transport: str | None,
     profile: str | None,
     device_count: int | None,
     devices: str | Sequence[str] | None,
@@ -284,6 +322,10 @@ def _apply_env_inplace(
         lib_dir=resolved_dir,
         mode=mode,
         oom_policy=oom_policy,
+        dist_mode=dist_mode,
+        cluster_config=cluster_config,
+        coordinator_addr=coordinator_addr,
+        coordinator_transport=coordinator_transport,
         profile=profile,
         device_count=device_count,
         devices=devices,
@@ -292,10 +334,30 @@ def _apply_env_inplace(
     os.environ.update(updated)
 
 def _apply_config_env_inplace(
-    *, mode: str | None, oom_policy: str | None, profile: str | None, device_count: int | None, devices: str | Sequence[str] | None
+    *,
+    mode: str | None,
+    oom_policy: str | None,
+    dist_mode: str | None,
+    cluster_config: str | os.PathLike[str] | None,
+    coordinator_addr: str | None,
+    coordinator_transport: str | None,
+    profile: str | None,
+    device_count: int | None,
+    devices: str | Sequence[str] | None,
 ) -> None:
     updated = dict(os.environ)
-    _apply_config_env(updated, mode=mode, oom_policy=oom_policy, profile=profile, device_count=device_count, devices=devices)
+    _apply_config_env(
+        updated,
+        mode=mode,
+        oom_policy=oom_policy,
+        dist_mode=dist_mode,
+        cluster_config=cluster_config,
+        coordinator_addr=coordinator_addr,
+        coordinator_transport=coordinator_transport,
+        profile=profile,
+        device_count=device_count,
+        devices=devices,
+    )
     os.environ.update(updated)
 
 
@@ -304,6 +366,10 @@ def _apply_config_env(
     *,
     mode: str | None,
     oom_policy: str | None,
+    dist_mode: str | None,
+    cluster_config: str | os.PathLike[str] | None,
+    coordinator_addr: str | None,
+    coordinator_transport: str | None,
     profile: str | None,
     device_count: int | None,
     devices: str | Sequence[str] | None,
@@ -313,6 +379,18 @@ def _apply_config_env(
 
     if oom_policy is not None:
         env_map["FAKEGPU_OOM_POLICY"] = str(oom_policy)
+
+    if dist_mode is not None:
+        env_map["FAKEGPU_DIST_MODE"] = str(dist_mode)
+
+    if cluster_config is not None:
+        env_map["FAKEGPU_CLUSTER_CONFIG"] = os.fspath(cluster_config)
+
+    if coordinator_addr is not None:
+        env_map["FAKEGPU_COORDINATOR_ADDR"] = str(coordinator_addr)
+
+    if coordinator_transport is not None:
+        env_map["FAKEGPU_COORDINATOR_TRANSPORT"] = str(coordinator_transport)
 
     if device_count is not None:
         if int(device_count) <= 0:

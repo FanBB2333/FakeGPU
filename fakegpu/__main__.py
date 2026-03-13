@@ -23,6 +23,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Hybrid OOM policy. Equivalent to setting $FAKEGPU_OOM_POLICY.",
     )
     parser.add_argument(
+        "--dist-mode",
+        choices=["disabled", "simulate", "proxy", "passthrough"],
+        help="Distributed communication mode. Equivalent to setting $FAKEGPU_DIST_MODE.",
+    )
+    parser.add_argument(
+        "--cluster-config",
+        help="Path to a cluster topology config. Equivalent to setting $FAKEGPU_CLUSTER_CONFIG.",
+    )
+    parser.add_argument(
+        "--coordinator-addr",
+        help="Coordinator endpoint, e.g. 127.0.0.1:29591. Equivalent to setting $FAKEGPU_COORDINATOR_ADDR.",
+    )
+    parser.add_argument(
+        "--coordinator-transport",
+        choices=["tcp", "unix"],
+        help="Coordinator transport. Equivalent to setting $FAKEGPU_COORDINATOR_TRANSPORT.",
+    )
+    parser.add_argument(
         "--build-dir",
         help="Path to a FakeGPU CMake build directory containing the shared libraries (default: $FAKEGPU_BUILD_DIR or ./build).",
     )
@@ -58,6 +76,10 @@ def main(argv: list[str] | None = None) -> int:
         lib_dir=ns.lib_dir,
         mode=ns.mode,
         oom_policy=ns.oom_policy,
+        dist_mode=ns.dist_mode,
+        cluster_config=ns.cluster_config,
+        coordinator_addr=ns.coordinator_addr,
+        coordinator_transport=ns.coordinator_transport,
         profile=ns.profile,
         device_count=ns.device_count,
         devices=ns.devices,

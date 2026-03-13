@@ -111,6 +111,7 @@ add_subdirectory(src/core)
 add_subdirectory(src/nvml)
 add_subdirectory(src/cuda)
 add_subdirectory(src/monitor)
+add_subdirectory(src/distributed)
 
 # Main Shared Library for NVML
 # We link the OBJECT libraries from subdirectories to create one single shared library
@@ -119,6 +120,7 @@ add_library(fake_gpu SHARED
     $<TARGET_OBJECTS:fake_gpu_nvml>
     $<TARGET_OBJECTS:fake_gpu_cuda>
     $<TARGET_OBJECTS:fake_gpu_monitor>
+    $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 
 # Link dl library for dlopen/dlsym interception
@@ -130,6 +132,7 @@ add_library(fake_cuda SHARED
     $<TARGET_OBJECTS:fake_gpu_core>
     $<TARGET_OBJECTS:fake_gpu_cuda>
     $<TARGET_OBJECTS:fake_gpu_monitor>
+    $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 target_link_libraries(fake_cuda PRIVATE ${CMAKE_DL_LIBS})
 
@@ -141,6 +144,7 @@ add_library(fake_cudart SHARED
     src/cuda/cuda_driver_stubs.cpp
     $<TARGET_OBJECTS:fake_gpu_core>
     $<TARGET_OBJECTS:fake_gpu_monitor>
+    $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 target_link_libraries(fake_cudart PRIVATE ${CMAKE_DL_LIBS})
 target_include_directories(fake_cudart PRIVATE src/cuda src/core)
@@ -152,6 +156,7 @@ add_library(fake_cublas SHARED
     src/cublas/cublas_stubs.cpp
     $<TARGET_OBJECTS:fake_gpu_core>
     $<TARGET_OBJECTS:fake_gpu_monitor>
+    $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 target_link_libraries(fake_cublas PRIVATE ${CMAKE_DL_LIBS})
 target_include_directories(fake_cublas PRIVATE src/cublas src/core)
@@ -223,3 +228,10 @@ else()
         SOVERSION "12"
     )
 endif()
+
+add_executable(fakegpu_config_probe
+    verification/test_cluster_config_main.cpp
+    $<TARGET_OBJECTS:fake_gpu_core>
+    $<TARGET_OBJECTS:fake_gpu_distributed>
+)
+target_include_directories(fakegpu_config_probe PRIVATE src/core src/distributed)
