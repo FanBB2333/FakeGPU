@@ -336,6 +336,43 @@ void ClusterCoordinator::handle_client(int client_fd) {
                 }
             }
         }
+    } else if (request.command == "BARRIER") {
+        BarrierSubmitRequest barrier_request;
+        bool ok = false;
+        std::string error;
+
+        barrier_request.comm_id = parse_required_int(request.fields, "comm_id", ok, error);
+        if (!ok) {
+            response = format_error_response("bad_request", error);
+        } else {
+            barrier_request.rank = parse_required_int(request.fields, "rank", ok, error);
+            if (!ok) {
+                response = format_error_response("bad_request", error);
+            } else {
+                barrier_request.seqno = parse_required_u64(request.fields, "seqno", ok, error);
+                if (!ok) {
+                    response = format_error_response("bad_request", error);
+                } else {
+                    barrier_request.timeout_ms = parse_required_int(request.fields, "timeout_ms", ok, error);
+                    if (!ok) {
+                        response = format_error_response("bad_request", error);
+                    } else {
+                        BarrierSubmitResult result =
+                            communicator_registry_.submit_barrier(barrier_request);
+                        if (!result.ok) {
+                            response = format_error_response(result.error_code, result.error_detail);
+                        } else {
+                            response = format_ok_response({
+                                {"comm_id", std::to_string(barrier_request.comm_id)},
+                                {"seqno", std::to_string(result.seqno)},
+                                {"rank", std::to_string(barrier_request.rank)},
+                                {"op", "barrier"},
+                            });
+                        }
+                    }
+                }
+            }
+        }
     } else if (request.command == "SHUTDOWN") {
         response = format_ok_response({
             {"status", "shutting_down"},
