@@ -8,10 +8,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 #include <sstream>
 #include <string>
+#include <utility>
 
 #include <unistd.h>
 
@@ -19,19 +21,56 @@ struct ncclComm {
     int comm_id = -1;
     int world_size = 0;
     int rank = -1;
+    int device = -1;
     std::uint64_t next_seqno = 1;
     bool destroyed = false;
+    bool finalized = false;
+    ncclResult_t async_error = ncclSuccess;
+    std::string last_error;
 };
 
 namespace {
 
-constexpr int kFakeNcclVersion = 29000;
+constexpr int kFakeNcclVersion = NCCL_VERSION_CODE;
 constexpr int kCoordinatorTimeoutMs = 1000;
+
+thread_local int g_group_depth = 0;
+thread_local std::string g_last_error;
+
+void clear_last_error(ncclComm_t comm) {
+    g_last_error.clear();
+    if (comm) {
+        comm->last_error.clear();
+        comm->async_error = ncclSuccess;
+    }
+}
+
+ncclResult_t fail_with(ncclComm_t comm, ncclResult_t result, std::string message) {
+    g_last_error = message;
+    if (comm) {
+        comm->last_error = std::move(message);
+        if (result != ncclSuccess && result != ncclInProgress) {
+            comm->async_error = result;
+        }
+    }
+    return result;
+}
 
 std::string unique_id_to_token(const ncclUniqueId& unique_id) {
     const char* begin = unique_id.internal;
     const char* end = std::find(begin, begin + NCCL_UNIQUE_ID_BYTES, '\0');
     return std::string(begin, end);
+}
+
+int infer_device_for_rank(int rank) {
+    const char* local_rank = std::getenv("LOCAL_RANK");
+    if (local_rank && *local_rank) {
+        try {
+            return std::stoi(local_rank);
+        } catch (...) {
+        }
+    }
+    return rank;
 }
 
 bool parse_int_field(
@@ -75,8 +114,16 @@ bool map_dtype(
         out = fake_gpu::distributed::CollectiveDataType::Int32;
         return true;
     }
+    if (datatype == ncclInt64) {
+        out = fake_gpu::distributed::CollectiveDataType::Int64;
+        return true;
+    }
     if (datatype == ncclFloat32 || datatype == ncclFloat) {
         out = fake_gpu::distributed::CollectiveDataType::Float32;
+        return true;
+    }
+    if (datatype == ncclFloat64 || datatype == ncclDouble) {
+        out = fake_gpu::distributed::CollectiveDataType::Float64;
         return true;
     }
     return false;
@@ -98,8 +145,9 @@ bool map_reduce_op(
         case ncclMin:
             out = fake_gpu::distributed::CollectiveReduceOp::Min;
             return true;
+        default:
+            return false;
     }
-    return false;
 }
 
 ncclResult_t map_response_error(const std::string& error_code) {
@@ -111,7 +159,8 @@ ncclResult_t map_response_error(const std::string& error_code) {
         error_code == "invalid_count" ||
         error_code == "invalid_bytes" ||
         error_code == "invalid_comm_id" ||
-        error_code == "invalid_seqno") {
+        error_code == "invalid_seqno" ||
+        error_code == "invalid_timeout") {
         return ncclInvalidArgument;
     }
     if (error_code == "duplicate_destroy" ||
@@ -125,6 +174,8 @@ ncclResult_t map_response_error(const std::string& error_code) {
         error_code == "reduce_op_mismatch" ||
         error_code == "bytes_mismatch" ||
         error_code == "duplicate_collective_rank" ||
+        error_code == "duplicate_barrier_rank" ||
+        error_code == "timeout_mismatch" ||
         error_code == "out_of_order_seqno" ||
         error_code == "stale_seqno" ||
         error_code == "rank_destroyed" ||
@@ -135,6 +186,7 @@ ncclResult_t map_response_error(const std::string& error_code) {
     }
     if (error_code == "timeout_waiting_for_ranks" ||
         error_code == "timeout_waiting_for_collective" ||
+        error_code == "timeout_waiting_for_barrier" ||
         error_code == "staging_open_failed") {
         return ncclSystemError;
     }
@@ -152,6 +204,18 @@ std::string make_staging_name(
            "-p" + std::to_string(static_cast<long long>(::getpid()));
 }
 
+bool validate_runtime_config(
+    ncclComm_t comm,
+    fake_gpu::distributed::DistributedConfig& config,
+    std::string& error) {
+    config = fake_gpu::BackendConfig::instance().distributed_config();
+    if (!fake_gpu::nccl::validate_direct_init_config(config, error)) {
+        fail_with(comm, ncclInvalidUsage, error);
+        return false;
+    }
+    return true;
+}
+
 ncclResult_t submit_collective(
     const char* command,
     fake_gpu::distributed::CollectiveType collective_type,
@@ -163,30 +227,29 @@ ncclResult_t submit_collective(
     int root,
     ncclComm_t comm) {
     if (!comm) {
-        return ncclInvalidArgument;
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
     if (comm->destroyed) {
-        return ncclInvalidUsage;
+        return fail_with(comm, ncclInvalidUsage, "communicator is already destroyed");
     }
     if (!local_input || !recvbuff) {
-        return ncclInvalidArgument;
+        return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
     if (count == 0) {
-        return ncclInvalidArgument;
+        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
     }
 
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(datatype, mapped_dtype)) {
-        return ncclInvalidArgument;
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
 
     const std::size_t dtype_size = fake_gpu::distributed::collective_data_type_size(mapped_dtype);
     const std::size_t bytes = count * dtype_size;
 
-    const fake_gpu::distributed::DistributedConfig& config =
-        fake_gpu::BackendConfig::instance().distributed_config();
+    fake_gpu::distributed::DistributedConfig config;
     std::string error;
-    if (!fake_gpu::nccl::validate_direct_init_config(config, error)) {
+    if (!validate_runtime_config(comm, config, error)) {
         return ncclInvalidUsage;
     }
 
@@ -204,7 +267,7 @@ ncclResult_t submit_collective(
     fake_gpu::distributed::StagingBufferManager manager;
     fake_gpu::distributed::StagingBufferHandle handle;
     if (!manager.create(metadata, true, handle, error)) {
-        return ncclSystemError;
+        return fail_with(comm, ncclSystemError, error);
     }
 
     std::memcpy(handle.data(), local_input, bytes);
@@ -228,10 +291,13 @@ ncclResult_t submit_collective(
             request.str(),
             response,
             error)) {
-        return ncclSystemError;
+        return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
-        return map_response_error(response.error_code);
+        return fail_with(
+            comm,
+            map_response_error(response.error_code),
+            response.error_detail.empty() ? response.error_code : response.error_detail);
     }
 
     int response_comm_id = -1;
@@ -240,12 +306,64 @@ ncclResult_t submit_collective(
         !parse_u64_field(response, "seqno", response_seqno) ||
         response_comm_id != comm->comm_id ||
         response_seqno != seqno) {
-        return ncclInternalError;
+        return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent response");
     }
 
     std::memcpy(recvbuff, handle.data(), bytes);
     comm->next_seqno++;
+    clear_last_error(comm);
     return ncclSuccess;
+}
+
+ncclResult_t do_destroy(ncclComm_t comm, bool allow_missing) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (comm->destroyed) {
+        return allow_missing ? ncclSuccess : fail_with(comm, ncclInvalidUsage, "communicator is already destroyed");
+    }
+
+    fake_gpu::distributed::DistributedConfig config;
+    std::string error;
+    if (comm->comm_id > 0 && validate_runtime_config(comm, config, error)) {
+        std::ostringstream request;
+        request << "DESTROY_COMM"
+                << " comm_id=" << comm->comm_id
+                << " rank=" << comm->rank;
+
+        fake_gpu::distributed::CoordinatorResponse response;
+        if (!fake_gpu::distributed::request_response_unix_socket(
+                config.coordinator_address,
+                request.str(),
+                response,
+                error)) {
+            if (!allow_missing) {
+                return fail_with(comm, ncclSystemError, error);
+            }
+        } else if (!response.ok &&
+                   !(allow_missing && response.error_code == "unknown_comm_id")) {
+            if (!allow_missing) {
+                return fail_with(
+                    comm,
+                    map_response_error(response.error_code),
+                    response.error_detail.empty() ? response.error_code : response.error_detail);
+            }
+        }
+    } else if (!allow_missing) {
+        return ncclInvalidUsage;
+    }
+
+    comm->destroyed = true;
+    comm->finalized = true;
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t unsupported_step_api(ncclComm_t comm, const char* api, const char* step) {
+    return fail_with(
+        comm,
+        ncclInvalidUsage,
+        std::string(api) + " is not implemented yet; it is planned for " + step);
 }
 
 }  // namespace
@@ -266,21 +384,53 @@ const char* ncclGetErrorString(ncclResult_t result) {
             return "invalid argument";
         case ncclInvalidUsage:
             return "invalid usage";
+        case ncclRemoteError:
+            return "remote error";
+        case ncclInProgress:
+            return "in progress";
+        case ncclNumResults:
+            return "num results";
     }
     return "unknown nccl error";
 }
 
+const char* ncclGetLastError(ncclComm_t comm) {
+    if (comm && !comm->last_error.empty()) {
+        return comm->last_error.c_str();
+    }
+    return g_last_error.empty() ? "success" : g_last_error.c_str();
+}
+
+ncclResult_t ncclMemAlloc(void** ptr, std::size_t size) {
+    if (!ptr || size == 0) {
+        return fail_with(nullptr, ncclInvalidArgument, "ncclMemAlloc requires a non-null ptr and size > 0");
+    }
+    *ptr = std::malloc(size);
+    if (!*ptr) {
+        return fail_with(nullptr, ncclSystemError, "malloc failed");
+    }
+    g_last_error.clear();
+    return ncclSuccess;
+}
+
+ncclResult_t ncclMemFree(void* ptr) {
+    std::free(ptr);
+    g_last_error.clear();
+    return ncclSuccess;
+}
+
 ncclResult_t ncclGetVersion(int* version) {
     if (!version) {
-        return ncclInvalidArgument;
+        return fail_with(nullptr, ncclInvalidArgument, "version must not be null");
     }
     *version = kFakeNcclVersion;
+    g_last_error.clear();
     return ncclSuccess;
 }
 
 ncclResult_t ncclGetUniqueId(ncclUniqueId* unique_id) {
     if (!unique_id) {
-        return ncclInvalidArgument;
+        return fail_with(nullptr, ncclInvalidArgument, "unique_id must not be null");
     }
 
     std::memset(unique_id, 0, sizeof(*unique_id));
@@ -300,31 +450,40 @@ ncclResult_t ncclGetUniqueId(ncclUniqueId* unique_id) {
     }
 
     std::memcpy(unique_id->internal, token.data(), token.size());
+    g_last_error.clear();
     return ncclSuccess;
+}
+
+ncclResult_t ncclCommInitRankConfig(
+    ncclComm_t* comm,
+    int nranks,
+    ncclUniqueId comm_id,
+    int rank,
+    ncclConfig_t* /*config*/) {
+    return ncclCommInitRank(comm, nranks, comm_id, rank);
 }
 
 ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id, int rank) {
     if (!comm) {
-        return ncclInvalidArgument;
+        return fail_with(nullptr, ncclInvalidArgument, "comm must not be null");
     }
     *comm = nullptr;
 
     if (nranks <= 0) {
-        return ncclInvalidArgument;
+        return fail_with(nullptr, ncclInvalidArgument, "nranks must be > 0");
     }
     if (rank < 0 || rank >= nranks) {
-        return ncclInvalidArgument;
+        return fail_with(nullptr, ncclInvalidArgument, "rank must be within [0, nranks)");
     }
 
     const std::string unique_id = unique_id_to_token(comm_id);
     if (unique_id.empty()) {
-        return ncclInvalidArgument;
+        return fail_with(nullptr, ncclInvalidArgument, "comm_id token must not be empty");
     }
 
-    const fake_gpu::distributed::DistributedConfig& config =
-        fake_gpu::BackendConfig::instance().distributed_config();
+    fake_gpu::distributed::DistributedConfig config;
     std::string error;
-    if (!fake_gpu::nccl::validate_direct_init_config(config, error)) {
+    if (!validate_runtime_config(nullptr, config, error)) {
         return ncclInvalidUsage;
     }
 
@@ -341,83 +500,198 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
             request.str(),
             response,
             error)) {
-        return ncclSystemError;
+        return fail_with(nullptr, ncclSystemError, error);
     }
     if (!response.ok) {
-        return map_response_error(response.error_code);
+        return fail_with(
+            nullptr,
+            map_response_error(response.error_code),
+            response.error_detail.empty() ? response.error_code : response.error_detail);
     }
 
     int coordinator_comm_id = -1;
     if (!parse_int_field(response, "comm_id", coordinator_comm_id) || coordinator_comm_id <= 0) {
-        return ncclInternalError;
+        return fail_with(nullptr, ncclInternalError, "coordinator did not return a valid comm_id");
     }
 
     ncclComm* state = new ncclComm();
     state->comm_id = coordinator_comm_id;
     state->world_size = nranks;
     state->rank = rank;
+    state->device = infer_device_for_rank(rank);
     *comm = state;
+    clear_last_error(*comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclCommInitAll(ncclComm_t* comm, int ndev, const int* /*devlist*/) {
+    if (comm && ndev > 0) {
+        for (int index = 0; index < ndev; ++index) {
+            comm[index] = nullptr;
+        }
+    }
+    return unsupported_step_api(nullptr, "ncclCommInitAll", "a later compatibility pass");
+}
+
+ncclResult_t ncclCommInitRankScalable(
+    ncclComm_t* comm,
+    int nranks,
+    int myrank,
+    int n_id,
+    ncclUniqueId* comm_ids,
+    ncclConfig_t* /*config*/) {
+    if (!comm_ids || n_id <= 0) {
+        return fail_with(nullptr, ncclInvalidArgument, "comm_ids must not be null and n_id must be > 0");
+    }
+    return ncclCommInitRank(comm, nranks, comm_ids[0], myrank);
+}
+
+ncclResult_t ncclCommFinalize(ncclComm_t comm) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    comm->finalized = true;
+    clear_last_error(comm);
     return ncclSuccess;
 }
 
 ncclResult_t ncclCommDestroy(ncclComm_t comm) {
-    if (!comm) {
-        return ncclInvalidArgument;
-    }
-    if (comm->destroyed) {
-        return ncclInvalidUsage;
-    }
+    return do_destroy(comm, false);
+}
 
-    const fake_gpu::distributed::DistributedConfig& config =
-        fake_gpu::BackendConfig::instance().distributed_config();
-    std::string error;
-    if (!fake_gpu::nccl::validate_direct_init_config(config, error)) {
-        return ncclInvalidUsage;
-    }
+ncclResult_t ncclCommAbort(ncclComm_t comm) {
+    return do_destroy(comm, true);
+}
 
-    std::ostringstream request;
-    request << "DESTROY_COMM"
-            << " comm_id=" << comm->comm_id
-            << " rank=" << comm->rank;
-
-    fake_gpu::distributed::CoordinatorResponse response;
-    if (!fake_gpu::distributed::request_response_unix_socket(
-            config.coordinator_address,
-            request.str(),
-            response,
-            error)) {
-        return ncclSystemError;
+ncclResult_t ncclCommSplit(
+    ncclComm_t comm,
+    int color,
+    int /*key*/,
+    ncclComm_t* newcomm,
+    ncclConfig_t* /*config*/) {
+    if (!newcomm) {
+        return fail_with(comm, ncclInvalidArgument, "newcomm must not be null");
     }
-    if (!response.ok) {
-        return map_response_error(response.error_code);
+    *newcomm = nullptr;
+    if (color == NCCL_SPLIT_NOCOLOR) {
+        clear_last_error(comm);
+        return ncclSuccess;
     }
+    return unsupported_step_api(comm, "ncclCommSplit", "a later compatibility pass");
+}
 
-    comm->destroyed = true;
+ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* async_error) {
+    if (!comm || !async_error) {
+        return fail_with(comm, ncclInvalidArgument, "communicator and async_error must not be null");
+    }
+    *async_error = comm->async_error;
+    g_last_error.clear();
     return ncclSuccess;
 }
 
-ncclResult_t ncclAllReduce(
-    const void* sendbuff,
-    void* recvbuff,
-    std::size_t count,
-    ncclDataType_t datatype,
-    ncclRedOp_t op,
+ncclResult_t ncclCommCount(const ncclComm_t comm, int* count) {
+    if (!comm || !count) {
+        return fail_with(comm, ncclInvalidArgument, "communicator and count must not be null");
+    }
+    *count = comm->world_size;
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* device) {
+    if (!comm || !device) {
+        return fail_with(comm, ncclInvalidArgument, "communicator and device must not be null");
+    }
+    *device = comm->device;
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank) {
+    if (!comm || !rank) {
+        return fail_with(comm, ncclInvalidArgument, "communicator and rank must not be null");
+    }
+    *rank = comm->rank;
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, std::size_t size, void** handle) {
+    if (!comm || !buff || !handle || size == 0) {
+        return fail_with(comm, ncclInvalidArgument, "invalid ncclCommRegister arguments");
+    }
+    *handle = buff;
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* /*handle*/) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclCommWindowRegister(
+    ncclComm_t comm,
+    void* buff,
+    std::size_t size,
+    ncclWindow_t* window,
+    int /*window_flags*/) {
+    if (!comm || !buff || !window || size == 0) {
+        return fail_with(comm, ncclInvalidArgument, "invalid ncclCommWindowRegister arguments");
+    }
+    *window = reinterpret_cast<ncclWindow_t>(buff);
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t /*window*/) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclRedOpCreatePreMulSum(
+    ncclRedOp_t* op,
+    void* scalar,
+    ncclDataType_t /*datatype*/,
+    ncclScalarResidence_t /*residence*/,
+    ncclComm_t comm) {
+    if (!op || !scalar) {
+        return fail_with(comm, ncclInvalidArgument, "op and scalar must not be null");
+    }
+    return unsupported_step_api(comm, "ncclRedOpCreatePreMulSum", "a later compatibility pass");
+}
+
+ncclResult_t ncclRedOpDestroy(ncclRedOp_t /*op*/, ncclComm_t comm) {
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclReduce(
+    const void* /*sendbuff*/,
+    void* /*recvbuff*/,
+    std::size_t /*count*/,
+    ncclDataType_t /*datatype*/,
+    ncclRedOp_t /*op*/,
+    int /*root*/,
     ncclComm_t comm,
     cudaStream_t /*stream*/) {
-    fake_gpu::distributed::CollectiveReduceOp reduce_op;
-    if (!map_reduce_op(op, reduce_op)) {
-        return ncclInvalidArgument;
-    }
-    return submit_collective(
-        "ALLREDUCE",
-        fake_gpu::distributed::CollectiveType::AllReduce,
-        sendbuff,
-        recvbuff,
-        count,
-        datatype,
-        reduce_op,
-        -1,
-        comm);
+    return unsupported_step_api(comm, "ncclReduce", "Step 13");
+}
+
+ncclResult_t ncclBcast(
+    void* buff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    int root,
+    ncclComm_t comm,
+    cudaStream_t stream) {
+    return ncclBroadcast(buff, buff, count, datatype, root, comm, stream);
 }
 
 ncclResult_t ncclBroadcast(
@@ -429,7 +703,7 @@ ncclResult_t ncclBroadcast(
     ncclComm_t comm,
     cudaStream_t /*stream*/) {
     if (!comm) {
-        return ncclInvalidArgument;
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
     const void* local_input = recvbuff;
     if (comm->rank == root) {
@@ -445,6 +719,96 @@ ncclResult_t ncclBroadcast(
         fake_gpu::distributed::CollectiveReduceOp::None,
         root,
         comm);
+}
+
+ncclResult_t ncclAllReduce(
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    ncclRedOp_t op,
+    ncclComm_t comm,
+    cudaStream_t /*stream*/) {
+    fake_gpu::distributed::CollectiveReduceOp reduce_op;
+    if (!map_reduce_op(op, reduce_op)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
+    }
+    return submit_collective(
+        "ALLREDUCE",
+        fake_gpu::distributed::CollectiveType::AllReduce,
+        sendbuff,
+        recvbuff,
+        count,
+        datatype,
+        reduce_op,
+        -1,
+        comm);
+}
+
+ncclResult_t ncclReduceScatter(
+    const void* /*sendbuff*/,
+    void* /*recvbuff*/,
+    std::size_t /*recvcount*/,
+    ncclDataType_t /*datatype*/,
+    ncclRedOp_t /*op*/,
+    ncclComm_t comm,
+    cudaStream_t /*stream*/) {
+    return unsupported_step_api(comm, "ncclReduceScatter", "Step 13");
+}
+
+ncclResult_t ncclAllGather(
+    const void* /*sendbuff*/,
+    void* /*recvbuff*/,
+    std::size_t /*sendcount*/,
+    ncclDataType_t /*datatype*/,
+    ncclComm_t comm,
+    cudaStream_t /*stream*/) {
+    return unsupported_step_api(comm, "ncclAllGather", "Step 13");
+}
+
+ncclResult_t ncclSend(
+    const void* /*sendbuff*/,
+    std::size_t /*count*/,
+    ncclDataType_t /*datatype*/,
+    int /*peer*/,
+    ncclComm_t comm,
+    cudaStream_t /*stream*/) {
+    return unsupported_step_api(comm, "ncclSend", "a later compatibility pass");
+}
+
+ncclResult_t ncclRecv(
+    void* /*recvbuff*/,
+    std::size_t /*count*/,
+    ncclDataType_t /*datatype*/,
+    int /*peer*/,
+    ncclComm_t comm,
+    cudaStream_t /*stream*/) {
+    return unsupported_step_api(comm, "ncclRecv", "a later compatibility pass");
+}
+
+ncclResult_t ncclGroupStart(void) {
+    ++g_group_depth;
+    g_last_error.clear();
+    return ncclSuccess;
+}
+
+ncclResult_t ncclGroupEnd(void) {
+    if (g_group_depth > 0) {
+        --g_group_depth;
+    }
+    g_last_error.clear();
+    return ncclSuccess;
+}
+
+ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* sim_info) {
+    if (sim_info) {
+        sim_info->estimatedTime = 0.0f;
+    }
+    if (g_group_depth > 0) {
+        --g_group_depth;
+    }
+    g_last_error.clear();
+    return ncclSuccess;
 }
 
 }  // extern "C"

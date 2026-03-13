@@ -54,6 +54,22 @@ bool open_participant_buffers(
     return true;
 }
 
+template <typename T>
+void sum_reduce_into_all_handles(
+    const CollectiveExecutionRequest& request,
+    std::vector<StagingBufferHandle>& handles) {
+    std::vector<T> reduced(request.count, static_cast<T>(0));
+    for (const StagingBufferHandle& handle : handles) {
+        const T* values = static_cast<const T*>(handle.data());
+        for (std::size_t index = 0; index < request.count; ++index) {
+            reduced[index] += values[index];
+        }
+    }
+    for (StagingBufferHandle& handle : handles) {
+        std::memcpy(handle.data(), reduced.data(), request.bytes);
+    }
+}
+
 }  // namespace
 
 CollectiveExecutionResult execute_allreduce_sum(
@@ -77,31 +93,19 @@ CollectiveExecutionResult execute_allreduce_sum(
         return make_error("staging_open_failed", error);
     }
 
-    if (request.dtype == CollectiveDataType::Float32) {
-        std::vector<float> reduced(request.count, 0.0f);
-        for (const StagingBufferHandle& handle : handles) {
-            const float* values = static_cast<const float*>(handle.data());
-            for (std::size_t index = 0; index < request.count; ++index) {
-                reduced[index] += values[index];
-            }
-        }
-        for (StagingBufferHandle& handle : handles) {
-            std::memcpy(handle.data(), reduced.data(), request.bytes);
-        }
-        CollectiveExecutionResult result;
-        result.ok = true;
-        return result;
-    }
-
-    std::vector<std::int32_t> reduced(request.count, 0);
-    for (const StagingBufferHandle& handle : handles) {
-        const std::int32_t* values = static_cast<const std::int32_t*>(handle.data());
-        for (std::size_t index = 0; index < request.count; ++index) {
-            reduced[index] += values[index];
-        }
-    }
-    for (StagingBufferHandle& handle : handles) {
-        std::memcpy(handle.data(), reduced.data(), request.bytes);
+    switch (request.dtype) {
+        case CollectiveDataType::Int32:
+            sum_reduce_into_all_handles<std::int32_t>(request, handles);
+            break;
+        case CollectiveDataType::Int64:
+            sum_reduce_into_all_handles<std::int64_t>(request, handles);
+            break;
+        case CollectiveDataType::Float32:
+            sum_reduce_into_all_handles<float>(request, handles);
+            break;
+        case CollectiveDataType::Float64:
+            sum_reduce_into_all_handles<double>(request, handles);
+            break;
     }
 
     CollectiveExecutionResult result;

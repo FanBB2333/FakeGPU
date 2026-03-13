@@ -43,6 +43,20 @@ struct CollectiveSubmitResult {
     std::string error_detail;
 };
 
+struct BarrierSubmitRequest {
+    int comm_id = -1;
+    int rank = -1;
+    std::uint64_t seqno = 0;
+    int timeout_ms = 0;
+};
+
+struct BarrierSubmitResult {
+    bool ok = false;
+    std::uint64_t seqno = 0;
+    std::string error_code;
+    std::string error_detail;
+};
+
 class CommunicatorRegistry {
 public:
     CommunicatorRegistrationResult init_communicator(
@@ -53,6 +67,7 @@ public:
 
     CommunicatorDestroyResult destroy_communicator(int comm_id, int rank);
     CollectiveSubmitResult submit_collective(const CollectiveSubmitRequest& request);
+    BarrierSubmitResult submit_barrier(const BarrierSubmitRequest& request);
 };
 
 }  // namespace fake_gpu::distributed

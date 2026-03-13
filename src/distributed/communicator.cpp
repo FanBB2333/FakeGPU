@@ -24,6 +24,16 @@ struct CollectiveState {
     std::condition_variable cv;
 };
 
+struct BarrierState {
+    BarrierSubmitRequest request;
+    bool completed = false;
+    bool failed = false;
+    std::string failure_code;
+    std::string failure_detail;
+    std::unordered_map<int, bool> participants;
+    std::condition_variable cv;
+};
+
 struct CommunicatorState {
     std::string unique_id;
     int world_size = 0;
@@ -36,6 +46,7 @@ struct CommunicatorState {
     std::unordered_map<int, bool> participants;
     std::unordered_map<int, bool> destroyed_ranks;
     std::unordered_map<std::uint64_t, std::shared_ptr<CollectiveState>> collectives;
+    std::unordered_map<std::uint64_t, std::shared_ptr<BarrierState>> barriers;
     std::condition_variable cv;
 };
 
@@ -75,6 +86,14 @@ CollectiveSubmitResult make_collective_error(std::string code, std::string detai
     return result;
 }
 
+BarrierSubmitResult make_barrier_error(std::string code, std::string detail) {
+    BarrierSubmitResult result;
+    result.ok = false;
+    result.error_code = std::move(code);
+    result.error_detail = std::move(detail);
+    return result;
+}
+
 void fail_pending_group_locked(
     RegistryImpl& registry,
     const std::shared_ptr<CommunicatorState>& state,
@@ -101,6 +120,23 @@ void fail_collective_locked(
         collective->failure_detail = state->failure_detail;
         collective->cv.notify_all();
         state->collectives.erase(collective->request.seqno);
+    }
+}
+
+void fail_barrier_locked(
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::shared_ptr<BarrierState>& barrier,
+    std::string code,
+    std::string detail) {
+    state->failed = true;
+    state->failure_code = std::move(code);
+    state->failure_detail = std::move(detail);
+    if (barrier) {
+        barrier->failed = true;
+        barrier->failure_code = state->failure_code;
+        barrier->failure_detail = state->failure_detail;
+        barrier->cv.notify_all();
+        state->barriers.erase(barrier->request.seqno);
     }
 }
 
@@ -424,6 +460,113 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     state->collectives.erase(request.seqno);
     collective->cv.notify_all();
     return CollectiveSubmitResult{true, request.seqno, "", ""};
+}
+
+BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequest& request) {
+    if (request.comm_id <= 0) {
+        return make_barrier_error("invalid_comm_id", "comm_id must be > 0");
+    }
+    if (request.rank < 0) {
+        return make_barrier_error("invalid_rank", "rank must be >= 0");
+    }
+    if (request.seqno == 0) {
+        return make_barrier_error("invalid_seqno", "seqno must be > 0");
+    }
+    if (request.timeout_ms <= 0) {
+        return make_barrier_error("invalid_timeout", "timeout_ms must be > 0");
+    }
+
+    RegistryImpl& registry = registry_impl();
+    std::shared_ptr<CommunicatorState> state;
+    std::shared_ptr<BarrierState> barrier;
+
+    std::unique_lock<std::mutex> lock(registry.mutex);
+    auto it = registry.active_by_comm_id.find(request.comm_id);
+    if (it == registry.active_by_comm_id.end()) {
+        return make_barrier_error("unknown_comm_id", "communicator not found");
+    }
+
+    state = it->second;
+    if (state->participants.find(request.rank) == state->participants.end()) {
+        return make_barrier_error("unknown_rank", "rank is not a member of this communicator");
+    }
+    if (state->destroyed_ranks.find(request.rank) != state->destroyed_ranks.end()) {
+        return make_barrier_error("rank_destroyed", "rank already destroyed this communicator");
+    }
+    if (state->failed) {
+        return make_barrier_error(state->failure_code, state->failure_detail);
+    }
+    if (request.rank >= state->world_size) {
+        return make_barrier_error("invalid_rank", "rank must be within [0, world_size)");
+    }
+
+    if (request.seqno != state->next_seqno) {
+        if (request.seqno < state->next_seqno) {
+            return make_barrier_error(
+                "stale_seqno",
+                "expected seqno " + std::to_string(state->next_seqno) +
+                    ", got " + std::to_string(request.seqno));
+        }
+        return make_barrier_error(
+            "out_of_order_seqno",
+            "expected seqno " + std::to_string(state->next_seqno) +
+                ", got " + std::to_string(request.seqno));
+    }
+
+    auto barrier_it = state->barriers.find(request.seqno);
+    if (barrier_it == state->barriers.end()) {
+        barrier = std::make_shared<BarrierState>();
+        barrier->request = request;
+        state->barriers.emplace(request.seqno, barrier);
+    } else {
+        barrier = barrier_it->second;
+    }
+
+    if (barrier->request.timeout_ms != request.timeout_ms) {
+        fail_barrier_locked(
+            state,
+            barrier,
+            "timeout_mismatch",
+            "barrier timeout mismatch: expected timeout_ms=" +
+                std::to_string(barrier->request.timeout_ms) +
+                ", got " + std::to_string(request.timeout_ms));
+        return make_barrier_error(state->failure_code, state->failure_detail);
+    }
+
+    if (!barrier->participants.emplace(request.rank, true).second) {
+        fail_barrier_locked(
+            state,
+            barrier,
+            "duplicate_barrier_rank",
+            "rank already submitted this barrier seqno");
+        return make_barrier_error(state->failure_code, state->failure_detail);
+    }
+
+    if (static_cast<int>(barrier->participants.size()) != state->world_size) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.timeout_ms);
+        while (!barrier->completed && !barrier->failed && !state->failed) {
+            if (barrier->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                fail_barrier_locked(
+                    state,
+                    barrier,
+                    "timeout_waiting_for_barrier",
+                    "timeout waiting for all ranks to join barrier seqno " +
+                        std::to_string(request.seqno));
+                return make_barrier_error(state->failure_code, state->failure_detail);
+            }
+        }
+
+        if (barrier->completed) {
+            return BarrierSubmitResult{true, request.seqno, "", ""};
+        }
+        return make_barrier_error(state->failure_code, state->failure_detail);
+    }
+
+    barrier->completed = true;
+    state->next_seqno++;
+    state->barriers.erase(request.seqno);
+    barrier->cv.notify_all();
+    return BarrierSubmitResult{true, request.seqno, "", ""};
 }
 
 }  // namespace fake_gpu::distributed
