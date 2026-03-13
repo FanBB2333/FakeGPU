@@ -23,6 +23,8 @@ research_poc/libintercept.dylib
 
 # Generated reports
 fake_gpu_report.json
+test/output/*_torchrun.log
+test/output/*_coordinator.log
 
 # Python build / packaging
 __pycache__/

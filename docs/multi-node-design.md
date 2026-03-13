@@ -1314,14 +1314,20 @@ src/nccl/
 
 范围：
 
-- [ ] Step 10：Torch Distributed 最小 smoke test
+- [x] Step 10：Torch Distributed 最小 smoke test
 
 本次完成标准：
 
-- [ ] 尝试接入 `torch.distributed.init_process_group`
-- [ ] 记录 barrier / group / async error 等缺口
-- [ ] 不为了通过 smoke test 临时跨越到后续 Step
-- [ ] 输出一份明确的缺口清单或探索结果
+- [x] 尝试接入 `torch.distributed.init_process_group`
+- [x] 记录 barrier / group / async error 等缺口
+- [x] 不为了通过 smoke test 临时跨越到后续 Step
+- [x] 输出一份明确的缺口清单或探索结果
+
+当前探索结果：
+
+- [x] 单机 2 rank / 4 rank smoke 脚本已接入并可稳定输出探索报告
+- [x] 当前首个框架接入缺口为 `libtorch_cuda.so` 依赖的 `ncclCommAbort` 缺失
+- [x] 探索报告输出到 `test/output/ddp_multinode_2r_gap_report.md` 和 `test/output/ddp_multinode_4r_gap_report.md`
 
 #### 第 7 次：Step 11 + Step 12 + Step 13 + Step 14 + Step 15
 
