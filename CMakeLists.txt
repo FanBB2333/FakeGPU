@@ -31,6 +31,8 @@ endif()
 
 project(FakeGPU VERSION "${FAKEGPU_VERSION}")
 
+find_package(Threads REQUIRED)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -112,6 +114,7 @@ add_subdirectory(src/nvml)
 add_subdirectory(src/cuda)
 add_subdirectory(src/monitor)
 add_subdirectory(src/distributed)
+add_subdirectory(src/nccl)
 
 # Main Shared Library for NVML
 # We link the OBJECT libraries from subdirectories to create one single shared library
@@ -125,6 +128,7 @@ add_library(fake_gpu SHARED
 
 # Link dl library for dlopen/dlsym interception
 target_link_libraries(fake_gpu PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(fake_gpu PRIVATE Threads::Threads)
 
 # CUDA Driver Library (libcuda.so.1)
 # This library intercepts CUDA Driver API calls
@@ -135,6 +139,7 @@ add_library(fake_cuda SHARED
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 target_link_libraries(fake_cuda PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(fake_cuda PRIVATE Threads::Threads)
 
 # CUDA Runtime Library (libcudart.so.12)
 # This library intercepts CUDA Runtime API calls and uses fake_cuda Driver API internally
@@ -147,6 +152,7 @@ add_library(fake_cudart SHARED
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 target_link_libraries(fake_cudart PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(fake_cudart PRIVATE Threads::Threads)
 target_include_directories(fake_cudart PRIVATE src/cuda src/core)
 
 # cuBLAS Library (libcublas.so.12)
@@ -162,6 +168,16 @@ target_link_libraries(fake_cublas PRIVATE ${CMAKE_DL_LIBS})
 target_include_directories(fake_cublas PRIVATE src/cublas src/core)
 target_compile_definitions(fake_cublas PRIVATE FAKEGPU_CPU_SIMULATION=$<BOOL:${ENABLE_FAKEGPU_CPU_SIMULATION}>)
 target_link_libraries(fake_cublas PRIVATE m)
+target_link_libraries(fake_cublas PRIVATE Threads::Threads)
+
+add_library(fake_nccl SHARED
+    $<TARGET_OBJECTS:fake_gpu_nccl>
+    $<TARGET_OBJECTS:fake_gpu_core>
+    $<TARGET_OBJECTS:fake_gpu_distributed>
+)
+target_link_libraries(fake_nccl PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(fake_nccl PRIVATE Threads::Threads)
+target_include_directories(fake_nccl PRIVATE src/nccl src/core src/distributed)
 
 # Platform specific flags
 if(APPLE)
@@ -191,6 +207,12 @@ if(APPLE)
         OUTPUT_NAME "cublas"
         VERSION "${FAKEGPU_VERSION}"
         SOVERSION "12"
+    )
+
+    set_target_properties(fake_nccl PROPERTIES
+        OUTPUT_NAME "nccl"
+        VERSION "${FAKEGPU_VERSION}"
+        SOVERSION "2"
     )
 else()
     # Set OUTPUT_NAME to libnvidia-ml.so.1 so CMake sets the correct SONAME
@@ -227,6 +249,12 @@ else()
         VERSION "${FAKEGPU_VERSION}"
         SOVERSION "12"
     )
+
+    set_target_properties(fake_nccl PROPERTIES
+        OUTPUT_NAME "nccl"
+        VERSION "${FAKEGPU_VERSION}"
+        SOVERSION "2"
+    )
 endif()
 
 add_executable(fakegpu_config_probe
@@ -235,3 +263,25 @@ add_executable(fakegpu_config_probe
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 target_include_directories(fakegpu_config_probe PRIVATE src/core src/distributed)
+target_link_libraries(fakegpu_config_probe PRIVATE Threads::Threads)
+
+add_executable(fakegpu_coordinator
+    src/distributed/coordinator_main.cpp
+    $<TARGET_OBJECTS:fake_gpu_core>
+    $<TARGET_OBJECTS:fake_gpu_distributed>
+)
+target_include_directories(fakegpu_coordinator PRIVATE src/distributed)
+target_link_libraries(fakegpu_coordinator PRIVATE Threads::Threads)
+set_target_properties(fakegpu_coordinator PROPERTIES OUTPUT_NAME "fakegpu-coordinator")
+
+add_executable(fakegpu_nccl_direct_test
+    verification/test_nccl_direct.cpp
+)
+target_include_directories(fakegpu_nccl_direct_test PRIVATE src/nccl src/distributed)
+target_link_libraries(fakegpu_nccl_direct_test PRIVATE fake_nccl fake_gpu Threads::Threads)
+
+add_executable(fakegpu_staging_buffer_probe
+    verification/test_staging_buffer_main.cpp
+)
+target_include_directories(fakegpu_staging_buffer_probe PRIVATE src/distributed)
+target_link_libraries(fakegpu_staging_buffer_probe PRIVATE fake_gpu Threads::Threads)

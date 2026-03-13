@@ -1,5 +1,9 @@
 add_library(fake_gpu_distributed OBJECT
     cluster_config.cpp
+    communicator.cpp
+    cluster_coordinator.cpp
+    transport_local.cpp
+    staging_buffer.cpp
 )
 
 target_include_directories(fake_gpu_distributed PUBLIC
