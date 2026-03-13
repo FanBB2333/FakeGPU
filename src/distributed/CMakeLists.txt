@@ -3,7 +3,9 @@ add_library(fake_gpu_distributed OBJECT
     communicator.cpp
     cluster_coordinator.cpp
     collective_allreduce.cpp
+    collective_allgather.cpp
     collective_broadcast.cpp
+    collective_reducescatter.cpp
     transport_local.cpp
     staging_buffer.cpp
 )

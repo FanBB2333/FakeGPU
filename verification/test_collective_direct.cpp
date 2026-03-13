@@ -157,6 +157,33 @@ std::vector<T> make_allreduce_reference(int world_size, std::size_t count) {
 }
 
 template <typename T>
+std::vector<T> make_allgather_reference(int world_size, std::size_t count) {
+    std::vector<T> reference;
+    reference.reserve(static_cast<std::size_t>(world_size) * count);
+    for (int rank = 0; rank < world_size; ++rank) {
+        std::vector<T> values = make_rank_values<T>(rank, count);
+        reference.insert(reference.end(), values.begin(), values.end());
+    }
+    return reference;
+}
+
+template <typename T>
+std::vector<T> make_reducescatter_reference(int world_size, std::size_t recvcount, int rank) {
+    const std::size_t total_count = recvcount * static_cast<std::size_t>(world_size);
+    std::vector<T> reduced(total_count, static_cast<T>(0));
+    for (int peer = 0; peer < world_size; ++peer) {
+        std::vector<T> values = make_rank_values<T>(peer, total_count);
+        for (std::size_t index = 0; index < total_count; ++index) {
+            reduced[index] += values[index];
+        }
+    }
+
+    const std::size_t offset = static_cast<std::size_t>(rank) * recvcount;
+    return std::vector<T>(reduced.begin() + static_cast<std::ptrdiff_t>(offset),
+                          reduced.begin() + static_cast<std::ptrdiff_t>(offset + recvcount));
+}
+
+template <typename T>
 void assert_equal_vectors(
     const std::vector<T>& actual,
     const std::vector<T>& expected,
@@ -224,6 +251,143 @@ void run_allreduce_case(int world_size, ncclDataType_t datatype, const std::stri
                 recv_buffers[static_cast<std::size_t>(rank)],
                 reference,
                 label + " allreduce result mismatch");
+        }
+    }
+
+    destroy_communicators(comms);
+}
+
+template <typename T>
+void run_allgather_case(int world_size, ncclDataType_t datatype, const std::string& label) {
+    std::vector<ncclComm_t> comms = init_communicators(world_size);
+    const std::size_t sendcount = 5;
+    const std::vector<T> reference = make_allgather_reference<T>(world_size, sendcount);
+
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        const bool grouped = iteration == 2;
+        std::vector<std::vector<T>> send_buffers;
+        std::vector<std::vector<T>> recv_buffers(
+            static_cast<std::size_t>(world_size),
+            std::vector<T>(reference.size(), static_cast<T>(0)));
+        std::vector<ncclResult_t> results(static_cast<std::size_t>(world_size), ncclInternalError);
+        std::vector<std::thread> threads;
+
+        send_buffers.reserve(static_cast<std::size_t>(world_size));
+        for (int rank = 0; rank < world_size; ++rank) {
+            send_buffers.push_back(make_rank_values<T>(rank, sendcount));
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            threads.emplace_back([&, rank]() {
+                if (grouped) {
+                    require_result(ncclGroupStart(), ncclSuccess, label + " ncclGroupStart failed");
+                    ncclResult_t inner = ncclAllGather(
+                        send_buffers[static_cast<std::size_t>(rank)].data(),
+                        recv_buffers[static_cast<std::size_t>(rank)].data(),
+                        sendcount,
+                        datatype,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr);
+                    if (inner != ncclSuccess) {
+                        ncclGroupSimulateEnd(nullptr);
+                        results[static_cast<std::size_t>(rank)] = inner;
+                        return;
+                    }
+                    results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
+                    return;
+                }
+
+                results[static_cast<std::size_t>(rank)] = ncclAllGather(
+                    send_buffers[static_cast<std::size_t>(rank)].data(),
+                    recv_buffers[static_cast<std::size_t>(rank)].data(),
+                    sendcount,
+                    datatype,
+                    comms[static_cast<std::size_t>(rank)],
+                    nullptr);
+            });
+        }
+
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            require_result(results[static_cast<std::size_t>(rank)], ncclSuccess, label + " allgather failed");
+            assert_equal_vectors(
+                recv_buffers[static_cast<std::size_t>(rank)],
+                reference,
+                label + " allgather result mismatch");
+        }
+    }
+
+    destroy_communicators(comms);
+}
+
+template <typename T>
+void run_reducescatter_case(int world_size, ncclDataType_t datatype, const std::string& label) {
+    std::vector<ncclComm_t> comms = init_communicators(world_size);
+    const std::size_t recvcount = 4;
+    const std::size_t total_count = recvcount * static_cast<std::size_t>(world_size);
+
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        const bool grouped = iteration == 2;
+        std::vector<std::vector<T>> send_buffers;
+        std::vector<std::vector<T>> recv_buffers(
+            static_cast<std::size_t>(world_size),
+            std::vector<T>(recvcount, static_cast<T>(0)));
+        std::vector<ncclResult_t> results(static_cast<std::size_t>(world_size), ncclInternalError);
+        std::vector<std::thread> threads;
+
+        send_buffers.reserve(static_cast<std::size_t>(world_size));
+        for (int rank = 0; rank < world_size; ++rank) {
+            send_buffers.push_back(make_rank_values<T>(rank, total_count));
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            threads.emplace_back([&, rank]() {
+                if (grouped) {
+                    require_result(ncclGroupStart(), ncclSuccess, label + " ncclGroupStart failed");
+                    ncclResult_t inner = ncclReduceScatter(
+                        send_buffers[static_cast<std::size_t>(rank)].data(),
+                        recv_buffers[static_cast<std::size_t>(rank)].data(),
+                        recvcount,
+                        datatype,
+                        ncclSum,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr);
+                    if (inner != ncclSuccess) {
+                        ncclGroupSimulateEnd(nullptr);
+                        results[static_cast<std::size_t>(rank)] = inner;
+                        return;
+                    }
+                    results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
+                    return;
+                }
+
+                results[static_cast<std::size_t>(rank)] = ncclReduceScatter(
+                    send_buffers[static_cast<std::size_t>(rank)].data(),
+                    recv_buffers[static_cast<std::size_t>(rank)].data(),
+                    recvcount,
+                    datatype,
+                    ncclSum,
+                    comms[static_cast<std::size_t>(rank)],
+                    nullptr);
+            });
+        }
+
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            require_result(
+                results[static_cast<std::size_t>(rank)],
+                ncclSuccess,
+                label + " reducescatter failed");
+            assert_equal_vectors(
+                recv_buffers[static_cast<std::size_t>(rank)],
+                make_reducescatter_reference<T>(world_size, recvcount, rank),
+                label + " reducescatter result mismatch");
         }
     }
 
@@ -429,6 +593,18 @@ void run_broadcast_scenario() {
     run_broadcast_case<std::int32_t>(4, 3, ncclInt32, "4-rank root-last int32");
 }
 
+void run_allgather_scenario() {
+    run_allgather_case<float>(2, ncclFloat32, "2-rank float32");
+    run_allgather_case<float>(4, ncclFloat32, "4-rank float32");
+    run_allgather_case<std::int32_t>(4, ncclInt32, "4-rank int32");
+}
+
+void run_reducescatter_scenario() {
+    run_reducescatter_case<float>(2, ncclFloat32, "2-rank float32");
+    run_reducescatter_case<float>(4, ncclFloat32, "4-rank float32");
+    run_reducescatter_case<std::int32_t>(4, ncclInt32, "4-rank int32");
+}
+
 void run_mismatch_scenario() {
     run_type_mismatch_case();
     run_dtype_mismatch_case();
@@ -456,6 +632,16 @@ int main(int argc, char** argv) {
         if (scenario == "broadcast") {
             run_broadcast_scenario();
             std::cout << "broadcast scenario passed" << std::endl;
+            return 0;
+        }
+        if (scenario == "allgather") {
+            run_allgather_scenario();
+            std::cout << "allgather scenario passed" << std::endl;
+            return 0;
+        }
+        if (scenario == "reducescatter") {
+            run_reducescatter_scenario();
+            std::cout << "reducescatter scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "mismatch") {

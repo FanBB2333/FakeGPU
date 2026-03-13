@@ -245,7 +245,11 @@ void ClusterCoordinator::handle_client(int client_fd) {
                 }
             }
         }
-    } else if (request.command == "ALLREDUCE" || request.command == "BROADCAST") {
+    } else if (
+        request.command == "ALLREDUCE" ||
+        request.command == "BROADCAST" ||
+        request.command == "ALLGATHER" ||
+        request.command == "REDUCESCATTER") {
         CollectiveSubmitRequest collective_request;
         bool ok = false;
         std::string error;
@@ -309,10 +313,15 @@ void ClusterCoordinator::handle_client(int client_fd) {
                                                 "bad_request",
                                                 "unsupported reduce_op");
                                         } else {
-                                            collective_request.type =
-                                                (request.command == "ALLREDUCE")
-                                                    ? CollectiveType::AllReduce
-                                                    : CollectiveType::Broadcast;
+                                            if (request.command == "ALLREDUCE") {
+                                                collective_request.type = CollectiveType::AllReduce;
+                                            } else if (request.command == "BROADCAST") {
+                                                collective_request.type = CollectiveType::Broadcast;
+                                            } else if (request.command == "ALLGATHER") {
+                                                collective_request.type = CollectiveType::AllGather;
+                                            } else {
+                                                collective_request.type = CollectiveType::ReduceScatter;
+                                            }
                                             CollectiveSubmitResult result =
                                                 communicator_registry_.submit_collective(collective_request);
                                             if (!result.ok) {

@@ -336,6 +336,12 @@ CollectiveExecutionResult execute_collective_locked(
     if (request.type == CollectiveType::Broadcast) {
         return execute_broadcast(execution_request, participants);
     }
+    if (request.type == CollectiveType::AllGather) {
+        return execute_allgather(execution_request, participants);
+    }
+    if (request.type == CollectiveType::ReduceScatter) {
+        return execute_reducescatter(execution_request, participants);
+    }
     return CollectiveExecutionResult{false, "unsupported_collective", "unsupported collective type"};
 }
 
