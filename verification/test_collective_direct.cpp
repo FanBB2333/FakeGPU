@@ -1,4 +1,5 @@
 #include "../src/distributed/cluster_coordinator.hpp"
+#include "../src/monitor/monitor.hpp"
 #include "../src/nccl/nccl_defs.hpp"
 
 #include <chrono>
@@ -626,31 +627,37 @@ int main(int argc, char** argv) {
 
         if (scenario == "allreduce") {
             run_allreduce_scenario();
+            fake_gpu::dump_monitor_report();
             std::cout << "allreduce scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "broadcast") {
             run_broadcast_scenario();
+            fake_gpu::dump_monitor_report();
             std::cout << "broadcast scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "allgather") {
             run_allgather_scenario();
+            fake_gpu::dump_monitor_report();
             std::cout << "allgather scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "reducescatter") {
             run_reducescatter_scenario();
+            fake_gpu::dump_monitor_report();
             std::cout << "reducescatter scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "mismatch") {
             run_mismatch_scenario();
+            fake_gpu::dump_monitor_report();
             std::cout << "mismatch scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "timeout") {
             run_timeout_case();
+            fake_gpu::dump_monitor_report();
             std::cout << "timeout scenario passed" << std::endl;
             return 0;
         }

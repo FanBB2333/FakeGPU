@@ -66,6 +66,16 @@ struct RegistryImpl {
     int next_comm_id = 1;
     std::unordered_map<std::string, std::shared_ptr<CommunicatorState>> pending_by_unique_id;
     std::unordered_map<int, std::shared_ptr<CommunicatorState>> active_by_comm_id;
+    struct ClusterReportState {
+        std::size_t world_size = 0;
+        std::size_t communicator_count = 0;
+        ClusterCollectiveReportStats all_reduce;
+        ClusterCollectiveReportStats broadcast;
+        ClusterCollectiveReportStats all_gather;
+        ClusterCollectiveReportStats reduce_scatter;
+        ClusterCollectiveReportStats barrier;
+        std::unordered_map<int, ClusterRankReportStats> ranks;
+    } report;
 };
 
 RegistryImpl& registry_impl() {
@@ -111,6 +121,87 @@ CollectiveBatchPrepareResult make_batch_error(std::string code, std::string deta
     result.error_code = std::move(code);
     result.error_detail = std::move(detail);
     return result;
+}
+
+ClusterRankReportStats& ensure_rank_report_locked(RegistryImpl& registry, int rank) {
+    auto [it, inserted] = registry.report.ranks.emplace(rank, ClusterRankReportStats{});
+    if (inserted) {
+        it->second.rank = rank;
+    }
+    return it->second;
+}
+
+void remember_world_size_locked(RegistryImpl& registry, int world_size) {
+    if (world_size > 0) {
+        registry.report.world_size =
+            std::max(registry.report.world_size, static_cast<std::size_t>(world_size));
+    }
+}
+
+void record_wait_time_locked(
+    RegistryImpl& registry,
+    int rank,
+    std::chrono::steady_clock::duration elapsed) {
+    if (rank < 0) {
+        return;
+    }
+    ClusterRankReportStats& stats = ensure_rank_report_locked(registry, rank);
+    stats.wait_time_ms += std::chrono::duration<double, std::milli>(elapsed).count();
+}
+
+template <typename ParticipantMap>
+void record_timeout_locked(RegistryImpl& registry, const ParticipantMap& participants) {
+    for (const auto& entry : participants) {
+        ClusterRankReportStats& stats = ensure_rank_report_locked(registry, entry.first);
+        stats.timeouts++;
+    }
+}
+
+ClusterCollectiveReportStats& collective_report_stats_for_type_locked(
+    RegistryImpl& registry,
+    CollectiveType type) {
+    switch (type) {
+        case CollectiveType::AllReduce:
+            return registry.report.all_reduce;
+        case CollectiveType::Broadcast:
+            return registry.report.broadcast;
+        case CollectiveType::AllGather:
+            return registry.report.all_gather;
+        case CollectiveType::ReduceScatter:
+            return registry.report.reduce_scatter;
+    }
+    return registry.report.all_reduce;
+}
+
+void record_collective_completion_locked(
+    RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::shared_ptr<CollectiveState>& collective) {
+    remember_world_size_locked(registry, state->world_size);
+
+    ClusterCollectiveReportStats& stats =
+        collective_report_stats_for_type_locked(registry, collective->request.type);
+    stats.calls++;
+    stats.bytes += static_cast<std::uint64_t>(collective->request.bytes) *
+                   static_cast<std::uint64_t>(state->world_size);
+
+    for (const auto& entry : collective->participants) {
+        ClusterRankReportStats& rank_stats = ensure_rank_report_locked(registry, entry.first);
+        rank_stats.collective_calls++;
+    }
+}
+
+void record_barrier_completion_locked(
+    RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::shared_ptr<BarrierState>& barrier) {
+    remember_world_size_locked(registry, state->world_size);
+    registry.report.barrier.calls++;
+
+    for (const auto& entry : barrier->participants) {
+        ClusterRankReportStats& rank_stats = ensure_rank_report_locked(registry, entry.first);
+        rank_stats.barrier_calls++;
+    }
 }
 
 void fail_pending_group_locked(
@@ -396,24 +487,31 @@ CommunicatorRegistrationResult CommunicatorRegistry::init_communicator(
         }
 
         state->participants.emplace(rank, true);
+        remember_world_size_locked(registry, world_size);
+        ensure_rank_report_locked(registry, rank).communicator_inits++;
         if (static_cast<int>(state->participants.size()) == state->world_size) {
             state->ready = true;
             state->comm_id = registry.next_comm_id++;
             registry.active_by_comm_id.emplace(state->comm_id, state);
             registry.pending_by_unique_id.erase(unique_id);
+            registry.report.communicator_count++;
             state->cv.notify_all();
             return CommunicatorRegistrationResult{true, state->comm_id, 0, "", ""};
         }
 
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        const auto wait_begin = std::chrono::steady_clock::now();
         while (!state->ready && !state->failed) {
             if (state->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                record_wait_time_locked(registry, rank, std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, state->participants);
                 const std::string detail =
                     "timeout waiting for ranks on unique_id " + unique_id;
                 fail_pending_group_locked(registry, state, "timeout_waiting_for_ranks", detail);
                 return make_error("timeout_waiting_for_ranks", detail);
             }
         }
+        record_wait_time_locked(registry, rank, std::chrono::steady_clock::now() - wait_begin);
 
         if (state->failed) {
             return make_error(state->failure_code, state->failure_detail);
@@ -547,8 +645,11 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     if (static_cast<int>(collective->participants.size()) == state->world_size) {
     } else {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.timeout_ms);
+        const auto wait_begin = std::chrono::steady_clock::now();
         while (!collective->completed && !collective->failed && !state->failed) {
             if (collective->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, collective->participants);
                 fail_collective_locked(
                     state,
                     collective,
@@ -557,6 +658,7 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
                 return make_collective_error(state->failure_code, state->failure_detail);
             }
         }
+        record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
 
         if (collective->completed) {
             return CollectiveSubmitResult{true, request.seqno, "", ""};
@@ -576,6 +678,7 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
         return make_collective_error(state->failure_code, state->failure_detail);
     }
 
+    record_collective_completion_locked(registry, state, collective);
     collective->completed = true;
     state->next_seqno++;
     state->collectives.erase(request.seqno);
@@ -665,8 +768,11 @@ BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequ
 
     if (static_cast<int>(barrier->participants.size()) != state->world_size) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.timeout_ms);
+        const auto wait_begin = std::chrono::steady_clock::now();
         while (!barrier->completed && !barrier->failed && !state->failed) {
             if (barrier->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, barrier->participants);
                 fail_barrier_locked(
                     state,
                     barrier,
@@ -676,6 +782,7 @@ BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequ
                 return make_barrier_error(state->failure_code, state->failure_detail);
             }
         }
+        record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
 
         if (barrier->completed) {
             return BarrierSubmitResult{true, request.seqno, "", ""};
@@ -683,6 +790,7 @@ BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequ
         return make_barrier_error(state->failure_code, state->failure_detail);
     }
 
+    record_barrier_completion_locked(registry, state, barrier);
     barrier->completed = true;
     state->next_seqno++;
     state->barriers.erase(request.seqno);
@@ -780,11 +888,15 @@ CollectiveBatchPrepareResult CommunicatorRegistry::prepare_collective_batch(
             "rank already submitted this group base_seqno");
         return make_batch_error(state->failure_code, state->failure_detail);
     }
+    ensure_rank_report_locked(registry, request.rank).group_prepares++;
 
     if (static_cast<int>(batch->participants.size()) != state->world_size) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.timeout_ms);
+        const auto wait_begin = std::chrono::steady_clock::now();
         while (!batch->completed && !batch->failed && !state->failed) {
             if (batch->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, batch->participants);
                 fail_batch_locked(
                     state,
                     batch,
@@ -794,6 +906,7 @@ CollectiveBatchPrepareResult CommunicatorRegistry::prepare_collective_batch(
                 return make_batch_error(state->failure_code, state->failure_detail);
             }
         }
+        record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
 
         if (batch->completed) {
             return CollectiveBatchPrepareResult{true, request.base_seqno, "", ""};
@@ -805,6 +918,41 @@ CollectiveBatchPrepareResult CommunicatorRegistry::prepare_collective_batch(
     state->batches.erase(request.base_seqno);
     batch->cv.notify_all();
     return CollectiveBatchPrepareResult{true, request.base_seqno, "", ""};
+}
+
+ClusterReportSnapshot snapshot_cluster_report() {
+    RegistryImpl& registry = registry_impl();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+
+    ClusterReportSnapshot snapshot;
+    snapshot.world_size = registry.report.world_size;
+    snapshot.communicator_count = registry.report.communicator_count;
+    snapshot.all_reduce = registry.report.all_reduce;
+    snapshot.broadcast = registry.report.broadcast;
+    snapshot.all_gather = registry.report.all_gather;
+    snapshot.reduce_scatter = registry.report.reduce_scatter;
+    snapshot.barrier = registry.report.barrier;
+    snapshot.ranks.reserve(registry.report.ranks.size());
+
+    for (const auto& entry : registry.report.ranks) {
+        snapshot.ranks.push_back(entry.second);
+    }
+    std::sort(
+        snapshot.ranks.begin(),
+        snapshot.ranks.end(),
+        [](const ClusterRankReportStats& lhs, const ClusterRankReportStats& rhs) {
+            return lhs.rank < rhs.rank;
+        });
+
+    snapshot.has_data =
+        snapshot.communicator_count > 0 ||
+        snapshot.all_reduce.calls > 0 ||
+        snapshot.broadcast.calls > 0 ||
+        snapshot.all_gather.calls > 0 ||
+        snapshot.reduce_scatter.calls > 0 ||
+        snapshot.barrier.calls > 0 ||
+        !snapshot.ranks.empty();
+    return snapshot;
 }
 
 }  // namespace fake_gpu::distributed

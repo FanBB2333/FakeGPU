@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace fake_gpu::distributed {
 
@@ -81,6 +82,33 @@ struct CollectiveBatchPrepareResult {
     std::string error_detail;
 };
 
+struct ClusterCollectiveReportStats {
+    std::uint64_t calls = 0;
+    std::uint64_t bytes = 0;
+};
+
+struct ClusterRankReportStats {
+    int rank = -1;
+    double wait_time_ms = 0.0;
+    std::uint64_t timeouts = 0;
+    std::uint64_t communicator_inits = 0;
+    std::uint64_t collective_calls = 0;
+    std::uint64_t barrier_calls = 0;
+    std::uint64_t group_prepares = 0;
+};
+
+struct ClusterReportSnapshot {
+    bool has_data = false;
+    std::size_t world_size = 0;
+    std::size_t communicator_count = 0;
+    ClusterCollectiveReportStats all_reduce;
+    ClusterCollectiveReportStats broadcast;
+    ClusterCollectiveReportStats all_gather;
+    ClusterCollectiveReportStats reduce_scatter;
+    ClusterCollectiveReportStats barrier;
+    std::vector<ClusterRankReportStats> ranks;
+};
+
 class CommunicatorRegistry {
 public:
     CommunicatorRegistrationResult init_communicator(
@@ -94,5 +122,7 @@ public:
     BarrierSubmitResult submit_barrier(const BarrierSubmitRequest& request);
     CollectiveBatchPrepareResult prepare_collective_batch(const CollectiveBatchPrepareRequest& request);
 };
+
+ClusterReportSnapshot snapshot_cluster_report();
 
 }  // namespace fake_gpu::distributed

@@ -10,6 +10,7 @@
 #include "../core/logging.hpp"
 #include "../core/backend_config.hpp"
 #include "../core/hybrid_memory_manager.hpp"
+#include "../distributed/communicator.hpp"
 
 namespace fake_gpu {
 
@@ -50,6 +51,112 @@ private:
         const uint64_t max_value = std::numeric_limits<uint64_t>::max();
         if (a >= max_value - b) return max_value;
         return a + b;
+    }
+
+    static std::string node_name_for_rank(
+        const distributed::ClusterConfigModel& config,
+        int rank) {
+        if (config.loaded()) {
+            for (const auto& node : config.nodes) {
+                for (int candidate : node.ranks) {
+                    if (candidate == rank) {
+                        return node.id;
+                    }
+                }
+            }
+        }
+        return "node0";
+    }
+
+    void dump_cluster_report_internal(const BackendConfig& config) {
+        const char* cluster_report_path = std::getenv("FAKEGPU_CLUSTER_REPORT_PATH");
+        const distributed::ClusterReportSnapshot cluster_snapshot =
+            distributed::snapshot_cluster_report();
+        if ((!cluster_report_path || !*cluster_report_path) && !config.distributed_enabled()) {
+            return;
+        }
+        if (!cluster_snapshot.has_data) {
+            return;
+        }
+        if (!cluster_report_path || !*cluster_report_path) {
+            cluster_report_path = "fake_gpu_cluster_report.json";
+        }
+
+        FILE* out = fopen(cluster_report_path, "w");
+        if (!out) {
+            FGPU_LOG("[Monitor] Failed to open cluster report file\n");
+            return;
+        }
+
+        const distributed::DistributedConfig& dist_config = config.distributed_config();
+        const distributed::ClusterConfigModel& cluster_config = dist_config.cluster_config;
+        const std::size_t world_size = cluster_snapshot.world_size > 0
+            ? cluster_snapshot.world_size
+            : (cluster_config.loaded() ? cluster_config.world_size : cluster_snapshot.ranks.size());
+        const std::size_t node_count = cluster_config.loaded()
+            ? cluster_config.nodes.size()
+            : (world_size > 0 ? 1U : 0U);
+
+        fprintf(out, "{\n");
+        fprintf(out, "  \"report_version\": 4,\n");
+        fprintf(out, "  \"schema\": \"experimental\",\n");
+        fprintf(out, "  \"cluster\": {\n");
+        fprintf(out, "    \"mode\": \"%s\",\n", distributed::distributed_mode_name(dist_config.mode));
+        fprintf(out, "    \"world_size\": %llu,\n", (unsigned long long)world_size);
+        fprintf(out, "    \"node_count\": %llu,\n", (unsigned long long)node_count);
+        fprintf(out, "    \"communicators\": %llu,\n",
+                (unsigned long long)cluster_snapshot.communicator_count);
+        fprintf(out, "    \"coordinator_transport\": \"%s\"",
+                distributed::coordinator_transport_name(dist_config.coordinator_transport));
+        if (cluster_config.loaded()) {
+            fprintf(out, ",\n");
+            fprintf(out, "    \"name\": \"%s\",\n", cluster_config.name.c_str());
+            fprintf(out, "    \"default_backend\": \"%s\",\n", cluster_config.default_backend.c_str());
+            fprintf(out, "    \"config_path\": \"%s\"\n", cluster_config.source_path.c_str());
+        } else {
+            fprintf(out, "\n");
+        }
+        fprintf(out, "  },\n");
+        fprintf(out, "  \"collectives\": {\n");
+        fprintf(out, "    \"all_reduce\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                (unsigned long long)cluster_snapshot.all_reduce.calls,
+                (unsigned long long)cluster_snapshot.all_reduce.bytes);
+        fprintf(out, "    \"broadcast\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                (unsigned long long)cluster_snapshot.broadcast.calls,
+                (unsigned long long)cluster_snapshot.broadcast.bytes);
+        fprintf(out, "    \"all_gather\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                (unsigned long long)cluster_snapshot.all_gather.calls,
+                (unsigned long long)cluster_snapshot.all_gather.bytes);
+        fprintf(out, "    \"reduce_scatter\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                (unsigned long long)cluster_snapshot.reduce_scatter.calls,
+                (unsigned long long)cluster_snapshot.reduce_scatter.bytes);
+        fprintf(out, "    \"barrier\": {\"calls\": %llu, \"bytes\": %llu}\n",
+                (unsigned long long)cluster_snapshot.barrier.calls,
+                (unsigned long long)cluster_snapshot.barrier.bytes);
+        fprintf(out, "  },\n");
+        fprintf(out, "  \"ranks\": [\n");
+        for (std::size_t index = 0; index < cluster_snapshot.ranks.size(); ++index) {
+            const auto& rank_stats = cluster_snapshot.ranks[index];
+            const std::string node_name = node_name_for_rank(cluster_config, rank_stats.rank);
+            fprintf(out, "    {\n");
+            fprintf(out, "      \"rank\": %d,\n", rank_stats.rank);
+            fprintf(out, "      \"node\": \"%s\",\n", node_name.c_str());
+            fprintf(out, "      \"wait_time_ms\": %.3f,\n", rank_stats.wait_time_ms);
+            fprintf(out, "      \"timeouts\": %llu,\n",
+                    (unsigned long long)rank_stats.timeouts);
+            fprintf(out, "      \"communicator_inits\": %llu,\n",
+                    (unsigned long long)rank_stats.communicator_inits);
+            fprintf(out, "      \"collective_calls\": %llu,\n",
+                    (unsigned long long)rank_stats.collective_calls);
+            fprintf(out, "      \"barrier_calls\": %llu,\n",
+                    (unsigned long long)rank_stats.barrier_calls);
+            fprintf(out, "      \"group_prepares\": %llu\n",
+                    (unsigned long long)rank_stats.group_prepares);
+            fprintf(out, "    }%s\n", (index + 1 < cluster_snapshot.ranks.size() ? "," : ""));
+        }
+        fprintf(out, "  ]\n");
+        fprintf(out, "}\n");
+        fclose(out);
     }
 
     void dump_report_internal() {
@@ -245,6 +352,7 @@ private:
             fprintf(out, "  ]\n");
             fprintf(out, "}\n");
             fclose(out);
+            dump_cluster_report_internal(config);
             g_report_dumped.store(true);
         } catch (...) {
             FGPU_LOG("[Monitor] Exception during report dump\n");
