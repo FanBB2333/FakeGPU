@@ -1,0 +1,63 @@
+{
+  "report_version": 4,
+  "schema": "experimental",
+  "cluster": {
+    "mode": "simulate",
+    "world_size": 4,
+    "node_count": 2,
+    "communicators": 1,
+    "coordinator_transport": "unix",
+    "name": "dev-cluster",
+    "default_backend": "nccl",
+    "config_path": "/home/l1ght/repos/fakeGPU/verification/data/cluster_valid.yaml"
+  },
+  "collectives": {
+    "all_reduce": {"calls": 5, "bytes": 6832},
+    "broadcast": {"calls": 5, "bytes": 3888},
+    "all_gather": {"calls": 1, "bytes": 128},
+    "reduce_scatter": {"calls": 0, "bytes": 0},
+    "barrier": {"calls": 0, "bytes": 0}
+  },
+  "ranks": [
+    {
+      "rank": 0,
+      "node": "node0",
+      "wait_time_ms": 10.182,
+      "timeouts": 0,
+      "communicator_inits": 1,
+      "collective_calls": 11,
+      "barrier_calls": 0,
+      "group_prepares": 0
+    },
+    {
+      "rank": 1,
+      "node": "node0",
+      "wait_time_ms": 1.088,
+      "timeouts": 0,
+      "communicator_inits": 1,
+      "collective_calls": 11,
+      "barrier_calls": 0,
+      "group_prepares": 0
+    },
+    {
+      "rank": 2,
+      "node": "node1",
+      "wait_time_ms": 6.574,
+      "timeouts": 0,
+      "communicator_inits": 1,
+      "collective_calls": 11,
+      "barrier_calls": 0,
+      "group_prepares": 0
+    },
+    {
+      "rank": 3,
+      "node": "node1",
+      "wait_time_ms": 6.853,
+      "timeouts": 0,
+      "communicator_inits": 1,
+      "collective_calls": 11,
+      "barrier_calls": 0,
+      "group_prepares": 0
+    }
+  ]
+}

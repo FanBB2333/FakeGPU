@@ -1,5 +1,7 @@
 #include "cluster_coordinator.hpp"
+#include "cluster_config.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -13,6 +15,112 @@ void print_usage() {
 std::string getenv_or_empty(const char* name) {
     const char* value = std::getenv(name);
     return value ? std::string(value) : std::string();
+}
+
+std::string node_name_for_rank(
+    const fake_gpu::distributed::ClusterConfigModel& config,
+    int rank) {
+    if (config.loaded()) {
+        for (const auto& node : config.nodes) {
+            for (int candidate : node.ranks) {
+                if (candidate == rank) {
+                    return node.id;
+                }
+            }
+        }
+    }
+    return "node0";
+}
+
+bool dump_cluster_report(
+    const fake_gpu::distributed::DistributedConfig& config,
+    std::string& error) {
+    const char* report_path = std::getenv("FAKEGPU_CLUSTER_REPORT_PATH");
+    if (!report_path || !*report_path) {
+        return true;
+    }
+
+    const fake_gpu::distributed::ClusterReportSnapshot snapshot =
+        fake_gpu::distributed::snapshot_cluster_report();
+    if (!snapshot.has_data) {
+        return true;
+    }
+
+    FILE* out = std::fopen(report_path, "w");
+    if (!out) {
+        error = std::string("failed to open cluster report: ") + report_path;
+        return false;
+    }
+
+    const auto& cluster_config = config.cluster_config;
+    const std::size_t world_size = snapshot.world_size > 0
+        ? snapshot.world_size
+        : (cluster_config.loaded() ? cluster_config.world_size : snapshot.ranks.size());
+    const std::size_t node_count = cluster_config.loaded()
+        ? cluster_config.nodes.size()
+        : (world_size > 0 ? 1U : 0U);
+
+    std::fprintf(out, "{\n");
+    std::fprintf(out, "  \"report_version\": 4,\n");
+    std::fprintf(out, "  \"schema\": \"experimental\",\n");
+    std::fprintf(out, "  \"cluster\": {\n");
+    std::fprintf(out, "    \"mode\": \"%s\",\n",
+                 fake_gpu::distributed::distributed_mode_name(config.mode));
+    std::fprintf(out, "    \"world_size\": %llu,\n", (unsigned long long)world_size);
+    std::fprintf(out, "    \"node_count\": %llu,\n", (unsigned long long)node_count);
+    std::fprintf(out, "    \"communicators\": %llu,\n",
+                 (unsigned long long)snapshot.communicator_count);
+    std::fprintf(out, "    \"coordinator_transport\": \"%s\"",
+                 fake_gpu::distributed::coordinator_transport_name(config.coordinator_transport));
+    if (cluster_config.loaded()) {
+        std::fprintf(out, ",\n");
+        std::fprintf(out, "    \"name\": \"%s\",\n", cluster_config.name.c_str());
+        std::fprintf(out, "    \"default_backend\": \"%s\",\n", cluster_config.default_backend.c_str());
+        std::fprintf(out, "    \"config_path\": \"%s\"\n", cluster_config.source_path.c_str());
+    } else {
+        std::fprintf(out, "\n");
+    }
+    std::fprintf(out, "  },\n");
+    std::fprintf(out, "  \"collectives\": {\n");
+    std::fprintf(out, "    \"all_reduce\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)snapshot.all_reduce.calls,
+                 (unsigned long long)snapshot.all_reduce.bytes);
+    std::fprintf(out, "    \"broadcast\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)snapshot.broadcast.calls,
+                 (unsigned long long)snapshot.broadcast.bytes);
+    std::fprintf(out, "    \"all_gather\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)snapshot.all_gather.calls,
+                 (unsigned long long)snapshot.all_gather.bytes);
+    std::fprintf(out, "    \"reduce_scatter\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)snapshot.reduce_scatter.calls,
+                 (unsigned long long)snapshot.reduce_scatter.bytes);
+    std::fprintf(out, "    \"barrier\": {\"calls\": %llu, \"bytes\": %llu}\n",
+                 (unsigned long long)snapshot.barrier.calls,
+                 (unsigned long long)snapshot.barrier.bytes);
+    std::fprintf(out, "  },\n");
+    std::fprintf(out, "  \"ranks\": [\n");
+    for (std::size_t index = 0; index < snapshot.ranks.size(); ++index) {
+        const auto& rank_stats = snapshot.ranks[index];
+        const std::string node_name = node_name_for_rank(cluster_config, rank_stats.rank);
+        std::fprintf(out, "    {\n");
+        std::fprintf(out, "      \"rank\": %d,\n", rank_stats.rank);
+        std::fprintf(out, "      \"node\": \"%s\",\n", node_name.c_str());
+        std::fprintf(out, "      \"wait_time_ms\": %.3f,\n", rank_stats.wait_time_ms);
+        std::fprintf(out, "      \"timeouts\": %llu,\n", (unsigned long long)rank_stats.timeouts);
+        std::fprintf(out, "      \"communicator_inits\": %llu,\n",
+                     (unsigned long long)rank_stats.communicator_inits);
+        std::fprintf(out, "      \"collective_calls\": %llu,\n",
+                     (unsigned long long)rank_stats.collective_calls);
+        std::fprintf(out, "      \"barrier_calls\": %llu,\n",
+                     (unsigned long long)rank_stats.barrier_calls);
+        std::fprintf(out, "      \"group_prepares\": %llu\n",
+                     (unsigned long long)rank_stats.group_prepares);
+        std::fprintf(out, "    }%s\n", (index + 1 < snapshot.ranks.size() ? "," : ""));
+    }
+    std::fprintf(out, "  ]\n");
+    std::fprintf(out, "}\n");
+    std::fclose(out);
+    return true;
 }
 
 }  // namespace
@@ -58,5 +166,22 @@ int main(int argc, char** argv) {
 
     std::cout << "fakegpu-coordinator listening on " << coordinator.socket_path() << "\n";
     std::cout.flush();
-    return coordinator.run();
+    int exit_code = coordinator.run();
+
+    fake_gpu::distributed::DistributedConfig report_config =
+        fake_gpu::distributed::parse_distributed_config_from_env();
+    if (report_config.mode == fake_gpu::distributed::DistributedMode::Disabled) {
+        report_config.mode = fake_gpu::distributed::DistributedMode::Simulate;
+    }
+    report_config.coordinator_transport = fake_gpu::distributed::CoordinatorTransport::Unix;
+    report_config.coordinator_address = address;
+
+    if (!dump_cluster_report(report_config, error)) {
+        std::cerr << "Failed to write cluster report: " << error << "\n";
+        if (exit_code == 0) {
+            exit_code = 1;
+        }
+    }
+
+    return exit_code;
 }

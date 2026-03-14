@@ -1338,7 +1338,7 @@ src/nccl/
 - [x] Step 12：GroupStart / GroupEnd 支持
 - [x] Step 13：AllGather 与 ReduceScatter
 - [x] Step 14：Cluster Report 基础版
-- [ ] Step 15：DDP 主路径验证
+- [x] Step 15：DDP 主路径验证
 
 本次完成标准：
 
@@ -1346,7 +1346,7 @@ src/nccl/
 - [x] group 语义可批量提交并保持顺序
 - [x] all_gather / reduce_scatter 语义正确
 - [x] cluster report 生成并包含核心字段
-- [ ] 单机模拟 2 节点 x 4 rank 的 DDP 主路径可跑通
+- [x] 单机模拟 2 节点 x 4 rank 的 DDP 主路径可跑通
 
 #### 第 8 次：Step 16 + Step 17 + Step 18
 

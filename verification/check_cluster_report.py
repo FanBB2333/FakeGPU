@@ -40,8 +40,9 @@ def main() -> int:
     ap.add_argument(
         "--expect-collective",
         choices=["all_reduce", "broadcast", "all_gather", "reduce_scatter", "barrier"],
-        default=None,
-        help="Require the named collective to have calls > 0",
+        action="append",
+        default=[],
+        help="Require the named collective to have calls > 0 (repeatable)",
     )
     ap.add_argument("--min-ranks", type=int, default=1, help="Minimum number of rank entries expected")
     args = ap.parse_args()
@@ -92,10 +93,10 @@ def main() -> int:
             non_zero_collectives += 1
     if non_zero_collectives == 0:
         _die("expected at least one collective counter to be non-zero")
-    if args.expect_collective is not None:
-        expected = collectives[args.expect_collective]
+    for expected_name in args.expect_collective:
+        expected = collectives[expected_name]
         if int(expected["calls"]) <= 0:
-            _die(f"expected collectives.{args.expect_collective}.calls > 0")
+            _die(f"expected collectives.{expected_name}.calls > 0")
 
     ranks = _require(report, "ranks", ctx="root")
     if not isinstance(ranks, list) or len(ranks) < args.min_ranks:
