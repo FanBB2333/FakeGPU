@@ -474,6 +474,34 @@ void run_send_recv_timeout_case() {
     require_result(ncclCommDestroy(comms[1]), ncclSuccess, "destroy after timeout failed");
 }
 
+void run_premul_redop_api_case() {
+    ncclRedOp_t op = ncclSum;
+    float scalar = 2.0f;
+    require_result(
+        ncclRedOpCreatePreMulSum(&op, &scalar, ncclFloat32, ncclScalarHostImmediate, nullptr),
+        ncclSuccess,
+        "ncclRedOpCreatePreMulSum should succeed");
+    require(static_cast<int>(op) != static_cast<int>(ncclSum), "custom redop should not alias ncclSum");
+    require_result(ncclRedOpDestroy(op, nullptr), ncclSuccess, "ncclRedOpDestroy should succeed");
+
+    require_result(
+        ncclRedOpCreatePreMulSum(nullptr, &scalar, ncclFloat32, ncclScalarHostImmediate, nullptr),
+        ncclInvalidArgument,
+        "null op should fail");
+    require_result(
+        ncclRedOpCreatePreMulSum(&op, nullptr, ncclFloat32, ncclScalarHostImmediate, nullptr),
+        ncclInvalidArgument,
+        "null scalar should fail");
+    require_result(
+        ncclRedOpCreatePreMulSum(&op, &scalar, ncclFloat16, ncclScalarHostImmediate, nullptr),
+        ncclInvalidArgument,
+        "unsupported datatype should fail");
+    require_result(
+        ncclRedOpCreatePreMulSum(&op, &scalar, ncclFloat32, ncclScalarDevice, nullptr),
+        ncclInvalidUsage,
+        "device scalar residence should fail");
+}
+
 }  // namespace
 
 int main() {
@@ -494,6 +522,7 @@ int main() {
         run_send_recv_case();
         run_send_recv_multi_pair_case();
         run_send_recv_timeout_case();
+        run_premul_redop_api_case();
 
         std::cout << "nccl direct init/destroy test passed" << std::endl;
         return 0;
