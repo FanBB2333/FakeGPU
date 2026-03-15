@@ -2,6 +2,7 @@
 #include "../src/nccl/nccl_defs.hpp"
 
 #include <chrono>
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -159,6 +160,45 @@ void run_duplicate_destroy_case() {
         "second destroy should fail with ncclInvalidUsage");
 }
 
+void run_comm_init_all_case() {
+    std::array<int, 3> devlist = {3, 1, 2};
+    std::array<ncclComm_t, 3> comms = {nullptr, nullptr, nullptr};
+
+    require_result(
+        ncclCommInitAll(comms.data(), static_cast<int>(comms.size()), devlist.data()),
+        ncclSuccess,
+        "ncclCommInitAll should succeed");
+
+    for (std::size_t index = 0; index < comms.size(); ++index) {
+        ncclComm_t comm = comms[index];
+        require(comm != nullptr, "ncclCommInitAll returned a null communicator");
+
+        int count = -1;
+        int rank = -1;
+        int device = -1;
+        require_result(ncclCommCount(comm, &count), ncclSuccess, "ncclCommCount failed");
+        require_result(ncclCommUserRank(comm, &rank), ncclSuccess, "ncclCommUserRank failed");
+        require_result(ncclCommCuDevice(comm, &device), ncclSuccess, "ncclCommCuDevice failed");
+
+        require(count == static_cast<int>(comms.size()), "ncclCommCount returned the wrong world size");
+        require(rank == static_cast<int>(index), "ncclCommUserRank returned the wrong rank");
+        require(device == devlist[index], "ncclCommCuDevice returned the wrong device id");
+    }
+
+    for (ncclComm_t comm : comms) {
+        require_result(ncclCommDestroy(comm), ncclSuccess, "ncclCommDestroy after ncclCommInitAll failed");
+    }
+}
+
+void run_comm_init_all_invalid_case() {
+    std::array<ncclComm_t, 2> comms = {nullptr, nullptr};
+    require_result(
+        ncclCommInitAll(comms.data(), 0, nullptr),
+        ncclInvalidArgument,
+        "ndev=0 should fail");
+    require(comms[0] == nullptr && comms[1] == nullptr, "invalid ncclCommInitAll should not mutate outputs");
+}
+
 }  // namespace
 
 int main() {
@@ -173,6 +213,8 @@ int main() {
         run_world_size_case(4);
         run_invalid_argument_case();
         run_duplicate_destroy_case();
+        run_comm_init_all_case();
+        run_comm_init_all_invalid_case();
 
         std::cout << "nccl direct init/destroy test passed" << std::endl;
         return 0;

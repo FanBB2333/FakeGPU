@@ -19,6 +19,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1680,13 +1681,70 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
     return ncclSuccess;
 }
 
-ncclResult_t ncclCommInitAll(ncclComm_t* comm, int ndev, const int* /*devlist*/) {
-    if (comm && ndev > 0) {
-        for (int index = 0; index < ndev; ++index) {
-            comm[index] = nullptr;
+ncclResult_t ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "comm must not be null");
+    }
+    if (ndev <= 0) {
+        return fail_with(nullptr, ncclInvalidArgument, "ndev must be > 0");
+    }
+
+    std::vector<int> devices(static_cast<std::size_t>(ndev), 0);
+    for (int index = 0; index < ndev; ++index) {
+        comm[index] = nullptr;
+        devices[static_cast<std::size_t>(index)] =
+            devlist ? devlist[index] : index;
+    }
+
+    ncclUniqueId unique_id {};
+    ncclResult_t result = ncclGetUniqueId(&unique_id);
+    if (result != ncclSuccess) {
+        return result;
+    }
+
+    std::vector<ncclComm_t> local_comms(static_cast<std::size_t>(ndev), nullptr);
+    std::vector<ncclResult_t> results(static_cast<std::size_t>(ndev), ncclInternalError);
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<std::size_t>(ndev));
+
+    for (int rank = 0; rank < ndev; ++rank) {
+        threads.emplace_back([&, rank]() {
+            results[static_cast<std::size_t>(rank)] =
+                ncclCommInitRank(&local_comms[static_cast<std::size_t>(rank)], ndev, unique_id, rank);
+        });
+    }
+
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+
+    ncclResult_t first_error = ncclSuccess;
+    for (int rank = 0; rank < ndev; ++rank) {
+        const ncclResult_t init_result = results[static_cast<std::size_t>(rank)];
+        if (init_result != ncclSuccess && first_error == ncclSuccess) {
+            first_error = init_result;
         }
     }
-    return unsupported_step_api(nullptr, "ncclCommInitAll", "a later compatibility pass");
+
+    if (first_error != ncclSuccess) {
+        for (ncclComm_t local_comm : local_comms) {
+            if (local_comm) {
+                ncclCommAbort(local_comm);
+            }
+        }
+        return first_error;
+    }
+
+    for (int rank = 0; rank < ndev; ++rank) {
+        ncclComm_t local_comm = local_comms[static_cast<std::size_t>(rank)];
+        if (local_comm) {
+            local_comm->device = devices[static_cast<std::size_t>(rank)];
+        }
+        comm[rank] = local_comm;
+    }
+
+    clear_last_error(nullptr);
+    return ncclSuccess;
 }
 
 ncclResult_t ncclCommInitRankScalable(
