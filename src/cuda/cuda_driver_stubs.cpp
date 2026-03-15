@@ -36,8 +36,18 @@ int map_virtual_device_to_real(int virtual_device) {
 std::mutex g_ctx_mutex;
 std::unordered_map<CUcontext, int> g_ctx_to_virtual_device;
 std::atomic<std::uintptr_t> g_next_stream_handle{1};
+std::atomic<std::uintptr_t> g_next_event_handle{1};
 std::mutex g_stream_mutex;
 std::unordered_map<CUstream, unsigned int> g_stream_flags;
+std::mutex g_event_mutex;
+
+struct EventState {
+    unsigned int flags = 0;
+    bool recorded = false;
+    CUstream last_stream = nullptr;
+};
+
+std::unordered_map<CUevent, EventState> g_event_states;
 
 void track_context_mapping(CUcontext ctx, int virtual_device) {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
@@ -74,6 +84,42 @@ bool erase_stream_handle(CUstream stream) {
 void register_stream_handle(CUstream stream, unsigned int flags) {
     std::lock_guard<std::mutex> lock(g_stream_mutex);
     g_stream_flags[stream] = flags;
+}
+
+bool lookup_event_state(CUevent event, EventState& state) {
+    if (event == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_event_mutex);
+    auto it = g_event_states.find(event);
+    if (it == g_event_states.end()) return false;
+    state = it->second;
+    return true;
+}
+
+bool erase_event_handle(CUevent event) {
+    if (event == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_event_mutex);
+    return g_event_states.erase(event) > 0;
+}
+
+void register_event_handle(CUevent event, unsigned int flags) {
+    std::lock_guard<std::mutex> lock(g_event_mutex);
+    EventState& state = g_event_states[event];
+    state.flags = flags;
+    state.recorded = false;
+    state.last_stream = nullptr;
+}
+
+bool mark_event_recorded(CUevent event, CUstream stream) {
+    std::lock_guard<std::mutex> lock(g_event_mutex);
+    auto it = g_event_states.find(event);
+    if (it == g_event_states.end()) return false;
+    it->second.recorded = true;
+    it->second.last_stream = stream;
+    return true;
 }
 
 } // namespace
@@ -1077,10 +1123,16 @@ CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags)
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamWaitEvent(hStream, hEvent, Flags);
     }
-    unsigned int flags = 0;
-    if (!lookup_stream_flags(hStream, flags)) {
+    unsigned int stream_flags = 0;
+    if (!lookup_stream_flags(hStream, stream_flags)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
+    EventState event_state;
+    if (!lookup_event_state(hEvent, event_state)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    (void)stream_flags;
+    (void)event_state;
     return CUDA_SUCCESS;
 }
 
@@ -1141,7 +1193,8 @@ CUresult cuEventCreate(CUevent *phEvent, unsigned int Flags) {
         return CudaDriverPassthrough::instance().cuEventCreate(phEvent, Flags);
     }
 
-    *phEvent = (CUevent)(uintptr_t)1;
+    *phEvent = reinterpret_cast<CUevent>(g_next_event_handle.fetch_add(1));
+    register_event_handle(*phEvent, Flags);
     FGPU_LOG("[FakeCUDA-Driver] cuEventCreate returning fake event\n");
     return CUDA_SUCCESS;
 }
@@ -1150,6 +1203,9 @@ CUresult cuEventDestroy(CUevent hEvent) {
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventDestroy(hEvent);
+    }
+    if (!erase_event_handle(hEvent)) {
+        return CUDA_ERROR_INVALID_VALUE;
     }
     FGPU_LOG("[FakeCUDA-Driver] cuEventDestroy\n");
     return CUDA_SUCCESS;
@@ -1160,6 +1216,13 @@ CUresult cuEventRecord(CUevent hEvent, CUstream hStream) {
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventRecord(hEvent, hStream);
     }
+    unsigned int stream_flags = 0;
+    if (!lookup_stream_flags(hStream, stream_flags)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if (!mark_event_recorded(hEvent, hStream)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     return CUDA_SUCCESS;
 }
 
@@ -1168,6 +1231,11 @@ CUresult cuEventSynchronize(CUevent hEvent) {
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventSynchronize(hEvent);
     }
+    EventState state;
+    if (!lookup_event_state(hEvent, state)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    (void)state;
     return CUDA_SUCCESS;
 }
 
@@ -1176,6 +1244,11 @@ CUresult cuEventQuery(CUevent hEvent) {
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventQuery(hEvent);
     }
+    EventState state;
+    if (!lookup_event_state(hEvent, state)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    (void)state;
     return CUDA_SUCCESS;
 }
 
@@ -1184,6 +1257,15 @@ CUresult cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUevent hEnd) 
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventElapsedTime(pMilliseconds, hStart, hEnd);
     }
+    EventState start_state;
+    EventState end_state;
+    if (!pMilliseconds ||
+        !lookup_event_state(hStart, start_state) ||
+        !lookup_event_state(hEnd, end_state)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    (void)start_state;
+    (void)end_state;
     if (pMilliseconds) *pMilliseconds = 0.0f;
     return CUDA_SUCCESS;
 }
