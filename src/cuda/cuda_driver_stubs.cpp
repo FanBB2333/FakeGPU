@@ -5,6 +5,7 @@
 #include "../core/hybrid_memory_manager.hpp"
 #include <cstdio>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
@@ -34,6 +35,7 @@ int map_virtual_device_to_real(int virtual_device) {
 
 std::mutex g_ctx_mutex;
 std::unordered_map<CUcontext, int> g_ctx_to_virtual_device;
+std::atomic<std::uintptr_t> g_next_stream_handle{1};
 
 void track_context_mapping(CUcontext ctx, int virtual_device) {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
@@ -999,8 +1001,8 @@ CUresult cuStreamCreate(CUstream *phStream, unsigned int Flags) {
         return CudaDriverPassthrough::instance().cuStreamCreate(phStream, Flags);
     }
 
-    // Return a fake stream pointer
-    *phStream = (CUstream)(uintptr_t)1;
+    // Return a stable but distinct opaque stream handle in simulate mode.
+    *phStream = reinterpret_cast<CUstream>(g_next_stream_handle.fetch_add(1));
     FGPU_LOG("[FakeCUDA-Driver] cuStreamCreate returning fake stream\n");
     return CUDA_SUCCESS;
 }
