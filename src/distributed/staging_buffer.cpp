@@ -14,6 +14,8 @@ namespace fake_gpu::distributed {
 
 namespace {
 
+constexpr const char* kTransportUnavailablePrefix = "shared memory transport unavailable: ";
+
 bool validate_name(const std::string& name, std::string& error) {
     if (name.empty() || name.front() != '/') {
         error = "staging buffer name must start with /";
@@ -85,10 +87,26 @@ bool resolve_staging_limit_bytes(std::size_t& out, std::string& error) {
     return true;
 }
 
+bool force_socket_staging(std::string& error) {
+    const char* raw = std::getenv("FAKEGPU_STAGING_FORCE_SOCKET");
+    if (!raw || !*raw) {
+        return false;
+    }
+    if (std::strcmp(raw, "0") == 0 || std::strcmp(raw, "false") == 0) {
+        return false;
+    }
+    error = std::string(kTransportUnavailablePrefix) + "forced via FAKEGPU_STAGING_FORCE_SOCKET";
+    return true;
+}
+
 }  // namespace
 
 std::string default_staging_buffer_name(int owner_rank, std::uint64_t staging_id) {
     return "/fakegpu-staging-r" + std::to_string(owner_rank) + "-s" + std::to_string(staging_id);
+}
+
+bool is_staging_transport_unavailable_error(const std::string& error) {
+    return error.rfind(kTransportUnavailablePrefix, 0) == 0;
 }
 
 StagingBufferHandle::~StagingBufferHandle() {
@@ -191,6 +209,9 @@ bool StagingBufferManager::create(
     if (!validate_metadata(metadata, error)) {
         return false;
     }
+    if (force_socket_staging(error)) {
+        return false;
+    }
 
     std::size_t staging_limit_bytes = 0;
     if (!resolve_staging_limit_bytes(staging_limit_bytes, error)) {
@@ -208,12 +229,14 @@ bool StagingBufferManager::create(
 
     const int fd = ::shm_open(metadata.name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
     if (fd < 0) {
-        error = "shm_open() failed: " + std::string(std::strerror(errno));
+        error = std::string(kTransportUnavailablePrefix) +
+                "shm_open() failed: " + std::string(std::strerror(errno));
         return false;
     }
 
     if (::ftruncate(fd, static_cast<off_t>(metadata.bytes)) != 0) {
-        error = "ftruncate() failed: " + std::string(std::strerror(errno));
+        error = std::string(kTransportUnavailablePrefix) +
+                "ftruncate() failed: " + std::string(std::strerror(errno));
         ::close(fd);
         ::shm_unlink(metadata.name.c_str());
         return false;
@@ -221,7 +244,8 @@ bool StagingBufferManager::create(
 
     void* mapping = ::mmap(nullptr, metadata.bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (mapping == MAP_FAILED) {
-        error = "mmap() failed: " + std::string(std::strerror(errno));
+        error = std::string(kTransportUnavailablePrefix) +
+                "mmap() failed: " + std::string(std::strerror(errno));
         ::close(fd);
         ::shm_unlink(metadata.name.c_str());
         return false;

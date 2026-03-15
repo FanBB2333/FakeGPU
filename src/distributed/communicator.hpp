@@ -56,8 +56,11 @@ struct PointToPointSubmitRequest {
     int peer = -1;
     CollectiveDataType dtype = CollectiveDataType::Float32;
     std::size_t count = 0;
+    BufferTransport transport = BufferTransport::SharedMemory;
     std::string staging_name;
     std::size_t bytes = 0;
+    std::size_t payload_bytes = 0;
+    std::vector<char> payload;
     int timeout_ms = 0;
 };
 
@@ -66,6 +69,7 @@ struct PointToPointSubmitResult {
     std::uint64_t seqno = 0;
     std::string error_code;
     std::string error_detail;
+    std::vector<char> output_payload;
 };
 
 struct CollectiveSubmitRequest {
@@ -77,8 +81,11 @@ struct CollectiveSubmitRequest {
     std::size_t count = 0;
     int root = -1;
     CollectiveReduceOp reduce_op = CollectiveReduceOp::None;
+    BufferTransport transport = BufferTransport::SharedMemory;
     std::string staging_name;
     std::size_t bytes = 0;
+    std::size_t payload_bytes = 0;
+    std::vector<char> payload;
     int timeout_ms = 0;
     bool proxy_only = false;
 };
@@ -88,6 +95,7 @@ struct CollectiveSubmitResult {
     std::uint64_t seqno = 0;
     std::string error_code;
     std::string error_detail;
+    std::vector<char> output_payload;
 };
 
 struct BarrierSubmitRequest {

@@ -17,6 +17,7 @@ typedef enum cudaError_enum {
     cudaErrorInitializationError = 3,
     cudaErrorCudartUnloading = 4,
     cudaErrorProfilerDisabled = 5,
+    cudaErrorNotReady = 600,
     cudaErrorInvalidDevice = 101,
     cudaErrorInvalidMemcpyDirection = 21,
     cudaErrorUnknown = 999

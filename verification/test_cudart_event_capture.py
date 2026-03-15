@@ -6,6 +6,7 @@ import pathlib
 
 CUDA_SUCCESS = 0
 CUDA_ERROR_INVALID_VALUE = 1
+CUDA_ERROR_NOT_READY = 600
 CUDA_STREAM_NON_BLOCKING = 1
 CUDA_CAPTURE_NONE = 0
 CUDA_CAPTURE_ACTIVE = 1
@@ -34,6 +35,12 @@ def main():
 
     cudart.cudaStreamDestroy.argtypes = [ctypes.c_void_p]
     cudart.cudaStreamDestroy.restype = ctypes.c_int
+
+    cudart.cudaStreamQuery.argtypes = [ctypes.c_void_p]
+    cudart.cudaStreamQuery.restype = ctypes.c_int
+
+    cudart.cudaStreamSynchronize.argtypes = [ctypes.c_void_p]
+    cudart.cudaStreamSynchronize.restype = ctypes.c_int
 
     cudart.cudaStreamWaitEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
     cudart.cudaStreamWaitEvent.restype = ctypes.c_int
@@ -141,8 +148,9 @@ def main():
 
     require(cudart.cudaEventRecord(event, stream) == CUDA_SUCCESS, "cudaEventRecord should succeed")
     require(cudart.cudaEventRecordWithFlags(event, stream, 0) == CUDA_SUCCESS, "cudaEventRecordWithFlags should succeed")
-    require(cudart.cudaEventQuery(event) == CUDA_SUCCESS, "cudaEventQuery should succeed for a live event")
+    require(cudart.cudaEventQuery(event) == CUDA_ERROR_NOT_READY, "freshly recorded event should be pending")
     require(cudart.cudaEventSynchronize(event) == CUDA_SUCCESS, "cudaEventSynchronize should succeed for a live event")
+    require(cudart.cudaEventQuery(event) == CUDA_SUCCESS, "cudaEventQuery should succeed after synchronize")
     require(cudart.cudaStreamWaitEvent(stream, event, 0) == CUDA_SUCCESS, "cudaStreamWaitEvent should succeed for live handles")
 
     elapsed_ms = ctypes.c_float()
@@ -151,6 +159,41 @@ def main():
         "cudaEventElapsedTime should succeed for live events",
     )
     require(elapsed_ms.value == 0.0, "simulate-mode elapsed time should remain zero")
+
+    ordering_stream = ctypes.c_void_p()
+    require(
+        cudart.cudaStreamCreateWithFlags(ctypes.byref(ordering_stream), 0) == CUDA_SUCCESS,
+        "blocking cudaStreamCreateWithFlags should succeed",
+    )
+    require(ordering_stream.value not in (None, 0), "ordering stream should be non-null")
+
+    wait_stream = ctypes.c_void_p()
+    require(
+        cudart.cudaStreamCreateWithFlags(ctypes.byref(wait_stream), CUDA_STREAM_NON_BLOCKING) == CUDA_SUCCESS,
+        "wait stream create should succeed",
+    )
+
+    start_event = ctypes.c_void_p()
+    end_event = ctypes.c_void_p()
+    require(cudart.cudaEventCreate(ctypes.byref(start_event)) == CUDA_SUCCESS, "start event create should succeed")
+    require(cudart.cudaEventCreate(ctypes.byref(end_event)) == CUDA_SUCCESS, "end event create should succeed")
+    require(cudart.cudaEventRecord(start_event, ordering_stream) == CUDA_SUCCESS, "start event record should succeed")
+    require(cudart.cudaEventRecord(end_event, ordering_stream) == CUDA_SUCCESS, "end event record should succeed")
+    require(cudart.cudaStreamQuery(ordering_stream) == CUDA_ERROR_NOT_READY, "stream query should report pending work")
+    require(cudart.cudaEventQuery(end_event) == CUDA_ERROR_NOT_READY, "end event should remain pending before sync")
+    require(cudart.cudaStreamWaitEvent(wait_stream, end_event, 0) == CUDA_SUCCESS, "cross-stream wait should succeed")
+    require(cudart.cudaStreamQuery(wait_stream) == CUDA_ERROR_NOT_READY, "wait stream should inherit pending dependency")
+    require(cudart.cudaStreamSynchronize(ordering_stream) == CUDA_SUCCESS, "ordering stream sync should succeed")
+    require(cudart.cudaStreamQuery(ordering_stream) == CUDA_SUCCESS, "stream query should become ready after sync")
+    require(cudart.cudaEventQuery(end_event) == CUDA_SUCCESS, "end event should become ready after stream sync")
+    require(cudart.cudaStreamSynchronize(wait_stream) == CUDA_SUCCESS, "wait stream sync should succeed")
+    require(cudart.cudaStreamQuery(wait_stream) == CUDA_SUCCESS, "wait stream should become ready after sync")
+    positive_elapsed_ms = ctypes.c_float()
+    require(
+        cudart.cudaEventElapsedTime(ctypes.byref(positive_elapsed_ms), start_event, end_event) == CUDA_SUCCESS,
+        "elapsed time should succeed for ordered events",
+    )
+    require(positive_elapsed_ms.value > 0.0, "ordered events should report a positive logical elapsed time")
 
     capture_status = ctypes.c_int(-1)
     capture_id = ctypes.c_ulonglong(99)
@@ -240,6 +283,8 @@ def main():
     )
 
     require(cudart.cudaEventDestroy(event) == CUDA_SUCCESS, "cudaEventDestroy should succeed")
+    require(cudart.cudaEventDestroy(start_event) == CUDA_SUCCESS, "start event destroy should succeed")
+    require(cudart.cudaEventDestroy(end_event) == CUDA_SUCCESS, "end event destroy should succeed")
     require(cudart.cudaEventQuery(event) == CUDA_ERROR_INVALID_VALUE, "destroyed event should become invalid")
     require(cudart.cudaEventRecord(event, stream) == CUDA_ERROR_INVALID_VALUE, "destroyed event record should fail")
     require(
@@ -252,6 +297,8 @@ def main():
     )
 
     require(cudart.cudaStreamDestroy(stream) == CUDA_SUCCESS, "cudaStreamDestroy should succeed")
+    require(cudart.cudaStreamDestroy(ordering_stream) == CUDA_SUCCESS, "ordering stream destroy should succeed")
+    require(cudart.cudaStreamDestroy(wait_stream) == CUDA_SUCCESS, "wait stream destroy should succeed")
     require(
         cudart.cudaGraphUpload(graph_exec, stream) == CUDA_ERROR_INVALID_VALUE,
         "cudaGraphUpload should reject a destroyed stream",

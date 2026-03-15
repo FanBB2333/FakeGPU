@@ -81,13 +81,23 @@ static cudaError_t convertDriverError(CUresult result) {
             return cudaErrorInvalidDevice;
         case CUDA_ERROR_NOT_INITIALIZED:
             return cudaErrorInitializationError;
+        case CUDA_ERROR_NOT_READY:
+            return cudaErrorNotReady;
         default:
             return cudaErrorUnknown;
     }
 }
 
 static bool validateStreamArgument(cudaStream_t stream) {
-    CUresult result = cuStreamQuery((CUstream)stream);
+    if (!fake_gpu::cuda::is_stream_handle_live((CUstream)stream)) {
+        last_error = cudaErrorInvalidValue;
+        return false;
+    }
+    return true;
+}
+
+static bool submitAsyncStreamOperation(cudaStream_t stream) {
+    const CUresult result = fake_gpu::cuda::submit_stream_operation((CUstream)stream);
     if (result != CUDA_SUCCESS) {
         last_error = convertDriverError(result);
         return false;
@@ -294,6 +304,9 @@ cudaError_t cudaMallocAsync(void **devPtr, size_t size, cudaStream_t stream) {
         last_error = convertDriverError(result);
     }
 
+    if (last_error == cudaSuccess && !submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     return last_error;
 }
 
@@ -308,6 +321,9 @@ cudaError_t cudaFreeAsync(void *devPtr, cudaStream_t stream) {
 
     CUresult result = cuMemFree((CUdeviceptr)devPtr);
     last_error = convertDriverError(result);
+    if (last_error == cudaSuccess && !submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaFreeAsync(%p)\n", devPtr);
     return last_error;
 }
@@ -368,6 +384,9 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count, cudaMemcpy
     }
 
     last_error = convertDriverError(result);
+    if (last_error == cudaSuccess && !submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     return last_error;
 }
 
@@ -389,6 +408,9 @@ cudaError_t cudaMemcpyPeerAsync(void *dst, int dstDevice, const void *src, int s
     memcpy(dst, src, count);
     last_error = cudaSuccess;
     fake_gpu::GlobalState::instance().record_memcpy_peer(dstDevice, srcDevice, count);
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaMemcpyPeerAsync count=%zu from device %d to device %d\n", count, srcDevice, dstDevice);
     return last_error;
 }
@@ -410,6 +432,9 @@ cudaError_t cudaMemsetAsync(void *devPtr, int value, size_t count, cudaStream_t 
     memset(devPtr, value, count);
     last_error = cudaSuccess;
     fake_gpu::GlobalState::instance().record_memset(devPtr, count);
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     return last_error;
 }
 
@@ -550,6 +575,8 @@ const char* cudaGetErrorString(cudaError_t error) {
             return "invalid device ordinal";
         case cudaErrorInvalidMemcpyDirection:
             return "invalid memcpy direction";
+        case cudaErrorNotReady:
+            return "not ready";
         default:
             return "unknown error";
     }
@@ -569,6 +596,8 @@ const char* cudaGetErrorName(cudaError_t error) {
             return "cudaErrorInvalidDevice";
         case cudaErrorInvalidMemcpyDirection:
             return "cudaErrorInvalidMemcpyDirection";
+        case cudaErrorNotReady:
+            return "cudaErrorNotReady";
         default:
             return "cudaErrorUnknown";
     }
@@ -616,6 +645,9 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
 
     // No actual kernel execution
     last_error = cudaSuccess;
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     return last_error;
 }
 
@@ -625,6 +657,9 @@ cudaError_t cudaConfigureCall(dim3 gridDim, dim3 blockDim, size_t sharedMem, cud
     }
     FGPU_LOG("[FakeCUDART] cudaConfigureCall (stub)\n");
     last_error = cudaSuccess;
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     return last_error;
 }
 
@@ -656,6 +691,9 @@ cudaError_t cudaLaunchHostFunc(cudaStream_t stream, void (*fn)(void *userData), 
         fn(userData);
     }
     last_error = cudaSuccess;
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaLaunchHostFunc (executed host function)\n");
     return last_error;
 }
@@ -1084,7 +1122,14 @@ cudaError_t cudaMemcpy2DAsync(void *dst, size_t dpitch, const void *src, size_t 
     }
 
     // Simplified: do synchronous copy after validating the stream handle.
-    return cudaMemcpy2D(dst, dpitch, src, spitch, width, height, kind);
+    cudaError_t result = cudaMemcpy2D(dst, dpitch, src, spitch, width, height, kind);
+    if (result != cudaSuccess) {
+        return result;
+    }
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
+    return last_error;
 }
 
 cudaError_t cudaMemcpy3D(const void *p) {
@@ -1100,6 +1145,9 @@ cudaError_t cudaMemcpy3DAsync(const void *p, cudaStream_t stream) {
 
     // Simplified: just succeed after validating the stream handle.
     last_error = cudaSuccess;
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     return last_error;
 }
 
@@ -1128,6 +1176,9 @@ cudaError_t cudaMemPrefetchAsync(const void *devPtr, size_t count, int dstDevice
 
     // Simplified: just succeed after validating the stream handle.
     last_error = cudaSuccess;
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     return last_error;
 }
 
@@ -1200,6 +1251,9 @@ cudaError_t cudaMallocFromPoolAsync(void **ptr, size_t size, cudaMemPool_t memPo
         last_error = convertDriverError(result);
     }
 
+    if (last_error == cudaSuccess && !submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     return last_error;
 }
 
@@ -1597,6 +1651,9 @@ cudaError_t cudaGraphLaunch(cudaGraphExec_t graphExec, cudaStream_t stream) {
         return last_error;
     }
     last_error = cudaSuccess;
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaGraphLaunch (stub)\n");
     return last_error;
 }
@@ -1610,6 +1667,9 @@ cudaError_t cudaGraphUpload(cudaGraphExec_t graphExec, cudaStream_t stream) {
         return last_error;
     }
     last_error = cudaSuccess;
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaGraphUpload (stub)\n");
     return last_error;
 }
@@ -1945,13 +2005,25 @@ cudaError_t cudaImportExternalSemaphore(void **extSem_out, const void *semHandle
 }
 
 cudaError_t cudaSignalExternalSemaphoresAsync(const void **extSemArray, const void **paramsArray, unsigned int numExtSems, cudaStream_t stream) {
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
     last_error = cudaSuccess;
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaSignalExternalSemaphoresAsync (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaWaitExternalSemaphoresAsync(const void **extSemArray, const void **paramsArray, unsigned int numExtSems, cudaStream_t stream) {
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
     last_error = cudaSuccess;
+    if (!submitAsyncStreamOperation(stream)) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaWaitExternalSemaphoresAsync (stub)\n");
     return last_error;
 }

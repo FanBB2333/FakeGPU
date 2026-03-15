@@ -1,7 +1,7 @@
 #include "collective_executor.hpp"
 
+#include "buffer_transfer.hpp"
 #include "collective_slice_plan.hpp"
-#include "staging_buffer.hpp"
 
 #include <cstring>
 #include <string>
@@ -33,9 +33,6 @@ CollectiveExecutionResult execute_allgather(
         return make_error("invalid_collective_size", "allgather bytes do not match world_size * count * dtype_size");
     }
 
-    StagingBufferManager manager;
-    std::vector<StagingBufferHandle> handles;
-    handles.reserve(participants.size());
     std::vector<unsigned char> gathered(plan.total_bytes, 0);
 
     for (std::size_t index = 0; index < participants.size(); ++index) {
@@ -48,31 +45,46 @@ CollectiveExecutionResult execute_allgather(
                     ", expected " + std::to_string(request.bytes));
         }
 
-        StagingBufferMetadata metadata;
-        metadata.name = participant.staging_name;
-        metadata.dtype = collective_data_type_name(request.dtype);
-        metadata.bytes = request.bytes;
-        metadata.shape = {plan.total_elements};
-        metadata.owner_rank = participant.rank;
-        metadata.staging_id = request.seqno;
-
-        StagingBufferHandle handle;
-        if (!manager.open(metadata, false, handle, error)) {
+        std::vector<char> buffer;
+        if (!load_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                participant.transport == BufferTransport::SocketPayload
+                    ? participant.payload_bytes
+                    : request.bytes,
+                {plan.total_elements},
+                participant.rank,
+                request.seqno,
+                participant.payload,
+                buffer,
+                error)) {
             return make_error("staging_open_failed", error);
         }
         std::memcpy(
             gathered.data() + plan.byte_offset_for_rank(participant.rank),
-            handle.data(),
+            buffer.data(),
             plan.chunk_bytes);
-        handles.push_back(std::move(handle));
-    }
-
-    for (StagingBufferHandle& handle : handles) {
-        std::memcpy(handle.data(), gathered.data(), gathered.size());
     }
 
     CollectiveExecutionResult result;
     result.ok = true;
+    for (const CollectiveExecutionParticipant& participant : participants) {
+        if (!store_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                {plan.total_elements},
+                participant.rank,
+                request.seqno,
+                gathered.data(),
+                gathered.size(),
+                result.output_payloads[participant.rank],
+                error)) {
+            return make_error("staging_open_failed", error);
+        }
+    }
+
     return result;
 }
 

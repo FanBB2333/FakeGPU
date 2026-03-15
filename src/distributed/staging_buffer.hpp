@@ -17,6 +17,7 @@ struct StagingBufferMetadata {
 };
 
 std::string default_staging_buffer_name(int owner_rank, std::uint64_t staging_id);
+bool is_staging_transport_unavailable_error(const std::string& error);
 
 class StagingBufferHandle {
 public:

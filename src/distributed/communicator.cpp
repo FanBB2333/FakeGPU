@@ -1,8 +1,8 @@
 #include "communicator.hpp"
 
 #include "../core/backend_config.hpp"
+#include "buffer_transfer.hpp"
 #include "topology_model.hpp"
-#include "staging_buffer.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -26,6 +26,7 @@ struct CollectiveState {
     std::string failure_code;
     std::string failure_detail;
     std::unordered_map<int, CollectiveExecutionParticipant> participants;
+    std::unordered_map<int, CollectiveSubmitResult> results;
     std::condition_variable cv;
 };
 
@@ -74,6 +75,7 @@ struct PointToPointState {
     std::string failure_code;
     std::string failure_detail;
     std::unordered_map<int, PointToPointSubmitRequest> participants;
+    std::unordered_map<int, PointToPointSubmitResult> results;
     std::condition_variable cv;
 };
 
@@ -414,6 +416,11 @@ bool collective_requests_match(
     const CollectiveSubmitRequest& actual,
     std::string& error_code,
     std::string& error_detail) {
+    if (expected.transport != actual.transport) {
+        error_code = "buffer_transport_mismatch";
+        error_detail = "collective ranks disagreed on buffer transport";
+        return false;
+    }
     if (expected.type != actual.type) {
         error_code = "collective_type_mismatch";
         error_detail =
@@ -463,6 +470,13 @@ bool collective_requests_match(
             ", got " + (actual.proxy_only ? "1" : "0");
         return false;
     }
+    if (expected.payload_bytes != actual.payload_bytes) {
+        error_code = "payload_bytes_mismatch";
+        error_detail =
+            "expected payload_bytes=" + std::to_string(expected.payload_bytes) +
+            ", got " + std::to_string(actual.payload_bytes);
+        return false;
+    }
     return true;
 }
 
@@ -471,11 +485,23 @@ bool point_to_point_requests_match(
     const PointToPointSubmitRequest& actual,
     std::string& error_code,
     std::string& error_detail) {
+    if (expected.transport != actual.transport) {
+        error_code = "buffer_transport_mismatch";
+        error_detail = "point-to-point peers disagreed on buffer transport";
+        return false;
+    }
     if (expected.timeout_ms != actual.timeout_ms) {
         error_code = "p2p_timeout_mismatch";
         error_detail =
             "expected timeout_ms=" + std::to_string(expected.timeout_ms) +
             ", got " + std::to_string(actual.timeout_ms);
+        return false;
+    }
+    if (expected.payload_bytes != actual.payload_bytes) {
+        error_code = "payload_bytes_mismatch";
+        error_detail =
+            "expected payload_bytes=" + std::to_string(expected.payload_bytes) +
+            ", got " + std::to_string(actual.payload_bytes);
         return false;
     }
     return true;
@@ -499,8 +525,9 @@ bool split_requests_match(
 CollectiveExecutionResult execute_point_to_point_locked(
     const PointToPointSubmitRequest& request,
     const std::shared_ptr<PointToPointState>& p2p) {
-    StagingBufferManager manager;
     std::string error;
+    CollectiveExecutionResult result;
+    result.ok = true;
 
     for (const auto& entry : p2p->participants) {
         const PointToPointSubmitRequest& participant = entry.second;
@@ -580,37 +607,50 @@ CollectiveExecutionResult execute_point_to_point_locked(
         const PointToPointSubmitRequest& receiver =
             p2p->participants.at(participant.peer);
 
-        StagingBufferMetadata sender_metadata;
-        sender_metadata.name = participant.staging_name;
-        sender_metadata.dtype = collective_data_type_name(participant.dtype);
-        sender_metadata.bytes = participant.bytes;
-        sender_metadata.shape = {participant.count};
-        sender_metadata.owner_rank = participant.rank;
-        sender_metadata.staging_id = participant.seqno;
-
-        StagingBufferMetadata receiver_metadata;
-        receiver_metadata.name = receiver.staging_name;
-        receiver_metadata.dtype = collective_data_type_name(receiver.dtype);
-        receiver_metadata.bytes = receiver.bytes;
-        receiver_metadata.shape = {receiver.count};
-        receiver_metadata.owner_rank = receiver.rank;
-        receiver_metadata.staging_id = receiver.seqno;
-
-        StagingBufferHandle sender_handle;
-        if (!manager.open(sender_metadata, false, sender_handle, error)) {
+        std::vector<char> sender_bytes;
+        if (!load_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                participant.dtype,
+                participant.transport == BufferTransport::SocketPayload
+                    ? participant.payload_bytes
+                    : participant.bytes,
+                {participant.count},
+                participant.rank,
+                participant.seqno,
+                participant.payload,
+                sender_bytes,
+                error)) {
             return CollectiveExecutionResult{false, "staging_open_failed", error};
         }
 
-        StagingBufferHandle receiver_handle;
-        if (!manager.open(receiver_metadata, false, receiver_handle, error)) {
+        std::vector<char> receiver_output;
+        if (!store_participant_buffer(
+                receiver.transport,
+                receiver.staging_name,
+                receiver.dtype,
+                {receiver.count},
+                receiver.rank,
+                receiver.seqno,
+                sender_bytes.data(),
+                sender_bytes.size(),
+                receiver_output,
+                error)) {
             return CollectiveExecutionResult{false, "staging_open_failed", error};
         }
-
-        std::memcpy(receiver_handle.data(), sender_handle.data(), participant.bytes);
+        if (receiver.transport == BufferTransport::SocketPayload) {
+            result.output_payloads[receiver.rank] = std::move(receiver_output);
+        }
+        if (participant.transport == BufferTransport::SocketPayload) {
+            result.output_payloads.emplace(participant.rank, std::vector<char>{});
+        }
     }
 
-    CollectiveExecutionResult result;
-    result.ok = true;
+    for (const auto& entry : p2p->participants) {
+        if (entry.second.transport == BufferTransport::SocketPayload) {
+            result.output_payloads.emplace(entry.first, std::vector<char>{});
+        }
+    }
     return result;
 }
 
@@ -1062,8 +1102,13 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
     if (request.bytes == 0) {
         return make_point_to_point_error("invalid_bytes", "bytes must be > 0");
     }
-    if (request.staging_name.empty()) {
+    if (request.transport == BufferTransport::SharedMemory && request.staging_name.empty()) {
         return make_point_to_point_error("missing_staging_name", "staging_name must be set");
+    }
+    if (request.transport == BufferTransport::SocketPayload &&
+        request.type == PointToPointType::Send &&
+        request.payload.size() != request.payload_bytes) {
+        return make_point_to_point_error("socket_payload_size_mismatch", "point-to-point socket payload size did not match bytes");
     }
     if (request.timeout_ms <= 0) {
         return make_point_to_point_error("invalid_timeout", "timeout_ms must be > 0");
@@ -1156,7 +1201,11 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
         record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
 
         if (p2p->completed) {
-            return PointToPointSubmitResult{true, request.seqno, "", ""};
+            auto result_it = p2p->results.find(request.rank);
+            if (result_it == p2p->results.end()) {
+                return make_point_to_point_error("internal_error", "point-to-point completed without a per-rank result");
+            }
+            return result_it->second;
         }
         return make_point_to_point_error(state->failure_code, state->failure_detail);
     }
@@ -1173,11 +1222,21 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
         return make_point_to_point_error(state->failure_code, state->failure_detail);
     }
 
+    for (const auto& entry : p2p->participants) {
+        PointToPointSubmitResult result;
+        result.ok = true;
+        result.seqno = request.seqno;
+        auto payload_it = execution.output_payloads.find(entry.first);
+        if (payload_it != execution.output_payloads.end()) {
+            result.output_payload = payload_it->second;
+        }
+        p2p->results[entry.first] = std::move(result);
+    }
     p2p->completed = true;
     state->next_seqno++;
     state->point_to_points.erase(request.seqno);
     p2p->cv.notify_all();
-    return PointToPointSubmitResult{true, request.seqno, "", ""};
+    return p2p->results.at(request.rank);
 }
 
 CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveSubmitRequest& request) {
@@ -1196,8 +1255,15 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     if (request.bytes == 0) {
         return make_collective_error("invalid_bytes", "bytes must be > 0");
     }
-    if (!request.proxy_only && request.staging_name.empty()) {
+    if (!request.proxy_only &&
+        request.transport == BufferTransport::SharedMemory &&
+        request.staging_name.empty()) {
         return make_collective_error("missing_staging_name", "staging_name must be set");
+    }
+    if (!request.proxy_only &&
+        request.transport == BufferTransport::SocketPayload &&
+        request.payload.size() != request.payload_bytes) {
+        return make_collective_error("socket_payload_size_mismatch", "collective socket payload size did not match bytes");
     }
     if (request.timeout_ms <= 0) {
         return make_collective_error("invalid_timeout", "timeout_ms must be > 0");
@@ -1267,8 +1333,11 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
 
     CollectiveExecutionParticipant participant;
     participant.rank = request.rank;
+    participant.transport = request.transport;
     participant.staging_name = request.staging_name;
     participant.bytes = request.bytes;
+    participant.payload_bytes = request.payload_bytes;
+    participant.payload = request.payload;
     if (!collective->participants.emplace(request.rank, participant).second) {
         fail_collective_locked(
             state,
@@ -1281,11 +1350,17 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     if (static_cast<int>(collective->participants.size()) == state->world_size) {
         if (request.proxy_only) {
             record_collective_completion_locked(registry, state, collective);
+            for (const auto& entry : collective->participants) {
+                CollectiveSubmitResult result;
+                result.ok = true;
+                result.seqno = request.seqno;
+                collective->results[entry.first] = std::move(result);
+            }
             collective->completed = true;
             state->next_seqno++;
             state->collectives.erase(request.seqno);
             collective->cv.notify_all();
-            return CollectiveSubmitResult{true, request.seqno, "", ""};
+            return collective->results.at(request.rank);
         }
     } else {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.timeout_ms);
@@ -1305,7 +1380,11 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
         record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
 
         if (collective->completed) {
-            return CollectiveSubmitResult{true, request.seqno, "", ""};
+            auto result_it = collective->results.find(request.rank);
+            if (result_it == collective->results.end()) {
+                return make_collective_error("internal_error", "collective completed without a per-rank result");
+            }
+            return result_it->second;
         }
         return make_collective_error(state->failure_code, state->failure_detail);
     }
@@ -1323,11 +1402,21 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     }
 
     record_collective_completion_locked(registry, state, collective);
+    for (const auto& entry : collective->participants) {
+        CollectiveSubmitResult result;
+        result.ok = true;
+        result.seqno = request.seqno;
+        auto payload_it = execution.output_payloads.find(entry.first);
+        if (payload_it != execution.output_payloads.end()) {
+            result.output_payload = payload_it->second;
+        }
+        collective->results[entry.first] = std::move(result);
+    }
     collective->completed = true;
     state->next_seqno++;
     state->collectives.erase(request.seqno);
     collective->cv.notify_all();
-    return CollectiveSubmitResult{true, request.seqno, "", ""};
+    return collective->results.at(request.rank);
 }
 
 BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequest& request) {

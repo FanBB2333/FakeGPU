@@ -21,6 +21,7 @@ def main() -> int:
         "rank": rank,
         "world_size": world_size,
         "mode": os.environ["RUN_MODE"],
+        "grouped": os.environ.get("USE_GROUPED", "0") not in ("", "0", "false", "False"),
         "status": "starting",
         "stage": "bootstrap",
     }
@@ -79,6 +80,10 @@ def main() -> int:
             ctypes.c_void_p,
         ]
         lib.ncclBroadcast.restype = ctypes.c_int
+        lib.ncclGroupStart.argtypes = []
+        lib.ncclGroupStart.restype = ctypes.c_int
+        lib.ncclGroupEnd.argtypes = []
+        lib.ncclGroupEnd.restype = ctypes.c_int
 
         unique_id = ncclUniqueId()
         if rank == 0:
@@ -116,6 +121,17 @@ def main() -> int:
             device="cuda",
             dtype=torch.float32,
         )
+        broadcast = torch.tensor(
+            [111, 222] if rank == 0 else [0, 0],
+            device="cuda",
+            dtype=torch.int32,
+        )
+        if report["grouped"]:
+            result = lib.ncclGroupStart()
+            report["group_start_result"] = int(result)
+            if result != 0:
+                raise AssertionError(f"ncclGroupStart failed with code {result}")
+
         result = lib.ncclAllReduce(
             ctypes.c_void_p(all_reduce.data_ptr()),
             ctypes.c_void_p(all_reduce.data_ptr()),
@@ -128,14 +144,7 @@ def main() -> int:
         report["all_reduce_result"] = int(result)
         if result != 0:
             raise AssertionError(f"ncclAllReduce failed with code {result}")
-        report["stage"] = "all_reduce_done"
-        flush()
 
-        broadcast = torch.tensor(
-            [111, 222] if rank == 0 else [0, 0],
-            device="cuda",
-            dtype=torch.int32,
-        )
         result = lib.ncclBroadcast(
             ctypes.c_void_p(broadcast.data_ptr()),
             ctypes.c_void_p(broadcast.data_ptr()),
@@ -148,7 +157,14 @@ def main() -> int:
         report["broadcast_result"] = int(result)
         if result != 0:
             raise AssertionError(f"ncclBroadcast failed with code {result}")
-        report["stage"] = "broadcast_done"
+
+        if report["grouped"]:
+            result = lib.ncclGroupEnd()
+            report["group_end_result"] = int(result)
+            if result != 0:
+                raise AssertionError(f"ncclGroupEnd failed with code {result}")
+
+        report["stage"] = "collectives_done"
         flush()
 
         torch.cuda.synchronize()

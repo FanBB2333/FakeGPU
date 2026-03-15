@@ -37,14 +37,27 @@ std::mutex g_ctx_mutex;
 std::unordered_map<CUcontext, int> g_ctx_to_virtual_device;
 std::atomic<std::uintptr_t> g_next_stream_handle{1};
 std::atomic<std::uintptr_t> g_next_event_handle{1};
+std::atomic<std::uint64_t> g_next_timeline_tick{1};
 std::mutex g_stream_mutex;
-std::unordered_map<CUstream, unsigned int> g_stream_flags;
+std::uint64_t g_default_stream_submitted_tick = 0;
+std::uint64_t g_default_stream_completed_tick = 0;
 std::mutex g_event_mutex;
+
+struct StreamState {
+    unsigned int flags = 0;
+    std::uint64_t submitted_tick = 0;
+    std::uint64_t completed_tick = 0;
+    std::uint64_t dependency_tick = 0;
+};
+
+std::unordered_map<CUstream, StreamState> g_stream_states;
 
 struct EventState {
     unsigned int flags = 0;
     bool recorded = false;
+    bool completed = false;
     CUstream last_stream = nullptr;
+    std::uint64_t timeline_tick = 0;
 };
 
 std::unordered_map<CUevent, EventState> g_event_states;
@@ -67,9 +80,25 @@ bool lookup_stream_flags(CUstream stream, unsigned int& flags) {
         return true;
     }
     std::lock_guard<std::mutex> lock(g_stream_mutex);
-    auto it = g_stream_flags.find(stream);
-    if (it == g_stream_flags.end()) return false;
-    flags = it->second;
+    auto it = g_stream_states.find(stream);
+    if (it == g_stream_states.end()) return false;
+    flags = it->second.flags;
+    return true;
+}
+
+bool lookup_stream_state_locked(CUstream stream, StreamState& state) {
+    if (stream == nullptr) {
+        state.flags = CU_STREAM_DEFAULT;
+        state.submitted_tick = g_default_stream_submitted_tick;
+        state.completed_tick = g_default_stream_completed_tick;
+        state.dependency_tick = g_default_stream_submitted_tick;
+        return true;
+    }
+    const auto it = g_stream_states.find(stream);
+    if (it == g_stream_states.end()) {
+        return false;
+    }
+    state = it->second;
     return true;
 }
 
@@ -78,12 +107,12 @@ bool erase_stream_handle(CUstream stream) {
         return false;
     }
     std::lock_guard<std::mutex> lock(g_stream_mutex);
-    return g_stream_flags.erase(stream) > 0;
+    return g_stream_states.erase(stream) > 0;
 }
 
 void register_stream_handle(CUstream stream, unsigned int flags) {
     std::lock_guard<std::mutex> lock(g_stream_mutex);
-    g_stream_flags[stream] = flags;
+    g_stream_states[stream].flags = flags;
 }
 
 bool lookup_event_state(CUevent event, EventState& state) {
@@ -110,19 +139,142 @@ void register_event_handle(CUevent event, unsigned int flags) {
     EventState& state = g_event_states[event];
     state.flags = flags;
     state.recorded = false;
+    state.completed = false;
     state.last_stream = nullptr;
+    state.timeline_tick = 0;
+}
+
+bool stream_is_non_blocking(unsigned int flags) {
+    return (flags & CU_STREAM_NON_BLOCKING) != 0;
+}
+
+std::uint64_t max_submitted_tick_for_blocking_streams_locked() {
+    std::uint64_t max_tick = g_default_stream_submitted_tick;
+    for (const auto& entry : g_stream_states) {
+        if (!stream_is_non_blocking(entry.second.flags)) {
+            max_tick = std::max(max_tick, entry.second.submitted_tick);
+        }
+    }
+    return max_tick;
+}
+
+std::uint64_t reserve_next_tick(std::uint64_t floor_tick) {
+    const std::uint64_t next_tick = g_next_timeline_tick.fetch_add(1);
+    return std::max(next_tick, floor_tick + 1);
+}
+
+bool submit_stream_operation_locked(CUstream stream, std::uint64_t& tick) {
+    StreamState state;
+    if (!lookup_stream_state_locked(stream, state)) {
+        return false;
+    }
+
+    std::uint64_t floor_tick = std::max(state.submitted_tick, state.dependency_tick);
+    if (stream == nullptr) {
+        floor_tick = std::max(floor_tick, max_submitted_tick_for_blocking_streams_locked());
+        tick = reserve_next_tick(floor_tick);
+        g_default_stream_submitted_tick = tick;
+        return true;
+    }
+
+    if (!stream_is_non_blocking(state.flags)) {
+        floor_tick = std::max(floor_tick, g_default_stream_submitted_tick);
+    }
+    tick = reserve_next_tick(floor_tick);
+    StreamState& writable = g_stream_states[stream];
+    writable.submitted_tick = tick;
+    writable.dependency_tick = tick;
+    return true;
+}
+
+bool mark_stream_synchronized_locked(CUstream stream) {
+    if (stream == nullptr) {
+        g_default_stream_completed_tick = g_default_stream_submitted_tick;
+        return true;
+    }
+    auto it = g_stream_states.find(stream);
+    if (it == g_stream_states.end()) {
+        return false;
+    }
+    it->second.completed_tick = it->second.submitted_tick;
+    return true;
+}
+
+bool stream_is_ready_locked(CUstream stream) {
+    if (stream == nullptr) {
+        return g_default_stream_completed_tick >= g_default_stream_submitted_tick;
+    }
+    auto it = g_stream_states.find(stream);
+    if (it == g_stream_states.end()) {
+        return false;
+    }
+    return it->second.completed_tick >= it->second.submitted_tick;
+}
+
+std::uint64_t stream_completed_tick(CUstream stream) {
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    if (stream == nullptr) {
+        return g_default_stream_completed_tick;
+    }
+    const auto it = g_stream_states.find(stream);
+    if (it == g_stream_states.end()) {
+        return 0;
+    }
+    return it->second.completed_tick;
 }
 
 bool mark_event_recorded(CUevent event, CUstream stream) {
+    std::uint64_t tick = 0;
+    {
+        std::lock_guard<std::mutex> stream_lock(g_stream_mutex);
+        if (!submit_stream_operation_locked(stream, tick)) {
+            return false;
+        }
+    }
+
     std::lock_guard<std::mutex> lock(g_event_mutex);
     auto it = g_event_states.find(event);
     if (it == g_event_states.end()) return false;
     it->second.recorded = true;
+    it->second.completed = false;
     it->second.last_stream = stream;
+    it->second.timeline_tick = tick;
     return true;
 }
 
 } // namespace
+
+namespace fake_gpu::cuda {
+
+bool is_stream_handle_live(CUstream stream) {
+    const BackendConfig& config = BackendConfig::instance();
+    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+        return true;
+    }
+    unsigned int flags = 0;
+    return lookup_stream_flags(stream, flags);
+}
+
+CUresult submit_stream_operation(CUstream stream) {
+    const BackendConfig& config = BackendConfig::instance();
+    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+        return CUDA_SUCCESS;
+    }
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    std::uint64_t tick = 0;
+    return submit_stream_operation_locked(stream, tick) ? CUDA_SUCCESS : CUDA_ERROR_INVALID_VALUE;
+}
+
+CUresult mark_stream_synchronized(CUstream stream) {
+    const BackendConfig& config = BackendConfig::instance();
+    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+        return CUDA_SUCCESS;
+    }
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    return mark_stream_synchronized_locked(stream) ? CUDA_SUCCESS : CUDA_ERROR_INVALID_VALUE;
+}
+
+}  // namespace fake_gpu::cuda
 
 extern "C" {
 
@@ -1043,19 +1195,29 @@ CUresult cuCtxPopCurrent(CUcontext *pctx) {
 
 // Error handling
 CUresult cuGetErrorString(CUresult error, const char **pStr) {
-    static const char* error_strings[] = {
-        "CUDA_SUCCESS",
-        "CUDA_ERROR_INVALID_VALUE",
-        "CUDA_ERROR_OUT_OF_MEMORY",
-        "CUDA_ERROR_NOT_INITIALIZED",
-        "CUDA_ERROR_DEINITIALIZED"
-    };
-
     if (pStr) {
-        if (error < 5) {
-            *pStr = error_strings[error];
-        } else {
-            *pStr = "CUDA_ERROR_UNKNOWN";
+        switch (error) {
+            case CUDA_SUCCESS:
+                *pStr = "CUDA_SUCCESS";
+                break;
+            case CUDA_ERROR_INVALID_VALUE:
+                *pStr = "CUDA_ERROR_INVALID_VALUE";
+                break;
+            case CUDA_ERROR_OUT_OF_MEMORY:
+                *pStr = "CUDA_ERROR_OUT_OF_MEMORY";
+                break;
+            case CUDA_ERROR_NOT_INITIALIZED:
+                *pStr = "CUDA_ERROR_NOT_INITIALIZED";
+                break;
+            case CUDA_ERROR_DEINITIALIZED:
+                *pStr = "CUDA_ERROR_DEINITIALIZED";
+                break;
+            case CUDA_ERROR_NOT_READY:
+                *pStr = "CUDA_ERROR_NOT_READY";
+                break;
+            default:
+                *pStr = "CUDA_ERROR_UNKNOWN";
+                break;
         }
     }
     return CUDA_SUCCESS;
@@ -1098,8 +1260,7 @@ CUresult cuStreamSynchronize(CUstream hStream) {
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamSynchronize(hStream);
     }
-    unsigned int flags = 0;
-    if (!lookup_stream_flags(hStream, flags)) {
+    if (fake_gpu::cuda::mark_stream_synchronized(hStream) != CUDA_SUCCESS) {
         return CUDA_ERROR_INVALID_VALUE;
     }
     FGPU_LOG("[FakeCUDA-Driver] cuStreamSynchronize (no-op)\n");
@@ -1111,11 +1272,12 @@ CUresult cuStreamQuery(CUstream hStream) {
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamQuery(hStream);
     }
-    unsigned int flags = 0;
-    if (!lookup_stream_flags(hStream, flags)) {
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    StreamState state;
+    if (!lookup_stream_state_locked(hStream, state)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    return CUDA_SUCCESS;
+    return stream_is_ready_locked(hStream) ? CUDA_SUCCESS : CUDA_ERROR_NOT_READY;
 }
 
 CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags) {
@@ -1123,8 +1285,9 @@ CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags)
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamWaitEvent(hStream, hEvent, Flags);
     }
-    unsigned int stream_flags = 0;
-    if (!lookup_stream_flags(hStream, stream_flags)) {
+    std::lock_guard<std::mutex> stream_lock(g_stream_mutex);
+    StreamState stream_state;
+    if (!lookup_stream_state_locked(hStream, stream_state)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
     EventState event_state;
@@ -1134,8 +1297,18 @@ CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags)
     if (!event_state.recorded) {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    (void)stream_flags;
-    (void)event_state;
+    std::uint64_t tick = 0;
+    if (!submit_stream_operation_locked(hStream, tick)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if (hStream == nullptr) {
+        g_default_stream_submitted_tick = std::max(g_default_stream_submitted_tick, event_state.timeline_tick);
+    } else {
+        StreamState& writable = g_stream_states[hStream];
+        writable.submitted_tick = std::max(writable.submitted_tick, event_state.timeline_tick);
+        writable.dependency_tick = std::max(writable.dependency_tick, event_state.timeline_tick);
+    }
+    (void)Flags;
     return CUDA_SUCCESS;
 }
 
@@ -1219,8 +1392,7 @@ CUresult cuEventRecord(CUevent hEvent, CUstream hStream) {
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventRecord(hEvent, hStream);
     }
-    unsigned int stream_flags = 0;
-    if (!lookup_stream_flags(hStream, stream_flags)) {
+    if (!fake_gpu::cuda::is_stream_handle_live(hStream)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
     if (!mark_event_recorded(hEvent, hStream)) {
@@ -1238,7 +1410,16 @@ CUresult cuEventSynchronize(CUevent hEvent) {
     if (!lookup_event_state(hEvent, state)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    (void)state;
+    if (state.recorded && fake_gpu::cuda::mark_stream_synchronized(state.last_stream) != CUDA_SUCCESS) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_event_mutex);
+        auto it = g_event_states.find(hEvent);
+        if (it != g_event_states.end()) {
+            it->second.completed = true;
+        }
+    }
     return CUDA_SUCCESS;
 }
 
@@ -1251,8 +1432,11 @@ CUresult cuEventQuery(CUevent hEvent) {
     if (!lookup_event_state(hEvent, state)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    (void)state;
-    return CUDA_SUCCESS;
+    if (!state.recorded) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    const bool ready = state.completed || stream_completed_tick(state.last_stream) >= state.timeline_tick;
+    return ready ? CUDA_SUCCESS : CUDA_ERROR_NOT_READY;
 }
 
 CUresult cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUevent hEnd) {
@@ -1270,9 +1454,11 @@ CUresult cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUevent hEnd) 
     if (!start_state.recorded || !end_state.recorded) {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    (void)start_state;
-    (void)end_state;
-    if (pMilliseconds) *pMilliseconds = 0.0f;
+    const std::uint64_t delta_ticks =
+        end_state.timeline_tick > start_state.timeline_tick
+            ? (end_state.timeline_tick - start_state.timeline_tick)
+            : 0;
+    if (pMilliseconds) *pMilliseconds = static_cast<float>(delta_ticks) * 0.1f;
     return CUDA_SUCCESS;
 }
 

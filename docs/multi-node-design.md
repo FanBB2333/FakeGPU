@@ -327,6 +327,11 @@ FakeGPU
   - 推荐优先使用 POSIX shared memory
   - shared memory 不可用时，再回退到 socket streaming
 
+当前实现说明：
+
+- 已支持从 POSIX shared memory 自动回退到 socket streaming
+- 为了做确定性验证，可设置 `FAKEGPU_STAGING_FORCE_SOCKET=1` 强制走 socket fallback
+
 这样做的好处是：
 
 - 控制逻辑与大块数据传输不会相互干扰
@@ -374,11 +379,11 @@ FakeGPU
 
 - 框架层的 `barrier` 优先通过 coordinator 自己实现，或退化成一个固定大小的同步 collective
 - 文档中不再把“`ncclBarrier`”当作前置 Step 必需 API，因为它不应成为设计的中心依赖
-- 当前实现还额外覆盖了 `ncclCommInitAll`、`ncclCommSplit`（当前仅 `FAKEGPU_DIST_MODE=simulate`）、blocking `ncclSend` / `ncclRecv`（当前仅 `FAKEGPU_DIST_MODE=simulate`，已支持 grouped submission，但每个 seqno 仍需要 communicator 内所有 rank 都提交一个 p2p 操作）、`ncclRedOpCreatePreMulSum`（当前仅 `FAKEGPU_DIST_MODE=simulate` + `ncclScalarHostImmediate` + `int32/int64/float32/float64`）、`ncclAlltoAll`、`ncclCommGetAsyncError` 的基础 async-error 持久化/快失败语义、grouped submission 下的基础 stream 一致性约束、fake stream / event 生命周期校验，以及基础 stream capture 状态查询；另外未 record 的 event 不允许参与 elapsed-time / wait，capture 中的 stream 也不允许直接 destroy，可用于本地 direct smoke test
+- 当前实现还额外覆盖了 `ncclCommInitAll`、`ncclCommSplit`（当前仅 `FAKEGPU_DIST_MODE=simulate`）、blocking `ncclSend` / `ncclRecv`（当前仅 `FAKEGPU_DIST_MODE=simulate`，已支持 grouped submission，但每个 seqno 仍需要 communicator 内所有 rank 都提交一个 p2p 操作）、`ncclRedOpCreatePreMulSum`（当前仅 `FAKEGPU_DIST_MODE=simulate` + `ncclScalarHostImmediate` + `int32/int64/float32/float64`）、`ncclAlltoAll`、`ncclCommGetAsyncError` 的基础 async-error 持久化/快失败语义、grouped collective 在 `simulate/proxy/passthrough` 下的批量提交语义、grouped submission 下的基础 stream 一致性约束、fake stream / event 生命周期校验，以及基础 stream capture 状态查询；另外未 record 的 event 不允许参与 elapsed-time / wait，capture 中的 stream 也不允许直接 destroy，并且当前已补上轻量的 stream logical timeline：`cudaStreamQuery/cudaEventQuery` 可反映 pending/ready，`cudaStreamWaitEvent` 会传播依赖，`cudaEventElapsedTime` 会返回逻辑时间差，可用于本地 direct smoke test
 
 ### 9.2 后续可补充
 
-- 更细的 stream 关联
+- 更细的 graph/capture 关联与真实异步 overlap 模型
 
 ## 10. 内存与数据通路设计
 
@@ -1196,7 +1201,7 @@ src/nccl/
 当前边界：
 
 - 单 GPU 机器默认只验证 `world_size=1`；`world_size=2` 需要至少 2 张 GPU 才能做 baseline 对比
-- grouped collective 仍只在 `simulate` 模式实现，`proxy/passthrough` 目前只覆盖 ungrouped direct collective
+- grouped collective 已支持 `proxy/passthrough`，但 grouped `ncclSend/ncclRecv` 仍只在 `simulate` 模式实现
 
 #### Step 21：远端 Coordinator 与多机扩展
 

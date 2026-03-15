@@ -107,6 +107,20 @@ std::size_t parse_required_size(
     return static_cast<std::size_t>(value);
 }
 
+std::size_t parse_optional_size(
+    const std::unordered_map<std::string, std::string>& fields,
+    const char* key,
+    std::size_t default_value,
+    bool& ok,
+    std::string& error) {
+    auto it = fields.find(key);
+    if (it == fields.end()) {
+        ok = true;
+        return default_value;
+    }
+    return parse_required_size(fields, key, ok, error);
+}
+
 }  // namespace
 
 ClusterCoordinator::ClusterCoordinator(CoordinatorTransport transport, std::string address)
@@ -179,9 +193,14 @@ void ClusterCoordinator::accept_loop() {
 
 void ClusterCoordinator::handle_client(int client_fd) {
     std::string request_line;
+    std::vector<char> request_payload;
     std::string transport_error;
-    if (!receive_message_line(client_fd, request_line, transport_error)) {
-        send_message_line(client_fd, format_error_response("bad_request", transport_error), transport_error);
+    if (!receive_message_packet(client_fd, request_line, request_payload, transport_error)) {
+        send_message_packet(
+            client_fd,
+            format_error_response("bad_request", transport_error),
+            {},
+            transport_error);
         ::close(client_fd);
         return;
     }
@@ -189,12 +208,18 @@ void ClusterCoordinator::handle_client(int client_fd) {
     CoordinatorMessage request;
     std::string parse_error;
     if (!parse_message_line(request_line, request, parse_error)) {
-        send_message_line(client_fd, format_error_response("bad_request", parse_error), transport_error);
+        send_message_packet(
+            client_fd,
+            format_error_response("bad_request", parse_error),
+            {},
+            transport_error);
         ::close(client_fd);
         return;
     }
+    request.payload = std::move(request_payload);
 
     std::string response;
+    std::vector<char> response_payload;
     if (request.command == "PING") {
         response = format_ok_response({
             {"status", "ready"},
@@ -360,8 +385,12 @@ void ClusterCoordinator::handle_client(int client_fd) {
                                     response = format_error_response("bad_request", error);
                                 } else {
                                     auto staging_it = request.fields.find("staging_name");
+                                    const auto transport_it = request.fields.find("buffer_transport");
+                                    const bool socket_transport =
+                                        transport_it != request.fields.end() &&
+                                        transport_it->second == "socket";
                                     auto dtype_it = request.fields.find("dtype");
-                                    if (staging_it == request.fields.end()) {
+                                    if (!socket_transport && staging_it == request.fields.end()) {
                                         response = format_error_response(
                                             "bad_request",
                                             "missing required field: staging_name");
@@ -374,25 +403,42 @@ void ClusterCoordinator::handle_client(int client_fd) {
                                                    p2p_request.dtype)) {
                                         response = format_error_response("bad_request", "unsupported dtype");
                                     } else {
-                                        p2p_request.staging_name = staging_it->second;
-                                        p2p_request.type = request.command == "SEND"
-                                            ? PointToPointType::Send
-                                            : PointToPointType::Recv;
-
-                                        PointToPointSubmitResult result =
-                                            communicator_registry_.submit_point_to_point(p2p_request);
-                                        if (!result.ok) {
-                                            response = format_error_response(
-                                                result.error_code,
-                                                result.error_detail);
+                                        if (staging_it != request.fields.end()) {
+                                            p2p_request.staging_name = staging_it->second;
+                                        }
+                                        if (socket_transport) {
+                                            p2p_request.transport = BufferTransport::SocketPayload;
+                                        }
+                                        p2p_request.payload_bytes = parse_optional_size(
+                                            request.fields,
+                                            "payload_bytes",
+                                            request.payload.size(),
+                                            ok,
+                                            error);
+                                        if (!ok) {
+                                            response = format_error_response("bad_request", error);
                                         } else {
-                                            response = format_ok_response({
-                                                {"comm_id", std::to_string(p2p_request.comm_id)},
-                                                {"seqno", std::to_string(result.seqno)},
-                                                {"rank", std::to_string(p2p_request.rank)},
-                                                {"peer", std::to_string(p2p_request.peer)},
-                                                {"op", request.command == "SEND" ? "send" : "recv"},
-                                            });
+                                            p2p_request.payload = request.payload;
+                                            p2p_request.type = request.command == "SEND"
+                                                ? PointToPointType::Send
+                                                : PointToPointType::Recv;
+
+                                            PointToPointSubmitResult result =
+                                                communicator_registry_.submit_point_to_point(p2p_request);
+                                            if (!result.ok) {
+                                                response = format_error_response(
+                                                    result.error_code,
+                                                    result.error_detail);
+                                            } else {
+                                                response_payload = std::move(result.output_payload);
+                                                response = format_ok_response({
+                                                    {"comm_id", std::to_string(p2p_request.comm_id)},
+                                                    {"seqno", std::to_string(result.seqno)},
+                                                    {"rank", std::to_string(p2p_request.rank)},
+                                                    {"peer", std::to_string(p2p_request.peer)},
+                                                    {"op", request.command == "SEND" ? "send" : "recv"},
+                                                });
+                                            }
                                         }
                                     }
                                 }
@@ -453,7 +499,12 @@ void ClusterCoordinator::handle_client(int client_fd) {
                                     } else {
                                         collective_request.proxy_only = proxy_only;
                                         auto staging_it = request.fields.find("staging_name");
+                                        const auto transport_it = request.fields.find("buffer_transport");
+                                        const bool socket_transport =
+                                            transport_it != request.fields.end() &&
+                                            transport_it->second == "socket";
                                         if (!collective_request.proxy_only &&
+                                            !socket_transport &&
                                             staging_it == request.fields.end()) {
                                             response = format_error_response(
                                                 "bad_request",
@@ -462,55 +513,70 @@ void ClusterCoordinator::handle_client(int client_fd) {
                                             if (staging_it != request.fields.end()) {
                                                 collective_request.staging_name = staging_it->second;
                                             }
-                                            auto dtype_it = request.fields.find("dtype");
-                                            auto reduce_it = request.fields.find("reduce_op");
-                                            if (dtype_it == request.fields.end()) {
-                                                response = format_error_response(
-                                                    "bad_request",
-                                                    "missing required field: dtype");
-                                            } else if (reduce_it == request.fields.end()) {
-                                                response = format_error_response(
-                                                    "bad_request",
-                                                    "missing required field: reduce_op");
-                                            } else if (!parse_collective_data_type(
-                                                           dtype_it->second,
-                                                           collective_request.dtype)) {
-                                                response = format_error_response(
-                                                    "bad_request",
-                                                    "unsupported dtype");
-                                            } else if (!parse_collective_reduce_op(
-                                                           reduce_it->second,
-                                                           collective_request.reduce_op)) {
-                                                response = format_error_response(
-                                                    "bad_request",
-                                                    "unsupported reduce_op");
+                                            if (socket_transport) {
+                                                collective_request.transport = BufferTransport::SocketPayload;
+                                            }
+                                            collective_request.payload_bytes = parse_optional_size(
+                                                request.fields,
+                                                "payload_bytes",
+                                                request.payload.size(),
+                                                ok,
+                                                error);
+                                            if (!ok) {
+                                                response = format_error_response("bad_request", error);
                                             } else {
-                                                if (request.command == "ALLREDUCE") {
-                                                    collective_request.type = CollectiveType::AllReduce;
-                                                } else if (request.command == "REDUCE") {
-                                                    collective_request.type = CollectiveType::Reduce;
-                                                } else if (request.command == "BROADCAST") {
-                                                    collective_request.type = CollectiveType::Broadcast;
-                                                } else if (request.command == "ALLGATHER") {
-                                                    collective_request.type = CollectiveType::AllGather;
-                                                } else if (request.command == "ALLTOALL") {
-                                                    collective_request.type = CollectiveType::AllToAll;
-                                                } else {
-                                                    collective_request.type = CollectiveType::ReduceScatter;
-                                                }
-                                                CollectiveSubmitResult result =
-                                                    communicator_registry_.submit_collective(collective_request);
-                                                if (!result.ok) {
+                                                collective_request.payload = request.payload;
+                                                auto dtype_it = request.fields.find("dtype");
+                                                auto reduce_it = request.fields.find("reduce_op");
+                                                if (dtype_it == request.fields.end()) {
                                                     response = format_error_response(
-                                                        result.error_code,
-                                                        result.error_detail);
+                                                        "bad_request",
+                                                        "missing required field: dtype");
+                                                } else if (reduce_it == request.fields.end()) {
+                                                    response = format_error_response(
+                                                        "bad_request",
+                                                        "missing required field: reduce_op");
+                                                } else if (!parse_collective_data_type(
+                                                               dtype_it->second,
+                                                               collective_request.dtype)) {
+                                                    response = format_error_response(
+                                                        "bad_request",
+                                                        "unsupported dtype");
+                                                } else if (!parse_collective_reduce_op(
+                                                               reduce_it->second,
+                                                               collective_request.reduce_op)) {
+                                                    response = format_error_response(
+                                                        "bad_request",
+                                                        "unsupported reduce_op");
                                                 } else {
-                                                    response = format_ok_response({
-                                                        {"comm_id", std::to_string(collective_request.comm_id)},
-                                                        {"seqno", std::to_string(result.seqno)},
-                                                        {"rank", std::to_string(collective_request.rank)},
-                                                        {"op", collective_type_name(collective_request.type)},
-                                                    });
+                                                    if (request.command == "ALLREDUCE") {
+                                                        collective_request.type = CollectiveType::AllReduce;
+                                                    } else if (request.command == "REDUCE") {
+                                                        collective_request.type = CollectiveType::Reduce;
+                                                    } else if (request.command == "BROADCAST") {
+                                                        collective_request.type = CollectiveType::Broadcast;
+                                                    } else if (request.command == "ALLGATHER") {
+                                                        collective_request.type = CollectiveType::AllGather;
+                                                    } else if (request.command == "ALLTOALL") {
+                                                        collective_request.type = CollectiveType::AllToAll;
+                                                    } else {
+                                                        collective_request.type = CollectiveType::ReduceScatter;
+                                                    }
+                                                    CollectiveSubmitResult result =
+                                                        communicator_registry_.submit_collective(collective_request);
+                                                    if (!result.ok) {
+                                                        response = format_error_response(
+                                                            result.error_code,
+                                                            result.error_detail);
+                                                    } else {
+                                                        response_payload = std::move(result.output_payload);
+                                                        response = format_ok_response({
+                                                            {"comm_id", std::to_string(collective_request.comm_id)},
+                                                            {"seqno", std::to_string(result.seqno)},
+                                                            {"rank", std::to_string(collective_request.rank)},
+                                                            {"op", collective_type_name(collective_request.type)},
+                                                        });
+                                                    }
                                                 }
                                             }
                                         }
@@ -665,7 +731,7 @@ void ClusterCoordinator::handle_client(int client_fd) {
         response = format_ok_response({
             {"status", "shutting_down"},
         });
-        send_message_line(client_fd, response, transport_error);
+        send_message_packet(client_fd, response, {}, transport_error);
         ::close(client_fd);
         request_shutdown();
         return;
@@ -673,7 +739,7 @@ void ClusterCoordinator::handle_client(int client_fd) {
         response = format_error_response("unknown_command", request.command);
     }
 
-    send_message_line(client_fd, response, transport_error);
+    send_message_packet(client_fd, response, response_payload, transport_error);
     ::close(client_fd);
 }
 

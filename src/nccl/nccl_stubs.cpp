@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #include <mutex>
 #include <random>
 #include <sstream>
@@ -341,12 +342,16 @@ ncclResult_t real_nccl_error(
     return fail_with(comm, result, std::move(error));
 }
 
-bool grouped_operation_supported(ncclComm_t comm) {
-    if (comm && comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
+bool grouped_operation_supported(ncclComm_t comm, GroupOperationKind kind) {
+    if (!comm) {
+        return true;
+    }
+    if (kind == GroupOperationKind::PointToPoint &&
+        comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
         fail_with(
             comm,
             ncclInvalidUsage,
-            "grouped operations are only implemented for FAKEGPU_DIST_MODE=simulate");
+            "grouped ncclSend/ncclRecv are only implemented for FAKEGPU_DIST_MODE=simulate");
         return false;
     }
     return true;
@@ -385,12 +390,15 @@ ncclResult_t map_response_error(const std::string& error_code) {
         error_code == "group_reduce_op_mismatch" ||
         error_code == "bytes_mismatch" ||
         error_code == "group_bytes_mismatch" ||
+        error_code == "payload_bytes_mismatch" ||
         error_code == "group_size_mismatch" ||
         error_code == "duplicate_collective_rank" ||
         error_code == "duplicate_p2p_rank" ||
         error_code == "duplicate_barrier_rank" ||
         error_code == "proxy_only_mismatch" ||
+        error_code == "buffer_transport_mismatch" ||
         error_code == "staging_size_mismatch" ||
+        error_code == "socket_payload_size_mismatch" ||
         error_code == "root_rank_missing" ||
         error_code == "missing_peer" ||
         error_code == "p2p_direction_mismatch" ||
@@ -443,14 +451,25 @@ bool validate_runtime_config(
 bool coordinator_request_response(
     const fake_gpu::distributed::DistributedConfig& config,
     const std::string& request_line,
+    const std::vector<char>& request_payload,
     fake_gpu::distributed::CoordinatorResponse& response,
     std::string& error) {
     return fake_gpu::distributed::request_response(
         config.coordinator_transport,
         config.coordinator_address,
         request_line,
+        request_payload,
         response,
         error);
+}
+
+bool coordinator_request_response(
+    const fake_gpu::distributed::DistributedConfig& config,
+    const std::string& request_line,
+    fake_gpu::distributed::CoordinatorResponse& response,
+    std::string& error) {
+    static const std::vector<char> kEmptyPayload;
+    return coordinator_request_response(config, request_line, kEmptyPayload, response, error);
 }
 
 bool collective_transfer_sizes(
@@ -750,8 +769,20 @@ bool validate_stream_handle(
     if (!comm || comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
         return true;
     }
-    const CUresult result = cuStreamQuery(reinterpret_cast<CUstream>(stream));
-    if (result != CUDA_SUCCESS) {
+    using cuStreamQueryFn = CUresult (*)(CUstream);
+    static cuStreamQueryFn stream_query = []() -> cuStreamQueryFn {
+        void* symbol = ::dlsym(RTLD_DEFAULT, "cuStreamQuery");
+        return reinterpret_cast<cuStreamQueryFn>(symbol);
+    }();
+    if (!stream_query) {
+        fail_with(
+            comm,
+            ncclInvalidUsage,
+            "cuStreamQuery is unavailable for simulate-mode stream validation");
+        return false;
+    }
+    const CUresult result = stream_query(reinterpret_cast<CUstream>(stream));
+    if (result != CUDA_SUCCESS && result != CUDA_ERROR_NOT_READY) {
         fail_with(
             comm,
             ncclInvalidArgument,
@@ -788,7 +819,7 @@ ncclResult_t prepare_group_batch(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "group contains a null communicator");
     }
-    if (!grouped_operation_supported(comm)) {
+    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
         return ncclInvalidUsage;
     }
     if (operations.empty()) {
@@ -898,7 +929,7 @@ ncclResult_t buffer_group_allreduce(
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm)) {
+    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
         return ncclInvalidUsage;
     }
     if (!validate_stream_handle(comm, stream)) {
@@ -959,7 +990,7 @@ ncclResult_t buffer_group_reduce(
     if (comm->rank == root && !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "root recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm)) {
+    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
         return ncclInvalidUsage;
     }
     if (!validate_stream_handle(comm, stream)) {
@@ -1024,7 +1055,7 @@ ncclResult_t buffer_group_broadcast(
     if (!recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm)) {
+    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
         return ncclInvalidUsage;
     }
     if (!validate_stream_handle(comm, stream)) {
@@ -1081,7 +1112,7 @@ ncclResult_t buffer_group_allgather(
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm)) {
+    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
         return ncclInvalidUsage;
     }
     if (!validate_stream_handle(comm, stream)) {
@@ -1133,7 +1164,7 @@ ncclResult_t buffer_group_reducescatter(
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm)) {
+    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
         return ncclInvalidUsage;
     }
     if (!validate_stream_handle(comm, stream)) {
@@ -1189,7 +1220,7 @@ ncclResult_t buffer_group_alltoall(
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm)) {
+    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
         return ncclInvalidUsage;
     }
     if (!validate_stream_handle(comm, stream)) {
@@ -1240,7 +1271,7 @@ ncclResult_t buffer_group_send(
     if (!sendbuff) {
         return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
     }
-    if (!grouped_operation_supported(comm)) {
+    if (!grouped_operation_supported(comm, GroupOperationKind::PointToPoint)) {
         return ncclInvalidUsage;
     }
     if (!validate_stream_handle(comm, stream)) {
@@ -1295,7 +1326,7 @@ ncclResult_t buffer_group_recv(
     if (!recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm)) {
+    if (!grouped_operation_supported(comm, GroupOperationKind::PointToPoint)) {
         return ncclInvalidUsage;
     }
     if (!validate_stream_handle(comm, stream)) {
@@ -1384,6 +1415,10 @@ ncclResult_t submit_collective_chunk(
 
     const std::uint64_t seqno = comm->next_seqno;
     const std::string staging_name = make_staging_name(*comm, seqno, command);
+    fake_gpu::distributed::BufferTransport buffer_transport =
+        fake_gpu::distributed::BufferTransport::SharedMemory;
+    std::vector<char> request_payload;
+    fake_gpu::distributed::StagingBufferHandle handle;
 
     fake_gpu::distributed::StagingBufferMetadata metadata;
     metadata.name = staging_name;
@@ -1400,12 +1435,17 @@ ncclResult_t submit_collective_chunk(
     metadata.staging_id = seqno;
 
     fake_gpu::distributed::StagingBufferManager manager;
-    fake_gpu::distributed::StagingBufferHandle handle;
     if (!manager.create(metadata, true, handle, error)) {
-        return fail_with(comm, ncclSystemError, error);
+        if (!fake_gpu::distributed::is_staging_transport_unavailable_error(error)) {
+            return fail_with(comm, ncclSystemError, error);
+        }
+        buffer_transport = fake_gpu::distributed::BufferTransport::SocketPayload;
+        request_payload.assign(
+            static_cast<const char*>(local_input),
+            static_cast<const char*>(local_input) + input_bytes);
+    } else {
+        std::memcpy(handle.data(), local_input, input_bytes);
     }
-
-    std::memcpy(handle.data(), local_input, input_bytes);
 
     std::ostringstream request;
     request << command
@@ -1417,11 +1457,17 @@ ncclResult_t submit_collective_chunk(
             << " bytes=" << staging_bytes
             << " root=" << root
             << " reduce_op=" << fake_gpu::distributed::collective_reduce_op_name(reduce_op)
-            << " staging_name=" << staging_name
+            << " buffer_transport="
+            << (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload ? "socket" : "shm")
             << " timeout_ms=" << kCoordinatorTimeoutMs;
+    if (buffer_transport == fake_gpu::distributed::BufferTransport::SharedMemory) {
+        request << " staging_name=" << staging_name;
+    } else {
+        request << " payload_bytes=" << request_payload.size();
+    }
 
     fake_gpu::distributed::CoordinatorResponse response;
-    if (!coordinator_request_response(config, request.str(), response, error)) {
+    if (!coordinator_request_response(config, request.str(), request_payload, response, error)) {
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
@@ -1440,7 +1486,14 @@ ncclResult_t submit_collective_chunk(
         return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent response");
     }
 
-    std::memcpy(recvbuff, handle.data(), output_bytes);
+    if (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload) {
+        if (response.payload.size() != output_bytes) {
+            return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent socket payload");
+        }
+        std::memcpy(recvbuff, response.payload.data(), output_bytes);
+    } else {
+        std::memcpy(recvbuff, handle.data(), output_bytes);
+    }
     comm->next_seqno++;
     clear_last_error(comm);
     return ncclSuccess;
@@ -1854,6 +1907,9 @@ ncclResult_t submit_point_to_point(
     const std::size_t bytes = count * dtype_size;
     const std::uint64_t seqno = comm->next_seqno;
     const std::string staging_name = make_staging_name(*comm, seqno, command);
+    fake_gpu::distributed::BufferTransport buffer_transport =
+        fake_gpu::distributed::BufferTransport::SharedMemory;
+    std::vector<char> request_payload;
 
     fake_gpu::distributed::StagingBufferMetadata metadata;
     metadata.name = staging_name;
@@ -1866,7 +1922,10 @@ ncclResult_t submit_point_to_point(
     fake_gpu::distributed::StagingBufferManager manager;
     fake_gpu::distributed::StagingBufferHandle handle;
     if (!manager.create(metadata, true, handle, error)) {
-        return fail_with(comm, ncclSystemError, error);
+        if (!fake_gpu::distributed::is_staging_transport_unavailable_error(error)) {
+            return fail_with(comm, ncclSystemError, error);
+        }
+        buffer_transport = fake_gpu::distributed::BufferTransport::SocketPayload;
     }
 
     if (p2p_type == fake_gpu::distributed::PointToPointType::Send) {
@@ -1874,7 +1933,11 @@ ncclResult_t submit_point_to_point(
         if (!fake_gpu::nccl::copy_buffer_to_host(local_input, bytes, host_input, error)) {
             return fail_with(comm, ncclSystemError, error);
         }
-        std::memcpy(handle.data(), host_input.data(), bytes);
+        if (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload) {
+            request_payload = std::move(host_input);
+        } else {
+            std::memcpy(handle.data(), host_input.data(), bytes);
+        }
     }
 
     std::ostringstream request;
@@ -1886,11 +1949,18 @@ ncclResult_t submit_point_to_point(
             << " dtype=" << fake_gpu::distributed::collective_data_type_name(mapped_dtype)
             << " count=" << count
             << " bytes=" << bytes
-            << " staging_name=" << staging_name
+            << " buffer_transport="
+            << (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload ? "socket" : "shm")
             << " timeout_ms=" << kCoordinatorTimeoutMs;
+    if (buffer_transport == fake_gpu::distributed::BufferTransport::SharedMemory) {
+        request << " staging_name=" << staging_name;
+    } else {
+        request << " payload_bytes="
+                << (p2p_type == fake_gpu::distributed::PointToPointType::Send ? bytes : bytes);
+    }
 
     fake_gpu::distributed::CoordinatorResponse response;
-    if (!coordinator_request_response(config, request.str(), response, error)) {
+    if (!coordinator_request_response(config, request.str(), request_payload, response, error)) {
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
@@ -1910,7 +1980,14 @@ ncclResult_t submit_point_to_point(
     }
 
     if (p2p_type == fake_gpu::distributed::PointToPointType::Recv) {
-        if (!fake_gpu::nccl::copy_host_to_buffer(local_output, handle.data(), bytes, error)) {
+        const void* source = buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload
+            ? static_cast<const void*>(response.payload.data())
+            : handle.data();
+        if (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload &&
+            response.payload.size() != bytes) {
+            return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent point-to-point socket payload");
+        }
+        if (!fake_gpu::nccl::copy_host_to_buffer(local_output, source, bytes, error)) {
             return fail_with(comm, ncclSystemError, error);
         }
     }
@@ -1992,7 +2069,8 @@ ncclResult_t flush_grouped_operations() {
         return fail_with(nullptr, ncclInvalidUsage, "group currently requires all operations to use the same communicator");
     }
 
-    if (all_group_operations_are_collectives(g_group_operations)) {
+    if (all_group_operations_are_collectives(g_group_operations) &&
+        requires_coordinator(comm->dist_mode)) {
         ncclResult_t result = prepare_group_batch(comm, g_group_operations);
         if (result != ncclSuccess) {
             clear_group_operations();
