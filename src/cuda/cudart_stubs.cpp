@@ -2,12 +2,60 @@
 #include "cuda_driver_defs.hpp"
 #include "../core/global_state.hpp"
 #include "../core/logging.hpp"
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <mutex>
+#include <unordered_map>
 
 // Thread-local error tracking
 static __thread cudaError_t last_error = cudaSuccess;
+
+namespace {
+
+struct CaptureState {
+    bool active = false;
+    unsigned long long id = 0;
+};
+
+std::mutex g_capture_mutex;
+std::unordered_map<cudaStream_t, CaptureState> g_capture_states;
+std::atomic<unsigned long long> g_next_capture_id{1};
+
+CaptureState lookupCaptureState(cudaStream_t stream) {
+    std::lock_guard<std::mutex> lock(g_capture_mutex);
+    auto it = g_capture_states.find(stream);
+    if (it == g_capture_states.end()) {
+        return {};
+    }
+    return it->second;
+}
+
+bool beginCapture(cudaStream_t stream) {
+    std::lock_guard<std::mutex> lock(g_capture_mutex);
+    CaptureState& state = g_capture_states[stream];
+    if (state.active) {
+        return false;
+    }
+    state.active = true;
+    state.id = g_next_capture_id.fetch_add(1);
+    return true;
+}
+
+bool endCapture(cudaStream_t stream, unsigned long long& capture_id) {
+    std::lock_guard<std::mutex> lock(g_capture_mutex);
+    auto it = g_capture_states.find(stream);
+    if (it == g_capture_states.end() || !it->second.active) {
+        return false;
+    }
+    capture_id = it->second.id;
+    it->second.active = false;
+    it->second.id = 0;
+    return true;
+}
+
+}  // namespace
 
 // Helper: Convert CUresult to cudaError_t
 static cudaError_t convertDriverError(CUresult result) {
@@ -1541,6 +1589,13 @@ cudaError_t cudaGraphDebugDotPrint(cudaGraph_t graph, const char *path, unsigned
 }
 
 cudaError_t cudaStreamBeginCapture(cudaStream_t stream, int mode) {
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+    if (!beginCapture(stream)) {
+        last_error = cudaErrorInvalidValue;
+        return last_error;
+    }
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaStreamBeginCapture mode=%d\n", mode);
     return last_error;
@@ -1551,10 +1606,19 @@ cudaError_t cudaStreamEndCapture(cudaStream_t stream, cudaGraph_t *pGraph) {
         last_error = cudaErrorInvalidValue;
         return last_error;
     }
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+
+    unsigned long long capture_id = 0;
+    if (!endCapture(stream, capture_id)) {
+        last_error = cudaErrorInvalidValue;
+        return last_error;
+    }
 
     *pGraph = (cudaGraph_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaStreamEndCapture\n");
+    FGPU_LOG("[FakeCUDART] cudaStreamEndCapture capture_id=%llu\n", capture_id);
     return last_error;
 }
 
@@ -1563,8 +1627,12 @@ cudaError_t cudaStreamIsCapturing(cudaStream_t stream, int *pCaptureStatus) {
         last_error = cudaErrorInvalidValue;
         return last_error;
     }
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
 
-    *pCaptureStatus = 0;  // Not capturing
+    const CaptureState state = lookupCaptureState(stream);
+    *pCaptureStatus = state.active ? 1 : 0;
     last_error = cudaSuccess;
     return last_error;
 }
@@ -1574,9 +1642,13 @@ cudaError_t cudaStreamGetCaptureInfo(cudaStream_t stream, int *captureStatus, un
         last_error = cudaErrorInvalidValue;
         return last_error;
     }
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
 
-    *captureStatus = 0;  // Not capturing
-    if (id) *id = 0;
+    const CaptureState state = lookupCaptureState(stream);
+    *captureStatus = state.active ? 1 : 0;
+    if (id) *id = state.active ? state.id : 0;
     last_error = cudaSuccess;
     return last_error;
 }
@@ -1600,9 +1672,13 @@ cudaError_t cudaStreamGetCaptureInfo_v2(cudaStream_t stream, int *captureStatus,
         last_error = cudaErrorInvalidValue;
         return last_error;
     }
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
 
-    *captureStatus = 0;  // Not capturing
-    if (id) *id = 0;
+    const CaptureState state = lookupCaptureState(stream);
+    *captureStatus = state.active ? 1 : 0;
+    if (id) *id = state.active ? state.id : 0;
     if (graph) *graph = NULL;
     if (numDependencies) *numDependencies = 0;
     last_error = cudaSuccess;
