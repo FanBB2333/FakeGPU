@@ -55,6 +55,17 @@ bool endCapture(cudaStream_t stream, unsigned long long& capture_id) {
     return true;
 }
 
+bool isCaptureActive(cudaStream_t stream) {
+    std::lock_guard<std::mutex> lock(g_capture_mutex);
+    auto it = g_capture_states.find(stream);
+    return it != g_capture_states.end() && it->second.active;
+}
+
+void clearCaptureState(cudaStream_t stream) {
+    std::lock_guard<std::mutex> lock(g_capture_mutex);
+    g_capture_states.erase(stream);
+}
+
 }  // namespace
 
 // Helper: Convert CUresult to cudaError_t
@@ -425,8 +436,15 @@ cudaError_t cudaStreamCreate(cudaStream_t *pStream) {
 }
 
 cudaError_t cudaStreamDestroy(cudaStream_t stream) {
+    if (isCaptureActive(stream)) {
+        last_error = cudaErrorInvalidValue;
+        return last_error;
+    }
     CUresult result = cuStreamDestroy((CUstream)stream);
     last_error = convertDriverError(result);
+    if (last_error == cudaSuccess) {
+        clearCaptureState(stream);
+    }
     FGPU_LOG("[FakeCUDART] cudaStreamDestroy\n");
     return last_error;
 }
@@ -1571,12 +1589,26 @@ cudaError_t cudaGraphExecDestroy(cudaGraphExec_t graphExec) {
 }
 
 cudaError_t cudaGraphLaunch(cudaGraphExec_t graphExec, cudaStream_t stream) {
+    if (!graphExec) {
+        last_error = cudaErrorInvalidValue;
+        return last_error;
+    }
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaGraphLaunch (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaGraphUpload(cudaGraphExec_t graphExec, cudaStream_t stream) {
+    if (!graphExec) {
+        last_error = cudaErrorInvalidValue;
+        return last_error;
+    }
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaGraphUpload (stub)\n");
     return last_error;

@@ -92,10 +92,33 @@ def main():
     cudart.cudaGraphDestroy.argtypes = [ctypes.c_void_p]
     cudart.cudaGraphDestroy.restype = ctypes.c_int
 
+    cudart.cudaGraphInstantiate.argtypes = [
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+    ]
+    cudart.cudaGraphInstantiate.restype = ctypes.c_int
+
+    cudart.cudaGraphExecDestroy.argtypes = [ctypes.c_void_p]
+    cudart.cudaGraphExecDestroy.restype = ctypes.c_int
+
+    cudart.cudaGraphLaunch.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    cudart.cudaGraphLaunch.restype = ctypes.c_int
+
+    cudart.cudaGraphUpload.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    cudart.cudaGraphUpload.restype = ctypes.c_int
+
     device_count = ctypes.c_int()
     require(cudart.cudaGetDeviceCount(ctypes.byref(device_count)) == CUDA_SUCCESS, "cudaGetDeviceCount should succeed")
     require(device_count.value > 0, "at least one fake device should be visible")
     require(cudart.cudaSetDevice(0) == CUDA_SUCCESS, "cudaSetDevice(0) should succeed")
+
+    require(
+        cudart.cudaStreamDestroy(ctypes.c_void_p()) == CUDA_ERROR_INVALID_VALUE,
+        "destroying the implicit default stream should fail",
+    )
 
     stream = ctypes.c_void_p()
     require(
@@ -107,6 +130,14 @@ def main():
     event = ctypes.c_void_p()
     require(cudart.cudaEventCreate(ctypes.byref(event)) == CUDA_SUCCESS, "cudaEventCreate should succeed")
     require(event.value not in (None, 0), "event should be non-null")
+
+    fresh_event = ctypes.c_void_p()
+    require(cudart.cudaEventCreate(ctypes.byref(fresh_event)) == CUDA_SUCCESS, "fresh cudaEventCreate should succeed")
+    require(
+        cudart.cudaEventElapsedTime(ctypes.byref(elapsed_ms := ctypes.c_float()), fresh_event, fresh_event)
+        == CUDA_ERROR_INVALID_VALUE,
+        "elapsed time should reject unrecorded events",
+    )
 
     require(cudart.cudaEventRecord(event, stream) == CUDA_SUCCESS, "cudaEventRecord should succeed")
     require(cudart.cudaEventRecordWithFlags(event, stream, 0) == CUDA_SUCCESS, "cudaEventRecordWithFlags should succeed")
@@ -171,6 +202,10 @@ def main():
     require(capture_id_v2.value == capture_id.value, "v2 capture id should match v1")
     require(graph_handle.value in (None, 0), "v2 graph handle should remain null in the stub")
     require(deps_count.value == 0, "v2 dependency count should be zero in the stub")
+    require(
+        cudart.cudaStreamDestroy(stream) == CUDA_ERROR_INVALID_VALUE,
+        "cudaStreamDestroy should reject a stream with an active capture",
+    )
 
     captured_graph = ctypes.c_void_p()
     require(
@@ -178,7 +213,22 @@ def main():
         "cudaStreamEndCapture should succeed",
     )
     require(captured_graph.value not in (None, 0), "cudaStreamEndCapture should produce a graph handle")
-    require(cudart.cudaGraphDestroy(captured_graph) == CUDA_SUCCESS, "cudaGraphDestroy should succeed")
+
+    graph_exec = ctypes.c_void_p()
+    require(
+        cudart.cudaGraphInstantiate(
+            ctypes.byref(graph_exec),
+            captured_graph,
+            ctypes.POINTER(ctypes.c_void_p)(),
+            None,
+            0,
+        ) == CUDA_SUCCESS,
+        "cudaGraphInstantiate should succeed",
+    )
+    require(graph_exec.value not in (None, 0), "cudaGraphInstantiate should produce an exec handle")
+    require(cudart.cudaGraphUpload(graph_exec, stream) == CUDA_SUCCESS, "cudaGraphUpload should accept a live stream")
+    require(cudart.cudaGraphLaunch(graph_exec, stream) == CUDA_SUCCESS, "cudaGraphLaunch should accept a live stream")
+
     require(
         cudart.cudaStreamIsCapturing(stream, ctypes.byref(capture_status)) == CUDA_SUCCESS,
         "cudaStreamIsCapturing should succeed after capture",
@@ -203,6 +253,14 @@ def main():
 
     require(cudart.cudaStreamDestroy(stream) == CUDA_SUCCESS, "cudaStreamDestroy should succeed")
     require(
+        cudart.cudaGraphUpload(graph_exec, stream) == CUDA_ERROR_INVALID_VALUE,
+        "cudaGraphUpload should reject a destroyed stream",
+    )
+    require(
+        cudart.cudaGraphLaunch(graph_exec, stream) == CUDA_ERROR_INVALID_VALUE,
+        "cudaGraphLaunch should reject a destroyed stream",
+    )
+    require(
         cudart.cudaStreamIsCapturing(stream, ctypes.byref(capture_status)) == CUDA_ERROR_INVALID_VALUE,
         "capture query should reject a destroyed stream",
     )
@@ -210,6 +268,9 @@ def main():
         cudart.cudaStreamBeginCapture(stream, 0) == CUDA_ERROR_INVALID_VALUE,
         "capture begin should reject a destroyed stream",
     )
+    require(cudart.cudaGraphExecDestroy(graph_exec) == CUDA_SUCCESS, "cudaGraphExecDestroy should succeed")
+    require(cudart.cudaGraphDestroy(captured_graph) == CUDA_SUCCESS, "cudaGraphDestroy should succeed")
+    require(cudart.cudaEventDestroy(fresh_event) == CUDA_SUCCESS, "fresh cudaEventDestroy should succeed")
 
     print("cudart event and capture test passed")
 

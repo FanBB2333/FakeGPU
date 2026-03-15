@@ -75,7 +75,7 @@ bool lookup_stream_flags(CUstream stream, unsigned int& flags) {
 
 bool erase_stream_handle(CUstream stream) {
     if (stream == nullptr) {
-        return true;
+        return false;
     }
     std::lock_guard<std::mutex> lock(g_stream_mutex);
     return g_stream_flags.erase(stream) > 0;
@@ -1131,6 +1131,9 @@ CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags)
     if (!lookup_event_state(hEvent, event_state)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
+    if (!event_state.recorded) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     (void)stream_flags;
     (void)event_state;
     return CUDA_SUCCESS;
@@ -1262,6 +1265,9 @@ CUresult cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUevent hEnd) 
     if (!pMilliseconds ||
         !lookup_event_state(hStart, start_state) ||
         !lookup_event_state(hEnd, end_state)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if (!start_state.recorded || !end_state.recorded) {
         return CUDA_ERROR_INVALID_VALUE;
     }
     (void)start_state;
