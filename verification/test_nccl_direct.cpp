@@ -1,4 +1,5 @@
 #include "../src/distributed/cluster_coordinator.hpp"
+#include "../src/cuda/cuda_driver_defs.hpp"
 #include "../src/nccl/nccl_defs.hpp"
 
 #include <chrono>
@@ -764,6 +765,18 @@ void run_group_stream_mismatch_case() {
     }
 }
 
+void run_fake_stream_identity_case() {
+    CUstream stream0 = nullptr;
+    CUstream stream1 = nullptr;
+    require(cuStreamCreate(&stream0, 0) == CUDA_SUCCESS, "first fake cuStreamCreate failed");
+    require(cuStreamCreate(&stream1, 0) == CUDA_SUCCESS, "second fake cuStreamCreate failed");
+    require(stream0 != nullptr, "first fake stream should not be null");
+    require(stream1 != nullptr, "second fake stream should not be null");
+    require(stream0 != stream1, "simulate mode should return distinct fake stream handles");
+    require(cuStreamDestroy(stream0) == CUDA_SUCCESS, "first fake cuStreamDestroy failed");
+    require(cuStreamDestroy(stream1) == CUDA_SUCCESS, "second fake cuStreamDestroy failed");
+}
+
 }  // namespace
 
 int main() {
@@ -788,6 +801,7 @@ int main() {
         run_send_recv_timeout_case();
         run_premul_redop_api_case();
         run_async_error_persistence_case();
+        run_fake_stream_identity_case();
         run_group_stream_mismatch_case();
 
         std::cout << "nccl direct init/destroy test passed" << std::endl;
