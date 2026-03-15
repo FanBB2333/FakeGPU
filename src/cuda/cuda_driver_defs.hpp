@@ -16,6 +16,7 @@ typedef enum CUresult_enum {
     CUDA_ERROR_OUT_OF_MEMORY = 2,
     CUDA_ERROR_NOT_INITIALIZED = 3,
     CUDA_ERROR_DEINITIALIZED = 4,
+    CUDA_ERROR_NOT_READY = 600,
     CUDA_ERROR_NO_DEVICE = 100,
     CUDA_ERROR_INVALID_DEVICE = 101,
     CUDA_ERROR_INVALID_CONTEXT = 201,
@@ -263,4 +264,12 @@ CUresult cuGetProcAddress_v2(const char *symbol, void **pfn, int cudaVersion, un
 
 #ifdef __cplusplus
 }
+
+namespace fake_gpu::cuda {
+
+bool is_stream_handle_live(CUstream stream);
+CUresult submit_stream_operation(CUstream stream);
+CUresult mark_stream_synchronized(CUstream stream);
+
+}  // namespace fake_gpu::cuda
 #endif

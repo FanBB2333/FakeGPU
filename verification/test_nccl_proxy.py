@@ -225,6 +225,13 @@ def main() -> int:
             report_dir=baseline_report_dir,
             env_updates={},
         )
+        baseline_grouped_reports = run_workers(
+            run_mode="baseline_grouped",
+            world_size=world_size,
+            lib_path=real_nccl_path,
+            report_dir=baseline_report_dir,
+            env_updates={"USE_GROUPED": "1"},
+        )
 
         socket_path = tmpdir_path / "coordinator.sock"
         cluster_report_path = tmpdir_path / "cluster_report.json"
@@ -265,6 +272,13 @@ def main() -> int:
                 report_dir=proxy_report_dir,
                 env_updates=proxy_base_env,
             )
+            proxy_grouped_reports = run_workers(
+                run_mode="proxy_grouped",
+                world_size=world_size,
+                lib_path=args.fake_nccl_lib,
+                report_dir=proxy_report_dir,
+                env_updates={**proxy_base_env, "USE_GROUPED": "1"},
+            )
         finally:
             try:
                 shutdown_coordinator(socket_path)
@@ -279,6 +293,21 @@ def main() -> int:
                 )
 
         compare_reports(baseline_reports, proxy_reports)
+        compare_reports(baseline_grouped_reports, proxy_grouped_reports)
+
+        passthrough_grouped_reports = run_workers(
+            run_mode="passthrough_grouped",
+            world_size=world_size,
+            lib_path=args.fake_nccl_lib,
+            report_dir=proxy_report_dir,
+            env_updates={
+                "FAKEGPU_MODE": "hybrid",
+                "FAKEGPU_DIST_MODE": "passthrough",
+                "FAKEGPU_REAL_NCCL_PATH": str(real_nccl_path),
+                "USE_GROUPED": "1",
+            },
+        )
+        compare_reports(baseline_grouped_reports, passthrough_grouped_reports)
 
         check_cmd = [
             sys.executable,
@@ -319,7 +348,10 @@ def main() -> int:
             "fake_nccl_lib": str(args.fake_nccl_lib),
             "cluster_report_path": str(cluster_report_path),
             "baseline": baseline_reports,
+            "baseline_grouped": baseline_grouped_reports,
             "proxy": proxy_reports,
+            "proxy_grouped": proxy_grouped_reports,
+            "passthrough_grouped": passthrough_grouped_reports,
         }
         print(json.dumps(summary, indent=2, sort_keys=True))
     return 0

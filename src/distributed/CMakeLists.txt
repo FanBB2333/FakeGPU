@@ -1,4 +1,5 @@
 add_library(fake_gpu_distributed OBJECT
+    buffer_transfer.cpp
     cluster_config.cpp
     communicator.cpp
     cluster_coordinator.cpp

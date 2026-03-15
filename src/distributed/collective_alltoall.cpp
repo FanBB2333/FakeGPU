@@ -1,7 +1,7 @@
 #include "collective_executor.hpp"
 
+#include "buffer_transfer.hpp"
 #include "collective_slice_plan.hpp"
-#include "staging_buffer.hpp"
 
 #include <cstring>
 #include <string>
@@ -33,9 +33,8 @@ CollectiveExecutionResult execute_alltoall(
         return make_error("invalid_collective_size", "alltoall bytes do not match world_size * count * dtype_size");
     }
 
-    StagingBufferManager manager;
-    std::vector<StagingBufferHandle> handles;
-    handles.reserve(participants.size());
+    std::vector<std::vector<char>> buffers;
+    buffers.reserve(participants.size());
 
     for (const CollectiveExecutionParticipant& participant : participants) {
         if (participant.bytes != request.bytes) {
@@ -46,26 +45,30 @@ CollectiveExecutionResult execute_alltoall(
                     ", expected " + std::to_string(request.bytes));
         }
 
-        StagingBufferMetadata metadata;
-        metadata.name = participant.staging_name;
-        metadata.dtype = collective_data_type_name(request.dtype);
-        metadata.bytes = request.bytes;
-        metadata.shape = {plan.world_size, plan.chunk_elements};
-        metadata.owner_rank = participant.rank;
-        metadata.staging_id = request.seqno;
-
-        StagingBufferHandle handle;
-        if (!manager.open(metadata, false, handle, error)) {
+        std::vector<char> buffer;
+        if (!load_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                participant.transport == BufferTransport::SocketPayload
+                    ? participant.payload_bytes
+                    : request.bytes,
+                {plan.world_size, plan.chunk_elements},
+                participant.rank,
+                request.seqno,
+                participant.payload,
+                buffer,
+                error)) {
             return make_error("staging_open_failed", error);
         }
-        handles.push_back(std::move(handle));
+        buffers.push_back(std::move(buffer));
     }
 
     std::vector<unsigned char> outputs(plan.total_bytes * participants.size(), 0);
 
     for (const CollectiveExecutionParticipant& sender : participants) {
         const unsigned char* sender_input =
-            static_cast<const unsigned char*>(handles[static_cast<std::size_t>(sender.rank)].data());
+            reinterpret_cast<const unsigned char*>(buffers[static_cast<std::size_t>(sender.rank)].data());
         for (const CollectiveExecutionParticipant& receiver : participants) {
             const std::size_t sender_offset = plan.byte_offset_for_rank(receiver.rank);
             const std::size_t receiver_offset = plan.byte_offset_for_rank(sender.rank);
@@ -76,15 +79,24 @@ CollectiveExecutionResult execute_alltoall(
         }
     }
 
-    for (const CollectiveExecutionParticipant& participant : participants) {
-        std::memcpy(
-            handles[static_cast<std::size_t>(participant.rank)].data(),
-            outputs.data() + static_cast<std::size_t>(participant.rank) * plan.total_bytes,
-            plan.total_bytes);
-    }
-
     CollectiveExecutionResult result;
     result.ok = true;
+    for (const CollectiveExecutionParticipant& participant : participants) {
+        if (!store_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                {plan.world_size, plan.chunk_elements},
+                participant.rank,
+                request.seqno,
+                outputs.data() + static_cast<std::size_t>(participant.rank) * plan.total_bytes,
+                plan.total_bytes,
+                result.output_payloads[participant.rank],
+                error)) {
+            return make_error("staging_open_failed", error);
+        }
+    }
+
     return result;
 }
 

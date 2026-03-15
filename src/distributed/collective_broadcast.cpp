@@ -1,6 +1,6 @@
 #include "collective_executor.hpp"
 
-#include "staging_buffer.hpp"
+#include "buffer_transfer.hpp"
 
 #include <cstring>
 #include <string>
@@ -31,9 +31,8 @@ CollectiveExecutionResult execute_broadcast(
         return make_error("invalid_collective_size", "broadcast bytes do not match count * dtype_size");
     }
 
-    StagingBufferManager manager;
-    std::vector<StagingBufferHandle> handles;
-    handles.reserve(participants.size());
+    std::vector<std::vector<char>> buffers;
+    buffers.reserve(participants.size());
 
     int root_index = -1;
     for (std::size_t index = 0; index < participants.size(); ++index) {
@@ -46,20 +45,24 @@ CollectiveExecutionResult execute_broadcast(
                     ", expected " + std::to_string(request.bytes));
         }
 
-        StagingBufferMetadata metadata;
-        metadata.name = participant.staging_name;
-        metadata.dtype = collective_data_type_name(request.dtype);
-        metadata.bytes = request.bytes;
-        metadata.shape = {request.count};
-        metadata.owner_rank = participant.rank;
-        metadata.staging_id = request.seqno;
-
-        StagingBufferHandle handle;
         std::string error;
-        if (!manager.open(metadata, false, handle, error)) {
+        std::vector<char> buffer;
+        if (!load_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                participant.transport == BufferTransport::SocketPayload
+                    ? participant.payload_bytes
+                    : request.bytes,
+                {request.count},
+                participant.rank,
+                request.seqno,
+                participant.payload,
+                buffer,
+                error)) {
             return make_error("staging_open_failed", error);
         }
-        handles.push_back(std::move(handle));
+        buffers.push_back(std::move(buffer));
 
         if (participant.rank == request.root_rank) {
             root_index = static_cast<int>(index);
@@ -71,14 +74,30 @@ CollectiveExecutionResult execute_broadcast(
     }
 
     std::vector<unsigned char> root_data(request.bytes, 0);
-    std::memcpy(root_data.data(), handles[static_cast<std::size_t>(root_index)].data(), request.bytes);
-
-    for (StagingBufferHandle& handle : handles) {
-        std::memcpy(handle.data(), root_data.data(), request.bytes);
-    }
+    std::memcpy(
+        root_data.data(),
+        buffers[static_cast<std::size_t>(root_index)].data(),
+        request.bytes);
 
     CollectiveExecutionResult result;
     result.ok = true;
+    for (const CollectiveExecutionParticipant& participant : participants) {
+        std::string error;
+        if (!store_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                {request.count},
+                participant.rank,
+                request.seqno,
+                root_data.data(),
+                request.bytes,
+                result.output_payloads[participant.rank],
+                error)) {
+            return make_error("staging_open_failed", error);
+        }
+    }
+
     return result;
 }
 

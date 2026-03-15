@@ -7,8 +7,10 @@
 #include <unistd.h>
 
 #include <array>
+#include <charconv>
 #include <sstream>
 #include <utility>
+#include <vector>
 
 namespace fake_gpu::distributed {
 
@@ -30,6 +32,93 @@ std::string sanitize_value(std::string value) {
         }
     }
     return value;
+}
+
+bool parse_payload_size_header(
+    const std::string& line,
+    std::size_t& payload_bytes,
+    std::string& error) {
+    payload_bytes = 0;
+
+    std::istringstream stream(line);
+    std::string token;
+    if (!(stream >> token)) {
+        error = "missing command";
+        return false;
+    }
+
+    while (stream >> token) {
+        const std::size_t equals = token.find('=');
+        if (equals == std::string::npos || equals == 0 || equals + 1 >= token.size()) {
+            error = "invalid token: " + token;
+            return false;
+        }
+        if (token.substr(0, equals) != "payload_bytes") {
+            continue;
+        }
+
+        const std::string value = token.substr(equals + 1);
+        std::size_t parsed = 0;
+        const auto [ptr, ec] =
+            std::from_chars(value.data(), value.data() + value.size(), parsed);
+        if (ec != std::errc() || ptr != value.data() + value.size()) {
+            error = "invalid payload_bytes value";
+            return false;
+        }
+        payload_bytes = parsed;
+        return true;
+    }
+
+    return true;
+}
+
+bool send_all_bytes(int fd, const char* data, std::size_t size, std::string& error) {
+    std::size_t offset = 0;
+    while (offset < size) {
+        const ssize_t rc = ::send(fd, data + offset, size - offset, 0);
+        if (rc < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            error = "send() failed: " + std::string(std::strerror(errno));
+            return false;
+        }
+        offset += static_cast<std::size_t>(rc);
+    }
+    return true;
+}
+
+bool receive_exact_bytes(int fd, std::size_t size, std::vector<char>& out, std::string& error) {
+    out.assign(size, '\0');
+    std::size_t offset = 0;
+    while (offset < size) {
+        const ssize_t rc = ::recv(fd, out.data() + offset, size - offset, 0);
+        if (rc == 0) {
+            error = "peer closed connection before sending the full payload";
+            return false;
+        }
+        if (rc < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            error = "recv() failed: " + std::string(std::strerror(errno));
+            return false;
+        }
+        offset += static_cast<std::size_t>(rc);
+    }
+    return true;
+}
+
+std::string append_payload_header(
+    const std::string& line,
+    const std::vector<char>& payload) {
+    if (payload.empty()) {
+        return line;
+    }
+    if (line.find("payload_bytes=") != std::string::npos) {
+        return line;
+    }
+    return line + " payload_bytes=" + std::to_string(payload.size());
 }
 
 }  // namespace
@@ -91,6 +180,7 @@ bool bind_and_listen(
 bool request_response_unix_socket(
     const std::string& path,
     const std::string& request_line,
+    const std::vector<char>& request_payload,
     CoordinatorResponse& response,
     std::string& error) {
     response = CoordinatorResponse{};
@@ -121,13 +211,13 @@ bool request_response_unix_socket(
         return false;
     }
 
-    if (!send_message_line(fd, request_line, error)) {
+    if (!send_message_packet(fd, request_line, request_payload, error)) {
         ::close(fd);
         return false;
     }
 
     std::string response_line;
-    if (!receive_message_line(fd, response_line, error)) {
+    if (!receive_message_packet(fd, response_line, response.payload, error)) {
         ::close(fd);
         return false;
     }
@@ -140,12 +230,23 @@ bool request_response(
     CoordinatorTransport transport,
     const std::string& address,
     const std::string& request_line,
+    const std::vector<char>& request_payload,
     CoordinatorResponse& response,
     std::string& error) {
     if (transport == CoordinatorTransport::Unix) {
-        return request_response_unix_socket(address, request_line, response, error);
+        return request_response_unix_socket(address, request_line, request_payload, response, error);
     }
-    return request_response_tcp_socket(address, request_line, response, error);
+    return request_response_tcp_socket(address, request_line, request_payload, response, error);
+}
+
+bool request_response(
+    CoordinatorTransport transport,
+    const std::string& address,
+    const std::string& request_line,
+    CoordinatorResponse& response,
+    std::string& error) {
+    static const std::vector<char> kEmptyPayload;
+    return request_response(transport, address, request_line, kEmptyPayload, response, error);
 }
 
 bool receive_message_line(int fd, std::string& line, std::string& error) {
@@ -193,23 +294,117 @@ bool send_message_line(int fd, const std::string& line, std::string& error) {
         payload.push_back('\n');
     }
 
-    std::size_t offset = 0;
-    while (offset < payload.size()) {
-        const ssize_t rc = ::send(fd, payload.data() + offset, payload.size() - offset, 0);
+    return send_all_bytes(fd, payload.data(), payload.size(), error);
+}
+
+bool receive_message_packet(
+    int fd,
+    std::string& line,
+    std::vector<char>& payload,
+    std::string& error) {
+    line.clear();
+    payload.clear();
+
+    std::array<char, 1024> buffer{};
+    std::vector<char> header_bytes;
+    std::vector<char> spill_bytes;
+
+    while (true) {
+        const ssize_t rc = ::recv(fd, buffer.data(), buffer.size(), 0);
+        if (rc == 0) {
+            if (header_bytes.empty()) {
+                error = "peer closed connection before sending a request";
+                return false;
+            }
+            error = "peer closed connection before terminating the header";
+            return false;
+        }
         if (rc < 0) {
             if (errno == EINTR) {
                 continue;
             }
-            error = "send() failed: " + std::string(std::strerror(errno));
+            error = "recv() failed: " + std::string(std::strerror(errno));
             return false;
         }
-        offset += static_cast<std::size_t>(rc);
+
+        const char* chunk_begin = buffer.data();
+        const char* chunk_end = buffer.data() + static_cast<std::size_t>(rc);
+        const char* newline =
+            static_cast<const char*>(std::memchr(chunk_begin, '\n', static_cast<std::size_t>(rc)));
+        if (!newline) {
+            header_bytes.insert(
+                header_bytes.end(),
+                chunk_begin,
+                chunk_end);
+            if (header_bytes.size() > 4096) {
+                error = "request line is too long";
+                return false;
+            }
+            continue;
+        }
+
+        const std::size_t header_chunk =
+            static_cast<std::size_t>(newline - chunk_begin);
+        header_bytes.insert(header_bytes.end(), chunk_begin, chunk_begin + header_chunk);
+        spill_bytes.insert(
+            spill_bytes.end(),
+            newline + 1,
+            chunk_end);
+        break;
     }
+
+    line.assign(header_bytes.begin(), header_bytes.end());
+    line = trim(line);
+    if (line.empty()) {
+        error = "empty request line";
+        return false;
+    }
+
+    std::size_t payload_bytes = 0;
+    if (!parse_payload_size_header(line, payload_bytes, error)) {
+        return false;
+    }
+    if (payload_bytes == 0) {
+        return true;
+    }
+
+    if (spill_bytes.size() > payload_bytes) {
+        error = "payload exceeded declared payload_bytes";
+        return false;
+    }
+
+    payload = std::move(spill_bytes);
+    if (payload.size() == payload_bytes) {
+        return true;
+    }
+
+    std::vector<char> tail;
+    if (!receive_exact_bytes(fd, payload_bytes - payload.size(), tail, error)) {
+        return false;
+    }
+    payload.insert(payload.end(), tail.begin(), tail.end());
     return true;
 }
 
+bool send_message_packet(
+    int fd,
+    const std::string& line,
+    const std::vector<char>& payload,
+    std::string& error) {
+    const std::string header = append_payload_header(line, payload);
+    if (!send_message_line(fd, header, error)) {
+        return false;
+    }
+    if (payload.empty()) {
+        return true;
+    }
+    return send_all_bytes(fd, payload.data(), payload.size(), error);
+}
+
 bool parse_message_line(const std::string& line, CoordinatorMessage& message, std::string& error) {
+    const std::vector<char> existing_payload = std::move(message.payload);
     message = CoordinatorMessage{};
+    message.payload = existing_payload;
     std::istringstream stream(line);
     if (!(stream >> message.command)) {
         error = "missing command";
@@ -229,7 +424,9 @@ bool parse_message_line(const std::string& line, CoordinatorMessage& message, st
 }
 
 bool parse_response_line(const std::string& line, CoordinatorResponse& response, std::string& error) {
+    const std::vector<char> existing_payload = std::move(response.payload);
     response = CoordinatorResponse{};
+    response.payload = existing_payload;
 
     std::istringstream stream(line);
     std::string status;

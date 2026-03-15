@@ -111,6 +111,7 @@ bool bind_and_listen_tcp_socket(const std::string& endpoint, int backlog, int& s
 bool request_response_tcp_socket(
     const std::string& endpoint,
     const std::string& request_line,
+    const std::vector<char>& request_payload,
     CoordinatorResponse& response,
     std::string& error) {
     response = CoordinatorResponse{};
@@ -127,13 +128,13 @@ bool request_response_tcp_socket(
         return false;
     }
 
-    if (!send_message_line(fd, request_line, error)) {
+    if (!send_message_packet(fd, request_line, request_payload, error)) {
         ::close(fd);
         return false;
     }
 
     std::string response_line;
-    if (!receive_message_line(fd, response_line, error)) {
+    if (!receive_message_packet(fd, response_line, response.payload, error)) {
         ::close(fd);
         return false;
     }

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace fake_gpu::distributed {
@@ -31,6 +32,11 @@ enum class CollectiveReduceOp {
     Min,
 };
 
+enum class BufferTransport {
+    SharedMemory,
+    SocketPayload,
+};
+
 struct CollectiveExecutionRequest {
     int comm_id = -1;
     std::uint64_t seqno = 0;
@@ -44,14 +50,18 @@ struct CollectiveExecutionRequest {
 
 struct CollectiveExecutionParticipant {
     int rank = -1;
+    BufferTransport transport = BufferTransport::SharedMemory;
     std::string staging_name;
     std::size_t bytes = 0;
+    std::size_t payload_bytes = 0;
+    std::vector<char> payload;
 };
 
 struct CollectiveExecutionResult {
     bool ok = false;
     std::string error_code;
     std::string error_detail;
+    std::unordered_map<int, std::vector<char>> output_payloads;
 };
 
 inline const char* collective_type_name(CollectiveType type) {

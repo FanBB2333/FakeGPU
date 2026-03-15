@@ -1,7 +1,7 @@
 #include "collective_executor.hpp"
 
+#include "buffer_transfer.hpp"
 #include "collective_slice_plan.hpp"
-#include "staging_buffer.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -23,22 +23,22 @@ CollectiveExecutionResult make_error(std::string code, std::string detail) {
 template <typename T>
 void reduce_scatter_sum_into_handles(
     const CollectiveSlicePlan& plan,
-    std::vector<StagingBufferHandle>& handles,
-    const std::vector<CollectiveExecutionParticipant>& participants) {
+    const std::vector<std::vector<char>>& buffers,
+    std::vector<std::vector<char>>& outputs) {
     std::vector<T> reduced(plan.total_elements, static_cast<T>(0));
-    for (const StagingBufferHandle& handle : handles) {
-        const T* values = static_cast<const T*>(handle.data());
+    for (const std::vector<char>& buffer : buffers) {
+        const T* values = reinterpret_cast<const T*>(buffer.data());
         for (std::size_t index = 0; index < plan.total_elements; ++index) {
             reduced[index] += values[index];
         }
     }
 
-    for (std::size_t index = 0; index < handles.size(); ++index) {
-        const CollectiveExecutionParticipant& participant = participants[index];
-        void* output = handles[index].data();
+    outputs.resize(buffers.size());
+    for (std::size_t index = 0; index < buffers.size(); ++index) {
+        outputs[index].assign(plan.chunk_bytes, '\0');
         std::memcpy(
-            output,
-            reduced.data() + participant.rank * plan.chunk_elements,
+            outputs[index].data(),
+            reduced.data() + index * plan.chunk_elements,
             plan.chunk_bytes);
     }
 }
@@ -61,9 +61,8 @@ CollectiveExecutionResult execute_reducescatter(
         return make_error("invalid_collective_size", "reducescatter bytes do not match world_size * count * dtype_size");
     }
 
-    StagingBufferManager manager;
-    std::vector<StagingBufferHandle> handles;
-    handles.reserve(participants.size());
+    std::vector<std::vector<char>> buffers;
+    buffers.reserve(participants.size());
 
     for (const CollectiveExecutionParticipant& participant : participants) {
         if (participant.bytes != request.bytes) {
@@ -74,38 +73,59 @@ CollectiveExecutionResult execute_reducescatter(
                     ", expected " + std::to_string(request.bytes));
         }
 
-        StagingBufferMetadata metadata;
-        metadata.name = participant.staging_name;
-        metadata.dtype = collective_data_type_name(request.dtype);
-        metadata.bytes = request.bytes;
-        metadata.shape = {plan.total_elements};
-        metadata.owner_rank = participant.rank;
-        metadata.staging_id = request.seqno;
-
-        StagingBufferHandle handle;
-        if (!manager.open(metadata, false, handle, error)) {
+        std::vector<char> buffer;
+        if (!load_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                participant.transport == BufferTransport::SocketPayload
+                    ? participant.payload_bytes
+                    : request.bytes,
+                {plan.total_elements},
+                participant.rank,
+                request.seqno,
+                participant.payload,
+                buffer,
+                error)) {
             return make_error("staging_open_failed", error);
         }
-        handles.push_back(std::move(handle));
+        buffers.push_back(std::move(buffer));
     }
 
+    std::vector<std::vector<char>> outputs;
     switch (request.dtype) {
         case CollectiveDataType::Int32:
-            reduce_scatter_sum_into_handles<std::int32_t>(plan, handles, participants);
+            reduce_scatter_sum_into_handles<std::int32_t>(plan, buffers, outputs);
             break;
         case CollectiveDataType::Int64:
-            reduce_scatter_sum_into_handles<std::int64_t>(plan, handles, participants);
+            reduce_scatter_sum_into_handles<std::int64_t>(plan, buffers, outputs);
             break;
         case CollectiveDataType::Float32:
-            reduce_scatter_sum_into_handles<float>(plan, handles, participants);
+            reduce_scatter_sum_into_handles<float>(plan, buffers, outputs);
             break;
         case CollectiveDataType::Float64:
-            reduce_scatter_sum_into_handles<double>(plan, handles, participants);
+            reduce_scatter_sum_into_handles<double>(plan, buffers, outputs);
             break;
     }
 
     CollectiveExecutionResult result;
     result.ok = true;
+    for (std::size_t index = 0; index < participants.size(); ++index) {
+        const CollectiveExecutionParticipant& participant = participants[index];
+        if (!store_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                {plan.chunk_elements},
+                participant.rank,
+                request.seqno,
+                outputs[index].data(),
+                outputs[index].size(),
+                result.output_payloads[participant.rank],
+                error)) {
+            return make_error("staging_open_failed", error);
+        }
+    }
     return result;
 }
 

@@ -1,6 +1,6 @@
 #include "collective_executor.hpp"
 
-#include "staging_buffer.hpp"
+#include "buffer_transfer.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -22,10 +22,10 @@ CollectiveExecutionResult make_error(std::string code, std::string detail) {
 bool open_participant_buffers(
     const CollectiveExecutionRequest& request,
     const std::vector<CollectiveExecutionParticipant>& participants,
-    std::vector<StagingBufferHandle>& handles,
+    const std::vector<std::size_t>& shape,
+    std::vector<std::vector<char>>& buffers,
     std::string& error) {
-    handles.clear();
-    StagingBufferManager manager;
+    buffers.clear();
 
     for (const CollectiveExecutionParticipant& participant : participants) {
         if (participant.bytes != request.bytes) {
@@ -36,19 +36,23 @@ bool open_participant_buffers(
             return false;
         }
 
-        StagingBufferMetadata metadata;
-        metadata.name = participant.staging_name;
-        metadata.dtype = collective_data_type_name(request.dtype);
-        metadata.bytes = request.bytes;
-        metadata.shape = {request.count};
-        metadata.owner_rank = participant.rank;
-        metadata.staging_id = request.seqno;
-
-        StagingBufferHandle handle;
-        if (!manager.open(metadata, false, handle, error)) {
+        std::vector<char> buffer;
+        if (!load_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                participant.transport == BufferTransport::SocketPayload
+                    ? participant.payload_bytes
+                    : request.bytes,
+                shape,
+                participant.rank,
+                request.seqno,
+                participant.payload,
+                buffer,
+                error)) {
             return false;
         }
-        handles.push_back(std::move(handle));
+        buffers.push_back(std::move(buffer));
     }
 
     return true;
@@ -57,17 +61,18 @@ bool open_participant_buffers(
 template <typename T>
 void sum_reduce_into_all_handles(
     const CollectiveExecutionRequest& request,
-    std::vector<StagingBufferHandle>& handles) {
+    const std::vector<std::vector<char>>& buffers,
+    std::vector<char>& reduced_bytes) {
     std::vector<T> reduced(request.count, static_cast<T>(0));
-    for (const StagingBufferHandle& handle : handles) {
-        const T* values = static_cast<const T*>(handle.data());
+    for (const std::vector<char>& buffer : buffers) {
+        const T* values = reinterpret_cast<const T*>(buffer.data());
         for (std::size_t index = 0; index < request.count; ++index) {
             reduced[index] += values[index];
         }
     }
-    for (StagingBufferHandle& handle : handles) {
-        std::memcpy(handle.data(), reduced.data(), request.bytes);
-    }
+    reduced_bytes.assign(
+        reinterpret_cast<const char*>(reduced.data()),
+        reinterpret_cast<const char*>(reduced.data()) + request.bytes);
 }
 
 template <typename T>
@@ -75,10 +80,11 @@ void sum_reduce_into_root_handle(
     const CollectiveExecutionRequest& request,
     int root_rank,
     const std::vector<CollectiveExecutionParticipant>& participants,
-    std::vector<StagingBufferHandle>& handles) {
+    const std::vector<std::vector<char>>& buffers,
+    std::vector<char>& reduced_bytes) {
     std::vector<T> reduced(request.count, static_cast<T>(0));
-    for (const StagingBufferHandle& handle : handles) {
-        const T* values = static_cast<const T*>(handle.data());
+    for (const std::vector<char>& buffer : buffers) {
+        const T* values = reinterpret_cast<const T*>(buffer.data());
         for (std::size_t index = 0; index < request.count; ++index) {
             reduced[index] += values[index];
         }
@@ -86,7 +92,9 @@ void sum_reduce_into_root_handle(
 
     for (std::size_t index = 0; index < participants.size(); ++index) {
         if (participants[index].rank == root_rank) {
-            std::memcpy(handles[index].data(), reduced.data(), request.bytes);
+            reduced_bytes.assign(
+                reinterpret_cast<const char*>(reduced.data()),
+                reinterpret_cast<const char*>(reduced.data()) + request.bytes);
             return;
         }
     }
@@ -109,29 +117,45 @@ CollectiveExecutionResult execute_allreduce_sum(
         return make_error("invalid_collective_size", "allreduce bytes do not match count * dtype_size");
     }
 
-    std::vector<StagingBufferHandle> handles;
+    std::vector<std::vector<char>> buffers;
     std::string error;
-    if (!open_participant_buffers(request, participants, handles, error)) {
+    if (!open_participant_buffers(request, participants, {request.count}, buffers, error)) {
         return make_error("staging_open_failed", error);
     }
 
+    std::vector<char> reduced_bytes;
     switch (request.dtype) {
         case CollectiveDataType::Int32:
-            sum_reduce_into_all_handles<std::int32_t>(request, handles);
+            sum_reduce_into_all_handles<std::int32_t>(request, buffers, reduced_bytes);
             break;
         case CollectiveDataType::Int64:
-            sum_reduce_into_all_handles<std::int64_t>(request, handles);
+            sum_reduce_into_all_handles<std::int64_t>(request, buffers, reduced_bytes);
             break;
         case CollectiveDataType::Float32:
-            sum_reduce_into_all_handles<float>(request, handles);
+            sum_reduce_into_all_handles<float>(request, buffers, reduced_bytes);
             break;
         case CollectiveDataType::Float64:
-            sum_reduce_into_all_handles<double>(request, handles);
+            sum_reduce_into_all_handles<double>(request, buffers, reduced_bytes);
             break;
     }
 
     CollectiveExecutionResult result;
     result.ok = true;
+    for (const CollectiveExecutionParticipant& participant : participants) {
+        if (!store_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                {request.count},
+                participant.rank,
+                request.seqno,
+                reduced_bytes.data(),
+                request.bytes,
+                result.output_payloads[participant.rank],
+                error)) {
+            return make_error("staging_open_failed", error);
+        }
+    }
     return result;
 }
 
@@ -161,29 +185,53 @@ CollectiveExecutionResult execute_reduce(
         return make_error("root_rank_missing", "reduce root rank is not part of the collective");
     }
 
-    std::vector<StagingBufferHandle> handles;
+    std::vector<std::vector<char>> buffers;
     std::string error;
-    if (!open_participant_buffers(request, participants, handles, error)) {
+    if (!open_participant_buffers(request, participants, {request.count}, buffers, error)) {
         return make_error("staging_open_failed", error);
     }
 
+    std::vector<char> reduced_bytes;
     switch (request.dtype) {
         case CollectiveDataType::Int32:
-            sum_reduce_into_root_handle<std::int32_t>(request, request.root_rank, participants, handles);
+            sum_reduce_into_root_handle<std::int32_t>(
+                request, request.root_rank, participants, buffers, reduced_bytes);
             break;
         case CollectiveDataType::Int64:
-            sum_reduce_into_root_handle<std::int64_t>(request, request.root_rank, participants, handles);
+            sum_reduce_into_root_handle<std::int64_t>(
+                request, request.root_rank, participants, buffers, reduced_bytes);
             break;
         case CollectiveDataType::Float32:
-            sum_reduce_into_root_handle<float>(request, request.root_rank, participants, handles);
+            sum_reduce_into_root_handle<float>(
+                request, request.root_rank, participants, buffers, reduced_bytes);
             break;
         case CollectiveDataType::Float64:
-            sum_reduce_into_root_handle<double>(request, request.root_rank, participants, handles);
+            sum_reduce_into_root_handle<double>(
+                request, request.root_rank, participants, buffers, reduced_bytes);
             break;
     }
 
     CollectiveExecutionResult result;
     result.ok = true;
+    for (const CollectiveExecutionParticipant& participant : participants) {
+        if (participant.rank != request.root_rank) {
+            result.output_payloads[participant.rank].clear();
+            continue;
+        }
+        if (!store_participant_buffer(
+                participant.transport,
+                participant.staging_name,
+                request.dtype,
+                {request.count},
+                participant.rank,
+                request.seqno,
+                reduced_bytes.data(),
+                request.bytes,
+                result.output_payloads[participant.rank],
+                error)) {
+            return make_error("staging_open_failed", error);
+        }
+    }
     return result;
 }
 
