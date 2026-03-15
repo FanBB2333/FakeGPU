@@ -109,6 +109,7 @@ struct RegistryImpl {
         ClusterCollectiveReportStats broadcast;
         ClusterCollectiveReportStats all_gather;
         ClusterCollectiveReportStats reduce_scatter;
+        ClusterCollectiveReportStats all_to_all;
         ClusterCollectiveReportStats barrier;
         std::unordered_map<std::string, ClusterLinkReportStats> links;
         std::unordered_map<int, ClusterRankReportStats> ranks;
@@ -224,6 +225,8 @@ ClusterCollectiveReportStats& collective_report_stats_for_type_locked(
             return registry.report.all_gather;
         case CollectiveType::ReduceScatter:
             return registry.report.reduce_scatter;
+        case CollectiveType::AllToAll:
+            return registry.report.all_to_all;
     }
     return registry.report.all_reduce;
 }
@@ -729,6 +732,9 @@ CollectiveExecutionResult execute_collective_locked(
     }
     if (request.type == CollectiveType::ReduceScatter) {
         return execute_reducescatter(execution_request, participants);
+    }
+    if (request.type == CollectiveType::AllToAll) {
+        return execute_alltoall(execution_request, participants);
     }
     return CollectiveExecutionResult{false, "unsupported_collective", "unsupported collective type"};
 }
@@ -1570,6 +1576,7 @@ ClusterReportSnapshot snapshot_cluster_report() {
     snapshot.broadcast = registry.report.broadcast;
     snapshot.all_gather = registry.report.all_gather;
     snapshot.reduce_scatter = registry.report.reduce_scatter;
+    snapshot.all_to_all = registry.report.all_to_all;
     snapshot.barrier = registry.report.barrier;
     snapshot.links.reserve(registry.report.links.size());
     snapshot.ranks.reserve(registry.report.ranks.size());
@@ -1606,6 +1613,7 @@ ClusterReportSnapshot snapshot_cluster_report() {
         snapshot.broadcast.calls > 0 ||
         snapshot.all_gather.calls > 0 ||
         snapshot.reduce_scatter.calls > 0 ||
+        snapshot.all_to_all.calls > 0 ||
         snapshot.barrier.calls > 0 ||
         !snapshot.links.empty() ||
         !snapshot.ranks.empty();

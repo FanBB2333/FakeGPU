@@ -56,7 +56,9 @@ inline bool build_staging_chunk_plan(
     }
 
     const std::size_t staging_multiplier =
-        (type == CollectiveType::AllGather || type == CollectiveType::ReduceScatter)
+        (type == CollectiveType::AllGather ||
+         type == CollectiveType::ReduceScatter ||
+         type == CollectiveType::AllToAll)
         ? static_cast<std::size_t>(world_size)
         : 1U;
     const std::size_t minimum_staging_bytes = dtype_size * staging_multiplier;
@@ -106,6 +108,11 @@ inline bool build_staging_chunk_plan(
                 chunk.input_bytes = chunk_bytes * static_cast<std::size_t>(world_size);
                 chunk.staging_bytes = chunk.input_bytes;
                 chunk.output_bytes = chunk_bytes;
+                break;
+            case CollectiveType::AllToAll:
+                chunk.input_bytes = chunk_bytes * static_cast<std::size_t>(world_size);
+                chunk.staging_bytes = chunk.input_bytes;
+                chunk.output_bytes = chunk.input_bytes;
                 break;
         }
 

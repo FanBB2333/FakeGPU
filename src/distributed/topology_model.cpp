@@ -30,6 +30,8 @@ double traffic_multiplier_for_collective(CollectiveType type) {
             return 1.0;
         case CollectiveType::ReduceScatter:
             return 1.0;
+        case CollectiveType::AllToAll:
+            return 1.0;
     }
     return 1.0;
 }

@@ -407,7 +407,8 @@ void ClusterCoordinator::handle_client(int client_fd) {
         request.command == "REDUCE" ||
         request.command == "BROADCAST" ||
         request.command == "ALLGATHER" ||
-        request.command == "REDUCESCATTER") {
+        request.command == "REDUCESCATTER" ||
+        request.command == "ALLTOALL") {
         CollectiveSubmitRequest collective_request;
         bool ok = false;
         std::string error;
@@ -492,6 +493,8 @@ void ClusterCoordinator::handle_client(int client_fd) {
                                                     collective_request.type = CollectiveType::Broadcast;
                                                 } else if (request.command == "ALLGATHER") {
                                                     collective_request.type = CollectiveType::AllGather;
+                                                } else if (request.command == "ALLTOALL") {
+                                                    collective_request.type = CollectiveType::AllToAll;
                                                 } else {
                                                     collective_request.type = CollectiveType::ReduceScatter;
                                                 }

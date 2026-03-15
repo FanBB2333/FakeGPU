@@ -143,6 +143,11 @@ private:
                 (unsigned long long)cluster_snapshot.reduce_scatter.bytes,
                 cluster_snapshot.reduce_scatter.estimated_time_us_total,
                 cluster_snapshot.reduce_scatter.contention_penalty_us_total);
+        fprintf(out, "    \"all_to_all\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
+                (unsigned long long)cluster_snapshot.all_to_all.calls,
+                (unsigned long long)cluster_snapshot.all_to_all.bytes,
+                cluster_snapshot.all_to_all.estimated_time_us_total,
+                cluster_snapshot.all_to_all.contention_penalty_us_total);
         fprintf(out, "    \"barrier\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f}\n",
                 (unsigned long long)cluster_snapshot.barrier.calls,
                 (unsigned long long)cluster_snapshot.barrier.bytes,

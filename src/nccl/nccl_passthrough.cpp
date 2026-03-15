@@ -25,6 +25,8 @@ using ncclBroadcast_fn =
     ncclResult_t (*)(const void*, void*, std::size_t, ncclDataType_t, int, ncclComm_t, cudaStream_t);
 using ncclAllGather_fn =
     ncclResult_t (*)(const void*, void*, std::size_t, ncclDataType_t, ncclComm_t, cudaStream_t);
+using ncclAlltoAll_fn =
+    ncclResult_t (*)(const void*, void*, std::size_t, ncclDataType_t, ncclComm_t, cudaStream_t);
 using ncclReduceScatter_fn =
     ncclResult_t (*)(const void*, void*, std::size_t, ncclDataType_t, ncclRedOp_t, ncclComm_t, cudaStream_t);
 
@@ -43,6 +45,7 @@ struct LoaderState {
     ncclReduce_fn reduce = nullptr;
     ncclBroadcast_fn broadcast = nullptr;
     ncclAllGather_fn all_gather = nullptr;
+    ncclAlltoAll_fn all_to_all = nullptr;
     ncclReduceScatter_fn reduce_scatter = nullptr;
 };
 
@@ -192,6 +195,10 @@ bool RealNcclLoader::resolve_symbols(std::string& error) {
     if (!state.all_gather) {
         return false;
     }
+    ::dlerror();
+    state.all_to_all =
+        reinterpret_cast<ncclAlltoAll_fn>(::dlsym(state.handle, "ncclAlltoAll"));
+    ::dlerror();
     state.reduce_scatter =
         reinterpret_cast<ncclReduceScatter_fn>(resolve_symbol(state.handle, "ncclReduceScatter", error));
     if (!state.reduce_scatter) {
@@ -353,6 +360,22 @@ ncclResult_t RealNcclLoader::all_gather(
         return ncclSystemError;
     }
     return state.all_gather(sendbuff, recvbuff, sendcount, datatype, comm, stream);
+}
+
+ncclResult_t RealNcclLoader::all_to_all(
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    ncclComm_t comm,
+    cudaStream_t stream,
+    std::string& error) const {
+    const LoaderState& state = loader_state();
+    if (!state.all_to_all) {
+        error = "real ncclAlltoAll is unavailable";
+        return ncclSystemError;
+    }
+    return state.all_to_all(sendbuff, recvbuff, count, datatype, comm, stream);
 }
 
 ncclResult_t RealNcclLoader::reduce_scatter(

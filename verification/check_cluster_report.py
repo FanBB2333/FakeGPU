@@ -49,7 +49,7 @@ def main() -> int:
     ap.add_argument("--expect-node-count", type=int, default=None)
     ap.add_argument(
         "--expect-collective",
-        choices=["all_reduce", "reduce", "broadcast", "all_gather", "reduce_scatter", "barrier"],
+        choices=["all_reduce", "reduce", "broadcast", "all_gather", "reduce_scatter", "all_to_all", "barrier"],
         action="append",
         default=[],
         help="Require the named collective to have calls > 0 (repeatable)",
@@ -98,7 +98,7 @@ def main() -> int:
     if not isinstance(collectives, dict):
         _die("collectives must be an object")
     non_zero_collectives = 0
-    for key in ("all_reduce", "reduce", "broadcast", "all_gather", "reduce_scatter", "barrier"):
+    for key in ("all_reduce", "reduce", "broadcast", "all_gather", "reduce_scatter", "all_to_all", "barrier"):
         counter = _require_counter(collectives, key, ctx="collectives")
         if int(counter["calls"]) > 0:
             non_zero_collectives += 1

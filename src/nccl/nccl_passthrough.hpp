@@ -62,6 +62,14 @@ public:
         ncclComm_t comm,
         cudaStream_t stream,
         std::string& error) const;
+    ncclResult_t all_to_all(
+        const void* sendbuff,
+        void* recvbuff,
+        std::size_t count,
+        ncclDataType_t datatype,
+        ncclComm_t comm,
+        cudaStream_t stream,
+        std::string& error) const;
     ncclResult_t reduce_scatter(
         const void* sendbuff,
         void* recvbuff,

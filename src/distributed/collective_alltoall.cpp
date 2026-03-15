@@ -1,0 +1,91 @@
+#include "collective_executor.hpp"
+
+#include "collective_slice_plan.hpp"
+#include "staging_buffer.hpp"
+
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace fake_gpu::distributed {
+
+namespace {
+
+CollectiveExecutionResult make_error(std::string code, std::string detail) {
+    CollectiveExecutionResult result;
+    result.ok = false;
+    result.error_code = std::move(code);
+    result.error_detail = std::move(detail);
+    return result;
+}
+
+}  // namespace
+
+CollectiveExecutionResult execute_alltoall(
+    const CollectiveExecutionRequest& request,
+    const std::vector<CollectiveExecutionParticipant>& participants) {
+    CollectiveSlicePlan plan;
+    std::string error;
+    if (!build_even_slice_plan(request, participants.size(), plan, error)) {
+        return make_error("invalid_slice_plan", error);
+    }
+    if (request.bytes != plan.total_bytes) {
+        return make_error("invalid_collective_size", "alltoall bytes do not match world_size * count * dtype_size");
+    }
+
+    StagingBufferManager manager;
+    std::vector<StagingBufferHandle> handles;
+    handles.reserve(participants.size());
+
+    for (const CollectiveExecutionParticipant& participant : participants) {
+        if (participant.bytes != request.bytes) {
+            return make_error(
+                "staging_size_mismatch",
+                "participant rank " + std::to_string(participant.rank) +
+                    " reported bytes=" + std::to_string(participant.bytes) +
+                    ", expected " + std::to_string(request.bytes));
+        }
+
+        StagingBufferMetadata metadata;
+        metadata.name = participant.staging_name;
+        metadata.dtype = collective_data_type_name(request.dtype);
+        metadata.bytes = request.bytes;
+        metadata.shape = {plan.world_size, plan.chunk_elements};
+        metadata.owner_rank = participant.rank;
+        metadata.staging_id = request.seqno;
+
+        StagingBufferHandle handle;
+        if (!manager.open(metadata, false, handle, error)) {
+            return make_error("staging_open_failed", error);
+        }
+        handles.push_back(std::move(handle));
+    }
+
+    std::vector<unsigned char> outputs(plan.total_bytes * participants.size(), 0);
+
+    for (const CollectiveExecutionParticipant& sender : participants) {
+        const unsigned char* sender_input =
+            static_cast<const unsigned char*>(handles[static_cast<std::size_t>(sender.rank)].data());
+        for (const CollectiveExecutionParticipant& receiver : participants) {
+            const std::size_t sender_offset = plan.byte_offset_for_rank(receiver.rank);
+            const std::size_t receiver_offset = plan.byte_offset_for_rank(sender.rank);
+            std::memcpy(
+                outputs.data() + static_cast<std::size_t>(receiver.rank) * plan.total_bytes + receiver_offset,
+                sender_input + sender_offset,
+                plan.chunk_bytes);
+        }
+    }
+
+    for (const CollectiveExecutionParticipant& participant : participants) {
+        std::memcpy(
+            handles[static_cast<std::size_t>(participant.rank)].data(),
+            outputs.data() + static_cast<std::size_t>(participant.rank) * plan.total_bytes,
+            plan.total_bytes);
+    }
+
+    CollectiveExecutionResult result;
+    result.ok = true;
+    return result;
+}
+
+}  // namespace fake_gpu::distributed

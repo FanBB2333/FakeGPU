@@ -166,6 +166,7 @@ struct ClusterReportSnapshot {
     ClusterCollectiveReportStats broadcast;
     ClusterCollectiveReportStats all_gather;
     ClusterCollectiveReportStats reduce_scatter;
+    ClusterCollectiveReportStats all_to_all;
     ClusterCollectiveReportStats barrier;
     std::vector<ClusterLinkReportStats> links;
     std::vector<ClusterRankReportStats> ranks;

@@ -208,6 +208,20 @@ ncclResult_t ncclAllGather(
     ncclDataType_t datatype,
     ncclComm_t comm,
     cudaStream_t stream);
+ncclResult_t ncclAlltoAll(
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    ncclComm_t comm,
+    cudaStream_t stream);
+ncclResult_t ncclAllToAll(
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    ncclComm_t comm,
+    cudaStream_t stream);
 ncclResult_t ncclSend(
     const void* sendbuff,
     std::size_t count,

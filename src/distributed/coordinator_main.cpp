@@ -107,6 +107,11 @@ bool dump_cluster_report(
                  (unsigned long long)snapshot.reduce_scatter.bytes,
                  snapshot.reduce_scatter.estimated_time_us_total,
                  snapshot.reduce_scatter.contention_penalty_us_total);
+    std::fprintf(out, "    \"all_to_all\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
+                 (unsigned long long)snapshot.all_to_all.calls,
+                 (unsigned long long)snapshot.all_to_all.bytes,
+                 snapshot.all_to_all.estimated_time_us_total,
+                 snapshot.all_to_all.contention_penalty_us_total);
     std::fprintf(out, "    \"barrier\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f}\n",
                  (unsigned long long)snapshot.barrier.calls,
                  (unsigned long long)snapshot.barrier.bytes,

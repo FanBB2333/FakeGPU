@@ -4,6 +4,7 @@ add_library(fake_gpu_distributed OBJECT
     cluster_coordinator.cpp
     collective_allreduce.cpp
     collective_allgather.cpp
+    collective_alltoall.cpp
     collective_broadcast.cpp
     collective_reducescatter.cpp
     topology_model.cpp

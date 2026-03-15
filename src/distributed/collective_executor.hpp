@@ -13,6 +13,7 @@ enum class CollectiveType {
     Broadcast,
     AllGather,
     ReduceScatter,
+    AllToAll,
 };
 
 enum class CollectiveDataType {
@@ -65,6 +66,8 @@ inline const char* collective_type_name(CollectiveType type) {
             return "allgather";
         case CollectiveType::ReduceScatter:
             return "reducescatter";
+        case CollectiveType::AllToAll:
+            return "alltoall";
     }
     return "unknown";
 }
@@ -118,6 +121,10 @@ inline bool parse_collective_type(const std::string& text, CollectiveType& out) 
     }
     if (text == "reducescatter") {
         out = CollectiveType::ReduceScatter;
+        return true;
+    }
+    if (text == "alltoall") {
+        out = CollectiveType::AllToAll;
         return true;
     }
     return false;
@@ -198,6 +205,10 @@ CollectiveExecutionResult execute_allgather(
     const std::vector<CollectiveExecutionParticipant>& participants);
 
 CollectiveExecutionResult execute_reducescatter(
+    const CollectiveExecutionRequest& request,
+    const std::vector<CollectiveExecutionParticipant>& participants);
+
+CollectiveExecutionResult execute_alltoall(
     const CollectiveExecutionRequest& request,
     const std::vector<CollectiveExecutionParticipant>& participants);
 

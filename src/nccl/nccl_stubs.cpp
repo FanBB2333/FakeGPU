@@ -563,6 +563,15 @@ ncclResult_t submit_real_collective(
             real_comm,
             stream,
             error);
+    } else if (collective_type == fake_gpu::distributed::CollectiveType::AllToAll) {
+        result = fake_gpu::nccl::RealNcclLoader::instance().all_to_all(
+            sendbuff,
+            recvbuff,
+            count,
+            datatype,
+            real_comm,
+            stream,
+            error);
     } else if (collective_type == fake_gpu::distributed::CollectiveType::ReduceScatter) {
         result = fake_gpu::nccl::RealNcclLoader::instance().reduce_scatter(
             sendbuff,
@@ -620,6 +629,11 @@ bool collective_transfer_sizes(
             input_bytes = chunk_bytes;
             staging_bytes = chunk_bytes * static_cast<std::size_t>(world_size);
             output_bytes = staging_bytes;
+            return true;
+        case fake_gpu::distributed::CollectiveType::AllToAll:
+            input_bytes = chunk_bytes * static_cast<std::size_t>(world_size);
+            staging_bytes = input_bytes;
+            output_bytes = input_bytes;
             return true;
         case fake_gpu::distributed::CollectiveType::ReduceScatter:
             input_bytes = chunk_bytes * static_cast<std::size_t>(world_size);
@@ -1017,6 +1031,44 @@ ncclResult_t buffer_group_reducescatter(
     return ncclSuccess;
 }
 
+ncclResult_t buffer_group_alltoall(
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    ncclComm_t comm) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (!sendbuff || !recvbuff) {
+        return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
+    }
+    if (!grouped_collective_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (count == 0) {
+        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+    }
+
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(datatype, mapped_dtype)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+
+    GroupCollectiveCall call;
+    call.type = fake_gpu::distributed::CollectiveType::AllToAll;
+    call.sendbuff = sendbuff;
+    call.recvbuff = recvbuff;
+    call.count = count;
+    call.datatype = datatype;
+    call.reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
+    call.root = -1;
+    call.comm = comm;
+    g_group_operations.push_back(call);
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
 ncclResult_t submit_collective_chunk(
     const fake_gpu::distributed::DistributedConfig& config,
     const char* command,
@@ -1070,7 +1122,8 @@ ncclResult_t submit_collective_chunk(
     metadata.dtype = fake_gpu::distributed::collective_data_type_name(mapped_dtype);
     metadata.bytes = staging_bytes;
     if (collective_type == fake_gpu::distributed::CollectiveType::AllGather ||
-        collective_type == fake_gpu::distributed::CollectiveType::ReduceScatter) {
+        collective_type == fake_gpu::distributed::CollectiveType::ReduceScatter ||
+        collective_type == fake_gpu::distributed::CollectiveType::AllToAll) {
         metadata.shape = {static_cast<std::size_t>(comm->world_size), count};
     } else {
         metadata.shape = {count};
@@ -1345,6 +1398,60 @@ ncclResult_t submit_collective(
                     chunk_output.data() + src_offset,
                     chunk.input_bytes,
                     error)) {
+                    return fail_with(comm, ncclSystemError, error);
+                }
+            }
+            continue;
+        }
+
+        if (collective_type == fake_gpu::distributed::CollectiveType::AllToAll) {
+            std::vector<char> chunk_input(chunk.input_bytes, 0);
+            for (int peer = 0; peer < comm->world_size; ++peer) {
+                const std::size_t src_offset =
+                    byte_offset_for_elements(
+                        static_cast<std::size_t>(peer) * count + chunk.offset_elements,
+                        dtype_size);
+                const std::size_t dst_offset =
+                    static_cast<std::size_t>(peer) * (chunk.element_count * dtype_size);
+                std::vector<char> peer_slice;
+                if (!fake_gpu::nccl::copy_buffer_to_host(
+                        byte_pointer(input_bytes, src_offset),
+                        chunk.element_count * dtype_size,
+                        peer_slice,
+                        error)) {
+                    return fail_with(comm, ncclSystemError, error);
+                }
+                std::memcpy(chunk_input.data() + dst_offset, peer_slice.data(), peer_slice.size());
+            }
+
+            std::vector<char> chunk_output(chunk.output_bytes, 0);
+            ncclResult_t result = submit_collective_chunk(
+                config,
+                command,
+                collective_type,
+                chunk_input.data(),
+                chunk_output.data(),
+                chunk.element_count,
+                datatype,
+                reduce_op,
+                root,
+                comm);
+            if (result != ncclSuccess) {
+                return result;
+            }
+
+            for (int peer = 0; peer < comm->world_size; ++peer) {
+                const std::size_t src_offset =
+                    static_cast<std::size_t>(peer) * (chunk.element_count * dtype_size);
+                const std::size_t dst_offset =
+                    byte_offset_for_elements(
+                        static_cast<std::size_t>(peer) * count + chunk.offset_elements,
+                        dtype_size);
+                if (!fake_gpu::nccl::copy_host_to_buffer(
+                        byte_pointer(output_bytes, dst_offset),
+                        chunk_output.data() + src_offset,
+                        chunk.element_count * dtype_size,
+                        error)) {
                     return fail_with(comm, ncclSystemError, error);
                 }
             }
@@ -1670,6 +1777,19 @@ ncclResult_t flush_grouped_operations() {
                 operation.datatype,
                 fake_gpu::distributed::CollectiveReduceOp::None,
                 -1,
+                operation.comm,
+                ncclSum,
+                nullptr);
+        } else if (operation.type == fake_gpu::distributed::CollectiveType::AllToAll) {
+            result = submit_collective(
+                "ALLTOALL",
+                fake_gpu::distributed::CollectiveType::AllToAll,
+                operation.sendbuff,
+                operation.recvbuff,
+                operation.count,
+                operation.datatype,
+                operation.reduce_op,
+                operation.root,
                 operation.comm,
                 ncclSum,
                 nullptr);
@@ -2475,6 +2595,40 @@ ncclResult_t ncclAllGather(
         comm,
         ncclSum,
         stream);
+}
+
+ncclResult_t ncclAlltoAll(
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    ncclComm_t comm,
+    cudaStream_t stream) {
+    if (g_group_depth > 0) {
+        return buffer_group_alltoall(sendbuff, recvbuff, count, datatype, comm);
+    }
+    return submit_collective(
+        "ALLTOALL",
+        fake_gpu::distributed::CollectiveType::AllToAll,
+        sendbuff,
+        recvbuff,
+        count,
+        datatype,
+        fake_gpu::distributed::CollectiveReduceOp::None,
+        -1,
+        comm,
+        ncclSum,
+        stream);
+}
+
+ncclResult_t ncclAllToAll(
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    ncclComm_t comm,
+    cudaStream_t stream) {
+    return ncclAlltoAll(sendbuff, recvbuff, count, datatype, comm, stream);
 }
 
 ncclResult_t ncclSend(
