@@ -35,6 +35,7 @@ struct CollectiveSubmitRequest {
     std::string staging_name;
     std::size_t bytes = 0;
     int timeout_ms = 0;
+    bool proxy_only = false;
 };
 
 struct CollectiveSubmitResult {

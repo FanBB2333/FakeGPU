@@ -208,7 +208,8 @@ def load_unique_id(lib_path: Path) -> str:
     result = lib.ncclGetUniqueId(ctypes.byref(unique_id))
     if result != 0:
         raise RuntimeError(f"ncclGetUniqueId failed with code {result}")
-    return base64.b64encode(bytes(unique_id.internal)).decode("ascii")
+    payload = ctypes.string_at(ctypes.byref(unique_id), ctypes.sizeof(unique_id))
+    return base64.b64encode(payload).decode("ascii")
 
 
 def load_report(report_dir: Path, rank: int) -> dict[str, Any]:

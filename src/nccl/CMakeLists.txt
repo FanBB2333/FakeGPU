@@ -1,5 +1,6 @@
 add_library(fake_gpu_nccl OBJECT
     nccl_stubs.cpp
+    nccl_passthrough.cpp
     staging_adapter.cpp
 )
 

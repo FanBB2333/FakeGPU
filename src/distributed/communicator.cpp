@@ -368,6 +368,13 @@ bool collective_requests_match(
             ", got " + std::to_string(actual.bytes);
         return false;
     }
+    if (expected.proxy_only != actual.proxy_only) {
+        error_code = "proxy_only_mismatch";
+        error_detail =
+            "expected proxy_only=" + std::string(expected.proxy_only ? "1" : "0") +
+            ", got " + (actual.proxy_only ? "1" : "0");
+        return false;
+    }
     return true;
 }
 
@@ -617,7 +624,7 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     if (request.bytes == 0) {
         return make_collective_error("invalid_bytes", "bytes must be > 0");
     }
-    if (request.staging_name.empty()) {
+    if (!request.proxy_only && request.staging_name.empty()) {
         return make_collective_error("missing_staging_name", "staging_name must be set");
     }
     if (request.timeout_ms <= 0) {
@@ -697,6 +704,14 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     }
 
     if (static_cast<int>(collective->participants.size()) == state->world_size) {
+        if (request.proxy_only) {
+            record_collective_completion_locked(registry, state, collective);
+            collective->completed = true;
+            state->next_seqno++;
+            state->collectives.erase(request.seqno);
+            collective->cv.notify_all();
+            return CollectiveSubmitResult{true, request.seqno, "", ""};
+        }
     } else {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.timeout_ms);
         const auto wait_begin = std::chrono::steady_clock::now();

@@ -1,5 +1,6 @@
 #include "nccl_defs.hpp"
 #include "nccl_mode_dispatch.hpp"
+#include "nccl_passthrough.hpp"
 #include "staging_adapter.hpp"
 
 #include "../core/backend_config.hpp"
@@ -24,11 +25,14 @@
 #include <unistd.h>
 
 struct ncclComm {
+    fake_gpu::distributed::DistributedMode dist_mode =
+        fake_gpu::distributed::DistributedMode::Simulate;
     int comm_id = -1;
     int world_size = 0;
     int rank = -1;
     int device = -1;
     std::uint64_t next_seqno = 1;
+    void* real_comm = nullptr;
     bool destroyed = false;
     bool finalized = false;
     ncclResult_t async_error = ncclSuccess;
@@ -178,6 +182,57 @@ bool map_reduce_op(
     }
 }
 
+bool uses_real_nccl(fake_gpu::distributed::DistributedMode mode) {
+    return mode == fake_gpu::distributed::DistributedMode::Proxy ||
+           mode == fake_gpu::distributed::DistributedMode::Passthrough;
+}
+
+bool requires_coordinator(fake_gpu::distributed::DistributedMode mode) {
+    return mode != fake_gpu::distributed::DistributedMode::Passthrough;
+}
+
+ncclResult_t require_real_nccl(std::string& error) {
+    if (!fake_gpu::nccl::RealNcclLoader::instance().initialize(error)) {
+        return ncclSystemError;
+    }
+    return ncclSuccess;
+}
+
+ncclResult_t real_nccl_error(
+    ncclComm_t comm,
+    ncclResult_t result,
+    std::string error) {
+    std::string lookup_error;
+    const char* detail =
+        fake_gpu::nccl::RealNcclLoader::instance().get_error_string(result, lookup_error);
+    if (detail && *detail) {
+        if (!error.empty()) {
+            error += ": ";
+        }
+        error += detail;
+    } else if (!lookup_error.empty()) {
+        if (!error.empty()) {
+            error += ": ";
+        }
+        error += lookup_error;
+    }
+    if (error.empty()) {
+        error = "real NCCL call failed";
+    }
+    return fail_with(comm, result, std::move(error));
+}
+
+bool grouped_collective_supported(ncclComm_t comm) {
+    if (comm && comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
+        fail_with(
+            comm,
+            ncclInvalidUsage,
+            "grouped collectives are only implemented for FAKEGPU_DIST_MODE=simulate");
+        return false;
+    }
+    return true;
+}
+
 ncclResult_t map_response_error(const std::string& error_code) {
     if (error_code == "bad_request" ||
         error_code == "invalid_rank" ||
@@ -213,6 +268,7 @@ ncclResult_t map_response_error(const std::string& error_code) {
         error_code == "group_size_mismatch" ||
         error_code == "duplicate_collective_rank" ||
         error_code == "duplicate_barrier_rank" ||
+        error_code == "proxy_only_mismatch" ||
         error_code == "staging_size_mismatch" ||
         error_code == "root_rank_missing" ||
         error_code == "timeout_mismatch" ||
@@ -256,6 +312,158 @@ bool validate_runtime_config(
         return false;
     }
     return true;
+}
+
+bool collective_transfer_sizes(
+    fake_gpu::distributed::CollectiveType type,
+    std::size_t element_count,
+    fake_gpu::distributed::CollectiveDataType dtype,
+    int world_size,
+    std::size_t& input_bytes,
+    std::size_t& staging_bytes,
+    std::size_t& output_bytes,
+    std::string& error);
+
+ncclResult_t submit_proxy_collective_record(
+    const fake_gpu::distributed::DistributedConfig& config,
+    const char* command,
+    fake_gpu::distributed::CollectiveType collective_type,
+    std::size_t count,
+    ncclDataType_t datatype,
+    fake_gpu::distributed::CollectiveReduceOp reduce_op,
+    int root,
+    ncclComm_t comm) {
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(datatype, mapped_dtype)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+
+    std::string error;
+    std::size_t input_bytes = 0;
+    std::size_t staging_bytes = 0;
+    std::size_t output_bytes = 0;
+    if (!collective_transfer_sizes(
+            collective_type,
+            count,
+            mapped_dtype,
+            comm->world_size,
+            input_bytes,
+            staging_bytes,
+            output_bytes,
+            error)) {
+        return fail_with(comm, ncclInvalidArgument, error);
+    }
+
+    std::ostringstream request;
+    request << command
+            << " comm_id=" << comm->comm_id
+            << " rank=" << comm->rank
+            << " seqno=" << comm->next_seqno
+            << " dtype=" << fake_gpu::distributed::collective_data_type_name(mapped_dtype)
+            << " count=" << count
+            << " bytes=" << staging_bytes
+            << " root=" << root
+            << " reduce_op=" << fake_gpu::distributed::collective_reduce_op_name(reduce_op)
+            << " proxy_only=1"
+            << " timeout_ms=" << kCoordinatorTimeoutMs;
+
+    fake_gpu::distributed::CoordinatorResponse response;
+    if (!fake_gpu::distributed::request_response_unix_socket(
+            config.coordinator_address,
+            request.str(),
+            response,
+            error)) {
+        return fail_with(comm, ncclSystemError, error);
+    }
+    if (!response.ok) {
+        return fail_with(
+            comm,
+            map_response_error(response.error_code),
+            response.error_detail.empty() ? response.error_code : response.error_detail);
+    }
+
+    int response_comm_id = -1;
+    std::uint64_t response_seqno = 0;
+    if (!parse_int_field(response, "comm_id", response_comm_id) ||
+        !parse_u64_field(response, "seqno", response_seqno) ||
+        response_comm_id != comm->comm_id ||
+        response_seqno != comm->next_seqno) {
+        return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent response");
+    }
+
+    comm->next_seqno++;
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t submit_real_collective(
+    fake_gpu::distributed::CollectiveType collective_type,
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    ncclRedOp_t op,
+    int root,
+    ncclComm_t comm,
+    cudaStream_t stream) {
+    if (!comm->real_comm) {
+        return fail_with(comm, ncclInvalidUsage, "real NCCL communicator is not initialized");
+    }
+    std::string error;
+    const ncclResult_t require_result = require_real_nccl(error);
+    if (require_result != ncclSuccess) {
+        return fail_with(comm, require_result, error);
+    }
+
+    const ncclComm_t real_comm = reinterpret_cast<ncclComm_t>(comm->real_comm);
+    ncclResult_t result = ncclInvalidUsage;
+    if (collective_type == fake_gpu::distributed::CollectiveType::AllReduce) {
+        result = fake_gpu::nccl::RealNcclLoader::instance().all_reduce(
+            sendbuff,
+            recvbuff,
+            count,
+            datatype,
+            op,
+            real_comm,
+            stream,
+            error);
+    } else if (collective_type == fake_gpu::distributed::CollectiveType::Broadcast) {
+        result = fake_gpu::nccl::RealNcclLoader::instance().broadcast(
+            sendbuff,
+            recvbuff,
+            count,
+            datatype,
+            root,
+            real_comm,
+            stream,
+            error);
+    } else if (collective_type == fake_gpu::distributed::CollectiveType::AllGather) {
+        result = fake_gpu::nccl::RealNcclLoader::instance().all_gather(
+            sendbuff,
+            recvbuff,
+            count,
+            datatype,
+            real_comm,
+            stream,
+            error);
+    } else if (collective_type == fake_gpu::distributed::CollectiveType::ReduceScatter) {
+        result = fake_gpu::nccl::RealNcclLoader::instance().reduce_scatter(
+            sendbuff,
+            recvbuff,
+            count,
+            datatype,
+            op,
+            real_comm,
+            stream,
+            error);
+    }
+
+    if (result != ncclSuccess) {
+        return real_nccl_error(comm, result, error);
+    }
+
+    clear_last_error(comm);
+    return ncclSuccess;
 }
 
 bool collective_transfer_sizes(
@@ -372,6 +580,9 @@ ncclResult_t prepare_group_batch(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "group contains a null communicator");
     }
+    if (!grouped_collective_supported(comm)) {
+        return ncclInvalidUsage;
+    }
     if (operations.empty()) {
         clear_last_error(comm);
         return ncclSuccess;
@@ -478,6 +689,9 @@ ncclResult_t buffer_group_allreduce(
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
+    if (!grouped_collective_supported(comm)) {
+        return ncclInvalidUsage;
+    }
     if (count == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
     }
@@ -517,6 +731,9 @@ ncclResult_t buffer_group_broadcast(
     }
     if (!recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
+    }
+    if (!grouped_collective_supported(comm)) {
+        return ncclInvalidUsage;
     }
     if (comm->rank == root && !sendbuff) {
         return fail_with(comm, ncclInvalidArgument, "root send buffer must not be null");
@@ -559,6 +776,9 @@ ncclResult_t buffer_group_allgather(
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
+    if (!grouped_collective_supported(comm)) {
+        return ncclInvalidUsage;
+    }
     if (count == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
     }
@@ -594,6 +814,9 @@ ncclResult_t buffer_group_reducescatter(
     }
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
+    }
+    if (!grouped_collective_supported(comm)) {
+        return ncclInvalidUsage;
     }
     if (recvcount == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
@@ -743,7 +966,9 @@ ncclResult_t submit_collective(
     ncclDataType_t datatype,
     fake_gpu::distributed::CollectiveReduceOp reduce_op,
     int root,
-    ncclComm_t comm) {
+    ncclComm_t comm,
+    ncclRedOp_t real_reduce_op,
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -766,6 +991,44 @@ ncclResult_t submit_collective(
     std::string error;
     if (!validate_runtime_config(comm, config, error)) {
         return ncclInvalidUsage;
+    }
+
+    if (comm->dist_mode == fake_gpu::distributed::DistributedMode::Proxy) {
+        ncclResult_t result = submit_proxy_collective_record(
+            config,
+            command,
+            collective_type,
+            count,
+            datatype,
+            reduce_op,
+            root,
+            comm);
+        if (result != ncclSuccess) {
+            return result;
+        }
+        return submit_real_collective(
+            collective_type,
+            local_input,
+            recvbuff,
+            count,
+            datatype,
+            real_reduce_op,
+            root,
+            comm,
+            stream);
+    }
+
+    if (comm->dist_mode == fake_gpu::distributed::DistributedMode::Passthrough) {
+        return submit_real_collective(
+            collective_type,
+            local_input,
+            recvbuff,
+            count,
+            datatype,
+            real_reduce_op,
+            root,
+            comm,
+            stream);
     }
 
     fake_gpu::distributed::StagingChunkPlan chunk_plan;
@@ -961,9 +1224,28 @@ ncclResult_t do_destroy(ncclComm_t comm, bool allow_missing) {
         return allow_missing ? ncclSuccess : fail_with(comm, ncclInvalidUsage, "communicator is already destroyed");
     }
 
-    fake_gpu::distributed::DistributedConfig config;
     std::string error;
-    if (comm->comm_id > 0 && validate_runtime_config(comm, config, error)) {
+    if (comm->real_comm) {
+        const ncclResult_t require_result = require_real_nccl(error);
+        if (require_result != ncclSuccess) {
+            if (!allow_missing) {
+                return fail_with(comm, require_result, error);
+            }
+        } else {
+            const ncclComm_t real_comm = reinterpret_cast<ncclComm_t>(comm->real_comm);
+            const ncclResult_t result = allow_missing
+                ? fake_gpu::nccl::RealNcclLoader::instance().comm_abort(real_comm, error)
+                : fake_gpu::nccl::RealNcclLoader::instance().comm_destroy(real_comm, error);
+            if (result != ncclSuccess && !allow_missing) {
+                return real_nccl_error(comm, result, error);
+            }
+        }
+    }
+
+    fake_gpu::distributed::DistributedConfig config;
+    if (comm->comm_id > 0 &&
+        requires_coordinator(comm->dist_mode) &&
+        validate_runtime_config(comm, config, error)) {
         std::ostringstream request;
         request << "DESTROY_COMM"
                 << " comm_id=" << comm->comm_id
@@ -987,10 +1269,11 @@ ncclResult_t do_destroy(ncclComm_t comm, bool allow_missing) {
                     response.error_detail.empty() ? response.error_code : response.error_detail);
             }
         }
-    } else if (!allow_missing) {
+    } else if (requires_coordinator(comm->dist_mode) && !allow_missing) {
         return ncclInvalidUsage;
     }
 
+    comm->real_comm = nullptr;
     comm->destroyed = true;
     comm->finalized = true;
     clear_last_error(comm);
@@ -1033,7 +1316,9 @@ ncclResult_t flush_grouped_operations() {
                 operation.datatype,
                 operation.reduce_op,
                 -1,
-                operation.comm);
+                operation.comm,
+                ncclSum,
+                nullptr);
         } else if (operation.type == fake_gpu::distributed::CollectiveType::Broadcast) {
             const void* local_input = operation.recvbuff;
             if (operation.comm->rank == operation.root) {
@@ -1048,7 +1333,9 @@ ncclResult_t flush_grouped_operations() {
                 operation.datatype,
                 fake_gpu::distributed::CollectiveReduceOp::None,
                 operation.root,
-                operation.comm);
+                operation.comm,
+                ncclSum,
+                nullptr);
         } else if (operation.type == fake_gpu::distributed::CollectiveType::AllGather) {
             result = submit_collective(
                 "ALLGATHER",
@@ -1059,7 +1346,9 @@ ncclResult_t flush_grouped_operations() {
                 operation.datatype,
                 fake_gpu::distributed::CollectiveReduceOp::None,
                 -1,
-                operation.comm);
+                operation.comm,
+                ncclSum,
+                nullptr);
         } else if (operation.type == fake_gpu::distributed::CollectiveType::ReduceScatter) {
             result = submit_collective(
                 "REDUCESCATTER",
@@ -1070,7 +1359,9 @@ ncclResult_t flush_grouped_operations() {
                 operation.datatype,
                 operation.reduce_op,
                 -1,
-                operation.comm);
+                operation.comm,
+                ncclSum,
+                nullptr);
         } else {
             result = fail_with(operation.comm, ncclInvalidUsage, "unsupported grouped collective");
         }
@@ -1143,6 +1434,22 @@ ncclResult_t ncclGetVersion(int* version) {
     if (!version) {
         return fail_with(nullptr, ncclInvalidArgument, "version must not be null");
     }
+    const fake_gpu::distributed::DistributedConfig& config =
+        fake_gpu::BackendConfig::instance().distributed_config();
+    if (uses_real_nccl(config.mode)) {
+        std::string error;
+        const ncclResult_t require_result = require_real_nccl(error);
+        if (require_result != ncclSuccess) {
+            return fail_with(nullptr, require_result, error);
+        }
+        const ncclResult_t result =
+            fake_gpu::nccl::RealNcclLoader::instance().get_version(version, error);
+        if (result != ncclSuccess) {
+            return real_nccl_error(nullptr, result, error);
+        }
+        g_last_error.clear();
+        return ncclSuccess;
+    }
     *version = kFakeNcclVersion;
     g_last_error.clear();
     return ncclSuccess;
@@ -1154,6 +1461,23 @@ ncclResult_t ncclGetUniqueId(ncclUniqueId* unique_id) {
     }
 
     std::memset(unique_id, 0, sizeof(*unique_id));
+
+    const fake_gpu::distributed::DistributedConfig& config =
+        fake_gpu::BackendConfig::instance().distributed_config();
+    if (uses_real_nccl(config.mode)) {
+        std::string error;
+        const ncclResult_t require_result = require_real_nccl(error);
+        if (require_result != ncclSuccess) {
+            return fail_with(nullptr, require_result, error);
+        }
+        const ncclResult_t result =
+            fake_gpu::nccl::RealNcclLoader::instance().get_unique_id(unique_id, error);
+        if (result != ncclSuccess) {
+            return real_nccl_error(nullptr, result, error);
+        }
+        g_last_error.clear();
+        return ncclSuccess;
+    }
 
     static constexpr char kHexDigits[] = "0123456789abcdef";
     std::array<unsigned char, 16> random_bytes {};
@@ -1207,38 +1531,71 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
         return ncclInvalidUsage;
     }
 
-    std::ostringstream request;
-    request << "INIT_COMM"
-            << " unique_id=" << unique_id
-            << " world_size=" << nranks
-            << " rank=" << rank
-            << " timeout_ms=" << kCoordinatorTimeoutMs;
-
-    fake_gpu::distributed::CoordinatorResponse response;
-    if (!fake_gpu::distributed::request_response_unix_socket(
-            config.coordinator_address,
-            request.str(),
-            response,
-            error)) {
-        return fail_with(nullptr, ncclSystemError, error);
-    }
-    if (!response.ok) {
-        return fail_with(
-            nullptr,
-            map_response_error(response.error_code),
-            response.error_detail.empty() ? response.error_code : response.error_detail);
-    }
-
     int coordinator_comm_id = -1;
-    if (!parse_int_field(response, "comm_id", coordinator_comm_id) || coordinator_comm_id <= 0) {
-        return fail_with(nullptr, ncclInternalError, "coordinator did not return a valid comm_id");
+    if (requires_coordinator(config.mode)) {
+        std::ostringstream request;
+        request << "INIT_COMM"
+                << " unique_id=" << unique_id
+                << " world_size=" << nranks
+                << " rank=" << rank
+                << " timeout_ms=" << kCoordinatorTimeoutMs;
+
+        fake_gpu::distributed::CoordinatorResponse response;
+        if (!fake_gpu::distributed::request_response_unix_socket(
+                config.coordinator_address,
+                request.str(),
+                response,
+                error)) {
+            return fail_with(nullptr, ncclSystemError, error);
+        }
+        if (!response.ok) {
+            return fail_with(
+                nullptr,
+                map_response_error(response.error_code),
+                response.error_detail.empty() ? response.error_code : response.error_detail);
+        }
+        if (!parse_int_field(response, "comm_id", coordinator_comm_id) || coordinator_comm_id <= 0) {
+            return fail_with(nullptr, ncclInternalError, "coordinator did not return a valid comm_id");
+        }
+    }
+
+    ncclComm_t real_comm = nullptr;
+    if (uses_real_nccl(config.mode)) {
+        const ncclResult_t require_result = require_real_nccl(error);
+        if (require_result != ncclSuccess) {
+            return fail_with(nullptr, require_result, error);
+        }
+        const ncclResult_t result = fake_gpu::nccl::RealNcclLoader::instance().comm_init_rank(
+            &real_comm,
+            nranks,
+            comm_id,
+            rank,
+            error);
+        if (result != ncclSuccess) {
+            if (coordinator_comm_id > 0) {
+                std::ostringstream cleanup_request;
+                cleanup_request << "DESTROY_COMM"
+                                << " comm_id=" << coordinator_comm_id
+                                << " rank=" << rank;
+                fake_gpu::distributed::CoordinatorResponse cleanup_response;
+                std::string cleanup_error;
+                fake_gpu::distributed::request_response_unix_socket(
+                    config.coordinator_address,
+                    cleanup_request.str(),
+                    cleanup_response,
+                    cleanup_error);
+            }
+            return real_nccl_error(nullptr, result, error);
+        }
     }
 
     ncclComm* state = new ncclComm();
+    state->dist_mode = config.mode;
     state->comm_id = coordinator_comm_id;
     state->world_size = nranks;
     state->rank = rank;
     state->device = infer_device_for_rank(rank);
+    state->real_comm = reinterpret_cast<void*>(real_comm);
     *comm = state;
     clear_last_error(*comm);
     return ncclSuccess;
@@ -1421,7 +1778,7 @@ ncclResult_t ncclBroadcast(
     ncclDataType_t datatype,
     int root,
     ncclComm_t comm,
-    cudaStream_t /*stream*/) {
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -1441,7 +1798,9 @@ ncclResult_t ncclBroadcast(
         datatype,
         fake_gpu::distributed::CollectiveReduceOp::None,
         root,
-        comm);
+        comm,
+        ncclSum,
+        stream);
 }
 
 ncclResult_t ncclAllReduce(
@@ -1451,7 +1810,7 @@ ncclResult_t ncclAllReduce(
     ncclDataType_t datatype,
     ncclRedOp_t op,
     ncclComm_t comm,
-    cudaStream_t /*stream*/) {
+    cudaStream_t stream) {
     if (g_group_depth > 0) {
         return buffer_group_allreduce(sendbuff, recvbuff, count, datatype, op, comm);
     }
@@ -1468,7 +1827,9 @@ ncclResult_t ncclAllReduce(
         datatype,
         reduce_op,
         -1,
-        comm);
+        comm,
+        op,
+        stream);
 }
 
 ncclResult_t ncclReduceScatter(
@@ -1478,7 +1839,7 @@ ncclResult_t ncclReduceScatter(
     ncclDataType_t datatype,
     ncclRedOp_t op,
     ncclComm_t comm,
-    cudaStream_t /*stream*/) {
+    cudaStream_t stream) {
     if (g_group_depth > 0) {
         return buffer_group_reducescatter(sendbuff, recvbuff, recvcount, datatype, op, comm);
     }
@@ -1495,7 +1856,9 @@ ncclResult_t ncclReduceScatter(
         datatype,
         reduce_op,
         -1,
-        comm);
+        comm,
+        op,
+        stream);
 }
 
 ncclResult_t ncclAllGather(
@@ -1504,7 +1867,7 @@ ncclResult_t ncclAllGather(
     std::size_t sendcount,
     ncclDataType_t datatype,
     ncclComm_t comm,
-    cudaStream_t /*stream*/) {
+    cudaStream_t stream) {
     if (g_group_depth > 0) {
         return buffer_group_allgather(sendbuff, recvbuff, sendcount, datatype, comm);
     }
@@ -1517,7 +1880,9 @@ ncclResult_t ncclAllGather(
         datatype,
         fake_gpu::distributed::CollectiveReduceOp::None,
         -1,
-        comm);
+        comm,
+        ncclSum,
+        stream);
 }
 
 ncclResult_t ncclSend(

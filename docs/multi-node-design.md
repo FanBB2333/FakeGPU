@@ -1186,6 +1186,7 @@ src/nccl/
 
 - 引入实验性 `proxy` 模式
 - 允许控制面仍由 FakeGPU 管理，但数据面转发到真实 NCCL
+- 增加 `FAKEGPU_REAL_NCCL_PATH`，允许显式指定真实 `libnccl.so.2`
 
 代码产物：
 
@@ -1195,11 +1196,17 @@ src/nccl/
 
 - 新增 `verification/test_nccl_proxy.py`
 - 在有 GPU + NCCL 的机器上运行
+- 脚本按机器 GPU 数自动选择 `world_size=1/2`
 
 通过标准：
 
 - baseline NCCL 与 proxy 模式在 collective 输出上保持一致
 - FakeGPU 仍能生成 cluster 级报告
+
+当前边界：
+
+- 单 GPU 机器默认只验证 `world_size=1`；`world_size=2` 需要至少 2 张 GPU 才能做 baseline 对比
+- grouped collective 仍只在 `simulate` 模式实现，`proxy/passthrough` 目前只覆盖 ungrouped direct collective
 
 #### Step 21：远端 Coordinator 与多机扩展
 
@@ -1368,13 +1375,13 @@ src/nccl/
 范围：
 
 - [x] Step 19：Hybrid + Simulate 混合运行
-- [ ] Step 20：Proxy / Passthrough 试验版
+- [x] Step 20：Proxy / Passthrough 试验版
 - [ ] Step 21：远端 Coordinator 与多机扩展
 
 本次完成标准：
 
 - [x] `hybrid + simulate` 可完成 host staging 和 collective 同步
-- [ ] `proxy` 模式能与 baseline NCCL 做输出对比
+- [x] `proxy` 模式能与 baseline NCCL 做输出对比
 - [ ] TCP transport 可支持远端 coordinator
 - [ ] 网络异常时 communicator 可明确回收或失败
 

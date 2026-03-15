@@ -591,25 +591,27 @@ DistributedConfig parse_distributed_config_from_env() {
         }
     }
 
-    if (config.coordinator_address.empty()) {
-        config.validation_error =
-            "FAKEGPU_COORDINATOR_ADDR must be set when FAKEGPU_DIST_MODE is enabled.";
-        return config;
-    }
-
-    if (config.coordinator_transport == CoordinatorTransport::Tcp) {
-        std::string host;
-        uint16_t port = 0;
-        std::string error;
-        if (!parse_tcp_endpoint(config.coordinator_address, host, port, error)) {
+    if (config.mode != DistributedMode::Passthrough || !config.coordinator_address.empty()) {
+        if (config.coordinator_address.empty()) {
             config.validation_error =
-                "Invalid FAKEGPU_COORDINATOR_ADDR: " + config.coordinator_address + " (" + error + ").";
+                "FAKEGPU_COORDINATOR_ADDR must be set when FAKEGPU_DIST_MODE requires a coordinator.";
             return config;
         }
-    } else if (config.coordinator_address.front() != '/') {
-        config.validation_error =
-            "FAKEGPU_COORDINATOR_ADDR must be an absolute Unix socket path when FAKEGPU_COORDINATOR_TRANSPORT=unix.";
-        return config;
+
+        if (config.coordinator_transport == CoordinatorTransport::Tcp) {
+            std::string host;
+            uint16_t port = 0;
+            std::string error;
+            if (!parse_tcp_endpoint(config.coordinator_address, host, port, error)) {
+                config.validation_error =
+                    "Invalid FAKEGPU_COORDINATOR_ADDR: " + config.coordinator_address + " (" + error + ").";
+                return config;
+            }
+        } else if (config.coordinator_address.front() != '/') {
+            config.validation_error =
+                "FAKEGPU_COORDINATOR_ADDR must be an absolute Unix socket path when FAKEGPU_COORDINATOR_TRANSPORT=unix.";
+            return config;
+        }
     }
 
     if (!config.cluster_config_path.empty()) {

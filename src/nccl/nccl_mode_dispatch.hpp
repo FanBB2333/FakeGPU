@@ -14,18 +14,22 @@ inline bool validate_direct_init_config(
         return false;
     }
     if (!config.enabled()) {
-        error = "FAKEGPU_DIST_MODE must be set to simulate";
+        error = "FAKEGPU_DIST_MODE must be set to simulate, proxy, or passthrough";
         return false;
     }
-    if (config.mode != distributed::DistributedMode::Simulate) {
-        error = "only FAKEGPU_DIST_MODE=simulate is implemented for fake NCCL init";
+    if (config.mode != distributed::DistributedMode::Simulate &&
+        config.mode != distributed::DistributedMode::Proxy &&
+        config.mode != distributed::DistributedMode::Passthrough) {
+        error = "only FAKEGPU_DIST_MODE=simulate/proxy/passthrough is implemented for fake NCCL init";
         return false;
     }
-    if (config.coordinator_transport != distributed::CoordinatorTransport::Unix) {
+    if (config.mode != distributed::DistributedMode::Passthrough &&
+        config.coordinator_transport != distributed::CoordinatorTransport::Unix) {
         error = "only FAKEGPU_COORDINATOR_TRANSPORT=unix is implemented for fake NCCL init";
         return false;
     }
-    if (config.coordinator_address.empty()) {
+    if (config.mode != distributed::DistributedMode::Passthrough &&
+        config.coordinator_address.empty()) {
         error = "FAKEGPU_COORDINATOR_ADDR must be set";
         return false;
     }

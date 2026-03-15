@@ -15,6 +15,29 @@ namespace fake_gpu::distributed {
 
 namespace {
 
+bool parse_optional_bool_field(
+    const std::unordered_map<std::string, std::string>& fields,
+    const char* key,
+    bool default_value,
+    bool& value,
+    std::string& error) {
+    value = default_value;
+    auto it = fields.find(key);
+    if (it == fields.end()) {
+        return true;
+    }
+    if (it->second == "1" || it->second == "true") {
+        value = true;
+        return true;
+    }
+    if (it->second == "0" || it->second == "false") {
+        value = false;
+        return true;
+    }
+    error = std::string("invalid boolean field: ") + key;
+    return false;
+}
+
 int parse_required_int(
     const std::unordered_map<std::string, std::string>& fields,
     const char* key,
@@ -283,58 +306,72 @@ void ClusterCoordinator::handle_client(int client_fd) {
                                 if (!ok) {
                                     response = format_error_response("bad_request", error);
                                 } else {
-                                    auto staging_it = request.fields.find("staging_name");
-                                    if (staging_it == request.fields.end()) {
-                                        response = format_error_response(
-                                            "bad_request",
-                                            "missing required field: staging_name");
+                                    bool proxy_only = false;
+                                    if (!parse_optional_bool_field(
+                                            request.fields,
+                                            "proxy_only",
+                                            false,
+                                            proxy_only,
+                                            error)) {
+                                        response = format_error_response("bad_request", error);
                                     } else {
-                                        collective_request.staging_name = staging_it->second;
-                                        auto dtype_it = request.fields.find("dtype");
-                                        auto reduce_it = request.fields.find("reduce_op");
-                                        if (dtype_it == request.fields.end()) {
+                                        collective_request.proxy_only = proxy_only;
+                                        auto staging_it = request.fields.find("staging_name");
+                                        if (!collective_request.proxy_only &&
+                                            staging_it == request.fields.end()) {
                                             response = format_error_response(
                                                 "bad_request",
-                                                "missing required field: dtype");
-                                        } else if (reduce_it == request.fields.end()) {
-                                            response = format_error_response(
-                                                "bad_request",
-                                                "missing required field: reduce_op");
-                                        } else if (!parse_collective_data_type(
-                                                       dtype_it->second,
-                                                       collective_request.dtype)) {
-                                            response = format_error_response(
-                                                "bad_request",
-                                                "unsupported dtype");
-                                        } else if (!parse_collective_reduce_op(
-                                                       reduce_it->second,
-                                                       collective_request.reduce_op)) {
-                                            response = format_error_response(
-                                                "bad_request",
-                                                "unsupported reduce_op");
+                                                "missing required field: staging_name");
                                         } else {
-                                            if (request.command == "ALLREDUCE") {
-                                                collective_request.type = CollectiveType::AllReduce;
-                                            } else if (request.command == "BROADCAST") {
-                                                collective_request.type = CollectiveType::Broadcast;
-                                            } else if (request.command == "ALLGATHER") {
-                                                collective_request.type = CollectiveType::AllGather;
-                                            } else {
-                                                collective_request.type = CollectiveType::ReduceScatter;
+                                            if (staging_it != request.fields.end()) {
+                                                collective_request.staging_name = staging_it->second;
                                             }
-                                            CollectiveSubmitResult result =
-                                                communicator_registry_.submit_collective(collective_request);
-                                            if (!result.ok) {
+                                            auto dtype_it = request.fields.find("dtype");
+                                            auto reduce_it = request.fields.find("reduce_op");
+                                            if (dtype_it == request.fields.end()) {
                                                 response = format_error_response(
-                                                    result.error_code,
-                                                    result.error_detail);
+                                                    "bad_request",
+                                                    "missing required field: dtype");
+                                            } else if (reduce_it == request.fields.end()) {
+                                                response = format_error_response(
+                                                    "bad_request",
+                                                    "missing required field: reduce_op");
+                                            } else if (!parse_collective_data_type(
+                                                           dtype_it->second,
+                                                           collective_request.dtype)) {
+                                                response = format_error_response(
+                                                    "bad_request",
+                                                    "unsupported dtype");
+                                            } else if (!parse_collective_reduce_op(
+                                                           reduce_it->second,
+                                                           collective_request.reduce_op)) {
+                                                response = format_error_response(
+                                                    "bad_request",
+                                                    "unsupported reduce_op");
                                             } else {
-                                                response = format_ok_response({
-                                                    {"comm_id", std::to_string(collective_request.comm_id)},
-                                                    {"seqno", std::to_string(result.seqno)},
-                                                    {"rank", std::to_string(collective_request.rank)},
-                                                    {"op", collective_type_name(collective_request.type)},
-                                                });
+                                                if (request.command == "ALLREDUCE") {
+                                                    collective_request.type = CollectiveType::AllReduce;
+                                                } else if (request.command == "BROADCAST") {
+                                                    collective_request.type = CollectiveType::Broadcast;
+                                                } else if (request.command == "ALLGATHER") {
+                                                    collective_request.type = CollectiveType::AllGather;
+                                                } else {
+                                                    collective_request.type = CollectiveType::ReduceScatter;
+                                                }
+                                                CollectiveSubmitResult result =
+                                                    communicator_registry_.submit_collective(collective_request);
+                                                if (!result.ok) {
+                                                    response = format_error_response(
+                                                        result.error_code,
+                                                        result.error_detail);
+                                                } else {
+                                                    response = format_ok_response({
+                                                        {"comm_id", std::to_string(collective_request.comm_id)},
+                                                        {"seqno", std::to_string(result.seqno)},
+                                                        {"rank", std::to_string(collective_request.rank)},
+                                                        {"op", collective_type_name(collective_request.type)},
+                                                    });
+                                                }
                                             }
                                         }
                                     }
