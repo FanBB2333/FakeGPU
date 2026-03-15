@@ -438,6 +438,135 @@ void run_send_recv_multi_pair_case() {
     }
 }
 
+void run_grouped_send_recv_case() {
+    ncclUniqueId unique_id {};
+    require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
+
+    std::array<ncclComm_t, 2> comms = {nullptr, nullptr};
+    std::array<ncclResult_t, 2> init_results = {ncclInternalError, ncclInternalError};
+    std::vector<std::thread> init_threads;
+    for (int rank = 0; rank < 2; ++rank) {
+        init_threads.emplace_back([&, rank]() {
+            init_results[static_cast<std::size_t>(rank)] =
+                ncclCommInitRank(&comms[static_cast<std::size_t>(rank)], 2, unique_id, rank);
+        });
+    }
+    for (std::thread& thread : init_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < 2; ++rank) {
+        require_result(init_results[static_cast<std::size_t>(rank)], ncclSuccess, "grouped p2p init failed");
+    }
+
+    std::array<float, 3> send0 = {1.0f, 2.0f, 3.0f};
+    std::array<float, 3> send1 = {4.0f, 5.0f, 6.0f};
+    std::array<float, 3> recv0 = {0.0f, 0.0f, 0.0f};
+    std::array<float, 3> recv1 = {0.0f, 0.0f, 0.0f};
+    std::array<ncclResult_t, 2> results = {ncclInternalError, ncclInternalError};
+
+    std::thread rank0([&]() {
+        require_result(ncclGroupStart(), ncclSuccess, "rank0 group start failed");
+        require_result(
+            ncclSend(send0.data(), send0.size(), ncclFloat32, 1, comms[0], nullptr),
+            ncclSuccess,
+            "rank0 grouped send failed");
+        require_result(
+            ncclRecv(recv0.data(), recv0.size(), ncclFloat32, 1, comms[0], nullptr),
+            ncclSuccess,
+            "rank0 grouped recv failed");
+        results[0] = ncclGroupEnd();
+    });
+    std::thread rank1([&]() {
+        require_result(ncclGroupStart(), ncclSuccess, "rank1 group start failed");
+        require_result(
+            ncclRecv(recv1.data(), recv1.size(), ncclFloat32, 0, comms[1], nullptr),
+            ncclSuccess,
+            "rank1 grouped recv failed");
+        require_result(
+            ncclSend(send1.data(), send1.size(), ncclFloat32, 0, comms[1], nullptr),
+            ncclSuccess,
+            "rank1 grouped send failed");
+        results[1] = ncclGroupEnd();
+    });
+    rank0.join();
+    rank1.join();
+
+    require_result(results[0], ncclSuccess, "rank0 grouped ncclGroupEnd failed");
+    require_result(results[1], ncclSuccess, "rank1 grouped ncclGroupEnd failed");
+    require(recv0 == send1, "rank0 grouped recv payload mismatch");
+    require(recv1 == send0, "rank1 grouped recv payload mismatch");
+
+    for (ncclComm_t comm : comms) {
+        require_result(ncclCommDestroy(comm), ncclSuccess, "destroy after grouped send/recv failed");
+    }
+}
+
+void run_grouped_send_recv_then_collective_case() {
+    ncclUniqueId unique_id {};
+    require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
+
+    std::array<ncclComm_t, 2> comms = {nullptr, nullptr};
+    std::array<ncclResult_t, 2> init_results = {ncclInternalError, ncclInternalError};
+    std::vector<std::thread> init_threads;
+    for (int rank = 0; rank < 2; ++rank) {
+        init_threads.emplace_back([&, rank]() {
+            init_results[static_cast<std::size_t>(rank)] =
+                ncclCommInitRank(&comms[static_cast<std::size_t>(rank)], 2, unique_id, rank);
+        });
+    }
+    for (std::thread& thread : init_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < 2; ++rank) {
+        require_result(init_results[static_cast<std::size_t>(rank)], ncclSuccess, "mixed group init failed");
+    }
+
+    std::array<std::int32_t, 2> send_payload = {7, 8};
+    std::array<std::int32_t, 2> recv_payload = {0, 0};
+    std::array<float, 1> send_values0 = {1.25f};
+    std::array<float, 1> send_values1 = {2.75f};
+    std::array<float, 1> recv_values0 = {0.0f};
+    std::array<float, 1> recv_values1 = {0.0f};
+    std::array<ncclResult_t, 2> results = {ncclInternalError, ncclInternalError};
+
+    std::thread rank0([&]() {
+        require_result(ncclGroupStart(), ncclSuccess, "mixed rank0 group start failed");
+        require_result(
+            ncclSend(send_payload.data(), send_payload.size(), ncclInt32, 1, comms[0], nullptr),
+            ncclSuccess,
+            "mixed rank0 grouped send failed");
+        require_result(
+            ncclAllReduce(send_values0.data(), recv_values0.data(), send_values0.size(), ncclFloat32, ncclSum, comms[0], nullptr),
+            ncclSuccess,
+            "mixed rank0 grouped allreduce enqueue failed");
+        results[0] = ncclGroupEnd();
+    });
+    std::thread rank1([&]() {
+        require_result(ncclGroupStart(), ncclSuccess, "mixed rank1 group start failed");
+        require_result(
+            ncclRecv(recv_payload.data(), recv_payload.size(), ncclInt32, 0, comms[1], nullptr),
+            ncclSuccess,
+            "mixed rank1 grouped recv failed");
+        require_result(
+            ncclAllReduce(send_values1.data(), recv_values1.data(), send_values1.size(), ncclFloat32, ncclSum, comms[1], nullptr),
+            ncclSuccess,
+            "mixed rank1 grouped allreduce enqueue failed");
+        results[1] = ncclGroupEnd();
+    });
+    rank0.join();
+    rank1.join();
+
+    require_result(results[0], ncclSuccess, "mixed rank0 ncclGroupEnd failed");
+    require_result(results[1], ncclSuccess, "mixed rank1 ncclGroupEnd failed");
+    require(recv_payload == send_payload, "mixed grouped recv payload mismatch");
+    require(recv_values0[0] == 4.0f, "mixed grouped allreduce rank0 mismatch");
+    require(recv_values1[0] == 4.0f, "mixed grouped allreduce rank1 mismatch");
+
+    for (ncclComm_t comm : comms) {
+        require_result(ncclCommDestroy(comm), ncclSuccess, "destroy after mixed grouped send/recv failed");
+    }
+}
+
 void run_send_recv_timeout_case() {
     ncclUniqueId unique_id {};
     require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
@@ -521,6 +650,8 @@ int main() {
         run_comm_split_case();
         run_send_recv_case();
         run_send_recv_multi_pair_case();
+        run_grouped_send_recv_case();
+        run_grouped_send_recv_then_collective_case();
         run_send_recv_timeout_case();
         run_premul_redop_api_case();
 

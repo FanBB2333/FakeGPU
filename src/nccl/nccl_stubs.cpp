@@ -51,8 +51,16 @@ constexpr int kCoordinatorTimeoutMs = 1000;
 thread_local int g_group_depth = 0;
 thread_local std::string g_last_error;
 
-struct GroupCollectiveCall {
+enum class GroupOperationKind {
+    Collective,
+    PointToPoint,
+};
+
+struct GroupOperation {
+    GroupOperationKind kind = GroupOperationKind::Collective;
     fake_gpu::distributed::CollectiveType type = fake_gpu::distributed::CollectiveType::AllReduce;
+    fake_gpu::distributed::PointToPointType p2p_type =
+        fake_gpu::distributed::PointToPointType::Send;
     const void* sendbuff = nullptr;
     void* recvbuff = nullptr;
     std::size_t count = 0;
@@ -60,11 +68,12 @@ struct GroupCollectiveCall {
     ncclRedOp_t red_op = ncclSum;
     fake_gpu::distributed::CollectiveReduceOp reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
     int root = -1;
+    int peer = -1;
     ncclComm_t comm = nullptr;
     std::vector<char> recv_scratch;
 };
 
-thread_local std::vector<GroupCollectiveCall> g_group_operations;
+thread_local std::vector<GroupOperation> g_group_operations;
 
 struct PreMulSumOpInfo {
     ncclDataType_t datatype = ncclFloat32;
@@ -312,12 +321,12 @@ ncclResult_t real_nccl_error(
     return fail_with(comm, result, std::move(error));
 }
 
-bool grouped_collective_supported(ncclComm_t comm) {
+bool grouped_operation_supported(ncclComm_t comm) {
     if (comm && comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
         fail_with(
             comm,
             ncclInvalidUsage,
-            "grouped collectives are only implemented for FAKEGPU_DIST_MODE=simulate");
+            "grouped operations are only implemented for FAKEGPU_DIST_MODE=simulate");
         return false;
     }
     return true;
@@ -688,7 +697,7 @@ void clear_group_operations() {
 }
 
 bool all_group_operations_share_comm(
-    const std::vector<GroupCollectiveCall>& operations,
+    const std::vector<GroupOperation>& operations,
     ncclComm_t& comm) {
     if (operations.empty()) {
         comm = nullptr;
@@ -698,8 +707,17 @@ bool all_group_operations_share_comm(
     if (!comm) {
         return false;
     }
-    for (const GroupCollectiveCall& operation : operations) {
+    for (const GroupOperation& operation : operations) {
         if (operation.comm != comm) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool all_group_operations_are_collectives(const std::vector<GroupOperation>& operations) {
+    for (const GroupOperation& operation : operations) {
+        if (operation.kind != GroupOperationKind::Collective) {
             return false;
         }
     }
@@ -708,11 +726,11 @@ bool all_group_operations_share_comm(
 
 ncclResult_t prepare_group_batch(
     ncclComm_t comm,
-    const std::vector<GroupCollectiveCall>& operations) {
+    const std::vector<GroupOperation>& operations) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "group contains a null communicator");
     }
-    if (!grouped_collective_supported(comm)) {
+    if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
     if (operations.empty()) {
@@ -734,7 +752,7 @@ ncclResult_t prepare_group_batch(
             << " timeout_ms=" << kCoordinatorTimeoutMs;
 
     std::vector<fake_gpu::distributed::CollectiveBatchPlanItem> prepared_operations;
-    for (const GroupCollectiveCall& operation : operations) {
+    for (const GroupOperation& operation : operations) {
         fake_gpu::distributed::CollectiveDataType mapped_dtype;
         if (!map_dtype(operation.datatype, mapped_dtype)) {
             return fail_with(comm, ncclInvalidArgument, "unsupported dtype in grouped collective");
@@ -817,7 +835,7 @@ ncclResult_t buffer_group_allreduce(
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_collective_supported(comm)) {
+    if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
     if (count == 0) {
@@ -833,7 +851,8 @@ ncclResult_t buffer_group_allreduce(
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
 
-    GroupCollectiveCall call;
+    GroupOperation call;
+    call.kind = GroupOperationKind::Collective;
     call.type = fake_gpu::distributed::CollectiveType::AllReduce;
     call.sendbuff = sendbuff;
     call.recvbuff = recvbuff;
@@ -865,7 +884,7 @@ ncclResult_t buffer_group_reduce(
     if (comm->rank == root && !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "root recv buffer must not be null");
     }
-    if (!grouped_collective_supported(comm)) {
+    if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
     if (count == 0) {
@@ -884,7 +903,8 @@ ncclResult_t buffer_group_reduce(
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
 
-    GroupCollectiveCall call;
+    GroupOperation call;
+    call.kind = GroupOperationKind::Collective;
     call.type = fake_gpu::distributed::CollectiveType::Reduce;
     call.sendbuff = sendbuff;
     call.recvbuff = recvbuff;
@@ -917,7 +937,7 @@ ncclResult_t buffer_group_broadcast(
     if (!recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
     }
-    if (!grouped_collective_supported(comm)) {
+    if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
     if (comm->rank == root && !sendbuff) {
@@ -935,7 +955,8 @@ ncclResult_t buffer_group_broadcast(
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
 
-    GroupCollectiveCall call;
+    GroupOperation call;
+    call.kind = GroupOperationKind::Collective;
     call.type = fake_gpu::distributed::CollectiveType::Broadcast;
     call.sendbuff = sendbuff;
     call.recvbuff = recvbuff;
@@ -961,7 +982,7 @@ ncclResult_t buffer_group_allgather(
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_collective_supported(comm)) {
+    if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
     if (count == 0) {
@@ -973,7 +994,8 @@ ncclResult_t buffer_group_allgather(
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
 
-    GroupCollectiveCall call;
+    GroupOperation call;
+    call.kind = GroupOperationKind::Collective;
     call.type = fake_gpu::distributed::CollectiveType::AllGather;
     call.sendbuff = sendbuff;
     call.recvbuff = recvbuff;
@@ -1000,7 +1022,7 @@ ncclResult_t buffer_group_reducescatter(
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_collective_supported(comm)) {
+    if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
     if (recvcount == 0) {
@@ -1016,7 +1038,8 @@ ncclResult_t buffer_group_reducescatter(
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
 
-    GroupCollectiveCall call;
+    GroupOperation call;
+    call.kind = GroupOperationKind::Collective;
     call.type = fake_gpu::distributed::CollectiveType::ReduceScatter;
     call.sendbuff = sendbuff;
     call.recvbuff = recvbuff;
@@ -1043,7 +1066,7 @@ ncclResult_t buffer_group_alltoall(
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_collective_supported(comm)) {
+    if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
     if (count == 0) {
@@ -1055,7 +1078,8 @@ ncclResult_t buffer_group_alltoall(
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
 
-    GroupCollectiveCall call;
+    GroupOperation call;
+    call.kind = GroupOperationKind::Collective;
     call.type = fake_gpu::distributed::CollectiveType::AllToAll;
     call.sendbuff = sendbuff;
     call.recvbuff = recvbuff;
@@ -1063,6 +1087,92 @@ ncclResult_t buffer_group_alltoall(
     call.datatype = datatype;
     call.reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
     call.root = -1;
+    call.comm = comm;
+    g_group_operations.push_back(call);
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t buffer_group_send(
+    const void* sendbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    int peer,
+    ncclComm_t comm) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (!sendbuff) {
+        return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
+    }
+    if (!grouped_operation_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (peer < 0 || peer >= comm->world_size) {
+        return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
+    }
+    if (peer == comm->rank) {
+        return fail_with(comm, ncclInvalidArgument, "peer must not equal rank");
+    }
+    if (count == 0) {
+        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+    }
+
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(datatype, mapped_dtype)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this point-to-point operation");
+    }
+
+    GroupOperation call;
+    call.kind = GroupOperationKind::PointToPoint;
+    call.p2p_type = fake_gpu::distributed::PointToPointType::Send;
+    call.sendbuff = sendbuff;
+    call.count = count;
+    call.datatype = datatype;
+    call.peer = peer;
+    call.comm = comm;
+    g_group_operations.push_back(call);
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t buffer_group_recv(
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    int peer,
+    ncclComm_t comm) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (!recvbuff) {
+        return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
+    }
+    if (!grouped_operation_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (peer < 0 || peer >= comm->world_size) {
+        return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
+    }
+    if (peer == comm->rank) {
+        return fail_with(comm, ncclInvalidArgument, "peer must not equal rank");
+    }
+    if (count == 0) {
+        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+    }
+
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(datatype, mapped_dtype)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this point-to-point operation");
+    }
+
+    GroupOperation call;
+    call.kind = GroupOperationKind::PointToPoint;
+    call.p2p_type = fake_gpu::distributed::PointToPointType::Recv;
+    call.recvbuff = recvbuff;
+    call.count = count;
+    call.datatype = datatype;
+    call.peer = peer;
     call.comm = comm;
     g_group_operations.push_back(call);
     clear_last_error(comm);
@@ -1713,14 +1823,27 @@ ncclResult_t flush_grouped_operations() {
         return fail_with(nullptr, ncclInvalidUsage, "group currently requires all operations to use the same communicator");
     }
 
-    ncclResult_t result = prepare_group_batch(comm, g_group_operations);
-    if (result != ncclSuccess) {
-        clear_group_operations();
-        return result;
+    if (all_group_operations_are_collectives(g_group_operations)) {
+        ncclResult_t result = prepare_group_batch(comm, g_group_operations);
+        if (result != ncclSuccess) {
+            clear_group_operations();
+            return result;
+        }
     }
 
-    for (GroupCollectiveCall& operation : g_group_operations) {
-        if (operation.type == fake_gpu::distributed::CollectiveType::AllReduce) {
+    for (GroupOperation& operation : g_group_operations) {
+        ncclResult_t result = ncclSuccess;
+        if (operation.kind == GroupOperationKind::PointToPoint) {
+            result = submit_point_to_point(
+                operation.p2p_type == fake_gpu::distributed::PointToPointType::Send ? "SEND" : "RECV",
+                operation.p2p_type,
+                operation.sendbuff,
+                operation.recvbuff,
+                operation.count,
+                operation.datatype,
+                operation.peer,
+                operation.comm);
+        } else if (operation.type == fake_gpu::distributed::CollectiveType::AllReduce) {
             result = submit_collective(
                 "ALLREDUCE",
                 fake_gpu::distributed::CollectiveType::AllReduce,
@@ -2642,10 +2765,7 @@ ncclResult_t ncclSend(
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
     if (g_group_depth > 0) {
-        return fail_with(
-            comm,
-            ncclInvalidUsage,
-            "grouped ncclSend/ncclRecv are not implemented yet");
+        return buffer_group_send(sendbuff, count, datatype, peer, comm);
     }
     return submit_point_to_point(
         "SEND",
@@ -2669,10 +2789,7 @@ ncclResult_t ncclRecv(
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
     if (g_group_depth > 0) {
-        return fail_with(
-            comm,
-            ncclInvalidUsage,
-            "grouped ncclSend/ncclRecv are not implemented yet");
+        return buffer_group_recv(recvbuff, count, datatype, peer, comm);
     }
     return submit_point_to_point(
         "RECV",
