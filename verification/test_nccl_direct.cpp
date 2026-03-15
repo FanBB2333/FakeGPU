@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -706,6 +707,63 @@ void run_async_error_persistence_case() {
     require_result(ncclCommDestroy(comms[1]), ncclSuccess, "destroy after async error failed");
 }
 
+void run_group_stream_mismatch_case() {
+    ncclUniqueId unique_id {};
+    require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
+
+    std::array<ncclComm_t, 2> comms = {nullptr, nullptr};
+    std::array<ncclResult_t, 2> init_results = {ncclInternalError, ncclInternalError};
+    std::vector<std::thread> init_threads;
+    for (int rank = 0; rank < 2; ++rank) {
+        init_threads.emplace_back([&, rank]() {
+            init_results[static_cast<std::size_t>(rank)] =
+                ncclCommInitRank(&comms[static_cast<std::size_t>(rank)], 2, unique_id, rank);
+        });
+    }
+    for (std::thread& thread : init_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < 2; ++rank) {
+        require_result(init_results[static_cast<std::size_t>(rank)], ncclSuccess, "stream-mismatch init failed");
+    }
+
+    const cudaStream_t stream_a = reinterpret_cast<cudaStream_t>(static_cast<std::uintptr_t>(0x1));
+    const cudaStream_t stream_b = reinterpret_cast<cudaStream_t>(static_cast<std::uintptr_t>(0x2));
+    std::array<float, 1> send0 = {1.0f};
+    std::array<float, 1> send1 = {2.0f};
+    std::array<float, 1> recv0 = {0.0f};
+    std::array<float, 1> recv1 = {0.0f};
+    std::array<ncclResult_t, 2> results = {ncclInternalError, ncclInternalError};
+
+    std::thread rank0([&]() {
+        require_result(ncclGroupStart(), ncclSuccess, "rank0 stream group start failed");
+        require_result(
+            ncclAllReduce(send0.data(), recv0.data(), send0.size(), ncclFloat32, ncclSum, comms[0], stream_a),
+            ncclSuccess,
+            "rank0 first grouped enqueue failed");
+        results[0] = ncclBroadcast(send0.data(), recv0.data(), send0.size(), ncclFloat32, 0, comms[0], stream_b);
+        require_result(ncclGroupSimulateEnd(nullptr), ncclSuccess, "rank0 group cleanup failed");
+    });
+    std::thread rank1([&]() {
+        require_result(ncclGroupStart(), ncclSuccess, "rank1 stream group start failed");
+        require_result(
+            ncclAllReduce(send1.data(), recv1.data(), send1.size(), ncclFloat32, ncclSum, comms[1], stream_a),
+            ncclSuccess,
+            "rank1 first grouped enqueue failed");
+        results[1] = ncclBroadcast(send1.data(), recv1.data(), send1.size(), ncclFloat32, 0, comms[1], stream_b);
+        require_result(ncclGroupSimulateEnd(nullptr), ncclSuccess, "rank1 group cleanup failed");
+    });
+    rank0.join();
+    rank1.join();
+
+    require_result(results[0], ncclInvalidUsage, "rank0 mismatched group stream should fail");
+    require_result(results[1], ncclInvalidUsage, "rank1 mismatched group stream should fail");
+
+    for (ncclComm_t comm : comms) {
+        require_result(ncclCommDestroy(comm), ncclSuccess, "destroy after stream mismatch failed");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -730,6 +788,7 @@ int main() {
         run_send_recv_timeout_case();
         run_premul_redop_api_case();
         run_async_error_persistence_case();
+        run_group_stream_mismatch_case();
 
         std::cout << "nccl direct init/destroy test passed" << std::endl;
         return 0;

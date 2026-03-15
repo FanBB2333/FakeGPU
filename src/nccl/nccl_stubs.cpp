@@ -69,6 +69,7 @@ struct GroupOperation {
     fake_gpu::distributed::CollectiveReduceOp reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
     int root = -1;
     int peer = -1;
+    cudaStream_t stream = nullptr;
     ncclComm_t comm = nullptr;
     std::vector<char> recv_scratch;
 };
@@ -743,6 +744,27 @@ bool all_group_operations_are_collectives(const std::vector<GroupOperation>& ope
     return true;
 }
 
+bool validate_group_stream_binding(
+    ncclComm_t comm,
+    cudaStream_t stream) {
+    if (!comm) {
+        return false;
+    }
+    for (const GroupOperation& operation : g_group_operations) {
+        if (operation.comm != comm) {
+            continue;
+        }
+        if (operation.stream != stream) {
+            fail_with(
+                comm,
+                ncclInvalidUsage,
+                "grouped operations on the same communicator must use the same stream");
+            return false;
+        }
+    }
+    return true;
+}
+
 ncclResult_t prepare_group_batch(
     ncclComm_t comm,
     const std::vector<GroupOperation>& operations) {
@@ -847,7 +869,8 @@ ncclResult_t buffer_group_allreduce(
     std::size_t count,
     ncclDataType_t datatype,
     ncclRedOp_t op,
-    ncclComm_t comm) {
+    ncclComm_t comm,
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -859,6 +882,9 @@ ncclResult_t buffer_group_allreduce(
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
     if (!grouped_operation_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
     if (count == 0) {
@@ -884,6 +910,7 @@ ncclResult_t buffer_group_allreduce(
     call.red_op = op;
     call.reduce_op = reduce_op;
     call.root = -1;
+    call.stream = stream;
     call.comm = comm;
     g_group_operations.push_back(call);
     clear_last_error(comm);
@@ -897,7 +924,8 @@ ncclResult_t buffer_group_reduce(
     ncclDataType_t datatype,
     ncclRedOp_t op,
     int root,
-    ncclComm_t comm) {
+    ncclComm_t comm,
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -912,6 +940,9 @@ ncclResult_t buffer_group_reduce(
         return fail_with(comm, ncclInvalidArgument, "root recv buffer must not be null");
     }
     if (!grouped_operation_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
     if (count == 0) {
@@ -940,6 +971,7 @@ ncclResult_t buffer_group_reduce(
     call.red_op = op;
     call.reduce_op = reduce_op;
     call.root = root;
+    call.stream = stream;
     call.comm = comm;
     if (comm->rank != root) {
         const std::size_t scratch_bytes =
@@ -957,7 +989,8 @@ ncclResult_t buffer_group_broadcast(
     std::size_t count,
     ncclDataType_t datatype,
     int root,
-    ncclComm_t comm) {
+    ncclComm_t comm,
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -969,6 +1002,9 @@ ncclResult_t buffer_group_broadcast(
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
     }
     if (!grouped_operation_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
     if (comm->rank == root && !sendbuff) {
@@ -995,6 +1031,7 @@ ncclResult_t buffer_group_broadcast(
     call.datatype = datatype;
     call.reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
     call.root = root;
+    call.stream = stream;
     call.comm = comm;
     g_group_operations.push_back(call);
     clear_last_error(comm);
@@ -1006,7 +1043,8 @@ ncclResult_t buffer_group_allgather(
     void* recvbuff,
     std::size_t count,
     ncclDataType_t datatype,
-    ncclComm_t comm) {
+    ncclComm_t comm,
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -1018,6 +1056,9 @@ ncclResult_t buffer_group_allgather(
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
     if (!grouped_operation_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
     if (count == 0) {
@@ -1038,6 +1079,7 @@ ncclResult_t buffer_group_allgather(
     call.datatype = datatype;
     call.reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
     call.root = -1;
+    call.stream = stream;
     call.comm = comm;
     g_group_operations.push_back(call);
     clear_last_error(comm);
@@ -1050,7 +1092,8 @@ ncclResult_t buffer_group_reducescatter(
     std::size_t recvcount,
     ncclDataType_t datatype,
     ncclRedOp_t op,
-    ncclComm_t comm) {
+    ncclComm_t comm,
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -1062,6 +1105,9 @@ ncclResult_t buffer_group_reducescatter(
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
     if (!grouped_operation_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
     if (recvcount == 0) {
@@ -1087,6 +1133,7 @@ ncclResult_t buffer_group_reducescatter(
     call.red_op = op;
     call.reduce_op = reduce_op;
     call.root = -1;
+    call.stream = stream;
     call.comm = comm;
     g_group_operations.push_back(call);
     clear_last_error(comm);
@@ -1098,7 +1145,8 @@ ncclResult_t buffer_group_alltoall(
     void* recvbuff,
     std::size_t count,
     ncclDataType_t datatype,
-    ncclComm_t comm) {
+    ncclComm_t comm,
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -1110,6 +1158,9 @@ ncclResult_t buffer_group_alltoall(
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
     if (!grouped_operation_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
     if (count == 0) {
@@ -1130,6 +1181,7 @@ ncclResult_t buffer_group_alltoall(
     call.datatype = datatype;
     call.reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
     call.root = -1;
+    call.stream = stream;
     call.comm = comm;
     g_group_operations.push_back(call);
     clear_last_error(comm);
@@ -1141,7 +1193,8 @@ ncclResult_t buffer_group_send(
     std::size_t count,
     ncclDataType_t datatype,
     int peer,
-    ncclComm_t comm) {
+    ncclComm_t comm,
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -1153,6 +1206,9 @@ ncclResult_t buffer_group_send(
         return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
     }
     if (!grouped_operation_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
     if (peer < 0 || peer >= comm->world_size) {
@@ -1177,6 +1233,7 @@ ncclResult_t buffer_group_send(
     call.count = count;
     call.datatype = datatype;
     call.peer = peer;
+    call.stream = stream;
     call.comm = comm;
     g_group_operations.push_back(call);
     clear_last_error(comm);
@@ -1188,7 +1245,8 @@ ncclResult_t buffer_group_recv(
     std::size_t count,
     ncclDataType_t datatype,
     int peer,
-    ncclComm_t comm) {
+    ncclComm_t comm,
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -1200,6 +1258,9 @@ ncclResult_t buffer_group_recv(
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
     }
     if (!grouped_operation_supported(comm)) {
+        return ncclInvalidUsage;
+    }
+    if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
     if (peer < 0 || peer >= comm->world_size) {
@@ -1224,6 +1285,7 @@ ncclResult_t buffer_group_recv(
     call.count = count;
     call.datatype = datatype;
     call.peer = peer;
+    call.stream = stream;
     call.comm = comm;
     g_group_operations.push_back(call);
     clear_last_error(comm);
@@ -1914,7 +1976,7 @@ ncclResult_t flush_grouped_operations() {
                 -1,
                 operation.comm,
                 operation.red_op,
-                nullptr);
+                operation.stream);
         } else if (operation.type == fake_gpu::distributed::CollectiveType::Reduce) {
             void* recv_target = operation.recvbuff;
             if (!operation.recv_scratch.empty()) {
@@ -1931,7 +1993,7 @@ ncclResult_t flush_grouped_operations() {
                 operation.root,
                 operation.comm,
                 operation.red_op,
-                nullptr);
+                operation.stream);
         } else if (operation.type == fake_gpu::distributed::CollectiveType::Broadcast) {
             const void* local_input = operation.recvbuff;
             if (operation.comm->rank == operation.root) {
@@ -1948,7 +2010,7 @@ ncclResult_t flush_grouped_operations() {
                 operation.root,
                 operation.comm,
                 ncclSum,
-                nullptr);
+                operation.stream);
         } else if (operation.type == fake_gpu::distributed::CollectiveType::AllGather) {
             result = submit_collective(
                 "ALLGATHER",
@@ -1961,7 +2023,7 @@ ncclResult_t flush_grouped_operations() {
                 -1,
                 operation.comm,
                 ncclSum,
-                nullptr);
+                operation.stream);
         } else if (operation.type == fake_gpu::distributed::CollectiveType::AllToAll) {
             result = submit_collective(
                 "ALLTOALL",
@@ -1974,7 +2036,7 @@ ncclResult_t flush_grouped_operations() {
                 operation.root,
                 operation.comm,
                 ncclSum,
-                nullptr);
+                operation.stream);
         } else if (operation.type == fake_gpu::distributed::CollectiveType::ReduceScatter) {
             result = submit_collective(
                 "REDUCESCATTER",
@@ -1987,7 +2049,7 @@ ncclResult_t flush_grouped_operations() {
                 -1,
                 operation.comm,
                 operation.red_op,
-                nullptr);
+                operation.stream);
         } else {
             result = fail_with(operation.comm, ncclInvalidUsage, "unsupported grouped collective");
         }
@@ -2572,7 +2634,7 @@ ncclResult_t ncclReduce(
         return pending_error;
     }
     if (g_group_depth > 0) {
-        return buffer_group_reduce(sendbuff, recvbuff, count, datatype, op, root, comm);
+        return buffer_group_reduce(sendbuff, recvbuff, count, datatype, op, root, comm, stream);
     }
     if (!sendbuff) {
         return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
@@ -2689,7 +2751,7 @@ ncclResult_t ncclBroadcast(
         return pending_error;
     }
     if (g_group_depth > 0) {
-        return buffer_group_broadcast(sendbuff, recvbuff, count, datatype, root, comm);
+        return buffer_group_broadcast(sendbuff, recvbuff, count, datatype, root, comm, stream);
     }
     const void* local_input = recvbuff;
     if (comm->rank == root) {
@@ -2724,7 +2786,7 @@ ncclResult_t ncclAllReduce(
         }
     }
     if (g_group_depth > 0) {
-        return buffer_group_allreduce(sendbuff, recvbuff, count, datatype, op, comm);
+        return buffer_group_allreduce(sendbuff, recvbuff, count, datatype, op, comm, stream);
     }
     fake_gpu::distributed::CollectiveReduceOp reduce_op;
     if (!map_reduce_op(op, reduce_op)) {
@@ -2759,7 +2821,7 @@ ncclResult_t ncclReduceScatter(
         }
     }
     if (g_group_depth > 0) {
-        return buffer_group_reducescatter(sendbuff, recvbuff, recvcount, datatype, op, comm);
+        return buffer_group_reducescatter(sendbuff, recvbuff, recvcount, datatype, op, comm, stream);
     }
     fake_gpu::distributed::CollectiveReduceOp reduce_op;
     if (!map_reduce_op(op, reduce_op)) {
@@ -2793,7 +2855,7 @@ ncclResult_t ncclAllGather(
         }
     }
     if (g_group_depth > 0) {
-        return buffer_group_allgather(sendbuff, recvbuff, sendcount, datatype, comm);
+        return buffer_group_allgather(sendbuff, recvbuff, sendcount, datatype, comm, stream);
     }
     return submit_collective(
         "ALLGATHER",
@@ -2823,7 +2885,7 @@ ncclResult_t ncclAlltoAll(
         }
     }
     if (g_group_depth > 0) {
-        return buffer_group_alltoall(sendbuff, recvbuff, count, datatype, comm);
+        return buffer_group_alltoall(sendbuff, recvbuff, count, datatype, comm, stream);
     }
     return submit_collective(
         "ALLTOALL",
@@ -2855,7 +2917,7 @@ ncclResult_t ncclSend(
     ncclDataType_t datatype,
     int peer,
     ncclComm_t comm,
-    cudaStream_t /*stream*/) {
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -2864,7 +2926,7 @@ ncclResult_t ncclSend(
         return pending_error;
     }
     if (g_group_depth > 0) {
-        return buffer_group_send(sendbuff, count, datatype, peer, comm);
+        return buffer_group_send(sendbuff, count, datatype, peer, comm, stream);
     }
     return submit_point_to_point(
         "SEND",
@@ -2883,7 +2945,7 @@ ncclResult_t ncclRecv(
     ncclDataType_t datatype,
     int peer,
     ncclComm_t comm,
-    cudaStream_t /*stream*/) {
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -2892,7 +2954,7 @@ ncclResult_t ncclRecv(
         return pending_error;
     }
     if (g_group_depth > 0) {
-        return buffer_group_recv(recvbuff, count, datatype, peer, comm);
+        return buffer_group_recv(recvbuff, count, datatype, peer, comm, stream);
     }
     return submit_point_to_point(
         "RECV",
