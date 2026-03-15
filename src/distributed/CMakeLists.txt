@@ -6,6 +6,7 @@ add_library(fake_gpu_distributed OBJECT
     collective_allgather.cpp
     collective_broadcast.cpp
     collective_reducescatter.cpp
+    topology_model.cpp
     transport_local.cpp
     staging_buffer.cpp
 )

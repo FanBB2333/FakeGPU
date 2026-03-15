@@ -1,0 +1,29 @@
+version: 1
+cluster:
+  name: hybrid-dev-cluster
+  default_backend: nccl
+
+nodes:
+  - id: node0
+    host: 127.0.0.1
+    ranks: [0]
+    gpus:
+      - profile: a100
+
+  - id: node1
+    host: 127.0.0.1
+    ranks: [1]
+    gpus:
+      - profile: a100
+
+fabric:
+  intra_node:
+    type: pcie
+    bandwidth_gbps: 64
+    latency_us: 4
+
+  inter_node:
+    type: infiniband
+    bandwidth_gbps: 100
+    latency_us: 12
+    oversubscription: 1.2

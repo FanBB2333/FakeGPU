@@ -85,6 +85,20 @@ struct CollectiveBatchPrepareResult {
 struct ClusterCollectiveReportStats {
     std::uint64_t calls = 0;
     std::uint64_t bytes = 0;
+    double estimated_time_us_total = 0.0;
+    double contention_penalty_us_total = 0.0;
+};
+
+struct ClusterLinkReportStats {
+    std::string src_node;
+    std::string dst_node;
+    std::string scope;
+    std::uint64_t samples = 0;
+    std::uint64_t bytes = 0;
+    double bandwidth_gbps = 0.0;
+    double avg_latency_us = 0.0;
+    double estimated_time_us_total = 0.0;
+    double contention_penalty_us_total = 0.0;
 };
 
 struct ClusterRankReportStats {
@@ -106,6 +120,7 @@ struct ClusterReportSnapshot {
     ClusterCollectiveReportStats all_gather;
     ClusterCollectiveReportStats reduce_scatter;
     ClusterCollectiveReportStats barrier;
+    std::vector<ClusterLinkReportStats> links;
     std::vector<ClusterRankReportStats> ranks;
 };
 

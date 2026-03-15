@@ -447,7 +447,5 @@ bool GlobalState::register_allocation_nolock(void* ptr, size_t size, int device,
 
 } // namespace fake_gpu
 
-// Ensure initialization when the shared library is preloaded
-__attribute__((constructor)) static void fake_gpu_constructor() {
-    fake_gpu::GlobalState::instance().initialize();
-}
+// Keep global state lazy-initialized to avoid interfering with real CUDA startup
+// when only a subset of FakeGPU libraries is loaded (for example fake NCCL).

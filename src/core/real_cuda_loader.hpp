@@ -26,22 +26,26 @@ public:
     // Get function pointers from real libraries
     void* get_cuda_driver_func(const char* name) {
         if (!cuda_driver_handle_) return nullptr;
-        return dlsym(cuda_driver_handle_, name);
+        const dlsym_fn real_dlsym = resolve_real_dlsym();
+        return real_dlsym ? real_dlsym(cuda_driver_handle_, name) : nullptr;
     }
 
     void* get_cudart_func(const char* name) {
         if (!cudart_handle_) return nullptr;
-        return dlsym(cudart_handle_, name);
+        const dlsym_fn real_dlsym = resolve_real_dlsym();
+        return real_dlsym ? real_dlsym(cudart_handle_, name) : nullptr;
     }
 
     void* get_cublas_func(const char* name) {
         if (!cublas_handle_) return nullptr;
-        return dlsym(cublas_handle_, name);
+        const dlsym_fn real_dlsym = resolve_real_dlsym();
+        return real_dlsym ? real_dlsym(cublas_handle_, name) : nullptr;
     }
 
     void* get_nvml_func(const char* name) {
         if (!nvml_handle_) return nullptr;
-        return dlsym(nvml_handle_, name);
+        const dlsym_fn real_dlsym = resolve_real_dlsym();
+        return real_dlsym ? real_dlsym(nvml_handle_, name) : nullptr;
     }
 
     // Initialize/load real libraries
@@ -128,14 +132,46 @@ private:
         // Don't unload libraries - they may still be in use
     }
 
+    using dlopen_fn = void* (*)(const char*, int);
+    using dlsym_fn = void* (*)(void*, const char*);
+
+    static dlopen_fn resolve_real_dlopen() {
+        static dlopen_fn fn = []() -> dlopen_fn {
+            return reinterpret_cast<dlopen_fn>(::dlsym(RTLD_NEXT, "dlopen"));
+        }();
+        return fn;
+    }
+
+    static dlsym_fn resolve_real_dlsym() {
+        static dlsym_fn fn = []() -> dlsym_fn {
+            return reinterpret_cast<dlsym_fn>(::dlsym(RTLD_NEXT, "dlsym"));
+        }();
+        return fn;
+    }
+
     void* load_library(const std::string& path, const char* fallback_name) {
+        const dlopen_fn real_dlopen = resolve_real_dlopen();
+        if (!real_dlopen) {
+            FGPU_LOG("[RealCudaLoader] Failed to resolve real dlopen\n");
+            return nullptr;
+        }
+
         if (!path.empty()) {
-            void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+            void* handle = real_dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
             if (handle) {
                 FGPU_LOG("[RealCudaLoader] Loaded %s from %s\n", fallback_name, path.c_str());
                 return handle;
             }
             FGPU_LOG("[RealCudaLoader] Failed to load %s: %s\n", path.c_str(), dlerror());
+        }
+
+        if (fallback_name && *fallback_name) {
+            void* handle = real_dlopen(fallback_name, RTLD_NOW | RTLD_LOCAL);
+            if (handle) {
+                FGPU_LOG("[RealCudaLoader] Loaded %s via fallback name %s\n", fallback_name, fallback_name);
+                return handle;
+            }
+            FGPU_LOG("[RealCudaLoader] Failed to load fallback %s: %s\n", fallback_name, dlerror());
         }
         return nullptr;
     }
@@ -156,14 +192,21 @@ private:
         typedef int (*cuCtxCreate_t)(void**, unsigned int, int);
         typedef int (*cuCtxDestroy_t)(void*);
 
-        auto cuInit = (cuInit_t)dlsym(cuda_driver_handle_, "cuInit");
-        auto cuDeviceGetCount = (cuDeviceGetCount_t)dlsym(cuda_driver_handle_, "cuDeviceGetCount");
-        auto cuDeviceTotalMem = (cuDeviceTotalMem_t)dlsym(cuda_driver_handle_, "cuDeviceTotalMem_v2");
-        auto cuDeviceGetName = (cuDeviceGetName_t)dlsym(cuda_driver_handle_, "cuDeviceGetName");
-        auto cuDeviceGetAttribute = (cuDeviceGetAttribute_t)dlsym(cuda_driver_handle_, "cuDeviceGetAttribute");
-        auto cuMemGetInfo = (cuMemGetInfo_t)dlsym(cuda_driver_handle_, "cuMemGetInfo_v2");
-        auto cuCtxCreate = (cuCtxCreate_t)dlsym(cuda_driver_handle_, "cuCtxCreate_v2");
-        auto cuCtxDestroy = (cuCtxDestroy_t)dlsym(cuda_driver_handle_, "cuCtxDestroy_v2");
+        const dlsym_fn real_dlsym = resolve_real_dlsym();
+        if (!real_dlsym) {
+            FGPU_LOG("[RealCudaLoader] Failed to resolve real dlsym\n");
+            real_gpu_info_.valid = false;
+            return;
+        }
+
+        auto cuInit = (cuInit_t)real_dlsym(cuda_driver_handle_, "cuInit");
+        auto cuDeviceGetCount = (cuDeviceGetCount_t)real_dlsym(cuda_driver_handle_, "cuDeviceGetCount");
+        auto cuDeviceTotalMem = (cuDeviceTotalMem_t)real_dlsym(cuda_driver_handle_, "cuDeviceTotalMem_v2");
+        auto cuDeviceGetName = (cuDeviceGetName_t)real_dlsym(cuda_driver_handle_, "cuDeviceGetName");
+        auto cuDeviceGetAttribute = (cuDeviceGetAttribute_t)real_dlsym(cuda_driver_handle_, "cuDeviceGetAttribute");
+        auto cuMemGetInfo = (cuMemGetInfo_t)real_dlsym(cuda_driver_handle_, "cuMemGetInfo_v2");
+        auto cuCtxCreate = (cuCtxCreate_t)real_dlsym(cuda_driver_handle_, "cuCtxCreate_v2");
+        auto cuCtxDestroy = (cuCtxDestroy_t)real_dlsym(cuda_driver_handle_, "cuCtxDestroy_v2");
 
         if (!cuInit || !cuDeviceGetCount) {
             FGPU_LOG("[RealCudaLoader] Missing required CUDA driver functions\n");

@@ -29,6 +29,16 @@ def _require_counter(obj: dict, key: str, *, ctx: str) -> dict:
         _die(f"{ctx}.{key}.calls must be a non-negative integer")
     if not isinstance(bytes_value, int) or bytes_value < 0:
         _die(f"{ctx}.{key}.bytes must be a non-negative integer")
+    estimated_time = value.get("estimated_time_us_total")
+    if estimated_time is not None and (
+        not isinstance(estimated_time, (int, float)) or estimated_time < 0
+    ):
+        _die(f"{ctx}.{key}.estimated_time_us_total must be a non-negative number")
+    contention_penalty = value.get("contention_penalty_us_total")
+    if contention_penalty is not None and (
+        not isinstance(contention_penalty, (int, float)) or contention_penalty < 0
+    ):
+        _die(f"{ctx}.{key}.contention_penalty_us_total must be a non-negative number")
     return value
 
 
@@ -44,6 +54,7 @@ def main() -> int:
         default=[],
         help="Require the named collective to have calls > 0 (repeatable)",
     )
+    ap.add_argument("--expect-links", action="store_true", help="Require non-empty link statistics")
     ap.add_argument("--min-ranks", type=int, default=1, help="Minimum number of rank entries expected")
     args = ap.parse_args()
 
@@ -97,6 +108,43 @@ def main() -> int:
         expected = collectives[expected_name]
         if int(expected["calls"]) <= 0:
             _die(f"expected collectives.{expected_name}.calls > 0")
+
+    links = report.get("links", [])
+    if args.expect_links:
+        if not isinstance(links, list) or not links:
+            _die("expected non-empty links array")
+        for index, link in enumerate(links):
+            ctx = f"links[{index}]"
+            if not isinstance(link, dict):
+                _die(f"{ctx} must be an object")
+            src = _require(link, "src", ctx=ctx)
+            dst = _require(link, "dst", ctx=ctx)
+            scope = _require(link, "scope", ctx=ctx)
+            samples = _require(link, "samples", ctx=ctx)
+            bytes_value = _require(link, "bytes", ctx=ctx)
+            bandwidth = _require(link, "bandwidth_gbps", ctx=ctx)
+            avg_latency = _require(link, "avg_latency_us", ctx=ctx)
+            estimated_time = _require(link, "estimated_time_us_total", ctx=ctx)
+            contention_penalty = _require(link, "contention_penalty_us_total", ctx=ctx)
+
+            if not isinstance(src, str) or not src:
+                _die(f"{ctx}.src must be a non-empty string")
+            if not isinstance(dst, str) or not dst:
+                _die(f"{ctx}.dst must be a non-empty string")
+            if scope not in ("intra_node", "inter_node"):
+                _die(f"{ctx}.scope must be intra_node or inter_node")
+            if not isinstance(samples, int) or samples <= 0:
+                _die(f"{ctx}.samples must be a positive integer")
+            if not isinstance(bytes_value, int) or bytes_value < 0:
+                _die(f"{ctx}.bytes must be a non-negative integer")
+            for field_name, field_value in (
+                ("bandwidth_gbps", bandwidth),
+                ("avg_latency_us", avg_latency),
+                ("estimated_time_us_total", estimated_time),
+                ("contention_penalty_us_total", contention_penalty),
+            ):
+                if not isinstance(field_value, (int, float)) or field_value < 0:
+                    _die(f"{ctx}.{field_name} must be a non-negative number")
 
     ranks = _require(report, "ranks", ctx="root")
     if not isinstance(ranks, list) or len(ranks) < args.min_ranks:

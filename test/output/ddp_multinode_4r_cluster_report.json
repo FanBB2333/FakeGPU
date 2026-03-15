@@ -12,17 +12,63 @@
     "config_path": "/home/l1ght/repos/fakeGPU/verification/data/cluster_valid.yaml"
   },
   "collectives": {
-    "all_reduce": {"calls": 5, "bytes": 6832},
-    "broadcast": {"calls": 5, "bytes": 3888},
-    "all_gather": {"calls": 1, "bytes": 128},
-    "reduce_scatter": {"calls": 0, "bytes": 0},
-    "barrier": {"calls": 0, "bytes": 0}
+    "all_reduce": {"calls": 5, "bytes": 6832, "estimated_time_us_total": 180.592, "contention_penalty_us_total": 0.137},
+    "broadcast": {"calls": 5, "bytes": 3888, "estimated_time_us_total": 180.168, "contention_penalty_us_total": 0.039},
+    "all_gather": {"calls": 1, "bytes": 128, "estimated_time_us_total": 36.006, "contention_penalty_us_total": 0.001},
+    "reduce_scatter": {"calls": 0, "bytes": 0, "estimated_time_us_total": 0.000, "contention_penalty_us_total": 0.000},
+    "barrier": {"calls": 0, "bytes": 0, "estimated_time_us_total": 0.000, "contention_penalty_us_total": 0.000}
   },
+  "links": [
+    {
+      "src": "node0",
+      "dst": "node0",
+      "scope": "intra_node",
+      "samples": 11,
+      "bytes": 4420,
+      "bandwidth_gbps": 300.000,
+      "avg_latency_us": 3.000,
+      "estimated_time_us_total": 33.118,
+      "contention_penalty_us_total": 0.000
+    },
+    {
+      "src": "node0",
+      "dst": "node1",
+      "scope": "inter_node",
+      "samples": 11,
+      "bytes": 4420,
+      "bandwidth_gbps": 200.000,
+      "avg_latency_us": 15.000,
+      "estimated_time_us_total": 165.265,
+      "contention_penalty_us_total": 0.088
+    },
+    {
+      "src": "node1",
+      "dst": "node0",
+      "scope": "inter_node",
+      "samples": 11,
+      "bytes": 4420,
+      "bandwidth_gbps": 200.000,
+      "avg_latency_us": 15.000,
+      "estimated_time_us_total": 165.265,
+      "contention_penalty_us_total": 0.088
+    },
+    {
+      "src": "node1",
+      "dst": "node1",
+      "scope": "intra_node",
+      "samples": 11,
+      "bytes": 4420,
+      "bandwidth_gbps": 300.000,
+      "avg_latency_us": 3.000,
+      "estimated_time_us_total": 33.118,
+      "contention_penalty_us_total": 0.000
+    }
+  ],
   "ranks": [
     {
       "rank": 0,
       "node": "node0",
-      "wait_time_ms": 10.182,
+      "wait_time_ms": 71.346,
       "timeouts": 0,
       "communicator_inits": 1,
       "collective_calls": 11,
@@ -32,7 +78,7 @@
     {
       "rank": 1,
       "node": "node0",
-      "wait_time_ms": 1.088,
+      "wait_time_ms": 72.499,
       "timeouts": 0,
       "communicator_inits": 1,
       "collective_calls": 11,
@@ -42,7 +88,7 @@
     {
       "rank": 2,
       "node": "node1",
-      "wait_time_ms": 6.574,
+      "wait_time_ms": 74.214,
       "timeouts": 0,
       "communicator_inits": 1,
       "collective_calls": 11,
@@ -52,7 +98,7 @@
     {
       "rank": 3,
       "node": "node1",
-      "wait_time_ms": 6.853,
+      "wait_time_ms": 1.827,
       "timeouts": 0,
       "communicator_inits": 1,
       "collective_calls": 11,

@@ -1,0 +1,67 @@
+{
+  "report_version": 4,
+  "schema": "experimental",
+  "cluster": {
+    "mode": "simulate",
+    "world_size": 2,
+    "node_count": 2,
+    "communicators": 1,
+    "coordinator_transport": "unix",
+    "name": "hybrid-dev-cluster",
+    "default_backend": "nccl",
+    "config_path": "/home/l1ght/repos/fakeGPU/verification/data/cluster_hybrid_2r.yaml"
+  },
+  "collectives": {
+    "all_reduce": {"calls": 1, "bytes": 8, "estimated_time_us_total": 24.002, "contention_penalty_us_total": 0.000},
+    "broadcast": {"calls": 1, "bytes": 8, "estimated_time_us_total": 24.001, "contention_penalty_us_total": 0.000},
+    "all_gather": {"calls": 0, "bytes": 0, "estimated_time_us_total": 0.000, "contention_penalty_us_total": 0.000},
+    "reduce_scatter": {"calls": 0, "bytes": 0, "estimated_time_us_total": 0.000, "contention_penalty_us_total": 0.000},
+    "barrier": {"calls": 0, "bytes": 0, "estimated_time_us_total": 0.000, "contention_penalty_us_total": 0.000}
+  },
+  "links": [
+    {
+      "src": "node0",
+      "dst": "node1",
+      "scope": "inter_node",
+      "samples": 2,
+      "bytes": 12,
+      "bandwidth_gbps": 100.000,
+      "avg_latency_us": 12.000,
+      "estimated_time_us_total": 24.001,
+      "contention_penalty_us_total": 0.000
+    },
+    {
+      "src": "node1",
+      "dst": "node0",
+      "scope": "inter_node",
+      "samples": 2,
+      "bytes": 12,
+      "bandwidth_gbps": 100.000,
+      "avg_latency_us": 12.000,
+      "estimated_time_us_total": 24.001,
+      "contention_penalty_us_total": 0.000
+    }
+  ],
+  "ranks": [
+    {
+      "rank": 0,
+      "node": "node0",
+      "wait_time_ms": 0.000,
+      "timeouts": 0,
+      "communicator_inits": 1,
+      "collective_calls": 2,
+      "barrier_calls": 0,
+      "group_prepares": 0
+    },
+    {
+      "rank": 1,
+      "node": "node1",
+      "wait_time_ms": 0.619,
+      "timeouts": 0,
+      "communicator_inits": 1,
+      "collective_calls": 2,
+      "barrier_calls": 0,
+      "group_prepares": 0
+    }
+  ]
+}

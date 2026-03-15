@@ -1,0 +1,31 @@
+version: 1
+cluster:
+  name: dev-cluster-slow-interconnect
+  default_backend: nccl
+
+nodes:
+  - id: node0
+    host: 127.0.0.1
+    ranks: [0, 1]
+    gpus:
+      - profile: a100
+      - profile: a100
+
+  - id: node1
+    host: 127.0.0.1
+    ranks: [2, 3]
+    gpus:
+      - profile: h100
+      - profile: h100
+
+fabric:
+  intra_node:
+    type: nvlink
+    bandwidth_gbps: 300
+    latency_us: 3
+
+  inter_node:
+    type: ethernet
+    bandwidth_gbps: 25
+    latency_us: 80
+    oversubscription: 2.0

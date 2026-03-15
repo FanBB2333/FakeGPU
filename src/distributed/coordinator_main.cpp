@@ -82,22 +82,48 @@ bool dump_cluster_report(
     }
     std::fprintf(out, "  },\n");
     std::fprintf(out, "  \"collectives\": {\n");
-    std::fprintf(out, "    \"all_reduce\": {\"calls\": %llu, \"bytes\": %llu},\n",
+    std::fprintf(out, "    \"all_reduce\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
                  (unsigned long long)snapshot.all_reduce.calls,
-                 (unsigned long long)snapshot.all_reduce.bytes);
-    std::fprintf(out, "    \"broadcast\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)snapshot.all_reduce.bytes,
+                 snapshot.all_reduce.estimated_time_us_total,
+                 snapshot.all_reduce.contention_penalty_us_total);
+    std::fprintf(out, "    \"broadcast\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
                  (unsigned long long)snapshot.broadcast.calls,
-                 (unsigned long long)snapshot.broadcast.bytes);
-    std::fprintf(out, "    \"all_gather\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)snapshot.broadcast.bytes,
+                 snapshot.broadcast.estimated_time_us_total,
+                 snapshot.broadcast.contention_penalty_us_total);
+    std::fprintf(out, "    \"all_gather\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
                  (unsigned long long)snapshot.all_gather.calls,
-                 (unsigned long long)snapshot.all_gather.bytes);
-    std::fprintf(out, "    \"reduce_scatter\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)snapshot.all_gather.bytes,
+                 snapshot.all_gather.estimated_time_us_total,
+                 snapshot.all_gather.contention_penalty_us_total);
+    std::fprintf(out, "    \"reduce_scatter\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
                  (unsigned long long)snapshot.reduce_scatter.calls,
-                 (unsigned long long)snapshot.reduce_scatter.bytes);
-    std::fprintf(out, "    \"barrier\": {\"calls\": %llu, \"bytes\": %llu}\n",
+                 (unsigned long long)snapshot.reduce_scatter.bytes,
+                 snapshot.reduce_scatter.estimated_time_us_total,
+                 snapshot.reduce_scatter.contention_penalty_us_total);
+    std::fprintf(out, "    \"barrier\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f}\n",
                  (unsigned long long)snapshot.barrier.calls,
-                 (unsigned long long)snapshot.barrier.bytes);
+                 (unsigned long long)snapshot.barrier.bytes,
+                 snapshot.barrier.estimated_time_us_total,
+                 snapshot.barrier.contention_penalty_us_total);
     std::fprintf(out, "  },\n");
+    std::fprintf(out, "  \"links\": [\n");
+    for (std::size_t index = 0; index < snapshot.links.size(); ++index) {
+        const auto& link_stats = snapshot.links[index];
+        std::fprintf(out, "    {\n");
+        std::fprintf(out, "      \"src\": \"%s\",\n", link_stats.src_node.c_str());
+        std::fprintf(out, "      \"dst\": \"%s\",\n", link_stats.dst_node.c_str());
+        std::fprintf(out, "      \"scope\": \"%s\",\n", link_stats.scope.c_str());
+        std::fprintf(out, "      \"samples\": %llu,\n", (unsigned long long)link_stats.samples);
+        std::fprintf(out, "      \"bytes\": %llu,\n", (unsigned long long)link_stats.bytes);
+        std::fprintf(out, "      \"bandwidth_gbps\": %.3f,\n", link_stats.bandwidth_gbps);
+        std::fprintf(out, "      \"avg_latency_us\": %.3f,\n", link_stats.avg_latency_us);
+        std::fprintf(out, "      \"estimated_time_us_total\": %.3f,\n", link_stats.estimated_time_us_total);
+        std::fprintf(out, "      \"contention_penalty_us_total\": %.3f\n", link_stats.contention_penalty_us_total);
+        std::fprintf(out, "    }%s\n", (index + 1 < snapshot.links.size() ? "," : ""));
+    }
+    std::fprintf(out, "  ],\n");
     std::fprintf(out, "  \"ranks\": [\n");
     for (std::size_t index = 0; index < snapshot.ranks.size(); ++index) {
         const auto& rank_stats = snapshot.ranks[index];
