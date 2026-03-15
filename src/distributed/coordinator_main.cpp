@@ -9,7 +9,7 @@
 namespace {
 
 void print_usage() {
-    std::cerr << "Usage: fakegpu-coordinator --transport unix --address /abs/path.sock\n";
+    std::cerr << "Usage: fakegpu-coordinator --transport {unix|tcp} --address <endpoint>\n";
 }
 
 std::string getenv_or_empty(const char* name) {
@@ -174,23 +174,30 @@ int main(int argc, char** argv) {
     if (transport.empty()) {
         transport = "unix";
     }
-    if (transport != "unix") {
-        std::cerr << "Only --transport unix is supported in this stage\n";
-        return 2;
-    }
     if (address.empty()) {
         std::cerr << "--address is required\n";
         return 2;
     }
 
-    fake_gpu::distributed::ClusterCoordinator coordinator(address);
+    fake_gpu::distributed::CoordinatorTransport coordinator_transport =
+        fake_gpu::distributed::CoordinatorTransport::Unix;
+    if (transport == "unix") {
+        coordinator_transport = fake_gpu::distributed::CoordinatorTransport::Unix;
+    } else if (transport == "tcp") {
+        coordinator_transport = fake_gpu::distributed::CoordinatorTransport::Tcp;
+    } else {
+        std::cerr << "Unsupported --transport: " << transport << "\n";
+        return 2;
+    }
+
+    fake_gpu::distributed::ClusterCoordinator coordinator(coordinator_transport, address);
     std::string error;
     if (!coordinator.start(error)) {
         std::cerr << "Failed to start coordinator: " << error << "\n";
         return 1;
     }
 
-    std::cout << "fakegpu-coordinator listening on " << coordinator.socket_path() << "\n";
+    std::cout << "fakegpu-coordinator listening on " << coordinator.address() << "\n";
     std::cout.flush();
     int exit_code = coordinator.run();
 
@@ -199,7 +206,7 @@ int main(int argc, char** argv) {
     if (report_config.mode == fake_gpu::distributed::DistributedMode::Disabled) {
         report_config.mode = fake_gpu::distributed::DistributedMode::Simulate;
     }
-    report_config.coordinator_transport = fake_gpu::distributed::CoordinatorTransport::Unix;
+    report_config.coordinator_transport = coordinator_transport;
     report_config.coordinator_address = address;
 
     if (!dump_cluster_report(report_config, error)) {

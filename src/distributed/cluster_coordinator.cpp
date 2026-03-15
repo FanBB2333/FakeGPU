@@ -109,8 +109,12 @@ std::size_t parse_required_size(
 
 }  // namespace
 
+ClusterCoordinator::ClusterCoordinator(CoordinatorTransport transport, std::string address)
+    : transport_(transport), address_(std::move(address)) {
+}
+
 ClusterCoordinator::ClusterCoordinator(std::string socket_path)
-    : socket_path_(std::move(socket_path)) {
+    : ClusterCoordinator(CoordinatorTransport::Unix, std::move(socket_path)) {
 }
 
 ClusterCoordinator::~ClusterCoordinator() {
@@ -128,13 +132,13 @@ ClusterCoordinator::~ClusterCoordinator() {
         }
         client_threads_.clear();
     }
-    if (!socket_path_.empty()) {
-        ::unlink(socket_path_.c_str());
+    if (transport_ == CoordinatorTransport::Unix && !address_.empty()) {
+        ::unlink(address_.c_str());
     }
 }
 
 bool ClusterCoordinator::start(std::string& error) {
-    if (!bind_and_listen_unix_socket(socket_path_, 64, server_fd_, error)) {
+    if (!bind_and_listen(transport_, address_, 64, server_fd_, error)) {
         return false;
     }
     return true;

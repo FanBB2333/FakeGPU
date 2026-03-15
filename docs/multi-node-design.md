@@ -1222,12 +1222,18 @@ src/nccl/
 验证方式：
 
 - 新增 `verification/test_remote_coordinator.py`
-- 至少两台机器或两个 network namespace 环境验证
+- 使用 TCP loopback 做 2 rank happy path 与断链失败验证
+- 真实多机或 network namespace 环境留作部署侧复核
 
 通过标准：
 
 - rank 可通过 TCP 注册与执行 collective
 - 网络异常时能返回明确错误并回收 communicator
+
+当前边界：
+
+- 目前验证范围是单机 `127.0.0.1` TCP；没有在两台物理机上重复此测试
+- 数据面仍然是现有 direct collective / proxy 路径，Step 21 只扩展 coordinator transport
 
 ### 18.2 Step 完成定义
 
@@ -1376,14 +1382,14 @@ src/nccl/
 
 - [x] Step 19：Hybrid + Simulate 混合运行
 - [x] Step 20：Proxy / Passthrough 试验版
-- [ ] Step 21：远端 Coordinator 与多机扩展
+- [x] Step 21：远端 Coordinator 与多机扩展
 
 本次完成标准：
 
 - [x] `hybrid + simulate` 可完成 host staging 和 collective 同步
 - [x] `proxy` 模式能与 baseline NCCL 做输出对比
-- [ ] TCP transport 可支持远端 coordinator
-- [ ] 网络异常时 communicator 可明确回收或失败
+- [x] TCP transport 可支持远端 coordinator
+- [x] 网络异常时 communicator 可明确回收或失败
 
 ### 18.4 批次使用建议
 

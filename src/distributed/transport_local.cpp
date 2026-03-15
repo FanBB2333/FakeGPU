@@ -76,6 +76,18 @@ bool bind_and_listen_unix_socket(const std::string& path, int backlog, int& serv
     return true;
 }
 
+bool bind_and_listen(
+    CoordinatorTransport transport,
+    const std::string& address,
+    int backlog,
+    int& server_fd,
+    std::string& error) {
+    if (transport == CoordinatorTransport::Unix) {
+        return bind_and_listen_unix_socket(address, backlog, server_fd, error);
+    }
+    return bind_and_listen_tcp_socket(address, backlog, server_fd, error);
+}
+
 bool request_response_unix_socket(
     const std::string& path,
     const std::string& request_line,
@@ -122,6 +134,18 @@ bool request_response_unix_socket(
 
     ::close(fd);
     return parse_response_line(response_line, response, error);
+}
+
+bool request_response(
+    CoordinatorTransport transport,
+    const std::string& address,
+    const std::string& request_line,
+    CoordinatorResponse& response,
+    std::string& error) {
+    if (transport == CoordinatorTransport::Unix) {
+        return request_response_unix_socket(address, request_line, response, error);
+    }
+    return request_response_tcp_socket(address, request_line, response, error);
 }
 
 bool receive_message_line(int fd, std::string& line, std::string& error) {

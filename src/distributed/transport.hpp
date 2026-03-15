@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cluster_config.hpp"
+
 #include <string>
 #include <unordered_map>
 
@@ -18,8 +20,26 @@ struct CoordinatorResponse {
 };
 
 bool bind_and_listen_unix_socket(const std::string& path, int backlog, int& server_fd, std::string& error);
+bool bind_and_listen_tcp_socket(const std::string& endpoint, int backlog, int& server_fd, std::string& error);
+bool bind_and_listen(
+    CoordinatorTransport transport,
+    const std::string& address,
+    int backlog,
+    int& server_fd,
+    std::string& error);
 bool request_response_unix_socket(
     const std::string& path,
+    const std::string& request_line,
+    CoordinatorResponse& response,
+    std::string& error);
+bool request_response_tcp_socket(
+    const std::string& endpoint,
+    const std::string& request_line,
+    CoordinatorResponse& response,
+    std::string& error);
+bool request_response(
+    CoordinatorTransport transport,
+    const std::string& address,
     const std::string& request_line,
     CoordinatorResponse& response,
     std::string& error);

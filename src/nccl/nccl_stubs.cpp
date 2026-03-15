@@ -314,6 +314,19 @@ bool validate_runtime_config(
     return true;
 }
 
+bool coordinator_request_response(
+    const fake_gpu::distributed::DistributedConfig& config,
+    const std::string& request_line,
+    fake_gpu::distributed::CoordinatorResponse& response,
+    std::string& error) {
+    return fake_gpu::distributed::request_response(
+        config.coordinator_transport,
+        config.coordinator_address,
+        request_line,
+        response,
+        error);
+}
+
 bool collective_transfer_sizes(
     fake_gpu::distributed::CollectiveType type,
     std::size_t element_count,
@@ -368,11 +381,7 @@ ncclResult_t submit_proxy_collective_record(
             << " timeout_ms=" << kCoordinatorTimeoutMs;
 
     fake_gpu::distributed::CoordinatorResponse response;
-    if (!fake_gpu::distributed::request_response_unix_socket(
-            config.coordinator_address,
-            request.str(),
-            response,
-            error)) {
+    if (!coordinator_request_response(config, request.str(), response, error)) {
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
@@ -649,11 +658,7 @@ ncclResult_t prepare_group_batch(
     }
 
     fake_gpu::distributed::CoordinatorResponse response;
-    if (!fake_gpu::distributed::request_response_unix_socket(
-            config.coordinator_address,
-            request.str(),
-            response,
-            error)) {
+    if (!coordinator_request_response(config, request.str(), response, error)) {
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
@@ -928,11 +933,7 @@ ncclResult_t submit_collective_chunk(
             << " timeout_ms=" << kCoordinatorTimeoutMs;
 
     fake_gpu::distributed::CoordinatorResponse response;
-    if (!fake_gpu::distributed::request_response_unix_socket(
-            config.coordinator_address,
-            request.str(),
-            response,
-            error)) {
+    if (!coordinator_request_response(config, request.str(), response, error)) {
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
@@ -1252,11 +1253,7 @@ ncclResult_t do_destroy(ncclComm_t comm, bool allow_missing) {
                 << " rank=" << comm->rank;
 
         fake_gpu::distributed::CoordinatorResponse response;
-        if (!fake_gpu::distributed::request_response_unix_socket(
-                config.coordinator_address,
-                request.str(),
-                response,
-                error)) {
+        if (!coordinator_request_response(config, request.str(), response, error)) {
             if (!allow_missing) {
                 return fail_with(comm, ncclSystemError, error);
             }
@@ -1541,11 +1538,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
                 << " timeout_ms=" << kCoordinatorTimeoutMs;
 
         fake_gpu::distributed::CoordinatorResponse response;
-        if (!fake_gpu::distributed::request_response_unix_socket(
-                config.coordinator_address,
-                request.str(),
-                response,
-                error)) {
+        if (!coordinator_request_response(config, request.str(), response, error)) {
             return fail_with(nullptr, ncclSystemError, error);
         }
         if (!response.ok) {
@@ -1579,8 +1572,8 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
                                 << " rank=" << rank;
                 fake_gpu::distributed::CoordinatorResponse cleanup_response;
                 std::string cleanup_error;
-                fake_gpu::distributed::request_response_unix_socket(
-                    config.coordinator_address,
+                coordinator_request_response(
+                    config,
                     cleanup_request.str(),
                     cleanup_response,
                     cleanup_error);

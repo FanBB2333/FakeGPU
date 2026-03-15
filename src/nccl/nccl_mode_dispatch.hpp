@@ -24,11 +24,6 @@ inline bool validate_direct_init_config(
         return false;
     }
     if (config.mode != distributed::DistributedMode::Passthrough &&
-        config.coordinator_transport != distributed::CoordinatorTransport::Unix) {
-        error = "only FAKEGPU_COORDINATOR_TRANSPORT=unix is implemented for fake NCCL init";
-        return false;
-    }
-    if (config.mode != distributed::DistributedMode::Passthrough &&
         config.coordinator_address.empty()) {
         error = "FAKEGPU_COORDINATOR_ADDR must be set";
         return false;
