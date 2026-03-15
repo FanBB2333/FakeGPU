@@ -27,6 +27,15 @@ static cudaError_t convertDriverError(CUresult result) {
     }
 }
 
+static bool validateStreamArgument(cudaStream_t stream) {
+    CUresult result = cuStreamQuery((CUstream)stream);
+    if (result != CUDA_SUCCESS) {
+        last_error = convertDriverError(result);
+        return false;
+    }
+    return true;
+}
+
 extern "C" {
 
 // ============================================================================
@@ -212,6 +221,9 @@ cudaError_t cudaMallocAsync(void **devPtr, size_t size, cudaStream_t stream) {
         last_error = cudaErrorInvalidValue;
         return last_error;
     }
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
 
     CUdeviceptr dptr;
     CUresult result = cuMemAlloc(&dptr, size);
@@ -227,6 +239,9 @@ cudaError_t cudaMallocAsync(void **devPtr, size_t size, cudaStream_t stream) {
 }
 
 cudaError_t cudaFreeAsync(void *devPtr, cudaStream_t stream) {
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
     if (!devPtr) {
         last_error = cudaSuccess;
         return last_error;
@@ -266,7 +281,11 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, cudaMemcpyKind 
 }
 
 cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count, cudaMemcpyKind kind, cudaStream_t stream) {
-    // Simplified: execute synchronously and ignore stream.
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+
+    // Simplified: execute synchronously after validating the stream handle.
     CUresult result = CUDA_SUCCESS;
 
     switch (kind) {
@@ -303,7 +322,11 @@ cudaError_t cudaMemcpyPeer(void *dst, int dstDevice, const void *src, int srcDev
 }
 
 cudaError_t cudaMemcpyPeerAsync(void *dst, int dstDevice, const void *src, int srcDevice, size_t count, cudaStream_t stream) {
-    // Simplified: just do memory copy
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+
+    // Simplified: just do memory copy after validating the stream handle.
     memcpy(dst, src, count);
     last_error = cudaSuccess;
     fake_gpu::GlobalState::instance().record_memcpy_peer(dstDevice, srcDevice, count);
@@ -320,7 +343,11 @@ cudaError_t cudaMemset(void *devPtr, int value, size_t count) {
 }
 
 cudaError_t cudaMemsetAsync(void *devPtr, int value, size_t count, cudaStream_t stream) {
-    // Simplified: just do synchronous memset
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+
+    // Simplified: just do synchronous memset after validating the stream handle.
     memset(devPtr, value, count);
     last_error = cudaSuccess;
     fake_gpu::GlobalState::instance().record_memset(devPtr, count);
@@ -515,6 +542,9 @@ cudaError_t cudaDriverGetVersion(int *driverVersion) {
 
 cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
                              void **args, size_t sharedMem, cudaStream_t stream) {
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaLaunchKernel (stub) Grid(%d,%d,%d) Block(%d,%d,%d)\n",
            gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
 
@@ -524,6 +554,9 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
 }
 
 cudaError_t cudaConfigureCall(dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream) {
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaConfigureCall (stub)\n");
     last_error = cudaSuccess;
     return last_error;
@@ -548,7 +581,11 @@ cudaError_t cudaLaunchKernelExC(const void *config, const void *func, void **arg
 }
 
 cudaError_t cudaLaunchHostFunc(cudaStream_t stream, void (*fn)(void *userData), void *userData) {
-    // Simplified: just execute the function directly
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+
+    // Simplified: just execute the function directly after validating the stream handle.
     if (fn) {
         fn(userData);
     }
@@ -724,9 +761,8 @@ cudaError_t cudaStreamGetPriority(cudaStream_t hStream, int *priority) {
         return last_error;
     }
 
-    // Simplified: always return 0
-    *priority = 0;
-    last_error = cudaSuccess;
+    CUresult result = cuStreamGetPriority((CUstream)hStream, priority);
+    last_error = convertDriverError(result);
     return last_error;
 }
 
@@ -737,14 +773,22 @@ cudaError_t cudaStreamWaitEvent(cudaStream_t stream, cudaEvent_t event, unsigned
 }
 
 cudaError_t cudaStreamAddCallback(cudaStream_t stream, void (*callback)(cudaStream_t stream, cudaError_t status, void *userData), void *userData, unsigned int flags) {
-    // Simplified: just succeed without actually adding callback
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+
+    // Simplified: just succeed without actually adding callback.
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaStreamAddCallback (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaStreamUpdateCaptureDependencies(cudaStream_t stream, cudaGraphNode_t *dependencies, size_t numDependencies, unsigned int flags) {
-    // Simplified: just succeed
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+
+    // Simplified: just succeed after validating the stream handle.
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaStreamUpdateCaptureDependencies (stub)\n");
     return last_error;
@@ -969,7 +1013,11 @@ cudaError_t cudaMemcpy2D(void *dst, size_t dpitch, const void *src, size_t spitc
 }
 
 cudaError_t cudaMemcpy2DAsync(void *dst, size_t dpitch, const void *src, size_t spitch, size_t width, size_t height, cudaMemcpyKind kind, cudaStream_t stream) {
-    // Simplified: do synchronous copy
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+
+    // Simplified: do synchronous copy after validating the stream handle.
     return cudaMemcpy2D(dst, dpitch, src, spitch, width, height, kind);
 }
 
@@ -980,7 +1028,11 @@ cudaError_t cudaMemcpy3D(const void *p) {
 }
 
 cudaError_t cudaMemcpy3DAsync(const void *p, cudaStream_t stream) {
-    // Simplified: just succeed
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+
+    // Simplified: just succeed after validating the stream handle.
     last_error = cudaSuccess;
     return last_error;
 }
@@ -1004,7 +1056,11 @@ cudaError_t cudaMemAdvise(const void *devPtr, size_t count, int advice, int devi
 }
 
 cudaError_t cudaMemPrefetchAsync(const void *devPtr, size_t count, int dstDevice, cudaStream_t stream) {
-    // Simplified: just succeed
+    if (!validateStreamArgument(stream)) {
+        return last_error;
+    }
+
+    // Simplified: just succeed after validating the stream handle.
     last_error = cudaSuccess;
     return last_error;
 }
@@ -1062,6 +1118,9 @@ cudaError_t cudaMemPoolDestroy(cudaMemPool_t memPool) {
 cudaError_t cudaMallocFromPoolAsync(void **ptr, size_t size, cudaMemPool_t memPool, cudaStream_t stream) {
     if (!ptr) {
         last_error = cudaErrorInvalidValue;
+        return last_error;
+    }
+    if (!validateStreamArgument(stream)) {
         return last_error;
     }
 
