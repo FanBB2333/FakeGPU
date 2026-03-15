@@ -158,6 +158,15 @@ std::vector<T> make_allreduce_reference(int world_size, std::size_t count) {
 }
 
 template <typename T>
+std::vector<T> scale_reference(const std::vector<T>& values, T scalar) {
+    std::vector<T> scaled = values;
+    for (T& value : scaled) {
+        value = static_cast<T>(value * scalar);
+    }
+    return scaled;
+}
+
+template <typename T>
 std::vector<T> make_reduce_untouched_reference(std::size_t count) {
     return std::vector<T>(count, static_cast<T>(-777));
 }
@@ -282,6 +291,262 @@ void run_allreduce_case(
         }
     }
 
+    destroy_communicators(comms);
+}
+
+template <typename T>
+void run_premul_allreduce_case(
+    int world_size,
+    ncclDataType_t datatype,
+    T scalar,
+    const std::string& label,
+    std::size_t count = 8) {
+    std::vector<ncclComm_t> comms = init_communicators(world_size);
+    const std::vector<T> reference =
+        scale_reference(make_allreduce_reference<T>(world_size, count), scalar);
+
+    ncclRedOp_t op = ncclSum;
+    require_result(
+        ncclRedOpCreatePreMulSum(&op, &scalar, datatype, ncclScalarHostImmediate, nullptr),
+        ncclSuccess,
+        label + " ncclRedOpCreatePreMulSum failed");
+
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        const bool grouped = iteration == 2;
+        std::vector<std::vector<T>> send_buffers;
+        std::vector<std::vector<T>> recv_buffers(static_cast<std::size_t>(world_size), std::vector<T>(count, {}));
+        std::vector<ncclResult_t> results(static_cast<std::size_t>(world_size), ncclInternalError);
+        std::vector<std::thread> threads;
+
+        send_buffers.reserve(static_cast<std::size_t>(world_size));
+        for (int rank = 0; rank < world_size; ++rank) {
+            send_buffers.push_back(make_rank_values<T>(rank, count));
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            threads.emplace_back([&, rank]() {
+                if (grouped) {
+                    require_result(ncclGroupStart(), ncclSuccess, label + " ncclGroupStart failed");
+                    ncclResult_t inner = ncclAllReduce(
+                        send_buffers[static_cast<std::size_t>(rank)].data(),
+                        recv_buffers[static_cast<std::size_t>(rank)].data(),
+                        count,
+                        datatype,
+                        op,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr);
+                    if (inner != ncclSuccess) {
+                        ncclGroupSimulateEnd(nullptr);
+                        results[static_cast<std::size_t>(rank)] = inner;
+                        return;
+                    }
+                    results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
+                    return;
+                }
+                results[static_cast<std::size_t>(rank)] = ncclAllReduce(
+                    send_buffers[static_cast<std::size_t>(rank)].data(),
+                    recv_buffers[static_cast<std::size_t>(rank)].data(),
+                    count,
+                    datatype,
+                    op,
+                    comms[static_cast<std::size_t>(rank)],
+                    nullptr);
+            });
+        }
+
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            require_result(results[static_cast<std::size_t>(rank)], ncclSuccess, label + " preMul allreduce failed");
+            assert_equal_vectors(
+                recv_buffers[static_cast<std::size_t>(rank)],
+                reference,
+                label + " preMul allreduce result mismatch");
+        }
+    }
+
+    require_result(ncclRedOpDestroy(op, nullptr), ncclSuccess, label + " ncclRedOpDestroy failed");
+    destroy_communicators(comms);
+}
+
+template <typename T>
+void run_premul_reduce_case(
+    int world_size,
+    int root,
+    ncclDataType_t datatype,
+    T scalar,
+    const std::string& label,
+    std::size_t count = 7) {
+    std::vector<ncclComm_t> comms = init_communicators(world_size);
+    const std::vector<T> reference =
+        scale_reference(make_allreduce_reference<T>(world_size, count), scalar);
+    const std::vector<T> untouched = make_reduce_untouched_reference<T>(count);
+
+    ncclRedOp_t op = ncclSum;
+    require_result(
+        ncclRedOpCreatePreMulSum(&op, &scalar, datatype, ncclScalarHostImmediate, nullptr),
+        ncclSuccess,
+        label + " ncclRedOpCreatePreMulSum failed");
+
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        const bool grouped = iteration == 2;
+        const bool null_non_root_recv = iteration == 1;
+        std::vector<std::vector<T>> send_buffers;
+        std::vector<std::vector<T>> recv_buffers(
+            static_cast<std::size_t>(world_size),
+            untouched);
+        std::vector<ncclResult_t> results(static_cast<std::size_t>(world_size), ncclInternalError);
+        std::vector<std::thread> threads;
+
+        send_buffers.reserve(static_cast<std::size_t>(world_size));
+        for (int rank = 0; rank < world_size; ++rank) {
+            send_buffers.push_back(make_rank_values<T>(rank, count));
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            threads.emplace_back([&, rank]() {
+                T* recv_ptr = recv_buffers[static_cast<std::size_t>(rank)].data();
+                if (rank != root && null_non_root_recv) {
+                    recv_ptr = nullptr;
+                }
+
+                if (grouped) {
+                    require_result(ncclGroupStart(), ncclSuccess, label + " ncclGroupStart failed");
+                    ncclResult_t inner = ncclReduce(
+                        send_buffers[static_cast<std::size_t>(rank)].data(),
+                        recv_ptr,
+                        count,
+                        datatype,
+                        op,
+                        root,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr);
+                    if (inner != ncclSuccess) {
+                        ncclGroupSimulateEnd(nullptr);
+                        results[static_cast<std::size_t>(rank)] = inner;
+                        return;
+                    }
+                    results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
+                    return;
+                }
+
+                results[static_cast<std::size_t>(rank)] = ncclReduce(
+                    send_buffers[static_cast<std::size_t>(rank)].data(),
+                    recv_ptr,
+                    count,
+                    datatype,
+                    op,
+                    root,
+                    comms[static_cast<std::size_t>(rank)],
+                    nullptr);
+            });
+        }
+
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            require_result(results[static_cast<std::size_t>(rank)], ncclSuccess, label + " preMul reduce failed");
+            if (rank == root) {
+                assert_equal_vectors(
+                    recv_buffers[static_cast<std::size_t>(rank)],
+                    reference,
+                    label + " preMul reduce root result mismatch");
+            } else {
+                assert_equal_vectors(
+                    recv_buffers[static_cast<std::size_t>(rank)],
+                    untouched,
+                    label + " preMul reduce non-root recv buffer should stay untouched");
+            }
+        }
+    }
+
+    require_result(ncclRedOpDestroy(op, nullptr), ncclSuccess, label + " ncclRedOpDestroy failed");
+    destroy_communicators(comms);
+}
+
+template <typename T>
+void run_premul_reducescatter_case(
+    int world_size,
+    ncclDataType_t datatype,
+    T scalar,
+    const std::string& label,
+    std::size_t recvcount = 4) {
+    std::vector<ncclComm_t> comms = init_communicators(world_size);
+    const std::size_t total_count = recvcount * static_cast<std::size_t>(world_size);
+
+    ncclRedOp_t op = ncclSum;
+    require_result(
+        ncclRedOpCreatePreMulSum(&op, &scalar, datatype, ncclScalarHostImmediate, nullptr),
+        ncclSuccess,
+        label + " ncclRedOpCreatePreMulSum failed");
+
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        const bool grouped = iteration == 2;
+        std::vector<std::vector<T>> send_buffers;
+        std::vector<std::vector<T>> recv_buffers(
+            static_cast<std::size_t>(world_size),
+            std::vector<T>(recvcount, static_cast<T>(0)));
+        std::vector<ncclResult_t> results(static_cast<std::size_t>(world_size), ncclInternalError);
+        std::vector<std::thread> threads;
+
+        send_buffers.reserve(static_cast<std::size_t>(world_size));
+        for (int rank = 0; rank < world_size; ++rank) {
+            send_buffers.push_back(make_rank_values<T>(rank, total_count));
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            threads.emplace_back([&, rank]() {
+                if (grouped) {
+                    require_result(ncclGroupStart(), ncclSuccess, label + " ncclGroupStart failed");
+                    ncclResult_t inner = ncclReduceScatter(
+                        send_buffers[static_cast<std::size_t>(rank)].data(),
+                        recv_buffers[static_cast<std::size_t>(rank)].data(),
+                        recvcount,
+                        datatype,
+                        op,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr);
+                    if (inner != ncclSuccess) {
+                        ncclGroupSimulateEnd(nullptr);
+                        results[static_cast<std::size_t>(rank)] = inner;
+                        return;
+                    }
+                    results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
+                    return;
+                }
+
+                results[static_cast<std::size_t>(rank)] = ncclReduceScatter(
+                    send_buffers[static_cast<std::size_t>(rank)].data(),
+                    recv_buffers[static_cast<std::size_t>(rank)].data(),
+                    recvcount,
+                    datatype,
+                    op,
+                    comms[static_cast<std::size_t>(rank)],
+                    nullptr);
+            });
+        }
+
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            require_result(
+                results[static_cast<std::size_t>(rank)],
+                ncclSuccess,
+                label + " preMul reducescatter failed");
+            assert_equal_vectors(
+                recv_buffers[static_cast<std::size_t>(rank)],
+                scale_reference(make_reducescatter_reference<T>(world_size, recvcount, rank), scalar),
+                label + " preMul reducescatter result mismatch");
+        }
+    }
+
+    require_result(ncclRedOpDestroy(op, nullptr), ncclSuccess, label + " ncclRedOpDestroy failed");
     destroy_communicators(comms);
 }
 
@@ -730,6 +995,7 @@ void run_allreduce_scenario() {
     run_allreduce_case<float>(4, ncclFloat32, "4-rank float32");
     run_allreduce_case<std::int32_t>(2, ncclInt32, "2-rank int32");
     run_allreduce_case<std::int32_t>(4, ncclInt32, "4-rank int32");
+    run_premul_allreduce_case<float>(2, ncclFloat32, 2.0f, "2-rank premul float32");
 }
 
 void run_broadcast_scenario() {
@@ -742,6 +1008,7 @@ void run_reduce_scenario() {
     run_reduce_case<float>(2, 0, ncclFloat32, "2-rank root0 float32");
     run_reduce_case<float>(4, 2, ncclFloat32, "4-rank root2 float32");
     run_reduce_case<std::int64_t>(4, 3, ncclInt64, "4-rank root-last int64");
+    run_premul_reduce_case<float>(2, 1, ncclFloat32, 2.0f, "2-rank premul reduce");
 }
 
 void run_allgather_scenario() {
@@ -754,6 +1021,7 @@ void run_reducescatter_scenario() {
     run_reducescatter_case<float>(2, ncclFloat32, "2-rank float32");
     run_reducescatter_case<float>(4, ncclFloat32, "4-rank float32");
     run_reducescatter_case<std::int32_t>(4, ncclInt32, "4-rank int32");
+    run_premul_reducescatter_case<float>(2, ncclFloat32, 2.0f, "2-rank premul float32");
 }
 
 void run_chunked_scenario() {
