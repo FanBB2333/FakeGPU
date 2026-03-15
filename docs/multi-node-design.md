@@ -374,7 +374,7 @@ FakeGPU
 
 - 框架层的 `barrier` 优先通过 coordinator 自己实现，或退化成一个固定大小的同步 collective
 - 文档中不再把“`ncclBarrier`”当作前置 Step 必需 API，因为它不应成为设计的中心依赖
-- 当前实现还额外覆盖了 `ncclCommInitAll`、`ncclCommSplit`（当前仅 `FAKEGPU_DIST_MODE=simulate`）以及 `ncclCommCount` / `ncclCommCuDevice` / `ncclCommUserRank` 等基础 communicator 查询接口，可用于本地 direct smoke test
+- 当前实现还额外覆盖了 `ncclCommInitAll`、`ncclCommSplit`（当前仅 `FAKEGPU_DIST_MODE=simulate`）、blocking `ncclSend` / `ncclRecv`（当前仅 `FAKEGPU_DIST_MODE=simulate`，且每个 seqno 需要 communicator 内所有 rank 都提交一个 p2p 操作）以及 `ncclCommCount` / `ncclCommCuDevice` / `ncclCommUserRank` 等基础 communicator 查询接口，可用于本地 direct smoke test
 
 ### 9.2 后续可补充
 
@@ -383,8 +383,6 @@ FakeGPU
 - `ncclAllGather`
 - `ncclReduceScatter`
 - `ncclAllToAll`
-- `ncclSend`
-- `ncclRecv`
 - `ncclCommGetAsyncError`
 - `ncclCommCount`
 - `ncclCommCuDevice`

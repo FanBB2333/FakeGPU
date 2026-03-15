@@ -321,6 +321,159 @@ void run_comm_split_case() {
     }
 }
 
+void run_send_recv_case() {
+    ncclUniqueId unique_id {};
+    require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
+
+    std::array<ncclComm_t, 2> comms = {nullptr, nullptr};
+    std::array<ncclResult_t, 2> init_results = {ncclInternalError, ncclInternalError};
+    std::vector<std::thread> init_threads;
+    for (int rank = 0; rank < 2; ++rank) {
+        init_threads.emplace_back([&, rank]() {
+            init_results[static_cast<std::size_t>(rank)] =
+                ncclCommInitRank(&comms[static_cast<std::size_t>(rank)], 2, unique_id, rank);
+        });
+    }
+    for (std::thread& thread : init_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < 2; ++rank) {
+        require_result(init_results[static_cast<std::size_t>(rank)], ncclSuccess, "p2p init failed");
+    }
+
+    std::array<float, 4> send = {1.5f, 2.5f, 3.5f, 4.5f};
+    std::array<float, 4> recv = {0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<ncclResult_t, 2> results = {ncclInternalError, ncclInternalError};
+    std::thread sender([&]() {
+        results[0] = ncclSend(send.data(), send.size(), ncclFloat32, 1, comms[0], nullptr);
+    });
+    std::thread receiver([&]() {
+        results[1] = ncclRecv(recv.data(), recv.size(), ncclFloat32, 0, comms[1], nullptr);
+    });
+    sender.join();
+    receiver.join();
+    require_result(results[0], ncclSuccess, "ncclSend failed");
+    require_result(results[1], ncclSuccess, "ncclRecv failed");
+    for (std::size_t index = 0; index < send.size(); ++index) {
+        require(send[index] == recv[index], "2-rank send/recv payload mismatch");
+    }
+
+    for (ncclComm_t comm : comms) {
+        require_result(ncclCommDestroy(comm), ncclSuccess, "destroy after send/recv failed");
+    }
+}
+
+void run_send_recv_multi_pair_case() {
+    const int world_size = 4;
+    ncclUniqueId unique_id {};
+    require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
+
+    std::array<ncclComm_t, world_size> comms = {nullptr, nullptr, nullptr, nullptr};
+    std::array<ncclResult_t, world_size> init_results = {
+        ncclInternalError, ncclInternalError, ncclInternalError, ncclInternalError};
+    std::vector<std::thread> init_threads;
+    for (int rank = 0; rank < world_size; ++rank) {
+        init_threads.emplace_back([&, rank]() {
+            init_results[static_cast<std::size_t>(rank)] =
+                ncclCommInitRank(&comms[static_cast<std::size_t>(rank)], world_size, unique_id, rank);
+        });
+    }
+    for (std::thread& thread : init_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < world_size; ++rank) {
+        require_result(init_results[static_cast<std::size_t>(rank)], ncclSuccess, "multi-pair init failed");
+    }
+
+    std::array<int, world_size> peers = {1, 0, 3, 2};
+    std::array<bool, world_size> is_send = {true, false, false, true};
+    std::array<std::array<std::int32_t, 3>, world_size> send_buffers = {
+        std::array<std::int32_t, 3>{11, 12, 13},
+        std::array<std::int32_t, 3>{0, 0, 0},
+        std::array<std::int32_t, 3>{0, 0, 0},
+        std::array<std::int32_t, 3>{31, 32, 33},
+    };
+    std::array<std::array<std::int32_t, 3>, world_size> recv_buffers = {
+        std::array<std::int32_t, 3>{0, 0, 0},
+        std::array<std::int32_t, 3>{0, 0, 0},
+        std::array<std::int32_t, 3>{0, 0, 0},
+        std::array<std::int32_t, 3>{0, 0, 0},
+    };
+    std::array<ncclResult_t, world_size> results = {
+        ncclInternalError, ncclInternalError, ncclInternalError, ncclInternalError};
+    std::vector<std::thread> threads;
+    for (int rank = 0; rank < world_size; ++rank) {
+        threads.emplace_back([&, rank]() {
+            if (is_send[static_cast<std::size_t>(rank)]) {
+                results[static_cast<std::size_t>(rank)] = ncclSend(
+                    send_buffers[static_cast<std::size_t>(rank)].data(),
+                    send_buffers[static_cast<std::size_t>(rank)].size(),
+                    ncclInt32,
+                    peers[static_cast<std::size_t>(rank)],
+                    comms[static_cast<std::size_t>(rank)],
+                    nullptr);
+            } else {
+                results[static_cast<std::size_t>(rank)] = ncclRecv(
+                    recv_buffers[static_cast<std::size_t>(rank)].data(),
+                    recv_buffers[static_cast<std::size_t>(rank)].size(),
+                    ncclInt32,
+                    peers[static_cast<std::size_t>(rank)],
+                    comms[static_cast<std::size_t>(rank)],
+                    nullptr);
+            }
+        });
+    }
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < world_size; ++rank) {
+        require_result(results[static_cast<std::size_t>(rank)], ncclSuccess, "multi-pair send/recv failed");
+    }
+
+    require(recv_buffers[1] == send_buffers[0], "rank 1 recv payload mismatch");
+    require(recv_buffers[2] == send_buffers[3], "rank 2 recv payload mismatch");
+
+    for (ncclComm_t comm : comms) {
+        require_result(ncclCommDestroy(comm), ncclSuccess, "destroy after multi-pair send/recv failed");
+    }
+}
+
+void run_send_recv_timeout_case() {
+    ncclUniqueId unique_id {};
+    require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
+
+    std::array<ncclComm_t, 2> comms = {nullptr, nullptr};
+    std::array<ncclResult_t, 2> init_results = {ncclInternalError, ncclInternalError};
+    std::vector<std::thread> init_threads;
+    for (int rank = 0; rank < 2; ++rank) {
+        init_threads.emplace_back([&, rank]() {
+            init_results[static_cast<std::size_t>(rank)] =
+                ncclCommInitRank(&comms[static_cast<std::size_t>(rank)], 2, unique_id, rank);
+        });
+    }
+    for (std::thread& thread : init_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < 2; ++rank) {
+        require_result(init_results[static_cast<std::size_t>(rank)], ncclSuccess, "timeout init failed");
+    }
+
+    std::array<float, 2> send = {9.0f, 10.0f};
+    ncclResult_t result = ncclInternalError;
+    const auto begin = std::chrono::steady_clock::now();
+    std::thread sender([&]() {
+        result = ncclSend(send.data(), send.size(), ncclFloat32, 1, comms[0], nullptr);
+    });
+    sender.join();
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - begin).count();
+
+    require_result(result, ncclSystemError, "missing recv should time out");
+    require(elapsed_ms < 5000, "send timeout exceeded 5 seconds");
+    require_result(ncclCommDestroy(comms[0]), ncclSuccess, "destroy after timeout failed");
+    require_result(ncclCommDestroy(comms[1]), ncclSuccess, "destroy after timeout failed");
+}
+
 }  // namespace
 
 int main() {
@@ -338,6 +491,9 @@ int main() {
         run_comm_init_all_case();
         run_comm_init_all_invalid_case();
         run_comm_split_case();
+        run_send_recv_case();
+        run_send_recv_multi_pair_case();
+        run_send_recv_timeout_case();
 
         std::cout << "nccl direct init/destroy test passed" << std::endl;
         return 0;

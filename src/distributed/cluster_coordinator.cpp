@@ -324,6 +324,85 @@ void ClusterCoordinator::handle_client(int client_fd) {
             }
         }
     } else if (
+        request.command == "SEND" ||
+        request.command == "RECV") {
+        PointToPointSubmitRequest p2p_request;
+        bool ok = false;
+        std::string error;
+
+        p2p_request.comm_id = parse_required_int(request.fields, "comm_id", ok, error);
+        if (!ok) {
+            response = format_error_response("bad_request", error);
+        } else {
+            p2p_request.rank = parse_required_int(request.fields, "rank", ok, error);
+            if (!ok) {
+                response = format_error_response("bad_request", error);
+            } else {
+                p2p_request.seqno = parse_required_u64(request.fields, "seqno", ok, error);
+                if (!ok) {
+                    response = format_error_response("bad_request", error);
+                } else {
+                    p2p_request.peer = parse_required_int(request.fields, "peer", ok, error);
+                    if (!ok) {
+                        response = format_error_response("bad_request", error);
+                    } else {
+                        p2p_request.count = parse_required_size(request.fields, "count", ok, error);
+                        if (!ok) {
+                            response = format_error_response("bad_request", error);
+                        } else {
+                            p2p_request.bytes = parse_required_size(request.fields, "bytes", ok, error);
+                            if (!ok) {
+                                response = format_error_response("bad_request", error);
+                            } else {
+                                p2p_request.timeout_ms =
+                                    parse_required_int(request.fields, "timeout_ms", ok, error);
+                                if (!ok) {
+                                    response = format_error_response("bad_request", error);
+                                } else {
+                                    auto staging_it = request.fields.find("staging_name");
+                                    auto dtype_it = request.fields.find("dtype");
+                                    if (staging_it == request.fields.end()) {
+                                        response = format_error_response(
+                                            "bad_request",
+                                            "missing required field: staging_name");
+                                    } else if (dtype_it == request.fields.end()) {
+                                        response = format_error_response(
+                                            "bad_request",
+                                            "missing required field: dtype");
+                                    } else if (!parse_collective_data_type(
+                                                   dtype_it->second,
+                                                   p2p_request.dtype)) {
+                                        response = format_error_response("bad_request", "unsupported dtype");
+                                    } else {
+                                        p2p_request.staging_name = staging_it->second;
+                                        p2p_request.type = request.command == "SEND"
+                                            ? PointToPointType::Send
+                                            : PointToPointType::Recv;
+
+                                        PointToPointSubmitResult result =
+                                            communicator_registry_.submit_point_to_point(p2p_request);
+                                        if (!result.ok) {
+                                            response = format_error_response(
+                                                result.error_code,
+                                                result.error_detail);
+                                        } else {
+                                            response = format_ok_response({
+                                                {"comm_id", std::to_string(p2p_request.comm_id)},
+                                                {"seqno", std::to_string(result.seqno)},
+                                                {"rank", std::to_string(p2p_request.rank)},
+                                                {"peer", std::to_string(p2p_request.peer)},
+                                                {"op", request.command == "SEND" ? "send" : "recv"},
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if (
         request.command == "ALLREDUCE" ||
         request.command == "REDUCE" ||
         request.command == "BROADCAST" ||

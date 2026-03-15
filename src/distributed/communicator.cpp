@@ -2,10 +2,12 @@
 
 #include "../core/backend_config.hpp"
 #include "topology_model.hpp"
+#include "staging_buffer.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -65,6 +67,16 @@ struct SplitState {
     std::condition_variable cv;
 };
 
+struct PointToPointState {
+    PointToPointSubmitRequest request;
+    bool completed = false;
+    bool failed = false;
+    std::string failure_code;
+    std::string failure_detail;
+    std::unordered_map<int, PointToPointSubmitRequest> participants;
+    std::condition_variable cv;
+};
+
 struct CommunicatorState {
     std::string unique_id;
     int world_size = 0;
@@ -80,6 +92,7 @@ struct CommunicatorState {
     std::unordered_map<std::uint64_t, std::shared_ptr<BarrierState>> barriers;
     std::unordered_map<std::uint64_t, std::shared_ptr<BatchState>> batches;
     std::unordered_map<std::uint64_t, std::shared_ptr<SplitState>> splits;
+    std::unordered_map<std::uint64_t, std::shared_ptr<PointToPointState>> point_to_points;
     std::condition_variable cv;
 };
 
@@ -125,6 +138,14 @@ CommunicatorDestroyResult make_destroy_error(std::string code, std::string detai
 
 CommunicatorSplitResult make_split_error(std::string code, std::string detail) {
     CommunicatorSplitResult result;
+    result.ok = false;
+    result.error_code = std::move(code);
+    result.error_detail = std::move(detail);
+    return result;
+}
+
+PointToPointSubmitResult make_point_to_point_error(std::string code, std::string detail) {
+    PointToPointSubmitResult result;
     result.ok = false;
     result.error_code = std::move(code);
     result.error_detail = std::move(detail);
@@ -368,6 +389,23 @@ void fail_split_locked(
     }
 }
 
+void fail_point_to_point_locked(
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::shared_ptr<PointToPointState>& p2p,
+    std::string code,
+    std::string detail) {
+    state->failed = true;
+    state->failure_code = std::move(code);
+    state->failure_detail = std::move(detail);
+    if (p2p) {
+        p2p->failed = true;
+        p2p->failure_code = state->failure_code;
+        p2p->failure_detail = state->failure_detail;
+        p2p->cv.notify_all();
+        state->point_to_points.erase(p2p->request.seqno);
+    }
+}
+
 bool collective_requests_match(
     const CollectiveSubmitRequest& expected,
     const CollectiveSubmitRequest& actual,
@@ -425,6 +463,21 @@ bool collective_requests_match(
     return true;
 }
 
+bool point_to_point_requests_match(
+    const PointToPointSubmitRequest& expected,
+    const PointToPointSubmitRequest& actual,
+    std::string& error_code,
+    std::string& error_detail) {
+    if (expected.timeout_ms != actual.timeout_ms) {
+        error_code = "p2p_timeout_mismatch";
+        error_detail =
+            "expected timeout_ms=" + std::to_string(expected.timeout_ms) +
+            ", got " + std::to_string(actual.timeout_ms);
+        return false;
+    }
+    return true;
+}
+
 bool split_requests_match(
     const CommunicatorSplitRequest& expected,
     const CommunicatorSplitRequest& actual,
@@ -438,6 +491,124 @@ bool split_requests_match(
         return false;
     }
     return true;
+}
+
+CollectiveExecutionResult execute_point_to_point_locked(
+    const PointToPointSubmitRequest& request,
+    const std::shared_ptr<PointToPointState>& p2p) {
+    StagingBufferManager manager;
+    std::string error;
+
+    for (const auto& entry : p2p->participants) {
+        const PointToPointSubmitRequest& participant = entry.second;
+        if (participant.peer == participant.rank) {
+            return CollectiveExecutionResult{
+                false,
+                "invalid_peer",
+                "point-to-point peer must not equal the local rank",
+            };
+        }
+
+        const auto peer_it = p2p->participants.find(participant.peer);
+        if (peer_it == p2p->participants.end()) {
+            return CollectiveExecutionResult{
+                false,
+                "missing_peer",
+                "rank " + std::to_string(participant.rank) +
+                    " expected peer " + std::to_string(participant.peer) +
+                    " to submit the same point-to-point seqno",
+            };
+        }
+
+        const PointToPointSubmitRequest& peer = peer_it->second;
+        if (participant.type == peer.type) {
+            return CollectiveExecutionResult{
+                false,
+                "p2p_direction_mismatch",
+                "rank " + std::to_string(participant.rank) +
+                    " and peer " + std::to_string(participant.peer) +
+                    " submitted the same point-to-point direction",
+            };
+        }
+        if (peer.peer != participant.rank) {
+            return CollectiveExecutionResult{
+                false,
+                "peer_mismatch",
+                "rank " + std::to_string(participant.rank) +
+                    " expected peer " + std::to_string(participant.peer) +
+                    " to target rank " + std::to_string(participant.rank),
+            };
+        }
+        if (participant.dtype != peer.dtype) {
+            return CollectiveExecutionResult{
+                false,
+                "dtype_mismatch",
+                "point-to-point dtype mismatch between rank " +
+                    std::to_string(participant.rank) + " and peer " +
+                    std::to_string(participant.peer),
+            };
+        }
+        if (participant.count != peer.count) {
+            return CollectiveExecutionResult{
+                false,
+                "count_mismatch",
+                "point-to-point count mismatch between rank " +
+                    std::to_string(participant.rank) + " and peer " +
+                    std::to_string(participant.peer),
+            };
+        }
+        if (participant.bytes != peer.bytes) {
+            return CollectiveExecutionResult{
+                false,
+                "bytes_mismatch",
+                "point-to-point bytes mismatch between rank " +
+                    std::to_string(participant.rank) + " and peer " +
+                    std::to_string(participant.peer),
+            };
+        }
+    }
+
+    for (const auto& entry : p2p->participants) {
+        const PointToPointSubmitRequest& participant = entry.second;
+        if (participant.type != PointToPointType::Send) {
+            continue;
+        }
+
+        const PointToPointSubmitRequest& receiver =
+            p2p->participants.at(participant.peer);
+
+        StagingBufferMetadata sender_metadata;
+        sender_metadata.name = participant.staging_name;
+        sender_metadata.dtype = collective_data_type_name(participant.dtype);
+        sender_metadata.bytes = participant.bytes;
+        sender_metadata.shape = {participant.count};
+        sender_metadata.owner_rank = participant.rank;
+        sender_metadata.staging_id = participant.seqno;
+
+        StagingBufferMetadata receiver_metadata;
+        receiver_metadata.name = receiver.staging_name;
+        receiver_metadata.dtype = collective_data_type_name(receiver.dtype);
+        receiver_metadata.bytes = receiver.bytes;
+        receiver_metadata.shape = {receiver.count};
+        receiver_metadata.owner_rank = receiver.rank;
+        receiver_metadata.staging_id = receiver.seqno;
+
+        StagingBufferHandle sender_handle;
+        if (!manager.open(sender_metadata, false, sender_handle, error)) {
+            return CollectiveExecutionResult{false, "staging_open_failed", error};
+        }
+
+        StagingBufferHandle receiver_handle;
+        if (!manager.open(receiver_metadata, false, receiver_handle, error)) {
+            return CollectiveExecutionResult{false, "staging_open_failed", error};
+        }
+
+        std::memcpy(receiver_handle.data(), sender_handle.data(), participant.bytes);
+    }
+
+    CollectiveExecutionResult result;
+    result.ok = true;
+    return result;
 }
 
 bool batch_items_match(
@@ -864,6 +1035,143 @@ CommunicatorSplitResult CommunicatorRegistry::split_communicator(const Communica
         "",
         "",
     };
+}
+
+PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const PointToPointSubmitRequest& request) {
+    if (request.comm_id <= 0) {
+        return make_point_to_point_error("invalid_comm_id", "comm_id must be > 0");
+    }
+    if (request.rank < 0) {
+        return make_point_to_point_error("invalid_rank", "rank must be >= 0");
+    }
+    if (request.seqno == 0) {
+        return make_point_to_point_error("invalid_seqno", "seqno must be > 0");
+    }
+    if (request.peer < 0) {
+        return make_point_to_point_error("invalid_peer", "peer must be >= 0");
+    }
+    if (request.count == 0) {
+        return make_point_to_point_error("invalid_count", "count must be > 0");
+    }
+    if (request.bytes == 0) {
+        return make_point_to_point_error("invalid_bytes", "bytes must be > 0");
+    }
+    if (request.staging_name.empty()) {
+        return make_point_to_point_error("missing_staging_name", "staging_name must be set");
+    }
+    if (request.timeout_ms <= 0) {
+        return make_point_to_point_error("invalid_timeout", "timeout_ms must be > 0");
+    }
+
+    RegistryImpl& registry = registry_impl();
+    std::shared_ptr<CommunicatorState> state;
+    std::shared_ptr<PointToPointState> p2p;
+
+    std::unique_lock<std::mutex> lock(registry.mutex);
+    auto it = registry.active_by_comm_id.find(request.comm_id);
+    if (it == registry.active_by_comm_id.end()) {
+        return make_point_to_point_error("unknown_comm_id", "communicator not found");
+    }
+
+    state = it->second;
+    if (state->participants.find(request.rank) == state->participants.end()) {
+        return make_point_to_point_error("unknown_rank", "rank is not a member of this communicator");
+    }
+    if (state->destroyed_ranks.find(request.rank) != state->destroyed_ranks.end()) {
+        return make_point_to_point_error("rank_destroyed", "rank already destroyed this communicator");
+    }
+    if (state->failed) {
+        return make_point_to_point_error(state->failure_code, state->failure_detail);
+    }
+    if (request.rank >= state->world_size) {
+        return make_point_to_point_error("invalid_rank", "rank must be within [0, world_size)");
+    }
+    if (request.peer >= state->world_size) {
+        return make_point_to_point_error("invalid_peer", "peer must be within [0, world_size)");
+    }
+    if (request.peer == request.rank) {
+        return make_point_to_point_error("invalid_peer", "peer must not equal rank");
+    }
+
+    if (request.seqno != state->next_seqno) {
+        if (request.seqno < state->next_seqno) {
+            return make_point_to_point_error(
+                "stale_seqno",
+                "expected seqno " + std::to_string(state->next_seqno) +
+                    ", got " + std::to_string(request.seqno));
+        }
+        return make_point_to_point_error(
+            "out_of_order_seqno",
+            "expected seqno " + std::to_string(state->next_seqno) +
+                ", got " + std::to_string(request.seqno));
+    }
+
+    auto p2p_it = state->point_to_points.find(request.seqno);
+    if (p2p_it == state->point_to_points.end()) {
+        p2p = std::make_shared<PointToPointState>();
+        p2p->request = request;
+        state->point_to_points.emplace(request.seqno, p2p);
+    } else {
+        p2p = p2p_it->second;
+    }
+
+    std::string error_code;
+    std::string error_detail;
+    if (!point_to_point_requests_match(p2p->request, request, error_code, error_detail)) {
+        fail_point_to_point_locked(state, p2p, std::move(error_code), std::move(error_detail));
+        return make_point_to_point_error(state->failure_code, state->failure_detail);
+    }
+
+    if (!p2p->participants.emplace(request.rank, request).second) {
+        fail_point_to_point_locked(
+            state,
+            p2p,
+            "duplicate_p2p_rank",
+            "rank already submitted this point-to-point seqno");
+        return make_point_to_point_error(state->failure_code, state->failure_detail);
+    }
+
+    if (static_cast<int>(p2p->participants.size()) != state->world_size) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.timeout_ms);
+        const auto wait_begin = std::chrono::steady_clock::now();
+        while (!p2p->completed && !p2p->failed && !state->failed) {
+            if (p2p->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, p2p->participants);
+                fail_point_to_point_locked(
+                    state,
+                    p2p,
+                    "timeout_waiting_for_p2p",
+                    "timeout waiting for all ranks to join point-to-point seqno " +
+                        std::to_string(request.seqno));
+                return make_point_to_point_error(state->failure_code, state->failure_detail);
+            }
+        }
+        record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+
+        if (p2p->completed) {
+            return PointToPointSubmitResult{true, request.seqno, "", ""};
+        }
+        return make_point_to_point_error(state->failure_code, state->failure_detail);
+    }
+
+    lock.unlock();
+    CollectiveExecutionResult execution = execute_point_to_point_locked(request, p2p);
+    lock.lock();
+
+    if (state->failed) {
+        return make_point_to_point_error(state->failure_code, state->failure_detail);
+    }
+    if (!execution.ok) {
+        fail_point_to_point_locked(state, p2p, execution.error_code, execution.error_detail);
+        return make_point_to_point_error(state->failure_code, state->failure_detail);
+    }
+
+    p2p->completed = true;
+    state->next_seqno++;
+    state->point_to_points.erase(request.seqno);
+    p2p->cv.notify_all();
+    return PointToPointSubmitResult{true, request.seqno, "", ""};
 }
 
 CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveSubmitRequest& request) {

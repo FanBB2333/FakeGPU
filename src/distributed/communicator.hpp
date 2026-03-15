@@ -43,6 +43,31 @@ struct CommunicatorSplitResult {
     std::string error_detail;
 };
 
+enum class PointToPointType {
+    Send,
+    Recv,
+};
+
+struct PointToPointSubmitRequest {
+    int comm_id = -1;
+    int rank = -1;
+    std::uint64_t seqno = 0;
+    PointToPointType type = PointToPointType::Send;
+    int peer = -1;
+    CollectiveDataType dtype = CollectiveDataType::Float32;
+    std::size_t count = 0;
+    std::string staging_name;
+    std::size_t bytes = 0;
+    int timeout_ms = 0;
+};
+
+struct PointToPointSubmitResult {
+    bool ok = false;
+    std::uint64_t seqno = 0;
+    std::string error_code;
+    std::string error_detail;
+};
+
 struct CollectiveSubmitRequest {
     int comm_id = -1;
     int rank = -1;
@@ -156,6 +181,7 @@ public:
 
     CommunicatorDestroyResult destroy_communicator(int comm_id, int rank);
     CommunicatorSplitResult split_communicator(const CommunicatorSplitRequest& request);
+    PointToPointSubmitResult submit_point_to_point(const PointToPointSubmitRequest& request);
     CollectiveSubmitResult submit_collective(const CollectiveSubmitRequest& request);
     BarrierSubmitResult submit_barrier(const BarrierSubmitRequest& request);
     CollectiveBatchPrepareResult prepare_collective_batch(const CollectiveBatchPrepareRequest& request);

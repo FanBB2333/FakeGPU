@@ -238,6 +238,7 @@ bool grouped_collective_supported(ncclComm_t comm) {
 ncclResult_t map_response_error(const std::string& error_code) {
     if (error_code == "bad_request" ||
         error_code == "invalid_rank" ||
+        error_code == "invalid_peer" ||
         error_code == "invalid_world_size" ||
         error_code == "missing_unique_id" ||
         error_code == "invalid_root" ||
@@ -269,10 +270,15 @@ ncclResult_t map_response_error(const std::string& error_code) {
         error_code == "group_bytes_mismatch" ||
         error_code == "group_size_mismatch" ||
         error_code == "duplicate_collective_rank" ||
+        error_code == "duplicate_p2p_rank" ||
         error_code == "duplicate_barrier_rank" ||
         error_code == "proxy_only_mismatch" ||
         error_code == "staging_size_mismatch" ||
         error_code == "root_rank_missing" ||
+        error_code == "missing_peer" ||
+        error_code == "p2p_direction_mismatch" ||
+        error_code == "peer_mismatch" ||
+        error_code == "p2p_timeout_mismatch" ||
         error_code == "timeout_mismatch" ||
         error_code == "out_of_order_seqno" ||
         error_code == "stale_seqno" ||
@@ -285,6 +291,7 @@ ncclResult_t map_response_error(const std::string& error_code) {
     }
     if (error_code == "timeout_waiting_for_ranks" ||
         error_code == "timeout_waiting_for_collective" ||
+        error_code == "timeout_waiting_for_p2p" ||
         error_code == "timeout_waiting_for_barrier" ||
         error_code == "timeout_waiting_for_group" ||
         error_code == "staging_open_failed") {
@@ -1287,6 +1294,128 @@ ncclResult_t submit_collective(
     return ncclSuccess;
 }
 
+ncclResult_t submit_point_to_point(
+    const char* command,
+    fake_gpu::distributed::PointToPointType p2p_type,
+    const void* local_input,
+    void* local_output,
+    std::size_t count,
+    ncclDataType_t datatype,
+    int peer,
+    ncclComm_t comm) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (comm->destroyed) {
+        return fail_with(comm, ncclInvalidUsage, "communicator is already destroyed");
+    }
+    if (peer < 0 || peer >= comm->world_size) {
+        return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
+    }
+    if (peer == comm->rank) {
+        return fail_with(comm, ncclInvalidArgument, "peer must not equal rank");
+    }
+    if (count == 0) {
+        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+    }
+    if (!local_input && p2p_type == fake_gpu::distributed::PointToPointType::Send) {
+        return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
+    }
+    if (!local_output && p2p_type == fake_gpu::distributed::PointToPointType::Recv) {
+        return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
+    }
+
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(datatype, mapped_dtype)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this point-to-point operation");
+    }
+
+    fake_gpu::distributed::DistributedConfig config;
+    std::string error;
+    if (!validate_runtime_config(comm, config, error)) {
+        return ncclInvalidUsage;
+    }
+
+    if (comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "ncclSend/ncclRecv are currently only implemented for FAKEGPU_DIST_MODE=simulate");
+    }
+
+    const std::size_t dtype_size = fake_gpu::distributed::collective_data_type_size(mapped_dtype);
+    if (dtype_size == 0) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this point-to-point operation");
+    }
+    const std::size_t bytes = count * dtype_size;
+    const std::uint64_t seqno = comm->next_seqno;
+    const std::string staging_name = make_staging_name(*comm, seqno, command);
+
+    fake_gpu::distributed::StagingBufferMetadata metadata;
+    metadata.name = staging_name;
+    metadata.dtype = fake_gpu::distributed::collective_data_type_name(mapped_dtype);
+    metadata.bytes = bytes;
+    metadata.shape = {count};
+    metadata.owner_rank = comm->rank;
+    metadata.staging_id = seqno;
+
+    fake_gpu::distributed::StagingBufferManager manager;
+    fake_gpu::distributed::StagingBufferHandle handle;
+    if (!manager.create(metadata, true, handle, error)) {
+        return fail_with(comm, ncclSystemError, error);
+    }
+
+    if (p2p_type == fake_gpu::distributed::PointToPointType::Send) {
+        std::vector<char> host_input;
+        if (!fake_gpu::nccl::copy_buffer_to_host(local_input, bytes, host_input, error)) {
+            return fail_with(comm, ncclSystemError, error);
+        }
+        std::memcpy(handle.data(), host_input.data(), bytes);
+    }
+
+    std::ostringstream request;
+    request << command
+            << " comm_id=" << comm->comm_id
+            << " rank=" << comm->rank
+            << " seqno=" << seqno
+            << " peer=" << peer
+            << " dtype=" << fake_gpu::distributed::collective_data_type_name(mapped_dtype)
+            << " count=" << count
+            << " bytes=" << bytes
+            << " staging_name=" << staging_name
+            << " timeout_ms=" << kCoordinatorTimeoutMs;
+
+    fake_gpu::distributed::CoordinatorResponse response;
+    if (!coordinator_request_response(config, request.str(), response, error)) {
+        return fail_with(comm, ncclSystemError, error);
+    }
+    if (!response.ok) {
+        return fail_with(
+            comm,
+            map_response_error(response.error_code),
+            response.error_detail.empty() ? response.error_code : response.error_detail);
+    }
+
+    int response_comm_id = -1;
+    std::uint64_t response_seqno = 0;
+    if (!parse_int_field(response, "comm_id", response_comm_id) ||
+        !parse_u64_field(response, "seqno", response_seqno) ||
+        response_comm_id != comm->comm_id ||
+        response_seqno != seqno) {
+        return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent point-to-point response");
+    }
+
+    if (p2p_type == fake_gpu::distributed::PointToPointType::Recv) {
+        if (!fake_gpu::nccl::copy_host_to_buffer(local_output, handle.data(), bytes, error)) {
+            return fail_with(comm, ncclSystemError, error);
+        }
+    }
+
+    comm->next_seqno++;
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
 ncclResult_t do_destroy(ncclComm_t comm, bool allow_missing) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
@@ -2190,23 +2319,57 @@ ncclResult_t ncclAllGather(
 }
 
 ncclResult_t ncclSend(
-    const void* /*sendbuff*/,
-    std::size_t /*count*/,
-    ncclDataType_t /*datatype*/,
-    int /*peer*/,
+    const void* sendbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    int peer,
     ncclComm_t comm,
     cudaStream_t /*stream*/) {
-    return unsupported_step_api(comm, "ncclSend", "a later compatibility pass");
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (g_group_depth > 0) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "grouped ncclSend/ncclRecv are not implemented yet");
+    }
+    return submit_point_to_point(
+        "SEND",
+        fake_gpu::distributed::PointToPointType::Send,
+        sendbuff,
+        nullptr,
+        count,
+        datatype,
+        peer,
+        comm);
 }
 
 ncclResult_t ncclRecv(
-    void* /*recvbuff*/,
-    std::size_t /*count*/,
-    ncclDataType_t /*datatype*/,
-    int /*peer*/,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    int peer,
     ncclComm_t comm,
     cudaStream_t /*stream*/) {
-    return unsupported_step_api(comm, "ncclRecv", "a later compatibility pass");
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (g_group_depth > 0) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "grouped ncclSend/ncclRecv are not implemented yet");
+    }
+    return submit_point_to_point(
+        "RECV",
+        fake_gpu::distributed::PointToPointType::Recv,
+        nullptr,
+        recvbuff,
+        count,
+        datatype,
+        peer,
+        comm);
 }
 
 ncclResult_t ncclGroupStart(void) {
