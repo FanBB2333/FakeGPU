@@ -88,9 +88,18 @@ std::atomic<int> g_next_premul_sum_op{64};
 void clear_last_error(ncclComm_t comm) {
     g_last_error.clear();
     if (comm) {
-        comm->last_error.clear();
-        comm->async_error = ncclSuccess;
+        if (comm->async_error == ncclSuccess) {
+            comm->last_error.clear();
+        }
     }
+}
+
+void reset_async_error(ncclComm_t comm) {
+    if (!comm) {
+        return;
+    }
+    comm->async_error = ncclSuccess;
+    comm->last_error.clear();
 }
 
 ncclResult_t fail_with(ncclComm_t comm, ncclResult_t result, std::string message) {
@@ -102,6 +111,16 @@ ncclResult_t fail_with(ncclComm_t comm, ncclResult_t result, std::string message
         }
     }
     return result;
+}
+
+ncclResult_t surface_async_error(ncclComm_t comm) {
+    if (!comm || comm->async_error == ncclSuccess) {
+        return ncclSuccess;
+    }
+    g_last_error = comm->last_error.empty()
+        ? "communicator has a pending async error"
+        : comm->last_error;
+    return comm->async_error;
 }
 
 std::string unique_id_to_token(const ncclUniqueId& unique_id) {
@@ -832,6 +851,10 @@ ncclResult_t buffer_group_allreduce(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
+    }
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
@@ -877,6 +900,10 @@ ncclResult_t buffer_group_reduce(
     ncclComm_t comm) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
     }
     if (!sendbuff) {
         return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
@@ -934,6 +961,10 @@ ncclResult_t buffer_group_broadcast(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
+    }
     if (!recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
     }
@@ -979,6 +1010,10 @@ ncclResult_t buffer_group_allgather(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
+    }
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
@@ -1018,6 +1053,10 @@ ncclResult_t buffer_group_reducescatter(
     ncclComm_t comm) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
     }
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
@@ -1063,6 +1102,10 @@ ncclResult_t buffer_group_alltoall(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
+    }
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
@@ -1101,6 +1144,10 @@ ncclResult_t buffer_group_send(
     ncclComm_t comm) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
     }
     if (!sendbuff) {
         return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
@@ -1144,6 +1191,10 @@ ncclResult_t buffer_group_recv(
     ncclComm_t comm) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
     }
     if (!recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
@@ -1195,6 +1246,10 @@ ncclResult_t submit_collective_chunk(
     }
     if (comm->destroyed) {
         return fail_with(comm, ncclInvalidUsage, "communicator is already destroyed");
+    }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
     }
     if (!local_input || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
@@ -1643,6 +1698,10 @@ ncclResult_t submit_point_to_point(
     }
     if (comm->destroyed) {
         return fail_with(comm, ncclInvalidUsage, "communicator is already destroyed");
+    }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
     }
     if (peer < 0 || peer >= comm->world_size) {
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
@@ -2276,6 +2335,10 @@ ncclResult_t ncclCommSplit(
     if (comm->destroyed) {
         return fail_with(comm, ncclInvalidUsage, "communicator is already destroyed");
     }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
+    }
     if (color < NCCL_SPLIT_NOCOLOR) {
         return fail_with(comm, ncclInvalidArgument, "color must be >= 0 or NCCL_SPLIT_NOCOLOR");
     }
@@ -2504,6 +2567,10 @@ ncclResult_t ncclReduce(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
+    }
     if (g_group_depth > 0) {
         return buffer_group_reduce(sendbuff, recvbuff, count, datatype, op, root, comm);
     }
@@ -2617,6 +2684,10 @@ ncclResult_t ncclBroadcast(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
+    }
     if (g_group_depth > 0) {
         return buffer_group_broadcast(sendbuff, recvbuff, count, datatype, root, comm);
     }
@@ -2646,6 +2717,12 @@ ncclResult_t ncclAllReduce(
     ncclRedOp_t op,
     ncclComm_t comm,
     cudaStream_t stream) {
+    if (comm) {
+        const ncclResult_t pending_error = surface_async_error(comm);
+        if (pending_error != ncclSuccess) {
+            return pending_error;
+        }
+    }
     if (g_group_depth > 0) {
         return buffer_group_allreduce(sendbuff, recvbuff, count, datatype, op, comm);
     }
@@ -2675,6 +2752,12 @@ ncclResult_t ncclReduceScatter(
     ncclRedOp_t op,
     ncclComm_t comm,
     cudaStream_t stream) {
+    if (comm) {
+        const ncclResult_t pending_error = surface_async_error(comm);
+        if (pending_error != ncclSuccess) {
+            return pending_error;
+        }
+    }
     if (g_group_depth > 0) {
         return buffer_group_reducescatter(sendbuff, recvbuff, recvcount, datatype, op, comm);
     }
@@ -2703,6 +2786,12 @@ ncclResult_t ncclAllGather(
     ncclDataType_t datatype,
     ncclComm_t comm,
     cudaStream_t stream) {
+    if (comm) {
+        const ncclResult_t pending_error = surface_async_error(comm);
+        if (pending_error != ncclSuccess) {
+            return pending_error;
+        }
+    }
     if (g_group_depth > 0) {
         return buffer_group_allgather(sendbuff, recvbuff, sendcount, datatype, comm);
     }
@@ -2727,6 +2816,12 @@ ncclResult_t ncclAlltoAll(
     ncclDataType_t datatype,
     ncclComm_t comm,
     cudaStream_t stream) {
+    if (comm) {
+        const ncclResult_t pending_error = surface_async_error(comm);
+        if (pending_error != ncclSuccess) {
+            return pending_error;
+        }
+    }
     if (g_group_depth > 0) {
         return buffer_group_alltoall(sendbuff, recvbuff, count, datatype, comm);
     }
@@ -2764,6 +2859,10 @@ ncclResult_t ncclSend(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
+    }
     if (g_group_depth > 0) {
         return buffer_group_send(sendbuff, count, datatype, peer, comm);
     }
@@ -2787,6 +2886,10 @@ ncclResult_t ncclRecv(
     cudaStream_t /*stream*/) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
     }
     if (g_group_depth > 0) {
         return buffer_group_recv(recvbuff, count, datatype, peer, comm);

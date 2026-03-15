@@ -631,6 +631,81 @@ void run_premul_redop_api_case() {
         "device scalar residence should fail");
 }
 
+void run_async_error_persistence_case() {
+    ncclUniqueId unique_id {};
+    require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
+
+    std::array<ncclComm_t, 2> comms = {nullptr, nullptr};
+    std::array<ncclResult_t, 2> init_results = {ncclInternalError, ncclInternalError};
+    std::vector<std::thread> init_threads;
+    for (int rank = 0; rank < 2; ++rank) {
+        init_threads.emplace_back([&, rank]() {
+            init_results[static_cast<std::size_t>(rank)] =
+                ncclCommInitRank(&comms[static_cast<std::size_t>(rank)], 2, unique_id, rank);
+        });
+    }
+    for (std::thread& thread : init_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < 2; ++rank) {
+        require_result(init_results[static_cast<std::size_t>(rank)], ncclSuccess, "async-error init failed");
+    }
+
+    std::array<float, 4> send0 = {1.0f, 2.0f, 3.0f, 4.0f};
+    std::array<float, 4> send1 = {10.0f, 20.0f, 30.0f, 40.0f};
+    std::array<float, 4> recv0 = {0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<float, 4> recv1 = {0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<ncclResult_t, 2> mismatch_results = {ncclInternalError, ncclInternalError};
+
+    std::thread rank0([&]() {
+        mismatch_results[0] =
+            ncclAllReduce(send0.data(), recv0.data(), send0.size(), ncclFloat32, ncclSum, comms[0], nullptr);
+    });
+    std::thread rank1([&]() {
+        mismatch_results[1] =
+            ncclAllReduce(send1.data(), recv1.data(), send1.size(), ncclFloat32, ncclProd, comms[1], nullptr);
+    });
+    rank0.join();
+    rank1.join();
+
+    require_result(mismatch_results[0], ncclInvalidUsage, "rank0 mismatch should fail");
+    require_result(mismatch_results[1], ncclInvalidUsage, "rank1 mismatch should fail");
+
+    ncclResult_t async_error0 = ncclSuccess;
+    ncclResult_t async_error1 = ncclSuccess;
+    require_result(ncclCommGetAsyncError(comms[0], &async_error0), ncclSuccess, "rank0 get async error failed");
+    require_result(ncclCommGetAsyncError(comms[1], &async_error1), ncclSuccess, "rank1 get async error failed");
+    require(async_error0 == ncclInvalidUsage, "rank0 async error should persist as ncclInvalidUsage");
+    require(async_error1 == ncclInvalidUsage, "rank1 async error should persist as ncclInvalidUsage");
+
+    std::array<float, 1> retry_send0 = {2.0f};
+    std::array<float, 1> retry_send1 = {3.0f};
+    std::array<float, 1> retry_recv0 = {0.0f};
+    std::array<float, 1> retry_recv1 = {0.0f};
+    std::array<ncclResult_t, 2> retry_results = {ncclInternalError, ncclInternalError};
+
+    const auto begin = std::chrono::steady_clock::now();
+    std::thread retry_rank0([&]() {
+        retry_results[0] = ncclAllReduce(
+            retry_send0.data(), retry_recv0.data(), retry_send0.size(), ncclFloat32, ncclSum, comms[0], nullptr);
+    });
+    std::thread retry_rank1([&]() {
+        retry_results[1] = ncclAllReduce(
+            retry_send1.data(), retry_recv1.data(), retry_send1.size(), ncclFloat32, ncclSum, comms[1], nullptr);
+    });
+    retry_rank0.join();
+    retry_rank1.join();
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - begin).count();
+
+    require_result(retry_results[0], ncclInvalidUsage, "rank0 retry should fail fast");
+    require_result(retry_results[1], ncclInvalidUsage, "rank1 retry should fail fast");
+    require(elapsed_ms < 500, "poisoned communicator retry should fail quickly");
+
+    require_result(ncclCommDestroy(comms[0]), ncclSuccess, "destroy after async error failed");
+    require_result(ncclCommDestroy(comms[1]), ncclSuccess, "destroy after async error failed");
+}
+
 }  // namespace
 
 int main() {
@@ -654,6 +729,7 @@ int main() {
         run_grouped_send_recv_then_collective_case();
         run_send_recv_timeout_case();
         run_premul_redop_api_case();
+        run_async_error_persistence_case();
 
         std::cout << "nccl direct init/destroy test passed" << std::endl;
         return 0;
