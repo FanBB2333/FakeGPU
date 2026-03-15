@@ -158,6 +158,11 @@ std::vector<T> make_allreduce_reference(int world_size, std::size_t count) {
 }
 
 template <typename T>
+std::vector<T> make_reduce_untouched_reference(std::size_t count) {
+    return std::vector<T>(count, static_cast<T>(-777));
+}
+
+template <typename T>
 std::vector<T> make_allgather_reference(int world_size, std::size_t count) {
     std::vector<T> reference;
     reference.reserve(static_cast<std::size_t>(world_size) * count);
@@ -343,6 +348,94 @@ void run_allgather_case(
                 recv_buffers[static_cast<std::size_t>(rank)],
                 reference,
                 label + " allgather result mismatch");
+        }
+    }
+
+    destroy_communicators(comms);
+}
+
+template <typename T>
+void run_reduce_case(
+    int world_size,
+    int root,
+    ncclDataType_t datatype,
+    const std::string& label,
+    std::size_t count = 7) {
+    std::vector<ncclComm_t> comms = init_communicators(world_size);
+    const std::vector<T> reference = make_allreduce_reference<T>(world_size, count);
+    const std::vector<T> untouched = make_reduce_untouched_reference<T>(count);
+
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        const bool grouped = iteration == 2;
+        const bool null_non_root_recv = iteration == 1;
+        std::vector<std::vector<T>> send_buffers;
+        std::vector<std::vector<T>> recv_buffers(
+            static_cast<std::size_t>(world_size),
+            untouched);
+        std::vector<ncclResult_t> results(static_cast<std::size_t>(world_size), ncclInternalError);
+        std::vector<std::thread> threads;
+
+        send_buffers.reserve(static_cast<std::size_t>(world_size));
+        for (int rank = 0; rank < world_size; ++rank) {
+            send_buffers.push_back(make_rank_values<T>(rank, count));
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            threads.emplace_back([&, rank]() {
+                T* recv_ptr = recv_buffers[static_cast<std::size_t>(rank)].data();
+                if (rank != root && null_non_root_recv) {
+                    recv_ptr = nullptr;
+                }
+
+                if (grouped) {
+                    require_result(ncclGroupStart(), ncclSuccess, label + " ncclGroupStart failed");
+                    ncclResult_t inner = ncclReduce(
+                        send_buffers[static_cast<std::size_t>(rank)].data(),
+                        recv_ptr,
+                        count,
+                        datatype,
+                        ncclSum,
+                        root,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr);
+                    if (inner != ncclSuccess) {
+                        ncclGroupSimulateEnd(nullptr);
+                        results[static_cast<std::size_t>(rank)] = inner;
+                        return;
+                    }
+                    results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
+                    return;
+                }
+
+                results[static_cast<std::size_t>(rank)] = ncclReduce(
+                    send_buffers[static_cast<std::size_t>(rank)].data(),
+                    recv_ptr,
+                    count,
+                    datatype,
+                    ncclSum,
+                    root,
+                    comms[static_cast<std::size_t>(rank)],
+                    nullptr);
+            });
+        }
+
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            require_result(results[static_cast<std::size_t>(rank)], ncclSuccess, label + " reduce failed");
+            if (rank == root) {
+                assert_equal_vectors(
+                    recv_buffers[static_cast<std::size_t>(rank)],
+                    reference,
+                    label + " reduce root result mismatch");
+            } else {
+                assert_equal_vectors(
+                    recv_buffers[static_cast<std::size_t>(rank)],
+                    untouched,
+                    label + " reduce non-root recv buffer should stay untouched");
+            }
         }
     }
 
@@ -645,6 +738,12 @@ void run_broadcast_scenario() {
     run_broadcast_case<std::int32_t>(4, 3, ncclInt32, "4-rank root-last int32");
 }
 
+void run_reduce_scenario() {
+    run_reduce_case<float>(2, 0, ncclFloat32, "2-rank root0 float32");
+    run_reduce_case<float>(4, 2, ncclFloat32, "4-rank root2 float32");
+    run_reduce_case<std::int64_t>(4, 3, ncclInt64, "4-rank root-last int64");
+}
+
 void run_allgather_scenario() {
     run_allgather_case<float>(2, ncclFloat32, "2-rank float32");
     run_allgather_case<float>(4, ncclFloat32, "4-rank float32");
@@ -659,6 +758,7 @@ void run_reducescatter_scenario() {
 
 void run_chunked_scenario() {
     run_allreduce_case<float>(4, ncclFloat32, "4-rank chunked float32", 65536);
+    run_reduce_case<float>(4, 1, ncclFloat32, "4-rank chunked reduce", 65536);
     run_broadcast_case<float>(4, 3, ncclFloat32, "4-rank chunked broadcast", 65536);
     run_allgather_case<float>(4, ncclFloat32, "4-rank chunked allgather", 16384);
     run_reducescatter_case<float>(4, ncclFloat32, "4-rank chunked reducescatter", 16384);
@@ -693,6 +793,12 @@ int main(int argc, char** argv) {
             run_broadcast_scenario();
             fake_gpu::dump_monitor_report();
             std::cout << "broadcast scenario passed" << std::endl;
+            return 0;
+        }
+        if (scenario == "reduce") {
+            run_reduce_scenario();
+            fake_gpu::dump_monitor_report();
+            std::cout << "reduce scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "allgather") {

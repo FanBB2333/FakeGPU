@@ -35,6 +35,16 @@ public:
         ncclComm_t comm,
         cudaStream_t stream,
         std::string& error) const;
+    ncclResult_t reduce(
+        const void* sendbuff,
+        void* recvbuff,
+        std::size_t count,
+        ncclDataType_t datatype,
+        ncclRedOp_t op,
+        int root,
+        ncclComm_t comm,
+        cudaStream_t stream,
+        std::string& error) const;
     ncclResult_t broadcast(
         const void* sendbuff,
         void* recvbuff,

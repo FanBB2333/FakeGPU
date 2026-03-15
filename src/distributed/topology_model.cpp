@@ -22,6 +22,8 @@ double traffic_multiplier_for_collective(CollectiveType type) {
     switch (type) {
         case CollectiveType::AllReduce:
             return 2.0;
+        case CollectiveType::Reduce:
+            return 1.0;
         case CollectiveType::Broadcast:
             return 1.0;
         case CollectiveType::AllGather:

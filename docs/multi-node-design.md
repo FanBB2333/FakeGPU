@@ -255,7 +255,7 @@ FakeGPU
 职责：
 
 - 提供 `libnccl.so` 兼容接口
-- 拦截 `ncclCommInitRank`、`ncclAllReduce`、`ncclBroadcast`、`ncclAllGather`、`ncclReduceScatter`、`ncclSend`、`ncclRecv` 等调用
+- 拦截 `ncclCommInitRank`、`ncclAllReduce`、`ncclReduce`、`ncclBroadcast`、`ncclAllGather`、`ncclReduceScatter`、`ncclSend`、`ncclRecv` 等调用
 - 将每个 collective 转换成 coordinator 可以理解的请求
 
 #### B. Cluster Coordinator
@@ -382,7 +382,6 @@ FakeGPU
 - `ncclAllGather`
 - `ncclReduceScatter`
 - `ncclAllToAll`
-- `ncclReduce`
 - `ncclSend`
 - `ncclRecv`
 - `ncclCommGetAsyncError`

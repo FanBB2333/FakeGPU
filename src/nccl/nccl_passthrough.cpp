@@ -19,6 +19,8 @@ using ncclCommAbort_fn = ncclResult_t (*)(ncclComm_t);
 using ncclGetErrorString_fn = const char* (*)(ncclResult_t);
 using ncclAllReduce_fn =
     ncclResult_t (*)(const void*, void*, std::size_t, ncclDataType_t, ncclRedOp_t, ncclComm_t, cudaStream_t);
+using ncclReduce_fn =
+    ncclResult_t (*)(const void*, void*, std::size_t, ncclDataType_t, ncclRedOp_t, int, ncclComm_t, cudaStream_t);
 using ncclBroadcast_fn =
     ncclResult_t (*)(const void*, void*, std::size_t, ncclDataType_t, int, ncclComm_t, cudaStream_t);
 using ncclAllGather_fn =
@@ -38,6 +40,7 @@ struct LoaderState {
     ncclCommAbort_fn comm_abort = nullptr;
     ncclGetErrorString_fn get_error_string = nullptr;
     ncclAllReduce_fn all_reduce = nullptr;
+    ncclReduce_fn reduce = nullptr;
     ncclBroadcast_fn broadcast = nullptr;
     ncclAllGather_fn all_gather = nullptr;
     ncclReduceScatter_fn reduce_scatter = nullptr;
@@ -174,6 +177,11 @@ bool RealNcclLoader::resolve_symbols(std::string& error) {
     if (!state.all_reduce) {
         return false;
     }
+    state.reduce =
+        reinterpret_cast<ncclReduce_fn>(resolve_symbol(state.handle, "ncclReduce", error));
+    if (!state.reduce) {
+        return false;
+    }
     state.broadcast =
         reinterpret_cast<ncclBroadcast_fn>(resolve_symbol(state.handle, "ncclBroadcast", error));
     if (!state.broadcast) {
@@ -294,6 +302,24 @@ ncclResult_t RealNcclLoader::all_reduce(
         return ncclSystemError;
     }
     return state.all_reduce(sendbuff, recvbuff, count, datatype, op, comm, stream);
+}
+
+ncclResult_t RealNcclLoader::reduce(
+    const void* sendbuff,
+    void* recvbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    ncclRedOp_t op,
+    int root,
+    ncclComm_t comm,
+    cudaStream_t stream,
+    std::string& error) const {
+    const LoaderState& state = loader_state();
+    if (!state.reduce) {
+        error = "real ncclReduce is unavailable";
+        return ncclSystemError;
+    }
+    return state.reduce(sendbuff, recvbuff, count, datatype, op, root, comm, stream);
 }
 
 ncclResult_t RealNcclLoader::broadcast(

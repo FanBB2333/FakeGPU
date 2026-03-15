@@ -117,6 +117,7 @@ struct ClusterReportSnapshot {
     std::size_t world_size = 0;
     std::size_t communicator_count = 0;
     ClusterCollectiveReportStats all_reduce;
+    ClusterCollectiveReportStats reduce;
     ClusterCollectiveReportStats broadcast;
     ClusterCollectiveReportStats all_gather;
     ClusterCollectiveReportStats reduce_scatter;

@@ -274,6 +274,7 @@ void ClusterCoordinator::handle_client(int client_fd) {
         }
     } else if (
         request.command == "ALLREDUCE" ||
+        request.command == "REDUCE" ||
         request.command == "BROADCAST" ||
         request.command == "ALLGATHER" ||
         request.command == "REDUCESCATTER") {
@@ -355,6 +356,8 @@ void ClusterCoordinator::handle_client(int client_fd) {
                                             } else {
                                                 if (request.command == "ALLREDUCE") {
                                                     collective_request.type = CollectiveType::AllReduce;
+                                                } else if (request.command == "REDUCE") {
+                                                    collective_request.type = CollectiveType::Reduce;
                                                 } else if (request.command == "BROADCAST") {
                                                     collective_request.type = CollectiveType::Broadcast;
                                                 } else if (request.command == "ALLGATHER") {

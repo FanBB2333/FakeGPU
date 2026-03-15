@@ -91,6 +91,7 @@ inline bool build_staging_chunk_plan(
 
         switch (type) {
             case CollectiveType::AllReduce:
+            case CollectiveType::Reduce:
             case CollectiveType::Broadcast:
                 chunk.input_bytes = chunk_bytes;
                 chunk.staging_bytes = chunk_bytes;

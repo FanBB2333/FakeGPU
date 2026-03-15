@@ -123,6 +123,11 @@ private:
                 (unsigned long long)cluster_snapshot.all_reduce.bytes,
                 cluster_snapshot.all_reduce.estimated_time_us_total,
                 cluster_snapshot.all_reduce.contention_penalty_us_total);
+        fprintf(out, "    \"reduce\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
+                (unsigned long long)cluster_snapshot.reduce.calls,
+                (unsigned long long)cluster_snapshot.reduce.bytes,
+                cluster_snapshot.reduce.estimated_time_us_total,
+                cluster_snapshot.reduce.contention_penalty_us_total);
         fprintf(out, "    \"broadcast\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
                 (unsigned long long)cluster_snapshot.broadcast.calls,
                 (unsigned long long)cluster_snapshot.broadcast.bytes,
