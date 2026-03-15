@@ -23,6 +23,26 @@ struct CommunicatorDestroyResult {
     std::string error_detail;
 };
 
+struct CommunicatorSplitRequest {
+    int comm_id = -1;
+    int rank = -1;
+    std::uint64_t seqno = 0;
+    int color = -1;
+    int key = 0;
+    int timeout_ms = 0;
+};
+
+struct CommunicatorSplitResult {
+    bool ok = false;
+    std::uint64_t seqno = 0;
+    bool participating = false;
+    int new_comm_id = -1;
+    int new_rank = -1;
+    int new_world_size = 0;
+    std::string error_code;
+    std::string error_detail;
+};
+
 struct CollectiveSubmitRequest {
     int comm_id = -1;
     int rank = -1;
@@ -135,6 +155,7 @@ public:
         int timeout_ms);
 
     CommunicatorDestroyResult destroy_communicator(int comm_id, int rank);
+    CommunicatorSplitResult split_communicator(const CommunicatorSplitRequest& request);
     CollectiveSubmitResult submit_collective(const CollectiveSubmitRequest& request);
     BarrierSubmitResult submit_barrier(const BarrierSubmitRequest& request);
     CollectiveBatchPrepareResult prepare_collective_batch(const CollectiveBatchPrepareRequest& request);

@@ -272,6 +272,57 @@ void ClusterCoordinator::handle_client(int client_fd) {
                 }
             }
         }
+    } else if (request.command == "SPLIT_COMM") {
+        CommunicatorSplitRequest split_request;
+        bool ok = false;
+        std::string error;
+
+        split_request.comm_id = parse_required_int(request.fields, "comm_id", ok, error);
+        if (!ok) {
+            response = format_error_response("bad_request", error);
+        } else {
+            split_request.rank = parse_required_int(request.fields, "rank", ok, error);
+            if (!ok) {
+                response = format_error_response("bad_request", error);
+            } else {
+                split_request.seqno = parse_required_u64(request.fields, "seqno", ok, error);
+                if (!ok) {
+                    response = format_error_response("bad_request", error);
+                } else {
+                    split_request.color = parse_required_int(request.fields, "color", ok, error);
+                    if (!ok) {
+                        response = format_error_response("bad_request", error);
+                    } else {
+                        split_request.key = parse_required_int(request.fields, "key", ok, error);
+                        if (!ok) {
+                            response = format_error_response("bad_request", error);
+                        } else {
+                            split_request.timeout_ms =
+                                parse_required_int(request.fields, "timeout_ms", ok, error);
+                            if (!ok) {
+                                response = format_error_response("bad_request", error);
+                            } else {
+                                CommunicatorSplitResult result =
+                                    communicator_registry_.split_communicator(split_request);
+                                if (!result.ok) {
+                                    response = format_error_response(result.error_code, result.error_detail);
+                                } else {
+                                    response = format_ok_response({
+                                        {"comm_id", std::to_string(split_request.comm_id)},
+                                        {"seqno", std::to_string(result.seqno)},
+                                        {"rank", std::to_string(split_request.rank)},
+                                        {"participating", result.participating ? "1" : "0"},
+                                        {"new_comm_id", std::to_string(result.new_comm_id)},
+                                        {"new_rank", std::to_string(result.new_rank)},
+                                        {"new_world_size", std::to_string(result.new_world_size)},
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     } else if (
         request.command == "ALLREDUCE" ||
         request.command == "REDUCE" ||

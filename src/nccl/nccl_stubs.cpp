@@ -1780,18 +1780,93 @@ ncclResult_t ncclCommAbort(ncclComm_t comm) {
 ncclResult_t ncclCommSplit(
     ncclComm_t comm,
     int color,
-    int /*key*/,
+    int key,
     ncclComm_t* newcomm,
     ncclConfig_t* /*config*/) {
     if (!newcomm) {
         return fail_with(comm, ncclInvalidArgument, "newcomm must not be null");
     }
     *newcomm = nullptr;
-    if (color == NCCL_SPLIT_NOCOLOR) {
-        clear_last_error(comm);
-        return ncclSuccess;
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
-    return unsupported_step_api(comm, "ncclCommSplit", "a later compatibility pass");
+    if (comm->destroyed) {
+        return fail_with(comm, ncclInvalidUsage, "communicator is already destroyed");
+    }
+    if (color < NCCL_SPLIT_NOCOLOR) {
+        return fail_with(comm, ncclInvalidArgument, "color must be >= 0 or NCCL_SPLIT_NOCOLOR");
+    }
+    if (color == NCCL_SPLIT_NOCOLOR) {
+        // NCCL still treats split as a collective over the parent communicator.
+    }
+
+    if (comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "ncclCommSplit is currently only implemented for FAKEGPU_DIST_MODE=simulate");
+    }
+
+    fake_gpu::distributed::DistributedConfig config;
+    std::string error;
+    if (!validate_runtime_config(comm, config, error)) {
+        return ncclInvalidUsage;
+    }
+
+    std::ostringstream request;
+    request << "SPLIT_COMM"
+            << " comm_id=" << comm->comm_id
+            << " rank=" << comm->rank
+            << " seqno=" << comm->next_seqno
+            << " color=" << color
+            << " key=" << key
+            << " timeout_ms=" << kCoordinatorTimeoutMs;
+
+    fake_gpu::distributed::CoordinatorResponse response;
+    if (!coordinator_request_response(config, request.str(), response, error)) {
+        return fail_with(comm, ncclSystemError, error);
+    }
+    if (!response.ok) {
+        return fail_with(
+            comm,
+            map_response_error(response.error_code),
+            response.error_detail.empty() ? response.error_code : response.error_detail);
+    }
+
+    int response_comm_id = -1;
+    int participating = 0;
+    int new_comm_id = -1;
+    int new_rank = -1;
+    int new_world_size = 0;
+    std::uint64_t response_seqno = 0;
+    if (!parse_int_field(response, "comm_id", response_comm_id) ||
+        !parse_u64_field(response, "seqno", response_seqno) ||
+        !parse_int_field(response, "participating", participating) ||
+        !parse_int_field(response, "new_comm_id", new_comm_id) ||
+        !parse_int_field(response, "new_rank", new_rank) ||
+        !parse_int_field(response, "new_world_size", new_world_size) ||
+        response_comm_id != comm->comm_id ||
+        response_seqno != comm->next_seqno) {
+        return fail_with(comm, ncclInternalError, "split coordinator returned an inconsistent response");
+    }
+
+    if (participating) {
+        if (new_comm_id <= 0 || new_rank < 0 || new_world_size <= 0) {
+            return fail_with(comm, ncclInternalError, "split coordinator returned invalid subgroup metadata");
+        }
+        ncclComm* child = new ncclComm();
+        child->dist_mode = comm->dist_mode;
+        child->comm_id = new_comm_id;
+        child->world_size = new_world_size;
+        child->rank = new_rank;
+        child->device = comm->device;
+        *newcomm = child;
+        clear_last_error(*newcomm);
+    }
+
+    comm->next_seqno++;
+    clear_last_error(comm);
+    return ncclSuccess;
 }
 
 ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* async_error) {

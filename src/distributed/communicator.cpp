@@ -47,6 +47,24 @@ struct BatchState {
     std::condition_variable cv;
 };
 
+struct SplitParticipantResult {
+    bool participating = false;
+    int new_comm_id = -1;
+    int new_rank = -1;
+    int new_world_size = 0;
+};
+
+struct SplitState {
+    CommunicatorSplitRequest request;
+    bool completed = false;
+    bool failed = false;
+    std::string failure_code;
+    std::string failure_detail;
+    std::unordered_map<int, CommunicatorSplitRequest> participants;
+    std::unordered_map<int, SplitParticipantResult> results;
+    std::condition_variable cv;
+};
+
 struct CommunicatorState {
     std::string unique_id;
     int world_size = 0;
@@ -61,6 +79,7 @@ struct CommunicatorState {
     std::unordered_map<std::uint64_t, std::shared_ptr<CollectiveState>> collectives;
     std::unordered_map<std::uint64_t, std::shared_ptr<BarrierState>> barriers;
     std::unordered_map<std::uint64_t, std::shared_ptr<BatchState>> batches;
+    std::unordered_map<std::uint64_t, std::shared_ptr<SplitState>> splits;
     std::condition_variable cv;
 };
 
@@ -98,6 +117,14 @@ CommunicatorRegistrationResult make_error(std::string code, std::string detail) 
 
 CommunicatorDestroyResult make_destroy_error(std::string code, std::string detail) {
     CommunicatorDestroyResult result;
+    result.ok = false;
+    result.error_code = std::move(code);
+    result.error_detail = std::move(detail);
+    return result;
+}
+
+CommunicatorSplitResult make_split_error(std::string code, std::string detail) {
+    CommunicatorSplitResult result;
     result.ok = false;
     result.error_code = std::move(code);
     result.error_detail = std::move(detail);
@@ -324,6 +351,23 @@ void fail_batch_locked(
     }
 }
 
+void fail_split_locked(
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::shared_ptr<SplitState>& split,
+    std::string code,
+    std::string detail) {
+    state->failed = true;
+    state->failure_code = std::move(code);
+    state->failure_detail = std::move(detail);
+    if (split) {
+        split->failed = true;
+        split->failure_code = state->failure_code;
+        split->failure_detail = state->failure_detail;
+        split->cv.notify_all();
+        state->splits.erase(split->request.seqno);
+    }
+}
+
 bool collective_requests_match(
     const CollectiveSubmitRequest& expected,
     const CollectiveSubmitRequest& actual,
@@ -376,6 +420,21 @@ bool collective_requests_match(
         error_detail =
             "expected proxy_only=" + std::string(expected.proxy_only ? "1" : "0") +
             ", got " + (actual.proxy_only ? "1" : "0");
+        return false;
+    }
+    return true;
+}
+
+bool split_requests_match(
+    const CommunicatorSplitRequest& expected,
+    const CommunicatorSplitRequest& actual,
+    std::string& error_code,
+    std::string& error_detail) {
+    if (expected.timeout_ms != actual.timeout_ms) {
+        error_code = "split_timeout_mismatch";
+        error_detail =
+            "expected timeout_ms=" + std::to_string(expected.timeout_ms) +
+            ", got " + std::to_string(actual.timeout_ms);
         return false;
     }
     return true;
@@ -612,6 +671,199 @@ CommunicatorDestroyResult CommunicatorRegistry::destroy_communicator(int comm_id
     CommunicatorDestroyResult result;
     result.ok = true;
     return result;
+}
+
+CommunicatorSplitResult CommunicatorRegistry::split_communicator(const CommunicatorSplitRequest& request) {
+    if (request.comm_id <= 0) {
+        return make_split_error("invalid_comm_id", "comm_id must be > 0");
+    }
+    if (request.rank < 0) {
+        return make_split_error("invalid_rank", "rank must be >= 0");
+    }
+    if (request.seqno == 0) {
+        return make_split_error("invalid_seqno", "seqno must be > 0");
+    }
+    if (request.color < -1) {
+        return make_split_error("invalid_color", "color must be >= 0 or -1 for no color");
+    }
+    if (request.timeout_ms <= 0) {
+        return make_split_error("invalid_timeout", "timeout_ms must be > 0");
+    }
+
+    RegistryImpl& registry = registry_impl();
+    std::shared_ptr<CommunicatorState> state;
+    std::shared_ptr<SplitState> split;
+
+    std::unique_lock<std::mutex> lock(registry.mutex);
+    auto it = registry.active_by_comm_id.find(request.comm_id);
+    if (it == registry.active_by_comm_id.end()) {
+        return make_split_error("unknown_comm_id", "communicator not found");
+    }
+
+    state = it->second;
+    if (state->participants.find(request.rank) == state->participants.end()) {
+        return make_split_error("unknown_rank", "rank is not a member of this communicator");
+    }
+    if (state->destroyed_ranks.find(request.rank) != state->destroyed_ranks.end()) {
+        return make_split_error("rank_destroyed", "rank already destroyed this communicator");
+    }
+    if (state->failed) {
+        return make_split_error(state->failure_code, state->failure_detail);
+    }
+    if (request.rank >= state->world_size) {
+        return make_split_error("invalid_rank", "rank must be within [0, world_size)");
+    }
+
+    if (request.seqno != state->next_seqno) {
+        if (request.seqno < state->next_seqno) {
+            return make_split_error(
+                "stale_seqno",
+                "expected seqno " + std::to_string(state->next_seqno) +
+                    ", got " + std::to_string(request.seqno));
+        }
+        return make_split_error(
+            "out_of_order_seqno",
+            "expected seqno " + std::to_string(state->next_seqno) +
+                ", got " + std::to_string(request.seqno));
+    }
+
+    auto split_it = state->splits.find(request.seqno);
+    if (split_it == state->splits.end()) {
+        split = std::make_shared<SplitState>();
+        split->request = request;
+        state->splits.emplace(request.seqno, split);
+    } else {
+        split = split_it->second;
+    }
+
+    std::string error_code;
+    std::string error_detail;
+    if (!split_requests_match(split->request, request, error_code, error_detail)) {
+        fail_split_locked(state, split, std::move(error_code), std::move(error_detail));
+        return make_split_error(state->failure_code, state->failure_detail);
+    }
+
+    if (!split->participants.emplace(request.rank, request).second) {
+        fail_split_locked(
+            state,
+            split,
+            "duplicate_split_rank",
+            "rank already submitted this split seqno");
+        return make_split_error(state->failure_code, state->failure_detail);
+    }
+
+    if (static_cast<int>(split->participants.size()) != state->world_size) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.timeout_ms);
+        const auto wait_begin = std::chrono::steady_clock::now();
+        while (!split->completed && !split->failed && !state->failed) {
+            if (split->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, split->participants);
+                fail_split_locked(
+                    state,
+                    split,
+                    "timeout_waiting_for_split",
+                    "timeout waiting for all ranks to join split seqno " +
+                        std::to_string(request.seqno));
+                return make_split_error(state->failure_code, state->failure_detail);
+            }
+        }
+        record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+
+        if (split->completed) {
+            const auto result_it = split->results.find(request.rank);
+            if (result_it == split->results.end()) {
+                return make_split_error("internal_error", "split completed without a per-rank result");
+            }
+            const SplitParticipantResult& per_rank = result_it->second;
+            return CommunicatorSplitResult{
+                true,
+                request.seqno,
+                per_rank.participating,
+                per_rank.new_comm_id,
+                per_rank.new_rank,
+                per_rank.new_world_size,
+                "",
+                "",
+            };
+        }
+        return make_split_error(state->failure_code, state->failure_detail);
+    }
+
+    std::unordered_map<int, std::vector<std::pair<int, int>>> groups;
+    for (const auto& entry : split->participants) {
+        const CommunicatorSplitRequest& participant = entry.second;
+        if (participant.color == -1) {
+            split->results.emplace(
+                participant.rank,
+                SplitParticipantResult{false, -1, -1, 0});
+            continue;
+        }
+        groups[participant.color].push_back({participant.key, participant.rank});
+    }
+
+    for (auto& entry : groups) {
+        const int color = entry.first;
+        std::vector<std::pair<int, int>>& members = entry.second;
+        std::sort(
+            members.begin(),
+            members.end(),
+            [](const std::pair<int, int>& lhs, const std::pair<int, int>& rhs) {
+                if (lhs.first != rhs.first) {
+                    return lhs.first < rhs.first;
+                }
+                return lhs.second < rhs.second;
+            });
+
+        auto child = std::make_shared<CommunicatorState>();
+        child->unique_id =
+            "split-parent" + std::to_string(state->comm_id) +
+            "-seq" + std::to_string(request.seqno) +
+            "-color" + std::to_string(color);
+        child->world_size = static_cast<int>(members.size());
+        child->comm_id = registry.next_comm_id++;
+        child->ready = true;
+
+        for (std::size_t subgroup_rank = 0; subgroup_rank < members.size(); ++subgroup_rank) {
+            const int parent_rank = members[subgroup_rank].second;
+            child->participants.emplace(static_cast<int>(subgroup_rank), true);
+            split->results.emplace(
+                parent_rank,
+                SplitParticipantResult{
+                    true,
+                    child->comm_id,
+                    static_cast<int>(subgroup_rank),
+                    child->world_size,
+                });
+            ensure_rank_report_locked(registry, parent_rank).communicator_inits++;
+        }
+
+        registry.active_by_comm_id.emplace(child->comm_id, child);
+        registry.report.communicator_count++;
+    }
+
+    split->completed = true;
+    state->next_seqno++;
+    state->splits.erase(request.seqno);
+    split->cv.notify_all();
+
+    const auto result_it = split->results.find(request.rank);
+    if (result_it == split->results.end()) {
+        fail_split_locked(state, split, "internal_error", "split completed without a per-rank result");
+        return make_split_error(state->failure_code, state->failure_detail);
+    }
+
+    const SplitParticipantResult& per_rank = result_it->second;
+    return CommunicatorSplitResult{
+        true,
+        request.seqno,
+        per_rank.participating,
+        per_rank.new_comm_id,
+        per_rank.new_rank,
+        per_rank.new_world_size,
+        "",
+        "",
+    };
 }
 
 CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveSubmitRequest& request) {

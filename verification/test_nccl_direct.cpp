@@ -199,6 +199,128 @@ void run_comm_init_all_invalid_case() {
     require(comms[0] == nullptr && comms[1] == nullptr, "invalid ncclCommInitAll should not mutate outputs");
 }
 
+void run_comm_split_case() {
+    const int world_size = 4;
+    ncclUniqueId unique_id {};
+    require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
+
+    std::array<ncclComm_t, world_size> parents = {nullptr, nullptr, nullptr, nullptr};
+    std::array<ncclResult_t, world_size> init_results = {
+        ncclInternalError, ncclInternalError, ncclInternalError, ncclInternalError};
+    std::vector<std::thread> init_threads;
+    for (int rank = 0; rank < world_size; ++rank) {
+        init_threads.emplace_back([&, rank]() {
+            init_results[static_cast<std::size_t>(rank)] =
+                ncclCommInitRank(&parents[static_cast<std::size_t>(rank)], world_size, unique_id, rank);
+        });
+    }
+    for (std::thread& thread : init_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < world_size; ++rank) {
+        require_result(init_results[static_cast<std::size_t>(rank)], ncclSuccess, "parent init failed");
+    }
+
+    const std::array<int, world_size> colors = {0, 1, 0, NCCL_SPLIT_NOCOLOR};
+    const std::array<int, world_size> keys = {20, 0, 10, 0};
+    std::array<ncclComm_t, world_size> children = {nullptr, nullptr, nullptr, nullptr};
+    std::array<ncclResult_t, world_size> split_results = {
+        ncclInternalError, ncclInternalError, ncclInternalError, ncclInternalError};
+    std::vector<std::thread> split_threads;
+    for (int rank = 0; rank < world_size; ++rank) {
+        split_threads.emplace_back([&, rank]() {
+            split_results[static_cast<std::size_t>(rank)] = ncclCommSplit(
+                parents[static_cast<std::size_t>(rank)],
+                colors[static_cast<std::size_t>(rank)],
+                keys[static_cast<std::size_t>(rank)],
+                &children[static_cast<std::size_t>(rank)],
+                nullptr);
+        });
+    }
+    for (std::thread& thread : split_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < world_size; ++rank) {
+        require_result(split_results[static_cast<std::size_t>(rank)], ncclSuccess, "ncclCommSplit failed");
+    }
+
+    require(children[3] == nullptr, "NCCL_SPLIT_NOCOLOR should return a null child communicator");
+
+    int child_count = -1;
+    int child_rank = -1;
+    require_result(ncclCommCount(children[2], &child_count), ncclSuccess, "split child count failed");
+    require_result(ncclCommUserRank(children[2], &child_rank), ncclSuccess, "split child rank failed");
+    require(child_count == 2, "color=0 subgroup should have size 2");
+    require(child_rank == 0, "rank 2 should become subgroup rank 0 because of smaller key");
+
+    require_result(ncclCommCount(children[0], &child_count), ncclSuccess, "split child count failed");
+    require_result(ncclCommUserRank(children[0], &child_rank), ncclSuccess, "split child rank failed");
+    require(child_count == 2, "color=0 subgroup should have size 2");
+    require(child_rank == 1, "rank 0 should become subgroup rank 1 because of larger key");
+
+    require_result(ncclCommCount(children[1], &child_count), ncclSuccess, "single-rank child count failed");
+    require_result(ncclCommUserRank(children[1], &child_rank), ncclSuccess, "single-rank child rank failed");
+    require(child_count == 1, "color=1 subgroup should have size 1");
+    require(child_rank == 0, "single-rank subgroup rank should be 0");
+
+    std::array<float, 2> color0_send = {1.0f, 3.0f};
+    std::array<float, 2> color0_recv = {0.0f, 0.0f};
+    std::array<ncclResult_t, 2> color0_results = {ncclInternalError, ncclInternalError};
+    std::thread color0_thread0([&]() {
+        color0_results[0] = ncclAllReduce(&color0_send[0], &color0_recv[0], 1, ncclFloat32, ncclSum, children[0], nullptr);
+    });
+    std::thread color0_thread1([&]() {
+        color0_results[1] = ncclAllReduce(&color0_send[1], &color0_recv[1], 1, ncclFloat32, ncclSum, children[2], nullptr);
+    });
+    color0_thread0.join();
+    color0_thread1.join();
+    require_result(color0_results[0], ncclSuccess, "color=0 subgroup allreduce failed");
+    require_result(color0_results[1], ncclSuccess, "color=0 subgroup allreduce failed");
+    require(color0_recv[0] == 4.0f && color0_recv[1] == 4.0f, "color=0 subgroup allreduce mismatch");
+
+    float color1_send = 7.0f;
+    float color1_recv = 0.0f;
+    require_result(
+        ncclAllReduce(&color1_send, &color1_recv, 1, ncclFloat32, ncclSum, children[1], nullptr),
+        ncclSuccess,
+        "single-rank subgroup allreduce failed");
+    require(color1_recv == 7.0f, "single-rank subgroup allreduce should preserve value");
+
+    std::array<float, world_size> parent_send = {1.0f, 2.0f, 3.0f, 4.0f};
+    std::array<float, world_size> parent_recv = {0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<ncclResult_t, world_size> parent_results = {
+        ncclInternalError, ncclInternalError, ncclInternalError, ncclInternalError};
+    std::vector<std::thread> parent_threads;
+    for (int rank = 0; rank < world_size; ++rank) {
+        parent_threads.emplace_back([&, rank]() {
+            parent_results[static_cast<std::size_t>(rank)] = ncclAllReduce(
+                &parent_send[static_cast<std::size_t>(rank)],
+                &parent_recv[static_cast<std::size_t>(rank)],
+                1,
+                ncclFloat32,
+                ncclSum,
+                parents[static_cast<std::size_t>(rank)],
+                nullptr);
+        });
+    }
+    for (std::thread& thread : parent_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < world_size; ++rank) {
+        require_result(parent_results[static_cast<std::size_t>(rank)], ncclSuccess, "parent allreduce after split failed");
+        require(parent_recv[static_cast<std::size_t>(rank)] == 10.0f, "parent allreduce after split mismatch");
+    }
+
+    for (ncclComm_t child : children) {
+        if (child) {
+            require_result(ncclCommDestroy(child), ncclSuccess, "child destroy failed");
+        }
+    }
+    for (ncclComm_t parent : parents) {
+        require_result(ncclCommDestroy(parent), ncclSuccess, "parent destroy failed");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -215,6 +337,7 @@ int main() {
         run_duplicate_destroy_case();
         run_comm_init_all_case();
         run_comm_init_all_invalid_case();
+        run_comm_split_case();
 
         std::cout << "nccl direct init/destroy test passed" << std::endl;
         return 0;
