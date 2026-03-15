@@ -744,6 +744,23 @@ bool all_group_operations_are_collectives(const std::vector<GroupOperation>& ope
     return true;
 }
 
+bool validate_stream_handle(
+    ncclComm_t comm,
+    cudaStream_t stream) {
+    if (!comm || comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
+        return true;
+    }
+    const CUresult result = cuStreamQuery(reinterpret_cast<CUstream>(stream));
+    if (result != CUDA_SUCCESS) {
+        fail_with(
+            comm,
+            ncclInvalidArgument,
+            "stream must be a valid CUDA stream handle");
+        return false;
+    }
+    return true;
+}
+
 bool validate_group_stream_binding(
     ncclComm_t comm,
     cudaStream_t stream) {
@@ -884,6 +901,9 @@ ncclResult_t buffer_group_allreduce(
     if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
+    }
     if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
@@ -941,6 +961,9 @@ ncclResult_t buffer_group_reduce(
     }
     if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
+    }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
     }
     if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
@@ -1004,6 +1027,9 @@ ncclResult_t buffer_group_broadcast(
     if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
+    }
     if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
@@ -1058,6 +1084,9 @@ ncclResult_t buffer_group_allgather(
     if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
+    }
     if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
@@ -1106,6 +1135,9 @@ ncclResult_t buffer_group_reducescatter(
     }
     if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
+    }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
     }
     if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
@@ -1160,6 +1192,9 @@ ncclResult_t buffer_group_alltoall(
     if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
     }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
+    }
     if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
     }
@@ -1207,6 +1242,9 @@ ncclResult_t buffer_group_send(
     }
     if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
+    }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
     }
     if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
@@ -1259,6 +1297,9 @@ ncclResult_t buffer_group_recv(
     }
     if (!grouped_operation_supported(comm)) {
         return ncclInvalidUsage;
+    }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
     }
     if (!validate_group_stream_binding(comm, stream)) {
         return ncclInvalidUsage;
@@ -1428,6 +1469,9 @@ ncclResult_t submit_collective(
     }
     if (count == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+    }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
     }
 
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
@@ -1754,7 +1798,8 @@ ncclResult_t submit_point_to_point(
     std::size_t count,
     ncclDataType_t datatype,
     int peer,
-    ncclComm_t comm) {
+    ncclComm_t comm,
+    cudaStream_t stream) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -1773,6 +1818,9 @@ ncclResult_t submit_point_to_point(
     }
     if (count == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+    }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
     }
     if (!local_input && p2p_type == fake_gpu::distributed::PointToPointType::Send) {
         return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
@@ -1963,7 +2011,8 @@ ncclResult_t flush_grouped_operations() {
                 operation.count,
                 operation.datatype,
                 operation.peer,
-                operation.comm);
+                operation.comm,
+                operation.stream);
         } else if (operation.type == fake_gpu::distributed::CollectiveType::AllReduce) {
             result = submit_collective(
                 "ALLREDUCE",
@@ -2936,7 +2985,8 @@ ncclResult_t ncclSend(
         count,
         datatype,
         peer,
-        comm);
+        comm,
+        stream);
 }
 
 ncclResult_t ncclRecv(
@@ -2964,7 +3014,8 @@ ncclResult_t ncclRecv(
         count,
         datatype,
         peer,
-        comm);
+        comm,
+        stream);
 }
 
 ncclResult_t ncclGroupStart(void) {

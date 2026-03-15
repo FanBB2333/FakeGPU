@@ -224,6 +224,7 @@ CUresult cuStreamQuery(CUstream hStream);
 CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags);
 CUresult cuStreamGetPriority(CUstream hStream, int *priority);
 CUresult cuStreamGetFlags(CUstream hStream, unsigned int *flags);
+CUresult cuStreamGetId(CUstream hStream, unsigned long long *streamId);
 CUresult cuStreamGetCtx(CUstream hStream, CUcontext *pctx);
 
 // Event management

@@ -36,6 +36,8 @@ int map_virtual_device_to_real(int virtual_device) {
 std::mutex g_ctx_mutex;
 std::unordered_map<CUcontext, int> g_ctx_to_virtual_device;
 std::atomic<std::uintptr_t> g_next_stream_handle{1};
+std::mutex g_stream_mutex;
+std::unordered_map<CUstream, unsigned int> g_stream_flags;
 
 void track_context_mapping(CUcontext ctx, int virtual_device) {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
@@ -47,6 +49,31 @@ int lookup_context_mapping(CUcontext ctx) {
     auto it = g_ctx_to_virtual_device.find(ctx);
     if (it == g_ctx_to_virtual_device.end()) return -1;
     return it->second;
+}
+
+bool lookup_stream_flags(CUstream stream, unsigned int& flags) {
+    if (stream == nullptr) {
+        flags = CU_STREAM_DEFAULT;
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    auto it = g_stream_flags.find(stream);
+    if (it == g_stream_flags.end()) return false;
+    flags = it->second;
+    return true;
+}
+
+bool erase_stream_handle(CUstream stream) {
+    if (stream == nullptr) {
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    return g_stream_flags.erase(stream) > 0;
+}
+
+void register_stream_handle(CUstream stream, unsigned int flags) {
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    g_stream_flags[stream] = flags;
 }
 
 } // namespace
@@ -1003,6 +1030,7 @@ CUresult cuStreamCreate(CUstream *phStream, unsigned int Flags) {
 
     // Return a stable but distinct opaque stream handle in simulate mode.
     *phStream = reinterpret_cast<CUstream>(g_next_stream_handle.fetch_add(1));
+    register_stream_handle(*phStream, Flags);
     FGPU_LOG("[FakeCUDA-Driver] cuStreamCreate returning fake stream\n");
     return CUDA_SUCCESS;
 }
@@ -1011,6 +1039,9 @@ CUresult cuStreamDestroy(CUstream hStream) {
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamDestroy(hStream);
+    }
+    if (!erase_stream_handle(hStream)) {
+        return CUDA_ERROR_INVALID_VALUE;
     }
     FGPU_LOG("[FakeCUDA-Driver] cuStreamDestroy\n");
     return CUDA_SUCCESS;
@@ -1021,6 +1052,10 @@ CUresult cuStreamSynchronize(CUstream hStream) {
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamSynchronize(hStream);
     }
+    unsigned int flags = 0;
+    if (!lookup_stream_flags(hStream, flags)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     FGPU_LOG("[FakeCUDA-Driver] cuStreamSynchronize (no-op)\n");
     return CUDA_SUCCESS;
 }
@@ -1030,6 +1065,10 @@ CUresult cuStreamQuery(CUstream hStream) {
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamQuery(hStream);
     }
+    unsigned int flags = 0;
+    if (!lookup_stream_flags(hStream, flags)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     return CUDA_SUCCESS;
 }
 
@@ -1037,6 +1076,10 @@ CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags)
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamWaitEvent(hStream, hEvent, Flags);
+    }
+    unsigned int flags = 0;
+    if (!lookup_stream_flags(hStream, flags)) {
+        return CUDA_ERROR_INVALID_VALUE;
     }
     return CUDA_SUCCESS;
 }
@@ -1050,6 +1093,10 @@ CUresult cuStreamGetPriority(CUstream hStream, int *priority) {
             return ((fn_t)fn)(hStream, priority);
         }
     }
+    unsigned int flags = 0;
+    if (!lookup_stream_flags(hStream, flags)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     if (priority) *priority = 0;
     return CUDA_SUCCESS;
 }
@@ -1059,7 +1106,12 @@ CUresult cuStreamGetFlags(CUstream hStream, unsigned int *flags) {
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamGetFlags(hStream, flags);
     }
-    if (flags) *flags = 0;
+    unsigned int stream_flags = 0;
+    if (!lookup_stream_flags(hStream, stream_flags)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if (!flags) return CUDA_ERROR_INVALID_VALUE;
+    *flags = stream_flags;
     return CUDA_SUCCESS;
 }
 
@@ -1071,6 +1123,10 @@ CUresult cuStreamGetCtx(CUstream hStream, CUcontext *pctx) {
             typedef CUresult (*fn_t)(CUstream, CUcontext*);
             return ((fn_t)fn)(hStream, pctx);
         }
+    }
+    unsigned int flags = 0;
+    if (!lookup_stream_flags(hStream, flags)) {
+        return CUDA_ERROR_INVALID_VALUE;
     }
     if (pctx) *pctx = (CUcontext)(uintptr_t)(current_context_device + 1);
     return CUDA_SUCCESS;
@@ -2098,11 +2154,19 @@ CUresult cuStreamCreateWithPriority(CUstream *phStream, unsigned int flags, int 
 }
 
 CUresult cuStreamGetId(CUstream hStream, unsigned long long *streamId) {
+    unsigned int flags = 0;
+    if (!lookup_stream_flags(hStream, flags)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     if (streamId) *streamId = (unsigned long long)(uintptr_t)hStream;
     return CUDA_SUCCESS;
 }
 
 CUresult cuStreamAddCallback(CUstream hStream, void *callback, void *userData, unsigned int flags) {
+    unsigned int stream_flags = 0;
+    if (!lookup_stream_flags(hStream, stream_flags)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     return CUDA_SUCCESS;
 }
 
