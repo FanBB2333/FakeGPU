@@ -9,6 +9,7 @@ namespace fake_gpu::distributed {
 
 enum class CollectiveType {
     AllReduce,
+    Reduce,
     Broadcast,
     AllGather,
     ReduceScatter,
@@ -56,6 +57,8 @@ inline const char* collective_type_name(CollectiveType type) {
     switch (type) {
         case CollectiveType::AllReduce:
             return "allreduce";
+        case CollectiveType::Reduce:
+            return "reduce";
         case CollectiveType::Broadcast:
             return "broadcast";
         case CollectiveType::AllGather:
@@ -99,6 +102,10 @@ inline const char* collective_reduce_op_name(CollectiveReduceOp op) {
 inline bool parse_collective_type(const std::string& text, CollectiveType& out) {
     if (text == "allreduce") {
         out = CollectiveType::AllReduce;
+        return true;
+    }
+    if (text == "reduce") {
+        out = CollectiveType::Reduce;
         return true;
     }
     if (text == "broadcast") {
@@ -175,6 +182,10 @@ inline std::size_t collective_data_type_size(CollectiveDataType dtype) {
 }
 
 CollectiveExecutionResult execute_allreduce_sum(
+    const CollectiveExecutionRequest& request,
+    const std::vector<CollectiveExecutionParticipant>& participants);
+
+CollectiveExecutionResult execute_reduce(
     const CollectiveExecutionRequest& request,
     const std::vector<CollectiveExecutionParticipant>& participants);
 

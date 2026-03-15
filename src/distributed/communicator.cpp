@@ -73,6 +73,7 @@ struct RegistryImpl {
         std::size_t world_size = 0;
         std::size_t communicator_count = 0;
         ClusterCollectiveReportStats all_reduce;
+        ClusterCollectiveReportStats reduce;
         ClusterCollectiveReportStats broadcast;
         ClusterCollectiveReportStats all_gather;
         ClusterCollectiveReportStats reduce_scatter;
@@ -167,6 +168,8 @@ ClusterCollectiveReportStats& collective_report_stats_for_type_locked(
     switch (type) {
         case CollectiveType::AllReduce:
             return registry.report.all_reduce;
+        case CollectiveType::Reduce:
+            return registry.report.reduce;
         case CollectiveType::Broadcast:
             return registry.report.broadcast;
         case CollectiveType::AllGather:
@@ -485,6 +488,9 @@ CollectiveExecutionResult execute_collective_locked(
     if (request.type == CollectiveType::AllReduce) {
         return execute_allreduce_sum(execution_request, participants);
     }
+    if (request.type == CollectiveType::Reduce) {
+        return execute_reduce(execution_request, participants);
+    }
     if (request.type == CollectiveType::Broadcast) {
         return execute_broadcast(execution_request, participants);
     }
@@ -655,9 +661,12 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     if (request.rank >= state->world_size) {
         return make_collective_error("invalid_rank", "rank must be within [0, world_size)");
     }
-    if (request.type == CollectiveType::Broadcast) {
+    if (request.type == CollectiveType::Broadcast || request.type == CollectiveType::Reduce) {
         if (request.root < 0 || request.root >= state->world_size) {
-            return make_collective_error("invalid_root", "broadcast root must be within [0, world_size)");
+            return make_collective_error(
+                "invalid_root",
+                std::string(collective_type_name(request.type)) +
+                    " root must be within [0, world_size)");
         }
     }
 
@@ -997,6 +1006,7 @@ ClusterReportSnapshot snapshot_cluster_report() {
     snapshot.world_size = registry.report.world_size;
     snapshot.communicator_count = registry.report.communicator_count;
     snapshot.all_reduce = registry.report.all_reduce;
+    snapshot.reduce = registry.report.reduce;
     snapshot.broadcast = registry.report.broadcast;
     snapshot.all_gather = registry.report.all_gather;
     snapshot.reduce_scatter = registry.report.reduce_scatter;
@@ -1032,6 +1042,7 @@ ClusterReportSnapshot snapshot_cluster_report() {
     snapshot.has_data =
         snapshot.communicator_count > 0 ||
         snapshot.all_reduce.calls > 0 ||
+        snapshot.reduce.calls > 0 ||
         snapshot.broadcast.calls > 0 ||
         snapshot.all_gather.calls > 0 ||
         snapshot.reduce_scatter.calls > 0 ||
