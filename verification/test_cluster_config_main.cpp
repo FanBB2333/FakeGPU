@@ -16,6 +16,7 @@ int main() {
               << fake_gpu::distributed::coordinator_transport_name(dist.coordinator_transport) << "\n";
     std::cout << "coordinator_addr=" << (dist.coordinator_address.empty() ? "<none>" : dist.coordinator_address) << "\n";
     std::cout << "cluster_config=" << (dist.cluster_config_path.empty() ? "<none>" : dist.cluster_config_path) << "\n";
+    std::cout << "staging_chunk_bytes=" << dist.staging_chunk_bytes << "\n";
     if (dist.cluster_config.loaded()) {
         std::cout << "cluster_name=" << dist.cluster_config.name << "\n";
         std::cout << "world_size=" << dist.cluster_config.world_size << "\n";

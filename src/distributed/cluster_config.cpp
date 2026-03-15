@@ -115,6 +115,26 @@ bool parse_double(const std::string& text, double& out) {
     }
 }
 
+bool parse_size_value(const std::string& text, std::size_t& out) {
+    if (!is_digits(text)) {
+        return false;
+    }
+    try {
+        std::size_t consumed = 0;
+        const unsigned long long parsed = std::stoull(text, &consumed, 10);
+        if (consumed != text.size()) {
+            return false;
+        }
+        if (parsed > std::numeric_limits<std::size_t>::max()) {
+            return false;
+        }
+        out = static_cast<std::size_t>(parsed);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 bool assign_fabric_field(FabricLinkConfig& fabric, const std::string& key, const std::string& value, std::string& error) {
     if (key == "type") {
         fabric.type = value;
@@ -558,6 +578,17 @@ DistributedConfig parse_distributed_config_from_env() {
 
     if (!config.enabled()) {
         return config;
+    }
+
+    const std::string raw_staging_chunk_bytes = env_or_empty("FAKEGPU_STAGING_CHUNK_BYTES");
+    if (!raw_staging_chunk_bytes.empty()) {
+        if (!parse_size_value(raw_staging_chunk_bytes, config.staging_chunk_bytes) ||
+            config.staging_chunk_bytes == 0) {
+            config.validation_error =
+                "Invalid FAKEGPU_STAGING_CHUNK_BYTES: " + raw_staging_chunk_bytes +
+                ". Expected a positive integer.";
+            return config;
+        }
     }
 
     if (config.coordinator_address.empty()) {

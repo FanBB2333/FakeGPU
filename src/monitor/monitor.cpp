@@ -118,22 +118,48 @@ private:
         }
         fprintf(out, "  },\n");
         fprintf(out, "  \"collectives\": {\n");
-        fprintf(out, "    \"all_reduce\": {\"calls\": %llu, \"bytes\": %llu},\n",
+        fprintf(out, "    \"all_reduce\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
                 (unsigned long long)cluster_snapshot.all_reduce.calls,
-                (unsigned long long)cluster_snapshot.all_reduce.bytes);
-        fprintf(out, "    \"broadcast\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                (unsigned long long)cluster_snapshot.all_reduce.bytes,
+                cluster_snapshot.all_reduce.estimated_time_us_total,
+                cluster_snapshot.all_reduce.contention_penalty_us_total);
+        fprintf(out, "    \"broadcast\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
                 (unsigned long long)cluster_snapshot.broadcast.calls,
-                (unsigned long long)cluster_snapshot.broadcast.bytes);
-        fprintf(out, "    \"all_gather\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                (unsigned long long)cluster_snapshot.broadcast.bytes,
+                cluster_snapshot.broadcast.estimated_time_us_total,
+                cluster_snapshot.broadcast.contention_penalty_us_total);
+        fprintf(out, "    \"all_gather\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
                 (unsigned long long)cluster_snapshot.all_gather.calls,
-                (unsigned long long)cluster_snapshot.all_gather.bytes);
-        fprintf(out, "    \"reduce_scatter\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                (unsigned long long)cluster_snapshot.all_gather.bytes,
+                cluster_snapshot.all_gather.estimated_time_us_total,
+                cluster_snapshot.all_gather.contention_penalty_us_total);
+        fprintf(out, "    \"reduce_scatter\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
                 (unsigned long long)cluster_snapshot.reduce_scatter.calls,
-                (unsigned long long)cluster_snapshot.reduce_scatter.bytes);
-        fprintf(out, "    \"barrier\": {\"calls\": %llu, \"bytes\": %llu}\n",
+                (unsigned long long)cluster_snapshot.reduce_scatter.bytes,
+                cluster_snapshot.reduce_scatter.estimated_time_us_total,
+                cluster_snapshot.reduce_scatter.contention_penalty_us_total);
+        fprintf(out, "    \"barrier\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f}\n",
                 (unsigned long long)cluster_snapshot.barrier.calls,
-                (unsigned long long)cluster_snapshot.barrier.bytes);
+                (unsigned long long)cluster_snapshot.barrier.bytes,
+                cluster_snapshot.barrier.estimated_time_us_total,
+                cluster_snapshot.barrier.contention_penalty_us_total);
         fprintf(out, "  },\n");
+        fprintf(out, "  \"links\": [\n");
+        for (std::size_t index = 0; index < cluster_snapshot.links.size(); ++index) {
+            const auto& link_stats = cluster_snapshot.links[index];
+            fprintf(out, "    {\n");
+            fprintf(out, "      \"src\": \"%s\",\n", link_stats.src_node.c_str());
+            fprintf(out, "      \"dst\": \"%s\",\n", link_stats.dst_node.c_str());
+            fprintf(out, "      \"scope\": \"%s\",\n", link_stats.scope.c_str());
+            fprintf(out, "      \"samples\": %llu,\n", (unsigned long long)link_stats.samples);
+            fprintf(out, "      \"bytes\": %llu,\n", (unsigned long long)link_stats.bytes);
+            fprintf(out, "      \"bandwidth_gbps\": %.3f,\n", link_stats.bandwidth_gbps);
+            fprintf(out, "      \"avg_latency_us\": %.3f,\n", link_stats.avg_latency_us);
+            fprintf(out, "      \"estimated_time_us_total\": %.3f,\n", link_stats.estimated_time_us_total);
+            fprintf(out, "      \"contention_penalty_us_total\": %.3f\n", link_stats.contention_penalty_us_total);
+            fprintf(out, "    }%s\n", (index + 1 < cluster_snapshot.links.size() ? "," : ""));
+        }
+        fprintf(out, "  ],\n");
         fprintf(out, "  \"ranks\": [\n");
         for (std::size_t index = 0; index < cluster_snapshot.ranks.size(); ++index) {
             const auto& rank_stats = cluster_snapshot.ranks[index];

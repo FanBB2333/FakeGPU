@@ -1,5 +1,8 @@
 #include "communicator.hpp"
 
+#include "../core/backend_config.hpp"
+#include "topology_model.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -74,6 +77,7 @@ struct RegistryImpl {
         ClusterCollectiveReportStats all_gather;
         ClusterCollectiveReportStats reduce_scatter;
         ClusterCollectiveReportStats barrier;
+        std::unordered_map<std::string, ClusterLinkReportStats> links;
         std::unordered_map<int, ClusterRankReportStats> ranks;
     } report;
 };
@@ -188,6 +192,56 @@ void record_collective_completion_locked(
     for (const auto& entry : collective->participants) {
         ClusterRankReportStats& rank_stats = ensure_rank_report_locked(registry, entry.first);
         rank_stats.collective_calls++;
+    }
+
+    const DistributedConfig& dist_config = fake_gpu::BackendConfig::instance().distributed_config();
+    if (!dist_config.cluster_config.loaded()) {
+        return;
+    }
+
+    TopologyModel topology_model;
+    std::string topology_error;
+    if (!TopologyModel::build(dist_config.cluster_config, topology_model, topology_error)) {
+        return;
+    }
+
+    CollectiveTopologyEstimate estimate;
+    if (!topology_model.estimate_ring_collective(
+            collective->request.type,
+            static_cast<std::uint64_t>(collective->request.bytes),
+            estimate,
+            topology_error)) {
+        return;
+    }
+
+    stats.estimated_time_us_total += estimate.estimated_time_us;
+
+    for (const TopologyLinkEstimate& link : estimate.links) {
+        const double transfer_without_penalty_us =
+            (static_cast<double>(link.bytes) * 8.0) / (link.bandwidth_gbps * 1000.0);
+        const double contention_penalty_us =
+            transfer_without_penalty_us * std::max(0.0, link.oversubscription - 1.0);
+
+        stats.contention_penalty_us_total += contention_penalty_us;
+
+        const std::string key = link.src_node + "\n" + link.dst_node + "\n" +
+                                topology_link_scope_name(link.scope);
+        auto [it, inserted] = registry.report.links.emplace(key, ClusterLinkReportStats{});
+        ClusterLinkReportStats& link_stats = it->second;
+        if (inserted) {
+            link_stats.src_node = link.src_node;
+            link_stats.dst_node = link.dst_node;
+            link_stats.scope = topology_link_scope_name(link.scope);
+            link_stats.bandwidth_gbps = link.bandwidth_gbps;
+        }
+        link_stats.samples += link.hop_count;
+        link_stats.bytes += link.bytes;
+        link_stats.avg_latency_us =
+            ((link_stats.avg_latency_us * static_cast<double>(link_stats.samples - link.hop_count)) +
+             (link.latency_us * static_cast<double>(link.hop_count))) /
+            static_cast<double>(link_stats.samples);
+        link_stats.estimated_time_us_total += link.estimated_time_us;
+        link_stats.contention_penalty_us_total += contention_penalty_us;
     }
 }
 
@@ -932,11 +986,27 @@ ClusterReportSnapshot snapshot_cluster_report() {
     snapshot.all_gather = registry.report.all_gather;
     snapshot.reduce_scatter = registry.report.reduce_scatter;
     snapshot.barrier = registry.report.barrier;
+    snapshot.links.reserve(registry.report.links.size());
     snapshot.ranks.reserve(registry.report.ranks.size());
 
+    for (const auto& entry : registry.report.links) {
+        snapshot.links.push_back(entry.second);
+    }
     for (const auto& entry : registry.report.ranks) {
         snapshot.ranks.push_back(entry.second);
     }
+    std::sort(
+        snapshot.links.begin(),
+        snapshot.links.end(),
+        [](const ClusterLinkReportStats& lhs, const ClusterLinkReportStats& rhs) {
+            if (lhs.src_node != rhs.src_node) {
+                return lhs.src_node < rhs.src_node;
+            }
+            if (lhs.dst_node != rhs.dst_node) {
+                return lhs.dst_node < rhs.dst_node;
+            }
+            return lhs.scope < rhs.scope;
+        });
     std::sort(
         snapshot.ranks.begin(),
         snapshot.ranks.end(),
@@ -951,6 +1021,7 @@ ClusterReportSnapshot snapshot_cluster_report() {
         snapshot.all_gather.calls > 0 ||
         snapshot.reduce_scatter.calls > 0 ||
         snapshot.barrier.calls > 0 ||
+        !snapshot.links.empty() ||
         !snapshot.ranks.empty();
     return snapshot;
 }

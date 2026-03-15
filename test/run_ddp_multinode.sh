@@ -112,6 +112,7 @@ python3 "$PROJECT_ROOT/verification/check_cluster_report.py" \
     --expect-node-count 2 \
     --expect-collective all_reduce \
     --expect-collective broadcast \
+    --expect-links \
     --min-ranks "$NPROC"
 CHECK_REPORT_EXIT="$?"
 set -e
@@ -205,6 +206,7 @@ if cluster_report is None:
 else:
     cluster = cluster_report.get("cluster", {})
     collectives = cluster_report.get("collectives", {})
+    links = cluster_report.get("links", [])
     lines.append(
         f"- world_size={cluster.get('world_size')} node_count={cluster.get('node_count')} "
         f"communicators={cluster.get('communicators')}"
@@ -212,6 +214,7 @@ else:
     for name in ("all_reduce", "broadcast", "barrier"):
         stats = collectives.get(name, {})
         lines.append(f"- {name}: calls={stats.get('calls')} bytes={stats.get('bytes')}")
+    lines.append(f"- links: {len(links)}")
 
 lines.extend([
     "",
@@ -220,7 +223,7 @@ lines.extend([
 ])
 
 if run_log.exists():
-    excerpt = run_log.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]
+    excerpt = [line.rstrip() for line in run_log.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]]
     if excerpt:
         lines.extend([f"- {line}" for line in excerpt])
     else:

@@ -1352,28 +1352,28 @@ src/nccl/
 
 范围：
 
-- [ ] Step 16：拓扑配置接入
-- [ ] Step 17：时间模型与链路级统计
-- [ ] Step 18：Chunked Staging
+- [x] Step 16：拓扑配置接入
+- [x] Step 17：时间模型与链路级统计
+- [x] Step 18：Chunked Staging
 
 本次完成标准：
 
-- [ ] fabric 配置可进入模型计算
-- [ ] link 级统计出现在报告中
-- [ ] 慢链路下耗时高于快链路
-- [ ] 大 tensor 在 chunked 模式下可完成传输且结果一致
+- [x] fabric 配置可进入模型计算
+- [x] link 级统计出现在报告中
+- [x] 慢链路下耗时高于快链路
+- [x] 大 tensor 在 chunked 模式下可完成传输且结果一致
 
 #### 第 9 次：Step 19 + Step 20 + Step 21
 
 范围：
 
-- [ ] Step 19：Hybrid + Simulate 混合运行
+- [x] Step 19：Hybrid + Simulate 混合运行
 - [ ] Step 20：Proxy / Passthrough 试验版
 - [ ] Step 21：远端 Coordinator 与多机扩展
 
 本次完成标准：
 
-- [ ] `hybrid + simulate` 可完成 host staging 和 collective 同步
+- [x] `hybrid + simulate` 可完成 host staging 和 collective 同步
 - [ ] `proxy` 模式能与 baseline NCCL 做输出对比
 - [ ] TCP transport 可支持远端 coordinator
 - [ ] 网络异常时 communicator 可明确回收或失败

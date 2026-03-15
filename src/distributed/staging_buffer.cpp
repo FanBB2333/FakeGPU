@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -57,6 +58,31 @@ bool unlink_name(const std::string& name, bool missing_ok, std::string& error) {
     }
     error = "shm_unlink() failed: " + std::string(std::strerror(errno));
     return false;
+}
+
+bool resolve_staging_limit_bytes(std::size_t& out, std::string& error) {
+    out = 0;
+
+    const char* raw = std::getenv("FAKEGPU_STAGING_MAX_BYTES");
+    if (!raw || !*raw) {
+        return true;
+    }
+
+    char* end = nullptr;
+    errno = 0;
+    const unsigned long long parsed = std::strtoull(raw, &end, 10);
+    if (errno != 0 || end == raw || (end && *end != '\0')) {
+        error =
+            "Invalid FAKEGPU_STAGING_MAX_BYTES: " + std::string(raw) +
+            ". Expected a positive integer.";
+        return false;
+    }
+    out = static_cast<std::size_t>(parsed);
+    if (out == 0) {
+        error = "FAKEGPU_STAGING_MAX_BYTES must be > 0 when set";
+        return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -163,6 +189,17 @@ bool StagingBufferManager::create(
     error.clear();
 
     if (!validate_metadata(metadata, error)) {
+        return false;
+    }
+
+    std::size_t staging_limit_bytes = 0;
+    if (!resolve_staging_limit_bytes(staging_limit_bytes, error)) {
+        return false;
+    }
+    if (staging_limit_bytes > 0 && metadata.bytes > staging_limit_bytes) {
+        error =
+            "staging buffer bytes exceed FAKEGPU_STAGING_MAX_BYTES=" +
+            std::to_string(staging_limit_bytes);
         return false;
     }
 

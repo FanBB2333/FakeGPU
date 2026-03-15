@@ -19,6 +19,8 @@ def run_case(name: str, env_updates: dict[str, str], expected_rc: int, expect_te
     env.pop("FAKEGPU_CLUSTER_CONFIG", None)
     env.pop("FAKEGPU_COORDINATOR_ADDR", None)
     env.pop("FAKEGPU_COORDINATOR_TRANSPORT", None)
+    env.pop("FAKEGPU_STAGING_CHUNK_BYTES", None)
+    env.pop("FAKEGPU_STAGING_MAX_BYTES", None)
     env.update(env_updates)
 
     completed = subprocess.run(
@@ -68,6 +70,16 @@ def main() -> int:
         expect_text="coordinator_addr=127.0.0.1:29591",
     )
     run_case(
+        "simulate_chunking_valid",
+        {
+            "FAKEGPU_DIST_MODE": "simulate",
+            "FAKEGPU_COORDINATOR_ADDR": "127.0.0.1:29591",
+            "FAKEGPU_STAGING_CHUNK_BYTES": "65536",
+        },
+        expected_rc=0,
+        expect_text="staging_chunk_bytes=65536",
+    )
+    run_case(
         "invalid_mode",
         {
             "FAKEGPU_DIST_MODE": "broken",
@@ -84,6 +96,17 @@ def main() -> int:
         },
         expected_rc=2,
         expect_text="FAKEGPU_COORDINATOR_ADDR must be set",
+        stream="stderr",
+    )
+    run_case(
+        "invalid_staging_chunk_bytes",
+        {
+            "FAKEGPU_DIST_MODE": "simulate",
+            "FAKEGPU_COORDINATOR_ADDR": "127.0.0.1:29591",
+            "FAKEGPU_STAGING_CHUNK_BYTES": "abc",
+        },
+        expected_rc=2,
+        expect_text="Invalid FAKEGPU_STAGING_CHUNK_BYTES",
         stream="stderr",
     )
     print("all cluster config checks passed")

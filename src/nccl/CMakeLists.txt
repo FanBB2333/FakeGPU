@@ -1,5 +1,6 @@
 add_library(fake_gpu_nccl OBJECT
     nccl_stubs.cpp
+    staging_adapter.cpp
 )
 
 target_include_directories(fake_gpu_nccl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -213,12 +213,16 @@ void assert_equal_vectors<float>(
 }
 
 template <typename T>
-void run_allreduce_case(int world_size, ncclDataType_t datatype, const std::string& label) {
+void run_allreduce_case(
+    int world_size,
+    ncclDataType_t datatype,
+    const std::string& label,
+    std::size_t count = 8) {
     std::vector<ncclComm_t> comms = init_communicators(world_size);
-    const std::size_t count = 8;
     const std::vector<T> reference = make_allreduce_reference<T>(world_size, count);
 
     for (int iteration = 0; iteration < 3; ++iteration) {
+        const bool grouped = iteration == 2;
         std::vector<std::vector<T>> send_buffers;
         std::vector<std::vector<T>> recv_buffers(static_cast<std::size_t>(world_size), std::vector<T>(count, {}));
         std::vector<ncclResult_t> results(static_cast<std::size_t>(world_size), ncclInternalError);
@@ -231,6 +235,24 @@ void run_allreduce_case(int world_size, ncclDataType_t datatype, const std::stri
 
         for (int rank = 0; rank < world_size; ++rank) {
             threads.emplace_back([&, rank]() {
+                if (grouped) {
+                    require_result(ncclGroupStart(), ncclSuccess, label + " ncclGroupStart failed");
+                    ncclResult_t inner = ncclAllReduce(
+                        send_buffers[static_cast<std::size_t>(rank)].data(),
+                        recv_buffers[static_cast<std::size_t>(rank)].data(),
+                        count,
+                        datatype,
+                        ncclSum,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr);
+                    if (inner != ncclSuccess) {
+                        ncclGroupSimulateEnd(nullptr);
+                        results[static_cast<std::size_t>(rank)] = inner;
+                        return;
+                    }
+                    results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
+                    return;
+                }
                 results[static_cast<std::size_t>(rank)] = ncclAllReduce(
                     send_buffers[static_cast<std::size_t>(rank)].data(),
                     recv_buffers[static_cast<std::size_t>(rank)].data(),
@@ -259,9 +281,12 @@ void run_allreduce_case(int world_size, ncclDataType_t datatype, const std::stri
 }
 
 template <typename T>
-void run_allgather_case(int world_size, ncclDataType_t datatype, const std::string& label) {
+void run_allgather_case(
+    int world_size,
+    ncclDataType_t datatype,
+    const std::string& label,
+    std::size_t sendcount = 5) {
     std::vector<ncclComm_t> comms = init_communicators(world_size);
-    const std::size_t sendcount = 5;
     const std::vector<T> reference = make_allgather_reference<T>(world_size, sendcount);
 
     for (int iteration = 0; iteration < 3; ++iteration) {
@@ -325,9 +350,12 @@ void run_allgather_case(int world_size, ncclDataType_t datatype, const std::stri
 }
 
 template <typename T>
-void run_reducescatter_case(int world_size, ncclDataType_t datatype, const std::string& label) {
+void run_reducescatter_case(
+    int world_size,
+    ncclDataType_t datatype,
+    const std::string& label,
+    std::size_t recvcount = 4) {
     std::vector<ncclComm_t> comms = init_communicators(world_size);
-    const std::size_t recvcount = 4;
     const std::size_t total_count = recvcount * static_cast<std::size_t>(world_size);
 
     for (int iteration = 0; iteration < 3; ++iteration) {
@@ -396,12 +424,17 @@ void run_reducescatter_case(int world_size, ncclDataType_t datatype, const std::
 }
 
 template <typename T>
-void run_broadcast_case(int world_size, int root, ncclDataType_t datatype, const std::string& label) {
+void run_broadcast_case(
+    int world_size,
+    int root,
+    ncclDataType_t datatype,
+    const std::string& label,
+    std::size_t count = 6) {
     std::vector<ncclComm_t> comms = init_communicators(world_size);
-    const std::size_t count = 6;
     const std::vector<T> root_values = make_rank_values<T>(root, count);
 
     for (int iteration = 0; iteration < 3; ++iteration) {
+        const bool grouped = iteration == 2;
         std::vector<std::vector<T>> recv_buffers(static_cast<std::size_t>(world_size), std::vector<T>(count, {}));
         std::vector<ncclResult_t> results(static_cast<std::size_t>(world_size), ncclInternalError);
         std::vector<std::thread> threads;
@@ -411,6 +444,24 @@ void run_broadcast_case(int world_size, int root, ncclDataType_t datatype, const
                 const T* send_ptr = nullptr;
                 if (rank == root) {
                     send_ptr = root_values.data();
+                }
+                if (grouped) {
+                    require_result(ncclGroupStart(), ncclSuccess, label + " ncclGroupStart failed");
+                    ncclResult_t inner = ncclBroadcast(
+                        send_ptr,
+                        recv_buffers[static_cast<std::size_t>(rank)].data(),
+                        count,
+                        datatype,
+                        root,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr);
+                    if (inner != ncclSuccess) {
+                        ncclGroupSimulateEnd(nullptr);
+                        results[static_cast<std::size_t>(rank)] = inner;
+                        return;
+                    }
+                    results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
+                    return;
                 }
                 results[static_cast<std::size_t>(rank)] = ncclBroadcast(
                     send_ptr,
@@ -606,6 +657,13 @@ void run_reducescatter_scenario() {
     run_reducescatter_case<std::int32_t>(4, ncclInt32, "4-rank int32");
 }
 
+void run_chunked_scenario() {
+    run_allreduce_case<float>(4, ncclFloat32, "4-rank chunked float32", 65536);
+    run_broadcast_case<float>(4, 3, ncclFloat32, "4-rank chunked broadcast", 65536);
+    run_allgather_case<float>(4, ncclFloat32, "4-rank chunked allgather", 16384);
+    run_reducescatter_case<float>(4, ncclFloat32, "4-rank chunked reducescatter", 16384);
+}
+
 void run_mismatch_scenario() {
     run_type_mismatch_case();
     run_dtype_mismatch_case();
@@ -647,6 +705,12 @@ int main(int argc, char** argv) {
             run_reducescatter_scenario();
             fake_gpu::dump_monitor_report();
             std::cout << "reducescatter scenario passed" << std::endl;
+            return 0;
+        }
+        if (scenario == "chunked") {
+            run_chunked_scenario();
+            fake_gpu::dump_monitor_report();
+            std::cout << "chunked scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "mismatch") {

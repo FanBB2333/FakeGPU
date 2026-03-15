@@ -265,6 +265,14 @@ add_executable(fakegpu_config_probe
 target_include_directories(fakegpu_config_probe PRIVATE src/core src/distributed)
 target_link_libraries(fakegpu_config_probe PRIVATE Threads::Threads)
 
+add_executable(fakegpu_topology_probe
+    verification/test_topology_model_main.cpp
+    $<TARGET_OBJECTS:fake_gpu_core>
+    $<TARGET_OBJECTS:fake_gpu_distributed>
+)
+target_include_directories(fakegpu_topology_probe PRIVATE src/core src/distributed)
+target_link_libraries(fakegpu_topology_probe PRIVATE Threads::Threads)
+
 add_executable(fakegpu_coordinator
     src/distributed/coordinator_main.cpp
     $<TARGET_OBJECTS:fake_gpu_core>
