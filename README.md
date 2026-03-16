@@ -1,6 +1,6 @@
 # FakeGPU
 
-A CUDA API interception library that simulates GPU devices in non-GPU environments, enabling basic operations for PyTorch and other deep learning frameworks.
+A CUDA API interception library that simulates GPU devices in non-GPU environments, enabling basic operations for PyTorch and other deep learning frameworks, and supporting single-host multi-process distributed simulation for NCCL-style workloads.
 
 ## Timeline
 
@@ -9,8 +9,12 @@ A CUDA API interception library that simulates GPU devices in non-GPU environmen
 - [x] **CUDA Runtime API** - cudaMalloc/Free, cudaMemcpy, Stream, Event
 - [x] **cuBLAS/cuBLASLt** - Matrix operations (GEMM, PyTorch 2.x compatible)
 - [x] **NVML API** - GPU information queries
+- [x] **Distributed Communication Simulation** - Fake NCCL init, collective ops, point-to-point send/recv, communicator split, grouped submission
+- [x] **Coordinator & Topology Model** - Single-host multi-process cluster simulation with Unix/TCP coordinator transport and YAML cluster config
+- [x] **Cluster-Level Reporting** - Collective counts/bytes/timing plus inter-node and intra-node link statistics
 - [x] **Python API Wrapper** - `import fakegpu; fakegpu.init()` enables FakeGPU from inside Python
 - [x] **PyTorch Support** - Basic tensor ops, linear layers, neural networks
+- [x] **PyTorch Distributed / DDP Smoke Path** - Single-host simulated multi-node DDP validation path
 - [x] **Real Scenario Testing** - LLM inference smoke test (Qwen2.5-0.5B-Instruct)
 - [x] **GPU Tool Compatibility** - Compatible with existing GPU status monitoring tools (nvidia-smi, gpustat, etc.)
 - [x] **Preset GPU Info** - Add more preset GPU hardware configurations
@@ -18,12 +22,13 @@ A CUDA API interception library that simulates GPU devices in non-GPU environmen
 - [x] **Multi-Architecture & Data Types** - Support different GPU architectures and various data storage/memory types
 
 ### Planned Features
-- [ ] **Multi-Node GPU Communication** - Simulate cross-node GPU communication (NCCL, etc.)
+- [ ] **Deeper Protocol Fidelity** - Better overlap/ordering realism beyond semantic NCCL simulation
+- [ ] **Broader Multi-Host Validation** - More real multi-machine coverage beyond current single-host and loopback transport validation
 - [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
 
 ## Operation Modes
 
-FakeGPU supports three operation modes, controlled by the `FAKEGPU_MODE` environment variable:
+FakeGPU supports three compute modes, controlled by the `FAKEGPU_MODE` environment variable:
 
 ### Simulate Mode (Default)
 ```bash
@@ -62,6 +67,36 @@ FAKEGPU_MODE=hybrid FAKEGPU_OOM_POLICY=clamp ./fgpu python your_script.py
 FAKEGPU_MODE={simulate,passthrough,hybrid}  # Operation mode
 FAKEGPU_OOM_POLICY={clamp,managed,mapped_host,spill_cpu}  # OOM policy for hybrid mode
 FAKEGPU_REAL_CUDA_LIB_DIR=/path/to/cuda/lib  # Custom CUDA library path
+```
+
+## Distributed Communication Modes
+
+Distributed communication is controlled separately by `FAKEGPU_DIST_MODE` so compute mode and communication mode can be combined.
+
+| `FAKEGPU_DIST_MODE` | Meaning |
+|---|---|
+| `disabled` | No FakeGPU distributed layer |
+| `simulate` | FakeGPU coordinator executes collectives / p2p using simulated topology |
+| `proxy` | Real NCCL executes collectives while FakeGPU records control-plane and cluster-report data |
+| `passthrough` | Thin forwarding to real NCCL with minimal FakeGPU wrapping |
+
+For first-time setup, the recommended mode pair is:
+
+```bash
+FAKEGPU_MODE=simulate
+FAKEGPU_DIST_MODE=simulate
+```
+
+Useful distributed environment variables:
+
+```bash
+FAKEGPU_DIST_MODE={disabled,simulate,proxy,passthrough}
+FAKEGPU_CLUSTER_CONFIG=/abs/path/to/cluster.yaml
+FAKEGPU_COORDINATOR_TRANSPORT={unix,tcp}
+FAKEGPU_COORDINATOR_ADDR=/tmp/fakegpu.sock        # or 127.0.0.1:29591 for tcp
+FAKEGPU_CLUSTER_REPORT_PATH=/path/to/cluster-report.json
+FAKEGPU_STAGING_CHUNK_BYTES=1048576
+FAKEGPU_STAGING_FORCE_SOCKET=1
 ```
 
 **Report Output (Hybrid mode):**
@@ -106,6 +141,8 @@ Generated libraries:
   - `build/libcudart.so.12` - CUDA Runtime API
   - `build/libcublas.so.12` - cuBLAS/cuBLASLt API
   - `build/libnvidia-ml.so.1` - NVML API
+  - `build/libnccl.so.2` - Fake NCCL shim for distributed simulation / proxy / passthrough
+  - `build/fakegpu-coordinator` - Coordinator daemon for distributed communication
 - macOS:
   - `build/libcuda.dylib` - CUDA Driver API
   - `build/libcudart.dylib` - CUDA Runtime API
@@ -133,6 +170,16 @@ Runs identical tests on both real GPU and FakeGPU to verify correctness.
 ```bash
 ./fgpu python3 test/test_comparison.py --mode fake
 ```
+
+**Distributed smoke / validation:**
+```bash
+./test/run_multinode_sim.sh 2      # 2-rank smoke
+./test/run_multinode_sim.sh 4      # 4-rank smoke
+./test/run_ddp_multinode.sh 4      # 4-rank DDP main path
+./test/run_hybrid_multinode.sh 2   # hybrid compute + simulated communication
+```
+
+These scripts write logs and reports under `test/output/`, including cluster-level communication reports.
 
 ### Usage
 
@@ -193,6 +240,45 @@ fakegpu python your_script.py
 # or: python -m fakegpu python your_script.py
 ```
 
+**Distributed runner example (single host, simulated multi-node):**
+```bash
+SOCKET_PATH=/tmp/fakegpu-coordinator.sock
+CLUSTER_CONFIG=$PWD/verification/data/cluster_valid.yaml
+
+FAKEGPU_DIST_MODE=simulate \
+FAKEGPU_CLUSTER_CONFIG="$CLUSTER_CONFIG" \
+FAKEGPU_COORDINATOR_TRANSPORT=unix \
+FAKEGPU_COORDINATOR_ADDR="$SOCKET_PATH" \
+FAKEGPU_CLUSTER_REPORT_PATH=/tmp/fakegpu-cluster-report.json \
+./build/fakegpu-coordinator --transport unix --address "$SOCKET_PATH"
+```
+
+In another terminal:
+```bash
+SOCKET_PATH=/tmp/fakegpu-coordinator.sock
+CLUSTER_CONFIG=$PWD/verification/data/cluster_valid.yaml
+
+export LD_PRELOAD="$PWD/build/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
+
+./fgpu \
+  --mode simulate \
+  --dist-mode simulate \
+  --cluster-config "$CLUSTER_CONFIG" \
+  --coordinator-transport unix \
+  --coordinator-addr "$SOCKET_PATH" \
+  --device-count 4 \
+  torchrun \
+  --nnodes=1 \
+  --nproc_per_node=4 \
+  --master_addr 127.0.0.1 \
+  --master_port 29500 \
+  test/test_ddp_multinode.py \
+  --report-dir /tmp/fakegpu-rank-reports \
+  --epochs 1
+```
+
+For a more complete walkthrough, see `docs/distributed-sim-usage.md`.
+
 **GPU tools (nvidia-smi)**
 ```bash
 # FakeGPU-simulated devices via NVML stubs
@@ -206,6 +292,12 @@ FakeGPU writes `fake_gpu_report.json` at program exit (also triggered by `nvmlSh
 - Per-device `used_memory_peak` (peak VRAM requirement)
 - Per-device IO bytes/calls: H2D / D2H / D2D / peer copies + memset
 - Per-device compute FLOPs/calls for GEMM/Matmul (`cuBLAS` / `cuBLASLt`)
+
+When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU also writes a cluster-level JSON report with:
+- Cluster/world-size metadata
+- Collective counts, bytes, and estimated time
+- Intra-node and inter-node link statistics
+- Experimental topology/timing fields used by the distributed validation scripts
 
 Notes:
 - FLOPs are theoretical estimates (GEMM ≈ `2*m*n*k`, complex GEMM uses a larger factor); kernel launches are no-ops and not counted.
@@ -231,6 +323,8 @@ FakeGPU
 │   ├── core/          # Global state and device management
 │   ├── cuda/          # CUDA Driver/Runtime API stubs
 │   ├── cublas/        # cuBLAS/cuBLASLt API stubs
+│   ├── distributed/   # Coordinator, topology config, communicator, staging, collective execution
+│   ├── nccl/          # Fake NCCL shim plus proxy/passthrough dispatch
 │   ├── nvml/          # NVML API stubs
 │   └── monitor/       # Resource monitoring and reporting
 └── test/              # Test scripts
@@ -257,7 +351,9 @@ FakeGPU
 
 - ❌ No real GPU execution (CUDA kernels are no-ops; supported cuBLAS/cuBLASLt ops run on CPU)
 - ❌ Complex models (Transformers) may require additional APIs
-- ❌ No multi-GPU synchronization
+- ⚠️ Distributed support is a semantic simulator, not a protocol-level recreation of NCCL/RDMA/NVLink internals
+- ⚠️ The most validated distributed path is still single-host multi-process simulation; TCP coordinator support exists, but real multi-machine coverage is more limited
+- ⚠️ Some proxy/passthrough and advanced NCCL behaviors remain experimental
 - ⚠️ macOS: Official PyTorch wheels do not include CUDA, so FakeGPU only helps when running CUDA-enabled binaries (typically in Linux via Docker/VM).
 - ⚠️ For testing and development environments only
 
@@ -282,4 +378,6 @@ MIT License
 ## Documentation
 
 - [Test Guide](test/README.md) - Detailed testing instructions
+- [Distributed Usage Guide](docs/distributed-sim-usage.md) - How to run single-host simulated multi-node workloads
+- [Multi-Node Design](docs/multi-node-design.md) - Distributed design notes, implementation plan, and current boundaries
 - [cuBLASLt Implementation](docs/cublaslt-fix.md) - cuBLASLt support details
