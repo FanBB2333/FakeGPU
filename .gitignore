@@ -33,6 +33,7 @@ __pycache__/
 *.pyd
 *.egg-info/
 dist/
+site/
 .pytest_cache/
 .venv/
 .venv*/

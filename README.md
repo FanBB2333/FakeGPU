@@ -2,6 +2,23 @@
 
 A CUDA API interception library that simulates GPU devices in non-GPU environments, enabling basic operations for PyTorch and other deep learning frameworks, and supporting single-host multi-process distributed simulation for NCCL-style workloads.
 
+## Documentation
+
+This repository now ships a MkDocs + Material for MkDocs documentation site configuration.
+
+Local preview:
+```bash
+python3 -m pip install -e ".[docs]"
+mkdocs serve
+```
+
+GitHub Pages deployment:
+- The site configuration lives in `mkdocs.yml`
+- The published content lives under `docs/`
+- `.github/workflows/docs.yml` builds and deploys the site through GitHub Pages
+- The workflow auto-deploys on pushes to `main`
+- `workflow_dispatch` remains available, so `dev` or any other branch can still be published manually from the Actions page
+
 ## Timeline
 
 ### Implemented Features
@@ -368,7 +385,7 @@ FakeGPU
 
 - CMake 3.14+
 - C++17 compiler
-- Python 3.8+ (for testing)
+- Python 3.10+ (for package, testing, and docs)
 - PyTorch 2.x (optional, for testing)
 
 ## License
@@ -377,6 +394,7 @@ MIT License
 
 ## Documentation
 
+- `mkdocs.yml` - MkDocs site config for local preview and GitHub Pages
 - [Test Guide](test/README.md) - Detailed testing instructions
 - [Distributed Usage Guide](docs/distributed-sim-usage.md) - How to run single-host simulated multi-node workloads
 - [Multi-Node Design](docs/multi-node-design.md) - Distributed design notes, implementation plan, and current boundaries
