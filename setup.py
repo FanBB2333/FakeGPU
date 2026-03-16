@@ -31,13 +31,24 @@ else:
         "libnvidia-ml.so.1",
     )
 
+_REQUIRED_CMAKE_TARGETS = (
+    "fake_gpu",
+    "fake_cuda",
+    "fake_cudart",
+    "fake_cublas",
+)
+
 
 def _cmake_build(build_dir: Path) -> None:
     cfg = os.environ.get("CMAKE_BUILD_TYPE", "Release")
     subprocess.check_call(
         ["cmake", "-S", str(_ROOT), "-B", str(build_dir), f"-DCMAKE_BUILD_TYPE={cfg}"],
     )
-    subprocess.check_call(["cmake", "--build", str(build_dir), "--config", cfg])
+    # Packaging only needs the runtime libraries copied into fakegpu/_native.
+    # Avoid building probes/tests here so wheel builds stay isolated from optional targets.
+    subprocess.check_call(
+        ["cmake", "--build", str(build_dir), "--config", cfg, "--target", *_REQUIRED_CMAKE_TARGETS],
+    )
 
 
 def _copy_native_libs(src_dir: Path, dst_dir: Path) -> None:

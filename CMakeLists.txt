@@ -33,6 +33,22 @@ project(FakeGPU VERSION "${FAKEGPU_VERSION}")
 
 find_package(Threads REQUIRED)
 
+set(FAKEGPU_POSIX_SHM_LIB "")
+if(UNIX AND NOT APPLE)
+    # On older glibc targets such as manylinux2014, shm_open/shm_unlink live in librt.
+    find_library(FAKEGPU_POSIX_SHM_LIB rt)
+endif()
+
+function(fakegpu_link_common_system_libs target_name)
+    if(CMAKE_DL_LIBS)
+        target_link_libraries(${target_name} PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+    target_link_libraries(${target_name} PRIVATE Threads::Threads)
+    if(FAKEGPU_POSIX_SHM_LIB)
+        target_link_libraries(${target_name} PRIVATE ${FAKEGPU_POSIX_SHM_LIB})
+    endif()
+endfunction()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -126,9 +142,7 @@ add_library(fake_gpu SHARED
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 
-# Link dl library for dlopen/dlsym interception
-target_link_libraries(fake_gpu PRIVATE ${CMAKE_DL_LIBS})
-target_link_libraries(fake_gpu PRIVATE Threads::Threads)
+fakegpu_link_common_system_libs(fake_gpu)
 
 # CUDA Driver Library (libcuda.so.1)
 # This library intercepts CUDA Driver API calls
@@ -138,8 +152,7 @@ add_library(fake_cuda SHARED
     $<TARGET_OBJECTS:fake_gpu_monitor>
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
-target_link_libraries(fake_cuda PRIVATE ${CMAKE_DL_LIBS})
-target_link_libraries(fake_cuda PRIVATE Threads::Threads)
+fakegpu_link_common_system_libs(fake_cuda)
 
 # CUDA Runtime Library (libcudart.so.12)
 # This library intercepts CUDA Runtime API calls and uses fake_cuda Driver API internally
@@ -151,8 +164,7 @@ add_library(fake_cudart SHARED
     $<TARGET_OBJECTS:fake_gpu_monitor>
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
-target_link_libraries(fake_cudart PRIVATE ${CMAKE_DL_LIBS})
-target_link_libraries(fake_cudart PRIVATE Threads::Threads)
+fakegpu_link_common_system_libs(fake_cudart)
 target_include_directories(fake_cudart PRIVATE src/cuda src/core)
 
 # cuBLAS Library (libcublas.so.12)
@@ -164,19 +176,17 @@ add_library(fake_cublas SHARED
     $<TARGET_OBJECTS:fake_gpu_monitor>
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
-target_link_libraries(fake_cublas PRIVATE ${CMAKE_DL_LIBS})
+fakegpu_link_common_system_libs(fake_cublas)
 target_include_directories(fake_cublas PRIVATE src/cublas src/core)
 target_compile_definitions(fake_cublas PRIVATE FAKEGPU_CPU_SIMULATION=$<BOOL:${ENABLE_FAKEGPU_CPU_SIMULATION}>)
 target_link_libraries(fake_cublas PRIVATE m)
-target_link_libraries(fake_cublas PRIVATE Threads::Threads)
 
 add_library(fake_nccl SHARED
     $<TARGET_OBJECTS:fake_gpu_nccl>
     $<TARGET_OBJECTS:fake_gpu_core>
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
-target_link_libraries(fake_nccl PRIVATE ${CMAKE_DL_LIBS})
-target_link_libraries(fake_nccl PRIVATE Threads::Threads)
+fakegpu_link_common_system_libs(fake_nccl)
 target_include_directories(fake_nccl PRIVATE src/nccl src/core src/distributed)
 
 # Platform specific flags
@@ -263,7 +273,7 @@ add_executable(fakegpu_config_probe
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 target_include_directories(fakegpu_config_probe PRIVATE src/core src/distributed)
-target_link_libraries(fakegpu_config_probe PRIVATE Threads::Threads)
+fakegpu_link_common_system_libs(fakegpu_config_probe)
 
 add_executable(fakegpu_topology_probe
     verification/test_topology_model_main.cpp
@@ -271,7 +281,7 @@ add_executable(fakegpu_topology_probe
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 target_include_directories(fakegpu_topology_probe PRIVATE src/core src/distributed)
-target_link_libraries(fakegpu_topology_probe PRIVATE Threads::Threads)
+fakegpu_link_common_system_libs(fakegpu_topology_probe)
 
 add_executable(fakegpu_coordinator
     src/distributed/coordinator_main.cpp
@@ -279,7 +289,7 @@ add_executable(fakegpu_coordinator
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 target_include_directories(fakegpu_coordinator PRIVATE src/distributed)
-target_link_libraries(fakegpu_coordinator PRIVATE Threads::Threads)
+fakegpu_link_common_system_libs(fakegpu_coordinator)
 set_target_properties(fakegpu_coordinator PROPERTIES OUTPUT_NAME "fakegpu-coordinator")
 
 add_executable(fakegpu_nccl_direct_test
