@@ -18,7 +18,7 @@
 
 本设计文档的目标，是为未来的多节点模拟能力提供一份按 Step 顺序落地的技术方案。
 
-如果你现在要直接使用已经落地的分布式模拟能力，先看 [distributed-sim-usage.md](/home/l1ght/repos/fakeGPU/docs/distributed-sim-usage.md)。
+如果你现在要直接使用已经落地的分布式模拟能力，先看 [分布式模拟使用说明](distributed-sim-usage.md)。
 
 ## 2. 目标
 

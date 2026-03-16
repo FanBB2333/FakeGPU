@@ -2,7 +2,7 @@
 
 这份文档面向“怎么跑起来”。
 
-- 架构和实现细节看 [multi-node-design.md](/home/l1ght/repos/fakeGPU/docs/multi-node-design.md)
+- 架构和实现细节看 [多节点模拟设计文档](multi-node-design.md)
 - 这里主要说明 `simulate` 分布式通信模式的使用方法
 
 ## 1. 适用范围
@@ -116,9 +116,9 @@ fabric:
 
 仓库里已有可直接使用的样例：
 
-- [cluster_valid.yaml](/home/l1ght/repos/fakeGPU/verification/data/cluster_valid.yaml)
-- [cluster_proxy_1r.yaml](/home/l1ght/repos/fakeGPU/verification/data/cluster_proxy_1r.yaml)
-- [cluster_proxy_2r.yaml](/home/l1ght/repos/fakeGPU/verification/data/cluster_proxy_2r.yaml)
+- [`verification/data/cluster_valid.yaml`](https://github.com/FanBB2333/FakeGPU/blob/dev/verification/data/cluster_valid.yaml)
+- [`verification/data/cluster_proxy_1r.yaml`](https://github.com/FanBB2333/FakeGPU/blob/dev/verification/data/cluster_proxy_1r.yaml)
+- [`verification/data/cluster_proxy_2r.yaml`](https://github.com/FanBB2333/FakeGPU/blob/dev/verification/data/cluster_proxy_2r.yaml)
 
 注意：
 
