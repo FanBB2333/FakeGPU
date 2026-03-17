@@ -1,263 +1,92 @@
-# FakeGPU 多节点模拟设计文档
+# Distributed Design Notes
 
-## 1. 背景
+This document explains the design intent behind FakeGPU's distributed layer and the boundaries that shape the current implementation.
 
-当前 FakeGPU 已经具备以下基础能力：
+## Core idea
 
-- 通过 `libcuda` / `libcudart` / `libcublas` / `libnvidia-ml` 拦截，在无 GPU 环境中暴露虚拟设备
-- 提供 `simulate` / `passthrough` / `hybrid` 三种运行模式
-- 在 `hybrid` 模式下跟踪真实显存预算并提供 OOM fallback
-- 输出单机、单进程维度的资源使用报告
+FakeGPU treats distributed support as a **semantic simulator**:
 
-下一步如果要支持“多节点”场景，重点不再只是伪造设备本身，而是要补齐“分布式语义”：
+- ranks can initialize and exchange communicator state
+- collectives and point-to-point calls can complete with modeled topology and timing metadata
+- reports can summarize communication activity at cluster scope
 
-- 节点、rank、local rank、world size 的拓扑关系
-- 跨进程 / 跨节点的 collective 与 point-to-point 通信
-- 虚拟网络拓扑与带宽/时延模型
-- 分布式场景下的资源统计、死锁诊断、故障注入
+It does **not** attempt to reproduce protocol-level NCCL, NVLink, RDMA, or InfiniBand behavior.
 
-本设计文档的目标，是为未来的多节点模拟能力提供一份按 Step 顺序落地的技术方案。
+## Design goals
 
-如果你现在要直接使用已经落地的分布式模拟能力，先看 [分布式模拟使用说明](distributed-sim-usage.md)。
+1. Bring up `torch.distributed` and NCCL-facing control flow on a single host without requiring a real cluster.
+2. Keep compute mode and communication mode independent so simulated communication can be combined with real local compute.
+3. Produce cluster-level observability data instead of stopping at per-process fake device stats.
+4. Prefer deterministic and debuggable behavior over trying to mimic every internal scheduling detail of real NCCL.
 
-## 2. 目标
+## Current implementation model
 
-### 2.1 总体目标
+### Fake NCCL shim
 
-让 FakeGPU 能在以下场景中提供可用的分布式模拟能力：
+- `src/nccl/nccl_stubs.cpp` exposes the `libnccl.so.2` compatibility surface.
+- Direct init validation rejects invalid or unsupported distributed configurations early.
+- Grouped operations, communicator split, point-to-point, and common collectives are handled inside the FakeGPU control plane.
 
-1. 在单机上模拟多节点多卡集群，运行依赖 `torch.distributed` / NCCL 的程序
-2. 在无 GPU 环境中跑通分布式训练/推理的控制流与通信流
-3. 在有真实 GPU 的环境中，将“本地计算”和“虚拟集群通信”组合起来做混合验证
-4. 产出可观测的 cluster 级报告，用于评估显存、通信量、带宽瓶颈和同步等待
+### Communicator registry
 
-### 2.2 分层验收标准
+- `src/distributed/communicator.cpp` tracks pending and active communicators.
+- Collectives wait for all required participants, then execute once the communicator state is complete.
+- Rank-level wait time, timeouts, and collective counters feed the cluster report.
 
-- L0：程序能完成分布式初始化，不崩溃
-- L1：常见 collective 能跑通，所有 rank 正常退出
-- L2：collective 语义正确，输出张量与参考实现一致
-- L3：可配置网络时延/带宽模型，报告可用于资源与性能评估
-- L4：支持故障注入、超时、rank 丢失、网络抖动等调试场景
+### Coordinator process
 
-需要额外明确的是，这里的 L0 ~ L4 是**总体能力分层**，不是某个单独 Step 的直接交付承诺。
+- `build/fakegpu-coordinator` accepts requests over Unix sockets or TCP.
+- It is the rendezvous point for multi-process execution on one host.
+- This keeps the process-local fake libraries simple while centralizing communicator state.
 
-- Step 1 ~ Step 9 的最低验收应以 direct NCCL shim / communicator / collective MVP 为准
-- `torch.distributed.init_process_group` 和 DDP 主路径应放到 Step 10 之后单独验收
-- 如果某个 Step 或 Step 区间只完成 direct API 语义正确，不应宣称已经覆盖框架级兼容性
+### Topology and timing model
 
-### 2.3 可行性判断
+- `src/distributed/topology_model.*` reads the cluster config and fabric assumptions.
+- Link bandwidth, latency, and contention penalties are used for estimated communication timing in reports.
+- The timing model is meant to be explainable and configurable, not cycle-accurate.
 
-这项设计整体上是可行的，但前提是要把“多节点模拟”的边界定义清楚。
+### Staging and data movement
 
-**可行的部分：**
+- Staging buffers are used to materialize collective and point-to-point semantics.
+- The local fast path prefers shared memory.
+- Socket-based transfer remains available as a fallback or explicit test path.
 
-- 单机多进程模拟多节点
-- `torch.distributed` / DDP 控制流跑通
-- collective 语义执行
-- cluster 级通信统计与等待时间统计
-- 可配置的简化带宽/时延模型
+## Deliberate boundaries
 
-**第一版不应追求的部分：**
+- Single-host multi-process simulation is the most validated target today.
+- `proxy` and `passthrough` modes exist for comparison and observability, but they are not the first path to validate.
+- Hybrid distributed runs are useful, but they still depend on real local CUDA/NCCL behavior and should be treated as more environment-sensitive.
+- The project should claim semantic correctness for maintained collective paths before claiming broad framework-level compatibility.
 
-- 精确复现真实 NCCL 内核调度
-- 精确复现 RDMA / InfiniBand / NVLink 协议级行为
-- 与真实集群性能一一对应
-- 覆盖所有 NCCL API 与框架行为细节
+## Why compute and communication are separate
 
-换句话说，第一版应被定义为 **分布式语义模拟器**，而不是 **真实网络/真实 NCCL 的协议级复刻**。
-
-## 3. 非目标
-
-以下内容不作为前置实现目标，尤其不作为 Step 1 ~ Step 15 的目标：
-
-- 完整模拟 InfiniBand/RDMA 协议栈细节
-- bitwise 级别复现真实 NCCL 内核与调度策略
-- 追求真实集群级性能，仅要求可解释、可配置、可复现
-- 一开始就覆盖所有框架，只优先覆盖 PyTorch + NCCL 主路径
-
-## 4. 设计原则
-
-### 4.1 语义正确性优先于性能逼真
-
-第一优先级是 collective 的输入输出语义正确，其次才是时延与带宽建模。
-
-### 4.2 计算与通信解耦
-
-当前 `FAKEGPU_MODE` 主要描述“设备/计算后端”：
+`FAKEGPU_MODE` describes the local compute backend:
 
 - `simulate`
-- `passthrough`
 - `hybrid`
+- `passthrough`
 
-多节点能力不应强行塞进这个枚举，而应新增独立的“分布式通信模式”配置，使计算后端与通信后端正交组合。
+`FAKEGPU_DIST_MODE` describes the communication backend:
 
-### 4.3 单机多进程先行，真实多机后扩展
+- `disabled`
+- `simulate`
+- `proxy`
+- `passthrough`
 
-优先支持：
+Keeping them separate lets you test combinations such as:
 
-- 单机、多进程、模拟多节点
-- 多进程之间通过本地 socket / shared memory 与 coordinator 通信
+- fake compute + fake communication
+- real compute + fake communication
+- real compute + real communication with FakeGPU reporting hooks
 
-再扩展：
+## Practical roadmap
 
-- 多机 coordinator
-- coordinator federation
-- 真实网络互联
+Near-term improvements that fit the current design:
 
-### 4.4 统一“语义执行”和“时间模型”
-
-collective 的结果计算与其耗时模拟应拆成两个层次：
-
-- 语义执行层：决定输出 buffer 内容
-- 时间模型层：决定何时完成、耗时多少、是否注入抖动/丢包/超时
-
-## 5. 关键使用场景
-
-### 场景 A：单机无 GPU，模拟 2 节点 x 4 卡
-
-目标：
-
-- 在一台普通机器上，用 `torchrun` 或多个 Python 进程跑通 `torch.distributed`
-- 每个 rank 看到自己的本地 GPU
-- 集体通信由 FakeGPU 模拟
-
-### 场景 B：单机有 GPU，本地计算真实执行，跨节点通信虚拟化
-
-目标：
-
-- 单机真实算子跑在 GPU 上
-- 通信路径走 FakeGPU 的虚拟 fabric
-- 用于评估“如果未来扩成多机，通信会是什么形态”
-
-### 场景 C：故障与极限条件调试
-
-目标：
-
-- 模拟某个节点超时、带宽下降、部分 rank 掉线
-- 复现 DDP / inference serving 中的 hang、barrier 卡死、梯度不同步问题
-
-## 6. 配置模型
-
-建议新增一组独立配置：
-
-```bash
-FAKEGPU_DIST_MODE={disabled,simulate,proxy,passthrough}
-FAKEGPU_CLUSTER_CONFIG=/path/to/cluster.yaml
-FAKEGPU_COORDINATOR_ADDR=127.0.0.1:29591
-FAKEGPU_COORDINATOR_TRANSPORT={unix,tcp}
-FAKEGPU_FAULT_PROFILE=/path/to/faults.yaml
-FAKEGPU_CLUSTER_REPORT_PATH=/path/to/fake_gpu_cluster_report.json
-```
-
-说明：
-
-- `disabled`：不启用分布式模拟
-- `simulate`：使用 FakeGPU 自己的 collective engine
-- `proxy`：记录与调度通信，但底层可转发到真实 NCCL
-- `passthrough`：直接转发到真实 NCCL，仅做最薄的包装/报告
-
-建议把模式稳定性也写清楚：
-
-- Step 1 ~ Step 15：只承诺 `disabled`、`simulate`
-- `proxy`：实验性，至少放到真实 GPU 混合运行之后
-- `passthrough`：更偏观测/对比用途，不应阻塞前 15 个 Step 的实现
-
-### 6.1 推荐的 cluster 配置文件
-
-建议采用 YAML，风格与现有 `profiles/*.yaml` 保持一致：
-
-```yaml
-version: 1
-cluster:
-  name: dev-cluster
-  default_backend: nccl
-
-nodes:
-  - id: node0
-    host: 127.0.0.1
-    ranks: [0, 1, 2, 3]
-    gpus:
-      - profile: a100
-      - profile: a100
-      - profile: a100
-      - profile: a100
-
-  - id: node1
-    host: 127.0.0.1
-    ranks: [4, 5, 6, 7]
-    gpus:
-      - profile: a100
-      - profile: a100
-      - profile: a100
-      - profile: a100
-
-fabric:
-  intra_node:
-    type: nvlink
-    bandwidth_gbps: 300
-    latency_us: 3
-
-  inter_node:
-    type: infiniband
-    bandwidth_gbps: 200
-    latency_us: 15
-    oversubscription: 1.5
-
-policies:
-  collective_timeout_ms: 60000
-  default_allreduce_algo: ring
-  deterministic_ordering: true
-```
-
-### 6.2 运行时环境变量映射
-
-需要兼容以下标准环境变量：
-
-- `RANK`
-- `LOCAL_RANK`
-- `WORLD_SIZE`
-- `MASTER_ADDR`
-- `MASTER_PORT`
-
-FakeGPU 不应替代这些变量，而应读取它们并与 cluster config 做一致性校验。
-
-### 6.3 配置主从关系
-
-为避免启动路径含糊，建议明确以下规则：
-
-- `RANK` / `LOCAL_RANK` / `WORLD_SIZE` 这类运行时变量是**进程实例事实来源**
-- `FAKEGPU_CLUSTER_CONFIG` 是**静态拓扑与策略来源**
-- 启动时优先用运行时变量确定“当前进程是谁”，再用 cluster config 校验该 rank 是否存在、位于哪个 node、使用哪个 GPU profile
-- 如果 cluster config 与运行时变量不一致，应在初始化阶段立即失败，而不是尝试隐式修正
-- Step 1 可以允许“无 cluster config”的最小模式，只依赖运行时变量和默认拓扑完成单机 smoke test
-
-## 7. 总体架构
-
-建议引入以下新模块：
-
-```text
-FakeGPU
-├── src/
-│   ├── distributed/         # cluster coordinator / collective engine / transport
-│   ├── nccl/                # NCCL stubs / passthrough dispatch
-│   ├── core/                # 现有 GlobalState / device / mode config
-│   ├── cuda/                # 现有 CUDA interception
-│   ├── cublas/              # 现有 cuBLAS interception
-│   └── monitor/             # 现有 report，未来扩展 cluster report
-└── test/
-    ├── test_nccl_basic.py
-    ├── test_ddp_multinode.py
-    └── run_multinode_sim.sh
-```
-
-### 7.1 核心组件
-
-#### A. Fake NCCL Shim
-
-职责：
-
-- 提供 `libnccl.so` 兼容接口
-- 拦截 `ncclCommInitRank`、`ncclAllReduce`、`ncclReduce`、`ncclBroadcast`、`ncclAllGather`、`ncclReduceScatter`、`ncclSend`、`ncclRecv` 等调用
+- broader direct tests for communicator lifecycle and grouped semantics
+- wider coverage for proxy and passthrough validation
+- better multi-host coverage beyond loopback and single-host orchestration
+- additional failure injection and timeout-debugging features
 - 将每个 collective 转换成 coordinator 可以理解的请求
 
 #### B. Cluster Coordinator

@@ -867,6 +867,7 @@ CUresult cuMemAlloc(CUdeviceptr *dptr, size_t bytesize) {
     }
 
     // Simulate mode: allocate in host memory.
+    GlobalState::instance().initialize();
     void* ptr = malloc(bytesize);
     if (!ptr) {
         return CUDA_ERROR_OUT_OF_MEMORY;
@@ -1811,6 +1812,7 @@ CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flag
         return CUDA_SUCCESS;
     }
 
+    GlobalState::instance().initialize();
     void* ptr = malloc(bytesize);
     if (!ptr) {
         return CUDA_ERROR_OUT_OF_MEMORY;
@@ -1836,6 +1838,7 @@ CUresult cuMemAllocHost(void **pp, size_t bytesize) {
         return CudaDriverPassthrough::instance().cuMemAllocHost(pp, bytesize);
     }
 
+    GlobalState::instance().initialize();
     *pp = malloc(bytesize);
     if (!*pp) return CUDA_ERROR_OUT_OF_MEMORY;
     GlobalState::instance().register_host_allocation(*pp, bytesize, current_context_device);

@@ -1,84 +1,66 @@
-# FakeGPU 分布式模拟使用说明
+# Distributed Simulation Usage
 
-这份文档面向“怎么跑起来”。
+This page focuses on the path that is easiest to bring up in practice: distributed simulation on a single host with multiple ranks.
 
-- 架构和实现细节看 [多节点模拟设计文档](multi-node-design.md)
-- 这里主要说明 `simulate` 分布式通信模式的使用方法
+For implementation details and design boundaries, see [Distributed Design Notes](multi-node-design.md).
 
-## 1. 适用范围
+## Recommended mode pairs
 
-先按下面的目标选组合：
-
-| 目标 | 推荐组合 | 说明 |
+| Goal | Recommended pair | Notes |
 |---|---|---|
-| 单机先把多 rank / 多节点控制流跑通 | `simulate + simulate` | 最稳定，优先推荐 |
-| 真实 GPU 做本地算子，通信仍走虚拟集群 | `hybrid + simulate` | 适合验证“本地算力真实，跨节点通信模拟” |
-| 真实 NCCL 跑 collective，同时保留 FakeGPU 统计/报告 | `hybrid + proxy` | 偏实验和对比用途 |
-| 尽量薄地转发到真实 NCCL | `passthrough + passthrough` | 更接近纯透传，不适合作为第一条上手路径 |
+| Stable first distributed bring-up | `simulate + simulate` | Best maintained path |
+| Real local compute, simulated communication | `hybrid + simulate` | Useful when a local GPU is available |
+| Real NCCL collectives with FakeGPU reports | `hybrid + proxy` | Comparison-oriented and more experimental |
+| Minimal wrapping around real NCCL | `passthrough + passthrough` | Not the best first step |
 
-当前最稳定、最推荐的分布式模拟组合是：
+If you only need one answer for where to start, use:
 
-- `FAKEGPU_MODE=simulate`
-- `FAKEGPU_DIST_MODE=simulate`
+```bash
+FAKEGPU_MODE=simulate
+FAKEGPU_DIST_MODE=simulate
+```
 
-这表示：
+## Prerequisites
 
-- 本地 CUDA / NCCL 都由 FakeGPU 接管
-- rank 之间通过 FakeGPU coordinator 协调 collective 和 p2p
-- 数据面优先走 POSIX shared memory，必要时会回退到 socket streaming
-
-另外两条已可用但更偏实验性质的路径是：
-
-- `FAKEGPU_MODE=hybrid` + `FAKEGPU_DIST_MODE=simulate`
-- `FAKEGPU_MODE=hybrid` + `FAKEGPU_DIST_MODE=proxy|passthrough`
-
-如果只是想在单机上稳定模拟多 rank / 多节点，优先用第一种。
-
-## 2. 前置条件
-
-先确保仓库已经构建完成，至少需要这些产物：
+Make sure you have built at least:
 
 - `build/libnccl.so.2`
 - `build/fakegpu-coordinator`
-- 根目录包装器 `./fgpu`
+- `./fgpu`
 
-常用构建命令：
+Typical build command:
 
 ```bash
 cmake -S . -B build
 cmake --build build -j4
 ```
 
-如果你要跑 `torchrun` 相关脚本，还需要：
+For `torchrun`-based validation you also need:
 
-- 当前 Python 环境能导入 `torch`
-- 命令行里能找到 `torchrun`
+- a Python environment with `torch`
+- `torchrun` available on `PATH`
 
-## 3. 关键配置项
+## Important settings
 
-分布式模拟最常用的环境变量如下：
-
-| 变量 | 说明 |
+| Variable | Meaning |
 |---|---|
-| `FAKEGPU_MODE` | 计算模式，常用 `simulate` / `hybrid` |
-| `FAKEGPU_DIST_MODE` | 通信模式，常用 `simulate` / `proxy` / `passthrough` |
-| `FAKEGPU_CLUSTER_CONFIG` | cluster YAML 路径 |
-| `FAKEGPU_COORDINATOR_TRANSPORT` | `unix` 或 `tcp` |
-| `FAKEGPU_COORDINATOR_ADDR` | coordinator 地址；`unix` 时是绝对路径，`tcp` 时是 `host:port` |
-| `FAKEGPU_CLUSTER_REPORT_PATH` | cluster report JSON 输出路径 |
-| `FAKEGPU_STAGING_CHUNK_BYTES` | 大张量 chunking 阈值 |
-| `FAKEGPU_STAGING_FORCE_SOCKET` | 设为 `1` 时强制跳过 shared memory，直接验证 socket fallback |
-| `FAKEGPU_DEVICE_COUNT` | 暴露的 fake device 数量 |
+| `FAKEGPU_MODE` | Compute mode |
+| `FAKEGPU_DIST_MODE` | Distributed mode |
+| `FAKEGPU_CLUSTER_CONFIG` | Cluster YAML path |
+| `FAKEGPU_COORDINATOR_TRANSPORT` | `unix` or `tcp` |
+| `FAKEGPU_COORDINATOR_ADDR` | Absolute socket path or `host:port` |
+| `FAKEGPU_CLUSTER_REPORT_PATH` | Cluster report output path |
+| `FAKEGPU_STAGING_CHUNK_BYTES` | Chunk size threshold for staged transfers |
+| `FAKEGPU_STAGING_FORCE_SOCKET` | Force socket fallback instead of shared memory |
+| `FAKEGPU_DEVICE_COUNT` | Number of exposed fake devices |
 
-对应的 CLI 参数也已经接上，可以通过 `./fgpu` 传入：
+The same knobs are available through `./fgpu` flags:
 
 ```bash
 ./fgpu --mode simulate --dist-mode simulate --cluster-config ... --coordinator-transport unix --coordinator-addr ...
 ```
 
-## 4. Cluster Config
-
-最小 cluster config 示例：
+## Minimal cluster config
 
 ```yaml
 version: 1
@@ -114,68 +96,42 @@ fabric:
     oversubscription: 1.5
 ```
 
-仓库里已有可直接使用的样例：
+Bundled examples live under `verification/data/`.
 
-- [`verification/data/cluster_valid.yaml`](https://github.com/FanBB2333/FakeGPU/blob/dev/verification/data/cluster_valid.yaml)
-- [`verification/data/cluster_proxy_1r.yaml`](https://github.com/FanBB2333/FakeGPU/blob/dev/verification/data/cluster_proxy_1r.yaml)
-- [`verification/data/cluster_proxy_2r.yaml`](https://github.com/FanBB2333/FakeGPU/blob/dev/verification/data/cluster_proxy_2r.yaml)
+Important validation rules:
 
-注意：
+- ranks should be unique and contiguous
+- each node should list the same number of `ranks` and `gpus`
+- `FAKEGPU_COORDINATOR_ADDR` must be an absolute path when using `unix`
 
-- rank 需要唯一且连续
-- `ranks` 和 `gpus` 数量需要对应
-- `unix` transport 下 `FAKEGPU_COORDINATOR_ADDR` 必须是绝对路径
+## Fastest way to verify the path
 
-## 5. 最快启动方式
-
-### 5.1 直接跑仓库自带脚本
-
-如果你只是想先确认“分布式模拟能跑”，优先用现成脚本：
-
-2 rank / 4 rank smoke：
+Use the bundled scripts first:
 
 ```bash
 ./test/run_multinode_sim.sh 2
 ./test/run_multinode_sim.sh 4
-```
-
-4 rank DDP 主路径：
-
-```bash
 ./test/run_ddp_multinode.sh 4
-```
-
-2 rank hybrid + simulate：
-
-```bash
 ./test/run_hybrid_multinode.sh 2
 ```
 
-这些脚本会自动：
+Those scripts take care of:
 
-- 启动 `fakegpu-coordinator`
-- 设置 `LD_PRELOAD`
-- 调 `./fgpu`
-- 输出日志和报告到 `test/output/`
+- starting `fakegpu-coordinator`
+- preloading `libnccl.so.2`
+- launching `./fgpu`
+- writing logs and reports under `test/output/`
 
-### 5.2 先跑哪个脚本
-
-建议按下面顺序上手：
+Recommended order:
 
 1. `./test/run_multinode_sim.sh 2`
 2. `./test/run_multinode_sim.sh 4`
 3. `./test/run_ddp_multinode.sh 4`
-4. 有真实 GPU 时再跑 `./test/run_hybrid_multinode.sh 2`
+4. `./test/run_hybrid_multinode.sh 2`
 
-如果第 1 步就失败，先不要直接看 DDP，先回到第 9 节的自检命令。
+## Manual coordinator startup
 
-## 6. 手动启动 Coordinator + Torchrun
-
-如果你想控制自己的训练脚本，可以按下面的方式手动跑。
-
-### 6.1 启动 coordinator
-
-Unix socket 示例：
+### Unix socket example
 
 ```bash
 SOCKET_PATH=/tmp/fakegpu-coordinator.sock
@@ -189,7 +145,7 @@ FAKEGPU_CLUSTER_REPORT_PATH=/tmp/fakegpu-cluster-report.json \
 ./build/fakegpu-coordinator --transport unix --address "$SOCKET_PATH"
 ```
 
-TCP 示例：
+### TCP example
 
 ```bash
 COORD_ADDR=127.0.0.1:29591
@@ -203,9 +159,7 @@ FAKEGPU_CLUSTER_REPORT_PATH=/tmp/fakegpu-cluster-report.json \
 ./build/fakegpu-coordinator --transport tcp --address "$COORD_ADDR"
 ```
 
-### 6.2 运行分布式程序
-
-下面是通用模板：
+## Manual `torchrun` template
 
 ```bash
 SOCKET_PATH=/tmp/fakegpu-coordinator.sock
@@ -228,36 +182,27 @@ export LD_PRELOAD="$PWD/build/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
   your_training_script.py
 ```
 
-几点说明：
+Notes:
 
-- `./fgpu` 本质上等价于 `python3 -m fakegpu`
-- `--device-count` 只是告诉 FakeGPU 暴露多少 fake device
-- `torchrun` 的 `--master_addr/--master_port` 是框架 rendezvous；和 FakeGPU coordinator 不是一回事
+- `./fgpu` and `python3 -m fakegpu` are equivalent launch styles.
+- `--device-count` controls how many fake devices FakeGPU exposes to the process.
+- `torchrun` rendezvous settings are separate from the FakeGPU coordinator address.
 
-### 6.3 `hybrid + simulate` 模板
+## Reading the output
 
-如果你要让本地算子走真实 GPU，而 collective 仍然走 FakeGPU 模拟通信，可以用下面这类模板。
+When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU writes a cluster report with:
 
-先启动 coordinator：
+- world-size and coordinator metadata
+- per-collective call counts, bytes, and estimated time
+- intra-node and inter-node link statistics
+- per-rank wait time, timeouts, and communicator-init counts
 
-```bash
-SOCKET_PATH=/tmp/fakegpu-hybrid.sock
-CLUSTER_CONFIG=$PWD/verification/data/cluster_hybrid_2r.yaml
+## Common failure cases
 
-FAKEGPU_DIST_MODE=simulate \
-FAKEGPU_CLUSTER_CONFIG="$CLUSTER_CONFIG" \
-FAKEGPU_COORDINATOR_TRANSPORT=unix \
-FAKEGPU_COORDINATOR_ADDR="$SOCKET_PATH" \
-FAKEGPU_CLUSTER_REPORT_PATH=/tmp/fakegpu-hybrid-report.json \
-./build/fakegpu-coordinator --transport unix --address "$SOCKET_PATH"
-```
-
-另一个终端里运行：
-
-```bash
-FAKEGPU_MODE=hybrid \
-FAKEGPU_DEVICE_COUNT=1 \
-FAKEGPU_DIST_MODE=simulate \
+- `FAKEGPU_COORDINATOR_ADDR` missing while not in `passthrough`
+- rank or world-size mismatch between runtime environment and cluster config
+- forgetting to preload `libnccl.so.2` for the distributed path
+- using proxy or passthrough modes before the basic simulate path is already known to work
 FAKEGPU_CLUSTER_CONFIG="$CLUSTER_CONFIG" \
 FAKEGPU_COORDINATOR_TRANSPORT=unix \
 FAKEGPU_COORDINATOR_ADDR="$SOCKET_PATH" \

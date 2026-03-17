@@ -1,48 +1,88 @@
-# 项目结构
+# Architecture
 
-## 构建与产物
+This page explains how the repository is organized and how the main runtime pieces fit together.
 
-- 核心 CMake 目标包括 `libcuda`、`libcudart`、`libcublas`、`libnvidia-ml` 和 `libnccl`
-- 默认提供 8 张虚拟 GPU，相关 profile 来自根目录 `profiles/*.yaml`
-- 分布式路径还会生成 `fakegpu-coordinator`
+## Runtime flow
 
-## 源码目录
+### 1. Launcher and Python API
 
-### `src/core/`
+- `./fgpu` is a thin shell wrapper around the same preload idea exposed by the Python package.
+- `fakegpu/_api.py` resolves the build or library directory, selects which shared objects to preload for each mode, and exposes `init()`, `env()`, and `run()`.
 
-- 维护全局设备状态、日志与动态库拦截入口
+### 2. Backend configuration
 
-### `src/cuda/`
+- `src/core/backend_config.hpp` parses `FAKEGPU_MODE`, `FAKEGPU_OOM_POLICY`, distributed settings, and optional real-library overrides.
+- The configuration determines whether FakeGPU stays fully simulated, mixes real compute with fake device identity, or forwards to real CUDA/NCCL.
 
-- CUDA Driver API / Runtime API 的类型定义与 stub 实现
+### 3. Device inventory and profiles
 
-### `src/cublas/`
+- `src/core/global_state.*` owns fake devices, current-device tracking, allocation maps, and runtime counters.
+- `src/core/gpu_profile.*` loads GPU presets from `profiles/*.yaml`.
+- CMake embeds those YAML files into generated headers at configure time, so runtime profile lookup does not depend on external files.
 
-- cuBLAS / cuBLASLt 的声明与 stub 或 CPU-backed 实现
+### 4. CUDA and NVML interception
 
-### `src/nvml/`
+- `src/cuda/` implements CUDA Driver and Runtime API stubs and passthrough helpers.
+- `src/nvml/` implements fake NVML responses so tools and frameworks can query device state.
+- In simulate mode, device memory is backed by host allocations tracked by `GlobalState`.
 
-- NVML 设备查询相关的 fake 实现
+### 5. cuBLAS and CPU-backed compute
 
-### `src/monitor/`
+- `src/cublas/` provides cuBLAS and cuBLASLt compatibility.
+- When `ENABLE_FAKEGPU_CPU_SIMULATION=ON`, maintained GEMM and matmul paths execute on CPU so validation can assert meaningful results instead of pure placeholder values.
 
-- 生成 `fake_gpu_report.json` 等运行时报告
+### 6. Distributed simulation
 
-### `src/nccl/`
+- `src/nccl/` exposes the fake `libnccl.so.2` surface.
+- `src/distributed/` contains communicator registration, coordinator transport, topology modeling, staging buffers, and collective execution.
+- The most validated distributed path is single-host multi-process execution coordinated through Unix sockets or loopback TCP.
 
-- 分布式通信模拟、代理和透传相关逻辑
+### 7. Monitoring and reports
 
-## 其他目录
+- `src/monitor/monitor.cpp` dumps `fake_gpu_report.json` on shutdown.
+- When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU also writes a cluster-level report with collective, link, and per-rank timing data.
 
-- `fakegpu/`：Python 包装层与 CLI 入口
-- `profiles/`：虚拟 GPU 预设
-- `test/`：C / Python / DDP / 对比测试脚本
-- `verification/`：更细粒度的验证脚本与测试数据
-- `docs/`：项目文档站内容
+## Source tree
 
-## 先读哪些文件
+| Path | Responsibility |
+|---|---|
+| `src/core/` | global state, device metadata, logging, backend selection |
+| `src/cuda/` | CUDA Driver and Runtime interception |
+| `src/cublas/` | cuBLAS/cuBLASLt shims and CPU-backed math |
+| `src/nvml/` | fake NVML implementation |
+| `src/nccl/` | fake NCCL entry points plus mode dispatch |
+| `src/distributed/` | coordinator protocol, communicator state, topology, staging |
+| `src/monitor/` | JSON reporting |
+| `fakegpu/` | Python package and CLI |
+| `profiles/` | GPU preset YAML definitions |
+| `test/` | user-facing smoke, PyTorch, DDP, and comparison scripts |
+| `verification/` | lower-level probes, direct tests, and sample configs |
+| `docs/` | MkDocs content |
 
-- 根目录 [README.md](https://github.com/FanBB2333/FakeGPU/blob/dev/README.md)
-- [快速开始](getting-started.md)
-- [分布式模拟使用说明](distributed-sim-usage.md)
-- [多节点模拟设计文档](multi-node-design.md)
+## Build outputs
+
+The standard build generates:
+
+- `build/libcuda.so.1`
+- `build/libcudart.so.12`
+- `build/libcublas.so.12`
+- `build/libnvidia-ml.so.1`
+- `build/libnccl.so.2`
+- `build/fakegpu-coordinator`
+
+On macOS the corresponding `.dylib` names are produced instead.
+
+## Profile system
+
+- The default inventory is eight A100-class fake devices.
+- You can switch to a single preset with `FAKEGPU_PROFILE` and `FAKEGPU_DEVICE_COUNT`.
+- You can mix presets with `FAKEGPU_PROFILES`, for example `a100:4,h100:4` or `t4,l40s`.
+- The Python API and CLI forward the same knobs.
+
+## Good files to read first
+
+- `README.md`
+- [Getting Started](getting-started.md)
+- [Reports & Validation](reports-and-validation.md)
+- [Distributed Simulation Usage Guide](distributed-sim-usage.md)
+- [Distributed Design Notes](multi-node-design.md)

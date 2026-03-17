@@ -1,5 +1,5 @@
 site_name: FakeGPU
-site_description: FakeGPU project documentation
+site_description: FakeGPU documentation for simulated CUDA, cuBLAS, NVML, and NCCL workflows
 site_url: https://fanbb2333.github.io/FakeGPU/
 repo_url: https://github.com/FanBB2333/FakeGPU
 repo_name: FanBB2333/FakeGPU
@@ -7,7 +7,7 @@ docs_dir: docs
 
 theme:
   name: material
-  language: zh
+  language: en
   icon:
     repo: fontawesome/brands/github
   palette:
@@ -23,6 +23,32 @@ theme:
     - content.code.copy
 
 plugins:
+  - i18n:
+      docs_structure: suffix
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          name: English
+          default: true
+          build: true
+        - locale: zh
+          name: 简体中文
+          build: true
+          site_description: FakeGPU 项目文档：模拟 CUDA、cuBLAS、NVML 与 NCCL 工作流
+          theme:
+            language: zh
+          nav:
+            - 首页: index.md
+            - 快速开始: getting-started.md
+            - 快速参考: quick-reference.md
+            - 项目结构与架构: project-structure.md
+            - 报告与验证: reports-and-validation.md
+            - 分布式模拟:
+                - 使用说明: distributed-sim-usage.md
+                - 设计说明: multi-node-design.md
+            - 兼容性说明:
+                - cuBLASLt 说明: cublaslt-fix.md
   - search
 
 markdown_extensions:
@@ -43,12 +69,13 @@ markdown_extensions:
       alternate_style: true
 
 nav:
-  - 首页: index.md
-  - 快速开始: getting-started.md
-  - 快速参考: quick-reference.md
-  - 项目结构: project-structure.md
-  - 分布式模拟:
-      - 使用说明: distributed-sim-usage.md
-      - 设计文档: multi-node-design.md
-  - 问题排查:
-      - cuBLASLt 兼容修复: cublaslt-fix.md
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Quick Reference: quick-reference.md
+  - Architecture: project-structure.md
+  - Reports & Validation: reports-and-validation.md
+  - Distributed Simulation:
+      - Usage Guide: distributed-sim-usage.md
+      - Design Notes: multi-node-design.md
+  - Compatibility:
+      - cuBLASLt Notes: cublaslt-fix.md
