@@ -2,11 +2,27 @@
 # Comprehensive test script for FakeGPU Mode 1 (Passthrough/Hybrid)
 # Tests all three modes: simulate, passthrough, hybrid
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
+
+build_jobs() {
+    getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1
+}
+
+compile_test_mode() {
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        cc -o "$BUILD_DIR/test_mode" "$SCRIPT_DIR/test_mode.c"
+    else
+        cc -D_GNU_SOURCE -o "$BUILD_DIR/test_mode" "$SCRIPT_DIR/test_mode.c" -ldl -Wl,--no-as-needed
+    fi
+}
+
+run_fakegpu() {
+    "$PROJECT_ROOT/fgpu" --build-dir "$BUILD_DIR" "$@"
+}
 
 echo "=============================================="
 echo "FakeGPU Mode 1 Test Suite"
@@ -17,13 +33,13 @@ echo ""
 echo "[1/5] Building FakeGPU..."
 cd "$PROJECT_ROOT"
 cmake -S . -B build -DENABLE_FAKEGPU_LOGGING=OFF > /dev/null
-cmake --build build -j$(nproc) > /dev/null 2>&1
+cmake --build build -j"$(build_jobs)" > /dev/null 2>&1
 echo "Build complete."
 echo ""
 
 # Compile test program
 echo "[2/5] Compiling test program..."
-gcc -D_GNU_SOURCE -o "$BUILD_DIR/test_mode" "$SCRIPT_DIR/test_mode.c" -ldl -Wl,--no-as-needed
+compile_test_mode
 echo "Test program compiled."
 echo ""
 
@@ -31,13 +47,8 @@ echo ""
 echo "=============================================="
 echo "[3/5] Test: Simulate Mode"
 echo "=============================================="
-FAKEGPU_MODE=simulate \
-FAKEGPU_PROFILE=h100 \
-FAKEGPU_DEVICE_COUNT=4 \
 FAKEGPU_REPORT_PATH="$BUILD_DIR/report_simulate.json" \
-LD_LIBRARY_PATH="$BUILD_DIR:$LD_LIBRARY_PATH" \
-LD_PRELOAD="$BUILD_DIR/libcuda.so.1:$BUILD_DIR/libnvidia-ml.so.1" \
-"$BUILD_DIR/test_mode"
+run_fakegpu --mode simulate --profile h100 --device-count 4 "$BUILD_DIR/test_mode"
 
 echo ""
 echo "Report (simulate mode):"
@@ -63,11 +74,8 @@ if [ "$HAS_GPU" = "1" ]; then
     echo "Device info should match real GPU."
     echo ""
 
-    # For passthrough, we need to NOT preload our fake libraries
-    # Instead, we just set the mode and let the real libraries handle it
-    FAKEGPU_MODE=passthrough \
     FAKEGPU_REPORT_PATH="$BUILD_DIR/report_passthrough.json" \
-    "$BUILD_DIR/test_mode" 2>&1 || echo "(Passthrough test completed with warnings)"
+    run_fakegpu --mode passthrough "$BUILD_DIR/test_mode" 2>&1 || echo "(Passthrough test completed with warnings)"
 
     echo ""
 
@@ -79,14 +87,9 @@ if [ "$HAS_GPU" = "1" ]; then
     echo "OOM policy: clamp (memory reported is clamped to real GPU capacity)"
     echo ""
 
-    FAKEGPU_MODE=hybrid \
-    FAKEGPU_OOM_POLICY=clamp \
-    FAKEGPU_PROFILE=a100 \
-    FAKEGPU_DEVICE_COUNT=2 \
     FAKEGPU_REPORT_PATH="$BUILD_DIR/report_hybrid.json" \
-    LD_LIBRARY_PATH="$BUILD_DIR:$LD_LIBRARY_PATH" \
-    LD_PRELOAD="$BUILD_DIR/libcuda.so.1:$BUILD_DIR/libnvidia-ml.so.1" \
-    "$BUILD_DIR/test_mode" 2>&1 || echo "(Hybrid test completed with warnings)"
+    run_fakegpu --mode hybrid --oom-policy clamp --profile a100 --device-count 2 \
+        "$BUILD_DIR/test_mode" 2>&1 || echo "(Hybrid test completed with warnings)"
 
     echo ""
     echo "Report (hybrid mode):"

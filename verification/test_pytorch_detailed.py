@@ -2,17 +2,18 @@
 """
 Detailed PyTorch test to check which operations use fake GPU
 """
-import sys
 import os
-from ctypes import CDLL
+import sys
+from pathlib import Path
 
-# Force load our fake GPU library before importing torch
-fake_gpu_lib = os.environ.get('FAKE_GPU_LIB', './build/libfake_gpu.so')
-if os.path.exists(fake_gpu_lib):
-    print(f"[Test] Loading fake GPU library: {fake_gpu_lib}")
-    CDLL(fake_gpu_lib, mode=os.RTLD_GLOBAL)
-else:
-    print(f"WARNING: Fake GPU library not found at {fake_gpu_lib}")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+import fakegpu
+
+result = fakegpu.init(force=True, update_env=True)
+print(f"[Test] FakeGPU initialized from: {result.lib_dir}")
 
 try:
     import torch

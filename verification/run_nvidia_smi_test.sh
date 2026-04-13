@@ -3,8 +3,19 @@ set -euo pipefail
 
 # Test nvidia-smi with fake GPU library
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
+
 BUILD_DIR=${BUILD_DIR:-build}
-FAKE_GPU_LIB="$PWD/$BUILD_DIR/libfake_gpu.so"
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "nvidia-smi verification is Linux-only. macOS does not ship NVIDIA user-space tools."
+    echo "Use verification/run_smoke.sh or verification/run_python_test.sh for macOS validation instead."
+    exit 0
+fi
+
+FAKE_GPU_LIB="$PROJECT_ROOT/$BUILD_DIR/libfake_gpu.so"
 
 if [[ ! -f "$FAKE_GPU_LIB" ]]; then
     echo "Error: $FAKE_GPU_LIB not found. Build first with: cmake --build build"
@@ -22,22 +33,16 @@ if ! command -v nvidia-smi &> /dev/null; then
     echo "This is expected if you don't have NVIDIA drivers installed"
     echo ""
     echo "To test, you would run:"
-    echo "  LD_PRELOAD=$FAKE_GPU_LIB nvidia-smi"
+    echo "  ./fgpu --build-dir $BUILD_DIR nvidia-smi"
     exit 0
-fi
-
-# Create symlink for libnvidia-ml.so.1 if it doesn't exist
-if [[ ! -L "$BUILD_DIR/libnvidia-ml.so.1" ]]; then
-    echo "Creating symlink: $BUILD_DIR/libnvidia-ml.so.1 -> libfake_gpu.so"
-    ln -sf libfake_gpu.so "$BUILD_DIR/libnvidia-ml.so.1"
 fi
 
 echo "Note: nvidia-smi on systems with real NVIDIA drivers will use the system's"
 echo "libnvidia-ml.so library, which has higher priority than LD_LIBRARY_PATH."
 echo ""
-echo "Method 1: Using LD_PRELOAD (may not work if nvidia-smi uses dlopen)"
+echo "Method 1: Using FakeGPU launcher (may not work if nvidia-smi uses dlopen)"
 echo "----------------------------------------"
-LD_PRELOAD="$FAKE_GPU_LIB" nvidia-smi 2>&1 | head -20 || true
+"$PROJECT_ROOT/fgpu" --build-dir "$BUILD_DIR" nvidia-smi 2>&1 | head -20 || true
 echo ""
 
 echo "Method 2: Using LD_LIBRARY_PATH (system library usually has priority)"
@@ -73,7 +78,7 @@ echo ""
 # Compile and run the direct NVML test if source exists
 if [[ -f "verification/test_nvml_direct.c" ]]; then
     if gcc -o "$BUILD_DIR/test_nvml_direct" verification/test_nvml_direct.c "$FAKE_GPU_LIB" 2>/dev/null; then
-        LD_LIBRARY_PATH="$PWD/$BUILD_DIR" "$BUILD_DIR/test_nvml_direct"
+        "$PROJECT_ROOT/fgpu" --build-dir "$BUILD_DIR" "$BUILD_DIR/test_nvml_direct"
     else
         echo "Failed to compile test_nvml_direct.c"
     fi

@@ -1,10 +1,17 @@
 import ctypes
-import os
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+	sys.path.insert(0, str(REPO_ROOT))
+
+import fakegpu
 
 print("=== Direct test: FakeGPU CUDA Driver API ===")
 
-# Load FakeGPU CUDA library
-fake_cuda = ctypes.CDLL('./build/libcuda.so.1', mode=ctypes.RTLD_GLOBAL)
+result = fakegpu.init(force=True, update_env=True)
+fake_cuda = result.handles['libcuda.dylib' if sys.platform == 'darwin' else 'libcuda.so.1']
 
 # Define function prototypes
 fake_cuda.cuInit.argtypes = [ctypes.c_uint]

@@ -1,10 +1,28 @@
 #!/usr/bin/env python3
 """Display GPU information using nvitop API."""
 
-from nvitop import Device
-import pynvml
+import sys
+
+import fakegpu
+
+
+def _nvml_lib_name() -> str:
+    return 'libnvidia-ml.dylib' if sys.platform == 'darwin' else 'libnvidia-ml.so.1'
 
 def main():
+    result = fakegpu.init(force=True, update_env=True)
+
+    import pynvml
+
+    def _load_fake_nvml_library():
+        pynvml.nvmlLib = result.handles[_nvml_lib_name()]
+        return pynvml.nvmlLib
+
+    pynvml.nvmlLib = None
+    pynvml._LoadNvmlLibrary = _load_fake_nvml_library
+
+    from nvitop import Device
+
     # Initialize NVML to get device count
     pynvml.nvmlInit()
     device_count = pynvml.nvmlDeviceGetCount()

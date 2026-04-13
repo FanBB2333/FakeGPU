@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Demo: run fakeGPU to emulate NVIDIA GPUs.
+Demo: run FakeGPU to emulate NVIDIA GPUs.
 
-Usage (run with LD_LIBRARY_PATH and LD_PRELOAD):
-    LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test all
-    LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test nvml --max-devices 2
-    LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test cuda --alloc-size 256
-    LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test pytorch
+Recommended usage:
+    ./fgpu python demo_usage.py --test all
+    ./fgpu python demo_usage.py --test nvml --max-devices 2
+    ./fgpu python demo_usage.py --test cuda --alloc-size 256
+    ./fgpu python demo_usage.py --test pytorch
 
 What it does (simple view):
 1) NVML via pynvml: report device count and a few device names.
@@ -17,39 +17,53 @@ What it does (simple view):
 import os
 import sys
 import argparse
-from ctypes import CDLL, c_int, c_void_p, c_size_t, POINTER, byref
+from pathlib import Path
+from ctypes import c_int, c_void_p, c_size_t, POINTER, byref
+
+import fakegpu
+
+
+def _default_lib_path() -> str:
+    return './build/libfake_gpu.dylib' if sys.platform == 'darwin' else './build/libfake_gpu.so'
+
+
+def _cudart_lib_name() -> str:
+    return 'libcudart.dylib' if sys.platform == 'darwin' else 'libcudart.so.12'
+
+
+def _nvml_lib_name() -> str:
+    return 'libnvidia-ml.dylib' if sys.platform == 'darwin' else 'libnvidia-ml.so.1'
 
 
 def load_fake_gpu_library(lib_path):
-    """Load the fake GPU shared library.
+    """Initialize FakeGPU and return the init result plus a CUDA Runtime handle."""
+    candidate = Path(lib_path).resolve()
+    lib_dir = candidate.parent if candidate.suffix else candidate
 
-    Note: When using LD_PRELOAD, the library is already loaded.
-    We only need to get a handle to it for direct CUDA calls.
-    """
-    if not os.path.exists(lib_path):
-        print(f"Error: library not found at {lib_path}")
+    if not lib_dir.exists():
+        print(f"Error: library directory not found at {lib_dir}")
         print("Build first: cmake --build build")
         sys.exit(1)
 
-    # Check if library is already loaded via LD_PRELOAD
-    if 'LD_PRELOAD' in os.environ and lib_path in os.environ['LD_PRELOAD']:
-        print(f"Fake GPU library already loaded via LD_PRELOAD: {lib_path}")
-        # Return None to indicate we don't need to load it
-        # The CUDA functions will be available via LD_PRELOAD
-        return None
-
-    print(f"Loading fake GPU library: {lib_path}")
-    # If not preloaded, load it normally
-    return CDLL(lib_path)
+    result = fakegpu.init(lib_dir=lib_dir, force=True, update_env=True)
+    print(f"FakeGPU initialized from: {result.lib_dir}")
+    return result, result.handles[_cudart_lib_name()]
 
 
-def test_pynvml(max_devices=None):
+def test_pynvml(nvml_handle, max_devices=None):
     """Scenario 1: list GPUs using pynvml (NVML API)."""
     print("Scenario 1: NVML (pynvml)")
     print("-" * 70)
 
     try:
         import pynvml
+
+        def _load_fake_nvml_library():
+            pynvml.nvmlLib = nvml_handle
+            return pynvml.nvmlLib
+
+        pynvml.nvmlLib = None
+        pynvml._LoadNvmlLibrary = _load_fake_nvml_library
 
         pynvml.nvmlInit()
 
@@ -193,10 +207,10 @@ def print_usage_summary():
     print("=" * 70)
     print("How to run")
     print("=" * 70)
-    print("LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test all")
-    print("LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test nvml --max-devices 2")
-    print("LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test cuda --alloc-size 256")
-    print("LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test pytorch")
+    print("./fgpu python demo_usage.py --test all")
+    print("./fgpu python demo_usage.py --test nvml --max-devices 2")
+    print("./fgpu python demo_usage.py --test cuda --alloc-size 256")
+    print("./fgpu python demo_usage.py --test pytorch")
     print("Report file: fake_gpu_report.json (written at program exit)")
     print()
 
@@ -208,18 +222,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test all
-  LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test nvml --max-devices 2
-  LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test cuda --alloc-size 256
-  LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --test pytorch
-  LD_LIBRARY_PATH=./build LD_PRELOAD=./build/libfake_gpu.so python demo_usage.py --no-summary
+    ./fgpu python demo_usage.py --test all
+    ./fgpu python demo_usage.py --test nvml --max-devices 2
+    ./fgpu python demo_usage.py --test cuda --alloc-size 256
+    ./fgpu python demo_usage.py --test pytorch
+    ./fgpu python demo_usage.py --no-summary
         """
     )
 
     parser.add_argument(
         '--lib-path',
-        default=os.environ.get('FAKE_GPU_LIB', './build/libfake_gpu.so'),
-        help='Path to libfake_gpu.so (default: ./build/libfake_gpu.so or $FAKE_GPU_LIB)'
+                default=os.environ.get('FAKE_GPU_LIB', _default_lib_path()),
+                help='Path to a FakeGPU library or library directory (default: build output or $FAKE_GPU_LIB)'
     )
 
     parser.add_argument(
@@ -265,14 +279,14 @@ Examples:
         print("=" * 70)
         print()
 
-    fake_gpu = load_fake_gpu_library(args.lib_path)
+    init_result, fake_gpu = load_fake_gpu_library(args.lib_path)
     if not args.quiet:
         print()
 
     results = {}
 
     if args.test in ['all', 'nvml']:
-        results['nvml'] = test_pynvml(max_devices=args.max_devices)
+        results['nvml'] = test_pynvml(init_result.handles[_nvml_lib_name()], max_devices=args.max_devices)
 
     if args.test in ['all', 'cuda']:
         results['cuda'] = test_cuda_runtime(fake_gpu, alloc_size_mb=args.alloc_size)
