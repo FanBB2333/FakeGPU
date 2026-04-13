@@ -83,7 +83,7 @@ python3 your_test.py
 
 ## 当前状态
 
-FakeGPU项目已经实现 CUDA Driver API、CUDA Runtime API、NVML API 和 cuBLAS API 的核心拦截能力。当前维护中的基线重点覆盖 fake device 发现、基础 PyTorch bring-up、以及支持的 cuBLAS / cuBLASLt CPU-backed 路径；DDP 和更深的 Transformers 覆盖仍然属于实验性路径，不应视为“完全支持”。
+FakeGPU项目已经实现 CUDA Driver API、CUDA Runtime API、NVML API 和 cuBLAS API 的核心拦截能力。当前维护中的基线重点覆盖 fake device 发现、基础 PyTorch bring-up、支持的 cuBLAS / cuBLASLt CPU-backed 路径，以及 simulate-mode 下的 NCCL direct collective / DDP smoke 验证；更深的 Transformers 覆盖仍不应视为“完全支持”。
 
 ### 已实现的功能
 
@@ -125,8 +125,8 @@ FakeGPU项目已经实现 CUDA Driver API、CUDA Runtime API、NVML API 和 cuBL
 
 - ✅ PyTorch 2.x 基础 CUDA bring-up、张量与 matmul 路径
 - ✅ 支持的 cuBLAS / cuBLASLt 算子可在 CPU simulation 下返回可校验结果
+- ✅ DDP / ProcessGroupNCCL 的 simulate-mode smoke 与 cluster validation 脚本可通过
 - ⚠️ Transformers 仅提供 smoke coverage，数值正确性与更广模型覆盖不属于当前维护基线
-- ⚠️ DDP / ProcessGroupNCCL 路径当前仍有已知缺口
 
 ### 当前功能
 
@@ -245,7 +245,7 @@ pip install torch transformers
 
 ### 重要提示
 
-FakeGPU 能稳定支撑基础 PyTorch CUDA bring-up，但这不等于完整 PyTorch / DDP 语义都已经被覆盖。所有 CUDA Runtime API 虽然都有 stub，但真正的可维护能力边界仍以 `./ftest smoke`、`./ftest cpu_sim`、`./ftest python`、`python3 verification/test_group_semantics.py` 和 `./test/run_hybrid_multinode.sh 2` 为准。
+FakeGPU 能稳定支撑基础 PyTorch CUDA bring-up，但这不等于完整 PyTorch / DDP 语义都已经被覆盖。所有 CUDA Runtime API 虽然都有 stub，但真正的可维护能力边界仍以 `./ftest smoke`、`./ftest cpu_sim`、`./ftest python`、`python3 verification/test_group_semantics.py`、`./test/run_multinode_sim.sh 2`、`./test/run_ddp_multinode.sh 4` 和 `./test/run_hybrid_multinode.sh 2` 为准。
 
 ### 正确的环境变量设置
 

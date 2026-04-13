@@ -52,15 +52,13 @@ python3 verification/test_coordinator_smoke.py
 python3 test/test_allreduce_correctness.py
 python3 verification/test_allgather_correctness.py
 python3 verification/test_group_semantics.py
+./test/run_multinode_sim.sh 2
+./test/run_multinode_sim.sh 4
+./test/run_ddp_multinode.sh 4
 ./test/run_hybrid_multinode.sh 2
 ```
 
-Experimental DDP probes:
-
-```bash
-./test/run_multinode_sim.sh 2
-./test/run_ddp_multinode.sh 4
-```
+These cover the maintained simulate-mode DDP path; they are smoke and control-flow checks, not a claim of full PyTorch/NCCL parity.
 
 ## Manual preload
 

@@ -41,6 +41,7 @@ std::atomic<std::uint64_t> g_next_timeline_tick{1};
 std::mutex g_stream_mutex;
 std::uint64_t g_default_stream_submitted_tick = 0;
 std::uint64_t g_default_stream_completed_tick = 0;
+bool g_default_stream_auto_complete_next_event_record = false;
 std::mutex g_event_mutex;
 
 struct StreamState {
@@ -48,6 +49,7 @@ struct StreamState {
     std::uint64_t submitted_tick = 0;
     std::uint64_t completed_tick = 0;
     std::uint64_t dependency_tick = 0;
+    bool auto_complete_next_event_record = false;
 };
 
 std::unordered_map<CUstream, StreamState> g_stream_states;
@@ -92,6 +94,7 @@ bool lookup_stream_state_locked(CUstream stream, StreamState& state) {
         state.submitted_tick = g_default_stream_submitted_tick;
         state.completed_tick = g_default_stream_completed_tick;
         state.dependency_tick = g_default_stream_submitted_tick;
+        state.auto_complete_next_event_record = g_default_stream_auto_complete_next_event_record;
         return true;
     }
     const auto it = g_stream_states.find(stream);
@@ -112,7 +115,12 @@ bool erase_stream_handle(CUstream stream) {
 
 void register_stream_handle(CUstream stream, unsigned int flags) {
     std::lock_guard<std::mutex> lock(g_stream_mutex);
-    g_stream_states[stream].flags = flags;
+    StreamState& state = g_stream_states[stream];
+    state.flags = flags;
+    state.submitted_tick = 0;
+    state.completed_tick = 0;
+    state.dependency_tick = 0;
+    state.auto_complete_next_event_record = false;
 }
 
 bool lookup_event_state(CUevent event, EventState& state) {
@@ -200,6 +208,41 @@ bool mark_stream_synchronized_locked(CUstream stream) {
     return true;
 }
 
+void mark_stream_completed_through_tick_locked(CUstream stream, std::uint64_t tick) {
+    if (stream == nullptr) {
+        g_default_stream_submitted_tick = std::max(g_default_stream_submitted_tick, tick);
+        g_default_stream_completed_tick = std::max(g_default_stream_completed_tick, tick);
+        return;
+    }
+    StreamState& writable = g_stream_states[stream];
+    writable.submitted_tick = std::max(writable.submitted_tick, tick);
+    writable.completed_tick = std::max(writable.completed_tick, tick);
+    writable.dependency_tick = std::max(writable.dependency_tick, tick);
+}
+
+void mark_stream_auto_complete_next_event_record_locked(CUstream stream) {
+    if (stream == nullptr) {
+        g_default_stream_auto_complete_next_event_record = true;
+        return;
+    }
+    g_stream_states[stream].auto_complete_next_event_record = true;
+}
+
+bool consume_stream_auto_complete_next_event_record_locked(CUstream stream) {
+    if (stream == nullptr) {
+        const bool should_auto_complete = g_default_stream_auto_complete_next_event_record;
+        g_default_stream_auto_complete_next_event_record = false;
+        return should_auto_complete;
+    }
+    auto it = g_stream_states.find(stream);
+    if (it == g_stream_states.end()) {
+        return false;
+    }
+    const bool should_auto_complete = it->second.auto_complete_next_event_record;
+    it->second.auto_complete_next_event_record = false;
+    return should_auto_complete;
+}
+
 bool stream_is_ready_locked(CUstream stream) {
     if (stream == nullptr) {
         return g_default_stream_completed_tick >= g_default_stream_submitted_tick;
@@ -225,10 +268,15 @@ std::uint64_t stream_completed_tick(CUstream stream) {
 
 bool mark_event_recorded(CUevent event, CUstream stream) {
     std::uint64_t tick = 0;
+    bool auto_complete = false;
     {
         std::lock_guard<std::mutex> stream_lock(g_stream_mutex);
         if (!submit_stream_operation_locked(stream, tick)) {
             return false;
+        }
+        auto_complete = consume_stream_auto_complete_next_event_record_locked(stream);
+        if (auto_complete) {
+            mark_stream_completed_through_tick_locked(stream, tick);
         }
     }
 
@@ -236,7 +284,7 @@ bool mark_event_recorded(CUevent event, CUstream stream) {
     auto it = g_event_states.find(event);
     if (it == g_event_states.end()) return false;
     it->second.recorded = true;
-    it->second.completed = false;
+    it->second.completed = auto_complete;
     it->second.last_stream = stream;
     it->second.timeline_tick = tick;
     return true;
@@ -272,6 +320,24 @@ CUresult mark_stream_synchronized(CUstream stream) {
     }
     std::lock_guard<std::mutex> lock(g_stream_mutex);
     return mark_stream_synchronized_locked(stream) ? CUDA_SUCCESS : CUDA_ERROR_INVALID_VALUE;
+}
+
+CUresult mark_stream_host_function_complete(CUstream stream) {
+    const BackendConfig& config = BackendConfig::instance();
+    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+        return CUDA_SUCCESS;
+    }
+
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    std::uint64_t tick = 0;
+    if (!submit_stream_operation_locked(stream, tick)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if (!mark_stream_synchronized_locked(stream)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    mark_stream_auto_complete_next_event_record_locked(stream);
+    return CUDA_SUCCESS;
 }
 
 }  // namespace fake_gpu::cuda

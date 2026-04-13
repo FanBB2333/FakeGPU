@@ -74,11 +74,11 @@ Treat the following as the most stable paths:
 - `cpu_sim`
 - `python`
 - single-host `simulate + simulate`
+- direct NCCL verification plus simulate-mode DDP validation (`test_coordinator_smoke.py`, `test_allreduce_correctness.py`, `test_allgather_correctness.py`, `test_group_semantics.py`, `run_multinode_sim.sh`, `run_ddp_multinode.sh`)
 
-Treat the following as more environment-sensitive or experimental:
+Treat the following as more environment-sensitive or extended coverage:
 
 - `hybrid` distributed runs
-- `run_multinode_sim.sh` and `run_ddp_multinode.sh` DDP-oriented probes
 - `proxy` and `passthrough` distributed modes
 - LLM smoke paths that depend on local model files and broader framework coverage
 
@@ -92,4 +92,7 @@ Treat the following as more environment-sensitive or experimental:
 6. Run `python3 test/test_allreduce_correctness.py`.
 7. Run `python3 verification/test_allgather_correctness.py`.
 8. Run `python3 verification/test_group_semantics.py`.
-9. Move to `./test/run_hybrid_multinode.sh 2`.
+9. Run `./test/run_multinode_sim.sh 2`.
+10. Run `./test/run_multinode_sim.sh 4`.
+11. Run `./test/run_ddp_multinode.sh 4`.
+12. Move to `./test/run_hybrid_multinode.sh 2`.
