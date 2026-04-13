@@ -223,16 +223,18 @@ output = model(x)
 Linux:
 ```bash
 LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
-LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
+LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1:./build/libnccl.so.2 \
 python your_script.py
 ```
 
 macOS:
 ```bash
 DYLD_LIBRARY_PATH=./build:$DYLD_LIBRARY_PATH \
-DYLD_INSERT_LIBRARIES=./build/libcublas.dylib:./build/libcudart.dylib:./build/libcuda.dylib:./build/libnvidia-ml.dylib \
+DYLD_INSERT_LIBRARIES=./build/libcublas.dylib:./build/libcudart.dylib:./build/libcuda.dylib:./build/libnvidia-ml.dylib:./build/libnccl.dylib \
 python3 your_script.py
 ```
+
+On macOS, prefer a Homebrew, conda, or pyenv-managed Python. SIP strips `DYLD_*` variables for protected system executables such as `/usr/bin/python3`.
 
 **Python wrapper (no need to start Python with LD_PRELOAD):**
 ```python
@@ -280,8 +282,6 @@ In another terminal:
 SOCKET_PATH=/tmp/fakegpu-coordinator.sock
 CLUSTER_CONFIG=$PWD/verification/data/cluster_valid.yaml
 
-export LD_PRELOAD="$PWD/build/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
-
 ./fgpu \
   --mode simulate \
   --dist-mode simulate \
@@ -298,6 +298,8 @@ export LD_PRELOAD="$PWD/build/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
   --report-dir /tmp/fakegpu-rank-reports \
   --epochs 1
 ```
+
+`./fgpu` now preloads the fake NCCL shim automatically, so no extra `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES` export is required for this path.
 
 For a more complete walkthrough, see `docs/distributed-sim-usage.md`.
 
