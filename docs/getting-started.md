@@ -8,7 +8,7 @@ This guide is the shortest path from a fresh checkout to a working FakeGPU envir
 - CMake 3.14+
 - A C++17-capable compiler
 - Linux or macOS
-- `torch` installed if you want to run the PyTorch or DDP-oriented checks
+- `torch` installed if you want to run the PyTorch or hybrid distributed checks
 
 ## 2. Build the project
 
@@ -41,10 +41,12 @@ If your Python environment has PyTorch:
 ./ftest python
 ```
 
-Recommended next distributed check:
+Recommended next distributed checks:
 
 ```bash
-./test/run_multinode_sim.sh 2
+python3 verification/test_coordinator_smoke.py
+python3 test/test_allreduce_correctness.py
+./test/run_hybrid_multinode.sh 2
 ```
 
 ## 4. Run your first FakeGPU command

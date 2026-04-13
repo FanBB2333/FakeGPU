@@ -106,28 +106,40 @@ Important validation rules:
 
 ## Fastest way to verify the path
 
-Use the bundled scripts first:
+Use the maintained checks first:
+
+```bash
+python3 verification/test_coordinator_smoke.py
+python3 test/test_allreduce_correctness.py
+python3 verification/test_allgather_correctness.py
+python3 verification/test_group_semantics.py
+./test/run_hybrid_multinode.sh 2
+```
+
+The maintained checks above validate:
+
+- coordinator lifecycle
+- direct collective semantics
+- grouped submission semantics
+- hybrid compute + simulated communication integration
+
+Recommended order:
+
+1. `python3 verification/test_coordinator_smoke.py`
+2. `python3 test/test_allreduce_correctness.py`
+3. `python3 verification/test_allgather_correctness.py`
+4. `python3 verification/test_group_semantics.py`
+5. `./test/run_hybrid_multinode.sh 2`
+
+Current DDP-oriented probes are still experimental:
 
 ```bash
 ./test/run_multinode_sim.sh 2
 ./test/run_multinode_sim.sh 4
 ./test/run_ddp_multinode.sh 4
-./test/run_hybrid_multinode.sh 2
 ```
 
-Those scripts take care of:
-
-- starting `fakegpu-coordinator`
-- preloading `libnccl.so.2`
-- launching `./fgpu`
-- writing logs and reports under `test/output/`
-
-Recommended order:
-
-1. `./test/run_multinode_sim.sh 2`
-2. `./test/run_multinode_sim.sh 4`
-3. `./test/run_ddp_multinode.sh 4`
-4. `./test/run_hybrid_multinode.sh 2`
+They are useful for regression tracking, but they are not part of the maintained passing baseline in the current tree.
 
 ## Manual coordinator startup
 
@@ -203,174 +215,3 @@ When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeG
 - rank or world-size mismatch between runtime environment and cluster config
 - forgetting to preload `libnccl.so.2` for the distributed path
 - using proxy or passthrough modes before the basic simulate path is already known to work
-FAKEGPU_CLUSTER_CONFIG="$CLUSTER_CONFIG" \
-FAKEGPU_COORDINATOR_TRANSPORT=unix \
-FAKEGPU_COORDINATOR_ADDR="$SOCKET_PATH" \
-python3 test/test_hybrid_multinode.py \
-  --report-dir /tmp/fakegpu-hybrid-ranks \
-  --world-size 2 \
-  --python-bin "$(command -v python3)" \
-  --nccl-lib "$PWD/build/libnccl.so.2"
-```
-
-如果只是想先确认这条路径能跑，直接用：
-
-```bash
-./test/run_hybrid_multinode.sh 2
-```
-
-### 6.4 `proxy / passthrough` 实验模板
-
-这两条路径更适合做对比验证，不建议作为第一次接入时的默认方案。
-
-如果本机有真实 GPU，并且你想让 FakeGPU 只保留控制面与统计，可以直接运行：
-
-```bash
-python3 verification/test_nccl_proxy.py
-```
-
-这个脚本会自动完成 baseline、`proxy`、grouped `proxy` 和 grouped `passthrough` 的结果对比。
-
-单 GPU 机器上，它会自动退化到 `world_size=1`；至少 2 张 GPU 时才会走 `world_size=2`。
-
-## 7. 只想给已有命令加 FakeGPU
-
-如果你已经有一条现成命令，也可以只套一层：
-
-```bash
-./fgpu \
-  --mode simulate \
-  --dist-mode simulate \
-  --cluster-config "$PWD/verification/data/cluster_valid.yaml" \
-  --coordinator-transport unix \
-  --coordinator-addr /tmp/fakegpu.sock \
-  --device-count 4 \
-  python your_script.py
-```
-
-或者直接用环境变量：
-
-```bash
-export FAKEGPU_MODE=simulate
-export FAKEGPU_DIST_MODE=simulate
-export FAKEGPU_CLUSTER_CONFIG="$PWD/verification/data/cluster_valid.yaml"
-export FAKEGPU_COORDINATOR_TRANSPORT=unix
-export FAKEGPU_COORDINATOR_ADDR=/tmp/fakegpu.sock
-export LD_PRELOAD="$PWD/build/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
-
-python your_script.py
-```
-
-## 8. 报告和产物
-
-常见输出包括：
-
-- rank 侧日志
-- coordinator 日志
-- cluster report JSON
-- DDP / hybrid 的 markdown validation report
-
-常见位置：
-
-- `test/output/`
-- 你自己设置的 `FAKEGPU_CLUSTER_REPORT_PATH`
-
-如果要检查 cluster report schema，可以用：
-
-```bash
-python3 verification/check_cluster_report.py --path /path/to/report.json
-```
-
-### 8.1 大张量 chunking 与 socket fallback
-
-默认情况下，数据面会优先走 shared memory；如果 shared memory 不可用，当前实现会自动回退到 socket streaming。
-
-如果你想主动调小 chunk 大小，可以这样跑：
-
-```bash
-FAKEGPU_STAGING_CHUNK_BYTES=1048576 ./test/run_ddp_multinode.sh 4
-```
-
-这会把大张量按约 1 MiB 的 staging chunk 拆开提交。
-
-如果你想强制验证 socket fallback：
-
-```bash
-FAKEGPU_STAGING_FORCE_SOCKET=1 python3 verification/test_socket_staging_fallback.py
-```
-
-这个开关主要用于验收和排障，不建议默认长期打开。
-
-## 9. 常用自检命令
-
-如果你怀疑环境或配置有问题，可以先跑这些：
-
-```bash
-python3 verification/test_cluster_config.py
-python3 verification/test_coordinator_smoke.py
-python3 verification/test_communicator_registry.py
-python3 verification/test_remote_coordinator.py
-python3 verification/test_socket_staging_fallback.py
-./build/fakegpu_nccl_direct_test
-```
-
-## 10. 常见问题
-
-### 10.1 `coordinator socket was not created`
-
-通常是：
-
-- `fakegpu-coordinator` 没有构建
-- `FAKEGPU_COORDINATOR_ADDR` 不是绝对路径
-- 目录无写权限
-
-### 10.2 `Invalid FAKEGPU_DIST_MODE`
-
-检查是否拼成了下面四个合法值之一：
-
-- `disabled`
-- `simulate`
-- `proxy`
-- `passthrough`
-
-### 10.3 `rank/world_size` 或 cluster config 不一致
-
-优先检查：
-
-- `torchrun --nproc_per_node`
-- `--device-count`
-- cluster YAML 中的 `ranks`
-
-这三者需要互相匹配。
-
-### 10.4 想确认 socket fallback 是否生效
-
-可以强制打开：
-
-```bash
-FAKEGPU_STAGING_FORCE_SOCKET=1 python3 verification/test_socket_staging_fallback.py
-```
-
-这个开关主要用于验证，不建议默认长期打开。
-
-### 10.5 `proxy/passthrough` 该怎么理解
-
-简单理解：
-
-- `simulate`：FakeGPU 自己执行 collective
-- `proxy`：真实 NCCL 执行 collective，同时 FakeGPU 记录控制面和 cluster report
-- `passthrough`：更接近纯透传，FakeGPU 保留最轻量的包装
-
-如果只是做分布式控制流模拟，不要从 `proxy/passthrough` 起步。
-
-## 11. 推荐使用顺序
-
-建议按这个顺序上手：
-
-1. 先跑 `python3 verification/test_cluster_config.py`
-2. 再跑 `python3 verification/test_coordinator_smoke.py`
-3. 如果要用 TCP coordinator，再跑 `python3 verification/test_remote_coordinator.py`
-4. 再跑 `./test/run_multinode_sim.sh 2`
-5. 最后再接自己的 `torchrun` 或训练脚本
-
-这样问题最好定位。

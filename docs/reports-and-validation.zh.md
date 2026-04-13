@@ -9,8 +9,11 @@
 | `./ftest smoke` | 构建、预加载、fake 设备发现、报告结构、多架构 profile、指针内存类型 |
 | `./ftest cpu_sim` | CPU-backed cuBLAS / cuBLASLt 与 CPU 参考结果的一致性 |
 | `./ftest python` | 基础 PyTorch CUDA 设备、张量和 matmul 路径 |
-| `./test/run_multinode_sim.sh 2` | 最小分布式模拟 smoke |
-| `./test/run_ddp_multinode.sh 4` | DDP 风格多 rank 路径 |
+| `python3 verification/test_coordinator_smoke.py` | coordinator 启停与请求/响应闭环 |
+| `python3 test/test_allreduce_correctness.py` | direct all-reduce 语义正确性 |
+| `python3 verification/test_allgather_correctness.py` | direct all-gather 语义正确性 |
+| `python3 verification/test_group_semantics.py` | grouped collective 提交语义 |
+| `./test/run_hybrid_multinode.sh 2` | hybrid 计算 + simulate 通信的维护中多进程验证 |
 | `./ftest llm` | 在本地模型文件可用时运行的可选 LLM smoke test |
 
 前面三条是最适合在代码或构建变更后优先执行的基线验证。
@@ -75,6 +78,7 @@
 下面这些路径更依赖环境，或者还偏实验性质：
 
 - `hybrid` 分布式运行
+- `run_multinode_sim.sh` 和 `run_ddp_multinode.sh` 这类 DDP 探针脚本
 - `proxy` / `passthrough` 分布式模式
 - 依赖本地模型文件和更广框架覆盖的 LLM smoke 路径
 
@@ -84,4 +88,8 @@
 2. 跑 `./ftest smoke`。
 3. 跑 `./ftest cpu_sim`。
 4. 如果装了 PyTorch，再跑 `./ftest python`。
-5. 然后再进入 `./test/run_multinode_sim.sh 2`。
+5. 跑 `python3 verification/test_coordinator_smoke.py`。
+6. 跑 `python3 test/test_allreduce_correctness.py`。
+7. 跑 `python3 verification/test_allgather_correctness.py`。
+8. 跑 `python3 verification/test_group_semantics.py`。
+9. 然后再进入 `./test/run_hybrid_multinode.sh 2`。

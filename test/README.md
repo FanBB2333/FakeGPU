@@ -83,7 +83,7 @@ python3 your_test.py
 
 ## 当前状态
 
-FakeGPU项目实现了完整的CUDA Driver API、CUDA Runtime API、NVML API和cuBLAS API拦截功能。PyTorch和Transformers已完全支持。
+FakeGPU项目已经实现 CUDA Driver API、CUDA Runtime API、NVML API 和 cuBLAS API 的核心拦截能力。当前维护中的基线重点覆盖 fake device 发现、基础 PyTorch bring-up、以及支持的 cuBLAS / cuBLASLt CPU-backed 路径；DDP 和更深的 Transformers 覆盖仍然属于实验性路径，不应视为“完全支持”。
 
 ### 已实现的功能
 
@@ -123,26 +123,33 @@ FakeGPU项目实现了完整的CUDA Driver API、CUDA Runtime API、NVML API和c
 
 ### 支持的框架
 
-- ✅ PyTorch 2.x (完全支持 - 包括矩阵运算)
-- ✅ Transformers (完全支持 - 可用于模型加载和推理)
-- ✅ 其他基于CUDA的深度学习框架
+- ✅ PyTorch 2.x 基础 CUDA bring-up、张量与 matmul 路径
+- ✅ 支持的 cuBLAS / cuBLASLt 算子可在 CPU simulation 下返回可校验结果
+- ⚠️ Transformers 仅提供 smoke coverage，数值正确性与更广模型覆盖不属于当前维护基线
+- ⚠️ DDP / ProcessGroupNCCL 路径当前仍有已知缺口
 
 ### 当前功能
 
-FakeGPU + cuBLAS实现了完整的stub函数集合，可以成功:
+FakeGPU + cuBLAS 目前可以稳定完成：
 - ✅ 检测GPU设备和属性
 - ✅ 分配和管理内存
 - ✅ 加载模型和权重
-- ✅ 执行张量操作（element-wise和矩阵运算）
+- ✅ 执行基础张量操作，以及支持的 cuBLAS / cuBLASLt 矩阵运算
 - ✅ 记录资源消耗模式
 
-**重要**: FakeGPU返回随机值用于所有计算结果，不执行实际GPU计算。这是设计上的预期行为，主要用途是:
+**重要**:
+
+- `simulate` 模式下，通用 CUDA kernel launch 仍是 no-op，不保证任意框架路径的数值正确性。
+- 对于已维护的 cuBLAS / cuBLASLt 路径，如果启用了默认的 CPU simulation，则会在 CPU 上执行并返回可校验结果。
+- 对于未覆盖的 GPU kernel 路径，FakeGPU 仍然更适合验证流程、资源消耗和设备管理，而不是验证最终数值。
+
+这也是当前主要用途：
 1. 在无GPU环境下测试模型加载和设备管理代码
 2. 记录和分析硬件资源消耗模式
 3. 指导未来的硬件资源分配决策
 4. 开发和调试不需要实际计算结果的工具
 
-如果需要实际的计算结果，请使用真实GPU或CPU模式。
+如果你需要通用 CUDA kernel 的真实数值结果，请使用真实 GPU，或者只依赖当前已覆盖的 CPU simulation 算子。
 
 ## 测试脚本说明
 
@@ -238,7 +245,7 @@ pip install torch transformers
 
 ### 重要提示
 
-FakeGPU现在完全支持PyTorch。所有CUDA Runtime API函数已实现为stub函数。
+FakeGPU 能稳定支撑基础 PyTorch CUDA bring-up，但这不等于完整 PyTorch / DDP 语义都已经被覆盖。所有 CUDA Runtime API 虽然都有 stub，但真正的可维护能力边界仍以 `./ftest smoke`、`./ftest cpu_sim`、`./ftest python`、`python3 verification/test_group_semantics.py` 和 `./test/run_hybrid_multinode.sh 2` 为准。
 
 ### 正确的环境变量设置
 
