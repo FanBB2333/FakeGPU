@@ -74,11 +74,11 @@
 - `cpu_sim`
 - `python`
 - 单机 `simulate + simulate`
+- direct NCCL 验证加 simulate-mode DDP 验证（`test_coordinator_smoke.py`、`test_allreduce_correctness.py`、`test_allgather_correctness.py`、`test_group_semantics.py`、`run_multinode_sim.sh`、`run_ddp_multinode.sh`）
 
-下面这些路径更依赖环境，或者还偏实验性质：
+下面这些路径更依赖环境，或者属于扩展覆盖：
 
 - `hybrid` 分布式运行
-- `run_multinode_sim.sh` 和 `run_ddp_multinode.sh` 这类 DDP 探针脚本
 - `proxy` / `passthrough` 分布式模式
 - 依赖本地模型文件和更广框架覆盖的 LLM smoke 路径
 
@@ -92,4 +92,7 @@
 6. 跑 `python3 test/test_allreduce_correctness.py`。
 7. 跑 `python3 verification/test_allgather_correctness.py`。
 8. 跑 `python3 verification/test_group_semantics.py`。
-9. 然后再进入 `./test/run_hybrid_multinode.sh 2`。
+9. 跑 `./test/run_multinode_sim.sh 2`。
+10. 跑 `./test/run_multinode_sim.sh 4`。
+11. 跑 `./test/run_ddp_multinode.sh 4`。
+12. 然后再进入 `./test/run_hybrid_multinode.sh 2`。

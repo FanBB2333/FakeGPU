@@ -129,17 +129,12 @@ python3 verification/test_group_semantics.py
 2. `python3 test/test_allreduce_correctness.py`
 3. `python3 verification/test_allgather_correctness.py`
 4. `python3 verification/test_group_semantics.py`
-5. `./test/run_hybrid_multinode.sh 2`
+5. `./test/run_multinode_sim.sh 2`
+6. `./test/run_multinode_sim.sh 4`
+7. `./test/run_ddp_multinode.sh 4`
+8. `./test/run_hybrid_multinode.sh 2`
 
-当前 DDP 风格探针仍属于实验路径：
-
-```bash
-./test/run_multinode_sim.sh 2
-./test/run_multinode_sim.sh 4
-./test/run_ddp_multinode.sh 4
-```
-
-这些脚本适合做回归跟踪，但不属于当前维护中的通过基线。
+上面的 DDP 脚本已经属于当前维护中的 simulate-mode 验证集。它们提供的是 ProcessGroupNCCL 的 smoke / 控制流覆盖，并不意味着已经达到真实 NCCL 的完整数值或协议等价。
 
 ## 手动启动 coordinator
 

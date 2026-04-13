@@ -270,6 +270,7 @@ namespace fake_gpu::cuda {
 bool is_stream_handle_live(CUstream stream);
 CUresult submit_stream_operation(CUstream stream);
 CUresult mark_stream_synchronized(CUstream stream);
+CUresult mark_stream_host_function_complete(CUstream stream);
 
 }  // namespace fake_gpu::cuda
 #endif

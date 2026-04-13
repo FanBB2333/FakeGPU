@@ -129,17 +129,12 @@ Recommended order:
 2. `python3 test/test_allreduce_correctness.py`
 3. `python3 verification/test_allgather_correctness.py`
 4. `python3 verification/test_group_semantics.py`
-5. `./test/run_hybrid_multinode.sh 2`
+5. `./test/run_multinode_sim.sh 2`
+6. `./test/run_multinode_sim.sh 4`
+7. `./test/run_ddp_multinode.sh 4`
+8. `./test/run_hybrid_multinode.sh 2`
 
-Current DDP-oriented probes are still experimental:
-
-```bash
-./test/run_multinode_sim.sh 2
-./test/run_multinode_sim.sh 4
-./test/run_ddp_multinode.sh 4
-```
-
-They are useful for regression tracking, but they are not part of the maintained passing baseline in the current tree.
+The DDP-oriented scripts above are part of the maintained simulate-mode validation set. They provide smoke and control-flow coverage for ProcessGroupNCCL, but they do not imply full numerical or protocol parity with a real NCCL stack.
 
 ## Manual coordinator startup
 

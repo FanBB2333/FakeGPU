@@ -52,15 +52,13 @@ python3 verification/test_coordinator_smoke.py
 python3 test/test_allreduce_correctness.py
 python3 verification/test_allgather_correctness.py
 python3 verification/test_group_semantics.py
+./test/run_multinode_sim.sh 2
+./test/run_multinode_sim.sh 4
+./test/run_ddp_multinode.sh 4
 ./test/run_hybrid_multinode.sh 2
 ```
 
-实验性 DDP 探针：
-
-```bash
-./test/run_multinode_sim.sh 2
-./test/run_ddp_multinode.sh 4
-```
+这些命令覆盖当前维护中的 simulate-mode DDP 路径；它们属于 smoke / 控制流验证，不代表完整的 PyTorch/NCCL 等价。
 
 ## 手动 preload
 

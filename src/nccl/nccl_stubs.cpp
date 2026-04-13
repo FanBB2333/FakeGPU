@@ -115,6 +115,17 @@ ncclResult_t fail_with(ncclComm_t comm, ncclResult_t result, std::string message
     return result;
 }
 
+ncclResult_t mark_simulated_stream_work_complete(ncclComm_t comm, cudaStream_t stream) {
+    if (!comm || comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
+        return ncclSuccess;
+    }
+    if (fake_gpu::cuda::mark_stream_host_function_complete(reinterpret_cast<CUstream>(stream)) !=
+        CUDA_SUCCESS) {
+        return fail_with(comm, ncclInvalidArgument, "stream completion bookkeeping failed");
+    }
+    return ncclSuccess;
+}
+
 ncclResult_t surface_async_error(ncclComm_t comm) {
     if (!comm || comm->async_error == ncclSuccess) {
         return ncclSuccess;
@@ -1845,6 +1856,11 @@ ncclResult_t submit_collective(
         return fail_with(comm, ncclInvalidUsage, "unsupported chunked collective");
     }
 
+    const ncclResult_t stream_result = mark_simulated_stream_work_complete(comm, stream);
+    if (stream_result != ncclSuccess) {
+        return stream_result;
+    }
+
     clear_last_error(comm);
     return ncclSuccess;
 }
@@ -1996,6 +2012,11 @@ ncclResult_t submit_point_to_point(
         if (!fake_gpu::nccl::copy_host_to_buffer(local_output, source, bytes, error)) {
             return fail_with(comm, ncclSystemError, error);
         }
+    }
+
+    const ncclResult_t stream_result = mark_simulated_stream_work_complete(comm, stream);
+    if (stream_result != ncclSuccess) {
+        return stream_result;
     }
 
     comm->next_seqno++;
