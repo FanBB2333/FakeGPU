@@ -101,14 +101,16 @@ otool -L ./build/libcublas.dylib
 Linux:
 ```bash
 LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH
-LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1
+LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1:./build/libnccl.so.2
 ```
 
 macOS:
 ```bash
 DYLD_LIBRARY_PATH=./build:$DYLD_LIBRARY_PATH
-DYLD_INSERT_LIBRARIES=./build/libcublas.dylib:./build/libcudart.dylib:./build/libcuda.dylib:./build/libnvidia-ml.dylib
+DYLD_INSERT_LIBRARIES=./build/libcublas.dylib:./build/libcudart.dylib:./build/libcuda.dylib:./build/libnvidia-ml.dylib:./build/libnccl.dylib
 ```
+
+提示：macOS 下请避免使用 `/usr/bin/python3`，系统保护机制会移除 `DYLD_*` 变量。
 
 ### 可选的环境变量
 ```bash

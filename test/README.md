@@ -54,7 +54,7 @@ python3 test/test_comparison.py --mode both   # 两者都测试
 
 ## PyTorch所需的库
 
-FakeGPU需要预加载所有四个库才能让PyTorch正常工作：
+FakeGPU需要预加载所有五个库才能让PyTorch正常工作：
 
 ```bash
 ./fgpu python3 your_test.py
@@ -64,22 +64,25 @@ FakeGPU需要预加载所有四个库才能让PyTorch正常工作：
 Linux:
 ```bash
 LD_LIBRARY_PATH=./build:$LD_LIBRARY_PATH \
-LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1 \
+LD_PRELOAD=./build/libcublas.so.12:./build/libcudart.so.12:./build/libcuda.so.1:./build/libnvidia-ml.so.1:./build/libnccl.so.2 \
 python3 your_test.py
 ```
 
 macOS:
 ```bash
 DYLD_LIBRARY_PATH=./build:$DYLD_LIBRARY_PATH \
-DYLD_INSERT_LIBRARIES=./build/libcublas.dylib:./build/libcudart.dylib:./build/libcuda.dylib:./build/libnvidia-ml.dylib \
+DYLD_INSERT_LIBRARIES=./build/libcublas.dylib:./build/libcudart.dylib:./build/libcuda.dylib:./build/libnvidia-ml.dylib:./build/libnccl.dylib \
 python3 your_test.py
 ```
+
+macOS 下请避免使用 `/usr/bin/python3`，因为 SIP 会清理 `DYLD_*` 环境变量。建议使用 Homebrew、conda 或 pyenv 提供的 Python。
 
 **库的顺序很重要:**
 1. `libcublas.so.12` - cuBLAS/cuBLASLt (矩阵运算)
 2. `libcudart.so.12` - CUDA Runtime API
 3. `libcuda.so.1` - CUDA Driver API
 4. `libnvidia-ml.so.1` - NVML (设备管理)
+5. `libnccl.so.2` - NCCL / distributed collective simulation
 
 ## 当前状态
 
