@@ -72,8 +72,16 @@ def _expected_device_profiles() -> list[str]:
     return [preset] * count
 
 
+def _preload_env_var() -> str:
+    return "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
+
+
+def _libcuda_name() -> str:
+    return "libcuda.dylib" if sys.platform == "darwin" else "libcuda.so.1"
+
+
 def _find_preloaded_path(libname: str) -> str | None:
-    preload = os.environ.get("LD_PRELOAD", "")
+    preload = os.environ.get(_preload_env_var(), "")
     for part in preload.split(":"):
         part = part.strip()
         if not part:
@@ -84,8 +92,9 @@ def _find_preloaded_path(libname: str) -> str | None:
 
 
 def _load_libcuda() -> ctypes.CDLL:
-    path = _find_preloaded_path("libcuda.so.1")
-    return ctypes.CDLL(path or "libcuda.so.1", mode=ctypes.RTLD_GLOBAL)
+    libname = _libcuda_name()
+    path = _find_preloaded_path(libname)
+    return ctypes.CDLL(path or libname, mode=ctypes.RTLD_GLOBAL)
 
 
 def _parse_simple_yaml(path: Path) -> dict[str, object]:
