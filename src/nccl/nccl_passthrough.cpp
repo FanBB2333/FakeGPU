@@ -86,13 +86,25 @@ std::vector<std::string> candidate_paths() {
 
     const char* conda_prefix = std::getenv("CONDA_PREFIX");
     if (conda_prefix && *conda_prefix) {
+#ifdef __APPLE__
+        paths.emplace_back(std::string(conda_prefix) + "/lib/libnccl.dylib");
+        paths.emplace_back(std::string(conda_prefix) + "/lib/libnccl.2.dylib");
+#else
         paths.emplace_back(std::string(conda_prefix) + "/lib/libnccl.so.2");
+#endif
     }
 
+#ifdef __APPLE__
+    paths.emplace_back("/opt/homebrew/lib/libnccl.dylib");
+    paths.emplace_back("/opt/homebrew/lib/libnccl.2.dylib");
+    paths.emplace_back("/usr/local/lib/libnccl.dylib");
+    paths.emplace_back("/usr/local/lib/libnccl.2.dylib");
+#else
     paths.emplace_back("/usr/lib/x86_64-linux-gnu/libnccl.so.2");
     paths.emplace_back("/usr/lib64/libnccl.so.2");
     paths.emplace_back("/usr/local/cuda/lib64/libnccl.so.2");
     paths.emplace_back("/usr/local/nvidia/lib64/libnccl.so.2");
+#endif
     return paths;
 }
 
@@ -141,7 +153,7 @@ bool RealNcclLoader::load_handle(std::string& error) {
         return true;
     }
 
-    error = "failed to load a real libnccl.so.2; set FAKEGPU_REAL_NCCL_PATH";
+    error = "failed to load a real NCCL library; set FAKEGPU_REAL_NCCL_PATH";
     return false;
 }
 

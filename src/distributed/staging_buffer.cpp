@@ -16,6 +16,13 @@ namespace {
 
 constexpr const char* kTransportUnavailablePrefix = "shared memory transport unavailable: ";
 
+#ifdef __APPLE__
+constexpr const char* kDefaultStagingBufferPrefix = "/fgpu-r";
+constexpr std::size_t kMaxShmNameLength = 31;
+#else
+constexpr const char* kDefaultStagingBufferPrefix = "/fakegpu-staging-r";
+#endif
+
 bool validate_name(const std::string& name, std::string& error) {
     if (name.empty() || name.front() != '/') {
         error = "staging buffer name must start with /";
@@ -29,6 +36,12 @@ bool validate_name(const std::string& name, std::string& error) {
         error = "staging buffer name must not contain nested slashes";
         return false;
     }
+#ifdef __APPLE__
+    if (name.size() > kMaxShmNameLength) {
+        error = "staging buffer name exceeds macOS POSIX shm limit of 31 characters";
+        return false;
+    }
+#endif
     return true;
 }
 
@@ -102,7 +115,8 @@ bool force_socket_staging(std::string& error) {
 }  // namespace
 
 std::string default_staging_buffer_name(int owner_rank, std::uint64_t staging_id) {
-    return "/fakegpu-staging-r" + std::to_string(owner_rank) + "-s" + std::to_string(staging_id);
+    return std::string(kDefaultStagingBufferPrefix) + std::to_string(owner_rank) + "-s" +
+           std::to_string(staging_id);
 }
 
 bool is_staging_transport_unavailable_error(const std::string& error) {

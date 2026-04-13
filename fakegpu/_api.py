@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import ctypes
 import os
+import shutil
 import subprocess
 import sys
 import threading
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -15,18 +17,20 @@ def _is_macos() -> bool:
 
 
 _PRELOAD_LIBS: tuple[str, ...] = (
-    ("libcublas.dylib", "libcudart.dylib", "libcuda.dylib", "libnvidia-ml.dylib")
+    ("libcublas.dylib", "libcudart.dylib", "libcuda.dylib", "libnvidia-ml.dylib", "libnccl.dylib")
     if _is_macos()
-    else ("libcublas.so.12", "libcudart.so.12", "libcuda.so.1", "libnvidia-ml.so.1")
+    else ("libcublas.so.12", "libcudart.so.12", "libcuda.so.1", "libnvidia-ml.so.1", "libnccl.so.2")
 )
 
 _LIBRARY_PATH_VAR = "DYLD_LIBRARY_PATH" if _is_macos() else "LD_LIBRARY_PATH"
 _PRELOAD_VAR = "DYLD_INSERT_LIBRARIES" if _is_macos() else "LD_PRELOAD"
+_MACOS_PROTECTED_PREFIXES = ("/System/", "/usr/bin/", "/usr/libexec/")
 
 _state_lock = threading.Lock()
 _initialized = False
 _loaded_dir: Path | None = None
 _handles: dict[str, ctypes.CDLL] = {}
+_macos_injection_warning_emitted = False
 
 
 def is_initialized() -> bool:
@@ -241,6 +245,9 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     """Run a subprocess with FakeGPU enabled (see `env()`)."""
 
+    if cmd:
+        _warn_if_macos_injection_may_be_blocked(cmd[0])
+
     completed = subprocess.run(
         list(cmd),
         check=check,
@@ -280,6 +287,8 @@ def _fallback_name(libname: str) -> str:
         return "libcuda.so"
     if libname == "libnvidia-ml.so.1":
         return "libnvidia-ml.so"
+    if libname == "libnccl.so.2":
+        return "libnccl.so"
 
     if libname == "libcublas.dylib":
         return "libcublas.12.dylib"
@@ -289,14 +298,16 @@ def _fallback_name(libname: str) -> str:
         return "libcuda.1.dylib"
     if libname == "libnvidia-ml.dylib":
         return "libnvidia-ml.1.dylib"
+    if libname == "libnccl.dylib":
+        return "libnccl.2.dylib"
     return libname
 
 
 def _preload_libs_for_mode(mode: str | None) -> tuple[str, ...]:
     # Mode-specific preloading:
     # - simulate: preload all FakeGPU libs (full stubs)
-    # - hybrid: preload CUDA driver/runtime + NVML, but keep real cuBLAS/cuBLASLt for correctness
-    # - passthrough: preload CUDA driver/runtime only; keep real NVML/cuBLAS to avoid fake device info and math changes
+    # - hybrid: preload CUDA driver/runtime + NVML/NCCL, but keep real cuBLAS/cuBLASLt for correctness
+    # - passthrough: preload CUDA driver/runtime + NCCL; keep real NVML/cuBLAS to avoid fake device info and math changes
     mode_norm = (mode or "simulate").strip().lower()
     if mode_norm == "hybrid":
         return tuple(lib for lib in _PRELOAD_LIBS if "cublas" not in lib)
@@ -446,3 +457,39 @@ def _remove_path(prefix: str, existing: str) -> str:
         return ""
     parts = [p for p in existing.split(":") if p and p != prefix]
     return ":".join(parts)
+
+
+def _warn_if_macos_injection_may_be_blocked(executable: str | os.PathLike[str] | None) -> None:
+    global _macos_injection_warning_emitted
+
+    if _macos_injection_warning_emitted or not _is_macos() or executable is None:
+        return
+
+    resolved = _resolve_executable_path(executable)
+    if not resolved:
+        return
+
+    if any(resolved.startswith(prefix) for prefix in _MACOS_PROTECTED_PREFIXES):
+        warnings.warn(
+            "FakeGPU may not inject correctly because macOS strips DYLD_* variables for protected system executables. "
+            f"Resolved command: {resolved}. Use a Homebrew, conda, or pyenv-managed binary instead.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        _macos_injection_warning_emitted = True
+
+
+def _resolve_executable_path(executable: str | os.PathLike[str]) -> str:
+    candidate = os.fspath(executable)
+    if not candidate:
+        return ""
+
+    if os.path.sep not in candidate:
+        resolved = shutil.which(candidate)
+        if resolved:
+            candidate = resolved
+
+    try:
+        return str(Path(candidate).resolve())
+    except OSError:
+        return candidate

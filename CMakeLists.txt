@@ -188,17 +188,27 @@ add_library(fake_nccl SHARED
 )
 fakegpu_link_common_system_libs(fake_nccl)
 target_include_directories(fake_nccl PRIVATE src/nccl src/core src/distributed)
+target_link_libraries(fake_nccl PRIVATE fake_cuda)
 
 # Platform specific flags
 if(APPLE)
     # macOS: build dylibs with CUDA/NVML-compatible names so DYLD_* search works.
     target_link_options(fake_gpu PRIVATE "-undefined" "dynamic_lookup")
     target_link_options(fake_cuda PRIVATE "-undefined" "dynamic_lookup")
+    target_link_options(fake_cudart PRIVATE "-undefined" "dynamic_lookup")
+    target_link_options(fake_cublas PRIVATE "-undefined" "dynamic_lookup")
+    target_link_options(fake_nccl PRIVATE "-undefined" "dynamic_lookup")
 
     set_target_properties(fake_gpu PROPERTIES
         OUTPUT_NAME "nvidia-ml"
         VERSION "${FAKEGPU_VERSION}"
         SOVERSION "1"
+    )
+    add_custom_command(TARGET fake_gpu POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+            $<TARGET_FILE_NAME:fake_gpu>
+            ${CMAKE_BINARY_DIR}/libfake_gpu.dylib
+        COMMENT "Creating libfake_gpu.dylib symlink for backward compatibility"
     )
 
     set_target_properties(fake_cuda PROPERTIES
