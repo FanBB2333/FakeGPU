@@ -166,14 +166,34 @@ private:
         }
 
         if (fallback_name && *fallback_name) {
-            void* handle = real_dlopen(fallback_name, RTLD_NOW | RTLD_LOCAL);
+            const std::string platform_fallback = platform_fallback_name(fallback_name);
+            void* handle = real_dlopen(platform_fallback.c_str(), RTLD_NOW | RTLD_LOCAL);
             if (handle) {
-                FGPU_LOG("[RealCudaLoader] Loaded %s via fallback name %s\n", fallback_name, fallback_name);
+                FGPU_LOG(
+                    "[RealCudaLoader] Loaded %s via fallback name %s\n",
+                    fallback_name,
+                    platform_fallback.c_str());
                 return handle;
             }
-            FGPU_LOG("[RealCudaLoader] Failed to load fallback %s: %s\n", fallback_name, dlerror());
+            FGPU_LOG(
+                "[RealCudaLoader] Failed to load fallback %s: %s\n",
+                platform_fallback.c_str(),
+                dlerror());
         }
         return nullptr;
+    }
+
+    static std::string platform_fallback_name(const char* fallback_name) {
+#ifdef __APPLE__
+        std::string name = fallback_name ? std::string(fallback_name) : std::string();
+        const std::size_t so_pos = name.rfind(".so");
+        if (so_pos != std::string::npos) {
+            name.replace(so_pos, 3, ".dylib");
+        }
+        return name;
+#else
+        return fallback_name ? std::string(fallback_name) : std::string();
+#endif
     }
 
     void query_real_gpu_info() {

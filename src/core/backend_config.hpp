@@ -108,6 +108,14 @@ private:
     }
 
     void find_real_library_paths() {
+#ifdef __APPLE__
+        static const char* cuda_search_paths[] = {
+            "/usr/local/cuda/lib",
+            "/usr/local/lib",
+            "/opt/homebrew/lib",
+            nullptr
+        };
+#else
         // Common CUDA installation paths
         static const char* cuda_search_paths[] = {
             "/usr/local/cuda/lib64",
@@ -118,6 +126,7 @@ private:
             "/usr/lib64",
             nullptr
         };
+#endif
 
         auto pick_first_existing = [&](const std::string& dir, const char* const* candidates) -> std::string {
             for (const char* const* name = candidates; *name; ++name) {
@@ -127,10 +136,17 @@ private:
             return "";
         };
 
+    #ifdef __APPLE__
+        static const char* cuda_driver_candidates[] = {"libcuda.dylib", "libcuda.1.dylib", nullptr};
+        static const char* cudart_candidates[] = {"libcudart.dylib", "libcudart.12.dylib", nullptr};
+        static const char* cublas_candidates[] = {"libcublas.dylib", "libcublas.12.dylib", nullptr};
+        static const char* nvml_candidates[] = {"libnvidia-ml.dylib", "libnvidia-ml.1.dylib", nullptr};
+    #else
         static const char* cuda_driver_candidates[] = {"libcuda.so.1", "libcuda.so", nullptr};
         static const char* cudart_candidates[] = {"libcudart.so.12", "libcudart.so.11", "libcudart.so", nullptr};
         static const char* cublas_candidates[] = {"libcublas.so.12", "libcublas.so.11", "libcublas.so", nullptr};
         static const char* nvml_candidates[] = {"libnvidia-ml.so.1", "libnvidia-ml.so", nullptr};
+    #endif
 
         // If user specified a directory, use it
         if (!real_cuda_lib_dir_.empty()) {
@@ -182,11 +198,13 @@ private:
         }
 
         // Also check /usr/lib for nvidia-ml (often installed separately)
+#ifndef __APPLE__
         if (real_nvml_path_.empty()) {
             if (file_exists("/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1")) {
                 real_nvml_path_ = "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1";
             }
         }
+#endif
     }
 
     static bool file_exists(const std::string& path) {

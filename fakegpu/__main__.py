@@ -5,6 +5,7 @@ import os
 import sys
 
 from ._api import env as fakegpu_env
+from ._api import _warn_if_macos_injection_may_be_blocked
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -70,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         cmd = cmd[1:]
     if not cmd:
         parser.error("missing command to run")
+
+    _warn_if_macos_injection_may_be_blocked(cmd[0])
 
     child_env = fakegpu_env(
         build_dir=ns.build_dir,

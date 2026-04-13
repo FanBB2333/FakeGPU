@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - wheel may be absent in some build contex
 _ROOT = Path(__file__).resolve().parent
 if sys.platform == "darwin":
     _REQUIRED_LIBS = (
+        "libnccl.dylib",
         "libcublas.dylib",
         "libcudart.dylib",
         "libcuda.dylib",
@@ -25,6 +26,7 @@ if sys.platform == "darwin":
     )
 else:
     _REQUIRED_LIBS = (
+        "libnccl.so.2",
         "libcublas.so.12",
         "libcudart.so.12",
         "libcuda.so.1",
@@ -36,6 +38,7 @@ _REQUIRED_CMAKE_TARGETS = (
     "fake_cuda",
     "fake_cudart",
     "fake_cublas",
+    "fake_nccl",
 )
 
 
