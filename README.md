@@ -31,7 +31,7 @@ GitHub Pages deployment:
 - [x] **Cluster-Level Reporting** - Collective counts/bytes/timing plus inter-node and intra-node link statistics
 - [x] **Python API Wrapper** - `import fakegpu; fakegpu.init()` enables FakeGPU from inside Python
 - [x] **PyTorch Support** - Basic tensor ops, linear layers, neural networks
-- [x] **PyTorch Distributed / DDP Smoke Path** - Single-host simulated multi-node DDP validation path
+- [x] **Hybrid Multi-Process Validation Path** - Hybrid compute + simulated communication smoke coverage
 - [x] **Real Scenario Testing** - LLM inference smoke test (Qwen2.5-0.5B-Instruct)
 - [x] **GPU Tool Compatibility** - Compatible with existing GPU status monitoring tools (nvidia-smi, gpustat, etc.)
 - [x] **Preset GPU Info** - Add more preset GPU hardware configurations
@@ -41,6 +41,7 @@ GitHub Pages deployment:
 ### Planned Features
 - [ ] **Deeper Protocol Fidelity** - Better overlap/ordering realism beyond semantic NCCL simulation
 - [ ] **Broader Multi-Host Validation** - More real multi-machine coverage beyond current single-host and loopback transport validation
+- [ ] **PyTorch Distributed / DDP Smoke Path** - Current ProcessGroupNCCL DDP scripts still have known gaps and are not part of the maintained passing baseline
 - [ ] **Enhanced Testing** - Optimize test suite with more languages and runtime environments
 
 ## Operation Modes
@@ -188,15 +189,23 @@ Runs identical tests on both real GPU and FakeGPU to verify correctness.
 ./fgpu python3 test/test_comparison.py --mode fake
 ```
 
-**Distributed smoke / validation:**
+**Distributed validation (maintained):**
 ```bash
-./test/run_multinode_sim.sh 2      # 2-rank smoke
-./test/run_multinode_sim.sh 4      # 4-rank smoke
-./test/run_ddp_multinode.sh 4      # 4-rank DDP main path
+python3 verification/test_coordinator_smoke.py
+python3 test/test_allreduce_correctness.py
+python3 verification/test_allgather_correctness.py
+python3 verification/test_group_semantics.py
 ./test/run_hybrid_multinode.sh 2   # hybrid compute + simulated communication
 ```
 
-These scripts write logs and reports under `test/output/`, including cluster-level communication reports.
+**Experimental DDP probes (currently known gaps):**
+```bash
+./test/run_multinode_sim.sh 2
+./test/run_multinode_sim.sh 4
+./test/run_ddp_multinode.sh 4
+```
+
+The maintained paths above pass in the current tree. The DDP-oriented scripts are kept for regression tracking, but they are not part of the maintained passing baseline right now.
 
 ### Usage
 

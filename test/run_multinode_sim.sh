@@ -37,6 +37,7 @@ fi
 TMPDIR="$(mktemp -d -t fakegpu-ddp-step10-XXXXXX)"
 SOCKET_PATH="$TMPDIR/coordinator.sock"
 REPORT_DIR="$TMPDIR/reports"
+MASTER_PORT="$(python3 -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
 TORCHRUN_EXIT=0
 
 cleanup() {
@@ -73,9 +74,10 @@ set +e
     --coordinator-addr "$SOCKET_PATH" \
     --device-count "$NPROC" \
     torchrun \
-    --standalone \
     --nnodes=1 \
     --nproc_per_node="$NPROC" \
+    --master_addr 127.0.0.1 \
+    --master_port "$MASTER_PORT" \
     "$SCRIPT_DIR/test_ddp_multinode.py" \
     --report-dir "$REPORT_DIR" \
     >"$RUN_LOG" 2>&1

@@ -106,28 +106,40 @@ fabric:
 
 ## 最快的验证方式
 
-优先用仓库自带脚本：
+优先用当前维护中的检查：
+
+```bash
+python3 verification/test_coordinator_smoke.py
+python3 test/test_allreduce_correctness.py
+python3 verification/test_allgather_correctness.py
+python3 verification/test_group_semantics.py
+./test/run_hybrid_multinode.sh 2
+```
+
+这些检查分别覆盖：
+
+- coordinator 生命周期
+- direct collective 语义
+- grouped submission 语义
+- hybrid 计算 + simulate 通信集成
+
+建议顺序：
+
+1. `python3 verification/test_coordinator_smoke.py`
+2. `python3 test/test_allreduce_correctness.py`
+3. `python3 verification/test_allgather_correctness.py`
+4. `python3 verification/test_group_semantics.py`
+5. `./test/run_hybrid_multinode.sh 2`
+
+当前 DDP 风格探针仍属于实验路径：
 
 ```bash
 ./test/run_multinode_sim.sh 2
 ./test/run_multinode_sim.sh 4
 ./test/run_ddp_multinode.sh 4
-./test/run_hybrid_multinode.sh 2
 ```
 
-这些脚本会自动：
-
-- 启动 `fakegpu-coordinator`
-- 预加载 `libnccl.so.2`
-- 调用 `./fgpu`
-- 把日志和报告写到 `test/output/`
-
-建议顺序：
-
-1. `./test/run_multinode_sim.sh 2`
-2. `./test/run_multinode_sim.sh 4`
-3. `./test/run_ddp_multinode.sh 4`
-4. `./test/run_hybrid_multinode.sh 2`
+这些脚本适合做回归跟踪，但不属于当前维护中的通过基线。
 
 ## 手动启动 coordinator
 

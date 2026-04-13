@@ -9,8 +9,11 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `./ftest smoke` | build, preload, fake device discovery, report schema, multi-architecture profiles, pointer-memory-type coverage |
 | `./ftest cpu_sim` | CPU-backed cuBLAS/cuBLASLt correctness against CPU references |
 | `./ftest python` | basic PyTorch CUDA device, tensor, and matmul flow |
-| `./test/run_multinode_sim.sh 2` | smallest maintained distributed simulation smoke path |
-| `./test/run_ddp_multinode.sh 4` | DDP-oriented multi-rank path |
+| `python3 verification/test_coordinator_smoke.py` | coordinator startup, request/response, and clean shutdown |
+| `python3 test/test_allreduce_correctness.py` | direct all-reduce semantics |
+| `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |
+| `python3 verification/test_group_semantics.py` | grouped collective submission semantics |
+| `./test/run_hybrid_multinode.sh 2` | maintained multi-process validation with hybrid compute + simulated communication |
 | `./ftest llm` | optional LLM smoke test when local model files are available |
 
 The first three commands are the best baseline after a code or build change.
@@ -75,6 +78,7 @@ Treat the following as the most stable paths:
 Treat the following as more environment-sensitive or experimental:
 
 - `hybrid` distributed runs
+- `run_multinode_sim.sh` and `run_ddp_multinode.sh` DDP-oriented probes
 - `proxy` and `passthrough` distributed modes
 - LLM smoke paths that depend on local model files and broader framework coverage
 
@@ -84,4 +88,8 @@ Treat the following as more environment-sensitive or experimental:
 2. Run `./ftest smoke`.
 3. Run `./ftest cpu_sim`.
 4. Run `./ftest python` if PyTorch is installed.
-5. Move to `./test/run_multinode_sim.sh 2`.
+5. Run `python3 verification/test_coordinator_smoke.py`.
+6. Run `python3 test/test_allreduce_correctness.py`.
+7. Run `python3 verification/test_allgather_correctness.py`.
+8. Run `python3 verification/test_group_semantics.py`.
+9. Move to `./test/run_hybrid_multinode.sh 2`.

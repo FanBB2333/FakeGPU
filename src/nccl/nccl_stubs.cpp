@@ -769,6 +769,12 @@ bool validate_stream_handle(
     if (!comm || comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
         return true;
     }
+    if (stream == nullptr) {
+        // NCCL uses the default stream as a valid submission target. Treat it as
+        // valid even when direct probes do not have a globally-resolvable
+        // cuStreamQuery symbol.
+        return true;
+    }
     using cuStreamQueryFn = CUresult (*)(CUstream);
     static cuStreamQueryFn stream_query = []() -> cuStreamQueryFn {
         void* symbol = ::dlsym(RTLD_DEFAULT, "cuStreamQuery");
@@ -1999,6 +2005,10 @@ ncclResult_t submit_point_to_point(
 
 ncclResult_t do_destroy(ncclComm_t comm, bool allow_missing) {
     if (!comm) {
+        if (allow_missing) {
+            g_last_error.clear();
+            return ncclSuccess;
+        }
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
     if (comm->destroyed) {

@@ -8,7 +8,7 @@
 - CMake 3.14+
 - 支持 C++17 的编译器
 - Linux 或 macOS
-- 如果要跑 PyTorch / DDP 路径，需要当前 Python 环境里能导入 `torch`
+- 如果要跑 PyTorch 或 hybrid 分布式路径，需要当前 Python 环境里能导入 `torch`
 
 ## 2. 构建项目
 
@@ -39,10 +39,12 @@ cmake --build build
 ./ftest python
 ```
 
-建议接着跑最小分布式 smoke：
+建议接着跑当前维护中的分布式验证：
 
 ```bash
-./test/run_multinode_sim.sh 2
+python3 verification/test_coordinator_smoke.py
+python3 test/test_allreduce_correctness.py
+./test/run_hybrid_multinode.sh 2
 ```
 
 ## 4. 运行第一条 FakeGPU 命令
