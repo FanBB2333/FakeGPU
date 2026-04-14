@@ -23,6 +23,23 @@ def main() -> None:
     assert dist.get_world_size() == 1
     assert dist.get_rank() == 0
 
+    x = torch.ones(2, 3, device="cuda")
+    dist.all_reduce(x)
+    assert torch.equal(x.cpu(), torch.ones(2, 3))
+
+    y = torch.full((2, 3), 5.0, device="cuda")
+    dist.broadcast(y, src=0)
+    assert torch.equal(y.cpu(), torch.full((2, 3), 5.0))
+
+    gathered = [torch.empty_like(y)]
+    dist.all_gather(gathered, y)
+    assert len(gathered) == 1
+    assert torch.equal(gathered[0].cpu(), y.cpu())
+
+    gathered_objects = [None]
+    dist.all_gather_object(gathered_objects, {"epoch": 1})
+    assert gathered_objects == [{"epoch": 1}]
+
     dist.barrier()
     work = dist.barrier(async_op=True)
     assert hasattr(work, "wait")
