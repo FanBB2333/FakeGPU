@@ -40,6 +40,10 @@ def main() -> None:
     dist.all_gather_into_tensor(gathered_into, y)
     assert torch.equal(gathered_into.cpu(), y.cpu())
 
+    gathered_into_base = torch.empty_like(y)
+    dist._all_gather_base(gathered_into_base, y)
+    assert torch.equal(gathered_into_base.cpu(), y.cpu())
+
     gathered_objects = [None]
     dist.all_gather_object(gathered_objects, {"epoch": 1})
     assert gathered_objects == [{"epoch": 1}]
@@ -65,6 +69,10 @@ def main() -> None:
     dist.reduce_scatter_tensor(reduced_scatter_tensor_out, y)
     assert torch.equal(reduced_scatter_tensor_out.cpu(), y.cpu())
 
+    reduced_scatter_base_out = torch.empty_like(y)
+    dist._reduce_scatter_base(reduced_scatter_base_out, y)
+    assert torch.equal(reduced_scatter_base_out.cpu(), y.cpu())
+
     all_to_all_out = [torch.empty_like(y)]
     dist.all_to_all(all_to_all_out, [y])
     assert len(all_to_all_out) == 1
@@ -82,6 +90,16 @@ def main() -> None:
     work = dist.barrier(async_op=True)
     assert hasattr(work, "wait")
     work.wait()
+
+    gather_into_work = dist.all_gather_into_tensor(torch.empty_like(y), y, async_op=True)
+    assert hasattr(gather_into_work, "wait")
+    gather_into_work.wait()
+
+    reduce_scatter_work = dist.reduce_scatter_tensor(
+        torch.empty_like(y), y, async_op=True
+    )
+    assert hasattr(reduce_scatter_work, "wait")
+    reduce_scatter_work.wait()
 
     dist.destroy_process_group()
     assert dist.is_initialized() is False
