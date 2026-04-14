@@ -36,9 +36,47 @@ def main() -> None:
     assert len(gathered) == 1
     assert torch.equal(gathered[0].cpu(), y.cpu())
 
+    gathered_into = torch.empty_like(y)
+    dist.all_gather_into_tensor(gathered_into, y)
+    assert torch.equal(gathered_into.cpu(), y.cpu())
+
     gathered_objects = [None]
     dist.all_gather_object(gathered_objects, {"epoch": 1})
     assert gathered_objects == [{"epoch": 1}]
+
+    reduced = torch.full((2, 3), 7.0, device="cuda")
+    dist.reduce(reduced, dst=0)
+    assert torch.equal(reduced.cpu(), torch.full((2, 3), 7.0))
+
+    gathered_single = [torch.empty_like(y)]
+    dist.gather(y, gather_list=gathered_single, dst=0)
+    assert len(gathered_single) == 1
+    assert torch.equal(gathered_single[0].cpu(), y.cpu())
+
+    scattered_single = torch.empty_like(y)
+    dist.scatter(scattered_single, scatter_list=[y], src=0)
+    assert torch.equal(scattered_single.cpu(), y.cpu())
+
+    reduced_scatter_out = torch.empty_like(y)
+    dist.reduce_scatter(reduced_scatter_out, [y])
+    assert torch.equal(reduced_scatter_out.cpu(), y.cpu())
+
+    reduced_scatter_tensor_out = torch.empty_like(y)
+    dist.reduce_scatter_tensor(reduced_scatter_tensor_out, y)
+    assert torch.equal(reduced_scatter_tensor_out.cpu(), y.cpu())
+
+    all_to_all_out = [torch.empty_like(y)]
+    dist.all_to_all(all_to_all_out, [y])
+    assert len(all_to_all_out) == 1
+    assert torch.equal(all_to_all_out[0].cpu(), y.cpu())
+
+    all_to_all_single_out = torch.empty_like(y)
+    dist.all_to_all_single(all_to_all_single_out, y)
+    assert torch.equal(all_to_all_single_out.cpu(), y.cpu())
+
+    object_list = [{"epoch": 2}]
+    dist.broadcast_object_list(object_list, src=0)
+    assert object_list == [{"epoch": 2}]
 
     dist.barrier()
     work = dist.barrier(async_op=True)

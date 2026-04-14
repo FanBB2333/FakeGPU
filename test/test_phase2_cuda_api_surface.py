@@ -25,6 +25,11 @@ def main() -> None:
     assert torch.cuda.memory_stats() == {}
     assert torch.cuda.memory_summary() == "FakeGPU: no real CUDA memory to report.\n"
     assert torch.cuda.memory_snapshot() == []
+    free_mem, total_mem = torch.cuda.mem_get_info()
+    assert isinstance(free_mem, int)
+    assert isinstance(total_mem, int)
+    assert free_mem == total_mem
+    assert total_mem > 0
     assert torch.cuda.max_memory_allocated() == 0
     assert torch.cuda.max_memory_reserved() == 0
     torch.cuda.reset_peak_memory_stats()
@@ -40,7 +45,10 @@ def main() -> None:
     assert cuda_memory.memory_stats() == {}
     assert cuda_memory.memory_summary() == "FakeGPU: no real CUDA memory to report.\n"
     assert cuda_memory.memory_snapshot() == []
+    sub_free_mem, sub_total_mem = cuda_memory.mem_get_info()
+    assert (sub_free_mem, sub_total_mem) == (free_mem, total_mem)
     cuda_memory.reset_peak_memory_stats()
+    cuda_memory.reset_accumulated_memory_stats()
 
     cuda_random.manual_seed(4321)
     assert cuda_random.initial_seed() == 4321
