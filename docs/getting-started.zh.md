@@ -80,6 +80,17 @@ Tue Mar 17 21:57:16 2026
 ./fgpu --mode hybrid --oom-policy clamp python3 your_script.py
 ```
 
+如果你当前使用的是 `fakegpu` Python 环境，并且已经在本地安装了
+`pytorch-fakegpu`，仓库里还提供了一个 tiny Transformer 训练 demo。
+这条路径不依赖 `./fgpu` preload，而是在 Python 进程内启用 fake CUDA 语义：
+
+```bash
+python3 demo_usage.py --test transformer
+python3 demo_usage.py --test transformer --quiet
+```
+
+这条路径适合在 CPU-only 主机上做 `device="cuda"` 风格训练脚本的 smoke 验证。
+
 ## 5. 在 Python 进程内启用
 
 如果你不想通过 `./fgpu` 启动，也可以在 Python 里尽早调用 `fakegpu.init()`。注意它必须在 `torch` 或其他 CUDA 相关库导入之前执行。

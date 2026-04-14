@@ -248,6 +248,15 @@ fakegpu.init()  # default: 8x A100
 import torch
 ```
 
+**Tiny Transformer training smoke with `pytorch-fakegpu`:**
+```bash
+python3 demo_usage.py --test transformer
+python3 demo_usage.py --test transformer --quiet
+```
+
+This path uses `fakegpu.torch_patch.patch()` inside the demo so CUDA-style
+training code can run as a fake-CUDA smoke test on CPU-only hosts.
+
 **Shortcut runner:**
 ```bash
 ./fgpu python your_script.py

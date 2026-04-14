@@ -7,11 +7,13 @@ Recommended usage:
     ./fgpu python demo_usage.py --test nvml --max-devices 2
     ./fgpu python demo_usage.py --test cuda --alloc-size 256
     ./fgpu python demo_usage.py --test pytorch
+    python3 demo_usage.py --test transformer
 
 What it does (simple view):
 1) NVML via pynvml: report device count and a few device names.
 2) CUDA Runtime via ctypes: allocate and free a small buffer.
 3) Optional PyTorch check: show CUDA availability and device count.
+4) Optional tiny Transformer training loop using fake CUDA semantics.
 """
 
 import os
@@ -202,6 +204,89 @@ def test_pytorch():
         print()
 
 
+def test_transformer_training():
+    """Scenario 4: run a tiny Transformer training loop."""
+    print("Scenario 4: Tiny Transformer training")
+    print("-" * 70)
+
+    try:
+        from fakegpu.torch_patch import patch
+
+        patch()
+
+        import torch
+        import torch.nn as nn
+        import torch.nn.functional as F
+
+        torch.manual_seed(0)
+
+        device = torch.device("cuda:0")
+        print(f"PyTorch version: {torch.__version__}")
+        print(f"Using device: {device}")
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        print(f"CUDA device count: {torch.cuda.device_count()}")
+        print(f"Device name: {torch.cuda.get_device_name(0)}")
+
+        class TinyTransformerLM(nn.Module):
+            def __init__(self, vocab_size=256, d_model=64, nhead=4, num_layers=2, max_len=32):
+                super().__init__()
+                self.token_emb = nn.Embedding(vocab_size, d_model)
+                self.pos_emb = nn.Parameter(torch.randn(max_len, d_model) * 0.02)
+                layer = nn.TransformerEncoderLayer(
+                    d_model=d_model,
+                    nhead=nhead,
+                    dim_feedforward=128,
+                    dropout=0.0,
+                    batch_first=True,
+                )
+                self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
+                self.ln = nn.LayerNorm(d_model)
+                self.head = nn.Linear(d_model, vocab_size)
+
+            def forward(self, input_ids):
+                x = self.token_emb(input_ids) + self.pos_emb[: input_ids.size(1)]
+                x = self.encoder(x)
+                x = self.ln(x)
+                return self.head(x)
+
+        model = TinyTransformerLM().to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+        batch_size = 4
+        seq_len = 16
+        steps = 5
+
+        for step in range(1, steps + 1):
+            input_ids = torch.randint(0, 256, (batch_size, seq_len), device=device)
+            labels = torch.roll(input_ids, shifts=-1, dims=1)
+
+            logits = model(input_ids)
+            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            print(
+                f"step={step} loss={loss.item():.4f} "
+                f"logits_device={logits.device} is_cuda={getattr(logits, 'is_cuda', False)}"
+            )
+
+        print("Transformer training simulation finished")
+        return True
+
+    except ImportError:
+        print("PyTorch not installed; skip (pip install torch)")
+        return False
+    except Exception as e:
+        print(f"Transformer training failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        print()
+
+
 def print_usage_summary():
     """Print a brief usage guide."""
     print("=" * 70)
@@ -211,6 +296,7 @@ def print_usage_summary():
     print("./fgpu python demo_usage.py --test nvml --max-devices 2")
     print("./fgpu python demo_usage.py --test cuda --alloc-size 256")
     print("./fgpu python demo_usage.py --test pytorch")
+    print("python3 demo_usage.py --test transformer")
     print("Report file: fake_gpu_report.json (written at program exit)")
     print()
 
@@ -226,6 +312,7 @@ Examples:
     ./fgpu python demo_usage.py --test nvml --max-devices 2
     ./fgpu python demo_usage.py --test cuda --alloc-size 256
     ./fgpu python demo_usage.py --test pytorch
+    python3 demo_usage.py --test transformer
     ./fgpu python demo_usage.py --no-summary
         """
     )
@@ -238,7 +325,7 @@ Examples:
 
     parser.add_argument(
         '--test',
-        choices=['all', 'nvml', 'cuda', 'pytorch'],
+        choices=['all', 'nvml', 'cuda', 'pytorch', 'transformer'],
         default='all',
         help='Select which test to run (default: all)'
     )
@@ -293,6 +380,9 @@ Examples:
 
     if args.test in ['all', 'pytorch']:
         results['pytorch'] = test_pytorch()
+
+    if args.test == 'transformer':
+        results['transformer'] = test_transformer_training()
 
     if not args.quiet and len(results) > 1:
         print("=" * 70)

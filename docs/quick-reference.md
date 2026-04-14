@@ -37,6 +37,16 @@ Dynamic initialization inside Python:
 python3 -c "import fakegpu; fakegpu.init(); import torch; print(torch.cuda.device_count())"
 ```
 
+Tiny Transformer training demo with `pytorch-fakegpu`:
+
+```bash
+python3 demo_usage.py --test transformer
+python3 demo_usage.py --test transformer --quiet
+```
+
+This route uses `fakegpu.torch_patch.patch()` inside the demo and is meant for
+fake-CUDA training smoke tests on CPU-only hosts.
+
 ## Test commands
 
 ```bash
