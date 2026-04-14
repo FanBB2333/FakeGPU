@@ -75,6 +75,7 @@ FAKEGPU_DIST_MODE=simulate
 - [快速开始](getting-started.md)
 - [快速参考](quick-reference.md)
 - [项目结构与架构](project-structure.md)
+- [Phase 2 自定义 Torch 路线](phase2-custom-torch.zh.md)
 - [报告与验证](reports-and-validation.md)
 - [分布式模拟使用说明](distributed-sim-usage.md)
 - [分布式设计说明](multi-node-design.md)

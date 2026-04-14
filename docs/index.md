@@ -76,6 +76,7 @@ FAKEGPU_DIST_MODE=simulate
 - [Getting Started](getting-started.md)
 - [Quick Reference](quick-reference.md)
 - [Architecture](project-structure.md)
+- [Phase 2 Custom Torch Route](phase2-custom-torch.md)
 - [Reports & Validation](reports-and-validation.md)
 - [Distributed Simulation Usage Guide](distributed-sim-usage.md)
 - [Distributed Design Notes](multi-node-design.md)
