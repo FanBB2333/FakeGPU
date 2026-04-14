@@ -4,6 +4,8 @@
 
 Phase 1 adds a CPU-backed `fgpu` device on top of PyTorch `PrivateUse1`.
 
+Phase 2 now exists as a separate custom-torch route for code that must look like CUDA at the Python level. See [Phase 2 Custom Torch Route](phase2-custom-torch.md) for the current supported surface and limits.
+
 The current prototype is intentionally scoped for local debug on non-CUDA hosts:
 
 - `torch.device("fgpu")` works

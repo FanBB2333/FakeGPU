@@ -403,6 +403,7 @@ MIT License
 
 - `mkdocs.yml` - MkDocs site config for local preview and GitHub Pages
 - [Test Guide](test/README.md) - Detailed testing instructions
+- [Phase 2 Custom Torch Route](docs/phase2-custom-torch.md) - CUDA-semantic custom torch path for CPU-only debug
 - [Distributed Usage Guide](docs/distributed-sim-usage.md) - How to run single-host simulated multi-node workloads
 - [Multi-Node Design](docs/multi-node-design.md) - Distributed design notes, implementation plan, and current boundaries
 - [cuBLASLt Implementation](docs/cublaslt-fix.md) - cuBLASLt support details
