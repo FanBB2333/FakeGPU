@@ -82,6 +82,18 @@ You can also choose profiles and modes from the command line:
 ./fgpu --mode hybrid --oom-policy clamp python3 your_script.py
 ```
 
+If you have the `fakegpu` Python environment plus a local `pytorch-fakegpu` install,
+the repository also ships a tiny Transformer training demo that uses fake CUDA
+semantics from inside Python instead of preload-based interception:
+
+```bash
+python3 demo_usage.py --test transformer
+python3 demo_usage.py --test transformer --quiet
+```
+
+That path is useful on CPU-only hosts where you still want `device="cuda"` style
+training code to run for smoke validation.
+
 ## 5. Enable FakeGPU inside Python
 
 Use `fakegpu.init()` when you want to stay inside a normal Python process. Call it before importing `torch` or any CUDA-using library.

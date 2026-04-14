@@ -37,6 +37,16 @@ cmake --build build
 python3 -c "import fakegpu; fakegpu.init(); import torch; print(torch.cuda.device_count())"
 ```
 
+使用 `pytorch-fakegpu` 的 tiny Transformer 训练 demo：
+
+```bash
+python3 demo_usage.py --test transformer
+python3 demo_usage.py --test transformer --quiet
+```
+
+这条路径会在 demo 内部调用 `fakegpu.torch_patch.patch()`，适合在 CPU-only
+主机上做 fake-CUDA 训练 smoke 验证。
+
 ## 测试命令
 
 ```bash
