@@ -22,9 +22,11 @@ def main() -> None:
     device = torch.device("cuda")
     model = torch.nn.Linear(4, 2).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    dp_model = torch.nn.DataParallel(model)
 
     x = torch.randn(8, 4, device=device)
     y = model(x)
+    y_dp = dp_model(x)
     loss = y.sum()
 
     opt.zero_grad()
@@ -46,6 +48,9 @@ def main() -> None:
     assert next(model.parameters()).device.type == "cuda"
     assert y.device.type == "cuda"
     assert y.is_cuda is True
+    assert y_dp.device.type == "cuda"
+    assert y_dp.is_cuda is True
+    assert y_dp.shape == y.shape
     assert y_cpu.device.type == "cpu"
     assert y_cpu.is_cuda is False
     assert ctx_tensor.device.index == 2
