@@ -21,6 +21,15 @@ def main() -> None:
     assert broadcasted[1].device.index == 1
     assert broadcasted[0].shape == (2, 4)
 
+    src = torch.arange(8, dtype=torch.float32, device="cuda").view(2, 4)
+    out_b0 = torch.empty(2, 4, device="cuda:0")
+    out_b1 = torch.empty(2, 4, device="cuda:1")
+    broadcasted_out = comm.broadcast(src, out=[out_b0, out_b1])
+    assert broadcasted_out[0].device.index == 0
+    assert broadcasted_out[1].device.index == 1
+    assert torch.equal(broadcasted_out[0].cpu(), src.cpu())
+    assert torch.equal(broadcasted_out[1].cpu(), src.cpu())
+
     broadcasted_coalesced = comm.broadcast_coalesced(
         [torch.randn(2, 4, device="cuda"), torch.randn(2, 4, device="cuda")],
         devices=[0, 1],
@@ -37,10 +46,23 @@ def main() -> None:
     assert scattered[0].shape == (4, 4)
     assert scattered[1].shape == (4, 4)
 
+    out_s0 = torch.empty(4, 4, device="cuda:0")
+    out_s1 = torch.empty(4, 4, device="cuda:1")
+    scattered_out = comm.scatter(x, out=[out_s0, out_s1], dim=0)
+    assert scattered_out[0].device.index == 0
+    assert scattered_out[1].device.index == 1
+    assert scattered_out[0].shape == (4, 4)
+    assert scattered_out[1].shape == (4, 4)
+
     gathered = comm.gather(scattered, dim=0, destination=0)
     assert gathered.device.type == "cuda"
     assert gathered.device.index == 0
     assert gathered.shape == x.shape
+
+    out_g = torch.empty_like(x, device="cuda:0")
+    gathered_out = comm.gather(scattered, dim=0, out=out_g)
+    assert gathered_out.device.index == 0
+    assert gathered_out.shape == x.shape
 
     reduced = comm.reduce_add(
         (
@@ -71,6 +93,10 @@ def main() -> None:
     gathered_via_sg = scatter_gather.gather(scattered_via_sg, 0, dim=0)
     assert gathered_via_sg.device.type == "cuda"
     assert gathered_via_sg.shape == x.shape
+
+    like_on_cuda1 = torch.empty_like(x, device="cuda:1")
+    assert like_on_cuda1.device.type == "cuda"
+    assert like_on_cuda1.device.index == 1
 
     model = nn.Linear(4, 2).cuda()
     ddp = nn.parallel.DistributedDataParallel(model)
