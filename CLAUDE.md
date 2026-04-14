@@ -131,3 +131,33 @@ When adding new API stubs:
 - Driver API (not Runtime API) calls are not intercepted
 - No multi-GPU synchronization simulation
 - No stream/event simulation
+
+## Python-Level PyTorch Patch (fakegpu/torch_patch.py)
+
+For CPU-only PyTorch builds (e.g. macOS), the C-level library interception cannot work.
+`fakegpu.torch_patch` provides a pure-Python alternative that monkeypatches `torch.cuda`
+to redirect all CUDA device references to CPU:
+
+```python
+import fakegpu
+fakegpu.patch_torch()  # or: from fakegpu.torch_patch import patch; patch()
+import torch
+
+x = torch.randn(3, 3, device="cuda")  # actually CPU
+model = torch.nn.Linear(3, 3).cuda()   # stays on CPU
+```
+
+### What it patches
+- `torch.cuda.*` module functions (is_available, device_count, memory_*, etc.)
+- `Tensor.to()` / `Tensor.cuda()` — redirect cuda→cpu
+- `Module.to()` / `Module.cuda()` — same
+- 20+ tensor factory functions (torch.zeros, torch.randn, etc.) — redirect device kwarg
+- `torch._C._cuda_*` stubs for internal PyTorch imports (dynamo, inductor)
+- `torch.load()` — normalize map_location
+- Stream/Event/GradScaler stubs
+
+### Known limitations
+- `tensor.device` reports `cpu`, not `cuda` (C-level property, cannot be patched)
+- `tensor.is_cuda` returns `False`
+- DataParallel cannot work (checks device_ids match actual device)
+- No actual GPU computation — all ops run on CPU backend
