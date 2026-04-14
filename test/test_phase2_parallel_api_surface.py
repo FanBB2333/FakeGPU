@@ -15,6 +15,21 @@ def main() -> None:
 
     x = torch.randn(8, 4, device="cuda")
 
+    broadcasted = comm.broadcast(torch.randn(2, 4, device="cuda"), devices=[0, 1])
+    assert len(broadcasted) == 2
+    assert broadcasted[0].device.index == 0
+    assert broadcasted[1].device.index == 1
+    assert broadcasted[0].shape == (2, 4)
+
+    broadcasted_coalesced = comm.broadcast_coalesced(
+        [torch.randn(2, 4, device="cuda"), torch.randn(2, 4, device="cuda")],
+        devices=[0, 1],
+    )
+    assert len(broadcasted_coalesced) == 2
+    assert len(broadcasted_coalesced[0]) == 2
+    assert broadcasted_coalesced[0][0].device.index == 0
+    assert broadcasted_coalesced[1][0].device.index == 1
+
     scattered = comm.scatter(x, devices=[0, 1], dim=0)
     assert len(scattered) == 2
     assert scattered[0].device.index == 0
@@ -26,6 +41,27 @@ def main() -> None:
     assert gathered.device.type == "cuda"
     assert gathered.device.index == 0
     assert gathered.shape == x.shape
+
+    reduced = comm.reduce_add(
+        (
+            torch.ones(2, 4, device="cuda:0"),
+            torch.full((2, 4), 2.0, device="cuda:1"),
+        ),
+        destination=0,
+    )
+    assert reduced.device.index == 0
+    assert torch.equal(reduced.cpu(), torch.full((2, 4), 3.0))
+
+    reduced_coalesced = comm.reduce_add_coalesced(
+        [
+            [torch.ones(2, 4, device="cuda:0"), torch.full((2, 4), 2.0, device="cuda:0")],
+            [torch.full((2, 4), 3.0, device="cuda:1"), torch.full((2, 4), 4.0, device="cuda:1")],
+        ],
+        destination=0,
+    )
+    assert len(reduced_coalesced) == 2
+    assert torch.equal(reduced_coalesced[0].cpu(), torch.full((2, 4), 4.0))
+    assert torch.equal(reduced_coalesced[1].cpu(), torch.full((2, 4), 6.0))
 
     scattered_via_sg = scatter_gather.scatter(x, [0, 1], dim=0)
     assert len(scattered_via_sg) == 2
