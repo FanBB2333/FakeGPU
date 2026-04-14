@@ -16,6 +16,8 @@ def main() -> None:
     assert hasattr(fakegpu, "__version__")
     assert torch.cuda.is_available() is True
     assert torch.cuda.device_count() >= 1
+    torch.cuda.manual_seed(1234)
+    torch.cuda.manual_seed_all(1234)
 
     device = torch.device("cuda")
     model = torch.nn.Linear(4, 2).to(device)
@@ -39,6 +41,7 @@ def main() -> None:
     with tempfile.NamedTemporaryFile(suffix=".pt") as f:
         torch.save(state, f.name)
         loaded = torch.load(f.name, map_location="cuda:2")
+    legacy = torch.cuda.FloatTensor(2, 3)
 
     assert next(model.parameters()).device.type == "cuda"
     assert y.device.type == "cuda"
@@ -48,6 +51,9 @@ def main() -> None:
     assert ctx_tensor.device.index == 2
     assert loaded["w"].device.index == 2
     assert loaded["w"] is loaded["alias"]
+    assert legacy.device.type == "cuda"
+    assert legacy.is_cuda is True
+    assert legacy.dtype == torch.float32
 
     print("phase2 custom torch smoke passed")
 

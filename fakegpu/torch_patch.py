@@ -23,6 +23,7 @@ Usage::
 from __future__ import annotations
 
 import functools
+import importlib
 import os
 import sys
 import warnings
@@ -420,6 +421,77 @@ class _FakeStreamCtx:
 
 
 # ---------------------------------------------------------------------------
+# Shared compatibility helpers
+# ---------------------------------------------------------------------------
+
+
+def _install_legacy_cuda_types(torch: Any, *, device: str) -> None:
+    """Install ``torch.cuda.FloatTensor``-style factories."""
+
+    _LEGACY_TYPES = {
+        "FloatTensor": torch.float32,
+        "DoubleTensor": torch.float64,
+        "HalfTensor": torch.float16,
+        "BFloat16Tensor": torch.bfloat16,
+        "IntTensor": torch.int32,
+        "LongTensor": torch.int64,
+        "ShortTensor": torch.int16,
+        "ByteTensor": torch.uint8,
+        "CharTensor": torch.int8,
+        "BoolTensor": torch.bool,
+    }
+
+    def _make_legacy_factory(dtype: Any) -> type:
+        _dtype = dtype
+
+        class _LegacyCudaTensor:
+            def __new__(cls, *args: Any, **kwargs: Any) -> Any:
+                kwargs = dict(kwargs)
+                kwargs["device"] = device
+                if args and not isinstance(args[0], int):
+                    return torch.tensor(args[0], dtype=_dtype, **kwargs)
+                return torch.empty(*args, dtype=_dtype, **kwargs)
+
+        return _LegacyCudaTensor
+
+    for tname, dt in _LEGACY_TYPES.items():
+        setattr(torch.cuda, tname, _make_legacy_factory(dt))
+
+
+def _maybe_enable_custom_torch_fakegpu(
+    torch: Any,
+    *,
+    num_devices: int | None = None,
+    device_name: str | None = None,
+) -> bool:
+    """Enable the installed custom torch fake-CUDA backend when available."""
+
+    os.environ["TORCH_FAKEGPU_ENABLE"] = "1"
+    os.environ["FAKEGPU_TORCH_ENABLE"] = "1"
+    if num_devices is not None:
+        os.environ["TORCH_FAKEGPU_DEVICE_COUNT"] = str(num_devices)
+    if device_name is not None:
+        os.environ["TORCH_FAKEGPU_DEVICE_NAME"] = device_name
+
+    try:
+        torch_fakegpu = importlib.import_module("torch.fakegpu")
+    except Exception:
+        return False
+
+    if num_devices is not None and hasattr(torch_fakegpu, "_NUM_DEVICES"):
+        torch_fakegpu._NUM_DEVICES = int(num_devices)
+    if device_name is not None and hasattr(torch_fakegpu, "_DEVICE_NAME"):
+        torch_fakegpu._DEVICE_NAME = str(device_name)
+
+    if not hasattr(torch_fakegpu, "enable"):
+        return False
+
+    torch_fakegpu.enable()
+    _install_legacy_cuda_types(torch, device="cuda")
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -449,6 +521,18 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         _NUM_DEVICES = num_devices
     if device_name is not None:
         _DEVICE_NAME = device_name
+
+    if _maybe_enable_custom_torch_fakegpu(
+        torch,
+        num_devices=_NUM_DEVICES,
+        device_name=_DEVICE_NAME,
+    ):
+        _patched = True
+        warnings.warn(
+            "fakegpu.torch_patch: enabled the installed custom torch fake-CUDA backend.",
+            stacklevel=2,
+        )
+        return
 
     # ---- torch.cuda module functions ----
     torch.cuda.is_available = _stub_is_available
@@ -625,32 +709,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
 
     # ---- torch.cuda.FloatTensor and friends (legacy) ----
     # Code like ``torch.cuda.FloatTensor(3, 4)`` should produce a CPU tensor.
-    _LEGACY_TYPES = {
-        "FloatTensor": torch.float32,
-        "DoubleTensor": torch.float64,
-        "HalfTensor": torch.float16,
-        "BFloat16Tensor": torch.bfloat16,
-        "IntTensor": torch.int32,
-        "LongTensor": torch.int64,
-        "ShortTensor": torch.int16,
-        "ByteTensor": torch.uint8,
-        "CharTensor": torch.int8,
-        "BoolTensor": torch.bool,
-    }
-
-    def _make_legacy_factory(dtype: Any) -> type:
-        _dtype = dtype
-
-        class _LegacyCudaTensor:
-            def __new__(cls, *args: Any, **kwargs: Any) -> Any:
-                if args and not isinstance(args[0], int):
-                    return torch.tensor(args[0], dtype=_dtype)
-                return torch.empty(*args, dtype=_dtype, **kwargs)
-
-        return _LegacyCudaTensor
-
-    for tname, dt in _LEGACY_TYPES.items():
-        setattr(torch.cuda, tname, _make_legacy_factory(dt))
+    _install_legacy_cuda_types(torch, device="cpu")
 
     # ---- GradScaler passthrough ----
     try:
