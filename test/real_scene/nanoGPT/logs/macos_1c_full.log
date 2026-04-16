@@ -22,6 +22,7 @@
 [WRAPPER] Device 6: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
 [WRAPPER] Device 7: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
 ======================================================================
+[WRAPPER] Effective train args: ['config/train_shakespeare_char.py', '--max_iters=20', '--log_interval=1', '--compile=False', '--dtype=float32', '--eval_iters=2', '--batch_size=8', '--block_size=64']
 Overriding config with config/train_shakespeare_char.py:
 # train a miniature character-level shakespeare model
 # good for debugging and playing on macbooks and such
@@ -64,38 +65,42 @@ warmup_iters = 100 # not super necessary potentially
 Overriding: max_iters = 20
 Overriding: log_interval = 1
 Overriding: compile = False
-tokens per iteration will be: 16,384
+Overriding: dtype = float32
+Overriding: eval_iters = 2
+Overriding: batch_size = 8
+Overriding: block_size = 64
+tokens per iteration will be: 512
 found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
 Initializing a new model from scratch
 number of parameters: 10.65M
 /Users/l1ght/repos/FakeGPU/test/real_scene/nanoGPT/train.py:196: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
   scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-num decayed parameter tensors: 26, with 10,740,096 parameters
+num decayed parameter tensors: 26, with 10,666,368 parameters
 num non-decayed parameter tensors: 13, with 4,992 parameters
 using fused AdamW: True
-step 0: train loss 4.2874, val loss 4.2823
-iter 0: loss 4.2655, time 444058.30ms, mfu -100.00%
-iter 1: loss 4.1253, time 5698.24ms, mfu -100.00%
-iter 2: loss 3.8813, time 6482.83ms, mfu -100.00%
-iter 3: loss 3.6640, time 7566.51ms, mfu -100.00%
-iter 4: loss 3.5327, time 6834.06ms, mfu -100.00%
-iter 5: loss 3.4150, time 8436.77ms, mfu 0.04%
-iter 6: loss 3.3701, time 6973.04ms, mfu 0.05%
-iter 7: loss 3.3240, time 6738.13ms, mfu 0.05%
-iter 8: loss 3.2787, time 8580.32ms, mfu 0.05%
-iter 9: loss 3.2134, time 6808.19ms, mfu 0.05%
-iter 10: loss 3.1338, time 6369.01ms, mfu 0.05%
-iter 11: loss 3.0856, time 7194.24ms, mfu 0.05%
-iter 12: loss 3.0498, time 5693.14ms, mfu 0.05%
-iter 13: loss 2.9846, time 8047.30ms, mfu 0.05%
-iter 14: loss 2.9488, time 7075.06ms, mfu 0.05%
-iter 15: loss 2.9060, time 5587.54ms, mfu 0.05%
-iter 16: loss 2.8520, time 6553.07ms, mfu 0.05%
-iter 17: loss 2.8270, time 8338.00ms, mfu 0.05%
-iter 18: loss 2.8277, time 7512.71ms, mfu 0.05%
-iter 19: loss 2.7906, time 8421.64ms, mfu 0.05%
-iter 20: loss 2.7556, time 8687.11ms, mfu 0.05%
+step 0: train loss 4.3036, val loss 4.3100
+iter 0: loss 4.3142, time 584.96ms, mfu -100.00%
+iter 1: loss 4.1395, time 150.48ms, mfu -100.00%
+iter 2: loss 3.9943, time 125.34ms, mfu -100.00%
+iter 3: loss 3.7597, time 129.06ms, mfu -100.00%
+iter 4: loss 3.6360, time 168.15ms, mfu -100.00%
+iter 5: loss 3.4918, time 145.41ms, mfu 0.07%
+iter 6: loss 3.4289, time 313.42ms, mfu 0.07%
+iter 7: loss 3.3347, time 429.78ms, mfu 0.07%
+iter 8: loss 3.4743, time 208.69ms, mfu 0.06%
+iter 9: loss 3.3723, time 167.18ms, mfu 0.06%
+iter 10: loss 3.2860, time 192.42ms, mfu 0.06%
+iter 11: loss 3.1895, time 234.62ms, mfu 0.06%
+iter 12: loss 3.2777, time 156.60ms, mfu 0.06%
+iter 13: loss 3.2648, time 202.16ms, mfu 0.06%
+iter 14: loss 3.1274, time 166.44ms, mfu 0.06%
+iter 15: loss 3.0099, time 143.68ms, mfu 0.06%
+iter 16: loss 3.0763, time 150.84ms, mfu 0.06%
+iter 17: loss 2.9930, time 136.16ms, mfu 0.07%
+iter 18: loss 2.8818, time 163.58ms, mfu 0.07%
+iter 19: loss 2.9094, time 172.26ms, mfu 0.07%
+iter 20: loss 2.9437, time 164.38ms, mfu 0.07%
 ======================================================================
-[WRAPPER] Training completed successfully in 592.2s
+[WRAPPER] Training completed successfully in 5.9s
 [WRAPPER] Result: PASS
 ======================================================================

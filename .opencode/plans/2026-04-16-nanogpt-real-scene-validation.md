@@ -411,7 +411,6 @@ PYTHON=<macOS-python-path>
 $PYTHON train_wrapper.py --mode full -- \
     config/train_shakespeare_char.py \
     --max_iters=20 \
-    --eval_iters=20 \
     --log_interval=1 \
     --compile=False \
     2>&1 | tee logs/macos_1c_full.log
@@ -429,21 +428,20 @@ Note: We do NOT pass `--device=cuda` explicitly because with full FakeGPU patchi
 - Run: `test/real_scene/nanoGPT/train_wrapper.py`
 - Output: `test/real_scene/nanoGPT/logs/macos_2_oom.log`
 
-- [ ] **Step 5.1: Run OOM test with small virtual VRAM and large model parameters**
+- [x] **Step 5.1: Run OOM test with small virtual VRAM and large model parameters**
 
-The strategy: Set a small virtual VRAM limit (e.g., 1GB) and increase model parameters significantly (large n_layer, n_head, n_embd, batch_size) to exceed this limit.
+The strategy: Select a small-VRAM FakeGPU profile (1GB) and increase model parameters significantly (large n_layer, n_head, n_embd, batch_size) to exceed this limit.
 
 ```bash
 cd /Users/l1ght/repos/FakeGPU/test/real_scene/nanoGPT
 PYTHON=<macOS-python-path>
 
-# OOM test: 1GB virtual VRAM + large model
+# OOM test: 1GB virtual VRAM profile + large model
 # GPT-2 Medium size: 24 layers, 16 heads, 1024 embd ~ 350M params ~ 1.4GB fp32
 # Plus optimizer states, activations, gradients -> easily exceeds 1GB
-$PYTHON train_wrapper.py --mode full --total-memory-gb 1.0 -- \
+$PYTHON train_wrapper.py --mode full --profile a100-1g -- \
     config/train_shakespeare_char.py \
     --max_iters=20 \
-    --eval_iters=20 \
     --log_interval=1 \
     --compile=False \
     --n_layer=24 \
@@ -454,16 +452,16 @@ $PYTHON train_wrapper.py --mode full --total-memory-gb 1.0 -- \
     2>&1 | tee logs/macos_2_oom.log
 ```
 
-**Expected:** FAIL — FakeGPU's memory tracking should detect that allocations exceed the 1GB virtual VRAM limit and raise an OOM error. This demonstrates that FakeGPU faithfully simulates real GPU memory constraints.
+**Expected:** FAIL — FakeGPU should expose a 1GB virtual device and detect that allocations exceed this limit, raising an OOM error. This demonstrates that FakeGPU can simulate small-memory GPU SKUs.
 
 **Important note:** The OOM behavior depends on the patching approach:
-1. **torch.fakegpu (from pytorch-fakegpu):** Check if it reads `FAKEGPU_TOTAL_MEMORY` env var.
-2. **torch_patch.py (from fakegpu package):** The `_TOTAL_MEMORY` variable reads from env at load time.
-3. **Alternative approach if env var doesn't work:** Modify the wrapper to directly set `fakegpu.torch_patch._TOTAL_MEMORY` after import but before training.
+1. **torch.fakegpu (from pytorch-fakegpu):** Check if it respects the selected GPU profile's memory size.
+2. **torch_patch.py (from fakegpu package):** Verify patched device properties and `mem_get_info()` reflect the selected profile.
+3. **Alternative approach if profile memory doesn't propagate fully:** Modify the wrapper to patch `torch.fakegpu` / `fakegpu.torch_patch` with the profile-derived memory before training.
 
 **If OOM is not triggered with the above parameters:** Try even larger model params or smaller VRAM:
 - Increase to `--n_layer=48 --n_head=24 --n_embd=2048 --batch_size=128`
-- Or decrease to `--total-memory-gb 0.5`
+- Or use an even smaller custom profile (e.g. 512MB)
 
 ---
 
@@ -553,7 +551,7 @@ ssh 100.71.234.15 "
 "
 ```
 
-- [ ] **Step 8.2: Run full FakeGPU test on Linux**
+- [x] **Step 8.2: Run full FakeGPU test on Linux**
 
 ```bash
 ssh 100.71.234.15 "
@@ -561,7 +559,6 @@ ssh 100.71.234.15 "
   /home/l1ght/anaconda3/envs/fakegpu-macos/bin/python train_wrapper.py --mode full -- \
       config/train_shakespeare_char.py \
       --max_iters=20 \
-      --eval_iters=20 \
       --log_interval=1 \
       --compile=False \
       2>&1 | tee logs/linux_3c_full.log
