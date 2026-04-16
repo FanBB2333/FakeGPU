@@ -1,0 +1,91 @@
+======================================================================
+[WRAPPER] nanoGPT Validation Test
+[WRAPPER] Mode: baseline
+[WRAPPER] Device count: default
+[WRAPPER] Total memory/device: default GiB
+[WRAPPER] Train args: ['config/train_shakespeare_char.py', '--max_iters=20', '--log_interval=1', '--compile=False', '--device=cuda']
+======================================================================
+[WRAPPER] Mode: baseline - No FakeGPU initialization
+[WRAPPER] PyTorch version: 2.9.1+cu128
+[WRAPPER] torch.cuda.is_available(): True
+[WRAPPER] torch.cuda.device_count(): 1
+[WRAPPER] Device 0: NVIDIA GeForce RTX 3090 Ti, Memory: 23.6 GiB
+======================================================================
+Overriding config with config/train_shakespeare_char.py:
+# train a miniature character-level shakespeare model
+# good for debugging and playing on macbooks and such
+
+out_dir = 'out-shakespeare-char'
+eval_interval = 250 # keep frequent because we'll overfit
+eval_iters = 200
+log_interval = 10 # don't print too too often
+
+# we expect to overfit on this small dataset, so only save when val improves
+always_save_checkpoint = False
+
+wandb_log = False # override via command line if you like
+wandb_project = 'shakespeare-char'
+wandb_run_name = 'mini-gpt'
+
+dataset = 'shakespeare_char'
+gradient_accumulation_steps = 1
+batch_size = 64
+block_size = 256 # context of up to 256 previous characters
+
+# baby GPT model :)
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.2
+
+learning_rate = 1e-3 # with baby networks can afford to go a bit higher
+max_iters = 5000
+lr_decay_iters = 5000 # make equal to max_iters usually
+min_lr = 1e-4 # learning_rate / 10 usually
+beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
+
+warmup_iters = 100 # not super necessary potentially
+
+# on macbook also add
+# device = 'cpu'  # run on cpu only
+# compile = False # do not torch compile the model
+
+Overriding: max_iters = 20
+Overriding: log_interval = 1
+Overriding: compile = False
+Overriding: device = cuda
+tokens per iteration will be: 16,384
+found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
+Initializing a new model from scratch
+number of parameters: 10.65M
+/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/train.py:196: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+num decayed parameter tensors: 26, with 10,740,096 parameters
+num non-decayed parameter tensors: 13, with 4,992 parameters
+using fused AdamW: True
+step 0: train loss 4.2874, val loss 4.2823
+iter 0: loss 4.2657, time 5102.88ms, mfu -100.00%
+iter 1: loss 4.1152, time 16.58ms, mfu -100.00%
+iter 2: loss 3.8881, time 30.37ms, mfu -100.00%
+iter 3: loss 3.6759, time 32.05ms, mfu -100.00%
+iter 4: loss 3.5230, time 32.23ms, mfu -100.00%
+iter 5: loss 3.4235, time 36.77ms, mfu 10.13%
+iter 6: loss 3.3430, time 32.47ms, mfu 10.27%
+iter 7: loss 3.3287, time 32.56ms, mfu 10.39%
+iter 8: loss 3.2363, time 31.42ms, mfu 10.53%
+iter 9: loss 3.2028, time 28.29ms, mfu 10.80%
+iter 10: loss 3.1457, time 33.40ms, mfu 10.83%
+iter 11: loss 3.0848, time 35.86ms, mfu 10.79%
+iter 12: loss 3.0288, time 33.60ms, mfu 10.82%
+iter 13: loss 2.9906, time 30.15ms, mfu 10.97%
+iter 14: loss 2.9566, time 37.50ms, mfu 10.87%
+iter 15: loss 2.8997, time 32.37ms, mfu 10.93%
+iter 16: loss 2.8761, time 30.86ms, mfu 11.05%
+iter 17: loss 2.8270, time 31.65ms, mfu 11.12%
+iter 18: loss 2.8245, time 32.97ms, mfu 11.14%
+iter 19: loss 2.7883, time 38.26ms, mfu 11.00%
+iter 20: loss 2.7335, time 27.35ms, mfu 11.26%
+======================================================================
+[WRAPPER] Training completed successfully in 6.9s
+[WRAPPER] Result: PASS
+======================================================================

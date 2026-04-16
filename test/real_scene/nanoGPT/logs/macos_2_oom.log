@@ -1,0 +1,6 @@
+/Users/l1ght/repos/FakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: enabled the installed custom torch fake-CUDA backend.
+  return patch(num_devices=num_devices, device_name=device_name)
+runtime fakecuda backend custom_torch
+torch.cuda.mem_get_info() (85899345920, 85899345920)
+allocation_succeeded 350000000 cuda:0
+oom_probe_result NO_OOM

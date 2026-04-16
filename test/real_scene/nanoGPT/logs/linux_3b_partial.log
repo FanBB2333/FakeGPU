@@ -1,0 +1,122 @@
+======================================================================
+[WRAPPER] nanoGPT Validation Test
+[WRAPPER] Mode: partial
+[WRAPPER] Device count: default
+[WRAPPER] Total memory/device: default GiB
+[WRAPPER] Train args: ['config/train_shakespeare_char.py', '--max_iters=20', '--log_interval=1', '--compile=False', '--device=cuda']
+======================================================================
+[WRAPPER] Mode: partial - fakegpu + native PyTorch (C-level interception only)
+[WRAPPER] fakegpu.init(runtime='native') -> runtime=native, backend=native
+[WRAPPER] PyTorch version: 2.9.1+cu128
+[WRAPPER] torch.cuda.is_available(): True
+[WRAPPER] torch.cuda.device_count(): 8
+[WRAPPER] Device 0: Fake NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 1: Fake NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 2: Fake NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 3: Fake NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 4: Fake NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 5: Fake NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 6: Fake NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 7: Fake NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+======================================================================
+Overriding config with config/train_shakespeare_char.py:
+# train a miniature character-level shakespeare model
+# good for debugging and playing on macbooks and such
+
+out_dir = 'out-shakespeare-char'
+eval_interval = 250 # keep frequent because we'll overfit
+eval_iters = 200
+log_interval = 10 # don't print too too often
+
+# we expect to overfit on this small dataset, so only save when val improves
+always_save_checkpoint = False
+
+wandb_log = False # override via command line if you like
+wandb_project = 'shakespeare-char'
+wandb_run_name = 'mini-gpt'
+
+dataset = 'shakespeare_char'
+gradient_accumulation_steps = 1
+batch_size = 64
+block_size = 256 # context of up to 256 previous characters
+
+# baby GPT model :)
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.2
+
+learning_rate = 1e-3 # with baby networks can afford to go a bit higher
+max_iters = 5000
+lr_decay_iters = 5000 # make equal to max_iters usually
+min_lr = 1e-4 # learning_rate / 10 usually
+beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
+
+warmup_iters = 100 # not super necessary potentially
+
+# on macbook also add
+# device = 'cpu'  # run on cpu only
+# compile = False # do not torch compile the model
+
+Overriding: max_iters = 20
+Overriding: log_interval = 1
+Overriding: compile = False
+Overriding: device = cuda
+tokens per iteration will be: 16,384
+found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
+Initializing a new model from scratch
+number of parameters: 10.65M
+/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/train.py:196: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+num decayed parameter tensors: 26, with 10,740,096 parameters
+num non-decayed parameter tensors: 13, with 4,992 parameters
+using fused AdamW: True
+======================================================================
+[WRAPPER] Training FAILED with error in 0.8s
+[WRAPPER] Error type: RuntimeError
+[WRAPPER] Error message: M should be less than maximum CUDA grid size,   file a support request to support bigger batches
+[WRAPPER] Result: FAIL
+Traceback (most recent call last):
+  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/train_wrapper.py", line 209, in main
+    exec(code, exec_globals, exec_globals)
+  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/train.py", line 264, in <module>
+    losses = estimate_loss()
+             ^^^^^^^^^^^^^^^
+  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/train.py", line 224, in estimate_loss
+    logits, loss = model(X, Y)
+                   ^^^^^^^^^^^
+  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/model.py", line 181, in forward
+    x = block(x)
+        ^^^^^^^^
+  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/model.py", line 104, in forward
+    x = x + self.attn(self.ln_1(x))
+                      ^^^^^^^^^^^^
+  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/model.py", line 27, in forward
+    return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/functional.py", line 2901, in layer_norm
+    return torch.layer_norm(
+           ^^^^^^^^^^^^^^^^^
+RuntimeError: M should be less than maximum CUDA grid size,   file a support request to support bigger batches
+======================================================================

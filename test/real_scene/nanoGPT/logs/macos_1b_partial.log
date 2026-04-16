@@ -1,0 +1,90 @@
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/amp/autocast_mode.py:270: UserWarning: User provided device_type of 'cuda', but CUDA is not available. Disabling
+  warnings.warn(
+Traceback (most recent call last):
+  File "/Users/l1ght/repos/FakeGPU/test/real_scene/nanoGPT/train_wrapper.py", line 193, in main
+    exec(code, exec_globals, exec_globals)
+  File "/Users/l1ght/repos/FakeGPU/test/real_scene/nanoGPT/train.py", line 193, in <module>
+    model.to(device)
+  File "/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1371, in to
+    return self._apply(convert)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/nn/modules/module.py", line 930, in _apply
+    module._apply(fn)
+  File "/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/nn/modules/module.py", line 930, in _apply
+    module._apply(fn)
+  File "/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/nn/modules/module.py", line 957, in _apply
+    param_applied = fn(param)
+                    ^^^^^^^^^
+  File "/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1357, in convert
+    return t.to(
+           ^^^^^
+  File "/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/cuda/__init__.py", line 403, in _lazy_init
+    raise AssertionError("Torch not compiled with CUDA enabled")
+AssertionError: Torch not compiled with CUDA enabled
+======================================================================
+[WRAPPER] nanoGPT Validation Test
+[WRAPPER] Mode: partial
+[WRAPPER] Device count: default
+[WRAPPER] Total memory/device: default GiB
+[WRAPPER] Train args: ['config/train_shakespeare_char.py', '--max_iters=20', '--log_interval=1', '--compile=False', '--device=cuda']
+======================================================================
+[WRAPPER] Mode: partial - fakegpu + native PyTorch (C-level interception only)
+[WRAPPER] fakegpu.init(runtime='native') -> runtime=native, backend=native
+[WRAPPER] PyTorch version: 2.9.1
+[WRAPPER] torch.cuda.is_available(): False
+======================================================================
+Overriding config with config/train_shakespeare_char.py:
+# train a miniature character-level shakespeare model
+# good for debugging and playing on macbooks and such
+
+out_dir = 'out-shakespeare-char'
+eval_interval = 250 # keep frequent because we'll overfit
+eval_iters = 200
+log_interval = 10 # don't print too too often
+
+# we expect to overfit on this small dataset, so only save when val improves
+always_save_checkpoint = False
+
+wandb_log = False # override via command line if you like
+wandb_project = 'shakespeare-char'
+wandb_run_name = 'mini-gpt'
+
+dataset = 'shakespeare_char'
+gradient_accumulation_steps = 1
+batch_size = 64
+block_size = 256 # context of up to 256 previous characters
+
+# baby GPT model :)
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.2
+
+learning_rate = 1e-3 # with baby networks can afford to go a bit higher
+max_iters = 5000
+lr_decay_iters = 5000 # make equal to max_iters usually
+min_lr = 1e-4 # learning_rate / 10 usually
+beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
+
+warmup_iters = 100 # not super necessary potentially
+
+# on macbook also add
+# device = 'cpu'  # run on cpu only
+# compile = False # do not torch compile the model
+
+Overriding: max_iters = 20
+Overriding: log_interval = 1
+Overriding: compile = False
+Overriding: device = cuda
+tokens per iteration will be: 16,384
+found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
+Initializing a new model from scratch
+number of parameters: 10.65M
+======================================================================
+[WRAPPER] Training FAILED with error in 0.6s
+[WRAPPER] Error type: AssertionError
+[WRAPPER] Error message: Torch not compiled with CUDA enabled
+[WRAPPER] Result: FAIL
+======================================================================
+[Monitor] Initialized
+[Monitor] Dumping report to fake_gpu_report.json. GlobalState Addr: 0x158f04080, Device Count: 0

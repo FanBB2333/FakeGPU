@@ -1,0 +1,76 @@
+======================================================================
+[WRAPPER] nanoGPT Validation Test
+[WRAPPER] Mode: full
+[WRAPPER] Device count: default
+[WRAPPER] Total memory/device: default GiB
+[WRAPPER] Train args: ['config/train_shakespeare_char.py', '--max_iters=20', '--eval_iters=20', '--log_interval=1', '--compile=False']
+======================================================================
+[WRAPPER] Mode: full - fakegpu + pytorch-fakegpu / torch patching
+/home/l1ght/repos/fakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: enabled the installed custom torch fake-CUDA backend.
+  return patch(num_devices=num_devices, device_name=device_name)
+[WRAPPER] fakegpu.init(runtime='auto') -> runtime=fakecuda, backend=custom_torch
+[WRAPPER] Patched torch.Tensor.pin_memory() to no-op for fakecuda after probe failure: Cannot access accelerator device when none is available.
+[WRAPPER] PyTorch version: 2.11.0+fakegpu
+[WRAPPER] torch.cuda.is_available(): True
+[WRAPPER] torch.cuda.device_count(): 8
+[WRAPPER] Device 0: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 1: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 2: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 3: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 4: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 5: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 6: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+[WRAPPER] Device 7: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
+======================================================================
+Overriding config with config/train_shakespeare_char.py:
+# train a miniature character-level shakespeare model
+# good for debugging and playing on macbooks and such
+
+out_dir = 'out-shakespeare-char'
+eval_interval = 250 # keep frequent because we'll overfit
+eval_iters = 200
+log_interval = 10 # don't print too too often
+
+# we expect to overfit on this small dataset, so only save when val improves
+always_save_checkpoint = False
+
+wandb_log = False # override via command line if you like
+wandb_project = 'shakespeare-char'
+wandb_run_name = 'mini-gpt'
+
+dataset = 'shakespeare_char'
+gradient_accumulation_steps = 1
+batch_size = 64
+block_size = 256 # context of up to 256 previous characters
+
+# baby GPT model :)
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.2
+
+learning_rate = 1e-3 # with baby networks can afford to go a bit higher
+max_iters = 5000
+lr_decay_iters = 5000 # make equal to max_iters usually
+min_lr = 1e-4 # learning_rate / 10 usually
+beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
+
+warmup_iters = 100 # not super necessary potentially
+
+# on macbook also add
+# device = 'cpu'  # run on cpu only
+# compile = False # do not torch compile the model
+
+Overriding: max_iters = 20
+Overriding: eval_iters = 20
+Overriding: log_interval = 1
+Overriding: compile = False
+tokens per iteration will be: 16,384
+found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
+Initializing a new model from scratch
+number of parameters: 10.65M
+/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/train.py:196: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+num decayed parameter tensors: 26, with 10,740,096 parameters
+num non-decayed parameter tensors: 13, with 4,992 parameters
+using fused AdamW: True
