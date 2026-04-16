@@ -1,16 +1,29 @@
 #include "cuda_defs.hpp"
 #include "../core/global_state.hpp"
 #include "../core/logging.hpp"
+#include "../monitor/monitor.hpp"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 
 using namespace fake_gpu;
 
+namespace {
+bool g_report_dump_registered = false;
+
+void ensure_report_dump_registered() {
+    if (!g_report_dump_registered) {
+        std::atexit(fake_gpu::dump_monitor_report);
+        g_report_dump_registered = true;
+    }
+}
+}
+
 extern "C" {
 
 cudaError_t cudaGetDeviceCount(int *count) {
     if (!count) return cudaErrorInvalidValue;
+    ensure_report_dump_registered();
     // ensure initialized
     GlobalState::instance().initialize();
     *count = GlobalState::instance().get_device_count();
@@ -19,6 +32,7 @@ cudaError_t cudaGetDeviceCount(int *count) {
 }
 
 cudaError_t cudaSetDevice(int device) {
+    ensure_report_dump_registered();
     GlobalState::instance().initialize();
     int count = GlobalState::instance().get_device_count();
     if (device < 0 || device >= count) {
@@ -32,6 +46,7 @@ cudaError_t cudaSetDevice(int device) {
 
 cudaError_t cudaMalloc(void **devPtr, size_t size) {
     if (!devPtr) return cudaErrorInvalidValue;
+    ensure_report_dump_registered();
     GlobalState::instance().initialize();
     int device = GlobalState::instance().get_current_device();
     Device& dev = GlobalState::instance().get_device(device);
@@ -56,6 +71,7 @@ cudaError_t cudaMalloc(void **devPtr, size_t size) {
 }
 
 cudaError_t cudaFree(void *devPtr) {
+    ensure_report_dump_registered();
     FGPU_LOG("[FakeCUDA] cudaFree(%p)\n", devPtr);
     if (!devPtr) return cudaSuccess;
 
@@ -75,6 +91,7 @@ cudaError_t cudaFree(void *devPtr) {
 }
 
 cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, cudaMemcpyKind kind) {
+    ensure_report_dump_registered();
     FGPU_LOG("[FakeCUDA] cudaMemcpy count=%zu kind=%d\n", count, kind);
     memcpy(dst, src, count);
     switch (kind) {
