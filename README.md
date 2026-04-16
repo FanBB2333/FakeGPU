@@ -29,7 +29,7 @@ GitHub Pages deployment:
 - [x] **Distributed Communication Simulation** - Fake NCCL init, collective ops, point-to-point send/recv, communicator split, grouped submission
 - [x] **Coordinator & Topology Model** - Single-host multi-process cluster simulation with Unix/TCP coordinator transport and YAML cluster config
 - [x] **Cluster-Level Reporting** - Collective counts/bytes/timing plus inter-node and intra-node link statistics
-- [x] **Python API Wrapper** - `import fakegpu; fakegpu.init()` enables FakeGPU from inside Python
+- [x] **Python API Wrapper** - `import fakegpu; fakegpu.init(runtime="native")` enables FakeGPU from inside Python
 - [x] **PyTorch Support** - Basic tensor ops, linear layers, neural networks
 - [x] **Hybrid Multi-Process Validation Path** - Hybrid compute + simulated communication smoke coverage
 - [x] **Real Scenario Testing** - LLM inference smoke test (Qwen2.5-0.5B-Instruct)
@@ -241,11 +241,20 @@ On macOS, prefer a Homebrew, conda, or pyenv-managed Python. SIP strips `DYLD_*`
 import fakegpu
 
 # Call early (before importing torch / CUDA-using libraries)
-fakegpu.init()  # default: 8x A100
-# Optional: fakegpu.init(profile="t4", device_count=2)
-# Optional: fakegpu.init(devices="a100:4,h100:4")
+fakegpu.init(runtime="native")  # preload/native route, default: 8x A100
+# Optional: fakegpu.init(runtime="native", profile="t4", device_count=2)
+# Optional: fakegpu.init(runtime="native", devices="a100:4,h100:4")
 
 import torch
+```
+
+For the Python-level fake-CUDA route:
+
+```python
+import fakegpu
+
+fakegpu.init(runtime="auto")      # prefer torch.fakegpu when installed, else native
+# or: fakegpu.init(runtime="fakecuda")
 ```
 
 **Tiny Transformer training smoke with `pytorch-fakegpu`:**
@@ -378,7 +387,7 @@ FakeGPU
 - Select presets at runtime via environment variables:
   - `FAKEGPU_PROFILE=<id>` + `FAKEGPU_DEVICE_COUNT=<n>` (uniform devices)
   - `FAKEGPU_PROFILES=<spec>` (per-device spec, e.g. `a100:4,h100:4` or `t4,l40s`)
-- Python wrapper passes the same settings (must be called before importing CUDA-using libs like torch): `fakegpu.init(profile="t4", device_count=2)` or `fakegpu.init(devices="a100:4,h100:4")`.
+- Python wrapper passes the same settings (must be called before importing CUDA-using libs like torch for the preload route): `fakegpu.init(runtime="native", profile="t4", device_count=2)` or `fakegpu.init(runtime="native", devices="a100:4,h100:4")`.
 
 ## Limitations
 

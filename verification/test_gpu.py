@@ -17,7 +17,7 @@ def _nvml_lib_name() -> str:
     return 'libnvidia-ml.dylib' if sys.platform == 'darwin' else 'libnvidia-ml.so.1'
 
 
-result = fakegpu.init(force=True, update_env=True)
+result = fakegpu.init(runtime="native", force=True, update_env=True)
 print(f"[Python] FakeGPU library dir: {result.lib_dir}")
 
 try:

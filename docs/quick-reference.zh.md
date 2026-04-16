@@ -34,7 +34,13 @@ cmake --build build
 在 Python 进程内动态启用：
 
 ```bash
-python3 -c "import fakegpu; fakegpu.init(); import torch; print(torch.cuda.device_count())"
+python3 -c "import fakegpu; fakegpu.init(runtime='native'); import torch; print(torch.cuda.device_count())"
+```
+
+Python 级 fake-CUDA 路由：
+
+```bash
+python3 -c "import fakegpu; print(fakegpu.init(runtime='auto').runtime)"
 ```
 
 使用 `pytorch-fakegpu` 的 tiny Transformer 训练 demo：
@@ -92,7 +98,7 @@ python3 your_script.py
 
 Python API 在不同模式下会预加载不同的库：
 
-| 计算模式 | `fakegpu.init()` / `fakegpu.env()` 会加载的 fake 库 |
+| 计算模式 | `fakegpu.init(runtime=\"native\")` / `fakegpu.env()` 会加载的 fake 库 |
 |---|---|
 | `simulate` | cuBLAS + CUDA Runtime + CUDA Driver + NVML |
 | `hybrid` | CUDA Runtime + CUDA Driver + NVML |

@@ -63,7 +63,7 @@ FAKEGPU_DIST_MODE=simulate
 
 ## 一眼看懂运行链路
 
-1. `./fgpu` 或 `fakegpu.init()` 负责找到产物并设置 preload 环境变量。
+1. `./fgpu` 或 `fakegpu.init(runtime="native")` 负责找到产物并设置 preload 环境变量。
 2. `BackendConfig` 读取 `FAKEGPU_*` 环境变量，决定计算模式和分布式模式。
 3. `GlobalState` 按编译进来的 YAML profile 惰性创建 fake device。
 4. CUDA / NVML stub 负责设备查询与内存流；已维护的 cuBLAS / cuBLASLt 路径可走 CPU。

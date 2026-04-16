@@ -12,7 +12,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import fakegpu
 
-result = fakegpu.init(force=True, update_env=True)
+result = fakegpu.init(runtime="native", force=True, update_env=True)
 print(f"[Test] FakeGPU initialized from: {result.lib_dir}")
 
 try:

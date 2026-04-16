@@ -96,12 +96,12 @@ training code to run for smoke validation.
 
 ## 5. Enable FakeGPU inside Python
 
-Use `fakegpu.init()` when you want to stay inside a normal Python process. Call it before importing `torch` or any CUDA-using library.
+Use `fakegpu.init(runtime="native")` when you want to stay inside a normal Python process with the preload/shared-library route. Call it before importing `torch` or any CUDA-using library.
 
 ```python
 import fakegpu
 
-fakegpu.init(profile="a100", device_count=4)
+fakegpu.init(runtime="native", profile="a100", device_count=4)
 
 import torch
 print(torch.cuda.device_count())
@@ -111,7 +111,16 @@ print(torch.cuda.get_device_name(0))
 You can also pass per-device profile specs:
 
 ```python
-fakegpu.init(devices="a100:2,h100:2")
+fakegpu.init(runtime="native", devices="a100:2,h100:2")
+```
+
+If you want Python-level fake-CUDA behavior instead of preload semantics:
+
+```python
+import fakegpu
+
+fakegpu.init(runtime="auto")      # prefer torch.fakegpu when available, else native
+# or: fakegpu.init(runtime="fakecuda")
 ```
 
 ## 6. Compute and distributed modes

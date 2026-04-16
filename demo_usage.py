@@ -47,7 +47,7 @@ def load_fake_gpu_library(lib_path):
         print("Build first: cmake --build build")
         sys.exit(1)
 
-    result = fakegpu.init(lib_dir=lib_dir, force=True, update_env=True)
+    result = fakegpu.init(runtime="native", lib_dir=lib_dir, force=True, update_env=True)
     print(f"FakeGPU initialized from: {result.lib_dir}")
     return result, result.handles[_cudart_lib_name()]
 
