@@ -34,7 +34,13 @@ cmake --build build
 Dynamic initialization inside Python:
 
 ```bash
-python3 -c "import fakegpu; fakegpu.init(); import torch; print(torch.cuda.device_count())"
+python3 -c "import fakegpu; fakegpu.init(runtime='native'); import torch; print(torch.cuda.device_count())"
+```
+
+Python-level fake-CUDA routing:
+
+```bash
+python3 -c "import fakegpu; print(fakegpu.init(runtime='auto').runtime)"
 ```
 
 Tiny Transformer training demo with `pytorch-fakegpu`:
@@ -92,7 +98,7 @@ python3 your_script.py
 
 Mode-specific preload behavior in the Python API:
 
-| Compute mode | Fake libraries loaded by `fakegpu.init()` / `fakegpu.env()` |
+| Compute mode | Fake libraries loaded by `fakegpu.init(runtime=\"native\")` / `fakegpu.env()` |
 |---|---|
 | `simulate` | cuBLAS + CUDA Runtime + CUDA Driver + NVML |
 | `hybrid` | CUDA Runtime + CUDA Driver + NVML |

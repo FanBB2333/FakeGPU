@@ -8,10 +8,8 @@ the Python level so that the C++ dispatcher never sees a ``cuda`` device.
 Usage::
 
     import fakegpu
-    fakegpu.init()
-
-    from fakegpu.torch_patch import patch
-    patch()
+    fakegpu.init(runtime="fakecuda")
+    # or: fakegpu.patch_torch()
 
     import torch
     # Everything below "just works" on CPU.
@@ -27,9 +25,11 @@ import importlib
 import os
 import sys
 import warnings
+from dataclasses import dataclass
 from typing import Any
 
 _patched = False
+_patch_result: "PatchResult | None" = None
 
 # ---------------------------------------------------------------------------
 # Configuration – mirrors the active FakeGPU profile when available.
@@ -42,6 +42,13 @@ _COMPUTE_MINOR = 0
 _TOTAL_MEMORY = 80 * 1024**3  # 80 GiB per device
 
 _current_device: int = 0
+
+
+@dataclass(frozen=True)
+class PatchResult:
+    backend: str
+    num_devices: int
+    device_name: str
 
 # ---------------------------------------------------------------------------
 # Device helpers
@@ -62,6 +69,20 @@ def _normalize_device(device: Any) -> Any:
     if isinstance(device, torch.device) and device.type == "cuda":
         return torch.device("cpu")
     return device
+
+
+def _normalize_device_index(device: Any) -> int:
+    import torch
+
+    if device is None:
+        return _current_device
+    if isinstance(device, int):
+        return device
+    if isinstance(device, str):
+        device = torch.device(device)
+    if isinstance(device, torch.device):
+        return device.index or _current_device
+    return _current_device
 
 
 def _device_kwarg_wrapper(fn: Any) -> Any:
@@ -156,7 +177,7 @@ class _FakeStream:
     """Minimal stub for ``torch.cuda.Stream``."""
 
     def __init__(self, device: Any = None, priority: int = 0, **kwargs: Any):
-        self.device_index = 0
+        self.device_index = _normalize_device_index(device)
         self.cuda_stream = 0
 
     def synchronize(self) -> None:
@@ -357,25 +378,63 @@ def _stub_memory_snapshot() -> list[Any]:
 
 
 def _stub_manual_seed(seed: int) -> None:
-    pass  # no CUDA RNG to seed; torch.manual_seed() already seeds CPU
+    import torch
+
+    torch.random.default_generator.manual_seed(int(seed))
 
 
 def _stub_manual_seed_all(seed: int) -> None:
-    pass  # no CUDA RNG to seed
+    _stub_manual_seed(seed)
 
 
 def _stub_seed() -> int:
     import torch
-    return torch.initial_seed()
+
+    return int(torch.random.default_generator.seed())
 
 
 def _stub_seed_all() -> None:
-    pass
+    _stub_seed()
 
 
 def _stub_initial_seed() -> int:
     import torch
-    return torch.initial_seed()
+
+    return int(torch.random.default_generator.initial_seed())
+
+
+def _cpu_rng_state():
+    import torch
+
+    return torch.random.get_rng_state()
+
+
+def _set_cpu_rng_state(new_state: Any) -> None:
+    import torch
+
+    state = new_state.cpu() if hasattr(new_state, "cpu") else new_state
+    torch.random.set_rng_state(state)
+
+
+def _stub_get_rng_state(device: Any = "cuda"):
+    return _cpu_rng_state()
+
+
+def _stub_get_rng_state_all() -> list[Any]:
+    state = _cpu_rng_state()
+    return [state.clone() for _ in range(_NUM_DEVICES)]
+
+
+def _stub_set_rng_state(new_state: Any, device: Any = "cuda") -> None:
+    _set_cpu_rng_state(new_state)
+
+
+def _stub_set_rng_state_all(new_states: Any) -> None:
+    states = list(new_states)
+    if not states:
+        return
+    index = _current_device if _current_device < len(states) else 0
+    _set_cpu_rng_state(states[index])
 
 
 def _stub_is_initialized() -> bool:
@@ -418,6 +477,33 @@ class _FakeStreamCtx:
         return self
     def __exit__(self, *args: Any) -> None:
         pass
+
+
+class _FakeCudaGenerator:
+    """CPU-backed stand-in for ``torch.cuda.default_generators`` entries."""
+
+    def __init__(self, index: int):
+        self.index = index
+
+    def get_state(self):
+        return _cpu_rng_state()
+
+    def set_state(self, new_state: Any) -> None:
+        _set_cpu_rng_state(new_state)
+
+    def manual_seed(self, seed: int):
+        _stub_manual_seed(seed)
+        return self
+
+    def seed(self) -> int:
+        return _stub_seed()
+
+    def initial_seed(self) -> int:
+        return _stub_initial_seed()
+
+
+def _make_default_generators() -> tuple[_FakeCudaGenerator, ...]:
+    return tuple(_FakeCudaGenerator(i) for i in range(_NUM_DEVICES))
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +582,7 @@ def _maybe_enable_custom_torch_fakegpu(
 # ---------------------------------------------------------------------------
 
 
-def patch(*, num_devices: int | None = None, device_name: str | None = None) -> None:
+def patch(*, num_devices: int | None = None, device_name: str | None = None) -> PatchResult:
     """Apply monkey-patches to ``torch`` so CUDA code runs transparently on CPU.
 
     Safe to call multiple times; only the first call has effect.
@@ -507,11 +593,16 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         Number of fake CUDA devices to expose.  Defaults to ``$FAKEGPU_DEVICE_COUNT`` or 8.
     device_name:
         Name reported by ``torch.cuda.get_device_name()``.
+    Returns
+    -------
+    PatchResult
+        Describes whether the installed custom torch backend was used or the
+        standalone CPU-backed fallback was activated.
     """
 
-    global _patched, _NUM_DEVICES, _DEVICE_NAME
+    global _patched, _NUM_DEVICES, _DEVICE_NAME, _patch_result
     if _patched:
-        return
+        return _patch_result
 
     import torch
     import torch.cuda
@@ -528,11 +619,16 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         device_name=_DEVICE_NAME,
     ):
         _patched = True
+        _patch_result = PatchResult(
+            backend="custom_torch",
+            num_devices=_NUM_DEVICES,
+            device_name=_DEVICE_NAME,
+        )
         warnings.warn(
             "fakegpu.torch_patch: enabled the installed custom torch fake-CUDA backend.",
             stacklevel=2,
         )
-        return
+        return _patch_result
 
     # ---- torch.cuda module functions ----
     torch.cuda.is_available = _stub_is_available
@@ -564,9 +660,14 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     torch.cuda.seed = _stub_seed
     torch.cuda.seed_all = _stub_seed_all
     torch.cuda.initial_seed = _stub_initial_seed
+    torch.cuda.get_rng_state = _stub_get_rng_state
+    torch.cuda.get_rng_state_all = _stub_get_rng_state_all
+    torch.cuda.set_rng_state = _stub_set_rng_state
+    torch.cuda.set_rng_state_all = _stub_set_rng_state_all
     torch.cuda.ipc_collect = _stub_ipc_collect
     torch.cuda.can_device_access_peer = _stub_can_device_access_peer
     torch.cuda.get_gencode_flags = _stub_get_gencode_flags
+    torch.cuda.default_generators = _make_default_generators()
 
     # Internal helpers PyTorch relies on
     torch.cuda._is_compiled = lambda: True
@@ -626,6 +727,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         _graphs._cuda_isCurrentStreamCapturing = _c_stubs["_cuda_isCurrentStreamCapturing"]
 
     import torch.cuda.memory as _memory
+    import torch.cuda.random as _random
     _mem_stubs = {
         "_cuda_CUDAAllocator": lambda: None,
         "_cuda_beginAllocateCurrentThreadToPool": lambda *a: None,
@@ -638,6 +740,16 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
             setattr(_memory, attr, stub)
         if not hasattr(torch._C, attr):
             setattr(torch._C, attr, stub)
+
+    _random.manual_seed = _stub_manual_seed
+    _random.manual_seed_all = _stub_manual_seed_all
+    _random.seed = _stub_seed
+    _random.seed_all = _stub_seed_all
+    _random.initial_seed = _stub_initial_seed
+    _random.get_rng_state = _stub_get_rng_state
+    _random.get_rng_state_all = _stub_get_rng_state_all
+    _random.set_rng_state = _stub_set_rng_state
+    _random.set_rng_state_all = _stub_set_rng_state_all
 
     # Fake CUDAGraph class if missing
     if not hasattr(torch._C, "_CUDAGraph"):
@@ -661,8 +773,9 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     torch.cuda.Stream = _FakeStream  # type: ignore[misc]
     torch.cuda.Event = _FakeEvent  # type: ignore[misc]
     torch.cuda.stream = _FakeStreamCtx  # type: ignore[misc]
-    torch.cuda.current_stream = lambda device=None: _FakeStream()
-    torch.cuda.default_stream = lambda device=None: _FakeStream()
+    torch.cuda.current_stream = lambda device=None: _FakeStream(device=device)
+    torch.cuda.default_stream = lambda device=None: _FakeStream(device=device)
+    torch.cuda.set_stream = lambda stream: _stub_set_device(getattr(stream, "device_index", 0))
 
     # ---- Tensor.to / Tensor.cuda ----
     global _orig_tensor_to, _orig_tensor_cuda
@@ -721,6 +834,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
                 super().__init__(*args, **kwargs)
 
         torch.cuda.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
+        torch.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
     except Exception:
         pass
 
@@ -736,12 +850,18 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         pass
 
     _patched = True
+    _patch_result = PatchResult(
+        backend="standalone",
+        num_devices=_NUM_DEVICES,
+        device_name=_DEVICE_NAME,
+    )
 
     warnings.warn(
         "fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. "
         "Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.",
         stacklevel=2,
     )
+    return _patch_result
 
 
 def is_patched() -> bool:

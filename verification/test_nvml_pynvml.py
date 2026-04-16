@@ -56,6 +56,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     import fakegpu
 
     fakegpu.init(
+        runtime="native",
         build_dir=ns.build_dir,
         lib_dir=ns.lib_dir,
         profile=ns.profile,

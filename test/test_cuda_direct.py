@@ -10,7 +10,7 @@ import fakegpu
 
 print("=== Direct test: FakeGPU CUDA Driver API ===")
 
-result = fakegpu.init(force=True, update_env=True)
+result = fakegpu.init(runtime="native", force=True, update_env=True)
 fake_cuda = result.handles['libcuda.dylib' if sys.platform == 'darwin' else 'libcuda.so.1']
 
 # Define function prototypes

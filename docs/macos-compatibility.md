@@ -466,7 +466,7 @@ print('FakeGPU libraries loaded successfully')
 # 通过 Python API
 python -c "
 import fakegpu
-fakegpu.init()
+fakegpu.init(runtime="native")
 print('init OK, lib_dir:', fakegpu.library_dir())
 "
 ```

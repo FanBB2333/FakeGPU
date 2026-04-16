@@ -64,7 +64,7 @@ FAKEGPU_DIST_MODE=simulate
 
 ## Architecture in one view
 
-1. `./fgpu` or `fakegpu.init()` resolves the built libraries and sets the correct preload variables.
+1. `./fgpu` or `fakegpu.init(runtime="native")` resolves the built libraries and sets the correct preload variables.
 2. `BackendConfig` reads `FAKEGPU_*` environment variables and chooses compute and distributed modes.
 3. `GlobalState` lazily instantiates fake devices from the compiled-in YAML profiles.
 4. CUDA/NVML stubs answer device queries and memory operations; supported cuBLAS/cuBLASLt paths can run on CPU.

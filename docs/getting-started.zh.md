@@ -93,12 +93,12 @@ python3 demo_usage.py --test transformer --quiet
 
 ## 5. 在 Python 进程内启用
 
-如果你不想通过 `./fgpu` 启动，也可以在 Python 里尽早调用 `fakegpu.init()`。注意它必须在 `torch` 或其他 CUDA 相关库导入之前执行。
+如果你不想通过 `./fgpu` 启动，也可以在 Python 里尽早调用 `fakegpu.init(runtime="native")`。这条 preload / shared-library 路径必须在 `torch` 或其他 CUDA 相关库导入之前执行。
 
 ```python
 import fakegpu
 
-fakegpu.init(profile="a100", device_count=4)
+fakegpu.init(runtime="native", profile="a100", device_count=4)
 
 import torch
 print(torch.cuda.device_count())
@@ -108,7 +108,16 @@ print(torch.cuda.get_device_name(0))
 也支持按设备混合 profile：
 
 ```python
-fakegpu.init(devices="a100:2,h100:2")
+fakegpu.init(runtime="native", devices="a100:2,h100:2")
+```
+
+如果你想走 Python 级别的 fake-CUDA 路径，而不是 preload 语义：
+
+```python
+import fakegpu
+
+fakegpu.init(runtime="auto")      # 优先使用已安装的 torch.fakegpu，否则回退到 native
+# 或：fakegpu.init(runtime="fakecuda")
 ```
 
 ## 6. 计算模式和通信模式
