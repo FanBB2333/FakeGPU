@@ -105,9 +105,32 @@ print("runtime router dispatch passed")
     _assert_ok(_run(code), "runtime router dispatch")
 
 
+def test_editable_custom_torch_detection() -> None:
+    code = f"""
+from pathlib import Path
+import sys
+from unittest.mock import patch
+
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root))
+
+from fakegpu import _runtime
+
+with patch.dict(sys.modules, {{}}, clear=False):
+    sys.modules.pop("torch.fakegpu", None)
+    with patch("fakegpu._runtime.importlib.util.find_spec", return_value=object()), \\
+         patch.object(sys, "path", [""]):
+        assert _runtime._detect_custom_torch_fakegpu_available() is True
+
+print("editable custom torch detection passed")
+"""
+    _assert_ok(_run(code), "editable custom torch detection")
+
+
 def main() -> None:
     test_import_is_side_effect_free()
     test_runtime_router_dispatch()
+    test_editable_custom_torch_detection()
     print("runtime init smoke passed")
 
 
