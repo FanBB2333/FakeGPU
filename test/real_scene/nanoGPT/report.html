@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FakeGPU · nanoGPT 真实场景验证报告</title>
+<style>
+  /* ---------- Morandi Palette ---------- */
+  :root {
+    --bg:        #ede8e0;
+    --surface:   #f4f0e9;
+    --surface-2: #e3dcd1;
+    --ink:       #4a4740;
+    --ink-soft:  #7a7468;
+    --line:      #d6cdbf;
+
+    --sage:      #a8b5a0;   /* pass */
+    --sage-dk:   #7d8e78;
+    --rose:      #c9a7a1;   /* fail */
+    --rose-dk:   #a8837c;
+    --sand:      #d4bf9a;   /* warn / expected-fail */
+    --sand-dk:   #b39a73;
+    --mist:      #a4b1bd;   /* info */
+    --mist-dk:   #7d8b98;
+    --plum:      #b5a0b0;
+    --plum-dk:   #8e7b8b;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue",
+                 "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Layout ---------- */
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 64px 32px 96px; }
+
+  header.hero {
+    text-align: center;
+    padding: 56px 24px 40px;
+    margin-bottom: 48px;
+    background: linear-gradient(140deg, var(--surface) 0%, var(--surface-2) 100%);
+    border-radius: 24px;
+    border: 1px solid var(--line);
+    opacity: 0;
+    transform: translateY(14px);
+    animation: rise .9s .05s ease-out forwards;
+  }
+  header.hero .eyebrow {
+    letter-spacing: .24em;
+    font-size: 12px;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  header.hero h1 {
+    font-size: 34px;
+    margin: 0 0 12px;
+    font-weight: 600;
+    letter-spacing: .5px;
+  }
+  header.hero .sub {
+    color: var(--ink-soft);
+    font-size: 15px;
+    margin: 0;
+  }
+  header.hero .meta {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .chip {
+    background: var(--bg);
+    color: var(--ink-soft);
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    border: 1px solid var(--line);
+  }
+
+  /* ---------- Summary cards ---------- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    margin-bottom: 48px;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 22px 20px;
+    opacity: 0;
+    transform: translateY(14px);
+    animation: rise .7s ease-out forwards;
+  }
+  .stat:nth-child(1) { animation-delay: .15s; }
+  .stat:nth-child(2) { animation-delay: .25s; }
+  .stat:nth-child(3) { animation-delay: .35s; }
+  .stat:nth-child(4) { animation-delay: .45s; }
+  .stat .label { font-size: 12px; color: var(--ink-soft); letter-spacing: .1em; text-transform: uppercase; }
+  .stat .value { font-size: 30px; font-weight: 600; margin-top: 6px; }
+  .stat.pass  .value { color: var(--sage-dk); }
+  .stat.fail   .value { color: var(--rose-dk); }
+  .stat.total .value { color: var(--mist-dk); }
+
+  /* ---------- Section ---------- */
+  section {
+    margin-bottom: 56px;
+    opacity: 0;
+    transform: translateY(14px);
+    animation: rise .75s ease-out forwards;
+    animation-delay: .5s;
+  }
+  section h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 18px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+    letter-spacing: .5px;
+  }
+
+  /* ---------- Result table ---------- */
+  .results {
+    display: grid;
+    gap: 14px;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 60px 1fr auto;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 5px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 20px;
+    transition: transform .25s ease, box-shadow .25s ease, background .25s ease;
+    cursor: pointer;
+  }
+  .row:hover {
+    transform: translateX(4px);
+    background: var(--surface-2);
+    box-shadow: 0 4px 18px -12px rgba(74,71,64,.35);
+  }
+  .row.pass { border-left-color: var(--sage-dk); }
+  .row.fail { border-left-color: var(--rose-dk); }
+
+  .row .id {
+    font-weight: 600;
+    color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .05em;
+  }
+  .row .info .title { font-weight: 600; font-size: 15px; }
+  .row .info .desc  { color: var(--ink-soft); font-size: 13px; margin-top: 2px; }
+  .badge {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: 999px;
+    letter-spacing: .08em;
+  }
+  .badge.pass { background: var(--sage); color: #fff; }
+  .badge.fail { background: var(--rose); color: #fff; }
+
+  .detail {
+    grid-column: 1 / -1;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--line);
+    display: none;
+    font-size: 14px;
+    color: var(--ink);
+    animation: fadeIn .4s ease-out;
+  }
+  .row.open .detail { display: block; }
+  .detail .kv { margin: 4px 0; color: var(--ink-soft); }
+  .detail pre {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 10px 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+    overflow-x: auto;
+    color: var(--ink);
+  }
+  .detail .note { margin-top: 10px; }
+
+  /* ---------- Environment cards ---------- */
+  .envs { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .env {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 22px 22px 20px;
+  }
+  .env h3 {
+    margin: 0 0 12px;
+    font-size: 16px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .env h3::before {
+    content: '';
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--mist);
+  }
+  .env.linux h3::before { background: var(--plum); }
+  .env ul { margin: 0; padding-left: 18px; color: var(--ink-soft); font-size: 14px; }
+  .env ul li { margin: 4px 0; }
+  .env code { background: var(--bg); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; color: var(--ink); }
+
+  /* ---------- Conclusion ---------- */
+  .concl { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px;
+  }
+  .card h4 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .card.pass h4 { color: var(--sage-dk); }
+  .card.fail h4 { color: var(--rose-dk); }
+  .card.caveat h4 { color: var(--sand-dk); }
+  .card ul { margin: 0; padding-left: 18px; font-size: 14px; color: var(--ink); }
+  .card ul li { margin: 4px 0; }
+
+  footer {
+    text-align: center;
+    color: var(--ink-soft);
+    font-size: 12.5px;
+    margin-top: 48px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* ---------- Animations ---------- */
+  @keyframes rise {
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (max-width: 780px) {
+    .stats   { grid-template-columns: repeat(3, 1fr); }
+    .envs    { grid-template-columns: 1fr; }
+    .concl   { grid-template-columns: 1fr; }
+    .row     { grid-template-columns: 50px 1fr auto; }
+    header.hero h1 { font-size: 26px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Real-Scene Validation · 2026-04-16</div>
+    <h1>FakeGPU × nanoGPT 真实场景验证报告</h1>
+    <p class="sub">字符级 Shakespeare baby GPT（~10.65M 参数）· 20 iters · macOS &amp; Linux 双平台</p>
+    <div class="meta">
+      <span class="chip">Runner: train_wrapper.py</span>
+      <span class="chip">Models: nanoGPT</span>
+      <span class="chip">Iterations: 20</span>
+      <span class="chip">Date: 2026-04-16</span>
+    </div>
+  </header>
+
+  <!-- Summary stats -->
+  <div class="stats">
+    <div class="stat total"><div class="label">Total Tests</div><div class="value">7</div></div>
+    <div class="stat pass"><div class="label">符合预期</div><div class="value">7</div></div>
+    <div class="stat fail"><div class="label">不符合预期</div><div class="value">0</div></div>
+  </div>
+
+  <!-- Environments -->
+  <section>
+    <h2>测试环境</h2>
+    <div class="envs">
+      <div class="env macos">
+        <h3>macOS · 无物理 GPU</h3>
+        <ul>
+          <li>Baseline / Partial：<code>py311</code>，PyTorch <code>2.9.1</code></li>
+          <li>Full：<code>fakegpu</code>，PyTorch <code>2.11.0a0+gitb926036</code></li>
+          <li><code>torch.fakegpu</code>：full 环境可用</li>
+          <li>FakeGPU 产物：<code>build/*.dylib</code></li>
+        </ul>
+      </div>
+      <div class="env linux">
+        <h3>Linux · RTX 3090 Ti (24GB)</h3>
+        <ul>
+          <li>Baseline / Partial：<code>fakegpu</code>，PyTorch <code>2.9.1+cu128</code></li>
+          <li>Full：<code>fakegpu-macos</code>，PyTorch <code>2.11.0+fakegpu</code></li>
+          <li><code>torch.fakegpu</code>：full 环境可用</li>
+          <li>FakeGPU 产物：<code>build/*.so</code></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Results list -->
+  <section>
+    <h2>测试结果明细 <span style="font-weight:400;font-size:13px;color:var(--ink-soft);margin-left:8px;">点击行展开详情</span></h2>
+    <div class="results">
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">1A</div>
+        <div class="info">
+          <div class="title">macOS · Baseline（无 FakeGPU）</div>
+          <div class="desc">Expected Fail · 原生 PyTorch 未编译 CUDA 支持</div>
+        </div>
+        <div class="badge pass">符合预期</div>
+        <div class="detail">
+          <div class="kv">Log：logs/macos_1a_baseline.log</div>
+          <pre>torch.cuda.is_available(): False
+AssertionError: Torch not compiled with CUDA enabled</pre>
+          <div class="note">与预期一致：在无 CUDA PyTorch 的机器上 baseline 必然失败。</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">1B</div>
+        <div class="info">
+          <div class="title">macOS · Partial（fakegpu + 原生 PyTorch）</div>
+          <div class="desc">Expected Fail · C 层注入无法改写 CPU-only PyTorch 的 CUDA 能力</div>
+        </div>
+        <div class="badge pass">符合预期</div>
+        <div class="detail">
+          <div class="kv">Log：logs/macos_1b_partial.log</div>
+          <pre>fakegpu.init(runtime='native') -> runtime=native, backend=native
+torch.cuda.is_available(): False
+AssertionError: Torch not compiled with CUDA enabled</pre>
+          <div class="note">C 层 stub 加载成功，但 CPU-only PyTorch 根本不会进入 CUDA 路径，因此原生拦截无效。</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">1C</div>
+        <div class="info">
+          <div class="title">macOS · Full（fakegpu + torch.fakegpu）</div>
+          <div class="desc">训练 5.9s 完成 · wrapper 注入 CPU-friendly fakecuda 默认值</div>
+        </div>
+        <div class="badge pass">符合预期</div>
+        <div class="detail">
+          <div class="kv">Log：logs/macos_1c_full.log</div>
+          <pre>fakegpu.init(runtime='auto') -> runtime=fakecuda, backend=custom_torch
+Patched torch.Tensor.pin_memory() to no-op for fakecuda after probe failure
+Effective train args: ... '--dtype=float32', '--eval_iters=2',
+                         '--batch_size=8', '--block_size=64'
+iter 20: loss 2.9437
+Training completed successfully in 5.9s</pre>
+          <div class="note">Python 层完整 patch 足以让 nanoGPT 在 macOS 上跑通。Wrapper 自动：<br>
+            · 在 probe 失败时把 <code>pin_memory()</code> 改成 no-op；<br>
+            · 切换 CPU 友好默认值（float32 / eval_iters=2 / batch=8 / block=64）。</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">2</div>
+        <div class="info">
+          <div class="title">macOS · OOM 模拟（a100-1g · 1GiB profile）</div>
+          <div class="desc">Expected Fail · 显存超限在 model.to(cuda) 阶段被拒绝</div>
+        </div>
+        <div class="badge pass">符合预期</div>
+        <div class="detail">
+          <div class="kv">Log：logs/macos_2_oom.log</div>
+          <pre>Profile: a100-1g
+Installed fakecuda virtual memory limiter: 1.00 GiB
+Device 0: NVIDIA A100-SXM4-80GB, Memory: 1.0 GiB
+CUDA out of memory. Tried to allocate 1154.45 MiB during GPT.to(cuda).</pre>
+          <div class="note">Wrapper 从所选 FakeGPU profile 推导出 1GiB 的虚拟显存限制，超模型在训练前就被正确拒绝 —— 符合 OOM 场景预期。</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">3A</div>
+        <div class="info">
+          <div class="title">Linux · Baseline（真实 RTX 3090 Ti）</div>
+          <div class="desc">训练 6.9s 完成 · 释放远端 GPU 资源后重跑通过</div>
+        </div>
+        <div class="badge pass">符合预期</div>
+        <div class="detail">
+          <div class="kv">Log：logs/linux_3a_baseline.log</div>
+          <pre>torch.cuda.is_available(): True
+Device 0: NVIDIA GeForce RTX 3090 Ti
+iter 20: loss 2.7335
+Training completed successfully in 6.9s</pre>
+          <div class="note">首次失败仅因远端存在约 22GB 占用；资源释放后是权威 baseline 结果。</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">3B</div>
+        <div class="info">
+          <div class="title">Linux · Partial（fakegpu + 原生 PyTorch）</div>
+          <div class="desc">训练 22.4s 完成 · 修复 cudart 设备属性后流程跑通（loss 恒为 0，非数值忠实）</div>
+        </div>
+        <div class="badge pass">符合预期</div>
+        <div class="detail">
+          <div class="kv">Log：logs/linux_3b_partial.log</div>
+          <pre>fakegpu.init(runtime='native') -> runtime=native, backend=native
+torch.cuda.device_count(): 8
+Device 0: Fake NVIDIA A100-SXM4-80GB
+iter 20: loss 0.0000
+Training completed successfully in 22.4s</pre>
+          <div class="note">根因是 <code>cudaGetDeviceProperties()</code> stub 的 <code>maxThreadsDim</code> / <code>maxGridSize</code> 未填。<br>
+            补齐后流程可通，但 loss 恒为 0 表明 native stub 仍是 launch/no-op，而非真实计算。</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">3C</div>
+        <div class="info">
+          <div class="title">Linux · Full（fakegpu + torch.fakegpu）</div>
+          <div class="desc">训练 94.3s 完成 · wrapper 的 CPU 友好默认值生效</div>
+        </div>
+        <div class="badge pass">符合预期</div>
+        <div class="detail">
+          <div class="kv">Log：logs/linux_3c_full.log</div>
+          <pre>fakegpu.init(runtime='auto') -> runtime=fakecuda, backend=custom_torch
+Patched torch.Tensor.pin_memory() to no-op for fakecuda after probe failure
+Effective train args: ... '--dtype=float32', '--eval_iters=2',
+                         '--batch_size=8', '--block_size=64'
+step 0: train loss 4.3036, val loss 4.3100
+iter 20: loss 2.9437
+Training completed successfully in 94.3s</pre>
+          <div class="note">此前“无进展”是因为沿用了 CUDA 导向的默认值，不适合 CPU 后端。切换为 CPU 友好默认后，远端 Linux full 路径可完整跑完 20 iter。</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Conclusions -->
+  <section>
+    <h2>结论</h2>
+    <div class="concl">
+      <div class="card pass">
+        <h4>Confirmed Working</h4>
+        <ul>
+          <li>macOS full fakecuda</li>
+          <li>Linux real-GPU baseline</li>
+          <li>Linux full fakecuda</li>
+        </ul>
+      </div>
+      <div class="card fail">
+        <h4>Confirmed Failing</h4>
+        <ul>
+          <li>macOS baseline</li>
+          <li>macOS partial</li>
+          <li>macOS OOM（预期 OOM 失败）</li>
+        </ul>
+      </div>
+      <div class="card caveat">
+        <h4>Passing w/ Caveats</h4>
+        <ul>
+          <li>Linux partial native：流程通过，但 loss 恒为 0，非数值忠实</li>
+          <li>OOM 保护：wrapper 层守卫，非 allocator 级</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    生成于 VALIDATION_REPORT.md · 原始日志见 <code>test/real_scene/nanoGPT/logs/</code>
+  </footer>
+
+</div>
+
+<script>
+  // subtle stagger for rows
+  document.querySelectorAll('.results .row').forEach((el, i) => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(8px)';
+    el.style.transition = 'opacity .5s ease, transform .5s ease';
+    setTimeout(() => {
+      el.style.opacity = '1';
+      el.style.transform = 'translateY(0)';
+    }, 600 + i * 80);
+  });
+</script>
+</body>
+</html>
