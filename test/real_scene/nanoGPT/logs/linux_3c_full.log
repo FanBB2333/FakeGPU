@@ -3,13 +3,13 @@
 [WRAPPER] Mode: full
 [WRAPPER] Device count: default
 [WRAPPER] Total memory/device: default GiB
-[WRAPPER] Train args: ['config/train_shakespeare_char.py', '--max_iters=20', '--eval_iters=20', '--log_interval=1', '--compile=False']
+[WRAPPER] Train args: ['config/train_shakespeare_char.py', '--max_iters=20', '--log_interval=1', '--compile=False']
 ======================================================================
 [WRAPPER] Mode: full - fakegpu + pytorch-fakegpu / torch patching
-/home/l1ght/repos/fakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: enabled the installed custom torch fake-CUDA backend.
-  return patch(num_devices=num_devices, device_name=device_name)
 [WRAPPER] fakegpu.init(runtime='auto') -> runtime=fakecuda, backend=custom_torch
 [WRAPPER] Patched torch.Tensor.pin_memory() to no-op for fakecuda after probe failure: Cannot access accelerator device when none is available.
+/home/l1ght/repos/fakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: enabled the installed custom torch fake-CUDA backend.
+  return patch(num_devices=num_devices, device_name=device_name)
 [WRAPPER] PyTorch version: 2.11.0+fakegpu
 [WRAPPER] torch.cuda.is_available(): True
 [WRAPPER] torch.cuda.device_count(): 8
@@ -22,6 +22,7 @@
 [WRAPPER] Device 6: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
 [WRAPPER] Device 7: NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
 ======================================================================
+[WRAPPER] Effective train args: ['config/train_shakespeare_char.py', '--max_iters=20', '--log_interval=1', '--compile=False', '--dtype=float32', '--eval_iters=2', '--batch_size=8', '--block_size=64']
 Overriding config with config/train_shakespeare_char.py:
 # train a miniature character-level shakespeare model
 # good for debugging and playing on macbooks and such
@@ -62,15 +63,44 @@ warmup_iters = 100 # not super necessary potentially
 # compile = False # do not torch compile the model
 
 Overriding: max_iters = 20
-Overriding: eval_iters = 20
 Overriding: log_interval = 1
 Overriding: compile = False
-tokens per iteration will be: 16,384
+Overriding: dtype = float32
+Overriding: eval_iters = 2
+Overriding: batch_size = 8
+Overriding: block_size = 64
+tokens per iteration will be: 512
 found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
 Initializing a new model from scratch
 number of parameters: 10.65M
+num decayed parameter tensors: 26, with 10,666,368 parameters
+num non-decayed parameter tensors: 13, with 4,992 parameters
 /home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/train.py:196: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
   scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-num decayed parameter tensors: 26, with 10,740,096 parameters
-num non-decayed parameter tensors: 13, with 4,992 parameters
 using fused AdamW: True
+step 0: train loss 4.3036, val loss 4.3100
+iter 0: loss 4.3142, time 15166.70ms, mfu -100.00%
+iter 1: loss 4.1395, time 3784.65ms, mfu -100.00%
+iter 2: loss 3.9943, time 4082.34ms, mfu -100.00%
+iter 3: loss 3.7597, time 3877.76ms, mfu -100.00%
+iter 4: loss 3.6360, time 4133.99ms, mfu -100.00%
+iter 5: loss 3.4918, time 3803.66ms, mfu 0.00%
+iter 6: loss 3.4289, time 3898.94ms, mfu 0.00%
+iter 7: loss 3.3347, time 3967.49ms, mfu 0.00%
+iter 8: loss 3.4743, time 3884.51ms, mfu 0.00%
+iter 9: loss 3.3723, time 3983.17ms, mfu 0.00%
+iter 10: loss 3.2860, time 3694.52ms, mfu 0.00%
+iter 11: loss 3.1895, time 3862.09ms, mfu 0.00%
+iter 12: loss 3.2777, time 3720.60ms, mfu 0.00%
+iter 13: loss 3.2648, time 4146.95ms, mfu 0.00%
+iter 14: loss 3.1274, time 3819.77ms, mfu 0.00%
+iter 15: loss 3.0099, time 4222.41ms, mfu 0.00%
+iter 16: loss 3.0763, time 3765.36ms, mfu 0.00%
+iter 17: loss 2.9930, time 3963.65ms, mfu 0.00%
+iter 18: loss 2.8818, time 4050.95ms, mfu 0.00%
+iter 19: loss 2.9094, time 3836.49ms, mfu 0.00%
+iter 20: loss 2.9437, time 3833.06ms, mfu 0.00%
+======================================================================
+[WRAPPER] Training completed successfully in 94.3s
+[WRAPPER] Result: PASS
+======================================================================

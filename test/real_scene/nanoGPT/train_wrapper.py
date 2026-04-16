@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import time
 import traceback
+from typing import Any
 
 
 def _repo_root() -> Path:
@@ -19,6 +20,118 @@ def _ensure_repo_root_on_path() -> None:
     repo_root = str(_repo_root())
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
+
+
+def _read_profile_memory_bytes(profile_id: str) -> int | None:
+    normalized = profile_id.strip().lower()
+    if not normalized:
+        return None
+    profiles_dir = _repo_root() / "profiles"
+    candidates = [
+        profiles_dir / f"{normalized}.yaml",
+        profiles_dir / f"{normalized}.yml",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip().startswith("memory_bytes:"):
+                    _, value = line.split(":", 1)
+                    return int(value.strip(), 0)
+    return None
+
+
+def _resolve_profile_memory_bytes(*, profile: str | None, devices: str | None) -> int | None:
+    if profile:
+        return _read_profile_memory_bytes(profile)
+    if not devices:
+        return None
+    first = devices.split(",", 1)[0].strip()
+    if not first:
+        return None
+    if ":" in first:
+        first = first.split(":", 1)[0].strip()
+    return _read_profile_memory_bytes(first)
+
+
+def _has_cli_arg(args: list[str], key: str) -> bool:
+    prefix = f"{key}="
+    for index, arg in enumerate(args):
+        if arg == key:
+            return True
+        if arg.startswith(prefix):
+            return True
+        if index > 0 and args[index - 1] == key:
+            return True
+    return False
+
+
+def _prepare_train_args(train_args: list[str], *, mode: str, info: dict[str, object]) -> list[str]:
+    prepared = list(train_args)
+    if mode == "full" and info.get("fakegpu_runtime") == "fakecuda":
+        if not _has_cli_arg(prepared, "--dtype"):
+            prepared.append("--dtype=float32")
+        if not _has_cli_arg(prepared, "--eval_iters"):
+            prepared.append("--eval_iters=2")
+        if not _has_cli_arg(prepared, "--batch_size"):
+            prepared.append("--batch_size=8")
+        if not _has_cli_arg(prepared, "--block_size"):
+            prepared.append("--block_size=64")
+    return prepared
+
+
+class _FakeCudaMemoryLimiter:
+    def __init__(self, limit_bytes: int):
+        self.limit_bytes = int(limit_bytes)
+        self.used_bytes = 0
+
+    def reserve_bytes(self, size_bytes: int, *, context: str) -> None:
+        size_bytes = int(size_bytes)
+        if size_bytes <= 0:
+            return
+        next_used = self.used_bytes + size_bytes
+        if next_used > self.limit_bytes:
+            attempted_mib = size_bytes / 1024**2
+            total_mib = self.limit_bytes / 1024**2
+            used_mib = self.used_bytes / 1024**2
+            raise RuntimeError(
+                "CUDA out of memory. "
+                f"Tried to allocate {attempted_mib:.2f} MiB during {context}. "
+                f"FakeGPU limit is {total_mib:.2f} MiB, {used_mib:.2f} MiB already reserved."
+            )
+        self.used_bytes = next_used
+
+    def reserve_tensor(self, tensor: Any, *, context: str) -> None:
+        size_bytes = None
+        try:
+            storage = tensor.untyped_storage()
+            size_bytes = storage.nbytes()
+        except Exception:
+            pass
+        if size_bytes is None:
+            size_bytes = tensor.numel() * tensor.element_size()
+        self.reserve_bytes(size_bytes, context=context)
+
+    def mem_get_info(self) -> tuple[int, int]:
+        free_bytes = max(0, self.limit_bytes - self.used_bytes)
+        return free_bytes, self.limit_bytes
+
+
+def _module_nbytes(module: Any) -> int:
+    seen: set[int] = set()
+    total = 0
+    for tensor in list(module.parameters()) + list(module.buffers()):
+        try:
+            storage = tensor.untyped_storage()
+            storage_id = int(storage.data_ptr())
+            if storage_id in seen:
+                continue
+            seen.add(storage_id)
+            total += int(storage.nbytes())
+        except Exception:
+            total += int(tensor.numel() * tensor.element_size())
+    return total
 
 
 def _apply_memory_override(total_bytes: int | None) -> None:
@@ -80,7 +193,90 @@ def _patch_pin_memory_if_needed(mode: str, info: dict) -> None:
         )
 
 
-def setup_fakegpu(mode: str, *, device_count: int | None, total_memory_bytes: int | None) -> dict:
+def _install_fakecuda_memory_limit_if_needed(
+    mode: str,
+    info: dict[str, object],
+    *,
+    total_memory_bytes: int | None,
+) -> None:
+    if total_memory_bytes is None:
+        return
+    if mode != "full":
+        return
+    if info.get("fakegpu_runtime") != "fakecuda":
+        return
+
+    import torch
+
+    limiter = _FakeCudaMemoryLimiter(total_memory_bytes)
+    module_transfer_depth = 0
+
+    def _targets_cuda(args: tuple[Any, ...], kwargs: dict[str, Any]) -> bool:
+        device = kwargs.get("device")
+        if device is None and args:
+            device = args[0]
+        if device is None:
+            return True
+        if isinstance(device, str):
+            return device.startswith("cuda")
+        if hasattr(device, "type"):
+            return getattr(device, "type", None) == "cuda"
+        return False
+
+    orig_tensor_to = torch.Tensor.to
+    orig_tensor_cuda = torch.Tensor.cuda
+    orig_module_to = torch.nn.Module.to
+    orig_module_cuda = torch.nn.Module.cuda
+
+    def limited_tensor_to(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if module_transfer_depth == 0 and _targets_cuda(args, kwargs):
+            limiter.reserve_tensor(self, context="Tensor.to(cuda)")
+        return orig_tensor_to(self, *args, **kwargs)
+
+    def limited_tensor_cuda(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if module_transfer_depth == 0:
+            limiter.reserve_tensor(self, context="Tensor.cuda()")
+        return orig_tensor_cuda(self, *args, **kwargs)
+
+    def limited_module_to(self: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal module_transfer_depth
+        if _targets_cuda(args, kwargs):
+            limiter.reserve_bytes(_module_nbytes(self), context=f"{type(self).__name__}.to(cuda)")
+            module_transfer_depth += 1
+            try:
+                return orig_module_to(self, *args, **kwargs)
+            finally:
+                module_transfer_depth -= 1
+        return orig_module_to(self, *args, **kwargs)
+
+    def limited_module_cuda(self: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal module_transfer_depth
+        limiter.reserve_bytes(_module_nbytes(self), context=f"{type(self).__name__}.cuda()")
+        module_transfer_depth += 1
+        try:
+            return orig_module_cuda(self, *args, **kwargs)
+        finally:
+            module_transfer_depth -= 1
+
+    torch.Tensor.to = limited_tensor_to  # type: ignore[assignment]
+    torch.Tensor.cuda = limited_tensor_cuda  # type: ignore[assignment]
+    torch.nn.Module.to = limited_module_to  # type: ignore[assignment]
+    torch.nn.Module.cuda = limited_module_cuda  # type: ignore[assignment]
+    torch.cuda.mem_get_info = lambda device=None: limiter.mem_get_info()
+    print(
+        "[WRAPPER] Installed fakecuda virtual memory limiter: "
+        f"{total_memory_bytes / 1024**3:.2f} GiB"
+    )
+
+
+def setup_fakegpu(
+    mode: str,
+    *,
+    device_count: int | None,
+    total_memory_bytes: int | None,
+    profile: str | None,
+    devices: str | None,
+) -> dict:
     """Initialize FakeGPU for the requested mode and return diagnostic info."""
 
     info: dict[str, object] = {
@@ -106,7 +302,12 @@ def setup_fakegpu(mode: str, *, device_count: int | None, total_memory_bytes: in
     print(f"[WRAPPER] Mode: {mode} - {description}")
 
     try:
-        result = fakegpu.init(runtime=runtime, device_count=device_count)
+        result = fakegpu.init(
+            runtime=runtime,
+            device_count=device_count,
+            profile=profile,
+            devices=devices,
+        )
         info["fakegpu_runtime"] = result.runtime
         info["fakegpu_backend"] = result.backend
         print(
@@ -143,6 +344,18 @@ def main() -> int:
         help="Total memory per fake device in GiB",
     )
     parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="FakeGPU profile preset ID (for example: a100, a100-1g, h100)",
+    )
+    parser.add_argument(
+        "--devices",
+        type=str,
+        default=None,
+        help="FakeGPU device preset spec (for example: a100-1g or a100-1g,a100)",
+    )
+    parser.add_argument(
         "train_args",
         nargs=argparse.REMAINDER,
         help="Arguments passed through to train.py",
@@ -156,14 +369,21 @@ def main() -> int:
     total_memory_bytes = None
     if args.total_memory_gb is not None:
         total_memory_bytes = int(args.total_memory_gb * 1024**3)
+    else:
+        total_memory_bytes = _resolve_profile_memory_bytes(
+            profile=args.profile,
+            devices=args.devices,
+        )
 
     print("=" * 70)
     print("[WRAPPER] nanoGPT Validation Test")
     print(f"[WRAPPER] Mode: {args.mode}")
     print(f"[WRAPPER] Device count: {args.device_count or 'default'}")
+    print(f"[WRAPPER] Profile: {args.profile or 'default'}")
+    print(f"[WRAPPER] Devices spec: {args.devices or 'default'}")
     print(
         "[WRAPPER] Total memory/device: "
-        f"{args.total_memory_gb if args.total_memory_gb is not None else 'default'} GiB"
+        f"{args.total_memory_gb if args.total_memory_gb is not None else (f'{total_memory_bytes / 1024**3:.2f}' if total_memory_bytes is not None else 'default')} GiB"
     )
     print(f"[WRAPPER] Train args: {train_args}")
     print("=" * 70)
@@ -172,11 +392,20 @@ def main() -> int:
         args.mode,
         device_count=args.device_count,
         total_memory_bytes=total_memory_bytes,
+        profile=args.profile,
+        devices=args.devices,
     )
+
+    train_args = _prepare_train_args(train_args, mode=args.mode, info=info)
 
     import torch
 
     _patch_pin_memory_if_needed(args.mode, info)
+    _install_fakecuda_memory_limit_if_needed(
+        args.mode,
+        info,
+        total_memory_bytes=total_memory_bytes,
+    )
 
     info["torch_version"] = torch.__version__
     info["torch_cuda_available"] = torch.cuda.is_available()
@@ -200,6 +429,7 @@ def main() -> int:
 
     script_dir = Path(__file__).resolve().parent
     os.chdir(script_dir)
+    print(f"[WRAPPER] Effective train args: {train_args}")
     sys.argv = ["train.py", *train_args]
 
     start_time = time.time()

@@ -1,6 +1,98 @@
+======================================================================
+[WRAPPER] nanoGPT Validation Test
+[WRAPPER] Mode: full
+[WRAPPER] Device count: default
+[WRAPPER] Profile: a100-1g
+[WRAPPER] Devices spec: default
+[WRAPPER] Total memory/device: 1.00 GiB
+[WRAPPER] Train args: ['config/train_shakespeare_char.py', '--max_iters=1', '--compile=False', '--n_layer=24', '--n_head=16', '--n_embd=1024', '--batch_size=64', '--block_size=512']
+======================================================================
+[WRAPPER] Mode: full - fakegpu + pytorch-fakegpu / torch patching
 /Users/l1ght/repos/FakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: enabled the installed custom torch fake-CUDA backend.
   return patch(num_devices=num_devices, device_name=device_name)
-runtime fakecuda backend custom_torch
-torch.cuda.mem_get_info() (85899345920, 85899345920)
-allocation_succeeded 350000000 cuda:0
-oom_probe_result NO_OOM
+[WRAPPER] fakegpu.init(runtime='auto') -> runtime=fakecuda, backend=custom_torch
+[WRAPPER] Applied fakegpu.torch_patch total-memory override: 1.00 GiB
+[WRAPPER] Applied torch.fakegpu total-memory override: 1.00 GiB
+[WRAPPER] Patched torch.Tensor.pin_memory() to no-op for fakecuda after probe failure: Cannot access accelerator device when none is available.
+[WRAPPER] Installed fakecuda virtual memory limiter: 1.00 GiB
+[WRAPPER] PyTorch version: 2.11.0a0+gitb926036
+[WRAPPER] torch.cuda.is_available(): True
+[WRAPPER] torch.cuda.device_count(): 8
+[WRAPPER] Device 0: NVIDIA A100-SXM4-80GB, Memory: 1.0 GiB
+[WRAPPER] Device 1: NVIDIA A100-SXM4-80GB, Memory: 1.0 GiB
+[WRAPPER] Device 2: NVIDIA A100-SXM4-80GB, Memory: 1.0 GiB
+[WRAPPER] Device 3: NVIDIA A100-SXM4-80GB, Memory: 1.0 GiB
+[WRAPPER] Device 4: NVIDIA A100-SXM4-80GB, Memory: 1.0 GiB
+[WRAPPER] Device 5: NVIDIA A100-SXM4-80GB, Memory: 1.0 GiB
+[WRAPPER] Device 6: NVIDIA A100-SXM4-80GB, Memory: 1.0 GiB
+[WRAPPER] Device 7: NVIDIA A100-SXM4-80GB, Memory: 1.0 GiB
+======================================================================
+[WRAPPER] Effective train args: ['config/train_shakespeare_char.py', '--max_iters=1', '--compile=False', '--n_layer=24', '--n_head=16', '--n_embd=1024', '--batch_size=64', '--block_size=512', '--dtype=float32', '--eval_iters=2']
+Overriding config with config/train_shakespeare_char.py:
+# train a miniature character-level shakespeare model
+# good for debugging and playing on macbooks and such
+
+out_dir = 'out-shakespeare-char'
+eval_interval = 250 # keep frequent because we'll overfit
+eval_iters = 200
+log_interval = 10 # don't print too too often
+
+# we expect to overfit on this small dataset, so only save when val improves
+always_save_checkpoint = False
+
+wandb_log = False # override via command line if you like
+wandb_project = 'shakespeare-char'
+wandb_run_name = 'mini-gpt'
+
+dataset = 'shakespeare_char'
+gradient_accumulation_steps = 1
+batch_size = 64
+block_size = 256 # context of up to 256 previous characters
+
+# baby GPT model :)
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.2
+
+learning_rate = 1e-3 # with baby networks can afford to go a bit higher
+max_iters = 5000
+lr_decay_iters = 5000 # make equal to max_iters usually
+min_lr = 1e-4 # learning_rate / 10 usually
+beta2 = 0.99 # make a bit bigger because number of tokens per iter is small
+
+warmup_iters = 100 # not super necessary potentially
+
+# on macbook also add
+# device = 'cpu'  # run on cpu only
+# compile = False # do not torch compile the model
+
+Overriding: max_iters = 1
+Overriding: compile = False
+Overriding: n_layer = 24
+Overriding: n_head = 16
+Overriding: n_embd = 1024
+Overriding: batch_size = 64
+Overriding: block_size = 512
+Overriding: dtype = float32
+Overriding: eval_iters = 2
+tokens per iteration will be: 32,768
+found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
+Initializing a new model from scratch
+number of parameters: 302.11M
+======================================================================
+[WRAPPER] Training FAILED with error in 20.0s
+[WRAPPER] Error type: RuntimeError
+[WRAPPER] Error message: CUDA out of memory. Tried to allocate 1154.45 MiB during GPT.to(cuda). FakeGPU limit is 1024.00 MiB, 0.00 MiB already reserved.
+[WRAPPER] Result: FAIL
+Traceback (most recent call last):
+  File "/Users/l1ght/repos/FakeGPU/test/real_scene/nanoGPT/train_wrapper.py", line 443, in main
+    exec(code, exec_globals, exec_globals)
+  File "/Users/l1ght/repos/FakeGPU/test/real_scene/nanoGPT/train.py", line 193, in <module>
+    model.to(device)
+  File "/Users/l1ght/repos/FakeGPU/test/real_scene/nanoGPT/train_wrapper.py", line 244, in limited_module_to
+    limiter.reserve_bytes(_module_nbytes(self), context=f"{type(self).__name__}.to(cuda)")
+  File "/Users/l1ght/repos/FakeGPU/test/real_scene/nanoGPT/train_wrapper.py", line 98, in reserve_bytes
+    raise RuntimeError(
+RuntimeError: CUDA out of memory. Tried to allocate 1154.45 MiB during GPT.to(cuda). FakeGPU limit is 1024.00 MiB, 0.00 MiB already reserved.
+======================================================================

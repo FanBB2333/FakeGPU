@@ -19,6 +19,7 @@
 [WRAPPER] Device 6: Fake NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
 [WRAPPER] Device 7: Fake NVIDIA A100-SXM4-80GB, Memory: 80.0 GiB
 ======================================================================
+[WRAPPER] Effective train args: ['config/train_shakespeare_char.py', '--max_iters=20', '--log_interval=1', '--compile=False', '--device=cuda']
 Overriding config with config/train_shakespeare_char.py:
 # train a miniature character-level shakespeare model
 # good for debugging and playing on macbooks and such
@@ -71,52 +72,29 @@ number of parameters: 10.65M
 num decayed parameter tensors: 26, with 10,740,096 parameters
 num non-decayed parameter tensors: 13, with 4,992 parameters
 using fused AdamW: True
+step 0: train loss 0.0000, val loss 0.0000
+iter 0: loss 0.0000, time 19377.86ms, mfu -100.00%
+iter 1: loss 0.0000, time 236.67ms, mfu -100.00%
+iter 2: loss 0.0000, time 288.04ms, mfu -100.00%
+iter 3: loss 0.0000, time 95.16ms, mfu -100.00%
+iter 4: loss 0.0000, time 100.05ms, mfu -100.00%
+iter 5: loss 0.0000, time 84.64ms, mfu 4.40%
+iter 6: loss 0.0000, time 81.09ms, mfu 4.42%
+iter 7: loss 0.0000, time 79.12ms, mfu 4.45%
+iter 8: loss 0.0000, time 86.68ms, mfu 4.44%
+iter 9: loss 0.0000, time 92.97ms, mfu 4.39%
+iter 10: loss 0.0000, time 80.32ms, mfu 4.42%
+iter 11: loss 0.0000, time 81.48ms, mfu 4.43%
+iter 12: loss 0.0000, time 83.40ms, mfu 4.44%
+iter 13: loss 0.0000, time 87.42ms, mfu 4.42%
+iter 14: loss 0.0000, time 80.59ms, mfu 4.44%
+iter 15: loss 0.0000, time 82.46ms, mfu 4.45%
+iter 16: loss 0.0000, time 83.66ms, mfu 4.45%
+iter 17: loss 0.0000, time 82.56ms, mfu 4.45%
+iter 18: loss 0.0000, time 82.80ms, mfu 4.46%
+iter 19: loss 0.0000, time 86.00ms, mfu 4.45%
+iter 20: loss 0.0000, time 92.93ms, mfu 4.40%
 ======================================================================
-[WRAPPER] Training FAILED with error in 0.8s
-[WRAPPER] Error type: RuntimeError
-[WRAPPER] Error message: M should be less than maximum CUDA grid size,   file a support request to support bigger batches
-[WRAPPER] Result: FAIL
-Traceback (most recent call last):
-  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/train_wrapper.py", line 209, in main
-    exec(code, exec_globals, exec_globals)
-  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/train.py", line 264, in <module>
-    losses = estimate_loss()
-             ^^^^^^^^^^^^^^^
-  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/train.py", line 224, in estimate_loss
-    logits, loss = model(X, Y)
-                   ^^^^^^^^^^^
-  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/model.py", line 181, in forward
-    x = block(x)
-        ^^^^^^^^
-  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/model.py", line 104, in forward
-    x = x + self.attn(self.ln_1(x))
-                      ^^^^^^^^^^^^
-  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/l1ght/repos/fakeGPU/test/real_scene/nanoGPT/model.py", line 27, in forward
-    return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/l1ght/anaconda3/envs/fakegpu/lib/python3.12/site-packages/torch/nn/functional.py", line 2901, in layer_norm
-    return torch.layer_norm(
-           ^^^^^^^^^^^^^^^^^
-RuntimeError: M should be less than maximum CUDA grid size,   file a support request to support bigger batches
+[WRAPPER] Training completed successfully in 22.4s
+[WRAPPER] Result: PASS
 ======================================================================
