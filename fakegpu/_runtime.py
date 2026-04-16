@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 from dataclasses import dataclass
@@ -105,6 +106,15 @@ def init_privateuse1() -> None:
 def _detect_custom_torch_fakegpu_available() -> bool:
     if "torch.fakegpu" in sys.modules:
         return True
+
+    try:
+        if importlib.util.find_spec("torch.fakegpu") is not None:
+            return True
+    except Exception:
+        # Editable installs can expose torch.fakegpu via an import hook instead of
+        # a plain sys.path entry. If importlib probing fails because of a shadowed
+        # torch module or partial install, fall back to the path scan below.
+        pass
 
     for entry in sys.path:
         search_root = Path(entry or os.getcwd())
