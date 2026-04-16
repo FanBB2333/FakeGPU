@@ -22,6 +22,15 @@ nvmlReturn_t nvmlDeviceGetBoardPartNumber(nvmlDevice_t device, char *partNumber,
 }
 
 namespace {
+bool g_report_dump_registered = false;
+
+void ensure_report_dump_registered() {
+    if (!g_report_dump_registered) {
+        std::atexit(fake_gpu::dump_monitor_report);
+        g_report_dump_registered = true;
+    }
+}
+
 // Export table layout expected by the nvidia-smi build shipped alongside driver 570.195.03.
 // The table size (0x858) is discovered by observing the system NVML export table and is used
 // as a feature probe by nvidia-smi before it falls back to the public entry points.
@@ -74,6 +83,7 @@ const char driver_version_string[] = "570.195.03";
 
 // Helper to check init
 static bool check_init() {
+    ensure_report_dump_registered();
     // In a real implementation we would check a flag, but GlobalState handles itself
     return true; 
 }

@@ -53,6 +53,30 @@ private:
         return a + b;
     }
 
+    static bool snapshot_has_meaningful_activity(
+        const std::vector<DeviceReportStats>& devices,
+        const HostIoStats& host_io) {
+        if (host_io.memcpy_calls > 0 || host_io.memcpy_bytes > 0) {
+            return true;
+        }
+
+        for (const auto& dev : devices) {
+            if (dev.used_memory_current > 0 || dev.used_memory_peak > 0) return true;
+            if (dev.alloc_calls > 0 || dev.alloc_bytes > 0) return true;
+            if (dev.free_calls > 0 || dev.free_bytes > 0) return true;
+            if (dev.memcpy_h2d_calls > 0 || dev.memcpy_h2d_bytes > 0) return true;
+            if (dev.memcpy_d2h_calls > 0 || dev.memcpy_d2h_bytes > 0) return true;
+            if (dev.memcpy_d2d_calls > 0 || dev.memcpy_d2d_bytes > 0) return true;
+            if (dev.memcpy_peer_tx_calls > 0 || dev.memcpy_peer_tx_bytes > 0) return true;
+            if (dev.memcpy_peer_rx_calls > 0 || dev.memcpy_peer_rx_bytes > 0) return true;
+            if (dev.memset_calls > 0 || dev.memset_bytes > 0) return true;
+            if (dev.cublas_gemm_calls > 0 || dev.cublas_gemm_flops > 0) return true;
+            if (dev.cublaslt_matmul_calls > 0 || dev.cublaslt_matmul_flops > 0) return true;
+        }
+
+        return false;
+    }
+
     static std::string node_name_for_rank(
         const distributed::ClusterConfigModel& config,
         int rank) {
@@ -206,6 +230,14 @@ private:
             HostIoStats host_io = gs.snapshot_host_io();
             const int count = static_cast<int>(devices.size());
             FGPU_LOG("[Monitor] Dumping report to %s. GlobalState Addr: %p, Device Count: %d\n", report_path, (void*)&gs, count);
+
+            if (!snapshot_has_meaningful_activity(devices, host_io)) {
+                std::ifstream existing_report(report_path);
+                if (existing_report.good()) {
+                    FGPU_LOG("[Monitor] Skipping report overwrite for %s because this library instance has no activity\n", report_path);
+                    return;
+                }
+            }
 
             FILE* out = fopen(report_path, "w");
             if (!out) {

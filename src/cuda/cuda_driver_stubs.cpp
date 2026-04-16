@@ -18,6 +18,175 @@ static int current_context_device = 0;
 static bool driver_initialized = false;
 
 namespace {
+bool g_report_dump_registered = false;
+
+uint64_t saturating_add_u64(uint64_t a, uint64_t b) {
+    const uint64_t max_value = std::numeric_limits<uint64_t>::max();
+    if (a >= max_value - b) return max_value;
+    return a + b;
+}
+
+void dump_active_cuda_report() {
+    const char* report_path = std::getenv("FAKEGPU_REPORT_PATH");
+    if (!report_path || !*report_path) {
+        report_path = "fake_gpu_report.json";
+    }
+
+    fake_gpu::GlobalState& gs = fake_gpu::GlobalState::instance();
+    std::vector<fake_gpu::DeviceReportStats> devices = gs.snapshot_device_report();
+    fake_gpu::HostIoStats host_io = gs.snapshot_host_io();
+    if (devices.empty()) {
+        FILE* existing = std::fopen(report_path, "r");
+        if (existing) {
+            std::fclose(existing);
+        }
+        return;
+    }
+
+    uint64_t total_alloc_bytes = 0;
+    uint64_t total_free_bytes = 0;
+    uint64_t total_h2d_bytes = 0;
+    uint64_t total_d2h_bytes = 0;
+    uint64_t total_d2d_bytes = 0;
+    uint64_t total_peer_tx_bytes = 0;
+    uint64_t total_peer_rx_bytes = 0;
+    uint64_t total_memset_bytes = 0;
+    uint64_t total_cublas_gemm_flops = 0;
+    uint64_t total_cublaslt_matmul_flops = 0;
+
+    uint64_t total_alloc_calls = 0;
+    uint64_t total_free_calls = 0;
+    uint64_t total_h2d_calls = 0;
+    uint64_t total_d2h_calls = 0;
+    uint64_t total_d2d_calls = 0;
+    uint64_t total_peer_tx_calls = 0;
+    uint64_t total_peer_rx_calls = 0;
+    uint64_t total_memset_calls = 0;
+    uint64_t total_cublas_gemm_calls = 0;
+    uint64_t total_cublaslt_matmul_calls = 0;
+
+    for (const auto& dev : devices) {
+        total_alloc_bytes = saturating_add_u64(total_alloc_bytes, dev.alloc_bytes);
+        total_free_bytes = saturating_add_u64(total_free_bytes, dev.free_bytes);
+        total_h2d_bytes = saturating_add_u64(total_h2d_bytes, dev.memcpy_h2d_bytes);
+        total_d2h_bytes = saturating_add_u64(total_d2h_bytes, dev.memcpy_d2h_bytes);
+        total_d2d_bytes = saturating_add_u64(total_d2d_bytes, dev.memcpy_d2d_bytes);
+        total_peer_tx_bytes = saturating_add_u64(total_peer_tx_bytes, dev.memcpy_peer_tx_bytes);
+        total_peer_rx_bytes = saturating_add_u64(total_peer_rx_bytes, dev.memcpy_peer_rx_bytes);
+        total_memset_bytes = saturating_add_u64(total_memset_bytes, dev.memset_bytes);
+        total_cublas_gemm_flops = saturating_add_u64(total_cublas_gemm_flops, dev.cublas_gemm_flops);
+        total_cublaslt_matmul_flops = saturating_add_u64(total_cublaslt_matmul_flops, dev.cublaslt_matmul_flops);
+
+        total_alloc_calls = saturating_add_u64(total_alloc_calls, dev.alloc_calls);
+        total_free_calls = saturating_add_u64(total_free_calls, dev.free_calls);
+        total_h2d_calls = saturating_add_u64(total_h2d_calls, dev.memcpy_h2d_calls);
+        total_d2h_calls = saturating_add_u64(total_d2h_calls, dev.memcpy_d2h_calls);
+        total_d2d_calls = saturating_add_u64(total_d2d_calls, dev.memcpy_d2d_calls);
+        total_peer_tx_calls = saturating_add_u64(total_peer_tx_calls, dev.memcpy_peer_tx_calls);
+        total_peer_rx_calls = saturating_add_u64(total_peer_rx_calls, dev.memcpy_peer_rx_calls);
+        total_memset_calls = saturating_add_u64(total_memset_calls, dev.memset_calls);
+        total_cublas_gemm_calls = saturating_add_u64(total_cublas_gemm_calls, dev.cublas_gemm_calls);
+        total_cublaslt_matmul_calls = saturating_add_u64(total_cublaslt_matmul_calls, dev.cublaslt_matmul_calls);
+    }
+
+    FILE* out = std::fopen(report_path, "w");
+    if (!out) return;
+
+    const fake_gpu::BackendConfig& config = fake_gpu::BackendConfig::instance();
+
+    std::fprintf(out, "{\n");
+    std::fprintf(out, "  \"report_version\": 3,\n");
+    std::fprintf(out, "  \"mode\": \"%s\",\n", fake_gpu::mode_name(config.mode()));
+    std::fprintf(out, "  \"host_io\": {\n");
+    std::fprintf(out, "    \"memcpy_calls\": %llu,\n", (unsigned long long)host_io.memcpy_calls);
+    std::fprintf(out, "    \"memcpy_bytes\": %llu\n", (unsigned long long)host_io.memcpy_bytes);
+    std::fprintf(out, "  },\n");
+    std::fprintf(out, "  \"summary\": {\n");
+    std::fprintf(out, "    \"device_count\": %llu,\n", (unsigned long long)devices.size());
+    std::fprintf(out, "    \"alloc\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)total_alloc_calls, (unsigned long long)total_alloc_bytes);
+    std::fprintf(out, "    \"free\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)total_free_calls, (unsigned long long)total_free_bytes);
+    std::fprintf(out, "    \"io\": {\n");
+    std::fprintf(out, "      \"h2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)total_h2d_calls, (unsigned long long)total_h2d_bytes);
+    std::fprintf(out, "      \"d2h\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)total_d2h_calls, (unsigned long long)total_d2h_bytes);
+    std::fprintf(out, "      \"d2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)total_d2d_calls, (unsigned long long)total_d2d_bytes);
+    std::fprintf(out, "      \"peer_tx\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)total_peer_tx_calls, (unsigned long long)total_peer_tx_bytes);
+    std::fprintf(out, "      \"peer_rx\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                 (unsigned long long)total_peer_rx_calls, (unsigned long long)total_peer_rx_bytes);
+    std::fprintf(out, "      \"memset\": {\"calls\": %llu, \"bytes\": %llu}\n",
+                 (unsigned long long)total_memset_calls, (unsigned long long)total_memset_bytes);
+    std::fprintf(out, "    },\n");
+    std::fprintf(out, "    \"compute\": {\n");
+    std::fprintf(out, "      \"cublas_gemm\": {\"calls\": %llu, \"flops\": %llu},\n",
+                 (unsigned long long)total_cublas_gemm_calls, (unsigned long long)total_cublas_gemm_flops);
+    std::fprintf(out, "      \"cublaslt_matmul\": {\"calls\": %llu, \"flops\": %llu}\n",
+                 (unsigned long long)total_cublaslt_matmul_calls, (unsigned long long)total_cublaslt_matmul_flops);
+    std::fprintf(out, "    }\n");
+    std::fprintf(out, "  },\n");
+    std::fprintf(out, "  \"devices\": [\n");
+
+    for (size_t i = 0; i < devices.size(); ++i) {
+        const auto& dev = devices[i];
+        const uint64_t device_total_io_bytes = saturating_add_u64(
+            saturating_add_u64(
+                saturating_add_u64(dev.memcpy_h2d_bytes, dev.memcpy_d2h_bytes),
+                saturating_add_u64(dev.memcpy_d2d_bytes, dev.memcpy_peer_tx_bytes)),
+            saturating_add_u64(dev.memcpy_peer_rx_bytes, dev.memset_bytes));
+        const uint64_t device_total_flops =
+            saturating_add_u64(dev.cublas_gemm_flops, dev.cublaslt_matmul_flops);
+
+        std::fprintf(out, "    {\n");
+        std::fprintf(out, "      \"index\": %d,\n", dev.index);
+        std::fprintf(out, "      \"name\": \"%s\",\n", dev.name.c_str());
+        std::fprintf(out, "      \"uuid\": \"%s\",\n", dev.uuid.c_str());
+        std::fprintf(out, "      \"total_memory\": %llu,\n", (unsigned long long)dev.total_memory);
+        std::fprintf(out, "      \"used_memory_peak\": %llu,\n", (unsigned long long)dev.used_memory_peak);
+        std::fprintf(out, "      \"used_memory_current\": %llu,\n", (unsigned long long)dev.used_memory_current);
+        std::fprintf(out, "      \"alloc\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                     (unsigned long long)dev.alloc_calls, (unsigned long long)dev.alloc_bytes);
+        std::fprintf(out, "      \"free\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                     (unsigned long long)dev.free_calls, (unsigned long long)dev.free_bytes);
+        std::fprintf(out, "      \"io\": {\n");
+        std::fprintf(out, "        \"h2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                     (unsigned long long)dev.memcpy_h2d_calls, (unsigned long long)dev.memcpy_h2d_bytes);
+        std::fprintf(out, "        \"d2h\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                     (unsigned long long)dev.memcpy_d2h_calls, (unsigned long long)dev.memcpy_d2h_bytes);
+        std::fprintf(out, "        \"d2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                     (unsigned long long)dev.memcpy_d2d_calls, (unsigned long long)dev.memcpy_d2d_bytes);
+        std::fprintf(out, "        \"peer_tx\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                     (unsigned long long)dev.memcpy_peer_tx_calls, (unsigned long long)dev.memcpy_peer_tx_bytes);
+        std::fprintf(out, "        \"peer_rx\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                     (unsigned long long)dev.memcpy_peer_rx_calls, (unsigned long long)dev.memcpy_peer_rx_bytes);
+        std::fprintf(out, "        \"memset\": {\"calls\": %llu, \"bytes\": %llu},\n",
+                     (unsigned long long)dev.memset_calls, (unsigned long long)dev.memset_bytes);
+        std::fprintf(out, "        \"total_bytes\": %llu\n", (unsigned long long)device_total_io_bytes);
+        std::fprintf(out, "      },\n");
+        std::fprintf(out, "      \"compute\": {\n");
+        std::fprintf(out, "        \"cublas_gemm\": {\"calls\": %llu, \"flops\": %llu},\n",
+                     (unsigned long long)dev.cublas_gemm_calls, (unsigned long long)dev.cublas_gemm_flops);
+        std::fprintf(out, "        \"cublaslt_matmul\": {\"calls\": %llu, \"flops\": %llu},\n",
+                     (unsigned long long)dev.cublaslt_matmul_calls, (unsigned long long)dev.cublaslt_matmul_flops);
+        std::fprintf(out, "        \"total_flops\": %llu\n", (unsigned long long)device_total_flops);
+        std::fprintf(out, "      }\n");
+        std::fprintf(out, "    }%s\n", (i + 1 < devices.size() ? "," : ""));
+    }
+
+    std::fprintf(out, "  ]\n");
+    std::fprintf(out, "}\n");
+    std::fclose(out);
+}
+
+void ensure_report_dump_registered() {
+    if (!g_report_dump_registered) {
+        std::atexit(dump_active_cuda_report);
+        g_report_dump_registered = true;
+    }
+}
 
 bool real_driver_available() {
     const BackendConfig& config = BackendConfig::instance();
@@ -383,6 +552,7 @@ CUresult cuDriverGetVersion(int *driverVersion) {
 
 CUresult cuDeviceGetCount(int *count) {
     if (!count) return CUDA_ERROR_INVALID_VALUE;
+    ensure_report_dump_registered();
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
@@ -397,6 +567,7 @@ CUresult cuDeviceGetCount(int *count) {
 
 CUresult cuDeviceGet(CUdevice *device, int ordinal) {
     if (!device) return CUDA_ERROR_INVALID_VALUE;
+    ensure_report_dump_registered();
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
@@ -416,6 +587,7 @@ CUresult cuDeviceGet(CUdevice *device, int ordinal) {
 
 CUresult cuDeviceGetName(char *name, int len, CUdevice dev) {
     if (!name || len <= 0) return CUDA_ERROR_INVALID_VALUE;
+    ensure_report_dump_registered();
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
@@ -1584,6 +1756,7 @@ CUresult cuCtxGetApiVersion(CUcontext ctx, unsigned int *version) {
 
 // Memory info
 CUresult cuMemGetInfo(size_t *free, size_t *total) {
+    ensure_report_dump_registered();
     const BackendConfig& config = BackendConfig::instance();
 
     if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
