@@ -57,7 +57,7 @@ _PROFILE_NAMES: dict[str, str] = {
     "t4": "Tesla T4",
     "a40": "NVIDIA A40",
     "a100": "NVIDIA A100-SXM4-80GB",
-    "a100-1g": "NVIDIA A100-SXM4-80GB",
+    "a100-1g": "NVIDIA A100-SXM4-1GB",
     "h100": "NVIDIA H100 80GB HBM3",
     "l40s": "NVIDIA L40S",
     "b100": "NVIDIA B100",
@@ -71,7 +71,7 @@ _PROFILE_TOTAL_MEMORY: dict[str, int] = {
     "t4": 16 * 1024**3,
     "a40": 48 * 1024**3,
     "a100": 80 * 1024**3,
-    "a100-1g": 80 * 1024**3,
+    "a100-1g": 1 * 1024**3,
     "h100": 80 * 1024**3,
     "l40s": 48 * 1024**3,
     "b100": 192 * 1024**3,
@@ -121,13 +121,14 @@ def _resolve_total_memory() -> int:
     return 80 * 1024**3
 
 
-def _resolve_per_device_profiles() -> list[dict[str, Any]]:
+def _resolve_per_device_profiles(num_devices: int | None = None) -> list[dict[str, Any]]:
     """Resolve per-device profile info from FAKEGPU_PROFILES.
 
     Returns a list of dicts, one per device, each with keys:
       'profile_id', 'name', 'total_memory', 'compute_major', 'compute_minor'
     """
     profiles_env = os.environ.get("FAKEGPU_PROFILES", "")
+    target_count = int(num_devices if num_devices is not None else os.environ.get("FAKEGPU_DEVICE_COUNT", "8"))
     result: list[dict[str, Any]] = []
 
     if profiles_env:
@@ -159,28 +160,48 @@ def _resolve_per_device_profiles() -> list[dict[str, Any]]:
             "compute_major": cc[0],
             "compute_minor": cc[1],
         }
-        # Will be padded/truncated to _NUM_DEVICES below
-        for _ in range(int(os.environ.get("FAKEGPU_DEVICE_COUNT", "8"))):
+        for _ in range(target_count):
             result.append(dict(entry))
+
+    if len(result) != target_count and len(result) > 0:
+        while len(result) < target_count:
+            result.append(dict(result[-1]))
+        result = result[:target_count]
 
     return result
 
 
 _NUM_DEVICES = int(os.environ.get("FAKEGPU_DEVICE_COUNT", "8"))
-_DEVICE_PROFILES: list[dict[str, Any]] = _resolve_per_device_profiles()
-# If FAKEGPU_DEVICE_COUNT overrides the profile count, adjust
-if len(_DEVICE_PROFILES) != _NUM_DEVICES:
-    if len(_DEVICE_PROFILES) > 0:
-        # Pad or truncate to match _NUM_DEVICES
-        while len(_DEVICE_PROFILES) < _NUM_DEVICES:
-            _DEVICE_PROFILES.append(dict(_DEVICE_PROFILES[-1]))
-        _DEVICE_PROFILES = _DEVICE_PROFILES[:_NUM_DEVICES]
+_DEVICE_PROFILES: list[dict[str, Any]] = _resolve_per_device_profiles(_NUM_DEVICES)
 
 _DEVICE_NAME = _resolve_device_name()
 _COMPUTE_MAJOR, _COMPUTE_MINOR = _resolve_compute_capability()
 _TOTAL_MEMORY = _resolve_total_memory()
 
 _current_device: int = 0
+
+
+def _refresh_runtime_profile_state(*, num_devices: int | None = None, device_name: str | None = None) -> None:
+    """Refresh per-device profile globals after runtime options change."""
+    global _NUM_DEVICES, _DEVICE_PROFILES, _DEVICE_NAME, _COMPUTE_MAJOR, _COMPUTE_MINOR, _TOTAL_MEMORY
+
+    if num_devices is not None:
+        _NUM_DEVICES = int(num_devices)
+        os.environ["FAKEGPU_DEVICE_COUNT"] = str(_NUM_DEVICES)
+
+    _DEVICE_PROFILES = _resolve_per_device_profiles(_NUM_DEVICES)
+
+    if _DEVICE_PROFILES:
+        first = _DEVICE_PROFILES[0]
+        _COMPUTE_MAJOR = int(first.get("compute_major", 8))
+        _COMPUTE_MINOR = int(first.get("compute_minor", 0))
+        _TOTAL_MEMORY = int(first.get("total_memory", 80 * 1024**3))
+        if device_name is None:
+            _DEVICE_NAME = str(first.get("name", _resolve_device_name()))
+        else:
+            _DEVICE_NAME = device_name
+    elif device_name is not None:
+        _DEVICE_NAME = device_name
 
 # ---------------------------------------------------------------------------
 # Device registry: tracks which fake CUDA device each tensor lives on.
@@ -1107,10 +1128,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     import torch.cuda
     import torch.nn
 
-    if num_devices is not None:
-        _NUM_DEVICES = num_devices
-    if device_name is not None:
-        _DEVICE_NAME = device_name
+    _refresh_runtime_profile_state(num_devices=num_devices, device_name=device_name)
 
     if _maybe_enable_custom_torch_fakegpu(
         torch,

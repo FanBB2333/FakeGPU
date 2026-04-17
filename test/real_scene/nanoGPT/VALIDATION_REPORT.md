@@ -126,6 +126,20 @@
   - The wrapper now injects `--dtype=float32`, `--eval_iters=2`, `--batch_size=8`, and `--block_size=64` for full fakecuda runs unless the caller overrides them.
   - With those defaults, the remote Linux full path completes the full 20-iteration validation run.
 
+## torch_patch Summary Proof (2026-04-17)
+
+Detailed artifact: `test/real_scene/nanoGPT/TORCH_PATCH_PROOF.md`
+
+- Additional proof experiments now distinguish between:
+  - **weight/storage-tracking behavior** in the CPU-backed `torch_patch` fakecuda path; and
+  - **true training-peak memory**, which is still out of scope for the current tracker.
+- Key validated outcomes:
+  - The existing small MoE training case remains consistent with model size: ~2.41M params maps to ~9.2 MB peak.
+  - A 520.22M-parameter MoE load-only probe reports a 1.94 GiB peak, matching fp32 parameter bytes.
+  - A 1001.61M-parameter MoE load-only probe reports a 3.73 GiB peak, showing the summary scales correctly for larger models.
+  - An elementwise-add scope probe keeps tracked memory flat at 8.0 MB after `x + y`, confirming that most op-produced activations are not yet counted.
+  - Pure `torch_patch` fakecuda now honors the `a100-1g` profile directly: the same 1.0B MoE probe reports 1.00 GiB total memory, keeps device/profile counts synchronized, and raises `OutOfMemoryError` without relying on the wrapper's separate limiter.
+
 ## Analysis & Conclusions
 
 ### macOS

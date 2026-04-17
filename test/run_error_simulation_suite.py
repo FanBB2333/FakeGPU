@@ -8,6 +8,7 @@ Usage:
     python test/run_error_simulation_suite.py [--output test/report.html]
 """
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -230,6 +231,57 @@ def _build_phase4_rows(suites: list[SuiteResult]) -> str:
     return "\n".join(parts)
 
 
+_PROOF_RESULTS_PATH = Path(__file__).resolve().parent / "real_scene" / "nanoGPT" / "torch_patch_proof_results.json"
+
+
+def _load_phase3_proof_results() -> list[dict]:
+    if not _PROOF_RESULTS_PATH.exists():
+        return []
+    try:
+        payload = json.loads(_PROOF_RESULTS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    results = payload.get("results", [])
+    return results if isinstance(results, list) else []
+
+
+def _build_phase3_proof_rows(results: list[dict]) -> str:
+    parts: list[str] = []
+    for result in results:
+        status = str(result.get("status", "pass"))
+        badge_cls = "pass" if status == "pass" else "fail"
+        excerpt = str(result.get("excerpt", ""))
+        esc_excerpt = excerpt.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        note = str(result.get("note", ""))
+        esc_note = note.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        detail = f"<pre>{esc_excerpt}</pre>"
+        if note:
+            detail += f'<div class="note">{esc_note}</div>'
+
+        summary = result.get("summary")
+        if summary:
+            summary_html = _format_summary_html(str(summary))
+            detail += (
+                '<div style="margin-top:8px">'
+                '<strong style="font-size:11px;color:var(--ink-soft);">'
+                'FakeGPU Report Summary</strong>'
+                f'<div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;">'
+                f"{summary_html}</div></div>"
+            )
+
+        parts.append(
+            f"""
+        <div class="row {badge_cls}" onclick="this.classList.toggle('open')">
+          <div class="id">{result.get("id", "P3-X")}</div>
+          <div class="info"><div class="title">{result.get("title", "Phase-3 Proof Experiment")}</div><div class="desc">{result.get("description", "")}</div></div>
+          <div class="badge {badge_cls}">{status.upper()}</div>
+          <div class="detail">{detail}</div>
+        </div>"""
+        )
+    return "\n".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Unified HTML generation
 # ---------------------------------------------------------------------------
@@ -238,17 +290,22 @@ def generate_unified_html(
     suites: list[SuiteResult],
     output_path: str,
 ) -> None:
+    phase3_proof_results = _load_phase3_proof_results()
+    phase3_proof_rows = _build_phase3_proof_rows(phase3_proof_results)
+    phase3_proof_pass = sum(1 for item in phase3_proof_results if item.get("status") == "pass")
+    phase3_proof_fail = sum(1 for item in phase3_proof_results if item.get("status") != "pass")
+
     p4_pass = sum(s.passed for s in suites)
     p4_fail = sum(s.failed for s in suites)
     p4_total = sum(s.total for s in suites)
 
     # Phase 1-3 static counts
-    p123_total = 10
-    p123_pass = 10
+    p123_total = 10 + len(phase3_proof_results)
+    p123_pass = 10 + phase3_proof_pass
 
     all_total = p123_total + p4_total
     all_pass = p123_pass + p4_pass
-    all_fail = 0 + p4_fail
+    all_fail = phase3_proof_fail + p4_fail
 
     p4_rows = _build_phase4_rows(suites)
 
@@ -749,8 +806,8 @@ def generate_unified_html(
       <div class="phase-banner p3">
         <div class="phase-num">P3</div>
         <div class="phase-info">
-          <div class="ptitle">MoE-GPT Model &middot; EP Training Script &middot; Homo/Hetero Configs &middot; train_wrapper --model moe</div>
-          <div class="pdesc">Standard Mixture-of-Experts GPT model with Router (top-k gating), Expert Parallelism via all_to_all, and two FakeGPU configurations.</div>
+          <div class="ptitle">MoE-GPT Model &middot; EP Training Script &middot; Homo/Hetero Configs &middot; train_wrapper --model moe &middot; torch_patch Proof Experiments</div>
+          <div class="pdesc">Standard Mixture-of-Experts GPT model with Router (top-k gating), Expert Parallelism via all_to_all, plus proof experiments that separate weight-tracking behavior from full training-peak expectations.</div>
         </div>
       </div>
       <div class="results">
@@ -833,6 +890,7 @@ MoEGPT model: 2.40M parameters, 4 experts, top-2
             </div></div>
           </div>
         </div>
+{phase3_proof_rows}
       </div>
     </section>
   </div>
@@ -874,7 +932,7 @@ MoEGPT model: 2.40M parameters, 4 experts, top-2
         <ul>
           <li>P1: Report v1.5.0 + terminal summary</li>
           <li>P2: HW compat strict/relaxed</li>
-          <li>P3: MoE model + training</li>
+          <li>P3: MoE model + training + summary proof experiments</li>
           <li>P4: {p4_pass}/{p4_total} error simulations</li>
         </ul>
       </div>
@@ -894,6 +952,7 @@ MoEGPT model: 2.40M parameters, 4 experts, top-2
         <ul>
           <li>No actual GPU computation; kernels are no-ops</li>
           <li><code>tensor.device</code> reports <code>cpu</code></li>
+          <li>fakecuda terminal summary is currently weight/storage-focused; most op-produced activations are not tracked</li>
           <li>E6 (distributed) not yet implemented</li>
           <li>macOS: all tests use CPU backend</li>
         </ul>
