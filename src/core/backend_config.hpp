@@ -59,6 +59,8 @@ public:
         return mode_ == FakeGpuMode::Passthrough || mode_ == FakeGpuMode::Hybrid;
     }
 
+    bool strict_compat() const { return strict_compat_; }
+
     // For testing: allow mode override
     void set_mode(FakeGpuMode mode) { mode_ = mode; }
     void set_oom_policy(OomPolicy policy) { oom_policy_ = policy; }
@@ -101,6 +103,10 @@ private:
         distributed_config_ = distributed::parse_distributed_config_from_env();
         if (!distributed_config_.valid()) {
             configuration_error_ = distributed_config_.validation_error;
+        }
+
+        if (const char* strict_env = std::getenv("FAKEGPU_STRICT_COMPAT")) {
+            strict_compat_ = std::string(strict_env) != "0";
         }
 
         // Try to find real library paths
@@ -225,6 +231,7 @@ private:
     std::string real_nvml_path_;
     distributed::DistributedConfig distributed_config_;
     std::string configuration_error_;
+    bool strict_compat_ = true;
 };
 
 // Helper function to get mode name

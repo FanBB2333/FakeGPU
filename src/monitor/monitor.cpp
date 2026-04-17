@@ -73,6 +73,7 @@ private:
             if (dev.cublas_gemm_calls > 0 || dev.cublas_gemm_flops > 0) return true;
             if (dev.cublaslt_matmul_calls > 0 || dev.cublaslt_matmul_flops > 0) return true;
             if (dev.kernel_launch_total > 0) return true;
+            if (!dev.compat_events.empty()) return true;
         }
 
         return false;
@@ -299,6 +300,15 @@ private:
                              fmt_bytes(dev.memcpy_h2d_bytes).c_str(),
                              fmt_bytes(dev.memcpy_d2h_bytes).c_str(),
                              fmt_bytes(dev.memcpy_d2d_bytes).c_str());
+            }
+
+            if (!dev.compat_events.empty()) {
+                std::fprintf(stderr, "   COMPAT WARNINGS:");
+                for (const auto& [op, dtype, count] : dev.compat_events) {
+                    std::fprintf(stderr, " %s(%s)x%llu",
+                                 op.c_str(), dtype.c_str(), (unsigned long long)count);
+                }
+                std::fprintf(stderr, "\n");
             }
 
             std::fprintf(stderr, "------------------------------------------------------\n");
@@ -553,6 +563,19 @@ private:
                     fprintf(out, "      }\n");
                 } else {
                     fprintf(out, "}\n");
+                }
+
+                if (!dev.compat_events.empty()) {
+                    fprintf(out, "      ,\"compatibility_events\": [\n");
+                    for (size_t ci = 0; ci < dev.compat_events.size(); ++ci) {
+                        const auto& [op, dtype, count] = dev.compat_events[ci];
+                        fprintf(out, "        {\"operation\": \"%s\", \"dtype\": \"%s\", \"count\": %llu}%s\n",
+                                op.c_str(),
+                                dtype.c_str(),
+                                (unsigned long long)count,
+                                (ci + 1 < dev.compat_events.size() ? "," : ""));
+                    }
+                    fprintf(out, "      ]\n");
                 }
 
                 fprintf(out, "    }%s\n", (i < count - 1 ? "," : ""));

@@ -392,6 +392,19 @@ void GlobalState::record_cublaslt_matmul_typed(const void* output_device_ptr, ui
     saturating_add_u64(dtype_stats.flops, flops);
 }
 
+void GlobalState::record_compat_event(int device, const std::string& operation, const std::string& dtype) {
+    std::lock_guard<std::mutex> lock(mutex);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    if (!stats) return;
+    const std::string key = operation + ":" + dtype;
+    auto& evt = stats->compat_events[key];
+    if (evt.count == 0) {
+        evt.operation = operation;
+        evt.dtype = dtype;
+    }
+    evt.count += 1;
+}
+
 std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
     std::lock_guard<std::mutex> lock(mutex);
     std::vector<DeviceReportStats> snapshot;
@@ -442,6 +455,9 @@ std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
                     dtype_stats.calls,
                     dtype_stats.flops,
                 };
+            }
+            for (const auto& [key, evt] : stats.compat_events) {
+                entry.compat_events.emplace_back(evt.operation, evt.dtype, evt.count);
             }
         }
 

@@ -157,6 +157,10 @@ std::vector<std::string> builtin_profile_ids();
 // Returns nullopt if the ID is unknown.
 std::optional<GpuProfile> profile_from_preset_id(const std::string& id);
 
+// Map a cudaDataType_t integer value to the corresponding GPU capability type.
+// Returns nullopt for types that do not participate in hardware compatibility checks.
+std::optional<GpuDataType> cuda_dtype_to_gpu_dtype(int cuda_data_type);
+
 const char* to_string(GpuArch arch);
 const char* to_string(GpuDataType type);
 

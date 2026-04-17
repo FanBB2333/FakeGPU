@@ -77,6 +77,14 @@ void dump_terminal_summary(const std::vector<fake_gpu::DeviceReportStats>& devic
         if (dev.kernel_launch_total > 0) {
             std::fprintf(stderr, "   Kernels: %llu total\n", (unsigned long long)dev.kernel_launch_total);
         }
+        if (!dev.compat_events.empty()) {
+            std::fprintf(stderr, "   COMPAT WARNINGS:");
+            for (const auto& [op, dtype, count] : dev.compat_events) {
+                std::fprintf(stderr, " %s(%s)x%llu",
+                             op.c_str(), dtype.c_str(), (unsigned long long)count);
+            }
+            std::fprintf(stderr, "\n");
+        }
         std::fprintf(stderr, "------------------------------------------------------\n");
     }
 
@@ -280,6 +288,18 @@ void dump_active_cuda_report() {
             std::fprintf(out, "      }\n");
         } else {
             std::fprintf(out, "}\n");
+        }
+        if (!dev.compat_events.empty()) {
+            std::fprintf(out, "      ,\"compatibility_events\": [\n");
+            for (size_t ci = 0; ci < dev.compat_events.size(); ++ci) {
+                const auto& [op, dtype, count] = dev.compat_events[ci];
+                std::fprintf(out, "        {\"operation\": \"%s\", \"dtype\": \"%s\", \"count\": %llu}%s\n",
+                             op.c_str(),
+                             dtype.c_str(),
+                             (unsigned long long)count,
+                             (ci + 1 < dev.compat_events.size() ? "," : ""));
+            }
+            std::fprintf(out, "      ]\n");
         }
         std::fprintf(out, "    }%s\n", (i + 1 < devices.size() ? "," : ""));
     }

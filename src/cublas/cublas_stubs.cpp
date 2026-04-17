@@ -1,5 +1,7 @@
 #include "cublas_defs.hpp"
+#include "../core/backend_config.hpp"
 #include "../core/global_state.hpp"
+#include "../core/gpu_profile.hpp"
 #include "../core/logging.hpp"
 #include <algorithm>
 #include <cerrno>
@@ -436,6 +438,37 @@ bool is_supported_gemm_datatype(int dataType) {
         default:
             return false;
     }
+}
+
+cublasStatus_t check_device_dtype_compat(int cuda_data_type, const char* op_name) {
+    auto gpu_dtype = fake_gpu::cuda_dtype_to_gpu_dtype(cuda_data_type);
+    if (!gpu_dtype.has_value()) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+
+    auto& gs = fake_gpu::GlobalState::instance();
+    const int dev_idx = gs.get_current_device();
+    auto& device = gs.get_device(dev_idx);
+    if (device.profile.supports(*gpu_dtype)) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+
+    gs.record_compat_event(dev_idx, op_name, fake_gpu::to_string(*gpu_dtype));
+    if (fake_gpu::BackendConfig::instance().strict_compat()) {
+        FGPU_LOG("[FakeCUBLAS] %s: %s not supported on %s (%s) - returning NOT_SUPPORTED\n",
+                 op_name,
+                 fake_gpu::to_string(*gpu_dtype),
+                 device.profile.name.c_str(),
+                 fake_gpu::to_string(device.profile.architecture));
+        return CUBLAS_STATUS_NOT_SUPPORTED;
+    }
+
+    FGPU_LOG("[FakeCUBLAS] WARNING: %s: %s not supported on %s (%s), proceeding anyway (strict_compat=off)\n",
+             op_name,
+             fake_gpu::to_string(*gpu_dtype),
+             device.profile.name.c_str(),
+             fake_gpu::to_string(device.profile.architecture));
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 } // namespace
@@ -1449,6 +1482,12 @@ cublasStatus_t cublasDgemmBatched(cublasHandle_t handle, cublasOperation_t trans
 cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const void *alpha, const void *A, int Atype, int lda, const void *B, int Btype, int ldb, const void *beta, void *C, int Ctype, int ldc, int computeType, cublasGemmAlgo_t algo) {
     if (!A || !B || !C || !alpha || !beta) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    {
+        cublasStatus_t compat = check_device_dtype_compat(Atype, "cublasGemmEx");
+        if (compat != CUBLAS_STATUS_SUCCESS) {
+            return compat;
+        }
     }
 #if FAKEGPU_CPU_SIMULATION
     if (!is_supported_gemm_datatype(Atype) || !is_supported_gemm_datatype(Btype) || !is_supported_gemm_datatype(Ctype)) {
@@ -2737,11 +2776,6 @@ cublasStatus_t cublasLtMatmul(
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 
-#if !FAKEGPU_CPU_SIMULATION
-    FGPU_LOG("[FakeCUBLASLt] cublasLtMatmul A=%p B=%p D=%p workspace=%zu\n",
-           A, B, D, workspaceSizeInBytes);
-    return CUBLAS_STATUS_SUCCESS;
-#else
     LtMatmulDescState desc;
     LtMatrixLayoutState a_layout;
     LtMatrixLayoutState b_layout;
@@ -2768,6 +2802,18 @@ cublasStatus_t cublasLtMatmul(
         }
     }
 
+    {
+        cublasStatus_t compat = check_device_dtype_compat(a_layout.type, "cublasLtMatmul");
+        if (compat != CUBLAS_STATUS_SUCCESS) {
+            return compat;
+        }
+    }
+
+#if !FAKEGPU_CPU_SIMULATION
+    FGPU_LOG("[FakeCUBLASLt] cublasLtMatmul A=%p B=%p D=%p workspace=%zu\n",
+           A, B, D, workspaceSizeInBytes);
+    return CUBLAS_STATUS_SUCCESS;
+#else
     if (!lt_order_supported(a_layout.order) || !lt_order_supported(b_layout.order) || !lt_order_supported(c_layout.order) || !lt_order_supported(d_layout.order)) {
         FGPU_LOG("[FakeCUBLASLt] cublasLtMatmul unsupported matrix order; skipping cpu compute\n");
         return CUBLAS_STATUS_SUCCESS;
