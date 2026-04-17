@@ -83,6 +83,8 @@ public:
     bool get_allocation_info(void* ptr, size_t& size, int& device) const;
     bool get_allocation_info_ex(void* ptr, size_t& size, int& device, AllocationKind& kind) const;
 
+    int resolve_device_for_ptr(const void* ptr, int fallback_device) const;
+
     // IO tracking (best-effort)
     void record_memcpy_h2d(const void* dst_device_ptr, size_t bytes);
     void record_memcpy_d2h(const void* src_device_ptr, size_t bytes);

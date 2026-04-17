@@ -480,6 +480,11 @@ int GlobalState::resolve_device_for_ptr_nolock(const void* ptr, int fallback_dev
     return it->second.device;
 }
 
+int GlobalState::resolve_device_for_ptr(const void* ptr, int fallback_device) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return resolve_device_for_ptr_nolock(ptr, fallback_device);
+}
+
 GlobalState::DeviceRuntimeStats* GlobalState::stats_for_device_nolock(int device) {
     if (device < 0 || device >= static_cast<int>(device_stats.size())) return nullptr;
     return &device_stats[device];
