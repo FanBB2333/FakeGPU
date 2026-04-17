@@ -170,8 +170,8 @@ y = model(x)
 - Stream/Event/GradScaler stubs
 - Terminal memory summary on exit
 
-### Verified PyTorch version
-- torch 2.9.1 (only version tested)
+### Verified PyTorch versions
+- torch 2.6.0, 2.7.1, 2.8.0, 2.9.1, 2.10.0, 2.11.0 (all pass 30/30 validation steps)
 
 ### Known limitations
 - No actual GPU computation — all ops run on CPU backend

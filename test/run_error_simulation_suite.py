@@ -813,7 +813,7 @@ def generate_unified_html(
         <ul>
           <li>Platform: <code>darwin arm64</code></li>
           <li>Python: <code>3.11</code> (miniforge3/envs/py311)</li>
-          <li>PyTorch: <code>2.9.1</code> (CPU-only)</li>
+          <li>PyTorch: <code>2.6.0 &ndash; 2.11.0</code> (CPU-only, all verified)</li>
           <li>FakeGPU build: <code>build/*.dylib</code> (CMake, C++17)</li>
           <li>Report format: <code>v1.5.0</code> (JSON)</li>
         </ul>

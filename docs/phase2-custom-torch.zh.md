@@ -87,7 +87,18 @@ FakeGPU 的 torch patch 采用两层架构：
 
 ## 已验证 PyTorch 版本
 
-目前唯一测试过的版本：**torch 2.9.1**。
+已测试并通过（每个版本 30/30 验证步骤）：
+
+| 版本 | 状态 |
+|------|------|
+| torch 2.6.0 | 通过 (xfail: torch.compile, overhead benchmark) |
+| torch 2.7.1 | 通过 (xfail: torch.compile, overhead benchmark) |
+| torch 2.8.0 | 通过 (xfail: overhead benchmark) |
+| torch 2.9.1 | 通过 |
+| torch 2.10.0 | 通过 |
+| torch 2.11.0 | 通过 |
+
+详见 `test-results/index.html` 中的完整兼容性矩阵报告。
 
 ## 配置
 
