@@ -45,6 +45,7 @@ site/
 *.swo
 *~
 .DS_Store
+.cache/
 
 # CMake generated
 CMakeCache.txt
@@ -52,5 +53,9 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 compile_commands.json
+
+# Local planning/spec artifacts
+docs/superpowers/plans/
+docs/superpowers/specs/
 
 .CLAUDE.md
