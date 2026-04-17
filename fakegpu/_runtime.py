@@ -123,6 +123,14 @@ def _detect_custom_torch_fakegpu_available() -> bool:
             return True
         if (torch_dir / "fakegpu" / "__init__.py").is_file():
             return True
+
+    # Check for vendored upstream (_upstream.py ships with fakegpu itself)
+    try:
+        if importlib.util.find_spec("fakegpu._upstream") is not None:
+            return True
+    except Exception:
+        pass
+
     return False
 
 
