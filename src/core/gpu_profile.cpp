@@ -426,6 +426,22 @@ std::optional<GpuProfile> profile_from_preset_id(const std::string& id) {
     return std::nullopt;
 }
 
+std::optional<GpuDataType> cuda_dtype_to_gpu_dtype(int cuda_data_type) {
+    switch (cuda_data_type) {
+        case 0:  return GpuDataType::FP32;   // CUDA_R_32F
+        case 2:  return GpuDataType::FP16;   // CUDA_R_16F
+        case 14: return GpuDataType::BF16;   // CUDA_R_16BF
+        case 3:  return GpuDataType::INT8;   // CUDA_R_8I
+        case 16: // CUDA_R_4I
+        case 17: // CUDA_R_4U
+        case 18: // CUDA_C_4I
+        case 19: // CUDA_C_4U
+            return GpuDataType::INT4;
+        default:
+            return std::nullopt;
+    }
+}
+
 GpuProfile GpuProfile::GTX980() {
     GpuProfileParams params;
     params.name = "Fake NVIDIA GeForce GTX 980";

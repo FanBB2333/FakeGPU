@@ -35,11 +35,95 @@ _patch_result: "PatchResult | None" = None
 # Configuration – mirrors the active FakeGPU profile when available.
 # ---------------------------------------------------------------------------
 
+_PROFILE_CC: dict[str, tuple[int, int]] = {
+    "gtx980": (5, 2),
+    "p100": (6, 0),
+    "v100": (7, 0),
+    "t4": (7, 5),
+    "a40": (8, 6),
+    "a100": (8, 0),
+    "a100-1g": (8, 0),
+    "h100": (9, 0),
+    "l40s": (8, 9),
+    "b100": (11, 0),
+    "b200": (11, 0),
+}
+
+_PROFILE_NAMES: dict[str, str] = {
+    "gtx980": "NVIDIA GeForce GTX 980",
+    "p100": "Tesla P100-PCIE-16GB",
+    "v100": "Tesla V100-SXM2-32GB",
+    "t4": "Tesla T4",
+    "a40": "NVIDIA A40",
+    "a100": "NVIDIA A100-SXM4-80GB",
+    "a100-1g": "NVIDIA A100-SXM4-80GB",
+    "h100": "NVIDIA H100 80GB HBM3",
+    "l40s": "NVIDIA L40S",
+    "b100": "NVIDIA B100",
+    "b200": "NVIDIA B200",
+}
+
+_PROFILE_TOTAL_MEMORY: dict[str, int] = {
+    "gtx980": 4 * 1024**3,
+    "p100": 16 * 1024**3,
+    "v100": 32 * 1024**3,
+    "t4": 16 * 1024**3,
+    "a40": 48 * 1024**3,
+    "a100": 80 * 1024**3,
+    "a100-1g": 80 * 1024**3,
+    "h100": 80 * 1024**3,
+    "l40s": 48 * 1024**3,
+    "b100": 192 * 1024**3,
+    "b200": 192 * 1024**3,
+}
+
+
+def _resolve_profile_id() -> str | None:
+    profiles_env = os.environ.get("FAKEGPU_PROFILES", "")
+    if profiles_env:
+        first_spec = profiles_env.split(",")[0].strip()
+        return first_spec.split(":")[0].strip().lower()
+
+    profile_env = os.environ.get("FAKEGPU_PROFILE", "")
+    if profile_env:
+        return profile_env.strip().lower()
+
+    device_name = os.environ.get("FAKEGPU_DEVICE_NAME", "").strip().lower()
+    if device_name:
+        reverse_names = {value.lower(): key for key, value in _PROFILE_NAMES.items()}
+        return reverse_names.get(device_name)
+
+    return None
+
+
+def _resolve_compute_capability() -> tuple[int, int]:
+    profile_id = _resolve_profile_id()
+    if profile_id and profile_id in _PROFILE_CC:
+        return _PROFILE_CC[profile_id]
+    return (8, 0)
+
+
+def _resolve_device_name() -> str:
+    name = os.environ.get("FAKEGPU_DEVICE_NAME", "")
+    if name:
+        return name
+    profile_id = _resolve_profile_id()
+    if profile_id:
+        return _PROFILE_NAMES.get(profile_id, "NVIDIA A100-SXM4-80GB")
+    return "NVIDIA A100-SXM4-80GB"
+
+
+def _resolve_total_memory() -> int:
+    profile_id = _resolve_profile_id()
+    if profile_id:
+        return _PROFILE_TOTAL_MEMORY.get(profile_id, 80 * 1024**3)
+    return 80 * 1024**3
+
+
 _NUM_DEVICES = int(os.environ.get("FAKEGPU_DEVICE_COUNT", "8"))
-_DEVICE_NAME = os.environ.get("FAKEGPU_DEVICE_NAME", "NVIDIA A100-SXM4-80GB")
-_COMPUTE_MAJOR = 8
-_COMPUTE_MINOR = 0
-_TOTAL_MEMORY = 80 * 1024**3  # 80 GiB per device
+_DEVICE_NAME = _resolve_device_name()
+_COMPUTE_MAJOR, _COMPUTE_MINOR = _resolve_compute_capability()
+_TOTAL_MEMORY = _resolve_total_memory()
 
 _current_device: int = 0
 
