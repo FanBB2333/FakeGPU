@@ -10,6 +10,8 @@ from pathlib import Path
 def main() -> None:
     project_root = Path(__file__).resolve().parent.parent
     demo_script = project_root / "demo_usage.py"
+    env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
 
     completed = subprocess.run(
         [
@@ -20,6 +22,7 @@ def main() -> None:
             "--quiet",
         ],
         cwd=project_root,
+        env=env,
         capture_output=True,
         text=True,
         check=False,

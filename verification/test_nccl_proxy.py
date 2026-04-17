@@ -70,6 +70,7 @@ def run_workers(
     for rank in range(world_size):
         report_path = report_dir / f"{run_mode}_rank_{rank}.json"
         env = dict(os.environ)
+        env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
         env.update(env_updates)
         env.update(
             {
@@ -330,6 +331,7 @@ def main() -> int:
         check_result = subprocess.run(
             check_cmd,
             cwd=REPO_ROOT,
+            env={**os.environ, "XONSH_HISTORY_BACKEND": os.environ.get("XONSH_HISTORY_BACKEND", "dummy")},
             text=True,
             capture_output=True,
             check=False,

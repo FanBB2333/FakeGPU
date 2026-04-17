@@ -19,6 +19,7 @@ SLOW_CONFIG = REPO_ROOT / "verification" / "data" / "cluster_slow_interconnect.y
 
 def run_report(config_path: Path, report_path: Path, raw_report_path: Path) -> dict:
     env = os.environ.copy()
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
     env["FAKEGPU_CLUSTER_CONFIG"] = str(config_path)
     env["FAKEGPU_CLUSTER_REPORT_PATH"] = str(report_path)
     env["FAKEGPU_REPORT_PATH"] = str(raw_report_path)

@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def _run_snippet(code: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
     env["FAKEGPU_TERMINAL_REPORT"] = "0"
     env["PYTHONPATH"] = str(REPO_ROOT)
     return subprocess.run(

@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def run_with_profile(profile: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
     env["FAKEGPU_PROFILES"] = profile
     return subprocess.run(
         [

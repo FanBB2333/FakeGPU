@@ -239,6 +239,7 @@ def main() -> int:
     try:
         for rank in range(args.world_size):
             env = dict(os.environ)
+            env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
             env.update(
                 {
                     "FAKEGPU_MODE": "hybrid",
