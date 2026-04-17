@@ -360,11 +360,17 @@ def generate_unified_html(
 
   /* ---------- JSON viewer ---------- */
   .json-sample {{
-    background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+    background: #2b2926; border: 1px solid var(--line); border-radius: 12px;
     padding: 18px 20px; font-family: 'SF Mono', 'Fira Code', monospace;
-    font-size: 12px; line-height: 1.6; overflow-x: auto;
-    max-height: 420px; overflow-y: auto; color: var(--ink);
+    font-size: 12.5px; line-height: 1.6; overflow-x: auto;
+    max-height: 420px; overflow-y: auto; color: #d8d4cc;
+    white-space: pre; margin: 14px 0;
   }}
+  .json-key  {{ color: #c5a8b0; }}
+  .json-str  {{ color: #a8c5a0; }}
+  .json-num  {{ color: #d4c09a; }}
+  .json-bool {{ color: #a4c5bd; }}
+  .json-null {{ color: #a4c5bd; font-style: italic; }}
 
   /* ---------- Env card ---------- */
   .env-card {{
@@ -602,23 +608,7 @@ def generate_unified_html(
       </div>
 
       <h3>Report v4 JSON Sample (Device 0)</h3>
-      <div class="json-sample">{{
-  "<span style="color:var(--mist-dk)">report_version</span>": 4,
-  "<span style="color:var(--mist-dk)">mode</span>": "simulate",
-  "<span style="color:var(--mist-dk)">devices</span>": [{{
-    "<span style="color:var(--mist-dk)">index</span>": 0,
-    "<span style="color:var(--mist-dk)">name</span>": "Fake NVIDIA A100-SXM4-80GB",
-    "<span style="color:var(--mist-dk)">gpu_profile</span>": {{
-      "architecture": "Ampere",
-      "compute_capability": "8.0",
-      "supported_types": ["fp32", "tf32", "fp16", "bf16", "int8"]
-    }},
-    "<span style="color:var(--mist-dk)">total_memory</span>": 85899345920,
-    "<span style="color:var(--mist-dk)">used_memory_peak</span>": 67108864,
-    "<span style="color:var(--mist-dk)">kernel_launches</span>": {{ "total": 0 }},
-    "<span style="color:var(--mist-dk)">gemm_by_dtype</span>": {{}}
-  }}]
-}}</div>
+      <pre class="json-sample">{{"report_version": 4, "mode": "simulate", "devices": [{{"index": 0, "name": "Fake NVIDIA A100-SXM4-80GB", "gpu_profile": {{"architecture": "Ampere", "compute_capability": "8.0", "supported_types": ["fp32", "tf32", "fp16", "bf16", "int8"]}}, "total_memory": 85899345920, "used_memory_peak": 67108864, "kernel_launches": {{"total": 0}}, "gemm_by_dtype": {{}}}}]}}</pre>
     </section>
   </div>
 
@@ -817,6 +807,29 @@ MoEGPT model: 0.30M parameters, 4 experts, top-2
       el.style.opacity = '1';
       el.style.transform = 'translateY(0)';
     }}, 600 + i * 80);
+  }});
+  // JSON syntax highlighter
+  function highlightJson(pre) {{
+    var text = pre.textContent;
+    var json;
+    try {{ json = JSON.parse(text); }} catch (e) {{ return; }}
+    var formatted = JSON.stringify(json, null, 2)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    pre.innerHTML = formatted.replace(
+      /("(?:\\u[0-9a-fA-F]{{4}}|\\[^u]|[^\\"])*"(?:\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+      function(match) {{
+        if (/^"/.test(match)) {{
+          if (/:$/.test(match)) return '<span class="json-key">' + match + '</span>';
+          return '<span class="json-str">' + match + '</span>';
+        }}
+        if (/true|false/.test(match)) return '<span class="json-bool">' + match + '</span>';
+        if (/null/.test(match)) return '<span class="json-null">' + match + '</span>';
+        return '<span class="json-num">' + match + '</span>';
+      }}
+    );
+  }}
+  document.addEventListener('DOMContentLoaded', function() {{
+    document.querySelectorAll('pre.json-sample').forEach(highlightJson);
   }});
 </script>
 </body>
