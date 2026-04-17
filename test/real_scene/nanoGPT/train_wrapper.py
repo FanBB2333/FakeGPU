@@ -81,6 +81,12 @@ def _prepare_train_args(train_args: list[str], *, mode: str, info: dict[str, obj
     return prepared
 
 
+def _resolve_train_script(model: str) -> str:
+    if model == "moe":
+        return "train_moe.py"
+    return "train.py"
+
+
 class _FakeCudaMemoryLimiter:
     def __init__(self, limit_bytes: int):
         self.limit_bytes = int(limit_bytes)
@@ -332,6 +338,12 @@ def main() -> int:
         help="FakeGPU configuration mode",
     )
     parser.add_argument(
+        "--model",
+        default="gpt",
+        choices=["gpt", "moe"],
+        help="Model architecture: gpt (default dense) or moe (mixture of experts)",
+    )
+    parser.add_argument(
         "--device-count",
         type=int,
         default=None,
@@ -378,6 +390,7 @@ def main() -> int:
     print("=" * 70)
     print("[WRAPPER] nanoGPT Validation Test")
     print(f"[WRAPPER] Mode: {args.mode}")
+    print(f"[WRAPPER] Model: {args.model}")
     print(f"[WRAPPER] Device count: {args.device_count or 'default'}")
     print(f"[WRAPPER] Profile: {args.profile or 'default'}")
     print(f"[WRAPPER] Devices spec: {args.devices or 'default'}")
@@ -429,17 +442,20 @@ def main() -> int:
 
     script_dir = Path(__file__).resolve().parent
     os.chdir(script_dir)
+    train_script = _resolve_train_script(args.model)
+    if args.model == "moe":
+        print(f"[WRAPPER] Using MoE model: {train_script}")
     print(f"[WRAPPER] Effective train args: {train_args}")
-    sys.argv = ["train.py", *train_args]
+    sys.argv = [train_script, *train_args]
 
     start_time = time.time()
     try:
         exec_globals = {
             "__name__": "__main__",
-            "__file__": str(script_dir / "train.py"),
+            "__file__": str(script_dir / train_script),
         }
-        with open(script_dir / "train.py", "r", encoding="utf-8") as handle:
-            code = compile(handle.read(), str(script_dir / "train.py"), "exec")
+        with open(script_dir / train_script, "r", encoding="utf-8") as handle:
+            code = compile(handle.read(), str(script_dir / train_script), "exec")
         exec(code, exec_globals, exec_globals)
         elapsed = time.time() - start_time
         print("=" * 70)
