@@ -120,12 +120,276 @@ def _resolve_total_memory() -> int:
     return 80 * 1024**3
 
 
+def _resolve_per_device_profiles() -> list[dict[str, Any]]:
+    """Resolve per-device profile info from FAKEGPU_PROFILES.
+
+    Returns a list of dicts, one per device, each with keys:
+      'profile_id', 'name', 'total_memory', 'compute_major', 'compute_minor'
+    """
+    profiles_env = os.environ.get("FAKEGPU_PROFILES", "")
+    result: list[dict[str, Any]] = []
+
+    if profiles_env:
+        for spec in profiles_env.split(","):
+            spec = spec.strip()
+            if not spec:
+                continue
+            parts = spec.split(":")
+            pid = parts[0].strip().lower()
+            count = int(parts[1]) if len(parts) > 1 and parts[1].strip().isdigit() else 1
+            for _ in range(count):
+                cc = _PROFILE_CC.get(pid, (8, 0))
+                result.append({
+                    "profile_id": pid,
+                    "name": _PROFILE_NAMES.get(pid, "NVIDIA A100-SXM4-80GB"),
+                    "total_memory": _PROFILE_TOTAL_MEMORY.get(pid, 80 * 1024**3),
+                    "compute_major": cc[0],
+                    "compute_minor": cc[1],
+                })
+
+    if not result:
+        # Uniform config: all devices share the same profile
+        pid = _resolve_profile_id() or "a100"
+        cc = _PROFILE_CC.get(pid, (8, 0))
+        entry = {
+            "profile_id": pid,
+            "name": _PROFILE_NAMES.get(pid, "NVIDIA A100-SXM4-80GB"),
+            "total_memory": _PROFILE_TOTAL_MEMORY.get(pid, 80 * 1024**3),
+            "compute_major": cc[0],
+            "compute_minor": cc[1],
+        }
+        # Will be padded/truncated to _NUM_DEVICES below
+        for _ in range(int(os.environ.get("FAKEGPU_DEVICE_COUNT", "8"))):
+            result.append(dict(entry))
+
+    return result
+
+
 _NUM_DEVICES = int(os.environ.get("FAKEGPU_DEVICE_COUNT", "8"))
+_DEVICE_PROFILES: list[dict[str, Any]] = _resolve_per_device_profiles()
+# If FAKEGPU_DEVICE_COUNT overrides the profile count, adjust
+if len(_DEVICE_PROFILES) != _NUM_DEVICES:
+    if len(_DEVICE_PROFILES) > 0:
+        # Pad or truncate to match _NUM_DEVICES
+        while len(_DEVICE_PROFILES) < _NUM_DEVICES:
+            _DEVICE_PROFILES.append(dict(_DEVICE_PROFILES[-1]))
+        _DEVICE_PROFILES = _DEVICE_PROFILES[:_NUM_DEVICES]
+
 _DEVICE_NAME = _resolve_device_name()
 _COMPUTE_MAJOR, _COMPUTE_MINOR = _resolve_compute_capability()
 _TOTAL_MEMORY = _resolve_total_memory()
 
 _current_device: int = 0
+
+# ---------------------------------------------------------------------------
+# Device registry: tracks which fake CUDA device each tensor lives on.
+# Key = storage data_ptr (stable across views/slices)
+# Value = logical device index
+# ---------------------------------------------------------------------------
+
+_CROSS_DEVICE_CHECK = os.environ.get("FAKEGPU_CROSS_DEVICE_CHECK", "1") != "0"
+
+_device_registry: dict[int, int] = {}
+
+
+def _register_tensor_device(tensor: Any, device_index: int) -> None:
+    """Register a tensor's storage in the device registry and memory tracker."""
+    try:
+        dp = tensor.untyped_storage().data_ptr()
+        if dp != 0:
+            _device_registry[dp] = device_index
+            _register_tensor_for_memory_tracking(tensor, device_index)
+    except (MemoryError, RuntimeError):
+        raise  # Re-raise OOM and related errors
+    except Exception:
+        pass
+
+
+def _get_tensor_device(tensor: Any) -> int | None:
+    """Look up the fake CUDA device index for a tensor, or None if untracked."""
+    try:
+        dp = tensor.untyped_storage().data_ptr()
+        return _device_registry.get(dp)
+    except Exception:
+        return None
+
+
+def _check_same_device(*tensors: Any) -> None:
+    """Raise RuntimeError if tensors span multiple fake CUDA devices."""
+    if not _CROSS_DEVICE_CHECK:
+        return
+    import torch
+
+    first_dev: int | None = None
+    for t in tensors:
+        if not isinstance(t, torch.Tensor):
+            continue
+        dev = _get_tensor_device(t)
+        if dev is None:
+            continue  # untracked tensor (e.g. pure CPU) — skip
+        if first_dev is None:
+            first_dev = dev
+        elif dev != first_dev:
+            raise RuntimeError(
+                f"Expected all tensors to be on the same device, "
+                f"but found at least two devices, cuda:{first_dev} and cuda:{dev}!"
+            )
+
+
+def _wrap_multi_tensor_op(orig_fn: Any) -> Any:
+    """Wrap a torch function to check device consistency of tensor args."""
+
+    @functools.wraps(orig_fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        import torch
+
+        tensors = []
+        for a in args:
+            if isinstance(a, torch.Tensor):
+                tensors.append(a)
+            elif isinstance(a, (list, tuple)):
+                for item in a:
+                    if isinstance(item, torch.Tensor):
+                        tensors.append(item)
+        for v in kwargs.values():
+            if isinstance(v, torch.Tensor):
+                tensors.append(v)
+        if len(tensors) >= 2:
+            _check_same_device(*tensors)
+        return orig_fn(*args, **kwargs)
+
+    return wrapper
+
+
+def _wrap_tensor_binary_op(orig_fn: Any) -> Any:
+    """Wrap a Tensor binary method (e.g. __add__) to check cross-device."""
+
+    @functools.wraps(orig_fn)
+    def wrapper(self: Any, other: Any) -> Any:
+        import torch
+
+        if isinstance(other, torch.Tensor):
+            _check_same_device(self, other)
+        return orig_fn(self, other)
+
+    return wrapper
+
+
+def _extract_cuda_device_index(device: Any) -> int | None:
+    """Extract CUDA device index from a device-like argument, or None if not CUDA."""
+    import torch
+
+    if isinstance(device, int):
+        return device
+    if isinstance(device, str):
+        try:
+            device = torch.device(device)
+        except Exception:
+            return None
+    if isinstance(device, torch.device) and device.type == "cuda":
+        return device.index if device.index is not None else _current_device
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Memory tracking: per-device memory accounting.
+# ---------------------------------------------------------------------------
+
+_MEMORY_TRACKING = os.environ.get("FAKEGPU_MEMORY_TRACKING", "1") != "0"
+
+
+class _DeviceMemoryTracker:
+    """Track per-device memory allocations in the torch_patch layer."""
+
+    def __init__(self, per_device_bytes: list[int]):
+        self._total = list(per_device_bytes)
+        self._used = [0] * len(per_device_bytes)
+        self._peak = [0] * len(per_device_bytes)
+        # data_ptr -> (device_index, nbytes)
+        self._allocs: dict[int, tuple[int, int]] = {}
+
+    def allocate(self, data_ptr: int, nbytes: int, device: int) -> None:
+        """Register allocation. Raise OutOfMemoryError if exceeds limit."""
+        import torch
+
+        if device < 0 or device >= len(self._total):
+            return
+        if data_ptr in self._allocs:
+            return  # already tracked
+        if self._used[device] + nbytes > self._total[device]:
+            free = self._total[device] - self._used[device]
+            raise torch.cuda.OutOfMemoryError(
+                f"CUDA out of memory. Tried to allocate "
+                f"{nbytes / 2**20:.2f} MiB. "
+                f"GPU {device} has a total capacity of "
+                f"{self._total[device] / 2**30:.2f} GiB "
+                f"of which {free / 2**30:.2f} GiB is free."
+            )
+        self._allocs[data_ptr] = (device, nbytes)
+        self._used[device] += nbytes
+        self._peak[device] = max(self._peak[device], self._used[device])
+
+    def release(self, data_ptr: int) -> None:
+        """Unregister allocation."""
+        rec = self._allocs.pop(data_ptr, None)
+        if rec:
+            dev, nbytes = rec
+            self._used[dev] = max(0, self._used[dev] - nbytes)
+
+    def memory_allocated(self, device: int) -> int:
+        if device < 0 or device >= len(self._used):
+            return 0
+        return self._used[device]
+
+    def max_memory_allocated(self, device: int) -> int:
+        if device < 0 or device >= len(self._peak):
+            return 0
+        return self._peak[device]
+
+    def mem_get_info(self, device: int) -> tuple[int, int]:
+        if device < 0 or device >= len(self._total):
+            return (0, 0)
+        free = self._total[device] - self._used[device]
+        return (max(0, free), self._total[device])
+
+    def reset_peak(self, device: int) -> None:
+        if 0 <= device < len(self._peak):
+            self._peak[device] = self._used[device]
+
+
+# Initialized later in patch() after _DEVICE_PROFILES is finalized
+_memory_tracker: _DeviceMemoryTracker | None = None
+
+
+import weakref
+
+
+def _register_tensor_for_memory_tracking(tensor: Any, device_index: int) -> None:
+    """Register a tensor's memory and set up GC cleanup via weakref."""
+    if _memory_tracker is None or not _MEMORY_TRACKING:
+        return
+    try:
+        storage = tensor.untyped_storage()
+        dp = storage.data_ptr()
+        nbytes = storage.nbytes()
+        if dp == 0 or nbytes == 0:
+            return
+        _memory_tracker.allocate(dp, nbytes, device_index)
+
+        # Set up weakref callback to release memory when tensor is GC'd.
+        # We weakref the storage, not the tensor, because multiple tensor
+        # views can share one storage.
+        def _release_cb(data_ptr=dp):
+            if _memory_tracker is not None:
+                _memory_tracker.release(data_ptr)
+            _device_registry.pop(data_ptr, None)
+
+        # Only add weakref if not already tracked (avoid double-counting)
+        weakref.finalize(storage, _release_cb)
+    except (MemoryError, RuntimeError):
+        raise  # Re-raise OOM and related errors
+    except Exception:
+        pass
 
 
 @dataclass(frozen=True)
@@ -140,17 +404,28 @@ class PatchResult:
 
 
 def _normalize_device(device: Any) -> Any:
-    """Redirect ``cuda`` devices to ``cpu``, leaving others untouched."""
+    """Redirect ``cuda`` devices to ``cpu``, raising for invalid ordinals."""
     import torch
 
     if device is None:
         return device
     if isinstance(device, int):
-        # bare int in a context expecting a CUDA ordinal → cpu
+        # bare int in a context expecting a CUDA ordinal → validate then cpu
+        if device >= _NUM_DEVICES:
+            raise RuntimeError(
+                f"CUDA error: invalid device ordinal "
+                f"(requested cuda:{device}, available: {_NUM_DEVICES})"
+            )
         return torch.device("cpu")
     if isinstance(device, str):
         device = torch.device(device)
     if isinstance(device, torch.device) and device.type == "cuda":
+        idx = device.index if device.index is not None else _current_device
+        if idx >= _NUM_DEVICES:
+            raise RuntimeError(
+                f"CUDA error: invalid device ordinal "
+                f"(requested cuda:{idx}, available: {_NUM_DEVICES})"
+            )
         return torch.device("cpu")
     return device
 
@@ -174,9 +449,14 @@ def _device_kwarg_wrapper(fn: Any) -> Any:
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
+        target_dev: int | None = None
         if "device" in kwargs and kwargs["device"] is not None:
+            target_dev = _extract_cuda_device_index(kwargs["device"])
             kwargs["device"] = _normalize_device(kwargs["device"])
-        return fn(*args, **kwargs)
+        result = fn(*args, **kwargs)
+        if target_dev is not None:
+            _register_tensor_device(result, target_dev)
+        return result
 
     return wrapper
 
@@ -192,22 +472,31 @@ _orig_tensor_cuda: Any = None
 def _patched_tensor_to(self: Any, *args: Any, **kwargs: Any) -> Any:
     import torch
 
-    # keyword device
+    # Extract target CUDA device index before normalization
+    target_dev: int | None = None
     if "device" in kwargs:
+        target_dev = _extract_cuda_device_index(kwargs["device"])
         kwargs["device"] = _normalize_device(kwargs["device"])
 
-    # positional device (first arg can be device‑like, dtype, or Tensor)
     if args:
         first = args[0]
         if isinstance(first, str):
+            if target_dev is None:
+                target_dev = _extract_cuda_device_index(first)
             args = (_normalize_device(first),) + args[1:]
         elif isinstance(first, torch.device) and first.type == "cuda":
+            if target_dev is None:
+                target_dev = _extract_cuda_device_index(first)
             args = (torch.device("cpu"),) + args[1:]
-        # int → might be device ordinal when second arg is dtype
         elif isinstance(first, int) and len(args) >= 2 and isinstance(args[1], torch.dtype):
+            if target_dev is None:
+                target_dev = first
             args = (torch.device("cpu"),) + args[1:]
 
-    return _orig_tensor_to(self, *args, **kwargs)
+    result = _orig_tensor_to(self, *args, **kwargs)
+    if target_dev is not None:
+        _register_tensor_device(result, target_dev)
+    return result
 
 
 def _patched_tensor_cuda(
@@ -216,12 +505,16 @@ def _patched_tensor_cuda(
     non_blocking: bool = False,
     memory_format: Any = None,
 ) -> Any:
-    # Already on CPU; return self to avoid a pointless copy.
     import torch
 
+    target_dev = _extract_cuda_device_index(device) if device is not None else _current_device
     if memory_format is not None and memory_format is not torch.preserve_format:
-        return self.contiguous(memory_format=memory_format)
-    return self
+        result = self.contiguous(memory_format=memory_format)
+    else:
+        result = self
+    if target_dev is not None:
+        _register_tensor_device(result, target_dev)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -234,17 +527,31 @@ _orig_module_to: Any = None
 def _patched_module_to(self: Any, *args: Any, **kwargs: Any) -> Any:
     import torch
 
+    target_dev: int | None = None
+
     if "device" in kwargs:
+        target_dev = _extract_cuda_device_index(kwargs["device"])
         kwargs["device"] = _normalize_device(kwargs["device"])
 
     if args:
         first = args[0]
         if isinstance(first, str):
+            target_dev = _extract_cuda_device_index(first) if target_dev is None else target_dev
             args = (_normalize_device(first),) + args[1:]
         elif isinstance(first, torch.device) and first.type == "cuda":
+            target_dev = _extract_cuda_device_index(first) if target_dev is None else target_dev
             args = (torch.device("cpu"),) + args[1:]
 
-    return _orig_module_to(self, *args, **kwargs)
+    result = _orig_module_to(self, *args, **kwargs)
+
+    # Register all parameters/buffers in the device registry
+    if target_dev is not None:
+        for param in result.parameters():
+            _register_tensor_device(param.data, target_dev)
+        for buf in result.buffers():
+            _register_tensor_device(buf, target_dev)
+
+    return result
 
 
 def _patched_module_cuda(self: Any, device: Any = None) -> Any:
@@ -367,10 +674,20 @@ def _stub_set_device(device: Any) -> None:
     import torch
 
     if isinstance(device, torch.device):
-        device = device.index or 0
+        idx = device.index or 0
     elif isinstance(device, str):
-        device = torch.device(device).index or 0
-    _current_device = device
+        idx = torch.device(device).index or 0
+    elif isinstance(device, int):
+        idx = device
+    else:
+        idx = 0
+
+    if idx < 0 or idx >= _NUM_DEVICES:
+        raise RuntimeError(
+            f"CUDA error: invalid device ordinal "
+            f"(requested {idx}, available: {_NUM_DEVICES})"
+        )
+    _current_device = idx
 
 
 def _stub_get_device_name(device: Any = None) -> str:
@@ -390,6 +707,11 @@ def _stub_get_device_properties(device: Any = None) -> _FakeDeviceProperties:
             idx = device.index or 0
         elif isinstance(device, int):
             idx = device
+    if idx < 0 or idx >= _NUM_DEVICES:
+        raise RuntimeError(
+            f"CUDA error: invalid device ordinal "
+            f"(requested {idx}, available: {_NUM_DEVICES})"
+        )
     return _FakeDeviceProperties(idx)
 
 
@@ -753,6 +1075,37 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     torch.cuda.get_gencode_flags = _stub_get_gencode_flags
     torch.cuda.default_generators = _make_default_generators()
 
+    # ---- Initialize memory tracker ----
+    global _memory_tracker
+    if _MEMORY_TRACKING:
+        per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
+        _memory_tracker = _DeviceMemoryTracker(per_device_bytes)
+
+    # Override memory stubs to use tracker
+    if _memory_tracker is not None:
+        _tracker = _memory_tracker  # local ref for closures
+
+        def _tracked_memory_allocated(device=None):
+            idx = _normalize_device_index(device)
+            return _tracker.memory_allocated(idx)
+
+        def _tracked_max_memory_allocated(device=None):
+            idx = _normalize_device_index(device)
+            return _tracker.max_memory_allocated(idx)
+
+        def _tracked_mem_get_info(device=None):
+            idx = _normalize_device_index(device)
+            return _tracker.mem_get_info(idx)
+
+        def _tracked_reset_peak_memory_stats(device=None):
+            idx = _normalize_device_index(device)
+            _tracker.reset_peak(idx)
+
+        torch.cuda.memory_allocated = _tracked_memory_allocated
+        torch.cuda.max_memory_allocated = _tracked_max_memory_allocated
+        torch.cuda.mem_get_info = _tracked_mem_get_info
+        torch.cuda.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
+
     # Internal helpers PyTorch relies on
     torch.cuda._is_compiled = lambda: True
     torch.cuda._lazy_init = _stub_lazy_init
@@ -767,19 +1120,49 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     if hasattr(torch.cuda, "_maybe_exchange_device"):
         torch.cuda._maybe_exchange_device = lambda device: 0
 
-    # ---- Patch torch.load to normalize map_location ----
+    # ---- Patch torch.load to validate + normalize map_location ----
     _orig_torch_load = torch.load
 
     def _patched_torch_load(*args, **kwargs):
-        if "map_location" in kwargs:
-            ml = kwargs["map_location"]
-            if isinstance(ml, (str, torch.device)):
-                ml = _normalize_device(ml)
-                kwargs["map_location"] = ml
-        elif len(args) >= 2:
+        # Extract map_location from kwargs or positional args
+        ml = kwargs.get("map_location", None)
+        if ml is None and len(args) >= 2:
             ml = args[1]
-            if isinstance(ml, (str, torch.device)):
-                args = (args[0], _normalize_device(ml)) + args[2:]
+
+        # Validate CUDA device index in map_location
+        if ml is not None:
+            if isinstance(ml, str):
+                try:
+                    dev = torch.device(ml)
+                    if dev.type == "cuda":
+                        idx = dev.index if dev.index is not None else _current_device
+                        if idx >= _NUM_DEVICES:
+                            raise RuntimeError(
+                                f"CUDA error: invalid device ordinal "
+                                f"(map_location={ml}, available: {_NUM_DEVICES})"
+                            )
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+            elif isinstance(ml, torch.device) and ml.type == "cuda":
+                idx = ml.index if ml.index is not None else _current_device
+                if idx >= _NUM_DEVICES:
+                    raise RuntimeError(
+                        f"CUDA error: invalid device ordinal "
+                        f"(map_location={ml}, available: {_NUM_DEVICES})"
+                    )
+
+        # Normalize device in map_location
+        if "map_location" in kwargs:
+            ml_val = kwargs["map_location"]
+            if isinstance(ml_val, (str, torch.device)):
+                kwargs["map_location"] = _normalize_device(ml_val)
+        elif len(args) >= 2:
+            ml_val = args[1]
+            if isinstance(ml_val, (str, torch.device)):
+                args = (args[0], _normalize_device(ml_val)) + args[2:]
+
         return _orig_torch_load(*args, **kwargs)
 
     torch.load = _patched_torch_load
@@ -868,6 +1251,81 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     torch.Tensor.to = _patched_tensor_to  # type: ignore[assignment]
     torch.Tensor.cuda = _patched_tensor_cuda  # type: ignore[assignment]
 
+    # ---- Propagate device registry through clone/contiguous/detach ----
+    _orig_tensor_clone = torch.Tensor.clone
+
+    def _patched_tensor_clone(self, *args, **kwargs):
+        result = _orig_tensor_clone(self, *args, **kwargs)
+        dev = _get_tensor_device(self)
+        if dev is not None:
+            _register_tensor_device(result, dev)
+        return result
+
+    torch.Tensor.clone = _patched_tensor_clone
+
+    _orig_tensor_contiguous = torch.Tensor.contiguous
+
+    def _patched_tensor_contiguous(self, *args, **kwargs):
+        result = _orig_tensor_contiguous(self, *args, **kwargs)
+        dev = _get_tensor_device(self)
+        if dev is not None:
+            _register_tensor_device(result, dev)
+        return result
+
+    torch.Tensor.contiguous = _patched_tensor_contiguous
+
+    # detach() is a method in PyTorch 2.x, not a property
+    _orig_tensor_detach_fn = torch.Tensor.detach
+
+    def _patched_tensor_detach(self):
+        result = _orig_tensor_detach_fn(self)
+        dev = _get_tensor_device(self)
+        if dev is not None:
+            _register_tensor_device(result, dev)
+        return result
+
+    torch.Tensor.detach = _patched_tensor_detach
+
+    # ---- Cross-device validation patches ----
+    if _CROSS_DEVICE_CHECK:
+        import torch.nn.functional as F
+
+        # Multi-input torch functions
+        _MULTI_TENSOR_OPS = [
+            "matmul", "mm", "bmm", "cat", "stack", "where",
+            "addmm", "addcmul", "addcdiv",
+        ]
+        for op_name in _MULTI_TENSOR_OPS:
+            orig = getattr(torch, op_name, None)
+            if orig is not None:
+                setattr(torch, op_name, _wrap_multi_tensor_op(orig))
+
+        # Loss functions
+        _LOSS_OPS = ["cross_entropy", "mse_loss", "nll_loss", "binary_cross_entropy"]
+        for op_name in _LOSS_OPS:
+            orig = getattr(F, op_name, None)
+            if orig is not None:
+                setattr(F, op_name, _wrap_multi_tensor_op(orig))
+
+        # Also wrap F.linear for model forward cross-device checks
+        _FUNCTIONAL_OPS = ["linear", "conv1d", "conv2d", "conv3d",
+                           "embedding", "batch_norm", "layer_norm"]
+        for op_name in _FUNCTIONAL_OPS:
+            orig = getattr(F, op_name, None)
+            if orig is not None:
+                setattr(F, op_name, _wrap_multi_tensor_op(orig))
+
+        # Tensor binary dunder methods
+        _BINARY_DUNDERS = [
+            "__add__", "__radd__", "__sub__", "__rsub__",
+            "__mul__", "__rmul__", "__truediv__", "__rtruediv__",
+            "__matmul__", "__rmatmul__",
+        ]
+        for dunder in _BINARY_DUNDERS:
+            orig = getattr(torch.Tensor, dunder, None)
+            if orig is not None:
+                setattr(torch.Tensor, dunder, _wrap_tensor_binary_op(orig))
+
     # ---- Module.to / Module.cuda ----
     global _orig_module_to
     _orig_module_to = torch.nn.Module.to
@@ -921,6 +1379,32 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         torch.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
     except Exception:
         pass
+
+    # ---- Autocast dtype validation (defense-in-depth) ----
+    _strict_compat = os.environ.get("FAKEGPU_STRICT_COMPAT", "1") != "0"
+
+    if _strict_compat and hasattr(torch.amp, "autocast"):
+        _OrigAutocast = torch.amp.autocast
+
+        class _PatchedAutocast(_OrigAutocast):
+            def __enter__(self):
+                if (
+                    getattr(self, "device_type", None) == "cuda"
+                    and getattr(self, "fast_dtype", None) == torch.bfloat16
+                    and _COMPUTE_MAJOR < 8
+                ):
+                    raise RuntimeError(
+                        f"Current CUDA Device does not support bfloat16. "
+                        f"Please switch dtype to float16 "
+                        f"(compute capability {_COMPUTE_MAJOR}.{_COMPUTE_MINOR}, "
+                        f"need >= 8.0 for bf16)."
+                    )
+                return super().__enter__()
+
+        torch.amp.autocast = _PatchedAutocast
+        # Also patch the cuda-specific alias if it exists
+        if hasattr(torch.cuda.amp, "autocast"):
+            torch.cuda.amp.autocast = _PatchedAutocast
 
     # ---- Patch torch.device to allow 'cuda' construction ----
     # torch.device('cuda') already works; no patch needed.

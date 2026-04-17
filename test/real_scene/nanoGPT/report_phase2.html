@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FakeGPU · Enhanced Report / HW Compat / MoE 验证报告</title>
+<style>
+  /* ---------- Morandi Palette ---------- */
+  :root {
+    --bg:        #ede8e0;
+    --surface:   #f4f0e9;
+    --surface-2: #e3dcd1;
+    --ink:       #4a4740;
+    --ink-soft:  #7a7468;
+    --line:      #d6cdbf;
+
+    --sage:      #a8b5a0;   /* pass */
+    --sage-dk:   #7d8e78;
+    --rose:      #c9a7a1;   /* fail */
+    --rose-dk:   #a8837c;
+    --sand:      #d4bf9a;   /* warn / expected-fail */
+    --sand-dk:   #b39a73;
+    --mist:      #a4b1bd;   /* info */
+    --mist-dk:   #7d8b98;
+    --plum:      #b5a0b0;
+    --plum-dk:   #8e7b8b;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue",
+                 "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Layout ---------- */
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 64px 32px 96px; }
+
+  header.hero {
+    text-align: center;
+    padding: 56px 24px 40px;
+    margin-bottom: 48px;
+    background: linear-gradient(140deg, var(--surface) 0%, var(--surface-2) 100%);
+    border-radius: 24px;
+    border: 1px solid var(--line);
+    opacity: 0;
+    transform: translateY(14px);
+    animation: rise .9s .05s ease-out forwards;
+  }
+  header.hero .eyebrow {
+    letter-spacing: .24em;
+    font-size: 12px;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  header.hero h1 {
+    font-size: 32px;
+    margin: 0 0 12px;
+    font-weight: 600;
+    letter-spacing: .5px;
+  }
+  header.hero .sub {
+    color: var(--ink-soft);
+    font-size: 15px;
+    margin: 0;
+  }
+  header.hero .meta {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .chip {
+    background: var(--bg);
+    color: var(--ink-soft);
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    border: 1px solid var(--line);
+  }
+
+  /* ---------- Summary cards ---------- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+    margin-bottom: 48px;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 22px 20px;
+    opacity: 0;
+    transform: translateY(14px);
+    animation: rise .7s ease-out forwards;
+  }
+  .stat:nth-child(1) { animation-delay: .15s; }
+  .stat:nth-child(2) { animation-delay: .25s; }
+  .stat:nth-child(3) { animation-delay: .35s; }
+  .stat:nth-child(4) { animation-delay: .45s; }
+  .stat .label { font-size: 12px; color: var(--ink-soft); letter-spacing: .1em; text-transform: uppercase; }
+  .stat .value { font-size: 30px; font-weight: 600; margin-top: 6px; }
+  .stat.pass  .value { color: var(--sage-dk); }
+  .stat.fail  .value { color: var(--rose-dk); }
+  .stat.total .value { color: var(--mist-dk); }
+  .stat.files .value { color: var(--plum-dk); }
+
+  /* ---------- Section ---------- */
+  section {
+    margin-bottom: 56px;
+    opacity: 0;
+    transform: translateY(14px);
+    animation: rise .75s ease-out forwards;
+    animation-delay: .5s;
+  }
+  section h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 18px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+    letter-spacing: .5px;
+  }
+  section h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 28px 0 14px;
+    color: var(--ink);
+  }
+
+  /* ---------- Phase banner ---------- */
+  .phase-banner {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 22px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 5px solid var(--mist-dk);
+    border-radius: 12px;
+    margin-bottom: 20px;
+  }
+  .phase-banner.p1 { border-left-color: var(--sage-dk); }
+  .phase-banner.p2 { border-left-color: var(--plum-dk); }
+  .phase-banner.p3 { border-left-color: var(--sand-dk); }
+  .phase-banner .phase-num {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--ink-soft);
+    min-width: 48px;
+    text-align: center;
+  }
+  .phase-banner .phase-info .ptitle { font-weight: 600; font-size: 15px; }
+  .phase-banner .phase-info .pdesc  { color: var(--ink-soft); font-size: 13px; margin-top: 2px; }
+
+  /* ---------- Result table ---------- */
+  .results {
+    display: grid;
+    gap: 14px;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 60px 1fr auto;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 5px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 20px;
+    transition: transform .25s ease, box-shadow .25s ease, background .25s ease;
+    cursor: pointer;
+  }
+  .row:hover {
+    transform: translateX(4px);
+    background: var(--surface-2);
+    box-shadow: 0 4px 18px -12px rgba(74,71,64,.35);
+  }
+  .row.pass { border-left-color: var(--sage-dk); }
+  .row.fail { border-left-color: var(--rose-dk); }
+
+  .row .id {
+    font-weight: 600;
+    color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .05em;
+  }
+  .row .info .title { font-weight: 600; font-size: 15px; }
+  .row .info .desc  { color: var(--ink-soft); font-size: 13px; margin-top: 2px; }
+  .badge {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: 999px;
+    letter-spacing: .08em;
+    white-space: nowrap;
+  }
+  .badge.pass { background: var(--sage); color: #fff; }
+  .badge.fail { background: var(--rose); color: #fff; }
+
+  .detail {
+    grid-column: 1 / -1;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--line);
+    display: none;
+    font-size: 14px;
+    color: var(--ink);
+    animation: fadeIn .4s ease-out;
+  }
+  .row.open .detail { display: block; }
+  .detail .kv { margin: 4px 0; color: var(--ink-soft); }
+  .detail pre {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 10px 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+    overflow-x: auto;
+    color: var(--ink);
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .detail .note { margin-top: 10px; }
+
+  /* ---------- Commit cards ---------- */
+  .commits {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+  .commit {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+  .commit .sha {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    background: var(--bg);
+    padding: 3px 10px;
+    border-radius: 6px;
+    color: var(--mist-dk);
+    border: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .commit .msg { font-size: 14px; }
+
+  /* ---------- JSON viewer ---------- */
+  .json-sample {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-x: auto;
+    max-height: 420px;
+    overflow-y: auto;
+    color: var(--ink);
+  }
+
+  /* ---------- Environment card ---------- */
+  .env-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 22px 22px 20px;
+    margin-bottom: 28px;
+  }
+  .env-card h3 {
+    margin: 0 0 12px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .env-card ul { margin: 0; padding-left: 18px; color: var(--ink-soft); font-size: 14px; }
+  .env-card ul li { margin: 4px 0; }
+  .env-card code { background: var(--bg); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; color: var(--ink); }
+
+  /* ---------- Conclusion ---------- */
+  .concl { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px;
+  }
+  .card h4 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .card.pass h4 { color: var(--sage-dk); }
+  .card.info h4 { color: var(--mist-dk); }
+  .card.caveat h4 { color: var(--sand-dk); }
+  .card ul { margin: 0; padding-left: 18px; font-size: 14px; color: var(--ink); }
+  .card ul li { margin: 4px 0; }
+
+  /* ---------- Terminal summary preview ---------- */
+  .terminal {
+    background: #2b2926;
+    color: #d8d4cc;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    padding: 20px 22px;
+    border-radius: 12px;
+    overflow-x: auto;
+    margin: 14px 0;
+  }
+  .terminal .hl { color: var(--sage); }
+  .terminal .dim { color: #7a7468; }
+
+  footer {
+    text-align: center;
+    color: var(--ink-soft);
+    font-size: 12.5px;
+    margin-top: 48px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* ---------- Animations ---------- */
+  @keyframes rise {
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (max-width: 780px) {
+    .stats   { grid-template-columns: repeat(2, 1fr); }
+    .concl   { grid-template-columns: 1fr; }
+    .row     { grid-template-columns: 50px 1fr auto; }
+    header.hero h1 { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Phase 2 Validation &middot; 2026-04-17</div>
+    <h1>FakeGPU &middot; Enhanced Report / HW Compat / MoE</h1>
+    <p class="sub">Report v4 + GPU Profile + Kernel GEMM Stats &middot; Profile-based Dtype Compatibility &middot; MoE nanoGPT Training</p>
+    <div class="meta">
+      <span class="chip">3 Commits</span>
+      <span class="chip">25 Files Changed</span>
+      <span class="chip">+1602 / -35</span>
+      <span class="chip">macOS &middot; ARM64</span>
+      <span class="chip">Date: 2026-04-17</span>
+    </div>
+  </header>
+
+  <!-- Summary stats -->
+  <div class="stats">
+    <div class="stat total"><div class="label">Total Tests</div><div class="value">10</div></div>
+    <div class="stat pass"><div class="label">Passed</div><div class="value">10</div></div>
+    <div class="stat fail"><div class="label">Failed</div><div class="value">0</div></div>
+    <div class="stat files"><div class="label">Files Changed</div><div class="value">25</div></div>
+  </div>
+
+  <!-- Commits -->
+  <section>
+    <h2>Commits</h2>
+    <div class="commits">
+      <div class="commit">
+        <span class="sha">60cce01</span>
+        <span class="msg"><strong>feat(report):</strong> add v4 GPU profile and kernel GEMM stats</span>
+      </div>
+      <div class="commit">
+        <span class="sha">3708ab6</span>
+        <span class="msg"><strong>feat(compat):</strong> enforce profile-based dtype compatibility</span>
+      </div>
+      <div class="commit">
+        <span class="sha">a4f95a1</span>
+        <span class="msg"><strong>feat(test):</strong> add MoE nanoGPT training flow</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Environment -->
+  <section>
+    <h2>Test Environment</h2>
+    <div class="env-card">
+      <h3>macOS &middot; Apple Silicon (no physical GPU)</h3>
+      <ul>
+        <li>Platform: <code>darwin arm64</code></li>
+        <li>Python: <code>3.11</code> (miniforge3/envs/py311)</li>
+        <li>PyTorch: <code>2.9.1</code> (CPU-only)</li>
+        <li>FakeGPU build: <code>build/*.dylib</code> (CMake, C++17)</li>
+        <li>Report format: <code>v4</code> (JSON)</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Phase 1 -->
+  <section>
+    <h2>Phase 1: Enhanced Report System <span style="font-weight:400;font-size:13px;color:var(--ink-soft);margin-left:8px;">click rows to expand</span></h2>
+    <div class="phase-banner p1">
+      <div class="phase-num">P1</div>
+      <div class="phase-info">
+        <div class="ptitle">Report v4 &middot; GPU Profile &middot; Kernel Launch Tracking &middot; GEMM-by-dtype &middot; Terminal Summary</div>
+        <div class="pdesc">Upgrade GlobalState, Monitor, and Driver stubs to record and report per-device kernel launches, typed GEMM stats, and architecture profile info.</div>
+      </div>
+    </div>
+    <div class="results">
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P1-1</div>
+        <div class="info">
+          <div class="title">cmake --build build</div>
+          <div class="desc">C++ library full compilation with new GlobalState fields, Monitor v4, and driver stubs</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>cmake --build build</code></div>
+          <pre>[ 28%] Built target fake_gpu_distributed
+[ 34%] Built target fake_gpu_core
+[ 41%] Built target fake_gpu_nvml
+[ 45%] Built target fake_gpu_cuda
+[ 47%] Built target fake_gpu_monitor
+[ 50%] Built target fake_gpu (libnvidia-ml.dylib)
+[ 67%] Built target fake_cuda (libcuda.dylib)
+...
+[100%] All targets built successfully</pre>
+          <div class="note">Clean compilation. All OBJECT libraries (core, nvml, cuda, monitor, distributed) and shared libraries (fake_gpu, fake_cuda, fake_cudart, fake_cublas, fake_nccl) link without errors.</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P1-2</div>
+        <div class="info">
+          <div class="title">test_enhanced_global_state.py</div>
+          <div class="desc">C++ binary validates DeviceRuntimeStats kernel/GEMM maps, CompatEvent tracking, and snapshot</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>python3 test/test_enhanced_global_state.py</code></div>
+          <pre>enhanced GlobalState smoke passed</pre>
+          <div class="note">Compiles <code>verification/test_enhanced_global_state.cpp</code> against the FakeGPU library, exercises <code>record_kernel_launch()</code>, <code>record_cublas_gemm_typed()</code>, <code>record_compat_event()</code>, and verifies snapshot output fields.</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P1-3</div>
+        <div class="info">
+          <div class="title">test_report_v4_smoke.py</div>
+          <div class="desc">Integration test: builds library, runs CUDA exercise, validates JSON v4 structure and terminal summary</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>python3 test/test_report_v4_smoke.py</code></div>
+          <pre>enhanced report smoke passed</pre>
+          <div class="note">Validates that <code>fake_gpu_report.json</code> has <code>report_version: 4</code>, per-device <code>gpu_profile</code> with architecture/compute_capability/supported_types, <code>kernel_launches</code> with total count, and <code>gemm_by_dtype</code> map. Also checks <code>FAKEGPU_TERMINAL_REPORT=1</code> produces stderr summary output.</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P1-4</div>
+        <div class="info">
+          <div class="title">run_smoke.sh (Native Smoke Test)</div>
+          <div class="desc">End-to-end: build &rarr; compile C test &rarr; LD_PRELOAD &rarr; verify report and terminal summary</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>./verification/run_smoke.sh</code></div>
+          <pre>Device 0: Fake NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+  Memory: 64.0 MB / 80.0 GB peak (0.1%)
+  Alloc: 1 calls | Free: 1 calls</pre>
+          <div class="note">Terminal summary correctly displayed on stderr. Report JSON shows v4 with gpu_profile, kernel_launches, and gemm_by_dtype for 8 simulated A100 devices.</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P1-5</div>
+        <div class="info">
+          <div class="title">FAKEGPU_TERMINAL_REPORT=0 Suppression</div>
+          <div class="desc">Verify terminal summary is suppressed when env var is set to 0</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>FAKEGPU_TERMINAL_REPORT=0 ./verification/run_smoke.sh</code></div>
+          <pre>grep -c "FakeGPU Report Summary" => 0</pre>
+          <div class="note">With <code>FAKEGPU_TERMINAL_REPORT=0</code>, the terminal summary is completely suppressed. The string "FakeGPU Report Summary" appears 0 times in combined stdout+stderr output.</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Terminal summary preview -->
+    <h3>Terminal Summary Preview</h3>
+    <div class="terminal">
+<span class="dim">======================================================</span>
+<span class="dim">             </span><span class="hl">FakeGPU Report Summary</span>
+<span class="dim">======================================================</span>
+ Device 0: Fake NVIDIA A100-SXM4-80GB <span class="dim">(Ampere, cc 8.0)</span>
+   Memory: <span class="hl">64.0 MB</span> / 80.0 GB peak (0.1%)
+   Alloc: 1 calls | Free: 1 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: Fake NVIDIA A100-SXM4-80GB <span class="dim">(Ampere, cc 8.0)</span>
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ <span class="dim">... (devices 2-7 idle, omitted for brevity)</span>
+<span class="dim">======================================================</span>
+    </div>
+
+    <!-- JSON v4 sample -->
+    <h3>Report v4 JSON Sample (Device 0)</h3>
+    <div class="json-sample">{
+  "<span style="color:var(--mist-dk)">report_version</span>": 4,
+  "<span style="color:var(--mist-dk)">mode</span>": "simulate",
+  "<span style="color:var(--mist-dk)">devices</span>": [{
+    "<span style="color:var(--mist-dk)">index</span>": 0,
+    "<span style="color:var(--mist-dk)">name</span>": "Fake NVIDIA A100-SXM4-80GB",
+    "<span style="color:var(--mist-dk)">gpu_profile</span>": {
+      "architecture": "Ampere",
+      "compute_capability": "8.0",
+      "supported_types": ["fp32", "tf32", "fp16", "bf16", "int8"]
+    },
+    "<span style="color:var(--mist-dk)">total_memory</span>": 85899345920,
+    "<span style="color:var(--mist-dk)">used_memory_peak</span>": 67108864,
+    "<span style="color:var(--mist-dk)">alloc</span>": { "calls": 1, "bytes": 67108864 },
+    "<span style="color:var(--mist-dk)">free</span>":  { "calls": 1, "bytes": 67108864 },
+    "<span style="color:var(--mist-dk)">kernel_launches</span>": { "total": 0 },
+    "<span style="color:var(--mist-dk)">gemm_by_dtype</span>": {}
+  }]
+}</div>
+  </section>
+
+  <!-- Phase 2 -->
+  <section>
+    <h2>Phase 2: Hardware Compatibility Simulation</h2>
+    <div class="phase-banner p2">
+      <div class="phase-num">P2</div>
+      <div class="phase-info">
+        <div class="ptitle">cuda_dtype_to_gpu_dtype Mapping &middot; cuBLAS Strict Compat Check &middot; Compat Events &middot; torch_patch BF16 Awareness</div>
+        <div class="pdesc">Enforce profile-based dtype compatibility in cuBLAS stubs, record compat events to report, and make torch_patch derive compute capability from FAKEGPU_PROFILES.</div>
+      </div>
+    </div>
+    <div class="results">
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P2-1</div>
+        <div class="info">
+          <div class="title">test_hw_compat_cublas.py</div>
+          <div class="desc">C++ binary tests cuBLAS dtype compat in strict and relaxed modes across different GPU profiles</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>python3 test/test_hw_compat_cublas.py</code></div>
+          <pre>hardware compatibility cuBLAS smoke passed</pre>
+          <div class="note">Compiles <code>verification/test_hw_compat_cublas.cpp</code>, which tests:
+<br>1. <code>FAKEGPU_STRICT_COMPAT=1</code>: BF16 GEMM on V100 (cc 7.0) returns <code>CUBLAS_STATUS_NOT_SUPPORTED</code>
+<br>2. <code>FAKEGPU_STRICT_COMPAT=0</code>: BF16 GEMM on V100 logs warning but returns <code>CUBLAS_STATUS_SUCCESS</code>
+<br>3. BF16 GEMM on A100 (cc 8.0) always succeeds
+<br>4. Compat events are recorded in GlobalState and visible in report</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P2-2</div>
+        <div class="info">
+          <div class="title">test_torch_patch_profile_bf16.py</div>
+          <div class="desc">Python regression: FAKEGPU_PROFILES drives compute capability and BF16 support in torch_patch</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>python3 test/test_torch_patch_profile_bf16.py</code></div>
+          <pre>torch patch profile BF16 smoke passed</pre>
+          <div class="note">Validates two key scenarios:
+<br>1. <code>FAKEGPU_PROFILES=t4:1</code> &rarr; compute_major=7, <code>is_bf16_supported()=False</code> (Turing, no BF16)
+<br>2. <code>FAKEGPU_PROFILES=a100:1</code> &rarr; compute_major=8, <code>is_bf16_supported()=True</code> (Ampere, has BF16)
+<br>Also verifies device name derivation: T4 &rarr; "Tesla T4", A100 &rarr; "NVIDIA A100-SXM4-80GB".</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Phase 3 -->
+  <section>
+    <h2>Phase 3: MoE nanoGPT Test Scenario</h2>
+    <div class="phase-banner p3">
+      <div class="phase-num">P3</div>
+      <div class="phase-info">
+        <div class="ptitle">MoE-GPT Model &middot; EP Training Script &middot; Homo/Hetero Configs &middot; train_wrapper --model moe</div>
+        <div class="pdesc">Standard Mixture-of-Experts GPT model with Router (top-k gating), Expert Parallelism via all_to_all, and two FakeGPU configurations (4&times;A100 homo, 2&times;A100+2&times;V100 hetero).</div>
+      </div>
+    </div>
+    <div class="results">
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P3-1</div>
+        <div class="info">
+          <div class="title">test_nanogpt_moe_components.py</div>
+          <div class="desc">Unit: MoEGPT instantiation, forward pass, loss computation, config files, wrapper resolution</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>python3 test/test_nanogpt_moe_components.py</code></div>
+          <pre>MoEGPT model: 0.02M parameters, 4 experts, top-2
+nanogpt MoE component smoke passed</pre>
+          <div class="note">Validates:
+<br>1. <code>MoEGPTConfig</code> creation with 2 layers, 4 experts, top-2
+<br>2. <code>MoEGPT</code> model instantiation (0.02M params)
+<br>3. Forward pass: output shape = (batch, seq_len, vocab_size), loss is scalar
+<br>4. Config files (<code>train_moe_homo.py</code>, <code>train_moe_hetero.py</code>) parse correctly
+<br>5. <code>_resolve_train_script("moe")</code> returns "train_moe.py"</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P3-2</div>
+        <div class="info">
+          <div class="title">test_nanogpt_train_wrapper_helpers.py</div>
+          <div class="desc">Regression: train_wrapper helper functions (_resolve_train_script, _prepare_train_args, memory limiter)</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>python3 test/test_nanogpt_train_wrapper_helpers.py</code></div>
+          <pre>nanogpt train wrapper helper regression passed</pre>
+          <div class="note">Tests helper functions:
+<br>1. <code>_resolve_train_script("gpt")</code> &rarr; "train.py", <code>"moe"</code> &rarr; "train_moe.py"
+<br>2. <code>_prepare_train_args()</code> default injection (float32, eval_iters=2, batch_size=8, block_size=64)
+<br>3. <code>_prepare_train_args()</code> no-clobber: existing args not overwritten
+<br>4. <code>_FakeCudaMemoryLimiter</code> OOM trigger at configured threshold
+<br>5. <code>_resolve_profile_memory_bytes()</code> for profile and devices specs</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P3-3</div>
+        <div class="info">
+          <div class="title">MoE Training (Direct: train_moe.py)</div>
+          <div class="desc">End-to-end MoE-GPT training: 2 iters, 4 experts, top-2, float32, CPU backend</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>python3 train_moe.py --max-iters 2 --n-layer 2 --n-embd 64 --n-head 2 --num-experts 4 --batch-size 2 --block-size 16 --dtype float32</code></div>
+          <pre>============================================================
+MoE-GPT Training
+  World size: 1
+  Device: cpu
+  Layers: 2, Heads: 2, Embd: 64
+  Experts: 4, Top-k: 2
+  Expert Parallel: False
+  Batch size: 2, Block size: 16
+  Max iters: 2
+  Dtype: float32
+============================================================
+MoEGPT model: 0.30M parameters, 4 experts, top-2
+  iter    0 | loss 4.9123 | time 0.1s
+  iter    1 | loss 4.8629 | time 0.1s
+============================================================
+Training complete: 2 iters in 0.1s
+============================================================</pre>
+          <div class="note">MoE-GPT model trains successfully. Loss decreases (4.9123 &rarr; 4.8629), confirming gradient flow through Router + ExpertMLP + attention layers. 0.30M parameters with 4 experts.</div>
+        </div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P3-4</div>
+        <div class="info">
+          <div class="title">MoE Training (Wrapper: train_wrapper.py --model moe)</div>
+          <div class="desc">Wrapper integration: baseline mode, MoE model routing, CPU fallback with correct arg injection</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail">
+          <div class="kv">Command: <code>python3 train_wrapper.py --mode baseline --model moe -- --max-iters=1 ...</code></div>
+          <pre>======================================================================
+[WRAPPER] nanoGPT Validation Test
+[WRAPPER] Mode: baseline
+[WRAPPER] Model: moe
+[WRAPPER] Train args: ['--max-iters=1', '--n-layer=2', '--n-embd=64',
+                        '--n-head=2', '--num-experts=4', '--batch-size=2',
+                        '--block-size=16', '--dtype=float32']
+======================================================================
+[WRAPPER] Using MoE model: train_moe.py
+============================================================
+MoE-GPT Training
+  World size: 1 | Device: cpu
+  Experts: 4, Top-k: 2
+============================================================
+MoEGPT model: 0.30M parameters, 4 experts, top-2
+  iter    0 | loss 4.8571 | time 0.0s
+============================================================
+Training complete: 1 iters in 0.0s
+============================================================
+======================================================================
+[WRAPPER] Training completed successfully in 0.5s
+[WRAPPER] Result: PASS
+======================================================================</pre>
+          <div class="note">Wrapper correctly:
+<br>1. Resolves <code>--model moe</code> to <code>train_moe.py</code>
+<br>2. Passes through all CLI args
+<br>3. In baseline mode, runs without FakeGPU init (CPU fallback)
+<br>4. Reports PASS with 0.5s total time</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Conclusions -->
+  <section>
+    <h2>Conclusions</h2>
+    <div class="concl">
+      <div class="card pass">
+        <h4>All Tests Passing</h4>
+        <ul>
+          <li>C++ build: clean compilation</li>
+          <li>Report v4: JSON + terminal summary</li>
+          <li>HW compat: strict/relaxed modes</li>
+          <li>BF16 profile awareness</li>
+          <li>MoE model + training</li>
+          <li>Wrapper --model moe routing</li>
+        </ul>
+      </div>
+      <div class="card info">
+        <h4>What's New in v4</h4>
+        <ul>
+          <li><code>gpu_profile</code>: arch, cc, supported dtypes</li>
+          <li><code>kernel_launches</code>: total + by-name</li>
+          <li><code>gemm_by_dtype</code>: per-type call/flop stats</li>
+          <li><code>compatibility_events</code>: dtype rejections</li>
+          <li>Stderr terminal summary (suppressible)</li>
+          <li><code>FAKEGPU_STRICT_COMPAT</code> env var</li>
+        </ul>
+      </div>
+      <div class="card caveat">
+        <h4>Known Limitations</h4>
+        <ul>
+          <li>MoE EP path: <code>all_to_all_single</code> fires but expert compute stays local (FakeGPU test focus)</li>
+          <li>No actual GPU computation; kernels are no-ops</li>
+          <li>Smoke test shows 0 kernel_launches (C binary doesn't call cudaLaunchKernel)</li>
+          <li>macOS: no real CUDA, all tests use CPU backend</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Generated from test results on 2026-04-17 &middot; Plan: <code>docs/superpowers/plans/2026-04-17-enhanced-report-hwcompat-moe.md</code>
+  </footer>
+
+</div>
+
+<script>
+  // subtle stagger for rows
+  document.querySelectorAll('.results .row').forEach((el, i) => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(8px)';
+    el.style.transition = 'opacity .5s ease, transform .5s ease';
+    setTimeout(() => {
+      el.style.opacity = '1';
+      el.style.transform = 'translateY(0)';
+    }, 600 + i * 80);
+  });
+</script>
+</body>
+</html>

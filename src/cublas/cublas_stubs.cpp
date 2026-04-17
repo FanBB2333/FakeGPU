@@ -1489,6 +1489,19 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
             return compat;
         }
     }
+    // Cross-device check: A, B, C must be on the same device
+    {
+        auto& gs = fake_gpu::GlobalState::instance();
+        const int current = gs.get_current_device();
+        int dev_a = gs.resolve_device_for_ptr(A, current);
+        int dev_b = gs.resolve_device_for_ptr(B, current);
+        int dev_c = gs.resolve_device_for_ptr(C, current);
+        if (dev_a != dev_c || dev_b != dev_c) {
+            FGPU_LOG("[FakeCUBLAS] cublasGemmEx: cross-device detected "
+                     "(A@dev%d, B@dev%d, C@dev%d)\n", dev_a, dev_b, dev_c);
+            return CUBLAS_STATUS_INVALID_VALUE;
+        }
+    }
 #if FAKEGPU_CPU_SIMULATION
     if (!is_supported_gemm_datatype(Atype) || !is_supported_gemm_datatype(Btype) || !is_supported_gemm_datatype(Ctype)) {
         FGPU_LOG("[FakeCUBLAS] cublasGemmEx unsupported types A=%d B=%d C=%d; skipping cpu compute\n", Atype, Btype, Ctype);
