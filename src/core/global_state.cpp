@@ -14,6 +14,17 @@ namespace fake_gpu {
 namespace {
 constexpr int kDefaultDeviceCount = 8;
 
+const char* cuda_dtype_name(int data_type) {
+    switch (data_type) {
+        case 0: return "FP32";
+        case 1: return "FP64";
+        case 2: return "FP16";
+        case 3: return "INT8";
+        case 14: return "BF16";
+        default: return "OTHER";
+    }
+}
+
 std::string trim_copy(const std::string& value) {
     const size_t begin = value.find_first_not_of(" \t\r\n");
     if (begin == std::string::npos) return "";
@@ -343,6 +354,44 @@ void GlobalState::record_cublaslt_matmul(const void* output_device_ptr, uint64_t
     saturating_add_u64(stats->cublaslt_matmul_flops, flops);
 }
 
+void GlobalState::record_kernel_launch(const std::string& kernel_name) {
+    std::lock_guard<std::mutex> lock(mutex);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(current_device);
+    if (!stats) return;
+    stats->kernel_launch_total += 1;
+    if (stats->kernel_launches.size() < 10000) {
+        stats->kernel_launches[kernel_name] += 1;
+    } else {
+        stats->kernel_launches["_other_"] += 1;
+    }
+}
+
+void GlobalState::record_cublas_gemm_typed(const void* output_device_ptr, uint64_t flops, int cuda_data_type) {
+    if (!output_device_ptr) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    if (!stats) return;
+    stats->cublas_gemm_calls += 1;
+    saturating_add_u64(stats->cublas_gemm_flops, flops);
+    auto& dtype_stats = stats->gemm_by_dtype[cuda_data_type];
+    dtype_stats.calls += 1;
+    saturating_add_u64(dtype_stats.flops, flops);
+}
+
+void GlobalState::record_cublaslt_matmul_typed(const void* output_device_ptr, uint64_t flops, int cuda_data_type) {
+    if (!output_device_ptr) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    if (!stats) return;
+    stats->cublaslt_matmul_calls += 1;
+    saturating_add_u64(stats->cublaslt_matmul_flops, flops);
+    auto& dtype_stats = stats->gemm_by_dtype[cuda_data_type];
+    dtype_stats.calls += 1;
+    saturating_add_u64(dtype_stats.flops, flops);
+}
+
 std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
     std::lock_guard<std::mutex> lock(mutex);
     std::vector<DeviceReportStats> snapshot;
@@ -354,6 +403,12 @@ std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
         entry.index = dev.index;
         entry.name = dev.name;
         entry.uuid = dev.uuid;
+        entry.architecture = to_string(dev.profile.architecture);
+        entry.compute_major = dev.profile.compute_major;
+        entry.compute_minor = dev.profile.compute_minor;
+        for (const auto& dtype : dev.profile.supported_types) {
+            entry.supported_types.push_back(to_string(dtype));
+        }
         entry.total_memory = dev.total_memory;
         entry.used_memory_current = dev.used_memory;
         entry.used_memory_peak = dev.used_memory_peak;
@@ -380,6 +435,14 @@ std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
             entry.cublas_gemm_flops = stats.cublas_gemm_flops;
             entry.cublaslt_matmul_calls = stats.cublaslt_matmul_calls;
             entry.cublaslt_matmul_flops = stats.cublaslt_matmul_flops;
+            entry.kernel_launches = stats.kernel_launches;
+            entry.kernel_launch_total = stats.kernel_launch_total;
+            for (const auto& [dtype_int, dtype_stats] : stats.gemm_by_dtype) {
+                entry.gemm_by_dtype[cuda_dtype_name(dtype_int)] = {
+                    dtype_stats.calls,
+                    dtype_stats.flops,
+                };
+            }
         }
 
         snapshot.push_back(std::move(entry));

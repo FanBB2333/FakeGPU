@@ -10,6 +10,8 @@
 
 namespace {
 
+void fake_kernel_probe() {}
+
 void check_cuda(cudaError_t err, const char* what) {
     if (err == cudaSuccess) return;
     std::fprintf(stderr, "CUDA failure (%s): %d\n", what, static_cast<int>(err));
@@ -127,6 +129,18 @@ bool allclose_scalar(float got, float expected, float atol, float rtol, const ch
 
 int main() {
     std::mt19937 rng(12345);
+
+    // Touch the runtime kernel-launch path so report tests can assert launch tracking.
+    check_cuda(
+        cudaLaunchKernel(
+            reinterpret_cast<const void*>(fake_kernel_probe),
+            dim3{1, 1, 1},
+            dim3{1, 1, 1},
+            nullptr,
+            0,
+            nullptr),
+        "cudaLaunchKernel"
+    );
 
     // -------------------------
     // Test 1: cublasSgemm_v2

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include "device.hpp"
 
 namespace fake_gpu {
@@ -19,6 +20,10 @@ struct DeviceReportStats {
     int index = -1;
     std::string name;
     std::string uuid;
+    std::string architecture;
+    int compute_major = 0;
+    int compute_minor = 0;
+    std::vector<std::string> supported_types;
     uint64_t total_memory = 0;
     uint64_t used_memory_current = 0;
     uint64_t used_memory_peak = 0;
@@ -45,6 +50,10 @@ struct DeviceReportStats {
     uint64_t cublas_gemm_flops = 0;
     uint64_t cublaslt_matmul_calls = 0;
     uint64_t cublaslt_matmul_flops = 0;
+
+    std::unordered_map<std::string, uint64_t> kernel_launches;
+    uint64_t kernel_launch_total = 0;
+    std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> gemm_by_dtype;
 };
 
 class GlobalState {
@@ -83,6 +92,9 @@ public:
     // Compute tracking (best-effort)
     void record_cublas_gemm(const void* output_device_ptr, uint64_t flops);
     void record_cublaslt_matmul(const void* output_device_ptr, uint64_t flops);
+    void record_kernel_launch(const std::string& kernel_name);
+    void record_cublas_gemm_typed(const void* output_device_ptr, uint64_t flops, int cuda_data_type);
+    void record_cublaslt_matmul_typed(const void* output_device_ptr, uint64_t flops, int cuda_data_type);
 
     // Snapshot for reporting (thread-safe)
     std::vector<DeviceReportStats> snapshot_device_report() const;
@@ -115,6 +127,15 @@ private:
         uint64_t cublas_gemm_flops = 0;
         uint64_t cublaslt_matmul_calls = 0;
         uint64_t cublaslt_matmul_flops = 0;
+
+        struct GemmDtypeStats {
+            uint64_t calls = 0;
+            uint64_t flops = 0;
+        };
+
+        std::unordered_map<std::string, uint64_t> kernel_launches;
+        uint64_t kernel_launch_total = 0;
+        std::unordered_map<int, GemmDtypeStats> gemm_by_dtype;
     };
 
     bool initialized = false;
