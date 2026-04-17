@@ -1,0 +1,3 @@
+$ /Users/l1ght/miniforge3/envs/fakegpu/bin/python test/test_torch_patch_profile_bf16.py
+
+torch patch profile BF16 smoke passed
