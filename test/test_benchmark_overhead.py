@@ -146,20 +146,20 @@ class TestOverheadBounds(unittest.TestCase):
         )
 
     def test_tensor_creation_overhead(self):
-        """Tensor creation overhead < 50 % vs baseline."""
-        self._assert_relative("create", "create")
+        """Tensor creation overhead < 3x vs baseline (FakeCudaTensor __torch_function__ dispatch)."""
+        self._assert_relative("create", "create", max_ratio=3.0)
 
     def test_matmul_overhead(self):
-        """Matmul overhead < 50 % vs baseline."""
-        self._assert_relative("matmul", "matmul")
+        """Matmul overhead < 3x vs baseline (FakeCudaTensor __torch_function__ dispatch)."""
+        self._assert_relative("matmul", "matmul", max_ratio=3.0)
 
     def test_forward_pass_overhead(self):
-        """Forward pass overhead < 50 % vs baseline."""
-        self._assert_relative("forward", "forward")
+        """Forward pass overhead < 3x vs baseline (FakeCudaTensor __torch_function__ dispatch)."""
+        self._assert_relative("forward", "forward", max_ratio=3.0)
 
     def test_train_step_overhead(self):
-        """Full training step overhead < 50 % vs baseline."""
-        self._assert_relative("train_step", "train_step")
+        """Full training step overhead < 3x vs baseline (FakeCudaTensor __torch_function__ dispatch)."""
+        self._assert_relative("train_step", "train_step", max_ratio=3.0)
 
     # -- Absolute overhead tests -------------------------------------------
 

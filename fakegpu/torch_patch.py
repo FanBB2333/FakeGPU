@@ -31,6 +31,7 @@ from typing import Any
 
 _patched = False
 _patch_result: "PatchResult | None" = None
+_upstream_mod: Any = None  # Set when upstream FakeCudaTensor backend is active
 
 # ---------------------------------------------------------------------------
 # Configuration – mirrors the active FakeGPU profile when available.
@@ -246,7 +247,11 @@ def _check_same_device(*tensors: Any) -> None:
     for t in tensors:
         if not isinstance(t, torch.Tensor):
             continue
-        dev = _get_tensor_device(t)
+        # Upstream FakeCudaTensor: has device_index attribute
+        dev = getattr(t, "device_index", None)
+        if dev is None:
+            # Standalone fallback: use device registry
+            dev = _get_tensor_device(t)
         if dev is None:
             continue  # untracked tensor (e.g. pure CPU) — skip
         if first_dev is None:
@@ -547,15 +552,21 @@ def _normalize_device(device: Any) -> Any:
 def _normalize_device_index(device: Any) -> int:
     import torch
 
-    if device is None:
+    def _get_current() -> int:
+        # In upstream mode, delegate to upstream's _CURRENT_DEVICE
+        if _upstream_mod is not None:
+            return _upstream_mod._CURRENT_DEVICE
         return _current_device
+
+    if device is None:
+        return _get_current()
     if isinstance(device, int):
         return device
     if isinstance(device, str):
         device = torch.device(device)
     if isinstance(device, torch.device):
-        return device.index or _current_device
-    return _current_device
+        return device.index if device.index is not None else _get_current()
+    return _get_current()
 
 
 def _device_kwarg_wrapper(fn: Any) -> Any:
@@ -737,13 +748,18 @@ class _FakeEvent:
 
 
 class _FakeDeviceProperties:
-    """Mimics ``torch.cuda.get_device_properties()`` return value."""
+    """Mimics ``torch.cuda.get_device_properties()`` return value.
+
+    Reads per-device profile data from ``_DEVICE_PROFILES`` when available,
+    falling back to the module-level scalar defaults.
+    """
 
     def __init__(self, index: int = 0):
-        self.name = _DEVICE_NAME
-        self.major = _COMPUTE_MAJOR
-        self.minor = _COMPUTE_MINOR
-        self.total_memory = _TOTAL_MEMORY
+        prof = _DEVICE_PROFILES[index] if index < len(_DEVICE_PROFILES) else {}
+        self.name = prof.get("name", _DEVICE_NAME)
+        self.major = prof.get("compute_major", _COMPUTE_MAJOR)
+        self.minor = prof.get("compute_minor", _COMPUTE_MINOR)
+        self.total_memory = prof.get("total_memory", _TOTAL_MEMORY)
         self.multi_processor_count = 108
         self.is_multi_gpu_board = False
         self.is_integrated = False
@@ -1087,37 +1103,296 @@ def _install_legacy_cuda_types(torch: Any, *, device: str) -> None:
         setattr(torch.cuda, tname, _make_legacy_factory(dt))
 
 
-def _maybe_enable_custom_torch_fakegpu(
-    torch: Any,
-    *,
-    num_devices: int | None = None,
-    device_name: str | None = None,
-) -> bool:
-    """Enable the installed custom torch fake-CUDA backend when available."""
+def _activate_upstream(num_devices: int, device_name: str) -> Any:
+    """Load and enable the upstream FakeCudaTensor backend.
 
-    os.environ["TORCH_FAKEGPU_ENABLE"] = "1"
-    os.environ["FAKEGPU_TORCH_ENABLE"] = "1"
-    if num_devices is not None:
-        os.environ["TORCH_FAKEGPU_DEVICE_COUNT"] = str(num_devices)
-    if device_name is not None:
-        os.environ["TORCH_FAKEGPU_DEVICE_NAME"] = device_name
+    Tries the installed ``torch.fakegpu`` module first, then falls back to the
+    vendored ``fakegpu._upstream``.  Returns the activated module on success,
+    or *None* when neither source is available.
+    """
+    global _upstream_mod
+    upstream = None
+
+    # 1. Prefer an installed torch.fakegpu (custom PyTorch build)
+    try:
+        upstream = importlib.import_module("torch.fakegpu")
+    except Exception:
+        pass
+
+    # 2. Fall back to vendored upstream
+    if upstream is None:
+        try:
+            from . import _upstream
+            upstream = _upstream
+        except Exception:
+            return None
+
+    if not hasattr(upstream, "enable"):
+        return None
+
+    # Configure device count and name before enable()
+    if hasattr(upstream, "_NUM_DEVICES"):
+        upstream._NUM_DEVICES = num_devices
+    if hasattr(upstream, "_DEVICE_NAME"):
+        upstream._DEVICE_NAME = device_name
+
+    os.environ["TORCH_FAKEGPU_DEVICE_COUNT"] = str(num_devices)
+    os.environ["TORCH_FAKEGPU_DEVICE_NAME"] = device_name
+
+    upstream.enable()
+    _upstream_mod = upstream
+    return upstream
+
+
+def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
+    """Layer FakeGPU enhancements on top of the upstream FakeCudaTensor backend.
+
+    The upstream ``enable()`` has already patched core CUDA redirection
+    (Tensor.to/cuda, Module.to/cuda, DataParallel, DDP, distributed,
+    factory functions, torch.load).  This function adds:
+
+    * Per-device GPU profile support
+    * Memory tracking with OOM simulation
+    * Autocast dtype validation
+    * GradScaler passthrough
+    * Cross-device validation
+    * Terminal report on exit
+    """
+    global _memory_tracker
+
+    import torch.cuda
+
+    # ---- 0. Device index bounds validation ----
+    # The upstream uses a different error message ("Invalid fake CUDA device index N").
+    # Replace _normalize_device_index entirely so that all paths (set_device,
+    # torch.load, etc.) that call it produce our "invalid device ordinal" message
+    # matching real CUDA behaviour and our test suite.
+    _orig_normalize_cuda_device = upstream._normalize_cuda_device
+
+    def _checked_normalize_device_index(device):
+        """Full replacement for upstream._normalize_device_index."""
+        normalized = _orig_normalize_cuda_device(device)
+        if normalized is None:
+            return upstream._CURRENT_DEVICE
+        index = 0 if normalized.index is None else int(normalized.index)
+        if index < 0 or index >= _NUM_DEVICES:
+            raise RuntimeError(
+                f"CUDA error: invalid device ordinal "
+                f"(requested cuda:{index}, available: {_NUM_DEVICES})"
+            )
+        return index
+
+    upstream._normalize_device_index = _checked_normalize_device_index
+
+    # Also override set_device to use our bounds-checked normalize
+    def _validated_set_device(device):
+        idx = _checked_normalize_device_index(device)
+        upstream._CURRENT_DEVICE = idx
+
+    torch.cuda.set_device = _validated_set_device
+    upstream.set_device = _validated_set_device
+
+    # Override _normalize_cuda_device to validate bounds for factory functions.
+    # The upstream version doesn't check _NUM_DEVICES, so torch.randn(device="cuda:99")
+    # would silently create a tensor on a non-existent device.
+    def _bounds_checked_normalize_cuda(device, *, allow_none=False):
+        result = _orig_normalize_cuda_device(device, allow_none=allow_none)
+        if result is not None and result.type == "cuda":
+            idx = 0 if result.index is None else int(result.index)
+            if idx < 0 or idx >= _NUM_DEVICES:
+                raise RuntimeError(
+                    f"CUDA error: invalid device ordinal "
+                    f"(requested cuda:{idx}, available: {_NUM_DEVICES})"
+                )
+        return result
+
+    upstream._normalize_cuda_device = _bounds_checked_normalize_cuda
+
+    # ---- 1. Memory tracker ----
+    if _MEMORY_TRACKING:
+        per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
+        _memory_tracker = _DeviceMemoryTracker(per_device_bytes)
+
+    # ---- 2. Hook upstream.wrap_tensor for memory tracking ----
+    _orig_wrap_tensor = upstream.wrap_tensor
+
+    def _hooked_wrap_tensor(t, device_index=None):
+        # Validate device index bounds
+        actual_idx = upstream._CURRENT_DEVICE if device_index is None else int(device_index)
+        if actual_idx < 0 or actual_idx >= _NUM_DEVICES:
+            raise RuntimeError(
+                f"CUDA error: invalid device ordinal "
+                f"(requested cuda:{actual_idx}, available: {_NUM_DEVICES})"
+            )
+        result = _orig_wrap_tensor(t, device_index=device_index)
+        if _memory_tracker is not None:
+            actual_idx = getattr(result, "device_index", 0)
+            _register_tensor_for_memory_tracking(result, actual_idx)
+        return result
+
+    upstream.wrap_tensor = _hooked_wrap_tensor
+
+    # ---- 3. Per-device GPU profiles ----
+    def _profiled_get_device_name(device=None):
+        idx = _normalize_device_index(device)
+        if idx < len(_DEVICE_PROFILES):
+            return _DEVICE_PROFILES[idx].get("name", _DEVICE_NAME)
+        return _DEVICE_NAME
+
+    def _profiled_get_device_capability(device=None):
+        idx = _normalize_device_index(device)
+        if idx < len(_DEVICE_PROFILES):
+            prof = _DEVICE_PROFILES[idx]
+            return (prof.get("compute_major", _COMPUTE_MAJOR),
+                    prof.get("compute_minor", _COMPUTE_MINOR))
+        return (_COMPUTE_MAJOR, _COMPUTE_MINOR)
+
+    def _profiled_get_device_properties(device=None):
+        idx = _normalize_device_index(device)
+        if idx < 0 or idx >= _NUM_DEVICES:
+            raise RuntimeError(
+                f"CUDA error: invalid device ordinal "
+                f"(requested {idx}, available: {_NUM_DEVICES})"
+            )
+        return _FakeDeviceProperties(idx)
+
+    torch.cuda.get_device_name = _profiled_get_device_name
+    torch.cuda.get_device_capability = _profiled_get_device_capability
+    torch.cuda.get_device_properties = _profiled_get_device_properties
+
+    # Compute-capability-aware bf16 check (upstream always returns True)
+    torch.cuda.is_bf16_supported = _stub_is_bf16_supported
+
+    # ---- 4. Tracked memory query functions ----
+    if _memory_tracker is not None:
+        _tracker = _memory_tracker
+
+        def _tracked_memory_allocated(device=None):
+            idx = _normalize_device_index(device)
+            return _tracker.memory_allocated(idx)
+
+        def _tracked_max_memory_allocated(device=None):
+            idx = _normalize_device_index(device)
+            return _tracker.max_memory_allocated(idx)
+
+        def _tracked_mem_get_info(device=None):
+            idx = _normalize_device_index(device)
+            return _tracker.mem_get_info(idx)
+
+        def _tracked_reset_peak_memory_stats(device=None):
+            idx = _normalize_device_index(device)
+            _tracker.reset_peak(idx)
+
+        torch.cuda.memory_allocated = _tracked_memory_allocated
+        torch.cuda.max_memory_allocated = _tracked_max_memory_allocated
+        torch.cuda.mem_get_info = _tracked_mem_get_info
+        torch.cuda.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
+
+        # Also patch torch.cuda.memory submodule
+        try:
+            import torch.cuda.memory as _memory_mod
+            _memory_mod.memory_allocated = _tracked_memory_allocated
+            _memory_mod.max_memory_allocated = _tracked_max_memory_allocated
+            _memory_mod.mem_get_info = _tracked_mem_get_info
+            _memory_mod.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
+        except Exception:
+            pass
+
+    # ---- 5. Autocast / GradScaler ----
+    _strict_compat = os.environ.get("FAKEGPU_STRICT_COMPAT", "1") != "0"
+
+    if _strict_compat and hasattr(torch_mod.amp, "autocast"):
+        _OrigAutocast = torch_mod.amp.autocast
+
+        class _PatchedAutocast(_OrigAutocast):
+            """Autocast wrapper that validates dtype vs compute capability."""
+
+            def __init__(self, device_type: str = "cuda", **kwargs):
+                super().__init__(device_type, **kwargs)
+
+            def __enter__(self):
+                if (
+                    getattr(self, "device_type", None) == "cuda"
+                    and getattr(self, "fast_dtype", None) == torch_mod.bfloat16
+                    and _COMPUTE_MAJOR < 8
+                ):
+                    raise RuntimeError(
+                        f"Current CUDA Device does not support bfloat16. "
+                        f"Please switch dtype to float16 "
+                        f"(compute capability {_COMPUTE_MAJOR}.{_COMPUTE_MINOR}, "
+                        f"need >= 8.0 for bf16)."
+                    )
+                return super().__enter__()
+
+        torch_mod.amp.autocast = _PatchedAutocast
+        if hasattr(torch_mod.cuda.amp, "autocast"):
+            torch_mod.cuda.amp.autocast = _PatchedAutocast
 
     try:
-        torch_fakegpu = importlib.import_module("torch.fakegpu")
+        from torch.amp import GradScaler as _RealGradScaler
+
+        class _FakeGradScaler(_RealGradScaler):
+            def __init__(self, *args: Any, **kwargs: Any):
+                kwargs.setdefault("enabled", False)
+                super().__init__(*args, **kwargs)
+
+        torch_mod.cuda.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
+        torch_mod.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
     except Exception:
-        return False
+        pass
 
-    if num_devices is not None and hasattr(torch_fakegpu, "_NUM_DEVICES"):
-        torch_fakegpu._NUM_DEVICES = int(num_devices)
-    if device_name is not None and hasattr(torch_fakegpu, "_DEVICE_NAME"):
-        torch_fakegpu._DEVICE_NAME = str(device_name)
+    # ---- 6. Cross-device validation ----
+    if _CROSS_DEVICE_CHECK:
+        import torch.nn.functional as F
 
-    if not hasattr(torch_fakegpu, "enable"):
-        return False
+        _MULTI_TENSOR_OPS = [
+            "matmul", "mm", "bmm", "cat", "stack", "where",
+            "addmm", "addcmul", "addcdiv",
+        ]
+        for op_name in _MULTI_TENSOR_OPS:
+            orig = getattr(torch_mod, op_name, None)
+            if orig is not None:
+                setattr(torch_mod, op_name, _wrap_multi_tensor_op(orig))
 
-    torch_fakegpu.enable()
-    _install_legacy_cuda_types(torch, device="cuda")
-    return True
+        _LOSS_OPS = ["cross_entropy", "mse_loss", "nll_loss", "binary_cross_entropy"]
+        for op_name in _LOSS_OPS:
+            orig = getattr(F, op_name, None)
+            if orig is not None:
+                setattr(F, op_name, _wrap_multi_tensor_op(orig))
+
+        _FUNCTIONAL_OPS = ["linear", "conv1d", "conv2d", "conv3d",
+                           "embedding", "batch_norm", "layer_norm"]
+        for op_name in _FUNCTIONAL_OPS:
+            orig = getattr(F, op_name, None)
+            if orig is not None:
+                setattr(F, op_name, _wrap_multi_tensor_op(orig))
+
+        _BINARY_DUNDERS = [
+            "__add__", "__radd__", "__sub__", "__rsub__",
+            "__mul__", "__rmul__", "__truediv__", "__rtruediv__",
+            "__matmul__", "__rmatmul__",
+        ]
+        for dunder in _BINARY_DUNDERS:
+            orig = getattr(torch_mod.Tensor, dunder, None)
+            if orig is not None:
+                setattr(torch_mod.Tensor, dunder, _wrap_tensor_binary_op(orig))
+
+    # ---- 7. RNG state functions (not provided by upstream) ----
+    torch.cuda.get_rng_state = _stub_get_rng_state
+    torch.cuda.get_rng_state_all = _stub_get_rng_state_all
+    torch.cuda.set_rng_state = _stub_set_rng_state
+    torch.cuda.set_rng_state_all = _stub_set_rng_state_all
+    try:
+        import torch.cuda.random as _random
+        _random.get_rng_state = _stub_get_rng_state
+        _random.get_rng_state_all = _stub_get_rng_state_all
+        _random.set_rng_state = _stub_set_rng_state
+        _random.set_rng_state_all = _stub_set_rng_state_all
+    except Exception:
+        pass
+
+    # ---- 8. Terminal report ----
+    atexit.register(_dump_terminal_summary)
 
 
 # ---------------------------------------------------------------------------
@@ -1153,19 +1428,20 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
 
     _refresh_runtime_profile_state(num_devices=num_devices, device_name=device_name)
 
-    if _maybe_enable_custom_torch_fakegpu(
-        torch,
-        num_devices=_NUM_DEVICES,
-        device_name=_DEVICE_NAME,
-    ):
+    # --- Upstream path: FakeCudaTensor (vendored or installed) ---
+    upstream = _activate_upstream(_NUM_DEVICES, _DEVICE_NAME)
+    if upstream is not None:
+        _apply_enhancements_over_upstream(upstream, torch)
         _patched = True
         _patch_result = PatchResult(
-            backend="custom_torch",
+            backend="upstream",
             num_devices=_NUM_DEVICES,
             device_name=_DEVICE_NAME,
         )
         warnings.warn(
-            "fakegpu.torch_patch: enabled the installed custom torch fake-CUDA backend.",
+            "fakegpu.torch_patch: enabled upstream FakeCudaTensor backend with "
+            "FakeGPU enhancements (memory tracking, GPU profiles, cross-device "
+            "validation).",
             stacklevel=2,
         )
         return _patch_result
