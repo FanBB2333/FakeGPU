@@ -20,7 +20,7 @@ standalone fallback path patches ``torch.cuda`` directly but cannot make
 
 .. _pytorch-fakegpu: https://github.com/FanBB2333/pytorch-fakegpu
 
-Verified PyTorch version: **torch 2.9.1** (only version tested).
+Verified PyTorch versions: **torch 2.6.0 -- 2.11.0** (all pass 30/30 validation steps).
 
 Usage::
 

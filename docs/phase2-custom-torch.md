@@ -116,9 +116,20 @@ import fakegpu
 fakegpu.init(runtime="fakecuda")
 ```
 
-## Verified PyTorch version
+## Verified PyTorch versions
 
-torch 2.9.1 is the only version tested so far.
+Tested and passing (30/30 validation steps each):
+
+| Version | Status |
+|---------|--------|
+| torch 2.6.0 | Pass (xfail: torch.compile, overhead benchmark) |
+| torch 2.7.1 | Pass (xfail: torch.compile, overhead benchmark) |
+| torch 2.8.0 | Pass (xfail: overhead benchmark) |
+| torch 2.9.1 | Pass |
+| torch 2.10.0 | Pass |
+| torch 2.11.0 | Pass |
+
+See `test-results/index.html` for the full compatibility matrix report.
 
 ## Known limitations
 
