@@ -26,6 +26,69 @@ uint64_t saturating_add_u64(uint64_t a, uint64_t b) {
     return a + b;
 }
 
+void dump_terminal_summary(const std::vector<fake_gpu::DeviceReportStats>& devices,
+                           const fake_gpu::HostIoStats& host_io) {
+    const char* env = std::getenv("FAKEGPU_TERMINAL_REPORT");
+    if (env && std::string(env) == "0") {
+        return;
+    }
+
+    auto fmt_bytes = [](uint64_t bytes) -> std::string {
+        char buf[32];
+        if (bytes >= 1024ULL * 1024 * 1024) {
+            std::snprintf(buf, sizeof(buf), "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+        } else if (bytes >= 1024ULL * 1024) {
+            std::snprintf(buf, sizeof(buf), "%.1f MB", bytes / (1024.0 * 1024.0));
+        } else {
+            std::snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)bytes);
+        }
+        return buf;
+    };
+
+    std::fprintf(stderr, "\n");
+    std::fprintf(stderr, "======================================================\n");
+    std::fprintf(stderr, "             FakeGPU Report Summary\n");
+    std::fprintf(stderr, "======================================================\n");
+
+    for (const auto& dev : devices) {
+        const double peak_pct = dev.total_memory > 0
+            ? (100.0 * static_cast<double>(dev.used_memory_peak) / static_cast<double>(dev.total_memory))
+            : 0.0;
+        std::fprintf(stderr, " Device %d: %s", dev.index, dev.name.c_str());
+        if (!dev.architecture.empty()) {
+            std::fprintf(stderr, " (%s, cc %d.%d)",
+                         dev.architecture.c_str(), dev.compute_major, dev.compute_minor);
+        }
+        std::fprintf(stderr, "\n");
+        std::fprintf(stderr, "   Memory: %s / %s peak (%.1f%%)\n",
+                     fmt_bytes(dev.used_memory_peak).c_str(),
+                     fmt_bytes(dev.total_memory).c_str(),
+                     peak_pct);
+        std::fprintf(stderr, "   Alloc: %llu calls | Free: %llu calls\n",
+                     (unsigned long long)dev.alloc_calls,
+                     (unsigned long long)dev.free_calls);
+        if (!dev.gemm_by_dtype.empty()) {
+            std::fprintf(stderr, "   GEMM:");
+            for (const auto& [dtype, stats] : dev.gemm_by_dtype) {
+                std::fprintf(stderr, " %s=%llu", dtype.c_str(), (unsigned long long)stats.first);
+            }
+            std::fprintf(stderr, "\n");
+        }
+        if (dev.kernel_launch_total > 0) {
+            std::fprintf(stderr, "   Kernels: %llu total\n", (unsigned long long)dev.kernel_launch_total);
+        }
+        std::fprintf(stderr, "------------------------------------------------------\n");
+    }
+
+    if (host_io.memcpy_calls > 0) {
+        std::fprintf(stderr, " Host IO: %llu calls, %s\n",
+                     (unsigned long long)host_io.memcpy_calls,
+                     fmt_bytes(host_io.memcpy_bytes).c_str());
+    }
+
+    std::fprintf(stderr, "======================================================\n\n");
+}
+
 void dump_active_cuda_report() {
     const char* report_path = std::getenv("FAKEGPU_REPORT_PATH");
     if (!report_path || !*report_path) {
@@ -95,7 +158,7 @@ void dump_active_cuda_report() {
     const fake_gpu::BackendConfig& config = fake_gpu::BackendConfig::instance();
 
     std::fprintf(out, "{\n");
-    std::fprintf(out, "  \"report_version\": 3,\n");
+    std::fprintf(out, "  \"report_version\": 4,\n");
     std::fprintf(out, "  \"mode\": \"%s\",\n", fake_gpu::mode_name(config.mode()));
     std::fprintf(out, "  \"host_io\": {\n");
     std::fprintf(out, "    \"memcpy_calls\": %llu,\n", (unsigned long long)host_io.memcpy_calls);
@@ -144,6 +207,17 @@ void dump_active_cuda_report() {
         std::fprintf(out, "      \"index\": %d,\n", dev.index);
         std::fprintf(out, "      \"name\": \"%s\",\n", dev.name.c_str());
         std::fprintf(out, "      \"uuid\": \"%s\",\n", dev.uuid.c_str());
+        std::fprintf(out, "      \"gpu_profile\": {\n");
+        std::fprintf(out, "        \"architecture\": \"%s\",\n", dev.architecture.c_str());
+        std::fprintf(out, "        \"compute_capability\": \"%d.%d\",\n", dev.compute_major, dev.compute_minor);
+        std::fprintf(out, "        \"supported_types\": [");
+        for (size_t t = 0; t < dev.supported_types.size(); ++t) {
+            std::fprintf(out, "\"%s\"%s",
+                         dev.supported_types[t].c_str(),
+                         (t + 1 < dev.supported_types.size() ? ", " : ""));
+        }
+        std::fprintf(out, "]\n");
+        std::fprintf(out, "      },\n");
         std::fprintf(out, "      \"total_memory\": %llu,\n", (unsigned long long)dev.total_memory);
         std::fprintf(out, "      \"used_memory_peak\": %llu,\n", (unsigned long long)dev.used_memory_peak);
         std::fprintf(out, "      \"used_memory_current\": %llu,\n", (unsigned long long)dev.used_memory_current);
@@ -172,13 +246,48 @@ void dump_active_cuda_report() {
         std::fprintf(out, "        \"cublaslt_matmul\": {\"calls\": %llu, \"flops\": %llu},\n",
                      (unsigned long long)dev.cublaslt_matmul_calls, (unsigned long long)dev.cublaslt_matmul_flops);
         std::fprintf(out, "        \"total_flops\": %llu\n", (unsigned long long)device_total_flops);
-        std::fprintf(out, "      }\n");
+        std::fprintf(out, "      },\n");
+        std::fprintf(out, "      \"kernel_launches\": {\n");
+        std::fprintf(out, "        \"total\": %llu", (unsigned long long)dev.kernel_launch_total);
+        if (!dev.kernel_launches.empty()) {
+            std::fprintf(out, ",\n");
+            std::fprintf(out, "        \"by_name\": {\n");
+            size_t ki = 0;
+            for (const auto& [name, count] : dev.kernel_launches) {
+                std::fprintf(out, "          \"%s\": %llu%s\n",
+                             name.c_str(),
+                             (unsigned long long)count,
+                             (ki + 1 < dev.kernel_launches.size() ? "," : ""));
+                ++ki;
+            }
+            std::fprintf(out, "        }\n");
+        } else {
+            std::fprintf(out, "\n");
+        }
+        std::fprintf(out, "      },\n");
+        std::fprintf(out, "      \"gemm_by_dtype\": {");
+        if (!dev.gemm_by_dtype.empty()) {
+            std::fprintf(out, "\n");
+            size_t gi = 0;
+            for (const auto& [dtype_name, stats_pair] : dev.gemm_by_dtype) {
+                std::fprintf(out, "        \"%s\": {\"calls\": %llu, \"flops\": %llu}%s\n",
+                             dtype_name.c_str(),
+                             (unsigned long long)stats_pair.first,
+                             (unsigned long long)stats_pair.second,
+                             (gi + 1 < dev.gemm_by_dtype.size() ? "," : ""));
+                ++gi;
+            }
+            std::fprintf(out, "      }\n");
+        } else {
+            std::fprintf(out, "}\n");
+        }
         std::fprintf(out, "    }%s\n", (i + 1 < devices.size() ? "," : ""));
     }
 
     std::fprintf(out, "  ]\n");
     std::fprintf(out, "}\n");
     std::fclose(out);
+    dump_terminal_summary(devices, host_io);
 }
 
 void ensure_report_dump_registered() {

@@ -6,7 +6,9 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <dlfcn.h>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 // Thread-local error tracking
@@ -646,8 +648,20 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
-    FGPU_LOG("[FakeCUDART] cudaLaunchKernel (stub) Grid(%d,%d,%d) Block(%d,%d,%d)\n",
-           gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
+    fake_gpu::GlobalState::instance().initialize();
+    std::string kernel_name;
+    Dl_info info;
+    if (func && dladdr(func, &info) && info.dli_sname) {
+        kernel_name = info.dli_sname;
+    }
+    if (kernel_name.empty()) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "kernel_%p", func);
+        kernel_name = buf;
+    }
+    FGPU_LOG("[FakeCUDART] cudaLaunchKernel (stub) '%s' Grid(%d,%d,%d) Block(%d,%d,%d)\n",
+           kernel_name.c_str(), gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
+    fake_gpu::GlobalState::instance().record_kernel_launch(kernel_name);
 
     // No actual kernel execution
     last_error = cudaSuccess;

@@ -1454,8 +1454,10 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
     if (!is_supported_gemm_datatype(Atype) || !is_supported_gemm_datatype(Btype) || !is_supported_gemm_datatype(Ctype)) {
         FGPU_LOG("[FakeCUBLAS] cublasGemmEx unsupported types A=%d B=%d C=%d; skipping cpu compute\n", Atype, Btype, Ctype);
         if (m > 0 && n > 0 && k > 0) {
-            fake_gpu::GlobalState::instance().record_cublas_gemm(
-                C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1));
+            fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
+                C,
+                gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1),
+                Atype);
         }
         return CUBLAS_STATUS_SUCCESS;
     }
@@ -1501,8 +1503,10 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
     FGPU_LOG("[FakeCUBLAS] cublasGemmEx m=%d n=%d k=%d Atype=%d Btype=%d Ctype=%d computeType=%d (cpu)\n",
            m, n, k, Atype, Btype, Ctype, computeType);
     if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1));
+        fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
+            C,
+            gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1),
+            Atype);
     }
     return CUBLAS_STATUS_SUCCESS;
 #else
@@ -1512,8 +1516,10 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
     FGPU_LOG("[FakeCUBLAS] cublasGemmEx m=%d n=%d k=%d Atype=%d Btype=%d Ctype=%d computeType=%d\n",
            m, n, k, Atype, Btype, Ctype, computeType);
     if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1));
+        fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
+            C,
+            gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1),
+            Atype);
     }
     return CUBLAS_STATUS_SUCCESS;
 #endif
@@ -2849,8 +2855,10 @@ cublasStatus_t cublasLtMatmul(
                static_cast<unsigned long long>(d_layout.cols),
                static_cast<unsigned long long>(opA_cols),
                batchCount);
-        fake_gpu::GlobalState::instance().record_cublaslt_matmul(
-            D, gemm_flops_u64(d_layout.rows, d_layout.cols, opA_cols, static_cast<uint64_t>(batchCount)));
+        fake_gpu::GlobalState::instance().record_cublaslt_matmul_typed(
+            D,
+            gemm_flops_u64(d_layout.rows, d_layout.cols, opA_cols, static_cast<uint64_t>(batchCount)),
+            a_layout.type);
         return CUBLAS_STATUS_SUCCESS;
     }
 
@@ -2907,8 +2915,10 @@ cublasStatus_t cublasLtMatmul(
     }
 
     FGPU_LOG("[FakeCUBLASLt] cublasLtMatmul computed on CPU (epilogue=%u)\n", epilogue);
-    fake_gpu::GlobalState::instance().record_cublaslt_matmul(
-        D, gemm_flops_u64(d_layout.rows, d_layout.cols, opA_cols, static_cast<uint64_t>(batchCount)));
+    fake_gpu::GlobalState::instance().record_cublaslt_matmul_typed(
+        D,
+        gemm_flops_u64(d_layout.rows, d_layout.cols, opA_cols, static_cast<uint64_t>(batchCount)),
+        a_layout.type);
     return CUBLAS_STATUS_SUCCESS;
 #endif
 }

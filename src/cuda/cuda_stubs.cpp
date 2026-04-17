@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <string>
+#include <dlfcn.h>
 
 using namespace fake_gpu;
 
@@ -201,12 +203,22 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
 // For real/complex apps, they use cudaLaunchKernel (C++ API) which wraps internal C generic calls
 // or use the driver API. This is basic runtime stub.
 cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim, void **args, size_t sharedMem, cudaStream_t stream) {
-    FGPU_LOG("[FakeCUDA] cudaLaunchKernel (stub) called! Grid(%d,%d,%d) Block(%d,%d,%d)\n", 
-           gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
-    
-    // Here lies the main logic: we do NOTHING but log it.
-    // If we wanted to fuzz output, we'd need to know which args are pointers.
-    
+    ensure_report_dump_registered();
+    GlobalState::instance().initialize();
+    std::string kernel_name;
+    Dl_info info;
+    if (func && dladdr(func, &info) && info.dli_sname) {
+        kernel_name = info.dli_sname;
+    }
+    if (kernel_name.empty()) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "kernel_%p", func);
+        kernel_name = buf;
+    }
+
+    FGPU_LOG("[FakeCUDA] cudaLaunchKernel (stub) '%s' Grid(%d,%d,%d) Block(%d,%d,%d)\n",
+           kernel_name.c_str(), gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
+    GlobalState::instance().record_kernel_launch(kernel_name);
     return cudaSuccess;
 }
 
