@@ -76,6 +76,18 @@ python3 verification/test_group_semantics.py
 
 These cover the maintained simulate-mode DDP path; they are smoke and control-flow checks, not a claim of full PyTorch/NCCL parity.
 
+### Error simulation tests
+
+```bash
+python test/run_error_simulation_suite.py   # all 23 tests + HTML report
+python test/test_error_cross_device.py      # E1: cross-device
+python test/test_error_oom.py               # E2: OOM
+python test/test_error_device_index.py      # E3: invalid device
+python test/test_error_dtype_autocast.py    # E4: dtype / autocast
+python test/test_error_checkpoint_load.py   # E5: checkpoint load
+python test/test_error_gradient.py          # E7: gradient
+```
+
 ## Manual preload
 
 Using `./fgpu` is recommended. If you need manual control:
@@ -138,6 +150,14 @@ Mode-specific preload behavior in the Python API:
 | `TORCH_SDPA_KERNEL=math` | Helpful for avoiding Flash Attention-specific paths |
 | `CUDA_LAUNCH_BLOCKING=1` | Forces synchronous error surfacing |
 
+### Error simulation
+
+| Variable | Meaning |
+|---|---|
+| `FAKEGPU_CROSS_DEVICE_CHECK` | Cross-device operation guard; `0` to disable |
+| `FAKEGPU_MEMORY_TRACKING` | Per-device memory tracking and OOM simulation; `0` to disable |
+| `FAKEGPU_STRICT_COMPAT` | Strict dtype and architecture compatibility checks; `0` to disable |
+
 ## Troubleshooting
 
 Reset a broken terminal:
@@ -186,3 +206,4 @@ otool -L ./build/libnvidia-ml.dylib
 - [Architecture](project-structure.md)
 - [Reports & Validation](reports-and-validation.md)
 - [Distributed Simulation Usage Guide](distributed-sim-usage.md)
+- [Error Simulation](error-simulation.md)

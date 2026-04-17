@@ -9,6 +9,8 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "setup.cfg"
+      - "test/report.html"
+      - "test/run_error_simulation_suite.py"
   workflow_dispatch:
 
 permissions:
@@ -43,6 +45,9 @@ jobs:
 
       - name: Build MkDocs site
         run: mkdocs build --strict
+
+      - name: Copy test report into site
+        run: mkdir -p site/test && cp test/report.html site/test/
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3

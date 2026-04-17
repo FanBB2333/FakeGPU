@@ -397,7 +397,7 @@ def generate_unified_html(
     background: #2b2926; color: #d8d4cc;
     font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12.5px;
     line-height: 1.6; padding: 20px 22px; border-radius: 12px;
-    overflow-x: auto; margin: 14px 0;
+    overflow-x: auto; margin: 14px 0; white-space: pre;
   }}
   .terminal .hl {{ color: var(--sage); }}
   .terminal .dim {{ color: #7a7468; }}
@@ -789,8 +789,8 @@ MoEGPT model: 0.30M parameters, 4 experts, top-2
 
   <footer>
     Generated from test results on 2026-04-17 &middot;
-    Phase 1-3: <code>report_phase2.html</code> &middot;
-    Phase 4: <code>run_error_simulation_suite.py</code>
+    Unified report: <code>test/report.html</code> &middot;
+    Runner: <code>test/run_error_simulation_suite.py</code>
   </footer>
 
 </div>

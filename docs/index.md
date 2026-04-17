@@ -11,6 +11,7 @@ English is the default documentation language. A Simplified Chinese translation 
 - Executing supported cuBLAS/cuBLASLt operators on CPU for correctness-oriented smoke coverage
 - Simulating NCCL-style collective and point-to-point flows on a single host with multiple ranks
 - Emitting per-device and cluster-level JSON reports for memory, IO, FLOPs, and communication activity
+- Reproducing common GPU runtime errors (cross-device, OOM, invalid device, dtype mismatch, checkpoint incompatibility) for error-handling validation
 
 ## What FakeGPU is not trying to be
 
@@ -27,6 +28,7 @@ The repository currently ships:
 - Embedded GPU profiles compiled from `profiles/*.yaml`
 - A coordinator process for single-host multi-process distributed simulation
 - JSON reporting for both single-process device activity and distributed cluster activity
+- Error simulation experiments covering 7 error categories with a unified HTML test report
 
 ## Validation baseline
 
@@ -81,3 +83,4 @@ FAKEGPU_DIST_MODE=simulate
 - [Distributed Simulation Usage Guide](distributed-sim-usage.md)
 - [Distributed Design Notes](multi-node-design.md)
 - [cuBLASLt Compatibility Notes](cublaslt-fix.md)
+- [Error Simulation](error-simulation.md)

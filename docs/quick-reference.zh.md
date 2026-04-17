@@ -76,6 +76,18 @@ python3 verification/test_group_semantics.py
 
 这些命令覆盖当前维护中的 simulate-mode DDP 路径；它们属于 smoke / 控制流验证，不代表完整的 PyTorch/NCCL 等价。
 
+### 错误模拟测试
+
+```bash
+python test/run_error_simulation_suite.py   # all 23 tests + HTML report
+python test/test_error_cross_device.py      # E1: cross-device
+python test/test_error_oom.py               # E2: OOM
+python test/test_error_device_index.py      # E3: invalid device
+python test/test_error_dtype_autocast.py    # E4: dtype / autocast
+python test/test_error_checkpoint_load.py   # E5: checkpoint load
+python test/test_error_gradient.py          # E7: gradient
+```
+
 ## 手动 preload
 
 更推荐用 `./fgpu`。如果你需要手动控制：
@@ -138,6 +150,14 @@ Python API 在不同模式下会预加载不同的库：
 | `TORCH_SDPA_KERNEL=math` | 避开 Flash Attention 特定路径时常用 |
 | `CUDA_LAUNCH_BLOCKING=1` | 让错误更早、同步地暴露出来 |
 
+### 错误模拟
+
+| 变量 | 含义 |
+|---|---|
+| `FAKEGPU_CROSS_DEVICE_CHECK` | 跨设备操作守卫；设为 `0` 可关闭 |
+| `FAKEGPU_MEMORY_TRACKING` | 每设备内存跟踪与 OOM 模拟；设为 `0` 可关闭 |
+| `FAKEGPU_STRICT_COMPAT` | 严格 dtype 与架构兼容性检查；设为 `0` 可关闭 |
+
 ## 故障排查
 
 终端状态异常时：
@@ -186,3 +206,4 @@ otool -L ./build/libnvidia-ml.dylib
 - [项目结构与架构](project-structure.md)
 - [报告与验证](reports-and-validation.md)
 - [分布式模拟使用说明](distributed-sim-usage.md)
+- [错误模拟](error-simulation.md)

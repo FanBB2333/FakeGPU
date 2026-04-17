@@ -16,6 +16,10 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `./test/run_hybrid_multinode.sh 2` | maintained multi-process validation with hybrid compute + simulated communication |
 | `./ftest llm` | optional LLM smoke test when local model files are available |
 
+| `python test/run_error_simulation_suite.py` | unified error simulation suite: cross-device, OOM, invalid device, dtype, checkpoint, gradient (23 tests) |
+| `python test/test_error_cross_device.py` | cross-device tensor operation guards |
+| `python test/test_error_oom.py` | per-device OOM simulation |
+
 The first three commands are the best baseline after a code or build change.
 
 ## `fake_gpu_report.json`
@@ -66,6 +70,23 @@ That report includes:
 
 This report is useful for validating control flow, topology modeling, and broad communication-volume trends.
 
+## Unified HTML test report
+
+`test/report.html` is a self-contained HTML report with tab navigation covering:
+
+- **Phase 1** — device discovery and profile exposure
+- **Phase 2** — training flow (nanoGPT on fake GPU)
+- **Phase 3** — MoE architecture validation
+- **Phase 4** — error simulation experiments (23 tests across 6 categories)
+
+Regenerate it with:
+
+```bash
+python test/run_error_simulation_suite.py
+```
+
+The report is designed for co-deployment with the mkdocs site at `/test/report.html`.
+
 ## Stability guidance
 
 Treat the following as the most stable paths:
@@ -96,3 +117,4 @@ Treat the following as more environment-sensitive or extended coverage:
 10. Run `./test/run_multinode_sim.sh 4`.
 11. Run `./test/run_ddp_multinode.sh 4`.
 12. Move to `./test/run_hybrid_multinode.sh 2`.
+13. Run `python test/run_error_simulation_suite.py` for error simulation coverage.

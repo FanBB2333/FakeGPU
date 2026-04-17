@@ -42,6 +42,12 @@ This page explains how the repository is organized and how the main runtime piec
 - `src/monitor/monitor.cpp` dumps `fake_gpu_report.json` on shutdown.
 - When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU also writes a cluster-level report with collective, link, and per-rank timing data.
 
+### 8. Error simulation (Python layer)
+
+- `fakegpu/torch_patch.py` includes per-device memory tracking, cross-device operation guards, autocast dtype validation, checkpoint compatibility checks, and gradient error detection.
+- These features reproduce common real-GPU runtime errors so that error-handling logic can be validated without physical hardware.
+- The error simulation test suite lives in `test/test_error_*.py` with a unified runner at `test/run_error_simulation_suite.py`.
+
 ## Source tree
 
 | Path | Responsibility |
@@ -53,7 +59,7 @@ This page explains how the repository is organized and how the main runtime piec
 | `src/nccl/` | fake NCCL entry points plus mode dispatch |
 | `src/distributed/` | coordinator protocol, communicator state, topology, staging |
 | `src/monitor/` | JSON reporting |
-| `fakegpu/` | Python package and CLI |
+| `fakegpu/` | Python package, CLI, and error simulation layer (device registry, memory tracker, cross-device guards) |
 | `profiles/` | GPU preset YAML definitions |
 | `test/` | user-facing smoke, PyTorch, DDP, and comparison scripts |
 | `verification/` | lower-level probes, direct tests, and sample configs |
@@ -86,3 +92,4 @@ On macOS the corresponding `.dylib` names are produced instead.
 - [Reports & Validation](reports-and-validation.md)
 - [Distributed Simulation Usage Guide](distributed-sim-usage.md)
 - [Distributed Design Notes](multi-node-design.md)
+- [Error Simulation](error-simulation.md)

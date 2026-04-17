@@ -44,6 +44,7 @@ plugins:
             - 快速参考: quick-reference.md
             - 项目结构与架构: project-structure.md
             - 报告与验证: reports-and-validation.md
+            - 错误模拟: error-simulation.md
             - 分布式模拟:
                 - 使用说明: distributed-sim-usage.md
                 - 设计说明: multi-node-design.md
@@ -74,6 +75,7 @@ nav:
   - Quick Reference: quick-reference.md
   - Architecture: project-structure.md
   - Reports & Validation: reports-and-validation.md
+  - Error Simulation: error-simulation.md
   - Distributed Simulation:
       - Usage Guide: distributed-sim-usage.md
       - Design Notes: multi-node-design.md
