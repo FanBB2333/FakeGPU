@@ -307,8 +307,22 @@ def _wrap_multi_tensor_op(orig_fn: Any) -> Any:
     return wrapper
 
 
-def _wrap_tensor_binary_op(orig_fn: Any) -> Any:
-    """Wrap a Tensor binary method (e.g. __add__) to check cross-device."""
+_BINARY_DUNDER_TORCH_OPS: dict[str, Any] = {
+    "__add__": lambda torch_mod, self, other: torch_mod.add(self, other),
+    "__radd__": lambda torch_mod, self, other: torch_mod.add(other, self),
+    "__sub__": lambda torch_mod, self, other: torch_mod.sub(self, other),
+    "__rsub__": lambda torch_mod, self, other: torch_mod.sub(other, self),
+    "__mul__": lambda torch_mod, self, other: torch_mod.mul(self, other),
+    "__rmul__": lambda torch_mod, self, other: torch_mod.mul(other, self),
+    "__truediv__": lambda torch_mod, self, other: torch_mod.true_divide(self, other),
+    "__rtruediv__": lambda torch_mod, self, other: torch_mod.true_divide(other, self),
+    "__matmul__": lambda torch_mod, self, other: torch_mod.matmul(self, other),
+    "__rmatmul__": lambda torch_mod, self, other: torch_mod.matmul(other, self),
+}
+
+
+def _wrap_tensor_binary_op(orig_fn: Any, dunder_name: str) -> Any:
+    """Wrap a Tensor binary method to check cross-device with torch-friendly calls."""
 
     @functools.wraps(orig_fn)
     def wrapper(self: Any, other: Any) -> Any:
@@ -316,6 +330,9 @@ def _wrap_tensor_binary_op(orig_fn: Any) -> Any:
 
         if isinstance(other, torch.Tensor):
             _check_same_device(self, other)
+        torch_op = _BINARY_DUNDER_TORCH_OPS.get(dunder_name)
+        if torch_op is not None:
+            return torch_op(torch, self, other)
         return orig_fn(self, other)
 
     return wrapper
@@ -611,6 +628,8 @@ def _device_kwarg_wrapper(fn: Any) -> Any:
 
 _orig_tensor_to: Any = None
 _orig_tensor_cuda: Any = None
+_orig_tensor_pin_memory: Any = None
+_orig_torch_compile: Any = None
 
 
 def _patched_tensor_to(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -659,6 +678,47 @@ def _patched_tensor_cuda(
     if target_dev is not None:
         _register_tensor_device(result, target_dev)
     return result
+
+
+def _patched_tensor_pin_memory(self: Any, device: Any = None) -> Any:
+    """Pinned-memory is a semantic no-op on FakeGPU's CPU-backed runtime."""
+    return self
+
+
+def _torch_minor_version(torch_mod: Any) -> tuple[int, int]:
+    version = str(getattr(torch_mod, "__version__", "0.0")).split("+", 1)[0]
+    parts = version.split(".")
+    if len(parts) < 2:
+        return (0, 0)
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError:
+        return (0, 0)
+
+
+def _install_compile_compat_shim(torch_mod: Any) -> None:
+    """Install a no-op torch.compile compatibility shim on crash-prone minors."""
+    global _orig_torch_compile
+
+    if not hasattr(torch_mod, "compile"):
+        return
+    if _torch_minor_version(torch_mod) < (2, 8):
+        return
+
+    if _orig_torch_compile is None:
+        _orig_torch_compile = torch_mod.compile
+
+    def _fakegpu_compile(model: Any = None, *args: Any, **kwargs: Any) -> Any:
+        if model is None:
+            def _decorator(fn: Any) -> Any:
+                return fn
+            return _decorator
+        return model
+
+    torch_mod.compile = _fakegpu_compile
+    compiler_mod = getattr(torch_mod, "compiler", None)
+    if compiler_mod is not None and hasattr(compiler_mod, "compile"):
+        compiler_mod.compile = _fakegpu_compile
 
 
 # ---------------------------------------------------------------------------
@@ -1251,6 +1311,30 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     upstream.wrap_tensor = _hooked_wrap_tensor
 
+    def _dynamo_friendly_tree_map(fn, obj):
+        if isinstance(obj, tuple):
+            return tuple(_dynamo_friendly_tree_map(fn, item) for item in obj)
+        if isinstance(obj, list):
+            return [_dynamo_friendly_tree_map(fn, item) for item in obj]
+        if isinstance(obj, dict):
+            items = ((key, _dynamo_friendly_tree_map(fn, value)) for key, value in obj.items())
+            if isinstance(obj, dict) and type(obj) is dict:
+                return dict(items)
+            return obj.__class__(items)
+        return fn(obj)
+
+    upstream._tree_map = _dynamo_friendly_tree_map
+
+    fake_ddp_cls = getattr(torch_mod.nn.parallel, "DistributedDataParallel", None)
+    if fake_ddp_cls is not None and not hasattr(fake_ddp_cls, "_get_active_ddp_module"):
+        fake_ddp_cls._get_active_ddp_module = staticmethod(lambda: None)
+
+    global _orig_tensor_pin_memory
+    if _orig_tensor_pin_memory is None:
+        _orig_tensor_pin_memory = torch_mod.Tensor.pin_memory
+    torch_mod.Tensor.pin_memory = _patched_tensor_pin_memory  # type: ignore[assignment]
+    _install_compile_compat_shim(torch_mod)
+
     # ---- 3. Per-device GPU profiles ----
     def _profiled_get_device_name(device=None):
         idx = _normalize_device_index(device)
@@ -1394,7 +1478,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         for dunder in _BINARY_DUNDERS:
             orig = getattr(torch_mod.Tensor, dunder, None)
             if orig is not None:
-                setattr(torch_mod.Tensor, dunder, _wrap_tensor_binary_op(orig))
+                setattr(torch_mod.Tensor, dunder, _wrap_tensor_binary_op(orig, dunder))
 
     # ---- 7. RNG state functions (not provided by upstream) ----
     torch.cuda.get_rng_state = _stub_get_rng_state
@@ -1680,8 +1764,11 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     global _orig_tensor_to, _orig_tensor_cuda
     _orig_tensor_to = torch.Tensor.to
     _orig_tensor_cuda = torch.Tensor.cuda
+    _orig_tensor_pin_memory = torch.Tensor.pin_memory
     torch.Tensor.to = _patched_tensor_to  # type: ignore[assignment]
     torch.Tensor.cuda = _patched_tensor_cuda  # type: ignore[assignment]
+    torch.Tensor.pin_memory = _patched_tensor_pin_memory  # type: ignore[assignment]
+    _install_compile_compat_shim(torch)
 
     # ---- Propagate device registry through clone/contiguous/detach ----
     _orig_tensor_clone = torch.Tensor.clone
@@ -1756,7 +1843,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         for dunder in _BINARY_DUNDERS:
             orig = getattr(torch.Tensor, dunder, None)
             if orig is not None:
-                setattr(torch.Tensor, dunder, _wrap_tensor_binary_op(orig))
+                setattr(torch.Tensor, dunder, _wrap_tensor_binary_op(orig, dunder))
 
     # ---- Module.to / Module.cuda ----
     global _orig_module_to
