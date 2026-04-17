@@ -126,6 +126,7 @@
   .phase-banner.p2 { border-left-color: var(--plum-dk); }
   .phase-banner.p3 { border-left-color: var(--sand-dk); }
   .phase-banner.p4 { border-left-color: var(--rose-dk); }
+  .phase-banner.p5 { border-left-color: var(--mist-dk); }
   .phase-banner .phase-num {
     font-size: 28px; font-weight: 700; color: var(--ink-soft);
     min-width: 48px; text-align: center;
@@ -273,6 +274,7 @@
     <button class="tab-btn" onclick="showTab('p2')">P2: HW Compat</button>
     <button class="tab-btn" onclick="showTab('p3')">P3: MoE nanoGPT</button>
     <button class="tab-btn" onclick="showTab('p4')">P4: Error Simulation</button>
+    <button class="tab-btn" onclick="showTab('p5')">P5: Validation Suite</button>
   </nav>
 
   <!-- ================================================================== -->
@@ -283,20 +285,20 @@
     <header class="hero">
       <div class="eyebrow">Unified Validation &middot; 2026-04-17</div>
       <h1>FakeGPU &middot; Full Test Report</h1>
-      <p class="sub">Enhanced Report &middot; HW Compat &middot; MoE Training &middot; Error Simulation</p>
+      <p class="sub">Enhanced Report &middot; HW Compat &middot; MoE Training &middot; Error Simulation &middot; Validation Suite</p>
       <div class="meta">
-        <span class="chip">4 Phases</span>
-        <span class="chip">37 Tests</span>
-        <span class="chip">37 Passed</span>
+        <span class="chip">5 Phases</span>
+        <span class="chip">75 Tests</span>
+        <span class="chip">74 Passed</span>
         <span class="chip">macOS &middot; ARM64</span>
       </div>
     </header>
 
     <div class="stats">
-      <div class="stat total"><div class="label">Total Tests</div><div class="value">37</div></div>
-      <div class="stat pass"><div class="label">Passed</div><div class="value">37</div></div>
+      <div class="stat total"><div class="label">Total Tests</div><div class="value">75</div></div>
+      <div class="stat pass"><div class="label">Passed</div><div class="value">74</div></div>
       <div class="stat fail"><div class="label">Failed</div><div class="value">0</div></div>
-      <div class="stat files"><div class="label">Phases</div><div class="value">4</div></div>
+      <div class="stat files"><div class="label">Phases</div><div class="value">5</div></div>
     </div>
 
     <section>
@@ -333,6 +335,14 @@
             <div class="desc">Cross-device &middot; OOM &middot; Device index &middot; Autocast &middot; Checkpoint &middot; Gradient</div>
           </div>
           <div class="badge pass">23/23 PASS</div>
+        </div>
+        <div class="row pass" onclick="showTab('p5')">
+          <div class="id">P5</div>
+          <div class="info">
+            <div class="title">Validation Suite</div>
+            <div class="desc">DataLoader &middot; torch.compile &middot; HF Trainer &middot; Overhead Bench &middot; Thread Safety</div>
+          </div>
+          <div class="badge pass">37/38 PASS</div>
         </div>
       </div>
     </section>
@@ -709,7 +719,7 @@ test/test_error_checkpoint_load.py::TestCheckpointLoadErrors::test_e5_1_load_map
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.92s =========================
+========================= 3 passed, 1 warning in 1.18s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -767,7 +777,7 @@ test/test_error_checkpoint_load.py::TestCheckpointLoadErrors::test_e5_1_load_map
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.92s =========================
+========================= 3 passed, 1 warning in 1.18s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -825,7 +835,7 @@ test/test_error_checkpoint_load.py::TestCheckpointLoadErrors::test_e5_1_load_map
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.92s =========================
+========================= 3 passed, 1 warning in 1.18s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -885,7 +895,7 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.67s =========================
+========================= 5 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -961,7 +971,7 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.67s =========================
+========================= 5 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1037,7 +1047,7 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.67s =========================
+========================= 5 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1113,7 +1123,7 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.67s =========================
+========================= 5 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1189,7 +1199,7 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.67s =========================
+========================= 5 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1264,7 +1274,7 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.77s =========================
+========================= 4 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1323,7 +1333,7 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.77s =========================
+========================= 4 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1382,7 +1392,7 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.77s =========================
+========================= 4 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1441,7 +1451,7 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.77s =========================
+========================= 4 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1499,7 +1509,7 @@ test/test_error_dtype_autocast.py::TestAutocastDtypeV100::test_e4_1_autocast_bf1
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.63s =========================
+========================= 3 passed, 1 warning in 0.65s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1549,7 +1559,7 @@ test/test_error_dtype_autocast.py::TestAutocastDtypeV100::test_e4_1_autocast_bf1
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.63s =========================
+========================= 3 passed, 1 warning in 0.65s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1599,7 +1609,7 @@ test/test_error_dtype_autocast.py::TestAutocastDtypeV100::test_e4_1_autocast_bf1
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.63s =========================
+========================= 3 passed, 1 warning in 0.65s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1649,7 +1659,7 @@ test/test_error_gradient.py::TestGradientErrors::test_e7_1_backward_twice_withou
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.66s =========================
+========================= 3 passed, 1 warning in 0.82s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1707,7 +1717,7 @@ test/test_error_gradient.py::TestGradientErrors::test_e7_1_backward_twice_withou
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.66s =========================
+========================= 3 passed, 1 warning in 0.82s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1765,7 +1775,7 @@ test/test_error_gradient.py::TestGradientErrors::test_e7_1_backward_twice_withou
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.66s =========================
+========================= 3 passed, 1 warning in 0.82s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1825,7 +1835,7 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.04s =========================
+========================= 5 passed, 1 warning in 1.05s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1885,7 +1895,7 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.04s =========================
+========================= 5 passed, 1 warning in 1.05s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1945,7 +1955,7 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.04s =========================
+========================= 5 passed, 1 warning in 1.05s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -2005,7 +2015,7 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.04s =========================
+========================= 5 passed, 1 warning in 1.05s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -2065,7 +2075,7 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.04s =========================
+========================= 5 passed, 1 warning in 1.05s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -2101,6 +2111,2364 @@ The event loop scope for asynchronous fixtures will default to the fixture cachi
   </div>
 
   <!-- ================================================================== -->
+  <!-- PHASE 5: Validation Suite (dynamic)                                  -->
+  <!-- ================================================================== -->
+  <div id="page-p5" class="tab-page">
+    <section>
+      <h2>Phase 5: Validation Suite <span style="font-weight:400;font-size:13px;color:var(--ink-soft);margin-left:8px;">click rows to expand</span></h2>
+      <div class="phase-banner p5">
+        <div class="phase-num">P5</div>
+        <div class="phase-info">
+          <div class="ptitle">DataLoader &middot; torch.compile &middot; HF Trainer &middot; Runtime Overhead &middot; Thread Safety</div>
+          <div class="pdesc">Real-world compatibility: pin_memory, torch.compile(eager), HuggingFace Trainer pipeline, per-call overhead benchmarks, clone/detach chains, and concurrent access safety. 38 test cases.</div>
+        </div>
+      </div>
+
+      <div class="stats" style="grid-template-columns: repeat(3, 1fr);">
+        <div class="stat pass"><div class="label">Passed</div><div class="value">37</div></div>
+        <div class="stat fail"><div class="label">Failed</div><div class="value">0</div></div>
+        <div class="stat total"><div class="label">Total</div><div class="value">38</div></div>
+      </div>
+
+      <div class="results">
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-1</div>
+        <div class="info">
+          <div class="title">custom collate with pin memory</div>
+          <div class="desc">pin_memory=True, non_blocking, num_workers, custom collate, training loop</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory PASSED [ 14%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic PASSED [ 28%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg PASSED [ 42%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking PASSED [ 57%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda PASSED [ 71%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers PASSED [ 85%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:692: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+    warnings.warn(warn_msg)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:659: UserWarning: pin_memory_device is deprecated, the current accelerator will be used as the device,ignore pin_memory_device='cuda'.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 7 passed, 9 warnings in 2.63s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 768 B / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">768 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-1</div>
+        <div class="info">
+          <div class="title">pin memory basic</div>
+          <div class="desc">pin_memory=True, non_blocking, num_workers, custom collate, training loop</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory PASSED [ 14%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic PASSED [ 28%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg PASSED [ 42%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking PASSED [ 57%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda PASSED [ 71%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers PASSED [ 85%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:692: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+    warnings.warn(warn_msg)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:659: UserWarning: pin_memory_device is deprecated, the current accelerator will be used as the device,ignore pin_memory_device='cuda'.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 7 passed, 9 warnings in 2.63s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 768 B / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">768 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-1</div>
+        <div class="info">
+          <div class="title">pin memory device kwarg</div>
+          <div class="desc">pin_memory=True, non_blocking, num_workers, custom collate, training loop</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory PASSED [ 14%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic PASSED [ 28%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg PASSED [ 42%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking PASSED [ 57%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda PASSED [ 71%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers PASSED [ 85%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:692: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+    warnings.warn(warn_msg)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:659: UserWarning: pin_memory_device is deprecated, the current accelerator will be used as the device,ignore pin_memory_device='cuda'.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 7 passed, 9 warnings in 2.63s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 768 B / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">768 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-1</div>
+        <div class="info">
+          <div class="title">pin memory non blocking</div>
+          <div class="desc">pin_memory=True, non_blocking, num_workers, custom collate, training loop</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory PASSED [ 14%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic PASSED [ 28%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg PASSED [ 42%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking PASSED [ 57%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda PASSED [ 71%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers PASSED [ 85%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:692: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+    warnings.warn(warn_msg)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:659: UserWarning: pin_memory_device is deprecated, the current accelerator will be used as the device,ignore pin_memory_device='cuda'.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 7 passed, 9 warnings in 2.63s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 768 B / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">768 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-1</div>
+        <div class="info">
+          <div class="title">pin memory to cuda</div>
+          <div class="desc">pin_memory=True, non_blocking, num_workers, custom collate, training loop</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory PASSED [ 14%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic PASSED [ 28%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg PASSED [ 42%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking PASSED [ 57%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda PASSED [ 71%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers PASSED [ 85%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:692: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+    warnings.warn(warn_msg)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:659: UserWarning: pin_memory_device is deprecated, the current accelerator will be used as the device,ignore pin_memory_device='cuda'.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 7 passed, 9 warnings in 2.63s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 768 B / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">768 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-1</div>
+        <div class="info">
+          <div class="title">pin memory with num workers</div>
+          <div class="desc">pin_memory=True, non_blocking, num_workers, custom collate, training loop</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory PASSED [ 14%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic PASSED [ 28%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg PASSED [ 42%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking PASSED [ 57%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda PASSED [ 71%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers PASSED [ 85%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:692: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+    warnings.warn(warn_msg)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:659: UserWarning: pin_memory_device is deprecated, the current accelerator will be used as the device,ignore pin_memory_device='cuda'.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 7 passed, 9 warnings in 2.63s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 768 B / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">768 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-1</div>
+        <div class="info">
+          <div class="title">training loop with pin memory</div>
+          <div class="desc">pin_memory=True, non_blocking, num_workers, custom collate, training loop</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory PASSED [ 14%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic PASSED [ 28%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg PASSED [ 42%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking PASSED [ 57%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda PASSED [ 71%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers PASSED [ 85%]
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_custom_collate_with_pin_memory
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_basic
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_non_blocking
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_to_cuda
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_with_num_workers
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_training_loop_with_pin_memory
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:692: UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.
+    warnings.warn(warn_msg)
+
+test/test_dataloader_pin_memory.py::TestDataLoaderPinMemory::test_pin_memory_device_kwarg
+  /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/torch/utils/data/dataloader.py:659: UserWarning: pin_memory_device is deprecated, the current accelerator will be used as the device,ignore pin_memory_device='cuda'.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 7 passed, 9 warnings in 2.63s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 768 B / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">768 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 20 calls | Free: 20 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-2</div>
+        <div class="info">
+          <div class="title">compile fullgraph</div>
+          <div class="desc">eager backend, fullgraph, training loop, autocast, inductor xfail</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_fullgraph PASSED [ 14%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_module PASSED [ 28%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_simple_function PASSED [ 42%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_training_loop PASSED [ 57%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_autocast PASSED [ 71%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_legacy_autocast PASSED [ 85%]
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises XFAIL [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/torch_patch.py:220: UserWarning: Accessing the data pointer of FakeTensor is deprecated and will error in PyTorch 2.5. This is almost definitely a bug in your code and will cause undefined behavior with subsystems like torch.compile. Please wrap calls to tensor.data_ptr() in an opaque custom op; If all else fails, you can guard accesses to tensor.data_ptr() on isinstance(tensor, FakeTensor). (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/c10/core/StorageImpl.cpp:40.)
+    dp = tensor.untyped_storage().data_ptr()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 6 passed, 1 xfailed, 2 warnings in 3.77s ===================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 1.4 KB / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">1.4 KB</span> / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-2</div>
+        <div class="info">
+          <div class="title">compile module</div>
+          <div class="desc">eager backend, fullgraph, training loop, autocast, inductor xfail</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_fullgraph PASSED [ 14%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_module PASSED [ 28%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_simple_function PASSED [ 42%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_training_loop PASSED [ 57%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_autocast PASSED [ 71%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_legacy_autocast PASSED [ 85%]
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises XFAIL [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/torch_patch.py:220: UserWarning: Accessing the data pointer of FakeTensor is deprecated and will error in PyTorch 2.5. This is almost definitely a bug in your code and will cause undefined behavior with subsystems like torch.compile. Please wrap calls to tensor.data_ptr() in an opaque custom op; If all else fails, you can guard accesses to tensor.data_ptr() on isinstance(tensor, FakeTensor). (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/c10/core/StorageImpl.cpp:40.)
+    dp = tensor.untyped_storage().data_ptr()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 6 passed, 1 xfailed, 2 warnings in 3.77s ===================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 1.4 KB / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">1.4 KB</span> / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-2</div>
+        <div class="info">
+          <div class="title">compile simple function</div>
+          <div class="desc">eager backend, fullgraph, training loop, autocast, inductor xfail</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_fullgraph PASSED [ 14%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_module PASSED [ 28%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_simple_function PASSED [ 42%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_training_loop PASSED [ 57%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_autocast PASSED [ 71%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_legacy_autocast PASSED [ 85%]
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises XFAIL [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/torch_patch.py:220: UserWarning: Accessing the data pointer of FakeTensor is deprecated and will error in PyTorch 2.5. This is almost definitely a bug in your code and will cause undefined behavior with subsystems like torch.compile. Please wrap calls to tensor.data_ptr() in an opaque custom op; If all else fails, you can guard accesses to tensor.data_ptr() on isinstance(tensor, FakeTensor). (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/c10/core/StorageImpl.cpp:40.)
+    dp = tensor.untyped_storage().data_ptr()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 6 passed, 1 xfailed, 2 warnings in 3.77s ===================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 1.4 KB / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">1.4 KB</span> / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-2</div>
+        <div class="info">
+          <div class="title">compile training loop</div>
+          <div class="desc">eager backend, fullgraph, training loop, autocast, inductor xfail</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_fullgraph PASSED [ 14%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_module PASSED [ 28%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_simple_function PASSED [ 42%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_training_loop PASSED [ 57%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_autocast PASSED [ 71%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_legacy_autocast PASSED [ 85%]
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises XFAIL [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/torch_patch.py:220: UserWarning: Accessing the data pointer of FakeTensor is deprecated and will error in PyTorch 2.5. This is almost definitely a bug in your code and will cause undefined behavior with subsystems like torch.compile. Please wrap calls to tensor.data_ptr() in an opaque custom op; If all else fails, you can guard accesses to tensor.data_ptr() on isinstance(tensor, FakeTensor). (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/c10/core/StorageImpl.cpp:40.)
+    dp = tensor.untyped_storage().data_ptr()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 6 passed, 1 xfailed, 2 warnings in 3.77s ===================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 1.4 KB / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">1.4 KB</span> / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-2</div>
+        <div class="info">
+          <div class="title">compile with autocast</div>
+          <div class="desc">eager backend, fullgraph, training loop, autocast, inductor xfail</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_fullgraph PASSED [ 14%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_module PASSED [ 28%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_simple_function PASSED [ 42%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_training_loop PASSED [ 57%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_autocast PASSED [ 71%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_legacy_autocast PASSED [ 85%]
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises XFAIL [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/torch_patch.py:220: UserWarning: Accessing the data pointer of FakeTensor is deprecated and will error in PyTorch 2.5. This is almost definitely a bug in your code and will cause undefined behavior with subsystems like torch.compile. Please wrap calls to tensor.data_ptr() in an opaque custom op; If all else fails, you can guard accesses to tensor.data_ptr() on isinstance(tensor, FakeTensor). (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/c10/core/StorageImpl.cpp:40.)
+    dp = tensor.untyped_storage().data_ptr()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 6 passed, 1 xfailed, 2 warnings in 3.77s ===================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 1.4 KB / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">1.4 KB</span> / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-2</div>
+        <div class="info">
+          <div class="title">compile with legacy autocast</div>
+          <div class="desc">eager backend, fullgraph, training loop, autocast, inductor xfail</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_fullgraph PASSED [ 14%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_module PASSED [ 28%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_simple_function PASSED [ 42%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_training_loop PASSED [ 57%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_autocast PASSED [ 71%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_legacy_autocast PASSED [ 85%]
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises XFAIL [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/torch_patch.py:220: UserWarning: Accessing the data pointer of FakeTensor is deprecated and will error in PyTorch 2.5. This is almost definitely a bug in your code and will cause undefined behavior with subsystems like torch.compile. Please wrap calls to tensor.data_ptr() in an opaque custom op; If all else fails, you can guard accesses to tensor.data_ptr() on isinstance(tensor, FakeTensor). (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/c10/core/StorageImpl.cpp:40.)
+    dp = tensor.untyped_storage().data_ptr()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 6 passed, 1 xfailed, 2 warnings in 3.77s ===================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 1.4 KB / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">1.4 KB</span> / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P5-2</div>
+        <div class="info">
+          <div class="title">inductor raises</div>
+          <div class="desc">eager backend, fullgraph, training loop, autocast, inductor xfail</div>
+        </div>
+        <div class="badge pass">XFAIL</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_fullgraph PASSED [ 14%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_module PASSED [ 28%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_simple_function PASSED [ 42%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_training_loop PASSED [ 57%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_autocast PASSED [ 71%]
+test/test_torch_compile.py::TestTorchCompileEager::test_compile_with_legacy_autocast PASSED [ 85%]
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises XFAIL [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_torch_compile.py::TestTorchCompileInductorExpectedFailure::test_inductor_raises
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/torch_patch.py:220: UserWarning: Accessing the data pointer of FakeTensor is deprecated and will error in PyTorch 2.5. This is almost definitely a bug in your code and will cause undefined behavior with subsystems like torch.compile. Please wrap calls to tensor.data_ptr() in an opaque custom op; If all else fails, you can guard accesses to tensor.data_ptr() on isinstance(tensor, FakeTensor). (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/c10/core/StorageImpl.cpp:40.)
+    dp = tensor.untyped_storage().data_ptr()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 6 passed, 1 xfailed, 2 warnings in 3.77s ===================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 1.4 KB / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">1.4 KB</span> / 80.0 GB peak (0.0%)
+   Alloc: 18 calls | Free: 17 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P6-1</div>
+        <div class="info">
+          <div class="title">checkpoint save load</div>
+          <div class="desc">Trainer train / eval / predict / checkpoint save-load</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+test/test_hf_trainer.py::TestHFTrainerBasic::test_checkpoint_save_load PASSED [ 25%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_evaluation PASSED      [ 50%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_predict PASSED         [ 75%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_training_loop PASSED   [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========================= 4 passed, 1 warning in 8.01s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P6-1</div>
+        <div class="info">
+          <div class="title">evaluation</div>
+          <div class="desc">Trainer train / eval / predict / checkpoint save-load</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+test/test_hf_trainer.py::TestHFTrainerBasic::test_checkpoint_save_load PASSED [ 25%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_evaluation PASSED      [ 50%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_predict PASSED         [ 75%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_training_loop PASSED   [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========================= 4 passed, 1 warning in 8.01s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P6-1</div>
+        <div class="info">
+          <div class="title">predict</div>
+          <div class="desc">Trainer train / eval / predict / checkpoint save-load</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+test/test_hf_trainer.py::TestHFTrainerBasic::test_checkpoint_save_load PASSED [ 25%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_evaluation PASSED      [ 50%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_predict PASSED         [ 75%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_training_loop PASSED   [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========================= 4 passed, 1 warning in 8.01s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P6-1</div>
+        <div class="info">
+          <div class="title">training loop</div>
+          <div class="desc">Trainer train / eval / predict / checkpoint save-load</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+test/test_hf_trainer.py::TestHFTrainerBasic::test_checkpoint_save_load PASSED [ 25%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_evaluation PASSED      [ 50%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_predict PASSED         [ 75%]
+test/test_hf_trainer.py::TestHFTrainerBasic::test_training_loop PASSED   [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========================= 4 passed, 1 warning in 8.01s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">B3-1</div>
+        <div class="info">
+          <div class="title">device context fast</div>
+          <div class="desc">Per-call overhead bounds (<50% compute, <10µs ctx switch, <5µs mem query)</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+test/test_benchmark_overhead.py::TestOverheadBounds::test_device_context_fast PASSED [ 12%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_forward_pass_overhead PASSED [ 25%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_matmul_overhead PASSED [ 37%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_memory_query_fast PASSED [ 50%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_tensor_creation_overhead PASSED [ 62%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_to_cuda_redirect_fast PASSED [ 75%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_train_step_overhead PASSED [ 87%]
+test/test_benchmark_overhead.py::TestOverheadReport::test_print_report PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 8 passed, 1 warning in 13.10s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">B3-1</div>
+        <div class="info">
+          <div class="title">forward pass overhead</div>
+          <div class="desc">Per-call overhead bounds (<50% compute, <10µs ctx switch, <5µs mem query)</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+test/test_benchmark_overhead.py::TestOverheadBounds::test_device_context_fast PASSED [ 12%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_forward_pass_overhead PASSED [ 25%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_matmul_overhead PASSED [ 37%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_memory_query_fast PASSED [ 50%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_tensor_creation_overhead PASSED [ 62%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_to_cuda_redirect_fast PASSED [ 75%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_train_step_overhead PASSED [ 87%]
+test/test_benchmark_overhead.py::TestOverheadReport::test_print_report PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 8 passed, 1 warning in 13.10s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">B3-1</div>
+        <div class="info">
+          <div class="title">matmul overhead</div>
+          <div class="desc">Per-call overhead bounds (<50% compute, <10µs ctx switch, <5µs mem query)</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+test/test_benchmark_overhead.py::TestOverheadBounds::test_device_context_fast PASSED [ 12%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_forward_pass_overhead PASSED [ 25%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_matmul_overhead PASSED [ 37%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_memory_query_fast PASSED [ 50%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_tensor_creation_overhead PASSED [ 62%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_to_cuda_redirect_fast PASSED [ 75%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_train_step_overhead PASSED [ 87%]
+test/test_benchmark_overhead.py::TestOverheadReport::test_print_report PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 8 passed, 1 warning in 13.10s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">B3-1</div>
+        <div class="info">
+          <div class="title">memory query fast</div>
+          <div class="desc">Per-call overhead bounds (<50% compute, <10µs ctx switch, <5µs mem query)</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+test/test_benchmark_overhead.py::TestOverheadBounds::test_device_context_fast PASSED [ 12%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_forward_pass_overhead PASSED [ 25%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_matmul_overhead PASSED [ 37%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_memory_query_fast PASSED [ 50%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_tensor_creation_overhead PASSED [ 62%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_to_cuda_redirect_fast PASSED [ 75%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_train_step_overhead PASSED [ 87%]
+test/test_benchmark_overhead.py::TestOverheadReport::test_print_report PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 8 passed, 1 warning in 13.10s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">B3-1</div>
+        <div class="info">
+          <div class="title">tensor creation overhead</div>
+          <div class="desc">Per-call overhead bounds (<50% compute, <10µs ctx switch, <5µs mem query)</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+test/test_benchmark_overhead.py::TestOverheadBounds::test_device_context_fast PASSED [ 12%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_forward_pass_overhead PASSED [ 25%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_matmul_overhead PASSED [ 37%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_memory_query_fast PASSED [ 50%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_tensor_creation_overhead PASSED [ 62%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_to_cuda_redirect_fast PASSED [ 75%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_train_step_overhead PASSED [ 87%]
+test/test_benchmark_overhead.py::TestOverheadReport::test_print_report PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 8 passed, 1 warning in 13.10s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">B3-1</div>
+        <div class="info">
+          <div class="title">to cuda redirect fast</div>
+          <div class="desc">Per-call overhead bounds (<50% compute, <10µs ctx switch, <5µs mem query)</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+test/test_benchmark_overhead.py::TestOverheadBounds::test_device_context_fast PASSED [ 12%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_forward_pass_overhead PASSED [ 25%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_matmul_overhead PASSED [ 37%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_memory_query_fast PASSED [ 50%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_tensor_creation_overhead PASSED [ 62%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_to_cuda_redirect_fast PASSED [ 75%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_train_step_overhead PASSED [ 87%]
+test/test_benchmark_overhead.py::TestOverheadReport::test_print_report PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 8 passed, 1 warning in 13.10s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">B3-1</div>
+        <div class="info">
+          <div class="title">train step overhead</div>
+          <div class="desc">Per-call overhead bounds (<50% compute, <10µs ctx switch, <5µs mem query)</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+test/test_benchmark_overhead.py::TestOverheadBounds::test_device_context_fast PASSED [ 12%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_forward_pass_overhead PASSED [ 25%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_matmul_overhead PASSED [ 37%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_memory_query_fast PASSED [ 50%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_tensor_creation_overhead PASSED [ 62%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_to_cuda_redirect_fast PASSED [ 75%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_train_step_overhead PASSED [ 87%]
+test/test_benchmark_overhead.py::TestOverheadReport::test_print_report PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 8 passed, 1 warning in 13.10s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">B3-1</div>
+        <div class="info">
+          <div class="title">print report</div>
+          <div class="desc">Per-call overhead bounds (<50% compute, <10µs ctx switch, <5µs mem query)</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+test/test_benchmark_overhead.py::TestOverheadBounds::test_device_context_fast PASSED [ 12%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_forward_pass_overhead PASSED [ 25%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_matmul_overhead PASSED [ 37%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_memory_query_fast PASSED [ 50%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_tensor_creation_overhead PASSED [ 62%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_to_cuda_redirect_fast PASSED [ 75%]
+test/test_benchmark_overhead.py::TestOverheadBounds::test_train_step_overhead PASSED [ 87%]
+test/test_benchmark_overhead.py::TestOverheadReport::test_print_report PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 8 passed, 1 warning in 13.10s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">chain clone detach contiguous</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">clone preserves data</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">clone to cuda</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">contiguous noop on contiguous</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">contiguous on transpose</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">contiguous view</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">detach clone preserves values</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">detach stops grad</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">concurrent device switching</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">concurrent forward passes</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">concurrent memory queries</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+
+      <div class="row pass" onclick="this.classList.toggle('open')">
+        <div class="id">P7</div>
+        <div class="info">
+          <div class="title">concurrent tensor creation</div>
+          <div class="desc">clone/contiguous/detach chains, multi-thread safety</div>
+        </div>
+        <div class="badge pass">PASS</div>
+        <div class="detail"><pre>============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 12 items
+
+test/test_patch_advanced.py::TestDevicePropagationChains::test_chain_clone_detach_contiguous PASSED [  8%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_preserves_data PASSED [ 16%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_clone_to_cuda PASSED [ 25%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_noop_on_contiguous PASSED [ 33%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_on_transpose PASSED [ 41%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_contiguous_view PASSED [ 50%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_clone_preserves_values PASSED [ 58%]
+test/test_patch_advanced.py::TestDevicePropagationChains::test_detach_stops_grad PASSED [ 66%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_device_switching PASSED [ 75%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_forward_passes PASSED [ 83%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_memory_queries PASSED [ 91%]
+test/test_patch_advanced.py::TestMultiThreadSafety::test_concurrent_tensor_creation PASSED [100%]
+
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 12 passed, 1 warning in 0.90s =========================
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+</pre></div>
+      </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================================================================== -->
   <!-- Conclusions (visible on all tabs via footer)                        -->
   <!-- ================================================================== -->
   <section>
@@ -2113,6 +4481,7 @@ The event loop scope for asynchronous fixtures will default to the fixture cachi
           <li>P2: HW compat strict/relaxed</li>
           <li>P3: MoE model + training + summary proof experiments</li>
           <li>P4: 23/23 error simulations</li>
+          <li>P5: 37/38 validation suite</li>
         </ul>
       </div>
       <div class="card info">
@@ -2124,6 +4493,16 @@ The event loop scope for asynchronous fixtures will default to the fixture cachi
           <li>E4: Autocast bfloat16 compat</li>
           <li>E5: Checkpoint map_location</li>
           <li>E7: Gradient error passthrough</li>
+        </ul>
+      </div>
+      <div class="card info">
+        <h4>Validation Suite Coverage</h4>
+        <ul>
+          <li>P5-1: DataLoader pin_memory + non_blocking</li>
+          <li>P5-2: torch.compile (eager backend)</li>
+          <li>P6-1: HuggingFace Trainer e2e</li>
+          <li>B3-1: Runtime overhead (&lt;4% for realistic workloads)</li>
+          <li>P7: clone/detach chains + thread safety</li>
         </ul>
       </div>
       <div class="card caveat">

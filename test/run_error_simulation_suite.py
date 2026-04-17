@@ -2,7 +2,8 @@
 """Unified FakeGPU validation report generator.
 
 Combines Phase 1-3 (static) results with Phase 4 (error simulation, dynamic)
-into a single HTML report with tab navigation.
+and Phase 5 (validation suite, dynamic) into a single HTML report with tab
+navigation.
 
 Usage:
     python test/run_error_simulation_suite.py [--output test/report.html]
@@ -89,12 +90,13 @@ def run_test_file(path: Path) -> list[TestResult]:
     results = []
     for line in (proc.stdout + proc.stderr).splitlines():
         m = re.match(
-            r"^.*?::([\w]+)::(test_\w+)\s+(PASSED|FAILED|ERROR|SKIPPED)", line
+            r"^.*?::([\w]+)::(test_\w+)\s+(PASSED|FAILED|ERROR|SKIPPED|XFAIL)", line
         )
         if m:
             cls_name, test_name, verdict = m.group(1), m.group(2), m.group(3)
             status = {"PASSED": "pass", "FAILED": "fail",
-                      "ERROR": "error", "SKIPPED": "skip"}[verdict]
+                      "ERROR": "error", "SKIPPED": "skip",
+                      "XFAIL": "xfail"}[verdict]
             results.append(TestResult(
                 test_id=f"{path.stem}::{cls_name}::{test_name}",
                 name=test_name, file=str(path.name), status=status,
@@ -121,6 +123,50 @@ CATEGORY_MAP = {
     "test_error_distributed": ("E6: Distributed", "NCCL communication error simulation"),
     "test_error_gradient": ("E7: Gradient", "Native PyTorch gradient errors (validation only)"),
 }
+
+
+# Phase 5 test files ---------------------------------------------------------
+
+P5_FILES = [
+    "test_dataloader_pin_memory.py",
+    "test_torch_compile.py",
+    "test_hf_trainer.py",
+    "test_benchmark_overhead.py",
+    "test_patch_advanced.py",
+]
+
+P5_CATEGORY_MAP = {
+    "test_dataloader_pin_memory": (
+        "P5-1: DataLoader pin_memory",
+        "pin_memory=True, non_blocking, num_workers, custom collate, training loop",
+    ),
+    "test_torch_compile": (
+        "P5-2: torch.compile",
+        "eager backend, fullgraph, training loop, autocast, inductor xfail",
+    ),
+    "test_hf_trainer": (
+        "P6-1: HuggingFace Trainer",
+        "Trainer train / eval / predict / checkpoint save-load",
+    ),
+    "test_benchmark_overhead": (
+        "B3-1: Runtime Overhead",
+        "Per-call overhead bounds (<50% compute, <10µs ctx switch, <5µs mem query)",
+    ),
+    "test_patch_advanced": (
+        "P7: Advanced Patches",
+        "clone/contiguous/detach chains, multi-thread safety",
+    ),
+}
+
+
+def discover_p5_test_files(test_dir: str) -> list[Path]:
+    """Return Phase-5 test files that exist in *test_dir*."""
+    result: list[Path] = []
+    for name in P5_FILES:
+        p = Path(test_dir) / name
+        if p.exists():
+            result.append(p)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +287,88 @@ def _build_phase4_rows(suites: list[SuiteResult]) -> str:
     return "\n".join(parts)
 
 
+def _extract_benchmark_table(text: str) -> str | None:
+    """Pull the Overhead Report table out of pytest output."""
+    lines = text.splitlines()
+    start = end = None
+    for i, line in enumerate(lines):
+        if "FakeGPU Runtime Overhead Report" in line:
+            # walk back to the === line
+            for j in range(i - 1, max(i - 3, -1), -1):
+                if lines[j].strip().startswith("=="):
+                    start = j
+                    break
+            if start is None:
+                start = i
+        if start is not None and i > start + 2 and line.strip().startswith("=="):
+            end = i
+    if start is not None and end is not None:
+        return "\n".join(lines[start : end + 1])
+    return None
+
+
+def _build_phase5_rows(suites: list[SuiteResult]) -> str:
+    """Return HTML rows for Phase-5 validation suites."""
+    parts: list[str] = []
+    for suite in suites:
+        for r in suite.results:
+            status = r.status
+            if status == "xfail":
+                status = "pass"
+            badge_cls = "pass" if status == "pass" else "fail"
+            detail = ""
+            if r.stdout or r.stderr:
+                combined = r.stdout + r.stderr
+                esc = (
+                    combined.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                )
+                detail = f'<pre>{esc[:4000]}</pre>'
+
+                # For benchmark tests, extract and format the table
+                bench = _extract_benchmark_table(combined)
+                if bench:
+                    bench_esc = (
+                        bench.replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                    )
+                    detail += (
+                        '<div style="margin-top:8px">'
+                        '<strong style="font-size:11px;color:var(--ink-soft);">'
+                        "Overhead Report</strong>"
+                        '<div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;">'
+                        f"{bench_esc}</div></div>"
+                    )
+
+                # Extract Report Summary if present
+                summary = _extract_report_summary(combined)
+                if summary:
+                    summary_html = _format_summary_html(summary)
+                    detail += (
+                        '<div style="margin-top:8px">'
+                        '<strong style="font-size:11px;color:var(--ink-soft);">'
+                        "FakeGPU Report Summary</strong>"
+                        '<div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;">'
+                        f"{summary_html}</div></div>"
+                    )
+
+            pretty_name = r.name.replace("_", " ").removeprefix("test ")
+            badge_label = r.status.upper() if r.status != "xfail" else "XFAIL"
+            parts.append(f"""
+      <div class="row {badge_cls}" onclick="this.classList.toggle('open')">
+        <div class="id">{suite.category.split(":")[0]}</div>
+        <div class="info">
+          <div class="title">{pretty_name}</div>
+          <div class="desc">{suite.description}</div>
+        </div>
+        <div class="badge {badge_cls}">{badge_label}</div>
+        <div class="detail">{detail}</div>
+      </div>""")
+    return "\n".join(parts)
+
+
 _PROOF_RESULTS_PATH = Path(__file__).resolve().parent / "real_scene" / "nanoGPT" / "torch_patch_proof_results.json"
 
 
@@ -299,6 +427,8 @@ def _build_phase3_proof_rows(results: list[dict]) -> str:
 def generate_unified_html(
     suites: list[SuiteResult],
     output_path: str,
+    *,
+    p5_suites: list[SuiteResult] | None = None,
 ) -> None:
     phase3_proof_results = _load_phase3_proof_results()
     phase3_proof_rows = _build_phase3_proof_rows(phase3_proof_results)
@@ -309,13 +439,21 @@ def generate_unified_html(
     p4_fail = sum(s.failed for s in suites)
     p4_total = sum(s.total for s in suites)
 
+    # Phase 5 dynamic counts
+    p5_suites = p5_suites or []
+    p5_pass = sum(s.passed for s in p5_suites)
+    p5_fail = sum(s.failed for s in p5_suites)
+    p5_total = sum(s.total for s in p5_suites)
+    p5_rows = _build_phase5_rows(p5_suites)
+
     # Phase 1-3 static counts
     p123_total = 10 + len(phase3_proof_results)
     p123_pass = 10 + phase3_proof_pass
 
-    all_total = p123_total + p4_total
-    all_pass = p123_pass + p4_pass
-    all_fail = phase3_proof_fail + p4_fail
+    n_phases = 5 if p5_total > 0 else 4
+    all_total = p123_total + p4_total + p5_total
+    all_pass = p123_pass + p4_pass + p5_pass
+    all_fail = phase3_proof_fail + p4_fail + p5_fail
 
     p4_rows = _build_phase4_rows(suites)
 
@@ -447,6 +585,7 @@ def generate_unified_html(
   .phase-banner.p2 {{ border-left-color: var(--plum-dk); }}
   .phase-banner.p3 {{ border-left-color: var(--sand-dk); }}
   .phase-banner.p4 {{ border-left-color: var(--rose-dk); }}
+  .phase-banner.p5 {{ border-left-color: var(--mist-dk); }}
   .phase-banner .phase-num {{
     font-size: 28px; font-weight: 700; color: var(--ink-soft);
     min-width: 48px; text-align: center;
@@ -594,6 +733,7 @@ def generate_unified_html(
     <button class="tab-btn" onclick="showTab('p2')">P2: HW Compat</button>
     <button class="tab-btn" onclick="showTab('p3')">P3: MoE nanoGPT</button>
     <button class="tab-btn" onclick="showTab('p4')">P4: Error Simulation</button>
+    <button class="tab-btn" onclick="showTab('p5')">P5: Validation Suite</button>
   </nav>
 
   <!-- ================================================================== -->
@@ -604,9 +744,9 @@ def generate_unified_html(
     <header class="hero">
       <div class="eyebrow">Unified Validation &middot; 2026-04-17</div>
       <h1>FakeGPU &middot; Full Test Report</h1>
-      <p class="sub">Enhanced Report &middot; HW Compat &middot; MoE Training &middot; Error Simulation</p>
+      <p class="sub">Enhanced Report &middot; HW Compat &middot; MoE Training &middot; Error Simulation &middot; Validation Suite</p>
       <div class="meta">
-        <span class="chip">4 Phases</span>
+        <span class="chip">{n_phases} Phases</span>
         <span class="chip">{all_total} Tests</span>
         <span class="chip">{all_pass} Passed</span>
         <span class="chip">macOS &middot; ARM64</span>
@@ -617,7 +757,7 @@ def generate_unified_html(
       <div class="stat total"><div class="label">Total Tests</div><div class="value">{all_total}</div></div>
       <div class="stat pass"><div class="label">Passed</div><div class="value">{all_pass}</div></div>
       <div class="stat fail"><div class="label">Failed</div><div class="value">{all_fail}</div></div>
-      <div class="stat files"><div class="label">Phases</div><div class="value">4</div></div>
+      <div class="stat files"><div class="label">Phases</div><div class="value">{n_phases}</div></div>
     </div>
 
     <section>
@@ -654,6 +794,14 @@ def generate_unified_html(
             <div class="desc">Cross-device &middot; OOM &middot; Device index &middot; Autocast &middot; Checkpoint &middot; Gradient</div>
           </div>
           <div class="badge {"pass" if p4_fail == 0 else "fail"}">{p4_pass}/{p4_total} {"PASS" if p4_fail == 0 else "FAIL"}</div>
+        </div>
+        <div class="row {"pass" if p5_fail == 0 else "fail"}" onclick="showTab('p5')">
+          <div class="id">P5</div>
+          <div class="info">
+            <div class="title">Validation Suite</div>
+            <div class="desc">DataLoader &middot; torch.compile &middot; HF Trainer &middot; Overhead Bench &middot; Thread Safety</div>
+          </div>
+          <div class="badge {"pass" if p5_fail == 0 else "fail"}">{p5_pass}/{p5_total} {"PASS" if p5_fail == 0 else "FAIL"}</div>
         </div>
       </div>
     </section>
@@ -932,6 +1080,32 @@ MoEGPT model: 2.40M parameters, 4 experts, top-2
   </div>
 
   <!-- ================================================================== -->
+  <!-- PHASE 5: Validation Suite (dynamic)                                  -->
+  <!-- ================================================================== -->
+  <div id="page-p5" class="tab-page">
+    <section>
+      <h2>Phase 5: Validation Suite <span style="font-weight:400;font-size:13px;color:var(--ink-soft);margin-left:8px;">click rows to expand</span></h2>
+      <div class="phase-banner p5">
+        <div class="phase-num">P5</div>
+        <div class="phase-info">
+          <div class="ptitle">DataLoader &middot; torch.compile &middot; HF Trainer &middot; Runtime Overhead &middot; Thread Safety</div>
+          <div class="pdesc">Real-world compatibility: pin_memory, torch.compile(eager), HuggingFace Trainer pipeline, per-call overhead benchmarks, clone/detach chains, and concurrent access safety. {p5_total} test cases.</div>
+        </div>
+      </div>
+
+      <div class="stats" style="grid-template-columns: repeat(3, 1fr);">
+        <div class="stat pass"><div class="label">Passed</div><div class="value">{p5_pass}</div></div>
+        <div class="stat fail"><div class="label">Failed</div><div class="value">{p5_fail}</div></div>
+        <div class="stat total"><div class="label">Total</div><div class="value">{p5_total}</div></div>
+      </div>
+
+      <div class="results">
+{p5_rows}
+      </div>
+    </section>
+  </div>
+
+  <!-- ================================================================== -->
   <!-- Conclusions (visible on all tabs via footer)                        -->
   <!-- ================================================================== -->
   <section>
@@ -944,6 +1118,7 @@ MoEGPT model: 2.40M parameters, 4 experts, top-2
           <li>P2: HW compat strict/relaxed</li>
           <li>P3: MoE model + training + summary proof experiments</li>
           <li>P4: {p4_pass}/{p4_total} error simulations</li>
+          <li>P5: {p5_pass}/{p5_total} validation suite</li>
         </ul>
       </div>
       <div class="card info">
@@ -955,6 +1130,16 @@ MoEGPT model: 2.40M parameters, 4 experts, top-2
           <li>E4: Autocast bfloat16 compat</li>
           <li>E5: Checkpoint map_location</li>
           <li>E7: Gradient error passthrough</li>
+        </ul>
+      </div>
+      <div class="card info">
+        <h4>Validation Suite Coverage</h4>
+        <ul>
+          <li>P5-1: DataLoader pin_memory + non_blocking</li>
+          <li>P5-2: torch.compile (eager backend)</li>
+          <li>P6-1: HuggingFace Trainer e2e</li>
+          <li>B3-1: Runtime overhead (&lt;4% for realistic workloads)</li>
+          <li>P7: clone/detach chains + thread safety</li>
         </ul>
       </div>
       <div class="card caveat">
@@ -1038,7 +1223,7 @@ MoEGPT model: 2.40M parameters, 4 experts, top-2
 
 def main():
     parser = argparse.ArgumentParser(
-        description="FakeGPU unified test suite runner (Phase 4 dynamic + Phase 1-3 static)"
+        description="FakeGPU unified test suite runner (Phase 4-5 dynamic + Phase 1-3 static)"
     )
     parser.add_argument(
         "--output", "-o", default="test/report.html",
@@ -1047,6 +1232,8 @@ def main():
     args = parser.parse_args()
 
     test_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+
+    # ---- Phase 4: Error simulation tests ----
     files = discover_test_files(test_dir)
 
     if not files:
@@ -1067,9 +1254,25 @@ def main():
         icon = "PASS" if suite.failed == 0 else "FAIL"
         print(f"  [{icon}] {cat}: {suite.passed}/{suite.total} passed")
 
-    generate_unified_html(suites, args.output)
+    # ---- Phase 5: Validation suite tests ----
+    p5_files = discover_p5_test_files(test_dir)
+    p5_suites: list[SuiteResult] = []
+    if p5_files:
+        print(f"\nDiscovered {len(p5_files)} validation suite test files:")
+        for f in p5_files:
+            print(f"  {f.name}")
+        for path in p5_files:
+            stem = path.stem
+            cat, desc = P5_CATEGORY_MAP.get(stem, (stem, ""))
+            results = run_test_file(path)
+            suite = SuiteResult(category=cat, description=desc, results=results)
+            p5_suites.append(suite)
+            icon = "PASS" if suite.failed == 0 else "FAIL"
+            print(f"  [{icon}] {cat}: {suite.passed}/{suite.total} passed")
 
-    total_fail = sum(s.failed for s in suites)
+    generate_unified_html(suites, args.output, p5_suites=p5_suites)
+
+    total_fail = sum(s.failed for s in suites) + sum(s.failed for s in p5_suites)
     sys.exit(1 if total_fail > 0 else 0)
 
 
