@@ -23,6 +23,9 @@ def _assert_has_flag(args: list[str], expected: str) -> None:
 
 
 def main() -> None:
+    assert wrapper._resolve_train_script("gpt") == "train.py"  # type: ignore[attr-defined]
+    assert wrapper._resolve_train_script("moe") == "train_moe.py"  # type: ignore[attr-defined]
+
     prepared = wrapper._prepare_train_args(  # type: ignore[attr-defined]
         ["config/train_shakespeare_char.py", "--max_iters=20"],
         mode="full",
