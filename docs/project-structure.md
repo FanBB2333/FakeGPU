@@ -42,11 +42,15 @@ This page explains how the repository is organized and how the main runtime piec
 - `src/monitor/monitor.cpp` dumps `fake_gpu_report.json` on shutdown.
 - When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU also writes a cluster-level report with collective, link, and per-rank timing data.
 
-### 8. Error simulation (Python layer)
+### 8. Python torch patch layer
 
-- `fakegpu/torch_patch.py` includes per-device memory tracking, cross-device operation guards, autocast dtype validation, checkpoint compatibility checks, and gradient error detection.
-- These features reproduce common real-GPU runtime errors so that error-handling logic can be validated without physical hardware.
+- `fakegpu/torch_patch.py` provides the Python-level CUDA redirection for CPU-only hosts.
+- The patch uses a two-layer architecture:
+  - **Base layer**: vendored upstream `FakeCudaTensor` backend (`fakegpu/_upstream.py`) provides core CUDA redirection via `torch.Tensor._make_subclass` + `__torch_function__` protocol. Tensors report `device == cuda:N` and `is_cuda == True`.
+  - **Enhancement layer**: FakeGPU additions including per-device GPU profiles, memory tracking with OOM simulation, autocast dtype validation, cross-device operation guards, and terminal summary reporting.
+- Error simulation (cross-device, OOM, invalid device, dtype mismatch, checkpoint, gradient) is part of the enhancement layer.
 - The error simulation test suite lives in `test/test_error_*.py` with a unified runner at `test/run_error_simulation_suite.py`.
+- See [Torch Patch System](phase2-custom-torch.md) for full architecture details.
 
 ## Source tree
 
@@ -59,7 +63,7 @@ This page explains how the repository is organized and how the main runtime piec
 | `src/nccl/` | fake NCCL entry points plus mode dispatch |
 | `src/distributed/` | coordinator protocol, communicator state, topology, staging |
 | `src/monitor/` | JSON reporting |
-| `fakegpu/` | Python package, CLI, and error simulation layer (device registry, memory tracker, cross-device guards) |
+| `fakegpu/` | Python package, CLI, vendored FakeCudaTensor backend, and enhancement layer (GPU profiles, memory tracker, cross-device guards, error simulation) |
 | `profiles/` | GPU preset YAML definitions |
 | `test/` | user-facing smoke, PyTorch, DDP, and comparison scripts |
 | `verification/` | lower-level probes, direct tests, and sample configs |
@@ -93,3 +97,4 @@ On macOS the corresponding `.dylib` names are produced instead.
 - [Distributed Simulation Usage Guide](distributed-sim-usage.md)
 - [Distributed Design Notes](multi-node-design.md)
 - [Error Simulation](error-simulation.md)
+- [Torch Patch System](phase2-custom-torch.md)

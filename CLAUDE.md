@@ -135,29 +135,47 @@ When adding new API stubs:
 ## Python-Level PyTorch Patch (fakegpu/torch_patch.py)
 
 For CPU-only PyTorch builds (e.g. macOS), the C-level library interception cannot work.
-`fakegpu.torch_patch` provides a pure-Python alternative that monkeypatches `torch.cuda`
-to redirect all CUDA device references to CPU:
+`fakegpu.torch_patch` provides a pure-Python alternative using a vendored `FakeCudaTensor`
+backend that makes CUDA code run transparently on CPU.
+
+The patch uses a two-layer architecture:
+1. **Base layer**: vendored upstream `FakeCudaTensor` (`fakegpu/_upstream.py`, from pytorch-fakegpu by FanBB2333). Uses `torch.Tensor._make_subclass` + `__torch_function__` protocol so that `tensor.device` reports `cuda:N` and `tensor.is_cuda` returns `True`.
+2. **Enhancement layer**: FakeGPU additions in `torch_patch.py` — GPU profiles, memory tracking with OOM simulation, autocast dtype validation, cross-device operation guards, terminal summary reporting.
 
 ```python
 import fakegpu
-fakegpu.patch_torch()  # or: from fakegpu.torch_patch import patch; patch()
+fakegpu.patch_torch()  # or: fakegpu.init(runtime="fakecuda")
 import torch
 
-x = torch.randn(3, 3, device="cuda")  # actually CPU
-model = torch.nn.Linear(3, 3).cuda()   # stays on CPU
+x = torch.randn(3, 3, device="cuda")
+assert x.device.type == "cuda"  # True — FakeCudaTensor subclass
+assert x.is_cuda is True
+model = torch.nn.Linear(3, 3).cuda()
+y = model(x)
 ```
 
-### What it patches
-- `torch.cuda.*` module functions (is_available, device_count, memory_*, etc.)
-- `Tensor.to()` / `Tensor.cuda()` — redirect cuda→cpu
-- `Module.to()` / `Module.cuda()` — same
-- 20+ tensor factory functions (torch.zeros, torch.randn, etc.) — redirect device kwarg
-- `torch._C._cuda_*` stubs for internal PyTorch imports (dynamo, inductor)
-- `torch.load()` — normalize map_location
+### What it patches (via upstream base layer)
+- `FakeCudaTensor` subclass: `tensor.device == cuda:N`, `tensor.is_cuda == True`
+- `Tensor.to()` / `Tensor.cuda()` / `Module.to()` / `Module.cuda()` — wrap/unwrap FakeCudaTensor
+- 20+ tensor factory functions (torch.zeros, torch.randn, etc.) — create FakeCudaTensor
+- `torch.load()` — rewrap loaded tensors as FakeCudaTensor
+- DataParallel / DistributedDataParallel / torch.distributed — single-process shims
+
+### What it patches (via FakeGPU enhancement layer)
+- `torch.cuda.*` module functions with GPU profile awareness
+- Per-device memory tracking with OOM simulation
+- Device index bounds validation matching real CUDA error messages
+- Autocast dtype validation (bf16 requires compute capability >= 8.0)
+- Cross-device operation guards
 - Stream/Event/GradScaler stubs
+- Terminal memory summary on exit
+
+### Verified PyTorch version
+- torch 2.9.1 (only version tested)
 
 ### Known limitations
-- `tensor.device` reports `cpu`, not `cuda` (C-level property, cannot be patched)
-- `tensor.is_cuda` returns `False`
-- DataParallel cannot work (checks device_ids match actual device)
 - No actual GPU computation — all ops run on CPU backend
+- `__torch_function__` overhead: ~2-3x vs direct CPU tensor ops
+- Stream/Event are API stubs only (no real async)
+- Distributed is single-process semantic compatibility only
+- CUDA extensions and custom kernels do not work

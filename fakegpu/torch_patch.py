@@ -1,9 +1,26 @@
 """Monkeypatch ``torch.cuda`` so CUDA-dependent code runs on CPU.
 
 On systems without an NVIDIA GPU (or with a CPU-only PyTorch build), this
-module transparently redirects all CUDA device references to the CPU backend.
-Tensor operations, module transfers, and factory functions are intercepted at
-the Python level so that the C++ dispatcher never sees a ``cuda`` device.
+module transparently provides CUDA-visible tensor semantics backed by CPU.
+It uses a **two-layer architecture**:
+
+1. **Base layer**: the vendored upstream ``FakeCudaTensor`` backend
+   (``fakegpu/_upstream.py``, from `pytorch-fakegpu`_ by FanBB2333).  Uses
+   ``torch.Tensor._make_subclass`` + ``__torch_function__`` so that
+   ``tensor.device`` reports ``cuda:N`` and ``tensor.is_cuda`` returns ``True``.
+
+2. **Enhancement layer**: FakeGPU additions applied on top — GPU profiles,
+   per-device memory tracking with OOM simulation, autocast dtype validation,
+   cross-device operation guards, and terminal summary reporting.
+
+When the upstream FakeCudaTensor is not available (neither as an installed
+``torch.fakegpu`` module nor as the vendored ``fakegpu._upstream``), a
+standalone fallback path patches ``torch.cuda`` directly but cannot make
+``tensor.device`` report ``cuda``.
+
+.. _pytorch-fakegpu: https://github.com/FanBB2333/pytorch-fakegpu
+
+Verified PyTorch version: **torch 2.9.1** (only version tested).
 
 Usage::
 
@@ -14,6 +31,8 @@ Usage::
     import torch
     # Everything below "just works" on CPU.
     x = torch.randn(3, 3, device="cuda")
+    assert x.device.type == "cuda"
+    assert x.is_cuda is True
     model = torch.nn.Linear(3, 3).cuda()
     y = model(x)
 """
