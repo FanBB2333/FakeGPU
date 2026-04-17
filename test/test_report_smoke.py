@@ -14,10 +14,12 @@ BUILD_DIR = ROOT / "build"
 
 
 def run(cmd: list[str], *, env: dict[str, str] | None = None, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
+    run_env = dict(os.environ) if env is None else dict(env)
+    run_env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
     completed = subprocess.run(
         cmd,
         cwd=str(cwd),
-        env=env,
+        env=run_env,
         text=True,
         capture_output=True,
     )

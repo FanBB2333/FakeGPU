@@ -18,6 +18,7 @@ def main() -> None:
     os.unlink(report_path)
 
     env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
     env["FAKEGPU_REPORT_PATH"] = report_path
 
     completed = subprocess.run(

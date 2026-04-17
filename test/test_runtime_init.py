@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def _run(code: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
     pythonpath = str(ROOT)
     if env.get("PYTHONPATH"):
         pythonpath = pythonpath + os.pathsep + env["PYTHONPATH"]

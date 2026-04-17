@@ -454,6 +454,7 @@ def _run_all_experiments() -> list[dict[str, Any]]:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as handle:
             result_json_path = Path(handle.name)
         env = dict(os.environ)
+        env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
         env["FAKEGPU_TERMINAL_REPORT"] = "1"
         proc = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "--run", slug, "--result-json", str(result_json_path)],

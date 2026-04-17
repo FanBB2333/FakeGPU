@@ -285,6 +285,7 @@ def spawn_success_workers(tmpdir: Path, endpoint: str) -> list[dict[str, Any]]:
         report_path = tmpdir / f"success_rank_{rank}.json"
         reports.append(report_path)
         env = dict(os.environ)
+        env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
         env.update(env_base)
         proc = subprocess.Popen(
             [
@@ -331,6 +332,7 @@ def run_disconnect_case(tmpdir: Path, endpoint: str, host: str, port: int) -> di
     ready_path = tmpdir / "disconnect_ready.flag"
     continue_path = tmpdir / "disconnect_continue.flag"
     env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
     env.update(
         {
             "FAKEGPU_DIST_MODE": "simulate",
@@ -454,6 +456,7 @@ def main() -> int:
                     "2",
                 ],
                 cwd=REPO_ROOT,
+                env={**os.environ, "XONSH_HISTORY_BACKEND": os.environ.get("XONSH_HISTORY_BACKEND", "dummy")},
                 capture_output=True,
                 text=True,
                 check=False,

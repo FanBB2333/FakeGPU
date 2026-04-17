@@ -61,6 +61,15 @@ def discover_test_files(test_dir: str) -> list[Path]:
     return sorted(Path(test_dir).glob("test_error_*.py"))
 
 
+def _pytest_subprocess_env() -> dict[str, str]:
+    env = dict(os.environ)
+    # pytest auto-loads the xonsh plugin in this environment. The plugin tries
+    # to initialize a writable history backend, which fails under sandboxed
+    # runs and pollutes captured test output with irrelevant PermissionErrors.
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
+    return env
+
+
 def run_test_file(path: Path) -> list[TestResult]:
     start = time.time()
     try:
@@ -68,6 +77,7 @@ def run_test_file(path: Path) -> list[TestResult]:
             [sys.executable, "-m", "pytest", str(path), "-v", "--tb=short"],
             capture_output=True, text=True, timeout=120,
             cwd=str(path.parent.parent),
+            env=_pytest_subprocess_env(),
         )
     except subprocess.TimeoutExpired:
         return [TestResult(
