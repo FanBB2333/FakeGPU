@@ -1,0 +1,28 @@
+$ /Users/l1ght/miniforge3/envs/fakegpu/bin/python test/run_error_simulation_suite.py --output /Users/l1ght/repos/FakeGPU/test-results/torch-patch-matrix/2.7.1/report.html
+
+Discovered 6 error simulation test files:
+  test_error_checkpoint_load.py
+  test_error_cross_device.py
+  test_error_device_index.py
+  test_error_dtype_autocast.py
+  test_error_gradient.py
+  test_error_oom.py
+  [PASS] E5: Checkpoint Load: 3/3 passed
+  [PASS] E1: Cross-device Ops: 5/5 passed
+  [PASS] E3: Device Index: 4/4 passed
+  [PASS] E4: dtype / Autocast: 3/3 passed
+  [PASS] E7: Gradient: 3/3 passed
+  [PASS] E2: OOM Simulation: 5/5 passed
+
+Discovered 5 validation suite test files:
+  test_dataloader_pin_memory.py
+  test_torch_compile.py
+  test_hf_trainer.py
+  test_benchmark_overhead.py
+  test_patch_advanced.py
+  [PASS] P5-1: DataLoader pin_memory: 7/7 passed
+  [PASS] P5-2: torch.compile: 6/7 passed
+  [PASS] P6-1: HuggingFace Trainer: 4/4 passed
+  [PASS] B3-1: Runtime Overhead: 6/8 passed
+  [PASS] P7: Advanced Patches: 12/12 passed
+Report written to /Users/l1ght/repos/FakeGPU/test-results/torch-patch-matrix/2.7.1/report.html

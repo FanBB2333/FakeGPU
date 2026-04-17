@@ -1,0 +1,65 @@
+$ /Users/l1ght/miniforge3/envs/fakegpu/bin/python test/test_torch_training.py
+
+/Users/l1ght/repos/FakeGPU/test/test_torch_training.py:10: UserWarning: fakegpu.torch_patch: enabled upstream FakeCudaTensor backend with FakeGPU enhancements (memory tracking, GPU profiles, cross-device validation).
+  from fakegpu.torch_patch import patch; patch()
+Using device: cuda
+GPU: NVIDIA A100-SXM4-80GB
+Model on device: cuda:0
+
+Training for 5 batches...
+  Batch 1/5 | Loss: 2.5115 | Acc: 6.25%
+  Batch 2/5 | Loss: 2.4412 | Acc: 6.25%
+  Batch 3/5 | Loss: 2.3538 | Acc: 6.25%
+  Batch 4/5 | Loss: 2.5096 | Acc: 12.50%
+  Batch 5/5 | Loss: 2.3896 | Acc: 18.75%
+
+Eval: output shape=(32, 10), probs sum=1.0000
+
+Checkpoint saved to /tmp/fakegpu_test_ckpt.pt
+Checkpoint loaded, epoch=1
+Restored step OK | Loss: 2.4854 | LR: 0.000531 | Scale: 1.0
+
+Testing autocast...
+  autocast output dtype: torch.float32, shape: (4, 10)
+
+Testing DataParallel...
+  DataParallel output: shape=(4, 10)
+
+=== TRAINING SIMULATION COMPLETE ===
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 24.0 MB / 80.0 GB peak (0.0%)
+   Alloc: 854 calls | Free: 510 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================

@@ -1,0 +1,43 @@
+{
+  "requested_version": "2.9.1",
+  "install": {
+    "returncode": 0,
+    "duration_sec": 23.283,
+    "log": "/Users/l1ght/repos/FakeGPU/test-results/torch-patch-matrix/2.9.1/install.log"
+  },
+  "steps": [
+    {
+      "name": "run_error_simulation_suite",
+      "returncode": 0,
+      "duration_sec": 42.298,
+      "log": "/Users/l1ght/repos/FakeGPU/test-results/torch-patch-matrix/2.9.1/run_error_simulation_suite.log",
+      "report": "/Users/l1ght/repos/FakeGPU/test-results/torch-patch-matrix/2.9.1/report.html"
+    },
+    {
+      "name": "test_torch_patch",
+      "returncode": 0,
+      "duration_sec": 0.995,
+      "log": "/Users/l1ght/repos/FakeGPU/test-results/torch-patch-matrix/2.9.1/test_torch_patch.log"
+    },
+    {
+      "name": "test_torch_training",
+      "returncode": 0,
+      "duration_sec": 2.552,
+      "log": "/Users/l1ght/repos/FakeGPU/test-results/torch-patch-matrix/2.9.1/test_torch_training.log"
+    },
+    {
+      "name": "test_torch_patch_profile_bf16",
+      "returncode": 0,
+      "duration_sec": 0.124,
+      "log": "/Users/l1ght/repos/FakeGPU/test-results/torch-patch-matrix/2.9.1/test_torch_patch_profile_bf16.log"
+    },
+    {
+      "name": "test_torch_patch_proof_regressions",
+      "returncode": 0,
+      "duration_sec": 1.25,
+      "log": "/Users/l1ght/repos/FakeGPU/test-results/torch-patch-matrix/2.9.1/test_torch_patch_proof_regressions.log"
+    }
+  ],
+  "torch_version": "2.9.1",
+  "all_steps_passed": true
+}

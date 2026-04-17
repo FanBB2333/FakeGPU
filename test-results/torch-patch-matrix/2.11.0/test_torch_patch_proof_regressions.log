@@ -1,0 +1,12 @@
+$ /Users/l1ght/miniforge3/envs/fakegpu/bin/python -m pytest -q test/test_torch_patch_proof_regressions.py -vv
+
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-9.0.3, pluggy-1.6.0 -- /Users/l1ght/miniforge3/envs/fakegpu/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+collecting ... collected 1 item
+
+test/test_torch_patch_proof_regressions.py::test_a100_1g_profile_matches_device_count_and_memory_limit PASSED [100%]
+
+============================== 1 passed in 1.05s ===============================

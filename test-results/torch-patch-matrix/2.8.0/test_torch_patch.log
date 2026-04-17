@@ -1,0 +1,86 @@
+$ /Users/l1ght/miniforge3/envs/fakegpu/bin/python test/test_torch_patch.py
+
+/Users/l1ght/repos/FakeGPU/test/test_torch_patch.py:6: UserWarning: fakegpu.torch_patch: enabled upstream FakeCudaTensor backend with FakeGPU enhancements (memory tracking, GPU profiles, cross-device validation).
+  patch()
+=== Basic checks ===
+cuda available: True
+device count: 8
+current device: 0
+device name: NVIDIA A100-SXM4-80GB
+device capability: (8, 0)
+
+=== Tensor creation with device=cuda ===
+tensor(device=cuda): tensor([1., 2., 3.]), device=cuda:0
+randn(device=cuda): shape=(3, 3), device=cuda:0
+zeros(device=cuda:0): tensor([0., 0., 0., 0.]), device=cuda:0
+ones(device=cuda): shape=(2, 3), device=cuda:0
+empty(device=cuda): shape=(5,), device=cuda:0
+
+=== .cuda() and .to() ===
+.cuda(): device=cuda:0
+.to('cuda'): device=cuda:0
+.to(device(cuda,0)): device=cuda:0
+.to('cuda', dtype=fp16): device=cuda:0, dtype=torch.float16
+.to(float64): dtype=torch.float64
+
+=== Module operations ===
+model.cuda(): weight device=cuda:0
+model.to('cuda'): weight device=cuda:0
+
+=== Forward pass ===
+output: shape=(3, 5), device=cuda:0
+output values (first row): [0.6853448152542114, 0.015417605638504028, 0.047028928995132446, 0.16421140730381012, 1.3778530359268188]
+
+=== Stream / Event ===
+stream/event OK
+
+=== Misc ===
+memory_allocated: 746
+mem_get_info: (85899345174, 85899345920)
+is_bf16_supported: True
+
+=== Legacy cuda tensor types ===
+cuda.FloatTensor(3,4): shape=(3, 4), dtype=torch.float32, device=cuda:0
+
+=== CNN model ===
+CNN output: shape=(2, 10), device=cuda:0
+CNN logits[0]: [0.09764594584703445, 0.16489453613758087, 0.046921469271183014, -0.06310185045003891, 0.06427501142024994, -0.004853853955864906, 0.22419966757297516, -0.12923136353492737, -0.011493590660393238, -0.08112017810344696]
+
+=== ALL TESTS PASSED ===
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 333.9 KB / 80.0 GB peak (0.0%)
+   Alloc: 28 calls | Free: 2 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 4: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 5: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 6: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 7: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
