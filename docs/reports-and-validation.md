@@ -76,7 +76,7 @@ This report is useful for validating control flow, topology modeling, and broad 
 
 - **Phase 1** — device discovery and profile exposure
 - **Phase 2** — training flow (nanoGPT on fake GPU)
-- **Phase 3** — MoE architecture validation
+- **Phase 3** — MoE architecture validation plus torch_patch proof experiments
 - **Phase 4** — error simulation experiments (23 tests across 6 categories)
 
 Regenerate it with:
@@ -86,6 +86,10 @@ python test/run_error_simulation_suite.py
 ```
 
 The report is designed for co-deployment with the mkdocs site at `/test/report.html`.
+
+For the proof-oriented Markdown companion, see:
+
+- `test/real_scene/nanoGPT/TORCH_PATCH_PROOF.md` — 520M / 1.0B load-only scaling, a100-1g OOM validation, and the current scope limitation that op-produced activations are not yet reflected in fakecuda terminal summary peaks.
 
 ## Stability guidance
 

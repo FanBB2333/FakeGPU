@@ -76,7 +76,7 @@
 
 - **Phase 1** — 设备发现与 profile 暴露
 - **Phase 2** — 训练流程（nanoGPT on fake GPU）
-- **Phase 3** — MoE 架构验证
+- **Phase 3** — MoE 架构验证与 torch_patch 证明型实验
 - **Phase 4** — 错误模拟实验（6 类场景，23 个测试）
 
 重新生成：
@@ -86,6 +86,10 @@ python test/run_error_simulation_suite.py
 ```
 
 该报告可以与 mkdocs 站点一起部署在 `/test/report.html`。
+
+对应的 Markdown 证明报告见：
+
+- `test/real_scene/nanoGPT/TORCH_PATCH_PROOF.md` — 包含 520M / 1.0B load-only 扩展实验、`a100-1g` OOM 验证，以及当前 fakecuda terminal summary 尚未覆盖大多数算子输出 activation 的范围说明。
 
 ## 稳定性建议
 

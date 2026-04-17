@@ -1,0 +1,90 @@
+{
+  "generated_at": "2026-04-17",
+  "results": [
+    {
+      "description": "Proves the current torch_patch summary tracks explicit fake-CUDA storages but does not account for most op-produced activation tensors.",
+      "excerpt": "after_xy: 8.0 MB\nafter_add: 8.0 MB\nafter_clone: 8.0 MB\nafter_zeros_like: 8.0 MB\npeak: 8.0 MB\nalloc_calls: 2",
+      "id": "P3-5",
+      "metrics": {
+        "after_add_mb": 8.0,
+        "after_clone_mb": 8.0,
+        "after_xy_mb": 8.0,
+        "after_zeros_like_mb": 8.0,
+        "alloc_calls": 2,
+        "free_calls": 0,
+        "peak_mb": 8.0
+      },
+      "note": "This is an expected limitation probe, not a bug regression. It documents that op-produced tensors like `x + y` are not yet tracked.",
+      "slug": "scope_probe",
+      "status": "pass",
+      "stderr": "/Users/l1ght/repos/FakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.\n  return patch(num_devices=num_devices, device_name=device_name)\n\n======================================================\n             FakeGPU Report Summary\n======================================================\n Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)\n   Memory: 8.0 MB / 80.0 GB peak (0.0%)\n   Alloc: 2 calls | Free: 2 calls\n------------------------------------------------------\n======================================================",
+      "stdout": "",
+      "summary": "======================================================\n             FakeGPU Report Summary\n======================================================\n Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)\n   Memory: 8.0 MB / 80.0 GB peak (0.0%)\n   Alloc: 2 calls | Free: 2 calls\n------------------------------------------------------\n======================================================",
+      "title": "Summary Scope Probe (Elementwise + Clone)"
+    },
+    {
+      "description": "Shows that Report Summary peak memory scales with parameter count for weight-only model loading.",
+      "excerpt": "params: 520.22M\nfp32_weight_bytes: 1.94 GiB\nmemory_allocated: 1.94 GiB\nmemory_peak: 1.94 GiB\nalloc_calls: 255",
+      "id": "P3-6",
+      "metrics": {
+        "alloc_calls": 255,
+        "fp32_weight_bytes": 2080877568,
+        "free_calls": 0,
+        "memory_allocated_bytes": 2080877568,
+        "memory_peak_bytes": 2080877568,
+        "params": 520219392,
+        "params_millions": 520.219392
+      },
+      "note": "Peak memory matches fp32 parameter bytes, which is the correct behavior for the current weight-only tracker.",
+      "slug": "moe_520m_load",
+      "status": "pass",
+      "stderr": "/Users/l1ght/repos/FakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.\n  return patch(num_devices=num_devices, device_name=device_name)\n\n======================================================\n             FakeGPU Report Summary\n======================================================\n Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)\n   Memory: 1.9 GB / 80.0 GB peak (2.4%)\n   Alloc: 255 calls | Free: 255 calls\n------------------------------------------------------\n======================================================",
+      "stdout": "MoEGPT model: 520.22M parameters, 8 experts, top-2",
+      "summary": "======================================================\n             FakeGPU Report Summary\n======================================================\n Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)\n   Memory: 1.9 GB / 80.0 GB peak (2.4%)\n   Alloc: 255 calls | Free: 255 calls\n------------------------------------------------------\n======================================================",
+      "title": "Load-Only Scaling (520M MoE)"
+    },
+    {
+      "description": "Confirms the same weight-tracking behavior at roughly 1B parameters.",
+      "excerpt": "params: 1001.61M\nfp32_weight_bytes: 3.73 GiB\nmemory_allocated: 3.73 GiB\nmemory_peak: 3.73 GiB\nalloc_calls: 507",
+      "id": "P3-7",
+      "metrics": {
+        "alloc_calls": 507,
+        "fp32_weight_bytes": 4006431744,
+        "free_calls": 0,
+        "memory_allocated_bytes": 4006431744,
+        "memory_peak_bytes": 4006431744,
+        "params": 1001607936,
+        "params_millions": 1001.607936
+      },
+      "note": "The 1B-class model still reports weight-size peak memory rather than full optimizer+activation training memory.",
+      "slug": "moe_1b_load",
+      "status": "pass",
+      "stderr": "/Users/l1ght/repos/FakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.\n  return patch(num_devices=num_devices, device_name=device_name)\n\n======================================================\n             FakeGPU Report Summary\n======================================================\n Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)\n   Memory: 3.7 GB / 80.0 GB peak (4.7%)\n   Alloc: 507 calls | Free: 507 calls\n------------------------------------------------------\n======================================================",
+      "stdout": "MoEGPT model: 1001.61M parameters, 8 experts, top-2",
+      "summary": "======================================================\n             FakeGPU Report Summary\n======================================================\n Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)\n   Memory: 3.7 GB / 80.0 GB peak (4.7%)\n   Alloc: 507 calls | Free: 507 calls\n------------------------------------------------------\n======================================================",
+      "title": "Load-Only Scaling (1.0B MoE)"
+    },
+    {
+      "description": "Verifies pure torch_patch fakecuda now honors the a100-1g profile memory limit and device-count/profile synchronization.",
+      "excerpt": "params: 1001.61M\ndevice_count: 2\nprofile_count: 2\ntracker_count: 2\nreported_total_memory: 1.00 GiB\nerror: CUDA out of memory. Tried to allocate 9.00 MiB. GPU 0 has a total capacity of 1.00 GiB of which 0.00 GiB is free.",
+      "id": "P3-8",
+      "metrics": {
+        "device_count": 2,
+        "error": "CUDA out of memory. Tried to allocate 9.00 MiB. GPU 0 has a total capacity of 1.00 GiB of which 0.00 GiB is free.",
+        "params": 1001607936,
+        "params_millions": 1001.607936,
+        "profile_count": 2,
+        "reported_total_memory_bytes": 1073741824,
+        "tracker_count": 2
+      },
+      "note": "This probe exercises pure torch_patch fakecuda without the wrapper's separate memory limiter.",
+      "slug": "moe_1b_oom_1g",
+      "status": "pass",
+      "stderr": "/Users/l1ght/repos/FakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.\n  return patch(num_devices=num_devices, device_name=device_name)\n\n======================================================\n             FakeGPU Report Summary\n======================================================\n Device 0: NVIDIA A100-SXM4-1GB (Ampere, cc 8.0)\n   Memory: 1021.3 MB / 1.0 GB peak (99.7%)\n   Alloc: 123 calls | Free: 123 calls\n------------------------------------------------------\n Device 1: NVIDIA A100-SXM4-1GB (Ampere, cc 8.0)\n   Memory: 0 B / 1.0 GB peak (0.0%)\n   Alloc: 0 calls | Free: 0 calls\n------------------------------------------------------\n======================================================",
+      "stdout": "MoEGPT model: 1001.61M parameters, 8 experts, top-2",
+      "summary": "======================================================\n             FakeGPU Report Summary\n======================================================\n Device 0: NVIDIA A100-SXM4-1GB (Ampere, cc 8.0)\n   Memory: 1021.3 MB / 1.0 GB peak (99.7%)\n   Alloc: 123 calls | Free: 123 calls\n------------------------------------------------------\n Device 1: NVIDIA A100-SXM4-1GB (Ampere, cc 8.0)\n   Memory: 0 B / 1.0 GB peak (0.0%)\n   Alloc: 0 calls | Free: 0 calls\n------------------------------------------------------\n======================================================",
+      "title": "Small-VRAM OOM (1.0B MoE on a100-1g)"
+    }
+  ],
+  "runner": "test/real_scene/nanoGPT/generate_torch_patch_proof_artifacts.py"
+}
