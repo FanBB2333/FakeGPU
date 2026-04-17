@@ -1,138 +1,148 @@
-# Phase 2 自定义 Torch 路线
+# Torch Patch 系统
 
-这份文档说明当前 Phase 2 路线的状态：基于自定义 PyTorch 构建，在没有真实 CUDA 的 macOS / Linux 主机上暴露 CUDA 语义，并与 FakeGPU 配合使用。
+这份文档说明 FakeGPU 的 Python 层 torch patch 架构、工作原理、支持的 API 面和已知限制。
 
-## 目标
+## 架构概览
 
-Phase 2 面向的是那些不能停留在 `fgpu` 这类 `PrivateUse1` 设备名上的场景。
+FakeGPU 的 torch patch 采用两层架构：
 
-目标是做本地调试和 smoke 验证层面的兼容，而不是做原生 CUDA 后端：
+1. **基础层** -- 内置的上游 `FakeCudaTensor` 后端（`fakegpu/_upstream.py`，源自 FanBB2333 的 `pytorch-fakegpu`）。通过 `torch.Tensor._make_subclass` + `__torch_function__` 协议实现核心 CUDA 重定向。
+2. **增强层** -- FakeGPU 自有的增强功能（`fakegpu/torch_patch.py`），在上游基础上覆写和扩展：GPU profiles、内存跟踪与 OOM 模拟、autocast dtype 校验、GradScaler 透传、跨设备操作校验、终端摘要报告。
 
-- `tensor.device.type == "cuda"`
-- `tensor.is_cuda is True`
-- `module.cuda()` / `module.to("cuda")`
-- 常见 `torch.cuda.*` 控制流
-- 足够支撑训练脚本的 `torch.distributed` / `DataParallel` / checkpoint 恢复
+上游代码已经 vendor 到 FakeGPU 包内部，不再需要安装独立的 `pytorch-fakegpu` 自定义 PyTorch 构建。
 
-底层执行仍然是 CPU。
+## 工作原理（数据流）
 
-## 当前架构
+1. `fakegpu.patch_torch()` 或 `fakegpu.init(runtime="fakecuda")` 调用 `torch_patch.py` 中的 `patch()`。
+2. `patch()` 调用 `_activate_upstream(num_devices, device_name)`：
+   - 优先尝试 `import torch.fakegpu`（已安装的自定义 PyTorch，如有）
+   - 回退到 `fakegpu._upstream`（内置 vendor 副本，始终可用）
+   - 调用 `upstream.enable()` 安装基础 FakeCudaTensor patch
+3. `patch()` 再调用 `_apply_enhancements_over_upstream(upstream, torch)` 叠加 FakeGPU 增强。
 
-- 源码基线：上游 `pytorch/pytorch` `v2.11.0`
-- 分支仓库：本地 `pytorch-fakegpu`
-- 集成入口：`torch.fakegpu.enable()`
-- 桥接入口：`fakegpu.torch_patch.patch()` 在检测到自定义 torch 时会优先走这条路径
+## 关键机制 -- FakeCudaTensor
 
-实现刻意放在 Python 层：
+`FakeCudaTensor` 是基础层的核心实现：
 
-- 包装张量，暴露 fake CUDA 可见属性
-- monkeypatch 张量、模块、device factory 入口
-- `torch.load(..., map_location=...)` 先按 CPU 反序列化，再递归改写成 fake CUDA tensor
-- 对部分 `torch.cuda`、`torch.nn.parallel`、`torch.distributed` 接口做单进程 shim
+- 使用 `torch.Tensor._make_subclass(cls, raw_data, requires_grad)` 创建子类，底层数据是 CPU tensor
+- 覆写 `device` 属性 -- 返回 `torch.device(f"cuda:{device_index}")`
+- 覆写 `is_cuda` 属性 -- 返回 `True`
+- 使用 `__torch_function__` 协议：解包参数到 CPU -> 执行 CPU 运算 -> 重新包装结果为 `FakeCudaTensor`
 
-## 当前支持面
+这种方式解决了 `tensor.device` 和 `tensor.is_cuda` 是 C 级描述符、无法在普通 tensor 上 monkeypatch 的问题。
 
-### CUDA 语义张量与模块
+## FakeGPU 增强层
 
-- `torch.device("cuda")`、`torch.device("cuda:N")`
-- 使用 `device="cuda"` / `device="cuda:N"` 创建张量
-- `.cuda()`、`.to("cuda")`、`.cpu()`
-- `tensor.device`、`tensor.is_cuda`
-- `module.cuda()`、`module.to("cuda")`
-- `torch.cuda.FloatTensor` 这一类 legacy tensor factory
+`_apply_enhancements_over_upstream` 在上游基础上叠加以下增强：
 
-### CUDA 管理接口
+| 部分 | 功能 |
+|---|---|
+| 第 0 部分 | 设备索引越界校验 -- 替换上游宽松的 `_normalize_device_index`，使用匹配真实 CUDA 行为的 "CUDA error: invalid device ordinal" 错误 |
+| 第 1 部分 | 内存跟踪器初始化，使用 GPU profile 中的每设备内存限制 |
+| 第 2 部分 | Hook `upstream.wrap_tensor`，实现 tensor 创建时自动内存跟踪 |
+| 第 3 部分 | 每设备 GPU profile（11 种 profile）-- 覆写 `get_device_name`, `get_device_capability`, `get_device_properties` |
+| 第 4 部分 | 使用跟踪器的内存查询函数，替换上游返回零值的 stub |
+| 第 5 部分 | Autocast dtype 校验（bf16 要求 compute capability >= 8.0）+ GradScaler 透传 |
+| 第 6 部分 | 跨设备操作校验（tensor ops、loss functions、functional ops、binary dunders） |
+| 第 7 部分 | RNG state 函数（上游未提供） |
+| 第 8 部分 | 退出时的终端摘要报告 |
 
-- `torch.cuda.is_available()`、`device_count()`、`current_device()`、`set_device()`
-- `get_device_name()`、`get_device_capability()`、`get_device_properties()`
-- `Stream`、`Event`、`stream(...)`、`current_stream()`、`default_stream()`、`set_stream()`、`device_of(...)`
-- `manual_seed()`、`manual_seed_all()`、`seed()`、`seed_all()`、`initial_seed()`
-- `get_rng_state()`、`get_rng_state_all()`、`set_rng_state()`、`set_rng_state_all()`
-- `memory_allocated()`、`memory_reserved()`、`mem_get_info()`
-- `memory_stats()`、`memory_summary()`、`memory_snapshot()`
-- `torch.cuda.memory` / `torch.cuda.random` 子模块中的对应别名
+### 支持的 GPU profiles
 
-### Parallel / Distributed shim
+共 11 种预设 profile：
 
-- `torch.nn.DataParallel`
-- `torch.nn.parallel.DistributedDataParallel`
-- `torch.nn.parallel.comm.broadcast`、`scatter`、`gather`、`reduce_add`、`reduce_add_coalesced`
-- 单进程语义兼容的 `torch.distributed`：
-  - `init_process_group`、`destroy_process_group`
-  - `barrier`
-  - `all_reduce`、`broadcast`
-  - `all_gather`、`all_gather_into_tensor`、`all_gather_object`
-  - `reduce`、`gather`、`scatter`
-  - `reduce_scatter`、`reduce_scatter_tensor`
-  - `all_to_all`、`all_to_all_single`
-  - `broadcast_object_list`
-  - 私有别名 `_all_gather_base`、`_reduce_scatter_base`
+| Profile | 说明 |
+|---|---|
+| `gtx980` | GeForce GTX 980 |
+| `p100` | Tesla P100 |
+| `v100` | Tesla V100 |
+| `t4` | Tesla T4 |
+| `a40` | NVIDIA A40 |
+| `a100` | NVIDIA A100 |
+| `a100-1g` | NVIDIA A100 (1g MIG) |
+| `h100` | NVIDIA H100 |
+| `l40s` | NVIDIA L40S |
+| `b100` | NVIDIA B100 |
+| `b200` | NVIDIA B200 |
 
-### Checkpoint 与训练兼容
+## 已支持的 API 面
 
-- `torch.save(...)`
-- `torch.load(..., map_location="cuda:N")`
-- `torch.load(..., map_location=torch.device("cuda:N"))`
-- `torch.load(..., map_location={"cpu": "cuda:N"})`
-- `torch.load(..., map_location={torch.device("cpu"): torch.device("cuda:N")})`
-- 递归保持 `OrderedDict`、list、tuple 和共享 tensor alias
-- model / optimizer / scheduler / AMP scaler / CUDA RNG state 的 checkpoint 恢复
-- `torch.amp.autocast(device_type="cuda")`
-- `torch.amp.GradScaler("cuda")`
+两层架构组合后支持的能力：
+
+| 能力 | 状态 |
+|---|---|
+| `tensor.device == cuda:N` | 支持 |
+| `tensor.is_cuda == True` | 支持 |
+| `nn.DataParallel` | 支持 |
+| `nn.DistributedDataParallel` | 支持 |
+| `torch.distributed.*`（单进程 shim，覆盖所有 collective ops） | 支持 |
+| Autocast / GradScaler with dtype validation | 支持 |
+| GPU profiles（11 种预设） | 支持 |
+| Memory tracking with OOM simulation | 支持 |
+| Cross-device validation | 支持 |
+| `torch.load` with `map_location` normalization | 支持 |
+| Factory functions (`torch.randn`, `torch.zeros`, etc.) with `device="cuda"` | 支持 |
+| Legacy tensor factories (`torch.cuda.FloatTensor`, etc.) | 支持 |
+| Stream/Event API 兼容 stub | 支持 |
+
+## 已验证 PyTorch 版本
+
+目前唯一测试过的版本：**torch 2.9.1**。
+
+## 配置
+
+通过环境变量控制行为：
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `FAKEGPU_DEVICE_COUNT` | Fake device 数量 | `8` |
+| `FAKEGPU_PROFILE` | GPU profile 预设 | -- |
+| `FAKEGPU_PROFILES` | 混合 profile（例: `a100:4,h100:4`） | -- |
+| `FAKEGPU_DEVICE_NAME` | 自定义设备名 | -- |
+| `FAKEGPU_STRICT_COMPAT` | 启用/禁用严格兼容校验 | `1` |
+
+## 使用方式
+
+### 基本用法
+
+```python
+import fakegpu
+fakegpu.patch_torch()
+import torch
+
+x = torch.randn(3, 3, device="cuda")
+assert x.device.type == "cuda"
+assert x.is_cuda is True
+
+model = torch.nn.Linear(3, 3).cuda()
+y = model(x)
+```
+
+### 通过 init 接口
+
+```python
+import fakegpu
+fakegpu.init(runtime="fakecuda")
+```
 
 ## 已知限制
 
-- 所有计算仍然由 CPU 执行。这条路线追求兼容，不追求性能。
-- CUDA 显存统计是 stub，内存统计值固定为 0 或固定假总量。
-- stream / event 只有 API 语义，没有真实异步执行。
-- distributed 只提供单进程语义兼容，不提供真实多 rank 通信。
-- `torch.load(..., map_location=<callable>)` 仍然保留上游 storage callback 语义；目前不支持把 callable 返回值翻译成 fake-CUDA 目标设备。
-- 这条路线不能让 CUDA 扩展、自定义 kernel、真实 storage allocator 在 CPU-only 构建上工作。
+- 所有计算由 CPU 执行 -- 没有实际 GPU 执行。
+- `__torch_function__` 开销：比直接 CPU tensor 操作慢约 2-3 倍（benchmark 测量值）。
+- Stream/Event 仅为 API 兼容 stub（无真实异步）。
+- Distributed 仅提供单进程语义兼容。
+- CUDA 扩展、自定义 kernel、storage 级 CUDA allocator 不可用。
+- 部分 PyTorch 内部路径可能绕过 `__torch_function__`（极少见）。
 
-## 当前维护的验证基线
+## 测试套件
 
-FakeGPU 仓库里当前维护的 Phase 2 smoke 测试包括：
+- 12 个测试文件，共 58 个测试。
+- 单独运行全部通过；同进程跨文件有隔离问题（pre-existing，由模块级 `_NUM_DEVICES` 全局状态引起）。
+- 关键测试文件：`test_benchmark_overhead.py`, `test_dataloader_pin_memory.py`, `test_error_*.py`, `test_patch_advanced.py`, `test_hf_trainer.py`。
 
-- `test/test_phase2_custom_torch_smoke.py`
-- `test/test_phase2_cuda_api_surface.py`
-- `test/test_phase2_parallel_api_surface.py`
-- `test/test_phase2_distributed_api_surface.py`
-- `test/test_phase2_checkpoint_state_surface.py`
-- `test/test_phase2_torch_load_map_location_surface.py`
-- `test/test_phase2_patch_bridge.py`
-- `test/test_torch_patch.py`
-- `test/test_torch_training.py`
+## Vendored 上游维护
 
-## 推荐使用方式
-
-### 1. 安装自定义 torch wheel
-
-先在本地 `pytorch-fakegpu` 仓库构建 wheel，再装到 FakeGPU 使用的同一套 Python 环境里。
-
-### 2. 选择一种激活方式
-
-直接跑自定义 torch 测试：
-
-```bash
-TORCH_FAKEGPU_ENABLE=1 python test/test_phase2_custom_torch_smoke.py
-```
-
-已有脚本如果已经用了 FakeGPU patch：
-
-```python
-from fakegpu.torch_patch import patch
-patch()
-```
-
-桥接层会尽量保持旧脚本不改，同时优先启用已安装的自定义 torch fake-CUDA 后端。
-
-## 什么情况下不该继续扩 Phase 2
-
-如果你的目标是下面这些场景，Phase 2 目前已经够用：
-
-- 本地脚本 bring-up
-- 在 CPU-only 环境里调试 CUDA 风格训练代码
-- checkpoint / optimizer 恢复链路的 smoke 验证
-- 需要 `torch.cuda` 和基础 `torch.distributed` 存在感的单进程兼容
-
-如果下一个需求已经变成真实 CUDA 执行、真实 allocator 行为、或者真实分布式通信，那就不应该继续在这层往前堆实现。
+- `fakegpu/_upstream.py` 是上游代码的原样副本。
+- 不要直接修改 -- 在 `torch_patch.py` 中做增强。
+- 更新方式是直接替换文件。
+- 文件顶部保留 attribution header。

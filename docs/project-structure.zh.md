@@ -42,11 +42,15 @@
 - `src/monitor/monitor.cpp` 会在退出时写出 `fake_gpu_report.json`。
 - 如果开启分布式并设置了 `FAKEGPU_CLUSTER_REPORT_PATH`，还会再写一份 cluster 级通信报告。
 
-### 8. 错误模拟（Python 层）
+### 8. Python torch patch 层
 
-- `fakegpu/torch_patch.py` 内包含每设备内存跟踪、跨设备操作守卫、autocast dtype 校验、checkpoint 兼容性检查和梯度错误检测。
-- 这些功能可以在没有物理 GPU 的环境下复现常见的真实 GPU 运行时错误，用于验证错误处理逻辑。
+- `fakegpu/torch_patch.py` 提供 Python 层面的 CUDA 重定向，用于 CPU-only 主机。
+- patch 采用两层架构：
+  - **基础层**：内置的上游 `FakeCudaTensor` 后端（`fakegpu/_upstream.py`），通过 `torch.Tensor._make_subclass` + `__torch_function__` 协议实现核心 CUDA 重定向。Tensor 报告 `device == cuda:N` 且 `is_cuda == True`。
+  - **增强层**：FakeGPU 自有增强，包括每设备 GPU profile、内存跟踪与 OOM 模拟、autocast dtype 校验、跨设备操作守卫、终端摘要报告。
+- 错误模拟（跨设备、OOM、无效设备索引、dtype 不匹配、checkpoint、梯度）属于增强层。
 - 错误模拟测试位于 `test/test_error_*.py`，统一运行入口在 `test/run_error_simulation_suite.py`。
+- 完整架构详情参见 [Torch Patch 系统](phase2-custom-torch.md)。
 
 ## 目录说明
 
@@ -59,7 +63,7 @@
 | `src/nccl/` | fake NCCL 入口与模式分发 |
 | `src/distributed/` | coordinator 协议、communicator、拓扑、staging |
 | `src/monitor/` | JSON 报告 |
-| `fakegpu/` | Python 包、CLI 与错误模拟层（设备注册、内存跟踪、跨设备守卫） |
+| `fakegpu/` | Python 包、CLI、内置 FakeCudaTensor 后端与增强层（GPU profile、内存跟踪、跨设备守卫、错误模拟） |
 | `profiles/` | GPU preset YAML |
 | `test/` | 用户入口级 smoke / PyTorch / DDP / comparison 脚本 |
 | `verification/` | 更底层的 probe、direct test 与样例配置 |
@@ -93,3 +97,4 @@
 - [分布式模拟使用说明](distributed-sim-usage.md)
 - [分布式设计说明](multi-node-design.md)
 - [错误模拟](error-simulation.md)
+- [Torch Patch 系统](phase2-custom-torch.md)
