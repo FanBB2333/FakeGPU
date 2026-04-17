@@ -67,8 +67,8 @@ def main() -> int:
         _die("report root must be a JSON object")
 
     version = report.get("report_version")
-    if version != 4:
-        _die(f"unexpected report_version={version!r} (expected 4)")
+    if not isinstance(version, str):
+        _die(f"unexpected report_version={version!r} (expected string like '1.5.0')")
 
     schema = _require(report, "schema", ctx="root")
     if schema != "experimental":

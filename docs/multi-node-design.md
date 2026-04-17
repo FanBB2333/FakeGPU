@@ -435,7 +435,7 @@ faults:
 
 ```json
 {
-  "report_version": 4,
+  "report_version": "1.5.0",
   "cluster": {
     "world_size": 8,
     "node_count": 2,

@@ -1,5 +1,6 @@
 #include "cluster_coordinator.hpp"
 #include "cluster_config.hpp"
+#include "../core/version.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -61,7 +62,7 @@ bool dump_cluster_report(
         : (world_size > 0 ? 1U : 0U);
 
     std::fprintf(out, "{\n");
-    std::fprintf(out, "  \"report_version\": 4,\n");
+    std::fprintf(out, "  \"report_version\": \"%s\",\n", FAKEGPU_VERSION);
     std::fprintf(out, "  \"schema\": \"experimental\",\n");
     std::fprintf(out, "  \"cluster\": {\n");
     std::fprintf(out, "    \"mode\": \"%s\",\n",
