@@ -20,6 +20,7 @@ Usage::
 
 from __future__ import annotations
 
+import atexit
 import functools
 import importlib
 import os
@@ -305,6 +306,8 @@ class _DeviceMemoryTracker:
         self._total = list(per_device_bytes)
         self._used = [0] * len(per_device_bytes)
         self._peak = [0] * len(per_device_bytes)
+        self._alloc_calls = [0] * len(per_device_bytes)
+        self._free_calls = [0] * len(per_device_bytes)
         # data_ptr -> (device_index, nbytes)
         self._allocs: dict[int, tuple[int, int]] = {}
 
@@ -328,6 +331,7 @@ class _DeviceMemoryTracker:
         self._allocs[data_ptr] = (device, nbytes)
         self._used[device] += nbytes
         self._peak[device] = max(self._peak[device], self._used[device])
+        self._alloc_calls[device] += 1
 
     def release(self, data_ptr: int) -> None:
         """Unregister allocation."""
@@ -335,6 +339,7 @@ class _DeviceMemoryTracker:
         if rec:
             dev, nbytes = rec
             self._used[dev] = max(0, self._used[dev] - nbytes)
+            self._free_calls[dev] += 1
 
     def memory_allocated(self, device: int) -> int:
         if device < 0 or device >= len(self._used):
@@ -355,6 +360,94 @@ class _DeviceMemoryTracker:
     def reset_peak(self, device: int) -> None:
         if 0 <= device < len(self._peak):
             self._peak[device] = self._used[device]
+
+
+# ---------------------------------------------------------------------------
+# Architecture name lookup (mirrors C++ gpu_profile.cpp)
+# ---------------------------------------------------------------------------
+
+_CC_TO_ARCH: dict[tuple[int, int], str] = {
+    (5, 2): "Maxwell",
+    (6, 0): "Pascal",
+    (7, 0): "Volta",
+    (7, 5): "Turing",
+    (8, 0): "Ampere",
+    (8, 6): "Ampere",
+    (8, 9): "Ada",
+    (9, 0): "Hopper",
+    (10, 0): "Blackwell",
+    (11, 0): "Blackwell",
+}
+
+
+def _arch_name(major: int, minor: int) -> str:
+    """Return the architecture name for a compute capability."""
+    exact = _CC_TO_ARCH.get((major, minor))
+    if exact:
+        return exact
+    # Fallback: match by major only
+    for (ma, _mi), name in _CC_TO_ARCH.items():
+        if ma == major:
+            return name
+    return "Unknown"
+
+
+# ---------------------------------------------------------------------------
+# Terminal Report Summary (atexit handler, mirrors C++ monitor.cpp)
+# ---------------------------------------------------------------------------
+
+def _fmt_bytes(b: int) -> str:
+    if b >= 1024**3:
+        return f"{b / 1024**3:.1f} GB"
+    elif b >= 1024**2:
+        return f"{b / 1024**2:.1f} MB"
+    elif b >= 1024:
+        return f"{b / 1024:.1f} KB"
+    return f"{b} B"
+
+
+def _dump_terminal_summary() -> None:
+    """Print a Report Summary to stderr on process exit.
+
+    Controlled by ``FAKEGPU_TERMINAL_REPORT`` (default: enabled).
+    """
+    if os.environ.get("FAKEGPU_TERMINAL_REPORT", "1") == "0":
+        return
+    tracker = _memory_tracker
+    if tracker is None:
+        return
+
+    lines: list[str] = []
+    lines.append("")
+    lines.append("======================================================")
+    lines.append("             FakeGPU Report Summary")
+    lines.append("======================================================")
+
+    for i, prof in enumerate(_DEVICE_PROFILES):
+        if i >= len(tracker._total):
+            break
+        name = prof.get("name", "NVIDIA A100-SXM4-80GB")
+        cc_major = prof.get("compute_major", 8)
+        cc_minor = prof.get("compute_minor", 0)
+        arch = _arch_name(cc_major, cc_minor)
+
+        total = tracker._total[i]
+        peak = tracker._peak[i]
+        peak_pct = (100.0 * peak / total) if total > 0 else 0.0
+
+        alloc = tracker._alloc_calls[i]
+        free = tracker._free_calls[i]
+
+        lines.append(f" Device {i}: {name} ({arch}, cc {cc_major}.{cc_minor})")
+        lines.append(f"   Memory: {_fmt_bytes(peak)} / {_fmt_bytes(total)} peak ({peak_pct:.1f}%)")
+        lines.append(f"   Alloc: {alloc} calls | Free: {free} calls")
+        lines.append("------------------------------------------------------")
+
+    lines.append("======================================================")
+    lines.append("")
+
+    sys.stderr.write("\n".join(lines))
+    sys.stderr.flush()
 
 
 # Initialized later in patch() after _DEVICE_PROFILES is finalized
@@ -1080,6 +1173,9 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     if _MEMORY_TRACKING:
         per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
         _memory_tracker = _DeviceMemoryTracker(per_device_bytes)
+
+    # ---- Register atexit terminal summary ----
+    atexit.register(_dump_terminal_summary)
 
     # Override memory stubs to use tracker
     if _memory_tracker is not None:

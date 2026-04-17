@@ -521,27 +521,62 @@ nanogpt MoE component smoke passed</pre>
 
         <div class="row pass" onclick="this.classList.toggle('open')">
           <div class="id">P3-3</div>
-          <div class="info"><div class="title">MoE Training (Direct: train_moe.py)</div><div class="desc">End-to-end MoE-GPT training: 2 iters, 4 experts, top-2, float32, CPU backend</div></div>
+          <div class="info"><div class="title">MoE Training (Direct: train_moe.py)</div><div class="desc">End-to-end MoE-GPT training: 2 iters, 4 experts, top-2, float32, fakecuda backend</div></div>
           <div class="badge pass">PASS</div>
           <div class="detail">
-            <pre>MoEGPT model: 0.30M parameters, 4 experts, top-2
-  iter    0 | loss 4.9123 | time 0.1s
-  iter    1 | loss 4.8629 | time 0.1s
-Training complete: 2 iters in 0.1s</pre>
-            <div class="note">Loss decreases (4.9123 &rarr; 4.8629), confirming gradient flow through Router + ExpertMLP + attention layers.</div>
+            <pre>MoEGPT model: 2.40M parameters, 4 experts, top-2
+[Init] Model on cuda, memory allocated: 9.1 MB
+  iter    0 | loss 4.9521 | mem 9.1 MB | time 0.1s
+  iter    1 | loss 4.3879 | mem 9.1 MB | time 0.2s
+Training complete: 2 iters in 0.2s
+  Device 0: allocated=9.1 MB, peak=9.2 MB
+  Device 1: allocated=0.0 MB, peak=0.0 MB</pre>
+            <div class="note">Loss decreases (4.95 &rarr; 4.39), confirming gradient flow through Router + ExpertMLP + attention layers. <code>FAKEGPU_DEVICE_COUNT=2</code>, fakecuda runtime.</div>
+            <div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong>
+            <div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;">
+<span class="dim">======================================================</span>
+<span class="dim">             </span><span class="hl">FakeGPU Report Summary</span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB <span class="dim">(Ampere, cc 8.0)</span>
+   Memory: <span class="hl">9.2 MB</span> / 80.0 GB peak (0.0%)
+   Alloc: 59 calls | Free: 59 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB <span class="dim">(Ampere, cc 8.0)</span>
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span>
+            </div></div>
           </div>
         </div>
 
         <div class="row pass" onclick="this.classList.toggle('open')">
           <div class="id">P3-4</div>
-          <div class="info"><div class="title">MoE Training (Wrapper: train_wrapper.py --model moe)</div><div class="desc">Wrapper integration: baseline mode, MoE model routing, CPU fallback</div></div>
+          <div class="info"><div class="title">MoE Training (Wrapper: train_wrapper.py --model moe)</div><div class="desc">Wrapper integration: full mode, fakecuda runtime, MoE model routing, memory tracking</div></div>
           <div class="badge pass">PASS</div>
           <div class="detail">
             <pre>[WRAPPER] Using MoE model: train_moe.py
-MoEGPT model: 0.30M parameters, 4 experts, top-2
-  iter    0 | loss 4.8571 | time 0.0s
-[WRAPPER] Training completed successfully in 0.5s
+MoEGPT model: 2.40M parameters, 4 experts, top-2
+[Init] Model on cuda, memory allocated: 9.1 MB
+  iter    0 | loss 4.9238 | mem 9.1 MB | time 0.1s
+  iter    1 | loss 4.4802 | mem 9.1 MB | time 0.2s
+[WRAPPER] Training completed successfully
 [WRAPPER] Result: PASS</pre>
+            <div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong>
+            <div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;">
+<span class="dim">======================================================</span>
+<span class="dim">             </span><span class="hl">FakeGPU Report Summary</span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB <span class="dim">(Ampere, cc 8.0)</span>
+   Memory: <span class="hl">9.2 MB</span> / 80.0 GB peak (0.0%)
+   Alloc: 59 calls | Free: 59 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB <span class="dim">(Ampere, cc 8.0)</span>
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span>
+            </div></div>
           </div>
         </div>
       </div>
@@ -596,12 +631,36 @@ test/test_error_checkpoint_load.py::TestCheckpointLoadErrors::test_e5_1_load_map
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.97s =========================
+========================= 3 passed, 1 warning in 1.90s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -630,12 +689,36 @@ test/test_error_checkpoint_load.py::TestCheckpointLoadErrors::test_e5_1_load_map
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.97s =========================
+========================= 3 passed, 1 warning in 1.90s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -664,12 +747,36 @@ test/test_error_checkpoint_load.py::TestCheckpointLoadErrors::test_e5_1_load_map
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.97s =========================
+========================= 3 passed, 1 warning in 1.90s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -700,12 +807,52 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.64s =========================
+========================= 5 passed, 1 warning in 0.69s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 48 B / 80.0 GB peak (0.0%)
+   Alloc: 7 calls | Free: 7 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 24 B / 80.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">48 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 7 calls | Free: 7 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">24 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -736,12 +883,52 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.64s =========================
+========================= 5 passed, 1 warning in 0.69s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 48 B / 80.0 GB peak (0.0%)
+   Alloc: 7 calls | Free: 7 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 24 B / 80.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">48 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 7 calls | Free: 7 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">24 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -772,12 +959,52 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.64s =========================
+========================= 5 passed, 1 warning in 0.69s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 48 B / 80.0 GB peak (0.0%)
+   Alloc: 7 calls | Free: 7 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 24 B / 80.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">48 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 7 calls | Free: 7 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">24 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -808,12 +1035,52 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.64s =========================
+========================= 5 passed, 1 warning in 0.69s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 48 B / 80.0 GB peak (0.0%)
+   Alloc: 7 calls | Free: 7 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 24 B / 80.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">48 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 7 calls | Free: 7 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">24 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -844,12 +1111,52 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.64s =========================
+========================= 5 passed, 1 warning in 0.69s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 48 B / 80.0 GB peak (0.0%)
+   Alloc: 7 calls | Free: 7 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 24 B / 80.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+------------------------------------------------------
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">48 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 7 calls | Free: 7 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">24 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 2: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 3: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -879,12 +1186,36 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.63s =========================
+========================= 4 passed, 1 warning in 0.67s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -914,12 +1245,36 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.63s =========================
+========================= 4 passed, 1 warning in 0.67s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -949,12 +1304,36 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.63s =========================
+========================= 4 passed, 1 warning in 0.67s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -984,12 +1363,36 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.63s =========================
+========================= 4 passed, 1 warning in 0.67s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1018,12 +1421,28 @@ test/test_error_dtype_autocast.py::TestAutocastDtypeV100::test_e4_1_autocast_bf1
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.71s =========================
+========================= 3 passed, 1 warning in 0.65s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: Tesla V100-SXM2-32GB (Volta, cc 7.0)
+   Memory: 72 B / 32.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: Tesla V100-SXM2-32GB (Volta, cc 7.0)
+   Memory: <span class="hl">72 B</span> / 32.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1052,12 +1471,28 @@ test/test_error_dtype_autocast.py::TestAutocastDtypeV100::test_e4_1_autocast_bf1
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.71s =========================
+========================= 3 passed, 1 warning in 0.65s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: Tesla V100-SXM2-32GB (Volta, cc 7.0)
+   Memory: 72 B / 32.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: Tesla V100-SXM2-32GB (Volta, cc 7.0)
+   Memory: <span class="hl">72 B</span> / 32.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1086,12 +1521,28 @@ test/test_error_dtype_autocast.py::TestAutocastDtypeV100::test_e4_1_autocast_bf1
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.71s =========================
+========================= 3 passed, 1 warning in 0.65s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: Tesla V100-SXM2-32GB (Volta, cc 7.0)
+   Memory: 72 B / 32.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: Tesla V100-SXM2-32GB (Volta, cc 7.0)
+   Memory: <span class="hl">72 B</span> / 32.0 GB peak (0.0%)
+   Alloc: 4 calls | Free: 4 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1120,12 +1571,36 @@ test/test_error_gradient.py::TestGradientErrors::test_e7_1_backward_twice_withou
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.67s =========================
+========================= 3 passed, 1 warning in 0.75s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1154,12 +1629,36 @@ test/test_error_gradient.py::TestGradientErrors::test_e7_1_backward_twice_withou
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.67s =========================
+========================= 3 passed, 1 warning in 0.75s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1188,12 +1687,36 @@ test/test_error_gradient.py::TestGradientErrors::test_e7_1_backward_twice_withou
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.67s =========================
+========================= 3 passed, 1 warning in 0.75s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1224,12 +1747,36 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.04s =========================
+========================= 5 passed, 1 warning in 1.16s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 6.0 MB / 10.0 MB peak (60.0%)
+   Alloc: 5 calls | Free: 5 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 10.0 MB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">6.0 MB</span> / 10.0 MB peak (60.0%)
+   Alloc: 5 calls | Free: 5 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 10.0 MB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1260,12 +1807,36 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.04s =========================
+========================= 5 passed, 1 warning in 1.16s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 6.0 MB / 10.0 MB peak (60.0%)
+   Alloc: 5 calls | Free: 5 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 10.0 MB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">6.0 MB</span> / 10.0 MB peak (60.0%)
+   Alloc: 5 calls | Free: 5 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 10.0 MB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1296,12 +1867,36 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.04s =========================
+========================= 5 passed, 1 warning in 1.16s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 6.0 MB / 10.0 MB peak (60.0%)
+   Alloc: 5 calls | Free: 5 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 10.0 MB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">6.0 MB</span> / 10.0 MB peak (60.0%)
+   Alloc: 5 calls | Free: 5 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 10.0 MB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1332,12 +1927,36 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.04s =========================
+========================= 5 passed, 1 warning in 1.16s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 6.0 MB / 10.0 MB peak (60.0%)
+   Alloc: 5 calls | Free: 5 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 10.0 MB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">6.0 MB</span> / 10.0 MB peak (60.0%)
+   Alloc: 5 calls | Free: 5 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 10.0 MB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
 
       <div class="row pass" onclick="this.classList.toggle('open')">
@@ -1368,12 +1987,36 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.04s =========================
+========================= 5 passed, 1 warning in 1.16s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
   warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
-</pre></div>
+
+======================================================
+             FakeGPU Report Summary
+======================================================
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 6.0 MB / 10.0 MB peak (60.0%)
+   Alloc: 5 calls | Free: 5 calls
+------------------------------------------------------
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: 0 B / 10.0 MB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+------------------------------------------------------
+======================================================
+</pre><div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong><div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;"><span class="dim">======================================================</span>
+<span class="dim">             <span class="hl">FakeGPU Report Summary</span></span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">6.0 MB</span> / 10.0 MB peak (60.0%)
+   Alloc: 5 calls | Free: 5 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB (Ampere, cc 8.0)
+   Memory: <span class="hl">0 B</span> / 10.0 MB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span></div></div></div>
       </div>
       </div>
     </section>

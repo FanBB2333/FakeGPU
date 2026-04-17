@@ -116,6 +116,81 @@ CATEGORY_MAP = {
 # Phase-4 dynamic HTML fragment
 # ---------------------------------------------------------------------------
 
+_SUMMARY_START_RE = re.compile(r"^=+\s*$")
+_SUMMARY_TITLE_RE = re.compile(r"FakeGPU Report Summary")
+
+
+def _extract_report_summary(text: str) -> str | None:
+    """Extract the FakeGPU Report Summary block from combined output.
+
+    The summary is enclosed by ``======...`` lines:
+
+        ======================================================
+                     FakeGPU Report Summary
+        ======================================================
+         Device 0: ...
+        ------------------------------------------------------
+        ======================================================
+    """
+    lines = text.splitlines()
+    # Find the title line
+    title_idx = None
+    for i, line in enumerate(lines):
+        if _SUMMARY_TITLE_RE.search(line):
+            title_idx = i
+            break
+    if title_idx is None:
+        return None
+
+    # Walk back to the opening === line
+    start = title_idx
+    for j in range(title_idx - 1, -1, -1):
+        if _SUMMARY_START_RE.match(lines[j]):
+            start = j
+            break
+
+    # Walk forward past the second === (after title) to find the final ===
+    # that closes the summary. We skip the immediate === after the title.
+    past_title_eq = False
+    end = None
+    for j in range(title_idx + 1, len(lines)):
+        if _SUMMARY_START_RE.match(lines[j]):
+            if not past_title_eq:
+                past_title_eq = True  # skip the === right after the title
+                continue
+            end = j
+            # Keep scanning in case there are separator lines (---) and
+            # Device blocks followed by a final ===
+    if end is None:
+        return None
+    return "\n".join(lines[start:end + 1])
+
+
+def _format_summary_html(summary: str) -> str:
+    """Convert a plain-text Report Summary into styled terminal HTML."""
+    html_lines: list[str] = []
+    for line in summary.splitlines():
+        esc = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        if "FakeGPU Report Summary" in line:
+            esc = esc.replace(
+                "FakeGPU Report Summary",
+                '<span class="hl">FakeGPU Report Summary</span>',
+            )
+            html_lines.append(f'<span class="dim">{esc}</span>')
+        elif esc.strip().startswith("==") or esc.strip().startswith("--"):
+            html_lines.append(f'<span class="dim">{esc}</span>')
+        elif "Memory:" in esc:
+            # Highlight the peak memory value
+            m = re.match(r"(.*Memory: )([^ ]+(?:\s+[A-Z]+)?)(.*)", esc)
+            if m:
+                html_lines.append(f'{m.group(1)}<span class="hl">{m.group(2)}</span>{m.group(3)}')
+            else:
+                html_lines.append(esc)
+        else:
+            html_lines.append(esc)
+    return "\n".join(html_lines)
+
+
 def _build_phase4_rows(suites: list[SuiteResult]) -> str:
     """Return <div class='results'>...</div> rows for error-sim suites."""
     parts: list[str] = []
@@ -124,9 +199,23 @@ def _build_phase4_rows(suites: list[SuiteResult]) -> str:
             badge_cls = "pass" if r.status == "pass" else "fail"
             detail = ""
             if r.stdout or r.stderr:
-                esc = (r.stdout + r.stderr).replace("&", "&amp;") \
+                combined = r.stdout + r.stderr
+                esc = combined.replace("&", "&amp;") \
                     .replace("<", "&lt;").replace(">", "&gt;")
                 detail = f'<pre>{esc[:4000]}</pre>'
+
+                # Extract and render Report Summary
+                summary = _extract_report_summary(combined)
+                if summary:
+                    summary_html = _format_summary_html(summary)
+                    detail += (
+                        '<div style="margin-top:8px">'
+                        '<strong style="font-size:11px;color:var(--ink-soft);">'
+                        'FakeGPU Report Summary</strong>'
+                        f'<div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;">'
+                        f'{summary_html}</div></div>'
+                    )
+
             pretty_name = r.name.replace("_", " ").removeprefix("test ")
             parts.append(f"""
       <div class="row {badge_cls}" onclick="this.classList.toggle('open')">
@@ -686,27 +775,62 @@ nanogpt MoE component smoke passed</pre>
 
         <div class="row pass" onclick="this.classList.toggle('open')">
           <div class="id">P3-3</div>
-          <div class="info"><div class="title">MoE Training (Direct: train_moe.py)</div><div class="desc">End-to-end MoE-GPT training: 2 iters, 4 experts, top-2, float32, CPU backend</div></div>
+          <div class="info"><div class="title">MoE Training (Direct: train_moe.py)</div><div class="desc">End-to-end MoE-GPT training: 2 iters, 4 experts, top-2, float32, fakecuda backend</div></div>
           <div class="badge pass">PASS</div>
           <div class="detail">
-            <pre>MoEGPT model: 0.30M parameters, 4 experts, top-2
-  iter    0 | loss 4.9123 | time 0.1s
-  iter    1 | loss 4.8629 | time 0.1s
-Training complete: 2 iters in 0.1s</pre>
-            <div class="note">Loss decreases (4.9123 &rarr; 4.8629), confirming gradient flow through Router + ExpertMLP + attention layers.</div>
+            <pre>MoEGPT model: 2.40M parameters, 4 experts, top-2
+[Init] Model on cuda, memory allocated: 9.1 MB
+  iter    0 | loss 4.9521 | mem 9.1 MB | time 0.1s
+  iter    1 | loss 4.3879 | mem 9.1 MB | time 0.2s
+Training complete: 2 iters in 0.2s
+  Device 0: allocated=9.1 MB, peak=9.2 MB
+  Device 1: allocated=0.0 MB, peak=0.0 MB</pre>
+            <div class="note">Loss decreases (4.95 &rarr; 4.39), confirming gradient flow through Router + ExpertMLP + attention layers. <code>FAKEGPU_DEVICE_COUNT=2</code>, fakecuda runtime.</div>
+            <div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong>
+            <div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;">
+<span class="dim">======================================================</span>
+<span class="dim">             </span><span class="hl">FakeGPU Report Summary</span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB <span class="dim">(Ampere, cc 8.0)</span>
+   Memory: <span class="hl">9.2 MB</span> / 80.0 GB peak (0.0%)
+   Alloc: 59 calls | Free: 59 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB <span class="dim">(Ampere, cc 8.0)</span>
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span>
+            </div></div>
           </div>
         </div>
 
         <div class="row pass" onclick="this.classList.toggle('open')">
           <div class="id">P3-4</div>
-          <div class="info"><div class="title">MoE Training (Wrapper: train_wrapper.py --model moe)</div><div class="desc">Wrapper integration: baseline mode, MoE model routing, CPU fallback</div></div>
+          <div class="info"><div class="title">MoE Training (Wrapper: train_wrapper.py --model moe)</div><div class="desc">Wrapper integration: full mode, fakecuda runtime, MoE model routing, memory tracking</div></div>
           <div class="badge pass">PASS</div>
           <div class="detail">
             <pre>[WRAPPER] Using MoE model: train_moe.py
-MoEGPT model: 0.30M parameters, 4 experts, top-2
-  iter    0 | loss 4.8571 | time 0.0s
-[WRAPPER] Training completed successfully in 0.5s
+MoEGPT model: 2.40M parameters, 4 experts, top-2
+[Init] Model on cuda, memory allocated: 9.1 MB
+  iter    0 | loss 4.9238 | mem 9.1 MB | time 0.1s
+  iter    1 | loss 4.4802 | mem 9.1 MB | time 0.2s
+[WRAPPER] Training completed successfully
 [WRAPPER] Result: PASS</pre>
+            <div style="margin-top:8px"><strong style="font-size:11px;color:var(--ink-soft);">FakeGPU Report Summary</strong>
+            <div class="terminal" style="margin-top:4px;font-size:11px;padding:12px 16px;">
+<span class="dim">======================================================</span>
+<span class="dim">             </span><span class="hl">FakeGPU Report Summary</span>
+<span class="dim">======================================================</span>
+ Device 0: NVIDIA A100-SXM4-80GB <span class="dim">(Ampere, cc 8.0)</span>
+   Memory: <span class="hl">9.2 MB</span> / 80.0 GB peak (0.0%)
+   Alloc: 59 calls | Free: 59 calls
+<span class="dim">------------------------------------------------------</span>
+ Device 1: NVIDIA A100-SXM4-80GB <span class="dim">(Ampere, cc 8.0)</span>
+   Memory: 0 B / 80.0 GB peak (0.0%)
+   Alloc: 0 calls | Free: 0 calls
+<span class="dim">------------------------------------------------------</span>
+<span class="dim">======================================================</span>
+            </div></div>
           </div>
         </div>
       </div>
