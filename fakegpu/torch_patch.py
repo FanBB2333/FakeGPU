@@ -804,6 +804,29 @@ def _stub_set_device(device: Any) -> None:
     _current_device = idx
 
 
+def _stub_exchange_device(device: int) -> int:
+    """Swap the current device and return the previous one.
+
+    This is the internal helper behind ``torch.cuda.device()`` context
+    manager.  A negative *device* index is treated as a no-op.
+    """
+    global _current_device
+    prev = _current_device
+    if isinstance(device, int) and device >= 0:
+        if device >= _NUM_DEVICES:
+            raise RuntimeError(
+                f"CUDA error: invalid device ordinal "
+                f"(requested {device}, available: {_NUM_DEVICES})"
+            )
+        _current_device = device
+    return prev
+
+
+def _stub_maybe_exchange_device(device: int) -> int:
+    """Like :func:`_stub_exchange_device` but only acts when *device* >= 0."""
+    return _stub_exchange_device(device)
+
+
 def _stub_get_device_name(device: Any = None) -> str:
     return _DEVICE_NAME
 
@@ -1229,10 +1252,10 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     torch.cuda._cached_device_count = _NUM_DEVICES
 
     # ---- Patch internal helpers that check for CUDA compilation ----
-    torch.cuda._exchange_device = lambda device: 0
-    torch.cuda._get_device = lambda device: 0
+    torch.cuda._exchange_device = _stub_exchange_device
+    torch.cuda._get_device = _stub_current_device
     if hasattr(torch.cuda, "_maybe_exchange_device"):
-        torch.cuda._maybe_exchange_device = lambda device: 0
+        torch.cuda._maybe_exchange_device = _stub_maybe_exchange_device
 
     # ---- Patch torch.load to validate + normalize map_location ----
     _orig_torch_load = torch.load
@@ -1501,6 +1524,11 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         _OrigAutocast = torch.amp.autocast
 
         class _PatchedAutocast(_OrigAutocast):
+            """Autocast wrapper that validates dtype vs compute capability."""
+
+            def __init__(self, device_type: str = "cuda", **kwargs):
+                super().__init__(device_type, **kwargs)
+
             def __enter__(self):
                 if (
                     getattr(self, "device_type", None) == "cuda"
@@ -1515,8 +1543,9 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
                     )
                 return super().__enter__()
 
+        # torch.amp.autocast keeps requiring device_type; only the
+        # cuda-specific alias defaults to "cuda".
         torch.amp.autocast = _PatchedAutocast
-        # Also patch the cuda-specific alias if it exists
         if hasattr(torch.cuda.amp, "autocast"):
             torch.cuda.amp.autocast = _PatchedAutocast
 
