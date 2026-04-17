@@ -1,6 +1,7 @@
 #include "cuda_driver_defs.hpp"
 #include "cuda_driver_passthrough.hpp"
 #include "../core/backend_config.hpp"
+#include "../core/version.hpp"
 #include "../core/global_state.hpp"
 #include "../core/hybrid_memory_manager.hpp"
 #include <cstdio>
@@ -166,7 +167,7 @@ void dump_active_cuda_report() {
     const fake_gpu::BackendConfig& config = fake_gpu::BackendConfig::instance();
 
     std::fprintf(out, "{\n");
-    std::fprintf(out, "  \"report_version\": 4,\n");
+    std::fprintf(out, "  \"report_version\": \"%s\",\n", FAKEGPU_VERSION);
     std::fprintf(out, "  \"mode\": \"%s\",\n", fake_gpu::mode_name(config.mode()));
     std::fprintf(out, "  \"host_io\": {\n");
     std::fprintf(out, "    \"memcpy_calls\": %llu,\n", (unsigned long long)host_io.memcpy_calls);

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <atomic>
 #include <limits>
+#include "../core/version.hpp"
 #include "../core/global_state.hpp"
 #include "../core/logging.hpp"
 #include "../core/backend_config.hpp"
@@ -124,7 +125,7 @@ private:
             : (world_size > 0 ? 1U : 0U);
 
         fprintf(out, "{\n");
-        fprintf(out, "  \"report_version\": 4,\n");
+            fprintf(out, "  \"report_version\": \"%s\",\n", FAKEGPU_VERSION);
         fprintf(out, "  \"schema\": \"experimental\",\n");
         fprintf(out, "  \"cluster\": {\n");
         fprintf(out, "    \"mode\": \"%s\",\n", distributed::distributed_mode_name(dist_config.mode));
@@ -396,7 +397,7 @@ private:
             }
 
             fprintf(out, "{\n");
-            fprintf(out, "  \"report_version\": 4,\n");
+        fprintf(out, "  \"report_version\": \"%s\",\n", FAKEGPU_VERSION);
 
             // Add mode information
             const BackendConfig& config = BackendConfig::instance();

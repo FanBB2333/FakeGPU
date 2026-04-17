@@ -306,7 +306,7 @@
           <div class="id">P1</div>
           <div class="info">
             <div class="title">Enhanced Report System</div>
-            <div class="desc">Report v4 &middot; GPU Profile &middot; Kernel GEMM Stats &middot; Terminal Summary</div>
+            <div class="desc">Report v1.5.0 &middot; GPU Profile &middot; Kernel GEMM Stats &middot; Terminal Summary</div>
           </div>
           <div class="badge pass">5/5 PASS</div>
         </div>
@@ -346,7 +346,7 @@
           <li>Python: <code>3.11</code> (miniforge3/envs/py311)</li>
           <li>PyTorch: <code>2.9.1</code> (CPU-only)</li>
           <li>FakeGPU build: <code>build/*.dylib</code> (CMake, C++17)</li>
-          <li>Report format: <code>v4</code> (JSON)</li>
+          <li>Report format: <code>v1.5.0</code> (JSON)</li>
         </ul>
       </div>
     </section>
@@ -361,14 +361,14 @@
       <div class="phase-banner p1">
         <div class="phase-num">P1</div>
         <div class="phase-info">
-          <div class="ptitle">Report v4 &middot; GPU Profile &middot; Kernel Launch Tracking &middot; GEMM-by-dtype &middot; Terminal Summary</div>
+          <div class="ptitle">Report v1.5.0 &middot; GPU Profile &middot; Kernel Launch Tracking &middot; GEMM-by-dtype &middot; Terminal Summary</div>
           <div class="pdesc">Upgrade GlobalState, Monitor, and Driver stubs to record and report per-device kernel launches, typed GEMM stats, and architecture profile info.</div>
         </div>
       </div>
       <div class="results">
         <div class="row pass" onclick="this.classList.toggle('open')">
           <div class="id">P1-1</div>
-          <div class="info"><div class="title">cmake --build build</div><div class="desc">C++ library full compilation with new GlobalState fields, Monitor v4, and driver stubs</div></div>
+          <div class="info"><div class="title">cmake --build build</div><div class="desc">C++ library full compilation with new GlobalState fields, Monitor v1.5.0, and driver stubs</div></div>
           <div class="badge pass">PASS</div>
           <div class="detail">
             <div class="kv">Command: <code>cmake --build build</code></div>
@@ -397,10 +397,10 @@
 
         <div class="row pass" onclick="this.classList.toggle('open')">
           <div class="id">P1-3</div>
-          <div class="info"><div class="title">test_report_v4_smoke.py</div><div class="desc">Integration: builds library, runs CUDA exercise, validates JSON v4 structure and terminal summary</div></div>
+          <div class="info"><div class="title">test_report_smoke.py</div><div class="desc">Integration: builds library, runs CUDA exercise, validates JSON v1.5.0 structure and terminal summary</div></div>
           <div class="badge pass">PASS</div>
           <div class="detail">
-            <div class="kv">Command: <code>python3 test/test_report_v4_smoke.py</code></div>
+            <div class="kv">Command: <code>python3 test/test_report_smoke.py</code></div>
             <pre>enhanced report smoke passed</pre>
           </div>
         </div>
@@ -442,8 +442,8 @@
 <span class="dim">======================================================</span>
       </div>
 
-      <h3>Report v4 JSON Sample (Device 0)</h3>
-      <pre class="json-sample">{"report_version": 4, "mode": "simulate", "devices": [{"index": 0, "name": "Fake NVIDIA A100-SXM4-80GB", "gpu_profile": {"architecture": "Ampere", "compute_capability": "8.0", "supported_types": ["fp32", "tf32", "fp16", "bf16", "int8"]}, "total_memory": 85899345920, "used_memory_peak": 67108864, "kernel_launches": {"total": 0}, "gemm_by_dtype": {}}]}</pre>
+      <h3>Report v1.5.0 JSON Sample (Device 0)</h3>
+      <pre class="json-sample">{"report_version": "1.5.0", "mode": "simulate", "devices": [{"index": 0, "name": "Fake NVIDIA A100-SXM4-80GB", "gpu_profile": {"architecture": "Ampere", "compute_capability": "8.0", "supported_types": ["fp32", "tf32", "fp16", "bf16", "int8"]}, "total_memory": 85899345920, "used_memory_peak": 67108864, "kernel_launches": {"total": 0}, "gemm_by_dtype": {}}]}</pre>
     </section>
   </div>
 
@@ -596,7 +596,7 @@ test/test_error_checkpoint_load.py::TestCheckpointLoadErrors::test_e5_1_load_map
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 1.03s =========================
+========================= 3 passed, 1 warning in 0.97s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -630,7 +630,7 @@ test/test_error_checkpoint_load.py::TestCheckpointLoadErrors::test_e5_1_load_map
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 1.03s =========================
+========================= 3 passed, 1 warning in 0.97s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -664,7 +664,7 @@ test/test_error_checkpoint_load.py::TestCheckpointLoadErrors::test_e5_1_load_map
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 1.03s =========================
+========================= 3 passed, 1 warning in 0.97s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -700,7 +700,7 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.62s =========================
+========================= 5 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -736,7 +736,7 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.62s =========================
+========================= 5 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -772,7 +772,7 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.62s =========================
+========================= 5 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -808,7 +808,7 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.62s =========================
+========================= 5 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -844,7 +844,7 @@ test/test_error_cross_device.py::TestCrossDeviceErrors::test_e1_1_add_different_
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 0.62s =========================
+========================= 5 passed, 1 warning in 0.64s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -879,7 +879,7 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.62s =========================
+========================= 4 passed, 1 warning in 0.63s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -914,7 +914,7 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.62s =========================
+========================= 4 passed, 1 warning in 0.63s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -949,7 +949,7 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.62s =========================
+========================= 4 passed, 1 warning in 0.63s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -984,7 +984,7 @@ test/test_error_device_index.py::TestDeviceIndexErrors::test_e3_1_set_device_out
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 4 passed, 1 warning in 0.62s =========================
+========================= 4 passed, 1 warning in 0.63s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1018,7 +1018,7 @@ test/test_error_dtype_autocast.py::TestAutocastDtypeV100::test_e4_1_autocast_bf1
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.65s =========================
+========================= 3 passed, 1 warning in 0.71s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1052,7 +1052,7 @@ test/test_error_dtype_autocast.py::TestAutocastDtypeV100::test_e4_1_autocast_bf1
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.65s =========================
+========================= 3 passed, 1 warning in 0.71s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1086,7 +1086,7 @@ test/test_error_dtype_autocast.py::TestAutocastDtypeV100::test_e4_1_autocast_bf1
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.65s =========================
+========================= 3 passed, 1 warning in 0.71s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1120,7 +1120,7 @@ test/test_error_gradient.py::TestGradientErrors::test_e7_1_backward_twice_withou
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.64s =========================
+========================= 3 passed, 1 warning in 0.67s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1154,7 +1154,7 @@ test/test_error_gradient.py::TestGradientErrors::test_e7_1_backward_twice_withou
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.64s =========================
+========================= 3 passed, 1 warning in 0.67s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1188,7 +1188,7 @@ test/test_error_gradient.py::TestGradientErrors::test_e7_1_backward_twice_withou
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 3 passed, 1 warning in 0.64s =========================
+========================= 3 passed, 1 warning in 0.67s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1224,7 +1224,7 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.10s =========================
+========================= 5 passed, 1 warning in 1.04s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1260,7 +1260,7 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.10s =========================
+========================= 5 passed, 1 warning in 1.04s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1296,7 +1296,7 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.10s =========================
+========================= 5 passed, 1 warning in 1.04s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1332,7 +1332,7 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.10s =========================
+========================= 5 passed, 1 warning in 1.04s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1368,7 +1368,7 @@ test/test_error_oom.py::TestOOMErrors::test_e2_1_single_allocation_exceeds_capac
     return patch(num_devices=num_devices, device_name=device_name)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-========================= 5 passed, 1 warning in 1.10s =========================
+========================= 5 passed, 1 warning in 1.04s =========================
 /Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 
@@ -1388,7 +1388,7 @@ The event loop scope for asynchronous fixtures will default to the fixture cachi
       <div class="card pass">
         <h4>All Tests Passing</h4>
         <ul>
-          <li>P1: Report v4 + terminal summary</li>
+          <li>P1: Report v1.5.0 + terminal summary</li>
           <li>P2: HW compat strict/relaxed</li>
           <li>P3: MoE model + training</li>
           <li>P4: 23/23 error simulations</li>

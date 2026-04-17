@@ -41,7 +41,7 @@ def ensure_build() -> None:
 def main() -> None:
     ensure_build()
 
-    fd, report_path = tempfile.mkstemp(prefix="fakegpu-report-v4-", suffix=".json")
+    fd, report_path = tempfile.mkstemp(prefix="fakegpu-report-", suffix=".json")
     os.close(fd)
     os.unlink(report_path)
 
@@ -52,7 +52,7 @@ def main() -> None:
     completed = run([sys.executable, "test/test_cuda_direct.py"], env=env)
 
     report = json.loads(Path(report_path).read_text(encoding="utf-8"))
-    assert report.get("report_version") == 4, report
+    assert report.get("report_version") == "1.5.0", report
 
     devices = report.get("devices")
     assert isinstance(devices, list) and devices, report

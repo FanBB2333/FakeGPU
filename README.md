@@ -120,7 +120,7 @@ FAKEGPU_STAGING_FORCE_SOCKET=1
 **Report Output (Hybrid mode):**
 ```json
 {
-  "report_version": 3,
+  "report_version": "1.5.0",
   "mode": "hybrid",
   "oom_policy": "clamp",
   "hybrid_stats": {

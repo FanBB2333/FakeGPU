@@ -33,9 +33,9 @@ def main() -> int:
     if not isinstance(report, dict):
         _die("report root must be a JSON object")
 
-    version = report.get("report_version", 0)
-    if not isinstance(version, int) or version < 2:
-        _die(f"unexpected report_version={version!r} (expected >= 2)")
+    version = report.get("report_version")
+    if not isinstance(version, str):
+        _die(f"unexpected report_version={version!r} (expected string like '1.5.0')")
 
     host_io = _require(report, "host_io", ctx="root")
     if not isinstance(host_io, dict):
