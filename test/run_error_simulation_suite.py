@@ -9,6 +9,7 @@ Usage:
     python test/run_error_simulation_suite.py [--output test/report.html]
 """
 import argparse
+import html as html_lib
 import json
 import os
 import re
@@ -243,9 +244,97 @@ def _format_summary_html(summary: str) -> str:
                 html_lines.append(f'{m.group(1)}<span class="hl">{m.group(2)}</span>{m.group(3)}')
             else:
                 html_lines.append(esc)
+        elif "Peak VRAM by GPU:" in esc:
+            html_lines.append(f'<strong>{esc}</strong>')
+        elif re.match(r"\s*GPU \d+:", line):
+            m = re.match(r"(\s*GPU \d+:\s*)([^ ].*)", line)
+            if m:
+                prefix = m.group(1).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                value = m.group(2).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                html_lines.append(f"{prefix}<span class=\"hl\">{value}</span>")
+            else:
+                html_lines.append(esc)
         else:
             html_lines.append(esc)
     return "\n".join(html_lines)
+
+
+def _fmt_bytes(b: int) -> str:
+    if b >= 1024**3:
+        return f"{b / 1024**3:.1f} GB"
+    if b >= 1024**2:
+        return f"{b / 1024**2:.1f} MB"
+    if b >= 1024:
+        return f"{b / 1024:.1f} KB"
+    return f"{b} B"
+
+
+def _parse_human_bytes(text: str) -> int | None:
+    match = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB)\s*$", text)
+    if not match:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2)
+    scale = {
+        "B": 1,
+        "KB": 1024,
+        "MB": 1024**2,
+        "GB": 1024**3,
+    }[unit]
+    return int(value * scale)
+
+
+def _extract_peak_vram_by_gpu(summary: str) -> dict[int, int]:
+    peaks: dict[int, int] = {}
+    current_gpu: int | None = None
+    for line in summary.splitlines():
+        device_match = re.match(r"^\s*Device (\d+):", line)
+        if device_match:
+            current_gpu = int(device_match.group(1))
+            continue
+        if current_gpu is None:
+            continue
+        memory_match = re.match(r"^\s*Memory:\s+([^/]+?)\s*/", line)
+        if memory_match:
+            peak_bytes = _parse_human_bytes(memory_match.group(1).strip())
+            if peak_bytes is not None:
+                peaks[current_gpu] = peak_bytes
+            current_gpu = None
+    return peaks
+
+
+def _extract_peak_vram_by_gpu_from_rendered_html(rendered_html: str) -> dict[int, int]:
+    peaks: dict[int, int] = {}
+    for match in re.finditer(r'<div class="terminal"[^>]*>(.*?)</div>', rendered_html, re.S):
+        terminal_html = match.group(1)
+        if "FakeGPU Report Summary" not in terminal_html:
+            continue
+        terminal_text = html_lib.unescape(re.sub(r"<[^>]+>", "", terminal_html))
+        for gpu_index, peak_bytes in _extract_peak_vram_by_gpu(terminal_text).items():
+            peaks[gpu_index] = max(peaks.get(gpu_index, 0), peak_bytes)
+    return peaks
+
+
+def _build_peak_vram_summary_section(peaks: dict[int, int]) -> str:
+    if not peaks:
+        return ""
+    cards = []
+    for gpu_index in sorted(peaks):
+        cards.append(
+            f"""
+      <div class="peak-card">
+        <div class="gpu">GPU {gpu_index}</div>
+        <div class="value">{_fmt_bytes(peaks[gpu_index])}</div>
+        <div class="desc">Max fake VRAM consumption seen in this report</div>
+      </div>"""
+        )
+    return f"""
+    <section>
+      <h2>Peak VRAM by GPU</h2>
+      <div class="peak-grid">
+{''.join(cards)}
+      </div>
+    </section>"""
 
 
 def _build_phase4_rows(suites: list[SuiteResult]) -> str:
@@ -559,6 +648,24 @@ def generate_unified_html(
   .stat.total .value {{ color: var(--mist-dk); }}
   .stat.files .value {{ color: var(--plum-dk); }}
 
+  .peak-grid {{
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px; margin-bottom: 8px;
+  }}
+  .peak-card {{
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 16px; padding: 20px;
+  }}
+  .peak-card .gpu {{
+    font-size: 12px; color: var(--ink-soft); letter-spacing: .1em; text-transform: uppercase;
+  }}
+  .peak-card .value {{
+    font-size: 28px; font-weight: 600; margin-top: 6px; color: var(--mist-dk);
+  }}
+  .peak-card .desc {{
+    color: var(--ink-soft); font-size: 13px; margin-top: 6px;
+  }}
+
   /* ---------- Section ---------- */
   section {{
     margin-bottom: 56px;
@@ -756,9 +863,11 @@ def generate_unified_html(
     <div class="stats">
       <div class="stat total"><div class="label">Total Tests</div><div class="value">{all_total}</div></div>
       <div class="stat pass"><div class="label">Passed</div><div class="value">{all_pass}</div></div>
-      <div class="stat fail"><div class="label">Failed</div><div class="value">{all_fail}</div></div>
-      <div class="stat files"><div class="label">Phases</div><div class="value">{n_phases}</div></div>
+    <div class="stat fail"><div class="label">Failed</div><div class="value">{all_fail}</div></div>
+    <div class="stat files"><div class="label">Phases</div><div class="value">{n_phases}</div></div>
     </div>
+
+__PEAK_VRAM_SUMMARY_SECTION__
 
     <section>
       <h2>Phase Summary</h2>
@@ -1212,6 +1321,11 @@ MoEGPT model: 2.40M parameters, 4 experts, top-2
 </script>
 </body>
 </html>"""
+
+    peak_vram_section = _build_peak_vram_summary_section(
+        _extract_peak_vram_by_gpu_from_rendered_html(html)
+    )
+    html = html.replace("__PEAK_VRAM_SUMMARY_SECTION__", peak_vram_section)
 
     Path(output_path).write_text(html, encoding="utf-8")
     print(f"Report written to {output_path}")

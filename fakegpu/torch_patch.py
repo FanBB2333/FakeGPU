@@ -505,6 +505,11 @@ def _dump_terminal_summary() -> None:
         lines.append(f"   Alloc: {alloc} calls | Free: {free} calls")
         lines.append("------------------------------------------------------")
 
+    lines.append(" Peak VRAM by GPU:")
+    for i, peak in enumerate(tracker._peak[: len(_DEVICE_PROFILES)]):
+        lines.append(f"   GPU {i}: {_fmt_bytes(peak)}")
+    lines.append("------------------------------------------------------")
+
     lines.append("======================================================")
     lines.append("")
 
