@@ -2,6 +2,97 @@
 
 A CUDA API interception library that simulates GPU devices in non-GPU environments, enabling basic operations for PyTorch and other deep learning frameworks, and supporting single-host multi-process distributed simulation for NCCL-style workloads.
 
+## How It Works
+
+FakeGPU makes applications believe they are running on real NVIDIA GPUs by intercepting every CUDA / NVML API call and redirecting GPU operations to system RAM. No physical GPU is needed. It provides two independent runtime paths:
+
+### Overview
+
+```
++-----------------------------------------------------------------------+
+|                        User's GPU Application                         |
+|                  (PyTorch, pynvml, nvidia-smi, ...)                   |
++----------------------------------+------------------------------------+
+                                   |
+                    CUDA / NVML API calls
+                                   |
+              +--------------------+--------------------+
+              |                                         |
+   [Path A: Native]                          [Path B: FakeCudaTensor]
+   C-level interception                      Python-level monkeypatch
+              |                                         |
+              v                                         v
++----------------------------+            +----------------------------+
+| Dynamic Linker intercepts  |            | fakegpu.patch_torch()      |
+| symbols via LD_PRELOAD /   |            |                            |
+| DYLD_INSERT_LIBRARIES      |            | Layer 1: FakeCudaTensor    |
+|                            |            |   __torch_function__       |
+| cuda_stubs.cpp             |            |   tensor.device = cuda:N   |
+|   cudaMalloc -> malloc()   |            |   tensor.is_cuda = True    |
+|   cudaFree   -> free()     |            |                            |
+|   cudaMemcpy -> memcpy()   |            | Layer 2: FakeGPU additions |
+|   cudaLaunchKernel -> noop |            |   GPU profiles & limits    |
+|                            |            |   Memory tracking + OOM    |
+| nvml_stubs.cpp             |            |   Cross-device guards      |
+|   nvmlDeviceGetMemoryInfo  |            |   Autocast validation      |
+|   nvmlDeviceGetName ...    |            +----------------------------+
+|                            |                          |
+| cublas_stubs.cpp           |               All compute runs on CPU
+|   GEMM -> CPU simulation   |
++----------------------------+
+              |
+              v
++----------------------------+            +----------------------------+
+|       GlobalState          |            |   _DeviceMemoryTracker     |
+|  (singleton, thread-safe)  |            |   (Python per-device)      |
+|                            |            |                            |
+|  Device[] with GpuProfile  |            |  used / peak / total mem   |
+|  allocations map: ptr ->   |            |  OOM enforcement           |
+|    {size, device, kind}    |            |  weakref GC cleanup        |
+|  per-device stats:         |            +----------------------------+
+|    peak mem, IO, FLOPs     |                          |
++----------------------------+                          v
+              |                           Terminal summary on exit
+              v
++----------------------------+
+|    Monitor (atexit)        |
+|  fake_gpu_report.json      |
+|  terminal summary          |
++----------------------------+
+```
+
+### Memory Lifecycle (Native Path)
+
+```
+cudaMalloc(devPtr, size)                    cudaFree(devPtr)
+        |                                          |
+        v                                          v
+  malloc(size)  ──── real system RAM ────>   free(devPtr)
+        |                                          |
+        v                                          v
+  GlobalState.register_allocation()       GlobalState.release_allocation()
+  ├─ Check: used + size > total?          ├─ Look up ptr in allocations map
+  │    Yes -> return OOM error            ├─ dev.used_memory -= size
+  │    No  -> continue                    └─ Remove from allocations map
+  ├─ dev.used_memory += size
+  ├─ dev.used_memory_peak = max(peak, used)
+  └─ Record {ptr -> (size, device)} in map
+                    |
+                    v  (on process exit)
+           Monitor.dump_report()
+           └─ Write fake_gpu_report.json
+              ├─ per-device peak memory
+              ├─ IO bytes (H2D / D2H / D2D)
+              └─ compute FLOPs (cuBLAS GEMM)
+```
+
+### Why Can It Simulate a GPU?
+
+1. **Symbol interception**: The dynamic linker resolves `cudaMalloc`, `nvmlDeviceGetName`, etc. to FakeGPU's `extern "C"` stubs before the real NVIDIA libraries are found. Applications see the exact same C API.
+2. **RAM as VRAM**: All "device memory" is plain `malloc`'d system RAM. `cudaMemcpy` becomes `memcpy`. From the application's perspective, pointers are valid and memory operations succeed.
+3. **Faithful bookkeeping**: Per-device memory limits, allocation tracking, peak usage, and OOM errors all behave like a real GPU driver — so code that checks `torch.cuda.mem_get_info()` or handles `OutOfMemoryError` works correctly.
+4. **Profile-driven identity**: GPU profiles (name, compute capability, memory size, SM count) are loaded from YAML, so `torch.cuda.get_device_name()` returns "NVIDIA A100-SXM4-80GB" and `torch.cuda.get_device_capability()` returns `(8, 0)`.
+
 ## Documentation
 
 This repository now ships a MkDocs + Material for MkDocs documentation site configuration.
@@ -401,10 +492,33 @@ FakeGPU
 
 ## Use Cases
 
-- ✅ Running GPU code tests in CI/CD environments
-- ✅ Debugging deep learning code on machines without GPUs
-- ✅ Validating CUDA API call logic
-- ✅ Prototyping and unit testing
+### Already Supported
+
+- **CI/CD Pipeline Testing** — Run GPU-dependent tests on CPU-only CI runners (GitHub Actions, GitLab CI). FakeGPU's JSON report output and HTML test reports integrate naturally into CI artifact archival. No GPU runners or cloud GPU costs needed.
+
+- **Multi-GPU Code Development** — Develop and validate multi-device parallelization (DataParallel, device placement) on a laptop. Configure `FAKEGPU_DEVICE_COUNT=8` or `FAKEGPU_PROFILES=a100:4,h100:4` to simulate heterogeneous multi-GPU setups. Cross-device operation guards catch real bugs.
+
+- **OOM Debugging & Memory Planning** — Test whether a model fits on target hardware before committing to expensive GPU time. Use small-VRAM profiles (e.g., `a100-1g` with 1 GB) to trigger OOM quickly, or full profiles to estimate peak VRAM. `torch.cuda.mem_get_info()` and `OutOfMemoryError` behave like real CUDA.
+
+- **Distributed Training Development** — Prototype DDP, NCCL collectives, and multi-rank communication on a single host. The full coordinator + topology + collective stack simulates allreduce, allgather, alltoall, broadcast, and reduce-scatter with configurable cluster topology (NVLink, InfiniBand, Ethernet bandwidth/latency).
+
+- **Hardware Compatibility Testing** — Validate code across GPU architectures (Maxwell → Blackwell) using 11 built-in profiles. Catch dtype mismatches (bf16 requires compute capability >= 8.0), checkpoint portability issues, and autocast failures before deploying to specific cloud instances.
+
+- **Education & Teaching** — Teach CUDA programming, distributed training, and GPU memory management on student laptops without GPU labs. Students write real `device="cuda"` code that executes, produces correct gradients, and shows realistic error messages.
+
+- **Model Architecture Prototyping** — Validate that training converges (forward/backward pass, optimizer steps, loss decrease) before requesting GPU time. CPU-backed cuBLAS computes correct GEMM results. Tested with nanoGPT (10.65M params) and MoE architectures.
+
+- **GPU Monitoring Tool Development** — Build and test GPU dashboards, alerting systems, or orchestration tools (nvidia-smi, gpustat, nvitop, custom Prometheus exporters) against NVML stubs without real hardware.
+
+### Potential Additions
+
+- **Cost Optimization Workflow** — Use hybrid mode (`FAKEGPU_MODE=hybrid`) to develop on smaller GPUs while simulating larger ones. OOM policies (`clamp`, `managed`, `spill_cpu`) let you test 80 GB A100 workloads on a 24 GB card.
+
+- **Pre-submission Resource Estimation** — Before submitting jobs to Slurm/PBS clusters, run locally with FakeGPU to estimate per-GPU peak VRAM, IO volume, and compute FLOPs from `fake_gpu_report.json`. Use this to right-size GPU allocation requests.
+
+- **Framework Migration Testing** — When upgrading PyTorch versions (verified 2.6.0 → 2.11.0) or switching frameworks, run your training pipeline under FakeGPU to catch API breakage without tying up real GPUs.
+
+- **Reproducibility Validation** — Verify that training scripts, checkpoint loading, and data pipelines run correctly on a clean CPU-only environment before sharing code in papers or repositories.
 
 ## Dependencies
 
