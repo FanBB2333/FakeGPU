@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import inspect
 import tempfile
 from pathlib import Path
 
@@ -19,6 +20,14 @@ def patch_fakegpu(*, profile: str = "a100", device_count: int = 1) -> None:
     import fakegpu
 
     fakegpu.patch_torch()
+    import torch
+
+    if hasattr(torch.backends, "mps"):
+        torch.backends.mps.is_available = lambda: False
+        if hasattr(torch.backends.mps, "is_built"):
+            torch.backends.mps.is_built = lambda: False
+    if hasattr(torch, "mps") and hasattr(torch.mps, "is_available"):
+        torch.mps.is_available = lambda: False
 
 
 def make_tiny_qwen_config():
@@ -37,10 +46,12 @@ def make_tiny_qwen_config():
     )
 
 
-def make_tiny_causal_lm():
+def make_tiny_causal_lm(*, vocab_size: int = 128):
     from transformers import AutoModelForCausalLM
 
-    return AutoModelForCausalLM.from_config(make_tiny_qwen_config())
+    config = make_tiny_qwen_config()
+    config.vocab_size = vocab_size
+    return AutoModelForCausalLM.from_config(config)
 
 
 def make_lm_dataset(*, size: int = 8, seq_len: int = 16, vocab_size: int = 128):
@@ -61,6 +72,95 @@ def make_lm_dataset(*, size: int = 8, seq_len: int = 16, vocab_size: int = 128):
     return _Dataset()
 
 
+def make_tiny_tokenizer():
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.pre_tokenizers import Whitespace
+    from transformers import PreTrainedTokenizerFast
+
+    vocab = {
+        "<pad>": 0,
+        "<unk>": 1,
+        "<bos>": 2,
+        "<eos>": 3,
+        "User": 4,
+        "Assistant": 5,
+        ":": 6,
+        "hello": 7,
+        "world": 8,
+        "what": 9,
+        "is": 10,
+        "1": 11,
+        "+": 12,
+        "2": 13,
+        "?": 14,
+        "The": 15,
+        "answer": 16,
+        "blue": 17,
+        "green": 18,
+        "sky": 19,
+        "hi": 20,
+        "there": 21,
+        ".": 22,
+    }
+
+    tokenizer = Tokenizer(WordLevel(vocab=vocab, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+    return PreTrainedTokenizerFast(
+        tokenizer_object=tokenizer,
+        bos_token="<bos>",
+        eos_token="<eos>",
+        unk_token="<unk>",
+        pad_token="<pad>",
+    )
+
+
+def make_sft_dataset():
+    from datasets import Dataset
+
+    rows = [
+        {
+            "prompt": "User: what is 1 + 1 ?",
+            "completion": "Assistant: The answer is 2 .",
+            "text": "User: what is 1 + 1 ? Assistant: The answer is 2 .",
+        },
+        {
+            "prompt": "User: hello world",
+            "completion": "Assistant: hi there .",
+            "text": "User: hello world Assistant: hi there .",
+        },
+        {
+            "prompt": "User: what color is the sky ?",
+            "completion": "Assistant: The sky is blue .",
+            "text": "User: what color is the sky ? Assistant: The sky is blue .",
+        },
+        {
+            "prompt": "User: what is 1 + 1 ?",
+            "completion": "Assistant: 2 .",
+            "text": "User: what is 1 + 1 ? Assistant: 2 .",
+        },
+    ]
+    return Dataset.from_list(rows)
+
+
+def make_dpo_dataset():
+    from datasets import Dataset
+
+    rows = [
+        {
+            "prompt": "User: what is 1 + 1 ?",
+            "chosen": "Assistant: The answer is 2 .",
+            "rejected": "Assistant: The answer is green .",
+        },
+        {
+            "prompt": "User: what color is the sky ?",
+            "chosen": "Assistant: The sky is blue .",
+            "rejected": "Assistant: The sky is green .",
+        },
+    ]
+    return Dataset.from_list(rows)
+
+
 def make_training_args(**overrides):
     from transformers import TrainingArguments
 
@@ -78,4 +178,6 @@ def make_training_args(**overrides):
         tf32=True,
     )
     defaults.update(overrides)
-    return TrainingArguments(**defaults)
+    supported = inspect.signature(TrainingArguments.__init__).parameters
+    filtered = {key: value for key, value in defaults.items() if key in supported}
+    return TrainingArguments(**filtered)
