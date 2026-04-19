@@ -46,7 +46,8 @@ def test_trainer_runs_in_cuda_path_without_use_cpu() -> None:
         result = trainer.train()
 
         assert trainer.args.use_cpu is False
-        assert trainer.args.no_cuda is False
+        if hasattr(trainer.args, "no_cuda"):
+            assert trainer.args.no_cuda is False
         assert next(trainer.model.parameters()).device.type == "cuda"
         assert isinstance(result.training_loss, float)
         assert result.training_loss > 0
