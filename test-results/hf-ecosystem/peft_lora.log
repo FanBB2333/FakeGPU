@@ -1,0 +1,12 @@
+.                                                                        [100%]
+=============================== warnings summary ===============================
+test/test_peft_lora.py::test_peft_lora_tiny_flow
+  /Users/l1ght/repos/FakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: enabled upstream FakeCudaTensor backend with FakeGPU enhancements (memory tracking, GPU profiles, cross-device validation).
+    return patch(num_devices=num_devices, device_name=device_name)
+
+test/test_peft_lora.py::test_peft_lora_tiny_flow
+  /Users/l1ght/miniforge3/envs/fakegpu/lib/python3.11/site-packages/peft/utils/save_and_load.py:372: UserWarning: Could not find a config file in  - will assume that the vocabulary was not modified.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 2 warnings in 3.07s

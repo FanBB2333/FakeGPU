@@ -1,0 +1,104 @@
+{
+  "generated_at": "2026-04-20T01:38:00.111063+08:00",
+  "python": "/Users/l1ght/miniforge3/envs/fakegpu/bin/python",
+  "suites": [
+    {
+      "name": "hf_trainer_baseline",
+      "command": [
+        "/Users/l1ght/miniforge3/envs/fakegpu/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test/test_hf_trainer.py"
+      ],
+      "exit_code": 0,
+      "status": "passed",
+      "summary_line": "4 passed, 1 warning in 4.53s",
+      "log_path": "test-results/hf-ecosystem/hf_trainer_baseline.log"
+    },
+    {
+      "name": "hf_trainer_cuda",
+      "command": [
+        "/Users/l1ght/miniforge3/envs/fakegpu/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test/test_hf_trainer_cuda.py"
+      ],
+      "exit_code": 0,
+      "status": "passed",
+      "summary_line": "4 passed in 6.54s",
+      "log_path": "test-results/hf-ecosystem/hf_trainer_cuda.log"
+    },
+    {
+      "name": "autocast_dtype",
+      "command": [
+        "/Users/l1ght/miniforge3/envs/fakegpu/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test/test_error_dtype_autocast.py"
+      ],
+      "exit_code": 0,
+      "status": "passed",
+      "summary_line": "3 passed, 1 warning in 0.66s",
+      "log_path": "test-results/hf-ecosystem/autocast_dtype.log"
+    },
+    {
+      "name": "torch_patch_proof_regressions",
+      "command": [
+        "/Users/l1ght/miniforge3/envs/fakegpu/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test/test_torch_patch_proof_regressions.py"
+      ],
+      "exit_code": 0,
+      "status": "passed",
+      "summary_line": "1 passed in 0.85s",
+      "log_path": "test-results/hf-ecosystem/torch_patch_proof_regressions.log"
+    },
+    {
+      "name": "peft_lora",
+      "command": [
+        "/Users/l1ght/miniforge3/envs/fakegpu/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test/test_peft_lora.py"
+      ],
+      "exit_code": 0,
+      "status": "passed",
+      "summary_line": "1 passed, 2 warnings in 3.07s",
+      "log_path": "test-results/hf-ecosystem/peft_lora.log"
+    },
+    {
+      "name": "trl_sft",
+      "command": [
+        "/Users/l1ght/miniforge3/envs/fakegpu/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test/test_trl_sft.py"
+      ],
+      "exit_code": 0,
+      "status": "passed",
+      "summary_line": "1 passed, 1 warning in 3.06s",
+      "log_path": "test-results/hf-ecosystem/trl_sft.log"
+    },
+    {
+      "name": "trl_dpo",
+      "command": [
+        "/Users/l1ght/miniforge3/envs/fakegpu/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "test/test_trl_dpo.py"
+      ],
+      "exit_code": 0,
+      "status": "passed",
+      "summary_line": "1 passed, 1 warning in 3.05s",
+      "log_path": "test-results/hf-ecosystem/trl_dpo.log"
+    }
+  ]
+}
