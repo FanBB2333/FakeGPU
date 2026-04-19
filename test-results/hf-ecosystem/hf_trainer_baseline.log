@@ -1,0 +1,8 @@
+....                                                                     [100%]
+=============================== warnings summary ===============================
+fakegpu/_runtime.py:97
+  /Users/l1ght/repos/FakeGPU/test/../fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: enabled upstream FakeCudaTensor backend with FakeGPU enhancements (memory tracking, GPU profiles, cross-device validation).
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+4 passed, 1 warning in 4.53s
