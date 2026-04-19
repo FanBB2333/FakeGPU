@@ -40,11 +40,14 @@ Usage::
 from __future__ import annotations
 
 import atexit
+import dataclasses
 import functools
 import importlib
 import os
 import sys
+import types
 import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -1187,6 +1190,105 @@ def _install_legacy_cuda_types(torch: Any, *, device: str) -> None:
         setattr(torch.cuda, tname, _make_legacy_factory(dt))
 
 
+def _patch_hf_cuda_surface(torch_mod: Any) -> None:
+    """Expose CUDA metadata expected by HuggingFace and Accelerate."""
+    torch_mod.version.cuda = "12.1"
+
+    backends_cuda = getattr(torch_mod.backends, "cuda", None)
+    if backends_cuda is None:
+        backends_cuda = types.SimpleNamespace()
+        torch_mod.backends.cuda = backends_cuda
+    backends_cuda.is_built = lambda: True
+
+    matmul_backend = getattr(backends_cuda, "matmul", None)
+    if matmul_backend is None:
+        matmul_backend = types.SimpleNamespace()
+        backends_cuda.matmul = matmul_backend
+    matmul_backend.allow_tf32 = False
+    if not hasattr(matmul_backend, "allow_fp16_reduced_precision_reduction"):
+        matmul_backend.allow_fp16_reduced_precision_reduction = True
+
+    cudnn_backend = getattr(torch_mod.backends, "cudnn", None)
+    if cudnn_backend is None:
+        cudnn_backend = types.SimpleNamespace()
+        torch_mod.backends.cudnn = cudnn_backend
+    cudnn_backend.is_available = lambda: True
+    cudnn_backend.enabled = True
+    cudnn_backend.benchmark = False
+    cudnn_backend.deterministic = False
+    cudnn_backend.allow_tf32 = False
+
+
+def _build_fake_fork_rng(torch_mod: Any):
+    @contextmanager
+    def _fake_fork_rng(devices=None, enabled: bool = True, device_type: str = "cuda"):
+        if not enabled:
+            yield
+            return
+        cpu_state = torch_mod.random.get_rng_state()
+        try:
+            yield
+        finally:
+            torch_mod.random.set_rng_state(cpu_state)
+
+    return _fake_fork_rng
+
+
+def _patch_cuda_rng_surface(torch_mod: Any) -> None:
+    fake_fork_rng = _build_fake_fork_rng(torch_mod)
+    torch_mod.random.fork_rng = fake_fork_rng
+    try:
+        import torch.cuda.random as _random
+
+        _random.fork_rng = fake_fork_rng
+    except Exception:
+        pass
+
+
+def _patch_nccl_surface(torch_mod: Any) -> None:
+    nccl_mod = getattr(torch_mod.cuda, "nccl", None)
+    if nccl_mod is None:
+        nccl_mod = types.SimpleNamespace()
+        torch_mod.cuda.nccl = nccl_mod
+    nccl_mod.version = lambda: (2, 21, 5)
+
+
+def _install_fakegpu_autocast(torch_mod: Any) -> None:
+    _strict_compat = os.environ.get("FAKEGPU_STRICT_COMPAT", "1") != "0"
+    if not (_strict_compat and hasattr(torch_mod.amp, "autocast")):
+        return
+
+    _OrigAutocast = torch_mod.amp.autocast
+
+    class _PatchedAutocast(_OrigAutocast):
+        """Autocast wrapper that redirects fake CUDA autocast to CPU."""
+
+        def __init__(self, device_type: str = "cuda", **kwargs):
+            requested_device = device_type
+            actual_device = "cpu" if device_type == "cuda" else device_type
+            self._fakegpu_requested_device_type = requested_device
+            self._fakegpu_actual_device_type = actual_device
+            super().__init__(actual_device, **kwargs)
+
+        def __enter__(self):
+            if (
+                getattr(self, "_fakegpu_requested_device_type", None) == "cuda"
+                and getattr(self, "fast_dtype", None) == torch_mod.bfloat16
+                and _COMPUTE_MAJOR < 8
+            ):
+                raise RuntimeError(
+                    f"Current CUDA Device does not support bfloat16. "
+                    f"Please switch dtype to float16 "
+                    f"(compute capability {_COMPUTE_MAJOR}.{_COMPUTE_MINOR}, "
+                    f"need >= 8.0 for bf16)."
+                )
+            return super().__enter__()
+
+    torch_mod.amp.autocast = _PatchedAutocast
+    if hasattr(torch_mod.cuda.amp, "autocast"):
+        torch_mod.cuda.amp.autocast = _PatchedAutocast
+
+
 def _activate_upstream(num_devices: int, device_name: str) -> Any:
     """Load and enable the upstream FakeCudaTensor backend.
 
@@ -1326,6 +1428,18 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
             if isinstance(obj, dict) and type(obj) is dict:
                 return dict(items)
             return obj.__class__(items)
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            mapped_fields = {
+                field.name: _dynamo_friendly_tree_map(fn, getattr(obj, field.name))
+                for field in dataclasses.fields(obj)
+            }
+            try:
+                return type(obj)(**mapped_fields)
+            except TypeError:
+                new_obj = object.__new__(type(obj))
+                for name, value in mapped_fields.items():
+                    object.__setattr__(new_obj, name, value)
+                return new_obj
         return fn(obj)
 
     upstream._tree_map = _dynamo_friendly_tree_map
@@ -1370,6 +1484,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     # Compute-capability-aware bf16 check (upstream always returns True)
     torch.cuda.is_bf16_supported = _stub_is_bf16_supported
+    _patch_hf_cuda_surface(torch_mod)
 
     # ---- 4. Tracked memory query functions ----
     if _memory_tracker is not None:
@@ -1407,34 +1522,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
             pass
 
     # ---- 5. Autocast / GradScaler ----
-    _strict_compat = os.environ.get("FAKEGPU_STRICT_COMPAT", "1") != "0"
-
-    if _strict_compat and hasattr(torch_mod.amp, "autocast"):
-        _OrigAutocast = torch_mod.amp.autocast
-
-        class _PatchedAutocast(_OrigAutocast):
-            """Autocast wrapper that validates dtype vs compute capability."""
-
-            def __init__(self, device_type: str = "cuda", **kwargs):
-                super().__init__(device_type, **kwargs)
-
-            def __enter__(self):
-                if (
-                    getattr(self, "device_type", None) == "cuda"
-                    and getattr(self, "fast_dtype", None) == torch_mod.bfloat16
-                    and _COMPUTE_MAJOR < 8
-                ):
-                    raise RuntimeError(
-                        f"Current CUDA Device does not support bfloat16. "
-                        f"Please switch dtype to float16 "
-                        f"(compute capability {_COMPUTE_MAJOR}.{_COMPUTE_MINOR}, "
-                        f"need >= 8.0 for bf16)."
-                    )
-                return super().__enter__()
-
-        torch_mod.amp.autocast = _PatchedAutocast
-        if hasattr(torch_mod.cuda.amp, "autocast"):
-            torch_mod.cuda.amp.autocast = _PatchedAutocast
+    _install_fakegpu_autocast(torch_mod)
 
     try:
         from torch.amp import GradScaler as _RealGradScaler
@@ -1498,6 +1586,8 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         _random.set_rng_state_all = _stub_set_rng_state_all
     except Exception:
         pass
+    _patch_cuda_rng_surface(torch_mod)
+    _patch_nccl_surface(torch_mod)
 
     # ---- 8. Terminal report ----
     atexit.register(_dump_terminal_summary)
@@ -1592,6 +1682,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     torch.cuda.can_device_access_peer = _stub_can_device_access_peer
     torch.cuda.get_gencode_flags = _stub_get_gencode_flags
     torch.cuda.default_generators = _make_default_generators()
+    _patch_hf_cuda_surface(torch)
 
     # ---- Initialize memory tracker ----
     global _memory_tracker
@@ -1905,36 +1996,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         pass
 
     # ---- Autocast dtype validation (defense-in-depth) ----
-    _strict_compat = os.environ.get("FAKEGPU_STRICT_COMPAT", "1") != "0"
-
-    if _strict_compat and hasattr(torch.amp, "autocast"):
-        _OrigAutocast = torch.amp.autocast
-
-        class _PatchedAutocast(_OrigAutocast):
-            """Autocast wrapper that validates dtype vs compute capability."""
-
-            def __init__(self, device_type: str = "cuda", **kwargs):
-                super().__init__(device_type, **kwargs)
-
-            def __enter__(self):
-                if (
-                    getattr(self, "device_type", None) == "cuda"
-                    and getattr(self, "fast_dtype", None) == torch.bfloat16
-                    and _COMPUTE_MAJOR < 8
-                ):
-                    raise RuntimeError(
-                        f"Current CUDA Device does not support bfloat16. "
-                        f"Please switch dtype to float16 "
-                        f"(compute capability {_COMPUTE_MAJOR}.{_COMPUTE_MINOR}, "
-                        f"need >= 8.0 for bf16)."
-                    )
-                return super().__enter__()
-
-        # torch.amp.autocast keeps requiring device_type; only the
-        # cuda-specific alias defaults to "cuda".
-        torch.amp.autocast = _PatchedAutocast
-        if hasattr(torch.cuda.amp, "autocast"):
-            torch.cuda.amp.autocast = _PatchedAutocast
+    _install_fakegpu_autocast(torch)
 
     # ---- Patch torch.device to allow 'cuda' construction ----
     # torch.device('cuda') already works; no patch needed.
@@ -1946,6 +2008,8 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
             dist.is_nccl_available = lambda: True
     except Exception:
         pass
+    _patch_cuda_rng_surface(torch)
+    _patch_nccl_surface(torch)
 
     _patched = True
     _patch_result = PatchResult(
