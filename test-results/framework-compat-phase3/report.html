@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FakeGPU · Phase 3 Compatibility Report</title>
+<title>FakeGPU · torchtune + FSDP Compatibility Report</title>
 <style>
   :root {
     --bg: #f1ece4;
@@ -34,7 +34,11 @@
     background: linear-gradient(140deg, var(--paper) 0%, var(--panel) 100%);
     box-shadow: 0 14px 40px rgba(62, 58, 52, 0.06);
     margin-bottom: 28px;
+    text-align: center;
+    opacity: 0; transform: translateY(14px);
+    animation: rise .9s .05s ease-out forwards;
   }
+  @keyframes rise { to { opacity: 1; transform: none; } }
   .eyebrow {
     font-size: 11px;
     letter-spacing: 0.24em;
@@ -51,12 +55,14 @@
     color: var(--muted);
     font-size: 15px;
     max-width: 760px;
+    margin: 0 auto;
   }
   .meta {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
     margin-top: 18px;
+    justify-content: center;
   }
   .chip {
     border: 1px solid var(--line);
@@ -110,6 +116,8 @@
     border-radius: 18px;
     background: var(--paper);
     padding: 22px;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .card-top {
     display: flex;
@@ -186,6 +194,7 @@
     border: 1px solid var(--line);
     border-radius: 6px;
     padding: 2px 6px;
+    word-break: break-all;
   }
   footer {
     margin-top: 30px;
@@ -204,24 +213,24 @@
 <body>
   <div class="wrap">
     <section class="hero">
-      <div class="eyebrow">FakeGPU Phase 3</div>
+      <div class="eyebrow">FakeGPU</div>
       <h1>torchtune + FSDP Compatibility</h1>
-      <p class="sub">Single-card torchtune-style fine-tuning and Real FSDP full-shard simulation, validated on macOS and on a Linux clean clone tracking the pushed <code>main</code> branch.</p>
+      <p class="sub">Single-card torchtune-style fine-tuning, Real FSDP full-shard simulation, and Distributed group management, validated on macOS and on a Linux clean clone tracking the pushed <code>main</code> branch.</p>
       <div class="meta">
         <span class="chip">torch 2.9.1</span>
         <span class="chip">Python 3.11.9</span>
         <span class="chip">Strategy: Fake PG + Real FSDP</span>
-        <span class="chip pass">7 / 7 passed</span>
+        <span class="chip pass">11 / 11 passed</span>
       </div>
     </section>
 
     <section class="stats">
       <div class="stat green">
-        <div class="n">7</div>
+        <div class="n">11</div>
         <div class="k">Tests Passed</div>
       </div>
       <div class="stat blue">
-        <div class="n">3</div>
+        <div class="n">4</div>
         <div class="k">Suites</div>
       </div>
       <div class="stat sand">
@@ -274,6 +283,21 @@
           <li><span class="dot"></span><span><code>test_torchtune_style_single_device_finetune_smoke</code></span></li>
         </ul>
       </article>
+
+      <article class="card">
+        <div class="card-top">
+          <span class="label">Distributed</span>
+          <span class="pill">4 / 4 passed</span>
+        </div>
+        <h2>Group Management</h2>
+        <p>Validates distributed group operations: default group retrieval after init, <code>new_group()</code> creation, init/destroy roundtrip, and collective operations (all_reduce, broadcast, barrier).</p>
+        <ul>
+          <li><span class="dot"></span><span><code>test_get_default_group_after_init</code></span></li>
+          <li><span class="dot"></span><span><code>test_new_group_returns_group</code></span></li>
+          <li><span class="dot"></span><span><code>test_distributed_init_destroy_roundtrip</code></span></li>
+          <li><span class="dot"></span><span><code>test_collectives_after_init</code></span></li>
+        </ul>
+      </article>
     </section>
 
     <section class="note-grid">
@@ -296,7 +320,7 @@
     </section>
 
     <footer>
-      Generated on 2026-04-20 from commit <code>e21818b</code>. Platforms: macOS local workspace + Linux clean clone on <code>100.71.234.15</code>.
+      Generated on 2026-04-20 &middot; Updated with accelerate &amp; distributed group tests. Platforms: macOS local workspace + Linux clean clone on <code>100.71.234.15</code>.
     </footer>
   </div>
 </body>

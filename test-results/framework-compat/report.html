@@ -99,6 +99,7 @@
     background: var(--surface); border: 1px solid var(--line);
     border-radius: 16px; padding: 24px;
     transition: transform .15s, box-shadow .15s;
+    min-width: 0; overflow-wrap: anywhere;
   }
   .suite-card:hover {
     transform: translateY(-2px);
@@ -167,6 +168,7 @@
   .arch-card {
     background: var(--surface); border: 1px solid var(--line);
     border-radius: 16px; padding: 24px;
+    min-width: 0; overflow-wrap: anywhere;
   }
   .arch-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 10px; }
   .arch-card p { font-size: 13px; color: var(--ink-soft); line-height: 1.7; }
@@ -203,19 +205,19 @@
 <header class="hero">
   <div class="eyebrow">FakeGPU</div>
   <h1>Framework Compatibility Report</h1>
-  <p class="sub">Phase 1 (HuggingFace) + Phase 2 (LLaMA-Factory, Lightning Fabric, LitGPT)</p>
+  <p class="sub">HuggingFace &middot; Accelerate &middot; LLaMA-Factory &middot; Lightning Fabric &middot; LitGPT</p>
   <div class="meta">
     <span class="chip">torch 2.9.1</span>
     <span class="chip">Python 3.11</span>
     <span class="chip">macOS + Linux</span>
-    <span class="chip pass">14 passed</span>
+    <span class="chip pass">24 passed</span>
   </div>
 </header>
 
 <!-- ==================== Stats ==================== -->
 <div class="stats">
   <div class="stat-card green">
-    <div class="number">14</div>
+    <div class="number">24</div>
     <div class="label">Tests Passed</div>
   </div>
   <div class="stat-card sand">
@@ -223,7 +225,7 @@
     <div class="label">Skipped</div>
   </div>
   <div class="stat-card blue">
-    <div class="number">7</div>
+    <div class="number">8</div>
     <div class="label">Frameworks</div>
   </div>
   <div class="stat-card plum">
@@ -235,7 +237,7 @@
 <!-- ==================== Phase 1: HuggingFace ==================== -->
 <div class="phase-section">
   <div class="phase-header">
-    <span class="phase-badge p1">Phase 1</span>
+    <span class="phase-badge p1">HuggingFace</span>
     <h2>HuggingFace Ecosystem</h2>
   </div>
   <div class="suite-grid">
@@ -314,10 +316,61 @@
   </div>
 </div>
 
+<!-- ==================== Accelerate ==================== -->
+<div class="phase-section">
+  <div class="phase-header">
+    <span class="phase-badge p1">Accelerate</span>
+    <h2>Accelerate Integration</h2>
+  </div>
+  <div class="suite-grid">
+
+    <!-- Accelerate Core -->
+    <div class="suite-card">
+      <div class="card-top">
+        <span class="framework">Accelerate</span>
+        <span class="status-pill passed">6/6 Passed</span>
+      </div>
+      <h3>Core API &amp; Mixed Precision</h3>
+      <p class="desc">Verifies CUDA detection, Accelerator init, model/optimizer prepare, training step cycle, fp16 mixed precision, and device_map utilities via <code>infer_auto_device_map</code>.</p>
+      <ul class="test-list">
+        <li><span class="test-dot passed"></span><span class="test-name">test_accelerate_detects_cuda</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_accelerator_init_and_device</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_accelerator_prepare_model_optimizer</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_accelerator_training_step</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_accelerator_fp16_mixed_precision</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_accelerator_device_map_utilities</span><span class="test-status passed">pass</span></li>
+      </ul>
+      <div class="platform-row">
+        <span class="platform-chip">macOS</span>
+      </div>
+    </div>
+
+    <!-- Accelerate + Trainer -->
+    <div class="suite-card">
+      <div class="card-top">
+        <span class="framework">Accelerate + Trainer</span>
+        <span class="status-pill passed">4/4 Passed</span>
+      </div>
+      <h3>HF Trainer via Accelerate</h3>
+      <p class="desc">End-to-end HF Trainer CUDA path through accelerate: basic training, fp16, eval/predict, and checkpoint save/load roundtrip.</p>
+      <ul class="test-list">
+        <li><span class="test-dot passed"></span><span class="test-name">test_trainer_cuda_path_with_accelerate</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_trainer_cuda_fp16_with_accelerate</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_trainer_eval_and_predict</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_trainer_checkpoint_roundtrip</span><span class="test-status passed">pass</span></li>
+      </ul>
+      <div class="platform-row">
+        <span class="platform-chip">macOS</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
 <!-- ==================== Phase 2: Framework Compat ==================== -->
 <div class="phase-section">
   <div class="phase-header">
-    <span class="phase-badge p2">Phase 2</span>
+    <span class="phase-badge p2">LLaMA-Factory · Lightning</span>
     <h2>Framework Compatibility</h2>
   </div>
   <div class="suite-grid">
@@ -383,7 +436,7 @@
 
 <!-- ==================== What was patched ==================== -->
 <div class="arch-section">
-  <h2>What Was Patched (Phase 2)</h2>
+  <h2>What Was Patched</h2>
   <div class="arch-grid">
     <div class="arch-card">
       <h3>New Stubs Added</h3>
@@ -391,6 +444,8 @@
         <li><code>torch._C._cuda_clearCublasWorkspaces</code> &mdash; Lightning Fabric calls this during CUDA memory cleanup</li>
         <li><code>transformers.utils.is_torch_cuda_available</code> &mdash; LLaMA-Factory reads this to decide CUDA vs CPU path</li>
         <li><code>transformers.utils.is_torch_bf16_gpu_available</code> &mdash; LLaMA-Factory reads this for dtype selection</li>
+        <li><code>accelerate.utils.imports</code> CUDA detection &mdash; patches <code>is_cuda_available</code> for robust accelerate integration</li>
+        <li><code>torch.distributed._get_default_group</code> &amp; <code>new_group</code> &mdash; fallback stubs for distributed group management</li>
       </ul>
     </div>
     <div class="arch-card">
@@ -417,7 +472,7 @@
 
 <!-- ==================== Footer ==================== -->
 <footer>
-  FakeGPU Framework Compatibility &middot; Generated 2026-04-20 &middot; torch 2.9.1 &middot; Python 3.11.9
+  FakeGPU Framework Compatibility &middot; Updated 2026-04-20 &middot; torch 2.9.1 &middot; Python 3.11.9
 </footer>
 
 </div>

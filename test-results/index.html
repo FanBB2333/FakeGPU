@@ -91,7 +91,7 @@
   /* ---------- Main content ---------- */
   .main {
     flex: 1; display: flex; flex-direction: column;
-    height: 100vh; overflow: hidden;
+    height: 100vh; overflow: auto;
   }
   .main iframe {
     flex: 1; border: none; width: 100%; height: 100%;
@@ -166,13 +166,13 @@
     <div class="nav-group-label">Framework Compatibility</div>
     <button class="nav-item" data-report="frameworks" onclick="navigate('frameworks')">
       <span class="dot pass"></span>
-      Phases 1-2 Overview
-      <span class="badge">14/14</span>
+      Frameworks Overview
+      <span class="badge">24/24</span>
     </button>
     <button class="nav-item" data-report="phase3" onclick="navigate('phase3')">
       <span class="dot pass"></span>
-      Phase 3 Report
-      <span class="badge">7/7</span>
+      torchtune · FSDP
+      <span class="badge">11/11</span>
     </button>
   </div>
 
@@ -208,6 +208,14 @@
   </div>
 
   <div class="nav-group">
+    <div class="nav-group-label">Documentation</div>
+    <button class="nav-item" data-report="architecture" onclick="navigate('architecture')">
+      <span class="dot matrix"></span>
+      How it Works
+    </button>
+  </div>
+
+  <div class="nav-group">
     <div class="nav-group-label">Other Reports</div>
     <button class="nav-item" data-report="precommit" onclick="navigate('precommit')">
       <span class="dot precommit"></span> Precommit (2.11.0)
@@ -223,11 +231,22 @@
       <h2>FakeGPU Test Reports</h2>
       <p>Select a report from the sidebar, or choose one below.</p>
       <div class="landing-cards">
+        <a class="landing-card featured" onclick="navigate('architecture'); return false;" href="#architecture">
+          <div class="lc-title">How it Works</div>
+          <div class="lc-desc">Architecture layers, interception modes, and real call flow examples</div>
+          <div class="chip-row">
+            <span class="chip-sm">Native Mode</span>
+            <span class="chip-sm">Python Mode</span>
+            <span class="chip-sm">5 Libraries</span>
+            <span class="chip-sm">0 GPUs</span>
+          </div>
+        </a>
         <a class="landing-card featured" onclick="navigate('frameworks'); return false;" href="#frameworks">
-          <div class="lc-title">Phases 1-2 Compatibility</div>
-          <div class="lc-desc">HuggingFace, LLaMA-Factory, Lightning Fabric, LitGPT &mdash; all passing</div>
+          <div class="lc-title">Framework Compatibility</div>
+          <div class="lc-desc">HuggingFace, Accelerate, LLaMA-Factory, Lightning Fabric, LitGPT &mdash; all passing</div>
           <div class="chip-row">
             <span class="chip-sm">HF Trainer</span>
+            <span class="chip-sm">Accelerate</span>
             <span class="chip-sm">PEFT</span>
             <span class="chip-sm">TRL</span>
             <span class="chip-sm">LLaMA-Factory</span>
@@ -236,13 +255,14 @@
           </div>
         </a>
         <a class="landing-card featured" onclick="navigate('phase3'); return false;" href="#phase3">
-          <div class="lc-title">Phase 3 Compatibility</div>
-          <div class="lc-desc">torchtune single-card fine-tuning + FSDP full-shard simulation on macOS and Linux</div>
+          <div class="lc-title">torchtune · FSDP · Distributed</div>
+          <div class="lc-desc">torchtune single-card fine-tuning, FSDP full-shard simulation, and distributed group management on macOS and Linux</div>
           <div class="chip-row">
             <span class="chip-sm">torchtune</span>
             <span class="chip-sm">FSDP</span>
             <span class="chip-sm">Fake PG</span>
             <span class="chip-sm">State Dict</span>
+            <span class="chip-sm">Dist Group</span>
           </div>
         </a>
         <a class="landing-card" onclick="navigate('matrix'); return false;" href="#matrix">
@@ -265,6 +285,7 @@
 <script>
 // Report path mapping (relative to this index.html in test-results/)
 const REPORTS = {
+  'architecture': 'architecture/report.html',
   'frameworks': 'framework-compat/report.html',
   'phase3':     'framework-compat-phase3/report.html',
   'matrix':     'torch-patch-matrix/report.html',
@@ -310,7 +331,16 @@ function loadReport(id) {
 
 function showLanding() {
   const landing = document.getElementById('landing');
-  if (landing) landing.style.display = 'flex';
+  if (landing) {
+    landing.style.display = 'flex';
+    // Re-trigger entrance animation
+    const inner = landing.querySelector('.landing-inner');
+    if (inner) {
+      inner.style.animation = 'none';
+      inner.offsetHeight; // force reflow
+      inner.style.animation = '';
+    }
+  }
   if (currentFrame) { currentFrame.remove(); currentFrame = null; }
   document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('active'));
 }
