@@ -166,8 +166,13 @@
     <div class="nav-group-label">Framework Compatibility</div>
     <button class="nav-item" data-report="frameworks" onclick="navigate('frameworks')">
       <span class="dot pass"></span>
-      Frameworks Overview
+      Phases 1-2 Overview
       <span class="badge">14/14</span>
+    </button>
+    <button class="nav-item" data-report="phase3" onclick="navigate('phase3')">
+      <span class="dot pass"></span>
+      Phase 3 Report
+      <span class="badge">7/7</span>
     </button>
   </div>
 
@@ -219,7 +224,7 @@
       <p>Select a report from the sidebar, or choose one below.</p>
       <div class="landing-cards">
         <a class="landing-card featured" onclick="navigate('frameworks'); return false;" href="#frameworks">
-          <div class="lc-title">Framework Compatibility</div>
+          <div class="lc-title">Phases 1-2 Compatibility</div>
           <div class="lc-desc">HuggingFace, LLaMA-Factory, Lightning Fabric, LitGPT &mdash; all passing</div>
           <div class="chip-row">
             <span class="chip-sm">HF Trainer</span>
@@ -228,6 +233,16 @@
             <span class="chip-sm">LLaMA-Factory</span>
             <span class="chip-sm">Lightning</span>
             <span class="chip-sm">LitGPT</span>
+          </div>
+        </a>
+        <a class="landing-card featured" onclick="navigate('phase3'); return false;" href="#phase3">
+          <div class="lc-title">Phase 3 Compatibility</div>
+          <div class="lc-desc">torchtune single-card fine-tuning + FSDP full-shard simulation on macOS and Linux</div>
+          <div class="chip-row">
+            <span class="chip-sm">torchtune</span>
+            <span class="chip-sm">FSDP</span>
+            <span class="chip-sm">Fake PG</span>
+            <span class="chip-sm">State Dict</span>
           </div>
         </a>
         <a class="landing-card" onclick="navigate('matrix'); return false;" href="#matrix">
@@ -251,6 +266,7 @@
 // Report path mapping (relative to this index.html in test-results/)
 const REPORTS = {
   'frameworks': 'framework-compat/report.html',
+  'phase3':     'framework-compat-phase3/report.html',
   'matrix':     'torch-patch-matrix/report.html',
   'v2.6.0':     'torch-patch-matrix/2.6.0/report.html',
   'v2.7.1':     'torch-patch-matrix/2.7.1/report.html',
