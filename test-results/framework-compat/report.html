@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FakeGPU &middot; Framework Compatibility Report</title>
+<style>
+  /* ---------- Morandi Palette ---------- */
+  :root {
+    --bg:        #ede8e0;
+    --surface:   #f4f0e9;
+    --surface-2: #e3dcd1;
+    --ink:       #4a4740;
+    --ink-soft:  #7a7468;
+    --line:      #d6cdbf;
+    --sage:      #a8b5a0;
+    --sage-dk:   #7d8e78;
+    --rose:      #c9a7a1;
+    --rose-dk:   #a8837c;
+    --sand:      #d4bf9a;
+    --sand-dk:   #b39a73;
+    --mist:      #a4b1bd;
+    --mist-dk:   #7d8b98;
+    --plum:      #b5a0b0;
+    --plum-dk:   #8e7b8b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue",
+                 "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--ink);
+    line-height: 1.65; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 64px 32px 96px; }
+
+  /* ---------- Hero ---------- */
+  header.hero {
+    text-align: center; padding: 56px 24px 40px; margin-bottom: 48px;
+    background: linear-gradient(140deg, var(--surface) 0%, var(--surface-2) 100%);
+    border-radius: 24px; border: 1px solid var(--line);
+    opacity: 0; transform: translateY(14px);
+    animation: rise .9s .05s ease-out forwards;
+  }
+  header.hero .eyebrow {
+    letter-spacing: .24em; font-size: 12px; color: var(--ink-soft);
+    text-transform: uppercase; margin-bottom: 14px;
+  }
+  header.hero h1 { font-size: 32px; margin: 0 0 12px; font-weight: 600; letter-spacing: .5px; }
+  header.hero .sub { color: var(--ink-soft); font-size: 15px; margin: 0; }
+  header.hero .meta {
+    display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin-top: 22px;
+  }
+  .chip {
+    background: var(--bg); color: var(--ink-soft);
+    padding: 6px 14px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line);
+  }
+  .chip.pass { background: var(--sage); color: #fff; border-color: var(--sage-dk); }
+
+  @keyframes rise { to { opacity: 1; transform: none; } }
+
+  /* ---------- Stats row ---------- */
+  .stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px; margin-bottom: 48px;
+  }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 16px; padding: 24px 20px; text-align: center;
+  }
+  .stat-card .number { font-size: 36px; font-weight: 700; line-height: 1.2; }
+  .stat-card .label { font-size: 12px; color: var(--ink-soft); margin-top: 4px; text-transform: uppercase; letter-spacing: .12em; }
+  .stat-card.green .number { color: var(--sage-dk); }
+  .stat-card.blue .number { color: var(--mist-dk); }
+  .stat-card.plum .number { color: var(--plum-dk); }
+  .stat-card.sand .number { color: var(--sand-dk); }
+
+  /* ---------- Phase section ---------- */
+  .phase-section { margin-bottom: 48px; }
+  .phase-header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 20px; padding-bottom: 12px;
+    border-bottom: 2px solid var(--line);
+  }
+  .phase-header h2 { font-size: 20px; font-weight: 600; }
+  .phase-badge {
+    font-size: 11px; padding: 4px 12px; border-radius: 999px;
+    font-weight: 600; letter-spacing: .05em;
+  }
+  .phase-badge.p1 { background: var(--sage); color: #fff; }
+  .phase-badge.p2 { background: var(--mist); color: #fff; }
+
+  /* ---------- Suite card ---------- */
+  .suite-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .suite-card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 16px; padding: 24px;
+    transition: transform .15s, box-shadow .15s;
+  }
+  .suite-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,0,0,.06);
+  }
+  .suite-card .card-top {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .suite-card .framework {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .15em; color: var(--ink-soft);
+  }
+  .suite-card .status-pill {
+    font-size: 11px; padding: 3px 10px; border-radius: 999px; font-weight: 600;
+  }
+  .status-pill.passed { background: var(--sage); color: #fff; }
+  .status-pill.failed { background: var(--rose); color: #fff; }
+  .suite-card h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+  .suite-card .desc { font-size: 13px; color: var(--ink-soft); margin-bottom: 16px; }
+
+  /* ---------- Test list ---------- */
+  .test-list { list-style: none; }
+  .test-list li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0; font-size: 13px;
+    border-top: 1px solid var(--line);
+  }
+  .test-list li:first-child { border-top: none; }
+  .test-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  }
+  .test-dot.passed { background: var(--sage-dk); }
+  .test-dot.skipped { background: var(--sand); }
+  .test-dot.failed { background: var(--rose-dk); }
+  .test-name { font-family: "SF Mono", "Fira Code", monospace; font-size: 12px; color: var(--ink); }
+  .test-status {
+    margin-left: auto; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .08em;
+  }
+  .test-status.passed { color: var(--sage-dk); }
+  .test-status.skipped { color: var(--sand-dk); }
+  .test-status.failed { color: var(--rose-dk); }
+
+  /* ---------- Platform row ---------- */
+  .platform-row {
+    display: flex; gap: 6px; margin-top: 12px; padding-top: 10px;
+    border-top: 1px dashed var(--line);
+  }
+  .platform-chip {
+    font-size: 10px; padding: 2px 8px; border-radius: 999px;
+    background: var(--surface-2); color: var(--ink-soft);
+    border: 1px solid var(--line);
+  }
+
+  /* ---------- Architecture section ---------- */
+  .arch-section { margin-bottom: 48px; }
+  .arch-section h2 {
+    font-size: 20px; font-weight: 600; margin-bottom: 20px;
+    padding-bottom: 12px; border-bottom: 2px solid var(--line);
+  }
+  .arch-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+  }
+  @media (max-width: 700px) { .arch-grid { grid-template-columns: 1fr; } }
+  .arch-card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 16px; padding: 24px;
+  }
+  .arch-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+  .arch-card p { font-size: 13px; color: var(--ink-soft); line-height: 1.7; }
+  .arch-card code {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12px; background: var(--bg); padding: 2px 6px;
+    border-radius: 4px; border: 1px solid var(--line);
+  }
+  .arch-card ul {
+    list-style: none; padding: 0; margin: 8px 0 0;
+  }
+  .arch-card ul li {
+    font-size: 13px; color: var(--ink-soft); padding: 3px 0;
+    padding-left: 16px; position: relative;
+  }
+  .arch-card ul li::before {
+    content: ""; position: absolute; left: 0; top: 10px;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--sage);
+  }
+
+  /* ---------- Footer ---------- */
+  footer {
+    text-align: center; padding-top: 32px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-soft); font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ==================== Hero ==================== -->
+<header class="hero">
+  <div class="eyebrow">FakeGPU</div>
+  <h1>Framework Compatibility Report</h1>
+  <p class="sub">Phase 1 (HuggingFace) + Phase 2 (LLaMA-Factory, Lightning Fabric, LitGPT)</p>
+  <div class="meta">
+    <span class="chip">torch 2.9.1</span>
+    <span class="chip">Python 3.11</span>
+    <span class="chip">macOS + Linux</span>
+    <span class="chip pass">14 passed</span>
+  </div>
+</header>
+
+<!-- ==================== Stats ==================== -->
+<div class="stats">
+  <div class="stat-card green">
+    <div class="number">14</div>
+    <div class="label">Tests Passed</div>
+  </div>
+  <div class="stat-card sand">
+    <div class="number">1</div>
+    <div class="label">Skipped</div>
+  </div>
+  <div class="stat-card blue">
+    <div class="number">7</div>
+    <div class="label">Frameworks</div>
+  </div>
+  <div class="stat-card plum">
+    <div class="number">2</div>
+    <div class="label">Platforms</div>
+  </div>
+</div>
+
+<!-- ==================== Phase 1: HuggingFace ==================== -->
+<div class="phase-section">
+  <div class="phase-header">
+    <span class="phase-badge p1">Phase 1</span>
+    <h2>HuggingFace Ecosystem</h2>
+  </div>
+  <div class="suite-grid">
+
+    <!-- HF Trainer CUDA -->
+    <div class="suite-card">
+      <div class="card-top">
+        <span class="framework">HuggingFace Transformers</span>
+        <span class="status-pill passed">4/4 Passed</span>
+      </div>
+      <h3>Trainer CUDA Code Path</h3>
+      <p class="desc">Verifies HF Trainer runs in CUDA mode, reports correct build info, RNG fork/restore, and dataclass tensor rewrapping.</p>
+      <ul class="test-list">
+        <li><span class="test-dot passed"></span><span class="test-name">test_trainer_runs_in_cuda_path_without_use_cpu</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_hf_cuda_surface_reports_cuda_build</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_cuda_random_fork_rng_restores_cpu_rng_state</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_tree_map_rewraps_plain_dataclass_tensors</span><span class="test-status passed">pass</span></li>
+      </ul>
+      <div class="platform-row">
+        <span class="platform-chip">macOS</span>
+        <span class="platform-chip">Linux</span>
+      </div>
+    </div>
+
+    <!-- PEFT LoRA -->
+    <div class="suite-card">
+      <div class="card-top">
+        <span class="framework">PEFT</span>
+        <span class="status-pill passed">1/1 Passed</span>
+      </div>
+      <h3>LoRA Full Lifecycle</h3>
+      <p class="desc">Apply LoRA config, train, save adapter, reload from disk, merge and unload &mdash; full production workflow.</p>
+      <ul class="test-list">
+        <li><span class="test-dot passed"></span><span class="test-name">test_peft_lora_tiny_flow</span><span class="test-status passed">pass</span></li>
+      </ul>
+      <div class="platform-row">
+        <span class="platform-chip">macOS</span>
+        <span class="platform-chip">Linux</span>
+      </div>
+    </div>
+
+    <!-- TRL SFT -->
+    <div class="suite-card">
+      <div class="card-top">
+        <span class="framework">TRL</span>
+        <span class="status-pill passed">1/1 Passed</span>
+      </div>
+      <h3>SFTTrainer</h3>
+      <p class="desc">Supervised fine-tuning with SFTTrainer on fake CUDA, including tokenized dataset and gradient steps.</p>
+      <ul class="test-list">
+        <li><span class="test-dot passed"></span><span class="test-name">test_trl_sft_tiny_flow</span><span class="test-status passed">pass</span></li>
+      </ul>
+      <div class="platform-row">
+        <span class="platform-chip">macOS</span>
+        <span class="platform-chip">Linux</span>
+      </div>
+    </div>
+
+    <!-- TRL DPO -->
+    <div class="suite-card">
+      <div class="card-top">
+        <span class="framework">TRL</span>
+        <span class="status-pill passed">1/1 Passed</span>
+      </div>
+      <h3>DPOTrainer</h3>
+      <p class="desc">Direct Preference Optimization with model + reference model, preference dataset, and gradient steps.</p>
+      <ul class="test-list">
+        <li><span class="test-dot passed"></span><span class="test-name">test_trl_dpo_tiny_flow</span><span class="test-status passed">pass</span></li>
+      </ul>
+      <div class="platform-row">
+        <span class="platform-chip">macOS</span>
+        <span class="platform-chip">Linux</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ==================== Phase 2: Framework Compat ==================== -->
+<div class="phase-section">
+  <div class="phase-header">
+    <span class="phase-badge p2">Phase 2</span>
+    <h2>Framework Compatibility</h2>
+  </div>
+  <div class="suite-grid">
+
+    <!-- LLaMA-Factory -->
+    <div class="suite-card">
+      <div class="card-top">
+        <span class="framework">LLaMA-Factory</span>
+        <span class="status-pill passed">2/2 Passed</span>
+      </div>
+      <h3>LoRA SFT + DPO</h3>
+      <p class="desc">Full LLaMA-Factory style workflow: apply LoRA, train with SFTTrainer/DPOTrainer, save adapter, reload &amp; merge. Tests tf32 and gradient checkpointing off paths.</p>
+      <ul class="test-list">
+        <li><span class="test-dot passed"></span><span class="test-name">test_llamafactory_style_lora_sft</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_llamafactory_style_lora_dpo</span><span class="test-status passed">pass</span></li>
+      </ul>
+      <div class="platform-row">
+        <span class="platform-chip">macOS</span>
+        <span class="platform-chip">Linux</span>
+      </div>
+    </div>
+
+    <!-- Lightning Fabric -->
+    <div class="suite-card">
+      <div class="card-top">
+        <span class="framework">Lightning Fabric</span>
+        <span class="status-pill passed">4/4 Passed</span>
+      </div>
+      <h3>CUDA Accelerator Integration</h3>
+      <p class="desc">CUDAAccelerator auto-selection, model+optimizer setup on fake CUDA, forward-backward-step cycle, and bf16-true mixed precision.</p>
+      <ul class="test-list">
+        <li><span class="test-dot passed"></span><span class="test-name">test_fabric_cuda_accelerator_selection</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_fabric_model_setup</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_fabric_training_step</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot passed"></span><span class="test-name">test_fabric_bf16_precision</span><span class="test-status passed">pass</span></li>
+      </ul>
+      <div class="platform-row">
+        <span class="platform-chip">macOS</span>
+        <span class="platform-chip">Linux</span>
+      </div>
+    </div>
+
+    <!-- LitGPT -->
+    <div class="suite-card">
+      <div class="card-top">
+        <span class="framework">LitGPT</span>
+        <span class="status-pill passed">1/1 + 1 skip</span>
+      </div>
+      <h3>Fabric Training Loop</h3>
+      <p class="desc">Simulates LitGPT&rsquo;s Fabric-based GPT training: tiny transformer, next-token loss, gradient steps, checkpoint save/load via <code>fabric.save()</code>.</p>
+      <ul class="test-list">
+        <li><span class="test-dot passed"></span><span class="test-name">test_litgpt_fabric_training_loop</span><span class="test-status passed">pass</span></li>
+        <li><span class="test-dot skipped"></span><span class="test-name">test_litgpt_importable</span><span class="test-status skipped">skip</span></li>
+      </ul>
+      <div class="platform-row">
+        <span class="platform-chip">macOS</span>
+        <span class="platform-chip">Linux</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ==================== What was patched ==================== -->
+<div class="arch-section">
+  <h2>What Was Patched (Phase 2)</h2>
+  <div class="arch-grid">
+    <div class="arch-card">
+      <h3>New Stubs Added</h3>
+      <ul>
+        <li><code>torch._C._cuda_clearCublasWorkspaces</code> &mdash; Lightning Fabric calls this during CUDA memory cleanup</li>
+        <li><code>transformers.utils.is_torch_cuda_available</code> &mdash; LLaMA-Factory reads this to decide CUDA vs CPU path</li>
+        <li><code>transformers.utils.is_torch_bf16_gpu_available</code> &mdash; LLaMA-Factory reads this for dtype selection</li>
+      </ul>
+    </div>
+    <div class="arch-card">
+      <h3>Matmul Precision Fix</h3>
+      <p>Torch 2.9+ introduced per-backend matmul precision tracking. Setting <code>backends.cuda.matmul.allow_tf32</code> (new API) then calling <code>torch.get_float32_matmul_precision()</code> (legacy API) throws <code>RuntimeError</code>.</p>
+      <p style="margin-top:8px">FakeGPU now intercepts both <code>get/set_float32_matmul_precision</code> and manages precision state in Python, bypassing the C++ backend entirely. This fixes cross-test contamination between HF Trainer (tf32=True) and Lightning Fabric.</p>
+    </div>
+    <div class="arch-card">
+      <h3>Pytest Configuration</h3>
+      <p>Added <code>[tool.pytest.ini_options]</code> to <code>pyproject.toml</code> with <code>testpaths</code> and <code>pythonpath</code> pointing to <code>test/</code>. This ensures <code>hf_test_utils</code> is importable on all platforms (previously worked by accident on macOS).</p>
+    </div>
+    <div class="arch-card">
+      <h3>Known Limitations</h3>
+      <ul>
+        <li>bitsandbytes / QLoRA &mdash; requires real CUDA kernels</li>
+        <li>Flash Attention &mdash; requires CUDA kernel</li>
+        <li>DeepSpeed ZeRO &mdash; requires CUDA kernel</li>
+        <li><code>cudaLaunchKernel</code> is a no-op; no actual GPU computation</li>
+        <li>Stream/Event are API stubs only (no real async)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== Footer ==================== -->
+<footer>
+  FakeGPU Framework Compatibility &middot; Generated 2026-04-20 &middot; torch 2.9.1 &middot; Python 3.11.9
+</footer>
+
+</div>
+</body>
+</html>

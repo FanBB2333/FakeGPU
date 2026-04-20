@@ -159,7 +159,16 @@
   <div class="sidebar-header">
     <div class="eyebrow">FakeGPU</div>
     <h1>Test Reports</h1>
-    <div class="sub">PyTorch Compatibility</div>
+    <div class="sub">PyTorch Compatibility &amp; Frameworks</div>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-label">Framework Compatibility</div>
+    <button class="nav-item" data-report="frameworks" onclick="navigate('frameworks')">
+      <span class="dot pass"></span>
+      Frameworks Overview
+      <span class="badge">14/14</span>
+    </button>
   </div>
 
   <div class="nav-group">
@@ -209,17 +218,21 @@
       <h2>FakeGPU Test Reports</h2>
       <p>Select a report from the sidebar, or choose one below.</p>
       <div class="landing-cards">
-        <a class="landing-card featured" onclick="navigate('matrix'); return false;" href="#matrix">
+        <a class="landing-card featured" onclick="navigate('frameworks'); return false;" href="#frameworks">
+          <div class="lc-title">Framework Compatibility</div>
+          <div class="lc-desc">HuggingFace, LLaMA-Factory, Lightning Fabric, LitGPT &mdash; all passing</div>
+          <div class="chip-row">
+            <span class="chip-sm">HF Trainer</span>
+            <span class="chip-sm">PEFT</span>
+            <span class="chip-sm">TRL</span>
+            <span class="chip-sm">LLaMA-Factory</span>
+            <span class="chip-sm">Lightning</span>
+            <span class="chip-sm">LitGPT</span>
+          </div>
+        </a>
+        <a class="landing-card" onclick="navigate('matrix'); return false;" href="#matrix">
           <div class="lc-title">Compatibility Matrix</div>
           <div class="lc-desc">Cross-version overview across PyTorch 2.6&ndash;2.11</div>
-          <div class="chip-row">
-            <span class="chip-sm">2.6.0</span>
-            <span class="chip-sm">2.7.1</span>
-            <span class="chip-sm">2.8.0</span>
-            <span class="chip-sm">2.9.1</span>
-            <span class="chip-sm">2.10.0</span>
-            <span class="chip-sm">2.11.0</span>
-          </div>
         </a>
         <a class="landing-card" onclick="navigate('v2.11.0'); return false;" href="#v2.11.0">
           <div class="lc-title">torch 2.11.0</div>
@@ -237,6 +250,7 @@
 <script>
 // Report path mapping (relative to this index.html in test-results/)
 const REPORTS = {
+  'frameworks': 'framework-compat/report.html',
   'matrix':     'torch-patch-matrix/report.html',
   'v2.6.0':     'torch-patch-matrix/2.6.0/report.html',
   'v2.7.1':     'torch-patch-matrix/2.7.1/report.html',

@@ -1,0 +1,22 @@
+/Users/l1ght/miniforge3/envs/py311/lib/python3.11/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+============================= test session starts ==============================
+platform darwin -- Python 3.11.9, pytest-8.3.2, pluggy-1.5.0 -- /Users/l1ght/miniforge3/envs/py311/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/l1ght/repos/FakeGPU
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.4.0, xonsh-0.18.3
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+test/test_trl_sft.py::test_trl_sft_tiny_flow PASSED                      [100%]
+
+=============================== warnings summary ===============================
+test/test_trl_sft.py::test_trl_sft_tiny_flow
+  /Users/l1ght/repos/FakeGPU/fakegpu/_runtime.py:97: UserWarning: fakegpu.torch_patch: enabled upstream FakeCudaTensor backend with FakeGPU enhancements (memory tracking, GPU profiles, cross-device validation).
+    return patch(num_devices=num_devices, device_name=device_name)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========================= 1 passed, 1 warning in 5.65s =========================

@@ -1,0 +1,122 @@
+{
+  "generated_at": "2026-04-20",
+  "torch_version": "2.9.1",
+  "python_version": "3.11.9",
+  "platforms": ["macOS (darwin)", "Linux (100.71.234.15)"],
+  "phase": "Phase 1 + Phase 2 — Framework Compatibility",
+  "suites": [
+    {
+      "phase": 1,
+      "framework": "HuggingFace Transformers",
+      "name": "hf_trainer_cuda",
+      "description": "HF Trainer CUDA code path",
+      "tests": [
+        {"name": "test_trainer_runs_in_cuda_path_without_use_cpu", "status": "passed"},
+        {"name": "test_hf_cuda_surface_reports_cuda_build", "status": "passed"},
+        {"name": "test_cuda_random_fork_rng_restores_cpu_rng_state", "status": "passed"},
+        {"name": "test_tree_map_rewraps_plain_dataclass_tensors", "status": "passed"}
+      ],
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "status": "passed",
+      "log_path": "test-results/framework-compat/hf_trainer_cuda.log",
+      "platform": "macOS + Linux"
+    },
+    {
+      "phase": 1,
+      "framework": "PEFT",
+      "name": "peft_lora",
+      "description": "PEFT LoRA full lifecycle (apply, train, save, reload, merge)",
+      "tests": [
+        {"name": "test_peft_lora_tiny_flow", "status": "passed"}
+      ],
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "status": "passed",
+      "log_path": "test-results/framework-compat/peft_lora.log",
+      "platform": "macOS + Linux"
+    },
+    {
+      "phase": 1,
+      "framework": "TRL",
+      "name": "trl_sft",
+      "description": "TRL SFTTrainer on fake CUDA",
+      "tests": [
+        {"name": "test_trl_sft_tiny_flow", "status": "passed"}
+      ],
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "status": "passed",
+      "log_path": "test-results/framework-compat/trl_sft.log",
+      "platform": "macOS + Linux"
+    },
+    {
+      "phase": 1,
+      "framework": "TRL",
+      "name": "trl_dpo",
+      "description": "TRL DPOTrainer on fake CUDA",
+      "tests": [
+        {"name": "test_trl_dpo_tiny_flow", "status": "passed"}
+      ],
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "status": "passed",
+      "log_path": "test-results/framework-compat/trl_dpo.log",
+      "platform": "macOS + Linux"
+    },
+    {
+      "phase": 2,
+      "framework": "LLaMA-Factory",
+      "name": "llamafactory_sft",
+      "description": "LLaMA-Factory style LoRA SFT + DPO workflows",
+      "tests": [
+        {"name": "test_llamafactory_style_lora_sft", "status": "passed"},
+        {"name": "test_llamafactory_style_lora_dpo", "status": "passed"}
+      ],
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "status": "passed",
+      "log_path": "test-results/framework-compat/llamafactory_sft.log",
+      "platform": "macOS + Linux"
+    },
+    {
+      "phase": 2,
+      "framework": "Lightning Fabric",
+      "name": "lightning_fabric",
+      "description": "Lightning Fabric CUDA accelerator, model setup, training, bf16",
+      "tests": [
+        {"name": "test_fabric_cuda_accelerator_selection", "status": "passed"},
+        {"name": "test_fabric_model_setup", "status": "passed"},
+        {"name": "test_fabric_training_step", "status": "passed"},
+        {"name": "test_fabric_bf16_precision", "status": "passed"}
+      ],
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "status": "passed",
+      "log_path": "test-results/framework-compat/lightning_fabric.log",
+      "platform": "macOS + Linux"
+    },
+    {
+      "phase": 2,
+      "framework": "LitGPT",
+      "name": "litgpt_finetune",
+      "description": "LitGPT Fabric-based training loop + checkpoint save/load",
+      "tests": [
+        {"name": "test_litgpt_fabric_training_loop", "status": "passed"},
+        {"name": "test_litgpt_importable", "status": "skipped"}
+      ],
+      "passed": 1,
+      "failed": 0,
+      "skipped": 1,
+      "status": "passed",
+      "log_path": "test-results/framework-compat/litgpt_finetune.log",
+      "platform": "macOS + Linux"
+    }
+  ]
+}
