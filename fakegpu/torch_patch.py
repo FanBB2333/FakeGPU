@@ -1360,6 +1360,78 @@ def _patch_nccl_surface(torch_mod: Any) -> None:
     nccl_mod.version = lambda: (2, 21, 5)
 
 
+def _patch_accelerate_utils() -> None:
+    """Patch ``accelerate`` detection helpers so the library treats FakeGPU as real CUDA.
+
+    When ``fakegpu.patch_torch()`` has already set ``torch.cuda.is_available()``
+    to ``True``, accelerate's ``is_cuda_available()`` normally picks that up.
+    However some helpers cache their result at import time or check extra
+    conditions (like ``torch.cuda.device_count() > 0``).  We explicitly patch
+    them here so that accelerate **always** sees CUDA as available regardless
+    of import order.
+    """
+    try:
+        import accelerate.utils.imports as _aui
+    except ImportError:
+        return
+
+    _aui.is_cuda_available = lambda: True
+    if hasattr(_aui, "is_bf16_available"):
+        _aui.is_bf16_available = lambda: True
+
+    # Re-export to top-level accelerate.utils if the names are there
+    try:
+        import accelerate.utils as _au
+
+        _au.is_cuda_available = _aui.is_cuda_available
+        if hasattr(_au, "is_bf16_available"):
+            _au.is_bf16_available = _aui.is_bf16_available
+    except (ImportError, AttributeError):
+        pass
+
+
+def _patch_dist_group_fallback(torch_mod: Any) -> None:
+    """Ensure ``torch.distributed._get_default_group`` and ``new_group`` are
+    available even when the PyTorch ``fake`` distributed backend fails to init.
+
+    When the ``fake`` backend succeeds (PyTorch ≥ 2.1), these functions are
+    already provided by the real C++ ProcessGroup layer.  This fallback only
+    activates when they are absent or broken, so that downstream code like
+    FSDP can still call ``_get_default_group()`` without crashing.
+    """
+    import torch.distributed as dist
+
+    # ---- _get_default_group fallback ----
+    try:
+        from torch.distributed.distributed_c10d import (
+            _get_default_group as _real_get_default_group,
+        )
+    except ImportError:
+        _real_get_default_group = None
+
+    if _real_get_default_group is None:
+        # Very old PyTorch — provide a simple stub
+        _fake_default_group = types.SimpleNamespace(
+            rank=lambda: 0,
+            size=lambda: 1,
+        )
+
+        def _fallback_get_default_group():
+            return _fake_default_group
+
+        dist._get_default_group = _fallback_get_default_group  # type: ignore[attr-defined]
+
+    # ---- new_group fallback ----
+    if not hasattr(dist, "new_group") or dist.new_group is None:
+        def _fallback_new_group(ranks=None, timeout=None, backend=None, pg_options=None):
+            return types.SimpleNamespace(
+                rank=lambda: 0,
+                size=lambda: (len(ranks) if ranks else 1),
+            )
+
+        dist.new_group = _fallback_new_group  # type: ignore[attr-defined]
+
+
 def _patch_upstream_fakecuda_tensor_compat(upstream: Any, torch_mod: Any) -> None:
     fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
     if fake_tensor_cls is None or getattr(fake_tensor_cls, "_fakegpu_set_patched", False):
@@ -2002,9 +2074,11 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         pass
     _patch_cuda_rng_surface(torch_mod)
     _patch_nccl_surface(torch_mod)
+    _patch_dist_group_fallback(torch_mod)
     _patch_fsdp_device_handling()
     _patch_fsdp_runtime_compat(getattr(upstream, "FakeCudaTensor", None))
     _patch_transformers_utils()
+    _patch_accelerate_utils()
 
     # ---- 8. Terminal report ----
     atexit.register(_dump_terminal_summary)
@@ -2445,8 +2519,10 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         pass
     _patch_cuda_rng_surface(torch)
     _patch_nccl_surface(torch)
+    _patch_dist_group_fallback(torch)
     _patch_fsdp_device_handling()
     _patch_transformers_utils()
+    _patch_accelerate_utils()
 
     _patched = True
     _patch_result = PatchResult(
