@@ -1387,8 +1387,34 @@ def _patch_upstream_fakecuda_tensor_compat(upstream: Any, torch_mod: Any) -> Non
         return self
 
     fake_tensor_cls.set_ = _patched_set_
+    fake_tensor_cls.record_stream = lambda self, stream: None
     fake_tensor_cls.is_cpu = property(lambda self: False)
     fake_tensor_cls._fakegpu_set_patched = True
+
+
+def _patch_upstream_collective_tensor_compat(upstream: Any) -> None:
+    if getattr(upstream, "_fakegpu_collective_tensor_patched", False):
+        return
+
+    def _patched_copy_collective_tensor(destination: Any, source: Any) -> None:
+        dst = upstream.unwrap_tensor(destination)
+        src = upstream.unwrap_tensor(source)
+        if dst.numel() == src.numel():
+            dst.copy_(src.reshape_as(dst))
+            return
+        if dst.numel() < src.numel():
+            dst.copy_(src.reshape(-1)[: dst.numel()].reshape_as(dst))
+            return
+
+        flat_dst = dst.reshape(-1)
+        flat_src = src.reshape(-1)
+        src_numel = flat_src.numel()
+        for offset in range(0, flat_dst.numel(), src_numel):
+            end = min(offset + src_numel, flat_dst.numel())
+            flat_dst[offset:end].copy_(flat_src[: end - offset])
+
+    upstream._copy_collective_tensor = _patched_copy_collective_tensor
+    upstream._fakegpu_collective_tensor_patched = True
 
 
 def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
@@ -1789,6 +1815,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     upstream.wrap_tensor = _hooked_wrap_tensor
     _patch_upstream_fakecuda_tensor_compat(upstream, torch_mod)
+    _patch_upstream_collective_tensor_compat(upstream)
     _patch_upstream_all_gather_object(upstream, torch_mod)
     _patch_upstream_process_group_compat(upstream, torch_mod)
 
