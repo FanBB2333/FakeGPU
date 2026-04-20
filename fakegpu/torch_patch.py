@@ -1218,6 +1218,82 @@ def _patch_hf_cuda_surface(torch_mod: Any) -> None:
     cudnn_backend.deterministic = False
     cudnn_backend.allow_tf32 = False
 
+    # Lightning Fabric calls torch._C._cuda_clearCublasWorkspaces in _clear_cuda_memory()
+    if not hasattr(torch_mod._C, "_cuda_clearCublasWorkspaces"):
+        torch_mod._C._cuda_clearCublasWorkspaces = lambda: None
+
+    # Patch matmul precision getters/setters to avoid C++ per-backend state conflicts.
+    # In torch 2.9+, setting allow_tf32 via backends.cuda.matmul uses the new per-backend
+    # API, while torch.get_float32_matmul_precision() uses the legacy global getter.
+    # Mixing these throws RuntimeError. We manage precision state in Python instead.
+    _matmul_precision = {"value": "highest"}
+
+    _precision_to_tf32 = {"highest": False, "high": True, "medium": True}
+    _tf32_to_precision = {False: "highest", True: "high"}
+
+    def _fake_set_float32_matmul_precision(precision: str) -> None:
+        if precision not in ("highest", "high", "medium"):
+            raise ValueError(
+                f"Invalid precision {precision!r}, must be 'highest', 'high', or 'medium'"
+            )
+        _matmul_precision["value"] = precision
+        matmul_backend.allow_tf32 = _precision_to_tf32[precision]
+
+    def _fake_get_float32_matmul_precision() -> str:
+        return _matmul_precision["value"]
+
+    torch_mod.set_float32_matmul_precision = _fake_set_float32_matmul_precision
+    torch_mod.get_float32_matmul_precision = _fake_get_float32_matmul_precision
+
+    # Also intercept writes to matmul.allow_tf32 so they stay consistent
+    _orig_matmul_type = type(matmul_backend)
+    if hasattr(_orig_matmul_type, "allow_tf32") and isinstance(
+        getattr(_orig_matmul_type, "allow_tf32", None), property
+    ):
+        # Real cuBLASModule has allow_tf32 as a property — override the class setter
+        _orig_setter = _orig_matmul_type.allow_tf32.fset
+
+        @_orig_matmul_type.allow_tf32.setter  # type: ignore[attr-defined]
+        def _intercept_tf32(self: Any, value: bool) -> None:
+            _matmul_precision["value"] = _tf32_to_precision.get(value, "highest")
+            if _orig_setter is not None:
+                try:
+                    _orig_setter(self, value)
+                except Exception:
+                    pass  # C++ backend unavailable — fine, Python state is authoritative
+    else:
+        # SimpleNamespace or plain object — wrap with a descriptor is overkill;
+        # just sync on get
+        _real_get = torch_mod.get_float32_matmul_precision
+
+        def _synced_get() -> str:
+            tf32_val = getattr(matmul_backend, "allow_tf32", False)
+            return _tf32_to_precision.get(tf32_val, "highest")
+
+        torch_mod.get_float32_matmul_precision = _synced_get
+
+
+def _patch_transformers_utils() -> None:
+    """Patch transformers.utils helpers for LLaMA-Factory / LitGPT compatibility."""
+    try:
+        import transformers.utils.import_utils as _tu
+    except ImportError:
+        return
+
+    if not getattr(_tu, "is_torch_cuda_available", lambda: False)():
+        _tu.is_torch_cuda_available = lambda: True
+
+    _tu.is_torch_bf16_gpu_available = lambda: True
+
+    # Also patch the top-level re-exports if they exist
+    try:
+        import transformers.utils as _tu_top
+
+        _tu_top.is_torch_cuda_available = _tu.is_torch_cuda_available
+        _tu_top.is_torch_bf16_gpu_available = _tu.is_torch_bf16_gpu_available
+    except (ImportError, AttributeError):
+        pass
+
 
 def _build_fake_fork_rng(torch_mod: Any):
     @contextmanager
@@ -1588,6 +1664,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         pass
     _patch_cuda_rng_surface(torch_mod)
     _patch_nccl_surface(torch_mod)
+    _patch_transformers_utils()
 
     # ---- 8. Terminal report ----
     atexit.register(_dump_terminal_summary)
@@ -2010,6 +2087,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         pass
     _patch_cuda_rng_surface(torch)
     _patch_nccl_surface(torch)
+    _patch_transformers_utils()
 
     _patched = True
     _patch_result = PatchResult(
