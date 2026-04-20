@@ -2,6 +2,10 @@
 requires = ["setuptools>=64", "wheel", "cmake>=3.14"]
 build-backend = "setuptools.build_meta"
 
+[tool.pytest.ini_options]
+testpaths = ["test"]
+pythonpath = ["test"]
+
 [tool.fakegpu.uv]
 # Dependency sets consumed by scripts (especially for macOS→Linux VM flows).
 # Keep these under `[tool.*]` to avoid impacting the setuptools packaging config.
