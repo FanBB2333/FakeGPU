@@ -1,0 +1,60 @@
+{
+  "generated_at": "2026-04-20",
+  "git_commit": "e21818b",
+  "torch_version": "2.9.1",
+  "python_version": "3.11.9",
+  "platforms": [
+    "macOS (local workspace)",
+    "Linux (100.71.234.15 clean clone)"
+  ],
+  "phase": "Phase 3 — torchtune + FSDP",
+  "strategy": "Option A — Fake ProcessGroup + Real FSDP",
+  "suites": [
+    {
+      "framework": "FSDP",
+      "name": "fsdp_basic",
+      "description": "world_size=1 training smoke + world_size=2 full-shard init/forward/backward lifecycle",
+      "tests": [
+        { "name": "test_fsdp_no_shard_world_size_1_train_step", "status": "passed" },
+        { "name": "test_fsdp_full_shard_rebinds_flat_param_storage", "status": "passed" },
+        { "name": "test_fsdp_full_shard_forward_backward_smoke", "status": "passed" }
+      ],
+      "passed": 3,
+      "failed": 0,
+      "status": "passed",
+      "platform": "macOS + Linux"
+    },
+    {
+      "framework": "FSDP",
+      "name": "fsdp_state_dict",
+      "description": "FULL_STATE_DICT roundtrip + LOCAL_STATE_DICT shard metadata",
+      "tests": [
+        { "name": "test_fsdp_full_state_dict_roundtrip", "status": "passed" },
+        { "name": "test_fsdp_local_state_dict_contains_flat_param", "status": "passed" }
+      ],
+      "passed": 2,
+      "failed": 0,
+      "status": "passed",
+      "platform": "macOS + Linux"
+    },
+    {
+      "framework": "torchtune-style single-card fine-tuning",
+      "name": "torchtune_finetune",
+      "description": "CUDA memory_stats surface + tiny Qwen-style single-device train step",
+      "tests": [
+        { "name": "test_memory_stats_keys", "status": "passed" },
+        { "name": "test_torchtune_style_single_device_finetune_smoke", "status": "passed" }
+      ],
+      "passed": 2,
+      "failed": 0,
+      "status": "passed",
+      "platform": "macOS + Linux"
+    }
+  ],
+  "verification": {
+    "macos_command": "pytest -q test/test_fsdp_basic.py test/test_fsdp_state_dict.py test/test_torchtune_finetune.py test/test_phase2_cuda_api_surface.py",
+    "macos_result": "7 passed in 23.29s",
+    "linux_command": "/home/l1ght/anaconda3/envs/fakegpu-macos/bin/python -m pytest -q test/test_fsdp_basic.py test/test_fsdp_state_dict.py test/test_torchtune_finetune.py test/test_phase2_cuda_api_surface.py",
+    "linux_result": "7 passed in 18.27s"
+  }
+}

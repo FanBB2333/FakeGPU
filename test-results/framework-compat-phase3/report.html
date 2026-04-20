@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FakeGPU · Phase 3 Compatibility Report</title>
+<style>
+  :root {
+    --bg: #f1ece4;
+    --paper: #fbf7f1;
+    --panel: #efe8dc;
+    --ink: #3e3a34;
+    --muted: #736c63;
+    --line: #d7cec0;
+    --green: #8da183;
+    --green-dk: #61745a;
+    --blue: #8ca2b5;
+    --blue-dk: #60778b;
+    --sand: #c7ab82;
+    --rose: #c5968c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif;
+    background: radial-gradient(circle at top, #faf6ef 0%, var(--bg) 58%);
+    color: var(--ink);
+    line-height: 1.65;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 56px 28px 88px; }
+  .hero {
+    padding: 44px 36px;
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    background: linear-gradient(140deg, var(--paper) 0%, var(--panel) 100%);
+    box-shadow: 0 14px 40px rgba(62, 58, 52, 0.06);
+    margin-bottom: 28px;
+  }
+  .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  h1 {
+    font-size: 34px;
+    line-height: 1.15;
+    margin-bottom: 10px;
+  }
+  .sub {
+    color: var(--muted);
+    font-size: 15px;
+    max-width: 760px;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 18px;
+  }
+  .chip {
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.62);
+    padding: 6px 12px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .chip.pass {
+    background: var(--green);
+    color: white;
+    border-color: var(--green-dk);
+  }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .stat {
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: var(--paper);
+    padding: 22px 18px;
+    text-align: center;
+  }
+  .stat .n {
+    font-size: 34px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .stat .k {
+    margin-top: 6px;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .stat.green .n { color: var(--green-dk); }
+  .stat.blue .n { color: var(--blue-dk); }
+  .stat.sand .n { color: #9b7e56; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 18px;
+    margin-bottom: 30px;
+  }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: var(--paper);
+    padding: 22px;
+  }
+  .card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .label {
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 700;
+  }
+  .pill {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--green);
+    color: white;
+    white-space: nowrap;
+  }
+  .card h2 {
+    font-size: 18px;
+    margin-bottom: 6px;
+  }
+  .card p {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  ul {
+    list-style: none;
+    display: grid;
+    gap: 8px;
+  }
+  li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    border-top: 1px solid #e8dfd3;
+    padding-top: 8px;
+  }
+  li:first-child {
+    border-top: none;
+    padding-top: 0;
+  }
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green-dk);
+    flex-shrink: 0;
+  }
+  .note-grid {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    gap: 18px;
+  }
+  .note h3 {
+    font-size: 16px;
+    margin-bottom: 10px;
+  }
+  .note p, .note li {
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .note code {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12px;
+    background: #f5efe6;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 2px 6px;
+  }
+  footer {
+    margin-top: 30px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+  }
+  @media (max-width: 860px) {
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .note-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="eyebrow">FakeGPU Phase 3</div>
+      <h1>torchtune + FSDP Compatibility</h1>
+      <p class="sub">Single-card torchtune-style fine-tuning and Real FSDP full-shard simulation, validated on macOS and on a Linux clean clone tracking the pushed <code>main</code> branch.</p>
+      <div class="meta">
+        <span class="chip">torch 2.9.1</span>
+        <span class="chip">Python 3.11.9</span>
+        <span class="chip">Strategy: Fake PG + Real FSDP</span>
+        <span class="chip pass">7 / 7 passed</span>
+      </div>
+    </section>
+
+    <section class="stats">
+      <div class="stat green">
+        <div class="n">7</div>
+        <div class="k">Tests Passed</div>
+      </div>
+      <div class="stat blue">
+        <div class="n">3</div>
+        <div class="k">Suites</div>
+      </div>
+      <div class="stat sand">
+        <div class="n">2</div>
+        <div class="k">Platforms</div>
+      </div>
+      <div class="stat green">
+        <div class="n">0</div>
+        <div class="k">Failures</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <div class="card-top">
+          <span class="label">FSDP</span>
+          <span class="pill">3 / 3 passed</span>
+        </div>
+        <h2>Basic Lifecycle</h2>
+        <p>Verifies `world_size=1` training smoke plus `world_size=2` flat-param rebinding and full-shard forward/backward execution.</p>
+        <ul>
+          <li><span class="dot"></span><span><code>test_fsdp_no_shard_world_size_1_train_step</code></span></li>
+          <li><span class="dot"></span><span><code>test_fsdp_full_shard_rebinds_flat_param_storage</code></span></li>
+          <li><span class="dot"></span><span><code>test_fsdp_full_shard_forward_backward_smoke</code></span></li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <div class="card-top">
+          <span class="label">FSDP</span>
+          <span class="pill">2 / 2 passed</span>
+        </div>
+        <h2>State Dict</h2>
+        <p>Covers `FULL_STATE_DICT` roundtrip plus `LOCAL_STATE_DICT` shard metadata emission under the single-process fake world.</p>
+        <ul>
+          <li><span class="dot"></span><span><code>test_fsdp_full_state_dict_roundtrip</code></span></li>
+          <li><span class="dot"></span><span><code>test_fsdp_local_state_dict_contains_flat_param</code></span></li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <div class="card-top">
+          <span class="label">torchtune-style</span>
+          <span class="pill">2 / 2 passed</span>
+        </div>
+        <h2>Single-Card Fine-Tune</h2>
+        <p>Expands `torch.cuda.memory_stats()` to the keys torchtune expects and validates a tiny Qwen-style single-device optimization step.</p>
+        <ul>
+          <li><span class="dot"></span><span><code>test_memory_stats_keys</code></span></li>
+          <li><span class="dot"></span><span><code>test_torchtune_style_single_device_finetune_smoke</code></span></li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="note-grid">
+      <article class="card note">
+        <h3>Verification Commands</h3>
+        <ul>
+          <li><span class="dot"></span><span>macOS: <code>pytest -q test/test_fsdp_basic.py test/test_fsdp_state_dict.py test/test_torchtune_finetune.py test/test_phase2_cuda_api_surface.py</code></span></li>
+          <li><span class="dot"></span><span>Linux: <code>/home/l1ght/anaconda3/envs/fakegpu-macos/bin/python -m pytest -q test/test_fsdp_basic.py test/test_fsdp_state_dict.py test/test_torchtune_finetune.py test/test_phase2_cuda_api_surface.py</code></span></li>
+        </ul>
+      </article>
+
+      <article class="card note">
+        <h3>Key Compatibility Patches</h3>
+        <ul>
+          <li><span class="dot"></span><span>Delegate patched distributed init/destroy to PyTorch's `fake` backend so FSDP sees a real default `ProcessGroup`.</span></li>
+          <li><span class="dot"></span><span>Patch `FakeCudaTensor.set_`, `record_stream`, and collective tensor copy semantics for FSDP sharding/unsharding on both vendored and installed upstream sources.</span></li>
+          <li><span class="dot"></span><span>Return torchtune-required `memory_stats` keys from both upstream and standalone FakeGPU paths.</span></li>
+        </ul>
+      </article>
+    </section>
+
+    <footer>
+      Generated on 2026-04-20 from commit <code>e21818b</code>. Platforms: macOS local workspace + Linux clean clone on <code>100.71.234.15</code>.
+    </footer>
+  </div>
+</body>
+</html>
