@@ -45,6 +45,8 @@ _DIST_INITIALIZED = False
 _DIST_BACKEND = "nccl"
 _DIST_WORLD_SIZE = 1
 _DIST_RANK = 0
+_ORIG_DIST_INIT: Any = None
+_ORIG_DIST_DESTROY: Any = None
 _DEFAULT_STREAMS = {}
 _CURRENT_STREAMS = {}
 _NEXT_STREAM_ID = 1
@@ -389,11 +391,44 @@ def _dist_init_process_group(
     _DIST_BACKEND = "nccl" if backend is None else str(backend)
     _DIST_WORLD_SIZE = 1 if world_size in (-1, None) else int(world_size)
     _DIST_RANK = 0 if rank in (-1, None) else int(rank)
+
+    # Create a real ProcessGroup using PyTorch's ``fake`` distributed backend.
+    # FSDP and other distributed modules call ``_get_default_group()`` which
+    # requires a real C++ ProcessGroup instance — our global-state-only
+    # approach is not sufficient.  The ``fake`` backend (PyTorch 2.1+)
+    # provides an in-process ProcessGroup that satisfies all type checks
+    # without needing NCCL or gloo.
+    if _ORIG_DIST_INIT is not None:
+        import os
+
+        _env_set: list[str] = []
+        if "MASTER_ADDR" not in os.environ:
+            os.environ["MASTER_ADDR"] = "localhost"
+            _env_set.append("MASTER_ADDR")
+        if "MASTER_PORT" not in os.environ:
+            os.environ["MASTER_PORT"] = "29500"
+            _env_set.append("MASTER_PORT")
+        try:
+            _ORIG_DIST_INIT(
+                backend="fake",
+                rank=_DIST_RANK,
+                world_size=_DIST_WORLD_SIZE,
+            )
+        except Exception:
+            pass  # Fall back to global-state-only mode
+        finally:
+            for key in _env_set:
+                os.environ.pop(key, None)
     return None
 
 
 def _dist_destroy_process_group(group: Any = None) -> None:
     global _DIST_INITIALIZED, _DIST_WORLD_SIZE, _DIST_RANK
+    if _ORIG_DIST_DESTROY is not None:
+        try:
+            _ORIG_DIST_DESTROY(group)
+        except Exception:
+            pass
     _DIST_INITIALIZED = False
     _DIST_WORLD_SIZE = 1
     _DIST_RANK = 0
@@ -448,7 +483,17 @@ def _copy_collective_tensor(destination: torch.Tensor, source: torch.Tensor) -> 
     if dst.numel() == src.numel():
         dst.copy_(src.reshape_as(dst))
         return
-    dst.copy_(src.reshape(-1)[: dst.numel()].reshape_as(dst))
+    if dst.numel() < src.numel():
+        # reduce_scatter: output is smaller than input — take first chunk
+        dst.copy_(src.reshape(-1)[: dst.numel()].reshape_as(dst))
+    else:
+        # all_gather: output is larger than input — replicate input to fill
+        flat_dst = dst.reshape(-1)
+        flat_src = src.reshape(-1)
+        src_numel = flat_src.numel()
+        for offset in range(0, flat_dst.numel(), src_numel):
+            end = min(offset + src_numel, flat_dst.numel())
+            flat_dst[offset:end].copy_(flat_src[: end - offset])
 
 
 def _dist_all_gather_object(object_list: list[Any], obj: Any, group: Any = None) -> None:
@@ -623,6 +668,10 @@ class FakeCudaTensor(torch.Tensor):
         )
         sync_parameter_grads()
 
+    def record_stream(self, stream) -> None:
+        """No-op for FakeCudaTensor — FSDP calls this during post-backward."""
+        pass
+
 
 def wrap_tensor(t: torch.Tensor, device_index: int | None = None) -> FakeCudaTensor:
     if isinstance(t, FakeCudaTensor):
@@ -657,6 +706,10 @@ def sync_parameter_grads() -> None:
 
 
 def _tree_map(fn, obj):
+    # torch.Size is a tuple subclass but should be preserved as-is.
+    # Its elements are plain ints (no tensors to unwrap/wrap).
+    if isinstance(obj, torch.Size):
+        return obj
     if isinstance(obj, tuple):
         return tuple(_tree_map(fn, item) for item in obj)
     if isinstance(obj, list):
@@ -1148,6 +1201,12 @@ def enable() -> None:
     import torch.nn.parallel.comm
     import torch.nn.parallel.distributed
     import torch.nn.parallel
+
+    # Save original dist functions before patching — needed for fake backend
+    # delegation so FSDP gets a real ProcessGroup.
+    global _ORIG_DIST_INIT, _ORIG_DIST_DESTROY
+    _ORIG_DIST_INIT = torch.distributed.init_process_group
+    _ORIG_DIST_DESTROY = torch.distributed.destroy_process_group
     import torch.nn.parallel.data_parallel
 
     _ORIG_TENSOR_TO = torch.Tensor.to

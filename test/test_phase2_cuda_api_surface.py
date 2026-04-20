@@ -22,7 +22,13 @@ def main() -> None:
     seed_after_seed_all = torch.cuda.initial_seed()
     assert isinstance(seed_after_seed_all, int)
 
-    assert torch.cuda.memory_stats() == {}
+    memory_stats = torch.cuda.memory_stats()
+    assert "active_bytes.all.current" in memory_stats
+    assert "active_bytes.all.peak" in memory_stats
+    assert "allocated_bytes.all.current" in memory_stats
+    assert "allocated_bytes.all.peak" in memory_stats
+    assert "reserved_bytes.all.current" in memory_stats
+    assert "reserved_bytes.all.peak" in memory_stats
     assert torch.cuda.memory_summary() == "FakeGPU: no real CUDA memory to report.\n"
     assert torch.cuda.memory_snapshot() == []
     free_mem, total_mem = torch.cuda.mem_get_info()
@@ -69,7 +75,10 @@ def main() -> None:
     assert cuda_memory.memory_reserved() == 0
     assert cuda_memory.memory_cached() == 0
     assert cuda_memory.max_memory_cached() == 0
-    assert cuda_memory.memory_stats() == {}
+    sub_memory_stats = cuda_memory.memory_stats()
+    assert "active_bytes.all.current" in sub_memory_stats
+    assert "allocated_bytes.all.current" in sub_memory_stats
+    assert "reserved_bytes.all.current" in sub_memory_stats
     assert cuda_memory.memory_summary() == "FakeGPU: no real CUDA memory to report.\n"
     assert cuda_memory.memory_snapshot() == []
     sub_free_mem, sub_total_mem = cuda_memory.mem_get_info()

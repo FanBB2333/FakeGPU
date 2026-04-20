@@ -1011,8 +1011,39 @@ def _stub_reset_accumulated_memory_stats(device: Any = None) -> None:
     pass
 
 
+def _build_memory_stats_dict(current: int, peak: int) -> dict[str, Any]:
+    current_i = int(current)
+    peak_i = int(max(current, peak))
+    return {
+        "active_bytes.all.current": current_i,
+        "active_bytes.all.peak": peak_i,
+        "active_bytes.all.allocated": peak_i,
+        "active_bytes.all.freed": 0,
+        "allocated_bytes.all.current": current_i,
+        "allocated_bytes.all.peak": peak_i,
+        "allocated_bytes.all.allocated": peak_i,
+        "allocated_bytes.all.freed": 0,
+        "reserved_bytes.all.current": current_i,
+        "reserved_bytes.all.peak": peak_i,
+        "reserved_bytes.all.allocated": peak_i,
+        "reserved_bytes.all.freed": 0,
+        "inactive_split_bytes.all.current": 0,
+        "inactive_split_bytes.all.peak": 0,
+        "segment.all.current": 0,
+        "segment.all.peak": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+    }
+
+
 def _stub_memory_stats(device: Any = None) -> dict[str, Any]:
-    return {}
+    current = 0
+    peak = 0
+    if _memory_tracker is not None:
+        idx = _resolve_device_index(device)
+        current = _memory_tracker.memory_allocated(idx)
+        peak = _memory_tracker.max_memory_allocated(idx)
+    return _build_memory_stats_dict(current, peak)
 
 
 def _stub_memory_summary(device: Any = None, abbreviated: bool = False) -> str:
@@ -1329,6 +1360,196 @@ def _patch_nccl_surface(torch_mod: Any) -> None:
     nccl_mod.version = lambda: (2, 21, 5)
 
 
+def _patch_upstream_fakecuda_tensor_compat(upstream: Any, torch_mod: Any) -> None:
+    fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
+    if fake_tensor_cls is None or getattr(fake_tensor_cls, "_fakegpu_set_patched", False):
+        return
+
+    def _patched_set_(self, source, storage_offset=0, size=None, stride=None):
+        raw_source = upstream.unwrap_tensor(source)
+        with torch_mod.no_grad():
+            if size is None and stride is None and storage_offset == 0:
+                torch_mod.Tensor.set_(self, raw_source)
+            else:
+                if size is None:
+                    size = tuple(raw_source.shape)
+                if stride is None:
+                    stride = tuple(raw_source.stride())
+                torch_mod.Tensor.set_(self, raw_source, storage_offset, size, stride)
+
+        # FSDP mutates FlatParameter storage via ``set_()``. Keep the
+        # CPU-side shadow tensor in sync so subsequent unwraps see the new
+        # storage instead of the previously freed one.
+        self.raw_data = self.as_subclass(torch_mod.Tensor)
+
+        if isinstance(source, fake_tensor_cls):
+            self.device_index = source.device_index
+        return self
+
+    fake_tensor_cls.set_ = _patched_set_
+    fake_tensor_cls.is_cpu = property(lambda self: False)
+    fake_tensor_cls._fakegpu_set_patched = True
+
+
+def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
+    if getattr(upstream, "_fakegpu_all_gather_object_patched", False):
+        return
+
+    def _clone_gathered_object_for_rank(obj: Any, rank: int) -> Any:
+        import copy
+        import re
+
+        try:
+            from torch.distributed._shard.metadata import ShardMetadata
+            from torch.distributed._shard.sharded_tensor.metadata import ShardedTensorMetadata
+        except Exception:
+            ShardMetadata = None
+            ShardedTensorMetadata = None
+
+        if ShardMetadata is not None and isinstance(obj, ShardMetadata):
+            shard_offsets = list(obj.shard_offsets)
+            if shard_offsets:
+                shard_offsets[0] = int(obj.shard_sizes[0]) * rank
+            placement = re.sub(r"rank:\\d+/", f"rank:{rank}/", str(obj.placement), count=1)
+            return dataclasses.replace(
+                obj,
+                shard_offsets=shard_offsets,
+                placement=placement,
+            )
+
+        if ShardedTensorMetadata is not None and isinstance(obj, ShardedTensorMetadata):
+            return dataclasses.replace(
+                obj,
+                shards_metadata=[
+                    _clone_gathered_object_for_rank(shard, rank)
+                    for shard in obj.shards_metadata
+                ],
+            )
+
+        if isinstance(obj, list):
+            return [_clone_gathered_object_for_rank(item, rank) for item in obj]
+        if isinstance(obj, tuple):
+            return tuple(_clone_gathered_object_for_rank(item, rank) for item in obj)
+        if isinstance(obj, dict):
+            return obj.__class__(
+                (key, _clone_gathered_object_for_rank(value, rank))
+                for key, value in obj.items()
+            )
+        return copy.deepcopy(obj)
+
+    def _patched_all_gather_object(object_list: list[Any], obj: Any, group: Any = None) -> None:
+        for index in range(len(object_list)):
+            object_list[index] = _clone_gathered_object_for_rank(obj, index)
+        return None
+
+    upstream._dist_all_gather_object = _patched_all_gather_object
+    torch_mod.distributed.all_gather_object = _patched_all_gather_object
+    upstream._fakegpu_all_gather_object_patched = True
+
+
+def _patch_fsdp_device_handling() -> None:
+    """Patch FSDP internal device resolution for FakeGPU compatibility.
+
+    On macOS, ``torch.device(0)`` resolves to ``mps:0`` via the C++
+    accelerator lookup, which cannot be overridden from Python.  This causes
+    FSDP's device_id resolution and ``_FSDPDeviceHandle.from_device()`` to
+    produce MPS-backed handles while model parameters report ``cuda:0``
+    (from FakeCudaTensor), leading to device mismatch errors.
+
+    We fix this by:
+    1. Wrapping ``_FSDPDeviceHandle.from_device`` to remap any non-cuda
+       device to cuda before creating the handle.
+    2. Wrapping ``_get_device_from_device_id`` to fix integer device_id
+       resolution (``torch.device(0)`` → ``mps:0`` → remapped to ``cuda:0``).
+    """
+    try:
+        from torch.distributed.fsdp._common_utils import _FSDPDeviceHandle
+    except ImportError:
+        return  # FSDP not available
+
+    _orig_from_device = _FSDPDeviceHandle.from_device.__func__
+
+    @classmethod  # type: ignore[misc]
+    def _patched_from_device(cls, device):
+        import torch as _torch
+
+        # Remap non-cuda device types to cuda for FakeGPU
+        if device.type not in ("cuda", "cpu", "meta"):
+            device = _torch.device("cuda", device.index if device.index is not None else 0)
+        return _orig_from_device(cls, device)
+
+    _FSDPDeviceHandle.from_device = _patched_from_device
+
+    # Also patch _get_device_from_device_id for the consistency check in
+    # _get_compute_device (compares device_from_device_id vs param.device).
+    try:
+        import torch.distributed.fsdp._init_utils as _fsdp_init
+        import torch.distributed.fsdp.fully_sharded_data_parallel as _fsdp_mod
+    except ImportError:
+        return
+
+    _orig_get_device = getattr(_fsdp_init, "_get_device_from_device_id", None)
+    if _orig_get_device is not None:
+
+        @functools.wraps(_orig_get_device)
+        def _patched_get_device(device_id, rank, device_handle):
+            result = _orig_get_device(device_id, rank, device_handle)
+            if result is not None and result.type not in ("cuda", "cpu", "meta"):
+                import torch as _torch
+
+                result = _torch.device("cuda", result.index if result.index is not None else 0)
+            return result
+
+        _fsdp_init._get_device_from_device_id = _patched_get_device
+        # Also patch the direct import in the FSDP module
+        if hasattr(_fsdp_mod, "_get_device_from_device_id"):
+            _fsdp_mod._get_device_from_device_id = _patched_get_device
+
+
+def _patch_fsdp_runtime_compat(fake_tensor_cls: type | None) -> None:
+    try:
+        import torch
+        import torch.distributed.fsdp._runtime_utils as _fsdp_runtime
+    except ImportError:
+        return
+
+    _orig_register = getattr(_fsdp_runtime, "_register_post_backward_hook", None)
+    if _orig_register is None or getattr(_orig_register, "_fakegpu_patched", False):
+        return
+
+    @functools.wraps(_orig_register)
+    def _patched_register_post_backward_hook(state, handle):
+        if not handle or fake_tensor_cls is None:
+            return _orig_register(state, handle)
+
+        flat_param = handle.flat_param
+        if not isinstance(flat_param, fake_tensor_cls):
+            return _orig_register(state, handle)
+
+        if not torch.is_grad_enabled():
+            return
+
+        already_registered = hasattr(flat_param, "_post_backward_hook_state")
+        if already_registered or not flat_param.requires_grad:
+            return
+
+        # FakeCudaTensor aliases do not expose the expected AccumulateGrad via
+        # ``expand_as(...).grad_fn.next_functions`` after FSDP's internal
+        # storage rebinding. Use the newer post-accumulate hook when available
+        # to avoid asserting during forward.
+        register_hook = getattr(flat_param, "register_post_accumulate_grad_hook", None)
+        if register_hook is not None:
+            hook = functools.partial(_fsdp_runtime._post_backward_hook, state, handle)
+            hook_handle = register_hook(hook)
+            flat_param._post_backward_hook_state = (None, hook_handle)
+            return
+
+        return
+
+    _patched_register_post_backward_hook._fakegpu_patched = True
+    _fsdp_runtime._register_post_backward_hook = _patched_register_post_backward_hook
+
+
 def _install_fakegpu_autocast(torch_mod: Any) -> None:
     _strict_compat = os.environ.get("FAKEGPU_STRICT_COMPAT", "1") != "0"
     if not (_strict_compat and hasattr(torch_mod.amp, "autocast")):
@@ -1493,8 +1714,14 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         return result
 
     upstream.wrap_tensor = _hooked_wrap_tensor
+    _patch_upstream_fakecuda_tensor_compat(upstream, torch_mod)
+    _patch_upstream_all_gather_object(upstream, torch_mod)
 
     def _dynamo_friendly_tree_map(fn, obj):
+        # torch.Size is a tuple subclass but must be preserved as-is so that
+        # FSDP (and other code) can call .numel() on tensor.size() results.
+        if isinstance(obj, torch_mod.Size):
+            return obj
         if isinstance(obj, tuple):
             return tuple(_dynamo_friendly_tree_map(fn, item) for item in obj)
         if isinstance(obj, list):
@@ -1582,10 +1809,18 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
             idx = _normalize_device_index(device)
             _tracker.reset_peak(idx)
 
+        def _tracked_memory_stats(device=None):
+            idx = _normalize_device_index(device)
+            return _build_memory_stats_dict(
+                _tracker.memory_allocated(idx),
+                _tracker.max_memory_allocated(idx),
+            )
+
         torch.cuda.memory_allocated = _tracked_memory_allocated
         torch.cuda.max_memory_allocated = _tracked_max_memory_allocated
         torch.cuda.mem_get_info = _tracked_mem_get_info
         torch.cuda.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
+        torch.cuda.memory_stats = _tracked_memory_stats
 
         # Also patch torch.cuda.memory submodule
         try:
@@ -1594,6 +1829,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
             _memory_mod.max_memory_allocated = _tracked_max_memory_allocated
             _memory_mod.mem_get_info = _tracked_mem_get_info
             _memory_mod.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
+            _memory_mod.memory_stats = _tracked_memory_stats
         except Exception:
             pass
 
@@ -1664,6 +1900,8 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         pass
     _patch_cuda_rng_surface(torch_mod)
     _patch_nccl_surface(torch_mod)
+    _patch_fsdp_device_handling()
+    _patch_fsdp_runtime_compat(getattr(upstream, "FakeCudaTensor", None))
     _patch_transformers_utils()
 
     # ---- 8. Terminal report ----
@@ -1790,10 +2028,23 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
             idx = _normalize_device_index(device)
             _tracker.reset_peak(idx)
 
+        def _tracked_memory_stats(device=None):
+            idx = _normalize_device_index(device)
+            return _build_memory_stats_dict(
+                _tracker.memory_allocated(idx),
+                _tracker.max_memory_allocated(idx),
+            )
+
         torch.cuda.memory_allocated = _tracked_memory_allocated
         torch.cuda.max_memory_allocated = _tracked_max_memory_allocated
         torch.cuda.mem_get_info = _tracked_mem_get_info
         torch.cuda.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
+        torch.cuda.memory_stats = _tracked_memory_stats
+        _memory.memory_stats = _tracked_memory_stats
+        _memory.memory_allocated = _tracked_memory_allocated
+        _memory.max_memory_allocated = _tracked_max_memory_allocated
+        _memory.mem_get_info = _tracked_mem_get_info
+        _memory.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
 
     # Internal helpers PyTorch relies on
     torch.cuda._is_compiled = lambda: True
@@ -1873,6 +2124,11 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     }
     for attr, stub in _c_stubs.items():
         setattr(torch._C, attr, stub)
+
+    # Ensure torch._C._get_accelerator returns "cuda" so that torch.device(0)
+    # resolves to cuda:0 rather than mps:0 (on macOS) or xpu:0, etc.
+    # FSDP and other distributed modules rely on this for device_id resolution.
+    torch._C._get_accelerator = lambda: torch.device("cuda")
 
     # ---- Fix stale module-level bindings from 'from torch._C import _cuda_*' ----
     # On CPU-only builds, these are dummy classes that raise RuntimeError.
@@ -2087,6 +2343,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         pass
     _patch_cuda_rng_surface(torch)
     _patch_nccl_surface(torch)
+    _patch_fsdp_device_handling()
     _patch_transformers_utils()
 
     _patched = True
