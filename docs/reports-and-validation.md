@@ -70,6 +70,25 @@ That report includes:
 
 This report is useful for validating control flow, topology modeling, and broad communication-volume trends.
 
+## Preflight report (planned)
+
+The AI researcher preflight workflow will add a higher-level report on top of the existing runtime reports.
+
+The planned file is `preflight_report.json`, with a Markdown companion `preflight_report.md`. It should answer whether a user command reached a selected stage, whether it triggered OOM under a target GPU profile, and how much memory headroom remains.
+
+Planned status values:
+
+| Status | Meaning |
+|---|---|
+| `PASS_FIT` | The selected stage completed and no tracked OOM occurred. |
+| `FAIL_OOM` | The run exceeded the target profile or raised an OOM. |
+| `FAIL_RUNTIME` | Dependencies, data, model loading, code, or environment setup failed. |
+| `WARN_INCOMPLETE_TRACKING` | The run completed, but memory tracking was not complete enough for a strong fit/no-fit judgment. |
+
+The current real calibration target is a single RTX 3090 Ti with 24GB of VRAM. That is useful for real-CUDA calibration under 24GB, but it does not prove that a larger multi-node A100/H100 cluster run will fit or perform well.
+
+See [AI Researcher Preflight](ai-researcher-preflight.md) for the design and current manual workflow.
+
 ## Unified HTML test report
 
 `test/report.html` is a self-contained HTML report with tab navigation covering:

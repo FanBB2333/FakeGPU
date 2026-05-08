@@ -1,248 +1,383 @@
-# TODOs / Roadmap: Real-GPU Passthrough + No-GPU Kernel Simulation
+# TODOs / Roadmap: AI Researcher Preflight OOM Validation
 
-目标：同时实现两种运行模式，并尽可能做到 **输出 token/数值对齐真实 GPU**。
+目标：让 AI researcher 在提交训练或推理任务到大型 GPU 集群前，可以在本地先运行同一条命令，判断它是否能跑到指定阶段、是否会 OOM，以及峰值显存离目标 GPU 容量还有多少余量。
 
-> 说明：这里的“对齐”建议分层定义（见下文 *Definition of Done*）。**bitwise 完全一致**在跨设备/跨实现下通常不现实，但可以先做到“token 一致 + logits/allclose”并逐步逼近。
+当前可用的真实校准机器：单张 NVIDIA GeForce RTX 3090 Ti，24GB 显存，Ampere 架构。下一版设计需要明确利用这张卡能验证什么，不能验证什么。
+
+本路线图暂不追求：
+
+- GPU SM 利用率、occupancy、吞吐或 step time 预测
+- token/logits 数值对齐
+- 通用 CUDA kernel 执行
+- PTX / SASS 解释器
+- NCCL / RDMA / NVLink 协议级仿真
+- 真实多机多卡集群性能预测
 
 ---
 
-## Definition of Done（建议分层验收）
+## Definition of Done
 
-- **L0（可跑）**：模型能加载、forward 能完成、不崩溃（当前 FakeGPU 主要做到这一级）。
-- **L1（token 对齐）**：固定 seed + 固定推理配置下（禁用随机/非确定性），生成 token 与真实 GPU 一致。
-- **L2（数值对齐）**：关键张量/最终 logits 与真实 GPU 在指定容差内 `allclose(rtol, atol)`。
-- **L3（bitwise 对齐，选做）**：关键张量 bitwise 相同（极难，通常只在同架构同实现+严格控制下才可能）。
+下一版完成后，用户至少可以做到：
 
-建议优先实现 **L1 → L2**，L3 作为研究性目标。
+- [ ] 用一条命令运行 preflight：
+  `fakegpu preflight --devices a100:8 --stage train_step -- python train.py ...`
+- [ ] 得到机器可读 JSON 和人可读 Markdown 报告。
+- [ ] 报告给出明确状态：
+  - `PASS_FIT`：指定阶段完成，未触发已跟踪 OOM。
+  - `FAIL_OOM`：触发 OOM 或目标 profile 显存不足。
+  - `FAIL_RUNTIME`：依赖、导入、数据、模型加载或代码逻辑失败。
+  - `WARN_INCOMPLETE_TRACKING`：运行完成，但显存跟踪范围不足以给出强结论。
+- [ ] 报告包含每张 logical GPU 的：
+  - `total_memory`
+  - `peak_memory`
+  - `headroom_bytes`
+  - `headroom_percent`
+  - `allocation_count`
+  - `largest_allocations`
+  - `tracking_confidence`
+- [ ] OOM 时报告：
+  - 失败阶段
+  - 异常类型和错误信息
+  - 最近一次大分配
+  - 当前 profile 和设备数量
+- [ ] 缺少 torch、transformers、本地模型、数据文件或真实 CUDA 时，不能静默跳过并报告成功。
+- [ ] 文档明确不同 runtime 的可信度边界。
 
 ---
 
 ## Glossary
 
-- **Reported Device（虚拟设备）**：通过 NVML / CUDA API 返回给上层框架的设备信息（name/memory/cc 等）。
-- **Backing Device（真实设备）**：实际执行计算/分配显存的真实 GPU（模式 1）。
-- **Fake Memory（假显存）**：FakeGPU 现在用系统 RAM 模拟的“device memory”（模式 2）。
-- **Passthrough**：拦截不改语义，尽量调用真实 CUDA 栈，保证结果与直接运行一致。
-- **Hybrid**：设备信息可虚拟化，但计算/分配尽量走真实 GPU，并提供 OOM 安全策略。
+- **Preflight**：提交集群前的本地预检查。目标是确认命令能跑到指定阶段，并给出显存风险判断。
+- **Stage**：preflight 要跑到的最小阶段，例如 `import`、`model_load`、`forward`、`backward`、`optimizer_step`、`n_steps`。
+- **Target Profile**：目标集群上的 GPU 规格，例如 `a100`、`h100`、`b200` 或混合配置 `a100:4,h100:4`。
+- **Calibration GPU**：本地真实 GPU。当前是 3090 Ti，用来校准真实 CUDA 路径和 24GB 边界。
+- **Tracking Confidence**：显存报告的可信度等级。它描述“这份报告覆盖了哪些分配”，不是模型能否正确训练的证明。
 
 ---
 
-## 总体架构改造（两种模式共享）
+## Current Scope For RTX 3090 Ti
 
-- [x] **统一配置入口**
-  - [x] `FAKEGPU_MODE={simulate,passthrough,hybrid}`（默认 `simulate` 保持现状）。
-  - [ ] CLI：`fakegpu --mode ...`、`./fgpu --mode ...`、`fakegpu.init(mode=...)`（Python wrapper）。
-  - [x] 为所有 mode 提供清晰的 fallback：无法加载真实 CUDA 时自动回退到 `simulate` 并提示。
+单张 3090 Ti 可以支持：
 
-- [x] **Backend 抽象**
-  - [x] 为 `libcuda/libcudart/libcublas/libcublasLt/libnvidia-ml` 引入统一的 *dispatch layer*：
-    - `FakeBackend`（现有 stub + CPU sim）
-    - `RealBackend`（dlopen/dlsym 转发到真实库）
-    - `HybridBackend`（设备信息/内存策略可能由 Fake 控制，计算/部分 API 转发到 Real）
-  - [x] 目标：每个 API 都能在运行时按 mode 选择实现，避免散落 `if (env)`。
+- [x] 验证真实 CUDA / PyTorch / transformers 环境是否能跑。
+- [x] 在 24GB 真实显存内校准 `passthrough` 和 `hybrid clamp` 路径。
+- [x] 验证小模型、短序列、小 batch 的真实峰值显存。
+- [x] 验证 24GB 以下 workload 的真实 OOM 行为。
+- [x] 对 fakecuda 的 profile 显存检查做 sanity check。
 
-- [ ] **测试矩阵与基准数据（Golden）**
-  - [ ] 新增 `verification/golden/` 生成与读取工具（只在"有 GPU"的机器上生成）。
-  - [ ] Golden 里至少保存：
-    - prompt、tokenizer 版本、transformers/torch 版本、seed、关键 env
-    - 生成的 token ids
-    - 可选：最后一步 logits（float32）或若干关键中间张量摘要（hash/统计量）
+单张 3090 Ti 不能直接支持：
+
+- [ ] 证明 80GB A100/H100 上一定能跑完整大 batch。
+- [ ] 证明真实多卡 NCCL / NVLink / InfiniBand 行为。
+- [ ] 预测大集群利用率、吞吐或排队后的性能。
+- [ ] 验证需要多张真实 GPU 才会暴露的通信或 sharding 问题。
+
+因此下一版的默认策略是：
+
+1. 用 3090 Ti 做真实 CUDA 校准和小规模 sanity check。
+2. 用 fakecuda / simulate profile 做目标 GPU 显存 preflight。
+3. 在报告中明确标出 confidence，不把估算当成真实集群证明。
 
 ---
 
-## Mode 1：真实 GPU Passthrough/Hybrid（结果对齐 + OOM 安全）
+## P0: 清理旧路线图和范围漂移
 
-### 1A. Pure Passthrough（最先落地：保证结果与直接跑一致）
-
-目标：在有真实 GPU 的机器上，`./fgpu --mode passthrough ...` 的结果 **与不使用 FakeGPU 完全一致**（至少达到 L1/L2）。
-
-- [x] **真实库定位与加载**
-  - [x] 增加 `FAKEGPU_REAL_CUDA_LIB_DIR`（或自动从 `ldconfig`/常见路径探测）。
-  - [x] 在每个 FakeGPU so 内部 `dlopen()` 真实库（例如 `/usr/local/cuda/.../libcuda.so.1` 等），并 `dlsym()` 真实符号。
-  - [x] 避免递归：不要用 `RTLD_DEFAULT`；优先用显式 handle + `dlsym(handle, ...)`。
-
-- [x] **完整转发链**
-  - [x] `libcuda`：Driver API 全量转发（或至少覆盖 PyTorch/Transformers 路径）。
-  - [x] `libcudart`：Runtime API 全量转发。
-  - [x] `libcublas/libcublasLt`：全量转发。
-  - [x] `libnvidia-ml`：可选择转发或仍用 Fake（取决于是否需要"虚拟设备展示"）。
-
-- [ ] **一致性与确定性**
-  - [ ] 为 parity 测试提供推荐环境变量集合（如 `CUBLAS_WORKSPACE_CONFIG`、禁用 TF32、固定算法等）。
-  - [x] 增加 `./ftest passthrough_parity`：同一脚本跑两次（直接 vs passthrough）并比较 token/logits。
+- [x] 保留已实现的统一配置入口：
+  - `FAKEGPU_MODE={simulate,passthrough,hybrid}`
+  - `fakegpu --mode ...`
+  - `./fgpu --mode ...`
+  - `fakegpu.init(mode=...)`
+- [ ] 删除或迁移旧 TODO 中近期无关项：
+  - token/logits parity
+  - PTX interpreter
+  - SASS / cubin interpreter
+  - ExternalSimulatorExecutor
+  - Qwen token 对齐
+  - 深度 NCCL 协议仿真
+- [ ] 保留通用修复：
+  - profile 一致性
+  - report schema
+  - strict test
+  - OOM policy 验证
+  - hybrid 3090 Ti 校准
+- [ ] README 和 docs 中避免把 simulate/fakecuda 说成“完整 CUDA 数值执行”。
 
 验收：
-- [ ] `test/test_load_qwen2_5.py` 在 `passthrough` 下生成 token 与直接跑一致（L1）。
-- [ ] 可选：dump logits 并在 `allclose` 容差内（L2）。
+
+- [ ] `TODOs.md` 只描述 preflight / OOM validation 近期目标。
+- [ ] 长期研究项移动到后续 milestone 或单独设计文档，不阻塞下一版。
 
 ---
 
-### 1B. Hybrid：虚拟设备信息 + 真实计算（并保证不 OOM）
+## P1: Preflight Runner
 
-核心难点：**虚拟设备（比如宣称 80GB A100）与真实设备（比如 24GB 3090）不一致时，框架可能会分配超额导致 OOM**。
+新增 `fakegpu preflight` 子命令，作为研究者的主入口。
 
-建议把 OOM 安全策略做成可配置的 policy，并明确"保证级别"：
-
-- [x] **策略（按推荐顺序）**
-  - [x] `oom_policy=clamp`（最稳）：report 的 `total_memory`/`memGetInfo` 等不超过真实 GPU；避免框架误判。
-  - [x] `oom_policy=managed`（中等）：拦截 `cudaMalloc` → `cudaMallocManaged`（或统一走 managed），依赖 UVM 进行 oversubscription（性能差但可避免 OOM）。
-  - [x] `oom_policy=mapped_host`（进阶）：超额部分用 `cudaHostAllocMapped` + `cudaHostGetDevicePointer` 返回"device pointer"，允许 kernel 访问主存（零拷贝）。
-  - [x] `oom_policy=spill+cpu`（混合兜底）：超额分配落到 Fake 内存；对可 CPU-sim 的算子走 CPU；不可 CPU-sim 的 kernel 直接报错（或强制回退到 simulate）。
-
-- [x] **Reported vs Real 的一致性规则**
-  - [x] `computeCapability` 建议 **不虚拟到高于真实**（避免 cubin 兼容问题）；name 可以虚拟，memory 可虚拟（但配合 policy）。
-  - [x] NVML 与 CUDA Runtime/Driver 返回值保持一致（避免 torch/transformers 读到矛盾信息）。
-
-- [x] **内存预算与压力感知**
-  - [x] 在 Hybrid 下引入 "allocation tracker + budget"：
-    - 真实显存 budget：通过真实 `cudaMemGetInfo`/NVML 查询。
-    - 虚拟显存 budget：来自 profile。
-  - [x] 对每次 `cudaMalloc/cudaMallocAsync/cuMemAlloc*` 做决策：走真实、走 managed、走 mapped_host、或 spill。
-
-- [x] **可观测性**
-  - [x] `fake_gpu_report.json` 增加：
-    - backing GPU 信息（真实设备 id/name/memory）
-    - 真实分配 vs managed vs mapped_host vs spilled 的统计
-    - OOM 次数/回退次数
+- [ ] 支持基础参数：
+  - `--devices a100:8`
+  - `--profile h100 --device-count 8`
+  - `--stage import|model_load|forward|backward|optimizer_step|n_steps`
+  - `--steps N`
+  - `--report-dir path`
+  - `--runtime fakecuda|native|hybrid|passthrough`
+  - `--strict`
+- [ ] 自动设置：
+  - `FAKEGPU_PROFILES`
+  - `FAKEGPU_DEVICE_COUNT`
+  - `FAKEGPU_TERMINAL_REPORT`
+  - `FAKEGPU_REPORT_PATH`
+  - `FAKEGPU_CLUSTER_REPORT_PATH`（分布式时）
+- [ ] 运行用户命令并捕获：
+  - stdout
+  - stderr
+  - exit code
+  - OOM 异常
+  - report 文件
+- [ ] 输出：
+  - `preflight_report.json`
+  - `preflight_report.md`
+  - `preflight_stdout.log`
+  - `preflight_stderr.log`
+- [ ] 支持严格模式：
+  - 依赖缺失即失败
+  - 模型文件缺失即失败
+  - CUDA 不可用即失败（当 runtime 需要真实 CUDA 时）
+  - pytest skip 不能算作通过
 
 验收：
-- [ ] 在 "虚拟 80GB、真实 24GB" 配置下，运行 LLM 推理脚本不因显存 OOM 直接失败（至少能通过 managed/mapped_host 策略跑完）。
-- [ ] 在 `clamp` 策略下，保证行为与真实 GPU 接近（不会因为虚报而 OOM）。
+
+- [ ] `fakegpu preflight --profile a100-1g --stage forward -- python demo_usage.py --test transformer` 能生成报告。
+- [ ] `--strict` 下缺依赖会返回非零退出码。
 
 ---
 
-## Mode 2：无 GPU 的 CUDA Kernel 执行/仿真（大工程）
+## P2: Stage Contract
 
-目标：在没有真实 GPU 的环境下，FakeGPU 仍能执行 kernel 并尽量达到 L1/L2（Qwen2.5 起步）。
+Preflight 需要知道用户命令跑到了哪个阶段。下一版先提供轻量协议，不要求用户重写训练脚本。
 
-> 关键现实：PyTorch/Transformers 的 CUDA 路径大量依赖自定义 kernel + 库 kernel。要做到 L1/L2，必须让这些 kernel **真的产生正确结果**。
+- [ ] 提供环境变量约定：
+  - `FAKEGPU_PREFLIGHT_STAGE=import`
+  - `FAKEGPU_PREFLIGHT_STAGE=model_load`
+  - `FAKEGPU_PREFLIGHT_STAGE=forward`
+  - `FAKEGPU_PREFLIGHT_STAGE=backward`
+  - `FAKEGPU_PREFLIGHT_STAGE=optimizer_step`
+- [ ] 提供 Python helper：
 
----
+```python
+import fakegpu
 
-### 2A. 先做可观测性：Kernel Trace + Coverage 报告（强烈建议先落地）
+with fakegpu.stage("model_load"):
+    model = load_model()
 
-- [ ] **捕获模块与 kernel 信息**
-  - [ ] 在 `cuModuleLoad/cuModuleLoadData/cuModuleGetFunction` 中提取：
-    - fatbin/cubin/PTX 原始 bytes（可选落盘）
-    - kernel 名称、函数句柄映射
-  - [ ] 在 `cuLaunchKernel` 中记录：
-    - grid/block dims、sharedMemBytes、stream
-    - kernelParams/extra 的参数布局（尽力解析）
+with fakegpu.stage("forward"):
+    loss = model(**batch).loss
 
-- [ ] **Trace 输出与可复现**
-  - [ ] 新增 `FAKEGPU_KERNEL_TRACE_PATH=/path`：输出可重放的 JSON trace。
-  - [ ] 提供 `verification/replay_kernel_trace.py`（后续用来回归）。
+with fakegpu.stage("backward"):
+    loss.backward()
+```
 
-- [ ] **Coverage 报告**
-  - [ ] 跑 `test/test_load_qwen2_5.py` 时输出 “Top kernels by calls/time/bytes”。
-  - [ ] 自动生成 “缺失 kernel 列表 + 需要的 PTX 特性列表”。
+- [ ] 没有显式 stage 标记时，runner 使用保守阶段：
+  - 命令启动成功：`import`
+  - 进程正常退出：`completed`
+  - OOM：`unknown_or_last_seen`
+- [ ] 报告中记录 stage timeline。
 
 验收：
-- [ ] 跑一次 Qwen，能得到稳定的 kernel 调用清单，为后续实现提供优先级。
+
+- [ ] 用户不用 helper 也能得到基础报告。
+- [ ] 使用 helper 后，OOM 报告能定位到阶段。
 
 ---
 
-### 2B. 设计 Kernel 执行框架（可插拔执行器）
+## P3: 显存跟踪可信度提升
 
-- [ ] **KernelExecutor 接口**
-  - [ ] `NoopExecutor`（现状）
-  - [ ] `BuiltinExecutor`：对“已知 kernel”用手写 CPU 实现（最快见效）
-  - [ ] `PTXInterpreterExecutor`：解释执行 PTX 子集（通用性更强）
-  - [ ] `ExternalSimulatorExecutor`：可选接外部模拟器（如 gpgpu-sim/accel-sim，进程外执行）
+当前 `torch_patch` 的报告主要覆盖显式 fake-CUDA storage，已知不足是大多数 op 产生的 activation / temporary tensor 没有完整计入。面向 OOM preflight，这一项是核心。
 
-- [ ] **内存模型**
-  - [ ] global memory：沿用 FakeGPU allocation（host malloc）。
-  - [ ] shared/local：在 CPU 端按 block/thread 分配并模拟寻址。
-  - [ ] 原子/同步：先实现最常见子集（`bar.sync`、basic atomics），不够再扩展。
-
----
-
-### 2C. 最快达到 L1：优先做 “BuiltinExecutor（算子级 CPU 参考实现）”
-
-思路：先不追求任意 kernel 通用执行，而是把 Qwen 推理路径上的关键 kernel 用 CPU reference 写出来，并通过 kernel 名称/签名匹配来调用。
-
-- [ ] **选定最小闭环目标：Qwen2.5-0.5B 单步 forward**
-  - [ ] embedding gather
-  - [ ] RMSNorm
-  - [ ] RoPE
-  - [ ] attention（建议强制 `TORCH_SDPA_KERNEL=math`，把注意力拆成 matmul+softmax+matmul）
-  - [ ] softmax（含 mask）
-  - [ ] SiLU + MLP（其中 Linear 已由 cuBLAS CPU-sim 覆盖）
-  - [ ] 残差 add / elementwise mul
-
-- [ ] **Kernel 匹配机制**
-  - [ ] 基于 kernel name 前缀/正则匹配（trace 得到）。
-  - [ ] 若 name 不稳定：用 module hash + 参数规模特征匹配（shape/stride/dtype）。
-
-- [ ] **数值一致性策略**
-  - [ ] 用与 GPU 接近的 dtype/舍入（fp16/bf16），必要时在关键点用 fp32 accumulation 模拟 GPU 行为。
-  - [ ] 固定随机种子与禁用非确定性路径（文档化）。
+- [ ] 修复 op-produced tensor 跟踪：
+  - elementwise output
+  - matmul output
+  - loss output
+  - clone / contiguous / view 后的新 storage
+  - autograd 保存的 activation
+- [ ] 区分内存类别：
+  - parameters
+  - buffers
+  - gradients
+  - optimizer state
+  - activations
+  - temporary tensors
+  - unknown
+- [ ] 支持分阶段峰值：
+  - `peak_import`
+  - `peak_model_load`
+  - `peak_forward`
+  - `peak_backward`
+  - `peak_optimizer_step`
+- [ ] 支持 top allocations：
+  - bytes
+  - dtype
+  - shape
+  - device
+  - stage
+  - optional stack trace
+- [ ] 多设备场景下正确归属 logical device。
+- [ ] 报告 `tracking_confidence`：
+  - `C0_incomplete`：只跑通流程，不适合判断 OOM。
+  - `C1_weight_storage`：主要覆盖权重和显式 storage。
+  - `C2_torch_tensor_lifetime`：覆盖 torch 层 tensor 生命周期，适合 fakecuda preflight。
+  - `C3_native_cuda_allocations`：覆盖 C/CUDA allocation，适合 native simulate。
+  - `C4_real_gpu_calibrated`：在 3090 Ti 上有真实 CUDA 对照。
 
 验收：
-- [ ] 无 GPU 环境下，Qwen 测试脚本生成 token 与真实 GPU 一致（L1）。
-- [ ] 可选：logits `allclose`（L2）。
+
+- [ ] 现有 `test/real_scene/nanoGPT/TORCH_PATCH_PROOF.md` 中 “op-produced activation 未计入” 的限制被替换为新的通过实验。
+- [ ] `torch.cuda.max_memory_allocated()` 与 preflight report 的峰值一致。
+- [ ] `a100-1g` 下可稳定触发 OOM。
 
 ---
 
-### 2D. 通用化：PTX 子集解释器 / JIT（长期）
+## P4: OOM 行为验证
 
-当 builtin 的覆盖越来越难维护/扩展时，引入 PTX 解释/JIT。
-
-- [ ] **PTX 获取**
-  - [ ] 从 fatbin 中优先提取 PTX（如果存在）。
-  - [ ] 如果只有 cubin：需要 SASS 解释器或外部模拟器（见 2E）。
-
-- [ ] **PTX Interpreter MVP（先能跑再补齐）**
-  - [ ] 基础指令：ld/st、add/mul/fma、type convert、predication、bra。
-  - [ ] 特殊寄存器：`%tid.%ctaid.%ntid.%nctaid` 等。
-  - [ ] memory space：global/shared/local/const。
-  - [ ] 同步：`bar.sync`。
-  - [ ] half/bf16：实现 IEEE 舍入与 NaN/Inf 规则（尽量贴近 CUDA）。
-
-- [ ] **并行执行**
-  - [ ] CPU 端用线程池/OpenMP 模拟 grid/block 并行。
-  - [ ] 提供 deterministic 模式（单线程或固定调度）用于对齐。
+- [ ] 新增 `./ftest preflight_oom`。
+- [ ] 测试小显存 profile：
+  - `a100-1g`
+  - 自定义 512MB profile（仅用于测试）
+- [ ] 测试大显存 profile：
+  - `a100`
+  - `h100`
+- [ ] 同一 workload 在小 profile 下 `FAIL_OOM`，在大 profile 下 `PASS_FIT`。
+- [ ] 验证 PyTorch OOM 表面：
+  - 异常类型接近 `torch.cuda.OutOfMemoryError`
+  - 错误信息包含 requested、total、free
+- [ ] 验证报告字段：
+  - `status`
+  - `stage`
+  - `peak_memory`
+  - `headroom_bytes`
+  - `tracking_confidence`
+  - `runtime`
+- [ ] `--strict` 模式下任何 skip 都失败。
 
 验收：
-- [ ] 能执行一批常见 elementwise/reduction kernel，并通过单元测试验证。
+
+- [ ] `./ftest preflight_oom` 在没有真实 GPU 的环境中也能验证 fakecuda OOM。
+- [ ] 在 3090 Ti 机器上额外运行真实 CUDA 校准用例。
 
 ---
 
-### 2E. cubin/SASS 路径（可能绕不开）
+## P5: 3090 Ti 校准流程
 
-现实：很多发行版可能只带 cubin（或多架构 fatbin），PTX 不一定总可用。
+这部分专门面向当前可用硬件。
 
-- [ ] **策略选择**
-  - [ ] 方案 1：要求/引导构建或运行时提供 PTX（可通过设置/编译选项达成）。
-  - [ ] 方案 2：集成 SASS 解释器（极大工程）。
-  - [ ] 方案 3：外部模拟器（gpgpu-sim/accel-sim）离线/子进程执行，并做 IPC。
+- [ ] 新增 `./ftest rtx3090ti_calibration`。
+- [ ] 新增 `profiles/rtx3090ti.yaml`，用于文档、报告和校准元数据；它不是目标集群 profile 的替代品。
+- [ ] 校准内容：
+  - 真实 PyTorch `torch.cuda.max_memory_allocated()`
+  - `passthrough` 模式峰值显存
+  - `hybrid --oom-policy clamp` 峰值显存
+  - fakecuda preflight 峰值显存
+- [ ] 使用小模型和可控张量，避免超过 24GB：
+  - MLP / Tiny Transformer
+  - HF tiny model
+  - LoRA tiny flow
+  - 手动大 tensor OOM probe
+- [ ] 生成校准报告：
+  - `calibration_rtx3090ti.json`
+  - `calibration_rtx3090ti.md`
+- [ ] 记录误差，不要求完全一致。
+- [ ] 如果真实 CUDA 不可用，测试必须报告 skip/fail 原因，不能静默通过。
 
-建议：先用 **trace 驱动** 评估 PTX 可得性，再决定是否投入 2E。
+验收：
 
----
-
-## 测试与工程化
-
-- [ ] **新增 ftest suites**
-  - [ ] `./ftest passthrough_parity`
-  - [ ] `./ftest hybrid_oom`（用小脚本主动申请超过真实显存的场景，验证 policy）
-  - [ ] `./ftest kernel_trace`（输出 trace + coverage）
-  - [ ] `./ftest llm_parity`（真实 GPU 机器：直接 vs passthrough/hybrid/simulate 对比）
-
-- [ ] **新增对齐测试**
-  - [ ] `test/test_llm_parity_token.py`：对比 token ids
-  - [ ] `test/test_llm_parity_logits.py`：对比 logits（容差可配置）
-
-- [ ] **文档**
-  - [ ] 在 `README.md` 增加 mode 说明、OOM policy 说明、对齐等级说明（L0-L3）
-  - [ ] 在 `test/README_QWEN_TEST.md` 补充 parity 流程
+- [ ] 3090 Ti 上同一 workload 的 fakecuda peak 与真实 peak 误差被记录。
+- [ ] 文档说明该误差只能作为当前实现校准，不代表 A100/H100 性能。
 
 ---
 
-## 风险与开放问题（需要尽早决策）
+## P6: 典型 AI Workload 覆盖
 
-- [ ] **“数值对齐”的标准**：你希望 L2 的容差是多少？是否需要层级/逐层对齐？
-- [ ] **PTX 可得性**：目标环境下 PyTorch kernels 是否带 PTX？如果只带 cubin，2E 成本会陡增。
-- [ ] **性能目标**：无 GPU 的 kernel 仿真一般会慢几个数量级；是否接受只跑小 batch/短序列？
-- [ ] **维护成本**：builtin kernel 的匹配可能随 torch/transformers 版本变化，需要版本锁定或自动化 trace 更新。
+优先覆盖研究者最常见的提交前检查，不追求大模型完整训练。
 
+- [ ] Tiny Transformer：
+  - forward
+  - backward
+  - optimizer step
+- [ ] HF Trainer 单卡 smoke。
+- [ ] LoRA / PEFT 小模型训练 smoke。
+- [ ] AMP：
+  - fp16
+  - bf16 profile capability check
+- [ ] Gradient accumulation。
+- [ ] Gradient checkpointing。
+- [ ] DDP 2-rank 单机 smoke。
+- [ ] FSDP 基础 smoke。
+
+验收：
+
+- [ ] 每个 workload 都有一个 preflight 示例命令。
+- [ ] 每个 workload 都能在报告里看到 stage、peak、status。
+
+---
+
+## P7: Report Schema
+
+- [ ] 定义 `preflight_report.schema.json`。
+- [ ] 报告字段包括：
+  - `schema_version`
+  - `fakegpu_version`
+  - `git_commit`
+  - `command`
+  - `runtime`
+  - `target_profiles`
+  - `calibration_gpu`
+  - `status`
+  - `stage`
+  - `devices`
+  - `tracking_confidence`
+  - `warnings`
+  - `errors`
+  - `logs`
+- [ ] 提供校验工具：
+  - `verification/check_preflight_report.py`
+- [ ] Markdown 报告包含：
+  - 一句话结论
+  - 每卡峰值显存表
+  - 失败原因
+  - 可信度说明
+  - 下一步建议
+
+验收：
+
+- [ ] schema 校验加入 `./ftest preflight_oom`。
+- [ ] 报告可直接作为 Slurm 提交前的附件。
+
+---
+
+## P8: 文档
+
+- [x] 新增 `docs/ai-researcher-preflight.md`。
+- [x] 新增 `docs/ai-researcher-preflight.zh.md`。
+- [x] README 增加 “AI researcher preflight” 入口。
+- [x] `docs/reports-and-validation.md` 增加 preflight 报告说明。
+- [x] `docs/quick-reference.md` 增加 3090 Ti 校准命令。
+- [ ] 明确限制：
+  - PASS 不代表训练结果数值正确。
+  - PASS 不代表目标集群性能。
+  - fakecuda profile 可以模拟 80GB 显存上限，但不等价于真实 A100/H100 kernel 行为。
+  - 3090 Ti 只能校准 24GB 内的真实 CUDA 行为。
+
+---
+
+## Deferred
+
+以下内容从下一版移出，不再阻塞 AI researcher preflight：
+
+- token 一致性与 logits allclose
+- Qwen2.5 真实 GPU parity
+- PTX interpreter
+- SASS / cubin interpreter
+- 外部 GPU 模拟器集成
+- kernel 数值执行
+- 完整 NCCL 协议复刻
+- GPU 利用率预测
+- step time / throughput 预测

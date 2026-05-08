@@ -53,6 +53,35 @@ python3 demo_usage.py --test transformer --quiet
 这条路径会在 demo 内部调用 `fakegpu.torch_patch.patch()`，适合在 CPU-only
 主机上做 fake-CUDA 训练 smoke 验证。
 
+## 手动 preflight / OOM 检查
+
+计划中的 `fakegpu preflight` 命令还没有实现。当前可以先用一个很小的 wrapper，在导入训练栈之前初始化 fakecuda：
+
+```python
+import fakegpu
+
+fakegpu.init(runtime="fakecuda", devices="a100-1g:1")
+
+import runpy
+runpy.run_path("train.py", run_name="__main__")
+```
+
+开启终端报告后运行：
+
+```bash
+FAKEGPU_TERMINAL_REPORT=1 python3 preflight_entry.py
+```
+
+如果要用 RTX 3090 Ti 做校准，先在真实 GPU 上跑缩小版 workload，再按环境能力对比 passthrough 或 hybrid：
+
+```bash
+python3 train.py --small-config
+./fgpu --mode passthrough python3 train.py --small-config
+./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
+```
+
+当前设计和限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
+
 ## 测试命令
 
 ```bash

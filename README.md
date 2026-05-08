@@ -516,6 +516,8 @@ FakeGPU
 
 - **Pre-submission Resource Estimation** — Before submitting jobs to Slurm/PBS clusters, run locally with FakeGPU to estimate per-GPU peak VRAM, IO volume, and compute FLOPs from `fake_gpu_report.json`. Use this to right-size GPU allocation requests.
 
+- **AI Researcher Preflight** — Run a training or inference command locally before submitting it to a larger cluster, then report whether it reaches a selected stage, whether it appears to fit the target GPU profile, and how much memory headroom remains. The current real calibration target is a single RTX 3090 Ti; it is useful for 24 GB calibration, not for proving multi-node cluster performance.
+
 - **Framework Migration Testing** — When upgrading PyTorch versions (verified 2.6.0 → 2.11.0) or switching frameworks, run your training pipeline under FakeGPU to catch API breakage without tying up real GPUs.
 
 - **Reproducibility Validation** — Verify that training scripts, checkpoint loading, and data pipelines run correctly on a clean CPU-only environment before sharing code in papers or repositories.
@@ -535,6 +537,7 @@ MIT License
 
 - `mkdocs.yml` - MkDocs site config for local preview and GitHub Pages
 - [Test Guide](test/README.md) - Detailed testing instructions
+- [AI Researcher Preflight](docs/ai-researcher-preflight.md) - Planned preflight workflow for OOM and fit/no-fit checks before cluster submission
 - [Torch Patch System](docs/phase2-custom-torch.md) - Vendored FakeCudaTensor backend with GPU profiles, memory tracking, and error simulation
 - [Distributed Usage Guide](docs/distributed-sim-usage.md) - How to run single-host simulated multi-node workloads
 - [Multi-Node Design](docs/multi-node-design.md) - Distributed design notes, implementation plan, and current boundaries
