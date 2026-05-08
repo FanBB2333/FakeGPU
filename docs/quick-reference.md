@@ -53,24 +53,28 @@ python3 demo_usage.py --test transformer --quiet
 This route uses `fakegpu.torch_patch.patch()` inside the demo and is meant for
 fake-CUDA training smoke tests on CPU-only hosts.
 
-## Manual preflight / OOM checks
+## Preflight / OOM checks
 
-The planned `fakegpu preflight` command is not implemented yet. For now, use a small wrapper that initializes fakecuda before importing your training stack:
-
-```python
-import fakegpu
-
-fakegpu.init(runtime="fakecuda", devices="a100-1g:1")
-
-import runpy
-runpy.run_path("train.py", run_name="__main__")
-```
-
-Run it with terminal reporting enabled:
+Run a fakecuda preflight before submitting a Python training command:
 
 ```bash
-FAKEGPU_TERMINAL_REPORT=1 python3 preflight_entry.py
+fakegpu preflight \
+  --runtime fakecuda \
+  --devices a100-1g:1 \
+  --stage forward \
+  --report-dir preflight-a100-1g \
+  --strict \
+  -- python3 train.py --small-config
 ```
+
+The runner writes:
+
+- `preflight_report.json`
+- `preflight_report.md`
+- `preflight_stdout.log`
+- `preflight_stderr.log`
+
+Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. This initial runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, but activation and temporary tracking still need more work.
 
 For RTX 3090 Ti calibration, run a reduced workload directly on the real GPU and compare with passthrough or hybrid when available:
 
@@ -88,6 +92,7 @@ See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design
 ./ftest smoke
 ./ftest cpu_sim
 ./ftest python
+./ftest preflight_oom
 ./ftest all
 ```
 

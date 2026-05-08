@@ -70,13 +70,13 @@
 
 这份报告很适合用来验证控制流、拓扑模型，以及通信量的大致趋势。
 
-## Preflight report（计划中）
+## Preflight report
 
-面向 AI researcher 的 preflight 工作流会在现有 runtime 报告之上增加一份更高层的报告。
+面向 AI researcher 的 preflight 工作流会在现有 runtime 报告之上生成一份更高层的报告。
 
-计划中的文件是 `preflight_report.json`，并配套生成 `preflight_report.md`。它应该回答：用户命令是否跑到了指定阶段，是否在目标 GPU profile 下触发 OOM，以及还剩多少显存余量。
+runner 会写出 `preflight_report.json`，并配套生成 `preflight_report.md`。它回答：用户命令是否跑到了指定阶段，是否在目标 GPU profile 下触发 OOM，以及还剩多少显存余量。
 
-计划状态如下：
+状态如下：
 
 | 状态 | 含义 |
 |---|---|
@@ -87,7 +87,7 @@
 
 当前真实校准目标是一张 24GB RTX 3090 Ti。它适合校准 24GB 内的真实 CUDA 行为，但不能证明更大的多机 A100/H100 集群一定能放下 workload，也不能证明性能表现。
 
-设计和当前手动流程见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
+用法和当前限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
 
 ## 统一 HTML 测试报告
 

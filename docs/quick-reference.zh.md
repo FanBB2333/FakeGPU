@@ -53,24 +53,28 @@ python3 demo_usage.py --test transformer --quiet
 这条路径会在 demo 内部调用 `fakegpu.torch_patch.patch()`，适合在 CPU-only
 主机上做 fake-CUDA 训练 smoke 验证。
 
-## 手动 preflight / OOM 检查
+## Preflight / OOM 检查
 
-计划中的 `fakegpu preflight` 命令还没有实现。当前可以先用一个很小的 wrapper，在导入训练栈之前初始化 fakecuda：
-
-```python
-import fakegpu
-
-fakegpu.init(runtime="fakecuda", devices="a100-1g:1")
-
-import runpy
-runpy.run_path("train.py", run_name="__main__")
-```
-
-开启终端报告后运行：
+提交 Python 训练命令前，可以先跑 fakecuda preflight：
 
 ```bash
-FAKEGPU_TERMINAL_REPORT=1 python3 preflight_entry.py
+fakegpu preflight \
+  --runtime fakecuda \
+  --devices a100-1g:1 \
+  --stage forward \
+  --report-dir preflight-a100-1g \
+  --strict \
+  -- python3 train.py --small-config
 ```
+
+runner 会写出：
+
+- `preflight_report.json`
+- `preflight_report.md`
+- `preflight_stdout.log`
+- `preflight_stderr.log`
+
+建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。当前初版 runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，但 activation 和 temporary tensor 跟踪仍需继续完善。
 
 如果要用 RTX 3090 Ti 做校准，先在真实 GPU 上跑缩小版 workload，再按环境能力对比 passthrough 或 hybrid：
 
@@ -88,6 +92,7 @@ python3 train.py --small-config
 ./ftest smoke
 ./ftest cpu_sim
 ./ftest python
+./ftest preflight_oom
 ./ftest all
 ```
 

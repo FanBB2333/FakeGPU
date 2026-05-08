@@ -9,6 +9,12 @@ from ._api import _warn_if_macos_injection_may_be_blocked
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "preflight":
+        from .preflight import main as preflight_main
+
+        return preflight_main(argv[1:])
+
     parser = argparse.ArgumentParser(
         prog="fakegpu",
         description="Run a command with FakeGPU libraries preloaded (LD_PRELOAD/DYLD_INSERT_LIBRARIES).",

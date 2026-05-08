@@ -180,5 +180,29 @@ def _init_fakecuda_runtime(
     if devices is not None:
         os.environ["FAKEGPU_PROFILES"] = ",".join(devices) if not isinstance(devices, str) else devices
 
-    patch_result = patch_torch(num_devices=device_count)
+    effective_device_count = device_count
+    if effective_device_count is None:
+        effective_device_count = _infer_device_count_from_devices(
+            devices if devices is not None else os.environ.get("FAKEGPU_PROFILES")
+        )
+
+    patch_result = patch_torch(num_devices=effective_device_count)
     return RuntimeInitResult(runtime="fakecuda", backend=patch_result.backend)
+
+
+def _infer_device_count_from_devices(devices: str | Sequence[str] | None) -> int | None:
+    if devices is None:
+        return None
+    specs = [devices] if isinstance(devices, str) else list(devices)
+    total = 0
+    for item in specs:
+        for spec in str(item).split(","):
+            spec = spec.strip()
+            if not spec:
+                continue
+            parts = spec.split(":", 1)
+            if len(parts) == 2 and parts[1].strip().isdigit():
+                total += int(parts[1].strip())
+            else:
+                total += 1
+    return total or None

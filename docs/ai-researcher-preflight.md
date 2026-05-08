@@ -45,12 +45,13 @@ the preflight workflow should answer:
 - If it failed, was the failure an OOM or a runtime/configuration error?
 - How complete is the memory tracking behind this conclusion?
 
-## Target Workflow
+## Current Target Workflow
 
-The next version should provide a single runner:
+The initial runner provides a single preflight entry point for Python commands:
 
 ```bash
 fakegpu preflight \
+  --runtime fakecuda \
   --devices a100:8 \
   --stage train_step \
   --steps 1 \
@@ -66,7 +67,7 @@ Expected outputs:
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-The report status should be one of:
+The report status is one of:
 
 | Status | Meaning |
 |---|---|
@@ -75,9 +76,9 @@ The report status should be one of:
 | `FAIL_RUNTIME` | The run failed for dependencies, data, model loading, code errors, or environment problems. |
 | `WARN_INCOMPLETE_TRACKING` | The command ran, but memory tracking was too incomplete for a strong fit/no-fit answer. |
 
-## Manual Workflow Available Today
+The initial fakecuda runner auto-initializes Python commands before executing the script, module, or `-c` code. Non-Python commands can still be run through native, hybrid, or passthrough modes, but fakecuda cannot auto-patch them.
 
-Until `fakegpu preflight` exists, use a three-step manual process.
+## Recommended Workflow
 
 ### 1. Check FakeGPU Baseline
 
@@ -85,33 +86,35 @@ Until `fakegpu preflight` exists, use a three-step manual process.
 ./ftest smoke
 ./ftest cpu_sim
 ./ftest python
+./ftest preflight_oom
 ```
 
 These commands verify that the build, preload path, reports, GPU profiles, CPU-backed cuBLAS paths, and basic PyTorch CUDA surface are working.
 
 ### 2. Run A Fakecuda OOM Probe
 
-Add FakeGPU initialization early in a small wrapper, before importing torch-heavy code:
-
-```python
-import fakegpu
-
-fakegpu.init(runtime="fakecuda", devices="a100-1g:1")
-
-import runpy
-runpy.run_path("train.py", run_name="__main__")
-```
-
-Then run:
+Run the preflight command with a small profile:
 
 ```bash
-FAKEGPU_TERMINAL_REPORT=1 python preflight_entry.py
+fakegpu preflight \
+  --runtime fakecuda \
+  --devices a100-1g:1 \
+  --stage forward \
+  --report-dir preflight-a100-1g \
+  --strict \
+  -- python train.py --small-config
 ```
 
-Use a small profile such as `a100-1g` to verify that OOM failures are detected. Then repeat with the intended target profile:
+Then repeat with the intended target profile:
 
-```python
-fakegpu.init(runtime="fakecuda", devices="a100:8")
+```bash
+fakegpu preflight \
+  --runtime fakecuda \
+  --devices a100:8 \
+  --stage forward \
+  --report-dir preflight-a100 \
+  --strict \
+  -- python train.py --cluster-config
 ```
 
 Important limitation: the current fakecuda summary is still strongest for model weights and explicit fake-CUDA storage. Op-produced activations and temporaries are not yet fully covered, so a pass should be treated as a weak signal until tensor-lifetime tracking is improved.
