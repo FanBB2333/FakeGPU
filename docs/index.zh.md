@@ -7,6 +7,7 @@ English 是默认文档版本，页面右上角可以切换到简体中文。
 ## FakeGPU 适合做什么
 
 - 在无 GPU 环境里先验证 CUDA / PyTorch 主路径
+- 在提交大型 GPU 集群前，对 AI workload 做能否运行和 OOM 风险预检查
 - 向框架暴露可配置的虚拟 GPU 设备清单
 - 对已维护的 cuBLAS / cuBLASLt 路径使用 CPU 执行，做结果可校验的 smoke test
 - 在单机多进程场景下模拟 NCCL 风格的 collective 和 point-to-point 通信
@@ -76,6 +77,7 @@ FAKEGPU_DIST_MODE=simulate
 
 - [快速开始](getting-started.md)
 - [快速参考](quick-reference.md)
+- [AI Researcher 提交前预检查](ai-researcher-preflight.md)
 - [项目结构与架构](project-structure.md)
 - [Torch Patch 系统](phase2-custom-torch.zh.md)
 - [报告与验证](reports-and-validation.md)

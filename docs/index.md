@@ -7,6 +7,7 @@ English is the default documentation language. A Simplified Chinese translation 
 ## What FakeGPU is good at
 
 - Running CUDA-facing code paths on machines without GPUs
+- Running preflight checks before submitting AI workloads to larger GPU clusters
 - Exposing configurable fake GPU inventories to frameworks such as PyTorch
 - Executing supported cuBLAS/cuBLASLt operators on CPU for correctness-oriented smoke coverage
 - Simulating NCCL-style collective and point-to-point flows on a single host with multiple ranks
@@ -77,6 +78,7 @@ FAKEGPU_DIST_MODE=simulate
 
 - [Getting Started](getting-started.md)
 - [Quick Reference](quick-reference.md)
+- [AI Researcher Preflight](ai-researcher-preflight.md)
 - [Architecture](project-structure.md)
 - [Torch Patch System](phase2-custom-torch.md)
 - [Reports & Validation](reports-and-validation.md)
