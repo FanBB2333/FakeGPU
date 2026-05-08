@@ -202,11 +202,11 @@ with fakegpu.stage("backward"):
   - view 后共享 storage 的归属验证
   - autograd 保存的 activation
 - [ ] 区分内存类别：
-  - parameters
+  - [x] parameters
   - buffers
-  - gradients
-  - optimizer state
-  - activations
+  - [x] gradients
+  - [x] optimizer state
+  - [x] activations
   - temporary tensors
   - unknown
 - [x] 支持分阶段峰值：

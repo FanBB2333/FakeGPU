@@ -85,7 +85,7 @@ Status values:
 | `FAIL_RUNTIME` | Dependencies, data, model loading, code, or environment setup failed. |
 | `WARN_INCOMPLETE_TRACKING` | The run completed, but memory tracking was not complete enough for a strong fit/no-fit judgment. |
 
-Each device entry includes total memory, peak memory, headroom, allocation count, `peak_by_stage`, and `largest_allocations`. In fakecuda mode, top allocations include bytes, dtype, shape, stage, and a coarse category such as `tensor` or `activation`.
+Each device entry includes total memory, peak memory, headroom, allocation count, `current_bytes_by_category`, `peak_by_stage`, and `largest_allocations`. In fakecuda mode, top allocations include bytes, dtype, shape, stage, and a coarse category such as `parameter`, `gradient`, `optimizer_state`, `tensor`, or `activation`.
 
 The current real calibration target is a single RTX 3090 Ti with 24GB of VRAM. That is useful for real-CUDA calibration under 24GB, but it does not prove that a larger multi-node A100/H100 cluster run will fit or perform well.
 
