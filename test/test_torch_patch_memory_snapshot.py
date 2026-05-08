@@ -259,3 +259,59 @@ def test_memory_snapshot_does_not_double_count_shared_storage_aliases() -> None:
     assert after_contiguous["current_memory"] == after_base["current_memory"] + 4 * 4 * 4
     assert after_contiguous["allocation_count"] == after_base["allocation_count"] + 1
     assert after_contiguous["peak_by_stage"]["forward"] == after_contiguous["current_memory"]
+
+
+def test_memory_snapshot_attributes_allocations_to_logical_devices() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", devices="a100-1g:2")
+
+        import torch
+        import fakegpu.torch_patch as tp
+
+        with fakegpu.stage("forward"):
+            dev0 = torch.empty((8, 8), device="cuda:0", dtype=torch.float32)
+            dev1 = torch.empty((16, 8), device="cuda:1", dtype=torch.float32)
+
+        snapshot = tp.memory_snapshot()
+        payload = {
+            "snapshot": snapshot,
+            "devices": [str(dev0.device), str(dev1.device)],
+        }
+        print(json.dumps(payload, sort_keys=True))
+        """
+    )
+
+    env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload["devices"] == ["cuda:0", "cuda:1"]
+
+    devices = payload["snapshot"]["devices"]
+    assert len(devices) == 2
+    dev0, dev1 = devices
+
+    assert dev0["index"] == 0
+    assert dev1["index"] == 1
+    assert dev0["current_memory"] == 8 * 8 * 4
+    assert dev1["current_memory"] == 16 * 8 * 4
+    assert dev0["peak_by_stage"]["forward"] == dev0["current_memory"]
+    assert dev1["peak_by_stage"]["forward"] == dev1["current_memory"]
+    assert dev0["largest_allocations"][0]["device"] == 0
+    assert dev1["largest_allocations"][0]["device"] == 1

@@ -223,7 +223,7 @@ with fakegpu.stage("backward"):
   - stage
   - category
 - [ ] 支持 optional stack trace
-- [ ] 多设备场景下正确归属 logical device。
+- [x] 多设备场景下正确归属 logical device。
 - [x] 报告 `tracking_confidence`：
   - `C0_incomplete`：只跑通流程，不适合判断 OOM。
   - `C1_weight_storage`：主要覆盖权重和显式 storage。
