@@ -1,0 +1,9 @@
+# Generated test reports — kept on the `reports` branch, not tracked on main.
+# These patterns are tagged so any stray HTML report (e.g. accidentally
+# committed local runs) still drops out of GitHub's language stats and
+# folds in PR diffs.
+test-results/**/report*.html linguist-generated=true
+test/report.html             linguist-generated=true
+
+# Hand-written entry page is the real source — keep it counted as HTML.
+test-results/index.html      linguist-generated=false
