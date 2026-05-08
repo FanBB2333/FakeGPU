@@ -37,7 +37,7 @@ EXPERIMENT_SPECS: dict[str, dict[str, Any]] = {
         "title": "Summary Scope Probe (Elementwise + Clone)",
         "description": (
             "Proves the current torch_patch summary tracks explicit fake-CUDA "
-            "storages but does not account for most op-produced activation tensors."
+            "storages plus common op-produced tensor outputs."
         ),
     },
     "moe_520m_load": {
@@ -150,8 +150,8 @@ def _make_key_observation(result: dict[str, Any]) -> str:
     metrics = result["metrics"]
     if slug == "scope_probe":
         return (
-            f"`x + y` stayed at {metrics['after_add_mb']:.1f} MB after two 4 MB inputs, "
-            "so op outputs are still outside the current tracker scope."
+            f"`x + y`, `clone`, and `zeros_like` raised tracked peak memory to "
+            f"{metrics['peak_mb']:.1f} MB."
         )
     if slug == "moe_520m_load":
         return (
@@ -171,7 +171,7 @@ def _make_key_observation(result: dict[str, Any]) -> str:
 
 def _render_markdown(results: list[dict[str, Any]]) -> str:
     findings = [
-        "- The current fakecuda `torch_patch` summary is weight/storage-oriented, not a full training-peak allocator trace.",
+        "- The current fakecuda `torch_patch` summary now includes common op-produced tensor storage, stage peaks, and top allocation metadata, but it is still not a full training-peak allocator trace.",
         "- Load-only peak memory scales correctly from the existing 2.41M MoE baseline to 520M and 1.0B parameter configurations.",
         "- The pure `torch_patch` path now honors the `a100-1g` profile limit and keeps device-count/profile state consistent.",
     ]
@@ -310,8 +310,8 @@ def _run_scope_probe() -> dict[str, Any]:
         "slug": "scope_probe",
         "status": "pass",
         "note": (
-            "This is an expected limitation probe, not a bug regression. It "
-            "documents that op-produced tensors like `x + y` are not yet tracked."
+            "This is now a regression probe for tensor-lifetime tracking. It "
+            "does not yet prove complete optimizer-state or autograd-saved activation accounting."
         ),
         "metrics": {
             "after_xy_mb": after_xy / 1024**2,

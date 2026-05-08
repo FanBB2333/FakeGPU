@@ -67,6 +67,8 @@ def _validate_device(index: int, dev: Any) -> None:
         "peak_memory",
         "headroom_bytes",
         "allocation_count",
+        "peak_by_stage",
+        "largest_allocations",
         "tracking_confidence",
     ):
         if field not in dev:
@@ -75,6 +77,16 @@ def _validate_device(index: int, dev: Any) -> None:
         _die(f"devices[{index}].total_memory must be >= 0")
     if int(dev["peak_memory"]) < 0:
         _die(f"devices[{index}].peak_memory must be >= 0")
+    if not isinstance(dev["peak_by_stage"], dict):
+        _die(f"devices[{index}].peak_by_stage must be an object")
+    if not isinstance(dev["largest_allocations"], list):
+        _die(f"devices[{index}].largest_allocations must be a list")
+    for alloc_index, alloc in enumerate(dev["largest_allocations"]):
+        if not isinstance(alloc, dict):
+            _die(f"devices[{index}].largest_allocations[{alloc_index}] must be an object")
+        for field in ("bytes", "device", "stage", "category"):
+            if field not in alloc:
+                _die(f"devices[{index}].largest_allocations[{alloc_index}].{field} is missing")
 
 
 def _require(report: dict[str, Any], key: str, expected: Any | None = None) -> Any:

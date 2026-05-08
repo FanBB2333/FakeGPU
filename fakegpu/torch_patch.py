@@ -373,17 +373,19 @@ class _DeviceMemoryTracker:
         self._peak = [0] * len(per_device_bytes)
         self._alloc_calls = [0] * len(per_device_bytes)
         self._free_calls = [0] * len(per_device_bytes)
-        # data_ptr -> (device_index, nbytes)
-        self._allocs: dict[int, tuple[int, int]] = {}
+        self._peak_by_stage: list[dict[str, int]] = [dict() for _ in per_device_bytes]
+        self._largest_allocations: list[list[dict[str, Any]]] = [[] for _ in per_device_bytes]
+        # data_ptr -> allocation record
+        self._allocs: dict[int, dict[str, Any]] = {}
 
-    def allocate(self, data_ptr: int, nbytes: int, device: int) -> None:
+    def allocate(self, data_ptr: int, nbytes: int, device: int, metadata: dict[str, Any] | None = None) -> bool:
         """Register allocation. Raise OutOfMemoryError if exceeds limit."""
         import torch
 
         if device < 0 or device >= len(self._total):
-            return
+            return False
         if data_ptr in self._allocs:
-            return  # already tracked
+            return False  # already tracked
         if self._used[device] + nbytes > self._total[device]:
             free = self._total[device] - self._used[device]
             raise torch.cuda.OutOfMemoryError(
@@ -393,16 +395,29 @@ class _DeviceMemoryTracker:
                 f"{self._total[device] / 2**30:.2f} GiB "
                 f"of which {free / 2**30:.2f} GiB is free."
             )
-        self._allocs[data_ptr] = (device, nbytes)
+        meta = dict(metadata or {})
+        stage = str(meta.get("stage") or os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown")
+        meta["stage"] = stage
+
+        self._allocs[data_ptr] = {
+            "device": device,
+            "bytes": int(nbytes),
+            **meta,
+        }
         self._used[device] += nbytes
         self._peak[device] = max(self._peak[device], self._used[device])
+        stage_peaks = self._peak_by_stage[device]
+        stage_peaks[stage] = max(stage_peaks.get(stage, 0), self._used[device])
         self._alloc_calls[device] += 1
+        self._record_largest_allocation(device, nbytes, meta)
+        return True
 
     def release(self, data_ptr: int) -> None:
         """Unregister allocation."""
         rec = self._allocs.pop(data_ptr, None)
         if rec:
-            dev, nbytes = rec
+            dev = int(rec.get("device", 0))
+            nbytes = int(rec.get("bytes", 0))
             self._used[dev] = max(0, self._used[dev] - nbytes)
             self._free_calls[dev] += 1
 
@@ -425,6 +440,63 @@ class _DeviceMemoryTracker:
     def reset_peak(self, device: int) -> None:
         if 0 <= device < len(self._peak):
             self._peak[device] = self._used[device]
+            self._peak_by_stage[device] = {}
+
+    def peak_by_stage(self, device: int) -> dict[str, int]:
+        if device < 0 or device >= len(self._peak_by_stage):
+            return {}
+        return dict(self._peak_by_stage[device])
+
+    def largest_allocations(self, device: int, limit: int = 10) -> list[dict[str, Any]]:
+        if device < 0 or device >= len(self._largest_allocations):
+            return []
+        return [dict(item) for item in self._largest_allocations[device][:limit]]
+
+    def snapshot(self, profiles: list[dict[str, Any]]) -> dict[str, Any]:
+        devices: list[dict[str, Any]] = []
+        for index, prof in enumerate(profiles):
+            if index >= len(self._total):
+                break
+            total = int(self._total[index])
+            peak = int(self._peak[index])
+            current = int(self._used[index])
+            headroom = total - peak
+            headroom_percent = (100.0 * headroom / total) if total > 0 else None
+            devices.append(
+                {
+                    "index": index,
+                    "name": str(prof.get("name", "")),
+                    "profile_id": str(prof.get("profile_id", "")),
+                    "total_memory": total,
+                    "current_memory": current,
+                    "peak_memory": peak,
+                    "headroom_bytes": headroom,
+                    "headroom_percent": round(headroom_percent, 3) if headroom_percent is not None else None,
+                    "allocation_count": int(self._alloc_calls[index]),
+                    "free_count": int(self._free_calls[index]),
+                    "peak_by_stage": self.peak_by_stage(index),
+                    "largest_allocations": self.largest_allocations(index),
+                    "tracking_confidence": "C2_torch_tensor_lifetime",
+                }
+            )
+        return {
+            "tracking_confidence": "C2_torch_tensor_lifetime",
+            "devices": devices,
+        }
+
+    def _record_largest_allocation(self, device: int, nbytes: int, metadata: dict[str, Any]) -> None:
+        item = {
+            "bytes": int(nbytes),
+            "device": int(device),
+            "dtype": metadata.get("dtype"),
+            "shape": metadata.get("shape"),
+            "stage": metadata.get("stage"),
+            "category": metadata.get("category", "tensor"),
+        }
+        entries = self._largest_allocations[device]
+        entries.append(item)
+        entries.sort(key=lambda alloc: int(alloc.get("bytes", 0)), reverse=True)
+        del entries[10:]
 
 
 # ---------------------------------------------------------------------------
@@ -537,7 +609,14 @@ def _register_tensor_for_memory_tracking(tensor: Any, device_index: int) -> None
         nbytes = storage.nbytes()
         if dp == 0 or nbytes == 0:
             return
-        _memory_tracker.allocate(dp, nbytes, device_index)
+        did_allocate = _memory_tracker.allocate(
+            dp,
+            nbytes,
+            device_index,
+            metadata=_tensor_allocation_metadata(tensor),
+        )
+        if not did_allocate:
+            return
 
         # Set up weakref callback to release memory when tensor is GC'd.
         # We weakref the storage, not the tensor, because multiple tensor
@@ -553,6 +632,60 @@ def _register_tensor_for_memory_tracking(tensor: Any, device_index: int) -> None
         raise  # Re-raise OOM and related errors
     except Exception:
         pass
+
+
+def _tensor_allocation_metadata(tensor: Any) -> dict[str, Any]:
+    raw = getattr(tensor, "raw_data", tensor)
+    shape = _safe_tensor_shape(raw)
+    dtype = getattr(raw, "dtype", getattr(tensor, "dtype", None))
+    return {
+        "dtype": str(dtype) if dtype is not None else None,
+        "shape": shape,
+        "stage": os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown",
+        "category": _infer_tensor_memory_category(tensor, raw),
+    }
+
+
+def _safe_tensor_shape(tensor: Any) -> list[int] | None:
+    try:
+        return [int(dim) for dim in tuple(tensor.shape)]
+    except Exception:
+        return None
+
+
+def _infer_tensor_memory_category(tensor: Any, raw: Any) -> str:
+    try:
+        import torch
+
+        if isinstance(tensor, torch.nn.Parameter) or isinstance(raw, torch.nn.Parameter):
+            return "parameter"
+    except Exception:
+        pass
+
+    try:
+        if getattr(raw, "grad_fn", None) is not None:
+            return "activation"
+    except Exception:
+        pass
+
+    try:
+        if bool(getattr(raw, "requires_grad", False)):
+            return "activation"
+    except Exception:
+        pass
+
+    return "tensor"
+
+
+def memory_snapshot() -> dict[str, Any]:
+    """Return FakeGPU torch-layer memory metadata for preflight reports."""
+    tracker = _memory_tracker
+    if tracker is None:
+        return {
+            "tracking_confidence": "C0_incomplete",
+            "devices": [],
+        }
+    return tracker.snapshot(_DEVICE_PROFILES)
 
 
 @dataclass(frozen=True)

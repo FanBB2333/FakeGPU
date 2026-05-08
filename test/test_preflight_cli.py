@@ -69,6 +69,9 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
 
     assert completed.returncode == 0, completed.stderr
     assert (report_dir / "preflight_report.md").is_file()
+    markdown = (report_dir / "preflight_report.md").read_text(encoding="utf-8")
+    assert "## Stage Peaks" in markdown
+    assert "## Largest Allocations" in markdown
     assert (report_dir / "preflight_stdout.log").read_text(encoding="utf-8").startswith("peak ")
     assert "FakeGPU Report Summary" in (report_dir / "preflight_stderr.log").read_text(encoding="utf-8")
 
@@ -88,6 +91,14 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     assert devices[0]["headroom_bytes"] > 0
     assert devices[0]["allocation_count"] >= 1
     assert devices[0]["tracking_confidence"] == "C2_torch_tensor_lifetime"
+    assert devices[0]["peak_by_stage"]["forward"] >= devices[0]["peak_memory"]
+    assert devices[0]["largest_allocations"]
+    largest = devices[0]["largest_allocations"][0]
+    assert largest["bytes"] >= 4 * 1024**2
+    assert largest["dtype"] == "torch.float32"
+    assert largest["shape"] == [1024, 1024]
+    assert largest["stage"] == "forward"
+    assert largest["category"] in {"activation", "tensor"}
 
 
 def test_preflight_devices_spec_infers_device_count(tmp_path: Path) -> None:

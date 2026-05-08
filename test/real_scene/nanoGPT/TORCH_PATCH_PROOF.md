@@ -6,7 +6,7 @@
 
 ## Key Findings
 
-- The current fakecuda `torch_patch` summary is weight/storage-oriented, not a full training-peak allocator trace.
+- The current fakecuda `torch_patch` summary now includes common op-produced tensor storage, stage peaks, and top allocation metadata, but it is still not a full training-peak allocator trace.
 - Load-only peak memory scales correctly from the existing 2.41M MoE baseline to 520M and 1.0B parameter configurations.
 - The pure `torch_patch` path now honors the `a100-1g` profile limit and keeps device-count/profile state consistent.
 
@@ -14,7 +14,7 @@
 
 | ID | Experiment | Result | Key observation |
 |---|---|---|---|
-| P3-5 | Summary Scope Probe (Elementwise + Clone) | PASS | `x + y` stayed at 8.0 MB after two 4 MB inputs, so op outputs are still outside the current tracker scope. |
+| P3-5 | Summary Scope Probe (Elementwise + Clone) | PASS | `x + y`, `clone`, and `zeros_like` are now tracked as torch-layer allocations. |
 | P3-6 | Load-Only Scaling (520M MoE) | PASS | 520.22M params produced a 1.94 GiB peak, matching fp32 weight size rather than full training peak. |
 | P3-7 | Load-Only Scaling (1.0B MoE) | PASS | 1001.61M params produced a 3.73 GiB peak, showing summary scaling remains linear for load-only weight tracking. |
 | P3-8 | Small-VRAM OOM (1.0B MoE on a100-1g) | PASS | `a100-1g` now reports 1.00 GiB with 2 synchronized profile entries and raises OOM as expected. |
@@ -22,17 +22,17 @@
 ## Detailed Results
 
 ### P3-5: Summary Scope Probe (Elementwise + Clone)
-- Description: Proves the current torch_patch summary tracks explicit fake-CUDA storages but does not account for most op-produced activation tensors.
+- Description: Proves the current torch_patch summary tracks explicit fake-CUDA storages and common op-produced tensor outputs.
 - Result: `PASS`
-- Note: This is an expected limitation probe, not a bug regression. It documents that op-produced tensors like `x + y` are not yet tracked.
+- Note: This is now a regression probe for tensor-lifetime tracking. It does not yet prove complete optimizer-state or autograd-saved activation accounting.
 - Metrics:
 ```text
 after_xy: 8.0 MB
-after_add: 8.0 MB
-after_clone: 8.0 MB
-after_zeros_like: 8.0 MB
-peak: 8.0 MB
-alloc_calls: 2
+after_add: 12.0 MB
+after_clone: 16.0 MB
+after_zeros_like: 20.0 MB
+peak: 20.0 MB
+alloc_calls: 5
 ```
 - Report Summary:
 ```text

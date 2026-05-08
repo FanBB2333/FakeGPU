@@ -1256,7 +1256,7 @@ MoEGPT model: 2.40M parameters, 4 experts, top-2
         <ul>
           <li>No actual GPU computation; kernels are no-ops</li>
           <li><code>tensor.device</code> reports <code>cpu</code></li>
-          <li>fakecuda terminal summary is currently weight/storage-focused; most op-produced activations are not tracked</li>
+          <li>fakecuda terminal summary is not yet a full optimizer-state or autograd-saved activation trace</li>
           <li>E6 (distributed) not yet implemented</li>
           <li>macOS: all tests use CPU backend</li>
         </ul>
