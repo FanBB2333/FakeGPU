@@ -181,6 +181,7 @@ preflight 报告应包含：
 - 已到达阶段
 - 每设备总显存、峰值显存和余量
 - 最大分配列表
+- 按 stage 统计的峰值显存
 - warning
 - error
 - stdout / stderr 日志路径

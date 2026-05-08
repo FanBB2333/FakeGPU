@@ -177,6 +177,8 @@ def _init_fakecuda_runtime(
 ) -> RuntimeInitResult:
     if profile is not None:
         os.environ["FAKEGPU_PROFILE"] = str(profile)
+        if devices is None:
+            os.environ.pop("FAKEGPU_PROFILES", None)
     if devices is not None:
         os.environ["FAKEGPU_PROFILES"] = ",".join(devices) if not isinstance(devices, str) else devices
 

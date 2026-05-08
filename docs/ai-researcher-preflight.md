@@ -181,6 +181,7 @@ The preflight report should include:
 - stage reached
 - per-device memory totals, peaks, and headroom
 - largest allocations
+- peak memory by stage
 - warnings
 - errors
 - stdout/stderr log paths

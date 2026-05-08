@@ -99,6 +99,14 @@ def _snapshot_fakecuda_devices() -> list[dict[str, Any]]:
     except Exception:
         return []
 
+    try:
+        snapshot = tp.memory_snapshot()
+        devices = snapshot.get("devices")
+        if isinstance(devices, list):
+            return [dict(device) for device in devices if isinstance(device, dict)]
+    except Exception:
+        pass
+
     tracker = getattr(tp, "_memory_tracker", None)
     profiles = list(getattr(tp, "_DEVICE_PROFILES", []))
     devices: list[dict[str, Any]] = []

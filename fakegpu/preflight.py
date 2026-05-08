@@ -234,6 +234,48 @@ def render_markdown_report(report: dict[str, Any]) -> str:
             )
         )
 
+    stage_rows: list[str] = []
+    allocation_rows: list[str] = []
+    for dev in report.get("devices", []):
+        dev_index = int(dev.get("index", 0))
+        for stage, peak in sorted((dev.get("peak_by_stage") or {}).items()):
+            stage_rows.append(f"| {dev_index} | `{stage}` | {_fmt_bytes(int(peak))} |")
+        for alloc in dev.get("largest_allocations", []) or []:
+            allocation_rows.append(
+                "| {device} | {size} | `{dtype}` | `{shape}` | `{stage}` | `{category}` |".format(
+                    device=int(alloc.get("device", dev_index)),
+                    size=_fmt_bytes(int(alloc.get("bytes", 0))),
+                    dtype=alloc.get("dtype"),
+                    shape=alloc.get("shape"),
+                    stage=alloc.get("stage"),
+                    category=alloc.get("category"),
+                )
+            )
+
+    if stage_rows:
+        lines.extend(
+            [
+                "",
+                "## Stage Peaks",
+                "",
+                "| GPU | Stage | Peak |",
+                "|---:|---|---:|",
+                *stage_rows,
+            ]
+        )
+
+    if allocation_rows:
+        lines.extend(
+            [
+                "",
+                "## Largest Allocations",
+                "",
+                "| GPU | Size | Dtype | Shape | Stage | Category |",
+                "|---:|---:|---|---|---|---|",
+                *allocation_rows,
+            ]
+        )
+
     errors = report.get("errors", [])
     if errors:
         lines.extend(["", "## Errors", ""])
@@ -291,6 +333,8 @@ def _build_child_env(ns: argparse.Namespace, paths: PreflightPaths) -> dict[str,
         base["FAKEGPU_DEVICE_COUNT"] = str(int(effective_device_count))
     if ns.profile:
         base["FAKEGPU_PROFILE"] = str(ns.profile)
+        if not ns.devices:
+            base.pop("FAKEGPU_PROFILES", None)
     if ns.devices:
         base["FAKEGPU_PROFILES"] = str(ns.devices)
 
@@ -406,7 +450,8 @@ def _normalize_devices(raw_report: dict[str, Any] | None, raw_report_kind: str |
                 "headroom_bytes": headroom,
                 "headroom_percent": round(headroom_percent, 3) if headroom_percent is not None else None,
                 "allocation_count": allocation_count,
-                "largest_allocations": [],
+                "peak_by_stage": dict(raw.get("peak_by_stage", {}) or {}),
+                "largest_allocations": list(raw.get("largest_allocations", []) or []),
                 "tracking_confidence": confidence,
             }
         )

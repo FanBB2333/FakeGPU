@@ -195,10 +195,11 @@ with fakegpu.stage("backward"):
 当前 `torch_patch` 的报告主要覆盖显式 fake-CUDA storage，已知不足是大多数 op 产生的 activation / temporary tensor 没有完整计入。面向 OOM preflight，这一项是核心。
 
 - [ ] 修复 op-produced tensor 跟踪：
-  - elementwise output
-  - matmul output
+  - [x] elementwise output
+  - [x] matmul output
   - loss output
-  - clone / contiguous / view 后的新 storage
+  - [x] clone / contiguous 后的新 storage
+  - view 后共享 storage 的归属验证
   - autograd 保存的 activation
 - [ ] 区分内存类别：
   - parameters
@@ -208,21 +209,22 @@ with fakegpu.stage("backward"):
   - activations
   - temporary tensors
   - unknown
-- [ ] 支持分阶段峰值：
+- [x] 支持分阶段峰值：
   - `peak_import`
   - `peak_model_load`
   - `peak_forward`
   - `peak_backward`
   - `peak_optimizer_step`
-- [ ] 支持 top allocations：
+- [x] 支持 top allocations：
   - bytes
   - dtype
   - shape
   - device
   - stage
-  - optional stack trace
+  - category
+- [ ] 支持 optional stack trace
 - [ ] 多设备场景下正确归属 logical device。
-- [ ] 报告 `tracking_confidence`：
+- [x] 报告 `tracking_confidence`：
   - `C0_incomplete`：只跑通流程，不适合判断 OOM。
   - `C1_weight_storage`：主要覆盖权重和显式 storage。
   - `C2_torch_tensor_lifetime`：覆盖 torch 层 tensor 生命周期，适合 fakecuda preflight。
@@ -232,7 +234,7 @@ with fakegpu.stage("backward"):
 验收：
 
 - [ ] 现有 `test/real_scene/nanoGPT/TORCH_PATCH_PROOF.md` 中 “op-produced activation 未计入” 的限制被替换为新的通过实验。
-- [ ] `torch.cuda.max_memory_allocated()` 与 preflight report 的峰值一致。
+- [x] `torch.cuda.max_memory_allocated()` 与 preflight report 的峰值一致。
 - [ ] `a100-1g` 下可稳定触发 OOM。
 
 ---
