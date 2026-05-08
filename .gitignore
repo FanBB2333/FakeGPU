@@ -26,6 +26,11 @@ fake_gpu_report.json
 test/output/*_torchrun.log
 test/output/*_coordinator.log
 
+# Pytest-html test reports — live on the `reports` branch, not main.
+# (test-results/index.html is a hand-written entry page; keep it tracked.)
+test-results/**/report.html
+test-results/**/report-*.html
+
 # Python build / packaging
 __pycache__/
 *.pyc
