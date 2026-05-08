@@ -117,7 +117,7 @@ fakegpu preflight \
   -- python train.py --cluster-config
 ```
 
-Important limitation: fakecuda preflight now tracks torch-level tensor lifetimes, stage peaks, top allocations, and coarse categories for parameters, buffers, gradients, optimizer state, activations, and temporaries. Shared-storage attribution, saved autograd activations, and multi-device ownership still need more validation, so a pass should be treated as a preflight signal rather than proof that a full cluster run will fit.
+Important limitation: fakecuda preflight now tracks torch-level tensor lifetimes, stage peaks, top allocations, coarse categories for parameters, buffers, gradients, optimizer state, activations, and temporaries, and shared-storage aliases. Saved autograd activations and multi-device ownership still need more validation, so a pass should be treated as a preflight signal rather than proof that a full cluster run will fit.
 
 ### 3. Calibrate On The 3090 Ti
 
@@ -202,8 +202,8 @@ Suggested confidence levels:
 
 The next implementation should prioritize:
 
-1. Shared-storage attribution for views and in-place aliases.
-2. Saved autograd activation coverage beyond visible op outputs.
-3. Multi-device logical ownership validation.
+1. Saved autograd activation coverage beyond visible op outputs.
+2. Multi-device logical ownership validation.
+3. Optional stack traces for the largest allocations.
 4. 3090 Ti calibration reports for small controlled workloads.
 5. Documentation that clearly separates fit/no-fit checks from performance prediction.
