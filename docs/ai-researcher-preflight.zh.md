@@ -45,12 +45,13 @@ preflight 至少要回答：
 - 如果失败，是 OOM 还是运行时/配置错误？
 - 这份显存结论的可信度是多少？
 
-## 目标工作流
+## 当前目标工作流
 
-下一版应该提供一个统一入口：
+初版 runner 已经提供一个面向 Python 命令的统一入口：
 
 ```bash
 fakegpu preflight \
+  --runtime fakecuda \
   --devices a100:8 \
   --stage train_step \
   --steps 1 \
@@ -66,7 +67,7 @@ fakegpu preflight \
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-报告状态应该是以下之一：
+报告状态是以下之一：
 
 | 状态 | 含义 |
 |---|---|
@@ -75,9 +76,9 @@ fakegpu preflight \
 | `FAIL_RUNTIME` | 依赖、数据、模型加载、代码或环境问题导致失败。 |
 | `WARN_INCOMPLETE_TRACKING` | 命令跑完了，但显存跟踪不完整，不能给出强结论。 |
 
-## 当前可用的手动流程
+初版 fakecuda runner 会在执行 Python script、module 或 `-c` 代码前自动初始化 fakecuda。非 Python 命令仍可通过 native、hybrid 或 passthrough 模式运行，但 fakecuda 不能自动 patch。
 
-在 `fakegpu preflight` 实现前，可以先用三步手动检查。
+## 推荐流程
 
 ### 1. 检查 FakeGPU 基线
 
@@ -85,33 +86,35 @@ fakegpu preflight \
 ./ftest smoke
 ./ftest cpu_sim
 ./ftest python
+./ftest preflight_oom
 ```
 
 这些命令用于确认构建、preload、报告、GPU profile、CPU-backed cuBLAS 路径和基础 PyTorch CUDA 表面可用。
 
 ### 2. 跑 fakecuda OOM probe
 
-在一个很小的 wrapper 里尽早初始化 FakeGPU，必须放在大量导入 torch 相关库之前：
-
-```python
-import fakegpu
-
-fakegpu.init(runtime="fakecuda", devices="a100-1g:1")
-
-import runpy
-runpy.run_path("train.py", run_name="__main__")
-```
-
-然后运行：
+先用小显存 profile 跑 preflight：
 
 ```bash
-FAKEGPU_TERMINAL_REPORT=1 python preflight_entry.py
+fakegpu preflight \
+  --runtime fakecuda \
+  --devices a100-1g:1 \
+  --stage forward \
+  --report-dir preflight-a100-1g \
+  --strict \
+  -- python train.py --small-config
 ```
 
-先用 `a100-1g` 这类小显存 profile 验证 OOM 能稳定触发。再换成目标 profile：
+再换成目标 profile：
 
-```python
-fakegpu.init(runtime="fakecuda", devices="a100:8")
+```bash
+fakegpu preflight \
+  --runtime fakecuda \
+  --devices a100:8 \
+  --stage forward \
+  --report-dir preflight-a100 \
+  --strict \
+  -- python train.py --cluster-config
 ```
 
 重要限制：当前 fakecuda summary 对模型权重和显式 fake-CUDA storage 最可靠。大多数算子产生的 activation 和 temporary tensor 还没有完整计入，所以通过结果只能作为弱信号，直到 tensor-lifetime 跟踪完成。

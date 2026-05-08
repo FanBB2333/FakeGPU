@@ -15,6 +15,7 @@ Suites:
   smoke     Build + run basic C/Python checks (no torch required)
   cpu_sim   Build CPU simulation and validate cuBLAS ops
   python    Run PyTorch tests (requires torch)
+  preflight_oom  Run fakecuda preflight pass/OOM report checks (requires torch)
   llm       Run LLM inference smoke test (requires torch + transformers + local model)
   passthrough_parity  Compare direct vs passthrough LLM outputs (requires real GPU + local model)
   all       smoke + python
@@ -89,6 +90,49 @@ run_python() {
   build
   FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$PYTHON_BIN" test/test_pytorch_basic.py
   "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report.json"
+}
+
+run_preflight_oom() {
+  if ! "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
+    echo "torch not found in current python; skipping preflight OOM tests."
+    return 0
+  fi
+
+  local report_root="$SMOKE_BUILD_DIR/preflight_oom"
+  rm -rf "$report_root"
+
+  "$PYTHON_BIN" -m fakegpu preflight \
+    --runtime fakecuda \
+    --profile a100-1g \
+    --device-count 1 \
+    --stage forward \
+    --report-dir "$report_root/pass" \
+    --strict \
+    -- "$PYTHON_BIN" verification/preflight_oom_probe.py --mode pass
+  "$PYTHON_BIN" verification/check_preflight_report.py \
+    --path "$report_root/pass/preflight_report.json" \
+    --expect-status PASS_FIT \
+    --expect-runtime fakecuda \
+    --expect-device
+
+  local rc=0
+  "$PYTHON_BIN" -m fakegpu preflight \
+    --runtime fakecuda \
+    --profile a100-1g \
+    --device-count 1 \
+    --stage forward \
+    --report-dir "$report_root/oom" \
+    --strict \
+    -- "$PYTHON_BIN" verification/preflight_oom_probe.py --mode oom || rc=$?
+  if [[ "$rc" != "2" ]]; then
+    echo "expected preflight OOM exit code 2, got $rc" >&2
+    return 1
+  fi
+  "$PYTHON_BIN" verification/check_preflight_report.py \
+    --path "$report_root/oom/preflight_report.json" \
+    --expect-status FAIL_OOM \
+    --expect-runtime fakecuda \
+    --expect-device
 }
 
 run_llm() {
@@ -167,6 +211,9 @@ case "$suite" in
     ;;
   python)
     run_python
+    ;;
+  preflight_oom)
+    run_preflight_oom
     ;;
   llm)
     run_llm

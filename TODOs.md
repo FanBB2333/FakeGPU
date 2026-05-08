@@ -113,7 +113,7 @@
 
 新增 `fakegpu preflight` 子命令，作为研究者的主入口。
 
-- [ ] 支持基础参数：
+- [x] 支持基础参数：
   - `--devices a100:8`
   - `--profile h100 --device-count 8`
   - `--stage import|model_load|forward|backward|optimizer_step|n_steps`
@@ -121,33 +121,34 @@
   - `--report-dir path`
   - `--runtime fakecuda|native|hybrid|passthrough`
   - `--strict`
-- [ ] 自动设置：
+- [x] 自动设置：
   - `FAKEGPU_PROFILES`
   - `FAKEGPU_DEVICE_COUNT`
   - `FAKEGPU_TERMINAL_REPORT`
   - `FAKEGPU_REPORT_PATH`
   - `FAKEGPU_CLUSTER_REPORT_PATH`（分布式时）
-- [ ] 运行用户命令并捕获：
+- [x] 运行用户命令并捕获：
   - stdout
   - stderr
   - exit code
   - OOM 异常
   - report 文件
-- [ ] 输出：
+- [x] 输出：
   - `preflight_report.json`
   - `preflight_report.md`
   - `preflight_stdout.log`
   - `preflight_stderr.log`
-- [ ] 支持严格模式：
+- [x] 支持初版严格模式：
   - 依赖缺失即失败
   - 模型文件缺失即失败
   - CUDA 不可用即失败（当 runtime 需要真实 CUDA 时）
+- [ ] 完善 strict pytest 语义：
   - pytest skip 不能算作通过
 
 验收：
 
-- [ ] `fakegpu preflight --profile a100-1g --stage forward -- python demo_usage.py --test transformer` 能生成报告。
-- [ ] `--strict` 下缺依赖会返回非零退出码。
+- [x] `fakegpu preflight --profile a100-1g --stage forward -- python demo_usage.py --test transformer` 能生成报告。
+- [x] `--strict` 下缺依赖会返回非零退出码。
 
 ---
 
@@ -155,13 +156,13 @@
 
 Preflight 需要知道用户命令跑到了哪个阶段。下一版先提供轻量协议，不要求用户重写训练脚本。
 
-- [ ] 提供环境变量约定：
+- [x] 提供环境变量约定：
   - `FAKEGPU_PREFLIGHT_STAGE=import`
   - `FAKEGPU_PREFLIGHT_STAGE=model_load`
   - `FAKEGPU_PREFLIGHT_STAGE=forward`
   - `FAKEGPU_PREFLIGHT_STAGE=backward`
   - `FAKEGPU_PREFLIGHT_STAGE=optimizer_step`
-- [ ] 提供 Python helper：
+- [x] 提供 Python helper：
 
 ```python
 import fakegpu
@@ -176,16 +177,16 @@ with fakegpu.stage("backward"):
     loss.backward()
 ```
 
-- [ ] 没有显式 stage 标记时，runner 使用保守阶段：
+- [x] 没有显式 stage 标记时，runner 使用保守阶段：
   - 命令启动成功：`import`
   - 进程正常退出：`completed`
   - OOM：`unknown_or_last_seen`
-- [ ] 报告中记录 stage timeline。
+- [x] 报告中记录 stage timeline。
 
 验收：
 
-- [ ] 用户不用 helper 也能得到基础报告。
-- [ ] 使用 helper 后，OOM 报告能定位到阶段。
+- [x] 用户不用 helper 也能得到基础报告。
+- [x] 使用 helper 后，OOM 报告能定位到阶段。
 
 ---
 
@@ -238,7 +239,7 @@ with fakegpu.stage("backward"):
 
 ## P4: OOM 行为验证
 
-- [ ] 新增 `./ftest preflight_oom`。
+- [x] 新增 `./ftest preflight_oom`。
 - [ ] 测试小显存 profile：
   - `a100-1g`
   - 自定义 512MB profile（仅用于测试）
@@ -249,7 +250,7 @@ with fakegpu.stage("backward"):
 - [ ] 验证 PyTorch OOM 表面：
   - 异常类型接近 `torch.cuda.OutOfMemoryError`
   - 错误信息包含 requested、total、free
-- [ ] 验证报告字段：
+- [x] 验证报告字段：
   - `status`
   - `stage`
   - `peak_memory`
