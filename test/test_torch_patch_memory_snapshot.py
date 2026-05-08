@@ -63,3 +63,66 @@ def test_memory_snapshot_records_stage_peaks_and_largest_allocations() -> None:
     assert largest["device"] == 0
     assert largest["stage"] == "forward"
     assert largest["category"] in {"activation", "tensor"}
+
+
+def test_memory_snapshot_classifies_training_state_categories() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", devices="a100-1g:1")
+
+        import torch
+        import fakegpu.torch_patch as tp
+
+        with fakegpu.stage("model_load"):
+            model = torch.nn.Linear(8, 4).cuda()
+            optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+        with fakegpu.stage("forward"):
+            x = torch.randn(2, 8, device="cuda")
+            loss = model(x).sum()
+
+        with fakegpu.stage("backward"):
+            loss.backward()
+            for param in model.parameters():
+                _ = param.grad
+
+        with fakegpu.stage("optimizer_step"):
+            optimizer.step()
+
+        snapshot = tp.memory_snapshot()
+        print(json.dumps(snapshot, sort_keys=True))
+        """
+    )
+
+    env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    snapshot = json.loads(completed.stdout.strip())
+    device = snapshot["devices"][0]
+    categories = device["current_bytes_by_category"]
+    assert categories["parameter"] >= 144
+    assert categories["gradient"] >= 144
+    assert categories["optimizer_state"] >= 288
+
+    assert device["peak_by_stage"]["model_load"] >= 144
+    assert device["peak_by_stage"]["forward"] > device["peak_by_stage"]["model_load"]
+    assert device["peak_by_stage"]["backward"] >= device["peak_by_stage"]["forward"]
+    assert device["peak_by_stage"]["optimizer_step"] >= device["peak_by_stage"]["backward"]
+
+    top_categories = {alloc["category"] for alloc in device["largest_allocations"]}
+    assert {"parameter", "gradient", "optimizer_state"}.issubset(top_categories)

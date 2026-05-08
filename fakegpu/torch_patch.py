@@ -409,7 +409,7 @@ class _DeviceMemoryTracker:
         stage_peaks = self._peak_by_stage[device]
         stage_peaks[stage] = max(stage_peaks.get(stage, 0), self._used[device])
         self._alloc_calls[device] += 1
-        self._record_largest_allocation(device, nbytes, meta)
+        self._record_largest_allocation(data_ptr, device, nbytes, meta)
         return True
 
     def release(self, data_ptr: int) -> None:
@@ -450,7 +450,28 @@ class _DeviceMemoryTracker:
     def largest_allocations(self, device: int, limit: int = 10) -> list[dict[str, Any]]:
         if device < 0 or device >= len(self._largest_allocations):
             return []
-        return [dict(item) for item in self._largest_allocations[device][:limit]]
+        return [_public_allocation_record(item) for item in self._largest_allocations[device][:limit]]
+
+    def current_bytes_by_category(self, device: int) -> dict[str, int]:
+        if device < 0 or device >= len(self._used):
+            return {}
+        totals: dict[str, int] = {}
+        for record in self._allocs.values():
+            if int(record.get("device", -1)) != device:
+                continue
+            category = str(record.get("category") or "unknown")
+            totals[category] = totals.get(category, 0) + int(record.get("bytes", 0))
+        return totals
+
+    def mark_category(self, data_ptr: int, category: str) -> None:
+        record = self._allocs.get(data_ptr)
+        if record is not None:
+            record["category"] = category
+            device = int(record.get("device", -1))
+            if 0 <= device < len(self._largest_allocations):
+                for item in self._largest_allocations[device]:
+                    if int(item.get("_data_ptr", -1)) == data_ptr:
+                        item["category"] = category
 
     def snapshot(self, profiles: list[dict[str, Any]]) -> dict[str, Any]:
         devices: list[dict[str, Any]] = []
@@ -474,6 +495,7 @@ class _DeviceMemoryTracker:
                     "headroom_percent": round(headroom_percent, 3) if headroom_percent is not None else None,
                     "allocation_count": int(self._alloc_calls[index]),
                     "free_count": int(self._free_calls[index]),
+                    "current_bytes_by_category": self.current_bytes_by_category(index),
                     "peak_by_stage": self.peak_by_stage(index),
                     "largest_allocations": self.largest_allocations(index),
                     "tracking_confidence": "C2_torch_tensor_lifetime",
@@ -484,8 +506,9 @@ class _DeviceMemoryTracker:
             "devices": devices,
         }
 
-    def _record_largest_allocation(self, device: int, nbytes: int, metadata: dict[str, Any]) -> None:
+    def _record_largest_allocation(self, data_ptr: int, device: int, nbytes: int, metadata: dict[str, Any]) -> None:
         item = {
+            "_data_ptr": int(data_ptr),
             "bytes": int(nbytes),
             "device": int(device),
             "dtype": metadata.get("dtype"),
@@ -497,6 +520,14 @@ class _DeviceMemoryTracker:
         entries.append(item)
         entries.sort(key=lambda alloc: int(alloc.get("bytes", 0)), reverse=True)
         del entries[10:]
+
+
+def _public_allocation_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in record.items()
+        if not str(key).startswith("_")
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +708,42 @@ def _infer_tensor_memory_category(tensor: Any, raw: Any) -> str:
     return "tensor"
 
 
+def _mark_tensor_memory_category(tensor: Any, category: str) -> None:
+    tracker = _memory_tracker
+    if tracker is None:
+        return
+    try:
+        dp = tensor.untyped_storage().data_ptr()
+    except Exception:
+        raw = getattr(tensor, "raw_data", None)
+        if raw is None:
+            return
+        try:
+            dp = raw.untyped_storage().data_ptr()
+        except Exception:
+            return
+    if dp:
+        tracker.mark_category(int(dp), category)
+
+
+def _iter_tensors(value: Any):
+    try:
+        import torch
+    except Exception:
+        return
+
+    if isinstance(value, torch.Tensor):
+        yield value
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_tensors(item)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _iter_tensors(item)
+
+
 def memory_snapshot() -> dict[str, Any]:
     """Return FakeGPU torch-layer memory metadata for preflight reports."""
     tracker = _memory_tracker
@@ -686,6 +753,112 @@ def memory_snapshot() -> dict[str, Any]:
             "devices": [],
         }
     return tracker.snapshot(_DEVICE_PROFILES)
+
+
+def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> None:
+    original_register_parameter = getattr(upstream, "register_parameter", None)
+    if callable(original_register_parameter) and not getattr(original_register_parameter, "_fakegpu_category_patch", False):
+
+        @functools.wraps(original_register_parameter)
+        def _tracked_register_parameter(tensor):
+            result = original_register_parameter(tensor)
+            _mark_tensor_memory_category(tensor, "parameter")
+            return result
+
+        _tracked_register_parameter._fakegpu_category_patch = True  # type: ignore[attr-defined]
+        upstream.register_parameter = _tracked_register_parameter
+
+    fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
+    if fake_tensor_cls is not None:
+        original_backward = getattr(fake_tensor_cls, "backward", None)
+        if callable(original_backward) and not getattr(original_backward, "_fakegpu_category_patch", False):
+
+            @functools.wraps(original_backward)
+            def _tracked_backward(self, *args, **kwargs):
+                try:
+                    return original_backward(self, *args, **kwargs)
+                finally:
+                    _mark_registered_parameter_grads(upstream)
+
+            _tracked_backward._fakegpu_category_patch = True  # type: ignore[attr-defined]
+            fake_tensor_cls.backward = _tracked_backward
+
+        grad_property = getattr(fake_tensor_cls, "grad", None)
+        if isinstance(grad_property, property) and not getattr(grad_property.fget, "_fakegpu_category_patch", False):
+            original_get = grad_property.fget
+            original_set = grad_property.fset
+
+            def _tracked_grad_get(self):
+                result = original_get(self) if original_get is not None else None
+                if result is not None:
+                    _mark_tensor_memory_category(result, "gradient")
+                return result
+
+            def _tracked_grad_set(self, value) -> None:
+                if original_set is not None:
+                    original_set(self, value)
+                if value is not None:
+                    _mark_tensor_memory_category(value, "gradient")
+
+            _tracked_grad_get._fakegpu_category_patch = True  # type: ignore[attr-defined]
+            fake_tensor_cls.grad = property(_tracked_grad_get, _tracked_grad_set)
+
+    _install_optimizer_state_category_patch(torch_mod)
+
+
+def _mark_registered_parameter_grads(upstream: Any) -> None:
+    for param in list(getattr(upstream, "_REGISTERED_PARAMETERS", ())):
+        _mark_tensor_memory_category(param, "parameter")
+        try:
+            grad = param.grad
+        except Exception:
+            grad = None
+        if grad is not None:
+            _mark_tensor_memory_category(grad, "gradient")
+
+
+def _install_optimizer_state_category_patch(torch_mod: Any) -> None:
+    try:
+        optim_mod = torch_mod.optim
+    except Exception:
+        return
+
+    class_names = (
+        "Optimizer",
+        "SGD",
+        "Adam",
+        "AdamW",
+        "RMSprop",
+        "Adagrad",
+        "Adadelta",
+    )
+    for name in class_names:
+        cls = getattr(optim_mod, name, None)
+        if cls is None:
+            continue
+        original_step = getattr(cls, "step", None)
+        if not callable(original_step) or getattr(original_step, "_fakegpu_category_patch", False):
+            continue
+
+        @functools.wraps(original_step)
+        def _tracked_step(self, *args, __orig_step=original_step, **kwargs):
+            try:
+                return __orig_step(self, *args, **kwargs)
+            finally:
+                _mark_optimizer_state_tensors(self)
+
+        _tracked_step._fakegpu_category_patch = True  # type: ignore[attr-defined]
+        cls.step = _tracked_step
+
+
+def _mark_optimizer_state_tensors(optimizer: Any) -> None:
+    try:
+        states = optimizer.state.values()
+    except Exception:
+        return
+    for state in states:
+        for tensor in _iter_tensors(state):
+            _mark_tensor_memory_category(tensor, "optimizer_state")
 
 
 @dataclass(frozen=True)
@@ -2019,6 +2192,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         return result
 
     upstream.wrap_tensor = _hooked_wrap_tensor
+    _install_upstream_memory_category_hooks(upstream, torch_mod)
     _patch_upstream_fakecuda_tensor_compat(upstream, torch_mod)
     _patch_upstream_collective_tensor_compat(upstream)
     _patch_upstream_all_gather_object(upstream, torch_mod)
@@ -2142,6 +2316,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     # ---- 5. Autocast / GradScaler ----
     _install_fakegpu_autocast(torch_mod)
+    _install_optimizer_state_category_patch(torch_mod)
 
     try:
         from torch.amp import GradScaler as _RealGradScaler
@@ -2639,6 +2814,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
 
     # ---- Autocast dtype validation (defense-in-depth) ----
     _install_fakegpu_autocast(torch)
+    _install_optimizer_state_category_patch(torch)
 
     # ---- Patch torch.device to allow 'cuda' construction ----
     # torch.device('cuda') already works; no patch needed.

@@ -264,6 +264,27 @@ def render_markdown_report(report: dict[str, Any]) -> str:
             ]
         )
 
+    category_rows: list[str] = []
+    for dev in report.get("devices", []):
+        dev_index = int(dev.get("index", 0))
+        categories = dev.get("current_bytes_by_category") or {}
+        for category, size in sorted(categories.items()):
+            category_rows.append(f"| {dev_index} | `{category}` | {_fmt_bytes(int(size))} |")
+
+    if report.get("devices"):
+        if not category_rows:
+            category_rows.append("| 0 | `_none_live` | 0 B |")
+        lines.extend(
+            [
+                "",
+                "## Current Memory By Category",
+                "",
+                "| GPU | Category | Current |",
+                "|---:|---|---:|",
+                *category_rows,
+            ]
+        )
+
     if allocation_rows:
         lines.extend(
             [
@@ -450,6 +471,7 @@ def _normalize_devices(raw_report: dict[str, Any] | None, raw_report_kind: str |
                 "headroom_bytes": headroom,
                 "headroom_percent": round(headroom_percent, 3) if headroom_percent is not None else None,
                 "allocation_count": allocation_count,
+                "current_bytes_by_category": dict(raw.get("current_bytes_by_category", {}) or {}),
                 "peak_by_stage": dict(raw.get("peak_by_stage", {}) or {}),
                 "largest_allocations": list(raw.get("largest_allocations", []) or []),
                 "tracking_confidence": confidence,

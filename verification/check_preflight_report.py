@@ -67,6 +67,7 @@ def _validate_device(index: int, dev: Any) -> None:
         "peak_memory",
         "headroom_bytes",
         "allocation_count",
+        "current_bytes_by_category",
         "peak_by_stage",
         "largest_allocations",
         "tracking_confidence",
@@ -77,6 +78,8 @@ def _validate_device(index: int, dev: Any) -> None:
         _die(f"devices[{index}].total_memory must be >= 0")
     if int(dev["peak_memory"]) < 0:
         _die(f"devices[{index}].peak_memory must be >= 0")
+    if not isinstance(dev["current_bytes_by_category"], dict):
+        _die(f"devices[{index}].current_bytes_by_category must be an object")
     if not isinstance(dev["peak_by_stage"], dict):
         _die(f"devices[{index}].peak_by_stage must be an object")
     if not isinstance(dev["largest_allocations"], list):
