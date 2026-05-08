@@ -199,7 +199,7 @@ with fakegpu.stage("backward"):
   - [x] matmul output
   - loss output
   - [x] clone / contiguous 后的新 storage
-  - view 后共享 storage 的归属验证
+  - [x] view 后共享 storage 的归属验证
   - autograd 保存的 activation
 - [ ] 区分内存类别：
   - [x] parameters

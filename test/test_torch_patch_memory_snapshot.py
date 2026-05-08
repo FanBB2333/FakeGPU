@@ -183,3 +183,79 @@ def test_memory_snapshot_classifies_buffers_and_temporaries() -> None:
     top_categories = {alloc["category"] for alloc in device["largest_allocations"]}
     assert "buffer" in top_categories
     assert "temporary" in top_categories
+
+
+def test_memory_snapshot_does_not_double_count_shared_storage_aliases() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", devices="a100-1g:1")
+
+        import torch
+        import fakegpu.torch_patch as tp
+
+        with fakegpu.stage("forward"):
+            base = torch.empty((4, 4), device="cuda", dtype=torch.float32)
+            after_base = tp.memory_snapshot()["devices"][0]
+
+            viewed = base.view(2, 8)
+            sliced = base[:, :2]
+            reshaped = base.reshape(1, 16)
+            base.add_(1)
+            after_aliases = tp.memory_snapshot()["devices"][0]
+
+            contiguous = base.t().contiguous()
+            after_contiguous = tp.memory_snapshot()["devices"][0]
+
+        payload = {
+            "after_base": after_base,
+            "after_aliases": after_aliases,
+            "after_contiguous": after_contiguous,
+            "ptrs": {
+                "base": base.untyped_storage().data_ptr(),
+                "viewed": viewed.untyped_storage().data_ptr(),
+                "sliced": sliced.untyped_storage().data_ptr(),
+                "reshaped": reshaped.untyped_storage().data_ptr(),
+                "contiguous": contiguous.untyped_storage().data_ptr(),
+            },
+        }
+        print(json.dumps(payload, sort_keys=True))
+        """
+    )
+
+    env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    payload = json.loads(completed.stdout.strip())
+    after_base = payload["after_base"]
+    after_aliases = payload["after_aliases"]
+    after_contiguous = payload["after_contiguous"]
+    ptrs = payload["ptrs"]
+
+    assert ptrs["viewed"] == ptrs["base"]
+    assert ptrs["sliced"] == ptrs["base"]
+    assert ptrs["reshaped"] == ptrs["base"]
+    assert ptrs["contiguous"] != ptrs["base"]
+
+    assert after_base["current_memory"] == 4 * 4 * 4
+    assert after_base["allocation_count"] == 1
+    assert after_aliases["current_memory"] == after_base["current_memory"]
+    assert after_aliases["allocation_count"] == after_base["allocation_count"]
+
+    assert after_contiguous["current_memory"] == after_base["current_memory"] + 4 * 4 * 4
+    assert after_contiguous["allocation_count"] == after_base["allocation_count"] + 1
+    assert after_contiguous["peak_by_stage"]["forward"] == after_contiguous["current_memory"]
