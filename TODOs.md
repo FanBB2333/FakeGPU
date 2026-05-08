@@ -203,11 +203,11 @@ with fakegpu.stage("backward"):
   - autograd 保存的 activation
 - [ ] 区分内存类别：
   - [x] parameters
-  - buffers
+  - [x] buffers
   - [x] gradients
   - [x] optimizer state
   - [x] activations
-  - temporary tensors
+  - [x] temporary tensors
   - unknown
 - [x] 支持分阶段峰值：
   - `peak_import`

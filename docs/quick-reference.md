@@ -74,7 +74,7 @@ The runner writes:
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. This initial runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, but activation and temporary tracking still need more work.
+Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. The runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, including stage peaks, top allocations, and coarse memory categories. Shared-storage attribution, saved autograd activations, and multi-device ownership still need more validation.
 
 For RTX 3090 Ti calibration, run a reduced workload directly on the real GPU and compare with passthrough or hybrid when available:
 

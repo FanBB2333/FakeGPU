@@ -74,7 +74,7 @@ runner 会写出：
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。当前初版 runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，但 activation 和 temporary tensor 跟踪仍需继续完善。
+建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，报告中包含分阶段峰值、top allocations 和粗粒度内存类别。共享 storage 归属、autograd 保存的 activation、多设备归属仍需要继续验证。
 
 如果要用 RTX 3090 Ti 做校准，先在真实 GPU 上跑缩小版 workload，再按环境能力对比 passthrough 或 hybrid：
 

@@ -100,7 +100,7 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     assert largest["dtype"] == "torch.float32"
     assert largest["shape"] == [1024, 1024]
     assert largest["stage"] == "forward"
-    assert largest["category"] in {"activation", "tensor"}
+    assert largest["category"] in {"activation", "temporary", "tensor"}
 
 
 def test_preflight_devices_spec_infers_device_count(tmp_path: Path) -> None:

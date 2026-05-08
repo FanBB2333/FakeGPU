@@ -630,6 +630,13 @@ _memory_tracker: _DeviceMemoryTracker | None = None
 import weakref
 
 
+def _set_tracked_data_ptr(tensor: Any, data_ptr: int) -> None:
+    try:
+        setattr(tensor, "_fakegpu_memory_data_ptr", int(data_ptr))
+    except Exception:
+        pass
+
+
 def _register_tensor_for_memory_tracking(tensor: Any, device_index: int) -> None:
     """Register a tensor's memory and set up GC cleanup via weakref."""
     if _memory_tracker is None or not _MEMORY_TRACKING:
@@ -640,6 +647,7 @@ def _register_tensor_for_memory_tracking(tensor: Any, device_index: int) -> None
         nbytes = storage.nbytes()
         if dp == 0 or nbytes == 0:
             return
+        _set_tracked_data_ptr(tensor, int(dp))
         did_allocate = _memory_tracker.allocate(
             dp,
             nbytes,
@@ -705,12 +713,19 @@ def _infer_tensor_memory_category(tensor: Any, raw: Any) -> str:
     except Exception:
         pass
 
+    if os.environ.get("FAKEGPU_PREFLIGHT_STAGE"):
+        return "temporary"
+
     return "tensor"
 
 
 def _mark_tensor_memory_category(tensor: Any, category: str) -> None:
     tracker = _memory_tracker
     if tracker is None:
+        return
+    dp = getattr(tensor, "_fakegpu_memory_data_ptr", None)
+    if dp is not None:
+        tracker.mark_category(int(dp), category)
         return
     try:
         dp = tensor.untyped_storage().data_ptr()
@@ -756,6 +771,35 @@ def memory_snapshot() -> dict[str, Any]:
 
 
 def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> None:
+    try:
+        module_cls = torch_mod.nn.Module
+    except Exception:
+        module_cls = None
+    if module_cls is not None:
+        original_module_cuda = getattr(module_cls, "cuda", None)
+        if callable(original_module_cuda) and not getattr(original_module_cuda, "_fakegpu_category_patch", False):
+
+            @functools.wraps(original_module_cuda)
+            def _tracked_module_cuda(self, *args, **kwargs):
+                result = original_module_cuda(self, *args, **kwargs)
+                _mark_module_memory_categories(result)
+                return result
+
+            _tracked_module_cuda._fakegpu_category_patch = True  # type: ignore[attr-defined]
+            module_cls.cuda = _tracked_module_cuda
+
+        original_module_to = getattr(module_cls, "to", None)
+        if callable(original_module_to) and not getattr(original_module_to, "_fakegpu_category_patch", False):
+
+            @functools.wraps(original_module_to)
+            def _tracked_module_to(self, *args, **kwargs):
+                result = original_module_to(self, *args, **kwargs)
+                _mark_module_memory_categories(result)
+                return result
+
+            _tracked_module_to._fakegpu_category_patch = True  # type: ignore[attr-defined]
+            module_cls.to = _tracked_module_to
+
     original_register_parameter = getattr(upstream, "register_parameter", None)
     if callable(original_register_parameter) and not getattr(original_register_parameter, "_fakegpu_category_patch", False):
 
@@ -859,6 +903,22 @@ def _mark_optimizer_state_tensors(optimizer: Any) -> None:
     for state in states:
         for tensor in _iter_tensors(state):
             _mark_tensor_memory_category(tensor, "optimizer_state")
+
+
+def _mark_module_memory_categories(module: Any) -> None:
+    try:
+        parameters = module.parameters()
+    except Exception:
+        parameters = ()
+    for param in parameters:
+        _mark_tensor_memory_category(param, "parameter")
+
+    try:
+        buffers = module.buffers()
+    except Exception:
+        buffers = ()
+    for buffer in buffers:
+        _mark_tensor_memory_category(buffer, "buffer")
 
 
 @dataclass(frozen=True)
@@ -1066,14 +1126,17 @@ def _patched_module_to(self: Any, *args: Any, **kwargs: Any) -> Any:
     if target_dev is not None:
         for param in result.parameters():
             _register_tensor_device(param.data, target_dev)
+            _mark_tensor_memory_category(param.data, "parameter")
         for buf in result.buffers():
             _register_tensor_device(buf, target_dev)
+            _mark_tensor_memory_category(buf, "buffer")
 
     return result
 
 
 def _patched_module_cuda(self: Any, device: Any = None) -> Any:
     # Module is already on CPU; no transfer needed.
+    _mark_module_memory_categories(self)
     return self
 
 
