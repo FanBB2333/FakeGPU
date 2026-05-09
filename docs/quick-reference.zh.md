@@ -77,6 +77,8 @@ runner 会写出：
 
 建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，报告中包含分阶段峰值、top allocations、可选 allocation stack trace、粗粒度内存类别、共享 storage alias 处理和基础 logical-device 归属。autograd 保存的 activation 仍需要继续验证。
 
+`./ftest preflight_oom` 现在包含 profile 矩阵检查：同一个 1.2 GB allocation 在 `a100-1g` 下必须失败，在 `a100` 下必须通过。
+
 如果要用 RTX 3090 Ti 做校准，先在真实 GPU 上跑缩小版 workload，再按环境能力对比 passthrough 或 hybrid：
 
 ```bash

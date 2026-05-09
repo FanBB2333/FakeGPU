@@ -235,7 +235,7 @@ with fakegpu.stage("backward"):
 
 - [ ] 现有 `test/real_scene/nanoGPT/TORCH_PATCH_PROOF.md` 中 “op-produced activation 未计入” 的限制被替换为新的通过实验。
 - [x] `torch.cuda.max_memory_allocated()` 与 preflight report 的峰值一致。
-- [ ] `a100-1g` 下可稳定触发 OOM。
+- [x] `a100-1g` 下可稳定触发 OOM。
 
 ---
 
@@ -243,15 +243,15 @@ with fakegpu.stage("backward"):
 
 - [x] 新增 `./ftest preflight_oom`。
 - [ ] 测试小显存 profile：
-  - `a100-1g`
-  - 自定义 512MB profile（仅用于测试）
+  - [x] `a100-1g`
+  - [ ] 自定义 512MB profile（仅用于测试）
 - [ ] 测试大显存 profile：
-  - `a100`
-  - `h100`
-- [ ] 同一 workload 在小 profile 下 `FAIL_OOM`，在大 profile 下 `PASS_FIT`。
-- [ ] 验证 PyTorch OOM 表面：
-  - 异常类型接近 `torch.cuda.OutOfMemoryError`
-  - 错误信息包含 requested、total、free
+  - [x] `a100`
+  - [ ] `h100`
+- [x] 同一 workload 在小 profile 下 `FAIL_OOM`，在大 profile 下 `PASS_FIT`。
+- [x] 验证 PyTorch OOM 表面：
+  - [x] 异常类型接近 `torch.cuda.OutOfMemoryError`
+  - [x] 错误信息包含 requested、total、free
 - [x] 验证报告字段：
   - `status`
   - `stage`
@@ -263,7 +263,7 @@ with fakegpu.stage("backward"):
 
 验收：
 
-- [ ] `./ftest preflight_oom` 在没有真实 GPU 的环境中也能验证 fakecuda OOM。
+- [x] `./ftest preflight_oom` 在没有真实 GPU 的环境中也能验证 fakecuda OOM。
 - [ ] 在 3090 Ti 机器上额外运行真实 CUDA 校准用例。
 
 ---

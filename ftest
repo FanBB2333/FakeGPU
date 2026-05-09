@@ -135,6 +135,42 @@ run_preflight_oom() {
     --expect-status FAIL_OOM \
     --expect-runtime fakecuda \
     --expect-device
+
+  local matrix_elements=300000000
+  local matrix_rc=0
+  "$PYTHON_BIN" -m fakegpu preflight \
+    --runtime fakecuda \
+    --profile a100-1g \
+    --device-count 1 \
+    --stage forward \
+    --report-dir "$report_root/matrix-small" \
+    --strict \
+    -- "$PYTHON_BIN" verification/preflight_oom_probe.py --mode alloc --elements "$matrix_elements" || matrix_rc=$?
+  if [[ "$matrix_rc" != "2" ]]; then
+    echo "expected matrix small-profile OOM exit code 2, got $matrix_rc" >&2
+    return 1
+  fi
+  "$PYTHON_BIN" verification/check_preflight_report.py \
+    --path "$report_root/matrix-small/preflight_report.json" \
+    --schema preflight_report.schema.json \
+    --expect-status FAIL_OOM \
+    --expect-runtime fakecuda \
+    --expect-device
+
+  "$PYTHON_BIN" -m fakegpu preflight \
+    --runtime fakecuda \
+    --profile a100 \
+    --device-count 1 \
+    --stage forward \
+    --report-dir "$report_root/matrix-large" \
+    --strict \
+    -- "$PYTHON_BIN" verification/preflight_oom_probe.py --mode alloc --elements "$matrix_elements"
+  "$PYTHON_BIN" verification/check_preflight_report.py \
+    --path "$report_root/matrix-large/preflight_report.json" \
+    --schema preflight_report.schema.json \
+    --expect-status PASS_FIT \
+    --expect-runtime fakecuda \
+    --expect-device
 }
 
 run_llm() {

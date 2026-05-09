@@ -360,3 +360,53 @@ def test_memory_snapshot_optionally_records_allocation_stack_trace() -> None:
     assert stack
     assert all({"file", "line", "function"}.issubset(frame) for frame in stack)
     assert any(frame["function"] == "allocate_from_user_code" for frame in stack)
+
+
+def test_fakecuda_oom_error_uses_torch_cuda_oom_type_and_capacity_message() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", devices="a100-1g:1")
+
+        import torch
+
+        try:
+            torch.empty((300_000_000,), device="cuda", dtype=torch.float32)
+        except Exception as exc:
+            payload = {
+                "type": type(exc).__name__,
+                "is_cuda_oom": isinstance(exc, torch.cuda.OutOfMemoryError),
+                "message": str(exc),
+            }
+            print(json.dumps(payload, sort_keys=True))
+            raise SystemExit(0)
+
+        raise SystemExit("expected fakecuda OOM")
+        """
+    )
+
+    env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    payload = json.loads(completed.stdout.strip())
+    message = payload["message"].lower()
+    assert payload["is_cuda_oom"] is True
+    assert payload["type"] == "OutOfMemoryError"
+    assert "cuda out of memory" in message
+    assert "tried to allocate" in message
+    assert "total capacity" in message
+    assert "free" in message
