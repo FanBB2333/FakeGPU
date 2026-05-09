@@ -232,7 +232,7 @@ def test_preflight_fakecuda_oom_returns_failure_report(tmp_path: Path) -> None:
 def test_preflight_same_workload_fails_on_small_profile_and_passes_on_large_profile(
     tmp_path: Path,
 ) -> None:
-    elements = "300000000"
+    elements = "140000000"
     requested_bytes = int(elements) * 4
     workload = [
         sys.executable,
@@ -247,13 +247,14 @@ def test_preflight_same_workload_fails_on_small_profile_and_passes_on_large_prof
     small = _run_preflight(
         workload,
         report_dir=small_dir,
-        device_args=["--profile", "a100-1g", "--device-count", "1"],
+        device_args=["--profile", "test-512m", "--device-count", "1"],
     )
 
     assert small.returncode == 2, small.stderr
     small_report = json.loads((small_dir / "preflight_report.json").read_text(encoding="utf-8"))
     assert small_report["status"] == "FAIL_OOM"
-    assert small_report["target_profiles"] == [{"profile_id": "a100-1g", "count": 1}]
+    assert small_report["target_profiles"] == [{"profile_id": "test-512m", "count": 1}]
+    assert small_report["devices"][0]["total_memory"] == 512 * 1024**2
     assert "out of memory" in small_report["errors"][0]["message"].lower()
 
     large_dir = tmp_path / "preflight-matrix-large"
@@ -269,3 +270,22 @@ def test_preflight_same_workload_fails_on_small_profile_and_passes_on_large_prof
     assert large_report["target_profiles"] == [{"profile_id": "a100", "count": 1}]
     assert large_report["devices"][0]["peak_memory"] >= requested_bytes
     assert large_report["devices"][0]["headroom_bytes"] > 0
+
+
+def test_preflight_strict_treats_skipped_child_output_as_failure(tmp_path: Path) -> None:
+    script = tmp_path / "skip_probe.py"
+    script.write_text("print('1 skipped in 0.01s')\n", encoding="utf-8")
+
+    report_dir = tmp_path / "preflight-strict-skip"
+    completed = _run_preflight(
+        [sys.executable, str(script)],
+        report_dir=report_dir,
+        preflight_args=["--strict"],
+    )
+
+    assert completed.returncode == 1, completed.stdout
+    report = json.loads((report_dir / "preflight_report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "FAIL_RUNTIME"
+    assert any("skipped" in warning.lower() for warning in report["warnings"])
+    assert report["errors"][0]["type"] == "SkippedTest"
+    assert "strict" in report["errors"][0]["message"].lower()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -144,15 +145,19 @@ def build_report(
 
     exit_code = completed.returncode if completed is not None else 1
     oom_detected = _looks_like_oom(stdout, stderr, raw_report)
+    strict_skip_detected = bool(ns.strict) and _looks_like_skip(stdout, stderr)
     status = _classify_status(
         exit_code=exit_code,
         setup_error=setup_error,
         oom_detected=oom_detected,
+        strict_skip_detected=strict_skip_detected,
         devices=devices,
         tracking_confidence=tracking_confidence,
     )
     if status == STATUS_WARN_INCOMPLETE:
         warnings.append("No runtime memory report was produced; fit/no-fit confidence is incomplete.")
+    if strict_skip_detected:
+        warnings.append("Strict mode detected skipped tests in the child command output.")
 
     errors = _collect_errors(
         status=status,
@@ -160,6 +165,7 @@ def build_report(
         stdout=stdout,
         stderr=stderr,
         raw_report=raw_report,
+        strict_skip_detected=strict_skip_detected,
     )
     stage = _resolve_stage(
         raw_report=raw_report,
@@ -648,10 +654,13 @@ def _classify_status(
     exit_code: int,
     setup_error: Exception | None,
     oom_detected: bool,
+    strict_skip_detected: bool,
     devices: list[dict[str, Any]],
     tracking_confidence: str,
 ) -> str:
     if setup_error is not None:
+        return STATUS_FAIL_RUNTIME
+    if strict_skip_detected:
         return STATUS_FAIL_RUNTIME
     if exit_code != 0:
         return STATUS_FAIL_OOM if oom_detected else STATUS_FAIL_RUNTIME
@@ -673,6 +682,17 @@ def _looks_like_oom(stdout: str, stderr: str, raw_report: dict[str, Any] | None)
     return False
 
 
+def _looks_like_skip(stdout: str, stderr: str) -> bool:
+    haystack = "\n".join([stdout, stderr])
+    patterns = [
+        r"\b\d+\s+skipped\b",
+        r"\bskipped\s+in\s+\d",
+        r"\bSKIPPED\b",
+        r"\bSkipped:\s",
+    ]
+    return any(re.search(pattern, haystack) for pattern in patterns)
+
+
 def _collect_errors(
     *,
     status: str,
@@ -680,9 +700,17 @@ def _collect_errors(
     stdout: str,
     stderr: str,
     raw_report: dict[str, Any] | None,
+    strict_skip_detected: bool,
 ) -> list[dict[str, str]]:
     if setup_error is not None:
         return [{"type": type(setup_error).__name__, "message": str(setup_error)}]
+    if strict_skip_detected:
+        return [
+            {
+                "type": "SkippedTest",
+                "message": "Strict preflight treats skipped child tests as runtime failure.",
+            }
+        ]
     if status not in {STATUS_FAIL_OOM, STATUS_FAIL_RUNTIME}:
         return []
 

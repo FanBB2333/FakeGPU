@@ -244,11 +244,11 @@ with fakegpu.stage("backward"):
 - [x] 新增 `./ftest preflight_oom`。
 - [ ] 测试小显存 profile：
   - [x] `a100-1g`
-  - [ ] 自定义 512MB profile（仅用于测试）
+  - [x] 自定义 512MB profile（仅用于测试）：`test-512m`
 - [ ] 测试大显存 profile：
   - [x] `a100`
   - [ ] `h100`
-- [x] 同一 workload 在小 profile 下 `FAIL_OOM`，在大 profile 下 `PASS_FIT`。
+- [x] 同一 workload 在小 profile 下 `FAIL_OOM`，在大 profile 下 `PASS_FIT`（`test-512m` -> `a100`）。
 - [x] 验证 PyTorch OOM 表面：
   - [x] 异常类型接近 `torch.cuda.OutOfMemoryError`
   - [x] 错误信息包含 requested、total、free
@@ -259,7 +259,7 @@ with fakegpu.stage("backward"):
   - `headroom_bytes`
   - `tracking_confidence`
   - `runtime`
-- [ ] `--strict` 模式下任何 skip 都失败。
+- [x] `--strict` 模式下任何 skip 都失败。
 
 验收：
 
