@@ -59,6 +59,12 @@ def test_calibration_compare_records_peak_error() -> None:
     assert item["peak_error_percent"] == 10.0
 
 
+def test_calibration_includes_tiny_transformer_workload() -> None:
+    from verification.calibration_rtx3090ti import _workloads
+
+    assert "tiny_transformer_step" in _workloads()
+
+
 def _parse_simple_yaml(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
