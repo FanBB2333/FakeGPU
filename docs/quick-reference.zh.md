@@ -84,10 +84,13 @@ runner 会写出：
 如果要用 Ampere GPU 做校准，先在真实 GPU 上跑缩小版 workload，再按环境能力对比 passthrough 或 hybrid：
 
 ```bash
+./ftest ampere_calibration
 python3 train.py --small-config
 ./fgpu --mode passthrough python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
+
+校准套件会写出 `build/ampere_calibration/calibration_ampere.json` 和 `.md`。如果当前机器没有 CUDA 可见的 Ampere GPU，它会写出明确 skip 原因，不会静默通过。
 
 当前设计和限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
 
@@ -98,6 +101,7 @@ python3 train.py --small-config
 ./ftest cpu_sim
 ./ftest python
 ./ftest preflight_oom
+./ftest ampere_calibration
 ./ftest all
 ```
 

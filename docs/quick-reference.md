@@ -84,10 +84,13 @@ When `--strict` is set, skipped child tests are treated as `FAIL_RUNTIME` instea
 For Ampere GPU calibration, run a reduced workload directly on the real GPU and compare with passthrough or hybrid when available:
 
 ```bash
+./ftest ampere_calibration
 python3 train.py --small-config
 ./fgpu --mode passthrough python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
+
+The calibration suite writes `build/ampere_calibration/calibration_ampere.json` and `.md`. On machines without a CUDA-visible Ampere GPU, it writes an explicit skip reason instead of passing silently.
 
 See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design and limitations.
 
@@ -98,6 +101,7 @@ See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design
 ./ftest cpu_sim
 ./ftest python
 ./ftest preflight_oom
+./ftest ampere_calibration
 ./ftest all
 ```
 
