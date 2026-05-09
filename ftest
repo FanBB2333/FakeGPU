@@ -78,7 +78,7 @@ run_smoke() {
   compile_verify_preload
   FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$SMOKE_BUILD_DIR/verify_preload"
   "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report.json"
-  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_multi_arch.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" --devices "a100,h100,b100,b200" "$PYTHON_BIN" verification/test_multi_arch_compute_units.py
+  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_multi_arch.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" --devices "test-512m,a100,h100,b100,b200" "$PYTHON_BIN" verification/test_multi_arch_compute_units.py
   FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_memory_types.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$PYTHON_BIN" verification/test_memory_types.py
 }
 
@@ -136,11 +136,11 @@ run_preflight_oom() {
     --expect-runtime fakecuda \
     --expect-device
 
-  local matrix_elements=300000000
+  local matrix_elements=140000000
   local matrix_rc=0
   "$PYTHON_BIN" -m fakegpu preflight \
     --runtime fakecuda \
-    --profile a100-1g \
+    --profile test-512m \
     --device-count 1 \
     --stage forward \
     --report-dir "$report_root/matrix-small" \
