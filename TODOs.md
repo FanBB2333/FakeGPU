@@ -342,7 +342,7 @@ with fakegpu.stage("backward"):
   - `logs`
 - [x] 提供校验工具：
   - `verification/check_preflight_report.py`
-- [ ] Markdown 报告包含：
+- [x] Markdown 报告包含：
   - 一句话结论
   - 每卡峰值显存表
   - 失败原因
@@ -352,7 +352,7 @@ with fakegpu.stage("backward"):
 验收：
 
 - [x] schema 校验加入 `./ftest preflight_oom`。
-- [ ] 报告可直接作为 Slurm 提交前的附件。
+- [x] 报告可直接作为 Slurm 提交前的附件。
 
 ---
 

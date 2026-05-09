@@ -72,9 +72,14 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     assert completed.returncode == 0, completed.stderr
     assert (report_dir / "preflight_report.md").is_file()
     markdown = (report_dir / "preflight_report.md").read_text(encoding="utf-8")
+    assert "## Summary" in markdown
     assert "## Stage Peaks" in markdown
     assert "## Current Memory By Category" in markdown
     assert "## Largest Allocations" in markdown
+    assert "## Confidence" in markdown
+    assert "## Suggested Next Steps" in markdown
+    assert "completed `forward` without tracked OOM" in markdown
+    assert "attach `preflight_report.json`" in markdown.lower()
     assert (report_dir / "preflight_stdout.log").read_text(encoding="utf-8").startswith("peak ")
     assert "FakeGPU Report Summary" in (report_dir / "preflight_stderr.log").read_text(encoding="utf-8")
 
@@ -216,4 +221,9 @@ def test_preflight_fakecuda_oom_returns_failure_report(tmp_path: Path) -> None:
     assert report["exit_code"] != 0
     assert report["errors"]
     assert "out of memory" in report["errors"][0]["message"].lower()
+    markdown = (report_dir / "preflight_report.md").read_text(encoding="utf-8")
+    assert "## Summary" in markdown
+    assert "## Failure Reason" in markdown
+    assert "out of memory" in markdown.lower()
+    assert "reduce batch size" in markdown.lower()
     assert (report_dir / "preflight_stderr.log").is_file()

@@ -218,6 +218,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"**Stage:** `{stage}`",
         f"**Tracking confidence:** `{report.get('tracking_confidence', 'unknown')}`",
         "",
+        "## Summary",
+        "",
+        _summary_sentence(report),
+        "",
         "## Command",
         "",
         "```bash",
@@ -320,7 +324,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
 
     errors = report.get("errors", [])
     if errors:
-        lines.extend(["", "## Errors", ""])
+        lines.extend(["", "## Failure Reason", ""])
         for error in errors:
             lines.append(f"- `{error.get('type', 'Error')}`: {error.get('message', '')}")
 
@@ -333,6 +337,19 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Confidence",
+            "",
+            _confidence_sentence(str(report.get("tracking_confidence", "unknown"))),
+            "",
+            "## Suggested Next Steps",
+            "",
+            *_next_steps(report),
+        ]
+    )
+
+    lines.extend(
+        [
+            "",
             "## Logs",
             "",
             f"- stdout: `{report.get('logs', {}).get('stdout')}`",
@@ -341,6 +358,98 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _summary_sentence(report: dict[str, Any]) -> str:
+    status = str(report.get("status", "UNKNOWN"))
+    stage = str(report.get("stage", "unknown"))
+    confidence = str(report.get("tracking_confidence", "unknown"))
+    peak = _total_peak_memory(report)
+    headroom = _min_headroom(report)
+    target = _target_profile_text(report)
+
+    if status == STATUS_PASS_FIT:
+        return (
+            f"The command completed `{stage}` without tracked OOM on {target}; "
+            f"peak tracked memory was {_fmt_bytes(peak)} with minimum headroom {_fmt_bytes(headroom)} "
+            f"at `{confidence}` confidence."
+        )
+    if status == STATUS_FAIL_OOM:
+        return (
+            f"The command reached `{stage}` and failed with tracked OOM on {target}; "
+            f"peak tracked memory was {_fmt_bytes(peak)} at `{confidence}` confidence."
+        )
+    if status == STATUS_WARN_INCOMPLETE:
+        return (
+            f"The command completed, but tracking was incomplete at `{confidence}` confidence; "
+            "treat fit/no-fit as unresolved."
+        )
+    return f"The command failed before a reliable fit/no-fit result was produced at `{confidence}` confidence."
+
+
+def _confidence_sentence(confidence: str) -> str:
+    descriptions = {
+        "C0_incomplete": "C0 means no usable runtime memory report was produced.",
+        "C1_weight_storage": "C1 mainly covers weights and explicit storage.",
+        "C2_torch_tensor_lifetime": "C2 tracks torch-level tensor lifetimes and is suitable for fakecuda preflight decisions.",
+        "C3_native_cuda_allocations": "C3 tracks native CUDA allocation events.",
+        "C4_real_gpu_calibrated": "C4 means the result has been calibrated against a real GPU run.",
+    }
+    return descriptions.get(confidence, f"`{confidence}` is not a recognized confidence level.")
+
+
+def _next_steps(report: dict[str, Any]) -> list[str]:
+    status = str(report.get("status", "UNKNOWN"))
+    confidence = str(report.get("tracking_confidence", "unknown"))
+    steps: list[str] = []
+
+    if status == STATUS_PASS_FIT:
+        steps.append("- Repeat with the target production profile if this run used a small profile.")
+        steps.append("- Attach `preflight_report.json` and `preflight_report.md` to the Slurm submission notes.")
+        if confidence != "C4_real_gpu_calibrated":
+            steps.append("- For high-risk jobs, calibrate a reduced workload on the 3090 Ti before cluster submission.")
+    elif status == STATUS_FAIL_OOM:
+        steps.append("- Reduce batch size, sequence length, activation checkpoint scope, or optimizer state footprint.")
+        steps.append("- Re-run with `--allocation-stacks` to locate the largest allocations in user code.")
+        steps.append("- Repeat the same command with the intended cluster GPU profile after memory changes.")
+    elif status == STATUS_WARN_INCOMPLETE:
+        steps.append("- Re-run under `--runtime fakecuda` or enable a runtime that produces a memory report.")
+        steps.append("- Treat this report as control-flow evidence, not a fit/no-fit decision.")
+    else:
+        steps.append("- Inspect `preflight_stderr.log` and fix runtime or dependency errors before memory tuning.")
+        steps.append("- Re-run preflight after the command reaches the target stage.")
+
+    return steps
+
+
+def _target_profile_text(report: dict[str, Any]) -> str:
+    profiles = report.get("target_profiles")
+    if not isinstance(profiles, list) or not profiles:
+        return "the selected target profile"
+    parts: list[str] = []
+    for item in profiles:
+        if not isinstance(item, dict):
+            continue
+        profile_id = item.get("profile_id", "unknown")
+        count = item.get("count", 1)
+        parts.append(f"{profile_id} x {count}")
+    return ", ".join(parts) or "the selected target profile"
+
+
+def _total_peak_memory(report: dict[str, Any]) -> int:
+    total = 0
+    for dev in report.get("devices", []) or []:
+        if isinstance(dev, dict):
+            total += int(dev.get("peak_memory", 0) or 0)
+    return total
+
+
+def _min_headroom(report: dict[str, Any]) -> int:
+    headrooms: list[int] = []
+    for dev in report.get("devices", []) or []:
+        if isinstance(dev, dict):
+            headrooms.append(int(dev.get("headroom_bytes", 0) or 0))
+    return min(headrooms) if headrooms else 0
 
 
 def _format_stack_origin(stack: Any) -> str:
