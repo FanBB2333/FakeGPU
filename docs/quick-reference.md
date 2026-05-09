@@ -84,10 +84,13 @@ When `--strict` is set, skipped child tests are treated as `FAIL_RUNTIME` instea
 For RTX 3090 Ti calibration, run a reduced workload directly on the real GPU and compare with passthrough or hybrid when available:
 
 ```bash
+./ftest rtx3090ti_calibration
 python3 train.py --small-config
 ./fgpu --mode passthrough python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
+
+The calibration suite writes `build/rtx3090ti_calibration/calibration_rtx3090ti.json` and `.md`. On machines without a CUDA-visible RTX 3090 Ti, it writes an explicit skip reason instead of passing silently.
 
 See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design and limitations.
 
@@ -98,6 +101,7 @@ See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design
 ./ftest cpu_sim
 ./ftest python
 ./ftest preflight_oom
+./ftest rtx3090ti_calibration
 ./ftest all
 ```
 

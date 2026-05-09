@@ -16,6 +16,7 @@ Suites:
   cpu_sim   Build CPU simulation and validate cuBLAS ops
   python    Run PyTorch tests (requires torch)
   preflight_oom  Run fakecuda preflight pass/OOM report checks (requires torch)
+  rtx3090ti_calibration  Calibrate small real-CUDA vs fakecuda workloads on RTX 3090 Ti
   llm       Run LLM inference smoke test (requires torch + transformers + local model)
   passthrough_parity  Compare direct vs passthrough LLM outputs (requires real GPU + local model)
   all       smoke + python
@@ -78,7 +79,7 @@ run_smoke() {
   compile_verify_preload
   FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$SMOKE_BUILD_DIR/verify_preload"
   "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report.json"
-  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_multi_arch.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" --devices "test-512m,a100,h100,b100,b200" "$PYTHON_BIN" verification/test_multi_arch_compute_units.py
+  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_multi_arch.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" --devices "test-512m,rtx3090ti,a100,h100,b100,b200" "$PYTHON_BIN" verification/test_multi_arch_compute_units.py
   FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_memory_types.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$PYTHON_BIN" verification/test_memory_types.py
 }
 
@@ -173,6 +174,21 @@ run_preflight_oom() {
     --expect-device
 }
 
+run_rtx3090ti_calibration() {
+  if ! "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
+    echo "torch not found in current python; skipping RTX 3090 Ti calibration."
+    return 0
+  fi
+
+  local report_root="$SMOKE_BUILD_DIR/rtx3090ti_calibration"
+  rm -rf "$report_root"
+
+  "$PYTHON_BIN" verification/calibration_rtx3090ti.py --out-dir "$report_root"
+  "$PYTHON_BIN" verification/check_rtx3090ti_calibration.py \
+    --path "$report_root/calibration_rtx3090ti.json" \
+    --allow-skip
+}
+
 run_llm() {
   if ! "$PYTHON_BIN" -c "import torch, transformers" >/dev/null 2>&1; then
     echo "torch/transformers not found in current python; skipping LLM smoke test."
@@ -252,6 +268,9 @@ case "$suite" in
     ;;
   preflight_oom)
     run_preflight_oom
+    ;;
+  rtx3090ti_calibration)
+    run_rtx3090ti_calibration
     ;;
   llm)
     run_llm

@@ -264,7 +264,7 @@ with fakegpu.stage("backward"):
 验收：
 
 - [x] `./ftest preflight_oom` 在没有真实 GPU 的环境中也能验证 fakecuda OOM。
-- [ ] 在 3090 Ti 机器上额外运行真实 CUDA 校准用例。
+- [x] 在 3090 Ti 机器上额外运行真实 CUDA 校准用例。
 
 ---
 
@@ -272,27 +272,29 @@ with fakegpu.stage("backward"):
 
 这部分专门面向当前可用硬件。
 
-- [ ] 新增 `./ftest rtx3090ti_calibration`。
-- [ ] 新增 `profiles/rtx3090ti.yaml`，用于文档、报告和校准元数据；它不是目标集群 profile 的替代品。
+- [x] 新增 `./ftest rtx3090ti_calibration`。
+- [x] 新增 `profiles/rtx3090ti.yaml`，用于文档、报告和校准元数据；它不是目标集群 profile 的替代品。
 - [ ] 校准内容：
-  - 真实 PyTorch `torch.cuda.max_memory_allocated()`
-  - `passthrough` 模式峰值显存
-  - `hybrid --oom-policy clamp` 峰值显存
-  - fakecuda preflight 峰值显存
+  - [x] 真实 PyTorch `torch.cuda.max_memory_allocated()`
+  - [ ] `passthrough` 模式峰值显存
+  - [ ] `hybrid --oom-policy clamp` 峰值显存
+  - [x] fakecuda preflight 峰值显存
 - [ ] 使用小模型和可控张量，避免超过 24GB：
-  - MLP / Tiny Transformer
-  - HF tiny model
-  - LoRA tiny flow
-  - 手动大 tensor OOM probe
-- [ ] 生成校准报告：
-  - `calibration_rtx3090ti.json`
-  - `calibration_rtx3090ti.md`
-- [ ] 记录误差，不要求完全一致。
-- [ ] 如果真实 CUDA 不可用，测试必须报告 skip/fail 原因，不能静默通过。
+  - [x] MLP
+  - [ ] Tiny Transformer
+  - [ ] HF tiny model
+  - [ ] LoRA tiny flow
+  - [x] 受控 tensor allocation probe
+  - [ ] 手动大 tensor OOM probe
+- [x] 生成校准报告：
+  - [x] `calibration_rtx3090ti.json`
+  - [x] `calibration_rtx3090ti.md`
+- [x] 记录误差，不要求完全一致。
+- [x] 如果真实 CUDA 不可用，测试必须报告 skip/fail 原因，不能静默通过。
 
 验收：
 
-- [ ] 3090 Ti 上同一 workload 的 fakecuda peak 与真实 peak 误差被记录。
+- [x] 3090 Ti 上同一 workload 的 fakecuda peak 与真实 peak 误差被记录。
 - [ ] 文档说明该误差只能作为当前实现校准，不代表 A100/H100 性能。
 
 ---
