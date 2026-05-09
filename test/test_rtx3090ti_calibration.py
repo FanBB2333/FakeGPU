@@ -102,6 +102,22 @@ def test_calibration_includes_tiny_transformer_workload() -> None:
     assert "tiny_transformer_step" in _workloads()
 
 
+def test_calibration_includes_hf_and_lora_researcher_workloads() -> None:
+    from verification.calibration_rtx3090ti import _workloads
+
+    workloads = _workloads()
+    assert "hf_tiny_gpt2_step" in workloads
+    assert "peft_lora_tiny_step" in workloads
+
+
+def test_lora_workload_reports_trainable_parameter_bytes() -> None:
+    from verification.calibration_rtx3090ti import _workload_peft_lora_tiny_step
+
+    payload = _workload_peft_lora_tiny_step("cpu")
+    assert payload["parameter_bytes"] > payload["trainable_parameter_bytes"] > 0
+    assert payload["lora_rank"] == 4
+
+
 def _parse_simple_yaml(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():

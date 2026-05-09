@@ -284,8 +284,8 @@ with fakegpu.stage("backward"):
 - [ ] 使用小模型和可控张量，避免超过 24GB：
   - [x] MLP
   - [x] Tiny Transformer
-  - [ ] HF tiny model
-  - [ ] LoRA tiny flow
+  - [x] HF tiny model
+  - [x] LoRA tiny flow
   - [x] 受控 tensor allocation probe
   - [ ] 手动大 tensor OOM probe
 - [x] 生成校准报告：
@@ -313,8 +313,9 @@ with fakegpu.stage("backward"):
   - forward
   - backward
   - optimizer step
+- [x] HF tiny GPT-2 单卡训练步校准 workload。
+- [x] LoRA / PEFT tiny GPT-2 训练步校准 workload。
 - [ ] HF Trainer 单卡 smoke。
-- [ ] LoRA / PEFT 小模型训练 smoke。
 - [ ] AMP：
   - fp16
   - bf16 profile capability check
