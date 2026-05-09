@@ -75,7 +75,7 @@ The runner writes:
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. For lightweight regression tests, `test-512m` is also available as a 512 MB fakecuda/native profile. The runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, including stage peaks, top allocations, optional allocation stack traces, coarse memory categories, shared-storage alias handling, and basic logical-device attribution. Saved autograd activations still need more validation.
+Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. For lightweight regression tests, `test-512m` is also available as a 512 MB fakecuda/native profile. The runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, including stage peaks, top allocations, optional allocation stack traces, coarse memory categories, shared-storage alias handling, basic logical-device attribution, and saved autograd tensors visible through PyTorch hooks. CUDA backend-internal workspaces can still be undercounted; use `--memory-safety-factor <factor>` when 3090 Ti calibration shows a repeatable gap.
 
 `./ftest preflight_oom` now includes a profile matrix check: the same 560 MB allocation must fail on `test-512m` and pass on `a100`.
 
@@ -90,7 +90,7 @@ python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
 
-The calibration suite writes `build/rtx3090ti_calibration/calibration_rtx3090ti.json` and `.md`. On machines without a CUDA-visible RTX 3090 Ti, it writes an explicit skip reason instead of passing silently. Calibration error is only evidence about this implementation on the 3090 Ti; it is not an A100/H100 fit, parity, or performance guarantee.
+The calibration suite writes `build/rtx3090ti_calibration/calibration_rtx3090ti.json` and `.md`. On machines without a CUDA-visible RTX 3090 Ti, it writes an explicit skip reason instead of passing silently. The report includes peak error, a calibration factor, and the largest real-vs-fake timeline gaps. Calibration error is only evidence about this implementation on the 3090 Ti; it is not an A100/H100 fit, parity, or performance guarantee.
 
 See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design and limitations.
 

@@ -117,7 +117,7 @@ fakegpu preflight \
   -- python train.py --cluster-config
 ```
 
-Important limitation: fakecuda preflight now tracks torch-level tensor lifetimes, stage peaks, top allocations, optional allocation stack traces, coarse categories for parameters, buffers, gradients, optimizer state, activations, and temporaries, shared-storage aliases, and basic logical-device attribution. Saved autograd activations still need more validation, so a pass should be treated as a preflight signal rather than proof that a full cluster run will fit.
+Important limitation: fakecuda preflight now tracks torch-level tensor lifetimes, saved autograd tensors visible through PyTorch hooks, stage peaks, top allocations, optional allocation stack traces, coarse categories for parameters, buffers, gradients, optimizer state, activations, and temporaries, shared-storage aliases, and basic logical-device attribution. CUDA backend-internal workspaces and optimizer temporaries may still be invisible in fakecuda, especially for Transformer-heavy workloads. Treat `PASS_FIT` as a preflight signal rather than proof that a full cluster run will fit.
 
 ### 3. Calibrate On The 3090 Ti
 
@@ -143,7 +143,28 @@ Then compare with FakeGPU passthrough or hybrid runs, when your CUDA installatio
 ./fgpu --mode hybrid --oom-policy clamp python train.py --small-config
 ```
 
-The goal is not exact equality. The goal is to understand the error between real 3090 Ti memory and FakeGPU-reported memory on small controlled workloads. That error should be included in future preflight reports as calibration context.
+For the built-in calibration suite, run:
+
+```bash
+./ftest rtx3090ti_calibration
+```
+
+The goal is not exact equality. The goal is to understand the error between real 3090 Ti memory and FakeGPU-reported memory on small controlled workloads. The calibration report records peak error, a per-workload calibration factor, and timeline gaps such as `after_transformer_block_0` or `after_optimizer_step`. Large gaps usually mean fakecuda cannot see CUDA backend-internal activation/workspace or optimizer allocations.
+
+When a workload family is known to be undercounted, apply the calibration factor conservatively in preflight:
+
+```bash
+fakegpu preflight \
+  --runtime fakecuda \
+  --devices a100:8 \
+  --stage optimizer_step \
+  --memory-safety-factor 3.1 \
+  --report-dir preflight-a100-factor \
+  --strict \
+  -- python train.py --cluster-config
+```
+
+Reports that use `--memory-safety-factor` keep both the raw tracked peak and the estimated peak used for fit/OOM classification.
 
 ## Stage Markers
 
@@ -202,8 +223,8 @@ Suggested confidence levels:
 
 The next implementation should prioritize:
 
-1. Saved autograd activation coverage beyond visible op outputs.
-2. 3090 Ti calibration reports for small controlled workloads.
-3. Small/large profile pass-fail matrix for the same workload.
+1. Reducing the remaining CUDA backend-internal workspace and optimizer undercount for Transformer workloads.
+2. More 3090 Ti calibration workloads, including HF tiny and LoRA tiny flows.
+3. Small/large profile pass-fail matrix for more realistic workloads.
 4. More workload examples that attach `preflight_report.json` to Slurm submission notes.
 5. Documentation that clearly separates fit/no-fit checks from performance prediction.

@@ -75,7 +75,7 @@ runner 会写出：
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。轻量回归测试也可以使用 `test-512m`，它是 512 MB 的 fakecuda/native 测试 profile。runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，报告中包含分阶段峰值、top allocations、可选 allocation stack trace、粗粒度内存类别、共享 storage alias 处理和基础 logical-device 归属。autograd 保存的 activation 仍需要继续验证。
+建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。轻量回归测试也可以使用 `test-512m`，它是 512 MB 的 fakecuda/native 测试 profile。runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，报告中包含分阶段峰值、top allocations、可选 allocation stack trace、粗粒度内存类别、共享 storage alias 处理、基础 logical-device 归属，以及 PyTorch hooks 能看到的 autograd saved tensor。CUDA 后端内部 workspace 仍可能被低估；如果 3090 Ti 校准显示某类 workload 有稳定 gap，可以用 `--memory-safety-factor <factor>` 做保守判定。
 
 `./ftest preflight_oom` 现在包含 profile 矩阵检查：同一个 560 MB allocation 在 `test-512m` 下必须失败，在 `a100` 下必须通过。
 
@@ -90,7 +90,7 @@ python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
 
-校准套件会写出 `build/rtx3090ti_calibration/calibration_rtx3090ti.json` 和 `.md`。如果当前机器没有 CUDA 可见的 RTX 3090 Ti，它会写出明确 skip 原因，不会静默通过。校准误差只说明当前实现和这张 3090 Ti 上的小型 workload 表现，不代表 A100/H100 的可运行性、数值等价或性能。
+校准套件会写出 `build/rtx3090ti_calibration/calibration_rtx3090ti.json` 和 `.md`。如果当前机器没有 CUDA 可见的 RTX 3090 Ti，它会写出明确 skip 原因，不会静默通过。报告会包含峰值误差、calibration factor，以及真实 CUDA 和 fakecuda 最大 timeline gap。校准误差只说明当前实现和这张 3090 Ti 上的小型 workload 表现，不代表 A100/H100 的可运行性、数值等价或性能。
 
 当前设计和限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
 

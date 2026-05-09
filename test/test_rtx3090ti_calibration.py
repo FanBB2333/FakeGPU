@@ -52,11 +52,48 @@ def test_calibration_compare_records_peak_error() -> None:
 
     item = _compare_workload(
         "probe",
-        {"peak_memory": 1000},
-        {"peak_memory": 1100, "status": "PASS_FIT"},
+        {
+            "peak_memory": 1000,
+            "timeline": [
+                {"label": "after_forward", "current_memory": 800, "peak_memory": 900},
+                {"label": "after_optimizer_step", "current_memory": 1000, "peak_memory": 1000},
+            ],
+        },
+        {
+            "peak_memory": 1100,
+            "status": "PASS_FIT",
+            "timeline": [
+                {"label": "after_forward", "current_memory": 700, "peak_memory": 850},
+                {"label": "after_optimizer_step", "current_memory": 1100, "peak_memory": 1100},
+            ],
+        },
     )
     assert item["peak_error_bytes"] == 100
     assert item["peak_error_percent"] == 10.0
+    assert item["calibration_factor"] == 0.909
+    assert item["gap_analysis"]["available"] is True
+    assert item["gap_analysis"]["largest_current_gap"]["label"] == "after_forward"
+    assert item["likely_gap_reason"] == "within_lightweight_calibration_tolerance"
+
+
+def test_calibration_compare_identifies_optimizer_gap() -> None:
+    from verification.calibration_rtx3090ti import _compare_workload
+
+    item = _compare_workload(
+        "probe",
+        {
+            "peak_memory": 3000,
+            "timeline": [{"label": "after_optimizer_step", "current_memory": 3000, "peak_memory": 3000}],
+        },
+        {
+            "peak_memory": 1000,
+            "status": "PASS_FIT",
+            "timeline": [{"label": "after_optimizer_step", "current_memory": 900, "peak_memory": 1000}],
+        },
+    )
+    assert item["calibration_factor"] == 3.0
+    assert item["gap_analysis"]["largest_current_gap"]["current_gap_bytes"] == 2100
+    assert item["likely_gap_reason"] == "cuda_optimizer_backend_hidden_allocation"
 
 
 def test_calibration_includes_tiny_transformer_workload() -> None:

@@ -74,6 +74,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Record short Python stack traces for largest fakecuda allocations.",
     )
+    parser.add_argument(
+        "--memory-safety-factor",
+        type=float,
+        default=None,
+        help=(
+            "Multiply tracked peak memory before fit/OOM classification. "
+            "Use this with a factor from RTX 3090 Ti calibration when fakecuda undercounts a workload family."
+        ),
+    )
     parser.add_argument("--build-dir", help="FakeGPU CMake build directory for native/hybrid/passthrough runtimes.")
     parser.add_argument("--lib-dir", help="Directory containing FakeGPU shared libraries.")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command to run after --")
@@ -142,6 +151,10 @@ def build_report(
     stderr = paths.stderr_log.read_text(encoding="utf-8") if paths.stderr_log.exists() else ""
     raw_report, raw_report_kind = _load_raw_runtime_report(paths)
     devices, tracking_confidence = _normalize_devices(raw_report, raw_report_kind)
+    memory_safety_factor = _resolve_memory_safety_factor(ns)
+    if memory_safety_factor > 1.0:
+        devices = _apply_memory_safety_factor(devices, memory_safety_factor)
+        warnings.append(f"Applied memory safety factor {memory_safety_factor:.3f} to tracked peaks.")
 
     exit_code = completed.returncode if completed is not None else 1
     oom_detected = _looks_like_oom(stdout, stderr, raw_report)
@@ -188,6 +201,7 @@ def build_report(
             "device_count": ns.device_count,
             "stage": ns.stage,
             "steps": ns.steps,
+            "memory_safety_factor": memory_safety_factor,
         },
         "target_profiles": _target_profiles(ns),
         "calibration_gpu": None,
@@ -196,6 +210,7 @@ def build_report(
         "exit_code": exit_code,
         "duration_seconds": round(duration_seconds, 3),
         "tracking_confidence": tracking_confidence,
+        "memory_safety_factor": memory_safety_factor,
         "devices": devices,
         "warnings": warnings,
         "errors": errors,
@@ -216,6 +231,13 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     status = report.get("status", "UNKNOWN")
     stage = report.get("stage", "unknown")
     runtime = report.get("runtime", "unknown")
+    has_safety_factor = any("tracked_peak_memory" in dev for dev in report.get("devices", []) if isinstance(dev, dict))
+    device_header = "| GPU | Name | Peak | Total | Headroom | Allocations |"
+    device_rule = "|---:|---|---:|---:|---:|---:|"
+    if has_safety_factor:
+        device_header = "| GPU | Name | Tracked Peak | Estimated Peak | Total | Headroom | Allocations |"
+        device_rule = "|---:|---|---:|---:|---:|---:|---:|"
+
     lines = [
         "# FakeGPU Preflight Report",
         "",
@@ -236,20 +258,33 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "",
         "## Device Memory",
         "",
-        "| GPU | Name | Peak | Total | Headroom | Allocations |",
-        "|---:|---|---:|---:|---:|---:|",
+        device_header,
+        device_rule,
     ]
     for dev in report.get("devices", []):
-        lines.append(
-            "| {index} | {name} | {peak} | {total} | {headroom} | {allocs} |".format(
-                index=dev.get("index", 0),
-                name=dev.get("name", ""),
-                peak=_fmt_bytes(int(dev.get("peak_memory", 0))),
-                total=_fmt_bytes(int(dev.get("total_memory", 0))),
-                headroom=_fmt_bytes(int(dev.get("headroom_bytes", 0))),
-                allocs=int(dev.get("allocation_count", 0)),
+        if has_safety_factor:
+            lines.append(
+                "| {index} | {name} | {tracked} | {estimated} | {total} | {headroom} | {allocs} |".format(
+                    index=dev.get("index", 0),
+                    name=dev.get("name", ""),
+                    tracked=_fmt_bytes(int(dev.get("tracked_peak_memory", dev.get("peak_memory", 0)))),
+                    estimated=_fmt_bytes(int(dev.get("peak_memory", 0))),
+                    total=_fmt_bytes(int(dev.get("total_memory", 0))),
+                    headroom=_fmt_bytes(int(dev.get("headroom_bytes", 0))),
+                    allocs=int(dev.get("allocation_count", 0)),
+                )
             )
-        )
+        else:
+            lines.append(
+                "| {index} | {name} | {peak} | {total} | {headroom} | {allocs} |".format(
+                    index=dev.get("index", 0),
+                    name=dev.get("name", ""),
+                    peak=_fmt_bytes(int(dev.get("peak_memory", 0))),
+                    total=_fmt_bytes(int(dev.get("total_memory", 0))),
+                    headroom=_fmt_bytes(int(dev.get("headroom_bytes", 0))),
+                    allocs=int(dev.get("allocation_count", 0)),
+                )
+            )
 
     stage_rows: list[str] = []
     allocation_rows: list[str] = []
@@ -373,17 +408,19 @@ def _summary_sentence(report: dict[str, Any]) -> str:
     peak = _total_peak_memory(report)
     headroom = _min_headroom(report)
     target = _target_profile_text(report)
+    factor = float(report.get("memory_safety_factor", 1.0) or 1.0)
+    peak_label = "estimated peak memory" if factor > 1.0 else "peak tracked memory"
 
     if status == STATUS_PASS_FIT:
         return (
             f"The command completed `{stage}` without tracked OOM on {target}; "
-            f"peak tracked memory was {_fmt_bytes(peak)} with minimum headroom {_fmt_bytes(headroom)} "
+            f"{peak_label} was {_fmt_bytes(peak)} with minimum headroom {_fmt_bytes(headroom)} "
             f"at `{confidence}` confidence."
         )
     if status == STATUS_FAIL_OOM:
         return (
             f"The command reached `{stage}` and failed with tracked OOM on {target}; "
-            f"peak tracked memory was {_fmt_bytes(peak)} at `{confidence}` confidence."
+            f"{peak_label} was {_fmt_bytes(peak)} at `{confidence}` confidence."
         )
     if status == STATUS_WARN_INCOMPLETE:
         return (
@@ -647,6 +684,41 @@ def _normalize_devices(raw_report: dict[str, Any] | None, raw_report_kind: str |
             }
         )
     return devices, confidence if devices else "C0_incomplete"
+
+
+def _resolve_memory_safety_factor(ns: argparse.Namespace) -> float:
+    raw_value = ns.memory_safety_factor
+    if raw_value is None:
+        env_value = os.environ.get("FAKEGPU_PREFLIGHT_MEMORY_SAFETY_FACTOR")
+        if env_value:
+            try:
+                raw_value = float(env_value)
+            except ValueError:
+                raw_value = 1.0
+    if raw_value is None:
+        return 1.0
+    return max(1.0, float(raw_value))
+
+
+def _apply_memory_safety_factor(devices: list[dict[str, Any]], factor: float) -> list[dict[str, Any]]:
+    import math
+
+    adjusted: list[dict[str, Any]] = []
+    for dev in devices:
+        item = dict(dev)
+        tracked_peak = int(item.get("peak_memory", 0) or 0)
+        estimated_peak = int(math.ceil(tracked_peak * factor))
+        total = int(item.get("total_memory", 0) or 0)
+        headroom = total - estimated_peak
+        headroom_percent = (100.0 * headroom / total) if total > 0 else None
+        item["tracked_peak_memory"] = tracked_peak
+        item["peak_memory"] = estimated_peak
+        item["estimated_peak_memory"] = estimated_peak
+        item["memory_safety_factor"] = round(factor, 6)
+        item["headroom_bytes"] = headroom
+        item["headroom_percent"] = round(headroom_percent, 3) if headroom_percent is not None else None
+        adjusted.append(item)
+    return adjusted
 
 
 def _classify_status(

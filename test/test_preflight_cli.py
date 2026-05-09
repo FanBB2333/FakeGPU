@@ -229,6 +229,43 @@ def test_preflight_fakecuda_oom_returns_failure_report(tmp_path: Path) -> None:
     assert (report_dir / "preflight_stderr.log").is_file()
 
 
+def test_preflight_memory_safety_factor_can_fail_estimated_oom(tmp_path: Path) -> None:
+    script = tmp_path / "factor_probe.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import fakegpu",
+                "import torch",
+                "with fakegpu.stage('forward'):",
+                "    x = torch.empty((1024, 1024), device='cuda', dtype=torch.float32)",
+                "    print('peak', torch.cuda.max_memory_allocated())",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report_dir = tmp_path / "preflight-safety-factor"
+    completed = _run_preflight(
+        [sys.executable, str(script)],
+        report_dir=report_dir,
+        device_args=["--profile", "test-512m", "--device-count", "1"],
+        preflight_args=["--memory-safety-factor", "200"],
+    )
+
+    assert completed.returncode == 2, completed.stderr
+    report = json.loads((report_dir / "preflight_report.json").read_text(encoding="utf-8"))
+    dev = report["devices"][0]
+    assert report["status"] == "FAIL_OOM"
+    assert report["memory_safety_factor"] == 200
+    assert dev["tracked_peak_memory"] >= 4 * 1024**2
+    assert dev["peak_memory"] == dev["estimated_peak_memory"]
+    assert dev["peak_memory"] > dev["total_memory"]
+    assert any("safety factor" in warning.lower() for warning in report["warnings"])
+    markdown = (report_dir / "preflight_report.md").read_text(encoding="utf-8")
+    assert "Tracked Peak" in markdown
+    assert "Estimated Peak" in markdown
+
+
 def test_preflight_same_workload_fails_on_small_profile_and_passes_on_large_profile(
     tmp_path: Path,
 ) -> None:

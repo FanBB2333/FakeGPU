@@ -192,15 +192,16 @@ with fakegpu.stage("backward"):
 
 ## P3: 显存跟踪可信度提升
 
-当前 `torch_patch` 的报告主要覆盖显式 fake-CUDA storage，已知不足是大多数 op 产生的 activation / temporary tensor 没有完整计入。面向 OOM preflight，这一项是核心。
+当前 `torch_patch` 的报告已经覆盖显式 fake-CUDA storage、部分 op output，以及 PyTorch hooks 能看到的 autograd saved tensor。已知不足是 CUDA 后端内部 workspace、fused attention/optimizer temporary 等仍可能不可见。面向 OOM preflight，这一项仍是核心。
 
 - [ ] 修复 op-produced tensor 跟踪：
   - [x] elementwise output
   - [x] matmul output
-  - loss output
+  - [x] loss output
   - [x] clone / contiguous 后的新 storage
   - [x] view 后共享 storage 的归属验证
-  - autograd 保存的 activation
+  - [x] PyTorch hooks 能看到的 autograd saved tensor
+  - [ ] CUDA 后端内部 workspace / fused attention temporary
 - [ ] 区分内存类别：
   - [x] parameters
   - [x] buffers
@@ -224,6 +225,7 @@ with fakegpu.stage("backward"):
   - category
 - [x] 支持 optional stack trace
 - [x] 多设备场景下正确归属 logical device。
+- [x] 支持 `--memory-safety-factor`，可把 3090 Ti 校准得到的 factor 用于保守 fit/OOM 判定。
 - [x] 报告 `tracking_confidence`：
   - `C0_incomplete`：只跑通流程，不适合判断 OOM。
   - `C1_weight_storage`：主要覆盖权重和显式 storage。
@@ -289,6 +291,10 @@ with fakegpu.stage("backward"):
 - [x] 生成校准报告：
   - [x] `calibration_rtx3090ti.json`
   - [x] `calibration_rtx3090ti.md`
+- [x] 生成误差诊断字段：
+  - [x] `calibration_factor`
+  - [x] `gap_analysis`
+  - [x] `likely_gap_reason`
 - [x] 记录误差，不要求完全一致。
 - [x] 如果真实 CUDA 不可用，测试必须报告 skip/fail 原因，不能静默通过。
 

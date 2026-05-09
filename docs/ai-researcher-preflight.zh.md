@@ -117,7 +117,7 @@ fakegpu preflight \
   -- python train.py --cluster-config
 ```
 
-重要限制：fakecuda preflight 现在会跟踪 torch 层 tensor 生命周期、分阶段峰值、top allocations、可选 allocation stack trace，粗略区分 parameters、buffers、gradients、optimizer state、activations 和 temporaries，并处理共享 storage alias 和基础 logical-device 归属。autograd 保存的 activation 仍需要继续验证，所以通过结果只能作为提交前信号，不能证明完整集群任务一定能放下。
+重要限制：fakecuda preflight 现在会跟踪 torch 层 tensor 生命周期、PyTorch hooks 能看到的 autograd saved tensor、分阶段峰值、top allocations、可选 allocation stack trace，粗略区分 parameters、buffers、gradients、optimizer state、activations 和 temporaries，并处理共享 storage alias 和基础 logical-device 归属。CUDA 后端内部的 workspace 和 optimizer 临时分配仍可能不可见，Transformer-heavy workload 尤其明显。所以 `PASS_FIT` 只能作为提交前信号，不能证明完整集群任务一定能放下。
 
 ### 3. 用 3090 Ti 做真实校准
 
@@ -143,7 +143,28 @@ print(torch.cuda.mem_get_info())
 ./fgpu --mode hybrid --oom-policy clamp python train.py --small-config
 ```
 
-这里不要求完全一致。目标是了解真实 3090 Ti 显存和 FakeGPU 报告在小型受控 workload 上的误差。未来 preflight 报告应该把这类误差作为 calibration context。
+内置校准套件可以直接运行：
+
+```bash
+./ftest rtx3090ti_calibration
+```
+
+这里不要求完全一致。目标是了解真实 3090 Ti 显存和 FakeGPU 报告在小型受控 workload 上的误差。校准报告会记录峰值误差、每个 workload 的 calibration factor，以及 `after_transformer_block_0`、`after_optimizer_step` 这类 timeline gap。较大的 gap 通常说明 fakecuda 看不到 CUDA 后端内部 activation/workspace 或 optimizer 分配。
+
+如果某类 workload 已知会被低估，可以把校准得到的 factor 保守地用于 preflight：
+
+```bash
+fakegpu preflight \
+  --runtime fakecuda \
+  --devices a100:8 \
+  --stage optimizer_step \
+  --memory-safety-factor 3.1 \
+  --report-dir preflight-a100-factor \
+  --strict \
+  -- python train.py --cluster-config
+```
+
+使用 `--memory-safety-factor` 后，报告会同时保留原始 tracked peak 和用于 fit/OOM 判定的 estimated peak。
 
 ## Stage 标记
 
@@ -202,8 +223,8 @@ preflight 报告应包含：
 
 下一版实现应优先做：
 
-1. 超出可见 op output 的 autograd saved activation 覆盖。
-2. 3090 Ti 小型受控 workload 校准报告。
-3. 同一 workload 在小/大 profile 下的 pass-fail matrix。
+1. 继续减少 Transformer workload 中 CUDA 后端内部 workspace 和 optimizer 分配的低估。
+2. 扩展 3090 Ti 校准 workload，包括 HF tiny 和 LoRA tiny flow。
+3. 为更真实的 workload 增加小/大 profile pass-fail matrix。
 4. 更多把 `preflight_report.json` 作为 Slurm 提交说明附件的 workload 示例。
 5. 文档中明确区分 fit/no-fit 检查和性能预测。
