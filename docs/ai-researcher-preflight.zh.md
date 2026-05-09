@@ -205,5 +205,5 @@ preflight 报告应包含：
 1. 超出可见 op output 的 autograd saved activation 覆盖。
 2. 3090 Ti 小型受控 workload 校准报告。
 3. 同一 workload 在小/大 profile 下的 pass-fail matrix。
-4. 面向报告消费者的 `preflight_report.schema.json`。
+4. 更多把 `preflight_report.json` 作为 Slurm 提交说明附件的 workload 示例。
 5. 文档中明确区分 fit/no-fit 检查和性能预测。

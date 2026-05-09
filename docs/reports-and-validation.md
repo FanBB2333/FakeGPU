@@ -74,7 +74,7 @@ This report is useful for validating control flow, topology modeling, and broad 
 
 The AI researcher preflight workflow adds a higher-level report on top of the existing runtime reports.
 
-The runner writes `preflight_report.json`, with a Markdown companion `preflight_report.md`. It answers whether a user command reached a selected stage, whether it triggered OOM under a target GPU profile, and how much memory headroom remains.
+The runner writes `preflight_report.json`, with a Markdown companion `preflight_report.md`. It answers whether a user command reached a selected stage, whether it triggered OOM under a target GPU profile, and how much memory headroom remains. The JSON contract is defined in the repo-root `preflight_report.schema.json`, and `verification/check_preflight_report.py` validates reports against that schema by default.
 
 Status values:
 

@@ -205,5 +205,5 @@ The next implementation should prioritize:
 1. Saved autograd activation coverage beyond visible op outputs.
 2. 3090 Ti calibration reports for small controlled workloads.
 3. Small/large profile pass-fail matrix for the same workload.
-4. `preflight_report.schema.json` for report consumers.
+4. More workload examples that attach `preflight_report.json` to Slurm submission notes.
 5. Documentation that clearly separates fit/no-fit checks from performance prediction.

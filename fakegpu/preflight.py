@@ -183,6 +183,8 @@ def build_report(
             "stage": ns.stage,
             "steps": ns.steps,
         },
+        "target_profiles": _target_profiles(ns),
+        "calibration_gpu": None,
         "status": status,
         "stage": stage,
         "exit_code": exit_code,
@@ -462,6 +464,24 @@ def _infer_device_count_from_devices(devices: str) -> int:
         else:
             total += 1
     return max(total, 1)
+
+
+def _target_profiles(ns: argparse.Namespace) -> list[dict[str, int | str]]:
+    if ns.devices:
+        profiles: list[dict[str, int | str]] = []
+        for spec in str(ns.devices).split(","):
+            spec = spec.strip()
+            if not spec:
+                continue
+            profile, _, count_text = spec.partition(":")
+            count = int(count_text) if count_text.strip().isdigit() else 1
+            profiles.append({"profile_id": profile.strip(), "count": count})
+        return profiles
+
+    if ns.profile:
+        return [{"profile_id": str(ns.profile), "count": int(ns.device_count or 1)}]
+
+    return []
 
 
 def _load_raw_runtime_report(paths: PreflightPaths) -> tuple[dict[str, Any] | None, str | None]:

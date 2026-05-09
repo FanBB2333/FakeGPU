@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fakegpu.local/schemas/preflight_report.schema.json",
+  "title": "FakeGPU Preflight Report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "fakegpu_version",
+    "git_commit",
+    "command",
+    "executed_command",
+    "cwd",
+    "runtime",
+    "target",
+    "target_profiles",
+    "calibration_gpu",
+    "status",
+    "stage",
+    "exit_code",
+    "duration_seconds",
+    "tracking_confidence",
+    "devices",
+    "warnings",
+    "errors",
+    "logs",
+    "raw_reports"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["preflight.v1"]
+    },
+    "fakegpu_version": {
+      "type": "string"
+    },
+    "git_commit": {
+      "type": ["string", "null"]
+    },
+    "command": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "executed_command": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "runtime": {
+      "type": "string",
+      "enum": ["fakecuda", "native", "hybrid", "passthrough"]
+    },
+    "target": {
+      "type": "object",
+      "required": ["devices", "profile", "device_count", "stage", "steps"],
+      "properties": {
+        "devices": {
+          "type": ["string", "null"]
+        },
+        "profile": {
+          "type": ["string", "null"]
+        },
+        "device_count": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "stage": {
+          "type": "string"
+        },
+        "steps": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        }
+      }
+    },
+    "target_profiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["profile_id", "count"],
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "calibration_gpu": {
+      "type": ["object", "null"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["PASS_FIT", "FAIL_OOM", "FAIL_RUNTIME", "WARN_INCOMPLETE_TRACKING"]
+    },
+    "stage": {
+      "type": "string"
+    },
+    "exit_code": {
+      "type": "integer"
+    },
+    "duration_seconds": {
+      "type": "number",
+      "minimum": 0
+    },
+    "tracking_confidence": {
+      "type": "string",
+      "enum": [
+        "C0_incomplete",
+        "C1_weight_storage",
+        "C2_torch_tensor_lifetime",
+        "C3_native_cuda_allocations",
+        "C4_real_gpu_calibrated"
+      ]
+    },
+    "devices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "index",
+          "name",
+          "profile_id",
+          "total_memory",
+          "peak_memory",
+          "current_memory",
+          "headroom_bytes",
+          "headroom_percent",
+          "allocation_count",
+          "current_bytes_by_category",
+          "peak_by_stage",
+          "largest_allocations",
+          "tracking_confidence"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": ["string", "null"]
+          },
+          "total_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "peak_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "current_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "headroom_bytes": {
+            "type": "integer"
+          },
+          "headroom_percent": {
+            "type": ["number", "null"]
+          },
+          "allocation_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "free_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "current_bytes_by_category": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "peak_by_stage": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "largest_allocations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["bytes", "device", "stage", "category"],
+              "properties": {
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "device": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "dtype": {
+                  "type": ["string", "null"]
+                },
+                "shape": {
+                  "type": ["array", "null"],
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "stage": {
+                  "type": "string"
+                },
+                "category": {
+                  "type": "string"
+                },
+                "stack": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["file", "line", "function"],
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "line": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "function": {
+                        "type": "string"
+                      },
+                      "code": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "tracking_confidence": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "message"],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "logs": {
+      "type": "object",
+      "required": ["stdout", "stderr"],
+      "properties": {
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        }
+      }
+    },
+    "raw_reports": {
+      "type": "object",
+      "required": ["runtime", "cluster", "fakecuda_child", "stage_log"],
+      "properties": {
+        "runtime": {
+          "type": ["string", "null"]
+        },
+        "cluster": {
+          "type": ["string", "null"]
+        },
+        "fakecuda_child": {
+          "type": ["string", "null"]
+        },
+        "stage_log": {
+          "type": ["string", "null"]
+        }
+      }
+    }
+  }
+}
