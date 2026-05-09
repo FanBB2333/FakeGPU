@@ -151,22 +151,22 @@ print(torch.cuda.mem_get_info())
 
 内置套件包含 tensor allocation probe、torch MLP 训练步、torch Tiny Transformer 训练步、本地随机初始化的 Hugging Face tiny GPT-2 训练步，以及 PEFT LoRA tiny GPT-2 训练步。它不会下载模型权重。
 
-这里不要求完全一致。目标是了解真实 3090 Ti 显存和 FakeGPU 报告在小型受控 workload 上的误差。校准报告会记录峰值误差、每个 workload 的 calibration factor，以及 `after_transformer_block_0`、`after_optimizer_step` 这类 timeline gap。较大的 gap 通常说明 fakecuda 看不到 CUDA 后端内部 activation/workspace 或 optimizer 分配。
+这里不要求完全一致。目标是了解真实 3090 Ti 显存和 FakeGPU 报告在小型受控 workload 上的误差。校准报告会记录峰值误差、缺失的峰值字节数、每个 workload 的 calibration factor，以及 `after_transformer_block_0`、`after_optimizer_step` 这类 timeline gap。较大的 gap 通常说明 fakecuda 看不到 CUDA 后端内部 activation/workspace 或 optimizer 分配。
 
-如果某类 workload 已知会被低估，可以把校准得到的 factor 保守地用于 preflight：
+如果缺失显存更像固定的后端 workspace gap，preflight 优先使用加性 margin。比如校准报告显示 `after_backward` 大约缺 18 MiB：
 
 ```bash
 fakegpu preflight \
   --runtime fakecuda \
   --devices a100:8 \
   --stage optimizer_step \
-  --memory-safety-factor 3.1 \
-  --report-dir preflight-a100-factor \
+  --memory-safety-margin 18MiB \
+  --report-dir preflight-a100-margin \
   --strict \
   -- python train.py --cluster-config
 ```
 
-使用 `--memory-safety-factor` 后，报告会同时保留原始 tracked peak 和用于 fit/OOM 判定的 estimated peak。
+只有当校准显示 gap 会随 workload 规模增长时，再使用 `--memory-safety-factor`。使用任一 safety 选项后，报告都会同时保留原始 tracked peak 和用于 fit/OOM 判定的 estimated peak。
 
 ## Stage 标记
 

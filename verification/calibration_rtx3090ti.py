@@ -578,6 +578,7 @@ def _compare_workload(name: str, real: dict[str, Any], fake: dict[str, Any]) -> 
     real_peak = int(real.get("peak_memory", 0) or 0)
     fake_peak = int(fake.get("peak_memory", 0) or 0)
     abs_error = fake_peak - real_peak
+    missing_peak = max(0, real_peak - fake_peak)
     rel_error = (abs(abs_error) / real_peak * 100.0) if real_peak > 0 else None
     factor = (real_peak / fake_peak) if fake_peak > 0 else None
     gap_analysis = _timeline_gap_analysis(real.get("timeline"), fake.get("timeline"))
@@ -587,6 +588,8 @@ def _compare_workload(name: str, real: dict[str, Any], fake: dict[str, Any]) -> 
         "fakecuda_preflight": fake,
         "peak_error_bytes": abs_error,
         "peak_error_percent": round(rel_error, 3) if rel_error is not None else None,
+        "missing_peak_bytes": missing_peak,
+        "recommended_memory_safety_margin_bytes": missing_peak,
         "calibration_factor": round(factor, 3) if factor is not None else None,
         "gap_analysis": gap_analysis,
         "likely_gap_reason": _likely_gap_reason(rel_error, gap_analysis),
@@ -677,20 +680,20 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## Workloads",
             "",
-            "| workload | real peak | fakecuda peak | error | error % | factor | likely reason |",
+            "| workload | real peak | fakecuda peak | missing peak | error % | factor | likely reason |",
             "|---|---:|---:|---:|---:|---:|---|",
         ]
     )
     for item in report.get("workloads", []):
         real_peak = int(item.get("real_cuda", {}).get("peak_memory", 0) or 0)
         fake_peak = int(item.get("fakecuda_preflight", {}).get("peak_memory", 0) or 0)
-        err = int(item.get("peak_error_bytes", 0) or 0)
+        missing_peak = int(item.get("missing_peak_bytes", 0) or 0)
         pct = item.get("peak_error_percent")
         pct_text = "" if pct is None else f"{pct:.3f}%"
         factor = item.get("calibration_factor")
         factor_text = "" if factor is None else f"{factor:.3f}x"
         lines.append(
-            f"| `{item.get('name')}` | {_fmt_bytes(real_peak)} | {_fmt_bytes(fake_peak)} | {_fmt_bytes(err)} | {pct_text} | {factor_text} | `{item.get('likely_gap_reason', '')}` |"
+            f"| `{item.get('name')}` | {_fmt_bytes(real_peak)} | {_fmt_bytes(fake_peak)} | {_fmt_bytes(missing_peak)} | {pct_text} | {factor_text} | `{item.get('likely_gap_reason', '')}` |"
         )
     gap_rows = []
     for item in report.get("workloads", []):
