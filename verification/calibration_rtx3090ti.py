@@ -115,7 +115,10 @@ def _cuda_probe() -> dict[str, Any]:
         return {"status": "probe_failed", "reason": str(exc)}
 
 
-def _workloads() -> dict[str, Callable[[str], dict[str, Any]]]:
+RecordFn = Callable[[str], None]
+
+
+def _workloads() -> dict[str, Callable[[str, RecordFn | None], dict[str, Any]]]:
     return {
         "tensor_256mb": _workload_tensor_256mb,
         "mlp_train_step": _workload_mlp_train_step,
@@ -141,28 +144,73 @@ def _run_worker(worker: str, workload_name: str) -> dict[str, Any]:
     if worker == "real":
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
+        try:
+            torch.cuda.reset_accumulated_memory_stats()
+        except Exception:
+            pass
+
+    timeline: list[dict[str, Any]] = []
+
+    def record(label: str) -> None:
+        _record_memory_point(label, timeline)
 
     with stage_ctx:
-        result = _workloads()[workload_name](device)
+        result = _workloads()[workload_name](device, record)
 
     if worker == "real":
         torch.cuda.synchronize()
         result["peak_memory"] = int(torch.cuda.max_memory_allocated())
+        result["peak_reserved_memory"] = int(torch.cuda.max_memory_reserved())
+        stats = torch.cuda.memory_stats()
+        requested_peak = stats.get("requested_bytes.all.peak")
+        if requested_peak is not None:
+            result["requested_peak_memory"] = int(requested_peak)
         torch.cuda.empty_cache()
     else:
         result["peak_memory"] = int(torch.cuda.max_memory_allocated())
+        result["peak_reserved_memory"] = int(torch.cuda.max_memory_allocated())
+        result["requested_peak_memory"] = int(torch.cuda.max_memory_allocated())
 
+    result["timeline"] = timeline
     result["worker"] = worker
     result["workload"] = workload_name
     return result
 
 
-def _workload_tensor_256mb(device: str) -> dict[str, Any]:
+def _record_memory_point(label: str, timeline: list[dict[str, Any]]) -> None:
+    import torch
+
+    if device_is_cuda := bool(torch.cuda.is_available()):
+        try:
+            torch.cuda.synchronize()
+        except Exception:
+            device_is_cuda = False
+    stats = torch.cuda.memory_stats() if device_is_cuda else {}
+    point = {
+        "label": label,
+        "current_memory": int(torch.cuda.memory_allocated()) if device_is_cuda else 0,
+        "peak_memory": int(torch.cuda.max_memory_allocated()) if device_is_cuda else 0,
+    }
+    for src_key, dst_key in (
+        ("requested_bytes.all.current", "requested_current_memory"),
+        ("requested_bytes.all.peak", "requested_peak_memory"),
+        ("reserved_bytes.all.current", "reserved_current_memory"),
+        ("reserved_bytes.all.peak", "reserved_peak_memory"),
+    ):
+        value = stats.get(src_key)
+        if value is not None:
+            point[dst_key] = int(value)
+    timeline.append(point)
+
+
+def _workload_tensor_256mb(device: str, record: RecordFn | None = None) -> dict[str, Any]:
     import torch
 
     elements = 64 * 1024 * 1024
     x = torch.empty((elements,), device=device, dtype=torch.float32)
     x.fill_(1.0)
+    if record is not None:
+        record("after_tensor_fill")
     if device == "cuda" and torch.cuda.is_available():
         torch.cuda.synchronize()
     requested_bytes = elements * 4
@@ -170,7 +218,7 @@ def _workload_tensor_256mb(device: str) -> dict[str, Any]:
     return {"requested_bytes": requested_bytes}
 
 
-def _workload_mlp_train_step(device: str) -> dict[str, Any]:
+def _workload_mlp_train_step(device: str, record: RecordFn | None = None) -> dict[str, Any]:
     import torch
 
     torch.manual_seed(0)
@@ -179,11 +227,21 @@ def _workload_mlp_train_step(device: str) -> dict[str, Any]:
         torch.nn.GELU(),
         torch.nn.Linear(4096, 1024),
     ).to(device)
+    if record is not None:
+        record("after_model_to")
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     x = torch.randn((16, 1024), device=device)
+    if record is not None:
+        record("after_input")
     loss = model(x).square().mean()
+    if record is not None:
+        record("after_forward_loss")
     loss.backward()
+    if record is not None:
+        record("after_backward")
     optimizer.step()
+    if record is not None:
+        record("after_optimizer_step")
     if device == "cuda" and torch.cuda.is_available():
         torch.cuda.synchronize()
     parameter_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
@@ -191,7 +249,7 @@ def _workload_mlp_train_step(device: str) -> dict[str, Any]:
     return {"parameter_bytes": int(parameter_bytes)}
 
 
-def _workload_tiny_transformer_step(device: str) -> dict[str, Any]:
+def _workload_tiny_transformer_step(device: str, record: RecordFn | None = None) -> dict[str, Any]:
     import torch
 
     torch.manual_seed(0)
@@ -224,17 +282,33 @@ def _workload_tiny_transformer_step(device: str) -> dict[str, Any]:
 
         def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
             x = self.token(input_ids) + self.position
-            for block in self.blocks:
+            if record is not None:
+                record("after_embed_add")
+            for block_index, block in enumerate(self.blocks):
                 x = block(x)
+                if record is not None:
+                    record(f"after_transformer_block_{block_index}")
             return self.head(x)
 
     model = TinyTransformer().to(device)
+    if record is not None:
+        record("after_model_to")
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
+    if record is not None:
+        record("after_input")
     logits = model(input_ids)
+    if record is not None:
+        record("after_forward")
     loss = logits.square().mean()
+    if record is not None:
+        record("after_loss")
     loss.backward()
+    if record is not None:
+        record("after_backward")
     optimizer.step()
+    if record is not None:
+        record("after_optimizer_step")
     if device == "cuda" and torch.cuda.is_available():
         torch.cuda.synchronize()
     parameter_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
@@ -289,19 +363,39 @@ def _run_fakecuda_preflight(workload_name: str, *, out_dir: Path) -> dict[str, A
         capture_output=True,
     )
     report_path = report_dir / "preflight_report.json"
+    stdout_path = report_dir / "preflight_stdout.log"
+    stderr_path = report_dir / "preflight_stderr.log"
     preflight_report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
+    worker_payload = _load_last_json_line(stdout_path)
     peak = 0
     devices = preflight_report.get("devices")
     if isinstance(devices, list) and devices:
         peak = int(devices[0].get("peak_memory", 0) or 0)
-    return {
+    result = dict(worker_payload)
+    result.update({
         "returncode": int(completed.returncode),
         "status": preflight_report.get("status", "MISSING_REPORT"),
         "peak_memory": peak,
         "report": str(report_path),
-        "stdout": str(report_dir / "preflight_stdout.log"),
-        "stderr": str(report_dir / "preflight_stderr.log"),
-    }
+        "stdout": str(stdout_path),
+        "stderr": str(stderr_path),
+    })
+    return result
+
+
+def _load_last_json_line(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    for line in reversed(path.read_text(encoding="utf-8").splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        return payload if isinstance(payload, dict) else {}
+    return {}
 
 
 def _run_json_subprocess(command: list[str], *, env: dict[str, str]) -> dict[str, Any]:
@@ -334,13 +428,79 @@ def _compare_workload(name: str, real: dict[str, Any], fake: dict[str, Any]) -> 
     fake_peak = int(fake.get("peak_memory", 0) or 0)
     abs_error = fake_peak - real_peak
     rel_error = (abs(abs_error) / real_peak * 100.0) if real_peak > 0 else None
+    factor = (real_peak / fake_peak) if fake_peak > 0 else None
+    gap_analysis = _timeline_gap_analysis(real.get("timeline"), fake.get("timeline"))
     return {
         "name": name,
         "real_cuda": real,
         "fakecuda_preflight": fake,
         "peak_error_bytes": abs_error,
         "peak_error_percent": round(rel_error, 3) if rel_error is not None else None,
+        "calibration_factor": round(factor, 3) if factor is not None else None,
+        "gap_analysis": gap_analysis,
+        "likely_gap_reason": _likely_gap_reason(rel_error, gap_analysis),
     }
+
+
+def _timeline_gap_analysis(real_timeline: Any, fake_timeline: Any) -> dict[str, Any]:
+    if not isinstance(real_timeline, list) or not isinstance(fake_timeline, list):
+        return {"available": False, "reason": "missing timeline"}
+
+    fake_by_label = {
+        str(item.get("label")): item
+        for item in fake_timeline
+        if isinstance(item, dict) and item.get("label")
+    }
+    rows: list[dict[str, Any]] = []
+    for real_item in real_timeline:
+        if not isinstance(real_item, dict) or not real_item.get("label"):
+            continue
+        label = str(real_item["label"])
+        fake_item = fake_by_label.get(label)
+        if not isinstance(fake_item, dict):
+            continue
+        real_current = int(real_item.get("current_memory", 0) or 0)
+        fake_current = int(fake_item.get("current_memory", 0) or 0)
+        real_peak = int(real_item.get("peak_memory", 0) or 0)
+        fake_peak = int(fake_item.get("peak_memory", 0) or 0)
+        rows.append(
+            {
+                "label": label,
+                "real_current_memory": real_current,
+                "fake_current_memory": fake_current,
+                "current_gap_bytes": real_current - fake_current,
+                "real_peak_memory": real_peak,
+                "fake_peak_memory": fake_peak,
+                "peak_gap_bytes": real_peak - fake_peak,
+            }
+        )
+
+    if not rows:
+        return {"available": False, "reason": "no aligned timeline labels"}
+    largest_current = max(rows, key=lambda row: int(row.get("current_gap_bytes", 0)))
+    largest_peak = max(rows, key=lambda row: int(row.get("peak_gap_bytes", 0)))
+    return {
+        "available": True,
+        "largest_current_gap": largest_current,
+        "largest_peak_gap": largest_peak,
+        "points": rows,
+    }
+
+
+def _likely_gap_reason(error_percent: float | None, gap_analysis: dict[str, Any]) -> str:
+    if error_percent is not None and error_percent <= 15.0:
+        return "within_lightweight_calibration_tolerance"
+    if not gap_analysis.get("available"):
+        return "untracked_cuda_backend_allocation"
+    largest = gap_analysis.get("largest_current_gap")
+    label = str(largest.get("label", "")) if isinstance(largest, dict) else ""
+    if "transformer_block" in label or "forward" in label or "loss" in label:
+        return "cuda_backend_hidden_activation_or_workspace"
+    if "backward" in label:
+        return "cuda_backend_backward_saved_tensor_or_workspace"
+    if "optimizer" in label:
+        return "cuda_optimizer_backend_hidden_allocation"
+    return "untracked_cuda_backend_allocation"
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -366,8 +526,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## Workloads",
             "",
-            "| workload | real peak | fakecuda peak | error | error % |",
-            "|---|---:|---:|---:|---:|",
+            "| workload | real peak | fakecuda peak | error | error % | factor | likely reason |",
+            "|---|---:|---:|---:|---:|---:|---|",
         ]
     )
     for item in report.get("workloads", []):
@@ -376,8 +536,36 @@ def render_markdown(report: dict[str, Any]) -> str:
         err = int(item.get("peak_error_bytes", 0) or 0)
         pct = item.get("peak_error_percent")
         pct_text = "" if pct is None else f"{pct:.3f}%"
+        factor = item.get("calibration_factor")
+        factor_text = "" if factor is None else f"{factor:.3f}x"
         lines.append(
-            f"| `{item.get('name')}` | {_fmt_bytes(real_peak)} | {_fmt_bytes(fake_peak)} | {_fmt_bytes(err)} | {pct_text} |"
+            f"| `{item.get('name')}` | {_fmt_bytes(real_peak)} | {_fmt_bytes(fake_peak)} | {_fmt_bytes(err)} | {pct_text} | {factor_text} | `{item.get('likely_gap_reason', '')}` |"
+        )
+    gap_rows = []
+    for item in report.get("workloads", []):
+        gap = item.get("gap_analysis") or {}
+        largest = gap.get("largest_current_gap") if isinstance(gap, dict) else None
+        if not isinstance(largest, dict):
+            continue
+        gap_rows.append(
+            "| `{name}` | `{label}` | {real} | {fake} | {gap_bytes} |".format(
+                name=item.get("name"),
+                label=largest.get("label"),
+                real=_fmt_bytes(int(largest.get("real_current_memory", 0) or 0)),
+                fake=_fmt_bytes(int(largest.get("fake_current_memory", 0) or 0)),
+                gap_bytes=_fmt_bytes(int(largest.get("current_gap_bytes", 0) or 0)),
+            )
+        )
+    if gap_rows:
+        lines.extend(
+            [
+                "",
+                "## Largest Timeline Gaps",
+                "",
+                "| workload | point | real current | fake current | gap |",
+                "|---|---|---:|---:|---:|",
+                *gap_rows,
+            ]
         )
     lines.extend(
         [

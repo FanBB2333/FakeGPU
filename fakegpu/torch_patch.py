@@ -384,6 +384,10 @@ class _DeviceMemoryTracker:
         self._largest_allocations: list[list[dict[str, Any]]] = [[] for _ in per_device_bytes]
         # data_ptr -> allocation record
         self._allocs: dict[int, dict[str, Any]] = {}
+        self._next_synthetic_data_ptr = -1
+        self._synthetic_saved_raw_ptrs: dict[int, dict[str, int]] = {}
+        self._held_saved_raw_ptrs: dict[int, int] = {}
+        self._pending_saved_releases: set[int] = set()
 
     def allocate(self, data_ptr: int, nbytes: int, device: int, metadata: dict[str, Any] | None = None) -> bool:
         """Register allocation. Raise OutOfMemoryError if exceeds limit."""
@@ -421,12 +425,74 @@ class _DeviceMemoryTracker:
 
     def release(self, data_ptr: int) -> None:
         """Unregister allocation."""
+        if self._held_saved_raw_ptrs.get(data_ptr, 0) > 0:
+            self._pending_saved_releases.add(data_ptr)
+            return
+        self._release_now(data_ptr)
+
+    def _release_now(self, data_ptr: int) -> None:
         rec = self._allocs.pop(data_ptr, None)
         if rec:
             dev = int(rec.get("device", 0))
             nbytes = int(rec.get("bytes", 0))
             self._used[dev] = max(0, self._used[dev] - nbytes)
             self._free_calls[dev] += 1
+
+    def allocate_saved_tensor(
+        self,
+        *,
+        raw_data_ptr: int,
+        nbytes: int,
+        device: int,
+        metadata: dict[str, Any] | None = None,
+    ) -> int | None:
+        """Track an autograd-saved raw tensor that is hidden behind a high-level op."""
+        if raw_data_ptr in self._allocs:
+            self._held_saved_raw_ptrs[raw_data_ptr] = self._held_saved_raw_ptrs.get(raw_data_ptr, 0) + 1
+            return raw_data_ptr
+        existing = self._synthetic_saved_raw_ptrs.get(raw_data_ptr)
+        if existing is not None:
+            existing["refs"] += 1
+            return int(existing["synthetic_data_ptr"])
+
+        synthetic_data_ptr = self._next_synthetic_data_ptr
+        self._next_synthetic_data_ptr -= 1
+        meta = {
+            "category": "activation",
+            "synthetic": True,
+            "source": "autograd_saved_tensor",
+            **(metadata or {}),
+        }
+        self.allocate(synthetic_data_ptr, nbytes, device, metadata=meta)
+        self._synthetic_saved_raw_ptrs[raw_data_ptr] = {
+            "synthetic_data_ptr": synthetic_data_ptr,
+            "refs": 1,
+        }
+        return synthetic_data_ptr
+
+    def release_saved_tensor(self, raw_data_ptr: int) -> None:
+        held_refs = self._held_saved_raw_ptrs.get(raw_data_ptr)
+        if held_refs is not None:
+            held_refs -= 1
+            if held_refs > 0:
+                self._held_saved_raw_ptrs[raw_data_ptr] = held_refs
+                return
+            self._held_saved_raw_ptrs.pop(raw_data_ptr, None)
+            if raw_data_ptr in self._pending_saved_releases:
+                self._pending_saved_releases.remove(raw_data_ptr)
+                self._release_now(raw_data_ptr)
+            return
+
+        existing = self._synthetic_saved_raw_ptrs.get(raw_data_ptr)
+        if existing is None:
+            return
+        refs = int(existing.get("refs", 1)) - 1
+        if refs > 0:
+            existing["refs"] = refs
+            return
+        synthetic_data_ptr = int(existing["synthetic_data_ptr"])
+        self._synthetic_saved_raw_ptrs.pop(raw_data_ptr, None)
+        self._release_now(synthetic_data_ptr)
 
     def memory_allocated(self, device: int) -> int:
         if device < 0 or device >= len(self._used):
@@ -833,6 +899,107 @@ def memory_snapshot() -> dict[str, Any]:
             "devices": [],
         }
     return tracker.snapshot(_DEVICE_PROFILES)
+
+
+class _TrackedSavedTensor:
+    """Small holder used by autograd saved_tensors_hooks."""
+
+    __slots__ = ("tensor", "raw_data_ptr", "__weakref__")
+
+    def __init__(self, tensor: Any, raw_data_ptr: int | None) -> None:
+        self.tensor = tensor
+        self.raw_data_ptr = raw_data_ptr
+
+
+_saved_tensors_hooks_cm: Any = None
+
+
+def _active_fake_device_index() -> int:
+    try:
+        if _upstream_mod is not None:
+            return int(getattr(_upstream_mod, "_CURRENT_DEVICE", 0))
+    except Exception:
+        pass
+    return int(_current_device)
+
+
+def _pack_autograd_saved_tensor(tensor: Any) -> Any:
+    tracker = _memory_tracker
+    if tracker is None or not _MEMORY_TRACKING:
+        return tensor
+    try:
+        import torch
+
+        if not isinstance(tensor, torch.Tensor):
+            return tensor
+        storage = tensor.untyped_storage()
+        raw_data_ptr = int(storage.data_ptr())
+        nbytes = int(storage.nbytes())
+        if raw_data_ptr == 0 or nbytes == 0:
+            return tensor
+        device_index = _device_registry.get(raw_data_ptr, _active_fake_device_index())
+        if device_index < 0 or device_index >= len(tracker._total):
+            return tensor
+        metadata = {
+            "dtype": str(getattr(tensor, "dtype", None)),
+            "shape": _safe_tensor_shape(tensor),
+            "stage": os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown",
+        }
+        synthetic_ptr = tracker.allocate_saved_tensor(
+            raw_data_ptr=raw_data_ptr,
+            nbytes=nbytes,
+            device=device_index,
+            metadata=metadata,
+        )
+        if synthetic_ptr is None:
+            return tensor
+        holder = _TrackedSavedTensor(tensor, raw_data_ptr)
+        weakref.finalize(holder, _release_autograd_saved_tensor, raw_data_ptr)
+        return holder
+    except (MemoryError, RuntimeError):
+        raise
+    except Exception:
+        return tensor
+
+
+def _unpack_autograd_saved_tensor(value: Any) -> Any:
+    if isinstance(value, _TrackedSavedTensor):
+        raw_data_ptr = value.raw_data_ptr
+        if raw_data_ptr is not None:
+            _release_autograd_saved_tensor(raw_data_ptr)
+            value.raw_data_ptr = None
+        return value.tensor
+    return value
+
+
+def _release_autograd_saved_tensor(raw_data_ptr: int) -> None:
+    tracker = _memory_tracker
+    if tracker is not None:
+        tracker.release_saved_tensor(int(raw_data_ptr))
+
+
+def _install_autograd_saved_tensor_tracking(torch_mod: Any) -> None:
+    global _saved_tensors_hooks_cm
+    if _saved_tensors_hooks_cm is not None or _memory_tracker is None:
+        return
+    try:
+        hooks = torch_mod.autograd.graph.saved_tensors_hooks(
+            _pack_autograd_saved_tensor,
+            _unpack_autograd_saved_tensor,
+        )
+        hooks.__enter__()
+        _saved_tensors_hooks_cm = hooks
+
+        def _close_hooks() -> None:
+            global _saved_tensors_hooks_cm
+            cm = _saved_tensors_hooks_cm
+            _saved_tensors_hooks_cm = None
+            if cm is not None:
+                cm.__exit__(None, None, None)
+
+        atexit.register(_close_hooks)
+    except Exception:
+        _saved_tensors_hooks_cm = None
 
 
 def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> None:
@@ -2301,6 +2468,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     if _MEMORY_TRACKING:
         per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
         _memory_tracker = _DeviceMemoryTracker(per_device_bytes)
+        _install_autograd_saved_tensor_tracking(torch_mod)
 
     # ---- 2. Hook upstream.wrap_tensor for memory tracking ----
     _orig_wrap_tensor = upstream.wrap_tensor

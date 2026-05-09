@@ -60,6 +60,13 @@ def main(argv: list[str] | None = None) -> int:
             _die(f"{name}: fakecuda preflight status must be PASS_FIT, got {fake.get('status')!r}")
         if "peak_error_bytes" not in workload or "peak_error_percent" not in workload:
             _die(f"{name}: missing peak error fields")
+        if "calibration_factor" not in workload:
+            _die(f"{name}: missing calibration_factor")
+        if "likely_gap_reason" not in workload:
+            _die(f"{name}: missing likely_gap_reason")
+        gap = workload.get("gap_analysis")
+        if not isinstance(gap, dict) or "available" not in gap:
+            _die(f"{name}: missing gap_analysis")
 
     print(f"OK: calibrated {len(workloads)} workload(s) on RTX 3090 Ti")
     return 0
