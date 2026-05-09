@@ -85,6 +85,8 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     assert report["stage"] == "forward"
     assert report["tracking_confidence"] == "C2_torch_tensor_lifetime"
     assert report["command"] == [sys.executable, str(script)]
+    assert report["target_profiles"] == [{"profile_id": "a100-1g", "count": 1}]
+    assert report["calibration_gpu"] is None
     assert report["logs"]["stdout"].endswith("preflight_stdout.log")
 
     devices = report["devices"]
@@ -103,6 +105,30 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     assert largest["shape"] == [1024, 1024]
     assert largest["stage"] == "forward"
     assert largest["category"] in {"activation", "temporary", "tensor"}
+
+    schema_path = ROOT / "preflight_report.schema.json"
+    assert schema_path.is_file()
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert "target_profiles" in schema["required"]
+    assert "calibration_gpu" in schema["required"]
+
+    checked = subprocess.run(
+        [
+            sys.executable,
+            "verification/check_preflight_report.py",
+            "--path",
+            str(report_dir / "preflight_report.json"),
+            "--expect-status",
+            "PASS_FIT",
+            "--expect-runtime",
+            "fakecuda",
+            "--expect-device",
+        ],
+        cwd=str(ROOT),
+        text=True,
+        capture_output=True,
+    )
+    assert checked.returncode == 0, checked.stderr
 
 
 def test_preflight_allocation_stacks_generates_json_and_markdown_origin(tmp_path: Path) -> None:

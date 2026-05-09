@@ -111,6 +111,7 @@ run_preflight_oom() {
     -- "$PYTHON_BIN" verification/preflight_oom_probe.py --mode pass
   "$PYTHON_BIN" verification/check_preflight_report.py \
     --path "$report_root/pass/preflight_report.json" \
+    --schema preflight_report.schema.json \
     --expect-status PASS_FIT \
     --expect-runtime fakecuda \
     --expect-device
@@ -130,6 +131,7 @@ run_preflight_oom() {
   fi
   "$PYTHON_BIN" verification/check_preflight_report.py \
     --path "$report_root/oom/preflight_report.json" \
+    --schema preflight_report.schema.json \
     --expect-status FAIL_OOM \
     --expect-runtime fakecuda \
     --expect-device

@@ -324,8 +324,8 @@ with fakegpu.stage("backward"):
 
 ## P7: Report Schema
 
-- [ ] 定义 `preflight_report.schema.json`。
-- [ ] 报告字段包括：
+- [x] 定义 `preflight_report.schema.json`。
+- [x] 报告字段包括：
   - `schema_version`
   - `fakegpu_version`
   - `git_commit`
@@ -340,7 +340,7 @@ with fakegpu.stage("backward"):
   - `warnings`
   - `errors`
   - `logs`
-- [ ] 提供校验工具：
+- [x] 提供校验工具：
   - `verification/check_preflight_report.py`
 - [ ] Markdown 报告包含：
   - 一句话结论
@@ -351,7 +351,7 @@ with fakegpu.stage("backward"):
 
 验收：
 
-- [ ] schema 校验加入 `./ftest preflight_oom`。
+- [x] schema 校验加入 `./ftest preflight_oom`。
 - [ ] 报告可直接作为 Slurm 提交前的附件。
 
 ---

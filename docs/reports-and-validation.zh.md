@@ -74,7 +74,7 @@
 
 面向 AI researcher 的 preflight 工作流会在现有 runtime 报告之上生成一份更高层的报告。
 
-runner 会写出 `preflight_report.json`，并配套生成 `preflight_report.md`。它回答：用户命令是否跑到了指定阶段，是否在目标 GPU profile 下触发 OOM，以及还剩多少显存余量。
+runner 会写出 `preflight_report.json`，并配套生成 `preflight_report.md`。它回答：用户命令是否跑到了指定阶段，是否在目标 GPU profile 下触发 OOM，以及还剩多少显存余量。JSON 契约由仓库根目录的 `preflight_report.schema.json` 定义，`verification/check_preflight_report.py` 默认会按这个 schema 校验报告。
 
 状态如下：
 
