@@ -227,3 +227,45 @@ def test_preflight_fakecuda_oom_returns_failure_report(tmp_path: Path) -> None:
     assert "out of memory" in markdown.lower()
     assert "reduce batch size" in markdown.lower()
     assert (report_dir / "preflight_stderr.log").is_file()
+
+
+def test_preflight_same_workload_fails_on_small_profile_and_passes_on_large_profile(
+    tmp_path: Path,
+) -> None:
+    elements = "300000000"
+    requested_bytes = int(elements) * 4
+    workload = [
+        sys.executable,
+        "verification/preflight_oom_probe.py",
+        "--mode",
+        "alloc",
+        "--elements",
+        elements,
+    ]
+
+    small_dir = tmp_path / "preflight-matrix-small"
+    small = _run_preflight(
+        workload,
+        report_dir=small_dir,
+        device_args=["--profile", "a100-1g", "--device-count", "1"],
+    )
+
+    assert small.returncode == 2, small.stderr
+    small_report = json.loads((small_dir / "preflight_report.json").read_text(encoding="utf-8"))
+    assert small_report["status"] == "FAIL_OOM"
+    assert small_report["target_profiles"] == [{"profile_id": "a100-1g", "count": 1}]
+    assert "out of memory" in small_report["errors"][0]["message"].lower()
+
+    large_dir = tmp_path / "preflight-matrix-large"
+    large = _run_preflight(
+        workload,
+        report_dir=large_dir,
+        device_args=["--profile", "a100", "--device-count", "1"],
+    )
+
+    assert large.returncode == 0, large.stderr
+    large_report = json.loads((large_dir / "preflight_report.json").read_text(encoding="utf-8"))
+    assert large_report["status"] == "PASS_FIT"
+    assert large_report["target_profiles"] == [{"profile_id": "a100", "count": 1}]
+    assert large_report["devices"][0]["peak_memory"] >= requested_bytes
+    assert large_report["devices"][0]["headroom_bytes"] > 0
