@@ -315,3 +315,48 @@ def test_memory_snapshot_attributes_allocations_to_logical_devices() -> None:
     assert dev1["peak_by_stage"]["forward"] == dev1["current_memory"]
     assert dev0["largest_allocations"][0]["device"] == 0
     assert dev1["largest_allocations"][0]["device"] == 1
+
+
+def test_memory_snapshot_optionally_records_allocation_stack_trace() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_ALLOCATION_STACKS"] = "1"
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", devices="a100-1g:1")
+
+        import torch
+        import fakegpu.torch_patch as tp
+
+        def allocate_from_user_code():
+            return torch.empty((8, 8), device="cuda", dtype=torch.float32)
+
+        with fakegpu.stage("forward"):
+            tensor = allocate_from_user_code()
+
+        snapshot = tp.memory_snapshot()
+        print(json.dumps(snapshot, sort_keys=True))
+        """
+    )
+
+    env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    snapshot = json.loads(completed.stdout.strip())
+    stack = snapshot["devices"][0]["largest_allocations"][0]["stack"]
+    assert stack
+    assert all({"file", "line", "function"}.issubset(frame) for frame in stack)
+    assert any(frame["function"] == "allocate_from_user_code" for frame in stack)

@@ -45,6 +45,7 @@ import functools
 import importlib
 import os
 import sys
+import traceback
 import types
 import warnings
 from contextlib import contextmanager
@@ -516,6 +517,8 @@ class _DeviceMemoryTracker:
             "stage": metadata.get("stage"),
             "category": metadata.get("category", "tensor"),
         }
+        if metadata.get("stack"):
+            item["stack"] = metadata["stack"]
         entries = self._largest_allocations[device]
         entries.append(item)
         entries.sort(key=lambda alloc: int(alloc.get("bytes", 0)), reverse=True)
@@ -677,12 +680,68 @@ def _tensor_allocation_metadata(tensor: Any) -> dict[str, Any]:
     raw = getattr(tensor, "raw_data", tensor)
     shape = _safe_tensor_shape(raw)
     dtype = getattr(raw, "dtype", getattr(tensor, "dtype", None))
-    return {
+    metadata = {
         "dtype": str(dtype) if dtype is not None else None,
         "shape": shape,
         "stage": os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown",
         "category": _infer_tensor_memory_category(tensor, raw),
     }
+    stack = _capture_allocation_stack_trace()
+    if stack:
+        metadata["stack"] = stack
+    return metadata
+
+
+def _capture_allocation_stack_trace() -> list[dict[str, Any]]:
+    if not _truthy_env("FAKEGPU_ALLOCATION_STACKS"):
+        return []
+
+    try:
+        depth = int(os.environ.get("FAKEGPU_ALLOCATION_STACK_DEPTH", "8"))
+    except ValueError:
+        depth = 8
+    depth = max(1, min(depth, 32))
+
+    frames = traceback.extract_stack()[:-2]
+    public_frames: list[dict[str, Any]] = []
+    for frame in frames:
+        if _is_internal_allocation_frame(frame.filename):
+            continue
+        item: dict[str, Any] = {
+            "file": frame.filename,
+            "line": int(frame.lineno),
+            "function": frame.name,
+        }
+        if frame.line:
+            item["code"] = frame.line.strip()
+        public_frames.append(item)
+
+    if not public_frames:
+        for frame in frames[-depth:]:
+            item = {
+                "file": frame.filename,
+                "line": int(frame.lineno),
+                "function": frame.name,
+            }
+            if frame.line:
+                item["code"] = frame.line.strip()
+            public_frames.append(item)
+
+    return public_frames[-depth:]
+
+
+def _is_internal_allocation_frame(filename: str) -> bool:
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.abspath(filename)
+        return path == os.path.abspath(__file__) or path.startswith(current_dir + os.sep)
+    except Exception:
+        return False
+
+
+def _truthy_env(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.lower() in {"1", "true", "yes", "on"}
 
 
 def _safe_tensor_shape(tensor: Any) -> list[int] | None:

@@ -17,6 +17,7 @@ def _run_preflight(
     *,
     report_dir: Path,
     device_args: list[str] | None = None,
+    preflight_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
@@ -38,6 +39,7 @@ def _run_preflight(
             "forward",
             "--report-dir",
             str(report_dir),
+            *(preflight_args or []),
             "--",
             *args,
         ],
@@ -101,6 +103,41 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     assert largest["shape"] == [1024, 1024]
     assert largest["stage"] == "forward"
     assert largest["category"] in {"activation", "temporary", "tensor"}
+
+
+def test_preflight_allocation_stacks_generates_json_and_markdown_origin(tmp_path: Path) -> None:
+    script = tmp_path / "stack_probe.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import fakegpu",
+                "import torch",
+                "def allocate_from_probe():",
+                "    return torch.empty((256, 256), device='cuda', dtype=torch.float32)",
+                "with fakegpu.stage('forward'):",
+                "    tensor = allocate_from_probe()",
+                "    print('peak', torch.cuda.max_memory_allocated())",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report_dir = tmp_path / "preflight-stacks"
+    completed = _run_preflight(
+        [sys.executable, str(script)],
+        report_dir=report_dir,
+        preflight_args=["--allocation-stacks"],
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads((report_dir / "preflight_report.json").read_text(encoding="utf-8"))
+    largest = report["devices"][0]["largest_allocations"][0]
+    assert largest["stack"]
+    assert any(frame["function"] == "allocate_from_probe" for frame in largest["stack"])
+
+    markdown = (report_dir / "preflight_report.md").read_text(encoding="utf-8")
+    assert "Origin" in markdown
+    assert "allocate_from_probe" in markdown
 
 
 def test_preflight_devices_spec_infers_device_count(tmp_path: Path) -> None:

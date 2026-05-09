@@ -90,6 +90,22 @@ def _validate_device(index: int, dev: Any) -> None:
         for field in ("bytes", "device", "stage", "category"):
             if field not in alloc:
                 _die(f"devices[{index}].largest_allocations[{alloc_index}].{field} is missing")
+        stack = alloc.get("stack")
+        if stack is not None:
+            if not isinstance(stack, list):
+                _die(f"devices[{index}].largest_allocations[{alloc_index}].stack must be a list")
+            for frame_index, frame in enumerate(stack):
+                if not isinstance(frame, dict):
+                    _die(
+                        f"devices[{index}].largest_allocations[{alloc_index}]."
+                        f"stack[{frame_index}] must be an object"
+                    )
+                for field in ("file", "line", "function"):
+                    if field not in frame:
+                        _die(
+                            f"devices[{index}].largest_allocations[{alloc_index}]."
+                            f"stack[{frame_index}].{field} is missing"
+                        )
 
 
 def _require(report: dict[str, Any], key: str, expected: Any | None = None) -> Any:

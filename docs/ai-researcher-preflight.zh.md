@@ -117,7 +117,7 @@ fakegpu preflight \
   -- python train.py --cluster-config
 ```
 
-重要限制：fakecuda preflight 现在会跟踪 torch 层 tensor 生命周期、分阶段峰值、top allocations，粗略区分 parameters、buffers、gradients、optimizer state、activations 和 temporaries，并处理共享 storage alias 和基础 logical-device 归属。autograd 保存的 activation、allocation stack trace 仍需要继续验证，所以通过结果只能作为提交前信号，不能证明完整集群任务一定能放下。
+重要限制：fakecuda preflight 现在会跟踪 torch 层 tensor 生命周期、分阶段峰值、top allocations、可选 allocation stack trace，粗略区分 parameters、buffers、gradients、optimizer state、activations 和 temporaries，并处理共享 storage alias 和基础 logical-device 归属。autograd 保存的 activation 仍需要继续验证，所以通过结果只能作为提交前信号，不能证明完整集群任务一定能放下。
 
 ### 3. 用 3090 Ti 做真实校准
 
@@ -203,7 +203,7 @@ preflight 报告应包含：
 下一版实现应优先做：
 
 1. 超出可见 op output 的 autograd saved activation 覆盖。
-2. largest allocations 的可选 stack trace。
-3. 3090 Ti 小型受控 workload 校准报告。
-4. 同一 workload 在小/大 profile 下的 pass-fail matrix。
+2. 3090 Ti 小型受控 workload 校准报告。
+3. 同一 workload 在小/大 profile 下的 pass-fail matrix。
+4. 面向报告消费者的 `preflight_report.schema.json`。
 5. 文档中明确区分 fit/no-fit 检查和性能预测。
