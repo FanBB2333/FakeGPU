@@ -149,6 +149,8 @@ For the built-in calibration suite, run:
 ./ftest rtx3090ti_calibration
 ```
 
+The built-in suite includes a tensor allocation probe, a torch MLP train step, a torch Tiny Transformer train step, a locally initialized Hugging Face tiny GPT-2 train step, and a PEFT LoRA tiny GPT-2 train step. It does not download model weights.
+
 The goal is not exact equality. The goal is to understand the error between real 3090 Ti memory and FakeGPU-reported memory on small controlled workloads. The calibration report records peak error, a per-workload calibration factor, and timeline gaps such as `after_transformer_block_0` or `after_optimizer_step`. Large gaps usually mean fakecuda cannot see CUDA backend-internal activation/workspace or optimizer allocations.
 
 When a workload family is known to be undercounted, apply the calibration factor conservatively in preflight:
@@ -224,7 +226,7 @@ Suggested confidence levels:
 The next implementation should prioritize:
 
 1. Reducing the remaining CUDA backend-internal workspace and optimizer undercount for Transformer workloads.
-2. More 3090 Ti calibration workloads, including HF tiny and LoRA tiny flows.
-3. Small/large profile pass-fail matrix for more realistic workloads.
+2. A manual large tensor OOM probe on the 3090 Ti.
+3. Small/large profile pass-fail matrix for more realistic HF and LoRA workloads.
 4. More workload examples that attach `preflight_report.json` to Slurm submission notes.
 5. Documentation that clearly separates fit/no-fit checks from performance prediction.

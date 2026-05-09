@@ -149,6 +149,8 @@ print(torch.cuda.mem_get_info())
 ./ftest rtx3090ti_calibration
 ```
 
+内置套件包含 tensor allocation probe、torch MLP 训练步、torch Tiny Transformer 训练步、本地随机初始化的 Hugging Face tiny GPT-2 训练步，以及 PEFT LoRA tiny GPT-2 训练步。它不会下载模型权重。
+
 这里不要求完全一致。目标是了解真实 3090 Ti 显存和 FakeGPU 报告在小型受控 workload 上的误差。校准报告会记录峰值误差、每个 workload 的 calibration factor，以及 `after_transformer_block_0`、`after_optimizer_step` 这类 timeline gap。较大的 gap 通常说明 fakecuda 看不到 CUDA 后端内部 activation/workspace 或 optimizer 分配。
 
 如果某类 workload 已知会被低估，可以把校准得到的 factor 保守地用于 preflight：
@@ -224,7 +226,7 @@ preflight 报告应包含：
 下一版实现应优先做：
 
 1. 继续减少 Transformer workload 中 CUDA 后端内部 workspace 和 optimizer 分配的低估。
-2. 扩展 3090 Ti 校准 workload，包括 HF tiny 和 LoRA tiny flow。
-3. 为更真实的 workload 增加小/大 profile pass-fail matrix。
+2. 增加 3090 Ti 手动大 tensor OOM probe。
+3. 为更真实的 HF 和 LoRA workload 增加小/大 profile pass-fail matrix。
 4. 更多把 `preflight_report.json` 作为 Slurm 提交说明附件的 workload 示例。
 5. 文档中明确区分 fit/no-fit 检查和性能预测。

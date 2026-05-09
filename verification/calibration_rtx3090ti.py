@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -119,11 +120,20 @@ RecordFn = Callable[[str], None]
 
 
 def _workloads() -> dict[str, Callable[[str, RecordFn | None], dict[str, Any]]]:
-    return {
+    workloads: dict[str, Callable[[str, RecordFn | None], dict[str, Any]]] = {
         "tensor_256mb": _workload_tensor_256mb,
         "mlp_train_step": _workload_mlp_train_step,
         "tiny_transformer_step": _workload_tiny_transformer_step,
     }
+    if _module_available("transformers"):
+        workloads["hf_tiny_gpt2_step"] = _workload_hf_tiny_gpt2_step
+    if _module_available("transformers") and _module_available("peft"):
+        workloads["peft_lora_tiny_step"] = _workload_peft_lora_tiny_step
+    return workloads
+
+
+def _module_available(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
 
 
 def _run_worker(worker: str, workload_name: str) -> dict[str, Any]:
@@ -319,6 +329,143 @@ def _workload_tiny_transformer_step(device: str, record: RecordFn | None = None)
         "hidden_size": hidden_size,
         "layers": layers,
         "parameter_bytes": int(parameter_bytes),
+    }
+
+
+def _workload_hf_tiny_gpt2_step(device: str, record: RecordFn | None = None) -> dict[str, Any]:
+    import torch
+    from transformers import AutoModelForCausalLM, GPT2Config
+
+    torch.manual_seed(0)
+
+    vocab_size = 256
+    batch_size = 2
+    seq_len = 32
+    hidden_size = 128
+    layers = 2
+
+    config = GPT2Config(
+        vocab_size=vocab_size,
+        n_positions=seq_len,
+        n_ctx=seq_len,
+        n_embd=hidden_size,
+        n_layer=layers,
+        n_head=4,
+        n_inner=hidden_size * 2,
+        resid_pdrop=0.0,
+        embd_pdrop=0.0,
+        attn_pdrop=0.0,
+        use_cache=False,
+    )
+    model = AutoModelForCausalLM.from_config(config).to(device)
+    if record is not None:
+        record("after_model_to")
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
+    if record is not None:
+        record("after_input")
+    outputs = model(input_ids=input_ids)
+    if record is not None:
+        record("after_forward")
+    loss = outputs.logits.square().mean()
+    if record is not None:
+        record("after_loss")
+    loss.backward()
+    if record is not None:
+        record("after_backward")
+    optimizer.step()
+    if record is not None:
+        record("after_optimizer_step")
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize()
+    parameter_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
+    del loss, outputs, input_ids, optimizer, model
+    return {
+        "batch_size": batch_size,
+        "seq_len": seq_len,
+        "hidden_size": hidden_size,
+        "layers": layers,
+        "vocab_size": vocab_size,
+        "parameter_bytes": int(parameter_bytes),
+        "framework": "transformers",
+        "model_family": "gpt2",
+    }
+
+
+def _workload_peft_lora_tiny_step(device: str, record: RecordFn | None = None) -> dict[str, Any]:
+    import torch
+    from peft import LoraConfig, TaskType, get_peft_model
+    from transformers import AutoModelForCausalLM, GPT2Config
+
+    torch.manual_seed(0)
+
+    vocab_size = 256
+    batch_size = 2
+    seq_len = 32
+    hidden_size = 128
+    layers = 2
+    lora_rank = 4
+
+    config = GPT2Config(
+        vocab_size=vocab_size,
+        n_positions=seq_len,
+        n_ctx=seq_len,
+        n_embd=hidden_size,
+        n_layer=layers,
+        n_head=4,
+        n_inner=hidden_size * 2,
+        resid_pdrop=0.0,
+        embd_pdrop=0.0,
+        attn_pdrop=0.0,
+        use_cache=False,
+    )
+    base_model = AutoModelForCausalLM.from_config(config)
+    lora_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=lora_rank,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        target_modules=["c_attn", "c_proj"],
+        fan_in_fan_out=True,
+    )
+    model = get_peft_model(base_model, lora_config).to(device)
+    if record is not None:
+        record("after_model_to")
+
+    trainable_parameters = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(trainable_parameters, lr=1e-3)
+    input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
+    if record is not None:
+        record("after_input")
+    outputs = model(input_ids=input_ids)
+    if record is not None:
+        record("after_forward")
+    loss = outputs.logits.square().mean()
+    if record is not None:
+        record("after_loss")
+    loss.backward()
+    if record is not None:
+        record("after_backward")
+    optimizer.step()
+    if record is not None:
+        record("after_optimizer_step")
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+    parameter_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
+    trainable_parameter_bytes = sum(p.numel() * p.element_size() for p in trainable_parameters)
+    del loss, outputs, input_ids, optimizer, model, base_model
+    return {
+        "batch_size": batch_size,
+        "seq_len": seq_len,
+        "hidden_size": hidden_size,
+        "layers": layers,
+        "vocab_size": vocab_size,
+        "parameter_bytes": int(parameter_bytes),
+        "trainable_parameter_bytes": int(trainable_parameter_bytes),
+        "lora_rank": lora_rank,
+        "framework": "peft",
+        "model_family": "gpt2",
     }
 
 
