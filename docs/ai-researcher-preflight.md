@@ -151,22 +151,22 @@ For the built-in calibration suite, run:
 
 The built-in suite includes a tensor allocation probe, a torch MLP train step, a torch Tiny Transformer train step, a locally initialized Hugging Face tiny GPT-2 train step, and a PEFT LoRA tiny GPT-2 train step. It does not download model weights.
 
-The goal is not exact equality. The goal is to understand the error between real 3090 Ti memory and FakeGPU-reported memory on small controlled workloads. The calibration report records peak error, a per-workload calibration factor, and timeline gaps such as `after_transformer_block_0` or `after_optimizer_step`. Large gaps usually mean fakecuda cannot see CUDA backend-internal activation/workspace or optimizer allocations.
+The goal is not exact equality. The goal is to understand the error between real 3090 Ti memory and FakeGPU-reported memory on small controlled workloads. The calibration report records peak error, missing peak bytes, a per-workload calibration factor, and timeline gaps such as `after_transformer_block_0` or `after_optimizer_step`. Large gaps usually mean fakecuda cannot see CUDA backend-internal activation/workspace or optimizer allocations.
 
-When a workload family is known to be undercounted, apply the calibration factor conservatively in preflight:
+When the missing memory looks like a mostly fixed backend workspace gap, prefer an additive margin in preflight. For example, if calibration reports roughly 18 MiB missing at `after_backward`:
 
 ```bash
 fakegpu preflight \
   --runtime fakecuda \
   --devices a100:8 \
   --stage optimizer_step \
-  --memory-safety-factor 3.1 \
-  --report-dir preflight-a100-factor \
+  --memory-safety-margin 18MiB \
+  --report-dir preflight-a100-margin \
   --strict \
   -- python train.py --cluster-config
 ```
 
-Reports that use `--memory-safety-factor` keep both the raw tracked peak and the estimated peak used for fit/OOM classification.
+Use `--memory-safety-factor` only when calibration shows the gap scales with workload size. Reports that use either safety option keep both the raw tracked peak and the estimated peak used for fit/OOM classification.
 
 ## Stage Markers
 

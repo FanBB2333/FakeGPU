@@ -75,6 +75,14 @@
         "steps": {
           "type": ["integer", "null"],
           "minimum": 1
+        },
+        "memory_safety_factor": {
+          "type": "number",
+          "minimum": 1
+        },
+        "memory_safety_margin_bytes": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -121,6 +129,14 @@
         "C4_real_gpu_calibrated"
       ]
     },
+    "memory_safety_factor": {
+      "type": "number",
+      "minimum": 1
+    },
+    "memory_safety_margin_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
     "devices": {
       "type": "array",
       "items": {
@@ -159,6 +175,14 @@
             "type": "integer",
             "minimum": 0
           },
+          "tracked_peak_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimated_peak_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
           "current_memory": {
             "type": "integer",
             "minimum": 0
@@ -174,6 +198,14 @@
             "minimum": 0
           },
           "free_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "memory_safety_factor": {
+            "type": "number",
+            "minimum": 1
+          },
+          "memory_safety_margin_bytes": {
             "type": "integer",
             "minimum": 0
           },

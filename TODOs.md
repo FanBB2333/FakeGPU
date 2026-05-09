@@ -225,6 +225,7 @@ with fakegpu.stage("backward"):
   - category
 - [x] 支持 optional stack trace
 - [x] 多设备场景下正确归属 logical device。
+- [x] 支持 `--memory-safety-margin`，可把 3090 Ti 校准得到的固定 missing bytes 用于更精确的 fit/OOM 判定。
 - [x] 支持 `--memory-safety-factor`，可把 3090 Ti 校准得到的 factor 用于保守 fit/OOM 判定。
 - [x] 报告 `tracking_confidence`：
   - `C0_incomplete`：只跑通流程，不适合判断 OOM。
@@ -293,6 +294,8 @@ with fakegpu.stage("backward"):
   - [x] `calibration_rtx3090ti.md`
 - [x] 生成误差诊断字段：
   - [x] `calibration_factor`
+  - [x] `missing_peak_bytes`
+  - [x] `recommended_memory_safety_margin_bytes`
   - [x] `gap_analysis`
   - [x] `likely_gap_reason`
 - [x] 记录误差，不要求完全一致。

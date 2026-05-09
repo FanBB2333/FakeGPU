@@ -71,6 +71,8 @@ def test_calibration_compare_records_peak_error() -> None:
     assert item["peak_error_bytes"] == 100
     assert item["peak_error_percent"] == 10.0
     assert item["calibration_factor"] == 0.909
+    assert item["missing_peak_bytes"] == 0
+    assert item["recommended_memory_safety_margin_bytes"] == 0
     assert item["gap_analysis"]["available"] is True
     assert item["gap_analysis"]["largest_current_gap"]["label"] == "after_forward"
     assert item["likely_gap_reason"] == "within_lightweight_calibration_tolerance"
@@ -92,6 +94,8 @@ def test_calibration_compare_identifies_optimizer_gap() -> None:
         },
     )
     assert item["calibration_factor"] == 3.0
+    assert item["missing_peak_bytes"] == 2000
+    assert item["recommended_memory_safety_margin_bytes"] == 2000
     assert item["gap_analysis"]["largest_current_gap"]["current_gap_bytes"] == 2100
     assert item["likely_gap_reason"] == "cuda_optimizer_backend_hidden_allocation"
 

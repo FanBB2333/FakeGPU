@@ -83,6 +83,14 @@ def build_parser() -> argparse.ArgumentParser:
             "Use this with a factor from RTX 3090 Ti calibration when fakecuda undercounts a workload family."
         ),
     )
+    parser.add_argument(
+        "--memory-safety-margin",
+        default=None,
+        help=(
+            "Add a fixed byte margin before fit/OOM classification, e.g. 18089460, 18MiB, or 0.02GiB. "
+            "Prefer this when calibration shows a mostly fixed backend workspace gap."
+        ),
+    )
     parser.add_argument("--build-dir", help="FakeGPU CMake build directory for native/hybrid/passthrough runtimes.")
     parser.add_argument("--lib-dir", help="Directory containing FakeGPU shared libraries.")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command to run after --")
@@ -152,9 +160,13 @@ def build_report(
     raw_report, raw_report_kind = _load_raw_runtime_report(paths)
     devices, tracking_confidence = _normalize_devices(raw_report, raw_report_kind)
     memory_safety_factor = _resolve_memory_safety_factor(ns)
-    if memory_safety_factor > 1.0:
-        devices = _apply_memory_safety_factor(devices, memory_safety_factor)
-        warnings.append(f"Applied memory safety factor {memory_safety_factor:.3f} to tracked peaks.")
+    memory_safety_margin = _resolve_memory_safety_margin(ns)
+    if memory_safety_factor > 1.0 or memory_safety_margin > 0:
+        devices = _apply_memory_safety_adjustment(devices, memory_safety_factor, memory_safety_margin)
+        if memory_safety_factor > 1.0:
+            warnings.append(f"Applied memory safety factor {memory_safety_factor:.3f} to tracked peaks.")
+        if memory_safety_margin > 0:
+            warnings.append(f"Applied memory safety margin {_fmt_bytes(memory_safety_margin)} to tracked peaks.")
 
     exit_code = completed.returncode if completed is not None else 1
     oom_detected = _looks_like_oom(stdout, stderr, raw_report)
@@ -202,6 +214,7 @@ def build_report(
             "stage": ns.stage,
             "steps": ns.steps,
             "memory_safety_factor": memory_safety_factor,
+            "memory_safety_margin_bytes": memory_safety_margin,
         },
         "target_profiles": _target_profiles(ns),
         "calibration_gpu": None,
@@ -211,6 +224,7 @@ def build_report(
         "duration_seconds": round(duration_seconds, 3),
         "tracking_confidence": tracking_confidence,
         "memory_safety_factor": memory_safety_factor,
+        "memory_safety_margin_bytes": memory_safety_margin,
         "devices": devices,
         "warnings": warnings,
         "errors": errors,
@@ -409,7 +423,8 @@ def _summary_sentence(report: dict[str, Any]) -> str:
     headroom = _min_headroom(report)
     target = _target_profile_text(report)
     factor = float(report.get("memory_safety_factor", 1.0) or 1.0)
-    peak_label = "estimated peak memory" if factor > 1.0 else "peak tracked memory"
+    margin = int(report.get("memory_safety_margin_bytes", 0) or 0)
+    peak_label = "estimated peak memory" if factor > 1.0 or margin > 0 else "peak tracked memory"
 
     if status == STATUS_PASS_FIT:
         return (
@@ -700,14 +715,57 @@ def _resolve_memory_safety_factor(ns: argparse.Namespace) -> float:
     return max(1.0, float(raw_value))
 
 
-def _apply_memory_safety_factor(devices: list[dict[str, Any]], factor: float) -> list[dict[str, Any]]:
+def _resolve_memory_safety_margin(ns: argparse.Namespace) -> int:
+    raw_value = ns.memory_safety_margin
+    if raw_value is None:
+        raw_value = os.environ.get("FAKEGPU_PREFLIGHT_MEMORY_SAFETY_MARGIN")
+    if raw_value is None or str(raw_value).strip() == "":
+        return 0
+    return max(0, _parse_byte_quantity(str(raw_value)))
+
+
+def _parse_byte_quantity(value: str) -> int:
+    text = value.strip()
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]*)", text)
+    if not match:
+        raise argparse.ArgumentTypeError(f"invalid byte quantity: {value!r}")
+    amount = float(match.group(1))
+    unit = match.group(2).lower()
+    multipliers = {
+        "": 1,
+        "b": 1,
+        "byte": 1,
+        "bytes": 1,
+        "k": 1000,
+        "kb": 1000,
+        "m": 1000**2,
+        "mb": 1000**2,
+        "g": 1000**3,
+        "gb": 1000**3,
+        "kib": 1024,
+        "ki": 1024,
+        "mib": 1024**2,
+        "mi": 1024**2,
+        "gib": 1024**3,
+        "gi": 1024**3,
+    }
+    if unit not in multipliers:
+        raise argparse.ArgumentTypeError(f"invalid byte unit in {value!r}")
+    return int(amount * multipliers[unit])
+
+
+def _apply_memory_safety_adjustment(
+    devices: list[dict[str, Any]],
+    factor: float,
+    margin_bytes: int,
+) -> list[dict[str, Any]]:
     import math
 
     adjusted: list[dict[str, Any]] = []
     for dev in devices:
         item = dict(dev)
         tracked_peak = int(item.get("peak_memory", 0) or 0)
-        estimated_peak = int(math.ceil(tracked_peak * factor))
+        estimated_peak = int(math.ceil(tracked_peak * factor)) + int(margin_bytes)
         total = int(item.get("total_memory", 0) or 0)
         headroom = total - estimated_peak
         headroom_percent = (100.0 * headroom / total) if total > 0 else None
@@ -715,6 +773,7 @@ def _apply_memory_safety_factor(devices: list[dict[str, Any]], factor: float) ->
         item["peak_memory"] = estimated_peak
         item["estimated_peak_memory"] = estimated_peak
         item["memory_safety_factor"] = round(factor, 6)
+        item["memory_safety_margin_bytes"] = int(margin_bytes)
         item["headroom_bytes"] = headroom
         item["headroom_percent"] = round(headroom_percent, 3) if headroom_percent is not None else None
         adjusted.append(item)

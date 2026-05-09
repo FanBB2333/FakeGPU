@@ -60,6 +60,10 @@ def main(argv: list[str] | None = None) -> int:
             _die(f"{name}: fakecuda preflight status must be PASS_FIT, got {fake.get('status')!r}")
         if "peak_error_bytes" not in workload or "peak_error_percent" not in workload:
             _die(f"{name}: missing peak error fields")
+        if "missing_peak_bytes" not in workload:
+            _die(f"{name}: missing missing_peak_bytes")
+        if "recommended_memory_safety_margin_bytes" not in workload:
+            _die(f"{name}: missing recommended_memory_safety_margin_bytes")
         if "calibration_factor" not in workload:
             _die(f"{name}: missing calibration_factor")
         if "likely_gap_reason" not in workload:
