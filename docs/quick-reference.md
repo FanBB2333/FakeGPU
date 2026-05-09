@@ -63,6 +63,7 @@ fakegpu preflight \
   --devices a100-1g:1 \
   --stage forward \
   --report-dir preflight-a100-1g \
+  --allocation-stacks \
   --strict \
   -- python3 train.py --small-config
 ```
@@ -74,7 +75,7 @@ The runner writes:
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. The runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, including stage peaks, top allocations, coarse memory categories, shared-storage alias handling, and basic logical-device attribution. Saved autograd activations and optional allocation stack traces still need more validation.
+Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. The runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, including stage peaks, top allocations, optional allocation stack traces, coarse memory categories, shared-storage alias handling, and basic logical-device attribution. Saved autograd activations still need more validation.
 
 For RTX 3090 Ti calibration, run a reduced workload directly on the real GPU and compare with passthrough or hybrid when available:
 

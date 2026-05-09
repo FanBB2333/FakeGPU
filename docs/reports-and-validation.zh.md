@@ -85,7 +85,7 @@ runner 会写出 `preflight_report.json`，并配套生成 `preflight_report.md`
 | `FAIL_RUNTIME` | 依赖、数据、模型加载、代码或环境设置失败。 |
 | `WARN_INCOMPLETE_TRACKING` | 运行完成，但显存跟踪不够完整，不能给出强 fit/no-fit 判断。 |
 
-每个 device entry 会包含总显存、峰值显存、余量、allocation 次数、`current_bytes_by_category`、`peak_by_stage` 和 `largest_allocations`。fakecuda 模式下，top allocations 会记录 bytes、dtype、shape、stage，以及 `parameter` / `buffer` / `gradient` / `optimizer_state` / `activation` / `temporary` / `tensor` 这类粗粒度 category。
+每个 device entry 会包含总显存、峰值显存、余量、allocation 次数、`current_bytes_by_category`、`peak_by_stage` 和 `largest_allocations`。fakecuda 模式下，top allocations 会记录 bytes、dtype、shape、stage，以及 `parameter` / `buffer` / `gradient` / `optimizer_state` / `activation` / `temporary` / `tensor` 这类粗粒度 category。加上 `--allocation-stacks` 后，还会为这些 top allocations 记录短 Python stack trace。
 
 当前真实校准目标是一张 24GB RTX 3090 Ti。它适合校准 24GB 内的真实 CUDA 行为，但不能证明更大的多机 A100/H100 集群一定能放下 workload，也不能证明性能表现。
 

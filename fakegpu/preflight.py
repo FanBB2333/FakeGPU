@@ -68,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steps", type=int, default=None, help="Target number of steps for n_steps preflights.")
     parser.add_argument("--report-dir", default="preflight-report", help="Directory for preflight outputs.")
     parser.add_argument("--strict", action="store_true", help="Treat incomplete tracking as a failing result.")
+    parser.add_argument(
+        "--allocation-stacks",
+        action="store_true",
+        help="Record short Python stack traces for largest fakecuda allocations.",
+    )
     parser.add_argument("--build-dir", help="FakeGPU CMake build directory for native/hybrid/passthrough runtimes.")
     parser.add_argument("--lib-dir", help="Directory containing FakeGPU shared libraries.")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command to run after --")
@@ -236,20 +241,29 @@ def render_markdown_report(report: dict[str, Any]) -> str:
 
     stage_rows: list[str] = []
     allocation_rows: list[str] = []
+    allocation_has_stack = any(
+        alloc.get("stack")
+        for dev in report.get("devices", [])
+        for alloc in (dev.get("largest_allocations", []) or [])
+    )
     for dev in report.get("devices", []):
         dev_index = int(dev.get("index", 0))
         for stage, peak in sorted((dev.get("peak_by_stage") or {}).items()):
             stage_rows.append(f"| {dev_index} | `{stage}` | {_fmt_bytes(int(peak))} |")
         for alloc in dev.get("largest_allocations", []) or []:
+            origin = _format_stack_origin(alloc.get("stack")) if allocation_has_stack else ""
+            row = "| {device} | {size} | `{dtype}` | `{shape}` | `{stage}` | `{category}` |".format(
+                device=int(alloc.get("device", dev_index)),
+                size=_fmt_bytes(int(alloc.get("bytes", 0))),
+                dtype=alloc.get("dtype"),
+                shape=alloc.get("shape"),
+                stage=alloc.get("stage"),
+                category=alloc.get("category"),
+            )
+            if allocation_has_stack:
+                row = row[:-1] + f" `{origin}` |"
             allocation_rows.append(
-                "| {device} | {size} | `{dtype}` | `{shape}` | `{stage}` | `{category}` |".format(
-                    device=int(alloc.get("device", dev_index)),
-                    size=_fmt_bytes(int(alloc.get("bytes", 0))),
-                    dtype=alloc.get("dtype"),
-                    shape=alloc.get("shape"),
-                    stage=alloc.get("stage"),
-                    category=alloc.get("category"),
-                )
+                row
             )
 
     if stage_rows:
@@ -286,13 +300,18 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         )
 
     if allocation_rows:
+        allocation_header = "| GPU | Size | Dtype | Shape | Stage | Category |"
+        allocation_rule = "|---:|---:|---|---|---|---|"
+        if allocation_has_stack:
+            allocation_header = "| GPU | Size | Dtype | Shape | Stage | Category | Origin |"
+            allocation_rule = "|---:|---:|---|---|---|---|---|"
         lines.extend(
             [
                 "",
                 "## Largest Allocations",
                 "",
-                "| GPU | Size | Dtype | Shape | Stage | Category |",
-                "|---:|---:|---|---|---|---|",
+                allocation_header,
+                allocation_rule,
                 *allocation_rows,
             ]
         )
@@ -322,6 +341,19 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_stack_origin(stack: Any) -> str:
+    if not isinstance(stack, list) or not stack:
+        return ""
+    frame = stack[-1]
+    if not isinstance(frame, dict):
+        return ""
+    file_name = Path(str(frame.get("file", ""))).name
+    line = frame.get("line", "")
+    function = frame.get("function", "")
+    origin = f"{file_name}:{line} {function}".strip()
+    return origin.replace("|", "\\|").replace("`", "'")
+
+
 def _make_paths(report_dir: Path) -> PreflightPaths:
     resolved = report_dir.resolve()
     return PreflightPaths(
@@ -345,6 +377,8 @@ def _build_child_env(ns: argparse.Namespace, paths: PreflightPaths) -> dict[str,
     base["FAKEGPU_PREFLIGHT_CHILD_REPORT"] = str(paths.child_report)
     base["FAKEGPU_PREFLIGHT_STAGE_LOG"] = str(paths.stage_log)
     base["FAKEGPU_PREFLIGHT_TARGET_STAGE"] = str(ns.stage)
+    if ns.allocation_stacks:
+        base["FAKEGPU_ALLOCATION_STACKS"] = "1"
     if ns.steps is not None:
         base["FAKEGPU_PREFLIGHT_STEPS"] = str(int(ns.steps))
     effective_device_count = ns.device_count
