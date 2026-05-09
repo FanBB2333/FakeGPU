@@ -281,7 +281,7 @@ with fakegpu.stage("backward"):
   - [x] fakecuda preflight 峰值显存
 - [ ] 使用小模型和可控张量，避免超过 24GB：
   - [x] MLP
-  - [ ] Tiny Transformer
+  - [x] Tiny Transformer
   - [ ] HF tiny model
   - [ ] LoRA tiny flow
   - [x] 受控 tensor allocation probe
@@ -295,7 +295,7 @@ with fakegpu.stage("backward"):
 验收：
 
 - [x] 3090 Ti 上同一 workload 的 fakecuda peak 与真实 peak 误差被记录。
-- [ ] 文档说明该误差只能作为当前实现校准，不代表 A100/H100 性能。
+- [x] 文档说明该误差只能作为当前实现校准，不代表 A100/H100 性能。
 
 ---
 

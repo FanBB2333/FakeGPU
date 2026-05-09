@@ -90,7 +90,7 @@ python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
 
-The calibration suite writes `build/rtx3090ti_calibration/calibration_rtx3090ti.json` and `.md`. On machines without a CUDA-visible RTX 3090 Ti, it writes an explicit skip reason instead of passing silently.
+The calibration suite writes `build/rtx3090ti_calibration/calibration_rtx3090ti.json` and `.md`. On machines without a CUDA-visible RTX 3090 Ti, it writes an explicit skip reason instead of passing silently. Calibration error is only evidence about this implementation on the 3090 Ti; it is not an A100/H100 fit, parity, or performance guarantee.
 
 See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design and limitations.
 

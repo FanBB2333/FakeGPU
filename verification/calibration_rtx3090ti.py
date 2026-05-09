@@ -119,21 +119,23 @@ def _workloads() -> dict[str, Callable[[str], dict[str, Any]]]:
     return {
         "tensor_256mb": _workload_tensor_256mb,
         "mlp_train_step": _workload_mlp_train_step,
+        "tiny_transformer_step": _workload_tiny_transformer_step,
     }
 
 
 def _run_worker(worker: str, workload_name: str) -> dict[str, Any]:
+    if worker == "fakecuda":
+        import fakegpu
+
+        fakegpu.init(runtime="fakecuda", profile="rtx3090ti", device_count=1)
+        stage_ctx = fakegpu.stage(workload_name)
+    else:
+        stage_ctx = contextlib.nullcontext()
+
     import torch
 
     if worker == "real" and not torch.cuda.is_available():
         raise RuntimeError("real worker requires torch.cuda.is_available()")
-
-    if worker == "fakecuda":
-        import fakegpu
-
-        stage_ctx = fakegpu.stage(workload_name)
-    else:
-        stage_ctx = contextlib.nullcontext()
 
     device = "cuda"
     if worker == "real":
@@ -187,6 +189,63 @@ def _workload_mlp_train_step(device: str) -> dict[str, Any]:
     parameter_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
     del loss, x, optimizer, model
     return {"parameter_bytes": int(parameter_bytes)}
+
+
+def _workload_tiny_transformer_step(device: str) -> dict[str, Any]:
+    import torch
+
+    torch.manual_seed(0)
+
+    vocab_size = 512
+    batch_size = 4
+    seq_len = 64
+    hidden_size = 128
+    layers = 2
+
+    class TinyTransformer(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.token = torch.nn.Embedding(vocab_size, hidden_size)
+            self.position = torch.nn.Parameter(torch.zeros(1, seq_len, hidden_size))
+            self.blocks = torch.nn.ModuleList(
+                [
+                    torch.nn.TransformerEncoderLayer(
+                        d_model=hidden_size,
+                        nhead=4,
+                        dim_feedforward=hidden_size * 4,
+                        dropout=0.0,
+                        activation="gelu",
+                        batch_first=True,
+                    )
+                    for _ in range(layers)
+                ]
+            )
+            self.head = torch.nn.Linear(hidden_size, vocab_size)
+
+        def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+            x = self.token(input_ids) + self.position
+            for block in self.blocks:
+                x = block(x)
+            return self.head(x)
+
+    model = TinyTransformer().to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
+    logits = model(input_ids)
+    loss = logits.square().mean()
+    loss.backward()
+    optimizer.step()
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize()
+    parameter_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
+    del loss, logits, input_ids, optimizer, model
+    return {
+        "batch_size": batch_size,
+        "seq_len": seq_len,
+        "hidden_size": hidden_size,
+        "layers": layers,
+        "parameter_bytes": int(parameter_bytes),
+    }
 
 
 def _run_real_worker(workload_name: str) -> dict[str, Any]:

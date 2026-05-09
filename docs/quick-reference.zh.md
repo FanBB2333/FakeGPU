@@ -90,7 +90,7 @@ python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
 
-校准套件会写出 `build/rtx3090ti_calibration/calibration_rtx3090ti.json` 和 `.md`。如果当前机器没有 CUDA 可见的 RTX 3090 Ti，它会写出明确 skip 原因，不会静默通过。
+校准套件会写出 `build/rtx3090ti_calibration/calibration_rtx3090ti.json` 和 `.md`。如果当前机器没有 CUDA 可见的 RTX 3090 Ti，它会写出明确 skip 原因，不会静默通过。校准误差只说明当前实现和这张 3090 Ti 上的小型 workload 表现，不代表 A100/H100 的可运行性、数值等价或性能。
 
 当前设计和限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
 
