@@ -362,9 +362,10 @@ def _workload_hf_tiny_gpt2_step(device: str, record: RecordFn | None = None) -> 
         record("after_model_to")
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
+    attention_mask = torch.ones((batch_size, seq_len), device=device, dtype=torch.long)
     if record is not None:
         record("after_input")
-    outputs = model(input_ids=input_ids)
+    outputs = model(input_ids=input_ids, attention_mask=attention_mask)
     if record is not None:
         record("after_forward")
     loss = outputs.logits.square().mean()
@@ -379,7 +380,7 @@ def _workload_hf_tiny_gpt2_step(device: str, record: RecordFn | None = None) -> 
     if device == "cuda" and torch.cuda.is_available():
         torch.cuda.synchronize()
     parameter_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
-    del loss, outputs, input_ids, optimizer, model
+    del loss, outputs, input_ids, attention_mask, optimizer, model
     return {
         "batch_size": batch_size,
         "seq_len": seq_len,
@@ -387,6 +388,7 @@ def _workload_hf_tiny_gpt2_step(device: str, record: RecordFn | None = None) -> 
         "layers": layers,
         "vocab_size": vocab_size,
         "parameter_bytes": int(parameter_bytes),
+        "uses_attention_mask": True,
         "framework": "transformers",
         "model_family": "gpt2",
     }
@@ -435,9 +437,10 @@ def _workload_peft_lora_tiny_step(device: str, record: RecordFn | None = None) -
     trainable_parameters = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable_parameters, lr=1e-3)
     input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
+    attention_mask = torch.ones((batch_size, seq_len), device=device, dtype=torch.long)
     if record is not None:
         record("after_input")
-    outputs = model(input_ids=input_ids)
+    outputs = model(input_ids=input_ids, attention_mask=attention_mask)
     if record is not None:
         record("after_forward")
     loss = outputs.logits.square().mean()
@@ -454,7 +457,7 @@ def _workload_peft_lora_tiny_step(device: str, record: RecordFn | None = None) -
 
     parameter_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
     trainable_parameter_bytes = sum(p.numel() * p.element_size() for p in trainable_parameters)
-    del loss, outputs, input_ids, optimizer, model, base_model
+    del loss, outputs, input_ids, attention_mask, optimizer, model, base_model
     return {
         "batch_size": batch_size,
         "seq_len": seq_len,
@@ -464,6 +467,7 @@ def _workload_peft_lora_tiny_step(device: str, record: RecordFn | None = None) -
         "parameter_bytes": int(parameter_bytes),
         "trainable_parameter_bytes": int(trainable_parameter_bytes),
         "lora_rank": lora_rank,
+        "uses_attention_mask": True,
         "framework": "peft",
         "model_family": "gpt2",
     }

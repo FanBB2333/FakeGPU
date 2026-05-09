@@ -116,6 +116,15 @@ def test_lora_workload_reports_trainable_parameter_bytes() -> None:
     payload = _workload_peft_lora_tiny_step("cpu")
     assert payload["parameter_bytes"] > payload["trainable_parameter_bytes"] > 0
     assert payload["lora_rank"] == 4
+    assert payload["uses_attention_mask"] is True
+
+
+def test_hf_workload_uses_attention_mask_for_fakecuda_compat() -> None:
+    from verification.calibration_rtx3090ti import _workload_hf_tiny_gpt2_step
+
+    payload = _workload_hf_tiny_gpt2_step("cpu")
+    assert payload["framework"] == "transformers"
+    assert payload["uses_attention_mask"] is True
 
 
 def _parse_simple_yaml(path: Path) -> dict[str, str]:
