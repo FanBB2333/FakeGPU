@@ -35,6 +35,9 @@ enum class GpuDataType {
 // Parameter pack that can be hydrated from JSON/CSV to define a GPU.
 struct GpuProfileParams {
     std::string name;
+    // Optional per-profile override. This is needed for architecture families
+    // that span multiple CUDA compute-capability major versions.
+    int compute_major = 0;
     int compute_minor = 0;
     uint64_t memory_bytes = 0;
     int sm_count = 0;

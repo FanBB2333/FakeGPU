@@ -306,13 +306,17 @@ def _fallback_name(libname: str) -> str:
 def _preload_libs_for_mode(mode: str | None) -> tuple[str, ...]:
     # Mode-specific preloading:
     # - simulate: preload all FakeGPU libs (full stubs)
-    # - hybrid: preload CUDA driver/runtime + NVML/NCCL, but keep real cuBLAS/cuBLASLt for correctness
-    # - passthrough: preload CUDA driver/runtime + NCCL; keep real NVML/cuBLAS to avoid fake device info and math changes
+    # - hybrid: interpose the CUDA Driver + NVML/NCCL, while keeping the real
+    #   CUDA Runtime and cuBLAS so registered kernels and Runtime API calls are
+    #   executed rather than replaced by simulation stubs
+    # - passthrough: do not interpose any FakeGPU library.  The mode is used as
+    #   a real-GPU baseline, so even a forwarding libcuda can change the CUDA
+    #   runtime/cuBLAS initialization path.
     mode_norm = (mode or "simulate").strip().lower()
     if mode_norm == "hybrid":
-        return tuple(lib for lib in _PRELOAD_LIBS if "cublas" not in lib)
+        return tuple(lib for lib in _PRELOAD_LIBS if "cublas" not in lib and "cudart" not in lib)
     if mode_norm == "passthrough":
-        return tuple(lib for lib in _PRELOAD_LIBS if ("cublas" not in lib and "nvidia-ml" not in lib))
+        return ()
     return _PRELOAD_LIBS
 
 

@@ -175,7 +175,11 @@ def _load_expected_device(*, repo_root: Path, preset_id: str) -> ExpectedDevice:
     arch = _require_str(data, "architecture", ctx=ctx).strip().lower()
     if arch not in ARCH_TO_CC_MAJOR:
         _die(f"{ctx}.architecture: unknown architecture {arch!r}")
-    cc_major = ARCH_TO_CC_MAJOR[arch]
+    cc_major = (
+        _require_int(data, "compute_major", ctx=ctx)
+        if "compute_major" in data
+        else ARCH_TO_CC_MAJOR[arch]
+    )
 
     return ExpectedDevice(
         preset_id=preset_id,
@@ -309,4 +313,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

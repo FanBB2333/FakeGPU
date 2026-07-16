@@ -17,7 +17,7 @@
 ```
 
 这将:
-1. 在真实GPU上测试 (Ampere GPU)
+1. 在真实 GPU 上测试（当前为 Blackwell GPU）
 2. 在FakeGPU上测试
 3. 证明测试代码在真实硬件上正常工作
 4. 证明任何FakeGPU问题都是实现缺口，而非测试代码问题

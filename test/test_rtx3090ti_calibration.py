@@ -19,22 +19,37 @@ def test_rtx3090ti_profile_matches_fakecuda_registry() -> None:
     assert torch_patch._PROFILE_CC["rtx3090ti"] == (8, 6)
 
 
+def test_rtx_pro_5000_blackwell_profile_matches_measured_hardware() -> None:
+    import fakegpu.torch_patch as torch_patch
+
+    profile_id = "rtx-pro-5000-blackwell"
+    profile = _parse_simple_yaml(ROOT / "profiles" / f"{profile_id}.yaml")
+    assert profile["id"] == profile_id
+    assert profile["name"] == torch_patch._PROFILE_NAMES[profile_id]
+    assert int(profile["memory_bytes"]) == 76374540288
+    assert int(profile["sm_count"]) == 110
+    assert int(profile["compute_major"]) == 12
+    assert torch_patch._PROFILE_TOTAL_MEMORY[profile_id] == 76374540288
+    assert torch_patch._PROFILE_CC[profile_id] == (12, 0)
+
+
 def test_calibration_checker_accepts_explicit_skip_report(tmp_path: Path) -> None:
     report = {
-        "schema_version": "rtx3090ti_calibration.v1",
-        "status": "SKIP_NO_RTX3090TI",
+        "schema_version": "real_gpu_calibration.v1",
+        "status": "SKIP_NO_REAL_GPU",
         "skip_reason": "torch.cuda.is_available() is false",
         "calibration_gpu": None,
+        "fakecuda_profile": None,
         "workloads": [],
-        "notes": ["requires real RTX 3090 Ti"],
+        "notes": ["requires a real CUDA GPU"],
     }
-    path = tmp_path / "calibration_rtx3090ti.json"
+    path = tmp_path / "calibration_real_gpu.json"
     path.write_text(json.dumps(report), encoding="utf-8")
 
     completed = subprocess.run(
         [
             sys.executable,
-            "verification/check_rtx3090ti_calibration.py",
+            "verification/check_real_gpu_calibration.py",
             "--path",
             str(path),
             "--allow-skip",
@@ -45,6 +60,68 @@ def test_calibration_checker_accepts_explicit_skip_report(tmp_path: Path) -> Non
     )
     assert completed.returncode == 0, completed.stderr
     assert "OK: calibration skipped" in completed.stdout
+
+
+def test_calibration_auto_selects_rtx_pro_5000_profile(tmp_path: Path, monkeypatch) -> None:
+    from verification import calibration_rtx3090ti as calibration
+
+    gpu = {
+        "name": "NVIDIA RTX PRO 5000 72GB Blackwell",
+        "total_memory": 76374540288,
+        "compute_capability": "12.0",
+        "sm_count": 110,
+    }
+    monkeypatch.setattr(calibration, "_cuda_probe", lambda: {"status": "available", "gpu": gpu})
+    monkeypatch.setattr(calibration, "_workloads", lambda: {"probe": lambda *_args: {}})
+    monkeypatch.setattr(
+        calibration,
+        "_run_real_worker",
+        lambda _name: {"peak_memory": 1000, "result_signature": 0.25},
+    )
+
+    selected: list[str] = []
+
+    def fake_worker(_name: str, *, out_dir: Path, profile: str):
+        assert out_dir == tmp_path
+        selected.append(profile)
+        return {"peak_memory": 900, "status": "PASS_FIT", "result_signature": 0.25}
+
+    monkeypatch.setattr(calibration, "_run_fakecuda_preflight", fake_worker)
+
+    native_modes: list[str] = []
+
+    def native_worker(_name: str, *, mode: str, out_dir: Path, profile: str, build_dir: Path):
+        assert out_dir == tmp_path
+        assert profile == "rtx-pro-5000-blackwell"
+        assert build_dir == ROOT / "build"
+        native_modes.append(mode)
+        return {
+            "peak_memory": 1000,
+            "result_signature": 0.25,
+            "status": "PASS_EXECUTED",
+            "driver_peak_memory": 800 if mode == "hybrid" else None,
+        }
+
+    monkeypatch.setattr(calibration, "_run_native_worker", native_worker)
+    monkeypatch.setattr(
+        calibration,
+        "_run_hybrid_oom_probe",
+        lambda **_kwargs: {
+            "status": "PASS_OOM",
+            "error_type": "OutOfMemoryError",
+            "requested_bytes": 1001,
+            "total_memory": 1000,
+        },
+    )
+
+    report = calibration.run_calibration(out_dir=tmp_path, build_dir=ROOT / "build")
+    assert report["schema_version"] == "real_gpu_calibration.v1"
+    assert report["calibration_gpu"] == gpu
+    assert report["fakecuda_profile"] == "rtx-pro-5000-blackwell"
+    assert selected == ["rtx-pro-5000-blackwell"]
+    assert native_modes == ["passthrough", "hybrid"]
+    assert report["workloads"][0]["native_modes"]["hybrid_clamp"]["result_signature_match"] is True
+    assert report["hybrid_clamp_oom_probe"]["status"] == "PASS_OOM"
 
 
 def test_calibration_compare_records_peak_error() -> None:
@@ -100,6 +177,23 @@ def test_calibration_compare_identifies_optimizer_gap() -> None:
     assert item["likely_gap_reason"] == "cuda_optimizer_backend_hidden_allocation"
 
 
+def test_native_mode_comparison_checks_peak_and_result_signature() -> None:
+    from verification.calibration_rtx3090ti import _compare_native_mode
+
+    comparison = _compare_native_mode(
+        {"peak_memory": 1024, "result_signature": 0.5},
+        {
+            "peak_memory": 1056,
+            "result_signature": 0.5000001,
+            "status": "PASS_EXECUTED",
+        },
+    )
+    assert comparison["status"] == "PASS_EXECUTED"
+    assert comparison["peak_error_bytes"] == 32
+    assert comparison["peak_error_percent"] == 3.125
+    assert comparison["result_signature_match"] is True
+
+
 def test_calibration_includes_tiny_transformer_workload() -> None:
     from verification.calibration_rtx3090ti import _workloads
 
@@ -112,6 +206,32 @@ def test_calibration_includes_hf_and_lora_researcher_workloads() -> None:
     workloads = _workloads()
     assert "hf_tiny_gpt2_step" in workloads
     assert "peft_lora_tiny_step" in workloads
+
+
+def test_calibration_includes_gradient_memory_workloads() -> None:
+    from verification.calibration_rtx3090ti import _workloads
+
+    workloads = _workloads()
+    assert "gradient_accumulation_step" in workloads
+    assert "gradient_checkpointing_step" in workloads
+
+
+def test_gradient_accumulation_workload_reports_microbatches() -> None:
+    from verification.calibration_rtx3090ti import _workload_gradient_accumulation_step
+
+    payload = _workload_gradient_accumulation_step("cpu")
+    assert payload["microbatches"] == 4
+    assert payload["parameter_bytes"] > 0
+    assert payload["result_signature"] > 0
+
+
+def test_gradient_checkpointing_workload_reports_checkpoint_usage() -> None:
+    from verification.calibration_rtx3090ti import _workload_gradient_checkpointing_step
+
+    payload = _workload_gradient_checkpointing_step("cpu")
+    assert payload["checkpointed_layers"] == 3
+    assert payload["uses_gradient_checkpointing"] is True
+    assert payload["parameter_bytes"] > 0
 
 
 def test_lora_workload_reports_trainable_parameter_bytes() -> None:

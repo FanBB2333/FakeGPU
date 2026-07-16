@@ -128,10 +128,26 @@ print("editable custom torch detection passed")
     _assert_ok(_run(code), "editable custom torch detection")
 
 
+def test_native_mode_preload_boundaries() -> None:
+    from fakegpu._api import _preload_libs_for_mode
+
+    simulate = _preload_libs_for_mode("simulate")
+    hybrid = _preload_libs_for_mode("hybrid")
+    passthrough = _preload_libs_for_mode("passthrough")
+
+    assert any("cudart" in lib for lib in simulate)
+    assert not any("cudart" in lib for lib in hybrid)
+    assert not any("cudart" in lib for lib in passthrough)
+    assert any("libcuda" in lib for lib in hybrid)
+    assert any("nvidia-ml" in lib for lib in hybrid)
+    assert passthrough == ()
+
+
 def main() -> None:
     test_import_is_side_effect_free()
     test_runtime_router_dispatch()
     test_editable_custom_torch_detection()
+    test_native_mode_preload_boundaries()
     print("runtime init smoke passed")
 
 

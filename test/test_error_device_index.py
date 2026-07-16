@@ -16,6 +16,8 @@ class TestDeviceIndexErrors(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        os.environ["FAKEGPU_DEVICE_COUNT"] = "2"
+        os.environ["FAKEGPU_PROFILES"] = "a100:2"
         import fakegpu
         fakegpu.patch_torch()
         import torch

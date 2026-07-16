@@ -20,7 +20,7 @@ GpuProfile ArchProfile::build(const GpuProfileParams& params) const {
     GpuProfile profile;
     profile.name = params.name;
     profile.architecture = arch;
-    profile.compute_major = compute_major;
+    profile.compute_major = params.compute_major > 0 ? params.compute_major : compute_major;
     profile.compute_minor = params.compute_minor;
     profile.memory_bytes = params.memory_bytes;
     profile.sm_count = params.sm_count;
@@ -235,7 +235,9 @@ GpuProfile build_profile_from_definition(const ProfileDefinition& def) {
     GpuProfile profile;
     profile.name = def.params.name;
     profile.architecture = def.arch;
-    profile.compute_major = static_cast<int>(def.arch);
+    profile.compute_major = def.params.compute_major > 0
+        ? def.params.compute_major
+        : static_cast<int>(def.arch);
     profile.compute_minor = def.params.compute_minor;
     profile.memory_bytes = def.params.memory_bytes;
     profile.sm_count = def.params.sm_count;
@@ -300,6 +302,15 @@ std::optional<ProfileDefinition> parse_definition(const ProfileYamlBlob& blob) {
         return std::nullopt;
     }
     def.arch = arch.value();
+
+    auto compute_major_it = parsed.scalars.find("compute_major");
+    if (compute_major_it != parsed.scalars.end()) {
+        if (!parse_integer(compute_major_it->second, def.params.compute_major) ||
+            def.params.compute_major <= 0) {
+            FGPU_LOG("[GpuProfile] Invalid compute_major in %s: %s\n", blob.filename, compute_major_it->second.c_str());
+            return std::nullopt;
+        }
+    }
 
     auto compute_minor_it = parsed.scalars.find("compute_minor");
     if (compute_minor_it != parsed.scalars.end()) {

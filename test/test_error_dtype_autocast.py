@@ -18,20 +18,6 @@ class TestAutocastDtypeV100(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         os.environ["FAKEGPU_PROFILES"] = "v100:1"
-        import fakegpu.torch_patch as tp
-        # Force re-resolve profile constants for V100
-        tp._patched = False
-        tp._NUM_DEVICES = 1
-        tp._COMPUTE_MAJOR, tp._COMPUTE_MINOR = 7, 0
-        tp._DEVICE_NAME = "Tesla V100-SXM2-32GB"
-        tp._TOTAL_MEMORY = 32 * 1024**3
-        tp._DEVICE_PROFILES = [{
-            "profile_id": "v100",
-            "name": "Tesla V100-SXM2-32GB",
-            "total_memory": 32 * 1024**3,
-            "compute_major": 7,
-            "compute_minor": 0,
-        }]
         import fakegpu
         fakegpu.patch_torch()
         import torch
@@ -65,10 +51,9 @@ class TestAutocastDtypeA100(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        # A100 profile - patch was already applied by V100 test above,
-        # but autocast checks _COMPUTE_MAJOR at runtime
-        import fakegpu.torch_patch as tp
-        tp._COMPUTE_MAJOR, tp._COMPUTE_MINOR = 8, 0
+        os.environ["FAKEGPU_PROFILES"] = "a100:1"
+        import fakegpu
+        fakegpu.patch_torch()
         import torch
         cls.torch = torch
 
@@ -86,9 +71,9 @@ class TestAutocastDtypeA100(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        # Restore for other tests
-        import fakegpu.torch_patch as tp
-        tp._COMPUTE_MAJOR, tp._COMPUTE_MINOR = 8, 0
+        os.environ["FAKEGPU_PROFILES"] = "a100:1"
+        import fakegpu
+        fakegpu.patch_torch()
 
 
 if __name__ == "__main__":

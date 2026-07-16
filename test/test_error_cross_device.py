@@ -17,6 +17,8 @@ class TestCrossDeviceErrors(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        os.environ["FAKEGPU_DEVICE_COUNT"] = "4"
+        os.environ["FAKEGPU_PROFILES"] = "a100:4"
         import fakegpu
         fakegpu.patch_torch()
         import torch

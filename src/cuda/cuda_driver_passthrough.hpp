@@ -17,7 +17,7 @@ typedef CUresult (*cuDeviceGet_fn)(CUdevice*, int);
 typedef CUresult (*cuDeviceGetName_fn)(char*, int, CUdevice);
 typedef CUresult (*cuDeviceGetAttribute_fn)(int*, CUdevice_attribute, CUdevice);
 typedef CUresult (*cuDeviceTotalMem_fn)(size_t*, CUdevice);
-typedef CUresult (*cuDeviceGetUuid_fn)(char*, CUdevice);
+typedef CUresult (*cuDeviceGetUuid_fn)(CUuuid*, CUdevice);
 typedef CUresult (*cuCtxCreate_fn)(CUcontext*, unsigned int, CUdevice);
 typedef CUresult (*cuCtxDestroy_fn)(CUcontext);
 typedef CUresult (*cuCtxSetCurrent_fn)(CUcontext);
@@ -75,7 +75,7 @@ public:
         initialized_ = true;
 
         RealCudaLoader& loader = RealCudaLoader::instance();
-        if (!loader.initialize()) {
+        if (!loader.initialize_driver()) {
             FGPU_LOG("[CudaDriverPassthrough] Real CUDA loader not available\n");
             return false;
         }
@@ -85,39 +85,47 @@ public:
             real_##name = (name##_fn)loader.get_cuda_driver_func(#name); \
             if (!real_##name) real_##name = (name##_fn)loader.get_cuda_driver_func(#name "_v2")
 
+        // Several legacy Driver API entry points use 32-bit pointer/size
+        // signatures.  On a 64-bit process we must prefer their _v2 symbols;
+        // calling the legacy cuMemAlloc, for example, returns
+        // CUDA_ERROR_INVALID_CONTEXT even with a valid current context.
+        #define LOAD_FUNC_V2(name) \
+            real_##name = (name##_fn)loader.get_cuda_driver_func(#name "_v2"); \
+            if (!real_##name) real_##name = (name##_fn)loader.get_cuda_driver_func(#name)
+
         LOAD_FUNC(cuInit);
         LOAD_FUNC(cuDriverGetVersion);
         LOAD_FUNC(cuDeviceGetCount);
         LOAD_FUNC(cuDeviceGet);
         LOAD_FUNC(cuDeviceGetName);
         LOAD_FUNC(cuDeviceGetAttribute);
-        LOAD_FUNC(cuDeviceTotalMem);
+        LOAD_FUNC_V2(cuDeviceTotalMem);
         LOAD_FUNC(cuDeviceGetUuid);
-        LOAD_FUNC(cuCtxCreate);
-        LOAD_FUNC(cuCtxDestroy);
+        LOAD_FUNC_V2(cuCtxCreate);
+        LOAD_FUNC_V2(cuCtxDestroy);
         LOAD_FUNC(cuCtxSetCurrent);
         LOAD_FUNC(cuCtxGetCurrent);
         LOAD_FUNC(cuCtxGetDevice);
         LOAD_FUNC(cuCtxSynchronize);
-        LOAD_FUNC(cuMemAlloc);
-        LOAD_FUNC(cuMemFree);
-        LOAD_FUNC(cuMemcpyDtoH);
-        LOAD_FUNC(cuMemcpyHtoD);
-        LOAD_FUNC(cuMemcpyDtoD);
+        LOAD_FUNC_V2(cuMemAlloc);
+        LOAD_FUNC_V2(cuMemFree);
+        LOAD_FUNC_V2(cuMemcpyDtoH);
+        LOAD_FUNC_V2(cuMemcpyHtoD);
+        LOAD_FUNC_V2(cuMemcpyDtoD);
         LOAD_FUNC(cuMemAllocManaged);
-        LOAD_FUNC(cuMemAllocHost);
+        LOAD_FUNC_V2(cuMemAllocHost);
         LOAD_FUNC(cuMemFreeHost);
         LOAD_FUNC(cuMemHostAlloc);
-        LOAD_FUNC(cuMemHostGetDevicePointer);
-        LOAD_FUNC(cuMemGetInfo);
+        LOAD_FUNC_V2(cuMemHostGetDevicePointer);
+        LOAD_FUNC_V2(cuMemGetInfo);
         LOAD_FUNC(cuStreamCreate);
-        LOAD_FUNC(cuStreamDestroy);
+        LOAD_FUNC_V2(cuStreamDestroy);
         LOAD_FUNC(cuStreamSynchronize);
         LOAD_FUNC(cuStreamQuery);
         LOAD_FUNC(cuStreamWaitEvent);
         LOAD_FUNC(cuStreamGetFlags);
         LOAD_FUNC(cuEventCreate);
-        LOAD_FUNC(cuEventDestroy);
+        LOAD_FUNC_V2(cuEventDestroy);
         LOAD_FUNC(cuEventRecord);
         LOAD_FUNC(cuEventSynchronize);
         LOAD_FUNC(cuEventQuery);
@@ -133,6 +141,7 @@ public:
         LOAD_FUNC(cuGetProcAddress);
 
         #undef LOAD_FUNC
+        #undef LOAD_FUNC_V2
 
         available_ = (real_cuInit != nullptr);
         if (available_) {
@@ -175,6 +184,11 @@ public:
     CUresult cuDeviceTotalMem(size_t* bytes, CUdevice dev) {
         if (!real_cuDeviceTotalMem) return CUDA_ERROR_NOT_INITIALIZED;
         return real_cuDeviceTotalMem(bytes, dev);
+    }
+
+    CUresult cuDeviceGetUuid(CUuuid* uuid, CUdevice dev) {
+        if (!real_cuDeviceGetUuid) return CUDA_ERROR_NOT_INITIALIZED;
+        return real_cuDeviceGetUuid(uuid, dev);
     }
 
     CUresult cuCtxCreate(CUcontext* pctx, unsigned int flags, CUdevice dev) {

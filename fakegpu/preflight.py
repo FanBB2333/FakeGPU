@@ -80,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Multiply tracked peak memory before fit/OOM classification. "
-            "Use this with a factor from RTX 3090 Ti calibration when fakecuda undercounts a workload family."
+            "Use this with a factor from real-GPU calibration when fakecuda undercounts a workload family."
         ),
     )
     parser.add_argument(
@@ -465,7 +465,7 @@ def _next_steps(report: dict[str, Any]) -> list[str]:
         steps.append("- Repeat with the target production profile if this run used a small profile.")
         steps.append("- Attach `preflight_report.json` and `preflight_report.md` to the Slurm submission notes.")
         if confidence != "C4_real_gpu_calibrated":
-            steps.append("- For high-risk jobs, calibrate a reduced workload on the 3090 Ti before cluster submission.")
+            steps.append("- For high-risk jobs, calibrate a reduced workload on the available real GPU before cluster submission.")
     elif status == STATUS_FAIL_OOM:
         steps.append("- Reduce batch size, sequence length, activation checkpoint scope, or optimizer state footprint.")
         steps.append("- Re-run with `--allocation-stacks` to locate the largest allocations in user code.")

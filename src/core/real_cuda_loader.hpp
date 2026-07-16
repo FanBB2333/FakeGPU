@@ -49,6 +49,26 @@ public:
     }
 
     // Initialize/load real libraries
+    bool initialize_driver() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (driver_initialized_) return is_available();
+        driver_initialized_ = true;
+
+        const BackendConfig& config = BackendConfig::instance();
+        if (!config.use_real_cuda()) {
+            FGPU_LOG("[RealCudaLoader] Mode is simulate, not loading real CUDA driver\n");
+            return false;
+        }
+
+        cuda_driver_handle_ = load_library(config.real_cuda_driver_path(), "libcuda.so");
+        if (cuda_driver_handle_) {
+            FGPU_LOG("[RealCudaLoader] Loaded real CUDA driver library\n");
+        } else {
+            FGPU_LOG("[RealCudaLoader] WARNING: Could not load real CUDA driver library\n");
+        }
+        return is_available();
+    }
+
     bool initialize() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (initialized_) return is_available();
@@ -64,8 +84,13 @@ public:
 
         FGPU_LOG("[RealCudaLoader] Attempting to load real CUDA libraries...\n");
 
-        // Load CUDA driver library first (libcuda.so)
-        cuda_driver_handle_ = load_library(config.real_cuda_driver_path(), "libcuda.so");
+        // Load CUDA driver library first (libcuda.so).  Driver-only users call
+        // initialize_driver() so they do not inject a second libcudart/cuBLAS
+        // version into framework processes.
+        if (!driver_initialized_) {
+            driver_initialized_ = true;
+            cuda_driver_handle_ = load_library(config.real_cuda_driver_path(), "libcuda.so");
+        }
         if (cuda_driver_handle_) {
             FGPU_LOG("[RealCudaLoader] Loaded real CUDA driver library\n");
         } else {
@@ -292,6 +317,7 @@ private:
 
     std::mutex mutex_;
     bool initialized_ = false;
+    bool driver_initialized_ = false;
     bool real_gpu_info_cached_ = false;
 
     void* cuda_driver_handle_ = nullptr;
