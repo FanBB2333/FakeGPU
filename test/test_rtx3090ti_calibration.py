@@ -225,6 +225,23 @@ def test_nvml_sampler_marks_missing_wsl_process_mapping_as_unavailable(monkeypat
     assert "WSL" in result["process_memory_reason"]
 
 
+def test_calibration_bundle_ignores_unavailable_zero_process_memory() -> None:
+    from verification.aggregate_real_gpu_calibrations import _nvml_trial_values
+
+    payload = {
+        "trials": [
+            {
+                "nvml": {
+                    "status": "available",
+                    "process_memory_status": "unavailable",
+                    "peak_process_memory": 0,
+                }
+            }
+        ]
+    }
+    assert _nvml_trial_values(payload, "peak_process_memory") == []
+
+
 def test_compare_uses_each_real_trial_for_empirical_gap_summary() -> None:
     from verification.calibration_rtx3090ti import _compare_workload
 

@@ -615,6 +615,7 @@ class _NvmlProcessMemorySampler:
         self._reason: str | None = None
         self._sample_count = 0
         self._process_sample_count = 0
+        self._process_baseline_available = False
         self._baseline_process_memory = 0
         self._baseline_device_used_memory = 0
         self._peak_process_memory = 0
@@ -638,6 +639,7 @@ class _NvmlProcessMemorySampler:
                 self._baseline_process_memory = process_memory
                 self._peak_process_memory = process_memory
                 self._process_sample_count = 1
+                self._process_baseline_available = True
             self._baseline_device_used_memory = device_memory
             self._peak_device_used_memory = device_memory
             self._sample_count = 1
@@ -684,14 +686,22 @@ class _NvmlProcessMemorySampler:
                 {
                     "process_memory_status": "available",
                     "process_sample_count": int(self._process_sample_count),
-                    "baseline_process_memory": int(self._baseline_process_memory),
                     "peak_process_memory": int(self._peak_process_memory),
-                    "peak_process_delta_memory": max(
-                        0,
-                        int(self._peak_process_memory - self._baseline_process_memory),
-                    ),
                 }
             )
+            if self._process_baseline_available:
+                result.update(
+                    {
+                        "process_baseline_status": "available",
+                        "baseline_process_memory": int(self._baseline_process_memory),
+                        "peak_process_delta_memory": max(
+                            0,
+                            int(self._peak_process_memory - self._baseline_process_memory),
+                        ),
+                    }
+                )
+            else:
+                result["process_baseline_status"] = "unavailable"
         else:
             result.update(
                 {
@@ -753,7 +763,7 @@ class _NvmlProcessMemorySampler:
             if int(getattr(process, "pid", -1)) != pid:
                 continue
             used = int(getattr(process, "usedGpuMemory", 0) or 0)
-            if used != unavailable_sentinel:
+            if 0 < used != unavailable_sentinel:
                 process_memory = used if process_memory is None else max(process_memory, used)
         memory_info = pynvml.nvmlDeviceGetMemoryInfo(self._handle)
         device_memory = int(getattr(memory_info, "used", 0) or 0)

@@ -185,7 +185,7 @@ def _nvml_trial_values(payload: dict[str, Any], metric: str) -> list[int]:
     trials = payload.get("trials")
     if not isinstance(trials, list):
         nvml = payload.get("nvml")
-        if isinstance(nvml, dict) and nvml.get(metric) is not None:
+        if isinstance(nvml, dict) and int(nvml.get(metric, 0) or 0) > 0:
             return [int(nvml[metric])]
         return []
     return [
@@ -194,7 +194,7 @@ def _nvml_trial_values(payload: dict[str, Any], metric: str) -> list[int]:
         if isinstance(item, dict)
         and isinstance((nvml := item.get("nvml")), dict)
         and nvml.get("status") == "available"
-        and nvml.get(metric) is not None
+        and int(nvml.get(metric, 0) or 0) > 0
     ]
 
 
