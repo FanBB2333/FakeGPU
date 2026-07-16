@@ -137,7 +137,6 @@ add_subdirectory(src/nccl)
 add_library(fake_gpu SHARED
     $<TARGET_OBJECTS:fake_gpu_core>
     $<TARGET_OBJECTS:fake_gpu_nvml>
-    $<TARGET_OBJECTS:fake_gpu_cuda>
     $<TARGET_OBJECTS:fake_gpu_monitor>
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
@@ -148,7 +147,7 @@ fakegpu_link_common_system_libs(fake_gpu)
 # This library intercepts CUDA Driver API calls
 add_library(fake_cuda SHARED
     $<TARGET_OBJECTS:fake_gpu_core>
-    $<TARGET_OBJECTS:fake_gpu_cuda>
+    $<TARGET_OBJECTS:fake_gpu_cuda_driver>
     $<TARGET_OBJECTS:fake_gpu_monitor>
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
@@ -158,8 +157,8 @@ fakegpu_link_common_system_libs(fake_cuda)
 # This library intercepts CUDA Runtime API calls and uses fake_cuda Driver API internally
 # We only include Driver API stubs, not Runtime API stubs from cuda_stubs.cpp
 add_library(fake_cudart SHARED
-    src/cuda/cudart_stubs.cpp
-    src/cuda/cuda_driver_stubs.cpp
+    $<TARGET_OBJECTS:fake_gpu_cudart>
+    $<TARGET_OBJECTS:fake_gpu_cuda_driver>
     $<TARGET_OBJECTS:fake_gpu_core>
     $<TARGET_OBJECTS:fake_gpu_monitor>
     $<TARGET_OBJECTS:fake_gpu_distributed>
@@ -306,7 +305,7 @@ add_executable(fakegpu_nccl_direct_test
     verification/test_nccl_direct.cpp
 )
 target_include_directories(fakegpu_nccl_direct_test PRIVATE src/nccl src/distributed)
-target_link_libraries(fakegpu_nccl_direct_test PRIVATE fake_nccl fake_gpu Threads::Threads)
+target_link_libraries(fakegpu_nccl_direct_test PRIVATE fake_nccl fake_cuda fake_gpu Threads::Threads)
 
 add_executable(fakegpu_staging_buffer_probe
     verification/test_staging_buffer_main.cpp

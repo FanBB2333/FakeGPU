@@ -47,7 +47,7 @@ public:
         }
 
         // Get real GPU info
-        RealCudaLoader::instance().initialize();
+        RealCudaLoader::instance().initialize_driver();
         const auto& real_info = RealCudaLoader::instance().get_real_gpu_info();
 
         if (real_info.valid) {

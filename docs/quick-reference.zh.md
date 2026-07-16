@@ -75,22 +75,22 @@ runner 会写出：
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。轻量回归测试也可以使用 `test-512m`，它是 512 MB 的 fakecuda/native 测试 profile。runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，报告中包含分阶段峰值、top allocations、可选 allocation stack trace、粗粒度内存类别、共享 storage alias 处理、基础 logical-device 归属，以及 PyTorch hooks 能看到的 autograd saved tensor。CUDA 后端内部 workspace 仍可能被低估；如果 3090 Ti 校准显示 gap 大致固定，优先用 `--memory-safety-margin <bytes>`；只有当 gap 随 workload 规模增长时，再用 `--memory-safety-factor <factor>`。
+建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。轻量回归测试也可以使用 `test-512m`，它是 512 MB 的 fakecuda/native 测试 profile。runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，报告中包含分阶段峰值、top allocations、可选 allocation stack trace、粗粒度内存类别、共享 storage alias 处理、基础 logical-device 归属，以及 PyTorch hooks 能看到的 autograd saved tensor。CUDA 后端内部 workspace 仍可能被低估；如果真实 GPU 校准显示 gap 大致固定，优先用 `--memory-safety-margin <bytes>`；只有当 gap 随 workload 规模增长时，再用 `--memory-safety-factor <factor>`。
 
 `./ftest preflight_oom` 现在包含 profile 矩阵检查：同一个 560 MB allocation 在 `test-512m` 下必须失败，在 `a100` 下必须通过。
 
 启用 `--strict` 后，child test 出现 skip 会被记为 `FAIL_RUNTIME`，不会作为通过的 preflight。
 
-如果要用 RTX 3090 Ti 做校准，先在真实 GPU 上跑缩小版 workload，再按环境能力对比 passthrough 或 hybrid：
+真实 GPU 校准需要先运行缩小版 workload，再按环境能力对比 passthrough 或 hybrid：
 
 ```bash
-./ftest rtx3090ti_calibration
+./ftest real_gpu_calibration
 python3 train.py --small-config
 ./fgpu --mode passthrough python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
 
-校准套件会写出 `build/rtx3090ti_calibration/calibration_rtx3090ti.json` 和 `.md`。如果当前机器没有 CUDA 可见的 RTX 3090 Ti，它会写出明确 skip 原因，不会静默通过。套件包含 tensor、MLP、Tiny Transformer、Hugging Face tiny GPT-2 和 PEFT LoRA tiny GPT-2 workload。报告会包含峰值误差、缺失的峰值字节数、calibration factor，以及真实 CUDA 和 fakecuda 最大 timeline gap。校准误差只说明当前实现和这张 3090 Ti 上的小型 workload 表现，不代表 A100/H100 的可运行性、数值等价或性能。
+校准套件会写出 `build/real_gpu_calibration/calibration_real_gpu.json` 和 `.md`。当前服务器会自动选择 `rtx-pro-5000-blackwell`；缺少 CUDA、PyTorch 或匹配 profile 时，报告会记录明确的 skip 原因。套件包含 tensor、MLP、Tiny Transformer、梯度累积、梯度 checkpointing、Hugging Face tiny GPT-2 和 PEFT LoRA tiny GPT-2 workload。每个 workload 都会运行 real CUDA、passthrough、Hybrid clamp 和 fakecuda；报告会校验原生模式的结果签名，记录 PyTorch 峰值与 Hybrid Driver 峰值，并执行受控的 Hybrid clamp OOM probe。校准误差只适用于实际测量的 GPU 和 workload 类型，不能证明其他目标 GPU 的可运行性、数值等价或性能。
 
 当前设计和限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
 
@@ -101,7 +101,7 @@ python3 train.py --small-config
 ./ftest cpu_sim
 ./ftest python
 ./ftest preflight_oom
-./ftest rtx3090ti_calibration
+./ftest real_gpu_calibration
 ./ftest all
 ```
 

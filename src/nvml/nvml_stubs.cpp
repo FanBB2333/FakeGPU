@@ -972,6 +972,28 @@ nvmlReturn_t nvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int lin
     return NVML_SUCCESS;
 }
 
+nvmlReturn_t nvmlDeviceGetNvLinkRemoteDeviceType(
+    nvmlDevice_t device,
+    unsigned int link,
+    nvmlIntNvLinkDeviceType_t *remoteDeviceType) {
+    if (!device || !remoteDeviceType) return NVML_ERROR_INVALID_ARGUMENT;
+    (void)link;
+    // Profiles currently do not model a remote NVLink endpoint.  Exporting
+    // this query is still required by PyTorch's CUDA OOM diagnostics.
+    *remoteDeviceType = NVML_NVLINK_DEVICE_TYPE_UNKNOWN;
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetNvLinkRemotePciInfo_v2(
+    nvmlDevice_t device,
+    unsigned int link,
+    nvmlPciInfo_t *pci) {
+    if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
+    (void)link;
+    memset(pci, 0, sizeof(*pci));
+    return NVML_ERROR_NOT_SUPPORTED;
+}
+
 nvmlReturn_t nvmlDeviceGetGpuFabricInfoV(nvmlDevice_t device, void *gpuFabricInfo) {
     if (!device || !gpuFabricInfo) return NVML_ERROR_INVALID_ARGUMENT;
 

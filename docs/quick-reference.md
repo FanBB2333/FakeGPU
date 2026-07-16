@@ -75,22 +75,22 @@ The runner writes:
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. For lightweight regression tests, `test-512m` is also available as a 512 MB fakecuda/native profile. The runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, including stage peaks, top allocations, optional allocation stack traces, coarse memory categories, shared-storage alias handling, basic logical-device attribution, and saved autograd tensors visible through PyTorch hooks. CUDA backend-internal workspaces can still be undercounted; use `--memory-safety-margin <bytes>` when 3090 Ti calibration shows a mostly fixed gap, and reserve `--memory-safety-factor <factor>` for gaps that scale with workload size.
+Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. For lightweight regression tests, `test-512m` is also available as a 512 MB fakecuda/native profile. The runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, including stage peaks, top allocations, optional allocation stack traces, coarse memory categories, shared-storage alias handling, basic logical-device attribution, and saved autograd tensors visible through PyTorch hooks. CUDA backend-internal workspaces can still be undercounted; use `--memory-safety-margin <bytes>` when real-GPU calibration shows a mostly fixed gap, and reserve `--memory-safety-factor <factor>` for gaps that scale with workload size.
 
 `./ftest preflight_oom` now includes a profile matrix check: the same 560 MB allocation must fail on `test-512m` and pass on `a100`.
 
 When `--strict` is set, skipped child tests are treated as `FAIL_RUNTIME` instead of a passing preflight.
 
-For RTX 3090 Ti calibration, run a reduced workload directly on the real GPU and compare with passthrough or hybrid when available:
+For real-GPU calibration, run a reduced workload directly on the GPU and compare with passthrough or hybrid when available:
 
 ```bash
-./ftest rtx3090ti_calibration
+./ftest real_gpu_calibration
 python3 train.py --small-config
 ./fgpu --mode passthrough python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
 
-The calibration suite writes `build/rtx3090ti_calibration/calibration_rtx3090ti.json` and `.md`. On machines without a CUDA-visible RTX 3090 Ti, it writes an explicit skip reason instead of passing silently. The suite includes tensor, MLP, Tiny Transformer, Hugging Face tiny GPT-2, and PEFT LoRA tiny GPT-2 workloads. The report includes peak error, missing peak bytes, a calibration factor, and the largest real-vs-fake timeline gaps. Calibration error is only evidence about this implementation on the 3090 Ti; it is not an A100/H100 fit, parity, or performance guarantee.
+The calibration suite writes `build/real_gpu_calibration/calibration_real_gpu.json` and `.md`. It auto-selects `rtx-pro-5000-blackwell` for the current server and records an explicit skip reason when CUDA, PyTorch, or a matching profile is unavailable. The suite includes tensor, MLP, Tiny Transformer, gradient accumulation, gradient checkpointing, Hugging Face tiny GPT-2, and PEFT LoRA tiny GPT-2 workloads. Each workload runs on real CUDA, passthrough, Hybrid clamp, and fakecuda. The report checks native-mode result signatures, records both PyTorch and Hybrid Driver peaks, and includes a controlled Hybrid clamp OOM probe. Calibration error is evidence only for the measured GPU and workload family; it is not a fit, parity, or performance guarantee for another target.
 
 See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design and limitations.
 
@@ -101,7 +101,7 @@ See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design
 ./ftest cpu_sim
 ./ftest python
 ./ftest preflight_oom
-./ftest rtx3090ti_calibration
+./ftest real_gpu_calibration
 ./ftest all
 ```
 

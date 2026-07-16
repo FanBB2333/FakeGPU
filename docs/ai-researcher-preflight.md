@@ -6,24 +6,24 @@ The immediate goal is narrow: determine whether the command can reach a selected
 
 ## Local Hardware Assumption
 
-The current real calibration machine is a single NVIDIA GeForce RTX 3090 Ti with 24GB of VRAM.
+The current real calibration machine is a single NVIDIA RTX PRO 5000 72GB Blackwell with compute capability 12.0.
 
 That machine is useful for:
 
 - checking that the real CUDA / PyTorch / transformers environment works
-- calibrating small and medium workloads that fit within 24GB
+- calibrating workloads that fit within the GPU's measured memory limit
 - comparing real PyTorch `torch.cuda.max_memory_allocated()` with FakeGPU reports
-- validating 24GB OOM boundaries
+- validating real OOM behavior up to the GPU's available memory boundary
 - sanity-checking fakecuda memory tracking on controlled workloads
 
 It cannot directly prove:
 
-- that an 80GB A100 or H100 cluster run will fit
+- that a workload calibrated on this GPU will fit a different target profile
 - that a multi-GPU NCCL, NVLink, RDMA, or InfiniBand path behaves correctly
 - that cluster throughput or GPU utilization will be good
 - that CUDA kernels produce numerically identical results in simulate or fakecuda mode
 
-Treat the 3090 Ti as a calibration point, not as a substitute for the target cluster.
+Treat the RTX PRO 5000 as a calibration point, not as a substitute for the target cluster.
 
 ## What Preflight Should Answer
 
@@ -119,7 +119,7 @@ fakegpu preflight \
 
 Important limitation: fakecuda preflight now tracks torch-level tensor lifetimes, saved autograd tensors visible through PyTorch hooks, stage peaks, top allocations, optional allocation stack traces, coarse categories for parameters, buffers, gradients, optimizer state, activations, and temporaries, shared-storage aliases, and basic logical-device attribution. CUDA backend-internal workspaces and optimizer temporaries may still be invisible in fakecuda, especially for Transformer-heavy workloads. Treat `PASS_FIT` as a preflight signal rather than proof that a full cluster run will fit.
 
-### 3. Calibrate On The 3090 Ti
+### 3. Calibrate On The Real GPU
 
 Run a reduced version of the workload directly on the real GPU:
 
@@ -146,12 +146,40 @@ Then compare with FakeGPU passthrough or hybrid runs, when your CUDA installatio
 For the built-in calibration suite, run:
 
 ```bash
-./ftest rtx3090ti_calibration
+./ftest real_gpu_calibration
 ```
 
-The built-in suite includes a tensor allocation probe, a torch MLP train step, a torch Tiny Transformer train step, a locally initialized Hugging Face tiny GPT-2 train step, and a PEFT LoRA tiny GPT-2 train step. It does not download model weights.
+The built-in suite includes a tensor allocation probe, a torch MLP train step, a torch Tiny Transformer train step, gradient accumulation, gradient checkpointing, a locally initialized Hugging Face tiny GPT-2 train step, and a PEFT LoRA tiny GPT-2 train step. It does not download model weights.
 
-The goal is not exact equality. The goal is to understand the error between real 3090 Ti memory and FakeGPU-reported memory on small controlled workloads. The calibration report records peak error, missing peak bytes, a per-workload calibration factor, and timeline gaps such as `after_transformer_block_0` or `after_optimizer_step`. Large gaps usually mean fakecuda cannot see CUDA backend-internal activation/workspace or optimizer allocations.
+The goal is not exact equality. The goal is to understand the error between memory measured on the current real GPU and FakeGPU-reported memory on small controlled workloads. The suite auto-selects `rtx-pro-5000-blackwell` for the current server and writes `build/real_gpu_calibration/calibration_real_gpu.json` plus a Markdown report. Each workload executes on real CUDA, passthrough, Hybrid clamp, and fakecuda. Native result signatures must match real CUDA; the report also records PyTorch peaks, Hybrid Driver peaks, fakecuda error, and timeline gaps such as `after_transformer_block_0` or `after_optimizer_step`. A final oversized tensor verifies that Hybrid clamp raises `torch.cuda.OutOfMemoryError` without consuming the physical GPU capacity.
+
+To produce an individual preflight report for every maintained workload:
+
+```bash
+workloads=(
+  tensor_256mb
+  mlp_train_step
+  tiny_transformer_step
+  gradient_accumulation_step
+  gradient_checkpointing_step
+  hf_tiny_gpt2_step
+  peft_lora_tiny_step
+)
+for workload in "${workloads[@]}"; do
+  python3 -m fakegpu preflight \
+    --runtime fakecuda \
+    --profile rtx-pro-5000-blackwell \
+    --device-count 1 \
+    --stage "$workload" \
+    --report-dir "build/preflight-$workload" \
+    --strict \
+    -- python3 verification/calibration_real_gpu.py \
+      --worker fakecuda --workload "$workload" \
+      --profile rtx-pro-5000-blackwell
+done
+```
+
+Each generated report contains the workload stage, peak memory, and final status.
 
 When the missing memory looks like a mostly fixed backend workspace gap, prefer an additive margin in preflight. For example, if calibration reports roughly 18 MiB missing at `after_backward`:
 
@@ -219,14 +247,14 @@ Suggested confidence levels:
 | `C1_weight_storage` | Mostly tracks weights and explicit fake-CUDA storage. |
 | `C2_torch_tensor_lifetime` | Tracks torch tensor lifetimes well enough for fakecuda preflight. |
 | `C3_native_cuda_allocations` | Tracks native CUDA allocations in simulate mode. |
-| `C4_real_gpu_calibrated` | Has real 3090 Ti calibration data for this workload class. |
+| `C4_real_gpu_calibrated` | Has calibration data from an identified real GPU for this workload class. |
 
 ## Recommended Next Work
 
 The next implementation should prioritize:
 
 1. Reducing the remaining CUDA backend-internal workspace and optimizer undercount for Transformer workloads.
-2. A manual large tensor OOM probe on the 3090 Ti.
+2. A manual large tensor OOM probe on the current real calibration GPU.
 3. Small/large profile pass-fail matrix for more realistic HF and LoRA workloads.
 4. More workload examples that attach `preflight_report.json` to Slurm submission notes.
 5. Documentation that clearly separates fit/no-fit checks from performance prediction.

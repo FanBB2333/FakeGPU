@@ -9,9 +9,10 @@ from typing import Any
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Validate RTX 3090 Ti calibration report.")
+    parser = argparse.ArgumentParser(description="Validate a real-GPU calibration report.")
     parser.add_argument("--path", required=True)
     parser.add_argument("--allow-skip", action="store_true")
+    parser.add_argument("--expected-gpu-name")
     ns = parser.parse_args(argv)
 
     path = Path(ns.path)
@@ -19,7 +20,10 @@ def main(argv: list[str] | None = None) -> int:
         _die(f"report not found: {path}")
     report = json.loads(path.read_text(encoding="utf-8"))
 
-    if report.get("schema_version") != "rtx3090ti_calibration.v1":
+    if report.get("schema_version") not in {
+        "real_gpu_calibration.v1",
+        "rtx3090ti_calibration.v1",
+    }:
         _die(f"unexpected schema_version: {report.get('schema_version')!r}")
 
     status = str(report.get("status", ""))
@@ -35,7 +39,9 @@ def main(argv: list[str] | None = None) -> int:
         _die(f"unexpected status: {status}")
 
     gpu = _require_dict(report, "calibration_gpu")
-    if gpu.get("name") != "NVIDIA GeForce RTX 3090 Ti":
+    if not gpu.get("name"):
+        _die("calibration_gpu.name is required")
+    if ns.expected_gpu_name and gpu.get("name") != ns.expected_gpu_name:
         _die(f"unexpected calibration GPU: {gpu.get('name')!r}")
     if int(gpu.get("total_memory", 0) or 0) <= 0:
         _die("calibration_gpu.total_memory must be positive")
@@ -43,6 +49,18 @@ def main(argv: list[str] | None = None) -> int:
     workloads = report.get("workloads")
     if not isinstance(workloads, list) or not workloads:
         _die("workloads must be a non-empty list")
+
+    if report.get("native_modes_included"):
+        oom_probe = _require_dict(report, "hybrid_clamp_oom_probe")
+        if oom_probe.get("status") != "PASS_OOM":
+            _die(f"hybrid_clamp_oom_probe must be PASS_OOM, got {oom_probe.get('status')!r}")
+        if oom_probe.get("error_type") != "OutOfMemoryError":
+            _die(
+                "hybrid_clamp_oom_probe.error_type must be OutOfMemoryError, "
+                f"got {oom_probe.get('error_type')!r}"
+            )
+        if int(oom_probe.get("requested_bytes", 0) or 0) <= int(oom_probe.get("total_memory", 0) or 0):
+            _die("hybrid_clamp_oom_probe must request more than total_memory")
 
     for index, workload in enumerate(workloads):
         if not isinstance(workload, dict):
@@ -72,7 +90,30 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(gap, dict) or "available" not in gap:
             _die(f"{name}: missing gap_analysis")
 
-    print(f"OK: calibrated {len(workloads)} workload(s) on RTX 3090 Ti")
+        native_modes = workload.get("native_modes")
+        if report.get("native_modes_included"):
+            if not isinstance(native_modes, dict):
+                _die(f"{name}: native_modes must be an object")
+            for mode_name in ("passthrough", "hybrid_clamp"):
+                mode = native_modes.get(mode_name)
+                if not isinstance(mode, dict):
+                    _die(f"{name}: missing native mode {mode_name}")
+                if mode.get("status") != "PASS_EXECUTED":
+                    _die(f"{name}/{mode_name}: expected PASS_EXECUTED, got {mode.get('status')!r}")
+                measurement = _require_dict(mode, "measurement", ctx=f"{name}/{mode_name}")
+                if int(measurement.get("peak_memory", 0) or 0) <= 0:
+                    _die(f"{name}/{mode_name}: peak_memory must be positive")
+                if mode.get("result_signature_match") is not True:
+                    _die(f"{name}/{mode_name}: result signature does not match real CUDA")
+                if mode_name == "hybrid_clamp":
+                    driver_peak = measurement.get("driver_peak_memory")
+                    if driver_peak is None or int(driver_peak) <= 0:
+                        _die(f"{name}/{mode_name}: driver_peak_memory must be positive")
+
+    if report.get("schema_version") == "real_gpu_calibration.v1" and not report.get("fakecuda_profile"):
+        _die("fakecuda_profile is required for generic calibration reports")
+
+    print(f"OK: calibrated {len(workloads)} workload(s) on {gpu.get('name')}")
     return 0
 
 
@@ -84,7 +125,7 @@ def _require_dict(obj: dict[str, Any], key: str, *, ctx: str = "report") -> dict
 
 
 def _die(message: str) -> None:
-    print(f"[check_rtx3090ti_calibration] ERROR: {message}", file=sys.stderr)
+    print(f"[check_real_gpu_calibration] ERROR: {message}", file=sys.stderr)
     raise SystemExit(2)
 
 

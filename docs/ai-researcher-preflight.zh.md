@@ -6,24 +6,24 @@
 
 ## 本地硬件前提
 
-当前可用的真实校准机器是一张 NVIDIA GeForce RTX 3090 Ti，24GB 显存。
+当前可用的真实校准机器是一张 NVIDIA RTX PRO 5000 72GB Blackwell，Compute Capability 为 12.0。
 
 这张卡适合用来：
 
 - 检查真实 CUDA / PyTorch / transformers 环境是否可用
-- 校准能放进 24GB 的小型和中型 workload
+- 校准能放进这张卡实际可用显存的小型和中型 workload
 - 对比真实 PyTorch `torch.cuda.max_memory_allocated()` 和 FakeGPU 报告
-- 验证 24GB 边界内的真实 OOM 行为
+- 验证这张卡实际显存边界内的真实 OOM 行为
 - 对 fakecuda 的显存跟踪做受控 sanity check
 
 它不能直接证明：
 
-- 80GB A100 / H100 集群上的完整任务一定能跑
+- 在这张卡上校准的 workload 一定能适配另一种目标 GPU profile
 - 真实多卡 NCCL、NVLink、RDMA 或 InfiniBand 行为正确
 - 集群吞吐或 GPU 利用率足够好
 - simulate 或 fakecuda 模式下 CUDA kernel 的数值结果与真实 GPU 一致
 
-所以 3090 Ti 应该被当成校准点，而不是目标集群的替代品。
+RTX PRO 5000 只是校准点，不能替代目标集群验证。
 
 ## Preflight 需要回答什么
 
@@ -119,7 +119,7 @@ fakegpu preflight \
 
 重要限制：fakecuda preflight 现在会跟踪 torch 层 tensor 生命周期、PyTorch hooks 能看到的 autograd saved tensor、分阶段峰值、top allocations、可选 allocation stack trace，粗略区分 parameters、buffers、gradients、optimizer state、activations 和 temporaries，并处理共享 storage alias 和基础 logical-device 归属。CUDA 后端内部的 workspace 和 optimizer 临时分配仍可能不可见，Transformer-heavy workload 尤其明显。所以 `PASS_FIT` 只能作为提交前信号，不能证明完整集群任务一定能放下。
 
-### 3. 用 3090 Ti 做真实校准
+### 3. 用真实 GPU 做校准
 
 先在真实 GPU 上跑缩小版 workload：
 
@@ -146,12 +146,40 @@ print(torch.cuda.mem_get_info())
 内置校准套件可以直接运行：
 
 ```bash
-./ftest rtx3090ti_calibration
+./ftest real_gpu_calibration
 ```
 
-内置套件包含 tensor allocation probe、torch MLP 训练步、torch Tiny Transformer 训练步、本地随机初始化的 Hugging Face tiny GPT-2 训练步，以及 PEFT LoRA tiny GPT-2 训练步。它不会下载模型权重。
+内置套件包含 tensor allocation probe、torch MLP 训练步、torch Tiny Transformer 训练步、梯度累积、梯度 checkpointing、本地随机初始化的 Hugging Face tiny GPT-2 训练步，以及 PEFT LoRA tiny GPT-2 训练步。它不会下载模型权重。
 
-这里不要求完全一致。目标是了解真实 3090 Ti 显存和 FakeGPU 报告在小型受控 workload 上的误差。校准报告会记录峰值误差、缺失的峰值字节数、每个 workload 的 calibration factor，以及 `after_transformer_block_0`、`after_optimizer_step` 这类 timeline gap。较大的 gap 通常说明 fakecuda 看不到 CUDA 后端内部 activation/workspace 或 optimizer 分配。
+这里不要求完全一致。目标是了解当前真实 GPU 的显存数据和 FakeGPU 报告在小型受控 workload 上的误差。校准套件会为当前服务器自动选择 `rtx-pro-5000-blackwell`，并写出 `build/real_gpu_calibration/calibration_real_gpu.json` 和 Markdown 报告。每个 workload 都会运行 real CUDA、passthrough、Hybrid clamp 和 fakecuda；原生模式的结果签名必须与 real CUDA 一致。报告还会记录 PyTorch 峰值、Hybrid Driver 峰值、fakecuda 误差和 timeline gap。最后一个超容量 tensor probe 会验证 Hybrid clamp 能返回 `torch.cuda.OutOfMemoryError`，而不会真的耗尽物理显存。
+
+如需为每个维护中的 workload 分别生成 preflight 报告，可以运行：
+
+```bash
+workloads=(
+  tensor_256mb
+  mlp_train_step
+  tiny_transformer_step
+  gradient_accumulation_step
+  gradient_checkpointing_step
+  hf_tiny_gpt2_step
+  peft_lora_tiny_step
+)
+for workload in "${workloads[@]}"; do
+  python3 -m fakegpu preflight \
+    --runtime fakecuda \
+    --profile rtx-pro-5000-blackwell \
+    --device-count 1 \
+    --stage "$workload" \
+    --report-dir "build/preflight-$workload" \
+    --strict \
+    -- python3 verification/calibration_real_gpu.py \
+      --worker fakecuda --workload "$workload" \
+      --profile rtx-pro-5000-blackwell
+done
+```
+
+每份报告都会包含 workload stage、峰值显存和最终 status。
 
 如果缺失显存更像固定的后端 workspace gap，preflight 优先使用加性 margin。比如校准报告显示 `after_backward` 大约缺 18 MiB：
 
@@ -219,14 +247,14 @@ preflight 报告应包含：
 | `C1_weight_storage` | 主要跟踪权重和显式 fake-CUDA storage。 |
 | `C2_torch_tensor_lifetime` | torch tensor 生命周期跟踪足够用于 fakecuda preflight。 |
 | `C3_native_cuda_allocations` | native simulate 模式下 CUDA allocation 跟踪较完整。 |
-| `C4_real_gpu_calibrated` | 该类 workload 有 3090 Ti 真实校准数据。 |
+| `C4_real_gpu_calibrated` | 该类 workload 有明确记录 GPU 型号的真实校准数据。 |
 
 ## 建议下一步
 
 下一版实现应优先做：
 
 1. 继续减少 Transformer workload 中 CUDA 后端内部 workspace 和 optimizer 分配的低估。
-2. 增加 3090 Ti 手动大 tensor OOM probe。
+2. 在当前真实校准 GPU 上增加手动大 tensor OOM probe。
 3. 为更真实的 HF 和 LoRA workload 增加小/大 profile pass-fail matrix。
 4. 更多把 `preflight_report.json` 作为 Slurm 提交说明附件的 workload 示例。
 5. 文档中明确区分 fit/no-fit 检查和性能预测。

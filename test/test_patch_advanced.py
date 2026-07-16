@@ -33,6 +33,12 @@ import torch
 class TestDevicePropagationChains(unittest.TestCase):
     """clone/contiguous/detach on 'cuda' tensors."""
 
+    @classmethod
+    def setUpClass(cls):
+        os.environ["FAKEGPU_DEVICE_COUNT"] = "8"
+        os.environ["FAKEGPU_PROFILES"] = "a100:8"
+        fakegpu.patch_torch()
+
     def test_clone_preserves_data(self):
         x = torch.randn(4, 4, device="cuda")
         c = x.clone()
@@ -78,6 +84,31 @@ class TestDevicePropagationChains(unittest.TestCase):
         y = x.contiguous().view(-1)
         self.assertEqual(y.shape, torch.Size([24]))
 
+    def test_get_device_reports_logical_cuda_index(self):
+        x = torch.randn(2, 2, device="cuda:3")
+        self.assertEqual(x.get_device(), 3)
+
+    def test_gradient_checkpoint_uses_logical_cuda_device(self):
+        from torch.utils.checkpoint import checkpoint
+
+        layer = torch.nn.Linear(8, 8).cuda()
+        x = torch.randn(4, 8, device="cuda", requires_grad=True)
+        y = checkpoint(layer, x, use_reentrant=False)
+        y.square().mean().backward()
+        self.assertIsNotNone(layer.weight.grad)
+
+    def test_memory_tracking_skips_storage_less_transform_tensor(self):
+        import fakegpu.torch_patch as torch_patch_module
+
+        class StorageLessTensor:
+            def untyped_storage(self):
+                raise NotImplementedError("Cannot access storage of BatchedTensorImpl")
+
+        # vmap and other functional transforms expose tensor wrappers that do
+        # not own accessible storage.  Memory accounting must leave them to
+        # their underlying tensors instead of aborting the operation.
+        torch_patch_module._register_tensor_for_memory_tracking(StorageLessTensor(), 0)
+
 
 # ======================================================================
 # P7-4: Multi-thread safety
@@ -86,6 +117,12 @@ class TestDevicePropagationChains(unittest.TestCase):
 
 class TestMultiThreadSafety(unittest.TestCase):
     """Concurrent FakeGPU operations must not crash."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["FAKEGPU_DEVICE_COUNT"] = "8"
+        os.environ["FAKEGPU_PROFILES"] = "a100:8"
+        fakegpu.patch_torch()
 
     def _run_threads(self, target, n_threads=4, **kwargs):
         errors: list[str] = []

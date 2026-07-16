@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Exact `rtx-pro-5000-blackwell` profile for the current 72 GB calibration server, including compute capability 12.0 and measured CUDA device attributes.
+- Generic `real_gpu_calibration` suite that records the detected GPU, selects a matching fakecuda profile, executes real/passthrough/hybrid/fakecuda comparisons, checks deterministic result signatures, and verifies Hybrid clamp OOM behavior.
+- Gradient accumulation and gradient checkpointing calibration workloads.
+
+### Fixed
+
+- Repeated `patch_torch()` calls now refresh device/profile state, memory tracking limits, and framework capability probes.
+- Pytest no longer executes standalone Qwen, native CUDA, or PrivateUse1 scripts during collection.
+- Per-profile `compute_major` overrides allow workstation Blackwell (12.0) and datacenter Blackwell profiles to coexist.
+- Native CUDA Driver and Runtime stubs are split into separate libraries so NVML and Driver preloads do not leak Runtime symbols.
+- Passthrough now runs as a zero-interposition real-GPU baseline; Hybrid keeps the real CUDA Runtime and cuBLAS while interposing the Driver/NVML surfaces it owns.
+- Hybrid forwards the CUDA 12.x Driver symbols resolved directly by PyTorch/cuBLAS, restoring real GEMM, backward, and optimizer execution on RTX PRO 5000.
+- FakeCudaTensor now reports its logical CUDA index through `get_device()`, enabling `torch.utils.checkpoint`.
+- Memory tracking now skips storage-less functional-transform tensors such as `BatchedTensorImpl`, enabling current Transformers Qwen2 masking code that uses `vmap`.
+- NVML exports the NVLink queries used by PyTorch OOM diagnostics, so Hybrid clamp raises `torch.cuda.OutOfMemoryError` instead of an internal missing-symbol assertion.
+- Pytest collection isolates the standalone native Driver script so its `LD_PRELOAD` state cannot leak into Transformers/torchvision subprocess tests; runtime benchmarks now use adjacent, batched samples.
+
 ## v1.5.1 - 2026-04-18
 
 Compared with `v1.4.0`.

@@ -35,6 +35,13 @@ typedef enum {
 
 typedef struct nvmlDevice_st* nvmlDevice_t;
 
+typedef enum nvmlIntNvLinkDeviceType_enum {
+    NVML_NVLINK_DEVICE_TYPE_GPU = 0x00,
+    NVML_NVLINK_DEVICE_TYPE_IBMNPU = 0x01,
+    NVML_NVLINK_DEVICE_TYPE_SWITCH = 0x02,
+    NVML_NVLINK_DEVICE_TYPE_UNKNOWN = 0xFF,
+} nvmlIntNvLinkDeviceType_t;
+
 typedef struct nvmlMemory_st {
     unsigned long long total;
     unsigned long long free;

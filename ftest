@@ -16,7 +16,8 @@ Suites:
   cpu_sim   Build CPU simulation and validate cuBLAS ops
   python    Run PyTorch tests (requires torch)
   preflight_oom  Run fakecuda preflight pass/OOM report checks (requires torch)
-  rtx3090ti_calibration  Calibrate small real-CUDA vs fakecuda workloads on RTX 3090 Ti
+  real_gpu_calibration  Calibrate real/passthrough/hybrid/fakecuda workloads on the detected GPU
+  rtx3090ti_calibration  Deprecated alias for real_gpu_calibration
   llm       Run LLM inference smoke test (requires torch + transformers + local model)
   passthrough_parity  Compare direct vs passthrough LLM outputs (requires real GPU + local model)
   all       smoke + python
@@ -76,10 +77,11 @@ run_cpu_sim() {
 
 run_smoke() {
   build
+  "$PYTHON_BIN" verification/check_library_boundaries.py --lib-dir "$SMOKE_BUILD_DIR"
   compile_verify_preload
   FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$SMOKE_BUILD_DIR/verify_preload"
   "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report.json"
-  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_multi_arch.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" --devices "test-512m,rtx3090ti,a100,h100,b100,b200" "$PYTHON_BIN" verification/test_multi_arch_compute_units.py
+  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_multi_arch.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" --devices "test-512m,rtx3090ti,rtx-pro-5000-blackwell,a100,h100,b100,b200" "$PYTHON_BIN" verification/test_multi_arch_compute_units.py
   FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_memory_types.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$PYTHON_BIN" verification/test_memory_types.py
 }
 
@@ -172,20 +174,32 @@ run_preflight_oom() {
     --expect-status PASS_FIT \
     --expect-runtime fakecuda \
     --expect-device
+
+  "$PYTHON_BIN" -m fakegpu preflight \
+    --runtime fakecuda \
+    --profile h100 \
+    --device-count 1 \
+    --stage forward \
+    --report-dir "$report_root/matrix-h100" \
+    --strict \
+    -- "$PYTHON_BIN" verification/preflight_oom_probe.py --mode alloc --elements "$matrix_elements"
+  "$PYTHON_BIN" verification/check_preflight_report.py \
+    --path "$report_root/matrix-h100/preflight_report.json" \
+    --schema preflight_report.schema.json \
+    --expect-status PASS_FIT \
+    --expect-runtime fakecuda \
+    --expect-device
 }
 
-run_rtx3090ti_calibration() {
-  if ! "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
-    echo "torch not found in current python; skipping RTX 3090 Ti calibration."
-    return 0
-  fi
-
-  local report_root="$SMOKE_BUILD_DIR/rtx3090ti_calibration"
+run_real_gpu_calibration() {
+  local report_root="$SMOKE_BUILD_DIR/real_gpu_calibration"
   rm -rf "$report_root"
 
-  "$PYTHON_BIN" verification/calibration_rtx3090ti.py --out-dir "$report_root"
-  "$PYTHON_BIN" verification/check_rtx3090ti_calibration.py \
-    --path "$report_root/calibration_rtx3090ti.json" \
+  "$PYTHON_BIN" verification/calibration_real_gpu.py \
+    --out-dir "$report_root" \
+    --build-dir "$SMOKE_BUILD_DIR"
+  "$PYTHON_BIN" verification/check_real_gpu_calibration.py \
+    --path "$report_root/calibration_real_gpu.json" \
     --allow-skip
 }
 
@@ -269,8 +283,12 @@ case "$suite" in
   preflight_oom)
     run_preflight_oom
     ;;
+  real_gpu_calibration)
+    run_real_gpu_calibration
+    ;;
   rtx3090ti_calibration)
-    run_rtx3090ti_calibration
+    echo "rtx3090ti_calibration is deprecated; using real_gpu_calibration."
+    run_real_gpu_calibration
     ;;
   llm)
     run_llm

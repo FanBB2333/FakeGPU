@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-pythonpath = ["test"]
+pythonpath = [".", "test"]
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.fakegpu.uv]
 # Dependency sets consumed by scripts (especially for macOS→Linux VM flows).

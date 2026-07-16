@@ -9,6 +9,8 @@
 | `./ftest smoke` | 构建、预加载、fake 设备发现、报告结构、多架构 profile、指针内存类型 |
 | `./ftest cpu_sim` | CPU-backed cuBLAS / cuBLASLt 与 CPU 参考结果的一致性 |
 | `./ftest python` | 基础 PyTorch CUDA 设备、张量和 matmul 路径 |
+| `./ftest preflight_oom` | fakecuda fit/OOM 判定与报告 schema |
+| `./ftest real_gpu_calibration` | real/passthrough/Hybrid/fakecuda 显存与结果签名校准 |
 | `python3 verification/test_coordinator_smoke.py` | coordinator 启停与请求/响应闭环 |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce 语义正确性 |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather 语义正确性 |
@@ -87,7 +89,7 @@ runner 会写出 `preflight_report.json`，并配套生成 `preflight_report.md`
 
 每个 device entry 会包含总显存、峰值显存、余量、allocation 次数、`current_bytes_by_category`、`peak_by_stage` 和 `largest_allocations`。fakecuda 模式下，top allocations 会记录 bytes、dtype、shape、stage，以及 `parameter` / `buffer` / `gradient` / `optimizer_state` / `activation` / `temporary` / `tensor` 这类粗粒度 category。加上 `--allocation-stacks` 后，还会为这些 top allocations 记录短 Python stack trace。
 
-当前真实校准目标是一张 24GB RTX 3090 Ti。它适合校准 24GB 内的真实 CUDA 行为，但不能证明更大的多机 A100/H100 集群一定能放下 workload，也不能证明性能表现。
+当前真实校准目标是一张 NVIDIA RTX PRO 5000 72GB Blackwell（Compute Capability 12.0）。维护中的套件覆盖七个受控 workload，要求 passthrough 与 Hybrid 的结果签名匹配 real CUDA，记录 Hybrid Driver allocation 峰值，并验证 Hybrid clamp 下的 PyTorch OOM 表现。它不能证明多机目标集群一定能容纳 workload，也不能证明性能表现。
 
 用法和当前限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
 

@@ -152,9 +152,9 @@ FAKEGPU_MODE=simulate ./fgpu python your_script.py
 ```bash
 FAKEGPU_MODE=passthrough ./fgpu python your_script.py
 ```
-- Forwards all CUDA calls to real GPU libraries
-- Results identical to running without FakeGPU
-- Useful for parity testing and debugging
+- Injects no FakeGPU CUDA/NVML libraries; it is the unmodified real-GPU baseline
+- Results are directly comparable with running the command without `fgpu`
+- Useful for parity testing and calibration
 - Requires real GPU and CUDA installation
 
 ### Hybrid Mode
@@ -164,6 +164,9 @@ FAKEGPU_MODE=hybrid FAKEGPU_OOM_POLICY=clamp ./fgpu python your_script.py
 - Device info is virtualized (can report different GPU specs)
 - Compute operations use real GPU
 - OOM safety policies prevent crashes when virtual memory exceeds real GPU capacity
+- CUDA 12.x Driver entry points requested directly by PyTorch/cuBLAS are forwarded to the backing driver
+
+The maintained real-GPU validation currently covers `hybrid` with `clamp`. The oversubscription policies below remain experimental and should not be treated as numerical-parity guarantees.
 
 **OOM Policies** (for Hybrid mode):
 - `clamp` (default): Report memory clamped to real GPU capacity
@@ -516,7 +519,7 @@ FakeGPU
 
 - **Pre-submission Resource Estimation** — Before submitting jobs to Slurm/PBS clusters, run locally with FakeGPU to estimate per-GPU peak VRAM, IO volume, and compute FLOPs from `fake_gpu_report.json`. Use this to right-size GPU allocation requests.
 
-- **AI Researcher Preflight** — Run a training or inference command locally before submitting it to a larger cluster, then report whether it reaches a selected stage, whether it appears to fit the target GPU profile, and how much memory headroom remains. The current real calibration target is a single RTX 3090 Ti; it is useful for 24 GB calibration, not for proving multi-node cluster performance.
+- **AI Researcher Preflight** — Run a training or inference command locally before submitting it to a larger cluster, then report whether it reaches a selected stage, whether it appears to fit the target GPU profile, and how much memory headroom remains. The current real calibration target is a single NVIDIA RTX PRO 5000 72GB Blackwell; it provides a 72 GB, compute-capability 12.0 calibration point, not proof of multi-node cluster behavior.
 
 - **Framework Migration Testing** — When upgrading PyTorch versions (verified 2.6.0 → 2.11.0) or switching frameworks, run your training pipeline under FakeGPU to catch API breakage without tying up real GPUs.
 

@@ -1,0 +1,28 @@
+id: rtx-pro-5000-blackwell
+name: NVIDIA RTX PRO 5000 72GB Blackwell
+architecture: blackwell
+compute_major: 12
+compute_minor: 0
+memory_bytes: 76374540288
+sm_count: 110
+memory_bus_width_bits: 384
+core_clock_mhz: 2377
+memory_clock_mhz: 14001
+l2_cache_bytes: 100663296
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 300000
+max_power_limit_mw: 350000
+pci_device_id: 0x2BB310DE
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4

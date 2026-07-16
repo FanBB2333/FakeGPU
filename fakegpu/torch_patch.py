@@ -70,6 +70,7 @@ _PROFILE_CC: dict[str, tuple[int, int]] = {
     "a100-1g": (8, 0),
     "test-512m": (8, 0),
     "rtx3090ti": (8, 6),
+    "rtx-pro-5000-blackwell": (12, 0),
     "h100": (9, 0),
     "l40s": (8, 9),
     "b100": (11, 0),
@@ -86,6 +87,7 @@ _PROFILE_NAMES: dict[str, str] = {
     "a100-1g": "NVIDIA A100-SXM4-1GB",
     "test-512m": "FakeGPU Test Profile 512MB",
     "rtx3090ti": "NVIDIA GeForce RTX 3090 Ti",
+    "rtx-pro-5000-blackwell": "NVIDIA RTX PRO 5000 72GB Blackwell",
     "h100": "NVIDIA H100 80GB HBM3",
     "l40s": "NVIDIA L40S",
     "b100": "NVIDIA B100",
@@ -102,6 +104,7 @@ _PROFILE_TOTAL_MEMORY: dict[str, int] = {
     "a100-1g": 1 * 1024**3,
     "test-512m": 512 * 1024**2,
     "rtx3090ti": 25291849728,
+    "rtx-pro-5000-blackwell": 76374540288,
     "h100": 80 * 1024**3,
     "l40s": 48 * 1024**3,
     "b100": 192 * 1024**3,
@@ -215,9 +218,10 @@ def _refresh_runtime_profile_state(*, num_devices: int | None = None, device_nam
     """Refresh per-device profile globals after runtime options change."""
     global _NUM_DEVICES, _DEVICE_PROFILES, _DEVICE_NAME, _COMPUTE_MAJOR, _COMPUTE_MINOR, _TOTAL_MEMORY
 
-    if num_devices is not None:
-        _NUM_DEVICES = int(num_devices)
-        os.environ["FAKEGPU_DEVICE_COUNT"] = str(_NUM_DEVICES)
+    if num_devices is None:
+        num_devices = int(os.environ.get("FAKEGPU_DEVICE_COUNT", str(_NUM_DEVICES)))
+    _NUM_DEVICES = int(num_devices)
+    os.environ["FAKEGPU_DEVICE_COUNT"] = str(_NUM_DEVICES)
 
     _DEVICE_PROFILES = _resolve_per_device_profiles(_NUM_DEVICES)
 
@@ -716,12 +720,25 @@ def _register_tensor_for_memory_tracking(tensor: Any, device_index: int) -> None
     """Register a tensor's memory and set up GC cleanup via weakref."""
     if _memory_tracker is None or not _MEMORY_TRACKING:
         return
+
+    # Functional transforms such as vmap expose BatchedTensorImpl objects
+    # whose storage is intentionally inaccessible.  Meta tensors and some
+    # external tensor subclasses have the same property.  They do not own a
+    # distinct allocation that FakeGPU can track, so skip them without
+    # suppressing errors raised later by the actual tracker (notably OOM).
     try:
         storage = tensor.untyped_storage()
         dp = storage.data_ptr()
         nbytes = storage.nbytes()
-        if dp == 0 or nbytes == 0:
-            return
+    except (NotImplementedError, RuntimeError):
+        return
+    except Exception:
+        return
+
+    if dp == 0 or nbytes == 0:
+        return
+
+    try:
         _set_tracked_data_ptr(tensor, int(dp))
         did_allocate = _memory_tracker.allocate(
             dp,
@@ -743,7 +760,7 @@ def _register_tensor_for_memory_tracking(tensor: Any, device_index: int) -> None
         # Only add weakref if not already tracked (avoid double-counting)
         weakref.finalize(storage, _release_cb)
     except (MemoryError, RuntimeError):
-        raise  # Re-raise OOM and related errors
+        raise  # Preserve simulated OOM and other tracker errors.
     except Exception:
         pass
 
@@ -1915,7 +1932,10 @@ def _patch_transformers_utils() -> None:
     if not getattr(_tu, "is_torch_cuda_available", lambda: False)():
         _tu.is_torch_cuda_available = lambda: True
 
-    _tu.is_torch_bf16_gpu_available = lambda: True
+    _tu.is_torch_bf16_gpu_available = lambda: _COMPUTE_MAJOR >= 8
+    # Transformers caches this probe. Replacing it avoids retaining a false
+    # result from imports that happened before FakeGPU enabled CUDA semantics.
+    _tu.is_torch_tf32_available = lambda: _COMPUTE_MAJOR >= 8
 
     # Also patch the top-level re-exports if they exist
     try:
@@ -1923,6 +1943,7 @@ def _patch_transformers_utils() -> None:
 
         _tu_top.is_torch_cuda_available = _tu.is_torch_cuda_available
         _tu_top.is_torch_bf16_gpu_available = _tu.is_torch_bf16_gpu_available
+        _tu_top.is_torch_tf32_available = _tu.is_torch_tf32_available
     except (ImportError, AttributeError):
         pass
 
@@ -2035,7 +2056,15 @@ def _patch_dist_group_fallback(torch_mod: Any) -> None:
 
 def _patch_upstream_fakecuda_tensor_compat(upstream: Any, torch_mod: Any) -> None:
     fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
-    if fake_tensor_cls is None or getattr(fake_tensor_cls, "_fakegpu_set_patched", False):
+    if fake_tensor_cls is None:
+        return
+
+    # torch.utils.checkpoint groups non-CPU tensors by ``tensor.get_device()``.
+    # The subclass stores CPU data internally, so inheriting Tensor.get_device
+    # leaks the backing CPU value (-1) and checkpoint tries to enter cuda:-1.
+    fake_tensor_cls.get_device = lambda self: int(self.device_index)
+
+    if getattr(fake_tensor_cls, "_fakegpu_set_patched", False):
         return
 
     def _patched_set_(self, source, storage_offset=0, size=None, stride=None):
@@ -2568,29 +2597,33 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     # ---- 4. Tracked memory query functions ----
     if _memory_tracker is not None:
-        _tracker = _memory_tracker
+        def _active_tracker():
+            if _memory_tracker is None:
+                raise RuntimeError("FakeGPU memory tracking is not initialized")
+            return _memory_tracker
 
         def _tracked_memory_allocated(device=None):
             idx = _normalize_device_index(device)
-            return _tracker.memory_allocated(idx)
+            return _active_tracker().memory_allocated(idx)
 
         def _tracked_max_memory_allocated(device=None):
             idx = _normalize_device_index(device)
-            return _tracker.max_memory_allocated(idx)
+            return _active_tracker().max_memory_allocated(idx)
 
         def _tracked_mem_get_info(device=None):
             idx = _normalize_device_index(device)
-            return _tracker.mem_get_info(idx)
+            return _active_tracker().mem_get_info(idx)
 
         def _tracked_reset_peak_memory_stats(device=None):
             idx = _normalize_device_index(device)
-            _tracker.reset_peak(idx)
+            _active_tracker().reset_peak(idx)
 
         def _tracked_memory_stats(device=None):
             idx = _normalize_device_index(device)
+            tracker = _active_tracker()
             return _build_memory_stats_dict(
-                _tracker.memory_allocated(idx),
-                _tracker.max_memory_allocated(idx),
+                tracker.memory_allocated(idx),
+                tracker.max_memory_allocated(idx),
             )
 
         torch.cuda.memory_allocated = _tracked_memory_allocated
@@ -2696,7 +2729,8 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 def patch(*, num_devices: int | None = None, device_name: str | None = None) -> PatchResult:
     """Apply monkey-patches to ``torch`` so CUDA code runs transparently on CPU.
 
-    Safe to call multiple times; only the first call has effect.
+    Safe to call multiple times. Later calls refresh device/profile state while
+    reusing the installed monkey patches.
 
     Parameters
     ----------
@@ -2711,15 +2745,37 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         standalone CPU-backed fallback was activated.
     """
 
-    global _patched, _NUM_DEVICES, _DEVICE_NAME, _patch_result
-    if _patched:
-        return _patch_result
+    global _patched, _NUM_DEVICES, _DEVICE_NAME, _patch_result, _memory_tracker, _current_device
 
     import torch
     import torch.cuda
     import torch.nn
 
     _refresh_runtime_profile_state(num_devices=num_devices, device_name=device_name)
+
+    if _patched:
+        if _upstream_mod is not None:
+            if hasattr(_upstream_mod, "_NUM_DEVICES"):
+                _upstream_mod._NUM_DEVICES = _NUM_DEVICES
+            if hasattr(_upstream_mod, "_DEVICE_NAME"):
+                _upstream_mod._DEVICE_NAME = _DEVICE_NAME
+            if getattr(_upstream_mod, "_CURRENT_DEVICE", 0) >= _NUM_DEVICES:
+                _upstream_mod._CURRENT_DEVICE = 0
+        if _current_device >= _NUM_DEVICES:
+            _current_device = 0
+        torch.cuda._cached_device_count = _NUM_DEVICES
+        if _MEMORY_TRACKING:
+            _memory_tracker = _DeviceMemoryTracker(
+                [profile["total_memory"] for profile in _DEVICE_PROFILES]
+            )
+        _patch_transformers_utils()
+        _patch_accelerate_utils()
+        _patch_result = PatchResult(
+            backend=_patch_result.backend,
+            num_devices=_NUM_DEVICES,
+            device_name=_DEVICE_NAME,
+        )
+        return _patch_result
 
     # --- Upstream path: FakeCudaTensor (vendored or installed) ---
     upstream = _activate_upstream(_NUM_DEVICES, _DEVICE_NAME)
@@ -2780,7 +2836,6 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     _patch_hf_cuda_surface(torch)
 
     # ---- Initialize memory tracker ----
-    global _memory_tracker
     if _MEMORY_TRACKING:
         per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
         _memory_tracker = _DeviceMemoryTracker(per_device_bytes)
@@ -2790,29 +2845,33 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
 
     # Override memory stubs to use tracker
     if _memory_tracker is not None:
-        _tracker = _memory_tracker  # local ref for closures
+        def _active_tracker():
+            if _memory_tracker is None:
+                raise RuntimeError("FakeGPU memory tracking is not initialized")
+            return _memory_tracker
 
         def _tracked_memory_allocated(device=None):
             idx = _normalize_device_index(device)
-            return _tracker.memory_allocated(idx)
+            return _active_tracker().memory_allocated(idx)
 
         def _tracked_max_memory_allocated(device=None):
             idx = _normalize_device_index(device)
-            return _tracker.max_memory_allocated(idx)
+            return _active_tracker().max_memory_allocated(idx)
 
         def _tracked_mem_get_info(device=None):
             idx = _normalize_device_index(device)
-            return _tracker.mem_get_info(idx)
+            return _active_tracker().mem_get_info(idx)
 
         def _tracked_reset_peak_memory_stats(device=None):
             idx = _normalize_device_index(device)
-            _tracker.reset_peak(idx)
+            _active_tracker().reset_peak(idx)
 
         def _tracked_memory_stats(device=None):
             idx = _normalize_device_index(device)
+            tracker = _active_tracker()
             return _build_memory_stats_dict(
-                _tracker.memory_allocated(idx),
-                _tracker.max_memory_allocated(idx),
+                tracker.memory_allocated(idx),
+                tracker.max_memory_allocated(idx),
             )
 
         torch.cuda.memory_allocated = _tracked_memory_allocated

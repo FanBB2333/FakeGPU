@@ -9,6 +9,8 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `./ftest smoke` | build, preload, fake device discovery, report schema, multi-architecture profiles, pointer-memory-type coverage |
 | `./ftest cpu_sim` | CPU-backed cuBLAS/cuBLASLt correctness against CPU references |
 | `./ftest python` | basic PyTorch CUDA device, tensor, and matmul flow |
+| `./ftest preflight_oom` | fakecuda fit/OOM classification and report schema |
+| `./ftest real_gpu_calibration` | real/passthrough/Hybrid/fakecuda memory and result-signature calibration |
 | `python3 verification/test_coordinator_smoke.py` | coordinator startup, request/response, and clean shutdown |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce semantics |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |
@@ -87,7 +89,7 @@ Status values:
 
 Each device entry includes total memory, peak memory, headroom, allocation count, `current_bytes_by_category`, `peak_by_stage`, and `largest_allocations`. In fakecuda mode, top allocations include bytes, dtype, shape, stage, and a coarse category such as `parameter`, `buffer`, `gradient`, `optimizer_state`, `activation`, `temporary`, or `tensor`. Add `--allocation-stacks` to include short Python stack traces for those top allocations.
 
-The current real calibration target is a single RTX 3090 Ti with 24GB of VRAM. That is useful for real-CUDA calibration under 24GB, but it does not prove that a larger multi-node A100/H100 cluster run will fit or perform well.
+The current real calibration target is a single NVIDIA RTX PRO 5000 72GB Blackwell (compute capability 12.0). The maintained suite covers seven controlled workloads, requires passthrough and Hybrid result signatures to match real CUDA, records Hybrid Driver allocation peaks, and verifies the PyTorch OOM surface under Hybrid clamp. It does not prove that a multi-node target cluster will fit or perform well.
 
 See [AI Researcher Preflight](ai-researcher-preflight.md) for usage and current limitations.
 
