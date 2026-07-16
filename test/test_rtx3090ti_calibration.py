@@ -207,6 +207,24 @@ def test_repeated_worker_measurements_use_observed_upper_bound() -> None:
     assert len(result["workload_signature"]) == 64
 
 
+def test_nvml_sampler_marks_missing_wsl_process_mapping_as_unavailable(monkeypatch) -> None:
+    from verification.calibration_rtx3090ti import _NvmlProcessMemorySampler
+
+    sampler = _NvmlProcessMemorySampler(device_index=0, interval_ms=2.0)
+    sampler._status = "available"
+    sampler._sample_count = 1
+    sampler._baseline_device_used_memory = 100
+    sampler._peak_device_used_memory = 120
+    monkeypatch.setattr(sampler, "_read_sample", lambda: (None, 140))
+
+    result = sampler.stop()
+    assert result["status"] == "available"
+    assert result["process_memory_status"] == "unavailable"
+    assert "peak_process_memory" not in result
+    assert result["peak_device_used_memory"] == 140
+    assert "WSL" in result["process_memory_reason"]
+
+
 def test_compare_uses_each_real_trial_for_empirical_gap_summary() -> None:
     from verification.calibration_rtx3090ti import _compare_workload
 
