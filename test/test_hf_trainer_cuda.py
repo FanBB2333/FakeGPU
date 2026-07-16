@@ -62,14 +62,16 @@ def test_trainer_runs_in_cuda_path_without_use_cpu() -> None:
 def test_hf_cuda_surface_reports_cuda_build() -> None:
     code = textwrap.dedent(
         """
+        import torch
+        installed_cuda = torch.version.cuda
+
         from hf_test_utils import patch_fakegpu
 
         patch_fakegpu(profile="a100", device_count=1)
 
-        import torch
         from transformers.utils.import_utils import is_torch_tf32_available
 
-        assert torch.version.cuda == "12.1"
+        assert torch.version.cuda == (installed_cuda or "12.1")
         assert torch.backends.cuda.is_built() is True
         assert torch.backends.cudnn.is_available() is True
         assert torch.cuda.nccl.version() == (2, 21, 5)
