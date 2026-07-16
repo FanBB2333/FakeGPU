@@ -90,7 +90,27 @@ python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
 
-The calibration suite writes `build/real_gpu_calibration/calibration_real_gpu.json` and `.md`. It auto-selects `rtx-pro-5000-blackwell` for the current server and records an explicit skip reason when CUDA, PyTorch, or a matching profile is unavailable. The suite includes tensor, MLP, Tiny Transformer, gradient accumulation, gradient checkpointing, Hugging Face tiny GPT-2, and PEFT LoRA tiny GPT-2 workloads. Each workload runs on real CUDA, passthrough, Hybrid clamp, and fakecuda. The report checks native-mode result signatures, records both PyTorch and Hybrid Driver peaks, and includes a controlled Hybrid clamp OOM probe. Calibration error is evidence only for the measured GPU and workload family; it is not a fit, parity, or performance guarantee for another target.
+The calibration suite writes `build/real_gpu_calibration/calibration_real_gpu.json` and `.md`. It auto-selects `rtx-pro-5000-blackwell` for the current server and records an explicit skip reason when CUDA, PyTorch, or a matching profile is unavailable. The suite includes tensor, MLP, Tiny Transformer, gradient accumulation, gradient checkpointing, Hugging Face tiny GPT-2, and PEFT LoRA tiny GPT-2 workloads. By default, it performs one warmup followed by three measured trials and uses the largest observed peak as an empirical upper bound. Each trial retains PyTorch allocated/reserved/requested peaks and NVML process-memory samples. Each workload runs on real CUDA, passthrough, Hybrid clamp, and fakecuda. Calibration evidence applies only to an exact GPU profile and workload signature under a comparable software stack.
+
+Combine reports from multiple GPUs into an empirical lookup bundle, then let preflight select the matching profile:
+
+```bash
+python3 verification/aggregate_real_gpu_calibrations.py \
+  reports/3090ti/calibration_real_gpu.json \
+  reports/pro5000/calibration_real_gpu.json \
+  --output build/calibration_bundle.json \
+  --markdown build/calibration_bundle.md
+
+python3 -m fakegpu preflight \
+  --runtime fakecuda \
+  --profile rtx3090ti \
+  --memory-calibration build/calibration_bundle.json \
+  --calibration-workload tiny_transformer_step \
+  --report-dir preflight-report \
+  -- python3 train.py
+```
+
+This path uses the observed real-CUDA upper bound instead of fitting a universal factor. If a workload name has more than one signature, select the full signature. Do not reuse a calibration after changing batch size, sequence length, or model shape.
 
 See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design and limitations.
 

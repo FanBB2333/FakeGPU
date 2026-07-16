@@ -227,6 +227,9 @@ with fakegpu.stage("backward"):
 - [x] 多设备场景下正确归属 logical device。
 - [x] 支持 `--memory-safety-margin`，可把真实 GPU 校准得到的固定 missing bytes 用于更精确的 fit/OOM 判定。
 - [x] 支持 `--memory-safety-factor`，可把真实 GPU 校准得到的 factor 用于保守 fit/OOM 判定。
+- [x] 真实 GPU 校准支持 warmup 后重复采样，保留 PyTorch allocated/reserved/requested 与 NVML 进程显存分布。
+- [x] 支持把多台 GPU 的校准报告聚合为 workload-signature/profile 级实测数据集。
+- [x] preflight 支持读取实测数据集，对完全匹配的 workload 与 profile 使用重复样本中的真实峰值上界。
 - [x] 报告 `tracking_confidence`：
   - `C0_incomplete`：只跑通流程，不适合判断 OOM。
   - `C1_weight_storage`：主要覆盖权重和显式 storage。

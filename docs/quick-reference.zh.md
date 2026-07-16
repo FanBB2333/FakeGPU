@@ -90,7 +90,27 @@ python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
 
-校准套件会写出 `build/real_gpu_calibration/calibration_real_gpu.json` 和 `.md`。当前服务器会自动选择 `rtx-pro-5000-blackwell`；缺少 CUDA、PyTorch 或匹配 profile 时，报告会记录明确的 skip 原因。套件包含 tensor、MLP、Tiny Transformer、梯度累积、梯度 checkpointing、Hugging Face tiny GPT-2 和 PEFT LoRA tiny GPT-2 workload。每个 workload 都会运行 real CUDA、passthrough、Hybrid clamp 和 fakecuda；报告会校验原生模式的结果签名，记录 PyTorch 峰值与 Hybrid Driver 峰值，并执行受控的 Hybrid clamp OOM probe。校准误差只适用于实际测量的 GPU 和 workload 类型，不能证明其他目标 GPU 的可运行性、数值等价或性能。
+校准套件会写出 `build/real_gpu_calibration/calibration_real_gpu.json` 和 `.md`。当前服务器会自动选择 `rtx-pro-5000-blackwell`；缺少 CUDA、PyTorch 或匹配 profile 时，报告会记录明确的 skip 原因。套件包含 tensor、MLP、Tiny Transformer、梯度累积、梯度 checkpointing、Hugging Face tiny GPT-2 和 PEFT LoRA tiny GPT-2 workload。默认先 warmup 1 次，再测量 3 次，使用最大观测峰值作为上界，同时保留 PyTorch allocated/reserved/requested 和 NVML 进程级显存分布。每个 workload 都会运行 real CUDA、passthrough、Hybrid clamp 和 fakecuda；报告会校验原生模式的结果签名，并执行受控的 Hybrid clamp OOM probe。校准结果只适用于完全匹配的 GPU profile、workload 签名和相近的软件环境。
+
+多台机器的报告可以合并为实测数据集，再交给 preflight 按 profile 选择：
+
+```bash
+python3 verification/aggregate_real_gpu_calibrations.py \
+  reports/3090ti/calibration_real_gpu.json \
+  reports/pro5000/calibration_real_gpu.json \
+  --output build/calibration_bundle.json \
+  --markdown build/calibration_bundle.md
+
+python3 -m fakegpu preflight \
+  --runtime fakecuda \
+  --profile rtx3090ti \
+  --memory-calibration build/calibration_bundle.json \
+  --calibration-workload tiny_transformer_step \
+  --report-dir preflight-report \
+  -- python3 train.py
+```
+
+这种模式直接采用重复实测中的真实峰值上界，不拟合通用倍率。workload 名称对应多个签名时，命令会要求改用完整签名；不同 batch、序列长度或模型配置不能直接套用。
 
 当前设计和限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
 

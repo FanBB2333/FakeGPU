@@ -91,6 +91,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Prefer this when calibration shows a mostly fixed backend workspace gap."
         ),
     )
+    parser.add_argument(
+        "--memory-calibration",
+        help=(
+            "Path to a repeated real-GPU calibration report or aggregated bundle. "
+            "For an exact matching workload/profile, use its observed real-CUDA upper bound."
+        ),
+    )
+    parser.add_argument(
+        "--calibration-workload",
+        help="Exact workload name or workload signature to select from --memory-calibration.",
+    )
     parser.add_argument("--build-dir", help="FakeGPU CMake build directory for native/hybrid/passthrough runtimes.")
     parser.add_argument("--lib-dir", help="Directory containing FakeGPU shared libraries.")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command to run after --")
@@ -168,6 +179,38 @@ def build_report(
         if memory_safety_margin > 0:
             warnings.append(f"Applied memory safety margin {_fmt_bytes(memory_safety_margin)} to tracked peaks.")
 
+    calibration_gpu: dict[str, Any] | None = None
+    memory_estimation: dict[str, Any] = {
+        "method": (
+            "manual_factor_or_margin"
+            if memory_safety_factor > 1.0 or memory_safety_margin > 0
+            else "tracked_peak"
+        )
+    }
+    calibration_path = getattr(ns, "memory_calibration", None)
+    calibration_workload = getattr(ns, "calibration_workload", None)
+    if calibration_path:
+        try:
+            if not calibration_workload:
+                raise ValueError("--memory-calibration requires --calibration-workload")
+            devices, empirical = _apply_empirical_memory_calibration(
+                devices,
+                path=Path(calibration_path),
+                workload_selector=str(calibration_workload),
+            )
+            memory_estimation = empirical
+            calibration_gpu = empirical.get("calibration_gpu")
+            matched = int(empirical.get("matched_device_count", 0) or 0)
+            if devices and matched == len(devices):
+                tracking_confidence = "C4_real_gpu_calibrated"
+            warnings.extend(str(value) for value in empirical.get("warnings", []))
+        except Exception as exc:
+            if setup_error is None:
+                setup_error = ValueError(f"empirical memory calibration failed: {exc}")
+            warnings.append(f"Empirical memory calibration was not applied: {exc}")
+    elif calibration_workload:
+        warnings.append("--calibration-workload was ignored because --memory-calibration was not provided.")
+
     exit_code = completed.returncode if completed is not None else 1
     oom_detected = _looks_like_oom(stdout, stderr, raw_report)
     strict_skip_detected = bool(ns.strict) and _looks_like_skip(stdout, stderr)
@@ -215,9 +258,11 @@ def build_report(
             "steps": ns.steps,
             "memory_safety_factor": memory_safety_factor,
             "memory_safety_margin_bytes": memory_safety_margin,
+            "memory_calibration": str(calibration_path) if calibration_path else None,
+            "calibration_workload": str(calibration_workload) if calibration_workload else None,
         },
         "target_profiles": _target_profiles(ns),
-        "calibration_gpu": None,
+        "calibration_gpu": calibration_gpu,
         "status": status,
         "stage": stage,
         "exit_code": exit_code,
@@ -225,6 +270,7 @@ def build_report(
         "tracking_confidence": tracking_confidence,
         "memory_safety_factor": memory_safety_factor,
         "memory_safety_margin_bytes": memory_safety_margin,
+        "memory_estimation": memory_estimation,
         "devices": devices,
         "warnings": warnings,
         "errors": errors,
@@ -299,6 +345,21 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                     allocs=int(dev.get("allocation_count", 0)),
                 )
             )
+
+    memory_estimation = report.get("memory_estimation")
+    if isinstance(memory_estimation, dict) and memory_estimation.get("method") == "empirical_repeated_upper_bound":
+        lines.extend(
+            [
+                "",
+                "## Empirical Memory Calibration",
+                "",
+                f"- source: `{memory_estimation.get('source')}`",
+                f"- workload: `{memory_estimation.get('workload')}`",
+                f"- workload signature: `{memory_estimation.get('workload_signature')}`",
+                f"- matched profiles: `{', '.join(memory_estimation.get('matched_profiles', []))}`",
+                f"- matched devices: `{memory_estimation.get('matched_device_count')}`",
+            ]
+        )
 
     stage_rows: list[str] = []
     allocation_rows: list[str] = []
@@ -424,7 +485,9 @@ def _summary_sentence(report: dict[str, Any]) -> str:
     target = _target_profile_text(report)
     factor = float(report.get("memory_safety_factor", 1.0) or 1.0)
     margin = int(report.get("memory_safety_margin_bytes", 0) or 0)
-    peak_label = "estimated peak memory" if factor > 1.0 or margin > 0 else "peak tracked memory"
+    estimation = report.get("memory_estimation")
+    empirical = isinstance(estimation, dict) and estimation.get("method") == "empirical_repeated_upper_bound"
+    peak_label = "estimated peak memory" if empirical or factor > 1.0 or margin > 0 else "peak tracked memory"
 
     if status == STATUS_PASS_FIT:
         return (
@@ -778,6 +841,220 @@ def _apply_memory_safety_adjustment(
         item["headroom_percent"] = round(headroom_percent, 3) if headroom_percent is not None else None
         adjusted.append(item)
     return adjusted
+
+
+def _apply_empirical_memory_calibration(
+    devices: list[dict[str, Any]],
+    *,
+    path: Path,
+    workload_selector: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    calibration = _load_empirical_memory_calibration(path, workload_selector)
+    candidates = calibration["candidates"]
+    adjusted: list[dict[str, Any]] = []
+    matched_profiles: list[str] = []
+    warnings: list[str] = []
+    calibration_gpus: list[dict[str, Any]] = []
+
+    for dev in devices:
+        item = dict(dev)
+        profile = str(item.get("profile_id") or "")
+        candidate = candidates.get(profile)
+        if not isinstance(candidate, dict):
+            warnings.append(
+                f"No empirical calibration observation matched device {item.get('index', 0)} "
+                f"with profile {profile or '<unknown>'}."
+            )
+            adjusted.append(item)
+            continue
+
+        tracked_peak = int(item.get("tracked_peak_memory", item.get("peak_memory", 0)) or 0)
+        previous_estimate = int(item.get("peak_memory", 0) or 0)
+        empirical_upper_bound = int(candidate["empirical_real_peak_upper_bound_bytes"])
+        estimated_peak = max(previous_estimate, empirical_upper_bound)
+        total = int(item.get("total_memory", 0) or 0)
+        headroom = total - estimated_peak
+        headroom_percent = (100.0 * headroom / total) if total > 0 else None
+        item.update(
+            {
+                "tracked_peak_memory": tracked_peak,
+                "peak_memory": estimated_peak,
+                "estimated_peak_memory": estimated_peak,
+                "memory_estimation_method": "empirical_repeated_upper_bound",
+                "empirical_calibration_peak_memory": empirical_upper_bound,
+                "memory_calibration_sample_count": int(candidate.get("sample_count", 0) or 0),
+                "memory_calibration_workload_signature": calibration["workload_signature"],
+                "memory_calibration_profile": profile,
+                "headroom_bytes": headroom,
+                "headroom_percent": round(headroom_percent, 3) if headroom_percent is not None else None,
+            }
+        )
+        adjusted.append(item)
+        matched_profiles.append(profile)
+        for gpu in candidate.get("gpus", []):
+            if isinstance(gpu, dict) and gpu not in calibration_gpus:
+                calibration_gpus.append(gpu)
+        warnings.append(
+            "Applied empirical upper bound {peak} from {samples} post-warmup real-GPU sample(s) "
+            "for workload {workload} on profile {profile}.".format(
+                peak=_fmt_bytes(empirical_upper_bound),
+                samples=int(candidate.get("sample_count", 0) or 0),
+                workload=calibration["workload_name"],
+                profile=profile,
+            )
+        )
+
+    calibration_gpu = {
+        "method": "empirical_repeated_upper_bound",
+        "source": str(path.resolve()),
+        "workload": calibration["workload_name"],
+        "workload_signature": calibration["workload_signature"],
+        "observations": calibration_gpus,
+    }
+    return adjusted, {
+        "method": "empirical_repeated_upper_bound",
+        "source": str(path.resolve()),
+        "source_schema_version": calibration["source_schema_version"],
+        "workload": calibration["workload_name"],
+        "workload_signature": calibration["workload_signature"],
+        "matched_device_count": len(matched_profiles),
+        "matched_profiles": matched_profiles,
+        "calibration_gpu": calibration_gpu,
+        "warnings": warnings,
+    }
+
+
+def _load_empirical_memory_calibration(
+    path: Path,
+    workload_selector: str,
+) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"calibration file not found: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("calibration file must contain a JSON object")
+    schema = str(payload.get("schema_version") or "")
+    if schema == "real_gpu_calibration_bundle.v1":
+        return _load_empirical_bundle(payload, workload_selector)
+    if schema in {"real_gpu_calibration.v1", "rtx3090ti_calibration.v1"}:
+        return _load_empirical_report(payload, workload_selector)
+    raise ValueError(f"unsupported calibration schema: {schema!r}")
+
+
+def _load_empirical_bundle(payload: dict[str, Any], workload_selector: str) -> dict[str, Any]:
+    workloads = payload.get("workloads")
+    if not isinstance(workloads, list):
+        raise ValueError("calibration bundle workloads must be a list")
+    matches = [
+        item
+        for item in workloads
+        if isinstance(item, dict)
+        and (
+            str(item.get("name") or "") == workload_selector
+            or str(item.get("workload_signature") or "") == workload_selector
+        )
+    ]
+    if not matches:
+        raise ValueError(f"workload {workload_selector!r} was not found in the calibration bundle")
+    if len(matches) > 1:
+        signatures = ", ".join(str(item.get("workload_signature")) for item in matches)
+        raise ValueError(
+            f"workload name {workload_selector!r} has multiple signatures; select one of: {signatures}"
+        )
+    workload = matches[0]
+    candidates: dict[str, dict[str, Any]] = {}
+    observations = workload.get("observations")
+    if not isinstance(observations, list):
+        raise ValueError("calibration bundle workload observations must be a list")
+    for observation in observations:
+        if not isinstance(observation, dict):
+            continue
+        profile = str(observation.get("profile") or "")
+        upper_bound = int(observation.get("empirical_real_peak_upper_bound_bytes", 0) or 0)
+        if not profile or upper_bound <= 0:
+            continue
+        candidate = candidates.setdefault(
+            profile,
+            {
+                "empirical_real_peak_upper_bound_bytes": 0,
+                "sample_count": 0,
+                "gpus": [],
+            },
+        )
+        candidate["empirical_real_peak_upper_bound_bytes"] = max(
+            int(candidate["empirical_real_peak_upper_bound_bytes"]),
+            upper_bound,
+        )
+        candidate["sample_count"] = int(candidate["sample_count"]) + int(
+            observation.get("sample_count", 0) or 0
+        )
+        gpu = observation.get("gpu")
+        if isinstance(gpu, dict) and gpu not in candidate["gpus"]:
+            candidate["gpus"].append(gpu)
+    if not candidates:
+        raise ValueError("calibration bundle has no usable profile observations")
+    return {
+        "source_schema_version": "real_gpu_calibration_bundle.v1",
+        "workload_name": str(workload.get("name") or workload_selector),
+        "workload_signature": str(workload.get("workload_signature") or ""),
+        "candidates": candidates,
+    }
+
+
+def _load_empirical_report(payload: dict[str, Any], workload_selector: str) -> dict[str, Any]:
+    if payload.get("status") != "PASS_CALIBRATED":
+        raise ValueError(f"calibration report status is {payload.get('status')!r}, not PASS_CALIBRATED")
+    workloads = payload.get("workloads")
+    if not isinstance(workloads, list):
+        raise ValueError("calibration report workloads must be a list")
+    matches = [
+        item
+        for item in workloads
+        if isinstance(item, dict)
+        and (
+            str(item.get("name") or "") == workload_selector
+            or str(item.get("workload_signature") or "") == workload_selector
+        )
+    ]
+    if not matches:
+        raise ValueError(f"workload {workload_selector!r} was not found in the calibration report")
+    if len(matches) > 1:
+        raise ValueError(f"calibration report contains duplicate workload selector {workload_selector!r}")
+    workload = matches[0]
+    real = workload.get("real_cuda")
+    if not isinstance(real, dict):
+        raise ValueError("calibration workload has no real_cuda measurement")
+    trials = real.get("trials")
+    if isinstance(trials, list):
+        peaks = [
+            int(item.get("peak_memory", 0) or 0)
+            for item in trials
+            if isinstance(item, dict) and int(item.get("peak_memory", 0) or 0) > 0
+        ]
+    else:
+        peak = int(real.get("peak_memory", 0) or 0)
+        peaks = [peak] if peak > 0 else []
+    if not peaks:
+        raise ValueError("calibration workload has no positive real-CUDA peak samples")
+    profile = str(payload.get("fakecuda_profile") or "")
+    if not profile:
+        raise ValueError("calibration report has no fakecuda_profile")
+    signature = str(workload.get("workload_signature") or real.get("workload_signature") or "")
+    if not signature:
+        raise ValueError("calibration workload has no workload_signature")
+    gpu = payload.get("calibration_gpu")
+    return {
+        "source_schema_version": str(payload.get("schema_version")),
+        "workload_name": str(workload.get("name") or workload_selector),
+        "workload_signature": signature,
+        "candidates": {
+            profile: {
+                "empirical_real_peak_upper_bound_bytes": max(peaks),
+                "sample_count": len(peaks),
+                "gpus": [gpu] if isinstance(gpu, dict) else [],
+            }
+        },
+    }
 
 
 def _classify_status(

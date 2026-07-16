@@ -519,7 +519,7 @@ FakeGPU
 
 - **Pre-submission Resource Estimation** — Before submitting jobs to Slurm/PBS clusters, run locally with FakeGPU to estimate per-GPU peak VRAM, IO volume, and compute FLOPs from `fake_gpu_report.json`. Use this to right-size GPU allocation requests.
 
-- **AI Researcher Preflight** — Run a training or inference command locally before submitting it to a larger cluster, then report whether it reaches a selected stage, whether it appears to fit the target GPU profile, and how much memory headroom remains. The current real calibration target is a single NVIDIA RTX PRO 5000 72GB Blackwell; it provides a 72 GB, compute-capability 12.0 calibration point, not proof of multi-node cluster behavior.
+- **AI Researcher Preflight** — Run a training or inference command locally before submitting it to a larger cluster, then report whether it reaches a selected stage, whether it appears to fit the target GPU profile, and how much memory headroom remains. Repeated real-GPU reports can be aggregated by exact workload signature and profile; preflight then uses the largest observed real-CUDA peak instead of a universal scaling factor. These samples remain scoped to their measured GPU, workload shape, and software stack.
 
 - **Framework Migration Testing** — When upgrading PyTorch versions (verified 2.6.0 → 2.11.0) or switching frameworks, run your training pipeline under FakeGPU to catch API breakage without tying up real GPUs.
 

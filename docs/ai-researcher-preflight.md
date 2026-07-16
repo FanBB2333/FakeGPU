@@ -151,7 +151,32 @@ For the built-in calibration suite, run:
 
 The built-in suite includes a tensor allocation probe, a torch MLP train step, a torch Tiny Transformer train step, gradient accumulation, gradient checkpointing, a locally initialized Hugging Face tiny GPT-2 train step, and a PEFT LoRA tiny GPT-2 train step. It does not download model weights.
 
-The goal is not exact equality. The goal is to understand the error between memory measured on the current real GPU and FakeGPU-reported memory on small controlled workloads. The suite auto-selects `rtx-pro-5000-blackwell` for the current server and writes `build/real_gpu_calibration/calibration_real_gpu.json` plus a Markdown report. Each workload executes on real CUDA, passthrough, Hybrid clamp, and fakecuda. Native result signatures must match real CUDA; the report also records PyTorch peaks, Hybrid Driver peaks, fakecuda error, and timeline gaps such as `after_transformer_block_0` or `after_optimizer_step`. A final oversized tensor verifies that Hybrid clamp raises `torch.cuda.OutOfMemoryError` without consuming the physical GPU capacity.
+The goal is not exact equality. The goal is to understand the error between memory measured on the current real GPU and FakeGPU-reported memory on small controlled workloads. The suite auto-selects `rtx-pro-5000-blackwell` for the current server and writes `build/real_gpu_calibration/calibration_real_gpu.json` plus a Markdown report. By default, every real/native worker performs one warmup followed by three measured trials. The report keeps the full distribution of PyTorch allocated, reserved, and requested peaks, samples process-level memory through NVML, and uses the largest measured peak as the empirical upper bound. Each workload executes on real CUDA, passthrough, Hybrid clamp, and fakecuda. Native result signatures must match real CUDA. A final oversized tensor verifies that Hybrid clamp raises `torch.cuda.OutOfMemoryError` without consuming the physical GPU capacity.
+
+Reports from different calibration GPUs can be combined without fitting a universal factor:
+
+```bash
+python3 verification/aggregate_real_gpu_calibrations.py \
+  reports/3090ti/calibration_real_gpu.json \
+  reports/pro5000/calibration_real_gpu.json \
+  --output build/calibration_bundle.json \
+  --markdown build/calibration_bundle.md
+```
+
+For a known workload signature, preflight can use the matching profile's observed real-CUDA upper bound:
+
+```bash
+fakegpu preflight \
+  --runtime fakecuda \
+  --profile rtx3090ti \
+  --memory-calibration build/calibration_bundle.json \
+  --calibration-workload tiny_transformer_step \
+  --report-dir preflight-empirical \
+  --strict \
+  -- python train.py --small-config
+```
+
+This raises tracking confidence to `C4_real_gpu_calibrated` only when every target device has a matching profile observation. It does not extrapolate across model shapes: changing batch size, sequence length, model dimensions, or optimizer configuration requires a new workload signature and new samples.
 
 To produce an individual preflight report for every maintained workload:
 
@@ -181,7 +206,7 @@ done
 
 Each generated report contains the workload stage, peak memory, and final status.
 
-When the missing memory looks like a mostly fixed backend workspace gap, prefer an additive margin in preflight. For example, if calibration reports roughly 18 MiB missing at `after_backward`:
+When no exact empirical workload match exists and the missing memory looks like a mostly fixed backend workspace gap, use an additive margin in preflight. For example, if calibration reports roughly 18 MiB missing at `after_backward`:
 
 ```bash
 fakegpu preflight \
