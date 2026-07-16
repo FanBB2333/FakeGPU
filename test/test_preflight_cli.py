@@ -149,6 +149,31 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     assert checked.returncode == 0, checked.stderr
 
 
+def test_preflight_python_script_can_import_sibling_module(tmp_path: Path) -> None:
+    helper = tmp_path / "workload_helper.py"
+    helper.write_text("ELEMENTS = 1024\n", encoding="utf-8")
+    script = tmp_path / "sibling_import_probe.py"
+    script.write_text(
+        "\n".join(
+            [
+                "from workload_helper import ELEMENTS",
+                "import torch",
+                "x = torch.empty((ELEMENTS,), device='cuda', dtype=torch.float32)",
+                "print('sibling-import-ok', x.numel())",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report_dir = tmp_path / "preflight-sibling-import"
+    completed = _run_preflight([sys.executable, str(script)], report_dir=report_dir)
+
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads((report_dir / "preflight_report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "PASS_FIT"
+    assert "sibling-import-ok 1024" in (report_dir / "preflight_stdout.log").read_text(encoding="utf-8")
+
+
 def test_preflight_allocation_stacks_generates_json_and_markdown_origin(tmp_path: Path) -> None:
     script = tmp_path / "stack_probe.py"
     script.write_text(

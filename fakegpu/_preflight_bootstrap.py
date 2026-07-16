@@ -64,9 +64,14 @@ def _run_python_target(args: list[str]) -> None:
         runpy.run_module(module_name, run_name="__main__", alter_sys=True)
         return
 
-    script = str(Path(target))
-    sys.argv = [script, *args[1:]]
-    runpy.run_path(script, run_name="__main__")
+    script = Path(target).resolve()
+    sys.argv = [str(script), *args[1:]]
+    original_sys_path = list(sys.path)
+    sys.path.insert(0, str(script.parent))
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        sys.path[:] = original_sys_path
 
 
 def _write_child_report(*, init_result: Any, exception: BaseException | None, exit_code: int) -> None:
