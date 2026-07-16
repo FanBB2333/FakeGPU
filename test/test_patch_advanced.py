@@ -11,6 +11,8 @@ threads do not crash or produce corrupt results.
 import os
 import sys
 import threading
+from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -23,6 +25,18 @@ import fakegpu
 fakegpu.patch_torch()
 
 import torch
+
+
+class TestCudaVersionCompatibility(unittest.TestCase):
+    def test_preserves_installed_cuda_build_unless_overridden(self):
+        import fakegpu.torch_patch as torch_patch
+
+        torch_module = SimpleNamespace(version=SimpleNamespace(cuda="13.0"))
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FAKEGPU_CUDA_VERSION", None)
+            self.assertEqual(torch_patch._reported_cuda_version(torch_module), "13.0")
+        with mock.patch.dict(os.environ, {"FAKEGPU_CUDA_VERSION": "12.8"}, clear=False):
+            self.assertEqual(torch_patch._reported_cuda_version(torch_module), "12.8")
 
 
 # ======================================================================

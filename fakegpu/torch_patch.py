@@ -1839,9 +1839,15 @@ def _install_legacy_cuda_types(torch: Any, *, device: str) -> None:
         setattr(torch.cuda, tname, _make_legacy_factory(dt))
 
 
+def _reported_cuda_version(torch_mod: Any) -> str:
+    configured_cuda_version = os.environ.get("FAKEGPU_CUDA_VERSION", "").strip()
+    installed_cuda_version = getattr(torch_mod.version, "cuda", None)
+    return str(configured_cuda_version or installed_cuda_version or "12.1")
+
+
 def _patch_hf_cuda_surface(torch_mod: Any) -> None:
     """Expose CUDA metadata expected by HuggingFace and Accelerate."""
-    torch_mod.version.cuda = "12.1"
+    torch_mod.version.cuda = _reported_cuda_version(torch_mod)
 
     backends_cuda = getattr(torch_mod.backends, "cuda", None)
     if backends_cuda is None:
