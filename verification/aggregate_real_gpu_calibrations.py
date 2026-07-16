@@ -153,6 +153,8 @@ def _build_observation(
     missing_peaks = [max(0, peak - fake_peak) for peak in real_peaks]
     nvml_process_peaks = _nvml_trial_values(real, "peak_process_memory")
     nvml_process_deltas = _nvml_trial_values(real, "peak_process_delta_memory")
+    nvml_device_peaks = _nvml_trial_values(real, "peak_device_used_memory")
+    nvml_device_deltas = _nvml_trial_values(real, "peak_device_used_delta_memory")
     observation: dict[str, Any] = {
         "source_report": str(path),
         "profile": profile,
@@ -172,6 +174,10 @@ def _build_observation(
         observation["nvml_process_peak_memory"] = _summary(nvml_process_peaks)
     if nvml_process_deltas:
         observation["nvml_process_delta_memory"] = _summary(nvml_process_deltas)
+    if nvml_device_peaks:
+        observation["nvml_device_used_peak_memory"] = _summary(nvml_device_peaks)
+    if nvml_device_deltas:
+        observation["nvml_device_used_delta_memory"] = _summary(nvml_device_deltas)
     return observation
 
 
@@ -228,8 +234,8 @@ def render_markdown(bundle: dict[str, Any]) -> str:
         "",
         f"**Sources:** {len(bundle.get('source_reports', []))}",
         "",
-        "| workload | profile | GPU | trials | real peak min | real peak median | empirical upper bound | fakecuda tracked | max missing | NVML process peak |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| workload | profile | GPU | trials | real peak min | real peak median | empirical upper bound | fakecuda tracked | max missing | NVML process peak | NVML device delta |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for workload in bundle.get("workloads", []):
         if not isinstance(workload, dict):
@@ -241,9 +247,15 @@ def render_markdown(bundle: dict[str, Any]) -> str:
             missing = observation.get("missing_peak_memory") or {}
             nvml = observation.get("nvml_process_peak_memory") or {}
             nvml_text = _fmt_bytes(int(nvml.get("max", 0))) if nvml else "n/a"
+            nvml_device_delta = observation.get("nvml_device_used_delta_memory") or {}
+            nvml_device_delta_text = (
+                _fmt_bytes(int(nvml_device_delta.get("max", 0)))
+                if nvml_device_delta
+                else "n/a"
+            )
             gpu = observation.get("gpu") or {}
             lines.append(
-                "| `{name}` | `{profile}` | `{gpu}` | {trials} | {minimum} | {median} | {upper} | {fake} | {missing} | {nvml} |".format(
+                "| `{name}` | `{profile}` | `{gpu}` | {trials} | {minimum} | {median} | {upper} | {fake} | {missing} | {nvml} | {nvml_device_delta} |".format(
                     name=workload.get("name"),
                     profile=observation.get("profile"),
                     gpu=gpu.get("name"),
@@ -254,6 +266,7 @@ def render_markdown(bundle: dict[str, Any]) -> str:
                     fake=_fmt_bytes(int(observation.get("fakecuda_tracked_peak_memory", 0))),
                     missing=_fmt_bytes(int(missing.get("max", 0))),
                     nvml=nvml_text,
+                    nvml_device_delta=nvml_device_delta_text,
                 )
             )
     lines.extend(["", "## Notes", ""])

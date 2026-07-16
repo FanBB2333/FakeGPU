@@ -301,6 +301,8 @@ def test_aggregate_calibrations_keeps_gpu_specific_empirical_observations(tmp_pa
                                             "status": "available",
                                             "peak_process_memory": peak + 200,
                                             "peak_process_delta_memory": peak + 20,
+                                            "peak_device_used_memory": peak + 300,
+                                            "peak_device_used_delta_memory": peak + 30,
                                         },
                                     }
                                     for peak in peaks
@@ -322,6 +324,7 @@ def test_aggregate_calibrations_keeps_gpu_specific_empirical_observations(tmp_pa
     observations = {item["profile"]: item for item in workload["observations"]}
     assert observations["rtx3090ti"]["empirical_real_peak_upper_bound_bytes"] == 110
     assert observations["rtx3090ti"]["empirical_missing_peak_upper_bound_bytes"] == 20
+    assert observations["rtx3090ti"]["nvml_device_used_delta_memory"]["max"] == 140
     assert observations["rtx-pro-5000-blackwell"]["real_cuda_peak_memory"]["median"] == 123
 
 
