@@ -151,6 +151,10 @@
           "type": "string",
           "enum": ["tracked_peak", "manual_factor_or_margin", "empirical_repeated_upper_bound"]
         },
+        "metric": {
+          "type": "string",
+          "enum": ["physical_peak"]
+        },
         "source": {
           "type": "string"
         },
@@ -252,6 +256,22 @@
           "empirical_calibration_peak_memory": {
             "type": "integer",
             "minimum": 0
+          },
+          "empirical_allocator_peak_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "memory_calibration_metric": {
+            "type": "string",
+            "enum": ["physical_peak"]
+          },
+          "memory_calibration_metric_source": {
+            "type": "string",
+            "enum": [
+              "nvml_process_peak",
+              "torch_allocator_peak_with_nvml_device_delta",
+              "torch_allocator_peak"
+            ]
           },
           "memory_calibration_sample_count": {
             "type": "integer",

@@ -163,7 +163,7 @@ python3 verification/aggregate_real_gpu_calibrations.py \
   --markdown build/calibration_bundle.md
 ```
 
-For a known workload signature, preflight can use the matching profile's observed real-CUDA upper bound:
+For a known workload signature, preflight can use the matching profile's observed physical-memory upper bound:
 
 ```bash
 fakegpu preflight \
@@ -176,7 +176,7 @@ fakegpu preflight \
   -- python train.py --small-config
 ```
 
-This raises tracking confidence to `C4_real_gpu_calibrated` only when every target device has a matching profile observation. It does not extrapolate across model shapes: changing batch size, sequence length, model dimensions, or optimizer configuration requires a new workload signature and new samples.
+This raises tracking confidence to `C4_real_gpu_calibrated` only when every target device has a matching profile observation. Physical peaks prefer NVML process memory, which includes CUDA context and backend allocations. When WSL cannot expose the process, the estimate uses the larger of the PyTorch allocator peak and NVML device delta and records that fallback source. It does not extrapolate across model shapes: changing batch size, sequence length, model dimensions, or optimizer configuration requires a new workload signature and new samples.
 
 To produce an individual preflight report for every maintained workload:
 

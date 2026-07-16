@@ -110,7 +110,7 @@ python3 -m fakegpu preflight \
   -- python3 train.py
 ```
 
-这种模式直接采用重复实测中的真实峰值上界，不拟合通用倍率。workload 名称对应多个签名时，命令会要求改用完整签名；不同 batch、序列长度或模型配置不能直接套用。
+这种模式直接采用重复实测中的物理显存上界，不拟合通用倍率。能够取得 NVML 进程峰值时，会把 CUDA context 和后端分配一起计入；WSL 无法提供进程数据时，则取 PyTorch allocator 峰值与 NVML 设备增量中的较大值，并在报告里注明数据来源。workload 名称对应多个签名时，命令会要求改用完整签名；不同 batch、序列长度或模型配置不能直接套用。
 
 当前设计和限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
 

@@ -110,7 +110,7 @@ python3 -m fakegpu preflight \
   -- python3 train.py
 ```
 
-This path uses the observed real-CUDA upper bound instead of fitting a universal factor. If a workload name has more than one signature, select the full signature. Do not reuse a calibration after changing batch size, sequence length, or model shape.
+This path uses an observed physical-memory upper bound instead of fitting a universal factor. It prefers NVML process peaks, including CUDA context and backend allocations; when WSL cannot expose the process, it uses the larger of the PyTorch allocator peak and NVML device delta. The report records which source was selected. If a workload name has more than one signature, select the full signature. Do not reuse a calibration after changing batch size, sequence length, or model shape.
 
 See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design and limitations.
 
