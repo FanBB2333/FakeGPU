@@ -301,6 +301,78 @@ def test_preflight_memory_safety_margin_can_fail_estimated_oom(tmp_path: Path) -
     assert any("safety margin" in warning.lower() for warning in report["warnings"])
 
 
+def test_preflight_empirical_calibration_uses_repeated_real_gpu_upper_bound(tmp_path: Path) -> None:
+    script = tmp_path / "empirical_probe.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import fakegpu",
+                "import torch",
+                "with fakegpu.stage('forward'):",
+                "    x = torch.empty((1024, 1024), device='cuda', dtype=torch.float32)",
+                "    print('peak', torch.cuda.max_memory_allocated())",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    calibration_path = tmp_path / "calibration.json"
+    empirical_upper_bound = 600 * 1024**2
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "real_gpu_calibration.v1",
+                "status": "PASS_CALIBRATED",
+                "fakecuda_profile": "test-512m",
+                "calibration_gpu": {"name": "Test calibration GPU"},
+                "workloads": [
+                    {
+                        "name": "exact_probe",
+                        "workload_signature": "exact-signature",
+                        "real_cuda": {
+                            "peak_memory": empirical_upper_bound,
+                            "trials": [
+                                {"peak_memory": 580 * 1024**2},
+                                {"peak_memory": empirical_upper_bound},
+                                {"peak_memory": 590 * 1024**2},
+                            ],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report_dir = tmp_path / "preflight-empirical-calibration"
+    completed = _run_preflight(
+        [sys.executable, str(script)],
+        report_dir=report_dir,
+        device_args=["--profile", "test-512m", "--device-count", "1"],
+        preflight_args=[
+            "--memory-calibration",
+            str(calibration_path),
+            "--calibration-workload",
+            "exact_probe",
+        ],
+    )
+
+    assert completed.returncode == 2, completed.stderr
+    report = json.loads((report_dir / "preflight_report.json").read_text(encoding="utf-8"))
+    dev = report["devices"][0]
+    assert report["status"] == "FAIL_OOM"
+    assert report["tracking_confidence"] == "C4_real_gpu_calibrated"
+    assert report["memory_estimation"]["method"] == "empirical_repeated_upper_bound"
+    assert report["memory_estimation"]["workload_signature"] == "exact-signature"
+    assert report["calibration_gpu"]["observations"] == [{"name": "Test calibration GPU"}]
+    assert dev["tracked_peak_memory"] >= 4 * 1024**2
+    assert dev["peak_memory"] == empirical_upper_bound
+    assert dev["memory_calibration_sample_count"] == 3
+    assert dev["memory_estimation_method"] == "empirical_repeated_upper_bound"
+    assert any("empirical upper bound" in warning.lower() for warning in report["warnings"])
+    markdown = (report_dir / "preflight_report.md").read_text(encoding="utf-8")
+    assert "## Empirical Memory Calibration" in markdown
+
+
 def test_preflight_same_workload_fails_on_small_profile_and_passes_on_large_profile(
     tmp_path: Path,
 ) -> None:

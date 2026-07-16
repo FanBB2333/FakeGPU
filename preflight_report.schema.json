@@ -83,6 +83,12 @@
         "memory_safety_margin_bytes": {
           "type": "integer",
           "minimum": 0
+        },
+        "memory_calibration": {
+          "type": ["string", "null"]
+        },
+        "calibration_workload": {
+          "type": ["string", "null"]
         }
       }
     },
@@ -136,6 +142,36 @@
     "memory_safety_margin_bytes": {
       "type": "integer",
       "minimum": 0
+    },
+    "memory_estimation": {
+      "type": "object",
+      "required": ["method"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["tracked_peak", "manual_factor_or_margin", "empirical_repeated_upper_bound"]
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_schema_version": {
+          "type": "string"
+        },
+        "workload": {
+          "type": "string"
+        },
+        "workload_signature": {
+          "type": "string"
+        },
+        "matched_device_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "matched_profiles": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
     },
     "devices": {
       "type": "array",
@@ -208,6 +244,24 @@
           "memory_safety_margin_bytes": {
             "type": "integer",
             "minimum": 0
+          },
+          "memory_estimation_method": {
+            "type": "string",
+            "enum": ["empirical_repeated_upper_bound"]
+          },
+          "empirical_calibration_peak_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "memory_calibration_sample_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "memory_calibration_workload_signature": {
+            "type": "string"
+          },
+          "memory_calibration_profile": {
+            "type": "string"
           },
           "current_bytes_by_category": {
             "type": "object",

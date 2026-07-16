@@ -76,7 +76,7 @@ def test_calibration_auto_selects_rtx_pro_5000_profile(tmp_path: Path, monkeypat
     monkeypatch.setattr(
         calibration,
         "_run_real_worker",
-        lambda _name: {"peak_memory": 1000, "result_signature": 0.25},
+        lambda _name, **_kwargs: {"peak_memory": 1000, "result_signature": 0.25},
     )
 
     selected: list[str] = []
@@ -90,7 +90,15 @@ def test_calibration_auto_selects_rtx_pro_5000_profile(tmp_path: Path, monkeypat
 
     native_modes: list[str] = []
 
-    def native_worker(_name: str, *, mode: str, out_dir: Path, profile: str, build_dir: Path):
+    def native_worker(
+        _name: str,
+        *,
+        mode: str,
+        out_dir: Path,
+        profile: str,
+        build_dir: Path,
+        **_kwargs,
+    ):
         assert out_dir == tmp_path
         assert profile == "rtx-pro-5000-blackwell"
         assert build_dir == ROOT / "build"
@@ -122,6 +130,164 @@ def test_calibration_auto_selects_rtx_pro_5000_profile(tmp_path: Path, monkeypat
     assert native_modes == ["passthrough", "hybrid"]
     assert report["workloads"][0]["native_modes"]["hybrid_clamp"]["result_signature_match"] is True
     assert report["hybrid_clamp_oom_probe"]["status"] == "PASS_OOM"
+
+
+def test_repeated_worker_measurements_use_observed_upper_bound() -> None:
+    from verification.calibration_rtx3090ti import _aggregate_worker_trials
+
+    trials = [
+        {
+            "peak_memory": 100,
+            "peak_reserved_memory": 130,
+            "requested_peak_memory": 95,
+            "result_signature": 0.5,
+            "parameter_bytes": 32,
+            "timeline": [{"label": "done", "peak_memory": 100}],
+            "trial_index": 0,
+            "nvml": {
+                "status": "available",
+                "sample_count": 4,
+                "peak_process_memory": 500,
+                "peak_process_delta_memory": 110,
+                "peak_device_used_memory": 800,
+                "peak_device_used_delta_memory": 120,
+            },
+        },
+        {
+            "peak_memory": 120,
+            "peak_reserved_memory": 140,
+            "requested_peak_memory": 118,
+            "result_signature": 0.50000001,
+            "parameter_bytes": 32,
+            "timeline": [{"label": "done", "peak_memory": 120}],
+            "trial_index": 1,
+            "nvml": {
+                "status": "available",
+                "sample_count": 5,
+                "peak_process_memory": 530,
+                "peak_process_delta_memory": 125,
+                "peak_device_used_memory": 830,
+                "peak_device_used_delta_memory": 135,
+            },
+        },
+        {
+            "peak_memory": 110,
+            "peak_reserved_memory": 135,
+            "requested_peak_memory": 105,
+            "result_signature": 0.5,
+            "parameter_bytes": 32,
+            "timeline": [{"label": "done", "peak_memory": 110}],
+            "trial_index": 2,
+            "nvml": {"status": "unavailable", "reason": "test"},
+        },
+    ]
+
+    result = _aggregate_worker_trials(
+        worker="real",
+        workload_name="probe",
+        trials=trials,
+        warmup_runs=1,
+    )
+    assert result["peak_memory"] == 120
+    assert result["peak_reserved_memory"] == 140
+    assert result["trial_count"] == 3
+    assert result["warmup_runs"] == 1
+    assert result["measurement_summary"]["peak_memory"] == {
+        "count": 3,
+        "min": 100,
+        "median": 110,
+        "p95": 119,
+        "max": 120,
+        "range": 20,
+        "relative_range_percent": 18.181818,
+    }
+    assert result["measurement_summary"]["nvml_process_memory"]["max"] == 530
+    assert result["result_signature_stable"] is True
+    assert result["workload_descriptor"]["parameters"]["parameter_bytes"] == 32
+    assert len(result["workload_signature"]) == 64
+
+
+def test_compare_uses_each_real_trial_for_empirical_gap_summary() -> None:
+    from verification.calibration_rtx3090ti import _compare_workload
+
+    item = _compare_workload(
+        "probe",
+        {
+            "peak_memory": 120,
+            "trials": [
+                {"peak_memory": 100},
+                {"peak_memory": 120},
+                {"peak_memory": 110},
+            ],
+            "workload_signature": "abc",
+            "workload_descriptor": {"name": "probe", "parameters": {}},
+        },
+        {"peak_memory": 90, "status": "PASS_FIT"},
+    )
+    assert item["memory_estimation_method"] == "empirical_repeated_upper_bound"
+    assert item["empirical_real_peak_upper_bound_bytes"] == 120
+    assert item["empirical_real_peak_summary"]["median"] == 110
+    assert item["empirical_missing_peak_summary"]["min"] == 10
+    assert item["empirical_missing_peak_summary"]["max"] == 30
+
+
+def test_aggregate_calibrations_keeps_gpu_specific_empirical_observations(tmp_path: Path) -> None:
+    from verification.aggregate_real_gpu_calibrations import aggregate_reports
+
+    descriptor = {"name": "probe", "parameters": {"batch_size": 2}}
+    reports = []
+    for profile, gpu_name, peaks, fake_peak in (
+        ("rtx3090ti", "NVIDIA GeForce RTX 3090 Ti", [100, 110, 105], 90),
+        ("rtx-pro-5000-blackwell", "NVIDIA RTX PRO 5000 72GB Blackwell", [120, 125, 123], 92),
+    ):
+        path = tmp_path / f"{profile}.json"
+        reports.append(
+            (
+                path,
+                {
+                    "schema_version": "real_gpu_calibration.v1",
+                    "status": "PASS_CALIBRATED",
+                    "created_at_unix": 1,
+                    "calibration_gpu": {"name": gpu_name, "compute_capability": "8.6"},
+                    "fakecuda_profile": profile,
+                    "software": {"torch_version": "test"},
+                    "workloads": [
+                        {
+                            "name": "probe",
+                            "workload_descriptor": descriptor,
+                            "workload_signature": "same-signature",
+                            "real_cuda": {
+                                "peak_memory": max(peaks),
+                                "trials": [
+                                    {
+                                        "peak_memory": peak,
+                                        "peak_reserved_memory": peak + 10,
+                                        "nvml": {
+                                            "status": "available",
+                                            "peak_process_memory": peak + 200,
+                                            "peak_process_delta_memory": peak + 20,
+                                        },
+                                    }
+                                    for peak in peaks
+                                ],
+                            },
+                            "fakecuda_preflight": {"peak_memory": fake_peak},
+                        }
+                    ],
+                },
+            )
+        )
+
+    bundle = aggregate_reports(reports)
+    assert bundle["schema_version"] == "real_gpu_calibration_bundle.v1"
+    assert len(bundle["workloads"]) == 1
+    workload = bundle["workloads"][0]
+    assert workload["profiles"] == ["rtx-pro-5000-blackwell", "rtx3090ti"]
+    assert workload["total_real_trials"] == 6
+    observations = {item["profile"]: item for item in workload["observations"]}
+    assert observations["rtx3090ti"]["empirical_real_peak_upper_bound_bytes"] == 110
+    assert observations["rtx3090ti"]["empirical_missing_peak_upper_bound_bytes"] == 20
+    assert observations["rtx-pro-5000-blackwell"]["real_cuda_peak_memory"]["median"] == 123
 
 
 def test_calibration_compare_records_peak_error() -> None:
