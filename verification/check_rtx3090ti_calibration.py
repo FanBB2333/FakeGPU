@@ -105,6 +105,19 @@ def main(argv: list[str] | None = None) -> int:
                 _die(f"{name}: empirical upper bound must equal the maximum real trial peak")
             if not workload.get("workload_signature"):
                 _die(f"{name}: workload_signature is required for empirical calibration")
+            physical_peak = int(
+                workload.get("empirical_physical_peak_upper_bound_bytes", real.get("peak_memory", 0))
+                or 0
+            )
+            if physical_peak < int(real.get("peak_memory", 0) or 0):
+                _die(f"{name}: empirical physical upper bound cannot be below allocator peak")
+            physical_source = workload.get("empirical_physical_peak_upper_bound_source")
+            if physical_source is not None and physical_source not in {
+                "nvml_process_peak",
+                "torch_allocator_peak_with_nvml_device_delta",
+                "torch_allocator_peak",
+            }:
+                _die(f"{name}: unexpected empirical physical peak source")
         if "likely_gap_reason" not in workload:
             _die(f"{name}: missing likely_gap_reason")
         gap = workload.get("gap_analysis")

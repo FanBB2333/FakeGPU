@@ -163,7 +163,7 @@ python3 verification/aggregate_real_gpu_calibrations.py \
   --markdown build/calibration_bundle.md
 ```
 
-对于已有精确签名的 workload，preflight 可以使用匹配 profile 的真实 CUDA 峰值上界：
+对于已有精确签名的 workload，preflight 可以使用匹配 profile 的物理显存上界：
 
 ```bash
 fakegpu preflight \
@@ -176,7 +176,7 @@ fakegpu preflight \
   -- python train.py --small-config
 ```
 
-只有所有目标设备都找到匹配的 profile 观测时，报告才会把可信度提升为 `C4_real_gpu_calibrated`。这套数据不会跨模型形状外推；batch size、序列长度、模型维度或 optimizer 配置变化后，需要生成新的 workload 签名和样本。
+只有所有目标设备都找到匹配的 profile 观测时，报告才会把可信度提升为 `C4_real_gpu_calibrated`。物理显存上界优先使用 NVML 进程峰值，把 CUDA context 和后端分配一起计入；WSL 无法提供进程数据时，会取 PyTorch allocator 峰值与 NVML 设备增量中的较大值，并记录这一数据来源。这套数据不会跨模型形状外推；batch size、序列长度、模型维度或 optimizer 配置变化后，需要生成新的 workload 签名和样本。
 
 如需为每个维护中的 workload 分别生成 preflight 报告，可以运行：
 

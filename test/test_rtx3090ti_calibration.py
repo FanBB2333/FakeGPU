@@ -261,6 +261,8 @@ def test_compare_uses_each_real_trial_for_empirical_gap_summary() -> None:
     )
     assert item["memory_estimation_method"] == "empirical_repeated_upper_bound"
     assert item["empirical_real_peak_upper_bound_bytes"] == 120
+    assert item["empirical_physical_peak_upper_bound_bytes"] == 120
+    assert item["empirical_physical_peak_upper_bound_source"] == "torch_allocator_peak"
     assert item["empirical_real_peak_summary"]["median"] == 110
     assert item["empirical_missing_peak_summary"]["min"] == 10
     assert item["empirical_missing_peak_summary"]["max"] == 30
@@ -324,6 +326,8 @@ def test_aggregate_calibrations_keeps_gpu_specific_empirical_observations(tmp_pa
     observations = {item["profile"]: item for item in workload["observations"]}
     assert observations["rtx3090ti"]["empirical_real_peak_upper_bound_bytes"] == 110
     assert observations["rtx3090ti"]["empirical_missing_peak_upper_bound_bytes"] == 20
+    assert observations["rtx3090ti"]["empirical_physical_peak_upper_bound_bytes"] == 310
+    assert observations["rtx3090ti"]["empirical_physical_peak_upper_bound_source"] == "nvml_process_peak"
     assert observations["rtx3090ti"]["nvml_device_used_delta_memory"]["max"] == 140
     assert observations["rtx-pro-5000-blackwell"]["real_cuda_peak_memory"]["median"] == 123
 

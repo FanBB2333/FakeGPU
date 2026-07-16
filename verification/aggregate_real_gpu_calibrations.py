@@ -130,7 +130,7 @@ def aggregate_reports(
         "workloads": workloads,
         "notes": [
             "Each observation is scoped to one exact workload signature and one GPU profile.",
-            "The empirical upper bound is the largest post-warmup peak actually observed, not a fitted universal factor.",
+            "The physical upper bound prefers post-warmup NVML process peaks and records its fallback source; it is not a fitted universal factor.",
             "Use a matching profile and workload signature; do not extrapolate these values to different shapes or software stacks.",
         ],
     }
@@ -155,6 +155,16 @@ def _build_observation(
     nvml_process_deltas = _nvml_trial_values(real, "peak_process_delta_memory")
     nvml_device_peaks = _nvml_trial_values(real, "peak_device_used_memory")
     nvml_device_deltas = _nvml_trial_values(real, "peak_device_used_delta_memory")
+    allocator_upper_bound = max(real_peaks)
+    if nvml_process_peaks:
+        physical_upper_bound = max(allocator_upper_bound, max(nvml_process_peaks))
+        physical_upper_bound_source = "nvml_process_peak"
+    elif nvml_device_deltas:
+        physical_upper_bound = max(allocator_upper_bound, max(nvml_device_deltas))
+        physical_upper_bound_source = "torch_allocator_peak_with_nvml_device_delta"
+    else:
+        physical_upper_bound = allocator_upper_bound
+        physical_upper_bound_source = "torch_allocator_peak"
     observation: dict[str, Any] = {
         "source_report": str(path),
         "profile": profile,
@@ -166,8 +176,14 @@ def _build_observation(
         "real_cuda_reserved_peak_memory": _summary(reserved_peaks),
         "real_cuda_requested_peak_memory": _summary(requested_peaks),
         "missing_peak_memory": _summary(missing_peaks),
-        "empirical_real_peak_upper_bound_bytes": max(real_peaks),
+        "empirical_real_peak_upper_bound_bytes": allocator_upper_bound,
         "empirical_missing_peak_upper_bound_bytes": max(missing_peaks),
+        "empirical_physical_peak_upper_bound_bytes": physical_upper_bound,
+        "empirical_physical_peak_upper_bound_source": physical_upper_bound_source,
+        "empirical_physical_missing_peak_upper_bound_bytes": max(
+            0,
+            physical_upper_bound - fake_peak,
+        ),
         "calibration_created_at_unix": report.get("created_at_unix"),
     }
     if nvml_process_peaks:
@@ -234,8 +250,8 @@ def render_markdown(bundle: dict[str, Any]) -> str:
         "",
         f"**Sources:** {len(bundle.get('source_reports', []))}",
         "",
-        "| workload | profile | GPU | trials | real peak min | real peak median | empirical upper bound | fakecuda tracked | max missing | NVML process peak | NVML device delta |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| workload | profile | GPU | trials | allocator median | allocator upper | physical upper | physical source | fakecuda tracked | physical missing | NVML device delta |",
+        "|---|---|---|---:|---:|---:|---:|---|---:|---:|---:|",
     ]
     for workload in bundle.get("workloads", []):
         if not isinstance(workload, dict):
@@ -244,9 +260,6 @@ def render_markdown(bundle: dict[str, Any]) -> str:
             if not isinstance(observation, dict):
                 continue
             peak = observation.get("real_cuda_peak_memory") or {}
-            missing = observation.get("missing_peak_memory") or {}
-            nvml = observation.get("nvml_process_peak_memory") or {}
-            nvml_text = _fmt_bytes(int(nvml.get("max", 0))) if nvml else "n/a"
             nvml_device_delta = observation.get("nvml_device_used_delta_memory") or {}
             nvml_device_delta_text = (
                 _fmt_bytes(int(nvml_device_delta.get("max", 0)))
@@ -255,17 +268,23 @@ def render_markdown(bundle: dict[str, Any]) -> str:
             )
             gpu = observation.get("gpu") or {}
             lines.append(
-                "| `{name}` | `{profile}` | `{gpu}` | {trials} | {minimum} | {median} | {upper} | {fake} | {missing} | {nvml} | {nvml_device_delta} |".format(
+                "| `{name}` | `{profile}` | `{gpu}` | {trials} | {median} | {allocator_upper} | {physical_upper} | `{physical_source}` | {fake} | {physical_missing} | {nvml_device_delta} |".format(
                     name=workload.get("name"),
                     profile=observation.get("profile"),
                     gpu=gpu.get("name"),
                     trials=observation.get("sample_count"),
-                    minimum=_fmt_bytes(int(peak.get("min", 0))),
                     median=_fmt_bytes(int(peak.get("median", 0))),
-                    upper=_fmt_bytes(int(observation.get("empirical_real_peak_upper_bound_bytes", 0))),
+                    allocator_upper=_fmt_bytes(
+                        int(observation.get("empirical_real_peak_upper_bound_bytes", 0))
+                    ),
+                    physical_upper=_fmt_bytes(
+                        int(observation.get("empirical_physical_peak_upper_bound_bytes", 0))
+                    ),
+                    physical_source=observation.get("empirical_physical_peak_upper_bound_source"),
                     fake=_fmt_bytes(int(observation.get("fakecuda_tracked_peak_memory", 0))),
-                    missing=_fmt_bytes(int(missing.get("max", 0))),
-                    nvml=nvml_text,
+                    physical_missing=_fmt_bytes(
+                        int(observation.get("empirical_physical_missing_peak_upper_bound_bytes", 0))
+                    ),
                     nvml_device_delta=nvml_device_delta_text,
                 )
             )

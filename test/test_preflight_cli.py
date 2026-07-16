@@ -355,6 +355,7 @@ def test_preflight_empirical_calibration_uses_repeated_real_gpu_upper_bound(tmp_
     )
     calibration_path = tmp_path / "calibration.json"
     empirical_upper_bound = 600 * 1024**2
+    physical_upper_bound = 700 * 1024**2
     calibration_path.write_text(
         json.dumps(
             {
@@ -369,9 +370,18 @@ def test_preflight_empirical_calibration_uses_repeated_real_gpu_upper_bound(tmp_
                         "real_cuda": {
                             "peak_memory": empirical_upper_bound,
                             "trials": [
-                                {"peak_memory": 580 * 1024**2},
-                                {"peak_memory": empirical_upper_bound},
-                                {"peak_memory": 590 * 1024**2},
+                                {
+                                    "peak_memory": 580 * 1024**2,
+                                    "nvml": {"status": "available", "peak_process_memory": 680 * 1024**2},
+                                },
+                                {
+                                    "peak_memory": empirical_upper_bound,
+                                    "nvml": {"status": "available", "peak_process_memory": physical_upper_bound},
+                                },
+                                {
+                                    "peak_memory": 590 * 1024**2,
+                                    "nvml": {"status": "available", "peak_process_memory": 690 * 1024**2},
+                                },
                             ],
                         },
                     }
@@ -403,10 +413,13 @@ def test_preflight_empirical_calibration_uses_repeated_real_gpu_upper_bound(tmp_
     assert report["memory_estimation"]["workload_signature"] == "exact-signature"
     assert report["calibration_gpu"]["observations"] == [{"name": "Test calibration GPU"}]
     assert dev["tracked_peak_memory"] >= 4 * 1024**2
-    assert dev["peak_memory"] == empirical_upper_bound
+    assert dev["peak_memory"] == physical_upper_bound
+    assert dev["empirical_allocator_peak_memory"] == empirical_upper_bound
+    assert dev["memory_calibration_metric"] == "physical_peak"
+    assert dev["memory_calibration_metric_source"] == "nvml_process_peak"
     assert dev["memory_calibration_sample_count"] == 3
     assert dev["memory_estimation_method"] == "empirical_repeated_upper_bound"
-    assert any("empirical upper bound" in warning.lower() for warning in report["warnings"])
+    assert any("empirical physical upper bound" in warning.lower() for warning in report["warnings"])
     markdown = (report_dir / "preflight_report.md").read_text(encoding="utf-8")
     assert "## Empirical Memory Calibration" in markdown
 

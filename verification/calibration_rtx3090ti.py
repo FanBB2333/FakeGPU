@@ -1545,6 +1545,8 @@ def _compare_workload(
         if missing_trial_peaks
         else None
     )
+    physical_upper_bound, physical_upper_bound_source = _empirical_physical_upper_bound(real)
+    physical_missing_peak = max(0, physical_upper_bound - fake_peak)
     return {
         "name": name,
         "workload_descriptor": real.get("workload_descriptor"),
@@ -1560,6 +1562,9 @@ def _compare_workload(
         "empirical_real_peak_summary": real_peak_summary,
         "empirical_missing_peak_summary": missing_peak_summary,
         "empirical_real_peak_upper_bound_bytes": real_peak,
+        "empirical_physical_peak_upper_bound_bytes": physical_upper_bound,
+        "empirical_physical_peak_upper_bound_source": physical_upper_bound_source,
+        "empirical_physical_missing_peak_bytes": physical_missing_peak,
         "gap_analysis": gap_analysis,
         "likely_gap_reason": _likely_gap_reason(rel_error, gap_analysis),
         "native_modes": dict(native_modes or {}),
@@ -1578,6 +1583,40 @@ def _measurement_values(payload: dict[str, Any], metric: str) -> list[int]:
             return values
     value = payload.get(metric)
     return [int(value)] if value is not None else []
+
+
+def _nvml_measurement_values(payload: dict[str, Any], metric: str) -> list[int]:
+    trials = payload.get("trials")
+    if isinstance(trials, list):
+        values = [
+            int(nvml.get(metric, 0) or 0)
+            for item in trials
+            if isinstance(item, dict)
+            and isinstance((nvml := item.get("nvml")), dict)
+            and nvml.get("status") == "available"
+            and int(nvml.get(metric, 0) or 0) > 0
+        ]
+        if values:
+            return values
+    nvml = payload.get("nvml")
+    if isinstance(nvml, dict) and int(nvml.get(metric, 0) or 0) > 0:
+        return [int(nvml[metric])]
+    return []
+
+
+def _empirical_physical_upper_bound(payload: dict[str, Any]) -> tuple[int, str]:
+    allocator_peaks = _measurement_values(payload, "peak_memory")
+    allocator_upper_bound = max(allocator_peaks) if allocator_peaks else 0
+    process_peaks = _nvml_measurement_values(payload, "peak_process_memory")
+    if process_peaks:
+        return max(allocator_upper_bound, max(process_peaks)), "nvml_process_peak"
+    device_deltas = _nvml_measurement_values(payload, "peak_device_used_delta_memory")
+    if device_deltas:
+        return (
+            max(allocator_upper_bound, max(device_deltas)),
+            "torch_allocator_peak_with_nvml_device_delta",
+        )
+    return allocator_upper_bound, "torch_allocator_peak"
 
 
 def _compare_native_mode(real: dict[str, Any], native: dict[str, Any]) -> dict[str, Any]:
@@ -1701,12 +1740,12 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- measured runs per workload: `{(report.get('sampling') or {}).get('measured_runs_per_workload')}`",
             f"- warmup runs per workload: `{(report.get('sampling') or {}).get('warmup_runs_per_workload')}`",
             f"- NVML interval: `{(report.get('sampling') or {}).get('nvml_sample_interval_ms')} ms`",
-            "- fit decisions use the largest measured post-warmup real-CUDA peak for an exact workload signature.",
+            "- fit decisions prefer the largest NVML process peak; allocator/device-delta data is used when process memory is unavailable.",
             "",
             "## Workloads",
             "",
-            "| workload | samples | real peak upper bound | trial range | NVML process peak | fakecuda peak | missing peak | likely reason |",
-            "|---|---:|---:|---:|---:|---:|---:|---|",
+            "| workload | samples | allocator upper bound | physical upper bound | source | trial range | fakecuda peak | physical missing | likely reason |",
+            "|---|---:|---:|---:|---|---:|---:|---:|---|",
         ]
     )
     for item in report.get("workloads", []):
@@ -1717,11 +1756,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         summary = real.get("measurement_summary", {}).get("peak_memory", {})
         trial_range = int(summary.get("range", 0) or 0)
         samples = int(summary.get("count", real.get("trial_count", 1)) or 1)
-        nvml = real.get("measurement_summary", {}).get("nvml_process_memory", {})
-        nvml_peak = nvml.get("max")
-        nvml_text = "n/a" if nvml_peak is None else _fmt_bytes(int(nvml_peak))
+        physical_peak = int(item.get("empirical_physical_peak_upper_bound_bytes", real_peak) or real_peak)
+        physical_missing = int(item.get("empirical_physical_missing_peak_bytes", missing_peak) or 0)
         lines.append(
-            f"| `{item.get('name')}` | {samples} | {_fmt_bytes(real_peak)} | {_fmt_bytes(trial_range)} | {nvml_text} | {_fmt_bytes(fake_peak)} | {_fmt_bytes(missing_peak)} | `{item.get('likely_gap_reason', '')}` |"
+            f"| `{item.get('name')}` | {samples} | {_fmt_bytes(real_peak)} | {_fmt_bytes(physical_peak)} | `{item.get('empirical_physical_peak_upper_bound_source')}` | {_fmt_bytes(trial_range)} | {_fmt_bytes(fake_peak)} | {_fmt_bytes(physical_missing)} | `{item.get('likely_gap_reason', '')}` |"
         )
     native_rows: list[str] = []
     for item in report.get("workloads", []):

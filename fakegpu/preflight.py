@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--memory-calibration",
         help=(
             "Path to a repeated real-GPU calibration report or aggregated bundle. "
-            "For an exact matching workload/profile, use its observed real-CUDA upper bound."
+            "For an exact matching workload/profile, use its observed physical-memory upper bound."
         ),
     )
     parser.add_argument(
@@ -356,6 +356,18 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"- source: `{memory_estimation.get('source')}`",
                 f"- workload: `{memory_estimation.get('workload')}`",
                 f"- workload signature: `{memory_estimation.get('workload_signature')}`",
+                f"- metric: `{memory_estimation.get('metric')}`",
+                "- metric sources: `{}`".format(
+                    ", ".join(
+                        sorted(
+                            {
+                                str(dev.get("memory_calibration_metric_source"))
+                                for dev in report.get("devices", [])
+                                if isinstance(dev, dict) and dev.get("memory_calibration_metric_source")
+                            }
+                        )
+                    )
+                ),
                 f"- matched profiles: `{', '.join(memory_estimation.get('matched_profiles', []))}`",
                 f"- matched devices: `{memory_estimation.get('matched_device_count')}`",
             ]
@@ -870,7 +882,13 @@ def _apply_empirical_memory_calibration(
 
         tracked_peak = int(item.get("tracked_peak_memory", item.get("peak_memory", 0)) or 0)
         previous_estimate = int(item.get("peak_memory", 0) or 0)
-        empirical_upper_bound = int(candidate["empirical_real_peak_upper_bound_bytes"])
+        allocator_upper_bound = int(candidate["empirical_real_peak_upper_bound_bytes"])
+        empirical_upper_bound = int(
+            candidate.get("empirical_physical_peak_upper_bound_bytes", allocator_upper_bound)
+        )
+        empirical_source = str(
+            candidate.get("empirical_physical_peak_upper_bound_source") or "torch_allocator_peak"
+        )
         estimated_peak = max(previous_estimate, empirical_upper_bound)
         total = int(item.get("total_memory", 0) or 0)
         headroom = total - estimated_peak
@@ -882,6 +900,9 @@ def _apply_empirical_memory_calibration(
                 "estimated_peak_memory": estimated_peak,
                 "memory_estimation_method": "empirical_repeated_upper_bound",
                 "empirical_calibration_peak_memory": empirical_upper_bound,
+                "empirical_allocator_peak_memory": allocator_upper_bound,
+                "memory_calibration_metric": "physical_peak",
+                "memory_calibration_metric_source": empirical_source,
                 "memory_calibration_sample_count": int(candidate.get("sample_count", 0) or 0),
                 "memory_calibration_workload_signature": calibration["workload_signature"],
                 "memory_calibration_profile": profile,
@@ -895,9 +916,10 @@ def _apply_empirical_memory_calibration(
             if isinstance(gpu, dict) and gpu not in calibration_gpus:
                 calibration_gpus.append(gpu)
         warnings.append(
-            "Applied empirical upper bound {peak} from {samples} post-warmup real-GPU sample(s) "
-            "for workload {workload} on profile {profile}.".format(
+            "Applied empirical physical upper bound {peak} ({source}) from {samples} "
+            "post-warmup real-GPU sample(s) for workload {workload} on profile {profile}.".format(
                 peak=_fmt_bytes(empirical_upper_bound),
+                source=empirical_source,
                 samples=int(candidate.get("sample_count", 0) or 0),
                 workload=calibration["workload_name"],
                 profile=profile,
@@ -906,6 +928,7 @@ def _apply_empirical_memory_calibration(
 
     calibration_gpu = {
         "method": "empirical_repeated_upper_bound",
+        "metric": "physical_peak",
         "source": str(path.resolve()),
         "workload": calibration["workload_name"],
         "workload_signature": calibration["workload_signature"],
@@ -913,6 +936,7 @@ def _apply_empirical_memory_calibration(
     }
     return adjusted, {
         "method": "empirical_repeated_upper_bound",
+        "metric": "physical_peak",
         "source": str(path.resolve()),
         "source_schema_version": calibration["source_schema_version"],
         "workload": calibration["workload_name"],
@@ -970,21 +994,32 @@ def _load_empirical_bundle(payload: dict[str, Any], workload_selector: str) -> d
         if not isinstance(observation, dict):
             continue
         profile = str(observation.get("profile") or "")
-        upper_bound = int(observation.get("empirical_real_peak_upper_bound_bytes", 0) or 0)
-        if not profile or upper_bound <= 0:
+        allocator_upper_bound = int(observation.get("empirical_real_peak_upper_bound_bytes", 0) or 0)
+        physical_upper_bound = int(
+            observation.get("empirical_physical_peak_upper_bound_bytes", allocator_upper_bound) or 0
+        )
+        physical_source = str(
+            observation.get("empirical_physical_peak_upper_bound_source") or "torch_allocator_peak"
+        )
+        if not profile or allocator_upper_bound <= 0 or physical_upper_bound <= 0:
             continue
         candidate = candidates.setdefault(
             profile,
             {
                 "empirical_real_peak_upper_bound_bytes": 0,
+                "empirical_physical_peak_upper_bound_bytes": 0,
+                "empirical_physical_peak_upper_bound_source": "torch_allocator_peak",
                 "sample_count": 0,
                 "gpus": [],
             },
         )
         candidate["empirical_real_peak_upper_bound_bytes"] = max(
             int(candidate["empirical_real_peak_upper_bound_bytes"]),
-            upper_bound,
+            allocator_upper_bound,
         )
+        if physical_upper_bound > int(candidate["empirical_physical_peak_upper_bound_bytes"]):
+            candidate["empirical_physical_peak_upper_bound_bytes"] = physical_upper_bound
+            candidate["empirical_physical_peak_upper_bound_source"] = physical_source
         candidate["sample_count"] = int(candidate["sample_count"]) + int(
             observation.get("sample_count", 0) or 0
         )
@@ -1036,6 +1071,25 @@ def _load_empirical_report(payload: dict[str, Any], workload_selector: str) -> d
         peaks = [peak] if peak > 0 else []
     if not peaks:
         raise ValueError("calibration workload has no positive real-CUDA peak samples")
+    allocator_upper_bound = max(peaks)
+    physical_upper_bound = int(
+        workload.get("empirical_physical_peak_upper_bound_bytes", 0) or 0
+    )
+    physical_source = str(
+        workload.get("empirical_physical_peak_upper_bound_source") or ""
+    )
+    if physical_upper_bound <= 0:
+        process_peaks = _positive_nvml_trial_values(real, "peak_process_memory")
+        device_deltas = _positive_nvml_trial_values(real, "peak_device_used_delta_memory")
+        if process_peaks:
+            physical_upper_bound = max(allocator_upper_bound, max(process_peaks))
+            physical_source = "nvml_process_peak"
+        elif device_deltas:
+            physical_upper_bound = max(allocator_upper_bound, max(device_deltas))
+            physical_source = "torch_allocator_peak_with_nvml_device_delta"
+        else:
+            physical_upper_bound = allocator_upper_bound
+            physical_source = "torch_allocator_peak"
     profile = str(payload.get("fakecuda_profile") or "")
     if not profile:
         raise ValueError("calibration report has no fakecuda_profile")
@@ -1049,12 +1103,31 @@ def _load_empirical_report(payload: dict[str, Any], workload_selector: str) -> d
         "workload_signature": signature,
         "candidates": {
             profile: {
-                "empirical_real_peak_upper_bound_bytes": max(peaks),
+                "empirical_real_peak_upper_bound_bytes": allocator_upper_bound,
+                "empirical_physical_peak_upper_bound_bytes": physical_upper_bound,
+                "empirical_physical_peak_upper_bound_source": physical_source,
                 "sample_count": len(peaks),
                 "gpus": [gpu] if isinstance(gpu, dict) else [],
             }
         },
     }
+
+
+def _positive_nvml_trial_values(measurement: dict[str, Any], metric: str) -> list[int]:
+    trials = measurement.get("trials")
+    if isinstance(trials, list):
+        return [
+            int(nvml.get(metric, 0) or 0)
+            for item in trials
+            if isinstance(item, dict)
+            and isinstance((nvml := item.get("nvml")), dict)
+            and nvml.get("status") == "available"
+            and int(nvml.get(metric, 0) or 0) > 0
+        ]
+    nvml = measurement.get("nvml")
+    if isinstance(nvml, dict) and int(nvml.get(metric, 0) or 0) > 0:
+        return [int(nvml[metric])]
+    return []
 
 
 def _classify_status(
