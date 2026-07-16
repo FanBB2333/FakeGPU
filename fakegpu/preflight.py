@@ -1081,13 +1081,25 @@ def _classify_status(
 
 def _looks_like_oom(stdout: str, stderr: str, raw_report: dict[str, Any] | None) -> bool:
     haystack = "\n".join([stdout, stderr]).lower()
-    if "outofmemory" in haystack or "out of memory" in haystack or "cuda oom" in haystack:
+    if _contains_oom_marker(haystack):
         return True
     exc = raw_report.get("exception") if isinstance(raw_report, dict) else None
     if isinstance(exc, dict):
         exc_text = f"{exc.get('type', '')}\n{exc.get('message', '')}".lower()
-        return "outofmemory" in exc_text or "out of memory" in exc_text or "oom" in exc_text
+        return _contains_oom_marker(exc_text)
     return False
+
+
+def _contains_oom_marker(text: str) -> bool:
+    return any(
+        re.search(pattern, text, flags=re.IGNORECASE)
+        for pattern in (
+            r"\bout\s+of\s+memory\b",
+            r"\b(?:cuda)?outofmemory(?:error)?\b",
+            r"\bcuda\s+oom\b",
+            r"\boom\b",
+        )
+    )
 
 
 def _looks_like_skip(stdout: str, stderr: str) -> bool:
@@ -1138,8 +1150,7 @@ def _collect_errors(
 def _extract_relevant_error_line(text: str) -> str | None:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     for line in reversed(lines):
-        lower = line.lower()
-        if "out of memory" in lower or "outofmemory" in lower or "oom" in lower:
+        if _contains_oom_marker(line):
             return line
     return lines[-1] if lines else None
 

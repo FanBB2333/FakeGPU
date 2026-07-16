@@ -50,6 +50,19 @@ def _run_preflight(
     )
 
 
+def test_oom_detection_does_not_match_bloom_model_names() -> None:
+    from fakegpu.preflight import _looks_like_oom
+
+    raw_report = {
+        "exception": {
+            "type": "ModuleNotFoundError",
+            "message": "Could not import module 'BloomPreTrainedModel'",
+        }
+    }
+    assert _looks_like_oom("", "", raw_report) is False
+    assert _looks_like_oom("", "torch.cuda.OutOfMemoryError: CUDA out of memory", None) is True
+
+
 def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path) -> None:
     script = tmp_path / "pass_probe.py"
     script.write_text(
