@@ -151,7 +151,7 @@ print(torch.cuda.mem_get_info())
 
 内置套件包含 tensor allocation probe、torch MLP 训练步、torch Tiny Transformer 训练步、梯度累积、梯度 checkpointing、本地随机初始化的 Hugging Face tiny GPT-2 训练步，以及 PEFT LoRA tiny GPT-2 训练步。它不会下载模型权重。
 
-这里不要求完全一致。目标是了解当前真实 GPU 的显存数据和 FakeGPU 报告在小型受控 workload 上的误差。校准套件会为当前服务器自动选择 `rtx-pro-5000-blackwell`，并写出 `build/real_gpu_calibration/calibration_real_gpu.json` 和 Markdown 报告。默认每个 real/native worker 先 warmup 1 次，再测量 3 次；报告保留 PyTorch allocated、reserved、requested 峰值分布和 NVML 进程级显存采样，并把最大观测值作为实测上界。每个 workload 都会运行 real CUDA、passthrough、Hybrid clamp 和 fakecuda，原生模式的结果签名必须与 real CUDA 一致。最后一个超容量 tensor probe 会验证 Hybrid clamp 能返回 `torch.cuda.OutOfMemoryError`，而不会真的耗尽物理显存。
+这里不要求完全一致。目标是了解当前真实 GPU 的显存数据和 FakeGPU 报告在小型受控 workload 上的误差。校准套件会为当前服务器自动选择 `rtx-pro-5000-blackwell`，并写出 `build/real_gpu_calibration/calibration_real_gpu.json` 和 Markdown 报告。默认每个 real/native worker 先 warmup 1 次，再测量 3 次；报告保留 PyTorch allocated、reserved、requested 峰值分布和 NVML 显存采样，并把最大观测值作为实测上界。NVML 能识别当前 PID 时会记录进程峰值；WSL 无法提供 PID 映射时，会明确标记进程采样不可用并保留设备显存增量。每个 workload 都会运行 real CUDA、passthrough、Hybrid clamp 和 fakecuda，原生模式的结果签名必须与 real CUDA 一致。最后一个超容量 tensor probe 会验证 Hybrid clamp 能返回 `torch.cuda.OutOfMemoryError`，而不会真的耗尽物理显存。
 
 不同校准 GPU 的报告可以直接聚合，不需要拟合一个通用倍率：
 

@@ -248,7 +248,7 @@ def run_calibration(
         "notes": [
             f"This calibration records memory peak error for small workloads on {gpu['name']}.",
             "Measured peaks use the maximum of repeated post-warmup trials; distributions remain in each worker payload.",
-            "NVML process memory includes CUDA context and backend allocations that PyTorch allocator counters do not expose.",
+            "NVML adds process memory when the current PID is visible; otherwise device deltas still expose allocator-external changes.",
             "Its safety margins apply only to the measured GPU and workload family.",
             "It does not claim numerical parity or cluster performance.",
             "passthrough and hybrid clamp execute the same workloads on the backing GPU when native modes are enabled.",
@@ -614,6 +614,7 @@ class _NvmlProcessMemorySampler:
         self._status = "not_started"
         self._reason: str | None = None
         self._sample_count = 0
+        self._process_sample_count = 0
         self._baseline_process_memory = 0
         self._baseline_device_used_memory = 0
         self._peak_process_memory = 0
@@ -633,9 +634,11 @@ class _NvmlProcessMemorySampler:
                 driver = driver.decode("utf-8", errors="replace")
             self._driver_version = str(driver)
             process_memory, device_memory = self._read_sample()
-            self._baseline_process_memory = process_memory
+            if process_memory is not None:
+                self._baseline_process_memory = process_memory
+                self._peak_process_memory = process_memory
+                self._process_sample_count = 1
             self._baseline_device_used_memory = device_memory
-            self._peak_process_memory = process_memory
             self._peak_device_used_memory = device_memory
             self._sample_count = 1
             self._status = "available"
@@ -668,12 +671,6 @@ class _NvmlProcessMemorySampler:
             "status": "available",
             "sample_interval_ms": round(self.interval_seconds * 1000.0, 3),
             "sample_count": int(self._sample_count),
-            "baseline_process_memory": int(self._baseline_process_memory),
-            "peak_process_memory": int(self._peak_process_memory),
-            "peak_process_delta_memory": max(
-                0,
-                int(self._peak_process_memory - self._baseline_process_memory),
-            ),
             "baseline_device_used_memory": int(self._baseline_device_used_memory),
             "peak_device_used_memory": int(self._peak_device_used_memory),
             "peak_device_used_delta_memory": max(
@@ -682,6 +679,28 @@ class _NvmlProcessMemorySampler:
             ),
             "driver_version": self._driver_version,
         }
+        if self._process_sample_count > 0:
+            result.update(
+                {
+                    "process_memory_status": "available",
+                    "process_sample_count": int(self._process_sample_count),
+                    "baseline_process_memory": int(self._baseline_process_memory),
+                    "peak_process_memory": int(self._peak_process_memory),
+                    "peak_process_delta_memory": max(
+                        0,
+                        int(self._peak_process_memory - self._baseline_process_memory),
+                    ),
+                }
+            )
+        else:
+            result.update(
+                {
+                    "process_memory_status": "unavailable",
+                    "process_memory_reason": (
+                        "NVML did not expose the current PID; WSL commonly provides only device-level memory"
+                    ),
+                }
+            )
         if self._reason:
             result["warning"] = self._reason
         return result
@@ -696,16 +715,18 @@ class _NvmlProcessMemorySampler:
                     self._reason = f"sampling failed: {type(exc).__name__}: {exc}"
                 return
 
-    def _record_sample(self, process_memory: int, device_memory: int) -> None:
+    def _record_sample(self, process_memory: int | None, device_memory: int) -> None:
         self._sample_count += 1
-        self._peak_process_memory = max(self._peak_process_memory, int(process_memory))
+        if process_memory is not None:
+            self._process_sample_count += 1
+            self._peak_process_memory = max(self._peak_process_memory, int(process_memory))
         self._peak_device_used_memory = max(self._peak_device_used_memory, int(device_memory))
 
-    def _read_sample(self) -> tuple[int, int]:
+    def _read_sample(self) -> tuple[int | None, int]:
         pynvml = self._pynvml
         if pynvml is None or self._handle is None:
             raise RuntimeError("NVML is not initialized")
-        process_memory = 0
+        process_memory: int | None = None
         process_getters = (
             "nvmlDeviceGetComputeRunningProcesses_v3",
             "nvmlDeviceGetComputeRunningProcesses_v2",
@@ -733,7 +754,7 @@ class _NvmlProcessMemorySampler:
                 continue
             used = int(getattr(process, "usedGpuMemory", 0) or 0)
             if used != unavailable_sentinel:
-                process_memory = max(process_memory, used)
+                process_memory = used if process_memory is None else max(process_memory, used)
         memory_info = pynvml.nvmlDeviceGetMemoryInfo(self._handle)
         device_memory = int(getattr(memory_info, "used", 0) or 0)
         return process_memory, device_memory

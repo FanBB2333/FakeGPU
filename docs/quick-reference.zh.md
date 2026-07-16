@@ -90,7 +90,7 @@ python3 train.py --small-config
 ./fgpu --mode hybrid --oom-policy clamp python3 train.py --small-config
 ```
 
-校准套件会写出 `build/real_gpu_calibration/calibration_real_gpu.json` 和 `.md`。当前服务器会自动选择 `rtx-pro-5000-blackwell`；缺少 CUDA、PyTorch 或匹配 profile 时，报告会记录明确的 skip 原因。套件包含 tensor、MLP、Tiny Transformer、梯度累积、梯度 checkpointing、Hugging Face tiny GPT-2 和 PEFT LoRA tiny GPT-2 workload。默认先 warmup 1 次，再测量 3 次，使用最大观测峰值作为上界，同时保留 PyTorch allocated/reserved/requested 和 NVML 进程级显存分布。每个 workload 都会运行 real CUDA、passthrough、Hybrid clamp 和 fakecuda；报告会校验原生模式的结果签名，并执行受控的 Hybrid clamp OOM probe。校准结果只适用于完全匹配的 GPU profile、workload 签名和相近的软件环境。
+校准套件会写出 `build/real_gpu_calibration/calibration_real_gpu.json` 和 `.md`。当前服务器会自动选择 `rtx-pro-5000-blackwell`；缺少 CUDA、PyTorch 或匹配 profile 时，报告会记录明确的 skip 原因。套件包含 tensor、MLP、Tiny Transformer、梯度累积、梯度 checkpointing、Hugging Face tiny GPT-2 和 PEFT LoRA tiny GPT-2 workload。默认先 warmup 1 次，再测量 3 次，使用最大观测峰值作为上界，同时保留 PyTorch allocated/reserved/requested 和 NVML 显存分布。NVML 能识别当前 PID 时会记录进程峰值；WSL 无法提供 PID 映射时，会明确标记进程采样不可用并保留设备显存增量。每个 workload 都会运行 real CUDA、passthrough、Hybrid clamp 和 fakecuda；报告会校验原生模式的结果签名，并执行受控的 Hybrid clamp OOM probe。校准结果只适用于完全匹配的 GPU profile、workload 签名和相近的软件环境。
 
 多台机器的报告可以合并为实测数据集，再交给 preflight 按 profile 选择：
 
