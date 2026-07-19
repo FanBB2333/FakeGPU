@@ -248,8 +248,18 @@ _CROSS_DEVICE_CHECK = os.environ.get("FAKEGPU_CROSS_DEVICE_CHECK", "1") != "0"
 _device_registry: dict[int, int] = {}
 
 
+def _is_fake_tensor(tensor: Any) -> bool:
+    """Return whether a tensor is owned by PyTorch FakeTensorMode."""
+    return getattr(tensor, "fake_mode", None) is not None or (
+        type(tensor).__module__ == "torch._subclasses.fake_tensor"
+        and type(tensor).__name__ == "FakeTensor"
+    )
+
+
 def _register_tensor_device(tensor: Any, device_index: int) -> None:
     """Register a tensor's storage in the device registry and memory tracker."""
+    if _is_fake_tensor(tensor):
+        return
     try:
         dp = tensor.untyped_storage().data_ptr()
         if dp != 0:
@@ -263,6 +273,8 @@ def _register_tensor_device(tensor: Any, device_index: int) -> None:
 
 def _get_tensor_device(tensor: Any) -> int | None:
     """Look up the fake CUDA device index for a tensor, or None if untracked."""
+    if _is_fake_tensor(tensor):
+        return None
     try:
         dp = tensor.untyped_storage().data_ptr()
         return _device_registry.get(dp)
@@ -720,6 +732,8 @@ def _register_tensor_for_memory_tracking(tensor: Any, device_index: int) -> None
     """Register a tensor's memory and set up GC cleanup via weakref."""
     if _memory_tracker is None or not _MEMORY_TRACKING:
         return
+    if _is_fake_tensor(tensor):
+        return
 
     # Functional transforms such as vmap expose BatchedTensorImpl objects
     # whose storage is intentionally inaccessible.  Meta tensors and some
@@ -869,7 +883,7 @@ def _infer_tensor_memory_category(tensor: Any, raw: Any) -> str:
 
 def _mark_tensor_memory_category(tensor: Any, category: str) -> None:
     tracker = _memory_tracker
-    if tracker is None:
+    if tracker is None or _is_fake_tensor(tensor):
         return
     dp = getattr(tensor, "_fakegpu_memory_data_ptr", None)
     if dp is not None:
@@ -949,8 +963,15 @@ def _pack_autograd_saved_tensor(tensor: Any) -> Any:
 
         if not isinstance(tensor, torch.Tensor):
             return tensor
+        if _is_fake_tensor(tensor):
+            return tensor
         storage = tensor.untyped_storage()
-        raw_data_ptr = int(storage.data_ptr())
+        try:
+            raw_data_ptr = int(storage.data_ptr())
+        except RuntimeError as exc:
+            if "Cannot access data pointer" in str(exc):
+                return tensor
+            raise
         nbytes = int(storage.nbytes())
         if raw_data_ptr == 0 or nbytes == 0:
             return tensor
@@ -1017,6 +1038,34 @@ def _install_autograd_saved_tensor_tracking(torch_mod: Any) -> None:
         atexit.register(_close_hooks)
     except Exception:
         _saved_tensors_hooks_cm = None
+
+
+@contextmanager
+def _suspend_autograd_saved_tensor_tracking():
+    """Temporarily remove the global hook for torch.func/export graph capture."""
+
+    global _saved_tensors_hooks_cm
+    hooks = _saved_tensors_hooks_cm
+    if hooks is None:
+        yield
+        return
+
+    _saved_tensors_hooks_cm = None
+    hooks.__exit__(None, None, None)
+    try:
+        yield
+    finally:
+        try:
+            import torch
+
+            restored = torch.autograd.graph.saved_tensors_hooks(
+                _pack_autograd_saved_tensor,
+                _unpack_autograd_saved_tensor,
+            )
+            restored.__enter__()
+            _saved_tensors_hooks_cm = restored
+        except Exception:
+            _saved_tensors_hooks_cm = None
 
 
 def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> None:

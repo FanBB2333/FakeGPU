@@ -178,6 +178,22 @@ fakegpu preflight \
 
 This raises tracking confidence to `C4_real_gpu_calibrated` only when every target device has a matching profile observation. Physical peaks prefer NVML process memory, which includes CUDA context and backend allocations. When WSL cannot expose the process, the estimate uses the larger of the PyTorch allocator peak and NVML device delta and records that fallback source. It does not extrapolate across model shapes: changing batch size, sequence length, model dimensions, or optimizer configuration requires a new workload signature and new samples.
 
+### 4. Static ATen Storage-Liveness Validation
+
+`./ftest static_memory_validation` captures a fake-tensor ATen forward/backward graph without executing CUDA kernels. CUDA-enabled hosts trace fake CUDA tensors so device-dependent operators select the measured backend's ATen path. The estimator accounts for unique storage aliases, graph last-use lifetimes, parameters, buffers, gradients, and Adam/AdamW moment state. Graph and optimizer phases are compared separately. The eager single-tensor optimizer model follows parameter iteration order because two current-parameter intermediates can overlap the previous parameter's denominator. CUDA Flash Attention auxiliary storage is derived from query shape, dtype, and 64-token sequence tiles. A CUDA run adds one measured post-release backend-resident allocation for the current GPU/software profile and checks six parameterized MLP/Transformer FP32/BF16 workloads. The maintained threshold rejects a measured underestimate above 5%.
+
+The current cross-machine evidence covers RTX 3090 Ti Ampere (PyTorch 2.12/CUDA 13.0) and RTX PRO 5000 Blackwell (PyTorch 2.9/CUDA 12.8). Across six workloads and 12 GPU observations, maximum underestimation and maximum absolute error were 0.24%. MLP requested-byte estimates were exact. Three Flash Attention shapes differed from requested peaks by at most 260 bytes after backend-resident calibration. Static peak bytes matched across both hosts. Transformer graph fingerprints still differed across PyTorch versions despite equal byte estimates. This validates the current parameter grid, not arbitrary models or software stacks.
+
+```bash
+python3 verification/aggregate_static_memory_validations.py \
+  reports/3090ti/static_memory_validation.json \
+  reports/pro5000/static_memory_validation.json \
+  --output build/static_memory_validation_bundle.json \
+  --markdown build/static_memory_validation_bundle.md
+```
+
+Efficient Attention and other unmatched backend workspaces, fused/foreach optimizer extras, allocator fragmentation, custom CUDA kernels, distributed buffers, and graph breaks still require additional modeling or empirical measurements.
+
 To produce an individual preflight report for every maintained workload:
 
 ```bash

@@ -49,6 +49,7 @@
   - **基础层**：内置的上游 `FakeCudaTensor` 后端（`fakegpu/_upstream.py`），通过 `torch.Tensor._make_subclass` + `__torch_function__` 协议实现核心 CUDA 重定向。Tensor 报告 `device == cuda:N` 且 `is_cuda == True`。
   - **增强层**：FakeGPU 自有增强，包括每设备 GPU profile、内存跟踪与 OOM 模拟、autocast dtype 校验、跨设备操作守卫、终端摘要报告。
 - 错误模拟（跨设备、OOM、无效设备索引、dtype 不匹配、checkpoint、梯度）属于增强层。
+- `fakegpu/memory_estimator.py` 捕获 fake-tensor ATen 图，估算前向或函数式训练步骤中的唯一 storage 生命周期。
 - 错误模拟测试位于 `test/test_error_*.py`，统一运行入口在 `test/run_error_simulation_suite.py`。
 - 完整架构详情参见 [Torch Patch 系统](phase2-custom-torch.md)。
 
@@ -63,7 +64,7 @@
 | `src/nccl/` | fake NCCL 入口与模式分发 |
 | `src/distributed/` | coordinator 协议、communicator、拓扑、staging |
 | `src/monitor/` | JSON 报告 |
-| `fakegpu/` | Python 包、CLI、内置 FakeCudaTensor 后端与增强层（GPU profile、内存跟踪、跨设备守卫、错误模拟） |
+| `fakegpu/` | Python 包、CLI、内置 FakeCudaTensor 后端、运行时显存跟踪与 ATen 图显存估算器 |
 | `profiles/` | GPU preset YAML |
 | `test/` | 用户入口级 smoke / PyTorch / DDP / comparison 脚本 |
 | `verification/` | 更底层的 probe、direct test 与样例配置 |

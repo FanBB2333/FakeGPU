@@ -81,6 +81,25 @@ Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with
 
 When `--strict` is set, skipped child tests are treated as `FAIL_RUNTIME` instead of a passing preflight.
 
+For graph-based training-memory estimation, run:
+
+```bash
+./ftest static_memory_validation
+```
+
+The estimator captures a fake-tensor ATen forward/backward graph with `make_fx` and `torch.func.grad_and_value`, deduplicates aliased storages, and releases each storage after its final graph use. `target_device="auto"` uses fake CUDA tensors when PyTorch is linked with CUDA, so Attention and other device-dependent operators select the CUDA ATen path without allocating real GPU memory. Its default training-step model retains the module output through backward and `optimizer.step()`. It compares graph and optimizer phases instead of adding non-overlapping peaks, then accounts for Adam/AdamW moment state. The eager single-tensor optimizer model follows parameter iteration order: two current-parameter intermediates can overlap the previous parameter's denominator. CUDA Flash Attention auxiliary storage is derived from query shape, dtype, and 64-token sequence tiles. On a CUDA host, the validation suite also measures one post-release backend-resident allocation and compares six MLP/Transformer FP32/BF16 workloads with `torch.cuda.max_memory_allocated()`. The maintained suite rejects a measured underestimation above 5%.
+
+Reports from different GPUs can be compared with:
+
+```bash
+python3 verification/aggregate_static_memory_validations.py \
+  reports/3090ti/static_memory_validation.json \
+  reports/pro5000/static_memory_validation.json \
+  --output build/static_memory_validation_bundle.json
+```
+
+Storage-size arithmetic is device-independent, but the captured ATen graph is target-device-specific. Backend-resident memory remains specific to the GPU, PyTorch, CUDA, and selected operator path. Measured reports keep both allocator-allocated and allocator-requested comparisons so size-class rounding can be separated from missing logical storage or operator workspace. A changed graph fingerprint must be reviewed even when the estimated byte count is unchanged.
+
 For real-GPU calibration, run a reduced workload directly on the GPU and compare with passthrough or hybrid when available:
 
 ```bash
@@ -121,6 +140,7 @@ See [AI Researcher Preflight](ai-researcher-preflight.md) for the current design
 ./ftest cpu_sim
 ./ftest python
 ./ftest preflight_oom
+./ftest static_memory_validation
 ./ftest real_gpu_calibration
 ./ftest all
 ```

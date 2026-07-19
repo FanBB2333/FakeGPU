@@ -178,6 +178,22 @@ fakegpu preflight \
 
 只有所有目标设备都找到匹配的 profile 观测时，报告才会把可信度提升为 `C4_real_gpu_calibrated`。物理显存上界优先使用 NVML 进程峰值，把 CUDA context 和后端分配一起计入；WSL 无法提供进程数据时，会取 PyTorch allocator 峰值与 NVML 设备增量中的较大值，并记录这一数据来源。这套数据不会跨模型形状外推；batch size、序列长度、模型维度或 optimizer 配置变化后，需要生成新的 workload 签名和样本。
 
+### 4. 静态 ATen Storage 生命周期验证
+
+`./ftest static_memory_validation` 会捕获 fake-tensor ATen 前向/反向图，不执行 CUDA kernel。含 CUDA 支持的 PyTorch 会创建 fake CUDA tensor，使设备相关算子选择实测 backend 的 ATen 路径。估算内容包括共享 storage alias、图中的最后使用位置、parameters、buffers、gradients 和 Adam/AdamW moment state。graph 与 optimizer 阶段分别比较。eager single-tensor optimizer 会按参数迭代顺序计算临时张量，因为当前参数的两个中间结果可能与上一个参数的 denominator 同时存在。CUDA Flash Attention auxiliary storage 按 query shape、dtype 和 64-token sequence tile 计算。CUDA 环境还会测量一次 workload 释放后的 backend 常驻分配，并检查 6 个参数化 MLP/Transformer FP32/BF16 workload。维护中的阈值会拒绝超过 5% 的实测低估。
+
+当前跨机器数据覆盖 RTX 3090 Ti Ampere（PyTorch 2.12/CUDA 13.0）和 RTX PRO 5000 Blackwell（PyTorch 2.9/CUDA 12.8）。6 个 workload 共 12 个 GPU 观测，最大低估和最大绝对误差均为 0.24%。MLP 的 requested-byte 估算精确到字节；3 组 Flash Attention shape 在 backend 常驻校准后的 requested 峰值差异不超过 260 字节。两台主机的静态峰值字节数一致；Transformer fingerprint 因 PyTorch 版本不同而有差异，但字节估算仍相同。这些结果只验证了当前参数网格。
+
+```bash
+python3 verification/aggregate_static_memory_validations.py \
+  reports/3090ti/static_memory_validation.json \
+  reports/pro5000/static_memory_validation.json \
+  --output build/static_memory_validation_bundle.json \
+  --markdown build/static_memory_validation_bundle.md
+```
+
+Efficient Attention 和其他未匹配的 backend workspace、fused/foreach optimizer 额外临时分配、allocator 碎片、自定义 CUDA kernel、分布式 buffer 和 graph break 仍需要继续建模或实测。
+
 如需为每个维护中的 workload 分别生成 preflight 报告，可以运行：
 
 ```bash

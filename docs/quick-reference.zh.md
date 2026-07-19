@@ -81,6 +81,25 @@ runner 会写出：
 
 启用 `--strict` 后，child test 出现 skip 会被记为 `FAIL_RUNTIME`，不会作为通过的 preflight。
 
+基于计算图的训练显存估算可以使用：
+
+```bash
+./ftest static_memory_validation
+```
+
+估算器通过 `make_fx` 和 `torch.func.grad_and_value` 捕获 fake-tensor ATen 前向/反向图，合并共享 storage 的 alias，并在最后一次图使用后释放 storage。PyTorch 含 CUDA 支持时，`target_device="auto"` 会使用 fake CUDA tensor，使 Attention 等设备相关算子选择 CUDA ATen 路径，但不会分配真实 GPU 显存。默认训练步骤会保留 module output，直到 backward 和 `optimizer.step()` 结束。graph 和 optimizer 两个阶段分别计算，不会叠加并不同时存在的峰值；Adam/AdamW 还会计算常驻 moment state。eager single-tensor optimizer 会按参数迭代顺序计算临时张量：当前参数的两个中间结果可能与上一个参数的 denominator 同时存在。CUDA Flash Attention auxiliary storage 按 query shape、dtype 和 64-token sequence tile 计算。CUDA 主机还会测量一次 workload 释放后的 backend 常驻分配，再用 6 个 MLP/Transformer FP32/BF16 workload 对比 `torch.cuda.max_memory_allocated()`。维护中的套件会拒绝超过 5% 的实测低估。
+
+不同 GPU 的报告可以这样比较：
+
+```bash
+python3 verification/aggregate_static_memory_validations.py \
+  reports/3090ti/static_memory_validation.json \
+  reports/pro5000/static_memory_validation.json \
+  --output build/static_memory_validation_bundle.json
+```
+
+storage 大小计算本身与设备无关，但捕获的 ATen 图取决于目标设备。backend 常驻显存仍取决于 GPU、PyTorch、CUDA 和算子路径。实测报告同时保存 allocator allocated 与 requested 对比，用于区分 size-class 对齐误差、缺失的逻辑 storage 和算子 workspace。即使估算字节数相同，只要 graph fingerprint 变化，仍需要检查图结构差异。
+
 真实 GPU 校准需要先运行缩小版 workload，再按环境能力对比 passthrough 或 hybrid：
 
 ```bash
@@ -121,6 +140,7 @@ python3 -m fakegpu preflight \
 ./ftest cpu_sim
 ./ftest python
 ./ftest preflight_oom
+./ftest static_memory_validation
 ./ftest real_gpu_calibration
 ./ftest all
 ```

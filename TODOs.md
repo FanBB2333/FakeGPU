@@ -230,6 +230,19 @@ with fakegpu.stage("backward"):
 - [x] 真实 GPU 校准支持 warmup 后重复采样，保留 PyTorch allocated/reserved/requested 与 NVML 进程显存分布。
 - [x] 支持把多台 GPU 的校准报告聚合为 workload-signature/profile 级实测数据集。
 - [x] preflight 支持读取实测数据集，对完全匹配的 workload 与 profile 使用重复样本中的真实峰值上界。
+- [x] 新增基于 fake-tensor ATen 图的静态显存估算基础版本：
+  - [x] `make_fx` + `torch.func.grad_and_value` 前向/反向图捕获
+  - [x] storage alias 去重和最后使用位置生命周期分析
+  - [x] parameters / buffers / gradients / AdamW state 分项统计
+  - [x] graph/optimizer phase 分离和 single-tensor Adam/AdamW 参数迭代临时张量估算
+  - [x] 按目标 device 创建 fake tensor，使 Attention 等算子选择目标 backend 的 ATen 路径
+  - [x] 新增按 query shape、dtype 和 sequence tile 计算的 CUDA Flash Attention auxiliary storage profile
+  - [x] GPU/软件栈级 backend 常驻 allocator 分量校准
+  - [x] MLP/Transformer、FP32/BF16 参数网格验证
+- [x] 在 RTX 3090 Ti Ampere 与 RTX PRO 5000 Blackwell 上完成 6 个 workload、12 个观测的静态估算跨卡验证；最大低估和最大绝对误差为 0.24%。
+- [x] 支持聚合多台 GPU 的静态估算报告，分别检查 byte peak 与 graph fingerprint 一致性。
+- [ ] 继续为 cuDNN/cuBLASLt、Efficient Attention 和 fused optimizer 建立按架构、软件版本、dtype 和 shape 索引的 workspace profile。
+- [ ] 扩展静态验证到动态 shape、graph break、自定义 CUDA op、FSDP/ZeRO 和 fused/foreach optimizer。
 - [x] 报告 `tracking_confidence`：
   - `C0_incomplete`：只跑通流程，不适合判断 OOM。
   - `C1_weight_storage`：主要覆盖权重和显式 storage。

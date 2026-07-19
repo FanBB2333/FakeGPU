@@ -7,6 +7,7 @@
 - Exact `rtx-pro-5000-blackwell` profile for the current 72 GB calibration server, including compute capability 12.0 and measured CUDA device attributes.
 - Generic `real_gpu_calibration` suite that records the detected GPU, selects a matching fakecuda profile, executes real/passthrough/hybrid/fakecuda comparisons, checks deterministic result signatures, and verifies Hybrid clamp OOM behavior.
 - Gradient accumulation and gradient checkpointing calibration workloads.
+- Target-device fake-tensor ATen forward/backward storage-liveness estimator with alias handling, phase-aware optimizer memory, CUDA Flash Attention auxiliary-storage profiles, per-stack backend-resident calibration, and cross-GPU validation reports.
 
 ### Fixed
 
