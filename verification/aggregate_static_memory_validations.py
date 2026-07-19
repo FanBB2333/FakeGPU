@@ -79,6 +79,7 @@ def aggregate_reports(
             )
             static = dict(item.get("static_estimate") or {})
             graph = dict(static.get("graph") or {})
+            workspace = dict(static.get("workspace_estimate") or {})
             comparison = dict(item.get("comparison") or {})
             observation = {
                 "source_report": str(path),
@@ -87,7 +88,29 @@ def aggregate_reports(
                 "backend_calibration": backend_calibration,
                 "static_estimated_peak_bytes": int(static.get("estimated_peak_bytes", 0) or 0),
                 "profiled_workspace_bytes": int(
-                    static.get("workspace_estimate_bytes", 0) or 0
+                    static.get(
+                        "workspace_peak_contribution_bytes",
+                        static.get("workspace_estimate_bytes", 0),
+                    )
+                    or 0
+                ),
+                "workspace_profiled_bytes_sum": int(
+                    workspace.get("profiled_bytes_sum", 0) or 0
+                ),
+                "workspace_profile_count": int(
+                    workspace.get("profiled_operator_count", 0) or 0
+                ),
+                "extrapolated_workspace_profile_count": int(
+                    workspace.get("extrapolated_profile_count", 0) or 0
+                ),
+                "unprofiled_attention_operator_count": sum(
+                    int(count)
+                    for count in dict(
+                        workspace.get("unprofiled_attention_operators") or {}
+                    ).values()
+                ),
+                "workspace_peak_candidate": dict(
+                    workspace.get("peak_candidate") or {}
                 ),
                 "graph_fingerprint": str(graph.get("graph_fingerprint") or ""),
                 "graph_node_count": int(graph.get("node_count", 0) or 0),
@@ -95,6 +118,11 @@ def aggregate_reports(
                 "real_peak_allocated_bytes": int(
                     (item.get("real_cuda") or {}).get("peak_allocated_bytes", 0) or 0
                 ),
+                "real_peak_stage": (item.get("real_cuda") or {}).get("peak_stage"),
+                "real_requested_peak_stage": (item.get("real_cuda") or {}).get(
+                    "peak_requested_stage"
+                ),
+                "estimated_peak_phase": static.get("peak_phase"),
                 "comparison": comparison,
             }
             workload["observations"].append(observation)
@@ -140,6 +168,20 @@ def aggregate_reports(
         float(item.get("underestimate_percent", 0.0) or 0.0)
         for item in all_comparisons
     ]
+    requested_comparisons = [
+        item
+        for item in all_comparisons
+        if item.get("requested_underestimate_percent") is not None
+        and item.get("requested_absolute_error_percent") is not None
+    ]
+    requested_underestimates = [
+        float(item["requested_underestimate_percent"])
+        for item in requested_comparisons
+    ]
+    requested_absolute_errors = [
+        float(item["requested_absolute_error_percent"])
+        for item in requested_comparisons
+    ]
     return {
         "schema_version": SCHEMA_VERSION,
         "created_at_unix": int(time.time()),
@@ -156,11 +198,47 @@ def aggregate_reports(
                 bool(item["graph_fingerprint_consistent"]) for item in workloads
             ),
             "underestimated_observation_count": sum(value > 0 for value in underestimates),
+            "unprofiled_attention_observation_count": sum(
+                int(observation.get("unprofiled_attention_operator_count", 0) or 0)
+                > 0
+                for workload in workloads
+                for observation in workload["observations"]
+            ),
+            "extrapolated_workspace_profile_observation_count": sum(
+                int(
+                    observation.get(
+                        "extrapolated_workspace_profile_count",
+                        0,
+                    )
+                    or 0
+                )
+                > 0
+                for workload in workloads
+                for observation in workload["observations"]
+            ),
             "max_underestimate_percent": max(underestimates) if underestimates else None,
             "median_absolute_error_percent": (
                 statistics.median(absolute_errors) if absolute_errors else None
             ),
             "max_absolute_error_percent": max(absolute_errors) if absolute_errors else None,
+            "requested_underestimated_observation_count": sum(
+                value > 0 for value in requested_underestimates
+            ),
+            "max_requested_underestimate_percent": (
+                max(requested_underestimates)
+                if requested_underestimates
+                else None
+            ),
+            "median_requested_absolute_error_percent": (
+                statistics.median(requested_absolute_errors)
+                if requested_absolute_errors
+                else None
+            ),
+            "max_requested_absolute_error_percent": (
+                max(requested_absolute_errors)
+                if requested_absolute_errors
+                else None
+            ),
         },
         "workloads": workloads,
         "notes": [
@@ -183,9 +261,11 @@ def render_markdown(bundle: dict[str, Any]) -> str:
         f"**Graph fingerprints consistent:** `{summary.get('all_graph_fingerprints_consistent')}`",
         f"**Maximum underestimate:** `{_fmt_percent(summary.get('max_underestimate_percent'))}`",
         f"**Maximum absolute error:** `{_fmt_percent(summary.get('max_absolute_error_percent'))}`",
+        f"**Maximum requested-byte underestimate:** `{_fmt_percent(summary.get('max_requested_underestimate_percent'))}`",
+        f"**Maximum requested-byte absolute error:** `{_fmt_percent(summary.get('max_requested_absolute_error_percent'))}`",
         "",
-        "| workload | GPU | static peak | profiled workspace | backend resident | calibrated peak | real peak | error | underestimate | static consistent | graph consistent |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|",
+        "| workload | GPU | static peak | profile bytes | peak contribution | backend resident | calibrated peak | real peak | phase | error | underestimate | static consistent | graph consistent |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---|",
     ]
     for workload in bundle.get("workloads", []):
         static_consistent = bool(workload.get("static_peak_consistent"))
@@ -195,7 +275,7 @@ def render_markdown(bundle: dict[str, Any]) -> str:
             backend = observation.get("backend_calibration") or {}
             comparison = observation.get("comparison") or {}
             lines.append(
-                "| `{name}` | `{gpu}` | {static} | {workspace} | {backend} | {calibrated} | {real} | {error} | {underestimate} | `{static_consistent}` | `{graph_consistent}` |".format(
+                "| `{name}` | `{gpu}` | {static} | {profile_sum} | {workspace} | {backend} | {calibrated} | {real} | `{phase}` | {error} | {underestimate} | `{static_consistent}` | `{graph_consistent}` |".format(
                     name=workload.get("name"),
                     gpu=gpu.get("name"),
                     static=_fmt_bytes(
@@ -203,6 +283,12 @@ def render_markdown(bundle: dict[str, Any]) -> str:
                     ),
                     workspace=_fmt_bytes(
                         int(observation.get("profiled_workspace_bytes", 0) or 0)
+                    ),
+                    profile_sum=_fmt_bytes(
+                        int(
+                            observation.get("workspace_profiled_bytes_sum", 0)
+                            or 0
+                        )
                     ),
                     backend=_fmt_bytes(
                         int(backend.get("resident_allocated_bytes", 0) or 0)
@@ -213,6 +299,7 @@ def render_markdown(bundle: dict[str, Any]) -> str:
                     real=_fmt_bytes(
                         int(observation.get("real_peak_allocated_bytes", 0) or 0)
                     ),
+                    phase=observation.get("real_peak_stage") or "unknown",
                     error=_fmt_percent(comparison.get("absolute_error_percent")),
                     underestimate=_fmt_percent(comparison.get("underestimate_percent")),
                     static_consistent="yes" if static_consistent else "no",

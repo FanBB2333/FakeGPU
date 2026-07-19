@@ -182,7 +182,7 @@ This raises tracking confidence to `C4_real_gpu_calibrated` only when every targ
 
 `./ftest static_memory_validation` captures a fake-tensor ATen forward/backward graph without executing CUDA kernels. CUDA-enabled hosts trace fake CUDA tensors so device-dependent operators select the measured backend's ATen path. The estimator accounts for unique storage aliases, graph last-use lifetimes, parameters, buffers, gradients, and Adam/AdamW moment state. Graph and optimizer phases are compared separately. The eager single-tensor optimizer model follows parameter iteration order because two current-parameter intermediates can overlap the previous parameter's denominator. CUDA Flash Attention auxiliary storage is derived from query shape, dtype, and 64-token sequence tiles. A CUDA run adds one measured post-release backend-resident allocation for the current GPU/software profile and checks six parameterized MLP/Transformer FP32/BF16 workloads. The maintained threshold rejects a measured underestimate above 5%.
 
-The current cross-machine evidence covers RTX 3090 Ti Ampere (PyTorch 2.12/CUDA 13.0) and RTX PRO 5000 Blackwell (PyTorch 2.9/CUDA 12.8). Across six workloads and 12 GPU observations, maximum underestimation and maximum absolute error were 0.24%. MLP requested-byte estimates were exact. Three Flash Attention shapes differed from requested peaks by at most 260 bytes after backend-resident calibration. Static peak bytes matched across both hosts. Transformer graph fingerprints still differed across PyTorch versions despite equal byte estimates. This validates the current parameter grid, not arbitrary models or software stacks.
+The current cross-machine evidence covers RTX 3090 Ti Ampere (PyTorch 2.12/CUDA 13.0) and RTX PRO 5000 Blackwell (PyTorch 2.9/CUDA 12.8). Across 13 workloads and 26 GPU observations, maximum allocator underestimation and maximum absolute error were 0.08%. MLP requested-byte estimates were exact. FP32 Efficient Attention shapes differed from requested peaks by at most 28 bytes, while three Flash Attention shapes differed by at most 260 bytes after backend-resident calibration. Static peak bytes matched across both hosts. Transformer graph fingerprints still differed across PyTorch versions despite equal byte estimates. This validates the current parameter grid, not arbitrary models or software stacks.
 
 ```bash
 python3 verification/aggregate_static_memory_validations.py \
@@ -192,7 +192,7 @@ python3 verification/aggregate_static_memory_validations.py \
   --markdown build/static_memory_validation_bundle.md
 ```
 
-Efficient Attention and other unmatched backend workspaces, fused/foreach optimizer extras, allocator fragmentation, custom CUDA kernels, distributed buffers, and graph breaks still require additional modeling or empirical measurements.
+Other unmatched backend workspaces, fused/foreach optimizer extras, allocator fragmentation, custom CUDA kernels, distributed buffers, and graph breaks still require additional modeling or empirical measurements.
 
 To produce an individual preflight report for every maintained workload:
 
@@ -294,7 +294,7 @@ Suggested confidence levels:
 
 The next implementation should prioritize:
 
-1. Reducing the remaining CUDA backend-internal workspace and optimizer undercount for Transformer workloads.
+1. Adding phase-local cuDNN/cuBLASLt and fused optimizer workspace profiles.
 2. A manual large tensor OOM probe on the current real calibration GPU.
 3. Small/large profile pass-fail matrix for more realistic HF and LoRA workloads.
 4. More workload examples that attach `preflight_report.json` to Slurm submission notes.

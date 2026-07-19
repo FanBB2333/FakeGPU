@@ -90,6 +90,8 @@ runner 会写出 `preflight_report.json`，并配套生成 `preflight_report.md`
 
 每个 device entry 会包含总显存、峰值显存、余量、allocation 次数、`current_bytes_by_category`、`peak_by_stage` 和 `largest_allocations`。fakecuda 模式下，top allocations 会记录 bytes、dtype、shape、stage，以及 `parameter` / `buffer` / `gradient` / `optimizer_state` / `activation` / `temporary` / `tensor` 这类粗粒度 category。加上 `--allocation-stacks` 后，还会为这些 top allocations 记录短 Python stack trace。
 
+静态显存验证报告会分别保留 forward、backward 和 optimizer 的 CUDA 峰值。workspace 字段会区分 profile 总字节数与实际影响峰值的增量：graph-phase persistent storage 作用于整个计算图，operator-local workspace 只与对应 ATen 节点的 live storage 相加。报告还会列出已由计算图覆盖和仍未匹配的 Attention 算子。
+
 当前真实校准目标是一张 NVIDIA RTX PRO 5000 72GB Blackwell（Compute Capability 12.0）。维护中的套件覆盖七个受控 workload，要求 passthrough 与 Hybrid 的结果签名匹配 real CUDA，记录 Hybrid Driver allocation 峰值，并验证 Hybrid clamp 下的 PyTorch OOM 表现。它不能证明多机目标集群一定能容纳 workload，也不能证明性能表现。
 
 用法和当前限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。

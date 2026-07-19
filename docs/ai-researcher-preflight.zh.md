@@ -182,7 +182,7 @@ fakegpu preflight \
 
 `./ftest static_memory_validation` 会捕获 fake-tensor ATen 前向/反向图，不执行 CUDA kernel。含 CUDA 支持的 PyTorch 会创建 fake CUDA tensor，使设备相关算子选择实测 backend 的 ATen 路径。估算内容包括共享 storage alias、图中的最后使用位置、parameters、buffers、gradients 和 Adam/AdamW moment state。graph 与 optimizer 阶段分别比较。eager single-tensor optimizer 会按参数迭代顺序计算临时张量，因为当前参数的两个中间结果可能与上一个参数的 denominator 同时存在。CUDA Flash Attention auxiliary storage 按 query shape、dtype 和 64-token sequence tile 计算。CUDA 环境还会测量一次 workload 释放后的 backend 常驻分配，并检查 6 个参数化 MLP/Transformer FP32/BF16 workload。维护中的阈值会拒绝超过 5% 的实测低估。
 
-当前跨机器数据覆盖 RTX 3090 Ti Ampere（PyTorch 2.12/CUDA 13.0）和 RTX PRO 5000 Blackwell（PyTorch 2.9/CUDA 12.8）。6 个 workload 共 12 个 GPU 观测，最大低估和最大绝对误差均为 0.24%。MLP 的 requested-byte 估算精确到字节；3 组 Flash Attention shape 在 backend 常驻校准后的 requested 峰值差异不超过 260 字节。两台主机的静态峰值字节数一致；Transformer fingerprint 因 PyTorch 版本不同而有差异，但字节估算仍相同。这些结果只验证了当前参数网格。
+当前跨机器数据覆盖 RTX 3090 Ti Ampere（PyTorch 2.12/CUDA 13.0）和 RTX PRO 5000 Blackwell（PyTorch 2.9/CUDA 12.8）。13 个 workload 共 26 个 GPU 观测，allocator 最大低估和最大绝对误差均为 0.08%。MLP 的 requested-byte 估算精确到字节；FP32 Efficient Attention shape 的 requested 峰值差异不超过 28 字节，3 组 Flash Attention shape 的差异不超过 260 字节。两台主机的静态峰值字节数一致；Transformer fingerprint 因 PyTorch 版本不同而有差异，但字节估算仍相同。这些结果只验证了当前参数网格。
 
 ```bash
 python3 verification/aggregate_static_memory_validations.py \
@@ -192,7 +192,7 @@ python3 verification/aggregate_static_memory_validations.py \
   --markdown build/static_memory_validation_bundle.md
 ```
 
-Efficient Attention 和其他未匹配的 backend workspace、fused/foreach optimizer 额外临时分配、allocator 碎片、自定义 CUDA kernel、分布式 buffer 和 graph break 仍需要继续建模或实测。
+其他未匹配的 backend workspace、fused/foreach optimizer 额外临时分配、allocator 碎片、自定义 CUDA kernel、分布式 buffer 和 graph break 仍需要继续建模或实测。
 
 如需为每个维护中的 workload 分别生成 preflight 报告，可以运行：
 
@@ -294,7 +294,7 @@ preflight 报告应包含：
 
 下一版实现应优先做：
 
-1. 继续减少 Transformer workload 中 CUDA 后端内部 workspace 和 optimizer 分配的低估。
+1. 增加按执行阶段处理的 cuDNN/cuBLASLt 和 fused optimizer workspace profile。
 2. 在当前真实校准 GPU 上增加手动大 tensor OOM probe。
 3. 为更真实的 HF 和 LoRA workload 增加小/大 profile pass-fail matrix。
 4. 更多把 `preflight_report.json` 作为 Slurm 提交说明附件的 workload 示例。

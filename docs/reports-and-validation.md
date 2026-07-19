@@ -90,6 +90,8 @@ Status values:
 
 Each device entry includes total memory, peak memory, headroom, allocation count, `current_bytes_by_category`, `peak_by_stage`, and `largest_allocations`. In fakecuda mode, top allocations include bytes, dtype, shape, stage, and a coarse category such as `parameter`, `buffer`, `gradient`, `optimizer_state`, `activation`, `temporary`, or `tensor`. Add `--allocation-stacks` to include short Python stack traces for those top allocations.
 
+Static-memory validation reports retain forward, backward, and optimizer CUDA peaks separately. Workspace details distinguish total profiled bytes from the effective peak contribution: graph-phase persistent storage applies across the graph, while operator-local workspace is combined only with the live storage at its ATen node. Reports also list graph-modeled and unprofiled Attention operators.
+
 The current real calibration target is a single NVIDIA RTX PRO 5000 72GB Blackwell (compute capability 12.0). The maintained suite covers seven controlled workloads, requires passthrough and Hybrid result signatures to match real CUDA, records Hybrid Driver allocation peaks, and verifies the PyTorch OOM surface under Hybrid clamp. It does not prove that a multi-node target cluster will fit or perform well.
 
 See [AI Researcher Preflight](ai-researcher-preflight.md) for usage and current limitations.

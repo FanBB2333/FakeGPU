@@ -237,11 +237,14 @@ with fakegpu.stage("backward"):
   - [x] graph/optimizer phase 分离和 single-tensor Adam/AdamW 参数迭代临时张量估算
   - [x] 按目标 device 创建 fake tensor，使 Attention 等算子选择目标 backend 的 ATen 路径
   - [x] 新增按 query shape、dtype 和 sequence tile 计算的 CUDA Flash Attention auxiliary storage profile
+  - [x] 记录每个 ATen node 的 live storage，把 operator-local workspace 只加入对应节点
+  - [x] 新增按 batch、sequence 和 query storage 计算的 FP32 Efficient Attention backward workspace profile
+  - [x] 真实 CUDA 测量分别记录 forward / backward / optimizer 峰值
   - [x] GPU/软件栈级 backend 常驻 allocator 分量校准
   - [x] MLP/Transformer、FP32/BF16 参数网格验证
-- [x] 在 RTX 3090 Ti Ampere 与 RTX PRO 5000 Blackwell 上完成 6 个 workload、12 个观测的静态估算跨卡验证；最大低估和最大绝对误差为 0.24%。
+- [x] 在 RTX 3090 Ti Ampere 与 RTX PRO 5000 Blackwell 上完成 13 个 workload、26 个观测的静态估算跨卡验证；allocator 最大低估和最大绝对误差为 0.08%，Efficient Attention requested-byte 差异为 0–28 bytes。
 - [x] 支持聚合多台 GPU 的静态估算报告，分别检查 byte peak 与 graph fingerprint 一致性。
-- [ ] 继续为 cuDNN/cuBLASLt、Efficient Attention 和 fused optimizer 建立按架构、软件版本、dtype 和 shape 索引的 workspace profile。
+- [ ] 继续为 cuDNN/cuBLASLt 和 fused optimizer 建立按架构、软件版本、dtype 和 shape 索引的 workspace profile。
 - [ ] 扩展静态验证到动态 shape、graph break、自定义 CUDA op、FSDP/ZeRO 和 fused/foreach optimizer。
 - [x] 报告 `tracking_confidence`：
   - `C0_incomplete`：只跑通流程，不适合判断 OOM。

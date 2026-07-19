@@ -28,6 +28,20 @@ def main(argv: list[str] | None = None) -> int:
 
     workloads = report.get("workloads")
     _require(isinstance(workloads, list) and workloads, "workloads must be a non-empty list")
+    phase_resolved = bool((report.get("sampling") or {}).get("phase_resolved"))
+    summary = report.get("summary")
+    _require(isinstance(summary, dict), "summary is required")
+    for field in (
+        "workspace_profile_count",
+        "extrapolated_workspace_profile_count",
+        "graph_modeled_attention_operator_count",
+        "unprofiled_attention_operator_count",
+    ):
+        if field in summary:
+            _require(
+                int(summary.get(field, -1)) >= 0,
+                f"summary.{field} must be non-negative",
+            )
     if status == "PASS_MEASURED":
         backend = report.get("backend_calibration")
         _require(isinstance(backend, dict), "backend_calibration is required")
@@ -64,11 +78,71 @@ def main(argv: list[str] | None = None) -> int:
         )
         profiles = workspace.get("profiles")
         _require(isinstance(profiles, list), f"{context} workspace profiles must be a list")
+        profile_bytes = sum(
+            int(profile.get("bytes", 0) or 0) for profile in profiles
+        )
+        profiled_bytes_sum = int(
+            workspace.get("profiled_bytes_sum", profile_bytes)
+        )
+        _require(
+            profiled_bytes_sum == profile_bytes,
+            f"{context} workspace profiled byte sum is inconsistent",
+        )
+        _require(
+            workspace_bytes == profiled_bytes_sum,
+            f"{context} workspace total does not match profiled bytes",
+        )
+        if "profiled_operator_count" in workspace:
+            _require(
+                int(workspace["profiled_operator_count"]) == len(profiles),
+                f"{context} workspace profile count is inconsistent",
+            )
+        if "extrapolated_profile_count" in workspace:
+            _require(
+                0
+                <= int(workspace["extrapolated_profile_count"])
+                <= len(profiles),
+                f"{context} extrapolated workspace profile count is invalid",
+            )
+        lifetime_model = workspace.get("lifetime_model")
+        _require(
+            lifetime_model in {None, "node_liveness.v1"},
+            f"{context} workspace lifetime model is unsupported",
+        )
         for profile_index, profile in enumerate(profiles):
             _require(
                 isinstance(profile, dict)
                 and int(profile.get("bytes", 0) or 0) > 0,
                 f"{context} workspace profile {profile_index} is invalid",
+            )
+            if lifetime_model == "node_liveness.v1":
+                _require(
+                    profile.get("lifetime")
+                    in {"graph_phase_persistent", "operator_local"},
+                    f"{context} workspace profile {profile_index} has invalid lifetime",
+                )
+        if lifetime_model == "node_liveness.v1":
+            _require(
+                isinstance(workspace.get("graph_modeled_attention_operators"), dict),
+                f"{context} graph-modeled attention operators are required",
+            )
+            peak_contribution = int(
+                static.get("workspace_peak_contribution_bytes", -1)
+            )
+            _require(
+                0 <= peak_contribution <= profiled_bytes_sum,
+                f"{context} workspace peak contribution is invalid",
+            )
+            _require(
+                peak_contribution
+                == int(workspace.get("effective_peak_contribution_bytes", -1)),
+                f"{context} workspace peak contribution fields disagree",
+            )
+            peak_candidate = workspace.get("peak_candidate")
+            _require(
+                isinstance(peak_candidate, dict)
+                and int(peak_candidate.get("combined_live_bytes", -1)) >= 0,
+                f"{context} workspace peak candidate is required",
             )
         graph = static.get("graph")
         _require(isinstance(graph, dict), f"{context}.static_estimate.graph is required")
@@ -96,6 +170,44 @@ def main(argv: list[str] | None = None) -> int:
                 int(real.get("peak_allocated_bytes", 0) or 0) > 0,
                 f"{context}.real_cuda.peak_allocated_bytes must be positive",
             )
+            if phase_resolved:
+                peak_by_stage = real.get("peak_by_stage")
+                _require(
+                    isinstance(peak_by_stage, dict),
+                    f"{context}.real_cuda.peak_by_stage is required",
+                )
+                for stage_name in ("forward", "backward", "optimizer"):
+                    stage = peak_by_stage.get(stage_name)
+                    _require(
+                        isinstance(stage, dict)
+                        and int(stage.get("peak_allocated_bytes", 0) or 0) > 0,
+                        f"{context}.real_cuda.peak_by_stage.{stage_name} is invalid",
+                    )
+                _require(
+                    real.get("peak_stage") in {"forward", "backward", "optimizer"},
+                    f"{context}.real_cuda.peak_stage is invalid",
+                )
+                if real.get("requested_peak_bytes") is not None:
+                    _require(
+                        real.get("peak_requested_stage")
+                        in {"forward", "backward", "optimizer"},
+                        f"{context}.real_cuda.peak_requested_stage is invalid",
+                    )
+                _require(
+                    int(real.get("peak_allocated_bytes", 0) or 0)
+                    == max(
+                        int(peak_by_stage[name]["peak_allocated_bytes"])
+                        for name in ("forward", "backward", "optimizer")
+                    ),
+                    f"{context}.real_cuda peak does not match stage peaks",
+                )
+                phase_comparison = comparison.get("phase_comparison")
+                _require(
+                    isinstance(phase_comparison, dict)
+                    and isinstance(phase_comparison.get("graph"), dict)
+                    and isinstance(phase_comparison.get("optimizer"), dict),
+                    f"{context}.comparison.phase_comparison is required",
+                )
             underestimate = comparison.get("underestimate_percent")
             _require(
                 isinstance(underestimate, (int, float)) and math.isfinite(float(underestimate)),
@@ -114,6 +226,14 @@ def main(argv: list[str] | None = None) -> int:
                     f"{context} underestimate {float(underestimate):.3f}% exceeds "
                     f"{ns.max_underestimate_percent:.3f}%",
                 )
+                if real.get("requested_peak_bytes") is not None:
+                    _require(
+                        float(requested_underestimate)
+                        <= ns.max_underestimate_percent,
+                        f"{context} requested-byte underestimate "
+                        f"{float(requested_underestimate):.3f}% exceeds "
+                        f"{ns.max_underestimate_percent:.3f}%",
+                    )
 
     print(f"OK: static memory validation {ns.path} status={status} workloads={len(workloads)}")
     return 0

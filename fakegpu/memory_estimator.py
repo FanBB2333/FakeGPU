@@ -10,6 +10,9 @@ from typing import Any
 
 SCHEMA_VERSION = "static_memory_estimate.v1"
 SUPPORTED_OPTIMIZERS = {"none", "sgd", "sgd_momentum", "adam", "adamw"}
+_EFFICIENT_ATTENTION_BATCH_WORKSPACE_BYTES = 65536
+_EFFICIENT_ATTENTION_SEQUENCE_ROW_BYTES = 16
+_EFFICIENT_ATTENTION_BATCH_METADATA_BYTES = 64
 
 
 def estimate_module_memory(
@@ -210,10 +213,14 @@ def estimate_module_memory(
         trainable_parameters.values(),
         optimizer=normalized_optimizer,
     )
-    workspace_estimate = _estimate_backend_workspace(graph_module)
+    workspace_estimate = _estimate_backend_workspace(
+        graph_module,
+        graph=graph,
+        target_device=trace_device,
+    )
     graph_phase_peak = int(graph["peak_live_bytes"]) + int(
         optimizer_state["total_bytes"]
-    ) + int(workspace_estimate["total_bytes"])
+    ) + int(workspace_estimate["effective_peak_contribution_bytes"])
     optimizer_phase_peak: int | None = None
     if normalized_mode == "training" and normalized_optimizer != "none":
         optimizer_phase_peak = (
@@ -237,6 +244,11 @@ def estimate_module_memory(
         "cuda_context_and_loaded_modules",
         "caching_allocator_fragmentation",
     ]
+    if any(
+        str(profile.get("confidence", "")).startswith("extrapolated_")
+        for profile in workspace_estimate["profiles"]
+    ):
+        unmodeled_components.append("workspace_profile_shape_extrapolation")
     if normalized_mode == "training" and normalized_optimizer != "none":
         unmodeled_components.append("optimizer_fused_or_foreach_extra_temporaries")
 
@@ -274,6 +286,9 @@ def estimate_module_memory(
         "peak_phase": peak_phase,
         "workspace_estimate": workspace_estimate,
         "workspace_estimate_bytes": int(workspace_estimate["total_bytes"]),
+        "workspace_peak_contribution_bytes": int(
+            workspace_estimate["effective_peak_contribution_bytes"]
+        ),
         "estimated_peak_bytes": estimated_peak,
         "graph": graph,
         "unmodeled_components": unmodeled_components,
@@ -415,11 +430,13 @@ def analyze_graph_memory(
     peak_bytes = 0
     peak_index = 0
     peak_live_keys: set[int] = set()
+    live_bytes_by_node: dict[str, int] = {}
     for index, node in enumerate(nodes):
         for key in records_by_producer.get(index, []):
             if key not in live_keys:
                 live_keys.add(key)
                 live_bytes += int(storage_records[key]["bytes"])
+        live_bytes_by_node[node.name] = live_bytes
         if live_bytes > peak_bytes:
             peak_bytes = live_bytes
             peak_index = index
@@ -500,6 +517,7 @@ def analyze_graph_memory(
             int(record["bytes"]) for record in storage_records.values()
         ),
         "peak_live_bytes": peak_bytes,
+        "live_bytes_by_node": live_bytes_by_node,
         "final_live_bytes": final_live_bytes,
         "final_live_storage_count": len(final_live_keys),
         "peak_node": {
@@ -606,66 +624,31 @@ def _optimizer_temporary_estimate(
     }
 
 
-def _estimate_backend_workspace(graph_module: Any) -> dict[str, Any]:
+def _estimate_backend_workspace(
+    graph_module: Any,
+    *,
+    graph: Mapping[str, Any],
+    target_device: Any,
+) -> dict[str, Any]:
     profiles: list[dict[str, Any]] = []
+    graph_modeled_attention_operators: dict[str, int] = {}
     unprofiled_attention_operators: dict[str, int] = {}
 
     for node in graph_module.graph.nodes:
         if node.op not in {"call_function", "call_method", "call_module"}:
             continue
         target = _target_name(node.target)
-        if "_scaled_dot_product_flash_attention_backward" in target:
-            query = _first_tensor_leaf(
-                node.args[1].meta.get("val")
-                if len(node.args) > 1 and hasattr(node.args[1], "meta")
-                else None
-            )
-            if query is None:
-                continue
-            workspace_bytes, sequence_length, sequence_tiles = (
-                _flash_attention_workspace_bytes(query, sequence_dimension=2)
-            )
-            profiles.append(
-                {
-                    "operator": target,
-                    "node": node.name,
-                    "profile": "cuda_flash_attention_backward_auxiliary.v1",
-                    "kind": "backend_saved_or_workspace_storage",
-                    "query_shape": _shape_list(query.shape),
-                    "query_dtype": str(query.dtype),
-                    "sequence_length": sequence_length,
-                    "sequence_tile_size": 64,
-                    "sequence_tile_count": sequence_tiles,
-                    "bytes": workspace_bytes,
-                    "confidence": "validated_two_gpu_multi_shape",
-                }
-            )
+        profile = _backend_workspace_profile(
+            node,
+            target,
+            target_device=target_device,
+        )
+        if profile is not None:
+            profiles.append(profile)
             continue
-        if "_flash_attention_backward" in target:
-            query = _first_tensor_leaf(
-                node.args[1].meta.get("val")
-                if len(node.args) > 1 and hasattr(node.args[1], "meta")
-                else None
-            )
-            if query is None:
-                continue
-            workspace_bytes, sequence_length, sequence_tiles = (
-                _flash_attention_workspace_bytes(query, sequence_dimension=1)
-            )
-            profiles.append(
-                {
-                    "operator": target,
-                    "node": node.name,
-                    "profile": "cuda_flash_attention_backward_auxiliary.v1",
-                    "kind": "backend_saved_or_workspace_storage",
-                    "query_shape": _shape_list(query.shape),
-                    "query_dtype": str(query.dtype),
-                    "sequence_length": sequence_length,
-                    "sequence_tile_size": 64,
-                    "sequence_tile_count": sequence_tiles,
-                    "bytes": workspace_bytes,
-                    "confidence": "validated_two_gpu_multi_shape",
-                }
+        if _is_graph_modeled_attention_operator(target):
+            graph_modeled_attention_operators[target] = (
+                graph_modeled_attention_operators.get(target, 0) + 1
             )
             continue
         if "attention" in target.lower():
@@ -673,18 +656,234 @@ def _estimate_backend_workspace(graph_module: Any) -> dict[str, Any]:
                 unprofiled_attention_operators.get(target, 0) + 1
             )
 
+    summary = _workspace_peak_summary(graph, profiles)
     return {
         "method": "target_aten_operator_shape_profiles",
-        "total_bytes": sum(int(item["bytes"]) for item in profiles),
+        "lifetime_model": "node_liveness.v1",
+        "target_device": str(target_device),
+        **summary,
         "profiles": profiles,
+        "profiled_operator_count": len(profiles),
+        "extrapolated_profile_count": sum(
+            str(profile.get("confidence", "")).startswith("extrapolated_")
+            for profile in profiles
+        ),
+        "graph_modeled_attention_operators": dict(
+            sorted(graph_modeled_attention_operators.items())
+        ),
         "unprofiled_attention_operators": dict(
             sorted(unprofiled_attention_operators.items())
         ),
         "notes": [
+            "Graph-phase persistent profiles are added across the graph phase.",
+            "Operator-local workspaces are combined only with storage live at their execution node.",
             "Flash Attention auxiliary storage uses query shape, dtype, and 64-token sequence tiles.",
+            "FP32 Efficient Attention backward workspace uses batch, sequence, and query storage shape.",
             "Unprofiled operators remain listed instead of receiving a generic multiplier.",
         ],
     }
+
+
+def _backend_workspace_profile(
+    node: Any,
+    target: str,
+    *,
+    target_device: Any,
+) -> dict[str, Any] | None:
+    if "attention" not in target.lower():
+        return None
+    device_type = str(
+        getattr(target_device, "type", str(target_device).split(":", 1)[0])
+    )
+    if device_type != "cuda":
+        return None
+    query = _attention_query(node)
+    if query is None:
+        return None
+
+    if "_scaled_dot_product_flash_attention_backward" in target:
+        workspace_bytes, sequence_length, sequence_tiles = (
+            _flash_attention_workspace_bytes(query, sequence_dimension=2)
+        )
+        if workspace_bytes <= 0:
+            return None
+        return {
+            "operator": target,
+            "node": node.name,
+            "profile": "cuda_flash_attention_backward_auxiliary.v1",
+            "kind": "backend_saved_or_workspace_storage",
+            "lifetime": "graph_phase_persistent",
+            "query_shape": _shape_list(query.shape),
+            "query_dtype": str(query.dtype),
+            "sequence_length": sequence_length,
+            "sequence_tile_size": 64,
+            "sequence_tile_count": sequence_tiles,
+            "bytes": workspace_bytes,
+            "confidence": _flash_attention_profile_confidence(
+                query,
+                sequence_dimension=2,
+                scaled_operator=True,
+            ),
+            "validated_envelope": {
+                "compute_capabilities": ["8.6", "12.0"],
+                "batch_size": [2, 4],
+                "sequence_length": [64, 128],
+                "attention_heads": [4, 4],
+                "head_dimension": [32, 32],
+                "dtype": "torch.bfloat16",
+            },
+        }
+
+    if "_flash_attention_backward" in target:
+        workspace_bytes, sequence_length, sequence_tiles = (
+            _flash_attention_workspace_bytes(query, sequence_dimension=1)
+        )
+        if workspace_bytes <= 0:
+            return None
+        return {
+            "operator": target,
+            "node": node.name,
+            "profile": "cuda_flash_attention_backward_auxiliary.v1",
+            "kind": "backend_saved_or_workspace_storage",
+            "lifetime": "graph_phase_persistent",
+            "query_shape": _shape_list(query.shape),
+            "query_dtype": str(query.dtype),
+            "sequence_length": sequence_length,
+            "sequence_tile_size": 64,
+            "sequence_tile_count": sequence_tiles,
+            "bytes": workspace_bytes,
+            "confidence": _flash_attention_profile_confidence(
+                query,
+                sequence_dimension=1,
+                scaled_operator=False,
+            ),
+            "validated_envelope": {
+                "source_profile": "scaled_dot_product_flash_attention_backward",
+                "compute_capabilities": ["8.6", "12.0"],
+            },
+        }
+
+    if (
+        "_scaled_dot_product_efficient_attention_backward" in target
+        and str(getattr(query, "dtype", "")) == "torch.float32"
+    ):
+        (
+            workspace_bytes,
+            batch_size,
+            sequence_length,
+            fixed_bytes,
+            query_scratch_bytes,
+            row_metadata_bytes,
+        ) = _efficient_attention_backward_workspace_bytes(query)
+        if workspace_bytes <= 0:
+            return None
+        query_shape = tuple(query.shape)
+        validated_shape = (
+            1 <= batch_size <= 4
+            and 16 <= sequence_length <= 64
+            and int(query_shape[1]) == 4
+            and 16 <= int(query_shape[3]) <= 32
+        )
+        return {
+            "operator": target,
+            "node": node.name,
+            "profile": "cuda_efficient_attention_backward_workspace.v1",
+            "kind": "operator_workspace_storage",
+            "lifetime": "operator_local",
+            "query_shape": _shape_list(query.shape),
+            "query_dtype": str(query.dtype),
+            "batch_size": batch_size,
+            "sequence_length": sequence_length,
+            "fixed_bytes": fixed_bytes,
+            "query_scratch_bytes": query_scratch_bytes,
+            "row_metadata_bytes": row_metadata_bytes,
+            "bytes": workspace_bytes,
+            "confidence": (
+                "validated_two_gpu_multi_shape"
+                if validated_shape
+                else "extrapolated_from_two_gpu_multi_shape"
+            ),
+            "validated_envelope": {
+                "compute_capabilities": ["8.6", "12.0"],
+                "batch_size": [1, 4],
+                "sequence_length": [16, 64],
+                "attention_heads": [4, 4],
+                "head_dimension": [16, 32],
+                "dtype": "torch.float32",
+            },
+        }
+
+    return None
+
+
+def _workspace_peak_summary(
+    graph: Mapping[str, Any],
+    profiles: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    graph_peak_bytes = int(graph.get("peak_live_bytes", 0) or 0)
+    live_bytes_by_node = {
+        str(name): int(value)
+        for name, value in dict(graph.get("live_bytes_by_node") or {}).items()
+    }
+    persistent_bytes = sum(
+        int(profile.get("bytes", 0) or 0)
+        for profile in profiles
+        if profile.get("lifetime") == "graph_phase_persistent"
+    )
+    local_bytes_by_node: dict[str, int] = {}
+    for profile in profiles:
+        if profile.get("lifetime") != "operator_local":
+            continue
+        node = str(profile.get("node") or "")
+        local_bytes_by_node[node] = local_bytes_by_node.get(node, 0) + int(
+            profile.get("bytes", 0) or 0
+        )
+
+    peak_node = str((graph.get("peak_node") or {}).get("name") or "")
+    peak_graph_live_bytes = graph_peak_bytes
+    peak_operator_workspace_bytes = 0
+    combined_peak_bytes = graph_peak_bytes + persistent_bytes
+    for node, operator_workspace_bytes in local_bytes_by_node.items():
+        graph_live_bytes = int(live_bytes_by_node.get(node, 0))
+        candidate = graph_live_bytes + persistent_bytes + operator_workspace_bytes
+        if candidate > combined_peak_bytes:
+            combined_peak_bytes = candidate
+            peak_node = node
+            peak_graph_live_bytes = graph_live_bytes
+            peak_operator_workspace_bytes = operator_workspace_bytes
+
+    profiled_bytes_sum = sum(
+        int(profile.get("bytes", 0) or 0) for profile in profiles
+    )
+    effective_peak_contribution = max(0, combined_peak_bytes - graph_peak_bytes)
+    return {
+        "total_bytes": profiled_bytes_sum,
+        "effective_peak_contribution_bytes": effective_peak_contribution,
+        "profiled_bytes_sum": profiled_bytes_sum,
+        "graph_phase_persistent_bytes": persistent_bytes,
+        "operator_local_peak_bytes": max(local_bytes_by_node.values(), default=0),
+        "peak_candidate": {
+            "node": peak_node,
+            "graph_live_bytes": peak_graph_live_bytes,
+            "graph_phase_persistent_bytes": persistent_bytes,
+            "operator_workspace_bytes": peak_operator_workspace_bytes,
+            "combined_live_bytes": combined_peak_bytes,
+        },
+    }
+
+
+def _attention_query(node: Any) -> Any | None:
+    if len(node.args) <= 1 or not hasattr(node.args[1], "meta"):
+        return None
+    return _first_tensor_leaf(node.args[1].meta.get("val"))
+
+
+def _is_graph_modeled_attention_operator(target: str) -> bool:
+    return (
+        "_scaled_dot_product_efficient_attention(" in target
+        or "_scaled_dot_product_flash_attention(" in target
+        or "_flash_attention_forward(" in target
+    )
 
 
 def _flash_attention_workspace_bytes(
@@ -699,6 +898,56 @@ def _flash_attention_workspace_bytes(
     sequence_tiles = max(1, (sequence_length + 63) // 64)
     query_bytes = int(query.numel()) * int(query.element_size())
     return 2 * sequence_tiles * query_bytes, sequence_length, sequence_tiles
+
+
+def _flash_attention_profile_confidence(
+    query: Any,
+    *,
+    sequence_dimension: int,
+    scaled_operator: bool,
+) -> str:
+    shape = tuple(query.shape)
+    validated_shape = (
+        scaled_operator
+        and len(shape) == 4
+        and str(getattr(query, "dtype", "")) == "torch.bfloat16"
+        and int(shape[0]) in {2, 4}
+        and int(shape[1]) == 4
+        and int(shape[sequence_dimension]) in {64, 128}
+        and int(shape[3]) == 32
+    )
+    return (
+        "validated_two_gpu_multi_shape"
+        if validated_shape
+        else "extrapolated_from_two_gpu_multi_shape"
+    )
+
+
+def _efficient_attention_backward_workspace_bytes(
+    query: Any,
+) -> tuple[int, int, int, int, int, int]:
+    shape = tuple(query.shape)
+    if len(shape) != 4:
+        raise ValueError("Efficient Attention workspace profile requires a rank-4 query")
+    batch_size = int(shape[0])
+    sequence_length = int(shape[2])
+    fixed_bytes = batch_size * _EFFICIENT_ATTENTION_BATCH_WORKSPACE_BYTES
+    query_scratch_bytes = (
+        int(query.numel()) * int(query.element_size()) if batch_size > 1 else 0
+    )
+    row_metadata_bytes = batch_size * (
+        _EFFICIENT_ATTENTION_SEQUENCE_ROW_BYTES * sequence_length
+        + _EFFICIENT_ATTENTION_BATCH_METADATA_BYTES
+    )
+    total_bytes = fixed_bytes + query_scratch_bytes + row_metadata_bytes
+    return (
+        total_bytes,
+        batch_size,
+        sequence_length,
+        fixed_bytes,
+        query_scratch_bytes,
+        row_metadata_bytes,
+    )
 
 
 def _first_tensor_leaf(value: Any) -> Any | None:

@@ -34,6 +34,7 @@ def test_graph_liveness_deduplicates_view_storage() -> None:
     assert report["alias_node_count"] >= 2
     assert report["total_unique_storage_bytes"] == 64
     assert report["peak_live_bytes"] == 64
+    assert report["live_bytes_by_node"][report["peak_node"]["name"]] == 64
     assert report["retained_placeholder_storage_count"] == 1
     assert report["warnings"] == []
 
@@ -288,6 +289,116 @@ def test_flash_attention_workspace_profile_uses_sequence_tiles() -> None:
     assert bytes_128 == 4 * query_128.numel() * query_128.element_size()
 
 
+@pytest.mark.parametrize(
+    ("shape", "expected_bytes"),
+    [
+        ((1, 4, 16, 16), 65_856),
+        ((2, 4, 16, 16), 139_904),
+        ((1, 4, 32, 32), 66_112),
+        ((2, 4, 32, 16), 148_608),
+        ((4, 4, 32, 16), 297_216),
+        ((2, 4, 64, 16), 166_016),
+        ((2, 4, 64, 32), 198_784),
+        ((3, 4, 33, 24), 236_400),
+    ],
+)
+def test_efficient_attention_workspace_profile_matches_calibration_grid(
+    shape: tuple[int, ...],
+    expected_bytes: int,
+) -> None:
+    from fakegpu.memory_estimator import (
+        _efficient_attention_backward_workspace_bytes,
+    )
+
+    query = torch.empty(shape, dtype=torch.float32)
+    (
+        total_bytes,
+        batch_size,
+        sequence_length,
+        fixed_bytes,
+        query_scratch_bytes,
+        row_metadata_bytes,
+    ) = _efficient_attention_backward_workspace_bytes(query)
+
+    assert total_bytes == expected_bytes
+    assert fixed_bytes == batch_size * 65_536
+    assert query_scratch_bytes == (query.numel() * query.element_size()) * (
+        batch_size > 1
+    )
+    assert row_metadata_bytes == batch_size * (16 * sequence_length + 64)
+    assert total_bytes == fixed_bytes + query_scratch_bytes + row_metadata_bytes
+
+
+def test_operator_local_workspace_uses_node_liveness() -> None:
+    from fakegpu.memory_estimator import _workspace_peak_summary
+
+    graph = {
+        "peak_live_bytes": 100,
+        "peak_node": {"name": "global_peak"},
+        "live_bytes_by_node": {
+            "global_peak": 100,
+            "efficient_attention_backward": 70,
+        },
+    }
+    profiles = [
+        {
+            "node": "persistent_source",
+            "lifetime": "graph_phase_persistent",
+            "bytes": 20,
+        },
+        {
+            "node": "efficient_attention_backward",
+            "lifetime": "operator_local",
+            "bytes": 40,
+        },
+    ]
+
+    summary = _workspace_peak_summary(graph, profiles)
+
+    assert summary["profiled_bytes_sum"] == 60
+    assert summary["graph_phase_persistent_bytes"] == 20
+    assert summary["operator_local_peak_bytes"] == 40
+    assert summary["total_bytes"] == 60
+    assert summary["effective_peak_contribution_bytes"] == 30
+    assert summary["peak_candidate"] == {
+        "node": "efficient_attention_backward",
+        "graph_live_bytes": 70,
+        "graph_phase_persistent_bytes": 20,
+        "operator_workspace_bytes": 40,
+        "combined_live_bytes": 130,
+    }
+
+
+def test_cuda_workspace_profile_is_not_applied_to_cpu_trace() -> None:
+    from types import SimpleNamespace
+
+    from fakegpu.memory_estimator import _backend_workspace_profile
+
+    query = torch.empty((2, 4, 32, 16), dtype=torch.float32)
+    node = SimpleNamespace(
+        name="efficient_attention_backward",
+        args=(None, SimpleNamespace(meta={"val": query})),
+    )
+    target = "aten::_scaled_dot_product_efficient_attention_backward(Tensor query)"
+
+    assert (
+        _backend_workspace_profile(
+            node,
+            target,
+            target_device=torch.device("cpu"),
+        )
+        is None
+    )
+    profile = _backend_workspace_profile(
+        node,
+        target,
+        target_device=torch.device("cuda"),
+    )
+    assert profile is not None
+    assert profile["lifetime"] == "operator_local"
+    assert profile["confidence"] == "validated_two_gpu_multi_shape"
+
+
 def test_training_estimate_requires_scalar_loss() -> None:
     from fakegpu.memory_estimator import estimate_module_memory
 
@@ -367,7 +478,13 @@ def test_static_validation_cli_writes_checkable_static_only_report(tmp_path: Pat
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["status"] == "PASS_STATIC_ONLY"
     assert len(report["workloads"]) == 1
-    assert report["workloads"][0]["static_estimate"]["estimated_peak_bytes"] > 0
+    static = report["workloads"][0]["static_estimate"]
+    assert static["estimated_peak_bytes"] > 0
+    assert static["workspace_estimate"]["profiled_bytes_sum"] == 0
+    assert static["workspace_estimate_bytes"] == 0
+    assert static["workspace_peak_contribution_bytes"] == 0
+    assert static["workspace_estimate"]["peak_candidate"]["combined_live_bytes"] > 0
+    assert report["summary"]["extrapolated_workspace_profile_count"] == 0
 
     checked = subprocess.run(
         [
@@ -466,6 +583,12 @@ def test_measured_report_allows_zero_backend_resident_calibration(tmp_path: Path
                     "resident_allocated_bytes": 0,
                     "resident_requested_bytes": 0,
                 },
+                "summary": {
+                    "workspace_profile_count": 0,
+                    "extrapolated_workspace_profile_count": 0,
+                    "graph_modeled_attention_operator_count": 0,
+                    "unprofiled_attention_operator_count": 0,
+                },
                 "workloads": [
                     {
                         "name": "probe",
@@ -474,7 +597,13 @@ def test_measured_report_allows_zero_backend_resident_calibration(tmp_path: Path
                             "workspace_estimate_bytes": 0,
                             "workspace_estimate": {
                                 "total_bytes": 0,
+                                "profiled_bytes_sum": 0,
+                                "profiled_operator_count": 0,
                                 "profiles": [],
+                                "graph_modeled_attention_operators": {},
+                                "peak_candidate": {
+                                    "combined_live_bytes": 1,
+                                },
                             },
                             "graph": {
                                 "node_count": 1,
@@ -483,10 +612,22 @@ def test_measured_report_allows_zero_backend_resident_calibration(tmp_path: Path
                                 "warnings": [],
                             },
                         },
-                        "real_cuda": {"peak_allocated_bytes": 1},
+                        "real_cuda": {
+                            "peak_allocated_bytes": 1,
+                            "peak_stage": "forward",
+                            "peak_by_stage": {
+                                "forward": {"peak_allocated_bytes": 1},
+                                "backward": {"peak_allocated_bytes": 1},
+                                "optimizer": {"peak_allocated_bytes": 1},
+                            },
+                        },
                         "comparison": {
                             "method": "static_graph_plus_backend_resident_calibration",
                             "underestimate_percent": 0.0,
+                            "phase_comparison": {
+                                "graph": {},
+                                "optimizer": {},
+                            },
                         },
                     }
                 ],
