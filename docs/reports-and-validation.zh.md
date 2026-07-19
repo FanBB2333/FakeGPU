@@ -10,6 +10,7 @@
 | `./ftest cpu_sim` | CPU-backed cuBLAS / cuBLASLt 与 CPU 参考结果的一致性 |
 | `./ftest python` | 基础 PyTorch CUDA 设备、张量和 matmul 路径 |
 | `./ftest preflight_oom` | fakecuda fit/OOM 判定与报告 schema |
+| `./ftest static_memory_validation` | fake-tensor ATen 前向/反向 storage 生命周期、optimizer 显存和可选真实 CUDA allocator 对比 |
 | `./ftest real_gpu_calibration` | real/passthrough/Hybrid/fakecuda 显存与结果签名校准 |
 | `python3 verification/test_coordinator_smoke.py` | coordinator 启停与请求/响应闭环 |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce 语义正确性 |

@@ -16,6 +16,7 @@ Suites:
   cpu_sim   Build CPU simulation and validate cuBLAS ops
   python    Run PyTorch tests (requires torch)
   preflight_oom  Run fakecuda preflight pass/OOM report checks (requires torch)
+  static_memory_validation  Capture ATen storage liveness and compare with real CUDA when available
   real_gpu_calibration  Calibrate real/passthrough/hybrid/fakecuda workloads on the detected GPU
   rtx3090ti_calibration  Deprecated alias for real_gpu_calibration
   llm       Run LLM inference smoke test (requires torch + transformers + local model)
@@ -23,7 +24,8 @@ Suites:
   all       smoke + python
 
 Env:
-  BUILD_DIR=<path>     Build directory for smoke/python (default: build)
+  BUILD_DIR=<path>       Build directory for smoke/python (default: build)
+  FAKEGPU_PYTHON=<path>  Python interpreter used by Python-based suites (default: python3)
 EOF
 }
 
@@ -203,6 +205,25 @@ run_real_gpu_calibration() {
     --allow-skip
 }
 
+run_static_memory_validation() {
+  if ! "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
+    echo "torch not found in current python; skipping static memory validation."
+    return 0
+  fi
+
+  local report_root="$SMOKE_BUILD_DIR/static_memory_validation"
+  rm -rf "$report_root"
+  mkdir -p "$report_root"
+
+  "$PYTHON_BIN" verification/static_memory_validation.py \
+    --output "$report_root/static_memory_validation.json" \
+    --max-underestimate-percent 5
+  "$PYTHON_BIN" verification/check_static_memory_validation.py \
+    --path "$report_root/static_memory_validation.json" \
+    --allow-static-only \
+    --max-underestimate-percent 5
+}
+
 run_llm() {
   if ! "$PYTHON_BIN" -c "import torch, transformers" >/dev/null 2>&1; then
     echo "torch/transformers not found in current python; skipping LLM smoke test."
@@ -282,6 +303,9 @@ case "$suite" in
     ;;
   preflight_oom)
     run_preflight_oom
+    ;;
+  static_memory_validation)
+    run_static_memory_validation
     ;;
   real_gpu_calibration)
     run_real_gpu_calibration

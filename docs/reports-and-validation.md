@@ -10,6 +10,7 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `./ftest cpu_sim` | CPU-backed cuBLAS/cuBLASLt correctness against CPU references |
 | `./ftest python` | basic PyTorch CUDA device, tensor, and matmul flow |
 | `./ftest preflight_oom` | fakecuda fit/OOM classification and report schema |
+| `./ftest static_memory_validation` | fake-tensor ATen forward/backward storage liveness, optimizer memory, and optional real-CUDA allocator comparison |
 | `./ftest real_gpu_calibration` | real/passthrough/Hybrid/fakecuda memory and result-signature calibration |
 | `python3 verification/test_coordinator_smoke.py` | coordinator startup, request/response, and clean shutdown |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce semantics |

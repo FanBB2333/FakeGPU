@@ -49,6 +49,7 @@ This page explains how the repository is organized and how the main runtime piec
   - **Base layer**: vendored upstream `FakeCudaTensor` backend (`fakegpu/_upstream.py`) provides core CUDA redirection via `torch.Tensor._make_subclass` + `__torch_function__` protocol. Tensors report `device == cuda:N` and `is_cuda == True`.
   - **Enhancement layer**: FakeGPU additions including per-device GPU profiles, memory tracking with OOM simulation, autocast dtype validation, cross-device operation guards, and terminal summary reporting.
 - Error simulation (cross-device, OOM, invalid device, dtype mismatch, checkpoint, gradient) is part of the enhancement layer.
+- `fakegpu/memory_estimator.py` captures fake-tensor ATen graphs and estimates unique storage lifetimes for forward or functional training steps.
 - The error simulation test suite lives in `test/test_error_*.py` with a unified runner at `test/run_error_simulation_suite.py`.
 - See [Torch Patch System](phase2-custom-torch.md) for full architecture details.
 
@@ -63,7 +64,7 @@ This page explains how the repository is organized and how the main runtime piec
 | `src/nccl/` | fake NCCL entry points plus mode dispatch |
 | `src/distributed/` | coordinator protocol, communicator state, topology, staging |
 | `src/monitor/` | JSON reporting |
-| `fakegpu/` | Python package, CLI, vendored FakeCudaTensor backend, and enhancement layer (GPU profiles, memory tracker, cross-device guards, error simulation) |
+| `fakegpu/` | Python package, CLI, vendored FakeCudaTensor backend, runtime memory tracker, and ATen graph memory estimator |
 | `profiles/` | GPU preset YAML definitions |
 | `test/` | user-facing smoke, PyTorch, DDP, and comparison scripts |
 | `verification/` | lower-level probes, direct tests, and sample configs |
