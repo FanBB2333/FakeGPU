@@ -87,7 +87,7 @@ runner 会写出：
 ./ftest static_memory_validation
 ```
 
-估算器通过 `make_fx` 和 `torch.func.grad_and_value` 捕获 fake-tensor ATen 前向/反向图，合并共享 storage 的 alias，并在最后一次图使用后释放 storage。PyTorch 含 CUDA 支持时，`target_device="auto"` 会使用 fake CUDA tensor，使 Attention 等设备相关算子选择 CUDA ATen 路径，但不会分配真实 GPU 显存。默认训练步骤会保留 module output，直到 backward 和 `optimizer.step()` 结束。graph 和 optimizer 两个阶段分别计算，不会叠加并不同时存在的峰值；Adam/AdamW 还会计算常驻 moment state。eager single-tensor optimizer 会按参数迭代顺序计算临时张量：当前参数的两个中间结果可能与上一个参数的 denominator 同时存在。CUDA Flash Attention auxiliary storage 按 query shape、dtype 和 64-token sequence tile 计算。CUDA 主机还会测量一次 workload 释放后的 backend 常驻分配，再用 6 个 MLP/Transformer FP32/BF16 workload 对比 `torch.cuda.max_memory_allocated()`。维护中的套件会拒绝超过 5% 的实测低估。
+估算器通过 `make_fx` 和 `torch.func.grad_and_value` 捕获 fake-tensor ATen 前向/反向图，合并共享 storage 的 alias，并在最后一次图使用后释放 storage。PyTorch 含 CUDA 支持时，`target_device="auto"` 会使用 fake CUDA tensor，使 Attention 等设备相关算子选择 CUDA ATen 路径，但不会分配真实 GPU 显存。默认训练步骤会保留 module output，直到 backward 和 `optimizer.step()` 结束。graph 和 optimizer 两个阶段分别计算，不会叠加并不同时存在的峰值；Adam/AdamW 还会计算常驻 moment state。eager single-tensor optimizer 会按参数迭代顺序计算临时张量：当前参数的两个中间结果可能与上一个参数的 denominator 同时存在。CUDA Flash Attention auxiliary storage 按 query shape、dtype 和 64-token sequence tile 计算。FP32 Efficient Attention backward workspace 按 batch、sequence length 和 query storage 计算，并且只与对应 ATen 节点的 live storage 相加。CUDA 主机会分别记录 forward、backward 和 optimizer 峰值，测量一次 workload 释放后的 backend 常驻分配，再用 13 个 MLP/Transformer FP32/BF16 workload 对比 `torch.cuda.max_memory_allocated()`。维护中的套件会同时检查 allocator 和 requested-byte 低估是否超过 5%。
 
 不同 GPU 的报告可以这样比较：
 
@@ -98,7 +98,7 @@ python3 verification/aggregate_static_memory_validations.py \
   --output build/static_memory_validation_bundle.json
 ```
 
-storage 大小计算本身与设备无关，但捕获的 ATen 图取决于目标设备。backend 常驻显存仍取决于 GPU、PyTorch、CUDA 和算子路径。实测报告同时保存 allocator allocated 与 requested 对比，用于区分 size-class 对齐误差、缺失的逻辑 storage 和算子 workspace。即使估算字节数相同，只要 graph fingerprint 变化，仍需要检查图结构差异。
+storage 大小计算本身与设备无关，但捕获的 ATen 图取决于目标设备。backend 常驻显存仍取决于 GPU、PyTorch、CUDA 和算子路径。实测报告会保存 allocator allocated 与 requested 对比、分阶段峰值、profile 覆盖率、profile 总字节数和实际影响峰值的增量，用于区分 size-class 对齐误差、缺失的逻辑 storage 和算子 workspace。即使估算字节数相同，只要 graph fingerprint 变化，仍需要检查图结构差异。
 
 真实 GPU 校准需要先运行缩小版 workload，再按环境能力对比 passthrough 或 hybrid：
 

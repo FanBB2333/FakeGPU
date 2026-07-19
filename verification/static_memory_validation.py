@@ -141,6 +141,40 @@ def run_validation(
         and item["comparison"].get("underestimate_percent") is not None
     ]
     summary = _comparison_summary(measured_comparisons)
+    workspace_estimates = [
+        dict(item["static_estimate"].get("workspace_estimate") or {})
+        for item in results
+    ]
+    summary.update(
+        {
+            "workspace_profile_count": sum(
+                int(workspace.get("profiled_operator_count", 0) or 0)
+                for workspace in workspace_estimates
+            ),
+            "extrapolated_workspace_profile_count": sum(
+                int(workspace.get("extrapolated_profile_count", 0) or 0)
+                for workspace in workspace_estimates
+            ),
+            "graph_modeled_attention_operator_count": sum(
+                sum(
+                    int(count)
+                    for count in dict(
+                        workspace.get("graph_modeled_attention_operators") or {}
+                    ).values()
+                )
+                for workspace in workspace_estimates
+            ),
+            "unprofiled_attention_operator_count": sum(
+                sum(
+                    int(count)
+                    for count in dict(
+                        workspace.get("unprofiled_attention_operators") or {}
+                    ).values()
+                )
+                for workspace in workspace_estimates
+            ),
+        }
+    )
     failed = (
         max_underestimate_percent is not None
         and summary.get("max_underestimate_percent") is not None
@@ -169,6 +203,7 @@ def run_validation(
             "warmup_runs": int(warmup_runs) if has_real_cuda else 0,
             "measured_runs": int(repeats) if has_real_cuda else 0,
             "metric": "torch.cuda.max_memory_allocated",
+            "phase_resolved": bool(has_real_cuda),
         },
         "backend_calibration": backend_calibration,
         "validation_limit": {
@@ -184,6 +219,8 @@ def run_validation(
             "The validation models the eager training-step lifetime where the module output remains referenced through backward and optimizer.step().",
             "CUDA-enabled validation traces fake CUDA tensors so device-specific ATen dispatch matches the measured execution path.",
             "CUDA Flash Attention auxiliary storage is estimated from query shape, dtype, and 64-token sequence tiles.",
+            "FP32 Efficient Attention backward workspace is evaluated at the operator's graph-liveness point.",
+            "Real CUDA peaks are retained separately for forward, backward, and optimizer phases.",
             "Backend operations without a matched profile, allocator fragmentation, and fused/foreach optimizer extras remain unmodeled.",
             "Cross-GPU claims require comparing reports from multiple GPU/software profiles.",
         ],
@@ -218,26 +255,72 @@ def _measure_real_cuda(
     for trial_index in range(max(1, int(repeats))):
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
         baseline_allocated = int(torch.cuda.memory_allocated())
         baseline_reserved = int(torch.cuda.memory_reserved())
-        loss = _training_step(model, cuda_args, optimizer, zero_grad=False)
+        baseline_requested = int(
+            torch.cuda.memory_stats().get("requested_bytes.all.current", 0) or 0
+        )
+
+        torch.cuda.reset_peak_memory_stats()
+        output = model(*cuda_args)
+        loss = _training_loss(output)
         torch.cuda.synchronize()
-        stats = torch.cuda.memory_stats()
-        requested_peak = stats.get("requested_bytes.all.peak")
+        stage_peaks = {"forward": _cuda_stage_memory()}
+
+        torch.cuda.reset_peak_memory_stats()
+        loss.backward()
+        torch.cuda.synchronize()
+        stage_peaks["backward"] = _cuda_stage_memory()
+
+        torch.cuda.reset_peak_memory_stats()
+        optimizer.step()
+        torch.cuda.synchronize()
+        stage_peaks["optimizer"] = _cuda_stage_memory()
+
+        peak_stage = max(
+            stage_peaks,
+            key=lambda name: int(stage_peaks[name]["peak_allocated_bytes"]),
+        )
+        peak_allocated = max(
+            int(stage["peak_allocated_bytes"]) for stage in stage_peaks.values()
+        )
+        peak_reserved = max(
+            int(stage["peak_reserved_bytes"]) for stage in stage_peaks.values()
+        )
+        requested_stage_values = [
+            int(stage["peak_requested_bytes"])
+            for stage in stage_peaks.values()
+            if stage.get("peak_requested_bytes") is not None
+        ]
+        peak_requested_stage = (
+            max(
+                stage_peaks,
+                key=lambda name: int(
+                    stage_peaks[name].get("peak_requested_bytes", -1) or -1
+                ),
+            )
+            if requested_stage_values
+            else None
+        )
+        loss_value = float(loss.detach().item())
         trials.append(
             {
                 "trial_index": trial_index,
                 "baseline_allocated_bytes": baseline_allocated,
                 "baseline_reserved_bytes": baseline_reserved,
-                "peak_allocated_bytes": int(torch.cuda.max_memory_allocated()),
-                "peak_reserved_bytes": int(torch.cuda.max_memory_reserved()),
+                "baseline_requested_bytes": baseline_requested,
+                "peak_stage": peak_stage,
+                "peak_requested_stage": peak_requested_stage,
+                "stage_peaks": stage_peaks,
+                "peak_allocated_bytes": peak_allocated,
+                "peak_reserved_bytes": peak_reserved,
                 "requested_peak_bytes": (
-                    int(requested_peak) if requested_peak is not None else None
+                    max(requested_stage_values) if requested_stage_values else None
                 ),
-                "loss": float(loss),
+                "loss": loss_value,
             }
         )
+        del output, loss
 
     allocated = [int(item["peak_allocated_bytes"]) for item in trials]
     reserved = [int(item["peak_reserved_bytes"]) for item in trials]
@@ -247,11 +330,51 @@ def _measure_real_cuda(
         if item.get("requested_peak_bytes") is not None
     ]
     losses = [float(item["loss"]) for item in trials]
+    peak_trial = max(trials, key=lambda item: int(item["peak_allocated_bytes"]))
+    requested_peak_trials = [
+        item for item in trials if item.get("requested_peak_bytes") is not None
+    ]
+    peak_requested_trial = (
+        max(
+            requested_peak_trials,
+            key=lambda item: int(item["requested_peak_bytes"]),
+        )
+        if requested_peak_trials
+        else None
+    )
+    peak_by_stage: dict[str, dict[str, Any]] = {}
+    for stage_name in ("forward", "backward", "optimizer"):
+        stage_allocated = [
+            int(item["stage_peaks"][stage_name]["peak_allocated_bytes"])
+            for item in trials
+        ]
+        stage_requested = [
+            int(item["stage_peaks"][stage_name]["peak_requested_bytes"])
+            for item in trials
+            if item["stage_peaks"][stage_name].get("peak_requested_bytes") is not None
+        ]
+        peak_by_stage[stage_name] = {
+            "peak_allocated_bytes": max(stage_allocated),
+            "peak_allocated_summary": _sample_summary(stage_allocated),
+            "peak_requested_bytes": (
+                max(stage_requested) if stage_requested else None
+            ),
+            "peak_requested_summary": (
+                _sample_summary(stage_requested) if stage_requested else None
+            ),
+        }
     result = {
         "status": "PASS_MEASURED",
         "trial_count": len(trials),
         "warmup_runs": max(0, int(warmup_runs)),
         "trials": trials,
+        "peak_stage": str(peak_trial["peak_stage"]),
+        "peak_requested_stage": (
+            peak_requested_trial.get("peak_requested_stage")
+            if peak_requested_trial is not None
+            else None
+        ),
+        "peak_by_stage": peak_by_stage,
         "peak_allocated_bytes": max(allocated),
         "peak_allocated_summary": _sample_summary(allocated),
         "peak_reserved_bytes": max(reserved),
@@ -267,6 +390,26 @@ def _measure_real_cuda(
     gc.collect()
     torch.cuda.empty_cache()
     return result
+
+
+def _cuda_stage_memory() -> dict[str, int | None]:
+    import torch
+
+    stats = torch.cuda.memory_stats()
+    requested_peak = stats.get("requested_bytes.all.peak")
+    requested_current = stats.get("requested_bytes.all.current")
+    return {
+        "peak_allocated_bytes": int(torch.cuda.max_memory_allocated()),
+        "end_allocated_bytes": int(torch.cuda.memory_allocated()),
+        "peak_reserved_bytes": int(torch.cuda.max_memory_reserved()),
+        "end_reserved_bytes": int(torch.cuda.memory_reserved()),
+        "peak_requested_bytes": (
+            int(requested_peak) if requested_peak is not None else None
+        ),
+        "end_requested_bytes": (
+            int(requested_current) if requested_current is not None else None
+        ),
+    }
 
 
 def _measure_backend_resident() -> dict[str, Any]:
@@ -423,6 +566,80 @@ def _compare_estimate(
                 ),
             }
         )
+    peak_by_stage = measured.get("peak_by_stage")
+    if isinstance(peak_by_stage, dict):
+        forward = dict(peak_by_stage.get("forward") or {})
+        backward = dict(peak_by_stage.get("backward") or {})
+        optimizer = dict(peak_by_stage.get("optimizer") or {})
+        graph_stage_name, graph_stage = max(
+            (("forward", forward), ("backward", backward)),
+            key=lambda item: int(item[1].get("peak_allocated_bytes", 0) or 0),
+        )
+        result["actual_peak_stage"] = measured.get("peak_stage")
+        result["actual_requested_peak_stage"] = measured.get(
+            "peak_requested_stage"
+        )
+        result["estimated_peak_phase"] = static_estimate.get("peak_phase")
+        result["phase_comparison"] = {
+            "graph": _compare_phase_peak(
+                static_peak_bytes=int(static_estimate["graph_phase_peak_bytes"]),
+                actual_allocated_bytes=int(
+                    graph_stage.get("peak_allocated_bytes", 0) or 0
+                ),
+                actual_requested_bytes=graph_stage.get("peak_requested_bytes"),
+                backend_allocated_bytes=backend_resident_bytes,
+                backend_requested_bytes=backend_requested,
+                actual_substage=graph_stage_name,
+            ),
+            "optimizer": _compare_phase_peak(
+                static_peak_bytes=int(
+                    static_estimate.get("optimizer_phase_peak_bytes", 0) or 0
+                ),
+                actual_allocated_bytes=int(
+                    optimizer.get("peak_allocated_bytes", 0) or 0
+                ),
+                actual_requested_bytes=optimizer.get("peak_requested_bytes"),
+                backend_allocated_bytes=backend_resident_bytes,
+                backend_requested_bytes=backend_requested,
+                actual_substage="optimizer",
+            ),
+        }
+    return result
+
+
+def _compare_phase_peak(
+    *,
+    static_peak_bytes: int,
+    actual_allocated_bytes: int,
+    actual_requested_bytes: Any,
+    backend_allocated_bytes: int,
+    backend_requested_bytes: Any,
+    actual_substage: str,
+) -> dict[str, Any]:
+    estimated_allocated = static_peak_bytes + max(0, int(backend_allocated_bytes))
+    allocated_signed_error = estimated_allocated - actual_allocated_bytes
+    result = {
+        "actual_substage": actual_substage,
+        "static_peak_bytes": static_peak_bytes,
+        "calibrated_estimated_allocated_bytes": estimated_allocated,
+        "actual_peak_allocated_bytes": actual_allocated_bytes,
+        "allocated_signed_error_bytes": allocated_signed_error,
+        "allocated_underestimate_bytes": max(0, -allocated_signed_error),
+    }
+    if actual_requested_bytes is not None and backend_requested_bytes is not None:
+        estimated_requested = static_peak_bytes + max(
+            0,
+            int(backend_requested_bytes),
+        )
+        requested_signed_error = estimated_requested - int(actual_requested_bytes)
+        result.update(
+            {
+                "calibrated_estimated_requested_bytes": estimated_requested,
+                "actual_peak_requested_bytes": int(actual_requested_bytes),
+                "requested_signed_error_bytes": requested_signed_error,
+                "requested_underestimate_bytes": max(0, -requested_signed_error),
+            }
+        )
     return result
 
 
@@ -433,15 +650,51 @@ def _comparison_summary(comparisons: list[dict[str, Any]]) -> dict[str, Any]:
             "underestimated_workload_count": 0,
             "max_underestimate_percent": None,
             "median_absolute_error_percent": None,
+            "requested_underestimated_workload_count": 0,
+            "max_requested_underestimate_percent": None,
+            "median_requested_absolute_error_percent": None,
+            "max_requested_absolute_error_percent": None,
         }
     underestimates = [float(item["underestimate_percent"]) for item in comparisons]
     absolute_errors = [float(item["absolute_error_percent"]) for item in comparisons]
+    requested_comparisons = [
+        item
+        for item in comparisons
+        if item.get("requested_underestimate_percent") is not None
+        and item.get("requested_absolute_error_percent") is not None
+    ]
+    requested_underestimates = [
+        float(item["requested_underestimate_percent"])
+        for item in requested_comparisons
+    ]
+    requested_absolute_errors = [
+        float(item["requested_absolute_error_percent"])
+        for item in requested_comparisons
+    ]
     return {
         "measured_workload_count": len(comparisons),
         "underestimated_workload_count": sum(value > 0 for value in underestimates),
         "max_underestimate_percent": round(max(underestimates), 6),
         "median_absolute_error_percent": round(statistics.median(absolute_errors), 6),
         "max_absolute_error_percent": round(max(absolute_errors), 6),
+        "requested_underestimated_workload_count": sum(
+            value > 0 for value in requested_underestimates
+        ),
+        "max_requested_underestimate_percent": (
+            round(max(requested_underestimates), 6)
+            if requested_underestimates
+            else None
+        ),
+        "median_requested_absolute_error_percent": (
+            round(statistics.median(requested_absolute_errors), 6)
+            if requested_absolute_errors
+            else None
+        ),
+        "max_requested_absolute_error_percent": (
+            round(max(requested_absolute_errors), 6)
+            if requested_absolute_errors
+            else None
+        ),
     }
 
 
@@ -491,9 +744,58 @@ def _workloads() -> dict[str, WorkloadSpec]:
             _mlp_spec(batch_size=8, width=256, hidden_size=512, dtype="float32"),
             _mlp_spec(batch_size=32, width=512, hidden_size=2048, dtype="bfloat16"),
             _transformer_spec(
+                batch_size=1,
+                seq_len=16,
+                hidden_size=64,
+                layers=1,
+                dtype="float32",
+            ),
+            _transformer_spec(
+                batch_size=2,
+                seq_len=16,
+                hidden_size=64,
+                layers=1,
+                dtype="float32",
+            ),
+            _transformer_spec(
                 batch_size=2,
                 seq_len=32,
                 hidden_size=64,
+                layers=1,
+                dtype="float32",
+            ),
+            _transformer_spec(
+                batch_size=4,
+                seq_len=32,
+                hidden_size=64,
+                layers=1,
+                dtype="float32",
+            ),
+            _transformer_spec(
+                batch_size=2,
+                seq_len=64,
+                hidden_size=64,
+                layers=1,
+                dtype="float32",
+            ),
+            _transformer_spec(
+                batch_size=2,
+                seq_len=32,
+                hidden_size=128,
+                layers=1,
+                dtype="float32",
+            ),
+            _transformer_spec(
+                batch_size=2,
+                seq_len=32,
+                hidden_size=64,
+                layers=2,
+                dtype="float32",
+            ),
+            _transformer_spec(
+                batch_size=3,
+                seq_len=33,
+                hidden_size=96,
                 layers=1,
                 dtype="float32",
             ),
@@ -625,8 +927,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         [
             "## Results",
             "",
-            "| workload | family | static peak | calibrated peak | real allocator peak | signed error | underestimate | graph |",
-            "|---|---|---:|---:|---:|---:|---:|---|",
+            "| workload | family | static peak | calibrated peak | real allocator peak | real phase | signed error | underestimate | requested error | graph |",
+            "|---|---|---:|---:|---:|---|---:|---:|---:|---|",
         ]
     )
     for item in report.get("workloads", []):
@@ -635,7 +937,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         comparison = item.get("comparison") or {}
         graph = static.get("graph") or {}
         lines.append(
-            "| `{name}` | `{family}` | {static_peak} | {calibrated_peak} | {real_peak} | {signed} | {underestimate} | "
+            "| `{name}` | `{family}` | {static_peak} | {calibrated_peak} | {real_peak} | `{real_phase}` | {signed} | {underestimate} | {requested_error} | "
             "{nodes} nodes / {aliases} aliases |".format(
                 name=item.get("name"),
                 family=item.get("family"),
@@ -652,6 +954,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                     if real
                     else "n/a"
                 ),
+                real_phase=real.get("peak_stage") if real else "n/a",
                 signed=(
                     _fmt_signed_bytes(int(comparison.get("signed_error_bytes", 0) or 0))
                     if comparison
@@ -660,6 +963,13 @@ def render_markdown(report: dict[str, Any]) -> str:
                 underestimate=(
                     f"{float(comparison.get('underestimate_percent', 0.0)):.2f}%"
                     if comparison
+                    else "n/a"
+                ),
+                requested_error=(
+                    _fmt_signed_bytes(
+                        int(comparison.get("requested_signed_error_bytes", 0) or 0)
+                    )
+                    if comparison.get("requested_signed_error_bytes") is not None
                     else "n/a"
                 ),
                 nodes=int(graph.get("node_count", 0) or 0),
@@ -672,10 +982,12 @@ def render_markdown(report: dict[str, Any]) -> str:
             "## Scope",
             "",
             "- Static peak is the larger of the graph phase and optimizer phase, including persistent AdamW state and matched backend operator profiles.",
+            "- Operator-local workspace is evaluated against the storage live at that ATen node; persistent auxiliary storage remains graph-wide.",
             "- Eager single-tensor AdamW models two current-parameter intermediates plus the previous loop denominator.",
             "- Calibrated peak adds one measured backend-resident allocation for the current GPU/software stack.",
             "- Real peak uses `torch.cuda.max_memory_allocated()`.",
             "- Reports also retain requested-byte comparisons when the allocator exposes `requested_bytes.all.peak`.",
+            "- Real measurements retain separate forward, backward, and optimizer peaks.",
             "- CUDA context, allocator fragmentation, unmatched operation workspaces, and fused/foreach optimizer extras are listed as unmodeled.",
             "",
         ]

@@ -8,6 +8,7 @@
 - Generic `real_gpu_calibration` suite that records the detected GPU, selects a matching fakecuda profile, executes real/passthrough/hybrid/fakecuda comparisons, checks deterministic result signatures, and verifies Hybrid clamp OOM behavior.
 - Gradient accumulation and gradient checkpointing calibration workloads.
 - Target-device fake-tensor ATen forward/backward storage-liveness estimator with alias handling, phase-aware optimizer memory, CUDA Flash Attention auxiliary-storage profiles, per-stack backend-resident calibration, and cross-GPU validation reports.
+- Operator-lifetime-aware workspace profiles, including a two-GPU-calibrated FP32 Efficient Attention backward profile and phase-resolved real CUDA measurements.
 
 ### Fixed
 
