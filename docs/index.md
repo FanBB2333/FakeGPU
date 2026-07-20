@@ -10,7 +10,7 @@ English is the default documentation language. A Simplified Chinese translation 
 - Running preflight checks before submitting AI workloads to larger GPU clusters
 - Exposing configurable fake GPU inventories to frameworks such as PyTorch
 - Executing supported cuBLAS/cuBLASLt operators on CPU for correctness-oriented smoke coverage
-- Simulating NCCL-style collective and point-to-point flows on a single host with multiple ranks
+- Simulating NCCL-style collective and point-to-point flows across local ranks or trusted TCP-connected hosts
 - Emitting per-device and cluster-level JSON reports for memory, IO, FLOPs, and communication activity
 - Reproducing common GPU runtime errors (cross-device, OOM, invalid device, dtype mismatch, checkpoint incompatibility) for error-handling validation
 
@@ -28,7 +28,7 @@ The repository currently ships:
 - A Python package and CLI wrapper (`fakegpu`, `./fgpu`) that manage preloading for you
 - Embedded GPU profiles compiled from
   `profiles/<architecture>/<segment>/*.yaml`
-- A coordinator process for single-host multi-process distributed simulation
+- A coordinator process for single-host or trusted-network multi-process distributed simulation
 - JSON reporting for both single-process device activity and distributed cluster activity
 - Error simulation experiments covering 7 error categories with a unified HTML test report
 

@@ -10,7 +10,7 @@ English 是默认文档版本，页面右上角可以切换到简体中文。
 - 在提交大型 GPU 集群前，对 AI workload 做能否运行和 OOM 风险预检查
 - 向框架暴露可配置的虚拟 GPU 设备清单
 - 对已维护的 cuBLAS / cuBLASLt 路径使用 CPU 执行，做结果可校验的 smoke test
-- 在单机多进程场景下模拟 NCCL 风格的 collective 和 point-to-point 通信
+- 在本地多进程或可信 TCP 主机之间模拟 NCCL 风格的 collective 和 point-to-point 通信
 - 输出设备级和 cluster 级 JSON 报告，用于观察显存、IO、FLOPs 和通信活动
 - 复现常见 GPU 运行时错误（跨设备、OOM、无效设备、dtype 不匹配、checkpoint 不兼容），用于验证错误处理逻辑
 
@@ -27,7 +27,7 @@ English 是默认文档版本，页面右上角可以切换到简体中文。
 - fake `libcuda`、`libcudart`、`libcublas`、`libnvidia-ml`、`libnccl`
 - Python 包和 CLI 包装器（`fakegpu`、`./fgpu`）
 - 从 `profiles/<architecture>/<segment>/*.yaml` 编译进产物的 GPU profile
-- 用于单机多进程分布式模拟的 coordinator
+- 用于单机或可信网络多进程分布式模拟的 coordinator
 - 单进程设备报告和 cluster 级通信报告
 - 覆盖 7 类错误场景的错误模拟实验，附带统一 HTML 测试报告
 

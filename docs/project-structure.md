@@ -36,7 +36,7 @@ This page explains how the repository is organized and how the main runtime piec
 
 - `src/nccl/` exposes the fake `libnccl.so.2` surface.
 - `src/distributed/` contains communicator registration, coordinator transport, topology modeling, staging buffers, and collective execution.
-- The most validated distributed path is single-host multi-process execution coordinated through Unix sockets or loopback TCP.
+- Single-host multi-process execution has the broadest regression coverage. The chosen-port TCP data path is also validated between two physical hosts.
 
 ### 7. Monitoring and reports
 
