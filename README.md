@@ -232,20 +232,36 @@ The simulated distributed path also needs a coordinator endpoint and cluster con
 
 ## GPU profiles
 
-Profiles are stored in `profiles/*.yaml`, loaded by the Python runtime, and
-compiled into native builds. The catalog currently contains 24 profiles across
-8 NVIDIA architectures and 15 compute capabilities:
+Profiles are stored under `profiles/<architecture>/<segment>/*.yaml`, loaded by
+the Python runtime, and compiled into native builds. Catalog segments are
+`consumer`, `datacenter`, `workstation`, `embedded`, and `test`:
 
-| Architecture | Compute capability | Profile IDs |
-|---|---|---|
-| Maxwell | 5.2 | `gtx980` |
-| Pascal | 6.0, 6.1 | `p100`, `p4` |
-| Volta | 7.0 | `v100` |
-| Turing | 7.5 | `t4` |
-| Ampere | 8.0, 8.6, 8.7 | `a100`, `a100-1g`, `a30`, `a10`, `a40`, `ampere`, `jetson-agx-orin-64gb`, `test-512m` |
-| Ada | 8.9 | `l4`, `l40s` |
-| Hopper | 9.0 | `h100`, `h200` |
-| Blackwell | 10.0, 10.3, 11.0, 12.0, 12.1 | `b100`, `b200`, `b300`, `jetson-t5000`, `blackwell`, `rtx-pro-6000-blackwell`, `gb10` |
+```text
+profiles/
+├── ampere/
+│   ├── consumer/ampere.yaml
+│   ├── datacenter/a100.yaml
+│   ├── embedded/jetson-agx-orin-64gb.yaml
+│   └── test/test-512m.yaml
+└── blackwell/
+    ├── datacenter/b200.yaml
+    ├── embedded/jetson-t5000.yaml
+    └── workstation/blackwell.yaml
+```
+
+The catalog currently contains 24 profiles across 8 NVIDIA architectures and
+15 compute capabilities:
+
+| Architecture | Segment(s) | Compute capability | Profile IDs |
+|---|---|---|---|
+| Maxwell | Consumer | 5.2 | `gtx980` |
+| Pascal | Data center | 6.0, 6.1 | `p100`, `p4` |
+| Volta | Data center | 7.0 | `v100` |
+| Turing | Data center | 7.5 | `t4` |
+| Ampere | Consumer, data center, embedded, test | 8.0, 8.6, 8.7 | `a100`, `a100-1g`, `a30`, `a10`, `a40`, `ampere`, `jetson-agx-orin-64gb`, `test-512m` |
+| Ada | Data center | 8.9 | `l4`, `l40s` |
+| Hopper | Data center | 9.0 | `h100`, `h200` |
+| Blackwell | Data center, embedded, workstation | 10.0, 10.3, 11.0, 12.0, 12.1 | `b100`, `b200`, `b300`, `jetson-t5000`, `blackwell`, `rtx-pro-6000-blackwell`, `gb10` |
 
 Every profile declares `compute_major` and `compute_minor`; both the Python
 catalog validator and native C++ loader reject an architecture/compute

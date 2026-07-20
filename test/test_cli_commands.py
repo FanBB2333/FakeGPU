@@ -86,6 +86,13 @@ def test_profile_catalog_matches_nvidia_snapshot() -> None:
         "hopper",
         "blackwell",
     }
+    assert summary["segments"] == {
+        "consumer": 2,
+        "datacenter": 16,
+        "embedded": 2,
+        "test": 1,
+        "workstation": 3,
+    }
     assert summary["compute_capabilities"] == [
         "5.2",
         "6.0",
@@ -103,6 +110,13 @@ def test_profile_catalog_matches_nvidia_snapshot() -> None:
         "12.0",
         "12.1",
     ]
+    for profile in profiles.values():
+        path_parts = Path(profile.profile_path).parts
+        assert path_parts == (
+            profile.architecture,
+            profile.segment,
+            f"{profile.id}.yaml",
+        )
 
     official = official_compute_capabilities()
     expected_models = {
@@ -151,6 +165,11 @@ def test_doctor_reports_selected_blackwell_profile_as_json() -> None:
     assert payload["profile_summary"]["profile_count"] == 24
     assert payload["selected_profile"]["id"] == "b300"
     assert payload["selected_profile"]["architecture"] == "blackwell"
+    assert payload["selected_profile"]["segment"] == "datacenter"
+    assert (
+        payload["selected_profile"]["profile_path"]
+        == "blackwell/datacenter/b300.yaml"
+    )
     assert payload["selected_profile"]["compute_capability"] == "10.3"
     assert payload["selected_profile"]["compiler_target"] == "sm_103"
 

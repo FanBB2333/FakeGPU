@@ -64,9 +64,14 @@ def _copy_native_libs(src_dir: Path, dst_dir: Path) -> None:
 
 
 def _copy_profile_catalog(dst_dir: Path) -> None:
+    if dst_dir.exists():
+        shutil.rmtree(dst_dir)
     dst_dir.mkdir(parents=True, exist_ok=True)
-    for profile in sorted((_ROOT / "profiles").glob("*.yaml")):
-        shutil.copy2(profile, dst_dir / profile.name)
+    profile_root = _ROOT / "profiles"
+    for profile in sorted(profile_root.rglob("*.yaml")):
+        destination = dst_dir / profile.relative_to(profile_root)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(profile, destination)
 
 
 class build_py(_build_py):

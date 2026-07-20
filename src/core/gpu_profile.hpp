@@ -153,14 +153,14 @@ struct GpuProfile {
     static GpuProfile B200();
 };
 
-// Returns the preset IDs compiled into the binary (from `profiles/*.yaml` at build time).
+// Returns the preset IDs compiled into the binary (from `profiles/**/*.yaml` at build time).
 std::vector<std::string> builtin_profile_ids();
 
 // Resolve the NVIDIA hardware architecture for an explicit CUDA compute capability.
 GpuArch architecture_from_compute_capability(int major, int minor);
 
 // Resolve a preset GPU profile by ID (case-insensitive). Supports:
-// - Built-in YAML profiles (any `id:` from `profiles/*.yaml` compiled into the binary)
+// - Built-in YAML profiles (any `id:` from `profiles/**/*.yaml` compiled into the binary)
 // - Legacy factory presets when no compiled YAML profile is available
 // Returns nullopt if the ID is unknown.
 std::optional<GpuProfile> profile_from_preset_id(const std::string& id);

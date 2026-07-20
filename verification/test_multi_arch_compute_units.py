@@ -153,11 +153,16 @@ class ExpectedDevice:
 
 
 def _load_expected_device(*, repo_root: Path, preset_id: str) -> ExpectedDevice:
-    profile_path = repo_root / "profiles" / f"{preset_id}.yaml"
-    if not profile_path.is_file():
-        _die(f"profile YAML not found: {profile_path}")
+    profile_root = repo_root / "profiles"
+    matches = sorted(profile_root.rglob(f"{preset_id}.yaml"))
+    if len(matches) != 1:
+        _die(
+            f"expected one profile YAML for {preset_id!r}, found {len(matches)} "
+            f"under {profile_root}"
+        )
+    profile_path = matches[0]
     data = _parse_simple_yaml(profile_path)
-    ctx = f"profiles/{preset_id}.yaml"
+    ctx = profile_path.relative_to(repo_root).as_posix()
 
     name = _require_str(data, "name", ctx=ctx)
     _require_str(data, "architecture", ctx=ctx)

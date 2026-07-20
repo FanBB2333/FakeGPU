@@ -17,7 +17,8 @@
 ### 3. 设备清单与 profile
 
 - `src/core/global_state.*` 负责 fake device、当前 device、分配映射和运行时计数器。
-- `src/core/gpu_profile.*` 负责从 `profiles/*.yaml` 读取 GPU preset。
+- `src/core/gpu_profile.*` 负责从
+  `profiles/<architecture>/<segment>/*.yaml` 读取 GPU preset。
 - CMake 会在 configure 阶段把这些 YAML 编译进产物，所以运行时不依赖外部 profile 文件。
 
 ### 4. CUDA 与 NVML 拦截
@@ -65,7 +66,7 @@
 | `src/distributed/` | coordinator 协议、communicator、拓扑、staging |
 | `src/monitor/` | JSON 报告 |
 | `fakegpu/` | Python 包、CLI、内置 FakeCudaTensor 后端、运行时显存跟踪与 ATen 图显存估算器 |
-| `profiles/` | GPU preset YAML |
+| `profiles/` | 按架构和 profile 类别组织的 GPU preset YAML |
 | `test/` | 用户入口级 smoke / PyTorch / DDP / comparison 脚本 |
 | `verification/` | 更底层的 probe、direct test 与样例配置 |
 | `docs/` | MkDocs 文档内容 |

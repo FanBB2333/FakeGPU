@@ -73,12 +73,17 @@ endif()
 
 # Embed YAML GPU profiles at configure time so defaults are available without runtime files
 set(FAKEGPU_PROFILE_DIR "${CMAKE_SOURCE_DIR}/profiles")
-file(GLOB FAKEGPU_PROFILE_FILES "${FAKEGPU_PROFILE_DIR}/*.yaml")
+file(
+    GLOB_RECURSE FAKEGPU_PROFILE_FILES
+    CONFIGURE_DEPENDS
+    "${FAKEGPU_PROFILE_DIR}/*.yaml"
+)
+list(SORT FAKEGPU_PROFILE_FILES)
 set(FAKEGPU_GENERATED_PROFILE_HEADER "${CMAKE_BINARY_DIR}/generated_profiles.hpp")
 
 if(FAKEGPU_PROFILE_FILES)
     file(WRITE ${FAKEGPU_GENERATED_PROFILE_HEADER}
-"// Auto-generated from profiles/*.yaml - do not edit by hand\n"
+"// Auto-generated from profiles/**/*.yaml - do not edit by hand\n"
 "#pragma once\n"
 "#include <string>\n"
 "#include <vector>\n"

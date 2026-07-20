@@ -17,7 +17,8 @@ This page explains how the repository is organized and how the main runtime piec
 ### 3. Device inventory and profiles
 
 - `src/core/global_state.*` owns fake devices, current-device tracking, allocation maps, and runtime counters.
-- `src/core/gpu_profile.*` loads GPU presets from `profiles/*.yaml`.
+- `src/core/gpu_profile.*` loads GPU presets from
+  `profiles/<architecture>/<segment>/*.yaml`.
 - CMake embeds those YAML files into generated headers at configure time, so runtime profile lookup does not depend on external files.
 
 ### 4. CUDA and NVML interception
@@ -65,7 +66,7 @@ This page explains how the repository is organized and how the main runtime piec
 | `src/distributed/` | coordinator protocol, communicator state, topology, staging |
 | `src/monitor/` | JSON reporting |
 | `fakegpu/` | Python package, CLI, vendored FakeCudaTensor backend, runtime memory tracker, and ATen graph memory estimator |
-| `profiles/` | GPU preset YAML definitions |
+| `profiles/` | GPU preset YAML definitions grouped by architecture and profile segment |
 | `test/` | user-facing smoke, PyTorch, DDP, and comparison scripts |
 | `verification/` | lower-level probes, direct tests, and sample configs |
 | `docs/` | MkDocs content |

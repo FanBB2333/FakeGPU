@@ -26,7 +26,8 @@ The repository currently ships:
 
 - Fake `libcuda`, `libcudart`, `libcublas`, `libnvidia-ml`, and `libnccl` shared libraries
 - A Python package and CLI wrapper (`fakegpu`, `./fgpu`) that manage preloading for you
-- Embedded GPU profiles compiled from `profiles/*.yaml`
+- Embedded GPU profiles compiled from
+  `profiles/<architecture>/<segment>/*.yaml`
 - A coordinator process for single-host multi-process distributed simulation
 - JSON reporting for both single-process device activity and distributed cluster activity
 - Error simulation experiments covering 7 error categories with a unified HTML test report

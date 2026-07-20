@@ -27,10 +27,8 @@ def _read_profile_memory_bytes(profile_id: str) -> int | None:
     if not normalized:
         return None
     profiles_dir = _repo_root() / "profiles"
-    candidates = [
-        profiles_dir / f"{normalized}.yaml",
-        profiles_dir / f"{normalized}.yml",
-    ]
+    candidates = sorted(profiles_dir.rglob(f"{normalized}.yaml"))
+    candidates.extend(sorted(profiles_dir.rglob(f"{normalized}.yml")))
     for path in candidates:
         if not path.exists():
             continue
