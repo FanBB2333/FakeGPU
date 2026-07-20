@@ -5,6 +5,7 @@
 
 #include "../core/backend_config.hpp"
 #include "../core/global_state.hpp"
+#include "../core/logging.hpp"
 #include "../distributed/communicator.hpp"
 #include "../distributed/collective_executor.hpp"
 #include "../distributed/staging_chunk_plan.hpp"
@@ -15,9 +16,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
+#include <functional>
+#include <limits>
 #include <mutex>
 #include <random>
 #include <sstream>
@@ -48,7 +52,7 @@ struct ncclComm {
 namespace {
 
 constexpr int kFakeNcclVersion = NCCL_VERSION_CODE;
-constexpr int kCoordinatorTimeoutMs = 1000;
+constexpr int kDefaultCoordinatorTimeoutMs = 1000;
 
 thread_local int g_group_depth = 0;
 thread_local std::string g_last_error;
@@ -78,6 +82,29 @@ struct GroupOperation {
 
 thread_local std::vector<GroupOperation> g_group_operations;
 
+int coordinator_timeout_ms() {
+    static const int timeout_ms = [] {
+        const char* raw = std::getenv("FAKEGPU_COORDINATOR_TIMEOUT_MS");
+        if (!raw || !*raw) {
+            return kDefaultCoordinatorTimeoutMs;
+        }
+
+        char* end = nullptr;
+        errno = 0;
+        const long parsed = std::strtol(raw, &end, 10);
+        if (errno != 0 || end == raw || (end && *end != '\0') ||
+            parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+            FGPU_LOG(
+                "[FakeNCCL] invalid FAKEGPU_COORDINATOR_TIMEOUT_MS=%s; using %d\n",
+                raw,
+                kDefaultCoordinatorTimeoutMs);
+            return kDefaultCoordinatorTimeoutMs;
+        }
+        return static_cast<int>(parsed);
+    }();
+    return timeout_ms;
+}
+
 struct PreMulSumOpInfo {
     ncclDataType_t datatype = ncclFloat32;
     std::array<unsigned char, 8> scalar_bytes {};
@@ -106,6 +133,11 @@ void reset_async_error(ncclComm_t comm) {
 }
 
 ncclResult_t fail_with(ncclComm_t comm, ncclResult_t result, std::string message) {
+    FGPU_LOG(
+        "[FakeNCCL] error=%d rank=%d detail=%s\n",
+        static_cast<int>(result),
+        comm ? comm->rank : -1,
+        message.c_str());
     g_last_error = message;
     if (comm) {
         comm->last_error = std::move(message);
@@ -120,8 +152,31 @@ ncclResult_t mark_simulated_stream_work_complete(ncclComm_t comm, cudaStream_t s
     if (!comm || comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
         return ncclSuccess;
     }
-    if (fake_gpu::cuda::mark_stream_host_function_complete(reinterpret_cast<CUstream>(stream)) !=
-        CUDA_SUCCESS) {
+
+    // Hybrid mode uses a real CUDA stream. The simulated collective is
+    // synchronous at the host-staging boundary, so there is no FakeGPU stream
+    // timeline to update. Avoiding the helper here also keeps fake NCCL from
+    // forcing fake libcuda into a real-CUDA process.
+    if (fake_gpu::BackendConfig::instance().mode() != fake_gpu::FakeGpuMode::Simulate) {
+        return ncclSuccess;
+    }
+
+    using MarkStreamCompleteFn = CUresult (*)(CUstream);
+    auto* mark_stream_complete = reinterpret_cast<MarkStreamCompleteFn>(
+        ::dlsym(RTLD_DEFAULT, "fakegpuCudaMarkStreamHostFunctionComplete"));
+    if (!mark_stream_complete) {
+        // A null stream has no observable per-stream state. This permits direct
+        // host-buffer collective tests to load fake NCCL by itself.
+        if (stream == nullptr) {
+            return ncclSuccess;
+        }
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "FakeGPU CUDA stream bookkeeping is unavailable");
+    }
+
+    if (mark_stream_complete(reinterpret_cast<CUstream>(stream)) != CUDA_SUCCESS) {
         return fail_with(comm, ncclInvalidArgument, "stream completion bookkeeping failed");
     }
     return ncclSuccess;
@@ -446,11 +501,21 @@ std::string make_staging_name(
     const ncclComm& comm,
     std::uint64_t seqno,
     const char* op_name) {
-    return "/fakegpu-" + std::string(op_name) +
-           "-c" + std::to_string(comm.comm_id) +
-           "-r" + std::to_string(comm.rank) +
-           "-s" + std::to_string(seqno) +
-           "-p" + std::to_string(static_cast<long long>(::getpid()));
+    const std::string identity =
+        std::string(op_name) +
+        "-c" + std::to_string(comm.comm_id) +
+        "-r" + std::to_string(comm.rank) +
+        "-s" + std::to_string(seqno) +
+        "-p" + std::to_string(static_cast<long long>(::getpid()));
+#ifdef __APPLE__
+    // Darwin limits POSIX shared-memory names to 31 characters. The
+    // coordinator receives the generated name from the participant, so a
+    // process-local stable hash keeps the name compact without losing any
+    // protocol information.
+    return "/fakegpu-" + std::to_string(std::hash<std::string>{}(identity));
+#else
+    return "/fakegpu-" + identity;
+#endif
 }
 
 bool validate_runtime_config(
@@ -540,7 +605,7 @@ ncclResult_t submit_proxy_collective_record(
             << " root=" << root
             << " reduce_op=" << fake_gpu::distributed::collective_reduce_op_name(reduce_op)
             << " proxy_only=1"
-            << " timeout_ms=" << kCoordinatorTimeoutMs;
+            << " timeout_ms=" << coordinator_timeout_ms();
 
     fake_gpu::distributed::CoordinatorResponse response;
     if (!coordinator_request_response(config, request.str(), response, error)) {
@@ -861,7 +926,7 @@ ncclResult_t prepare_group_batch(
             << " comm_id=" << comm->comm_id
             << " rank=" << comm->rank
             << " base_seqno=" << comm->next_seqno
-            << " timeout_ms=" << kCoordinatorTimeoutMs;
+            << " timeout_ms=" << coordinator_timeout_ms();
 
     std::vector<fake_gpu::distributed::CollectiveBatchPlanItem> prepared_operations;
     for (const GroupOperation& operation : operations) {
@@ -1458,7 +1523,16 @@ ncclResult_t submit_collective_chunk(
     metadata.staging_id = seqno;
 
     fake_gpu::distributed::StagingBufferManager manager;
-    if (!manager.create(metadata, true, handle, error)) {
+    if (config.coordinator_transport ==
+        fake_gpu::distributed::CoordinatorTransport::Tcp) {
+        // TCP endpoints may be on another host, where POSIX shared memory is
+        // not visible. Carry both input and output through the socket so the
+        // same path works for loopback and physical multi-host runs.
+        buffer_transport = fake_gpu::distributed::BufferTransport::SocketPayload;
+        request_payload.assign(
+            static_cast<const char*>(local_input),
+            static_cast<const char*>(local_input) + input_bytes);
+    } else if (!manager.create(metadata, true, handle, error)) {
         if (!fake_gpu::distributed::is_staging_transport_unavailable_error(error)) {
             return fail_with(comm, ncclSystemError, error);
         }
@@ -1482,7 +1556,7 @@ ncclResult_t submit_collective_chunk(
             << " reduce_op=" << fake_gpu::distributed::collective_reduce_op_name(reduce_op)
             << " buffer_transport="
             << (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload ? "socket" : "shm")
-            << " timeout_ms=" << kCoordinatorTimeoutMs;
+            << " timeout_ms=" << coordinator_timeout_ms();
     if (buffer_transport == fake_gpu::distributed::BufferTransport::SharedMemory) {
         request << " staging_name=" << staging_name;
     } else {
@@ -1949,7 +2023,10 @@ ncclResult_t submit_point_to_point(
 
     fake_gpu::distributed::StagingBufferManager manager;
     fake_gpu::distributed::StagingBufferHandle handle;
-    if (!manager.create(metadata, true, handle, error)) {
+    if (config.coordinator_transport ==
+        fake_gpu::distributed::CoordinatorTransport::Tcp) {
+        buffer_transport = fake_gpu::distributed::BufferTransport::SocketPayload;
+    } else if (!manager.create(metadata, true, handle, error)) {
         if (!fake_gpu::distributed::is_staging_transport_unavailable_error(error)) {
             return fail_with(comm, ncclSystemError, error);
         }
@@ -1979,7 +2056,7 @@ ncclResult_t submit_point_to_point(
             << " bytes=" << bytes
             << " buffer_transport="
             << (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload ? "socket" : "shm")
-            << " timeout_ms=" << kCoordinatorTimeoutMs;
+            << " timeout_ms=" << coordinator_timeout_ms();
     if (buffer_transport == fake_gpu::distributed::BufferTransport::SharedMemory) {
         request << " staging_name=" << staging_name;
     } else {
@@ -2390,7 +2467,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
                 << " unique_id=" << unique_id
                 << " world_size=" << nranks
                 << " rank=" << rank
-                << " timeout_ms=" << kCoordinatorTimeoutMs;
+                << " timeout_ms=" << coordinator_timeout_ms();
 
         fake_gpu::distributed::CoordinatorResponse response;
         if (!coordinator_request_response(config, request.str(), response, error)) {
@@ -2592,7 +2669,7 @@ ncclResult_t ncclCommSplit(
             << " seqno=" << comm->next_seqno
             << " color=" << color
             << " key=" << key
-            << " timeout_ms=" << kCoordinatorTimeoutMs;
+            << " timeout_ms=" << coordinator_timeout_ms();
 
     fake_gpu::distributed::CoordinatorResponse response;
     if (!coordinator_request_response(config, request.str(), response, error)) {

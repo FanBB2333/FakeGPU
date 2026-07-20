@@ -262,6 +262,10 @@ CUresult cuDevicePrimaryCtxSetFlags_v2(CUdevice dev, unsigned int flags);
 CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsigned long long flags);
 CUresult cuGetProcAddress_v2(const char *symbol, void **pfn, int cudaVersion, unsigned long long flags, void *symbolStatus);
 
+// Optional FakeGPU integration hook. Libraries such as fake NCCL resolve this
+// symbol dynamically so they do not acquire a hard dependency on libcuda.
+CUresult fakegpuCudaMarkStreamHostFunctionComplete(CUstream stream);
+
 #ifdef __cplusplus
 }
 

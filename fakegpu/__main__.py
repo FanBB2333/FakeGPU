@@ -22,12 +22,21 @@ def main(argv: list[str] | None = None) -> int:
         from .preflight import main as preflight_main
 
         return preflight_main(argv[1:])
+    if argv and argv[0] == "coordinator":
+        from .distributed_cli import coordinator_main
+
+        return coordinator_main(argv[1:])
+    if argv and argv[0] == "bandwidth":
+        from .distributed_cli import bandwidth_main
+
+        return bandwidth_main(argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="fakegpu",
         description="Run a command with FakeGPU libraries preloaded (LD_PRELOAD/DYLD_INSERT_LIBRARIES).",
         epilog=(
-            "Built-in commands: fakegpu demo, fakegpu doctor, fakegpu preflight. "
+            "Built-in commands: fakegpu demo, fakegpu doctor, fakegpu preflight, "
+            "fakegpu coordinator, fakegpu bandwidth. "
             "Run 'fakegpu <command> --help' for details."
         ),
     )

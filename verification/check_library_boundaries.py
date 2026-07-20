@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +33,7 @@ def main() -> int:
     runtime_symbols = _defined_symbols(runtime, nm_command)
     nvml_symbols = _defined_symbols(nvml, nm_command)
     nccl_symbols = _defined_symbols(nccl, nm_command)
+    nccl_dependencies = _dynamic_dependencies(nccl)
 
     _require(driver_symbols, "cuInit", driver)
     # CUDA 12.x and PyTorch resolve these symbols directly from the libcuda
@@ -77,8 +79,17 @@ def main() -> int:
         "ncclWaitSignal",
     ):
         _require(nccl_symbols, symbol, nccl)
+    for dependency in nccl_dependencies:
+        if dependency == "libcuda.so.1" or dependency.startswith("libcuda."):
+            raise SystemExit(
+                f"{nccl}: fake NCCL must not depend on {dependency}; "
+                "hybrid mode needs the process to retain its real CUDA driver"
+            )
 
-    print("OK: CUDA/NVML boundaries and PyTorch-required NCCL 2.29 symbols are valid")
+    print(
+        "OK: CUDA/NVML boundaries, NCCL driver independence, "
+        "and PyTorch-required NCCL 2.29 symbols are valid"
+    )
     return 0
 
 
@@ -101,6 +112,32 @@ def _defined_symbols(path: Path, nm_command: list[str]) -> set[str]:
                 symbol = symbol[1:]
             symbols.add(symbol)
     return symbols
+
+
+def _dynamic_dependencies(path: Path) -> set[str]:
+    if sys.platform == "darwin":
+        command = ["otool", "-L", str(path)]
+        completed = subprocess.run(command, check=True, text=True, capture_output=True)
+        dependencies: set[str] = set()
+        for line in completed.stdout.splitlines()[1:]:
+            value = line.strip().split(" ", 1)[0]
+            if value:
+                dependencies.add(Path(value).name)
+        return dependencies
+
+    completed = subprocess.run(
+        ["readelf", "-d", str(path)],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    return {
+        match.group(1)
+        for match in re.finditer(
+            r"\(NEEDED\).*Shared library: \[([^\]]+)\]",
+            completed.stdout,
+        )
+    }
 
 
 def _require(symbols: set[str], symbol: str, path: Path) -> None:

@@ -39,7 +39,10 @@ _REQUIRED_CMAKE_TARGETS = (
     "fake_cudart",
     "fake_cublas",
     "fake_nccl",
+    "fakegpu_coordinator",
 )
+
+_REQUIRED_BINARIES = ("fakegpu-coordinator",)
 
 
 def _cmake_build(build_dir: Path) -> None:
@@ -47,20 +50,21 @@ def _cmake_build(build_dir: Path) -> None:
     subprocess.check_call(
         ["cmake", "-S", str(_ROOT), "-B", str(build_dir), f"-DCMAKE_BUILD_TYPE={cfg}"],
     )
-    # Packaging only needs the runtime libraries copied into fakegpu/_native.
+    # Packaging needs the runtime libraries and coordinator executable copied
+    # into fakegpu/_native.
     # Avoid building probes/tests here so wheel builds stay isolated from optional targets.
     subprocess.check_call(
         ["cmake", "--build", str(build_dir), "--config", cfg, "--target", *_REQUIRED_CMAKE_TARGETS],
     )
 
 
-def _copy_native_libs(src_dir: Path, dst_dir: Path) -> None:
+def _copy_native_artifacts(src_dir: Path, dst_dir: Path) -> None:
     dst_dir.mkdir(parents=True, exist_ok=True)
-    for lib in _REQUIRED_LIBS:
-        src = src_dir / lib
+    for artifact in (*_REQUIRED_LIBS, *_REQUIRED_BINARIES):
+        src = src_dir / artifact
         if not src.exists():
-            raise FileNotFoundError(f"Missing built library: {src}")
-        shutil.copy2(src.resolve(), dst_dir / lib)
+            raise FileNotFoundError(f"Missing built native artifact: {src}")
+        shutil.copy2(src.resolve(), dst_dir / artifact)
 
 
 def _copy_profile_catalog(dst_dir: Path) -> None:
@@ -91,7 +95,7 @@ class build_py(_build_py):
         super().run()
 
         package_native = Path(self.build_lib) / "fakegpu" / "_native"
-        _copy_native_libs(native_out, package_native)
+        _copy_native_artifacts(native_out, package_native)
         package_profiles = Path(self.build_lib) / "fakegpu" / "_profiles"
         _copy_profile_catalog(package_profiles)
 

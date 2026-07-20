@@ -224,7 +224,7 @@ void ClusterCoordinator::handle_client(int client_fd) {
         response = format_ok_response({
             {"status", "ready"},
             {"version", "1"},
-            {"transport", "unix"},
+            {"transport", coordinator_transport_name(transport_)},
         });
     } else if (request.command == "HELLO") {
         response = format_ok_response({

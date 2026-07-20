@@ -16,6 +16,7 @@ Suites:
   cpu_sim   Build CPU simulation and validate cuBLAS ops
   python    Run PyTorch tests (requires torch)
   preflight_oom  Run fakecuda preflight pass/OOM report checks (requires torch)
+  tcp_bandwidth  Simulate two logical nodes and measure TCP collective throughput
   static_memory_validation  Capture ATen storage liveness and compare with real CUDA when available
   real_gpu_calibration  Calibrate real/passthrough/hybrid/fakecuda workloads on the detected GPU
   rtx3090ti_calibration  Deprecated alias for real_gpu_calibration
@@ -198,6 +199,11 @@ run_preflight_oom() {
     --expect-device
 }
 
+run_tcp_bandwidth() {
+  build
+  "$PYTHON_BIN" verification/test_tcp_bandwidth.py --build-dir "$SMOKE_BUILD_DIR"
+}
+
 run_real_gpu_calibration() {
   local report_root="$SMOKE_BUILD_DIR/real_gpu_calibration"
   rm -rf "$report_root"
@@ -308,6 +314,9 @@ case "$suite" in
     ;;
   preflight_oom)
     run_preflight_oom
+    ;;
+  tcp_bandwidth)
+    run_tcp_bandwidth
     ;;
   static_memory_validation)
     run_static_memory_validation

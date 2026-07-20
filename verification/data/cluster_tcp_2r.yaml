@@ -1,0 +1,30 @@
+version: 1
+cluster:
+  name: heterogeneous-tcp-cluster
+  default_backend: nccl
+
+nodes:
+  - id: rtx-pro-5000-node
+    host: coordinator-host
+    ranks: [0]
+    gpus:
+      - profile: rtx-pro-5000-blackwell
+
+  - id: rtx3090ti-node
+    host: worker-host
+    ranks: [1]
+    gpus:
+      - profile: rtx3090ti
+
+fabric:
+  intra_node:
+    type: pcie
+    bandwidth_gbps: 64
+    latency_us: 4
+
+  inter_node:
+    # These are topology-model inputs, not measured link properties.
+    type: tcp
+    bandwidth_gbps: 10
+    latency_us: 100
+    oversubscription: 1

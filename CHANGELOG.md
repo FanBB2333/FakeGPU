@@ -8,6 +8,8 @@
 - `fakegpu doctor`, including installation checks, structured diagnostics, and a complete profile listing.
 - Ten reference profiles: P4, A30, A10, Jetson AGX Orin 64GB, L4, H200, B300, Jetson T5000, RTX PRO 6000 Blackwell, and GB10.
 - A checked-in snapshot and updater for NVIDIA's current and legacy model-to-compute-capability tables.
+- `fakegpu coordinator` and `fakegpu bandwidth` commands for chosen-port TCP coordination, local logical-node simulation, physical multi-host rank launch, correctness checks, and end-to-end throughput reports.
+- A real-CUDA DDP numerical check for averaged gradients and cross-rank parameter consistency through simulated NCCL collectives.
 
 ### Changed
 
@@ -15,12 +17,15 @@
 - Every profile declares an explicit compute capability, provenance, memory kind, and measured/reference/synthetic status.
 - Native and Python architecture mapping now covers Maxwell through Blackwell, including Blackwell compute capabilities 10.0, 10.3, 11.0, 12.0, and 12.1.
 - Native smoke validation now exercises all 15 represented compute capabilities.
+- TCP coordinators now carry collective and point-to-point data in socket payloads so ranks can communicate across physical hosts; `FAKEGPU_COORDINATOR_TIMEOUT_MS` controls rank rendezvous and collective waits.
 
 ### Fixed
 
 - Corrected the previous B100/B200 compute-capability mismatch between the Python registry and native profiles.
 - Added FP8 and FP4 profile capability parsing so Hopper, Ada, and Blackwell profiles remain available to native builds.
 - Included profile YAML and NVIDIA catalog data in built wheels.
+- Removed fake NCCL's hard dependency on the FakeGPU CUDA Driver, allowing simulated communication to coexist with a process that uses the physical CUDA Driver.
+- Kept macOS collective shared-memory names within Darwin's 31-character POSIX limit.
 
 ## v1.5.2 - 2026-07-20
 
