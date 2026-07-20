@@ -851,6 +851,12 @@ bool validate_stream_handle(
     if (!comm || comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
         return true;
     }
+    if (fake_gpu::BackendConfig::instance().mode() != fake_gpu::FakeGpuMode::Simulate) {
+        // Hybrid collectives receive streams owned by the physical CUDA
+        // driver. FakeGPU intentionally does not preload its driver in this
+        // path, so fake stream-table validation does not apply.
+        return true;
+    }
     if (stream == nullptr) {
         // NCCL uses the default stream as a valid submission target. Treat it as
         // valid even when direct probes do not have a globally-resolvable
