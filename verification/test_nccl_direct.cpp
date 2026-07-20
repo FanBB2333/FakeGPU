@@ -162,6 +162,143 @@ void run_duplicate_destroy_case() {
         "second destroy should fail with ncclInvalidUsage");
 }
 
+void run_nccl_229_compat_case() {
+    ncclUniqueId unique_id {};
+    require_result(
+        ncclGetUniqueId(&unique_id),
+        ncclSuccess,
+        "NCCL 2.29 compatibility unique ID failed");
+
+    ncclComm_t comm = nullptr;
+    require_result(
+        ncclCommInitRank(&comm, 1, unique_id, 0),
+        ncclSuccess,
+        "NCCL 2.29 compatibility communicator init failed");
+
+    std::uint64_t memory_stat = 99;
+    require_result(
+        ncclCommMemStats(comm, ncclStatGpuMemTotal, &memory_stat),
+        ncclSuccess,
+        "active communicator memory statistics failed");
+    require(memory_stat == 0, "simulated communicator should report zero NCCL memory");
+
+    require_result(
+        ncclCommSuspend(comm, NCCL_SUSPEND_MEM),
+        ncclSuccess,
+        "communicator suspend failed");
+    require_result(
+        ncclCommMemStats(comm, ncclStatGpuMemSuspended, &memory_stat),
+        ncclSuccess,
+        "suspended communicator memory statistics failed");
+    require(memory_stat == 1, "suspended communicator state was not reported");
+
+    float send = 1.0f;
+    float recv = 0.0f;
+    require_result(
+        ncclAllReduce(
+            &send,
+            &recv,
+            1,
+            ncclFloat32,
+            ncclSum,
+            comm,
+            nullptr),
+        ncclInvalidUsage,
+        "collective on a suspended communicator should fail");
+
+    require_result(ncclCommResume(comm), ncclSuccess, "communicator resume failed");
+    require_result(
+        ncclCommMemStats(comm, ncclStatGpuMemSuspended, &memory_stat),
+        ncclSuccess,
+        "resumed communicator memory statistics failed");
+    require(memory_stat == 0, "resumed communicator still reports suspended state");
+
+    ncclResult_t async_error = ncclInternalError;
+    require_result(
+        ncclCommGetAsyncError(comm, &async_error),
+        ncclSuccess,
+        "async error query after resume failed");
+    require(
+        async_error == ncclSuccess,
+        "suspended collective should not become a persistent async error");
+
+    std::array<std::uint32_t, 4> window_storage = {1, 2, 3, 4};
+    ncclWindow_t window = nullptr;
+    require_result(
+        ncclCommWindowRegister(
+            comm,
+            window_storage.data(),
+            sizeof(window_storage),
+            &window,
+            0),
+        ncclSuccess,
+        "window registration failed");
+
+    void* device_pointer = nullptr;
+    require_result(
+        ncclGetLsaMultimemDevicePointer(
+            window,
+            sizeof(std::uint32_t),
+            &device_pointer),
+        ncclInvalidUsage,
+        "unsupported LSA multimem pointer lookup should be explicit");
+    require(device_pointer == nullptr, "unsupported LSA pointer lookup returned a pointer");
+
+    require_result(
+        ncclGetPeerDevicePointer(
+            window,
+            2 * sizeof(std::uint32_t),
+            0,
+            &device_pointer),
+        ncclInvalidUsage,
+        "unsupported peer pointer lookup should be explicit");
+    require(device_pointer == nullptr, "unsupported peer pointer lookup returned a pointer");
+    require_result(
+        ncclCommWindowDeregister(comm, window),
+        ncclSuccess,
+        "window deregistration failed");
+
+    ncclComm_t shrunk = nullptr;
+    require_result(
+        ncclCommShrink(comm, nullptr, 0, &shrunk, nullptr, 0),
+        ncclInvalidUsage,
+        "unsupported communicator shrink should be explicit");
+    require(shrunk == nullptr, "unsupported communicator shrink returned a handle");
+
+    require_result(
+        ncclDevCommCreate(comm, nullptr, nullptr),
+        ncclInvalidArgument,
+        "invalid device communicator creation should fail");
+    require_result(
+        ncclPutSignal(
+            nullptr,
+            0,
+            ncclFloat32,
+            0,
+            nullptr,
+            0,
+            0,
+            0,
+            0,
+            comm,
+            nullptr),
+        ncclInvalidUsage,
+        "unsupported put-signal should be explicit");
+    require_result(
+        ncclSignal(0, 0, 0, 0, comm, nullptr),
+        ncclInvalidUsage,
+        "unsupported signal should be explicit");
+    require_result(
+        ncclWaitSignal(0, nullptr, comm, nullptr),
+        ncclInvalidUsage,
+        "unsupported wait-signal should be explicit");
+
+    require_result(
+        ncclCommDestroy(comm),
+        ncclSuccess,
+        "NCCL 2.29 compatibility communicator destroy failed");
+}
+
 void run_comm_init_all_case() {
     std::array<int, 3> devlist = {3, 1, 2};
     std::array<ncclComm_t, 3> comms = {nullptr, nullptr, nullptr};
@@ -924,6 +1061,7 @@ int main() {
         run_fake_stream_registry_case();
         run_invalid_stream_collective_case();
         run_group_stream_mismatch_case();
+        run_nccl_229_compat_case();
 
         std::cout << "nccl direct init/destroy test passed" << std::endl;
         return 0;

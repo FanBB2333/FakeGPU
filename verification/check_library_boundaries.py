@@ -19,16 +19,19 @@ def main() -> int:
         driver = lib_dir / "libcuda.dylib"
         runtime = lib_dir / "libcudart.dylib"
         nvml = lib_dir / "libnvidia-ml.dylib"
+        nccl = lib_dir / "libnccl.dylib"
         nm_command = ["nm", "-gU"]
     else:
         driver = lib_dir / "libcuda.so.1"
         runtime = lib_dir / "libcudart.so.12"
         nvml = lib_dir / "libnvidia-ml.so.1"
+        nccl = lib_dir / "libnccl.so.2"
         nm_command = ["nm", "-D", "--defined-only"]
 
     driver_symbols = _defined_symbols(driver, nm_command)
     runtime_symbols = _defined_symbols(runtime, nm_command)
     nvml_symbols = _defined_symbols(nvml, nm_command)
+    nccl_symbols = _defined_symbols(nccl, nm_command)
 
     _require(driver_symbols, "cuInit", driver)
     # CUDA 12.x and PyTorch resolve these symbols directly from the libcuda
@@ -60,8 +63,22 @@ def main() -> int:
     _require(nvml_symbols, "nvmlDeviceGetNvLinkRemotePciInfo_v2", nvml)
     _forbid(nvml_symbols, "cuInit", nvml)
     _forbid(nvml_symbols, "cudaMalloc", nvml)
+    for symbol in (
+        "ncclCommMemStats",
+        "ncclCommResume",
+        "ncclCommShrink",
+        "ncclCommSuspend",
+        "ncclDevCommCreate",
+        "ncclDevCommDestroy",
+        "ncclGetLsaMultimemDevicePointer",
+        "ncclGetPeerDevicePointer",
+        "ncclPutSignal",
+        "ncclSignal",
+        "ncclWaitSignal",
+    ):
+        _require(nccl_symbols, symbol, nccl)
 
-    print("OK: CUDA Driver/Runtime library symbol boundaries are separated")
+    print("OK: CUDA/NVML boundaries and PyTorch-required NCCL 2.29 symbols are valid")
     return 0
 
 
