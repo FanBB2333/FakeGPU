@@ -53,6 +53,7 @@ cmake --build build -j4
 | `FAKEGPU_COORDINATOR_TIMEOUT_MS` | rank 汇合及操作等待时间，默认 `1000` 毫秒 |
 | `FAKEGPU_CLUSTER_REPORT_PATH` | cluster 报告输出路径 |
 | `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` | 可选 Markdown 项目报告路径；默认与 JSON 位于同一目录 |
+| `FAKEGPU_CLUSTER_REPORT_MAX_OPERATIONS` | coordinator 观测时间线最多保留的条目数，默认 `4096`；设为 `0` 可关闭保留 |
 | `FAKEGPU_STAGING_CHUNK_BYTES` | staging chunk 阈值 |
 | `FAKEGPU_STAGING_FORCE_SOCKET` | 强制跳过 shared memory，直接验证 socket fallback |
 | `FAKEGPU_DEVICE_COUNT` | 暴露的 fake device 数量 |
@@ -329,13 +330,22 @@ export LD_PRELOAD="$PWD/build/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
 
 - world size、transport 等元信息
 - 各类 collective 的调用次数、字节数、估算耗时
+- P2P 操作数、发送次数和字节数
 - 节点间 / 节点内链路统计
-- 全部不同节点的两两组合，包含方向总量、双向总量、单次操作峰值、传输次数，以及模型平均/峰值吞吐
-- 各 rank 的等待时间、超时次数、communicator 初始化次数
+- 全部不同节点的两两组合，包含 collective/P2P 操作分类、方向总量、双向总量、单次操作峰值、传输次数，以及模型平均/峰值吞吐
+- 各 rank 的等待时间、超时次数、communicator 初始化次数，以及 collective/P2P 调用次数
+- 有大小限制的操作时间线，记录全局 ranks、逻辑/socket 负载、汇合时间、coordinator 执行时间和模型时间
 
 设置 JSON 路径后，默认会在同一目录生成 `.md` 报告。通过
 `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` 或 coordinator 的
 `--markdown-report` 参数，可以指定最终项目报告路径。
+版本化 JSON 契约由仓库根目录的 `cluster_report.schema.json` 定义，
+`verification/check_cluster_report.py` 默认会按该契约校验。communicator
+split 会保留局部 rank 到集群全局 rank 的映射，因此 subgroup 流量只会
+归到实际参与的节点。
+coordinator 观测时间从完整请求进入 communicator registry 开始，到
+coordinator 侧执行结束为止；它不包含客户端准备和最终响应送达时间，也不
+等同于网卡抓包结果。
 
 ## 常见失败点
 

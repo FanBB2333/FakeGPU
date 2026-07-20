@@ -265,6 +265,17 @@ std::string format_decimal(double value, int precision = 3) {
     return out.str();
 }
 
+std::string format_rank_list(const std::vector<int>& ranks) {
+    std::ostringstream out;
+    for (std::size_t index = 0; index < ranks.size(); ++index) {
+        if (index > 0) {
+            out << ',';
+        }
+        out << ranks[index];
+    }
+    return out.str();
+}
+
 void write_collective_json(
     std::ostream& out,
     const char* name,
@@ -329,6 +340,7 @@ bool write_json_report(
 
     out << "{\n";
     out << "  \"report_version\": \"" << json_escape(FAKEGPU_VERSION) << "\",\n";
+    out << "  \"schema_version\": \"cluster_report.v1\",\n";
     out << "  \"schema\": \"experimental\",\n";
     out << "  \"cluster\": {\n";
     out << "    \"mode\": \""
@@ -364,6 +376,18 @@ bool write_json_report(
     write_collective_json(out, "barrier", snapshot.barrier, false);
     out << "  },\n";
 
+    out << "  \"point_to_point\": {\n";
+    out << "    \"operations\": " << snapshot.point_to_point.operations << ",\n";
+    out << "    \"sends\": " << snapshot.point_to_point.sends << ",\n";
+    out << "    \"bytes\": " << snapshot.point_to_point.bytes << ",\n";
+    out << "    \"estimated_time_us_total\": "
+        << format_decimal(snapshot.point_to_point.estimated_time_us_total)
+        << ",\n";
+    out << "    \"contention_penalty_us_total\": "
+        << format_decimal(snapshot.point_to_point.contention_penalty_us_total)
+        << "\n";
+    out << "  },\n";
+
     out << "  \"links\": [\n";
     for (std::size_t index = 0; index < snapshot.links.size(); ++index) {
         const ClusterLinkReportStats& link = snapshot.links[index];
@@ -375,6 +399,11 @@ bool write_json_report(
         out << "      \"dst\": \"" << json_escape(link.dst_node) << "\",\n";
         out << "      \"scope\": \"" << json_escape(link.scope) << "\",\n";
         out << "      \"samples\": " << link.samples << ",\n";
+        out << "      \"operations\": " << link.operations << ",\n";
+        out << "      \"collective_operations\": "
+            << link.collective_operations << ",\n";
+        out << "      \"point_to_point_operations\": "
+            << link.point_to_point_operations << ",\n";
         out << "      \"bytes\": " << link.bytes << ",\n";
         out << "      \"peak_bytes_per_operation\": "
             << link.peak_bytes_per_operation << ",\n";
@@ -405,6 +434,10 @@ bool write_json_report(
         out << "      \"node_b\": \"" << json_escape(pair.node_b) << "\",\n";
         out << "      \"scope\": \"inter_node\",\n";
         out << "      \"operations\": " << pair.operations << ",\n";
+        out << "      \"collective_operations\": "
+            << pair.collective_operations << ",\n";
+        out << "      \"point_to_point_operations\": "
+            << pair.point_to_point_operations << ",\n";
         out << "      \"a_to_b\": ";
         write_direction_json(out, pair.a_to_b, "      ");
         out << ",\n";
@@ -442,13 +475,66 @@ bool write_json_report(
             << rank.communicator_inits << ",\n";
         out << "      \"collective_calls\": "
             << rank.collective_calls << ",\n";
+        out << "      \"point_to_point_calls\": "
+            << rank.point_to_point_calls << ",\n";
         out << "      \"barrier_calls\": "
             << rank.barrier_calls << ",\n";
         out << "      \"group_prepares\": "
             << rank.group_prepares << "\n";
         out << "    }" << (index + 1 < snapshot.ranks.size() ? "," : "") << "\n";
     }
-    out << "  ]\n";
+    out << "  ],\n";
+
+    out << "  \"operation_timeline\": {\n";
+    out << "    \"retained_entries\": "
+        << snapshot.operation_timeline.size() << ",\n";
+    out << "    \"dropped_entries\": "
+        << snapshot.dropped_operation_timeline_entries << ",\n";
+    out << "    \"entries\": [\n";
+    for (std::size_t index = 0;
+         index < snapshot.operation_timeline.size();
+         ++index) {
+        const ClusterOperationTimelineEntry& entry =
+            snapshot.operation_timeline[index];
+        out << "      {\n";
+        out << "        \"index\": " << entry.index << ",\n";
+        out << "        \"comm_id\": " << entry.comm_id << ",\n";
+        out << "        \"seqno\": " << entry.seqno << ",\n";
+        out << "        \"kind\": \"" << json_escape(entry.kind) << "\",\n";
+        out << "        \"operation\": \""
+            << json_escape(entry.operation) << "\",\n";
+        out << "        \"buffer_transport\": \""
+            << json_escape(entry.buffer_transport) << "\",\n";
+        out << "        \"ranks\": [";
+        for (std::size_t rank_index = 0;
+             rank_index < entry.ranks.size();
+             ++rank_index) {
+            if (rank_index > 0) {
+                out << ", ";
+            }
+            out << entry.ranks[rank_index];
+        }
+        out << "],\n";
+        out << "        \"logical_payload_bytes\": "
+            << entry.logical_payload_bytes << ",\n";
+        out << "        \"socket_request_payload_bytes\": "
+            << entry.socket_request_payload_bytes << ",\n";
+        out << "        \"socket_response_payload_bytes\": "
+            << entry.socket_response_payload_bytes << ",\n";
+        out << "        \"rendezvous_wait_us\": "
+            << format_decimal(entry.rendezvous_wait_us) << ",\n";
+        out << "        \"execution_time_us\": "
+            << format_decimal(entry.execution_time_us) << ",\n";
+        out << "        \"coordinator_duration_us\": "
+            << format_decimal(entry.coordinator_duration_us) << ",\n";
+        out << "        \"modeled_time_us\": "
+            << format_decimal(entry.modeled_time_us) << "\n";
+        out << "      }"
+            << (index + 1 < snapshot.operation_timeline.size() ? "," : "")
+            << "\n";
+    }
+    out << "    ]\n";
+    out << "  }\n";
     out << "}\n";
     if (!out) {
         error = "failed to write cluster report: " + json_report_path;
@@ -520,12 +606,27 @@ bool write_markdown_report(
             << " us |\n";
     }
 
+    out << "\n## Point-to-Point Summary\n\n";
+    out << "| Operations | Sends | Payload | Estimated time"
+        << " | Contention penalty |\n";
+    out << "|---:|---:|---:|---:|---:|\n";
+    out << "| " << snapshot.point_to_point.operations
+        << " | " << snapshot.point_to_point.sends
+        << " | " << format_bytes(snapshot.point_to_point.bytes)
+        << " | "
+        << format_decimal(snapshot.point_to_point.estimated_time_us_total)
+        << " us"
+        << " | "
+        << format_decimal(snapshot.point_to_point.contention_penalty_us_total)
+        << " us |\n";
+
     out << "\n## Node-Pair Communication\n\n";
     out << "| Node A | Node B | A → B total | B → A total | Combined total"
         << " | A → B peak/op | B → A peak/op | Pair peak/op | Operations"
-        << " | Transfers | Avg est. Gbit/s | Peak est. Gbit/s"
+        << " | Collective ops | P2P ops | Transfers"
+        << " | Avg est. Gbit/s | Peak est. Gbit/s"
         << " | Est. time | Contention |\n";
-    out << "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n";
+    out << "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n";
     for (const ClusterNodePairReportStats& pair : node_pairs) {
         const std::uint64_t total_bytes = pair_total_bytes(pair);
         const double estimated_time_us = pair_estimated_time_us(pair);
@@ -538,6 +639,8 @@ bool write_markdown_report(
             << " | " << format_bytes(pair.b_to_a.peak_bytes_per_operation)
             << " | " << format_bytes(pair.peak_combined_bytes_per_operation)
             << " | " << pair.operations
+            << " | " << pair.collective_operations
+            << " | " << pair.point_to_point_operations
             << " | " << pair_total_transfers(pair)
             << " | " << format_decimal(
                    estimated_throughput_gbps(total_bytes, estimated_time_us))
@@ -548,14 +651,14 @@ bool write_markdown_report(
     }
     if (node_pairs.empty()) {
         out << "| _No distinct node pairs_ |  | 0 B | 0 B | 0 B"
-            << " | 0 B | 0 B | 0 B | 0 | 0 | 0.000 | 0.000"
+            << " | 0 B | 0 B | 0 B | 0 | 0 | 0 | 0 | 0.000 | 0.000"
             << " | 0.000 us | 0.000 us |\n";
     }
 
     out << "\n## Rank Summary\n\n";
     out << "| Rank | Node | Wait time | Timeouts | Communicator inits"
-        << " | Collective calls | Barrier calls | Group prepares |\n";
-    out << "|---:|---|---:|---:|---:|---:|---:|---:|\n";
+        << " | Collective calls | P2P calls | Barrier calls | Group prepares |\n";
+    out << "|---:|---|---:|---:|---:|---:|---:|---:|---:|\n";
     for (const ClusterRankReportStats& rank : snapshot.ranks) {
         out << "| " << rank.rank
             << " | `" << markdown_escape(
@@ -564,9 +667,53 @@ bool write_markdown_report(
             << " | " << rank.timeouts
             << " | " << rank.communicator_inits
             << " | " << rank.collective_calls
+            << " | " << rank.point_to_point_calls
             << " | " << rank.barrier_calls
             << " | " << rank.group_prepares
             << " |\n";
+    }
+
+    out << "\n## Recent Operation Timeline\n\n";
+    out << "- Retained entries: " << snapshot.operation_timeline.size() << "\n";
+    out << "- Dropped older entries: "
+        << snapshot.dropped_operation_timeline_entries << "\n";
+    const std::size_t timeline_display_limit = 100;
+    const std::size_t timeline_begin =
+        snapshot.operation_timeline.size() > timeline_display_limit
+        ? snapshot.operation_timeline.size() - timeline_display_limit
+        : 0;
+    if (timeline_begin > 0) {
+        out << "- Markdown shows the latest " << timeline_display_limit
+            << " entries; JSON retains the full bounded timeline.\n";
+    }
+    out << "\n| # | Kind / operation | Comm:seq | Global ranks | Transport"
+        << " | Logical payload | Socket request | Socket response"
+        << " | Rendezvous | Execution | Coordinator observed | Modeled |\n";
+    out << "|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|\n";
+    for (std::size_t index = timeline_begin;
+         index < snapshot.operation_timeline.size();
+         ++index) {
+        const ClusterOperationTimelineEntry& entry =
+            snapshot.operation_timeline[index];
+        out << "| " << entry.index
+            << " | `" << markdown_escape(entry.kind)
+            << " / " << markdown_escape(entry.operation)
+            << "` | `" << entry.comm_id << ':' << entry.seqno
+            << "` | `" << format_rank_list(entry.ranks)
+            << "` | `" << markdown_escape(entry.buffer_transport)
+            << "` | " << format_bytes(entry.logical_payload_bytes)
+            << " | " << format_bytes(entry.socket_request_payload_bytes)
+            << " | " << format_bytes(entry.socket_response_payload_bytes)
+            << " | " << format_decimal(entry.rendezvous_wait_us) << " us"
+            << " | " << format_decimal(entry.execution_time_us) << " us"
+            << " | " << format_decimal(entry.coordinator_duration_us) << " us"
+            << " | " << format_decimal(entry.modeled_time_us) << " us"
+            << " |\n";
+    }
+    if (snapshot.operation_timeline.empty()) {
+        out << "| 0 | _No completed communication operations_ |  |  |  | 0 B"
+            << " | 0 B | 0 B | 0.000 us | 0.000 us | 0.000 us"
+            << " | 0.000 us |\n";
     }
 
     out << "\n## Metric Notes\n\n";
@@ -574,9 +721,15 @@ bool write_markdown_report(
         << " the table, including pairs with zero traffic.\n";
     out << "- `peak/op` is the largest payload attributed to that direction or"
         << " node pair during one completed communication operation.\n";
+    out << "- Point-to-point payload counts successful sends once; the matching"
+        << " receive submission is not counted as a second transfer.\n";
     out << "- Estimated throughput, time, and contention come from the configured"
         << " topology model. They are not packet captures or measured NIC/NCCL"
         << " bandwidth.\n";
+    out << "- `Coordinator observed` starts when the first complete rank request"
+        << " enters the communicator registry and ends after coordinator-side"
+        << " execution. It excludes client-side preparation and final response"
+        << " delivery.\n";
     out << "- The JSON report retains exact byte counters and directional details"
         << " for automated analysis.\n";
 

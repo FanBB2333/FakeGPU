@@ -143,11 +143,22 @@ struct ClusterCollectiveReportStats {
     double contention_penalty_us_total = 0.0;
 };
 
+struct ClusterPointToPointReportStats {
+    std::uint64_t operations = 0;
+    std::uint64_t sends = 0;
+    std::uint64_t bytes = 0;
+    double estimated_time_us_total = 0.0;
+    double contention_penalty_us_total = 0.0;
+};
+
 struct ClusterLinkReportStats {
     std::string src_node;
     std::string dst_node;
     std::string scope;
     std::uint64_t samples = 0;
+    std::uint64_t operations = 0;
+    std::uint64_t collective_operations = 0;
+    std::uint64_t point_to_point_operations = 0;
     std::uint64_t bytes = 0;
     std::uint64_t peak_bytes_per_operation = 0;
     double bandwidth_gbps = 0.0;
@@ -172,6 +183,8 @@ struct ClusterNodePairReportStats {
     std::string node_a;
     std::string node_b;
     std::uint64_t operations = 0;
+    std::uint64_t collective_operations = 0;
+    std::uint64_t point_to_point_operations = 0;
     std::uint64_t peak_combined_bytes_per_operation = 0;
     double peak_estimated_throughput_gbps = 0.0;
     ClusterNodePairDirectionReportStats a_to_b;
@@ -184,8 +197,26 @@ struct ClusterRankReportStats {
     std::uint64_t timeouts = 0;
     std::uint64_t communicator_inits = 0;
     std::uint64_t collective_calls = 0;
+    std::uint64_t point_to_point_calls = 0;
     std::uint64_t barrier_calls = 0;
     std::uint64_t group_prepares = 0;
+};
+
+struct ClusterOperationTimelineEntry {
+    std::uint64_t index = 0;
+    int comm_id = -1;
+    std::uint64_t seqno = 0;
+    std::string kind;
+    std::string operation;
+    std::string buffer_transport;
+    std::vector<int> ranks;
+    std::uint64_t logical_payload_bytes = 0;
+    std::uint64_t socket_request_payload_bytes = 0;
+    std::uint64_t socket_response_payload_bytes = 0;
+    double rendezvous_wait_us = 0.0;
+    double execution_time_us = 0.0;
+    double coordinator_duration_us = 0.0;
+    double modeled_time_us = 0.0;
 };
 
 struct ClusterReportSnapshot {
@@ -199,9 +230,12 @@ struct ClusterReportSnapshot {
     ClusterCollectiveReportStats reduce_scatter;
     ClusterCollectiveReportStats all_to_all;
     ClusterCollectiveReportStats barrier;
+    ClusterPointToPointReportStats point_to_point;
     std::vector<ClusterLinkReportStats> links;
     std::vector<ClusterNodePairReportStats> node_pairs;
     std::vector<ClusterRankReportStats> ranks;
+    std::vector<ClusterOperationTimelineEntry> operation_timeline;
+    std::uint64_t dropped_operation_timeline_entries = 0;
 };
 
 class CommunicatorRegistry {

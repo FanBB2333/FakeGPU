@@ -97,6 +97,7 @@ def main() -> int:
         )
 
         assert cluster_report["cluster"]["coordinator_transport"] == "tcp"
+        assert cluster_report["schema_version"] == "cluster_report.v1"
         assert cluster_report["cluster"]["world_size"] == 2
         assert cluster_report["cluster"]["node_count"] == 2
         assert cluster_report["collectives"]["all_reduce"]["calls"] == 4
@@ -111,6 +112,8 @@ def main() -> int:
         pair = cluster_report["node_pairs"][0]
         assert {pair["node_a"], pair["node_b"]} == {"node0", "node1"}
         assert pair["operations"] == 4
+        assert pair["collective_operations"] == 4
+        assert pair["point_to_point_operations"] == 0
         assert pair["a_to_b"]["total_bytes"] > 0
         assert pair["b_to_a"]["total_bytes"] > 0
         assert pair["total_bytes"] == (
@@ -121,8 +124,22 @@ def main() -> int:
         assert pair["average_estimated_throughput_gbps"] > 0
         assert pair["peak_estimated_throughput_gbps"] > 0
 
+        timeline = cluster_report["operation_timeline"]
+        assert timeline["retained_entries"] == 4
+        assert timeline["dropped_entries"] == 0
+        for entry in timeline["entries"]:
+            assert entry["kind"] == "collective"
+            assert entry["operation"] == "allreduce"
+            assert entry["buffer_transport"] == "socket_payload"
+            assert entry["ranks"] == [0, 1]
+            assert entry["logical_payload_bytes"] > 0
+            assert entry["socket_request_payload_bytes"] > 0
+            assert entry["socket_response_payload_bytes"] > 0
+            assert entry["coordinator_duration_us"] > 0
+
         markdown = cluster_markdown_path.read_text(encoding="utf-8")
         assert "## Node-Pair Communication" in markdown
+        assert "## Recent Operation Timeline" in markdown
         assert "| `node0` | `node1` |" in markdown
 
         print(completed.stdout, end="")

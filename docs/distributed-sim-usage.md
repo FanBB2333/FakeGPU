@@ -53,6 +53,7 @@ For `torchrun`-based validation you also need:
 | `FAKEGPU_COORDINATOR_TIMEOUT_MS` | Rank rendezvous and operation timeout (default: `1000`) |
 | `FAKEGPU_CLUSTER_REPORT_PATH` | Cluster report output path |
 | `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` | Optional Markdown project-report path; defaults beside the JSON report |
+| `FAKEGPU_CLUSTER_REPORT_MAX_OPERATIONS` | Maximum retained coordinator-observed timeline entries (default: `4096`; `0` disables retention) |
 | `FAKEGPU_STAGING_CHUNK_BYTES` | Chunk size threshold for staged transfers |
 | `FAKEGPU_STAGING_FORCE_SOCKET` | Force socket fallback instead of shared memory |
 | `FAKEGPU_DEVICE_COUNT` | Number of exposed fake devices |
@@ -335,13 +336,23 @@ When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeG
 
 - world-size and coordinator metadata
 - per-collective call counts, bytes, and estimated time
+- point-to-point operation, send, and byte totals
 - intra-node and inter-node link statistics
-- every distinct node pair, with directional totals, combined total, per-operation peak payload, transfer count, and modeled average/peak throughput
-- per-rank wait time, timeouts, and communicator-init counts
+- every distinct node pair, with collective/P2P operation breakdowns, directional totals, combined total, per-operation peak payload, transfer count, and modeled average/peak throughput
+- per-rank wait time, timeouts, communicator-init counts, and collective/P2P call counts
+- a bounded operation timeline with global ranks, logical/socket payloads, rendezvous time, coordinator execution time, and modeled time
 
 The JSON path also produces a sibling `.md` report by default. Use
 `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` or coordinator
 `--markdown-report` to choose the final project-report path.
+The versioned JSON contract is defined by the repository-root
+`cluster_report.schema.json`; `verification/check_cluster_report.py` validates
+it by default. Communicator splits retain local-to-global rank membership, so
+subgroup traffic is attributed only to the participating cluster nodes.
+The coordinator-observed duration starts after a complete request has reached
+the communicator registry and ends after coordinator-side execution. It does
+not include client preparation or final response delivery and is not a NIC
+packet-capture measurement.
 
 ## Common failure cases
 

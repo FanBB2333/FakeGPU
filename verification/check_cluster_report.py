@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 
 def _die(msg: str) -> None:
@@ -17,6 +18,111 @@ def _require(obj: dict, key: str, *, ctx: str) -> object:
     if key not in obj:
         _die(f"missing key '{key}' in {ctx}")
     return obj[key]
+
+
+def _validate_schema_file(report: dict[str, Any], schema_path: Path) -> None:
+    if not schema_path.is_file():
+        _die(f"schema file not found: {schema_path}")
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        _die(f"failed to read schema {schema_path}: {exc}")
+    if not isinstance(schema, dict):
+        _die(f"schema root must be an object: {schema_path}")
+    _validate_against_schema(report, schema, "$", schema)
+
+
+def _resolve_local_ref(ref: str, root_schema: dict[str, Any]) -> dict[str, Any]:
+    if not ref.startswith("#/"):
+        _die(f"unsupported non-local schema reference: {ref}")
+    current: Any = root_schema
+    for component in ref[2:].split("/"):
+        key = component.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, dict) or key not in current:
+            _die(f"invalid schema reference: {ref}")
+        current = current[key]
+    if not isinstance(current, dict):
+        _die(f"schema reference does not resolve to an object: {ref}")
+    return current
+
+
+def _validate_against_schema(
+    value: Any,
+    schema: dict[str, Any],
+    path: str,
+    root_schema: dict[str, Any],
+) -> None:
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        _validate_against_schema(
+            value,
+            _resolve_local_ref(ref, root_schema),
+            path,
+            root_schema,
+        )
+        return
+
+    if "type" in schema:
+        _validate_type(value, schema["type"], path)
+    if "enum" in schema and value not in schema["enum"]:
+        _die(f"{path} must be one of {schema['enum']!r}, got {value!r}")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            _die(f"{path} must be >= {schema['minimum']!r}")
+
+    if isinstance(value, dict):
+        for key in schema.get("required", []):
+            if key not in value:
+                _die(f"{path}.{key} is missing")
+        properties = schema.get("properties", {})
+        if isinstance(properties, dict):
+            for key, child_schema in properties.items():
+                if key in value and isinstance(child_schema, dict):
+                    _validate_against_schema(
+                        value[key],
+                        child_schema,
+                        f"{path}.{key}",
+                        root_schema,
+                    )
+
+    if isinstance(value, list):
+        min_items = schema.get("minItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            _die(f"{path} must contain at least {min_items} item(s)")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                _validate_against_schema(
+                    item,
+                    item_schema,
+                    f"{path}[{index}]",
+                    root_schema,
+                )
+
+
+def _validate_type(value: Any, expected: Any, path: str) -> None:
+    expected_types = expected if isinstance(expected, list) else [expected]
+    if any(_matches_json_type(value, item) for item in expected_types):
+        return
+    _die(f"{path} must be {expected!r}, got {type(value).__name__}")
+
+
+def _matches_json_type(value: Any, expected: Any) -> bool:
+    if expected == "object":
+        return isinstance(value, dict)
+    if expected == "array":
+        return isinstance(value, list)
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "null":
+        return value is None
+    return True
 
 
 def _require_counter(obj: dict, key: str, *, ctx: str) -> dict:
@@ -77,6 +183,19 @@ def _validate_pair_direction(obj: object, *, ctx: str) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate FakeGPU cluster report schema")
     ap.add_argument("--path", default="fake_gpu_cluster_report.json", help="Path to fake_gpu_cluster_report.json")
+    ap.add_argument(
+        "--schema",
+        default=str(
+            Path(__file__).resolve().parent.parent
+            / "cluster_report.schema.json"
+        ),
+        help="Path to cluster_report.schema.json",
+    )
+    ap.add_argument(
+        "--no-schema",
+        action="store_true",
+        help="Skip JSON Schema validation",
+    )
     ap.add_argument("--expect-world-size", type=int, default=None)
     ap.add_argument("--expect-node-count", type=int, default=None)
     ap.add_argument(
@@ -87,6 +206,11 @@ def main() -> int:
         help="Require the named collective to have calls > 0 (repeatable)",
     )
     ap.add_argument("--expect-links", action="store_true", help="Require non-empty link statistics")
+    ap.add_argument(
+        "--expect-point-to-point",
+        action="store_true",
+        help="Require successful point-to-point sends",
+    )
     ap.add_argument(
         "--expect-markdown",
         action="store_true",
@@ -102,14 +226,25 @@ def main() -> int:
     report = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(report, dict):
         _die("report root must be a JSON object")
+    if not args.no_schema:
+        _validate_schema_file(report, Path(args.schema))
 
     version = report.get("report_version")
     if not isinstance(version, str):
         _die(f"unexpected report_version={version!r} (expected a version string)")
 
-    schema = _require(report, "schema", ctx="root")
-    if schema != "experimental":
-        _die(f"unexpected schema={schema!r} (expected 'experimental')")
+    schema_version = _require(report, "schema_version", ctx="root")
+    if schema_version != "cluster_report.v1":
+        _die(
+            f"unexpected schema_version={schema_version!r} "
+            "(expected 'cluster_report.v1')"
+        )
+    legacy_schema = _require(report, "schema", ctx="root")
+    if legacy_schema != "experimental":
+        _die(
+            f"unexpected legacy schema={legacy_schema!r} "
+            "(expected 'experimental')"
+        )
 
     cluster = _require(report, "cluster", ctx="root")
     if not isinstance(cluster, dict):
@@ -139,12 +274,43 @@ def main() -> int:
         counter = _require_counter(collectives, key, ctx="collectives")
         if int(counter["calls"]) > 0:
             non_zero_collectives += 1
-    if non_zero_collectives == 0:
-        _die("expected at least one collective counter to be non-zero")
     for expected_name in args.expect_collective:
         expected = collectives[expected_name]
         if int(expected["calls"]) <= 0:
             _die(f"expected collectives.{expected_name}.calls > 0")
+
+    point_to_point = _require(report, "point_to_point", ctx="root")
+    if not isinstance(point_to_point, dict):
+        _die("point_to_point must be an object")
+    p2p_operations = _require_non_negative_integer(
+        point_to_point,
+        "operations",
+        ctx="point_to_point",
+    )
+    p2p_sends = _require_non_negative_integer(
+        point_to_point,
+        "sends",
+        ctx="point_to_point",
+    )
+    _require_non_negative_integer(
+        point_to_point,
+        "bytes",
+        ctx="point_to_point",
+    )
+    _require_non_negative_number(
+        point_to_point,
+        "estimated_time_us_total",
+        ctx="point_to_point",
+    )
+    _require_non_negative_number(
+        point_to_point,
+        "contention_penalty_us_total",
+        ctx="point_to_point",
+    )
+    if non_zero_collectives == 0 and p2p_operations == 0:
+        _die("expected at least one completed communication operation")
+    if args.expect_point_to_point and (p2p_operations <= 0 or p2p_sends <= 0):
+        _die("expected successful point-to-point sends")
 
     links = report.get("links", [])
     if args.expect_links:
@@ -158,6 +324,17 @@ def main() -> int:
             dst = _require(link, "dst", ctx=ctx)
             scope = _require(link, "scope", ctx=ctx)
             samples = _require(link, "samples", ctx=ctx)
+            operations = _require(link, "operations", ctx=ctx)
+            collective_operations = _require(
+                link,
+                "collective_operations",
+                ctx=ctx,
+            )
+            point_to_point_operations = _require(
+                link,
+                "point_to_point_operations",
+                ctx=ctx,
+            )
             bytes_value = _require(link, "bytes", ctx=ctx)
             peak_bytes = _require(link, "peak_bytes_per_operation", ctx=ctx)
             bandwidth = _require(link, "bandwidth_gbps", ctx=ctx)
@@ -183,6 +360,15 @@ def main() -> int:
                 _die(f"{ctx}.scope must be intra_node or inter_node")
             if not isinstance(samples, int) or samples <= 0:
                 _die(f"{ctx}.samples must be a positive integer")
+            for field_name, field_value in (
+                ("operations", operations),
+                ("collective_operations", collective_operations),
+                ("point_to_point_operations", point_to_point_operations),
+            ):
+                if not isinstance(field_value, int) or field_value < 0:
+                    _die(f"{ctx}.{field_name} must be a non-negative integer")
+            if operations != collective_operations + point_to_point_operations:
+                _die(f"{ctx}.operations must equal its operation breakdown")
             if not isinstance(bytes_value, int) or bytes_value < 0:
                 _die(f"{ctx}.bytes must be a non-negative integer")
             if not isinstance(peak_bytes, int) or peak_bytes < 0:
@@ -232,7 +418,19 @@ def main() -> int:
             _die(f"duplicate node pair: {node_a}, {node_b}")
         seen_pairs.add(pair_key)
 
-        _require_non_negative_integer(pair, "operations", ctx=ctx)
+        operations = _require_non_negative_integer(pair, "operations", ctx=ctx)
+        collective_operations = _require_non_negative_integer(
+            pair,
+            "collective_operations",
+            ctx=ctx,
+        )
+        point_to_point_operations = _require_non_negative_integer(
+            pair,
+            "point_to_point_operations",
+            ctx=ctx,
+        )
+        if operations != collective_operations + point_to_point_operations:
+            _die(f"{ctx}.operations must equal its operation breakdown")
         a_to_b = _validate_pair_direction(
             _require(pair, "a_to_b", ctx=ctx),
             ctx=f"{ctx}.a_to_b",
@@ -303,7 +501,9 @@ def main() -> int:
         markdown = markdown_path.read_text(encoding="utf-8")
         for required_text in (
             "# FakeGPU Cluster Communication Report",
+            "## Point-to-Point Summary",
             "## Node-Pair Communication",
+            "## Recent Operation Timeline",
             "| Node A | Node B |",
         ):
             if required_text not in markdown:
@@ -327,6 +527,11 @@ def main() -> int:
         timeouts = _require(rank_stats, "timeouts", ctx=ctx)
         communicator_inits = _require(rank_stats, "communicator_inits", ctx=ctx)
         collective_calls = _require(rank_stats, "collective_calls", ctx=ctx)
+        point_to_point_calls = _require(
+            rank_stats,
+            "point_to_point_calls",
+            ctx=ctx,
+        )
         barrier_calls = _require(rank_stats, "barrier_calls", ctx=ctx)
         group_prepares = _require(rank_stats, "group_prepares", ctx=ctx)
 
@@ -343,11 +548,70 @@ def main() -> int:
             ("timeouts", timeouts),
             ("communicator_inits", communicator_inits),
             ("collective_calls", collective_calls),
+            ("point_to_point_calls", point_to_point_calls),
             ("barrier_calls", barrier_calls),
             ("group_prepares", group_prepares),
         ):
             if not isinstance(field_value, int) or field_value < 0:
                 _die(f"{ctx}.{field_name} must be a non-negative integer")
+
+    timeline = _require(report, "operation_timeline", ctx="root")
+    if not isinstance(timeline, dict):
+        _die("operation_timeline must be an object")
+    retained_entries = _require_non_negative_integer(
+        timeline,
+        "retained_entries",
+        ctx="operation_timeline",
+    )
+    _require_non_negative_integer(
+        timeline,
+        "dropped_entries",
+        ctx="operation_timeline",
+    )
+    entries = _require(timeline, "entries", ctx="operation_timeline")
+    if not isinstance(entries, list):
+        _die("operation_timeline.entries must be an array")
+    if retained_entries != len(entries):
+        _die(
+            "operation_timeline.retained_entries must equal the entries "
+            "array length"
+        )
+
+    previous_index = 0
+    for index, entry in enumerate(entries):
+        ctx = f"operation_timeline.entries[{index}]"
+        if not isinstance(entry, dict):
+            _die(f"{ctx} must be an object")
+        entry_index = _require_non_negative_integer(entry, "index", ctx=ctx)
+        if entry_index <= previous_index:
+            _die(f"{ctx}.index must be strictly increasing")
+        previous_index = entry_index
+        ranks_value = _require(entry, "ranks", ctx=ctx)
+        if not isinstance(ranks_value, list) or not ranks_value:
+            _die(f"{ctx}.ranks must be a non-empty array")
+        if any(
+            not isinstance(rank, int) or rank < 0
+            for rank in ranks_value
+        ):
+            _die(f"{ctx}.ranks must contain non-negative integers")
+
+        rendezvous = _require_non_negative_number(
+            entry,
+            "rendezvous_wait_us",
+            ctx=ctx,
+        )
+        execution = _require_non_negative_number(
+            entry,
+            "execution_time_us",
+            ctx=ctx,
+        )
+        coordinator_duration = _require_non_negative_number(
+            entry,
+            "coordinator_duration_us",
+            ctx=ctx,
+        )
+        if abs(coordinator_duration - rendezvous - execution) > 0.003:
+            _die(f"{ctx}.coordinator_duration_us is inconsistent")
 
     return 0
 

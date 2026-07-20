@@ -34,7 +34,8 @@ FakeGPU 的分布式支持本质上是一个**分布式语义模拟器**：
 
 - `src/distributed/communicator.cpp` 维护 pending / active communicator 状态。
 - collective 会等待所有参与 rank 到齐，再统一执行。
-- rank 等待时间、超时次数、collective 次数、方向链路总量和单次操作峰值都会进入 cluster report。
+- rank 等待时间、超时次数、collective/P2P 次数、方向链路总量和单次操作峰值都会进入 cluster report。
+- split communicator 会保留局部 rank 到集群全局 rank 的映射，subgroup 拓扑估算不会包含未参与的 rank。
 - `src/distributed/cluster_report_writer.cpp` 会写出精确 JSON 计数，以及包含全部配置节点对的 Markdown 表格。
 
 ### Coordinator 进程

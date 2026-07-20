@@ -5,6 +5,7 @@
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace fake_gpu::distributed {
@@ -144,11 +145,25 @@ bool TopologyModel::estimate_ring_collective(
     std::uint64_t bytes_per_rank,
     CollectiveTopologyEstimate& out,
     std::string& error) const {
+    return estimate_ring_collective(
+        type,
+        bytes_per_rank,
+        ordered_ranks_,
+        out,
+        error);
+}
+
+bool TopologyModel::estimate_ring_collective(
+    CollectiveType type,
+    std::uint64_t bytes_per_rank,
+    const std::vector<int>& participant_ranks,
+    CollectiveTopologyEstimate& out,
+    std::string& error) const {
     error.clear();
     out = CollectiveTopologyEstimate{};
     out.type = type;
     out.algorithm = "ring";
-    out.world_size = world_size_;
+    out.world_size = participant_ranks.size();
     out.bytes_per_rank = bytes_per_rank;
 
     if (!valid()) {
@@ -161,7 +176,30 @@ bool TopologyModel::estimate_ring_collective(
         out.error = error;
         return false;
     }
-    if (world_size_ < 2) {
+    if (participant_ranks.empty()) {
+        error = "participant_ranks must not be empty";
+        out.error = error;
+        return false;
+    }
+
+    std::unordered_set<int> unique_ranks;
+    unique_ranks.reserve(participant_ranks.size());
+    for (int rank : participant_ranks) {
+        if (node_by_rank_.find(rank) == node_by_rank_.end()) {
+            error = "participant rank is not part of the topology: " +
+                    std::to_string(rank);
+            out.error = error;
+            return false;
+        }
+        if (!unique_ranks.insert(rank).second) {
+            error = "participant_ranks contains duplicate rank: " +
+                    std::to_string(rank);
+            out.error = error;
+            return false;
+        }
+    }
+
+    if (participant_ranks.size() < 2) {
         out.ok = true;
         return true;
     }
@@ -178,9 +216,10 @@ bool TopologyModel::estimate_ring_collective(
     std::unordered_map<std::string, TopologyLinkEstimate> aggregates;
     double total_time_us = 0.0;
 
-    for (std::size_t index = 0; index < ordered_ranks_.size(); ++index) {
-        const int src_rank = ordered_ranks_[index];
-        const int dst_rank = ordered_ranks_[(index + 1) % ordered_ranks_.size()];
+    for (std::size_t index = 0; index < participant_ranks.size(); ++index) {
+        const int src_rank = participant_ranks[index];
+        const int dst_rank =
+            participant_ranks[(index + 1) % participant_ranks.size()];
 
         TopologyLinkEstimate edge;
         if (!estimate_transfer(src_rank, dst_rank, edge_bytes, edge, error)) {

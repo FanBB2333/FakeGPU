@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.5.3 - 2026-07-20
+
+Compared with `v1.5.2`.
+
 ### Added
 
 - `fakegpu demo`, a minimal CPU-backed PyTorch forward/backward/optimizer example with profile and JSON output.
@@ -10,7 +14,9 @@
 - A checked-in snapshot and updater for NVIDIA's current and legacy model-to-compute-capability tables.
 - `fakegpu coordinator` and `fakegpu bandwidth` commands for chosen-port TCP coordination, local logical-node simulation, physical multi-host rank launch, correctness checks, and end-to-end throughput reports.
 - A real-CUDA DDP numerical check for averaged gradients and cross-rank parameter consistency through simulated NCCL collectives.
-- Complete node-pair communication matrices in cluster JSON reports, plus an automatically generated Markdown project report with collective, node-pair, and rank tables.
+- Complete node-pair communication matrices in cluster JSON reports, plus an automatically generated Markdown project report with collective, P2P, node-pair, rank, and recent-operation tables.
+- A formal `cluster_report.v1` JSON contract and default schema validation.
+- A bounded coordinator-observed communication timeline with global communicator ranks, logical/socket payloads, rendezvous time, execution time, and topology-modeled time.
 
 ### Changed
 
@@ -20,6 +26,8 @@
 - Native smoke validation now exercises all 15 represented compute capabilities.
 - TCP coordinators now carry collective and point-to-point data in socket payloads so ranks can communicate across physical hosts; `FAKEGPU_COORDINATOR_TIMEOUT_MS` controls rank rendezvous and collective waits.
 - Link and node-pair reports now retain directional totals, per-operation peak payloads, modeled average/peak throughput, estimated time, and contention penalties.
+- Cluster reports distinguish collective and P2P operations at the link, node-pair, and rank levels.
+- Package, native report, and C++ runtime versions are synchronized at `1.5.3`.
 
 ### Fixed
 
@@ -29,10 +37,14 @@
 - Removed fake NCCL's hard dependency on the FakeGPU CUDA Driver, allowing simulated communication to coexist with a process that uses the physical CUDA Driver.
 - Kept macOS collective shared-memory names within Darwin's 31-character POSIX limit.
 - Sized hybrid NCCL pointer-attribute storage for both CUDA 12 and CUDA 13 Runtime ABIs.
+- Preserved local-to-global rank membership across communicator splits so subgroup traffic is attributed only to participating cluster nodes.
+- Counted successful NCCL send/recv operations in cluster traffic reports without double-counting the matching receive endpoint.
 
 ### Validation
 
-- Full local suite: 219 passed and 1 skipped.
+- Full local suite: 222 passed and 1 skipped.
+- Dedicated four-node accounting coverage verifies a reordered `[2, 0]` subgroup plus independent `0 → 1` and `3 → 2` P2P transfers.
+- TCP payload validation verifies non-zero request/response bytes and coordinator-observed timing for every retained all-reduce operation.
 - Hybrid DDP numerical validation passed on an RTX PRO 5000 with PyTorch 2.9.1/CUDA 12.8 and an RTX 3090 Ti with PyTorch 2.12.1/CUDA 13.0.
 - A heterogeneous physical two-host Hybrid DDP check passed between those software stacks: fake NCCL carried broadcast, all-reduce, and all-gather over TCP, producing the expected averaged gradient and identical updated parameters without coordinator timeouts.
 - A physical two-host Tailscale test completed correct 1 MiB and 16 MiB all-reduces with zero coordinator timeouts; the 16 MiB × 5 case measured about 0.261 Gbit/s algorithmic throughput and 0.521 Gbit/s bidirectional socket payload per rank.

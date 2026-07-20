@@ -322,7 +322,7 @@ FAKEGPU_PROFILES=a100:4,h100:4
 | Report | Produced by | Contents |
 |---|---|---|
 | `fake_gpu_report.json` | Native runtime | Per-device peak memory, IO, calls, and maintained GEMM FLOPs |
-| `cluster_report.json/.md` | Distributed coordinator | Collective totals, a complete node-pair traffic table, directional totals, per-operation peaks, modeled throughput, and rank statistics |
+| `cluster_report.json/.md` | Distributed coordinator | Collective/P2P totals, communicator-aware node-pair traffic, directional/per-operation peaks, bounded coordinator-observed timeline, modeled throughput, and rank statistics |
 | TCP bandwidth report | `fakegpu bandwidth --json ...` | Validated payload size, per-rank timings, and end-to-end socket throughput |
 | `preflight_report.json/.md` | Preflight CLI | Stage status, fit/OOM result, memory categories, and confidence |
 | Real-GPU calibration report | `./ftest real_gpu_calibration` | Real, passthrough, hybrid, fakecuda, allocator, and NVML observations |
@@ -339,6 +339,10 @@ FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH=/path/to/project_communication.md
 When only `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU automatically writes
 the Markdown report beside the JSON file. Every distinct node pair from the
 cluster configuration appears in its table, including pairs with zero traffic.
+The JSON contract is `cluster_report.v1`, defined by
+`cluster_report.schema.json`; `verification/check_cluster_report.py` validates
+it by default. Sub-communicators retain their global-rank membership, and
+successful P2P sends are counted once rather than once at each endpoint.
 
 ## Validation snapshot
 
