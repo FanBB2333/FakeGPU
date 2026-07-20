@@ -63,14 +63,34 @@ Example shape:
 
 ## Cluster report
 
-When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU also writes a cluster-level report.
+When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set,
+FakeGPU writes the cluster data to JSON and automatically creates a sibling
+Markdown project report. Set `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` to choose
+a different Markdown path, or set it to `off` to disable the companion.
+The maintained DDP and Hybrid validation scripts also embed this complete
+node-pair table directly in their final validation reports.
 
 That report includes:
 
 - cluster mode, world size, node count, and coordinator transport
 - per-collective counts, bytes, and estimated time
-- link statistics for intra-node and inter-node paths
+- directional link statistics for intra-node and inter-node paths
+- every distinct node pair from the configured cluster, including zero-traffic pairs
+- directional and combined byte totals, largest payload per operation, transfer counts, modeled average/peak throughput, estimated time, and contention
 - per-rank wait time, timeout count, communicator init count, and collective-call count
+
+The Markdown companion presents the node-pair data as a complete table:
+
+| Node A | Node B | A → B total | B → A total | Combined total | A → B peak/op | B → A peak/op | Pair peak/op | Operations | Transfers | Avg est. Gbit/s | Peak est. Gbit/s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `node0` | `node1` | 4.00 GiB | 4.00 GiB | 8.00 GiB | 64.00 MiB | 64.00 MiB | 128.00 MiB | 64 | 128 | 18.420 | 21.305 |
+| `node0` | `node2` | 0 B | 0 B | 0 B | 0 B | 0 B | 0 B | 0 | 0 | 0.000 | 0.000 |
+
+`peak/op` is the largest payload attributed to the direction or unordered
+node pair during one completed communication operation. Throughput, time, and
+contention values come from the configured topology model; they are not packet
+captures or measured NIC/NCCL bandwidth. The JSON file retains exact integer
+byte counters for automated processing.
 
 This report is useful for validating control flow, topology modeling, and broad communication-volume trends.
 

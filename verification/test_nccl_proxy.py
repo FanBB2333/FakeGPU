@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import socket
 import subprocess
 import sys
 import tempfile
-import textwrap
 import time
 from pathlib import Path
 from typing import Any
@@ -328,6 +326,7 @@ def main() -> int:
         ]
         if world_size > 1:
             check_cmd.append("--expect-links")
+        check_cmd.append("--expect-markdown")
         check_result = subprocess.run(
             check_cmd,
             cwd=REPO_ROOT,

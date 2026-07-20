@@ -202,6 +202,7 @@ run_preflight_oom() {
 run_tcp_bandwidth() {
   build
   "$PYTHON_BIN" verification/test_tcp_bandwidth.py --build-dir "$SMOKE_BUILD_DIR"
+  BUILD_DIR="$SMOKE_BUILD_DIR" "$PYTHON_BIN" verification/test_node_pair_report.py
 }
 
 run_real_gpu_calibration() {

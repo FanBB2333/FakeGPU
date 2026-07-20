@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 from fakegpu.distributed_cli import (
+    _coordinator_env,
     _write_local_cluster_config,
+    bandwidth_main,
     parse_ranks,
     parse_size,
     parse_tcp_endpoint,
@@ -62,3 +64,60 @@ def test_generated_cluster_assigns_ranks_to_logical_nodes(tmp_path: Path) -> Non
     assert text.count("profile: a100") == 4
     assert "type: tcp" in text
     assert "bandwidth_gbps: 25" in text
+
+
+def test_coordinator_env_sets_explicit_report_paths(tmp_path: Path) -> None:
+    json_report = tmp_path / "cluster.json"
+    markdown_report = tmp_path / "project-report.md"
+
+    env = _coordinator_env(
+        endpoint="127.0.0.1:29591",
+        cluster_config=None,
+        cluster_report=json_report,
+        cluster_markdown_report=markdown_report,
+    )
+
+    assert env["FAKEGPU_CLUSTER_REPORT_PATH"] == str(json_report.resolve())
+    assert env["FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH"] == str(
+        markdown_report.resolve()
+    )
+
+
+def test_coordinator_env_uses_default_markdown_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH",
+        str(tmp_path / "inherited.md"),
+    )
+
+    env = _coordinator_env(
+        endpoint="127.0.0.1:29591",
+        cluster_config=None,
+        cluster_report=tmp_path / "cluster.json",
+    )
+
+    assert "FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH" not in env
+
+
+def test_bandwidth_connect_rejects_coordinator_report_path(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        bandwidth_main(
+            [
+                "--connect",
+                "127.0.0.1:29591",
+                "--world-size",
+                "2",
+                "--ranks",
+                "0",
+                "--session",
+                "test-session",
+                "--cluster-report",
+                str(tmp_path / "cluster.json"),
+            ]
+        )
+
+    assert error.value.code == 2

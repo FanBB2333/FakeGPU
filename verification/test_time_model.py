@@ -50,6 +50,7 @@ def run_report(config_path: Path, report_path: Path, raw_report_path: Path) -> d
             "--expect-collective",
             "all_reduce",
             "--expect-links",
+            "--expect-markdown",
             "--min-ranks",
             "4",
         ],

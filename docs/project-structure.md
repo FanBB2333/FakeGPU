@@ -41,7 +41,7 @@ This page explains how the repository is organized and how the main runtime piec
 ### 7. Monitoring and reports
 
 - `src/monitor/monitor.cpp` dumps `fake_gpu_report.json` on shutdown.
-- When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU also writes a cluster-level report with collective, link, and per-rank timing data.
+- When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU writes cluster JSON plus a Markdown companion with collective, complete node-pair, link, and per-rank timing tables.
 
 ### 8. Python torch patch layer
 

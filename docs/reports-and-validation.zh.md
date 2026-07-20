@@ -63,14 +63,32 @@
 
 ## Cluster report
 
-当开启分布式并设置 `FAKEGPU_CLUSTER_REPORT_PATH` 后，FakeGPU 还会再写一份 cluster 级报告。
+开启分布式并设置 `FAKEGPU_CLUSTER_REPORT_PATH` 后，FakeGPU 会写出 cluster
+JSON 数据，并自动在同一目录生成 Markdown 项目报告。可以通过
+`FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` 指定 Markdown 路径，也可以将其
+设为 `off`，只保留 JSON。
+维护中的 DDP 和 Hybrid 验证脚本还会把这张完整节点对表直接写入最终
+验证报告。
 
 里面通常包括：
 
 - cluster mode、world size、node count、coordinator transport
 - 各类 collective 的调用次数、字节数、估算耗时
-- 节点内 / 节点间链路统计
+- 节点内 / 节点间的方向链路统计
+- 配置中全部不同节点的两两组合，包括通信量为 0 的节点对
+- 每个方向及双向合计字节数、单次操作最大负载、传输次数、模型平均/峰值吞吐、估算耗时和争用惩罚
 - 各 rank 的等待时间、超时次数、communicator 初始化次数、collective 次数
+
+Markdown 报告中的节点对表格如下：
+
+| 节点 A | 节点 B | A → B 总量 | B → A 总量 | 双向总量 | A → B 单次峰值 | B → A 单次峰值 | 节点对单次峰值 | 操作数 | 传输数 | 模型平均 Gbit/s | 模型峰值 Gbit/s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `node0` | `node1` | 4.00 GiB | 4.00 GiB | 8.00 GiB | 64.00 MiB | 64.00 MiB | 128.00 MiB | 64 | 128 | 18.420 | 21.305 |
+| `node0` | `node2` | 0 B | 0 B | 0 B | 0 B | 0 B | 0 B | 0 | 0 | 0.000 | 0.000 |
+
+“单次峰值”表示一次已完成通信操作中，归属于该方向或无序节点对的最大
+负载。吞吐、耗时和争用数据来自 cluster topology model，不是网卡抓包，
+也不是 NIC/NCCL 实测带宽。JSON 文件保留精确的整数字节计数，便于后续分析。
 
 这份报告很适合用来验证控制流、拓扑模型，以及通信量的大致趋势。
 

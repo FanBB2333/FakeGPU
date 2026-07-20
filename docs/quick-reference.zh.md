@@ -236,6 +236,7 @@ Python API 在不同模式下会预加载不同的库：
 | `FAKEGPU_COORDINATOR_TRANSPORT` | `unix` 或 `tcp` |
 | `FAKEGPU_COORDINATOR_ADDR` | socket 路径或 `host:port` |
 | `FAKEGPU_CLUSTER_REPORT_PATH` | cluster 级 JSON 报告输出路径 |
+| `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` | 可选 Markdown 报告路径；默认与 cluster JSON 位于同一目录 |
 | `FAKEGPU_STAGING_CHUNK_BYTES` | staging chunk 大小 |
 | `FAKEGPU_STAGING_FORCE_SOCKET` | 设为 `1` 时强制走 socket fallback |
 

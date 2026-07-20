@@ -236,6 +236,7 @@ Mode-specific preload behavior in the Python API:
 | `FAKEGPU_COORDINATOR_TRANSPORT` | `unix` or `tcp` |
 | `FAKEGPU_COORDINATOR_ADDR` | Socket path or `host:port` |
 | `FAKEGPU_CLUSTER_REPORT_PATH` | Output path for cluster-level JSON report |
+| `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` | Optional Markdown report path; defaults beside the cluster JSON |
 | `FAKEGPU_STAGING_CHUNK_BYTES` | Chunk size for staged transfers |
 | `FAKEGPU_STAGING_FORCE_SOCKET` | Set to `1` to skip shared memory and force socket fallback |
 

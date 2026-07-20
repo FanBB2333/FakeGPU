@@ -322,7 +322,7 @@ FAKEGPU_PROFILES=a100:4,h100:4
 | Report | Produced by | Contents |
 |---|---|---|
 | `fake_gpu_report.json` | Native runtime | Per-device peak memory, IO, calls, and maintained GEMM FLOPs |
-| Cluster report | Distributed coordinator | Collective counts, bytes, estimated timing, and link statistics |
+| `cluster_report.json/.md` | Distributed coordinator | Collective totals, a complete node-pair traffic table, directional totals, per-operation peaks, modeled throughput, and rank statistics |
 | TCP bandwidth report | `fakegpu bandwidth --json ...` | Validated payload size, per-rank timings, and end-to-end socket throughput |
 | `preflight_report.json/.md` | Preflight CLI | Stage status, fit/OOM result, memory categories, and confidence |
 | Real-GPU calibration report | `./ftest real_gpu_calibration` | Real, passthrough, hybrid, fakecuda, allocator, and NVML observations |
@@ -333,7 +333,12 @@ Output paths can be configured with:
 ```bash
 FAKEGPU_REPORT_PATH=/path/to/fake_gpu_report.json
 FAKEGPU_CLUSTER_REPORT_PATH=/path/to/cluster_report.json
+FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH=/path/to/project_communication.md
 ```
+
+When only `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU automatically writes
+the Markdown report beside the JSON file. Every distinct node pair from the
+cluster configuration appears in its table, including pairs with zero traffic.
 
 ## Validation snapshot
 
