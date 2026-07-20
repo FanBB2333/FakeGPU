@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FakeGPU common workflows</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #090d16;
+      --panel: #111827;
+      --panel-top: #172033;
+      --border: #2b3953;
+      --text: #e5edf8;
+      --muted: #8fa1ba;
+      --cyan: #67e8f9;
+      --green: #86efac;
+      --yellow: #fde68a;
+      --purple: #c4b5fd;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 1600px;
+      height: 1120px;
+      margin: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 12% 0%, rgba(56, 189, 248, 0.13), transparent 31%),
+        radial-gradient(circle at 88% 100%, rgba(139, 92, 246, 0.12), transparent 30%),
+        var(--page);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: 100%;
+      height: 100%;
+      padding: 42px 48px 46px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      margin-bottom: 28px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+
+    header p {
+      margin: 9px 0 0;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .badge {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 8px 13px;
+      color: var(--cyan);
+      background: rgba(17, 24, 39, 0.75);
+      font: 600 13px/1.1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 24px;
+      height: 962px;
+    }
+
+    article {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: rgba(17, 24, 39, 0.97);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+    }
+
+    .bar {
+      display: flex;
+      align-items: center;
+      min-height: 58px;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel-top);
+    }
+
+    .lights {
+      display: flex;
+      gap: 7px;
+      margin-right: 14px;
+    }
+
+    .light {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .red {
+      background: #fb7185;
+    }
+
+    .amber {
+      background: #fbbf24;
+    }
+
+    .green {
+      background: #4ade80;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.2;
+      letter-spacing: 0.01em;
+    }
+
+    .purpose {
+      margin-left: auto;
+      padding-left: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    pre {
+      margin: 0;
+      padding: 20px 22px;
+      color: var(--text);
+      font: 14px/1.54 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      white-space: pre-wrap;
+      tab-size: 2;
+    }
+
+    .prompt {
+      color: var(--cyan);
+      font-weight: 700;
+    }
+
+    .command {
+      color: #f8fafc;
+    }
+
+    .ok {
+      color: var(--green);
+      font-weight: 700;
+    }
+
+    .value {
+      color: var(--yellow);
+    }
+
+    .name {
+      color: var(--purple);
+    }
+
+    .dim {
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>FakeGPU · common workflows</h1>
+        <p>Real command output captured from the maintained v1.5.2 paths</p>
+      </div>
+      <div class="badge">CUDA-facing validation without a production cluster</div>
+    </header>
+
+    <section class="grid" aria-label="FakeGPU terminal workflow screenshots">
+      <article>
+        <div class="bar">
+          <div class="lights" aria-hidden="true">
+            <span class="light red"></span>
+            <span class="light amber"></span>
+            <span class="light green"></span>
+          </div>
+          <h2>1 · Train with fake CUDA</h2>
+          <span class="purpose">CPU-only PyTorch</span>
+        </div>
+        <pre><span class="prompt">$</span> <span class="command">PYTHONWARNINGS=ignore FAKEGPU_TERMINAL_REPORT=0 \
+  python3 demo_usage.py --test transformer --quiet</span>
+
+Scenario 4: Tiny Transformer training
+PyTorch version: <span class="value">2.9.1</span>
+Using device: <span class="name">cuda:0</span>
+CUDA available: <span class="ok">True</span>
+CUDA device count: <span class="value">8</span>
+Device name: NVIDIA A100-SXM4-80GB
+step=1 loss=5.5793 logits_device=<span class="name">cuda:0</span> is_cuda=<span class="ok">True</span>
+step=2 loss=5.6935 logits_device=<span class="name">cuda:0</span> is_cuda=<span class="ok">True</span>
+step=3 loss=5.7547 logits_device=<span class="name">cuda:0</span> is_cuda=<span class="ok">True</span>
+step=4 loss=5.6368 logits_device=<span class="name">cuda:0</span> is_cuda=<span class="ok">True</span>
+step=5 loss=5.8198 logits_device=<span class="name">cuda:0</span> is_cuda=<span class="ok">True</span>
+<span class="ok">Transformer training simulation finished</span></pre>
+      </article>
+
+      <article>
+        <div class="bar">
+          <div class="lights" aria-hidden="true">
+            <span class="light red"></span>
+            <span class="light amber"></span>
+            <span class="light green"></span>
+          </div>
+          <h2>2 · Switch GPU profiles</h2>
+          <span class="purpose">Hardware compatibility</span>
+        </div>
+        <pre><span class="prompt">$</span> <span class="command">FAKEGPU_TERMINAL_REPORT=0 python3 - &lt;&lt;'PY'
+import fakegpu
+fakegpu.init(runtime="fakecuda",
+  devices="test-512m,rtx3090ti,rtx-pro-5000-blackwell")
+import torch
+for i in range(torch.cuda.device_count()):
+    p = torch.cuda.get_device_properties(i)
+    print(f"GPU {i}: {p.name} | "
+          f"{p.total_memory / 1024**3:.1f} GiB | "
+          f"cc {p.major}.{p.minor}")
+PY</span>
+
+GPU 0: FakeGPU Test Profile 512MB | <span class="value">0.5 GiB</span> | cc 8.0
+GPU 1: NVIDIA GeForce RTX 3090 Ti | <span class="value">23.6 GiB</span> | cc 8.6
+GPU 2: NVIDIA RTX PRO 5000 72GB Blackwell | <span class="value">71.1 GiB</span> | cc 12.0</pre>
+      </article>
+
+      <article>
+        <div class="bar">
+          <div class="lights" aria-hidden="true">
+            <span class="light red"></span>
+            <span class="light amber"></span>
+            <span class="light green"></span>
+          </div>
+          <h2>3 · Check fit before submission</h2>
+          <span class="purpose">Preflight / OOM</span>
+        </div>
+        <pre><span class="prompt">$</span> <span class="command">python3 -m fakegpu preflight \
+  --runtime fakecuda --profile test-512m \
+  --device-count 1 --stage forward --strict \
+  --report-dir build/readme-preflight \
+  -- python3 verification/preflight_oom_probe.py --mode pass</span>
+
+# FakeGPU Preflight Report
+Status:              <span class="ok">PASS_FIT</span>
+Runtime:             fakecuda
+Stage:               forward
+Tracking confidence: C2_torch_tensor_lifetime
+
+GPU 0: FakeGPU Test Profile 512MB
+Peak:     <span class="value">4.00 MiB</span>
+Total:    <span class="value">512.00 MiB</span>
+Headroom: <span class="ok">508.00 MiB</span></pre>
+      </article>
+
+      <article>
+        <div class="bar">
+          <div class="lights" aria-hidden="true">
+            <span class="light red"></span>
+            <span class="light amber"></span>
+            <span class="light green"></span>
+          </div>
+          <h2>4 · Estimate training VRAM</h2>
+          <span class="purpose">ATen static analysis</span>
+        </div>
+        <pre><span class="prompt">$</span> <span class="command">./ftest static_memory_validation</span>
+
+<span class="ok">OK: static memory validation</span>
+status=<span class="ok">PASS_STATIC_ONLY</span> workloads=<span class="value">13</span>
+
+examples:
+  MLP · fp32
+    estimated peak   <span class="value">5.03 MiB</span>
+
+  Transformer · b2 s32 h128 · fp32
+    estimated peak   <span class="value">3.59 MiB</span>
+
+  Transformer · b4 s64 h128 l2 · bf16
+    estimated peak   <span class="value">4.78 MiB</span>
+
+<span class="dim">On CUDA hosts the same suite also compares forward,
+backward, and optimizer peaks with the real allocator.</span></pre>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
