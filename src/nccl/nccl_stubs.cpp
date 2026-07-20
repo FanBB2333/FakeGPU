@@ -40,6 +40,7 @@ struct ncclComm {
     void* real_comm = nullptr;
     bool destroyed = false;
     bool finalized = false;
+    bool suspended = false;
     ncclResult_t async_error = ncclSuccess;
     std::string last_error;
 };
@@ -127,6 +128,11 @@ ncclResult_t mark_simulated_stream_work_complete(ncclComm_t comm, cudaStream_t s
 }
 
 ncclResult_t surface_async_error(ncclComm_t comm) {
+    if (comm && comm->suspended) {
+        g_last_error = "communicator is suspended";
+        comm->last_error = g_last_error;
+        return ncclInvalidUsage;
+    }
     if (!comm || comm->async_error == ncclSuccess) {
         return ncclSuccess;
     }
@@ -2635,6 +2641,28 @@ ncclResult_t ncclCommSplit(
     return ncclSuccess;
 }
 
+ncclResult_t ncclCommShrink(
+    ncclComm_t comm,
+    int* /*exclude_ranks_list*/,
+    int /*exclude_ranks_count*/,
+    ncclComm_t* newcomm,
+    ncclConfig_t* /*config*/,
+    int /*shrink_flags*/) {
+    if (newcomm) {
+        *newcomm = nullptr;
+    }
+    if (!comm || !newcomm) {
+        return fail_with(
+            comm,
+            ncclInvalidArgument,
+            "communicator and newcomm must not be null");
+    }
+    return fail_with(
+        comm,
+        ncclInvalidUsage,
+        "ncclCommShrink is not implemented by the simulated NCCL backend");
+}
+
 ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* async_error) {
     if (!comm || !async_error) {
         return fail_with(comm, ncclInvalidArgument, "communicator and async_error must not be null");
@@ -2688,6 +2716,65 @@ ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* /*handle*/) {
     return ncclSuccess;
 }
 
+ncclResult_t ncclCommSuspend(ncclComm_t comm, int flags) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (comm->destroyed) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "communicator is already destroyed");
+    }
+    if ((flags & ~NCCL_SUSPEND_MEM) != 0) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported suspend flags");
+    }
+    comm->suspended = true;
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclCommResume(ncclComm_t comm) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (comm->destroyed) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "communicator is already destroyed");
+    }
+    comm->suspended = false;
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclCommMemStats(
+    ncclComm_t comm,
+    ncclCommMemStat_t stat,
+    std::uint64_t* value) {
+    if (!comm || !value) {
+        return fail_with(
+            comm,
+            ncclInvalidArgument,
+            "communicator and value must not be null");
+    }
+    switch (stat) {
+        case ncclStatGpuMemSuspend:
+        case ncclStatGpuMemPersist:
+        case ncclStatGpuMemTotal:
+            *value = 0;
+            break;
+        case ncclStatGpuMemSuspended:
+            *value = comm->suspended ? 1U : 0U;
+            break;
+        default:
+            return fail_with(comm, ncclInvalidArgument, "invalid memory statistic");
+    }
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
 ncclResult_t ncclCommWindowRegister(
     ncclComm_t comm,
     void* buff,
@@ -2708,6 +2795,82 @@ ncclResult_t ncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t /*window*/) 
     }
     clear_last_error(comm);
     return ncclSuccess;
+}
+
+ncclResult_t ncclDevCommCreate(
+    ncclComm_t comm,
+    const ncclDevCommRequirements_t* /*requirements*/,
+    ncclDevComm_t* out_dev_comm) {
+    if (!comm || !out_dev_comm) {
+        return fail_with(
+            comm,
+            ncclInvalidArgument,
+            "communicator and out_dev_comm must not be null");
+    }
+    return fail_with(
+        comm,
+        ncclInvalidUsage,
+        "NCCL device communicator creation is not implemented");
+}
+
+ncclResult_t ncclDevCommDestroy(
+    ncclComm_t comm,
+    const ncclDevComm_t* dev_comm) {
+    if (!comm || !dev_comm) {
+        return fail_with(
+            comm,
+            ncclInvalidArgument,
+            "communicator and dev_comm must not be null");
+    }
+    return fail_with(
+        comm,
+        ncclInvalidUsage,
+        "NCCL device communicator destruction is not implemented");
+}
+
+ncclResult_t ncclGetLsaMultimemDevicePointer(
+    ncclWindow_t window,
+    std::size_t /*offset*/,
+    void** out_ptr) {
+    if (out_ptr) {
+        *out_ptr = nullptr;
+    }
+    if (!window || !out_ptr) {
+        return fail_with(
+            nullptr,
+            ncclInvalidArgument,
+            "window and out_ptr must not be null");
+    }
+    return fail_with(
+        nullptr,
+        ncclInvalidUsage,
+        "NCCL LSA multimem pointer lookup is not implemented");
+}
+
+ncclResult_t ncclGetPeerDevicePointer(
+    ncclWindow_t window,
+    std::size_t /*offset*/,
+    int peer,
+    void** out_ptr) {
+    if (peer < 0) {
+        if (out_ptr) {
+            *out_ptr = nullptr;
+        }
+        return fail_with(nullptr, ncclInvalidArgument, "peer must be non-negative");
+    }
+    if (out_ptr) {
+        *out_ptr = nullptr;
+    }
+    if (!window || !out_ptr) {
+        return fail_with(
+            nullptr,
+            ncclInvalidArgument,
+            "window and out_ptr must not be null");
+    }
+    return fail_with(
+        nullptr,
+        ncclInvalidUsage,
+        "NCCL peer pointer lookup is not implemented");
 }
 
 ncclResult_t ncclRedOpCreatePreMulSum(
@@ -3125,6 +3288,57 @@ ncclResult_t ncclRecv(
         peer,
         comm,
         stream);
+}
+
+ncclResult_t ncclPutSignal(
+    const void* /*localbuff*/,
+    std::size_t /*count*/,
+    ncclDataType_t /*datatype*/,
+    int /*peer*/,
+    ncclWindow_t /*peer_window*/,
+    std::size_t /*peer_window_offset*/,
+    int /*signal_index*/,
+    int /*context*/,
+    unsigned int /*flags*/,
+    ncclComm_t comm,
+    cudaStream_t /*stream*/) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    return fail_with(
+        comm,
+        ncclInvalidUsage,
+        "NCCL put-signal operations are not implemented");
+}
+
+ncclResult_t ncclSignal(
+    int /*peer*/,
+    int /*signal_index*/,
+    int /*context*/,
+    unsigned int /*flags*/,
+    ncclComm_t comm,
+    cudaStream_t /*stream*/) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    return fail_with(
+        comm,
+        ncclInvalidUsage,
+        "NCCL signal operations are not implemented");
+}
+
+ncclResult_t ncclWaitSignal(
+    int /*descriptor_count*/,
+    ncclWaitSignalDesc_t* /*signal_descriptors*/,
+    ncclComm_t comm,
+    cudaStream_t /*stream*/) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    return fail_with(
+        comm,
+        ncclInvalidUsage,
+        "NCCL wait-signal operations are not implemented");
 }
 
 ncclResult_t ncclGroupStart(void) {

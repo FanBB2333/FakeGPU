@@ -10,6 +10,10 @@
 ./ftest all            # smoke + python
 ```
 
+`smoke` 还会检查 PyTorch CUDA 13 / NCCL 2.29 所需的 host ABI
+符号。FakeGPU 可以加载这些二进制；`ncclDevComm*` 和 signal/RMA 等高级
+device API 尚未模拟，调用时会返回 `ncclInvalidUsage`。
+
 ### 推荐：对比测试
 运行真实GPU和FakeGPU的并行对比测试：
 ```bash

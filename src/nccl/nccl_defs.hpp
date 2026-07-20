@@ -16,6 +16,7 @@
 #define NCCL_CONFIG_UNDEF_PTR NULL
 #define NCCL_UNDEF_FLOAT -1.0f
 #define NCCL_SPLIT_NOCOLOR -1
+#define NCCL_SUSPEND_MEM 0x01
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,6 +41,8 @@ typedef enum {
 
 typedef struct ncclComm* ncclComm_t;
 typedef struct ncclWindow* ncclWindow_t;
+typedef struct ncclDevComm ncclDevComm_t;
+typedef struct ncclDevCommRequirements ncclDevCommRequirements_t;
 
 typedef struct {
     char internal[NCCL_UNIQUE_ID_BYTES];
@@ -110,6 +113,20 @@ typedef enum {
     ncclScalarHostImmediate = 1,
 } ncclScalarResidence_t;
 
+typedef enum {
+    ncclStatGpuMemSuspend = 0,
+    ncclStatGpuMemSuspended = 1,
+    ncclStatGpuMemPersist = 2,
+    ncclStatGpuMemTotal = 3,
+} ncclCommMemStat_t;
+
+typedef struct {
+    int opCnt;
+    int peer;
+    int sigIdx;
+    int ctx;
+} ncclWaitSignalDesc_t;
+
 ncclResult_t ncclMemAlloc(void** ptr, std::size_t size);
 ncclResult_t ncclMemFree(void* ptr);
 
@@ -136,12 +153,25 @@ ncclResult_t ncclCommFinalize(ncclComm_t comm);
 ncclResult_t ncclCommDestroy(ncclComm_t comm);
 ncclResult_t ncclCommAbort(ncclComm_t comm);
 ncclResult_t ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t* newcomm, ncclConfig_t* config);
+ncclResult_t ncclCommShrink(
+    ncclComm_t comm,
+    int* exclude_ranks_list,
+    int exclude_ranks_count,
+    ncclComm_t* newcomm,
+    ncclConfig_t* config,
+    int shrink_flags);
 ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* async_error);
 ncclResult_t ncclCommCount(const ncclComm_t comm, int* count);
 ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* device);
 ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank);
 ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, std::size_t size, void** handle);
 ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* handle);
+ncclResult_t ncclCommSuspend(ncclComm_t comm, int flags);
+ncclResult_t ncclCommResume(ncclComm_t comm);
+ncclResult_t ncclCommMemStats(
+    ncclComm_t comm,
+    ncclCommMemStat_t stat,
+    std::uint64_t* value);
 ncclResult_t ncclCommWindowRegister(
     ncclComm_t comm,
     void* buff,
@@ -149,6 +179,22 @@ ncclResult_t ncclCommWindowRegister(
     ncclWindow_t* window,
     int window_flags);
 ncclResult_t ncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t window);
+ncclResult_t ncclDevCommCreate(
+    ncclComm_t comm,
+    const ncclDevCommRequirements_t* requirements,
+    ncclDevComm_t* out_dev_comm);
+ncclResult_t ncclDevCommDestroy(
+    ncclComm_t comm,
+    const ncclDevComm_t* dev_comm);
+ncclResult_t ncclGetLsaMultimemDevicePointer(
+    ncclWindow_t window,
+    std::size_t offset,
+    void** out_ptr);
+ncclResult_t ncclGetPeerDevicePointer(
+    ncclWindow_t window,
+    std::size_t offset,
+    int peer,
+    void** out_ptr);
 
 const char* ncclGetErrorString(ncclResult_t result);
 const char* ncclGetLastError(ncclComm_t comm);
@@ -234,6 +280,30 @@ ncclResult_t ncclRecv(
     std::size_t count,
     ncclDataType_t datatype,
     int peer,
+    ncclComm_t comm,
+    cudaStream_t stream);
+ncclResult_t ncclPutSignal(
+    const void* localbuff,
+    std::size_t count,
+    ncclDataType_t datatype,
+    int peer,
+    ncclWindow_t peer_window,
+    std::size_t peer_window_offset,
+    int signal_index,
+    int context,
+    unsigned int flags,
+    ncclComm_t comm,
+    cudaStream_t stream);
+ncclResult_t ncclSignal(
+    int peer,
+    int signal_index,
+    int context,
+    unsigned int flags,
+    ncclComm_t comm,
+    cudaStream_t stream);
+ncclResult_t ncclWaitSignal(
+    int descriptor_count,
+    ncclWaitSignalDesc_t* signal_descriptors,
     ncclComm_t comm,
     cudaStream_t stream);
 
