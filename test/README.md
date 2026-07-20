@@ -185,7 +185,7 @@ python test/test_pytorch_basic.py
 
 预期输出:
 - PyTorch成功检测到8个虚拟GPU（默认全部为 `Fake NVIDIA A100-SXM4-80GB`）
-- 设备参数来自编译时打包的 `profiles/*.yaml`，如需切换到其他 Compute Capability（Turing/Hopper/Blackwell等）只需修改或新增 YAML 后重新 `cmake` 即可
+- 设备参数来自编译时打包的 `profiles/<architecture>/<segment>/*.yaml`，如需切换到其他 Compute Capability（Turing/Hopper/Blackwell 等）只需修改或新增 YAML 后重新执行 `cmake` 即可
 - 显存容量等参数随所选预设变化（默认 80GB，其他预设覆盖 4GB→192GB）
 - 成功创建张量并进行基本运算
 

@@ -23,6 +23,14 @@ _SUPPORTED_ARCHITECTURES = {
 }
 _SUPPORTED_MEMORY_KINDS = {"dedicated", "unified", "synthetic"}
 _SUPPORTED_PROFILE_STATUSES = {"measured", "reference", "synthetic"}
+_SUPPORTED_SEGMENTS = {
+    "consumer",
+    "datacenter",
+    "workstation",
+    "embedded",
+    "test",
+    "custom",
+}
 _SUPPORTED_DATA_TYPES = {
     "fp32",
     "fp16",
@@ -66,6 +74,8 @@ class GpuProfile:
     torch_name: str
     official_model: str
     architecture: str
+    segment: str
+    profile_path: str
     compute_major: int
     compute_minor: int
     memory_bytes: int
@@ -158,7 +168,7 @@ def profile_directory() -> Path:
         )
     )
     for candidate in candidates:
-        if candidate.is_dir() and any(candidate.glob("*.yaml")):
+        if candidate.is_dir() and any(candidate.rglob("*.yaml")):
             return candidate.resolve()
     searched = ", ".join(str(path) for path in candidates)
     raise ProfileCatalogError(f"FakeGPU profile directory not found; searched: {searched}")
@@ -176,8 +186,8 @@ def _load_profiles_cached(profile_dir: str) -> tuple[tuple[str, GpuProfile], ...
         raise ProfileCatalogError(f"profile directory does not exist: {root}")
 
     profiles: dict[str, GpuProfile] = {}
-    for path in sorted(root.glob("*.yaml")):
-        profile = _profile_from_mapping(_parse_simple_yaml(path), path=path)
+    for path in sorted(root.rglob("*.yaml")):
+        profile = _profile_from_mapping(_parse_simple_yaml(path), path=path, root=root)
         if profile.id in profiles:
             raise ProfileCatalogError(f"duplicate profile id {profile.id!r}: {path}")
         if path.stem != profile.id:
@@ -248,6 +258,8 @@ def validate_catalog(
 
         if profile.architecture not in _SUPPORTED_ARCHITECTURES:
             errors.append(f"{prefix} unknown architecture {profile.architecture!r}")
+        if profile.segment not in _SUPPORTED_SEGMENTS:
+            errors.append(f"{prefix} unknown segment {profile.segment!r}")
         if profile.memory_kind not in _SUPPORTED_MEMORY_KINDS:
             errors.append(f"{prefix} unknown memory_kind {profile.memory_kind!r}")
         if profile.profile_status not in _SUPPORTED_PROFILE_STATUSES:
@@ -312,15 +324,18 @@ def catalog_summary(
 ) -> dict[str, Any]:
     catalog = profiles if profiles is not None else load_profiles()
     architecture_counts: dict[str, int] = {}
+    segment_counts: dict[str, int] = {}
     capabilities: set[str] = set()
     for profile in catalog.values():
         architecture_counts[profile.architecture] = (
             architecture_counts.get(profile.architecture, 0) + 1
         )
+        segment_counts[profile.segment] = segment_counts.get(profile.segment, 0) + 1
         capabilities.add(profile.compute_capability_text)
     return {
         "profile_count": len(catalog),
         "architectures": dict(sorted(architecture_counts.items())),
+        "segments": dict(sorted(segment_counts.items())),
         "compute_capabilities": sorted(
             capabilities,
             key=lambda value: tuple(int(part) for part in value.split(".", 1)),
@@ -328,7 +343,12 @@ def catalog_summary(
     }
 
 
-def _profile_from_mapping(raw: Mapping[str, object], *, path: Path) -> GpuProfile:
+def _profile_from_mapping(
+    raw: Mapping[str, object],
+    *,
+    path: Path,
+    root: Path,
+) -> GpuProfile:
     def required_text(key: str) -> str:
         value = raw.get(key)
         if not isinstance(value, str) or not value.strip():
@@ -357,13 +377,39 @@ def _profile_from_mapping(raw: Mapping[str, object], *, path: Path) -> GpuProfil
     ):
         raise ProfileCatalogError(f"{path}: supported_types must be a string list")
 
+    try:
+        relative_path = path.relative_to(root)
+    except ValueError as exc:
+        raise ProfileCatalogError(f"profile path is outside catalog root: {path}") from exc
+
+    parts = relative_path.parts
+    if len(parts) == 1:
+        directory_architecture = ""
+        segment = "custom"
+    elif len(parts) == 3:
+        directory_architecture = parts[0].lower()
+        segment = parts[1].lower()
+    else:
+        raise ProfileCatalogError(
+            f"{path}: expected <architecture>/<segment>/<profile>.yaml"
+        )
+
     name = required_text("name")
+    architecture = required_text("architecture").lower()
+    if directory_architecture and directory_architecture != architecture:
+        raise ProfileCatalogError(
+            f"{path}: directory architecture {directory_architecture!r} does not "
+            f"match profile architecture {architecture!r}"
+        )
+
     return GpuProfile(
         id=required_text("id").lower(),
         name=name,
         torch_name=optional_text("torch_name", name),
         official_model=required_text("official_model"),
-        architecture=required_text("architecture").lower(),
+        architecture=architecture,
+        segment=segment,
+        profile_path=relative_path.as_posix(),
         supported_types=tuple(str(item).lower() for item in supported_types_raw),
         memory_kind=optional_text("memory_kind", "dedicated").lower(),
         profile_status=optional_text("profile_status", "reference").lower(),

@@ -9,10 +9,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _profile_path(profile_id: str) -> Path:
+    matches = sorted((ROOT / "profiles").rglob(f"{profile_id}.yaml"))
+    assert len(matches) == 1
+    return matches[0]
+
+
 def test_rtx3090ti_profile_matches_fakecuda_registry() -> None:
     import fakegpu.torch_patch as torch_patch
 
-    profile = _parse_simple_yaml(ROOT / "profiles" / "rtx3090ti.yaml")
+    profile = _parse_simple_yaml(_profile_path("rtx3090ti"))
     assert profile["id"] == "rtx3090ti"
     assert profile["name"] == torch_patch._PROFILE_NAMES["rtx3090ti"]
     assert int(profile["memory_bytes"]) == torch_patch._PROFILE_TOTAL_MEMORY["rtx3090ti"]
@@ -23,7 +29,7 @@ def test_rtx_pro_5000_blackwell_profile_matches_measured_hardware() -> None:
     import fakegpu.torch_patch as torch_patch
 
     profile_id = "rtx-pro-5000-blackwell"
-    profile = _parse_simple_yaml(ROOT / "profiles" / f"{profile_id}.yaml")
+    profile = _parse_simple_yaml(_profile_path(profile_id))
     assert profile["id"] == profile_id
     assert profile["name"] == torch_patch._PROFILE_NAMES[profile_id]
     assert int(profile["memory_bytes"]) == 76374540288

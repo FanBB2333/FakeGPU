@@ -1,22 +1,56 @@
 # GPU profile catalog
 
-`profiles/*.yaml` is the shared source of truth for FakeGPU's Python and native
-runtimes. CMake embeds these files into native libraries at configure time;
-Python loads the same files directly, or the packaged copies under
-`fakegpu/_profiles` in an installed wheel.
+`profiles/<architecture>/<segment>/*.yaml` is the shared source of truth for
+FakeGPU's Python and native runtimes. CMake embeds these files into native
+libraries at configure time; Python loads the same files directly, or the same
+directory hierarchy under `fakegpu/_profiles` in an installed wheel.
+
+## Directory layout
+
+The first directory is the NVIDIA hardware architecture. The second is the
+profile segment:
+
+- `consumer`: GeForce products.
+- `datacenter`: Tesla and NVIDIA data-center accelerators.
+- `workstation`: RTX PRO and desktop AI systems.
+- `embedded`: Jetson modules and systems.
+- `test`: profiles created specifically for deterministic tests.
+
+`profile_status` remains independent of the profile segment. For example,
+`ampere/datacenter/a100-1g.yaml` is a synthetic profile of a data-center
+product, while `ampere/datacenter/a100.yaml` is a reference profile.
+
+```text
+profiles/
+├── maxwell/consumer/
+├── pascal/datacenter/
+├── volta/datacenter/
+├── turing/datacenter/
+├── ampere/
+│   ├── consumer/
+│   ├── datacenter/
+│   ├── embedded/
+│   └── test/
+├── ada/datacenter/
+├── hopper/datacenter/
+└── blackwell/
+    ├── datacenter/
+    ├── embedded/
+    └── workstation/
+```
 
 ## Coverage
 
-| Architecture | Compute capability | Included profiles |
-|---|---|---|
-| Maxwell | 5.2 | `gtx980` |
-| Pascal | 6.0, 6.1 | `p100`, `p4` |
-| Volta | 7.0 | `v100` |
-| Turing | 7.5 | `t4` |
-| Ampere | 8.0, 8.6, 8.7 | `a100`, `a100-1g`, `a30`, `a10`, `a40`, `rtx3090ti`, `jetson-agx-orin-64gb`, `test-512m` |
-| Ada | 8.9 | `l4`, `l40s` |
-| Hopper | 9.0 | `h100`, `h200` |
-| Blackwell | 10.0, 10.3, 11.0, 12.0, 12.1 | `b100`, `b200`, `b300`, `jetson-t5000`, `rtx-pro-5000-blackwell`, `rtx-pro-6000-blackwell`, `gb10` |
+| Architecture | Segment(s) | Compute capability | Included profiles |
+|---|---|---|---|
+| Maxwell | Consumer | 5.2 | `gtx980` |
+| Pascal | Data center | 6.0, 6.1 | `p100`, `p4` |
+| Volta | Data center | 7.0 | `v100` |
+| Turing | Data center | 7.5 | `t4` |
+| Ampere | Consumer, data center, embedded, test | 8.0, 8.6, 8.7 | `a100`, `a100-1g`, `a30`, `a10`, `a40`, `rtx3090ti`, `jetson-agx-orin-64gb`, `test-512m` |
+| Ada | Data center | 8.9 | `l4`, `l40s` |
+| Hopper | Data center | 9.0 | `h100`, `h200` |
+| Blackwell | Data center, embedded, workstation | 10.0, 10.3, 11.0, 12.0, 12.1 | `b100`, `b200`, `b300`, `jetson-t5000`, `rtx-pro-5000-blackwell`, `rtx-pro-6000-blackwell`, `gb10` |
 
 The architecture mapping follows NVIDIA's
 [CUDA GPU compute-capability table](https://developer.nvidia.com/cuda/gpus),
@@ -69,6 +103,7 @@ python3 -m pytest -q test/test_cli_commands.py
 ```
 
 The Python validator and C++ loader both reject a declared architecture that
-does not match its compute capability. The native smoke matrix selects one
-profile for each of the 15 represented capabilities and reads device
-attributes through the intercepted CUDA Driver API.
+does not match its compute capability. The Python loader also rejects an
+architecture directory that does not match the YAML declaration. The native
+smoke matrix selects one profile for each of the 15 represented capabilities
+and reads device attributes through the intercepted CUDA Driver API.

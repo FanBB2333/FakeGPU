@@ -53,6 +53,7 @@ def _collect(profile_id: str) -> dict[str, Any]:
                     (
                         f"{summary['profile_count']} profiles, "
                         f"{len(summary['architectures'])} architectures, "
+                        f"{len(summary['segments'])} profile segments, "
                         f"{len(summary['compute_capabilities'])} compute capabilities"
                     ),
                 )
@@ -66,7 +67,8 @@ def _collect(profile_id: str) -> dict[str, Any]:
                 "pass",
                 "selected profile",
                 (
-                    f"{selected.id}: {selected.name}, {selected.architecture.title()}, "
+                    f"{selected.id}: {selected.name}, {selected.architecture.title()} "
+                    f"{selected.segment}, "
                     f"cc {selected.compute_capability_text}, "
                     f"{_format_bytes(selected.memory_bytes)} {selected.memory_kind} memory"
                 ),
@@ -164,11 +166,15 @@ def _print_profile_table(profiles: list[dict[str, Any]]) -> None:
     if not profiles:
         return
     print("GPU profiles")
-    print(f"{'ID':<33} {'ARCH':<10} {'CC':<5} {'MEMORY':>10}  STATUS")
+    print(
+        f"{'ID':<33} {'ARCH':<10} {'SEGMENT':<11} "
+        f"{'CC':<5} {'MEMORY':>10}  STATUS"
+    )
     for profile in profiles:
         print(
             f"{profile['id']:<33} "
             f"{profile['architecture']:<10} "
+            f"{profile['segment']:<11} "
             f"{profile['compute_capability']:<5} "
             f"{_format_bytes(int(profile['memory_bytes'])):>10}  "
             f"{profile['profile_status']}"
@@ -209,7 +215,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--list-profiles",
         action="store_true",
-        help="List every built-in profile with architecture and compute capability.",
+        help=(
+            "List every built-in profile with architecture, segment, "
+            "and compute capability."
+        ),
     )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     parser.add_argument(

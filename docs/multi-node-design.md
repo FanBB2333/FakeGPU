@@ -1266,7 +1266,7 @@ src/nccl/
 2. coordinator 是否必须从 Step 3 起就是单独守护进程，还是先稳定 local coordinator 抽象
 3. cluster report 是单文件聚合，还是每 rank 一个文件再统一归并
 4. `proxy` 模式是否真的需要在 Step 20 之前就做，还是先把 `simulate` 做完整
-5. 是否要把多节点拓扑也做成类似 `profiles/*.yaml` 的内建预设
+5. 是否要把多节点拓扑也做成类似 `profiles/**/*.yaml` 的内建预设
 
 ## 21. 推荐结论
 

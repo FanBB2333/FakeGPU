@@ -26,7 +26,7 @@ English 是默认文档版本，页面右上角可以切换到简体中文。
 
 - fake `libcuda`、`libcudart`、`libcublas`、`libnvidia-ml`、`libnccl`
 - Python 包和 CLI 包装器（`fakegpu`、`./fgpu`）
-- 从 `profiles/*.yaml` 编译进产物的 GPU profile
+- 从 `profiles/<architecture>/<segment>/*.yaml` 编译进产物的 GPU profile
 - 用于单机多进程分布式模拟的 coordinator
 - 单进程设备报告和 cluster 级通信报告
 - 覆盖 7 类错误场景的错误模拟实验，附带统一 HTML 测试报告
