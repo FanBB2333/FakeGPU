@@ -1,20 +1,20 @@
-id: h100
-name: Fake NVIDIA H100-SXM-80GB
-torch_name: NVIDIA H100 80GB HBM3
-official_model: NVIDIA H100
+id: h200
+name: Fake NVIDIA H200-SXM-141GB
+torch_name: NVIDIA H200-SXM-141GB
+official_model: NVIDIA H200
 architecture: hopper
 compute_major: 9
 compute_minor: 0
 memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
-spec_source: https://www.nvidia.com/en-us/data-center/h100/
-notes: Reference profile based on NVIDIA H100 SXM specifications and CUDA compute-capability limits.
-memory_bytes: 85899345920
+spec_source: https://www.nvidia.com/en-us/data-center/h200/
+notes: Reference H200 SXM profile with 141 GiB HBM3e and Hopper compute capability 9.0 limits.
+memory_bytes: 151397597184
 sm_count: 132
 memory_bus_width_bits: 5120
-core_clock_mhz: 1800
-memory_clock_mhz: 1593
+core_clock_mhz: 1980
+memory_clock_mhz: 2400
 l2_cache_bytes: 52428800
 shared_mem_per_sm: 233472
 shared_mem_per_block: 49152
@@ -23,9 +23,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
-typical_power_usage_mw: 500000
+typical_power_usage_mw: 700000
 max_power_limit_mw: 700000
-pci_device_id: 0x233010DE
+pci_device_id: 0x233510DE
 supported_types:
   - fp32
   - tf32

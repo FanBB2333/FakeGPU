@@ -1,20 +1,20 @@
-id: a40
-name: Fake NVIDIA A40
-torch_name: NVIDIA A40
-official_model: NVIDIA A40
+id: a10
+name: Fake NVIDIA A10
+torch_name: NVIDIA A10
+official_model: NVIDIA A10
 architecture: ampere
 compute_major: 8
 compute_minor: 6
 memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
-spec_source: https://www.nvidia.com/en-us/data-center/a40/
-notes: Reference profile based on NVIDIA A40 specifications and CUDA compute-capability limits.
-memory_bytes: 51539607552
-sm_count: 84
+spec_source: https://www.nvidia.com/en-us/data-center/products/a10-gpu/
+notes: Reference A10 profile using NVIDIA product specifications and compute capability 8.6 limits.
+memory_bytes: 25769803776
+sm_count: 72
 memory_bus_width_bits: 384
-core_clock_mhz: 1530
-memory_clock_mhz: 1188
+core_clock_mhz: 1695
+memory_clock_mhz: 6251
 l2_cache_bytes: 6291456
 shared_mem_per_sm: 102400
 shared_mem_per_block: 49152
@@ -23,9 +23,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 16
-typical_power_usage_mw: 300000
-max_power_limit_mw: 350000
-pci_device_id: 0x223510DE
+typical_power_usage_mw: 150000
+max_power_limit_mw: 150000
+pci_device_id: 0x223710DE
 supported_types:
   - fp32
   - tf32

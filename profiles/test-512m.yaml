@@ -1,7 +1,15 @@
 id: test-512m
 name: FakeGPU Test Profile 512MB
+torch_name: FakeGPU Test Profile 512MB
+official_model: NVIDIA A100
 architecture: ampere
+compute_major: 8
 compute_minor: 0
+memory_kind: synthetic
+profile_status: synthetic
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/data-center/a100/
+notes: Synthetic 512 MiB validation profile using A100 compute properties.
 memory_bytes: 536870912
 sm_count: 108
 memory_bus_width_bits: 5120
@@ -24,3 +32,4 @@ supported_types:
   - fp16
   - bf16
   - int8
+  - int4

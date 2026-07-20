@@ -59,23 +59,39 @@ TuringProfile::TuringProfile()
 }
 
 AmpereProfile::AmpereProfile()
-    : ArchProfile(GpuArch::Ampere, 8, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8}) {
+    : ArchProfile(GpuArch::Ampere, 8, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::INT4}) {
 }
 
 HopperProfile::HopperProfile()
-    : ArchProfile(GpuArch::Hopper, 9, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::INT4}) {
+    : ArchProfile(GpuArch::Hopper, 9, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::INT4, GpuDataType::FP8}) {
 }
 
 AdaProfile::AdaProfile()
-    : ArchProfile(GpuArch::Ada, 8, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8}) {
+    : ArchProfile(GpuArch::Ada, 8, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::INT4, GpuDataType::FP8}) {
 }
 
 BlackwellProfile::BlackwellProfile()
-    : ArchProfile(GpuArch::Blackwell, 10, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::INT4}) {
+    : ArchProfile(GpuArch::Blackwell, 10, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::INT4, GpuDataType::FP8, GpuDataType::FP4}) {
 }
 
 bool GpuProfile::supports(GpuDataType type) const {
     return std::find(supported_types.begin(), supported_types.end(), type) != supported_types.end();
+}
+
+GpuArch architecture_from_compute_capability(int major, int minor) {
+    if ((major == 10 && (minor == 0 || minor == 3)) ||
+        (major == 11 && minor == 0) ||
+        (major == 12 && (minor == 0 || minor == 1))) {
+        return GpuArch::Blackwell;
+    }
+    if (major == 9 && minor == 0) return GpuArch::Hopper;
+    if (major == 8 && minor == 9) return GpuArch::Ada;
+    if (major == 8 && (minor == 0 || minor == 6 || minor == 7)) return GpuArch::Ampere;
+    if (major == 7 && minor == 5) return GpuArch::Turing;
+    if (major == 7 && (minor == 0 || minor == 2)) return GpuArch::Volta;
+    if (major == 6 && (minor == 0 || minor == 1 || minor == 2)) return GpuArch::Pascal;
+    if (major == 5 && (minor == 0 || minor == 2 || minor == 3)) return GpuArch::Maxwell;
+    return GpuArch::Unknown;
 }
 
 namespace {
@@ -166,6 +182,8 @@ std::optional<GpuDataType> parse_data_type(const std::string& text) {
     if (lower == "tf32") return GpuDataType::TF32;
     if (lower == "int8") return GpuDataType::INT8;
     if (lower == "int4") return GpuDataType::INT4;
+    if (lower == "fp8") return GpuDataType::FP8;
+    if (lower == "fp4") return GpuDataType::FP4;
     return std::nullopt;
 }
 
@@ -304,12 +322,14 @@ std::optional<ProfileDefinition> parse_definition(const ProfileYamlBlob& blob) {
     def.arch = arch.value();
 
     auto compute_major_it = parsed.scalars.find("compute_major");
-    if (compute_major_it != parsed.scalars.end()) {
-        if (!parse_integer(compute_major_it->second, def.params.compute_major) ||
-            def.params.compute_major <= 0) {
-            FGPU_LOG("[GpuProfile] Invalid compute_major in %s: %s\n", blob.filename, compute_major_it->second.c_str());
-            return std::nullopt;
-        }
+    if (compute_major_it == parsed.scalars.end()) {
+        FGPU_LOG("[GpuProfile] Missing 'compute_major' key in %s\n", blob.filename);
+        return std::nullopt;
+    }
+    if (!parse_integer(compute_major_it->second, def.params.compute_major) ||
+        def.params.compute_major <= 0) {
+        FGPU_LOG("[GpuProfile] Invalid compute_major in %s: %s\n", blob.filename, compute_major_it->second.c_str());
+        return std::nullopt;
     }
 
     auto compute_minor_it = parsed.scalars.find("compute_minor");
@@ -364,6 +384,21 @@ std::optional<ProfileDefinition> parse_definition(const ProfileYamlBlob& blob) {
             }
             def.params.supported_types.push_back(maybe_type.value());
         }
+    }
+
+    const GpuArch capability_arch = architecture_from_compute_capability(
+        def.params.compute_major,
+        def.params.compute_minor
+    );
+    if (capability_arch == GpuArch::Unknown || capability_arch != def.arch) {
+        FGPU_LOG(
+            "[GpuProfile] Architecture '%s' does not match compute capability %d.%d in %s\n",
+            arch_it->second.c_str(),
+            def.params.compute_major,
+            def.params.compute_minor,
+            blob.filename
+        );
+        return std::nullopt;
     }
     return def;
 }
@@ -705,6 +740,8 @@ const char* to_string(GpuDataType type) {
         case GpuDataType::TF32: return "tf32";
         case GpuDataType::INT8: return "int8";
         case GpuDataType::INT4: return "int4";
+        case GpuDataType::FP8: return "fp8";
+        case GpuDataType::FP4: return "fp4";
         default: return "unknown";
     }
 }

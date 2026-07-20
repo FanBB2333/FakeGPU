@@ -63,6 +63,12 @@ def _copy_native_libs(src_dir: Path, dst_dir: Path) -> None:
         shutil.copy2(src.resolve(), dst_dir / lib)
 
 
+def _copy_profile_catalog(dst_dir: Path) -> None:
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for profile in sorted((_ROOT / "profiles").glob("*.yaml")):
+        shutil.copy2(profile, dst_dir / profile.name)
+
+
 class build_py(_build_py):
     def run(self) -> None:
         if not (sys.platform.startswith("linux") or sys.platform == "darwin"):
@@ -81,6 +87,8 @@ class build_py(_build_py):
 
         package_native = Path(self.build_lib) / "fakegpu" / "_native"
         _copy_native_libs(native_out, package_native)
+        package_profiles = Path(self.build_lib) / "fakegpu" / "_profiles"
+        _copy_profile_catalog(package_profiles)
 
 
 class BinaryDistribution(Distribution):

@@ -1,0 +1,32 @@
+id: p4
+name: Fake NVIDIA Tesla P4
+torch_name: Tesla P4
+official_model: Tesla P4
+architecture: pascal
+compute_major: 6
+compute_minor: 1
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://www.nvidia.com/en-us/data-center/tesla-p4/
+notes: Legacy reference profile for Pascal compute capability 6.1 and INT8 inference paths.
+memory_bytes: 8589934592
+sm_count: 20
+memory_bus_width_bits: 256
+core_clock_mhz: 1114
+memory_clock_mhz: 1502
+l2_cache_bytes: 2097152
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 75000
+max_power_limit_mw: 75000
+pci_device_id: 0x1BB310DE
+supported_types:
+  - fp32
+  - fp16
+  - int8

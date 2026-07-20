@@ -10,6 +10,11 @@ FakeGPU is a CUDA, cuBLAS, NVML, and NCCL interception toolkit for validating GP
 
 It checks code paths and memory plans; it does not predict GPU speed.
 
+```bash
+fakegpu doctor --list-profiles       # inspect the installation and GPU catalog
+fakegpu demo --profile l4            # run a tiny CUDA-visible training step on CPU
+```
+
 ![Four FakeGPU workflows: simulated PyTorch training, GPU profile switching, preflight OOM checks, and static VRAM estimation](docs/assets/readme/tldr-workflows.png)
 
 _Real command output from the maintained v1.5.2 workflows._
@@ -20,6 +25,8 @@ _Real command output from the maintained v1.5.2 workflows._
 
 | Goal | GPU required | Recommended entry point |
 |---|---:|---|
+| Check the installation and list GPU profiles | No | `fakegpu doctor --list-profiles` |
+| Run the smallest end-to-end PyTorch example | No | `fakegpu demo --profile a100` |
 | Exercise PyTorch CUDA-style code on CPU | No | `fakegpu.init(runtime="fakecuda")` |
 | Intercept CUDA, NVML, cuBLAS, or NCCL shared-library calls | No | `./fgpu --mode simulate ...` |
 | Check whether a workload reaches a stage or exceeds a GPU profile | No | `python3 -m fakegpu preflight ...` |
@@ -29,6 +36,19 @@ _Real command output from the maintained v1.5.2 workflows._
 | Simulate multi-rank collective control flow | No | `FAKEGPU_DIST_MODE=simulate` |
 
 ## Quick start
+
+### Check the installation and run the demo
+
+From a checkout or installed package with PyTorch available:
+
+```bash
+python3 -m fakegpu doctor --list-profiles
+python3 -m fakegpu demo --profile l4
+```
+
+`doctor` checks the profile catalog, native libraries, and PyTorch environment.
+`demo` performs a small forward, backward, and optimizer step through the
+CPU-backed fake-CUDA runtime. Neither command needs a physical GPU.
 
 ### Build the native libraries
 
@@ -212,12 +232,39 @@ The simulated distributed path also needs a coordinator endpoint and cluster con
 
 ## GPU profiles
 
-Profiles are stored in `profiles/*.yaml` and compiled into native builds. Presets include:
+Profiles are stored in `profiles/*.yaml`, loaded by the Python runtime, and
+compiled into native builds. The catalog currently contains 24 profiles across
+8 NVIDIA architectures and 15 compute capabilities:
 
-```text
-GTX 980, P100, V100, T4, A40, A100, H100, L40S,
-B100, B200, RTX 3090 Ti, RTX PRO 5000 Blackwell
+| Architecture | Compute capability | Profile IDs |
+|---|---|---|
+| Maxwell | 5.2 | `gtx980` |
+| Pascal | 6.0, 6.1 | `p100`, `p4` |
+| Volta | 7.0 | `v100` |
+| Turing | 7.5 | `t4` |
+| Ampere | 8.0, 8.6, 8.7 | `a100`, `a100-1g`, `a30`, `a10`, `a40`, `rtx3090ti`, `jetson-agx-orin-64gb`, `test-512m` |
+| Ada | 8.9 | `l4`, `l40s` |
+| Hopper | 9.0 | `h100`, `h200` |
+| Blackwell | 10.0, 10.3, 11.0, 12.0, 12.1 | `b100`, `b200`, `b300`, `jetson-t5000`, `rtx-pro-5000-blackwell`, `rtx-pro-6000-blackwell`, `gb10` |
+
+Every profile declares `compute_major` and `compute_minor`; both the Python
+catalog validator and native C++ loader reject an architecture/compute
+capability mismatch. Model-to-capability mappings come from NVIDIA's
+[current CUDA GPU table](https://developer.nvidia.com/cuda/gpus) and
+[legacy table](https://developer.nvidia.com/cuda/gpus/legacy). Product
+specification URLs and whether a profile is measured, reference, or synthetic
+are recorded in each YAML file.
+
+Refresh or verify the checked-in NVIDIA model snapshot with:
+
+```bash
+python3 scripts/update_nvidia_gpu_catalog.py
+python3 scripts/update_nvidia_gpu_catalog.py --check
 ```
+
+Jetson and GB10 profiles describe unified system memory, not a GPU-exclusive
+allocation budget. See [profiles/README.md](profiles/README.md) for data
+provenance, status meanings, and validation rules.
 
 Select one uniform profile or a heterogeneous device list:
 

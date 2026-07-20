@@ -1,21 +1,21 @@
-id: a100
-name: Fake NVIDIA A100-SXM4-80GB
-torch_name: NVIDIA A100-SXM4-80GB
-official_model: NVIDIA A100
+id: a30
+name: Fake NVIDIA A30
+torch_name: NVIDIA A30
+official_model: NVIDIA A30
 architecture: ampere
 compute_major: 8
 compute_minor: 0
 memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
-spec_source: https://www.nvidia.com/en-us/data-center/a100/
-notes: Reference profile based on NVIDIA A100 SXM specifications and CUDA compute-capability limits.
-memory_bytes: 85899345920
-sm_count: 108
-memory_bus_width_bits: 5120
-core_clock_mhz: 1410
+spec_source: https://www.nvidia.com/en-us/data-center/products/a30-gpu/
+notes: Reference A30 profile using NVIDIA product specifications and compute capability 8.0 limits.
+memory_bytes: 25769803776
+sm_count: 56
+memory_bus_width_bits: 3072
+core_clock_mhz: 1440
 memory_clock_mhz: 1215
-l2_cache_bytes: 41943040
+l2_cache_bytes: 25165824
 shared_mem_per_sm: 167936
 shared_mem_per_block: 49152
 shared_mem_per_block_optin: 166912
@@ -23,9 +23,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
-typical_power_usage_mw: 300000
-max_power_limit_mw: 400000
-pci_device_id: 0x20B010DE
+typical_power_usage_mw: 165000
+max_power_limit_mw: 165000
+pci_device_id: 0x20B710DE
 supported_types:
   - fp32
   - tf32

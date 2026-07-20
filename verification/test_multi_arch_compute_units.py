@@ -19,18 +19,6 @@ CU_DEVICE_ATTRIBUTE_MAX_BLOCKS_PER_MULTIPROCESSOR = 106
 
 CUDA_SUCCESS = 0
 
-ARCH_TO_CC_MAJOR: dict[str, int] = {
-    "maxwell": 5,
-    "pascal": 6,
-    "volta": 7,
-    "turing": 7,
-    "ampere": 8,
-    "hopper": 9,
-    "ada": 8,
-    "blackwell": 10,
-}
-
-
 def _die(msg: str) -> None:
     print(f"[test_multi_arch_compute_units] ERROR: {msg}", file=sys.stderr)
     raise SystemExit(2)
@@ -172,14 +160,8 @@ def _load_expected_device(*, repo_root: Path, preset_id: str) -> ExpectedDevice:
     ctx = f"profiles/{preset_id}.yaml"
 
     name = _require_str(data, "name", ctx=ctx)
-    arch = _require_str(data, "architecture", ctx=ctx).strip().lower()
-    if arch not in ARCH_TO_CC_MAJOR:
-        _die(f"{ctx}.architecture: unknown architecture {arch!r}")
-    cc_major = (
-        _require_int(data, "compute_major", ctx=ctx)
-        if "compute_major" in data
-        else ARCH_TO_CC_MAJOR[arch]
-    )
+    _require_str(data, "architecture", ctx=ctx)
+    cc_major = _require_int(data, "compute_major", ctx=ctx)
 
     return ExpectedDevice(
         preset_id=preset_id,

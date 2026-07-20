@@ -1,7 +1,15 @@
 id: a100-1g
 name: Fake NVIDIA A100-SXM4-1GB
+torch_name: NVIDIA A100-SXM4-1GB
+official_model: NVIDIA A100
 architecture: ampere
+compute_major: 8
 compute_minor: 0
+memory_kind: synthetic
+profile_status: synthetic
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/data-center/a100/
+notes: Synthetic 1 GiB validation profile using A100 compute properties; not an NVIDIA MIG product name.
 memory_bytes: 1073741824
 sm_count: 108
 memory_bus_width_bits: 5120
@@ -24,3 +32,4 @@ supported_types:
   - fp16
   - bf16
   - int8
+  - int4

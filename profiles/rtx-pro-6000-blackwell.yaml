@@ -1,0 +1,37 @@
+id: rtx-pro-6000-blackwell
+name: Fake NVIDIA RTX PRO 6000 Blackwell Workstation Edition
+torch_name: NVIDIA RTX PRO 6000 Blackwell Workstation Edition
+official_model: NVIDIA RTX PRO 6000 Blackwell Workstation Edition
+architecture: blackwell
+compute_major: 12
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/data-center/rtx-pro-6000-blackwell-workstation-edition/workstation-blackwell-rtx-pro-6000-workstation-edition-nvidia-us-3519208-web.pdf
+notes: Reference workstation profile using NVIDIA's 24064 CUDA cores, 96 GB GDDR7, 512-bit interface, and 600 W specifications.
+memory_bytes: 103079215104
+sm_count: 188
+memory_bus_width_bits: 512
+core_clock_mhz: 2600
+memory_clock_mhz: 14000
+l2_cache_bytes: 100663296
+shared_mem_per_sm: 131072
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 600000
+max_power_limit_mw: 600000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8
+  - fp4

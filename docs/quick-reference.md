@@ -24,6 +24,9 @@ cmake --build build
 ## Common run commands
 
 ```bash
+fakegpu doctor --list-profiles
+fakegpu demo --profile l4
+fakegpu demo --profile b300 --json
 ./fgpu nvidia-smi
 ./fgpu python3 your_script.py
 ./fgpu --profile t4 --device-count 2 python3 your_script.py
@@ -43,15 +46,27 @@ Python-level fake-CUDA routing:
 python3 -c "import fakegpu; print(fakegpu.init(runtime='auto').runtime)"
 ```
 
-Tiny Transformer training demo with `pytorch-fakegpu`:
+The smallest maintained fake-CUDA training demo:
+
+```bash
+fakegpu demo --profile a100
+```
+
+The larger Transformer example remains available:
 
 ```bash
 python3 demo_usage.py --test transformer
 python3 demo_usage.py --test transformer --quiet
 ```
 
-This route uses `fakegpu.torch_patch.patch()` inside the demo and is meant for
-fake-CUDA training smoke tests on CPU-only hosts.
+Both routes use the CPU-backed fake-CUDA runtime and do not need a physical GPU.
+
+Inspect a specific profile and return structured diagnostics:
+
+```bash
+fakegpu doctor --profile jetson-t5000
+fakegpu doctor --profile rtx-pro-5000-blackwell --json
+```
 
 ## Preflight / OOM checks
 

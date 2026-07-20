@@ -4,5 +4,6 @@ include README.md
 include fgpu
 include ftest
 recursive-include fakegpu *.py
+recursive-include fakegpu/data *.json
 recursive-include profiles *.yaml
 recursive-include src *.cpp *.hpp *.h

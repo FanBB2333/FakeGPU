@@ -24,6 +24,9 @@ cmake --build build
 ## 常用运行命令
 
 ```bash
+fakegpu doctor --list-profiles
+fakegpu demo --profile l4
+fakegpu demo --profile b300 --json
 ./fgpu nvidia-smi
 ./fgpu python3 your_script.py
 ./fgpu --profile t4 --device-count 2 python3 your_script.py
@@ -43,15 +46,27 @@ Python 级 fake-CUDA 路由：
 python3 -c "import fakegpu; print(fakegpu.init(runtime='auto').runtime)"
 ```
 
-使用 `pytorch-fakegpu` 的 tiny Transformer 训练 demo：
+最小的 fake-CUDA 训练示例：
+
+```bash
+fakegpu demo --profile a100
+```
+
+较完整的 Transformer 示例仍可使用：
 
 ```bash
 python3 demo_usage.py --test transformer
 python3 demo_usage.py --test transformer --quiet
 ```
 
-这条路径会在 demo 内部调用 `fakegpu.torch_patch.patch()`，适合在 CPU-only
-主机上做 fake-CUDA 训练 smoke 验证。
+两种方式都使用 CPU-backed fake-CUDA runtime，不需要物理 GPU。
+
+检查指定 profile，并输出结构化诊断信息：
+
+```bash
+fakegpu doctor --profile jetson-t5000
+fakegpu doctor --profile rtx-pro-5000-blackwell --json
+```
 
 ## Preflight / OOM 检查
 

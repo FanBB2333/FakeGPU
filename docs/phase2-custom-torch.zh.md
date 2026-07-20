@@ -40,7 +40,7 @@ FakeGPU 的 torch patch 采用两层架构：
 | 第 0 部分 | 设备索引越界校验 -- 替换上游宽松的 `_normalize_device_index`，使用匹配真实 CUDA 行为的 "CUDA error: invalid device ordinal" 错误 |
 | 第 1 部分 | 内存跟踪器初始化，使用 GPU profile 中的每设备内存限制 |
 | 第 2 部分 | Hook `upstream.wrap_tensor`，实现 tensor 创建时自动内存跟踪 |
-| 第 3 部分 | 每设备 GPU profile（11 种 profile）-- 覆写 `get_device_name`, `get_device_capability`, `get_device_properties` |
+| 第 3 部分 | 每设备 GPU profile（24 种 YAML profile）-- 覆写 `get_device_name`, `get_device_capability`, `get_device_properties` |
 | 第 4 部分 | 使用跟踪器的内存查询函数，替换上游返回零值的 stub |
 | 第 5 部分 | Autocast dtype 校验（bf16 要求 compute capability >= 8.0）+ GradScaler 透传 |
 | 第 6 部分 | 跨设备操作校验（tensor ops、loss functions、functional ops、binary dunders） |
@@ -49,21 +49,21 @@ FakeGPU 的 torch patch 采用两层架构：
 
 ### 支持的 GPU profiles
 
-共 11 种预设 profile：
+24 种内置 profile 覆盖 8 个架构和 15 种 compute capability：
 
-| Profile | 说明 |
-|---|---|
-| `gtx980` | GeForce GTX 980 |
-| `p100` | Tesla P100 |
-| `v100` | Tesla V100 |
-| `t4` | Tesla T4 |
-| `a40` | NVIDIA A40 |
-| `a100` | NVIDIA A100 |
-| `a100-1g` | NVIDIA A100 (1g MIG) |
-| `h100` | NVIDIA H100 |
-| `l40s` | NVIDIA L40S |
-| `b100` | NVIDIA B100 |
-| `b200` | NVIDIA B200 |
+| 架构 | Compute capability | Profile |
+|---|---|---|
+| Maxwell | 5.2 | `gtx980` |
+| Pascal | 6.0、6.1 | `p100`、`p4` |
+| Volta | 7.0 | `v100` |
+| Turing | 7.5 | `t4` |
+| Ampere | 8.0、8.6、8.7 | `a100`、`a100-1g`、`a30`、`a10`、`a40`、`rtx3090ti`、`jetson-agx-orin-64gb`、`test-512m` |
+| Ada | 8.9 | `l4`、`l40s` |
+| Hopper | 9.0 | `h100`、`h200` |
+| Blackwell | 10.0、10.3、11.0、12.0、12.1 | `b100`、`b200`、`b300`、`jetson-t5000`、`rtx-pro-5000-blackwell`、`rtx-pro-6000-blackwell`、`gb10` |
+
+`torch_patch.py` 的型号表由 native build 使用的同一组 YAML 生成。数据来源和校验规则记录在仓库的
+`profiles/README.md` 中。
 
 ## 已支持的 API 面
 
@@ -77,7 +77,7 @@ FakeGPU 的 torch patch 采用两层架构：
 | `nn.DistributedDataParallel` | 支持 |
 | `torch.distributed.*`（单进程 shim，覆盖所有 collective ops） | 支持 |
 | Autocast / GradScaler with dtype validation | 支持 |
-| GPU profiles（11 种预设） | 支持 |
+| GPU profiles（24 种预设） | 支持 |
 | Memory tracking with OOM simulation | 支持 |
 | Cross-device validation | 支持 |
 | `torch.load` with `map_location` normalization | 支持 |

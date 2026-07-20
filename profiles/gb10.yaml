@@ -1,0 +1,37 @@
+id: gb10
+name: Fake NVIDIA GB10 (DGX Spark)
+torch_name: NVIDIA GB10 (DGX Spark)
+official_model: NVIDIA GB10 (DGX Spark)
+architecture: blackwell
+compute_major: 12
+compute_minor: 1
+memory_kind: unified
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-sg/products/workstations/dgx-spark/
+notes: Unified-memory reference profile; the 128 GiB LPDDR5x budget is shared by CPU and GPU on real DGX Spark hardware.
+memory_bytes: 137438953472
+sm_count: 48
+memory_bus_width_bits: 256
+core_clock_mhz: 1500
+memory_clock_mhz: 4266
+l2_cache_bytes: 33554432
+shared_mem_per_sm: 131072
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 140000
+max_power_limit_mw: 140000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8
+  - fp4
