@@ -1,0 +1,37 @@
+id: b300
+name: Fake NVIDIA B300
+torch_name: NVIDIA B300
+official_model: NVIDIA B300
+architecture: blackwell
+compute_major: 10
+compute_minor: 3
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html
+notes: Reference B300 SXM profile with 288 GiB HBM3e and Blackwell Ultra compute capability 10.3.
+memory_bytes: 309237645312
+sm_count: 160
+memory_bus_width_bits: 8192
+core_clock_mhz: 2100
+memory_clock_mhz: 3906
+l2_cache_bytes: 132120576
+shared_mem_per_sm: 233472
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 232448
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 1400000
+max_power_limit_mw: 1400000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8
+  - fp4

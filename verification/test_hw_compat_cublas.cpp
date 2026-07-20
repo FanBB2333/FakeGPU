@@ -36,6 +36,30 @@ int main() {
     auto bf16 = fake_gpu::cuda_dtype_to_gpu_dtype(14);
     require(bf16.has_value(), "missing BF16 mapping");
     require(*bf16 == fake_gpu::GpuDataType::BF16, "unexpected BF16 mapping");
+    require(
+        fake_gpu::architecture_from_compute_capability(8, 7) == fake_gpu::GpuArch::Ampere,
+        "cc 8.7 should map to Ampere");
+    require(
+        fake_gpu::architecture_from_compute_capability(8, 9) == fake_gpu::GpuArch::Ada,
+        "cc 8.9 should map to Ada");
+    require(
+        fake_gpu::architecture_from_compute_capability(10, 3) == fake_gpu::GpuArch::Blackwell,
+        "cc 10.3 should map to Blackwell");
+    require(
+        fake_gpu::architecture_from_compute_capability(11, 0) == fake_gpu::GpuArch::Blackwell,
+        "cc 11.0 should map to Blackwell");
+    require(
+        fake_gpu::architecture_from_compute_capability(12, 1) == fake_gpu::GpuArch::Blackwell,
+        "cc 12.1 should map to Blackwell");
+    require(
+        fake_gpu::architecture_from_compute_capability(10, 1) == fake_gpu::GpuArch::Unknown,
+        "unknown compute capability should not inherit an architecture by major version");
+    require(
+        std::strcmp(fake_gpu::to_string(fake_gpu::GpuDataType::FP8), "fp8") == 0,
+        "FP8 string mapping failed");
+    require(
+        std::strcmp(fake_gpu::to_string(fake_gpu::GpuDataType::FP4), "fp4") == 0,
+        "FP4 string mapping failed");
 
     setenv("FAKEGPU_PROFILES", "v100:1", 1);
 

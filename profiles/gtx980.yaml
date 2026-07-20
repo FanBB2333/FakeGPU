@@ -1,7 +1,15 @@
 id: gtx980
 name: Fake NVIDIA GeForce GTX 980
+torch_name: NVIDIA GeForce GTX 980
+official_model: GeForce GTX 980
 architecture: maxwell
+compute_major: 5
 compute_minor: 2
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://developer.nvidia.com/cuda/gpus/legacy
+notes: Legacy reference profile retained for Maxwell compatibility testing.
 memory_bytes: 4294967296
 sm_count: 16
 memory_bus_width_bits: 256

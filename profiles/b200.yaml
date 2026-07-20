@@ -1,18 +1,26 @@
 id: b200
 name: Fake NVIDIA B200
+torch_name: NVIDIA B200
+official_model: NVIDIA B200
 architecture: blackwell
+compute_major: 10
 compute_minor: 0
-memory_bytes: 206158430208
-sm_count: 192
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html
+notes: Reference B200 SXM profile with 180 GiB HBM3e and architecture-derived SM limits.
+memory_bytes: 193273528320
+sm_count: 160
 memory_bus_width_bits: 6144
 core_clock_mhz: 2050
 memory_clock_mhz: 2400
 l2_cache_bytes: 90112000
-shared_mem_per_sm: 262144
-shared_mem_per_block: 131072
-shared_mem_per_block_optin: 262144
+shared_mem_per_sm: 233472
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 232448
 regs_per_block: 65536
-regs_per_multiprocessor: 131072
+regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 700000
@@ -25,3 +33,5 @@ supported_types:
   - bf16
   - int8
   - int4
+  - fp8
+  - fp4

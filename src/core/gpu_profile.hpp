@@ -30,6 +30,8 @@ enum class GpuDataType {
     TF32,
     INT8,
     INT4,
+    FP8,
+    FP4,
 };
 
 // Parameter pack that can be hydrated from JSON/CSV to define a GPU.
@@ -154,9 +156,12 @@ struct GpuProfile {
 // Returns the preset IDs compiled into the binary (from `profiles/*.yaml` at build time).
 std::vector<std::string> builtin_profile_ids();
 
+// Resolve the NVIDIA hardware architecture for an explicit CUDA compute capability.
+GpuArch architecture_from_compute_capability(int major, int minor);
+
 // Resolve a preset GPU profile by ID (case-insensitive). Supports:
 // - Built-in YAML profiles (any `id:` from `profiles/*.yaml` compiled into the binary)
-// - Factory presets (gtx980/p100/v100/t4/a40/a100/h100/l40s/b100/b200)
+// - Legacy factory presets when no compiled YAML profile is available
 // Returns nullopt if the ID is unknown.
 std::optional<GpuProfile> profile_from_preset_id(const std::string& id);
 

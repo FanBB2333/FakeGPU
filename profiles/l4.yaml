@@ -1,0 +1,36 @@
+id: l4
+name: Fake NVIDIA L4
+torch_name: NVIDIA L4
+official_model: NVIDIA L4
+architecture: ada
+compute_major: 8
+compute_minor: 9
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/data-center/l4/
+notes: Reference L4 profile using NVIDIA product specifications and compute capability 8.9 limits.
+memory_bytes: 25769803776
+sm_count: 58
+memory_bus_width_bits: 192
+core_clock_mhz: 2040
+memory_clock_mhz: 6251
+l2_cache_bytes: 50331648
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 72000
+max_power_limit_mw: 72000
+pci_device_id: 0x27B810DE
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8

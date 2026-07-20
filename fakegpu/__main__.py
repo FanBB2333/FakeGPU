@@ -10,6 +10,14 @@ from ._api import _warn_if_macos_injection_may_be_blocked
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "demo":
+        from .demo import main as demo_main
+
+        return demo_main(argv[1:])
+    if argv and argv[0] == "doctor":
+        from .doctor import main as doctor_main
+
+        return doctor_main(argv[1:])
     if argv and argv[0] == "preflight":
         from .preflight import main as preflight_main
 
@@ -18,6 +26,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="fakegpu",
         description="Run a command with FakeGPU libraries preloaded (LD_PRELOAD/DYLD_INSERT_LIBRARIES).",
+        epilog=(
+            "Built-in commands: fakegpu demo, fakegpu doctor, fakegpu preflight. "
+            "Run 'fakegpu <command> --help' for details."
+        ),
     )
     parser.add_argument(
         "--mode",

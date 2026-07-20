@@ -52,6 +52,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+from .profile_catalog import architecture_for_compute_capability, load_profiles
+
 _patched = False
 _patch_result: "PatchResult | None" = None
 _upstream_mod: Any = None  # Set when upstream FakeCudaTensor backend is active
@@ -60,55 +62,22 @@ _upstream_mod: Any = None  # Set when upstream FakeCudaTensor backend is active
 # Configuration – mirrors the active FakeGPU profile when available.
 # ---------------------------------------------------------------------------
 
+_PROFILE_CATALOG = load_profiles()
 _PROFILE_CC: dict[str, tuple[int, int]] = {
-    "gtx980": (5, 2),
-    "p100": (6, 0),
-    "v100": (7, 0),
-    "t4": (7, 5),
-    "a40": (8, 6),
-    "a100": (8, 0),
-    "a100-1g": (8, 0),
-    "test-512m": (8, 0),
-    "rtx3090ti": (8, 6),
-    "rtx-pro-5000-blackwell": (12, 0),
-    "h100": (9, 0),
-    "l40s": (8, 9),
-    "b100": (11, 0),
-    "b200": (11, 0),
+    profile_id: profile.compute_capability
+    for profile_id, profile in _PROFILE_CATALOG.items()
 }
-
 _PROFILE_NAMES: dict[str, str] = {
-    "gtx980": "NVIDIA GeForce GTX 980",
-    "p100": "Tesla P100-PCIE-16GB",
-    "v100": "Tesla V100-SXM2-32GB",
-    "t4": "Tesla T4",
-    "a40": "NVIDIA A40",
-    "a100": "NVIDIA A100-SXM4-80GB",
-    "a100-1g": "NVIDIA A100-SXM4-1GB",
-    "test-512m": "FakeGPU Test Profile 512MB",
-    "rtx3090ti": "NVIDIA GeForce RTX 3090 Ti",
-    "rtx-pro-5000-blackwell": "NVIDIA RTX PRO 5000 72GB Blackwell",
-    "h100": "NVIDIA H100 80GB HBM3",
-    "l40s": "NVIDIA L40S",
-    "b100": "NVIDIA B100",
-    "b200": "NVIDIA B200",
+    profile_id: profile.torch_name
+    for profile_id, profile in _PROFILE_CATALOG.items()
 }
-
 _PROFILE_TOTAL_MEMORY: dict[str, int] = {
-    "gtx980": 4 * 1024**3,
-    "p100": 16 * 1024**3,
-    "v100": 32 * 1024**3,
-    "t4": 16 * 1024**3,
-    "a40": 48 * 1024**3,
-    "a100": 80 * 1024**3,
-    "a100-1g": 1 * 1024**3,
-    "test-512m": 512 * 1024**2,
-    "rtx3090ti": 25291849728,
-    "rtx-pro-5000-blackwell": 76374540288,
-    "h100": 80 * 1024**3,
-    "l40s": 48 * 1024**3,
-    "b100": 192 * 1024**3,
-    "b200": 192 * 1024**3,
+    profile_id: profile.memory_bytes
+    for profile_id, profile in _PROFILE_CATALOG.items()
+}
+_PROFILE_SUPPORTED_TYPES: dict[str, tuple[str, ...]] = {
+    profile_id: profile.supported_types
+    for profile_id, profile in _PROFILE_CATALOG.items()
 }
 
 
@@ -625,30 +594,10 @@ def _public_allocation_record(record: dict[str, Any]) -> dict[str, Any]:
 # Architecture name lookup (mirrors C++ gpu_profile.cpp)
 # ---------------------------------------------------------------------------
 
-_CC_TO_ARCH: dict[tuple[int, int], str] = {
-    (5, 2): "Maxwell",
-    (6, 0): "Pascal",
-    (7, 0): "Volta",
-    (7, 5): "Turing",
-    (8, 0): "Ampere",
-    (8, 6): "Ampere",
-    (8, 9): "Ada",
-    (9, 0): "Hopper",
-    (10, 0): "Blackwell",
-    (11, 0): "Blackwell",
-}
-
-
 def _arch_name(major: int, minor: int) -> str:
     """Return the architecture name for a compute capability."""
-    exact = _CC_TO_ARCH.get((major, minor))
-    if exact:
-        return exact
-    # Fallback: match by major only
-    for (ma, _mi), name in _CC_TO_ARCH.items():
-        if ma == major:
-            return name
-    return "Unknown"
+    architecture = architecture_for_compute_capability(major, minor)
+    return architecture.title() if architecture != "unknown" else "Unknown"
 
 
 # ---------------------------------------------------------------------------

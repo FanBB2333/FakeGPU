@@ -1,7 +1,15 @@
 id: a100
 name: Fake NVIDIA A100-SXM4-80GB
+torch_name: NVIDIA A100-SXM4-80GB
+official_model: NVIDIA A100
 architecture: ampere
+compute_major: 8
 compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/data-center/a100/
+notes: Reference profile based on NVIDIA A100 SXM specifications and CUDA compute-capability limits.
 memory_bytes: 85899345920
 sm_count: 108
 memory_bus_width_bits: 5120
@@ -24,3 +32,4 @@ supported_types:
   - fp16
   - bf16
   - int8
+  - int4

@@ -1,7 +1,15 @@
 id: t4
 name: Fake NVIDIA T4
+torch_name: Tesla T4
+official_model: NVIDIA T4
 architecture: turing
+compute_major: 7
 compute_minor: 5
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/data-center/tesla-t4/
+notes: Reference profile based on NVIDIA T4 specifications and CUDA compute-capability limits.
 memory_bytes: 17179869184
 sm_count: 40
 memory_bus_width_bits: 256
@@ -14,7 +22,7 @@ shared_mem_per_block_optin: 65536
 regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 1024
-max_blocks_per_multiprocessor: 32
+max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 70000
 max_power_limit_mw: 75000
 pci_device_id: 0x1EB810DE

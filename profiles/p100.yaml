@@ -1,7 +1,15 @@
 id: p100
 name: Fake NVIDIA Tesla P100-PCIE-16GB
+torch_name: Tesla P100-PCIE-16GB
+official_model: Tesla P100
 architecture: pascal
+compute_major: 6
 compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://developer.nvidia.com/cuda/gpus/legacy
+notes: Legacy reference profile retained for Pascal compute capability 6.0 testing.
 memory_bytes: 17179869184
 sm_count: 56
 memory_bus_width_bits: 4096

@@ -1,18 +1,26 @@
 id: b100
 name: Fake NVIDIA B100
+torch_name: NVIDIA B100
+official_model: NVIDIA B100
 architecture: blackwell
+compute_major: 10
 compute_minor: 0
-memory_bytes: 85899345920
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://docs.nvidia.com/cuda/blackwell-tuning-guide/
+spec_source: https://www.nvidia.com/en-us/data-center/blackwell/
+notes: Reference B100 profile; the current NVIDIA CUDA model table lists B200 but no longer lists B100.
+memory_bytes: 206158430208
 sm_count: 144
 memory_bus_width_bits: 5120
 core_clock_mhz: 1950
 memory_clock_mhz: 2300
 l2_cache_bytes: 65536000
-shared_mem_per_sm: 262144
-shared_mem_per_block: 131072
-shared_mem_per_block_optin: 262144
+shared_mem_per_sm: 233472
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 232448
 regs_per_block: 65536
-regs_per_multiprocessor: 131072
+regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 600000
@@ -25,3 +33,5 @@ supported_types:
   - bf16
   - int8
   - int4
+  - fp8
+  - fp4
