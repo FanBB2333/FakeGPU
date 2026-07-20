@@ -28,6 +28,13 @@
 - Kept macOS collective shared-memory names within Darwin's 31-character POSIX limit.
 - Sized hybrid NCCL pointer-attribute storage for both CUDA 12 and CUDA 13 Runtime ABIs.
 
+### Validation
+
+- Full local suite: 219 passed and 1 skipped.
+- Hybrid DDP numerical validation passed on an RTX PRO 5000 with PyTorch 2.9.1/CUDA 12.8 and an RTX 3090 Ti with PyTorch 2.12.1/CUDA 13.0.
+- A heterogeneous physical two-host Hybrid DDP check passed between those software stacks: fake NCCL carried broadcast, all-reduce, and all-gather over TCP, producing the expected averaged gradient and identical updated parameters without coordinator timeouts.
+- A physical two-host Tailscale test completed correct 1 MiB and 16 MiB all-reduces with zero coordinator timeouts; the 16 MiB × 5 case measured about 0.261 Gbit/s algorithmic throughput and 0.521 Gbit/s bidirectional socket payload per rank.
+
 ## v1.5.2 - 2026-07-20
 
 Compared with `v1.5.1`.

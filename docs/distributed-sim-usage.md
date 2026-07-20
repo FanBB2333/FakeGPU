@@ -1,6 +1,7 @@
 # Distributed Simulation Usage
 
-This page focuses on the path that is easiest to bring up in practice: distributed simulation on a single host with multiple ranks.
+This page starts with the most established single-host multi-rank path, then
+shows how to use the same simulator across trusted TCP-connected hosts.
 
 For implementation details and design boundaries, see [Distributed Design Notes](multi-node-design.md).
 
@@ -130,6 +131,58 @@ python3 -m fakegpu coordinator --shutdown coordinator-host:29591
 The coordinator protocol has no authentication. Bind it to loopback,
 Tailscale, or another trusted interface instead of exposing it to the public
 internet.
+
+### Maintained validation snapshot
+
+On 2026-07-20, this path was checked between an RTX PRO 5000
+(coordinator and rank 0) and an RTX 3090 Ti (rank 1) over Tailscale:
+
+| Payload | Measured iterations | Correctness | Effective algorithmic bandwidth | Bidirectional socket payload per rank |
+|---:|---:|---|---:|---:|
+| 1 MiB | 10 | all-reduce sample `[3, 3, 3]` on both ranks | 0.196 Gbit/s | 0.391 Gbit/s |
+| 16 MiB | 5 | all-reduce sample `[3, 3, 3]` on both ranks | 0.261 Gbit/s | 0.521 Gbit/s |
+
+The coordinator report recorded two nodes, 18 measured-plus-warmup
+all-reduces, inter-node traffic in both directions, and zero rank timeouts.
+These values validate the TCP simulator data path; they are not a benchmark
+of the GPUs or the underlying network.
+
+### Physical-host Hybrid DDP check
+
+The numerical worker can also verify real CUDA compute with simulated TCP
+communication. Start the coordinator as shown above, then execute this command
+concurrently on both GPU hosts. Set `NODE_RANK=0` on the first host and
+`NODE_RANK=1` on the second:
+
+```bash
+export NODE_RANK=0
+export COORDINATOR_HOST=coordinator-host
+export FAKEGPU_MODE=hybrid
+export FAKEGPU_DEVICE_COUNT=1
+export FAKEGPU_DIST_MODE=simulate
+export FAKEGPU_CLUSTER_CONFIG="$PWD/verification/data/cluster_tcp_2r.yaml"
+export FAKEGPU_COORDINATOR_TRANSPORT=tcp
+export FAKEGPU_COORDINATOR_ADDR="${COORDINATOR_HOST}:29591"
+export FAKEGPU_COORDINATOR_TIMEOUT_MS=60000
+
+LD_PRELOAD="$PWD/build/libnccl.so.2" \
+python3 -m torch.distributed.run \
+  --nnodes=2 \
+  --nproc-per-node=1 \
+  --node-rank="$NODE_RANK" \
+  --master-addr="$COORDINATOR_HOST" \
+  --master-port=29592 \
+  --max-restarts=0 \
+  test/test_ddp_hybrid_numerics.py \
+  --report-dir="/tmp/fakegpu-cross-ddp-rank${NODE_RANK}"
+```
+
+The maintained two-host result used PyTorch 2.9.1/CUDA 12.8 on the RTX PRO
+5000 and PyTorch 2.12.1/CUDA 13.0 on the RTX 3090 Ti. Both ranks produced
+gradient `[1.5, 3.0]`, updated parameters approximately
+`[0.85, -0.30]`, and identical all-gather results. The cluster report recorded
+broadcast, all-reduce, and all-gather traffic across two inter-node links with
+zero timeouts.
 
 ## Minimal cluster config
 

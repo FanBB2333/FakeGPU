@@ -1,6 +1,7 @@
 # 分布式模拟使用说明
 
-这份文档主要讲“怎么把分布式模拟跑起来”，尤其是最稳定的单机多进程路径。
+这份文档先介绍最稳定的单机多进程路径，再说明如何在可信 TCP 主机之间
+使用同一套模拟器。
 
 如果你更关心实现思路和边界，请看 [分布式设计说明](multi-node-design.md)。
 
@@ -126,6 +127,56 @@ python3 -m fakegpu coordinator --shutdown coordinator-host:29591
 
 coordinator 协议目前没有认证。请绑定到 loopback、Tailscale 或其他可信
 接口，不要直接暴露到公网。
+
+### 当前维护的验证结果
+
+2026-07-20 在两台物理主机之间完成了验证：RTX PRO 5000 负责
+coordinator 和 rank 0，RTX 3090 Ti 负责 rank 1，主机间通过 Tailscale
+连接。
+
+| 消息大小 | 计时迭代次数 | 正确性 | 有效算法带宽 | 每个 rank 的双向 socket 负载 |
+|---:|---:|---|---:|---:|
+| 1 MiB | 10 | 两个 rank 的 all-reduce 样本均为 `[3, 3, 3]` | 0.196 Gbit/s | 0.391 Gbit/s |
+| 16 MiB | 5 | 两个 rank 的 all-reduce 样本均为 `[3, 3, 3]` | 0.261 Gbit/s | 0.521 Gbit/s |
+
+coordinator 报告记录了两个节点、18 次计时及预热 all-reduce、双向节点间
+流量，且两个 rank 均没有超时。这组数值用于确认 TCP 模拟数据路径，
+不代表 GPU 性能或底层网络的原始带宽。
+
+### 物理多机 Hybrid DDP 检查
+
+数值检查 worker 也可以验证“真实 CUDA 计算 + 模拟 TCP 通信”。先按前面的
+命令启动 coordinator，再在两台 GPU 主机上同时执行下面的命令。第一台
+设置 `NODE_RANK=0`，第二台设置 `NODE_RANK=1`：
+
+```bash
+export NODE_RANK=0
+export COORDINATOR_HOST=coordinator-host
+export FAKEGPU_MODE=hybrid
+export FAKEGPU_DEVICE_COUNT=1
+export FAKEGPU_DIST_MODE=simulate
+export FAKEGPU_CLUSTER_CONFIG="$PWD/verification/data/cluster_tcp_2r.yaml"
+export FAKEGPU_COORDINATOR_TRANSPORT=tcp
+export FAKEGPU_COORDINATOR_ADDR="${COORDINATOR_HOST}:29591"
+export FAKEGPU_COORDINATOR_TIMEOUT_MS=60000
+
+LD_PRELOAD="$PWD/build/libnccl.so.2" \
+python3 -m torch.distributed.run \
+  --nnodes=2 \
+  --nproc-per-node=1 \
+  --node-rank="$NODE_RANK" \
+  --master-addr="$COORDINATOR_HOST" \
+  --master-port=29592 \
+  --max-restarts=0 \
+  test/test_ddp_hybrid_numerics.py \
+  --report-dir="/tmp/fakegpu-cross-ddp-rank${NODE_RANK}"
+```
+
+当前维护的两机结果使用 RTX PRO 5000 上的 PyTorch 2.9.1/CUDA 12.8，
+以及 RTX 3090 Ti 上的 PyTorch 2.12.1/CUDA 13.0。两个 rank 的梯度均为
+`[1.5, 3.0]`，更新后的参数约为 `[0.85, -0.30]`，all-gather 结果一致。
+cluster 报告记录了两个节点间链路上的 broadcast、all-reduce 和
+all-gather 流量，且没有超时。
 
 ## 最小 cluster config
 

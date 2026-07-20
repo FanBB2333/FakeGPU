@@ -36,7 +36,7 @@ It does **not** attempt to reproduce protocol-level NCCL, NVLink, RDMA, or Infin
 ### Coordinator process
 
 - `build/fakegpu-coordinator` accepts requests over Unix sockets or TCP.
-- It is the rendezvous point for multi-process execution on one host.
+- It is the rendezvous point for multi-process execution on one host or across trusted TCP-connected hosts.
 - This keeps the process-local fake libraries simple while centralizing communicator state.
 
 ### Topology and timing model
@@ -48,12 +48,12 @@ It does **not** attempt to reproduce protocol-level NCCL, NVLink, RDMA, or Infin
 ### Staging and data movement
 
 - Staging buffers are used to materialize collective and point-to-point semantics.
-- The local fast path prefers shared memory.
-- Socket-based transfer remains available as a fallback or explicit test path.
+- The local Unix-socket fast path prefers shared memory.
+- TCP coordinators carry input and output bytes in socket payloads so physical hosts do not depend on shared memory.
 
 ## Deliberate boundaries
 
-- Single-host multi-process simulation is the most validated target today.
+- Single-host multi-process simulation has the broadest regression coverage; the TCP data path also has a maintained physical two-host check.
 - `proxy` and `passthrough` modes exist for comparison and observability, but they are not the first path to validate.
 - Hybrid distributed runs are useful, but they still depend on real local CUDA/NCCL behavior and should be treated as more environment-sensitive.
 - The project should claim semantic correctness for maintained collective paths before claiming broad framework-level compatibility.
@@ -85,7 +85,7 @@ Near-term improvements that fit the current design:
 
 - broader direct tests for communicator lifecycle and grouped semantics
 - wider coverage for proxy and passthrough validation
-- better multi-host coverage beyond loopback and single-host orchestration
+- repeatable automation for broader multi-host topologies and network conditions
 - additional failure injection and timeout-debugging features
 - 将每个 collective 转换成 coordinator 可以理解的请求
 
@@ -1049,7 +1049,7 @@ src/nccl/
 
 - 新增 `verification/test_remote_coordinator.py`
 - 使用 TCP loopback 做 2 rank happy path 与断链失败验证
-- 真实多机或 network namespace 环境留作部署侧复核
+- 使用 RTX PRO 5000 和 RTX 3090 Ti 两台物理主机验证 TCP all-reduce 的数值与吞吐报告
 
 通过标准：
 
@@ -1058,8 +1058,8 @@ src/nccl/
 
 当前边界：
 
-- 目前验证范围是单机 `127.0.0.1` TCP；没有在两台物理机上重复此测试
-- 数据面仍然是现有 direct collective / proxy 路径，Step 21 只扩展 coordinator transport
+- 当前物理多机验证覆盖两台 Tailscale 主机；更多拓扑、网络类型和故障条件仍需扩展
+- TCP coordinator 的 collective 与 point-to-point 数据通过 socket payload 传输；本地 Unix socket 路径仍可使用 shared memory
 
 ### 18.2 Step 完成定义
 

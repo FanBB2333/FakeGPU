@@ -16,9 +16,10 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce semantics |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |
 | `python3 verification/test_group_semantics.py` | grouped collective submission semantics |
+| `./ftest tcp_bandwidth` | chosen-port TCP payload correctness and end-to-end simulator throughput |
 | `./test/run_hybrid_multinode.sh 2` | maintained multi-process validation with hybrid compute + simulated communication |
+| `python3 verification/run_hybrid_ddp_numerics.py` | real-CUDA DDP averaged gradients, optimizer update, and cross-rank parameter consistency |
 | `./ftest llm` | optional LLM smoke test when local model files are available |
-
 | `python test/run_error_simulation_suite.py` | unified error simulation suite: cross-device, OOM, invalid device, dtype, checkpoint, gradient (23 tests) |
 | `python test/test_error_cross_device.py` | cross-device tensor operation guards |
 | `python test/test_error_oom.py` | per-device OOM simulation |
@@ -125,11 +126,13 @@ Treat the following as the most stable paths:
 - `cpu_sim`
 - `python`
 - single-host `simulate + simulate`
+- local chosen-port TCP collective and bandwidth validation
 - direct NCCL verification plus simulate-mode DDP validation (`test_coordinator_smoke.py`, `test_allreduce_correctness.py`, `test_allgather_correctness.py`, `test_group_semantics.py`, `run_multinode_sim.sh`, `run_ddp_multinode.sh`)
 
 Treat the following as more environment-sensitive or extended coverage:
 
 - `hybrid` distributed runs
+- physical multi-host TCP measurements
 - `proxy` and `passthrough` distributed modes
 - LLM smoke paths that depend on local model files and broader framework coverage
 
@@ -143,8 +146,10 @@ Treat the following as more environment-sensitive or extended coverage:
 6. Run `python3 test/test_allreduce_correctness.py`.
 7. Run `python3 verification/test_allgather_correctness.py`.
 8. Run `python3 verification/test_group_semantics.py`.
-9. Run `./test/run_multinode_sim.sh 2`.
-10. Run `./test/run_multinode_sim.sh 4`.
-11. Run `./test/run_ddp_multinode.sh 4`.
-12. Move to `./test/run_hybrid_multinode.sh 2`.
-13. Run `python test/run_error_simulation_suite.py` for error simulation coverage.
+9. Run `./ftest tcp_bandwidth`.
+10. Run `./test/run_multinode_sim.sh 2`.
+11. Run `./test/run_multinode_sim.sh 4`.
+12. Run `./test/run_ddp_multinode.sh 4`.
+13. Move to `./test/run_hybrid_multinode.sh 2`.
+14. On a real CUDA host, run `python3 verification/run_hybrid_ddp_numerics.py`.
+15. Run `python test/run_error_simulation_suite.py` for error simulation coverage.

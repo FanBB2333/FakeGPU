@@ -39,7 +39,7 @@ FakeGPU 的分布式支持本质上是一个**分布式语义模拟器**：
 ### Coordinator 进程
 
 - `build/fakegpu-coordinator` 可以通过 Unix socket 或 TCP 接收请求。
-- 它是单机多进程场景里的 rendezvous 中心。
+- 它是单机多进程或可信 TCP 主机之间的 rendezvous 中心。
 - 这样每个进程里的 fake 库可以更简单，而 communicator 状态集中在 coordinator 里维护。
 
 ### 拓扑与时间模型
@@ -50,13 +50,13 @@ FakeGPU 的分布式支持本质上是一个**分布式语义模拟器**：
 
 ### Staging 与数据流
 
-- collective 和 p2p 语义需要 staging buffer 来落地。
-- 本地快速路径优先使用 shared memory。
-- 也保留了 socket fallback，既能兜底，也能单独拿来做验证。
+- collective 和 p2p 语义通过 staging buffer 传递数据。
+- 本地 Unix socket 快速路径优先使用 shared memory。
+- TCP coordinator 使用 socket payload 传输输入和输出，因此两台物理主机不依赖共享内存。
 
 ## 有意保留的边界
 
-- 当前验证最充分的仍然是“单机、多进程”的模拟路径。
+- 单机多进程模拟拥有最完整的回归覆盖；TCP 数据路径也已有两台物理主机的维护中验证。
 - `proxy` 和 `passthrough` 更适合做对比和观测，不是第一条建议路径。
 - `hybrid` 分布式路径有价值，但它更依赖真实本地 CUDA / NCCL 环境，受环境影响更大。
 - 项目应该先对“已维护 collective 路径的语义正确性”负责，再谈更广义的框架兼容性。

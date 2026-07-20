@@ -36,7 +36,7 @@
 
 - `src/nccl/` 暴露 fake `libnccl.so.2` 接口。
 - `src/distributed/` 负责 communicator 注册、coordinator 协议、拓扑模型、staging buffer 和 collective 执行。
-- 当前验证最充分的仍然是“单机、多进程、Unix socket 或 loopback TCP 协调”的路径。
+- 单机多进程路径拥有最完整的回归覆盖；指定端口的 TCP 数据路径也已在两台物理主机之间完成验证。
 
 ### 7. 监控与报告
 
