@@ -39,6 +39,7 @@ def main() -> int:
         temp_dir = Path(temp_dir_text)
         report_path = temp_dir / "bandwidth.json"
         cluster_report_path = temp_dir / "cluster.json"
+        cluster_markdown_path = temp_dir / "cluster.md"
         endpoint = f"127.0.0.1:{find_free_port()}"
         completed = subprocess.run(
             [
@@ -103,6 +104,26 @@ def main() -> int:
             link["scope"] == "inter_node"
             for link in cluster_report["links"]
         )
+        assert Path(
+            cluster_report["cluster"]["markdown_report_path"]
+        ).resolve() == cluster_markdown_path.resolve()
+        assert len(cluster_report["node_pairs"]) == 1
+        pair = cluster_report["node_pairs"][0]
+        assert {pair["node_a"], pair["node_b"]} == {"node0", "node1"}
+        assert pair["operations"] == 4
+        assert pair["a_to_b"]["total_bytes"] > 0
+        assert pair["b_to_a"]["total_bytes"] > 0
+        assert pair["total_bytes"] == (
+            pair["a_to_b"]["total_bytes"]
+            + pair["b_to_a"]["total_bytes"]
+        )
+        assert pair["peak_combined_bytes_per_operation"] > 0
+        assert pair["average_estimated_throughput_gbps"] > 0
+        assert pair["peak_estimated_throughput_gbps"] > 0
+
+        markdown = cluster_markdown_path.read_text(encoding="utf-8")
+        assert "## Node-Pair Communication" in markdown
+        assert "| `node0` | `node1` |" in markdown
 
         print(completed.stdout, end="")
         print("TCP multi-node bandwidth validation passed")

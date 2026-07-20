@@ -29,7 +29,7 @@ The repository currently ships:
 - Embedded GPU profiles compiled from
   `profiles/<architecture>/<segment>/*.yaml`
 - A coordinator process for single-host or trusted-network multi-process distributed simulation
-- JSON reporting for both single-process device activity and distributed cluster activity
+- JSON reporting for device activity plus JSON/Markdown cluster reports with complete node-pair communication tables
 - Error simulation experiments covering 7 error categories with a unified HTML test report
 
 ## Validation baseline

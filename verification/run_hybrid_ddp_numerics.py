@@ -193,6 +193,24 @@ def main() -> int:
             raise AssertionError("DDP did not issue a simulated all-reduce")
         if cluster_report["collectives"]["all_gather"]["calls"] < 1:
             raise AssertionError("parameter consistency did not issue all-gather")
+        node_pairs = cluster_report.get("node_pairs")
+        if not isinstance(node_pairs, list) or len(node_pairs) != 1:
+            raise AssertionError(
+                f"expected one complete node-pair entry, got {node_pairs!r}"
+            )
+        node_pair = node_pairs[0]
+        if int(node_pair.get("total_bytes", 0)) <= 0:
+            raise AssertionError(f"DDP node-pair traffic was empty: {node_pair}")
+        if int(node_pair.get("peak_combined_bytes_per_operation", 0)) <= 0:
+            raise AssertionError(f"DDP node-pair peak was empty: {node_pair}")
+        markdown_report_path = Path(
+            cluster_report["cluster"]["markdown_report_path"]
+        )
+        if not markdown_report_path.is_file():
+            raise AssertionError(
+                f"cluster Markdown report was not generated: "
+                f"{markdown_report_path}"
+            )
 
         summary = {
             "status": "success",
@@ -212,6 +230,11 @@ def main() -> int:
             "all_gather_calls": cluster_report["collectives"]["all_gather"][
                 "calls"
             ],
+            "node_pair_total_bytes": node_pair["total_bytes"],
+            "node_pair_peak_bytes_per_operation": node_pair[
+                "peak_combined_bytes_per_operation"
+            ],
+            "cluster_markdown_report": str(markdown_report_path),
         }
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0

@@ -1,8 +1,7 @@
 #include "cluster_coordinator.hpp"
 #include "cluster_config.hpp"
-#include "../core/version.hpp"
+#include "cluster_report_writer.hpp"
 
-#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -18,21 +17,6 @@ std::string getenv_or_empty(const char* name) {
     return value ? std::string(value) : std::string();
 }
 
-std::string node_name_for_rank(
-    const fake_gpu::distributed::ClusterConfigModel& config,
-    int rank) {
-    if (config.loaded()) {
-        for (const auto& node : config.nodes) {
-            for (int candidate : node.ranks) {
-                if (candidate == rank) {
-                    return node.id;
-                }
-            }
-        }
-    }
-    return "node0";
-}
-
 bool dump_cluster_report(
     const fake_gpu::distributed::DistributedConfig& config,
     std::string& error) {
@@ -46,118 +30,11 @@ bool dump_cluster_report(
     if (!snapshot.has_data) {
         return true;
     }
-
-    FILE* out = std::fopen(report_path, "w");
-    if (!out) {
-        error = std::string("failed to open cluster report: ") + report_path;
-        return false;
-    }
-
-    const auto& cluster_config = config.cluster_config;
-    const std::size_t world_size = snapshot.world_size > 0
-        ? snapshot.world_size
-        : (cluster_config.loaded() ? cluster_config.world_size : snapshot.ranks.size());
-    const std::size_t node_count = cluster_config.loaded()
-        ? cluster_config.nodes.size()
-        : (world_size > 0 ? 1U : 0U);
-
-    std::fprintf(out, "{\n");
-    std::fprintf(out, "  \"report_version\": \"%s\",\n", FAKEGPU_VERSION);
-    std::fprintf(out, "  \"schema\": \"experimental\",\n");
-    std::fprintf(out, "  \"cluster\": {\n");
-    std::fprintf(out, "    \"mode\": \"%s\",\n",
-                 fake_gpu::distributed::distributed_mode_name(config.mode));
-    std::fprintf(out, "    \"world_size\": %llu,\n", (unsigned long long)world_size);
-    std::fprintf(out, "    \"node_count\": %llu,\n", (unsigned long long)node_count);
-    std::fprintf(out, "    \"communicators\": %llu,\n",
-                 (unsigned long long)snapshot.communicator_count);
-    std::fprintf(out, "    \"coordinator_transport\": \"%s\"",
-                 fake_gpu::distributed::coordinator_transport_name(config.coordinator_transport));
-    if (cluster_config.loaded()) {
-        std::fprintf(out, ",\n");
-        std::fprintf(out, "    \"name\": \"%s\",\n", cluster_config.name.c_str());
-        std::fprintf(out, "    \"default_backend\": \"%s\",\n", cluster_config.default_backend.c_str());
-        std::fprintf(out, "    \"config_path\": \"%s\"\n", cluster_config.source_path.c_str());
-    } else {
-        std::fprintf(out, "\n");
-    }
-    std::fprintf(out, "  },\n");
-    std::fprintf(out, "  \"collectives\": {\n");
-    std::fprintf(out, "    \"all_reduce\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
-                 (unsigned long long)snapshot.all_reduce.calls,
-                 (unsigned long long)snapshot.all_reduce.bytes,
-                 snapshot.all_reduce.estimated_time_us_total,
-                 snapshot.all_reduce.contention_penalty_us_total);
-    std::fprintf(out, "    \"reduce\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
-                 (unsigned long long)snapshot.reduce.calls,
-                 (unsigned long long)snapshot.reduce.bytes,
-                 snapshot.reduce.estimated_time_us_total,
-                 snapshot.reduce.contention_penalty_us_total);
-    std::fprintf(out, "    \"broadcast\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
-                 (unsigned long long)snapshot.broadcast.calls,
-                 (unsigned long long)snapshot.broadcast.bytes,
-                 snapshot.broadcast.estimated_time_us_total,
-                 snapshot.broadcast.contention_penalty_us_total);
-    std::fprintf(out, "    \"all_gather\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
-                 (unsigned long long)snapshot.all_gather.calls,
-                 (unsigned long long)snapshot.all_gather.bytes,
-                 snapshot.all_gather.estimated_time_us_total,
-                 snapshot.all_gather.contention_penalty_us_total);
-    std::fprintf(out, "    \"reduce_scatter\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
-                 (unsigned long long)snapshot.reduce_scatter.calls,
-                 (unsigned long long)snapshot.reduce_scatter.bytes,
-                 snapshot.reduce_scatter.estimated_time_us_total,
-                 snapshot.reduce_scatter.contention_penalty_us_total);
-    std::fprintf(out, "    \"all_to_all\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f},\n",
-                 (unsigned long long)snapshot.all_to_all.calls,
-                 (unsigned long long)snapshot.all_to_all.bytes,
-                 snapshot.all_to_all.estimated_time_us_total,
-                 snapshot.all_to_all.contention_penalty_us_total);
-    std::fprintf(out, "    \"barrier\": {\"calls\": %llu, \"bytes\": %llu, \"estimated_time_us_total\": %.3f, \"contention_penalty_us_total\": %.3f}\n",
-                 (unsigned long long)snapshot.barrier.calls,
-                 (unsigned long long)snapshot.barrier.bytes,
-                 snapshot.barrier.estimated_time_us_total,
-                 snapshot.barrier.contention_penalty_us_total);
-    std::fprintf(out, "  },\n");
-    std::fprintf(out, "  \"links\": [\n");
-    for (std::size_t index = 0; index < snapshot.links.size(); ++index) {
-        const auto& link_stats = snapshot.links[index];
-        std::fprintf(out, "    {\n");
-        std::fprintf(out, "      \"src\": \"%s\",\n", link_stats.src_node.c_str());
-        std::fprintf(out, "      \"dst\": \"%s\",\n", link_stats.dst_node.c_str());
-        std::fprintf(out, "      \"scope\": \"%s\",\n", link_stats.scope.c_str());
-        std::fprintf(out, "      \"samples\": %llu,\n", (unsigned long long)link_stats.samples);
-        std::fprintf(out, "      \"bytes\": %llu,\n", (unsigned long long)link_stats.bytes);
-        std::fprintf(out, "      \"bandwidth_gbps\": %.3f,\n", link_stats.bandwidth_gbps);
-        std::fprintf(out, "      \"avg_latency_us\": %.3f,\n", link_stats.avg_latency_us);
-        std::fprintf(out, "      \"estimated_time_us_total\": %.3f,\n", link_stats.estimated_time_us_total);
-        std::fprintf(out, "      \"contention_penalty_us_total\": %.3f\n", link_stats.contention_penalty_us_total);
-        std::fprintf(out, "    }%s\n", (index + 1 < snapshot.links.size() ? "," : ""));
-    }
-    std::fprintf(out, "  ],\n");
-    std::fprintf(out, "  \"ranks\": [\n");
-    for (std::size_t index = 0; index < snapshot.ranks.size(); ++index) {
-        const auto& rank_stats = snapshot.ranks[index];
-        const std::string node_name = node_name_for_rank(cluster_config, rank_stats.rank);
-        std::fprintf(out, "    {\n");
-        std::fprintf(out, "      \"rank\": %d,\n", rank_stats.rank);
-        std::fprintf(out, "      \"node\": \"%s\",\n", node_name.c_str());
-        std::fprintf(out, "      \"wait_time_ms\": %.3f,\n", rank_stats.wait_time_ms);
-        std::fprintf(out, "      \"timeouts\": %llu,\n", (unsigned long long)rank_stats.timeouts);
-        std::fprintf(out, "      \"communicator_inits\": %llu,\n",
-                     (unsigned long long)rank_stats.communicator_inits);
-        std::fprintf(out, "      \"collective_calls\": %llu,\n",
-                     (unsigned long long)rank_stats.collective_calls);
-        std::fprintf(out, "      \"barrier_calls\": %llu,\n",
-                     (unsigned long long)rank_stats.barrier_calls);
-        std::fprintf(out, "      \"group_prepares\": %llu\n",
-                     (unsigned long long)rank_stats.group_prepares);
-        std::fprintf(out, "    }%s\n", (index + 1 < snapshot.ranks.size() ? "," : ""));
-    }
-    std::fprintf(out, "  ]\n");
-    std::fprintf(out, "}\n");
-    std::fclose(out);
-    return true;
+    return fake_gpu::distributed::write_cluster_report_files(
+        config,
+        snapshot,
+        report_path,
+        error);
 }
 
 }  // namespace

@@ -149,10 +149,33 @@ struct ClusterLinkReportStats {
     std::string scope;
     std::uint64_t samples = 0;
     std::uint64_t bytes = 0;
+    std::uint64_t peak_bytes_per_operation = 0;
     double bandwidth_gbps = 0.0;
     double avg_latency_us = 0.0;
     double estimated_time_us_total = 0.0;
     double contention_penalty_us_total = 0.0;
+    double peak_estimated_throughput_gbps = 0.0;
+};
+
+struct ClusterNodePairDirectionReportStats {
+    std::uint64_t transfers = 0;
+    std::uint64_t bytes = 0;
+    std::uint64_t peak_bytes_per_operation = 0;
+    double model_bandwidth_gbps = 0.0;
+    double avg_latency_us = 0.0;
+    double estimated_time_us_total = 0.0;
+    double contention_penalty_us_total = 0.0;
+    double peak_estimated_throughput_gbps = 0.0;
+};
+
+struct ClusterNodePairReportStats {
+    std::string node_a;
+    std::string node_b;
+    std::uint64_t operations = 0;
+    std::uint64_t peak_combined_bytes_per_operation = 0;
+    double peak_estimated_throughput_gbps = 0.0;
+    ClusterNodePairDirectionReportStats a_to_b;
+    ClusterNodePairDirectionReportStats b_to_a;
 };
 
 struct ClusterRankReportStats {
@@ -177,6 +200,7 @@ struct ClusterReportSnapshot {
     ClusterCollectiveReportStats all_to_all;
     ClusterCollectiveReportStats barrier;
     std::vector<ClusterLinkReportStats> links;
+    std::vector<ClusterNodePairReportStats> node_pairs;
     std::vector<ClusterRankReportStats> ranks;
 };
 

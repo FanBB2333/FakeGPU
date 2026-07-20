@@ -10,6 +10,7 @@
 - A checked-in snapshot and updater for NVIDIA's current and legacy model-to-compute-capability tables.
 - `fakegpu coordinator` and `fakegpu bandwidth` commands for chosen-port TCP coordination, local logical-node simulation, physical multi-host rank launch, correctness checks, and end-to-end throughput reports.
 - A real-CUDA DDP numerical check for averaged gradients and cross-rank parameter consistency through simulated NCCL collectives.
+- Complete node-pair communication matrices in cluster JSON reports, plus an automatically generated Markdown project report with collective, node-pair, and rank tables.
 
 ### Changed
 
@@ -18,6 +19,7 @@
 - Native and Python architecture mapping now covers Maxwell through Blackwell, including Blackwell compute capabilities 10.0, 10.3, 11.0, 12.0, and 12.1.
 - Native smoke validation now exercises all 15 represented compute capabilities.
 - TCP coordinators now carry collective and point-to-point data in socket payloads so ranks can communicate across physical hosts; `FAKEGPU_COORDINATOR_TIMEOUT_MS` controls rank rendezvous and collective waits.
+- Link and node-pair reports now retain directional totals, per-operation peak payloads, modeled average/peak throughput, estimated time, and contention penalties.
 
 ### Fixed
 

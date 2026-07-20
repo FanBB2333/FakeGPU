@@ -31,7 +31,8 @@ It does **not** attempt to reproduce protocol-level NCCL, NVLink, RDMA, or Infin
 
 - `src/distributed/communicator.cpp` tracks pending and active communicators.
 - Collectives wait for all required participants, then execute once the communicator state is complete.
-- Rank-level wait time, timeouts, and collective counters feed the cluster report.
+- Rank-level wait time, timeouts, collective counters, directional link totals, and per-operation peaks feed the cluster report.
+- `src/distributed/cluster_report_writer.cpp` emits exact JSON counters and a Markdown table containing every configured node pair.
 
 ### Coordinator process
 
@@ -453,6 +454,15 @@ faults:
       "avg_latency_us": 17.4
     }
   ],
+  "node_pairs": [
+    {
+      "node_a": "node0",
+      "node_b": "node1",
+      "total_bytes": 913578246,
+      "peak_combined_bytes_per_operation": 134217728,
+      "average_estimated_throughput_gbps": 18.42
+    }
+  ],
   "ranks": [
     {
       "rank": 0,
@@ -469,6 +479,7 @@ faults:
 - 每类 collective 的调用次数与字节数
 - 每个 rank 的等待时间、最长 barrier 卡顿
 - 每条虚拟链路的累计流量和平均耗时
+- 配置中全部节点对的方向总量、双向总量、单次操作峰值和模型吞吐
 - 失败 / 超时 / abort 次数
 - chunked transfer 的分片数量与回退次数
 

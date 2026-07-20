@@ -1,6 +1,7 @@
 add_library(fake_gpu_distributed OBJECT
     buffer_transfer.cpp
     cluster_config.cpp
+    cluster_report_writer.cpp
     communicator.cpp
     cluster_coordinator.cpp
     collective_allreduce.cpp

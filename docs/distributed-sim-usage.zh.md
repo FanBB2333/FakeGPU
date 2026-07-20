@@ -52,6 +52,7 @@ cmake --build build -j4
 | `FAKEGPU_COORDINATOR_ADDR` | 绝对 socket 路径或 `host:port` |
 | `FAKEGPU_COORDINATOR_TIMEOUT_MS` | rank 汇合及操作等待时间，默认 `1000` 毫秒 |
 | `FAKEGPU_CLUSTER_REPORT_PATH` | cluster 报告输出路径 |
+| `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` | 可选 Markdown 项目报告路径；默认与 JSON 位于同一目录 |
 | `FAKEGPU_STAGING_CHUNK_BYTES` | staging chunk 阈值 |
 | `FAKEGPU_STAGING_FORCE_SOCKET` | 强制跳过 shared memory，直接验证 socket fallback |
 | `FAKEGPU_DEVICE_COUNT` | 暴露的 fake device 数量 |
@@ -91,7 +92,8 @@ coordinator reduction、内存复制和进程调度。cluster YAML 中的
 python3 -m fakegpu coordinator \
   --listen 0.0.0.0:29591 \
   --cluster-config verification/data/cluster_tcp_2r.yaml \
-  --report /tmp/fakegpu-cluster.json
+  --report /tmp/fakegpu-cluster.json \
+  --markdown-report /tmp/fakegpu-project-communication.md
 ```
 
 仓库中的这份拓扑把 rank 0 配置为 `rtx-pro-5000-blackwell`，rank 1
@@ -273,6 +275,7 @@ FAKEGPU_CLUSTER_CONFIG="$CLUSTER_CONFIG" \
 FAKEGPU_COORDINATOR_TRANSPORT=unix \
 FAKEGPU_COORDINATOR_ADDR="$SOCKET_PATH" \
 FAKEGPU_CLUSTER_REPORT_PATH=/tmp/fakegpu-cluster-report.json \
+FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH=/tmp/fakegpu-project-communication.md \
 ./build/fakegpu-coordinator --transport unix --address "$SOCKET_PATH"
 ```
 
@@ -287,6 +290,7 @@ FAKEGPU_CLUSTER_CONFIG="$CLUSTER_CONFIG" \
 FAKEGPU_COORDINATOR_TRANSPORT=tcp \
 FAKEGPU_COORDINATOR_ADDR="$COORD_ADDR" \
 FAKEGPU_CLUSTER_REPORT_PATH=/tmp/fakegpu-cluster-report.json \
+FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH=/tmp/fakegpu-project-communication.md \
 ./build/fakegpu-coordinator --transport tcp --address "$COORD_ADDR"
 ```
 
@@ -326,7 +330,12 @@ export LD_PRELOAD="$PWD/build/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
 - world size、transport 等元信息
 - 各类 collective 的调用次数、字节数、估算耗时
 - 节点间 / 节点内链路统计
+- 全部不同节点的两两组合，包含方向总量、双向总量、单次操作峰值、传输次数，以及模型平均/峰值吞吐
 - 各 rank 的等待时间、超时次数、communicator 初始化次数
+
+设置 JSON 路径后，默认会在同一目录生成 `.md` 报告。通过
+`FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` 或 coordinator 的
+`--markdown-report` 参数，可以指定最终项目报告路径。
 
 ## 常见失败点
 

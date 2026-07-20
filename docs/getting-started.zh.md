@@ -152,6 +152,7 @@ FAKEGPU_CLUSTER_CONFIG=/abs/path/to/cluster.yaml
 FAKEGPU_COORDINATOR_TRANSPORT={unix,tcp}
 FAKEGPU_COORDINATOR_ADDR=/tmp/fakegpu.sock
 FAKEGPU_CLUSTER_REPORT_PATH=/path/to/cluster-report.json
+FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH=/path/to/project-communication.md
 FAKEGPU_REPORT_PATH=/path/to/fake_gpu_report.json
 ```
 

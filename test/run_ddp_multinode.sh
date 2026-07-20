@@ -113,6 +113,7 @@ python3 "$PROJECT_ROOT/verification/check_cluster_report.py" \
     --expect-collective all_reduce \
     --expect-collective broadcast \
     --expect-links \
+    --expect-markdown \
     --min-ranks "$NPROC"
 CHECK_REPORT_EXIT="$?"
 set -e
@@ -148,6 +149,11 @@ for rank in range(nproc):
 cluster_report = None
 if cluster_report_path.exists():
     cluster_report = json.loads(cluster_report_path.read_text(encoding="utf-8"))
+cluster_markdown_report = (
+    cluster_report.get("cluster", {}).get("markdown_report_path")
+    if cluster_report
+    else None
+)
 
 all_success = (
     torchrun_exit == 0
@@ -166,6 +172,7 @@ lines = [
     f"- `torchrun_log`: `{run_log}`",
     f"- `coordinator_log`: `{coord_log}`",
     f"- `cluster_report`: `{cluster_report_path}`",
+    f"- `cluster_communication_report`: `{cluster_markdown_report}`",
 ]
 
 lines.extend([
@@ -207,6 +214,7 @@ else:
     cluster = cluster_report.get("cluster", {})
     collectives = cluster_report.get("collectives", {})
     links = cluster_report.get("links", [])
+    node_pairs = cluster_report.get("node_pairs", [])
     lines.append(
         f"- world_size={cluster.get('world_size')} node_count={cluster.get('node_count')} "
         f"communicators={cluster.get('communicators')}"
@@ -215,6 +223,40 @@ else:
         stats = collectives.get(name, {})
         lines.append(f"- {name}: calls={stats.get('calls')} bytes={stats.get('bytes')}")
     lines.append(f"- links: {len(links)}")
+    lines.extend([
+        "",
+        "## Complete Node-Pair Communication",
+        "",
+        "| Node A | Node B | A → B total (B) | B → A total (B) | Combined total (B) | "
+        "A → B peak/op (B) | B → A peak/op (B) | Pair peak/op (B) | Operations | "
+        "Transfers | Avg est. Gbit/s | Peak est. Gbit/s |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ])
+    for pair in node_pairs:
+        a_to_b = pair.get("a_to_b", {})
+        b_to_a = pair.get("b_to_a", {})
+        lines.append(
+            f"| `{pair.get('node_a')}` | `{pair.get('node_b')}` "
+            f"| {a_to_b.get('total_bytes', 0)} "
+            f"| {b_to_a.get('total_bytes', 0)} "
+            f"| {pair.get('total_bytes', 0)} "
+            f"| {a_to_b.get('peak_bytes_per_operation', 0)} "
+            f"| {b_to_a.get('peak_bytes_per_operation', 0)} "
+            f"| {pair.get('peak_combined_bytes_per_operation', 0)} "
+            f"| {pair.get('operations', 0)} "
+            f"| {a_to_b.get('transfers', 0) + b_to_a.get('transfers', 0)} "
+            f"| {pair.get('average_estimated_throughput_gbps', 0)} "
+            f"| {pair.get('peak_estimated_throughput_gbps', 0)} |"
+        )
+    if not node_pairs:
+        lines.append(
+            "| _No distinct node pairs_ |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |"
+        )
+    lines.extend([
+        "",
+        "Peak and throughput values are topology-model estimates; they are not "
+        "measured NIC or NCCL counters.",
+    ])
 
 lines.extend([
     "",

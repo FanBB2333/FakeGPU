@@ -454,6 +454,7 @@ def main() -> int:
                     "--expect-collective",
                     "all_reduce",
                     "--expect-links",
+                    "--expect-markdown",
                     "--min-ranks",
                     "2",
                 ],

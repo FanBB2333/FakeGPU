@@ -52,6 +52,7 @@ For `torchrun`-based validation you also need:
 | `FAKEGPU_COORDINATOR_ADDR` | Absolute socket path or `host:port` |
 | `FAKEGPU_COORDINATOR_TIMEOUT_MS` | Rank rendezvous and operation timeout (default: `1000`) |
 | `FAKEGPU_CLUSTER_REPORT_PATH` | Cluster report output path |
+| `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` | Optional Markdown project-report path; defaults beside the JSON report |
 | `FAKEGPU_STAGING_CHUNK_BYTES` | Chunk size threshold for staged transfers |
 | `FAKEGPU_STAGING_FORCE_SOCKET` | Force socket fallback instead of shared memory |
 | `FAKEGPU_DEVICE_COUNT` | Number of exposed fake devices |
@@ -94,7 +95,8 @@ development network:
 python3 -m fakegpu coordinator \
   --listen 0.0.0.0:29591 \
   --cluster-config verification/data/cluster_tcp_2r.yaml \
-  --report /tmp/fakegpu-cluster.json
+  --report /tmp/fakegpu-cluster.json \
+  --markdown-report /tmp/fakegpu-project-communication.md
 ```
 
 The bundled topology assigns rank 0 to `rtx-pro-5000-blackwell` and rank 1 to
@@ -279,6 +281,7 @@ FAKEGPU_CLUSTER_CONFIG="$CLUSTER_CONFIG" \
 FAKEGPU_COORDINATOR_TRANSPORT=unix \
 FAKEGPU_COORDINATOR_ADDR="$SOCKET_PATH" \
 FAKEGPU_CLUSTER_REPORT_PATH=/tmp/fakegpu-cluster-report.json \
+FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH=/tmp/fakegpu-project-communication.md \
 ./build/fakegpu-coordinator --transport unix --address "$SOCKET_PATH"
 ```
 
@@ -293,6 +296,7 @@ FAKEGPU_CLUSTER_CONFIG="$CLUSTER_CONFIG" \
 FAKEGPU_COORDINATOR_TRANSPORT=tcp \
 FAKEGPU_COORDINATOR_ADDR="$COORD_ADDR" \
 FAKEGPU_CLUSTER_REPORT_PATH=/tmp/fakegpu-cluster-report.json \
+FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH=/tmp/fakegpu-project-communication.md \
 ./build/fakegpu-coordinator --transport tcp --address "$COORD_ADDR"
 ```
 
@@ -332,7 +336,12 @@ When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeG
 - world-size and coordinator metadata
 - per-collective call counts, bytes, and estimated time
 - intra-node and inter-node link statistics
+- every distinct node pair, with directional totals, combined total, per-operation peak payload, transfer count, and modeled average/peak throughput
 - per-rank wait time, timeouts, and communicator-init counts
+
+The JSON path also produces a sibling `.md` report by default. Use
+`FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` or coordinator
+`--markdown-report` to choose the final project-report path.
 
 ## Common failure cases
 

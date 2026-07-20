@@ -1,4 +1,5 @@
 #include "../src/distributed/cluster_coordinator.hpp"
+#include "../src/distributed/cluster_report_writer.hpp"
 #include "../src/monitor/monitor.hpp"
 #include "../src/nccl/nccl_defs.hpp"
 
@@ -42,6 +43,30 @@ void require_result(ncclResult_t actual, ncclResult_t expected, const std::strin
             message + ": expected " + ncclGetErrorString(expected) +
             ", got " + ncclGetErrorString(actual));
     }
+}
+
+void dump_reports() {
+    fake_gpu::dump_monitor_report();
+
+    const char* report_path = std::getenv("FAKEGPU_CLUSTER_REPORT_PATH");
+    if (!report_path || !*report_path) {
+        return;
+    }
+    fake_gpu::distributed::DistributedConfig config =
+        fake_gpu::distributed::parse_distributed_config_from_env();
+    if (config.mode == fake_gpu::distributed::DistributedMode::Disabled) {
+        config.mode = fake_gpu::distributed::DistributedMode::Simulate;
+    }
+    const fake_gpu::distributed::ClusterReportSnapshot snapshot =
+        fake_gpu::distributed::snapshot_cluster_report();
+    std::string error;
+    require(
+        fake_gpu::distributed::write_cluster_report_files(
+            config,
+            snapshot,
+            report_path,
+            error),
+        "failed to write direct collective cluster report: " + error);
 }
 
 class CoordinatorFixture {
@@ -1145,55 +1170,55 @@ int main(int argc, char** argv) {
 
         if (scenario == "allreduce") {
             run_allreduce_scenario();
-            fake_gpu::dump_monitor_report();
+            dump_reports();
             std::cout << "allreduce scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "broadcast") {
             run_broadcast_scenario();
-            fake_gpu::dump_monitor_report();
+            dump_reports();
             std::cout << "broadcast scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "reduce") {
             run_reduce_scenario();
-            fake_gpu::dump_monitor_report();
+            dump_reports();
             std::cout << "reduce scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "allgather") {
             run_allgather_scenario();
-            fake_gpu::dump_monitor_report();
+            dump_reports();
             std::cout << "allgather scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "reducescatter") {
             run_reducescatter_scenario();
-            fake_gpu::dump_monitor_report();
+            dump_reports();
             std::cout << "reducescatter scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "alltoall") {
             run_alltoall_scenario();
-            fake_gpu::dump_monitor_report();
+            dump_reports();
             std::cout << "alltoall scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "chunked") {
             run_chunked_scenario();
-            fake_gpu::dump_monitor_report();
+            dump_reports();
             std::cout << "chunked scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "mismatch") {
             run_mismatch_scenario();
-            fake_gpu::dump_monitor_report();
+            dump_reports();
             std::cout << "mismatch scenario passed" << std::endl;
             return 0;
         }
         if (scenario == "timeout") {
             run_timeout_case();
-            fake_gpu::dump_monitor_report();
+            dump_reports();
             std::cout << "timeout scenario passed" << std::endl;
             return 0;
         }

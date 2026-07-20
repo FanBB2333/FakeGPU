@@ -224,6 +224,7 @@ def _coordinator_env(
     endpoint: str,
     cluster_config: Path | None,
     cluster_report: Path | None,
+    cluster_markdown_report: Path | None = None,
 ) -> dict[str, str]:
     env = dict(os.environ)
     _clean_native_injection(env)
@@ -244,6 +245,13 @@ def _coordinator_env(
         env["FAKEGPU_CLUSTER_REPORT_PATH"] = str(cluster_report.resolve())
     else:
         env.pop("FAKEGPU_CLUSTER_REPORT_PATH", None)
+    if cluster_markdown_report is not None:
+        cluster_markdown_report.parent.mkdir(parents=True, exist_ok=True)
+        env["FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH"] = str(
+            cluster_markdown_report.resolve()
+        )
+    else:
+        env.pop("FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH", None)
     return env
 
 
@@ -270,15 +278,31 @@ def coordinator_main(argv: Sequence[str] | None = None) -> int:
         help="Ask a TCP coordinator to write its report and stop.",
     )
     parser.add_argument("--cluster-config", type=Path)
-    parser.add_argument("--report", type=Path, help="Write the cluster report on shutdown.")
+    parser.add_argument(
+        "--report",
+        type=Path,
+        help="Write JSON and a sibling Markdown cluster report on shutdown.",
+    )
+    parser.add_argument(
+        "--markdown-report",
+        type=Path,
+        help="Override the Markdown companion path; requires --report.",
+    )
     parser.add_argument("--build-dir")
     parser.add_argument("--lib-dir")
     args = parser.parse_args(argv)
 
     try:
         if args.ping or args.shutdown:
-            if args.cluster_config is not None or args.report is not None:
-                parser.error("--cluster-config/--report are only valid with --listen")
+            if (
+                args.cluster_config is not None
+                or args.report is not None
+                or args.markdown_report is not None
+            ):
+                parser.error(
+                    "--cluster-config/--report/--markdown-report are only "
+                    "valid with --listen"
+                )
             endpoint = args.ping or args.shutdown
             assert endpoint is not None
             parse_tcp_endpoint(endpoint)
@@ -293,12 +317,15 @@ def coordinator_main(argv: Sequence[str] | None = None) -> int:
         parse_tcp_endpoint(args.listen)
         if args.cluster_config is not None and not args.cluster_config.is_file():
             parser.error(f"cluster config does not exist: {args.cluster_config}")
+        if args.markdown_report is not None and args.report is None:
+            parser.error("--markdown-report requires --report")
         native_dir = library_dir(build_dir=args.build_dir, lib_dir=args.lib_dir)
         coordinator = _coordinator_binary_path(native_dir)
         env = _coordinator_env(
             endpoint=args.listen,
             cluster_config=args.cluster_config,
             cluster_report=args.report,
+            cluster_markdown_report=args.markdown_report,
         )
         os.execve(
             str(coordinator),
@@ -552,6 +579,14 @@ def _print_bandwidth_summary(report: dict[str, Any]) -> None:
                 f"  rank {rank_report['rank']} algorithmic bandwidth: "
                 f"{rank_report['algorithmic_bandwidth_gbps']:.3f} Gbit/s"
             )
+    cluster_report = report.get("cluster_report")
+    if isinstance(cluster_report, dict):
+        cluster = cluster_report.get("cluster")
+        if isinstance(cluster, dict) and cluster.get("markdown_report_path"):
+            print(
+                "  cluster communication report: "
+                f"{cluster['markdown_report_path']}"
+            )
     print("  note: value includes coordinator reduction and memory-copy overhead")
 
 
@@ -595,6 +630,11 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cluster-config", type=Path)
     parser.add_argument("--cluster-report", type=Path)
     parser.add_argument(
+        "--cluster-markdown-report",
+        type=Path,
+        help="Override the companion Markdown report path.",
+    )
+    parser.add_argument(
         "--interconnect-bandwidth-gbps",
         type=float,
         default=25.0,
@@ -628,6 +668,21 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
             parser.error("--interconnect-latency-us must be non-negative")
         if args.cluster_config is not None and not args.cluster_config.is_file():
             parser.error(f"cluster config does not exist: {args.cluster_config}")
+        if (
+            args.cluster_markdown_report is not None
+            and args.cluster_report is None
+        ):
+            parser.error(
+                "--cluster-markdown-report requires --cluster-report"
+            )
+        if args.connect and (
+            args.cluster_report is not None
+            or args.cluster_markdown_report is not None
+        ):
+            parser.error(
+                "--cluster-report/--cluster-markdown-report are only valid "
+                "with --listen because the coordinator writes cluster reports"
+            )
 
         native_dir = library_dir(build_dir=args.build_dir, lib_dir=args.lib_dir)
         nccl_lib = _nccl_library_path(native_dir)
@@ -679,6 +734,9 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
                         endpoint=args.listen,
                         cluster_config=cluster_config,
                         cluster_report=cluster_report_path,
+                        cluster_markdown_report=(
+                            args.cluster_markdown_report
+                        ),
                     ),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,

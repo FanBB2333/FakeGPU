@@ -114,6 +114,7 @@ struct RegistryImpl {
         ClusterCollectiveReportStats all_to_all;
         ClusterCollectiveReportStats barrier;
         std::unordered_map<std::string, ClusterLinkReportStats> links;
+        std::unordered_map<std::string, ClusterNodePairReportStats> node_pairs;
         std::unordered_map<int, ClusterRankReportStats> ranks;
     } report;
 };
@@ -272,11 +273,21 @@ void record_collective_completion_locked(
 
     stats.estimated_time_us_total += estimate.estimated_time_us;
 
+    struct PairOperationAccumulator {
+        std::uint64_t bytes = 0;
+        double estimated_time_us = 0.0;
+    };
+    std::unordered_map<std::string, PairOperationAccumulator> pair_operations;
+
     for (const TopologyLinkEstimate& link : estimate.links) {
         const double transfer_without_penalty_us =
             (static_cast<double>(link.bytes) * 8.0) / (link.bandwidth_gbps * 1000.0);
         const double contention_penalty_us =
             transfer_without_penalty_us * std::max(0.0, link.oversubscription - 1.0);
+        const double estimated_throughput_gbps = link.estimated_time_us > 0.0
+            ? (static_cast<double>(link.bytes) * 8.0) /
+                  (link.estimated_time_us * 1000.0)
+            : 0.0;
 
         stats.contention_penalty_us_total += contention_penalty_us;
 
@@ -292,12 +303,76 @@ void record_collective_completion_locked(
         }
         link_stats.samples += link.hop_count;
         link_stats.bytes += link.bytes;
+        link_stats.peak_bytes_per_operation =
+            std::max(link_stats.peak_bytes_per_operation, link.bytes);
         link_stats.avg_latency_us =
             ((link_stats.avg_latency_us * static_cast<double>(link_stats.samples - link.hop_count)) +
              (link.latency_us * static_cast<double>(link.hop_count))) /
             static_cast<double>(link_stats.samples);
         link_stats.estimated_time_us_total += link.estimated_time_us;
         link_stats.contention_penalty_us_total += contention_penalty_us;
+        link_stats.peak_estimated_throughput_gbps =
+            std::max(
+                link_stats.peak_estimated_throughput_gbps,
+                estimated_throughput_gbps);
+
+        if (link.src_node == link.dst_node) {
+            continue;
+        }
+
+        const bool source_is_a = link.src_node < link.dst_node;
+        const std::string& node_a = source_is_a ? link.src_node : link.dst_node;
+        const std::string& node_b = source_is_a ? link.dst_node : link.src_node;
+        const std::string pair_key = node_a + "\n" + node_b;
+        auto [pair_it, pair_inserted] =
+            registry.report.node_pairs.emplace(pair_key, ClusterNodePairReportStats{});
+        ClusterNodePairReportStats& pair_stats = pair_it->second;
+        if (pair_inserted) {
+            pair_stats.node_a = node_a;
+            pair_stats.node_b = node_b;
+        }
+
+        ClusterNodePairDirectionReportStats& direction =
+            source_is_a ? pair_stats.a_to_b : pair_stats.b_to_a;
+        const std::uint64_t previous_transfers = direction.transfers;
+        direction.transfers += link.hop_count;
+        direction.bytes += link.bytes;
+        direction.peak_bytes_per_operation =
+            std::max(direction.peak_bytes_per_operation, link.bytes);
+        direction.model_bandwidth_gbps = link.bandwidth_gbps;
+        direction.avg_latency_us =
+            ((direction.avg_latency_us * static_cast<double>(previous_transfers)) +
+             (link.latency_us * static_cast<double>(link.hop_count))) /
+            static_cast<double>(direction.transfers);
+        direction.estimated_time_us_total += link.estimated_time_us;
+        direction.contention_penalty_us_total += contention_penalty_us;
+        direction.peak_estimated_throughput_gbps =
+            std::max(
+                direction.peak_estimated_throughput_gbps,
+                estimated_throughput_gbps);
+
+        PairOperationAccumulator& operation = pair_operations[pair_key];
+        operation.bytes += link.bytes;
+        operation.estimated_time_us += link.estimated_time_us;
+    }
+
+    for (const auto& entry : pair_operations) {
+        ClusterNodePairReportStats& pair_stats =
+            registry.report.node_pairs.at(entry.first);
+        const PairOperationAccumulator& operation = entry.second;
+        pair_stats.operations++;
+        pair_stats.peak_combined_bytes_per_operation =
+            std::max(
+                pair_stats.peak_combined_bytes_per_operation,
+                operation.bytes);
+        const double throughput_gbps = operation.estimated_time_us > 0.0
+            ? (static_cast<double>(operation.bytes) * 8.0) /
+                  (operation.estimated_time_us * 1000.0)
+            : 0.0;
+        pair_stats.peak_estimated_throughput_gbps =
+            std::max(
+                pair_stats.peak_estimated_throughput_gbps,
+                throughput_gbps);
     }
 }
 
@@ -1668,10 +1743,14 @@ ClusterReportSnapshot snapshot_cluster_report() {
     snapshot.all_to_all = registry.report.all_to_all;
     snapshot.barrier = registry.report.barrier;
     snapshot.links.reserve(registry.report.links.size());
+    snapshot.node_pairs.reserve(registry.report.node_pairs.size());
     snapshot.ranks.reserve(registry.report.ranks.size());
 
     for (const auto& entry : registry.report.links) {
         snapshot.links.push_back(entry.second);
+    }
+    for (const auto& entry : registry.report.node_pairs) {
+        snapshot.node_pairs.push_back(entry.second);
     }
     for (const auto& entry : registry.report.ranks) {
         snapshot.ranks.push_back(entry.second);
@@ -1687,6 +1766,15 @@ ClusterReportSnapshot snapshot_cluster_report() {
                 return lhs.dst_node < rhs.dst_node;
             }
             return lhs.scope < rhs.scope;
+        });
+    std::sort(
+        snapshot.node_pairs.begin(),
+        snapshot.node_pairs.end(),
+        [](const ClusterNodePairReportStats& lhs, const ClusterNodePairReportStats& rhs) {
+            if (lhs.node_a != rhs.node_a) {
+                return lhs.node_a < rhs.node_a;
+            }
+            return lhs.node_b < rhs.node_b;
         });
     std::sort(
         snapshot.ranks.begin(),
@@ -1705,6 +1793,7 @@ ClusterReportSnapshot snapshot_cluster_report() {
         snapshot.all_to_all.calls > 0 ||
         snapshot.barrier.calls > 0 ||
         !snapshot.links.empty() ||
+        !snapshot.node_pairs.empty() ||
         !snapshot.ranks.empty();
     return snapshot;
 }

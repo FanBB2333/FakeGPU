@@ -42,6 +42,38 @@ def _require_counter(obj: dict, key: str, *, ctx: str) -> dict:
     return value
 
 
+def _require_non_negative_number(obj: dict, key: str, *, ctx: str) -> float:
+    value = _require(obj, key, ctx=ctx)
+    if not isinstance(value, (int, float)) or value < 0:
+        _die(f"{ctx}.{key} must be a non-negative number")
+    return float(value)
+
+
+def _require_non_negative_integer(obj: dict, key: str, *, ctx: str) -> int:
+    value = _require(obj, key, ctx=ctx)
+    if not isinstance(value, int) or value < 0:
+        _die(f"{ctx}.{key} must be a non-negative integer")
+    return value
+
+
+def _validate_pair_direction(obj: object, *, ctx: str) -> dict:
+    if not isinstance(obj, dict):
+        _die(f"{ctx} must be an object")
+    _require_non_negative_integer(obj, "transfers", ctx=ctx)
+    _require_non_negative_integer(obj, "total_bytes", ctx=ctx)
+    _require_non_negative_integer(obj, "peak_bytes_per_operation", ctx=ctx)
+    for key in (
+        "model_bandwidth_gbps",
+        "avg_latency_us",
+        "estimated_time_us_total",
+        "contention_penalty_us_total",
+        "average_estimated_throughput_gbps",
+        "peak_estimated_throughput_gbps",
+    ):
+        _require_non_negative_number(obj, key, ctx=ctx)
+    return obj
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate FakeGPU cluster report schema")
     ap.add_argument("--path", default="fake_gpu_cluster_report.json", help="Path to fake_gpu_cluster_report.json")
@@ -55,6 +87,11 @@ def main() -> int:
         help="Require the named collective to have calls > 0 (repeatable)",
     )
     ap.add_argument("--expect-links", action="store_true", help="Require non-empty link statistics")
+    ap.add_argument(
+        "--expect-markdown",
+        action="store_true",
+        help="Require the companion Markdown report and node-pair table",
+    )
     ap.add_argument("--min-ranks", type=int, default=1, help="Minimum number of rank entries expected")
     args = ap.parse_args()
 
@@ -122,10 +159,21 @@ def main() -> int:
             scope = _require(link, "scope", ctx=ctx)
             samples = _require(link, "samples", ctx=ctx)
             bytes_value = _require(link, "bytes", ctx=ctx)
+            peak_bytes = _require(link, "peak_bytes_per_operation", ctx=ctx)
             bandwidth = _require(link, "bandwidth_gbps", ctx=ctx)
             avg_latency = _require(link, "avg_latency_us", ctx=ctx)
             estimated_time = _require(link, "estimated_time_us_total", ctx=ctx)
             contention_penalty = _require(link, "contention_penalty_us_total", ctx=ctx)
+            average_throughput = _require(
+                link,
+                "average_estimated_throughput_gbps",
+                ctx=ctx,
+            )
+            peak_throughput = _require(
+                link,
+                "peak_estimated_throughput_gbps",
+                ctx=ctx,
+            )
 
             if not isinstance(src, str) or not src:
                 _die(f"{ctx}.src must be a non-empty string")
@@ -137,14 +185,132 @@ def main() -> int:
                 _die(f"{ctx}.samples must be a positive integer")
             if not isinstance(bytes_value, int) or bytes_value < 0:
                 _die(f"{ctx}.bytes must be a non-negative integer")
+            if not isinstance(peak_bytes, int) or peak_bytes < 0:
+                _die(f"{ctx}.peak_bytes_per_operation must be a non-negative integer")
             for field_name, field_value in (
                 ("bandwidth_gbps", bandwidth),
                 ("avg_latency_us", avg_latency),
                 ("estimated_time_us_total", estimated_time),
                 ("contention_penalty_us_total", contention_penalty),
+                (
+                    "average_estimated_throughput_gbps",
+                    average_throughput,
+                ),
+                ("peak_estimated_throughput_gbps", peak_throughput),
             ):
                 if not isinstance(field_value, (int, float)) or field_value < 0:
                     _die(f"{ctx}.{field_name} must be a non-negative number")
+
+    node_pairs = _require(report, "node_pairs", ctx="root")
+    if not isinstance(node_pairs, list):
+        _die("node_pairs must be an array")
+    expected_pair_count = node_count * (node_count - 1) // 2
+    if len(node_pairs) != expected_pair_count:
+        _die(
+            f"node_pairs must contain every distinct node pair: "
+            f"expected {expected_pair_count}, got {len(node_pairs)}"
+        )
+
+    seen_pairs: set[tuple[str, str]] = set()
+    for index, pair in enumerate(node_pairs):
+        ctx = f"node_pairs[{index}]"
+        if not isinstance(pair, dict):
+            _die(f"{ctx} must be an object")
+        node_a = _require(pair, "node_a", ctx=ctx)
+        node_b = _require(pair, "node_b", ctx=ctx)
+        scope = _require(pair, "scope", ctx=ctx)
+        if not isinstance(node_a, str) or not node_a:
+            _die(f"{ctx}.node_a must be a non-empty string")
+        if not isinstance(node_b, str) or not node_b:
+            _die(f"{ctx}.node_b must be a non-empty string")
+        if node_a >= node_b:
+            _die(f"{ctx} node names must be ordered and distinct")
+        if scope != "inter_node":
+            _die(f"{ctx}.scope must be inter_node")
+        pair_key = (node_a, node_b)
+        if pair_key in seen_pairs:
+            _die(f"duplicate node pair: {node_a}, {node_b}")
+        seen_pairs.add(pair_key)
+
+        _require_non_negative_integer(pair, "operations", ctx=ctx)
+        a_to_b = _validate_pair_direction(
+            _require(pair, "a_to_b", ctx=ctx),
+            ctx=f"{ctx}.a_to_b",
+        )
+        b_to_a = _validate_pair_direction(
+            _require(pair, "b_to_a", ctx=ctx),
+            ctx=f"{ctx}.b_to_a",
+        )
+        total_bytes = _require_non_negative_integer(pair, "total_bytes", ctx=ctx)
+        peak_combined = _require_non_negative_integer(
+            pair,
+            "peak_combined_bytes_per_operation",
+            ctx=ctx,
+        )
+        estimated_time = _require_non_negative_number(
+            pair,
+            "estimated_time_us_total",
+            ctx=ctx,
+        )
+        contention_penalty = _require_non_negative_number(
+            pair,
+            "contention_penalty_us_total",
+            ctx=ctx,
+        )
+        _require_non_negative_number(
+            pair,
+            "average_estimated_throughput_gbps",
+            ctx=ctx,
+        )
+        _require_non_negative_number(
+            pair,
+            "peak_estimated_throughput_gbps",
+            ctx=ctx,
+        )
+
+        expected_total = int(a_to_b["total_bytes"]) + int(b_to_a["total_bytes"])
+        if total_bytes != expected_total:
+            _die(f"{ctx}.total_bytes must equal both directional totals")
+        if peak_combined < max(
+            int(a_to_b["peak_bytes_per_operation"]),
+            int(b_to_a["peak_bytes_per_operation"]),
+        ):
+            _die(f"{ctx}.peak_combined_bytes_per_operation is inconsistent")
+        expected_time = float(a_to_b["estimated_time_us_total"]) + float(
+            b_to_a["estimated_time_us_total"]
+        )
+        if abs(estimated_time - expected_time) > 0.002:
+            _die(f"{ctx}.estimated_time_us_total is inconsistent")
+        expected_penalty = float(a_to_b["contention_penalty_us_total"]) + float(
+            b_to_a["contention_penalty_us_total"]
+        )
+        if abs(contention_penalty - expected_penalty) > 0.002:
+            _die(f"{ctx}.contention_penalty_us_total is inconsistent")
+
+    if args.expect_markdown:
+        markdown_value = _require(
+            cluster,
+            "markdown_report_path",
+            ctx="cluster",
+        )
+        if not isinstance(markdown_value, str) or not markdown_value:
+            _die("cluster.markdown_report_path must be a non-empty string")
+        markdown_path = Path(markdown_value)
+        if not markdown_path.is_absolute() and not markdown_path.is_file():
+            markdown_path = path.parent / markdown_path
+        if not markdown_path.is_file():
+            _die(f"Markdown report file not found: {markdown_path}")
+        markdown = markdown_path.read_text(encoding="utf-8")
+        for required_text in (
+            "# FakeGPU Cluster Communication Report",
+            "## Node-Pair Communication",
+            "| Node A | Node B |",
+        ):
+            if required_text not in markdown:
+                _die(
+                    f"Markdown report is missing required content: "
+                    f"{required_text!r}"
+                )
 
     ranks = _require(report, "ranks", ctx="root")
     if not isinstance(ranks, list) or len(ranks) < args.min_ranks:

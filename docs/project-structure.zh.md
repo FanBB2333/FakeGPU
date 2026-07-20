@@ -41,7 +41,7 @@
 ### 7. 监控与报告
 
 - `src/monitor/monitor.cpp` 会在退出时写出 `fake_gpu_report.json`。
-- 如果开启分布式并设置了 `FAKEGPU_CLUSTER_REPORT_PATH`，还会再写一份 cluster 级通信报告。
+- 开启分布式并设置 `FAKEGPU_CLUSTER_REPORT_PATH` 后，会生成 cluster JSON，以及包含 collective、完整节点对、链路和 rank 统计表的 Markdown 报告。
 
 ### 8. Python torch patch 层
 
