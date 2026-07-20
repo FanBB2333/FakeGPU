@@ -4,6 +4,7 @@
 #include "../core/global_state.hpp"
 #include "../cuda/cudart_defs.hpp"
 
+#include <cstdint>
 #include <dlfcn.h>
 #include <cstring>
 #include <string>
@@ -14,8 +15,24 @@ namespace fake_gpu::nccl {
 namespace {
 
 using cudaMemcpy_fn = cudaError_t (*)(void*, const void*, size_t, cudaMemcpyKind);
-using cudaPointerGetAttributes_fn = cudaError_t (*)(cudaPointerAttributes*, const void*);
+using cudaPointerGetAttributes_fn = cudaError_t (*)(void*, const void*);
 using cudaGetErrorString_fn = const char* (*)(cudaError_t);
+
+// CUDA 13 extended cudaPointerAttributes with reserved[8], increasing its
+// Linux ABI size from 32 to 96 bytes. FakeGPU builds without CUDA headers, so
+// use an intentionally oversized private buffer when calling the physical
+// Runtime. The stable prefix remains readable on CUDA 12 and CUDA 13.
+struct RuntimeCudaPointerAttributes {
+    cudaMemoryType type = cudaMemoryTypeUnregistered;
+    int device = -1;
+    void* device_pointer = nullptr;
+    void* host_pointer = nullptr;
+    std::uint64_t reserved[16] {};
+};
+
+static_assert(
+    sizeof(RuntimeCudaPointerAttributes) >= 96,
+    "runtime pointer-attribute storage must cover the CUDA 13 ABI");
 
 struct RuntimeCudaApi {
     cudaMemcpy_fn memcpy_fn = nullptr;
@@ -42,7 +59,7 @@ bool is_runtime_device_pointer(const void* ptr) {
         return false;
     }
 
-    cudaPointerAttributes attributes {};
+    RuntimeCudaPointerAttributes attributes {};
     const cudaError_t result = api.pointer_get_attributes_fn(&attributes, ptr);
     if (result != cudaSuccess) {
         return false;

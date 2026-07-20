@@ -26,6 +26,7 @@
 - Included profile YAML and NVIDIA catalog data in built wheels.
 - Removed fake NCCL's hard dependency on the FakeGPU CUDA Driver, allowing simulated communication to coexist with a process that uses the physical CUDA Driver.
 - Kept macOS collective shared-memory names within Darwin's 31-character POSIX limit.
+- Sized hybrid NCCL pointer-attribute storage for both CUDA 12 and CUDA 13 Runtime ABIs.
 
 ## v1.5.2 - 2026-07-20
 
