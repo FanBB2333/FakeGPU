@@ -11,6 +11,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = ROOT / "build"
+sys.path.insert(0, str(ROOT))
+
+from fakegpu import __version__  # noqa: E402
 
 
 def run(cmd: list[str], *, env: dict[str, str] | None = None, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
@@ -54,7 +57,7 @@ def main() -> None:
     completed = run([sys.executable, "test/test_cuda_direct.py"], env=env)
 
     report = json.loads(Path(report_path).read_text(encoding="utf-8"))
-    assert report.get("report_version") == "1.5.0", report
+    assert report.get("report_version") == __version__, report
 
     devices = report.get("devices")
     assert isinstance(devices, list) and devices, report

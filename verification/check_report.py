@@ -35,7 +35,7 @@ def main() -> int:
 
     version = report.get("report_version")
     if not isinstance(version, str):
-        _die(f"unexpected report_version={version!r} (expected string like '1.5.0')")
+        _die(f"unexpected report_version={version!r} (expected a version string)")
 
     host_io = _require(report, "host_io", ctx="root")
     if not isinstance(host_io, dict):
@@ -106,4 +106,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
