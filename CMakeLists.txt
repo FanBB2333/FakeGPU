@@ -192,7 +192,6 @@ add_library(fake_nccl SHARED
 )
 fakegpu_link_common_system_libs(fake_nccl)
 target_include_directories(fake_nccl PRIVATE src/nccl src/core src/distributed)
-target_link_libraries(fake_nccl PRIVATE fake_cuda)
 
 # Platform specific flags
 if(APPLE)

@@ -49,6 +49,7 @@ cmake --build build -j4
 | `FAKEGPU_CLUSTER_CONFIG` | cluster YAML 路径 |
 | `FAKEGPU_COORDINATOR_TRANSPORT` | `unix` 或 `tcp` |
 | `FAKEGPU_COORDINATOR_ADDR` | 绝对 socket 路径或 `host:port` |
+| `FAKEGPU_COORDINATOR_TIMEOUT_MS` | rank 汇合及操作等待时间，默认 `1000` 毫秒 |
 | `FAKEGPU_CLUSTER_REPORT_PATH` | cluster 报告输出路径 |
 | `FAKEGPU_STAGING_CHUNK_BYTES` | staging chunk 阈值 |
 | `FAKEGPU_STAGING_FORCE_SOCKET` | 强制跳过 shared memory，直接验证 socket fallback |
@@ -59,6 +60,72 @@ cmake --build build -j4
 ```bash
 ./fgpu --mode simulate --dist-mode simulate --cluster-config ... --coordinator-transport unix --coordinator-addr ...
 ```
+
+## TCP 多节点模拟与带宽测试
+
+下面的命令会监听指定的本地端口，创建两个逻辑节点，每个节点启动一个
+rank，并让 all-reduce 的数据经过 TCP：
+
+```bash
+python3 -m fakegpu bandwidth \
+  --listen 127.0.0.1:29591 \
+  --nodes 2 \
+  --ranks-per-node 1 \
+  --size 4MiB \
+  --warmup 2 \
+  --iterations 10 \
+  --json /tmp/fakegpu-bandwidth.json \
+  --cluster-report /tmp/fakegpu-cluster.json
+```
+
+coordinator 使用 TCP 时，FakeGPU 会用 socket payload 传输 collective
+的输入和输出，不再依赖 POSIX shared memory。因此，同一套通信路径也能
+用于两台物理主机。命令输出的是端到端吞吐率，其中包含 TCP 传输、
+coordinator reduction、内存复制和进程调度。cluster YAML 中的
+`bandwidth_gbps` 是拓扑模型参数，两者会分开报告。
+
+要在两台物理主机之间测试，先在可信的开发网络中启动 coordinator：
+
+```bash
+python3 -m fakegpu coordinator \
+  --listen 0.0.0.0:29591 \
+  --cluster-config verification/data/cluster_tcp_2r.yaml \
+  --report /tmp/fakegpu-cluster.json
+```
+
+仓库中的这份拓扑把 rank 0 配置为 `rtx-pro-5000-blackwell`，rank 1
+配置为 `rtx3090ti`。其中的 TCP fabric 数值只是模型输入；可以按计划使用的
+网络单独修改，不会改变实测结果。
+
+然后在两台主机上同时执行 rank 命令。两边的 endpoint 和 `--session`
+必须相同：
+
+```bash
+# 主机 A
+python3 -m fakegpu bandwidth \
+  --connect coordinator-host:29591 \
+  --world-size 2 \
+  --ranks 0 \
+  --session test-2026-07-20 \
+  --size 16MiB
+
+# 主机 B
+python3 -m fakegpu bandwidth \
+  --connect coordinator-host:29591 \
+  --world-size 2 \
+  --ranks 1 \
+  --session test-2026-07-20 \
+  --size 16MiB
+```
+
+两个 rank 完成后停止 coordinator：
+
+```bash
+python3 -m fakegpu coordinator --shutdown coordinator-host:29591
+```
+
+coordinator 协议目前没有认证。请绑定到 loopback、Tailscale 或其他可信
+接口，不要直接暴露到公网。
 
 ## 最小 cluster config
 
@@ -113,6 +180,7 @@ python3 verification/test_coordinator_smoke.py
 python3 test/test_allreduce_correctness.py
 python3 verification/test_allgather_correctness.py
 python3 verification/test_group_semantics.py
+./ftest tcp_bandwidth
 ./test/run_hybrid_multinode.sh 2
 ```
 
@@ -133,8 +201,13 @@ python3 verification/test_group_semantics.py
 6. `./test/run_multinode_sim.sh 4`
 7. `./test/run_ddp_multinode.sh 4`
 8. `./test/run_hybrid_multinode.sh 2`
+9. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_ddp_numerics.py`
 
 上面的 DDP 脚本已经属于当前维护中的 simulate-mode 验证集。它们提供的是 ProcessGroupNCCL 的 smoke / 控制流覆盖，并不意味着已经达到真实 NCCL 的完整数值或协议等价。
+
+最后一项真实 CUDA 检查的范围较窄，但会验证数值：两个 rank 共用一张
+物理卡，fake NCCL 对已知的非零梯度求平均，随后检查 optimizer 更新结果
+以及两个 rank 收集到的参数是否一致。
 
 ## 手动启动 coordinator
 
@@ -208,5 +281,7 @@ export LD_PRELOAD="$PWD/build/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
 
 - 在非 `passthrough` 模式下没设置 `FAKEGPU_COORDINATOR_ADDR`
 - 运行时环境里的 rank / world size 和 cluster config 对不上
+- 两台主机使用了不同的 `--session`、`--size` 或 `--iterations`
+- 防火墙拦截了选定的 TCP coordinator 端口
 - 分布式路径忘了 preload `libnccl.so.2`
 - 还没把基础 `simulate + simulate` 跑通就直接尝试 `proxy` 或 `passthrough`

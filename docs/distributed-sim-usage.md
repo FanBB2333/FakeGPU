@@ -49,6 +49,7 @@ For `torchrun`-based validation you also need:
 | `FAKEGPU_CLUSTER_CONFIG` | Cluster YAML path |
 | `FAKEGPU_COORDINATOR_TRANSPORT` | `unix` or `tcp` |
 | `FAKEGPU_COORDINATOR_ADDR` | Absolute socket path or `host:port` |
+| `FAKEGPU_COORDINATOR_TIMEOUT_MS` | Rank rendezvous and operation timeout (default: `1000`) |
 | `FAKEGPU_CLUSTER_REPORT_PATH` | Cluster report output path |
 | `FAKEGPU_STAGING_CHUNK_BYTES` | Chunk size threshold for staged transfers |
 | `FAKEGPU_STAGING_FORCE_SOCKET` | Force socket fallback instead of shared memory |
@@ -59,6 +60,76 @@ The same knobs are available through `./fgpu` flags:
 ```bash
 ./fgpu --mode simulate --dist-mode simulate --cluster-config ... --coordinator-transport unix --coordinator-addr ...
 ```
+
+## TCP multi-node simulation and bandwidth
+
+The shortest self-contained check starts a coordinator on the exact loopback
+port you choose, creates two logical nodes, launches one rank per node, and
+moves all-reduce payloads through TCP:
+
+```bash
+python3 -m fakegpu bandwidth \
+  --listen 127.0.0.1:29591 \
+  --nodes 2 \
+  --ranks-per-node 1 \
+  --size 4MiB \
+  --warmup 2 \
+  --iterations 10 \
+  --json /tmp/fakegpu-bandwidth.json \
+  --cluster-report /tmp/fakegpu-cluster.json
+```
+
+With a TCP coordinator, FakeGPU uses socket payloads rather than POSIX shared
+memory. This makes the same collective path usable when ranks live on
+different physical hosts. The reported throughput is end-to-end: it includes
+TCP transfer, coordinator reduction, host memory copies, and process
+scheduling. The `bandwidth_gbps` values in the cluster YAML remain a topology
+model and are reported separately.
+
+For a physical two-host check, first start one coordinator on a trusted
+development network:
+
+```bash
+python3 -m fakegpu coordinator \
+  --listen 0.0.0.0:29591 \
+  --cluster-config verification/data/cluster_tcp_2r.yaml \
+  --report /tmp/fakegpu-cluster.json
+```
+
+The bundled topology assigns rank 0 to `rtx-pro-5000-blackwell` and rank 1 to
+`rtx3090ti`. Its TCP fabric values are model inputs; edit them to represent
+your intended network separately from the measured result.
+
+Then start the two rank commands concurrently. The endpoint and `--session`
+must match:
+
+```bash
+# host A
+python3 -m fakegpu bandwidth \
+  --connect coordinator-host:29591 \
+  --world-size 2 \
+  --ranks 0 \
+  --session test-2026-07-20 \
+  --size 16MiB
+
+# host B
+python3 -m fakegpu bandwidth \
+  --connect coordinator-host:29591 \
+  --world-size 2 \
+  --ranks 1 \
+  --session test-2026-07-20 \
+  --size 16MiB
+```
+
+After both commands finish:
+
+```bash
+python3 -m fakegpu coordinator --shutdown coordinator-host:29591
+```
+
+The coordinator protocol has no authentication. Bind it to loopback,
+Tailscale, or another trusted interface instead of exposing it to the public
+internet.
 
 ## Minimal cluster config
 
@@ -113,6 +184,7 @@ python3 verification/test_coordinator_smoke.py
 python3 test/test_allreduce_correctness.py
 python3 verification/test_allgather_correctness.py
 python3 verification/test_group_semantics.py
+./ftest tcp_bandwidth
 ./test/run_hybrid_multinode.sh 2
 ```
 
@@ -133,8 +205,13 @@ Recommended order:
 6. `./test/run_multinode_sim.sh 4`
 7. `./test/run_ddp_multinode.sh 4`
 8. `./test/run_hybrid_multinode.sh 2`
+9. `python3 verification/run_hybrid_ddp_numerics.py` on a real CUDA host
 
 The DDP-oriented scripts above are part of the maintained simulate-mode validation set. They provide smoke and control-flow coverage for ProcessGroupNCCL, but they do not imply full numerical or protocol parity with a real NCCL stack.
+
+The final real-CUDA check is narrower but numerical: two ranks share one
+physical device, fake NCCL averages a known non-zero gradient, and the test
+verifies the optimizer result and parameters gathered from both ranks.
 
 ## Manual coordinator startup
 
@@ -208,5 +285,7 @@ When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeG
 
 - `FAKEGPU_COORDINATOR_ADDR` missing while not in `passthrough`
 - rank or world-size mismatch between runtime environment and cluster config
+- different `--session`, `--size`, or `--iterations` values across physical hosts
+- a firewall blocking the selected TCP coordinator port
 - forgetting to preload `libnccl.so.2` for the distributed path
 - using proxy or passthrough modes before the basic simulate path is already known to work

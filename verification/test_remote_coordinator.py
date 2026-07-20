@@ -19,7 +19,9 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COORDINATOR_BIN = REPO_ROOT / "build" / "fakegpu-coordinator"
-NCCL_LIB = REPO_ROOT / "build" / "libnccl.so.2"
+NCCL_LIB = REPO_ROOT / "build" / (
+    "libnccl.dylib" if sys.platform == "darwin" else "libnccl.so.2"
+)
 CLUSTER_CONFIG_2R = REPO_ROOT / "verification" / "data" / "cluster_proxy_2r.yaml"
 CLUSTER_CONFIG_1R = REPO_ROOT / "verification" / "data" / "cluster_proxy_1r.yaml"
 

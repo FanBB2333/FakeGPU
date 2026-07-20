@@ -693,6 +693,10 @@ CUresult mark_stream_host_function_complete(CUstream stream) {
 
 extern "C" {
 
+CUresult fakegpuCudaMarkStreamHostFunctionComplete(CUstream stream) {
+    return fake_gpu::cuda::mark_stream_host_function_complete(stream);
+}
+
 CUresult cuInit(unsigned int Flags) {
     FGPU_LOG("[FakeCUDA-Driver] cuInit called with flags=%u\n", Flags);
 

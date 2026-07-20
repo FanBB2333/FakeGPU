@@ -8,11 +8,13 @@ FakeGPU is a CUDA, cuBLAS, NVML, and NCCL interception toolkit for validating GP
 
 **FakeGPU lets PyTorch/CUDA programs see simulated NVIDIA GPUs.** It runs common test flows on CPU, switches GPU profiles, checks likely out-of-memory failures, and estimates training memory before you use a real GPU.
 
-It checks code paths and memory plans; it does not predict GPU speed.
+It checks code paths and memory plans; it does not predict GPU kernel speed.
+Its TCP benchmark measures the simulator path, not production NCCL/RDMA.
 
 ```bash
 fakegpu doctor --list-profiles       # inspect the installation and GPU catalog
 fakegpu demo --profile l4            # run a tiny CUDA-visible training step on CPU
+fakegpu bandwidth --listen 127.0.0.1:29591 --nodes 2  # simulate two TCP nodes
 ```
 
 ![Four FakeGPU workflows: simulated PyTorch training, GPU profile switching, preflight OOM checks, and static VRAM estimation](docs/assets/readme/tldr-workflows.png)
@@ -34,6 +36,7 @@ _Real command output from the maintained v1.5.2 workflows._
 | Compare an unmodified real-GPU baseline | Yes | `./fgpu --mode passthrough ...` |
 | Keep real CUDA compute while virtualizing selected surfaces | Yes | `./fgpu --mode hybrid --oom-policy clamp ...` |
 | Simulate multi-rank collective control flow | No | `FAKEGPU_DIST_MODE=simulate` |
+| Simulate logical machines over TCP and measure throughput | No | `fakegpu bandwidth --listen 127.0.0.1:29591 --nodes 2` |
 
 ## Quick start
 
@@ -218,6 +221,23 @@ FAKEGPU_DIST_MODE=simulate
 
 The simulated distributed path also needs a coordinator endpoint and cluster configuration. For complete coordinator and `torchrun` examples, see [Distributed Simulation Usage](docs/distributed-sim-usage.md).
 
+For a self-contained two-node loopback check on a chosen port:
+
+```bash
+fakegpu bandwidth \
+  --listen 127.0.0.1:29591 \
+  --nodes 2 \
+  --ranks-per-node 1 \
+  --size 4MiB \
+  --iterations 10
+```
+
+This starts the coordinator, generates a two-node topology, moves collective
+payloads through TCP, checks the all-reduce result, reports measured
+end-to-end throughput, and shuts the coordinator down. A separately hosted
+coordinator and per-host rank selection are available for physical multi-host
+checks.
+
 ## Capability map
 
 | Surface | Maintained behavior | Important boundary |
@@ -226,7 +246,7 @@ The simulated distributed path also needs a coordinator endpoint and cluster con
 | NVML | Device identity, memory information, common monitoring queries | Some telemetry fields are synthetic or unavailable |
 | cuBLAS/cuBLASLt | Selected GEMM/matmul operations with CPU-backed execution | Unsupported algorithms may remain stubbed |
 | PyTorch fake-CUDA | Common tensor, module, autograd, optimizer, Transformers, PEFT, Accelerate, and FSDP smoke paths | Custom CUDA extensions are not emulated |
-| NCCL-style communication | Collective and point-to-point control flow, topology-aware reporting, PyTorch-required NCCL 2.29 host symbols | Not a protocol-level NCCL/RDMA/NVLink model; device-communicator and signal/RMA operations are not simulated |
+| NCCL-style communication | Collective and point-to-point control flow, TCP socket payloads, topology-aware reporting, PyTorch-required NCCL 2.29 host symbols | Not a protocol-level NCCL/RDMA/NVLink model; device-communicator and signal/RMA operations are not simulated |
 | Memory preflight | Runtime tracking, ATen static analysis, empirical GPU calibration | Results apply to the validated shape and software envelope |
 | Error simulation | OOM, invalid device, cross-device, dtype/autocast, gradient, and checkpoint cases | Error timing can differ from a real driver |
 
@@ -303,6 +323,7 @@ FAKEGPU_PROFILES=a100:4,h100:4
 |---|---|---|
 | `fake_gpu_report.json` | Native runtime | Per-device peak memory, IO, calls, and maintained GEMM FLOPs |
 | Cluster report | Distributed coordinator | Collective counts, bytes, estimated timing, and link statistics |
+| TCP bandwidth report | `fakegpu bandwidth --json ...` | Validated payload size, per-rank timings, and end-to-end socket throughput |
 | `preflight_report.json/.md` | Preflight CLI | Stage status, fit/OOM result, memory categories, and confidence |
 | Real-GPU calibration report | `./ftest real_gpu_calibration` | Real, passthrough, hybrid, fakecuda, allocator, and NVML observations |
 | Static memory validation report | `./ftest static_memory_validation` | Graph liveness, optimizer phases, workspace profiles, and real-CUDA comparison |
@@ -340,6 +361,7 @@ These results validate the maintained parameter grid. They do not establish accu
 ./ftest cpu_sim
 ./ftest python
 ./ftest preflight_oom
+./ftest tcp_bandwidth
 ./ftest static_memory_validation
 ./ftest real_gpu_calibration
 python3 -m pytest -q
@@ -351,6 +373,7 @@ python3 -m pytest -q
 | `cpu_sim` | CPU-backed cuBLAS/cuBLASLt correctness |
 | `python` | Basic PyTorch native-interception path |
 | `preflight_oom` | Fit/OOM classification and report validation |
+| `tcp_bandwidth` | Two logical nodes, TCP payload correctness, and throughput reporting |
 | `static_memory_validation` | ATen graph memory estimation; optional real-CUDA comparison |
 | `real_gpu_calibration` | Real/passthrough/hybrid/fakecuda comparison on a supported GPU |
 
@@ -379,7 +402,7 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 - Native simulate mode does not execute arbitrary CUDA kernels.
 - FakeCudaTensor covers Python/PyTorch behavior, not binary CUDA extensions.
 - Supported cuBLAS/cuBLASLt operations can be numerically checked on CPU; unsupported operations may be stubs.
-- Distributed simulation checks semantics and control flow, not exact NCCL protocol or production-network performance.
+- Distributed simulation checks semantics and control flow. Its TCP result includes coordinator reduction, memory copies, and process scheduling, so it is not an exact NCCL/RDMA or raw-link measurement.
 - Static and runtime memory estimates can omit backend-internal allocations outside matched profiles.
 - Hybrid mode requires a real GPU and remains limited to validated Driver/runtime surfaces.
 - macOS system binaries can remove `DYLD_*` variables because of SIP; use a Homebrew, conda, or pyenv Python.
