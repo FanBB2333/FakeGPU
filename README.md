@@ -4,6 +4,16 @@ FakeGPU is a CUDA, cuBLAS, NVML, and NCCL interception toolkit for validating GP
 
 [Getting started](docs/getting-started.md) · [Quick reference](docs/quick-reference.md) · [中文文档](docs/index.zh.md) · [Changelog](CHANGELOG.md)
 
+## TL;DR
+
+**FakeGPU lets PyTorch/CUDA programs see simulated NVIDIA GPUs.** It runs common test flows on CPU, switches GPU profiles, checks likely out-of-memory failures, and estimates training memory before you use a real GPU.
+
+It checks code paths and memory plans; it does not predict GPU speed.
+
+![Four FakeGPU workflows: simulated PyTorch training, GPU profile switching, preflight OOM checks, and static VRAM estimation](docs/assets/readme/tldr-workflows.png)
+
+_Real command output from the maintained v1.5.2 workflows._
+
 > FakeGPU is a development and validation tool. It does not provide numerical or performance parity for arbitrary CUDA kernels.
 
 ## Choose a path
