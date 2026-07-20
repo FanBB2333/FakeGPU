@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -19,6 +21,8 @@ namespace fake_gpu::distributed {
 
 namespace {
 
+using SteadyTimePoint = std::chrono::steady_clock::time_point;
+
 struct CollectiveState {
     CollectiveSubmitRequest request;
     bool completed = false;
@@ -27,6 +31,8 @@ struct CollectiveState {
     std::string failure_detail;
     std::unordered_map<int, CollectiveExecutionParticipant> participants;
     std::unordered_map<int, CollectiveSubmitResult> results;
+    SteadyTimePoint first_submit_at;
+    SteadyTimePoint all_participants_at;
     std::condition_variable cv;
 };
 
@@ -37,6 +43,8 @@ struct BarrierState {
     std::string failure_code;
     std::string failure_detail;
     std::unordered_map<int, bool> participants;
+    SteadyTimePoint first_submit_at;
+    SteadyTimePoint all_participants_at;
     std::condition_variable cv;
 };
 
@@ -76,6 +84,8 @@ struct PointToPointState {
     std::string failure_detail;
     std::unordered_map<int, PointToPointSubmitRequest> participants;
     std::unordered_map<int, PointToPointSubmitResult> results;
+    SteadyTimePoint first_submit_at;
+    SteadyTimePoint all_participants_at;
     std::condition_variable cv;
 };
 
@@ -88,6 +98,7 @@ struct CommunicatorState {
     std::string failure_code;
     std::string failure_detail;
     std::uint64_t next_seqno = 1;
+    std::vector<int> global_ranks;
     std::unordered_map<int, bool> participants;
     std::unordered_map<int, bool> destroyed_ranks;
     std::unordered_map<std::uint64_t, std::shared_ptr<CollectiveState>> collectives;
@@ -113,9 +124,13 @@ struct RegistryImpl {
         ClusterCollectiveReportStats reduce_scatter;
         ClusterCollectiveReportStats all_to_all;
         ClusterCollectiveReportStats barrier;
+        ClusterPointToPointReportStats point_to_point;
         std::unordered_map<std::string, ClusterLinkReportStats> links;
         std::unordered_map<std::string, ClusterNodePairReportStats> node_pairs;
         std::unordered_map<int, ClusterRankReportStats> ranks;
+        std::deque<ClusterOperationTimelineEntry> operation_timeline;
+        std::uint64_t operation_timeline_entries = 0;
+        std::uint64_t dropped_operation_timeline_entries = 0;
     } report;
 };
 
@@ -188,6 +203,145 @@ ClusterRankReportStats& ensure_rank_report_locked(RegistryImpl& registry, int ra
     return it->second;
 }
 
+int global_rank_for_local(
+    const std::shared_ptr<CommunicatorState>& state,
+    int local_rank) {
+    if (state &&
+        local_rank >= 0 &&
+        static_cast<std::size_t>(local_rank) < state->global_ranks.size()) {
+        return state->global_ranks[static_cast<std::size_t>(local_rank)];
+    }
+    return local_rank;
+}
+
+std::vector<int> communicator_global_ranks(
+    const std::shared_ptr<CommunicatorState>& state) {
+    std::vector<int> ranks;
+    if (!state || state->world_size <= 0) {
+        return ranks;
+    }
+    ranks.reserve(static_cast<std::size_t>(state->world_size));
+    for (int local_rank = 0; local_rank < state->world_size; ++local_rank) {
+        ranks.push_back(global_rank_for_local(state, local_rank));
+    }
+    return ranks;
+}
+
+std::size_t operation_timeline_limit() {
+    static const std::size_t limit = []() {
+        constexpr std::size_t kDefaultLimit = 4096;
+        constexpr std::size_t kMaximumLimit = 1000000;
+        const char* configured =
+            std::getenv("FAKEGPU_CLUSTER_REPORT_MAX_OPERATIONS");
+        if (!configured || !*configured) {
+            return kDefaultLimit;
+        }
+        try {
+            std::size_t consumed = 0;
+            const unsigned long long parsed =
+                std::stoull(configured, &consumed, 10);
+            if (consumed != std::string(configured).size() ||
+                parsed > kMaximumLimit) {
+                return kDefaultLimit;
+            }
+            return static_cast<std::size_t>(parsed);
+        } catch (...) {
+            return kDefaultLimit;
+        }
+    }();
+    return limit;
+}
+
+double elapsed_us(SteadyTimePoint begin, SteadyTimePoint end) {
+    if (begin == SteadyTimePoint{} ||
+        end == SteadyTimePoint{} ||
+        end < begin) {
+        return 0.0;
+    }
+    return std::chrono::duration<double, std::micro>(end - begin).count();
+}
+
+const char* buffer_transport_name(BufferTransport transport) {
+    return transport == BufferTransport::SocketPayload
+        ? "socket_payload"
+        : "shared_memory";
+}
+
+void append_operation_timeline_locked(
+    RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
+    std::uint64_t seqno,
+    std::string kind,
+    std::string operation,
+    std::string buffer_transport,
+    std::uint64_t logical_payload_bytes,
+    std::uint64_t socket_request_payload_bytes,
+    std::uint64_t socket_response_payload_bytes,
+    SteadyTimePoint first_submit_at,
+    SteadyTimePoint all_participants_at,
+    SteadyTimePoint completed_at,
+    double modeled_time_us) {
+    ClusterOperationTimelineEntry entry;
+    entry.index = ++registry.report.operation_timeline_entries;
+    entry.comm_id = state ? state->comm_id : -1;
+    entry.seqno = seqno;
+    entry.kind = std::move(kind);
+    entry.operation = std::move(operation);
+    entry.buffer_transport = std::move(buffer_transport);
+    entry.ranks = communicator_global_ranks(state);
+    entry.logical_payload_bytes = logical_payload_bytes;
+    entry.socket_request_payload_bytes = socket_request_payload_bytes;
+    entry.socket_response_payload_bytes = socket_response_payload_bytes;
+    entry.rendezvous_wait_us =
+        elapsed_us(first_submit_at, all_participants_at);
+    entry.execution_time_us =
+        elapsed_us(all_participants_at, completed_at);
+    entry.coordinator_duration_us =
+        elapsed_us(first_submit_at, completed_at);
+    entry.modeled_time_us = modeled_time_us;
+
+    const std::size_t limit = operation_timeline_limit();
+    if (limit == 0) {
+        registry.report.dropped_operation_timeline_entries++;
+        return;
+    }
+    if (registry.report.operation_timeline.size() >= limit) {
+        registry.report.operation_timeline.pop_front();
+        registry.report.dropped_operation_timeline_entries++;
+    }
+    registry.report.operation_timeline.push_back(std::move(entry));
+}
+
+template <typename PayloadMap>
+std::uint64_t total_payload_bytes(const PayloadMap& payloads) {
+    std::uint64_t bytes = 0;
+    for (const auto& entry : payloads) {
+        bytes += static_cast<std::uint64_t>(entry.second.size());
+    }
+    return bytes;
+}
+
+template <typename ParticipantMap>
+std::uint64_t total_participant_payload_bytes(
+    const ParticipantMap& participants) {
+    std::uint64_t bytes = 0;
+    for (const auto& entry : participants) {
+        bytes += static_cast<std::uint64_t>(entry.second.payload.size());
+    }
+    return bytes;
+}
+
+std::uint64_t point_to_point_logical_payload_bytes(
+    const std::shared_ptr<PointToPointState>& point_to_point) {
+    std::uint64_t bytes = 0;
+    for (const auto& entry : point_to_point->participants) {
+        if (entry.second.type == PointToPointType::Send) {
+            bytes += static_cast<std::uint64_t>(entry.second.bytes);
+        }
+    }
+    return bytes;
+}
+
 void remember_world_size_locked(RegistryImpl& registry, int world_size) {
     if (world_size > 0) {
         registry.report.world_size =
@@ -197,19 +351,27 @@ void remember_world_size_locked(RegistryImpl& registry, int world_size) {
 
 void record_wait_time_locked(
     RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
     int rank,
     std::chrono::steady_clock::duration elapsed) {
-    if (rank < 0) {
+    const int global_rank = global_rank_for_local(state, rank);
+    if (global_rank < 0) {
         return;
     }
-    ClusterRankReportStats& stats = ensure_rank_report_locked(registry, rank);
+    ClusterRankReportStats& stats =
+        ensure_rank_report_locked(registry, global_rank);
     stats.wait_time_ms += std::chrono::duration<double, std::milli>(elapsed).count();
 }
 
 template <typename ParticipantMap>
-void record_timeout_locked(RegistryImpl& registry, const ParticipantMap& participants) {
+void record_timeout_locked(
+    RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
+    const ParticipantMap& participants) {
     for (const auto& entry : participants) {
-        ClusterRankReportStats& stats = ensure_rank_report_locked(registry, entry.first);
+        ClusterRankReportStats& stats = ensure_rank_report_locked(
+            registry,
+            global_rank_for_local(state, entry.first));
         stats.timeouts++;
     }
 }
@@ -234,66 +396,60 @@ ClusterCollectiveReportStats& collective_report_stats_for_type_locked(
     return registry.report.all_reduce;
 }
 
-void record_collective_completion_locked(
+enum class CommunicationOperationKind {
+    Collective,
+    PointToPoint,
+};
+
+struct TopologyOperationTotals {
+    double estimated_time_us = 0.0;
+    double contention_penalty_us = 0.0;
+};
+
+TopologyOperationTotals record_topology_operation_locked(
     RegistryImpl& registry,
-    const std::shared_ptr<CommunicatorState>& state,
-    const std::shared_ptr<CollectiveState>& collective) {
-    remember_world_size_locked(registry, state->world_size);
-
-    ClusterCollectiveReportStats& stats =
-        collective_report_stats_for_type_locked(registry, collective->request.type);
-    stats.calls++;
-    stats.bytes += static_cast<std::uint64_t>(collective->request.bytes) *
-                   static_cast<std::uint64_t>(state->world_size);
-
-    for (const auto& entry : collective->participants) {
-        ClusterRankReportStats& rank_stats = ensure_rank_report_locked(registry, entry.first);
-        rank_stats.collective_calls++;
+    const std::vector<TopologyLinkEstimate>& links,
+    CommunicationOperationKind kind) {
+    std::unordered_map<std::string, TopologyLinkEstimate> operation_links;
+    for (const TopologyLinkEstimate& link : links) {
+        const std::string key = link.src_node + "\n" + link.dst_node + "\n" +
+                                topology_link_scope_name(link.scope);
+        auto [it, inserted] = operation_links.emplace(key, link);
+        if (!inserted) {
+            it->second.hop_count += link.hop_count;
+            it->second.bytes += link.bytes;
+            it->second.estimated_time_us += link.estimated_time_us;
+        }
     }
-
-    const DistributedConfig& dist_config = fake_gpu::BackendConfig::instance().distributed_config();
-    if (!dist_config.cluster_config.loaded()) {
-        return;
-    }
-
-    TopologyModel topology_model;
-    std::string topology_error;
-    if (!TopologyModel::build(dist_config.cluster_config, topology_model, topology_error)) {
-        return;
-    }
-
-    CollectiveTopologyEstimate estimate;
-    if (!topology_model.estimate_ring_collective(
-            collective->request.type,
-            static_cast<std::uint64_t>(collective->request.bytes),
-            estimate,
-            topology_error)) {
-        return;
-    }
-
-    stats.estimated_time_us_total += estimate.estimated_time_us;
 
     struct PairOperationAccumulator {
         std::uint64_t bytes = 0;
         double estimated_time_us = 0.0;
     };
     std::unordered_map<std::string, PairOperationAccumulator> pair_operations;
+    TopologyOperationTotals totals;
 
-    for (const TopologyLinkEstimate& link : estimate.links) {
+    for (const auto& operation_entry : operation_links) {
+        const TopologyLinkEstimate& link = operation_entry.second;
         const double transfer_without_penalty_us =
-            (static_cast<double>(link.bytes) * 8.0) / (link.bandwidth_gbps * 1000.0);
+            link.bandwidth_gbps > 0.0
+            ? (static_cast<double>(link.bytes) * 8.0) /
+                  (link.bandwidth_gbps * 1000.0)
+            : 0.0;
         const double contention_penalty_us =
-            transfer_without_penalty_us * std::max(0.0, link.oversubscription - 1.0);
+            transfer_without_penalty_us *
+            std::max(0.0, link.oversubscription - 1.0);
         const double estimated_throughput_gbps = link.estimated_time_us > 0.0
             ? (static_cast<double>(link.bytes) * 8.0) /
                   (link.estimated_time_us * 1000.0)
             : 0.0;
+        totals.estimated_time_us += link.estimated_time_us;
+        totals.contention_penalty_us += contention_penalty_us;
 
-        stats.contention_penalty_us_total += contention_penalty_us;
-
-        const std::string key = link.src_node + "\n" + link.dst_node + "\n" +
-                                topology_link_scope_name(link.scope);
-        auto [it, inserted] = registry.report.links.emplace(key, ClusterLinkReportStats{});
+        auto [it, inserted] =
+            registry.report.links.emplace(
+                operation_entry.first,
+                ClusterLinkReportStats{});
         ClusterLinkReportStats& link_stats = it->second;
         if (inserted) {
             link_stats.src_node = link.src_node;
@@ -301,12 +457,20 @@ void record_collective_completion_locked(
             link_stats.scope = topology_link_scope_name(link.scope);
             link_stats.bandwidth_gbps = link.bandwidth_gbps;
         }
+        const std::uint64_t previous_samples = link_stats.samples;
         link_stats.samples += link.hop_count;
+        link_stats.operations++;
+        if (kind == CommunicationOperationKind::Collective) {
+            link_stats.collective_operations++;
+        } else {
+            link_stats.point_to_point_operations++;
+        }
         link_stats.bytes += link.bytes;
         link_stats.peak_bytes_per_operation =
             std::max(link_stats.peak_bytes_per_operation, link.bytes);
         link_stats.avg_latency_us =
-            ((link_stats.avg_latency_us * static_cast<double>(link_stats.samples - link.hop_count)) +
+            ((link_stats.avg_latency_us *
+              static_cast<double>(previous_samples)) +
              (link.latency_us * static_cast<double>(link.hop_count))) /
             static_cast<double>(link_stats.samples);
         link_stats.estimated_time_us_total += link.estimated_time_us;
@@ -321,11 +485,15 @@ void record_collective_completion_locked(
         }
 
         const bool source_is_a = link.src_node < link.dst_node;
-        const std::string& node_a = source_is_a ? link.src_node : link.dst_node;
-        const std::string& node_b = source_is_a ? link.dst_node : link.src_node;
+        const std::string& node_a =
+            source_is_a ? link.src_node : link.dst_node;
+        const std::string& node_b =
+            source_is_a ? link.dst_node : link.src_node;
         const std::string pair_key = node_a + "\n" + node_b;
         auto [pair_it, pair_inserted] =
-            registry.report.node_pairs.emplace(pair_key, ClusterNodePairReportStats{});
+            registry.report.node_pairs.emplace(
+                pair_key,
+                ClusterNodePairReportStats{});
         ClusterNodePairReportStats& pair_stats = pair_it->second;
         if (pair_inserted) {
             pair_stats.node_a = node_a;
@@ -341,7 +509,8 @@ void record_collective_completion_locked(
             std::max(direction.peak_bytes_per_operation, link.bytes);
         direction.model_bandwidth_gbps = link.bandwidth_gbps;
         direction.avg_latency_us =
-            ((direction.avg_latency_us * static_cast<double>(previous_transfers)) +
+            ((direction.avg_latency_us *
+              static_cast<double>(previous_transfers)) +
              (link.latency_us * static_cast<double>(link.hop_count))) /
             static_cast<double>(direction.transfers);
         direction.estimated_time_us_total += link.estimated_time_us;
@@ -361,6 +530,11 @@ void record_collective_completion_locked(
             registry.report.node_pairs.at(entry.first);
         const PairOperationAccumulator& operation = entry.second;
         pair_stats.operations++;
+        if (kind == CommunicationOperationKind::Collective) {
+            pair_stats.collective_operations++;
+        } else {
+            pair_stats.point_to_point_operations++;
+        }
         pair_stats.peak_combined_bytes_per_operation =
             std::max(
                 pair_stats.peak_combined_bytes_per_operation,
@@ -374,6 +548,122 @@ void record_collective_completion_locked(
                 pair_stats.peak_estimated_throughput_gbps,
                 throughput_gbps);
     }
+
+    return totals;
+}
+
+TopologyOperationTotals record_collective_completion_locked(
+    RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::shared_ptr<CollectiveState>& collective) {
+    remember_world_size_locked(registry, state->world_size);
+
+    ClusterCollectiveReportStats& stats =
+        collective_report_stats_for_type_locked(registry, collective->request.type);
+    stats.calls++;
+    stats.bytes += static_cast<std::uint64_t>(collective->request.bytes) *
+                   static_cast<std::uint64_t>(state->world_size);
+
+    for (const auto& entry : collective->participants) {
+        ClusterRankReportStats& rank_stats = ensure_rank_report_locked(
+            registry,
+            global_rank_for_local(state, entry.first));
+        rank_stats.collective_calls++;
+    }
+
+    const DistributedConfig& dist_config = fake_gpu::BackendConfig::instance().distributed_config();
+    if (!dist_config.cluster_config.loaded()) {
+        return {};
+    }
+
+    TopologyModel topology_model;
+    std::string topology_error;
+    if (!TopologyModel::build(dist_config.cluster_config, topology_model, topology_error)) {
+        return {};
+    }
+
+    CollectiveTopologyEstimate estimate;
+    if (!topology_model.estimate_ring_collective(
+            collective->request.type,
+            static_cast<std::uint64_t>(collective->request.bytes),
+            communicator_global_ranks(state),
+            estimate,
+            topology_error)) {
+        return {};
+    }
+
+    const TopologyOperationTotals totals = record_topology_operation_locked(
+        registry,
+        estimate.links,
+        CommunicationOperationKind::Collective);
+    stats.estimated_time_us_total += totals.estimated_time_us;
+    stats.contention_penalty_us_total += totals.contention_penalty_us;
+    return totals;
+}
+
+TopologyOperationTotals record_point_to_point_completion_locked(
+    RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::shared_ptr<PointToPointState>& point_to_point) {
+    remember_world_size_locked(registry, state->world_size);
+    ClusterPointToPointReportStats& stats = registry.report.point_to_point;
+    stats.operations++;
+
+    for (const auto& entry : point_to_point->participants) {
+        ClusterRankReportStats& rank_stats = ensure_rank_report_locked(
+            registry,
+            global_rank_for_local(state, entry.first));
+        rank_stats.point_to_point_calls++;
+
+        const PointToPointSubmitRequest& participant = entry.second;
+        if (participant.type == PointToPointType::Send) {
+            stats.sends++;
+            stats.bytes += static_cast<std::uint64_t>(participant.bytes);
+        }
+    }
+
+    const DistributedConfig& dist_config =
+        fake_gpu::BackendConfig::instance().distributed_config();
+    if (!dist_config.cluster_config.loaded()) {
+        return {};
+    }
+
+    TopologyModel topology_model;
+    std::string topology_error;
+    if (!TopologyModel::build(
+            dist_config.cluster_config,
+            topology_model,
+            topology_error)) {
+        return {};
+    }
+
+    std::vector<TopologyLinkEstimate> links;
+    links.reserve(point_to_point->participants.size() / 2);
+    for (const auto& entry : point_to_point->participants) {
+        const PointToPointSubmitRequest& participant = entry.second;
+        if (participant.type != PointToPointType::Send) {
+            continue;
+        }
+
+        TopologyLinkEstimate link;
+        if (!topology_model.estimate_transfer(
+                global_rank_for_local(state, participant.rank),
+                global_rank_for_local(state, participant.peer),
+                static_cast<std::uint64_t>(participant.bytes),
+                link,
+                topology_error)) {
+            continue;
+        }
+        links.push_back(std::move(link));
+    }
+
+    const TopologyOperationTotals totals = record_topology_operation_locked(
+        registry,
+        links,
+        CommunicationOperationKind::PointToPoint);
+    stats.estimated_time_us_total += totals.estimated_time_us;
+    stats.contention_penalty_us_total += totals.contention_penalty_us;
+    return totals;
 }
 
 void record_barrier_completion_locked(
@@ -384,7 +674,9 @@ void record_barrier_completion_locked(
     registry.report.barrier.calls++;
 
     for (const auto& entry : barrier->participants) {
-        ClusterRankReportStats& rank_stats = ensure_rank_report_locked(registry, entry.first);
+        ClusterRankReportStats& rank_stats = ensure_rank_report_locked(
+            registry,
+            global_rank_for_local(state, entry.first));
         rank_stats.barrier_calls++;
     }
 }
@@ -884,6 +1176,10 @@ CommunicatorRegistrationResult CommunicatorRegistry::init_communicator(
             state = std::make_shared<CommunicatorState>();
             state->unique_id = unique_id;
             state->world_size = world_size;
+            state->global_ranks.reserve(static_cast<std::size_t>(world_size));
+            for (int global_rank = 0; global_rank < world_size; ++global_rank) {
+                state->global_ranks.push_back(global_rank);
+            }
             registry.pending_by_unique_id.emplace(unique_id, state);
         } else {
             state = it->second;
@@ -921,15 +1217,23 @@ CommunicatorRegistrationResult CommunicatorRegistry::init_communicator(
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!state->ready && !state->failed) {
             if (state->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
-                record_wait_time_locked(registry, rank, std::chrono::steady_clock::now() - wait_begin);
-                record_timeout_locked(registry, state->participants);
+                record_wait_time_locked(
+                    registry,
+                    state,
+                    rank,
+                    std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, state, state->participants);
                 const std::string detail =
                     "timeout waiting for ranks on unique_id " + unique_id;
                 fail_pending_group_locked(registry, state, "timeout_waiting_for_ranks", detail);
                 return make_error("timeout_waiting_for_ranks", detail);
             }
         }
-        record_wait_time_locked(registry, rank, std::chrono::steady_clock::now() - wait_begin);
+        record_wait_time_locked(
+            registry,
+            state,
+            rank,
+            std::chrono::steady_clock::now() - wait_begin);
 
         if (state->failed) {
             return make_error(state->failure_code, state->failure_detail);
@@ -1049,8 +1353,12 @@ CommunicatorSplitResult CommunicatorRegistry::split_communicator(const Communica
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!split->completed && !split->failed && !state->failed) {
             if (split->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
-                record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
-                record_timeout_locked(registry, split->participants);
+                record_wait_time_locked(
+                    registry,
+                    state,
+                    request.rank,
+                    std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, state, split->participants);
                 fail_split_locked(
                     state,
                     split,
@@ -1060,7 +1368,11 @@ CommunicatorSplitResult CommunicatorRegistry::split_communicator(const Communica
                 return make_split_error(state->failure_code, state->failure_detail);
             }
         }
-        record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+        record_wait_time_locked(
+            registry,
+            state,
+            request.rank,
+            std::chrono::steady_clock::now() - wait_begin);
 
         if (split->completed) {
             const auto result_it = split->results.find(request.rank);
@@ -1115,9 +1427,12 @@ CommunicatorSplitResult CommunicatorRegistry::split_communicator(const Communica
         child->world_size = static_cast<int>(members.size());
         child->comm_id = registry.next_comm_id++;
         child->ready = true;
+        child->global_ranks.resize(members.size());
 
         for (std::size_t subgroup_rank = 0; subgroup_rank < members.size(); ++subgroup_rank) {
             const int parent_rank = members[subgroup_rank].second;
+            const int global_rank = global_rank_for_local(state, parent_rank);
+            child->global_ranks[subgroup_rank] = global_rank;
             child->participants.emplace(static_cast<int>(subgroup_rank), true);
             split->results.emplace(
                 parent_rank,
@@ -1127,7 +1442,7 @@ CommunicatorSplitResult CommunicatorRegistry::split_communicator(const Communica
                     static_cast<int>(subgroup_rank),
                     child->world_size,
                 });
-            ensure_rank_report_locked(registry, parent_rank).communicator_inits++;
+            ensure_rank_report_locked(registry, global_rank).communicator_inits++;
         }
 
         registry.active_by_comm_id.emplace(child->comm_id, child);
@@ -1236,6 +1551,7 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
     if (p2p_it == state->point_to_points.end()) {
         p2p = std::make_shared<PointToPointState>();
         p2p->request = request;
+        p2p->first_submit_at = std::chrono::steady_clock::now();
         state->point_to_points.emplace(request.seqno, p2p);
     } else {
         p2p = p2p_it->second;
@@ -1262,8 +1578,12 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!p2p->completed && !p2p->failed && !state->failed) {
             if (p2p->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
-                record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
-                record_timeout_locked(registry, p2p->participants);
+                record_wait_time_locked(
+                    registry,
+                    state,
+                    request.rank,
+                    std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, state, p2p->participants);
                 fail_point_to_point_locked(
                     state,
                     p2p,
@@ -1273,7 +1593,11 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
                 return make_point_to_point_error(state->failure_code, state->failure_detail);
             }
         }
-        record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+        record_wait_time_locked(
+            registry,
+            state,
+            request.rank,
+            std::chrono::steady_clock::now() - wait_begin);
 
         if (p2p->completed) {
             auto result_it = p2p->results.find(request.rank);
@@ -1285,6 +1609,7 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
         return make_point_to_point_error(state->failure_code, state->failure_detail);
     }
 
+    p2p->all_participants_at = std::chrono::steady_clock::now();
     lock.unlock();
     CollectiveExecutionResult execution = execute_point_to_point_locked(request, p2p);
     lock.lock();
@@ -1297,6 +1622,8 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
         return make_point_to_point_error(state->failure_code, state->failure_detail);
     }
 
+    const TopologyOperationTotals topology_totals =
+        record_point_to_point_completion_locked(registry, state, p2p);
     for (const auto& entry : p2p->participants) {
         PointToPointSubmitResult result;
         result.ok = true;
@@ -1307,6 +1634,21 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
         }
         p2p->results[entry.first] = std::move(result);
     }
+    const SteadyTimePoint completed_at = std::chrono::steady_clock::now();
+    append_operation_timeline_locked(
+        registry,
+        state,
+        request.seqno,
+        "point_to_point",
+        "send_recv",
+        buffer_transport_name(request.transport),
+        point_to_point_logical_payload_bytes(p2p),
+        total_participant_payload_bytes(p2p->participants),
+        total_payload_bytes(execution.output_payloads),
+        p2p->first_submit_at,
+        p2p->all_participants_at,
+        completed_at,
+        topology_totals.estimated_time_us);
     p2p->completed = true;
     state->next_seqno++;
     state->point_to_points.erase(request.seqno);
@@ -1394,6 +1736,7 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     if (collective_it == state->collectives.end()) {
         collective = std::make_shared<CollectiveState>();
         collective->request = request;
+        collective->first_submit_at = std::chrono::steady_clock::now();
         state->collectives.emplace(request.seqno, collective);
     } else {
         collective = collective_it->second;
@@ -1423,14 +1766,36 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     }
 
     if (static_cast<int>(collective->participants.size()) == state->world_size) {
+        collective->all_participants_at = std::chrono::steady_clock::now();
         if (request.proxy_only) {
-            record_collective_completion_locked(registry, state, collective);
+            const TopologyOperationTotals topology_totals =
+                record_collective_completion_locked(
+                    registry,
+                    state,
+                    collective);
             for (const auto& entry : collective->participants) {
                 CollectiveSubmitResult result;
                 result.ok = true;
                 result.seqno = request.seqno;
                 collective->results[entry.first] = std::move(result);
             }
+            const SteadyTimePoint completed_at =
+                std::chrono::steady_clock::now();
+            append_operation_timeline_locked(
+                registry,
+                state,
+                request.seqno,
+                "collective",
+                collective_type_name(request.type),
+                "proxy_only",
+                static_cast<std::uint64_t>(request.bytes) *
+                    static_cast<std::uint64_t>(state->world_size),
+                total_participant_payload_bytes(collective->participants),
+                0,
+                collective->first_submit_at,
+                collective->all_participants_at,
+                completed_at,
+                topology_totals.estimated_time_us);
             collective->completed = true;
             state->next_seqno++;
             state->collectives.erase(request.seqno);
@@ -1442,8 +1807,12 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!collective->completed && !collective->failed && !state->failed) {
             if (collective->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
-                record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
-                record_timeout_locked(registry, collective->participants);
+                record_wait_time_locked(
+                    registry,
+                    state,
+                    request.rank,
+                    std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, state, collective->participants);
                 fail_collective_locked(
                     state,
                     collective,
@@ -1452,7 +1821,11 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
                 return make_collective_error(state->failure_code, state->failure_detail);
             }
         }
-        record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+        record_wait_time_locked(
+            registry,
+            state,
+            request.rank,
+            std::chrono::steady_clock::now() - wait_begin);
 
         if (collective->completed) {
             auto result_it = collective->results.find(request.rank);
@@ -1476,7 +1849,8 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
         return make_collective_error(state->failure_code, state->failure_detail);
     }
 
-    record_collective_completion_locked(registry, state, collective);
+    const TopologyOperationTotals topology_totals =
+        record_collective_completion_locked(registry, state, collective);
     for (const auto& entry : collective->participants) {
         CollectiveSubmitResult result;
         result.ok = true;
@@ -1487,6 +1861,22 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
         }
         collective->results[entry.first] = std::move(result);
     }
+    const SteadyTimePoint completed_at = std::chrono::steady_clock::now();
+    append_operation_timeline_locked(
+        registry,
+        state,
+        request.seqno,
+        "collective",
+        collective_type_name(request.type),
+        buffer_transport_name(request.transport),
+        static_cast<std::uint64_t>(request.bytes) *
+            static_cast<std::uint64_t>(state->world_size),
+        total_participant_payload_bytes(collective->participants),
+        total_payload_bytes(execution.output_payloads),
+        collective->first_submit_at,
+        collective->all_participants_at,
+        completed_at,
+        topology_totals.estimated_time_us);
     collective->completed = true;
     state->next_seqno++;
     state->collectives.erase(request.seqno);
@@ -1549,6 +1939,7 @@ BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequ
     if (barrier_it == state->barriers.end()) {
         barrier = std::make_shared<BarrierState>();
         barrier->request = request;
+        barrier->first_submit_at = std::chrono::steady_clock::now();
         state->barriers.emplace(request.seqno, barrier);
     } else {
         barrier = barrier_it->second;
@@ -1579,8 +1970,12 @@ BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequ
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!barrier->completed && !barrier->failed && !state->failed) {
             if (barrier->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
-                record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
-                record_timeout_locked(registry, barrier->participants);
+                record_wait_time_locked(
+                    registry,
+                    state,
+                    request.rank,
+                    std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, state, barrier->participants);
                 fail_barrier_locked(
                     state,
                     barrier,
@@ -1590,7 +1985,11 @@ BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequ
                 return make_barrier_error(state->failure_code, state->failure_detail);
             }
         }
-        record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+        record_wait_time_locked(
+            registry,
+            state,
+            request.rank,
+            std::chrono::steady_clock::now() - wait_begin);
 
         if (barrier->completed) {
             return BarrierSubmitResult{true, request.seqno, "", ""};
@@ -1598,7 +1997,22 @@ BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequ
         return make_barrier_error(state->failure_code, state->failure_detail);
     }
 
+    barrier->all_participants_at = std::chrono::steady_clock::now();
     record_barrier_completion_locked(registry, state, barrier);
+    append_operation_timeline_locked(
+        registry,
+        state,
+        request.seqno,
+        "barrier",
+        "barrier",
+        "control",
+        0,
+        0,
+        0,
+        barrier->first_submit_at,
+        barrier->all_participants_at,
+        std::chrono::steady_clock::now(),
+        0.0);
     barrier->completed = true;
     state->next_seqno++;
     state->barriers.erase(request.seqno);
@@ -1696,15 +2110,21 @@ CollectiveBatchPrepareResult CommunicatorRegistry::prepare_collective_batch(
             "rank already submitted this group base_seqno");
         return make_batch_error(state->failure_code, state->failure_detail);
     }
-    ensure_rank_report_locked(registry, request.rank).group_prepares++;
+    ensure_rank_report_locked(
+        registry,
+        global_rank_for_local(state, request.rank)).group_prepares++;
 
     if (static_cast<int>(batch->participants.size()) != state->world_size) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.timeout_ms);
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!batch->completed && !batch->failed && !state->failed) {
             if (batch->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
-                record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
-                record_timeout_locked(registry, batch->participants);
+                record_wait_time_locked(
+                    registry,
+                    state,
+                    request.rank,
+                    std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(registry, state, batch->participants);
                 fail_batch_locked(
                     state,
                     batch,
@@ -1714,7 +2134,11 @@ CollectiveBatchPrepareResult CommunicatorRegistry::prepare_collective_batch(
                 return make_batch_error(state->failure_code, state->failure_detail);
             }
         }
-        record_wait_time_locked(registry, request.rank, std::chrono::steady_clock::now() - wait_begin);
+        record_wait_time_locked(
+            registry,
+            state,
+            request.rank,
+            std::chrono::steady_clock::now() - wait_begin);
 
         if (batch->completed) {
             return CollectiveBatchPrepareResult{true, request.base_seqno, "", ""};
@@ -1742,9 +2166,14 @@ ClusterReportSnapshot snapshot_cluster_report() {
     snapshot.reduce_scatter = registry.report.reduce_scatter;
     snapshot.all_to_all = registry.report.all_to_all;
     snapshot.barrier = registry.report.barrier;
+    snapshot.point_to_point = registry.report.point_to_point;
     snapshot.links.reserve(registry.report.links.size());
     snapshot.node_pairs.reserve(registry.report.node_pairs.size());
     snapshot.ranks.reserve(registry.report.ranks.size());
+    snapshot.operation_timeline.reserve(
+        registry.report.operation_timeline.size());
+    snapshot.dropped_operation_timeline_entries =
+        registry.report.dropped_operation_timeline_entries;
 
     for (const auto& entry : registry.report.links) {
         snapshot.links.push_back(entry.second);
@@ -1754,6 +2183,10 @@ ClusterReportSnapshot snapshot_cluster_report() {
     }
     for (const auto& entry : registry.report.ranks) {
         snapshot.ranks.push_back(entry.second);
+    }
+    for (const ClusterOperationTimelineEntry& entry :
+         registry.report.operation_timeline) {
+        snapshot.operation_timeline.push_back(entry);
     }
     std::sort(
         snapshot.links.begin(),
@@ -1792,9 +2225,11 @@ ClusterReportSnapshot snapshot_cluster_report() {
         snapshot.reduce_scatter.calls > 0 ||
         snapshot.all_to_all.calls > 0 ||
         snapshot.barrier.calls > 0 ||
+        snapshot.point_to_point.operations > 0 ||
         !snapshot.links.empty() ||
         !snapshot.node_pairs.empty() ||
-        !snapshot.ranks.empty();
+        !snapshot.ranks.empty() ||
+        !snapshot.operation_timeline.empty();
     return snapshot;
 }
 

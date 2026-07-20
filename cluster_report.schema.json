@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fakegpu.local/schemas/cluster_report.schema.json",
+  "title": "FakeGPU Cluster Communication Report",
+  "type": "object",
+  "required": [
+    "report_version",
+    "schema_version",
+    "schema",
+    "cluster",
+    "collectives",
+    "point_to_point",
+    "links",
+    "node_pairs",
+    "ranks",
+    "operation_timeline"
+  ],
+  "properties": {
+    "report_version": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string",
+      "enum": ["cluster_report.v1"]
+    },
+    "schema": {
+      "type": "string",
+      "enum": ["experimental"],
+      "description": "Legacy compatibility marker; use schema_version for the report contract."
+    },
+    "cluster": {
+      "type": "object",
+      "required": [
+        "mode",
+        "world_size",
+        "node_count",
+        "communicators",
+        "coordinator_transport"
+      ],
+      "properties": {
+        "mode": {"type": "string"},
+        "world_size": {"type": "integer", "minimum": 1},
+        "node_count": {"type": "integer", "minimum": 1},
+        "communicators": {"type": "integer", "minimum": 1},
+        "coordinator_transport": {"type": "string"},
+        "markdown_report_path": {"type": "string"},
+        "name": {"type": "string"},
+        "default_backend": {"type": "string"},
+        "config_path": {"type": "string"}
+      }
+    },
+    "collectives": {
+      "type": "object",
+      "required": [
+        "all_reduce",
+        "reduce",
+        "broadcast",
+        "all_gather",
+        "reduce_scatter",
+        "all_to_all",
+        "barrier"
+      ],
+      "properties": {
+        "all_reduce": {"$ref": "#/$defs/collectiveCounter"},
+        "reduce": {"$ref": "#/$defs/collectiveCounter"},
+        "broadcast": {"$ref": "#/$defs/collectiveCounter"},
+        "all_gather": {"$ref": "#/$defs/collectiveCounter"},
+        "reduce_scatter": {"$ref": "#/$defs/collectiveCounter"},
+        "all_to_all": {"$ref": "#/$defs/collectiveCounter"},
+        "barrier": {"$ref": "#/$defs/collectiveCounter"}
+      }
+    },
+    "point_to_point": {
+      "type": "object",
+      "required": [
+        "operations",
+        "sends",
+        "bytes",
+        "estimated_time_us_total",
+        "contention_penalty_us_total"
+      ],
+      "properties": {
+        "operations": {"type": "integer", "minimum": 0},
+        "sends": {"type": "integer", "minimum": 0},
+        "bytes": {"type": "integer", "minimum": 0},
+        "estimated_time_us_total": {"type": "number", "minimum": 0},
+        "contention_penalty_us_total": {"type": "number", "minimum": 0}
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/link"}
+    },
+    "node_pairs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/nodePair"}
+    },
+    "ranks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/rank"}
+    },
+    "operation_timeline": {
+      "type": "object",
+      "required": ["retained_entries", "dropped_entries", "entries"],
+      "properties": {
+        "retained_entries": {"type": "integer", "minimum": 0},
+        "dropped_entries": {"type": "integer", "minimum": 0},
+        "entries": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/operationTimelineEntry"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "collectiveCounter": {
+      "type": "object",
+      "required": [
+        "calls",
+        "bytes",
+        "estimated_time_us_total",
+        "contention_penalty_us_total"
+      ],
+      "properties": {
+        "calls": {"type": "integer", "minimum": 0},
+        "bytes": {"type": "integer", "minimum": 0},
+        "estimated_time_us_total": {"type": "number", "minimum": 0},
+        "contention_penalty_us_total": {"type": "number", "minimum": 0}
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": [
+        "src",
+        "dst",
+        "scope",
+        "samples",
+        "operations",
+        "collective_operations",
+        "point_to_point_operations",
+        "bytes",
+        "peak_bytes_per_operation",
+        "bandwidth_gbps",
+        "avg_latency_us",
+        "estimated_time_us_total",
+        "contention_penalty_us_total",
+        "average_estimated_throughput_gbps",
+        "peak_estimated_throughput_gbps"
+      ],
+      "properties": {
+        "src": {"type": "string"},
+        "dst": {"type": "string"},
+        "scope": {
+          "type": "string",
+          "enum": ["intra_node", "inter_node"]
+        },
+        "samples": {"type": "integer", "minimum": 1},
+        "operations": {"type": "integer", "minimum": 1},
+        "collective_operations": {"type": "integer", "minimum": 0},
+        "point_to_point_operations": {"type": "integer", "minimum": 0},
+        "bytes": {"type": "integer", "minimum": 0},
+        "peak_bytes_per_operation": {"type": "integer", "minimum": 0},
+        "bandwidth_gbps": {"type": "number", "minimum": 0},
+        "avg_latency_us": {"type": "number", "minimum": 0},
+        "estimated_time_us_total": {"type": "number", "minimum": 0},
+        "contention_penalty_us_total": {"type": "number", "minimum": 0},
+        "average_estimated_throughput_gbps": {"type": "number", "minimum": 0},
+        "peak_estimated_throughput_gbps": {"type": "number", "minimum": 0}
+      }
+    },
+    "direction": {
+      "type": "object",
+      "required": [
+        "transfers",
+        "total_bytes",
+        "peak_bytes_per_operation",
+        "model_bandwidth_gbps",
+        "avg_latency_us",
+        "estimated_time_us_total",
+        "contention_penalty_us_total",
+        "average_estimated_throughput_gbps",
+        "peak_estimated_throughput_gbps"
+      ],
+      "properties": {
+        "transfers": {"type": "integer", "minimum": 0},
+        "total_bytes": {"type": "integer", "minimum": 0},
+        "peak_bytes_per_operation": {"type": "integer", "minimum": 0},
+        "model_bandwidth_gbps": {"type": "number", "minimum": 0},
+        "avg_latency_us": {"type": "number", "minimum": 0},
+        "estimated_time_us_total": {"type": "number", "minimum": 0},
+        "contention_penalty_us_total": {"type": "number", "minimum": 0},
+        "average_estimated_throughput_gbps": {"type": "number", "minimum": 0},
+        "peak_estimated_throughput_gbps": {"type": "number", "minimum": 0}
+      }
+    },
+    "nodePair": {
+      "type": "object",
+      "required": [
+        "node_a",
+        "node_b",
+        "scope",
+        "operations",
+        "collective_operations",
+        "point_to_point_operations",
+        "a_to_b",
+        "b_to_a",
+        "total_bytes",
+        "peak_combined_bytes_per_operation",
+        "estimated_time_us_total",
+        "contention_penalty_us_total",
+        "average_estimated_throughput_gbps",
+        "peak_estimated_throughput_gbps"
+      ],
+      "properties": {
+        "node_a": {"type": "string"},
+        "node_b": {"type": "string"},
+        "scope": {"type": "string", "enum": ["inter_node"]},
+        "operations": {"type": "integer", "minimum": 0},
+        "collective_operations": {"type": "integer", "minimum": 0},
+        "point_to_point_operations": {"type": "integer", "minimum": 0},
+        "a_to_b": {"$ref": "#/$defs/direction"},
+        "b_to_a": {"$ref": "#/$defs/direction"},
+        "total_bytes": {"type": "integer", "minimum": 0},
+        "peak_combined_bytes_per_operation": {"type": "integer", "minimum": 0},
+        "estimated_time_us_total": {"type": "number", "minimum": 0},
+        "contention_penalty_us_total": {"type": "number", "minimum": 0},
+        "average_estimated_throughput_gbps": {"type": "number", "minimum": 0},
+        "peak_estimated_throughput_gbps": {"type": "number", "minimum": 0}
+      }
+    },
+    "rank": {
+      "type": "object",
+      "required": [
+        "rank",
+        "node",
+        "wait_time_ms",
+        "timeouts",
+        "communicator_inits",
+        "collective_calls",
+        "point_to_point_calls",
+        "barrier_calls",
+        "group_prepares"
+      ],
+      "properties": {
+        "rank": {"type": "integer", "minimum": 0},
+        "node": {"type": "string"},
+        "wait_time_ms": {"type": "number", "minimum": 0},
+        "timeouts": {"type": "integer", "minimum": 0},
+        "communicator_inits": {"type": "integer", "minimum": 0},
+        "collective_calls": {"type": "integer", "minimum": 0},
+        "point_to_point_calls": {"type": "integer", "minimum": 0},
+        "barrier_calls": {"type": "integer", "minimum": 0},
+        "group_prepares": {"type": "integer", "minimum": 0}
+      }
+    },
+    "operationTimelineEntry": {
+      "type": "object",
+      "required": [
+        "index",
+        "comm_id",
+        "seqno",
+        "kind",
+        "operation",
+        "buffer_transport",
+        "ranks",
+        "logical_payload_bytes",
+        "socket_request_payload_bytes",
+        "socket_response_payload_bytes",
+        "rendezvous_wait_us",
+        "execution_time_us",
+        "coordinator_duration_us",
+        "modeled_time_us"
+      ],
+      "properties": {
+        "index": {"type": "integer", "minimum": 1},
+        "comm_id": {"type": "integer", "minimum": 1},
+        "seqno": {"type": "integer", "minimum": 1},
+        "kind": {
+          "type": "string",
+          "enum": ["collective", "point_to_point", "barrier"]
+        },
+        "operation": {"type": "string"},
+        "buffer_transport": {
+          "type": "string",
+          "enum": [
+            "shared_memory",
+            "socket_payload",
+            "proxy_only",
+            "control"
+          ]
+        },
+        "ranks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "logical_payload_bytes": {"type": "integer", "minimum": 0},
+        "socket_request_payload_bytes": {"type": "integer", "minimum": 0},
+        "socket_response_payload_bytes": {"type": "integer", "minimum": 0},
+        "rendezvous_wait_us": {"type": "number", "minimum": 0},
+        "execution_time_us": {"type": "number", "minimum": 0},
+        "coordinator_duration_us": {"type": "number", "minimum": 0},
+        "modeled_time_us": {"type": "number", "minimum": 0}
+      }
+    }
+  }
+}

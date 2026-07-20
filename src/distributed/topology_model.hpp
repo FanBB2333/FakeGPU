@@ -61,6 +61,13 @@ public:
         CollectiveTopologyEstimate& out,
         std::string& error) const;
 
+    bool estimate_ring_collective(
+        CollectiveType type,
+        std::uint64_t bytes_per_rank,
+        const std::vector<int>& participant_ranks,
+        CollectiveTopologyEstimate& out,
+        std::string& error) const;
+
 private:
     ClusterConfigModel config_;
     std::unordered_map<int, std::string> node_by_rank_;

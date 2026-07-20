@@ -31,7 +31,8 @@ It does **not** attempt to reproduce protocol-level NCCL, NVLink, RDMA, or Infin
 
 - `src/distributed/communicator.cpp` tracks pending and active communicators.
 - Collectives wait for all required participants, then execute once the communicator state is complete.
-- Rank-level wait time, timeouts, collective counters, directional link totals, and per-operation peaks feed the cluster report.
+- Rank-level wait time, timeouts, collective/P2P counters, directional link totals, and per-operation peaks feed the cluster report.
+- Split communicators preserve local-to-global rank membership, so subgroup topology estimates do not use unrelated cluster ranks.
 - `src/distributed/cluster_report_writer.cpp` emits exact JSON counters and a Markdown table containing every configured node pair.
 
 ### Coordinator process
@@ -432,11 +433,12 @@ faults:
 
 ## 15. 报告与可观测性
 
-建议在现有 `fake_gpu_report.json` 之外，新增 cluster 级报告，例如：
+当前会在 `fake_gpu_report.json` 之外生成 cluster 级报告，结构示例如下：
 
 ```json
 {
-  "report_version": "1.5.2",
+  "report_version": "1.5.3",
+  "schema_version": "cluster_report.v1",
   "cluster": {
     "world_size": 8,
     "node_count": 2,
@@ -445,6 +447,11 @@ faults:
   "collectives": {
     "all_reduce": {"calls": 120, "bytes": 987654321},
     "all_gather": {"calls": 30, "bytes": 123456789}
+  },
+  "point_to_point": {
+    "operations": 4,
+    "sends": 8,
+    "bytes": 67108864
   },
   "links": [
     {
@@ -458,6 +465,8 @@ faults:
     {
       "node_a": "node0",
       "node_b": "node1",
+      "collective_operations": 150,
+      "point_to_point_operations": 4,
       "total_bytes": 913578246,
       "peak_combined_bytes_per_operation": 134217728,
       "average_estimated_throughput_gbps": 18.42
@@ -468,24 +477,34 @@ faults:
       "rank": 0,
       "node": "node0",
       "wait_time_ms": 321.5,
-      "timeouts": 0
+      "timeouts": 0,
+      "point_to_point_calls": 4
     }
-  ]
+  ],
+  "operation_timeline": {
+    "retained_entries": 154,
+    "dropped_entries": 0,
+    "entries": []
+  }
 }
 ```
 
 建议关注的指标：
 
 - 每类 collective 的调用次数与字节数
+- P2P 操作数、发送数、字节数，以及 collective/P2P 节点对分类
 - 每个 rank 的等待时间、最长 barrier 卡顿
 - 每条虚拟链路的累计流量和平均耗时
 - 配置中全部节点对的方向总量、双向总量、单次操作峰值和模型吞吐
 - 失败 / 超时 / abort 次数
 - chunked transfer 的分片数量与回退次数
+- coordinator 观测时间与模型时间的差异；前者不包含客户端准备和最终响应送达
 
-建议补充一条实现约束：
+当前报告契约：
 
-- Step 1 ~ Step 15 的 cluster report schema 可以标记为 experimental，只保证核心字段存在，不宜过早承诺长期稳定的 JSON 结构
+- `cluster_report.schema.json` 定义 `cluster_report.v1`，检查器默认执行 schema 校验。
+- legacy `schema: experimental` 字段暂时保留给旧消费者；新代码应读取 `schema_version`。
+- 兼容字段可在 v1 内增加；删除字段或改变含义时需要升级 schema version。
 
 ## 16. 代码结构建议
 

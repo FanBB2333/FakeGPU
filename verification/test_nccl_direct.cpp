@@ -1,4 +1,5 @@
 #include "../src/distributed/cluster_coordinator.hpp"
+#include "../src/distributed/cluster_report_writer.hpp"
 #include "../src/cuda/cuda_driver_defs.hpp"
 #include "../src/nccl/nccl_defs.hpp"
 
@@ -42,6 +43,29 @@ void require_result(ncclResult_t actual, ncclResult_t expected, const std::strin
             message + ": expected " + ncclGetErrorString(expected) +
             ", got " + ncclGetErrorString(actual));
     }
+}
+
+void dump_cluster_report() {
+    const char* report_path = std::getenv("FAKEGPU_CLUSTER_REPORT_PATH");
+    if (!report_path || !*report_path) {
+        return;
+    }
+
+    fake_gpu::distributed::DistributedConfig config =
+        fake_gpu::distributed::parse_distributed_config_from_env();
+    if (config.mode == fake_gpu::distributed::DistributedMode::Disabled) {
+        config.mode = fake_gpu::distributed::DistributedMode::Simulate;
+    }
+    const fake_gpu::distributed::ClusterReportSnapshot snapshot =
+        fake_gpu::distributed::snapshot_cluster_report();
+    std::string error;
+    require(
+        fake_gpu::distributed::write_cluster_report_files(
+            config,
+            snapshot,
+            report_path,
+            error),
+        "failed to write NCCL direct cluster report: " + error);
 }
 
 class CoordinatorFixture {
@@ -338,7 +362,7 @@ void run_comm_init_all_invalid_case() {
     require(comms[0] == nullptr && comms[1] == nullptr, "invalid ncclCommInitAll should not mutate outputs");
 }
 
-void run_comm_split_case() {
+void run_comm_split_case(bool include_parent_collective = true) {
     const int world_size = 4;
     ncclUniqueId unique_id {};
     require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
@@ -425,29 +449,36 @@ void run_comm_split_case() {
         "single-rank subgroup allreduce failed");
     require(color1_recv == 7.0f, "single-rank subgroup allreduce should preserve value");
 
-    std::array<float, world_size> parent_send = {1.0f, 2.0f, 3.0f, 4.0f};
-    std::array<float, world_size> parent_recv = {0.0f, 0.0f, 0.0f, 0.0f};
-    std::array<ncclResult_t, world_size> parent_results = {
-        ncclInternalError, ncclInternalError, ncclInternalError, ncclInternalError};
-    std::vector<std::thread> parent_threads;
-    for (int rank = 0; rank < world_size; ++rank) {
-        parent_threads.emplace_back([&, rank]() {
-            parent_results[static_cast<std::size_t>(rank)] = ncclAllReduce(
-                &parent_send[static_cast<std::size_t>(rank)],
-                &parent_recv[static_cast<std::size_t>(rank)],
-                1,
-                ncclFloat32,
-                ncclSum,
-                parents[static_cast<std::size_t>(rank)],
-                nullptr);
-        });
-    }
-    for (std::thread& thread : parent_threads) {
-        thread.join();
-    }
-    for (int rank = 0; rank < world_size; ++rank) {
-        require_result(parent_results[static_cast<std::size_t>(rank)], ncclSuccess, "parent allreduce after split failed");
-        require(parent_recv[static_cast<std::size_t>(rank)] == 10.0f, "parent allreduce after split mismatch");
+    if (include_parent_collective) {
+        std::array<float, world_size> parent_send = {1.0f, 2.0f, 3.0f, 4.0f};
+        std::array<float, world_size> parent_recv = {0.0f, 0.0f, 0.0f, 0.0f};
+        std::array<ncclResult_t, world_size> parent_results = {
+            ncclInternalError, ncclInternalError, ncclInternalError, ncclInternalError};
+        std::vector<std::thread> parent_threads;
+        for (int rank = 0; rank < world_size; ++rank) {
+            parent_threads.emplace_back([&, rank]() {
+                parent_results[static_cast<std::size_t>(rank)] = ncclAllReduce(
+                    &parent_send[static_cast<std::size_t>(rank)],
+                    &parent_recv[static_cast<std::size_t>(rank)],
+                    1,
+                    ncclFloat32,
+                    ncclSum,
+                    parents[static_cast<std::size_t>(rank)],
+                    nullptr);
+            });
+        }
+        for (std::thread& thread : parent_threads) {
+            thread.join();
+        }
+        for (int rank = 0; rank < world_size; ++rank) {
+            require_result(
+                parent_results[static_cast<std::size_t>(rank)],
+                ncclSuccess,
+                "parent allreduce after split failed");
+            require(
+                parent_recv[static_cast<std::size_t>(rank)] == 10.0f,
+                "parent allreduce after split mismatch");
+        }
     }
 
     for (ncclComm_t child : children) {
@@ -1035,9 +1066,24 @@ void run_invalid_stream_collective_case() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
         CoordinatorFixture fixture;
+
+        if (argc == 3 &&
+            std::string(argv[1]) == "--scenario" &&
+            std::string(argv[2]) == "communication-report") {
+            run_comm_split_case(false);
+            run_send_recv_multi_pair_case();
+            dump_cluster_report();
+            std::cout << "NCCL communication report scenario passed" << std::endl;
+            return 0;
+        }
+        if (argc != 1) {
+            throw std::runtime_error(
+                "usage: fakegpu_nccl_direct_test "
+                "[--scenario communication-report]");
+        }
 
         int version = 0;
         require_result(ncclGetVersion(&version), ncclSuccess, "ncclGetVersion failed");

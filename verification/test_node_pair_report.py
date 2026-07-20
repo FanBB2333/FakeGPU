@@ -148,6 +148,8 @@ def main() -> int:
         for key in active_pairs:
             pair = pairs[key]
             assert pair["operations"] > 0
+            assert pair["collective_operations"] == pair["operations"]
+            assert pair["point_to_point_operations"] == 0
             assert pair["total_bytes"] > 0
             assert pair["peak_combined_bytes_per_operation"] > 0
             assert pair["average_estimated_throughput_gbps"] > 0
@@ -160,6 +162,8 @@ def main() -> int:
         for key in inactive_pairs:
             pair = pairs[key]
             assert pair["operations"] == 0
+            assert pair["collective_operations"] == 0
+            assert pair["point_to_point_operations"] == 0
             assert pair["total_bytes"] == 0
             assert pair["peak_combined_bytes_per_operation"] == 0
             assert pair["a_to_b"]["model_bandwidth_gbps"] == 25

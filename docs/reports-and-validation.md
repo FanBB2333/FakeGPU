@@ -43,7 +43,7 @@ Example shape:
 
 ```json
 {
-  "report_version": "1.5.2",
+  "report_version": "1.5.3",
   "mode": "simulate",
   "devices": [
     {
@@ -74,23 +74,36 @@ That report includes:
 
 - cluster mode, world size, node count, and coordinator transport
 - per-collective counts, bytes, and estimated time
+- point-to-point operation, send, and byte totals
 - directional link statistics for intra-node and inter-node paths
 - every distinct node pair from the configured cluster, including zero-traffic pairs
-- directional and combined byte totals, largest payload per operation, transfer counts, modeled average/peak throughput, estimated time, and contention
-- per-rank wait time, timeout count, communicator init count, and collective-call count
+- collective/P2P operation breakdowns, directional and combined byte totals, largest payload per operation, transfer counts, modeled average/peak throughput, estimated time, and contention
+- per-rank wait time, timeout count, communicator init count, and collective/P2P call counts
+- a bounded recent-operation timeline containing global communicator ranks, logical and socket payloads, rendezvous time, coordinator execution time, and topology-modeled time
+
+The repository-root `cluster_report.schema.json` defines the
+`cluster_report.v1` JSON contract. `verification/check_cluster_report.py`
+validates it by default and can additionally require P2P traffic with
+`--expect-point-to-point`.
 
 The Markdown companion presents the node-pair data as a complete table:
 
-| Node A | Node B | A → B total | B → A total | Combined total | A → B peak/op | B → A peak/op | Pair peak/op | Operations | Transfers | Avg est. Gbit/s | Peak est. Gbit/s |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `node0` | `node1` | 4.00 GiB | 4.00 GiB | 8.00 GiB | 64.00 MiB | 64.00 MiB | 128.00 MiB | 64 | 128 | 18.420 | 21.305 |
-| `node0` | `node2` | 0 B | 0 B | 0 B | 0 B | 0 B | 0 B | 0 | 0 | 0.000 | 0.000 |
+| Node A | Node B | Combined total | Pair peak/op | Operations | Collective ops | P2P ops | Transfers | Avg est. Gbit/s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `node0` | `node1` | 8.00 GiB | 128.00 MiB | 64 | 60 | 4 | 128 | 18.420 |
+| `node0` | `node2` | 0 B | 0 B | 0 | 0 | 0 | 0 | 0.000 |
 
 `peak/op` is the largest payload attributed to the direction or unordered
 node pair during one completed communication operation. Throughput, time, and
 contention values come from the configured topology model; they are not packet
 captures or measured NIC/NCCL bandwidth. The JSON file retains exact integer
 byte counters for automated processing.
+
+The timeline's `coordinator_duration_us` begins when the first complete rank
+request enters the registry and ends after coordinator-side execution. It does
+not include client preparation or final response delivery. Retention defaults
+to 4096 latest entries and can be changed with
+`FAKEGPU_CLUSTER_REPORT_MAX_OPERATIONS`.
 
 This report is useful for validating control flow, topology modeling, and broad communication-volume trends.
 
