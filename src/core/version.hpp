@@ -1,2 +1,2 @@
 #pragma once
-#define FAKEGPU_VERSION "1.5.0"
+#define FAKEGPU_VERSION "1.5.2"

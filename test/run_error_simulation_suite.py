@@ -876,7 +876,7 @@ __PEAK_VRAM_SUMMARY_SECTION__
           <div class="id">P1</div>
           <div class="info">
             <div class="title">Enhanced Report System</div>
-            <div class="desc">Report v1.5.0 &middot; GPU Profile &middot; Kernel GEMM Stats &middot; Terminal Summary</div>
+            <div class="desc">Report v1.5.2 &middot; GPU Profile &middot; Kernel GEMM Stats &middot; Terminal Summary</div>
           </div>
           <div class="badge pass">5/5 PASS</div>
         </div>
@@ -924,7 +924,7 @@ __PEAK_VRAM_SUMMARY_SECTION__
           <li>Python: <code>3.11</code> (miniforge3/envs/py311)</li>
           <li>PyTorch: <code>2.6.0 &ndash; 2.11.0</code> (CPU-only, all verified)</li>
           <li>FakeGPU build: <code>build/*.dylib</code> (CMake, C++17)</li>
-          <li>Report format: <code>v1.5.0</code> (JSON)</li>
+          <li>Report format: <code>v1.5.2</code> (JSON)</li>
         </ul>
       </div>
     </section>
@@ -939,14 +939,14 @@ __PEAK_VRAM_SUMMARY_SECTION__
       <div class="phase-banner p1">
         <div class="phase-num">P1</div>
         <div class="phase-info">
-          <div class="ptitle">Report v1.5.0 &middot; GPU Profile &middot; Kernel Launch Tracking &middot; GEMM-by-dtype &middot; Terminal Summary</div>
+          <div class="ptitle">Report v1.5.2 &middot; GPU Profile &middot; Kernel Launch Tracking &middot; GEMM-by-dtype &middot; Terminal Summary</div>
           <div class="pdesc">Upgrade GlobalState, Monitor, and Driver stubs to record and report per-device kernel launches, typed GEMM stats, and architecture profile info.</div>
         </div>
       </div>
       <div class="results">
         <div class="row pass" onclick="this.classList.toggle('open')">
           <div class="id">P1-1</div>
-          <div class="info"><div class="title">cmake --build build</div><div class="desc">C++ library full compilation with new GlobalState fields, Monitor v1.5.0, and driver stubs</div></div>
+          <div class="info"><div class="title">cmake --build build</div><div class="desc">C++ library full compilation with new GlobalState fields, Monitor v1.5.2, and driver stubs</div></div>
           <div class="badge pass">PASS</div>
           <div class="detail">
             <div class="kv">Command: <code>cmake --build build</code></div>
@@ -975,7 +975,7 @@ __PEAK_VRAM_SUMMARY_SECTION__
 
         <div class="row pass" onclick="this.classList.toggle('open')">
           <div class="id">P1-3</div>
-          <div class="info"><div class="title">test_report_smoke.py</div><div class="desc">Integration: builds library, runs CUDA exercise, validates JSON v1.5.0 structure and terminal summary</div></div>
+          <div class="info"><div class="title">test_report_smoke.py</div><div class="desc">Integration: builds library, runs CUDA exercise, validates JSON v1.5.2 structure and terminal summary</div></div>
           <div class="badge pass">PASS</div>
           <div class="detail">
             <div class="kv">Command: <code>python3 test/test_report_smoke.py</code></div>
@@ -1020,8 +1020,8 @@ __PEAK_VRAM_SUMMARY_SECTION__
 <span class="dim">======================================================</span>
       </div>
 
-      <h3>Report v1.5.0 JSON Sample (Device 0)</h3>
-      <pre class="json-sample">{{"report_version": "1.5.0", "mode": "simulate", "devices": [{{"index": 0, "name": "Fake NVIDIA A100-SXM4-80GB", "gpu_profile": {{"architecture": "Ampere", "compute_capability": "8.0", "supported_types": ["fp32", "tf32", "fp16", "bf16", "int8"]}}, "total_memory": 85899345920, "used_memory_peak": 67108864, "kernel_launches": {{"total": 0}}, "gemm_by_dtype": {{}}}}]}}</pre>
+      <h3>Report v1.5.2 JSON Sample (Device 0)</h3>
+      <pre class="json-sample">{{"report_version": "1.5.2", "mode": "simulate", "devices": [{{"index": 0, "name": "Fake NVIDIA A100-SXM4-80GB", "gpu_profile": {{"architecture": "Ampere", "compute_capability": "8.0", "supported_types": ["fp32", "tf32", "fp16", "bf16", "int8"]}}, "total_memory": 85899345920, "used_memory_peak": 67108864, "kernel_launches": {{"total": 0}}, "gemm_by_dtype": {{}}}}]}}</pre>
     </section>
   </div>
 
@@ -1223,7 +1223,7 @@ MoEGPT model: 2.40M parameters, 4 experts, top-2
       <div class="card pass">
         <h4>All Tests Passing</h4>
         <ul>
-          <li>P1: Report v1.5.0 + terminal summary</li>
+          <li>P1: Report v1.5.2 + terminal summary</li>
           <li>P2: HW compat strict/relaxed</li>
           <li>P3: MoE model + training + summary proof experiments</li>
           <li>P4: {p4_pass}/{p4_total} error simulations</li>

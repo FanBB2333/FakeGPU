@@ -68,7 +68,7 @@ def main() -> int:
 
     version = report.get("report_version")
     if not isinstance(version, str):
-        _die(f"unexpected report_version={version!r} (expected string like '1.5.0')")
+        _die(f"unexpected report_version={version!r} (expected a version string)")
 
     schema = _require(report, "schema", ctx="root")
     if schema != "experimental":
