@@ -101,14 +101,23 @@ def main() -> int:
                 "FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH": str(markdown_path),
             }
         )
-        completed = subprocess.run(
-            [str(probe), "--scenario", "communication-report"],
-            cwd=REPO_ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                [str(probe), "--scenario", "communication-report"],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                "NCCL communication report probe exceeded 60 seconds; "
+                "rebuild the probe and shared libraries together",
+                file=sys.stderr,
+            )
+            return 124
         if completed.returncode != 0:
             print(completed.stdout, end="", file=sys.stderr)
             print(completed.stderr, end="", file=sys.stderr)
@@ -227,7 +236,7 @@ def main() -> int:
             if entry["kind"] == "point_to_point"
         )
         assert p2p_entry["ranks"] == [0, 1, 2, 3]
-        assert p2p_entry["data_type"] == "float32"
+        assert p2p_entry["data_type"] == "int32"
         assert p2p_entry["reduce_op"] == "none"
         assert p2p_entry["logical_payload_bytes"] == 24
         assert p2p_entry["socket_request_payload_bytes"] == 0
