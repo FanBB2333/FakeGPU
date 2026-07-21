@@ -208,6 +208,8 @@ struct ClusterOperationTimelineEntry {
     std::uint64_t seqno = 0;
     std::string kind;
     std::string operation;
+    std::string data_type;
+    std::string reduce_op;
     std::string buffer_transport;
     std::vector<int> ranks;
     std::uint64_t logical_payload_bytes = 0;

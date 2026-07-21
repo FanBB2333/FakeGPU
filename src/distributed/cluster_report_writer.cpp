@@ -503,6 +503,10 @@ bool write_json_report(
         out << "        \"kind\": \"" << json_escape(entry.kind) << "\",\n";
         out << "        \"operation\": \""
             << json_escape(entry.operation) << "\",\n";
+        out << "        \"data_type\": \""
+            << json_escape(entry.data_type) << "\",\n";
+        out << "        \"reduce_op\": \""
+            << json_escape(entry.reduce_op) << "\",\n";
         out << "        \"buffer_transport\": \""
             << json_escape(entry.buffer_transport) << "\",\n";
         out << "        \"ranks\": [";
@@ -686,10 +690,11 @@ bool write_markdown_report(
         out << "- Markdown shows the latest " << timeline_display_limit
             << " entries; JSON retains the full bounded timeline.\n";
     }
-    out << "\n| # | Kind / operation | Comm:seq | Global ranks | Transport"
+    out << "\n| # | Kind / operation | Data type | Reduce op | Comm:seq"
+        << " | Global ranks | Transport"
         << " | Logical payload | Socket request | Socket response"
         << " | Rendezvous | Execution | Coordinator observed | Modeled |\n";
-    out << "|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|\n";
+    out << "|---:|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|\n";
     for (std::size_t index = timeline_begin;
          index < snapshot.operation_timeline.size();
          ++index) {
@@ -698,6 +703,8 @@ bool write_markdown_report(
         out << "| " << entry.index
             << " | `" << markdown_escape(entry.kind)
             << " / " << markdown_escape(entry.operation)
+            << "` | `" << markdown_escape(entry.data_type)
+            << "` | `" << markdown_escape(entry.reduce_op)
             << "` | `" << entry.comm_id << ':' << entry.seqno
             << "` | `" << format_rank_list(entry.ranks)
             << "` | `" << markdown_escape(entry.buffer_transport)
@@ -711,7 +718,7 @@ bool write_markdown_report(
             << " |\n";
     }
     if (snapshot.operation_timeline.empty()) {
-        out << "| 0 | _No completed communication operations_ |  |  |  | 0 B"
+        out << "| 0 | _No completed communication operations_ |  |  |  |  |  | 0 B"
             << " | 0 B | 0 B | 0.000 us | 0.000 us | 0.000 us"
             << " | 0.000 us |\n";
     }

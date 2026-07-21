@@ -273,6 +273,8 @@ void append_operation_timeline_locked(
     std::uint64_t seqno,
     std::string kind,
     std::string operation,
+    std::string data_type,
+    std::string reduce_op,
     std::string buffer_transport,
     std::uint64_t logical_payload_bytes,
     std::uint64_t socket_request_payload_bytes,
@@ -287,6 +289,8 @@ void append_operation_timeline_locked(
     entry.seqno = seqno;
     entry.kind = std::move(kind);
     entry.operation = std::move(operation);
+    entry.data_type = std::move(data_type);
+    entry.reduce_op = std::move(reduce_op);
     entry.buffer_transport = std::move(buffer_transport);
     entry.ranks = communicator_global_ranks(state);
     entry.logical_payload_bytes = logical_payload_bytes;
@@ -1641,6 +1645,8 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
         request.seqno,
         "point_to_point",
         "send_recv",
+        collective_data_type_name(request.dtype),
+        collective_reduce_op_name(CollectiveReduceOp::None),
         buffer_transport_name(request.transport),
         point_to_point_logical_payload_bytes(p2p),
         total_participant_payload_bytes(p2p->participants),
@@ -1787,6 +1793,8 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
                 request.seqno,
                 "collective",
                 collective_type_name(request.type),
+                collective_data_type_name(request.dtype),
+                collective_reduce_op_name(request.reduce_op),
                 "proxy_only",
                 static_cast<std::uint64_t>(request.bytes) *
                     static_cast<std::uint64_t>(state->world_size),
@@ -1868,6 +1876,8 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
         request.seqno,
         "collective",
         collective_type_name(request.type),
+        collective_data_type_name(request.dtype),
+        collective_reduce_op_name(request.reduce_op),
         buffer_transport_name(request.transport),
         static_cast<std::uint64_t>(request.bytes) *
             static_cast<std::uint64_t>(state->world_size),
@@ -2005,6 +2015,8 @@ BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequ
         request.seqno,
         "barrier",
         "barrier",
+        "none",
+        "none",
         "control",
         0,
         0,

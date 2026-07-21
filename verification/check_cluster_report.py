@@ -703,6 +703,16 @@ def main() -> int:
         )
 
     previous_index = 0
+    valid_data_types = {
+        "none",
+        "int32",
+        "int64",
+        "float16",
+        "bfloat16",
+        "float32",
+        "float64",
+    }
+    valid_reduce_ops = {"none", "sum", "prod", "max", "min", "avg"}
     for index, entry in enumerate(entries):
         ctx = f"operation_timeline.entries[{index}]"
         if not isinstance(entry, dict):
@@ -711,6 +721,12 @@ def main() -> int:
         if entry_index <= previous_index:
             _die(f"{ctx}.index must be strictly increasing")
         previous_index = entry_index
+        data_type = entry.get("data_type")
+        if data_type is not None and data_type not in valid_data_types:
+            _die(f"{ctx}.data_type is unsupported: {data_type!r}")
+        reduce_op = entry.get("reduce_op")
+        if reduce_op is not None and reduce_op not in valid_reduce_ops:
+            _die(f"{ctx}.reduce_op is unsupported: {reduce_op!r}")
         ranks_value = _require(entry, "ranks", ctx=ctx)
         if not isinstance(ranks_value, list) or not ranks_value:
             _die(f"{ctx}.ranks must be a non-empty array")
