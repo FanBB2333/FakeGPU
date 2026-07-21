@@ -284,6 +284,8 @@ def _configure_training_model(model: Any, args: argparse.Namespace, *, static: b
             alpha=args.lora_alpha,
             dropout=args.lora_dropout,
             block_size=args.quantization_block_size,
+            double_quantization=args.quantization_double_quantization,
+            scale_block_size=args.quantization_scale_block_size,
             target_modules=args.lora_target_modules,
             chunk_blocks=args.quantization_chunk_blocks,
         )
@@ -298,6 +300,8 @@ def _configure_training_model(model: Any, args: argparse.Namespace, *, static: b
                 model,
                 rank=args.lora_rank,
                 block_size=args.quantization_block_size,
+                double_quantization=args.quantization_double_quantization,
+                scale_block_size=args.quantization_scale_block_size,
                 target_modules=args.lora_target_modules,
             )
 
@@ -530,7 +534,8 @@ def _common_report(args: argparse.Namespace, torch: Any, transformers: Any, mode
             "backend": "pytorch_native_nf4",
             "format": "nf4_blockwise",
             "block_size": args.quantization_block_size,
-            "double_quantization": False,
+            "double_quantization": bool(args.quantization_double_quantization),
+            "scale_block_size": args.quantization_scale_block_size,
         }
         if args.training_method == "qlora"
         else None,
@@ -884,6 +889,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lora-dropout", type=float, default=0.0)
     parser.add_argument("--lora-target-modules", default="all-linear")
     parser.add_argument("--quantization-block-size", type=int, default=64)
+    parser.add_argument(
+        "--quantization-double-quantization",
+        "--double-quantization",
+        action="store_true",
+    )
+    parser.add_argument("--quantization-scale-block-size", type=int, default=256)
     parser.add_argument("--quantization-chunk-blocks", type=int, default=16_384)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--sequence-length", type=int, default=16)
@@ -907,6 +918,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--lora-dropout must be in [0, 1)")
     if args.quantization_block_size <= 0 or args.quantization_block_size % 2:
         parser.error("--quantization-block-size must be a positive even integer")
+    if args.quantization_scale_block_size <= 0:
+        parser.error("--quantization-scale-block-size must be greater than zero")
     if args.quantization_chunk_blocks <= 0:
         parser.error("--quantization-chunk-blocks must be greater than zero")
     if args.learning_rate <= 0:
