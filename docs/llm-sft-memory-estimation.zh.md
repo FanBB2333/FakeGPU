@@ -71,6 +71,9 @@ $PYTHON verification/compare_qwen_sft_memory.py \
 # 无外部量化依赖的 NF4 QLoRA 参考实现
 --training-method qlora --lora-rank 8
 
+# 对第一层 scale 再做 8-bit 量化
+--training-method qlora --lora-rank 8 --quantization-double-quantization
+
 # non-reentrant gradient checkpointing
 --gradient-checkpointing
 
@@ -82,9 +85,15 @@ $PYTHON verification/compare_qwen_sft_memory.py \
 
 `--training-method qlora` 用于验证量化训练显存，不依赖额外量化包。它会将
 输出 embedding 之外的目标 linear 权重压成每字节两个 NF4 code，每 64 个
-权重保存一个 BF16/FP16 scale，并为每层保留一个很小的 byte lookup table。
-LoRA A/B 参数保持 FP32，与 PEFT 默认的 adapter dtype 一致；optimizer 仍为
-single-tensor AdamW。
+权重保存一个 FP32 absmax。LoRA A/B 参数保持 FP32，与 PEFT 默认的 adapter
+dtype 一致；optimizer 仍为 single-tensor AdamW。
+
+`--quantization-double-quantization` 会进一步压缩 scale：先减去第一层 absmax
+的均值，再使用 bitsandbytes 的 signed dynamic 8-bit map 编码；每 256 个
+scale 保存一个第二层 FP32 absmax，并保留一个 FP32 offset。该格式参照
+[bitsandbytes 官方实现](https://github.com/bitsandbytes-foundation/bitsandbytes/blob/main/bitsandbytes/functional.py)
+与 [QLoRA 论文](https://arxiv.org/abs/2305.14314)。论文给出的平均节省量约为
+每个参数 0.37 bit。
 
 自定义 autograd function 每次只反量化一层权重。backward 计算 input gradient
 时重新反量化，不会让所有 BF16 权重矩阵同时常驻。静态分析先捕获等价的
@@ -92,8 +101,11 @@ PEFT LoRA ATen 图，再用真实 packed storage 替换冻结权重，并加入�
 反量化 workspace。
 
 这条路径可以验证量化权重、adapter gradient、optimizer state 与反量化临时
-张量的生命周期。它不是 bitsandbytes 实现：目前没有 fused 4-bit kernel、
-double quantization、paged optimizer，也不代表 bitsandbytes allocator 的行为。
+张量的生命周期。它不是 bitsandbytes kernel 实现：NF4 与二级 scale lookup
+使用普通 PyTorch 算子，没有 fused 4-bit matmul、paged optimizer，也不代表
+bitsandbytes allocator 的行为。FakeCUDA 报告中的 `runtime_memory_phases` 保留
+CPU tracker 原始值，`memory_phases` 则在计算阶段加入已知的单层反量化
+workspace。
 
 多个 case 完成后，可以生成统一矩阵：
 
@@ -133,19 +145,34 @@ update 主导，因此 checkpointing 主要降低 forward 峰值，对整体峰�
 以下数据使用同一套 Blackwell GPU 软件环境。静态结果标记为 `analytical`，
 因为 packed storage 替换与反量化 workspace 是在 LoRA ATen 图上解析加入的。
 
+### FP32 scale 直接存储
+
 | Case | Checkpoint | Seq. | 可训练参数 | 真实峰值 | 静态峰值 | 静态误差 | FakeCUDA 误差 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| 0.8B QLoRA | 否 | 16 | 5,411,328 | 1.057 GiB | 1.065 GiB | 0.690% | 1.017% |
-| 0.8B QLoRA | 否 | 128 | 5,411,328 | 1.992 GiB | 2.005 GiB | 0.624% | — |
-| 0.8B QLoRA | 是 | 128 | 5,411,328 | 1.178 GiB | 1.191 GiB | 1.083% | — |
-| 2B QLoRA | 否 | 16 | 8,409,600 | 1.999 GiB | 2.027 GiB | 1.414% | — |
-| 2B QLoRA | 是 | 128 | 8,409,600 | 2.096 GiB | 2.132 GiB | 1.703% | — |
+| 0.8B QLoRA | 否 | 16 | 5,411,328 | 1.072 GiB | 1.079 GiB | 0.698% | 0.150% |
+| 0.8B QLoRA | 否 | 128 | 5,411,328 | 2.007 GiB | 2.019 GiB | 0.628% | — |
+| 0.8B QLoRA | 是 | 128 | 5,411,328 | 1.192 GiB | 1.205 GiB | 1.085% | — |
+| 2B QLoRA | 否 | 16 | 8,409,600 | 2.039 GiB | 2.067 GiB | 1.386% | — |
+| 2B QLoRA | 是 | 128 | 8,409,600 | 2.136 GiB | 2.172 GiB | 1.689% | — |
 
-0.8B 模型将 497,614,848 个 linear 权重压为 264,548,352 字节，平均每个
-权重 4.253 bit；2B 模型将 1,372,717,056 个权重压为 729,446,400 字节，
-平均 4.251 bit。0.8B 短序列还完成了 FakeCUDA 的完整 optimizer step：模型
-storage 和随机 batch 指纹完全一致，加载、forward、backward、optimizer 与
-整体显存检查均通过。
+### 8-bit 二级 scale 存储
+
+| Case | Checkpoint | Seq. | 可训练参数 | 真实峰值 | 静态峰值 | 静态误差 | FakeCUDA 误差 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0.8B QLoRA | 否 | 16 | 5,411,328 | 1.051 GiB | 1.058 GiB | 0.700% | 0.165% |
+| 0.8B QLoRA | 否 | 128 | 5,411,328 | 1.986 GiB | 1.998 GiB | 0.629% | — |
+| 0.8B QLoRA | 是 | 128 | 5,411,328 | 1.171 GiB | 1.184 GiB | 1.094% | — |
+| 2B QLoRA | 否 | 16 | 8,409,600 | 1.979 GiB | 2.008 GiB | 1.422% | — |
+| 2B QLoRA | 是 | 128 | 8,409,600 | 2.077 GiB | 2.113 GiB | 1.732% | — |
+
+| 模型 | 量化权重数 | 直接存储 | 直接存储 bit/权重 | 二级量化存储 | 二级量化 bit/权重 | 节省存储 |
+|---|---:|---:|---:|---:|---:|---:|
+| 0.8B | 497,614,848 | 280,098,816 B | 4.503 | 257,085,816 B | 4.133 | 23,013,000 B |
+| 2B | 1,372,717,056 | 772,343,808 B | 4.501 | 708,524,040 B | 4.129 | 63,819,768 B |
+
+二级量化对 0.8B 和 2B 分别节省 0.370 与 0.372 bit/权重。固定随机 batch
+上的 SFT loss 与 FP32 scale 版本相比，最大变化小于 0.018。0.8B 短序列还
+完成了 FakeCUDA 的完整 optimizer step，全部比较项在默认误差阈值内通过。
 
 ## Ampere 与 Blackwell
 
@@ -160,9 +187,9 @@ Ampere GPU（Compute Capability 8.6、PyTorch 2.12.1+cu130）复测结果如下�
 Ampere 8.6 与 Blackwell 12.0 使用。backend workspace 仍需针对新的 attention
 实现和超出校准范围的 shape 单独验证。
 
-原生 NF4 路径也在两张卡上得到逐字节相同的峰值：0.8B sequence 16 为
-1.057 GiB，checkpointed sequence 128 为 1.178 GiB；对应静态误差分别为
-0.690% 和 1.083%。
+使用二级 scale 的 NF4 路径在两张卡上得到逐字节相同的结果：0.8B sequence
+16 的真实峰值为 1.051 GiB，checkpointed sequence 128 为 1.171 GiB；对应
+静态峰值为 1.058 GiB 和 1.184 GiB。持久存储和随机 batch 指纹也完全一致。
 
 ## 首步与稳态显存
 
@@ -197,9 +224,9 @@ CPU-backed FakeCUDA 的 forward 和整体峰值在这两组测试中较接近真
 ATen storage-liveness 静态图作为 backward 的判定值，仍保留运行时数值用于
 诊断。
 
-当前结果覆盖全参数、LoRA、原生 NF4 QLoRA 参考实现、单卡、BF16、
-single-tensor AdamW、gradient checkpointing、gradient accumulation 2，
-以及 Transformers 的 PyTorch fallback linear-attention 实现。bitsandbytes
-QLoRA、double quantization、paged/量化 optimizer、Flash Linear Attention、
-自定义 CUDA/Triton kernel 和多卡 sharding 仍需分别验证，不能直接套用上述
-误差。
+当前结果覆盖全参数、LoRA、使用 FP32 scale 或二级 scale 的原生 NF4 QLoRA
+参考实现、单卡、BF16、single-tensor AdamW、gradient checkpointing、
+gradient accumulation 2，以及 Transformers 的 PyTorch fallback
+linear-attention 实现。外部 bitsandbytes fused kernel 与 allocator、paged/量化
+optimizer、Flash Linear Attention、自定义 CUDA/Triton kernel 和多卡 sharding
+仍需分别验证，不能直接套用上述误差。

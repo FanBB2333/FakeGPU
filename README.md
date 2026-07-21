@@ -218,9 +218,18 @@ For training, `verification/qwen_sft_memory_worker.py` can run the same
 full-parameter, LoRA, or packed-NF4 QLoRA reference step on real CUDA,
 CPU-backed FakeCUDA, or a static ATen graph. The maintained 0.8B and 2B BF16
 matrix covers gradient checkpointing and accumulation while distinguishing
-first-step from steady-state AdamW memory. The QLoRA reference needs no
-external quantization package, but it does not claim bitsandbytes fused-kernel
-equivalence; see
+first-step from steady-state AdamW memory. The QLoRA reference supports direct
+FP32 block scales and optional bitsandbytes-style nested 8-bit scale storage:
+
+```bash
+python3 verification/qwen_sft_memory_worker.py \
+  --mode static --model-dir /models/Qwen3.5-0.8B \
+  --training-method qlora --quantization-double-quantization \
+  --output build/qwen-sft-qlora-static.json
+```
+
+It needs no external quantization package, but it does not claim bitsandbytes
+fused-kernel equivalence; see
 [LLM SFT Memory Estimation](docs/llm-sft-memory-estimation.md).
 
 ## Runtime model
