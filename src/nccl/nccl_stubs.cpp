@@ -1715,7 +1715,8 @@ ncclResult_t submit_collective(
                     byte_pointer(input_bytes, chunk_offset_bytes),
                     chunk.input_bytes,
                     chunk_input,
-                    error)) {
+                    error,
+                    stream)) {
                 return fail_with(comm, ncclSystemError, error);
             }
             if (has_premul_sum &&
@@ -1746,7 +1747,8 @@ ncclResult_t submit_collective(
                     byte_pointer(output_bytes, chunk_offset_bytes),
                     chunk_output.data(),
                     chunk.output_bytes,
-                    error)) {
+                    error,
+                    stream)) {
                 return fail_with(comm, ncclSystemError, error);
             }
             continue;
@@ -1759,7 +1761,8 @@ ncclResult_t submit_collective(
                         byte_pointer(input_bytes, chunk_offset_bytes),
                         chunk.input_bytes,
                         chunk_input,
-                        error)) {
+                        error,
+                        stream)) {
                     return fail_with(comm, ncclSystemError, error);
                 }
             }
@@ -1782,7 +1785,8 @@ ncclResult_t submit_collective(
                     byte_pointer(output_bytes, chunk_offset_bytes),
                     chunk_output.data(),
                     chunk.output_bytes,
-                    error)) {
+                    error,
+                    stream)) {
                 return fail_with(comm, ncclSystemError, error);
             }
             continue;
@@ -1794,7 +1798,8 @@ ncclResult_t submit_collective(
                     byte_pointer(input_bytes, chunk_offset_bytes),
                     chunk.input_bytes,
                     chunk_input,
-                    error)) {
+                    error,
+                    stream)) {
                 return fail_with(comm, ncclSystemError, error);
             }
             std::vector<char> chunk_output(chunk.output_bytes, 0);
@@ -1824,7 +1829,8 @@ ncclResult_t submit_collective(
                     byte_pointer(output_bytes, dst_offset),
                     chunk_output.data() + src_offset,
                     chunk.input_bytes,
-                    error)) {
+                    error,
+                    stream)) {
                     return fail_with(comm, ncclSystemError, error);
                 }
             }
@@ -1845,7 +1851,8 @@ ncclResult_t submit_collective(
                         byte_pointer(input_bytes, src_offset),
                         chunk.element_count * dtype_size,
                         peer_slice,
-                        error)) {
+                        error,
+                        stream)) {
                     return fail_with(comm, ncclSystemError, error);
                 }
                 std::memcpy(chunk_input.data() + dst_offset, peer_slice.data(), peer_slice.size());
@@ -1878,7 +1885,8 @@ ncclResult_t submit_collective(
                         byte_pointer(output_bytes, dst_offset),
                         chunk_output.data() + src_offset,
                         chunk.element_count * dtype_size,
-                        error)) {
+                        error,
+                        stream)) {
                     return fail_with(comm, ncclSystemError, error);
                 }
             }
@@ -1899,7 +1907,8 @@ ncclResult_t submit_collective(
                         byte_pointer(input_bytes, src_offset),
                         chunk.output_bytes,
                         rank_slice,
-                        error)) {
+                        error,
+                        stream)) {
                     return fail_with(comm, ncclSystemError, error);
                 }
                 std::memcpy(chunk_input.data() + dst_offset, rank_slice.data(), chunk.output_bytes);
@@ -1933,7 +1942,8 @@ ncclResult_t submit_collective(
                     byte_pointer(output_bytes, chunk_offset_bytes),
                     chunk_output.data(),
                     chunk.output_bytes,
-                    error)) {
+                    error,
+                    stream)) {
                 return fail_with(comm, ncclSystemError, error);
             }
             continue;
@@ -2041,7 +2051,12 @@ ncclResult_t submit_point_to_point(
 
     if (p2p_type == fake_gpu::distributed::PointToPointType::Send) {
         std::vector<char> host_input;
-        if (!fake_gpu::nccl::copy_buffer_to_host(local_input, bytes, host_input, error)) {
+        if (!fake_gpu::nccl::copy_buffer_to_host(
+                local_input,
+                bytes,
+                host_input,
+                error,
+                stream)) {
             return fail_with(comm, ncclSystemError, error);
         }
         if (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload) {
@@ -2098,7 +2113,12 @@ ncclResult_t submit_point_to_point(
             response.payload.size() != bytes) {
             return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent point-to-point socket payload");
         }
-        if (!fake_gpu::nccl::copy_host_to_buffer(local_output, source, bytes, error)) {
+        if (!fake_gpu::nccl::copy_host_to_buffer(
+                local_output,
+                source,
+                bytes,
+                error,
+                stream)) {
             return fail_with(comm, ncclSystemError, error);
         }
     }

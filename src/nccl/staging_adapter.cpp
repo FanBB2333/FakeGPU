@@ -15,6 +15,9 @@ namespace fake_gpu::nccl {
 namespace {
 
 using cudaMemcpy_fn = cudaError_t (*)(void*, const void*, size_t, cudaMemcpyKind);
+using cudaMemcpyAsync_fn =
+    cudaError_t (*)(void*, const void*, size_t, cudaMemcpyKind, cudaStream_t);
+using cudaStreamSynchronize_fn = cudaError_t (*)(cudaStream_t);
 using cudaPointerGetAttributes_fn = cudaError_t (*)(void*, const void*);
 using cudaGetErrorString_fn = const char* (*)(cudaError_t);
 
@@ -36,6 +39,8 @@ static_assert(
 
 struct RuntimeCudaApi {
     cudaMemcpy_fn memcpy_fn = nullptr;
+    cudaMemcpyAsync_fn memcpy_async_fn = nullptr;
+    cudaStreamSynchronize_fn stream_synchronize_fn = nullptr;
     cudaPointerGetAttributes_fn pointer_get_attributes_fn = nullptr;
     cudaGetErrorString_fn get_error_string_fn = nullptr;
 };
@@ -44,6 +49,10 @@ const RuntimeCudaApi& runtime_cuda_api() {
     static const RuntimeCudaApi api = [] {
         RuntimeCudaApi value;
         value.memcpy_fn = reinterpret_cast<cudaMemcpy_fn>(::dlsym(RTLD_DEFAULT, "cudaMemcpy"));
+        value.memcpy_async_fn = reinterpret_cast<cudaMemcpyAsync_fn>(
+            ::dlsym(RTLD_DEFAULT, "cudaMemcpyAsync"));
+        value.stream_synchronize_fn = reinterpret_cast<cudaStreamSynchronize_fn>(
+            ::dlsym(RTLD_DEFAULT, "cudaStreamSynchronize"));
         value.pointer_get_attributes_fn = reinterpret_cast<cudaPointerGetAttributes_fn>(
             ::dlsym(RTLD_DEFAULT, "cudaPointerGetAttributes"));
         value.get_error_string_fn = reinterpret_cast<cudaGetErrorString_fn>(
@@ -97,13 +106,54 @@ std::string format_runtime_error(const char* api, cudaError_t result) {
     return std::string(api) + " failed: " + message;
 }
 
+bool copy_device_buffer(
+    void* dst,
+    const void* src,
+    std::size_t bytes,
+    cudaMemcpyKind kind,
+    cudaStream_t stream,
+    std::string& error) {
+    const RuntimeCudaApi& api = runtime_cuda_api();
+    if (stream != nullptr) {
+        if (!api.memcpy_async_fn || !api.stream_synchronize_fn) {
+            error = (
+                "cudaMemcpyAsync and cudaStreamSynchronize are required for "
+                "hybrid staging on a non-default stream");
+            return false;
+        }
+        cudaError_t result = api.memcpy_async_fn(dst, src, bytes, kind, stream);
+        if (result != cudaSuccess) {
+            error = format_runtime_error("cudaMemcpyAsync", result);
+            return false;
+        }
+        result = api.stream_synchronize_fn(stream);
+        if (result != cudaSuccess) {
+            error = format_runtime_error("cudaStreamSynchronize", result);
+            return false;
+        }
+        return true;
+    }
+
+    if (!api.memcpy_fn) {
+        error = "cudaMemcpy is not available for hybrid staging";
+        return false;
+    }
+    const cudaError_t result = api.memcpy_fn(dst, src, bytes, kind);
+    if (result != cudaSuccess) {
+        error = format_runtime_error("cudaMemcpy", result);
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 bool copy_buffer_to_host(
     const void* src,
     std::size_t bytes,
     std::vector<char>& out,
-    std::string& error) {
+    std::string& error,
+    cudaStream_t stream) {
     error.clear();
     out.assign(bytes, 0);
     if (bytes == 0) {
@@ -115,21 +165,13 @@ bool copy_buffer_to_host(
     }
 
     if (use_device_copy_path(src)) {
-        const RuntimeCudaApi& runtime_api = runtime_cuda_api();
-        if (!runtime_api.memcpy_fn) {
-            error = "cudaMemcpy is not available for hybrid staging";
-            return false;
-        }
-        const cudaError_t result = runtime_api.memcpy_fn(
+        return copy_device_buffer(
             out.data(),
             const_cast<void*>(src),
             bytes,
-            cudaMemcpyDeviceToHost);
-        if (result != cudaSuccess) {
-            error = format_runtime_error("cudaMemcpy(DeviceToHost)", result);
-            return false;
-        }
-        return true;
+            cudaMemcpyDeviceToHost,
+            stream,
+            error);
     }
 
     std::memcpy(out.data(), src, bytes);
@@ -140,7 +182,8 @@ bool copy_host_to_buffer(
     void* dst,
     const void* src,
     std::size_t bytes,
-    std::string& error) {
+    std::string& error,
+    cudaStream_t stream) {
     error.clear();
     if (bytes == 0) {
         return true;
@@ -151,21 +194,13 @@ bool copy_host_to_buffer(
     }
 
     if (use_device_copy_path(dst)) {
-        const RuntimeCudaApi& runtime_api = runtime_cuda_api();
-        if (!runtime_api.memcpy_fn) {
-            error = "cudaMemcpy is not available for hybrid staging";
-            return false;
-        }
-        const cudaError_t result = runtime_api.memcpy_fn(
+        return copy_device_buffer(
             dst,
             const_cast<void*>(src),
             bytes,
-            cudaMemcpyHostToDevice);
-        if (result != cudaSuccess) {
-            error = format_runtime_error("cudaMemcpy(HostToDevice)", result);
-            return false;
-        }
-        return true;
+            cudaMemcpyHostToDevice,
+            stream,
+            error);
     }
 
     std::memcpy(dst, src, bytes);

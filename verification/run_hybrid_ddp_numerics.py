@@ -79,6 +79,12 @@ EXPECTED_RESULTS: dict[str, dict[str, list[list[float]]]] = {
         "parameters_after_step": [[0.7, -0.6]],
     },
 }
+EXPECTED_ALL_REDUCE_CALLS = {
+    "basic": 2,
+    "no-sync": 2,
+    "find-unused": 3,
+    "static-graph": 4,
+}
 
 
 def _nested_allclose(
@@ -250,7 +256,7 @@ def main() -> int:
             cluster_report_path.read_text(encoding="utf-8")
         )
         expected_all_reduce_calls = sum(
-            3 if variant == "static-graph" else 2 for variant in variants
+            EXPECTED_ALL_REDUCE_CALLS[variant] for variant in variants
         )
         all_reduce_calls = cluster_report["collectives"]["all_reduce"]["calls"]
         if all_reduce_calls != expected_all_reduce_calls:
