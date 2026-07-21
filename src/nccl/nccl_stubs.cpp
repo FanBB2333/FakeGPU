@@ -8,6 +8,7 @@
 #include "../core/logging.hpp"
 #include "../distributed/communicator.hpp"
 #include "../distributed/collective_executor.hpp"
+#include "../distributed/low_precision.hpp"
 #include "../distributed/staging_chunk_plan.hpp"
 #include "../distributed/staging_buffer.hpp"
 #include "../distributed/transport.hpp"
@@ -268,6 +269,14 @@ bool map_dtype(
         out = fake_gpu::distributed::CollectiveDataType::Int64;
         return true;
     }
+    if (datatype == ncclFloat16) {
+        out = fake_gpu::distributed::CollectiveDataType::Float16;
+        return true;
+    }
+    if (datatype == ncclBfloat16) {
+        out = fake_gpu::distributed::CollectiveDataType::BFloat16;
+        return true;
+    }
     if (datatype == ncclFloat32 || datatype == ncclFloat) {
         out = fake_gpu::distributed::CollectiveDataType::Float32;
         return true;
@@ -294,6 +303,9 @@ bool map_reduce_op(
             return true;
         case ncclMin:
             out = fake_gpu::distributed::CollectiveReduceOp::Min;
+            return true;
+        case ncclAvg:
+            out = fake_gpu::distributed::CollectiveReduceOp::Avg;
             return true;
         default:
             break;
@@ -328,6 +340,29 @@ void scale_elements_inplace(void* data, std::size_t count, T scalar) {
     }
 }
 
+template <typename Decode, typename Encode>
+void scale_16bit_elements_inplace(
+    void* data,
+    std::size_t count,
+    std::uint16_t scalar_bits,
+    Decode decode,
+    Encode encode) {
+    char* bytes = static_cast<char*>(data);
+    const float scalar = decode(scalar_bits);
+    for (std::size_t index = 0; index < count; ++index) {
+        std::uint16_t value_bits = 0;
+        std::memcpy(
+            &value_bits,
+            bytes + index * sizeof(value_bits),
+            sizeof(value_bits));
+        value_bits = encode(decode(value_bits) * scalar);
+        std::memcpy(
+            bytes + index * sizeof(value_bits),
+            &value_bits,
+            sizeof(value_bits));
+    }
+}
+
 bool apply_premul_sum_inplace(
     void* data,
     std::size_t element_count,
@@ -354,6 +389,28 @@ bool apply_premul_sum_inplace(
             std::int64_t scalar = 0;
             std::memcpy(&scalar, info.scalar_bytes.data(), sizeof(scalar));
             scale_elements_inplace<std::int64_t>(data, element_count, scalar);
+            return true;
+        }
+        case ncclFloat16: {
+            std::uint16_t scalar = 0;
+            std::memcpy(&scalar, info.scalar_bytes.data(), sizeof(scalar));
+            scale_16bit_elements_inplace(
+                data,
+                element_count,
+                scalar,
+                fake_gpu::distributed::float16_bits_to_float,
+                fake_gpu::distributed::float_to_float16_bits);
+            return true;
+        }
+        case ncclBfloat16: {
+            std::uint16_t scalar = 0;
+            std::memcpy(&scalar, info.scalar_bytes.data(), sizeof(scalar));
+            scale_16bit_elements_inplace(
+                data,
+                element_count,
+                scalar,
+                fake_gpu::distributed::bfloat16_bits_to_float,
+                fake_gpu::distributed::float_to_bfloat16_bits);
             return true;
         }
         case ncclFloat32: {
@@ -3009,6 +3066,10 @@ ncclResult_t ncclRedOpCreatePreMulSum(
             break;
         case ncclInt64:
             info.scalar_size = sizeof(std::int64_t);
+            break;
+        case ncclFloat16:
+        case ncclBfloat16:
+            info.scalar_size = sizeof(std::uint16_t);
             break;
         case ncclFloat32:
             info.scalar_size = sizeof(float);

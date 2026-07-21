@@ -1,5 +1,6 @@
 #include "../src/distributed/cluster_coordinator.hpp"
 #include "../src/distributed/cluster_report_writer.hpp"
+#include "../src/distributed/low_precision.hpp"
 #include "../src/monitor/monitor.hpp"
 #include "../src/nccl/nccl_defs.hpp"
 
@@ -183,6 +184,20 @@ std::vector<T> make_allreduce_reference(int world_size, std::size_t count) {
 }
 
 template <typename T>
+std::vector<T> make_reduction_reference(
+    int world_size,
+    std::size_t count,
+    ncclRedOp_t op) {
+    std::vector<T> reference = make_allreduce_reference<T>(world_size, count);
+    if (op == ncclAvg) {
+        for (T& value : reference) {
+            value = static_cast<T>(value / static_cast<T>(world_size));
+        }
+    }
+    return reference;
+}
+
+template <typename T>
 std::vector<T> scale_reference(const std::vector<T>& values, T scalar) {
     std::vector<T> scaled = values;
     for (T& value : scaled) {
@@ -267,14 +282,105 @@ void assert_equal_vectors<float>(
     }
 }
 
+using Decode16 = float (*)(std::uint16_t);
+using Encode16 = std::uint16_t (*)(float);
+
+void run_low_precision_allreduce_case(
+    ncclDataType_t datatype,
+    ncclRedOp_t op,
+    Decode16 decode,
+    Encode16 encode,
+    float tolerance,
+    const std::string& label) {
+    constexpr int world_size = 2;
+    constexpr std::size_t count = 5;
+    std::vector<ncclComm_t> comms = init_communicators(world_size);
+
+    for (int iteration = 0; iteration < 2; ++iteration) {
+        const bool grouped = iteration == 1;
+        std::vector<std::vector<std::uint16_t>> send_buffers(
+            world_size, std::vector<std::uint16_t>(count));
+        std::vector<std::vector<std::uint16_t>> recv_buffers(
+            world_size, std::vector<std::uint16_t>(count));
+        std::vector<ncclResult_t> results(world_size, ncclInternalError);
+        std::vector<std::thread> threads;
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            for (std::size_t index = 0; index < count; ++index) {
+                send_buffers[rank][index] = encode(
+                    static_cast<float>(rank + 1) +
+                    static_cast<float>(index) * 0.25f);
+            }
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            threads.emplace_back([&, rank]() {
+                if (grouped) {
+                    require_result(
+                        ncclGroupStart(),
+                        ncclSuccess,
+                        label + " ncclGroupStart failed");
+                    const ncclResult_t inner = ncclAllReduce(
+                        send_buffers[rank].data(),
+                        recv_buffers[rank].data(),
+                        count,
+                        datatype,
+                        op,
+                        comms[rank],
+                        nullptr);
+                    if (inner != ncclSuccess) {
+                        ncclGroupSimulateEnd(nullptr);
+                        results[rank] = inner;
+                        return;
+                    }
+                    results[rank] = ncclGroupEnd();
+                    return;
+                }
+                results[rank] = ncclAllReduce(
+                    send_buffers[rank].data(),
+                    recv_buffers[rank].data(),
+                    count,
+                    datatype,
+                    op,
+                    comms[rank],
+                    nullptr);
+            });
+        }
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+
+        for (int rank = 0; rank < world_size; ++rank) {
+            require_result(
+                results[rank], ncclSuccess, label + " allreduce failed");
+            for (std::size_t index = 0; index < count; ++index) {
+                float expected =
+                    3.0f + static_cast<float>(index) * 0.5f;
+                if (op == ncclAvg) {
+                    expected /= static_cast<float>(world_size);
+                }
+                require(
+                    std::fabs(decode(recv_buffers[rank][index]) - expected) <=
+                        tolerance,
+                    label + " result mismatch at index " +
+                        std::to_string(index));
+            }
+        }
+    }
+
+    destroy_communicators(comms);
+}
+
 template <typename T>
 void run_allreduce_case(
     int world_size,
     ncclDataType_t datatype,
     const std::string& label,
-    std::size_t count = 8) {
+    std::size_t count = 8,
+    ncclRedOp_t op = ncclSum) {
     std::vector<ncclComm_t> comms = init_communicators(world_size);
-    const std::vector<T> reference = make_allreduce_reference<T>(world_size, count);
+    const std::vector<T> reference =
+        make_reduction_reference<T>(world_size, count, op);
 
     for (int iteration = 0; iteration < 3; ++iteration) {
         const bool grouped = iteration == 2;
@@ -297,7 +403,7 @@ void run_allreduce_case(
                         recv_buffers[static_cast<std::size_t>(rank)].data(),
                         count,
                         datatype,
-                        ncclSum,
+                        op,
                         comms[static_cast<std::size_t>(rank)],
                         nullptr);
                     if (inner != ncclSuccess) {
@@ -313,7 +419,7 @@ void run_allreduce_case(
                     recv_buffers[static_cast<std::size_t>(rank)].data(),
                     count,
                     datatype,
-                    ncclSum,
+                    op,
                     comms[static_cast<std::size_t>(rank)],
                     nullptr);
             });
@@ -666,9 +772,11 @@ void run_reduce_case(
     int root,
     ncclDataType_t datatype,
     const std::string& label,
-    std::size_t count = 7) {
+    std::size_t count = 7,
+    ncclRedOp_t op = ncclSum) {
     std::vector<ncclComm_t> comms = init_communicators(world_size);
-    const std::vector<T> reference = make_allreduce_reference<T>(world_size, count);
+    const std::vector<T> reference =
+        make_reduction_reference<T>(world_size, count, op);
     const std::vector<T> untouched = make_reduce_untouched_reference<T>(count);
 
     for (int iteration = 0; iteration < 3; ++iteration) {
@@ -700,7 +808,7 @@ void run_reduce_case(
                         recv_ptr,
                         count,
                         datatype,
-                        ncclSum,
+                        op,
                         root,
                         comms[static_cast<std::size_t>(rank)],
                         nullptr);
@@ -718,7 +826,7 @@ void run_reduce_case(
                     recv_ptr,
                     count,
                     datatype,
-                    ncclSum,
+                    op,
                     root,
                     comms[static_cast<std::size_t>(rank)],
                     nullptr);
@@ -753,7 +861,8 @@ void run_reducescatter_case(
     int world_size,
     ncclDataType_t datatype,
     const std::string& label,
-    std::size_t recvcount = 4) {
+    std::size_t recvcount = 4,
+    ncclRedOp_t op = ncclSum) {
     std::vector<ncclComm_t> comms = init_communicators(world_size);
     const std::size_t total_count = recvcount * static_cast<std::size_t>(world_size);
 
@@ -780,7 +889,7 @@ void run_reducescatter_case(
                         recv_buffers[static_cast<std::size_t>(rank)].data(),
                         recvcount,
                         datatype,
-                        ncclSum,
+                        op,
                         comms[static_cast<std::size_t>(rank)],
                         nullptr);
                     if (inner != ncclSuccess) {
@@ -797,7 +906,7 @@ void run_reducescatter_case(
                     recv_buffers[static_cast<std::size_t>(rank)].data(),
                     recvcount,
                     datatype,
-                    ncclSum,
+                    op,
                     comms[static_cast<std::size_t>(rank)],
                     nullptr);
             });
@@ -812,9 +921,17 @@ void run_reducescatter_case(
                 results[static_cast<std::size_t>(rank)],
                 ncclSuccess,
                 label + " reducescatter failed");
+            std::vector<T> reference =
+                make_reducescatter_reference<T>(world_size, recvcount, rank);
+            if (op == ncclAvg) {
+                for (T& value : reference) {
+                    value = static_cast<T>(
+                        value / static_cast<T>(world_size));
+                }
+            }
             assert_equal_vectors(
                 recv_buffers[static_cast<std::size_t>(rank)],
-                make_reducescatter_reference<T>(world_size, recvcount, rank),
+                reference,
                 label + " reducescatter result mismatch");
         }
     }
@@ -1103,20 +1220,42 @@ void run_timeout_case() {
 void run_allreduce_scenario() {
     run_allreduce_case<float>(2, ncclFloat32, "2-rank float32");
     run_allreduce_case<float>(4, ncclFloat32, "4-rank float32");
+    run_allreduce_case<float>(
+        4, ncclFloat32, "4-rank avg float32", 8, ncclAvg);
     run_allreduce_case<std::int32_t>(2, ncclInt32, "2-rank int32");
     run_allreduce_case<std::int32_t>(4, ncclInt32, "4-rank int32");
     run_premul_allreduce_case<float>(2, ncclFloat32, 2.0f, "2-rank premul float32");
+    run_low_precision_allreduce_case(
+        ncclFloat16,
+        ncclAvg,
+        fake_gpu::distributed::float16_bits_to_float,
+        fake_gpu::distributed::float_to_float16_bits,
+        0.002f,
+        "2-rank avg float16");
+    run_low_precision_allreduce_case(
+        ncclBfloat16,
+        ncclAvg,
+        fake_gpu::distributed::bfloat16_bits_to_float,
+        fake_gpu::distributed::float_to_bfloat16_bits,
+        0.02f,
+        "2-rank avg bfloat16");
 }
 
 void run_broadcast_scenario() {
     run_broadcast_case<float>(2, 0, ncclFloat32, "2-rank root0 float32");
     run_broadcast_case<float>(4, 0, ncclFloat32, "4-rank root0 float32");
     run_broadcast_case<std::int32_t>(4, 3, ncclInt32, "4-rank root-last int32");
+    run_broadcast_case<std::uint16_t>(
+        2, 1, ncclFloat16, "2-rank float16 payload");
+    run_broadcast_case<std::uint16_t>(
+        2, 1, ncclBfloat16, "2-rank bfloat16 payload");
 }
 
 void run_reduce_scenario() {
     run_reduce_case<float>(2, 0, ncclFloat32, "2-rank root0 float32");
     run_reduce_case<float>(4, 2, ncclFloat32, "4-rank root2 float32");
+    run_reduce_case<float>(
+        4, 2, ncclFloat32, "4-rank avg root2 float32", 7, ncclAvg);
     run_reduce_case<std::int64_t>(4, 3, ncclInt64, "4-rank root-last int64");
     run_premul_reduce_case<float>(2, 1, ncclFloat32, 2.0f, "2-rank premul reduce");
 }
@@ -1125,11 +1264,17 @@ void run_allgather_scenario() {
     run_allgather_case<float>(2, ncclFloat32, "2-rank float32");
     run_allgather_case<float>(4, ncclFloat32, "4-rank float32");
     run_allgather_case<std::int32_t>(4, ncclInt32, "4-rank int32");
+    run_allgather_case<std::uint16_t>(
+        2, ncclFloat16, "2-rank float16 payload");
+    run_allgather_case<std::uint16_t>(
+        2, ncclBfloat16, "2-rank bfloat16 payload");
 }
 
 void run_reducescatter_scenario() {
     run_reducescatter_case<float>(2, ncclFloat32, "2-rank float32");
     run_reducescatter_case<float>(4, ncclFloat32, "4-rank float32");
+    run_reducescatter_case<float>(
+        4, ncclFloat32, "4-rank avg float32", 4, ncclAvg);
     run_reducescatter_case<std::int32_t>(4, ncclInt32, "4-rank int32");
     run_premul_reducescatter_case<float>(2, ncclFloat32, 2.0f, "2-rank premul float32");
 }

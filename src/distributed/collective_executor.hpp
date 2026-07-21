@@ -20,6 +20,8 @@ enum class CollectiveType {
 enum class CollectiveDataType {
     Int32,
     Int64,
+    Float16,
+    BFloat16,
     Float32,
     Float64,
 };
@@ -30,6 +32,7 @@ enum class CollectiveReduceOp {
     Prod,
     Max,
     Min,
+    Avg,
 };
 
 enum class BufferTransport {
@@ -88,6 +91,10 @@ inline const char* collective_data_type_name(CollectiveDataType dtype) {
             return "int32";
         case CollectiveDataType::Int64:
             return "int64";
+        case CollectiveDataType::Float16:
+            return "float16";
+        case CollectiveDataType::BFloat16:
+            return "bfloat16";
         case CollectiveDataType::Float32:
             return "float32";
         case CollectiveDataType::Float64:
@@ -108,6 +115,8 @@ inline const char* collective_reduce_op_name(CollectiveReduceOp op) {
             return "max";
         case CollectiveReduceOp::Min:
             return "min";
+        case CollectiveReduceOp::Avg:
+            return "avg";
     }
     return "unknown";
 }
@@ -149,6 +158,14 @@ inline bool parse_collective_data_type(const std::string& text, CollectiveDataTy
         out = CollectiveDataType::Int64;
         return true;
     }
+    if (text == "float16") {
+        out = CollectiveDataType::Float16;
+        return true;
+    }
+    if (text == "bfloat16") {
+        out = CollectiveDataType::BFloat16;
+        return true;
+    }
     if (text == "float32") {
         out = CollectiveDataType::Float32;
         return true;
@@ -181,6 +198,10 @@ inline bool parse_collective_reduce_op(const std::string& text, CollectiveReduce
         out = CollectiveReduceOp::Min;
         return true;
     }
+    if (text == "avg") {
+        out = CollectiveReduceOp::Avg;
+        return true;
+    }
     return false;
 }
 
@@ -190,6 +211,9 @@ inline std::size_t collective_data_type_size(CollectiveDataType dtype) {
             return sizeof(std::int32_t);
         case CollectiveDataType::Int64:
             return sizeof(std::int64_t);
+        case CollectiveDataType::Float16:
+        case CollectiveDataType::BFloat16:
+            return sizeof(std::uint16_t);
         case CollectiveDataType::Float32:
             return sizeof(float);
         case CollectiveDataType::Float64:

@@ -1,6 +1,7 @@
 #include "collective_executor.hpp"
 
 #include "buffer_transfer.hpp"
+#include "low_precision.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -59,7 +60,7 @@ bool open_participant_buffers(
 }
 
 template <typename T>
-void sum_reduce_into_all_handles(
+void sum_or_average_reduce(
     const CollectiveExecutionRequest& request,
     const std::vector<std::vector<char>>& buffers,
     std::vector<char>& reduced_bytes) {
@@ -68,6 +69,12 @@ void sum_reduce_into_all_handles(
         const T* values = reinterpret_cast<const T*>(buffer.data());
         for (std::size_t index = 0; index < request.count; ++index) {
             reduced[index] += values[index];
+        }
+    }
+    if (request.reduce_op == CollectiveReduceOp::Avg) {
+        const T divisor = static_cast<T>(buffers.size());
+        for (T& value : reduced) {
+            value = static_cast<T>(value / divisor);
         }
     }
     reduced_bytes.assign(
@@ -75,28 +82,68 @@ void sum_reduce_into_all_handles(
         reinterpret_cast<const char*>(reduced.data()) + request.bytes);
 }
 
-template <typename T>
-void sum_reduce_into_root_handle(
+template <typename Decode, typename Encode>
+void sum_or_average_reduce_16bit(
     const CollectiveExecutionRequest& request,
-    int root_rank,
-    const std::vector<CollectiveExecutionParticipant>& participants,
     const std::vector<std::vector<char>>& buffers,
+    Decode decode,
+    Encode encode,
     std::vector<char>& reduced_bytes) {
-    std::vector<T> reduced(request.count, static_cast<T>(0));
+    std::vector<std::uint16_t> reduced(request.count, 0);
     for (const std::vector<char>& buffer : buffers) {
-        const T* values = reinterpret_cast<const T*>(buffer.data());
         for (std::size_t index = 0; index < request.count; ++index) {
-            reduced[index] += values[index];
+            std::uint16_t bits = 0;
+            std::memcpy(
+                &bits,
+                buffer.data() + index * sizeof(bits),
+                sizeof(bits));
+            reduced[index] = encode(decode(reduced[index]) + decode(bits));
         }
     }
-
-    for (std::size_t index = 0; index < participants.size(); ++index) {
-        if (participants[index].rank == root_rank) {
-            reduced_bytes.assign(
-                reinterpret_cast<const char*>(reduced.data()),
-                reinterpret_cast<const char*>(reduced.data()) + request.bytes);
-            return;
+    if (request.reduce_op == CollectiveReduceOp::Avg) {
+        const float divisor = static_cast<float>(buffers.size());
+        for (std::uint16_t& value : reduced) {
+            value = encode(decode(value) / divisor);
         }
+    }
+    reduced_bytes.assign(
+        reinterpret_cast<const char*>(reduced.data()),
+        reinterpret_cast<const char*>(reduced.data()) + request.bytes);
+}
+
+void sum_or_average_reduce_buffers(
+    const CollectiveExecutionRequest& request,
+    const std::vector<std::vector<char>>& buffers,
+    std::vector<char>& reduced_bytes) {
+    switch (request.dtype) {
+        case CollectiveDataType::Int32:
+            sum_or_average_reduce<std::int32_t>(request, buffers, reduced_bytes);
+            break;
+        case CollectiveDataType::Int64:
+            sum_or_average_reduce<std::int64_t>(request, buffers, reduced_bytes);
+            break;
+        case CollectiveDataType::Float16:
+            sum_or_average_reduce_16bit(
+                request,
+                buffers,
+                float16_bits_to_float,
+                float_to_float16_bits,
+                reduced_bytes);
+            break;
+        case CollectiveDataType::BFloat16:
+            sum_or_average_reduce_16bit(
+                request,
+                buffers,
+                bfloat16_bits_to_float,
+                float_to_bfloat16_bits,
+                reduced_bytes);
+            break;
+        case CollectiveDataType::Float32:
+            sum_or_average_reduce<float>(request, buffers, reduced_bytes);
+            break;
+        case CollectiveDataType::Float64:
+            sum_or_average_reduce<double>(request, buffers, reduced_bytes);
+            break;
     }
 }
 
@@ -105,8 +152,11 @@ void sum_reduce_into_root_handle(
 CollectiveExecutionResult execute_allreduce_sum(
     const CollectiveExecutionRequest& request,
     const std::vector<CollectiveExecutionParticipant>& participants) {
-    if (request.reduce_op != CollectiveReduceOp::Sum) {
-        return make_error("unsupported_reduce_op", "only allreduce(sum) is implemented");
+    if (request.reduce_op != CollectiveReduceOp::Sum &&
+        request.reduce_op != CollectiveReduceOp::Avg) {
+        return make_error(
+            "unsupported_reduce_op",
+            "only allreduce(sum/avg) is implemented");
     }
 
     const std::size_t dtype_size = collective_data_type_size(request.dtype);
@@ -124,20 +174,7 @@ CollectiveExecutionResult execute_allreduce_sum(
     }
 
     std::vector<char> reduced_bytes;
-    switch (request.dtype) {
-        case CollectiveDataType::Int32:
-            sum_reduce_into_all_handles<std::int32_t>(request, buffers, reduced_bytes);
-            break;
-        case CollectiveDataType::Int64:
-            sum_reduce_into_all_handles<std::int64_t>(request, buffers, reduced_bytes);
-            break;
-        case CollectiveDataType::Float32:
-            sum_reduce_into_all_handles<float>(request, buffers, reduced_bytes);
-            break;
-        case CollectiveDataType::Float64:
-            sum_reduce_into_all_handles<double>(request, buffers, reduced_bytes);
-            break;
-    }
+    sum_or_average_reduce_buffers(request, buffers, reduced_bytes);
 
     CollectiveExecutionResult result;
     result.ok = true;
@@ -162,8 +199,11 @@ CollectiveExecutionResult execute_allreduce_sum(
 CollectiveExecutionResult execute_reduce(
     const CollectiveExecutionRequest& request,
     const std::vector<CollectiveExecutionParticipant>& participants) {
-    if (request.reduce_op != CollectiveReduceOp::Sum) {
-        return make_error("unsupported_reduce_op", "only reduce(sum) is implemented");
+    if (request.reduce_op != CollectiveReduceOp::Sum &&
+        request.reduce_op != CollectiveReduceOp::Avg) {
+        return make_error(
+            "unsupported_reduce_op",
+            "only reduce(sum/avg) is implemented");
     }
 
     const std::size_t dtype_size = collective_data_type_size(request.dtype);
@@ -192,24 +232,7 @@ CollectiveExecutionResult execute_reduce(
     }
 
     std::vector<char> reduced_bytes;
-    switch (request.dtype) {
-        case CollectiveDataType::Int32:
-            sum_reduce_into_root_handle<std::int32_t>(
-                request, request.root_rank, participants, buffers, reduced_bytes);
-            break;
-        case CollectiveDataType::Int64:
-            sum_reduce_into_root_handle<std::int64_t>(
-                request, request.root_rank, participants, buffers, reduced_bytes);
-            break;
-        case CollectiveDataType::Float32:
-            sum_reduce_into_root_handle<float>(
-                request, request.root_rank, participants, buffers, reduced_bytes);
-            break;
-        case CollectiveDataType::Float64:
-            sum_reduce_into_root_handle<double>(
-                request, request.root_rank, participants, buffers, reduced_bytes);
-            break;
-    }
+    sum_or_average_reduce_buffers(request, buffers, reduced_bytes);
 
     CollectiveExecutionResult result;
     result.ok = true;
