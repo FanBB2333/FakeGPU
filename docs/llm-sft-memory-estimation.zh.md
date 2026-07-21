@@ -1,9 +1,9 @@
 # LLM SFT 显存估算
 
 FakeGPU 提供一组可重复的 Qwen3.5 文本 SFT 验证工具，用同一批随机 token
-分别执行真实 CUDA、CPU-backed FakeCUDA 和 FakeTensor ATen 静态分析。当前
-worker 测量一个完整的全参数训练步：forward、backward 和 single-tensor
-AdamW update。
+分别执行真实 CUDA、CPU-backed FakeCUDA 和 FakeTensor ATen 静态分析。worker
+支持全参数或 LoRA、gradient checkpointing、gradient accumulation，并测量
+forward、backward 和 single-tensor AdamW update。
 
 ## 验证负载
 
@@ -13,7 +13,8 @@ AdamW update。
 - BF16、SDPA、batch size 1、sequence length 16
 - 固定随机种子生成合法 token ID；前 8 个 label 设为 `-100`，模拟指令部分
   不参与 loss
-- 全参数训练，AdamW `foreach=False`，`use_cache=False`
+- 默认使用全参数训练；可选择 LoRA `all-linear`
+- AdamW `foreach=False`，`use_cache=False`
 - 显式文本 position IDs，使真实执行和静态图走相同的 Qwen3.5 混合
   linear/full-attention 分支
 
@@ -60,21 +61,64 @@ $PYTHON verification/compare_qwen_sft_memory.py \
 将 `MODEL` 和输出文件名替换为 `Qwen3.5-2B` 即可复测 2B 模型。比较器会检查
 模型配置、参数量、随机 batch 指纹和显存误差，另行生成 Markdown 表格。
 
-## Blackwell GPU 实测
+以下选项可以组合使用：
+
+```bash
+# LoRA rank 8
+--training-method lora --lora-rank 8
+
+# non-reentrant gradient checkpointing
+--gradient-checkpointing
+
+# 两个 microbatch 后执行一次 optimizer update
+--gradient-accumulation-steps 2
+```
+
+多个 case 完成后，可以生成统一矩阵：
+
+```bash
+$PYTHON verification/summarize_qwen_sft_matrix.py \
+  --input-dir build/qwen-sft-matrix \
+  --output build/qwen-sft-matrix/matrix.json
+```
+
+## Blackwell GPU 配置矩阵
 
 以下数据于 2026-07-21 在 Blackwell GPU 上测得，
 软件为 PyTorch 2.8.0+cu128、CUDA 12.8、Transformers 5.12.1。真实基准使用
 `torch.cuda.max_memory_allocated()`，不包含 CUDA context 和 allocator 中已
 reserved 但尚未使用的空间。
 
-| 模型 | 可训练参数 | 真实峰值 | FakeCUDA 峰值 / 误差 | 静态首步峰值 / 误差 | 静态 backward 误差 |
-|---|---:|---:|---:|---:|---:|
-| Qwen3.5-0.8B | 752,393,024 | 6.630 GiB | 6.561 GiB / 1.045% | 6.560 GiB / 1.047% | 1.442% |
-| Qwen3.5-2B | 1,881,825,088 | 15.939 GiB | 15.923 GiB / 0.101% | 15.923 GiB / 0.102% | 0.173% |
+| Case | 方法 | Checkpoint | Accum. | Seq. | 可训练参数 | 真实峰值 | 静态误差 | FakeCUDA 误差 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| 0.8B full | full | 否 | 2 | 16 | 752,393,024 | 6.626 GiB | 0.989% | 0.985% |
+| 0.8B full | full | 否 | 1 | 128 | 752,393,024 | 6.687 GiB | 1.121% | 1.119% |
+| 0.8B full | full | 是 | 1 | 128 | 752,393,024 | 6.679 GiB | 1.006% | 1.006% |
+| 0.8B LoRA | LoRA r8 | 否 | 1 | 16 | 5,411,328 | 1.756 GiB | 1.921% | 2.439% |
+| 0.8B LoRA | LoRA r8 | 否 | 1 | 128 | 5,411,328 | 2.696 GiB | 1.271% | — |
+| 0.8B LoRA | LoRA r8 | 是 | 1 | 128 | 5,411,328 | 1.876 GiB | 1.506% | — |
+| 2B full | full | 否 | 2 | 16 | 1,881,825,088 | 15.939 GiB | 0.102% | — |
+| 2B LoRA | LoRA r8 | 否 | 1 | 16 | 8,409,600 | 3.868 GiB | 0.266% | 0.500% |
+| 2B LoRA | LoRA r8 | 否 | 1 | 128 | 8,409,600 | 4.959 GiB | 0.359% | — |
+| 2B LoRA | LoRA r8 | 是 | 1 | 128 | 8,409,600 | 3.974 GiB | 0.281% | — |
 
-两组比较报告均通过：整体峰值误差低于 2%，静态 backward 峰值误差低于
-5%。FakeCUDA 与真实 CUDA 的 loss 差分别为 0.471% 和 1.200%；这是 CPU 与
-CUDA BF16 kernel 的数值差异，随机 batch 指纹和模型权重保持一致。
+10 个 case 全部通过。静态整体误差为 0.102%–1.921%；已执行 FakeCUDA 的
+case 误差为 0.500%–2.439%。LoRA checkpointing 在 sequence 128 下将 0.8B
+峰值减少 30.4%，将 2B 峰值减少 19.9%。全参数 AdamW 的整体峰值由 optimizer
+update 主导，因此 checkpointing 主要降低 forward 峰值，对整体峰值影响很小。
+
+## Ampere 与 Blackwell
+
+Ampere GPU（Compute Capability 8.6、PyTorch 2.12.1+cu130）复测结果如下：
+
+| Case | Ampere GPU 真实峰值 | Blackwell GPU 真实峰值 | 静态误差 |
+|---|---:|---:|---:|
+| 0.8B full，sequence 16 | 6.630 GiB | 6.630 GiB | 1.047% |
+| 0.8B LoRA r8 + checkpoint，sequence 128 | 1.876 GiB | 1.876 GiB | 1.506% |
+
+两个 CUDA allocator 路径的峰值几乎相同，当前 shape/storage 估算可以跨
+Ampere 8.6 与 Blackwell 12.0 使用。backend workspace 仍需针对新的 attention
+实现和超出校准范围的 shape 单独验证。
 
 ## 首步与稳态显存
 
@@ -91,6 +135,16 @@ AdamW 的 moment state 在第一次 `optimizer.step()` 中才创建。静态估�
 “参数 + 梯度 + 两份 optimizer state”这一固定公式更能反映 activation、
 别名 storage、算子临时结果和 workspace 生命周期。
 
+gradient accumulation 使用 eager autograd 的原地累加模型：已有梯度保持
+常驻，额外峰值取最大的单个可训练参数梯度，而不重复计算全部梯度。0.8B
+和 2B 的 accumulation 2 backward 误差分别为 1.305% 和 0.157%。
+
+PyTorch checkpoint 的 saved-tensor hook 目前不能直接嵌套在 `torch.func.grad`
+图捕获中。全参数训练保留由 tied weight 和参数梯度决定的 graph floor；LoRA
+训练则从未 checkpoint 的图中移除 decoder activation，只保留参数、输出、
+loss 临时张量、梯度、optimizer 和已建模 workspace。无法识别 loss operator
+时，报告会明确标记为 `upper_bound`。
+
 ## 当前边界
 
 CPU-backed FakeCUDA 的 forward 和整体峰值在这两组测试中较接近真实 CUDA，
@@ -99,7 +153,8 @@ CPU-backed FakeCUDA 的 forward 和整体峰值在这两组测试中较接近真
 ATen storage-liveness 静态图作为 backward 的判定值，仍保留运行时数值用于
 诊断。
 
-本次结果只覆盖全参数、单卡、BF16、single-tensor AdamW 和 Transformers 的
-PyTorch fallback linear-attention 实现。LoRA/QLoRA、gradient checkpointing、
-gradient accumulation、Flash Linear Attention、自定义 CUDA/Triton kernel、
-量化 optimizer 和多卡 sharding 需要分别验证，不能直接套用上述误差。
+当前结果覆盖全参数与 LoRA、单卡、BF16、single-tensor AdamW、gradient
+checkpointing、gradient accumulation 2，以及 Transformers 的 PyTorch
+fallback linear-attention 实现。QLoRA、Flash Linear Attention、自定义
+CUDA/Triton kernel、量化 optimizer 和多卡 sharding 仍需分别验证，不能直接
+套用上述误差。
