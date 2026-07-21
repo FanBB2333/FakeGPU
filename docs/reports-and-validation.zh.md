@@ -14,8 +14,8 @@
 | `./ftest real_gpu_calibration` | real/passthrough/Hybrid/fakecuda 显存与结果签名校准 |
 | `fakegpu estimate-llm ...` | 仅检查 header 的 dense decoder 参数、KV cache、临时显存与矩阵 FLOPs 估算 |
 | `verification/compare_qwen_memory.py ...` | 对比相同配置下的真实 CUDA/FakeCUDA 加载、推理、虚拟 SMI、token 与 FLOPs |
-| `verification/compare_qwen_sft_memory.py ...` | 对比 Qwen3.5 full/LoRA SFT 的真实 CUDA、FakeCUDA 与 ATen 静态图峰值 |
-| `verification/summarize_qwen_sft_matrix.py ...` | 汇总 full/LoRA、checkpointing、accumulation 和不同序列长度的 SFT 矩阵 |
+| `verification/compare_qwen_sft_memory.py ...` | 对比 Qwen3.5 full、LoRA、原生 NF4 QLoRA SFT 的真实 CUDA、FakeCUDA 与 ATen 静态图峰值 |
+| `verification/summarize_qwen_sft_matrix.py ...` | 汇总 full、LoRA、QLoRA、checkpointing、accumulation 和不同序列长度的 SFT 矩阵 |
 | `python3 verification/test_coordinator_smoke.py` | coordinator 启停、请求/响应与正常关闭 |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce 语义正确性 |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather 语义正确性 |
