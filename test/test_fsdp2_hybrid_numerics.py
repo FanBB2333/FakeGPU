@@ -41,6 +41,15 @@ def main() -> int:
         choices=("fp32", "fp16", "bf16"),
         default="fp32",
     )
+    parser.add_argument(
+        "--reduce-precision",
+        choices=("fp32", "parameter"),
+        default="fp32",
+        help=(
+            "Use FP32 gradient communication or match the mixed-precision "
+            "parameter dtype."
+        ),
+    )
     args = parser.parse_args()
 
     rank = int(os.environ["RANK"])
@@ -50,6 +59,7 @@ def main() -> int:
         "rank": rank,
         "world_size": world_size,
         "precision": args.precision,
+        "reduce_precision": args.reduce_precision,
         "physical_device_index": 0,
         "status": "starting",
     }
@@ -75,6 +85,15 @@ def main() -> int:
             "bf16": torch.bfloat16,
         }
         parameter_dtype = precision_dtypes[args.precision]
+        if parameter_dtype is None and args.reduce_precision == "parameter":
+            raise ValueError(
+                "--reduce-precision=parameter requires fp16 or bf16"
+            )
+        reduce_dtype = (
+            parameter_dtype
+            if args.reduce_precision == "parameter"
+            else torch.float32
+        )
         report["torch_version"] = str(torch.__version__)
         report["torch_cuda_version"] = str(torch.version.cuda)
         report["physical_device_name"] = torch.cuda.get_device_name(0)
@@ -111,7 +130,7 @@ def main() -> int:
         )
         mp_policy = MixedPrecisionPolicy(
             param_dtype=parameter_dtype,
-            reduce_dtype=torch.float32 if parameter_dtype is not None else None,
+            reduce_dtype=reduce_dtype if parameter_dtype is not None else None,
             output_dtype=torch.float32 if parameter_dtype is not None else None,
         )
         fully_shard(model, mesh=mesh, mp_policy=mp_policy)
@@ -170,6 +189,7 @@ def main() -> int:
         tolerance = 1e-6 if args.precision == "fp32" else 2e-2
         report["local_loss"] = float(loss.detach().float().cpu().item())
         report["gradient_dtype"] = str(local_gradient.dtype)
+        report["configured_reduce_dtype"] = str(reduce_dtype)
         report["local_shard_gradient"] = _tensor_values(local_gradient)
         report["expected_local_shard_gradient"] = _tensor_values(
             expected_gradient_row

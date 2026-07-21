@@ -122,6 +122,7 @@ def _validate_rank_reports(
     reports: list[dict[str, Any]],
     world_size: int,
     precision: str,
+    reduce_precision: str,
 ) -> None:
     expected_gradient, expected_parameter = _expected_values(world_size)
     tolerance = 1e-6 if precision == "fp32" else 2e-2
@@ -131,6 +132,11 @@ def _validate_rank_reports(
         if report.get("precision") != precision:
             raise AssertionError(
                 f"rank {rank} precision mismatch: {report.get('precision')}"
+            )
+        if report.get("reduce_precision") != reduce_precision:
+            raise AssertionError(
+                f"rank {rank} reduce precision mismatch: "
+                f"{report.get('reduce_precision')}"
             )
         if report.get("global_parameter_shape") != [world_size, world_size]:
             raise AssertionError(
@@ -184,8 +190,15 @@ def main() -> int:
         choices=("fp32", "fp16", "bf16"),
         default="fp32",
     )
+    parser.add_argument(
+        "--reduce-precision",
+        choices=("fp32", "parameter"),
+        default="fp32",
+    )
     parser.add_argument("--timeout", type=float, default=180.0)
     args = parser.parse_args()
+    if args.precision == "fp32" and args.reduce_precision == "parameter":
+        parser.error("--reduce-precision=parameter requires fp16 or bf16")
 
     build_dir = args.build_dir.resolve()
     coordinator_bin = build_dir / "fakegpu-coordinator"
@@ -269,6 +282,8 @@ def main() -> int:
             str(rank_report_dir),
             "--precision",
             args.precision,
+            "--reduce-precision",
+            args.reduce_precision,
         ]
         completed = subprocess.run(
             command,
@@ -291,6 +306,7 @@ def main() -> int:
             rank_reports,
             args.world_size,
             args.precision,
+            args.reduce_precision,
         )
 
         _shutdown_unix_coordinator(socket_path)
@@ -324,6 +340,7 @@ def main() -> int:
             "status": "success",
             "world_size": args.world_size,
             "precision": args.precision,
+            "reduce_precision": args.reduce_precision,
             "physical_device_name": rank_reports[0]["physical_device_name"],
             "physical_compute_capability": rank_reports[0][
                 "physical_compute_capability"
@@ -332,6 +349,9 @@ def main() -> int:
             "torch_cuda_version": rank_reports[0]["torch_cuda_version"],
             "parameter_dtype": rank_reports[0]["parameter_dtype"],
             "gradient_dtype": rank_reports[0]["gradient_dtype"],
+            "configured_reduce_dtype": rank_reports[0][
+                "configured_reduce_dtype"
+            ],
             "local_shard_shape": rank_reports[0]["local_shard_shape"],
             "all_gather_calls": cluster_report["collectives"]["all_gather"][
                 "calls"
