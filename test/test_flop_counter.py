@@ -16,6 +16,16 @@ def test_counter_counts_mm_and_bmm() -> None:
     assert counter.flops_by_operator["aten::bmm"] == 240
 
 
+def test_counter_counts_linear_inside_inference_mode() -> None:
+    inputs = torch.ones(2, 3)
+    weight = torch.ones(4, 3)
+    with torch.inference_mode():
+        with MatmulFlopCounterMode() as counter:
+            F.linear(inputs, weight)
+    assert counter.total_flops == 48
+    assert counter.flops_by_operator["aten::mm"] == 48
+
+
 def test_counter_supports_grouped_query_sdpa() -> None:
     query = torch.randn(1, 2, 3, 4)
     key = torch.randn(1, 1, 5, 4)
