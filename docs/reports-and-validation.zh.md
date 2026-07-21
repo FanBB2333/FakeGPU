@@ -12,6 +12,8 @@
 | `./ftest preflight_oom` | fakecuda fit/OOM 判定与报告 schema |
 | `./ftest static_memory_validation` | fake-tensor ATen 前向/反向 storage 生命周期、optimizer 显存和可选真实 CUDA allocator 对比 |
 | `./ftest real_gpu_calibration` | real/passthrough/Hybrid/fakecuda 显存与结果签名校准 |
+| `fakegpu estimate-llm ...` | 仅检查 header 的 dense decoder 参数、KV cache、临时显存与矩阵 FLOPs 估算 |
+| `verification/compare_qwen_memory.py ...` | 对比相同配置下的真实 CUDA/FakeCUDA 加载、推理、虚拟 SMI、token 与 FLOPs |
 | `python3 verification/test_coordinator_smoke.py` | coordinator 启停、请求/响应与正常关闭 |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce 语义正确性 |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather 语义正确性 |
@@ -132,6 +134,23 @@ runner 会写出 `preflight_report.json`，并配套生成 `preflight_report.md`
 当前真实校准目标是一张 NVIDIA RTX PRO 5000 72GB Blackwell（Compute Capability 12.0）。维护中的套件覆盖七个受控 workload，要求 passthrough 与 Hybrid 的结果签名匹配 real CUDA，记录 Hybrid Driver allocation 峰值，并验证 Hybrid clamp 下的 PyTorch OOM 表现。它不能证明多机目标集群一定能容纳 workload，也不能证明性能表现。
 
 用法和当前限制见 [AI Researcher 提交前预检查](ai-researcher-preflight.md)。
+
+## LLM 推理估算与虚拟 SMI
+
+`fakegpu estimate-llm --json <path>` 会写出
+`fakegpu.llm_inference_estimate.v1` 报告，并且不会加载 checkpoint payload。
+内容包括参数/checkpoint 元数据、KV cache、prefill/decode 临时显存、tensor
+与进程峰值，以及逐 step 的矩阵 FLOPs。
+
+如果在 FakeCUDA runtime 启动前设置 `FAKEGPU_SMI_STATE_PATH` 或
+`FAKEGPU_SMI_STATE_DIR`，每个进程都会发布 `fakegpu.smi_state.v1` JSON。
+`fakegpu nvidia-smi` 会显示当前及峰值 tracked tensor 显存，并可加入同一
+软件与硬件路径实测得到的 runtime overhead。
+
+Qwen 验证 worker 会分别记录模型加载和推理峰值；真实模式读取 NVML 进程
+显存，无 GPU 模式隐藏物理 GPU 并用 CPU-backed FakeCUDA 执行，还会对比
+实际 FLOPs 与形状估算。命令、实测结果和适用范围参见
+[LLM 推理显存与计算量估算](llm-inference-estimation.md)。
 
 ## 统一 HTML 测试报告
 

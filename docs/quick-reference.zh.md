@@ -68,6 +68,30 @@ fakegpu doctor --profile jetson-t5000
 fakegpu doctor --profile rtx-pro-5000-blackwell --json
 ```
 
+## LLM 推理估算与虚拟 SMI
+
+无需加载权重即可检查 dense decoder safetensors checkpoint：
+
+```bash
+fakegpu estimate-llm \
+  --model-dir /models/Qwen/Qwen3-8B \
+  --prompt-tokens 9 \
+  --generated-tokens 2 \
+  --dtype bfloat16 \
+  --attention-implementation sdpa \
+  --json build/qwen-estimate.json
+```
+
+让 FakeCUDA 进程发布显存状态，并在另一个终端查看：
+
+```bash
+FAKEGPU_SMI_STATE_DIR=/tmp/fakegpu-smi python3 inference.py
+fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi
+```
+
+CPU 执行、真实 CUDA 校准、Qwen3-8B 实测数据和适用范围参见
+[LLM 推理显存与计算量估算](llm-inference-estimation.md)。
+
 ## Preflight / OOM 检查
 
 提交 Python 训练命令前，可以先跑 fakecuda preflight：

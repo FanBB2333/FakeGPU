@@ -14,6 +14,7 @@ Its TCP benchmark measures the simulator path, not production NCCL/RDMA.
 ```bash
 fakegpu doctor --list-profiles       # inspect the installation and GPU catalog
 fakegpu demo --profile l4            # run a tiny CUDA-visible training step on CPU
+fakegpu estimate-llm --model-dir /models/qwen --prompt-tokens 128  # inspect VRAM/FLOPs without loading weights
 fakegpu bandwidth --listen 127.0.0.1:29591 --nodes 2  # simulate two TCP nodes
 ```
 
@@ -33,6 +34,8 @@ _Real command output from the maintained v1.5.3 workflows._
 | Intercept CUDA, NVML, cuBLAS, or NCCL shared-library calls | No | `./fgpu --mode simulate ...` |
 | Check whether a workload reaches a stage or exceeds a GPU profile | No | `python3 -m fakegpu preflight ...` |
 | Estimate training memory from an ATen graph | No | `./ftest static_memory_validation` |
+| Estimate dense-decoder inference memory/FLOPs from safetensors metadata | No | `fakegpu estimate-llm ...` |
+| Display memory from running FakeCUDA processes | No | `fakegpu nvidia-smi --state-dir ...` |
 | Compare an unmodified real-GPU baseline | Yes | `./fgpu --mode passthrough ...` |
 | Keep real CUDA compute while virtualizing selected surfaces | Yes | `./fgpu --mode hybrid --oom-policy clamp ...` |
 | Simulate multi-rank collective control flow | No | `FAKEGPU_DIST_MODE=simulate` |
@@ -174,6 +177,42 @@ print(report["estimated_peak_bytes"])
 CUDA-specific ATen traces require a CUDA-enabled PyTorch build, but the trace itself does not allocate physical GPU memory.
 
 Backend context memory, allocator fragmentation, unmatched workspaces, custom CUDA operators, and fused/foreach optimizer temporaries require device- and software-specific calibration.
+
+## LLM inference without a GPU
+
+For a local dense decoder checkpoint, FakeGPU can inspect safetensors headers
+without materializing the weights or creating a CUDA context:
+
+```bash
+python3 -m fakegpu estimate-llm \
+  --model-dir /models/Qwen/Qwen3-8B \
+  --batch-size 1 \
+  --prompt-tokens 9 \
+  --generated-tokens 2 \
+  --dtype bfloat16 \
+  --attention-implementation sdpa \
+  --json build/qwen-estimate.json
+```
+
+The report derives parameter storage from checkpoint metadata, KV-cache size
+from layer/KV-head dimensions, transient tensor storage from the selected
+attention path, and matrix FLOPs from model shapes. It currently targets dense
+decoder-only safetensors checkpoints; MoE, quantized weights, adapters, custom
+CUDA operators, and backend-specific workspaces need a dedicated model or
+empirical calibration.
+
+A FakeCUDA process can also publish its live tracked memory for a second
+terminal:
+
+```bash
+FAKEGPU_SMI_STATE_DIR=/tmp/fakegpu-smi python3 your_inference.py
+python3 -m fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi
+```
+
+Set `FAKEGPU_SMI_RUNTIME_OVERHEAD_BYTES` only when the same GPU/software path
+has been calibrated against NVML. See
+[LLM Inference Estimation](docs/llm-inference-estimation.md) for a complete
+real-CUDA/FakeCUDA comparison and the current accuracy boundary.
 
 ## Runtime model
 
@@ -327,6 +366,8 @@ FAKEGPU_PROFILES=a100:4,h100:4
 | `preflight_report.json/.md` | Preflight CLI | Stage status, fit/OOM result, memory categories, and confidence |
 | Real-GPU calibration report | `./ftest real_gpu_calibration` | Real, passthrough, hybrid, fakecuda, allocator, and NVML observations |
 | Static memory validation report | `./ftest static_memory_validation` | Graph liveness, optimizer phases, workspace profiles, and real-CUDA comparison |
+| LLM inference estimate | `fakegpu estimate-llm --json ...` | Checkpoint storage, KV cache, transient tensors, process-memory estimate, and matrix FLOPs |
+| Virtual SMI state | `FAKEGPU_SMI_STATE_PATH` / `FAKEGPU_SMI_STATE_DIR` | Per-process current/peak tracked bytes and optional calibrated runtime overhead |
 
 Output paths can be configured with:
 
@@ -362,6 +403,22 @@ Across 13 MLP/Transformer workloads and 26 GPU observations:
 - no maintained Attention workload used an unprofiled or extrapolated profile
 
 These results validate the maintained parameter grid. They do not establish accuracy for arbitrary models, shapes, PyTorch releases, or CUDA backends.
+
+The Qwen3-8B BF16 inference path was also checked on the RTX PRO 5000 with
+SDPA, a 9-token prompt, and two generated token IDs:
+
+| Comparison | Predicted | Real CUDA | Absolute error |
+|---|---:|---:|---:|
+| Model load: FakeCUDA tracked vs allocator | 16,381,470,976 B | 16,383,586,816 B | 0.012914% |
+| Inference peak: FakeCUDA tracked vs allocator | 16,385,992,936 B | 16,396,630,528 B | 0.064877% |
+| Inference peak: checkpoint-only estimate vs allocator | 16,385,606,472 B | 16,396,630,528 B | 0.067234% |
+| Process memory: virtual SMI vs NVML | 16,825,298,920 B | 16,835,936,256 B | 0.063182% |
+| Matrix FLOPs: FakeCUDA execution vs CUDA | 151,415,620,864 | 151,415,620,864 | 0% |
+| Matrix FLOPs: shape estimate vs CUDA | 151,415,619,584 | 151,415,620,864 | 0.000001% |
+
+The virtual-SMI row includes a `442,049,024`-byte runtime overhead measured in
+that same CUDA run. That value is evidence for this GPU, PyTorch, CUDA, model,
+and operator path—not a portable constant.
 
 The distributed paths were also checked on the same two hosts:
 
@@ -444,6 +501,7 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 
 - Native simulate mode does not execute arbitrary CUDA kernels.
 - FakeCudaTensor covers Python/PyTorch behavior, not binary CUDA extensions.
+- The checkpoint-only LLM estimator supports dense decoder-only safetensors models; it does not infer arbitrary repository control flow, MoE routing, quantization state, or custom kernels.
 - Supported cuBLAS/cuBLASLt operations can be numerically checked on CPU; unsupported operations may be stubs.
 - Distributed simulation checks semantics and control flow. Its TCP result includes coordinator reduction, memory copies, and process scheduling, so it is not an exact NCCL/RDMA or raw-link measurement.
 - Static and runtime memory estimates can omit backend-internal allocations outside matched profiles.
@@ -455,6 +513,7 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 - [Getting Started](docs/getting-started.md)
 - [Quick Reference](docs/quick-reference.md)
 - [AI Researcher Preflight](docs/ai-researcher-preflight.md)
+- [LLM Inference Estimation](docs/llm-inference-estimation.md)
 - [Architecture and Project Structure](docs/project-structure.md)
 - [Torch Patch System](docs/phase2-custom-torch.md)
 - [Reports and Validation](docs/reports-and-validation.md)

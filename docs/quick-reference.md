@@ -68,6 +68,30 @@ fakegpu doctor --profile jetson-t5000
 fakegpu doctor --profile rtx-pro-5000-blackwell --json
 ```
 
+## LLM inference estimate and virtual SMI
+
+Inspect a dense decoder safetensors checkpoint without loading its weights:
+
+```bash
+fakegpu estimate-llm \
+  --model-dir /models/Qwen/Qwen3-8B \
+  --prompt-tokens 9 \
+  --generated-tokens 2 \
+  --dtype bfloat16 \
+  --attention-implementation sdpa \
+  --json build/qwen-estimate.json
+```
+
+Publish FakeCUDA process memory and view it from another terminal:
+
+```bash
+FAKEGPU_SMI_STATE_DIR=/tmp/fakegpu-smi python3 inference.py
+fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi
+```
+
+See [LLM Inference Estimation](llm-inference-estimation.md) for CPU execution,
+real-CUDA calibration, Qwen3-8B results, and scope limits.
+
 ## Preflight / OOM checks
 
 Run a fakecuda preflight before submitting a Python training command:

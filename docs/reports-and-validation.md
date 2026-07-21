@@ -12,6 +12,8 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `./ftest preflight_oom` | fakecuda fit/OOM classification and report schema |
 | `./ftest static_memory_validation` | fake-tensor ATen forward/backward storage liveness, optimizer memory, and optional real-CUDA allocator comparison |
 | `./ftest real_gpu_calibration` | real/passthrough/Hybrid/fakecuda memory and result-signature calibration |
+| `fakegpu estimate-llm ...` | header-only dense-decoder parameter, KV-cache, transient-memory, and matrix-FLOP estimate |
+| `verification/compare_qwen_memory.py ...` | matching real-CUDA/FakeCUDA load, inference, virtual-SMI, token, and FLOP comparison |
 | `python3 verification/test_coordinator_smoke.py` | coordinator startup, request/response, and clean shutdown |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce semantics |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |
@@ -137,6 +139,24 @@ Static-memory validation reports retain forward, backward, and optimizer CUDA pe
 The current real calibration target is a single NVIDIA RTX PRO 5000 72GB Blackwell (compute capability 12.0). The maintained suite covers seven controlled workloads, requires passthrough and Hybrid result signatures to match real CUDA, records Hybrid Driver allocation peaks, and verifies the PyTorch OOM surface under Hybrid clamp. It does not prove that a multi-node target cluster will fit or perform well.
 
 See [AI Researcher Preflight](ai-researcher-preflight.md) for usage and current limitations.
+
+## LLM inference estimate and virtual SMI
+
+`fakegpu estimate-llm --json <path>` writes a
+`fakegpu.llm_inference_estimate.v1` report without loading checkpoint payloads.
+It includes parameter/checkpoint metadata, KV cache, prefill/decode transient
+memory, tensor/process peaks, and per-step matrix FLOPs.
+
+When `FAKEGPU_SMI_STATE_PATH` or `FAKEGPU_SMI_STATE_DIR` is set before the
+FakeCUDA runtime starts, each process publishes a `fakegpu.smi_state.v1` JSON
+file. `fakegpu nvidia-smi` displays current and peak tracked tensor memory plus
+an optional empirically calibrated runtime overhead.
+
+The Qwen validation worker separates model-load and inference peaks, records
+NVML process memory in real mode, executes CPU-backed FakeCUDA with the physical
+GPU hidden, and compares observed FLOPs with the shape estimator. See
+[LLM Inference Estimation](llm-inference-estimation.md) for commands, measured
+results, and the exact scope of the current model.
 
 ## Unified HTML test report
 

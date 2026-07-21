@@ -13,10 +13,15 @@
 - Per-operation collective data type and reduction operator fields in cluster JSON and Markdown timelines.
 - Physical multi-host controller cases for FSDP2 FP32, mixed-precision parameters, and low-precision gradient reduction.
 - Default cross-field cluster-report checks that reconcile collective/P2P counters with the operation timeline and reconcile directional links with node-pair totals.
+- A checkpoint-only dense-decoder inference estimator that reads safetensors headers without loading tensor payloads and reports parameter storage, KV cache, transient tensors, process memory, and prefill/decode matrix FLOPs.
+- A virtual `fakegpu nvidia-smi` view backed by per-process FakeCUDA memory state, with optional same-stack NVML runtime-overhead calibration.
+- Real-CUDA/FakeCUDA Qwen inference workers and a comparison report covering model load, inference peak, NVML process memory, generated tokens, and observed/static FLOPs.
+- A matrix-heavy FLOP counter that preserves PyTorch operator decomposition under inference mode and supports grouped-query SDPA with different query and KV head counts.
 
 ### Fixed
 
 - Preserved non-default CUDA stream ordering at the Hybrid host-staging boundary by copying on the collective stream and synchronizing before coordinator access. This restores correct FSDP pre-divided gradients with PyTorch 2.12/CUDA 13 while retaining PyTorch 2.9/CUDA 12 behavior.
+- Replaced PyTorch's equal-head fused-SDPA FLOP assumption in the Qwen verifier, allowing Qwen3 grouped-query attention (32 query heads and 8 KV heads) to be measured without assertion failures.
 
 ### Validation
 
@@ -27,6 +32,8 @@
 - The complete heterogeneous two-host run used commit `fb852c7` and passed basic DDP, all three DDP option cases, FSDP, collective mismatch, and missing-peer timeout. Its report reconciled 34 completed collectives, 1,104 node-pair bytes, a 128-byte per-operation peak, and one expected timeout with no discarded timeline entries.
 - The FSDP2 matrix passed 20 single-host combinations across the RTX PRO 5000 and RTX 3090 Ti: two/four ranks, FP32/FP16/BF16 parameters, and FP16/BF16 parameter-dtype gradient reductions.
 - Heterogeneous two-host FSDP2 passed FP32/FP16/BF16 parameter cases plus FP16/BF16 gradient reduction. The low-precision report retained eight operations, 160 node-pair bytes, and a 32-byte per-operation peak while identifying `float16`/`bfloat16` payloads and `sum`/`avg` reductions.
+- Qwen3-8B BF16 SDPA validation on the RTX PRO 5000 matched 8,190,735,360 parameters and both generated token IDs. FakeCUDA load and inference-peak errors versus the real CUDA allocator were 0.012914% and 0.064877%; the checkpoint-only peak error was 0.067234%; calibrated virtual-SMI process memory differed from NVML by 0.063182%.
+- Qwen3-8B observed matrix FLOPs matched exactly between CPU-backed FakeCUDA and real CUDA at 151,415,620,864; the shape estimate differed by 1,280 FLOPs (0.000001%).
 
 ## v1.5.3 - 2026-07-20
 
