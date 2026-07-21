@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- A Git-revision-aware physical multi-host controller that launches heterogeneous Hybrid DDP, collective-mismatch, and missing-peer cases over SSH, including Windows-to-WSL command execution and combined JSON/Markdown reports.
+- A `distributed_resilience` suite covering persistent async errors, TCP communicator timeouts, disabled operation retention, bounded rolling retention, and small-message report stress.
+
 ## v1.5.3 - 2026-07-20
 
 Compared with `v1.5.2`.

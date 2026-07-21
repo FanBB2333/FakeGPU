@@ -181,6 +181,34 @@ python3 -m torch.distributed.run \
 cluster 报告记录了两个节点间链路上的 broadcast、all-reduce 和
 all-gather 流量，且没有超时。
 
+### 可重复执行的 SSH 控制脚本
+
+`verification/run_physical_multihost.py` 将上述手动步骤整合为一条控制端
+命令。脚本不会复制代码，也不会修改远端仓库；两台主机需要预先通过 Git
+同步到相同 commit，并完成 native build。
+
+`--node` 的顺序对应 rank。SSH 进入 Windows、而仓库和 GPU 环境位于 WSL
+时，设置 `shell=wsl`：
+
+```bash
+python3 verification/run_physical_multihost.py \
+  --node 'name=blackwell;ssh=gpu-a;repo=/home/user/repos/fakeGPU;python=/opt/fakegpu/bin/python;shell=posix' \
+  --node 'name=ampere-wsl;ssh=user@gpu-b;repo=/home/user/repos/fakeGPU;python=/opt/torch/bin/python;shell=wsl' \
+  --coordinator-host 100.x.y.z
+```
+
+默认包含三个场景：
+
+- 异构两主机 Hybrid DDP 数值正确性
+- collective reduction operator 不一致以及持续可见的 async error
+- 从第二台物理主机触发缺少 rank 的 communicator 超时
+
+启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
+信息和 native 构建产物。合并报告写入
+`build/physical_multihost_validation/<session>/`，其中包含各 rank 结果、
+完整 cluster JSON/Markdown 报告、节点对通信总量和异常观测。对应的单机
+回归检查入口是 `./ftest distributed_resilience`。
+
 ## 最小 cluster config
 
 ```yaml

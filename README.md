@@ -383,6 +383,7 @@ prediction.
 ./ftest python
 ./ftest preflight_oom
 ./ftest tcp_bandwidth
+./ftest distributed_resilience
 ./ftest static_memory_validation
 ./ftest real_gpu_calibration
 python3 -m pytest -q
@@ -395,10 +396,15 @@ python3 -m pytest -q
 | `python` | Basic PyTorch native-interception path |
 | `preflight_oom` | Fit/OOM classification and report validation |
 | `tcp_bandwidth` | Two logical nodes, TCP payload correctness, and throughput reporting |
+| `distributed_resilience` | Collective mismatch, missing-peer timeout, and bounded operation-timeline retention |
 | `static_memory_validation` | ATen graph memory estimation; optional real-CUDA comparison |
 | `real_gpu_calibration` | Real/passthrough/hybrid/fakecuda comparison on a supported GPU |
 
 Additional distributed and framework checks are listed in [Reports and Validation](docs/reports-and-validation.md).
+The physical two-host controller in
+`verification/run_physical_multihost.py` verifies that both repositories use
+the same Git commit, launches Hybrid DDP and TCP fault cases concurrently,
+and collects JSON and Markdown reports on the control host.
 
 ## Architecture
 

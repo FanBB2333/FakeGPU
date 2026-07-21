@@ -187,6 +187,37 @@ gradient `[1.5, 3.0]`, updated parameters approximately
 broadcast, all-reduce, and all-gather traffic across two inter-node links with
 zero timeouts.
 
+### Repeatable SSH controller
+
+`verification/run_physical_multihost.py` turns the manual sequence into one
+control-host command. It does not copy source files or mutate either remote
+repository. Both hosts must already be synchronized through Git and have a
+current native build.
+
+Each `--node` value describes one rank in order. Use `shell=wsl` when SSH
+lands on Windows and the repository and GPU environment live inside WSL:
+
+```bash
+python3 verification/run_physical_multihost.py \
+  --node 'name=blackwell;ssh=gpu-a;repo=/home/user/repos/fakeGPU;python=/opt/fakegpu/bin/python;shell=posix' \
+  --node 'name=ampere-wsl;ssh=user@gpu-b;repo=/home/user/repos/fakeGPU;python=/opt/torch/bin/python;shell=wsl' \
+  --coordinator-host 100.x.y.z
+```
+
+The default cases are:
+
+- heterogeneous two-host Hybrid DDP numerical correctness
+- mismatched collective reduction operators and persistent async errors
+- a missing-peer communicator timeout from the second physical host
+
+Before launch, the controller checks the tracked Git state, exact commit,
+Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.
+It writes the combined result under
+`build/physical_multihost_validation/<session>/`, including the per-rank
+results, complete cluster JSON/Markdown reports, node-pair totals, and failure
+observations. Run `./ftest distributed_resilience` for the corresponding
+single-host regression checks.
+
 ## Minimal cluster config
 
 ```yaml
