@@ -30,13 +30,17 @@ def main(argv: list[str] | None = None) -> int:
         from .distributed_cli import bandwidth_main
 
         return bandwidth_main(argv[1:])
+    if argv and argv[0] == "estimate-llm":
+        from .llm_cli import main as llm_main
+
+        return llm_main(argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="fakegpu",
         description="Run a command with FakeGPU libraries preloaded (LD_PRELOAD/DYLD_INSERT_LIBRARIES).",
         epilog=(
             "Built-in commands: fakegpu demo, fakegpu doctor, fakegpu preflight, "
-            "fakegpu coordinator, fakegpu bandwidth. "
+            "fakegpu coordinator, fakegpu bandwidth, fakegpu estimate-llm. "
             "Run 'fakegpu <command> --help' for details."
         ),
     )
