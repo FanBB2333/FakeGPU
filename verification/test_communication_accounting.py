@@ -219,12 +219,16 @@ def main() -> int:
             and entry["ranks"] == [2, 0]
         )
         assert subgroup_entry["operation"] == "allreduce"
+        assert subgroup_entry["data_type"] == "float32"
+        assert subgroup_entry["reduce_op"] == "sum"
         assert subgroup_entry["logical_payload_bytes"] == 8
         p2p_entry = next(
             entry for entry in entries
             if entry["kind"] == "point_to_point"
         )
         assert p2p_entry["ranks"] == [0, 1, 2, 3]
+        assert p2p_entry["data_type"] == "float32"
+        assert p2p_entry["reduce_op"] == "none"
         assert p2p_entry["logical_payload_bytes"] == 24
         assert p2p_entry["socket_request_payload_bytes"] == 0
         assert p2p_entry["socket_response_payload_bytes"] == 0
@@ -235,6 +239,7 @@ def main() -> int:
         markdown = markdown_path.read_text(encoding="utf-8")
         assert "## Point-to-Point Summary" in markdown
         assert "## Recent Operation Timeline" in markdown
+        assert "| Data type | Reduce op |" in markdown
         assert "| 1 | 2 | 24 B |" in markdown
 
         print(
