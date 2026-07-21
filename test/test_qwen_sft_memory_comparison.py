@@ -105,6 +105,23 @@ def test_comparison_accepts_checkpointing_upper_bound() -> None:
     assert report["static"]["prediction_kind"] == "upper_bound"
 
 
+def test_comparison_accepts_analytical_gradient_accumulation() -> None:
+    real = _execution_report("real")
+    fake = _execution_report("fakecuda")
+    static = _static_report()
+    for report in (real, fake, static):
+        report["gradient_accumulation_steps"] = 2
+    static["static_analysis"] = {
+        "checkpointing": "disabled",
+        "gradient_accumulation": "in_place_largest_gradient_temporary",
+    }
+    static["memory_phases"]["accumulation_graph_estimated_peak_bytes"] = 4_020_000_000
+
+    report = compare_reports(real, fake, static)
+    assert report["status"] == "success"
+    assert report["static"]["prediction_kind"] == "analytical"
+
+
 def test_comparison_rejects_different_random_batch() -> None:
     fake = _execution_report("fakecuda")
     fake["batch"]["fingerprint_sha256"] = "different"

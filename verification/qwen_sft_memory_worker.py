@@ -233,6 +233,67 @@ def _configure_training_model(model: Any, args: argparse.Namespace, *, static: b
     }
 
 
+def _checkpoint_graph_estimate(estimate: dict[str, Any]) -> dict[str, Any]:
+    uncheckpointed_peak = int(estimate["first_step_graph_phase_peak_bytes"])
+    parameter_bytes = int(estimate["parameter_bytes"])
+    trainable_bytes = int(estimate["trainable_parameter_bytes"])
+    if trainable_bytes * 2 >= parameter_bytes:
+        return {
+            "method": "analytical_full_parameter_graph_floor",
+            "estimated_peak_bytes": uncheckpointed_peak,
+            "uncheckpointed_upper_bound_bytes": uncheckpointed_peak,
+            "loss_temporary_bytes": None,
+            "notes": [
+                "The full-parameter peak is dominated by parameter-gradient and tied-weight temporaries that checkpointing does not remove."
+            ],
+        }
+
+    loss_fragments = ("log_softmax", "nll_loss", "cross_entropy")
+    loss_temporary_bytes = sum(
+        int(storage.get("bytes", 0))
+        for storage in estimate["graph"].get("top_peak_storages", [])
+        if storage.get("category") == "temporary"
+        and any(
+            fragment in str(storage.get("producer_target", "")).lower()
+            for fragment in loss_fragments
+        )
+    )
+    if loss_temporary_bytes <= 0:
+        return {
+            "method": "uncheckpointed_upper_bound",
+            "estimated_peak_bytes": uncheckpointed_peak,
+            "uncheckpointed_upper_bound_bytes": uncheckpointed_peak,
+            "loss_temporary_bytes": None,
+            "notes": [
+                "The graph peak did not expose recognized loss temporaries, so the uncheckpointed graph remains the conservative estimate."
+            ],
+        }
+
+    peak_categories = estimate["graph"]["peak_bytes_by_category"]
+    retained_loss_floor = (
+        parameter_bytes
+        + int(estimate["buffer_bytes"])
+        + int(estimate["input_bytes"])
+        + int(peak_categories.get("output", 0))
+        + loss_temporary_bytes
+        + int(estimate["workspace_peak_contribution_bytes"])
+    )
+    post_graph_floor = int(estimate["post_graph_live_bytes"]) + int(
+        estimate["workspace_peak_contribution_bytes"]
+    )
+    return {
+        "method": "analytical_loss_and_optimizer_floor",
+        "estimated_peak_bytes": max(retained_loss_floor, post_graph_floor),
+        "uncheckpointed_upper_bound_bytes": uncheckpointed_peak,
+        "loss_temporary_bytes": loss_temporary_bytes,
+        "retained_loss_floor_bytes": retained_loss_floor,
+        "post_graph_floor_bytes": post_graph_floor,
+        "notes": [
+            "Checkpointed decoder activations are removed from the graph peak while parameters, outputs, loss temporaries, gradients, and profiled workspaces remain."
+        ],
+    }
+
+
 def _common_report(args: argparse.Namespace, torch: Any, transformers: Any, model_dir: Path) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -303,13 +364,21 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
         retain_forward_outputs=True,
         target_device="cuda",
     )
-    accumulation_graph_upper_bound = int(estimate["first_step_graph_phase_peak_bytes"])
+    checkpoint_estimate: dict[str, Any] | None = None
+    base_graph_estimate = int(estimate["first_step_graph_phase_peak_bytes"])
+    if args.gradient_checkpointing:
+        checkpoint_estimate = _checkpoint_graph_estimate(estimate)
+        base_graph_estimate = int(checkpoint_estimate["estimated_peak_bytes"])
+        training_metadata["checkpointing_analysis"] = checkpoint_estimate["method"]
+    accumulation_graph_estimate = base_graph_estimate
     accumulation_analysis = "single_microbatch_exact"
     if args.gradient_accumulation_steps > 1:
-        accumulation_graph_upper_bound += int(estimate["trainable_parameter_bytes"])
-        accumulation_analysis = "existing_gradient_upper_bound"
+        accumulation_graph_estimate += int(
+            estimate["optimizer_temporary"]["largest_parameter_tensor_bytes"]
+        )
+        accumulation_analysis = "in_place_largest_gradient_temporary"
     optimizer_peak = int(estimate["optimizer_phase_peak_bytes"])
-    first_step_peak = max(accumulation_graph_upper_bound, optimizer_peak)
+    first_step_peak = max(accumulation_graph_estimate, optimizer_peak)
     report = _common_report(args, torch, transformers, model_dir)
     report.update(
         {
@@ -326,6 +395,7 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
             "static_analysis": {
                 "checkpointing": training_metadata["checkpointing_analysis"],
                 "gradient_accumulation": accumulation_analysis,
+                "checkpoint_estimate": checkpoint_estimate,
             },
             "elapsed_seconds": time.monotonic() - started,
             "memory_phases": {
@@ -333,7 +403,12 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
                 "first_step_estimated_peak_bytes": first_step_peak,
                 "steady_state_estimated_peak_bytes": int(estimate["steady_state_estimated_peak_bytes"]),
                 "first_step_graph_phase_peak_bytes": int(estimate["first_step_graph_phase_peak_bytes"]),
-                "accumulation_graph_upper_bound_bytes": accumulation_graph_upper_bound,
+                "checkpoint_graph_estimated_peak_bytes": (
+                    int(checkpoint_estimate["estimated_peak_bytes"])
+                    if checkpoint_estimate is not None
+                    else None
+                ),
+                "accumulation_graph_estimated_peak_bytes": accumulation_graph_estimate,
                 "graph_phase_peak_bytes": int(estimate["graph_phase_peak_bytes"]),
                 "optimizer_phase_peak_bytes": int(estimate["optimizer_phase_peak_bytes"]),
                 "parameter_bytes": int(estimate["parameter_bytes"]),

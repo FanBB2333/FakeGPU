@@ -56,9 +56,19 @@ def compare_reports(
         static_analysis.get("checkpointing") == "disabled"
         and static_analysis.get("gradient_accumulation") == "single_microbatch_exact"
     )
+    checkpointing_analysis = str(static_analysis.get("checkpointing", ""))
+    accumulation_analysis = str(static_analysis.get("gradient_accumulation", ""))
+    static_is_analytical = (
+        checkpointing_analysis.startswith("analytical_")
+        and accumulation_analysis
+        in {"single_microbatch_exact", "in_place_largest_gradient_temporary"}
+    ) or (
+        checkpointing_analysis == "disabled"
+        and accumulation_analysis == "in_place_largest_gradient_temporary"
+    )
     static_graph_peak = int(
         static["memory_phases"].get(
-            "accumulation_graph_upper_bound_bytes",
+            "accumulation_graph_estimated_peak_bytes",
             static["memory_phases"]["first_step_graph_phase_peak_bytes"],
         )
     )
@@ -96,7 +106,7 @@ def compare_reports(
     real_parameter_bytes = int(real["parameters"]["parameter_bytes"])
     static_overall_comparison = comparisons["static_overall_peak"]
     static_graph_comparison = comparisons["static_first_step_graph_peak"]
-    if static_is_exact:
+    if static_is_exact or static_is_analytical:
         static_overall_passed = (
             static_overall_comparison["absolute_error_percent"]
             <= max_overall_error_percent
@@ -207,7 +217,13 @@ def compare_reports(
             "elapsed_seconds": static["elapsed_seconds"],
             "tracking_confidence": static["static_estimate"]["tracking_confidence"],
             "analysis": static_analysis,
-            "prediction_kind": "exact" if static_is_exact else "upper_bound",
+            "prediction_kind": (
+                "exact"
+                if static_is_exact
+                else "analytical"
+                if static_is_analytical
+                else "upper_bound"
+            ),
         },
     }
 
@@ -271,8 +287,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             "The FakeCUDA execution-only backward value is diagnostic: short-lived CPU-kernel "
             "temporaries are not all visible to its runtime tracker. The gating backward prediction "
             "comes from the captured ATen storage-liveness graph.",
-            "Gradient-checkpointing static reports are explicit uncheckpointed upper bounds because "
-            "torch.func cannot capture PyTorch checkpoint saved-tensor hooks in this path.",
+            "Gradient-checkpointing graphs use an analytical retained-loss/optimizer floor when the "
+            "loss operators are recognized; otherwise they remain explicit uncheckpointed upper bounds.",
             "",
         ]
     )
