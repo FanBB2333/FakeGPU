@@ -17,8 +17,10 @@
 | `python3 verification/test_allgather_correctness.py` | direct all-gather 语义正确性 |
 | `python3 verification/test_group_semantics.py` | grouped collective 提交语义 |
 | `./ftest tcp_bandwidth` | 指定端口的 TCP 负载正确性与端到端模拟吞吐 |
+| `./ftest distributed_resilience` | TCP collective 参数不一致、缺少 rank 超时和报告时间线容量限制 |
 | `./test/run_hybrid_multinode.sh 2` | hybrid 计算 + simulate 通信的维护中多进程验证 |
 | `python3 verification/run_hybrid_ddp_numerics.py` | 真实 CUDA DDP 的梯度平均、optimizer 更新与跨 rank 参数一致性 |
+| `python3 verification/run_physical_multihost.py ...` | 通过 SSH 重复执行两主机 Hybrid DDP、参数不一致、超时、Git 版本和报告检查 |
 | `./ftest llm` | 在本地模型文件可用时运行的可选 LLM smoke test |
 | `python test/run_error_simulation_suite.py` | 统一错误模拟套件：跨设备、OOM、无效设备、dtype、checkpoint、梯度（23 个测试） |
 | `python test/test_error_cross_device.py` | 跨设备张量操作守卫 |
@@ -168,17 +170,19 @@ python test/run_error_simulation_suite.py
 ## 推荐验证顺序
 
 1. 先完成构建。
-2. 跑 `./ftest smoke`。
-3. 跑 `./ftest cpu_sim`。
-4. 如果装了 PyTorch，再跑 `./ftest python`。
-5. 跑 `python3 verification/test_coordinator_smoke.py`。
-6. 跑 `python3 test/test_allreduce_correctness.py`。
-7. 跑 `python3 verification/test_allgather_correctness.py`。
-8. 跑 `python3 verification/test_group_semantics.py`。
+2. 执行 `./ftest smoke`。
+3. 执行 `./ftest cpu_sim`。
+4. 如果装了 PyTorch，再执行 `./ftest python`。
+5. 执行 `python3 verification/test_coordinator_smoke.py`。
+6. 执行 `python3 test/test_allreduce_correctness.py`。
+7. 执行 `python3 verification/test_allgather_correctness.py`。
+8. 执行 `python3 verification/test_group_semantics.py`。
 9. 执行 `./ftest tcp_bandwidth`。
-10. 执行 `./test/run_multinode_sim.sh 2`。
-11. 执行 `./test/run_multinode_sim.sh 4`。
-12. 执行 `./test/run_ddp_multinode.sh 4`。
-13. 然后再进入 `./test/run_hybrid_multinode.sh 2`。
-14. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_ddp_numerics.py`。
-15. 执行 `python test/run_error_simulation_suite.py`，检查错误模拟覆盖。
+10. 执行 `./ftest distributed_resilience`。
+11. 执行 `./test/run_multinode_sim.sh 2`。
+12. 执行 `./test/run_multinode_sim.sh 4`。
+13. 执行 `./test/run_ddp_multinode.sh 4`。
+14. 然后再进入 `./test/run_hybrid_multinode.sh 2`。
+15. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_ddp_numerics.py`。
+16. 两台 GPU 主机同步到相同 commit 后，执行 `python3 verification/run_physical_multihost.py ...`。
+17. 执行 `python test/run_error_simulation_suite.py`，检查错误模拟覆盖。

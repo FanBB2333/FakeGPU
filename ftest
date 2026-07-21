@@ -17,6 +17,7 @@ Suites:
   python    Run PyTorch tests (requires torch)
   preflight_oom  Run fakecuda preflight pass/OOM report checks (requires torch)
   tcp_bandwidth  Simulate two logical nodes and measure TCP collective throughput
+  distributed_resilience  Validate TCP mismatch/missing-peer failures and bounded reports
   static_memory_validation  Capture ATen storage liveness and compare with real CUDA when available
   real_gpu_calibration  Calibrate real/passthrough/hybrid/fakecuda workloads on the detected GPU
   rtx3090ti_calibration  Deprecated alias for real_gpu_calibration
@@ -206,6 +207,12 @@ run_tcp_bandwidth() {
   BUILD_DIR="$SMOKE_BUILD_DIR" "$PYTHON_BIN" verification/test_communication_accounting.py
 }
 
+run_distributed_resilience() {
+  build
+  "$PYTHON_BIN" verification/test_remote_faults.py --build-dir "$SMOKE_BUILD_DIR"
+  "$PYTHON_BIN" verification/test_cluster_report_retention.py --build-dir "$SMOKE_BUILD_DIR"
+}
+
 run_real_gpu_calibration() {
   local report_root="$SMOKE_BUILD_DIR/real_gpu_calibration"
   rm -rf "$report_root"
@@ -319,6 +326,9 @@ case "$suite" in
     ;;
   tcp_bandwidth)
     run_tcp_bandwidth
+    ;;
+  distributed_resilience)
+    run_distributed_resilience
     ;;
   static_memory_validation)
     run_static_memory_validation
