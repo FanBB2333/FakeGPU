@@ -254,6 +254,24 @@ def _load_text_config(AutoConfig: Any, model_dir: Path) -> Any:
     return getattr(root_config, "text_config", root_config)
 
 
+def _construct_meta_model(
+    torch: Any,
+    model_class: Any,
+    config: Any,
+    *,
+    dtype: Any,
+) -> Any:
+    """Construct parameters in the target dtype without casting FP32 buffers."""
+
+    previous_dtype = torch.get_default_dtype()
+    try:
+        torch.set_default_dtype(dtype)
+        with torch.device("meta"):
+            return model_class(config)
+    finally:
+        torch.set_default_dtype(previous_dtype)
+
+
 def _configure_training_model(model: Any, args: argparse.Namespace, *, static: bool) -> tuple[Any, dict[str, Any]]:
     peft_version: str | None = None
     quantization_plan: dict[str, Any] | None = None
@@ -532,9 +550,12 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
     config = _load_text_config(AutoConfig, model_dir)
     config.use_cache = False
     config._attn_implementation = args.attention_implementation
-    with torch.device("meta"):
-        model = Qwen3_5ForCausalLM(config)
-    model = model.to(dtype=dtype)
+    model = _construct_meta_model(
+        torch,
+        Qwen3_5ForCausalLM,
+        config,
+        dtype=dtype,
+    )
     model, training_metadata = _configure_training_model(model, args, static=True)
     model.train()
     parameters = _parameter_summary(model)
