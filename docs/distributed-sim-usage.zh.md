@@ -176,10 +176,10 @@ python3 -m torch.distributed.run \
 ```
 
 当前维护的两机结果使用 RTX PRO 5000 上的 PyTorch 2.9.1/CUDA 12.8，
-以及 RTX 3090 Ti 上的 PyTorch 2.12.1/CUDA 13.0。两个 rank 的梯度均为
-`[1.5, 3.0]`，更新后的参数约为 `[0.85, -0.30]`，all-gather 结果一致。
-cluster 报告记录了两个节点间链路上的 broadcast、all-reduce 和
-all-gather 流量，且没有超时。
+以及 RTX 3090 Ti 上的 PyTorch 2.12.1/CUDA 13.0。基础 DDP、全部 DDP
+选项场景和 FSDP 都得到预期梯度及一致的重建参数。完整 cluster 报告记录
+34 个成功通信操作、节点对总量 1,104 字节、节点对单次峰值 128 字节，
+并记录一次预期的缺少 rank 超时。
 
 ### 可重复执行的 SSH 控制脚本
 
@@ -197,9 +197,11 @@ python3 verification/run_physical_multihost.py \
   --coordinator-host 100.x.y.z
 ```
 
-默认包含三个场景：
+默认包含以下场景：
 
 - 异构两主机 Hybrid DDP 数值正确性
+- DDP `no_sync`、不同 rank 使用不同分支时的未使用参数、静态图和 gradient bucket view
+- FSDP 全分片、reduce-scatter、optimizer、完整参数和 state dict 正确性
 - collective reduction operator 不一致以及持续可见的 async error
 - 从第二台物理主机触发缺少 rank 的 communicator 超时
 
@@ -264,6 +266,8 @@ python3 verification/test_allgather_correctness.py
 python3 verification/test_group_semantics.py
 ./ftest tcp_bandwidth
 ./test/run_hybrid_multinode.sh 2
+python3 verification/run_hybrid_ddp_numerics.py --variant all
+python3 verification/run_hybrid_fsdp_numerics.py
 ```
 
 这些检查分别覆盖：
@@ -272,6 +276,8 @@ python3 verification/test_group_semantics.py
 - direct collective 语义
 - grouped submission 语义
 - hybrid 计算 + simulate 通信集成
+- 真实 CUDA 上的 DDP 常见选项数值结果
+- FSDP 分片、reduce-scatter、参数重建与 checkpoint 恢复
 
 建议顺序：
 
@@ -283,13 +289,17 @@ python3 verification/test_group_semantics.py
 6. `./test/run_multinode_sim.sh 4`
 7. `./test/run_ddp_multinode.sh 4`
 8. `./test/run_hybrid_multinode.sh 2`
-9. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_ddp_numerics.py`
+9. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_ddp_numerics.py --variant all`
+10. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_fsdp_numerics.py`
 
 上面的 DDP 脚本已经属于当前维护中的 simulate-mode 验证集。它们提供的是 ProcessGroupNCCL 的 smoke / 控制流覆盖，并不意味着已经达到真实 NCCL 的完整数值或协议等价。
 
-最后一项真实 CUDA 检查的范围较窄，但会验证数值：两个 rank 共用一张
-物理卡，fake NCCL 对已知的非零梯度求平均，随后检查 optimizer 更新结果
-以及两个 rank 收集到的参数是否一致。
+真实 CUDA 检查会核对具体数值。DDP runner 覆盖基础梯度平均、`no_sync`
+梯度累积、不同 rank 使用不同分支时的未使用参数、静态图和 gradient bucket
+view。FSDP runner 会验证真实双 rank 全分片、reduce-scatter 梯度平均、
+optimizer 更新、完整参数重建和完整 state dict 恢复。两个 runner 都支持
+两个 rank 共用一张物理卡；物理多主机控制器默认让每台已同步的 SSH 主机
+各承担一个 rank。
 
 ## 手动启动 coordinator
 

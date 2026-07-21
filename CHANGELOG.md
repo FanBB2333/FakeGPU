@@ -6,12 +6,21 @@
 
 - A Git-revision-aware physical multi-host controller that launches heterogeneous Hybrid DDP, collective-mismatch, and missing-peer cases over SSH, including Windows-to-WSL command execution and combined JSON/Markdown reports.
 - A `distributed_resilience` suite covering persistent async errors, TCP communicator timeouts, disabled operation retention, bounded rolling retention, and small-message report stress.
+- Two-rank real-CUDA Hybrid FSDP validation covering parameter sharding, reduce-scatter gradient averaging, optimizer updates, full-parameter reconstruction, and full-state-dict serialization/restoration.
+- DDP numerical variants for `no_sync`, rank-dependent unused parameters, `static_graph`, and gradient bucket views, available on one physical GPU and across two SSH hosts.
+- Default cross-field cluster-report checks that reconcile collective/P2P counters with the operation timeline and reconcile directional links with node-pair totals.
+
+### Fixed
+
+- Preserved non-default CUDA stream ordering at the Hybrid host-staging boundary by copying on the collective stream and synchronizing before coordinator access. This restores correct FSDP pre-divided gradients with PyTorch 2.12/CUDA 13 while retaining PyTorch 2.9/CUDA 12 behavior.
 
 ### Validation
 
-- Full local suite: 232 passed and 1 skipped.
+- Full local suite: 236 passed and 1 skipped.
 - The distributed resilience suite passed on macOS, the RTX PRO 5000 Linux host, and the RTX 3090 Ti WSL host; its 256-operation case retained the newest 64 timeline entries and counted 192 discarded entries.
 - The automated heterogeneous two-host run used the same `3e6c8b2` commit on both hosts. Hybrid DDP produced gradient `[1.5, 3.0]` and parameters `[0.85, -0.30]`; both mismatched ranks persisted async error 5; the missing-peer case timed out in 0.755 seconds. The cluster report recorded six successful collectives, 192 bytes between the node pair, a 64-byte per-operation peak, and one expected timeout.
+- Single-host Hybrid DDP/FSDP passed on both the RTX PRO 5000 Blackwell (compute capability 12.0, PyTorch 2.9.1/CUDA 12.8) and RTX 3090 Ti (compute capability 8.6, PyTorch 2.12.1/CUDA 13.0). FSDP produced local shard gradients `[1.5]` and `[3.0]`, reconstructed `[0.85, -0.30]`, and restored the same values from a full state dict.
+- The complete heterogeneous two-host run used commit `fb852c7` and passed basic DDP, all three DDP option cases, FSDP, collective mismatch, and missing-peer timeout. Its report reconciled 34 completed collectives, 1,104 node-pair bytes, a 128-byte per-operation peak, and one expected timeout with no discarded timeline entries.
 
 ## v1.5.3 - 2026-07-20
 
