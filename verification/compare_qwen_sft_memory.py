@@ -34,6 +34,7 @@ def compare_reports(
         "gradient_checkpointing",
         "gradient_accumulation_steps",
         "lora",
+        "quantization",
         "batch_size",
         "sequence_length",
         "data_seed",
@@ -51,20 +52,30 @@ def compare_reports(
     static_analysis = static.get("static_analysis") or {
         "checkpointing": "disabled",
         "gradient_accumulation": "single_microbatch_exact",
+        "quantization": "disabled",
     }
+    quantization_analysis = str(static_analysis.get("quantization", "disabled"))
     static_is_exact = (
         static_analysis.get("checkpointing") == "disabled"
         and static_analysis.get("gradient_accumulation") == "single_microbatch_exact"
+        and quantization_analysis == "disabled"
     )
     checkpointing_analysis = str(static_analysis.get("checkpointing", ""))
     accumulation_analysis = str(static_analysis.get("gradient_accumulation", ""))
-    static_is_analytical = (
+    static_is_analytical = ((
         checkpointing_analysis.startswith("analytical_")
         and accumulation_analysis
         in {"single_microbatch_exact", "in_place_largest_gradient_temporary"}
     ) or (
         checkpointing_analysis == "disabled"
         and accumulation_analysis == "in_place_largest_gradient_temporary"
+    ) or (
+        checkpointing_analysis == "disabled"
+        and accumulation_analysis == "single_microbatch_exact"
+        and quantization_analysis.startswith("analytical_")
+    )) and (
+        quantization_analysis == "disabled"
+        or quantization_analysis.startswith("analytical_")
     )
     static_graph_peak = int(
         static["memory_phases"].get(
@@ -188,6 +199,7 @@ def compare_reports(
             "gradient_checkpointing": bool(real.get("gradient_checkpointing", False)),
             "gradient_accumulation_steps": int(real.get("gradient_accumulation_steps", 1)),
             "lora": real.get("lora"),
+            "quantization": real.get("quantization"),
             "fingerprint_sha256": next(iter(fingerprints)),
         },
         "limits": {

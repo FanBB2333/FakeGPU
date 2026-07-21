@@ -16,6 +16,7 @@ def _report(mode: str, peak: int) -> dict:
         "gradient_checkpointing": False,
         "gradient_accumulation_steps": 1,
         "lora": {"rank": 8},
+        "quantization": None,
         "batch_size": 1,
         "sequence_length": 16,
         "data_seed": 7,
@@ -82,3 +83,17 @@ def test_matrix_rejects_static_error_above_limit() -> None:
 
     assert report["status"] == "failed"
     assert report["cases"][0]["static_passed"] is False
+
+
+def test_matrix_labels_native_nf4_prediction_as_analytical() -> None:
+    real = _report("real", 1_000)
+    static = _report("static", 995)
+    for item in (real, static):
+        item["training_method"] = "qlora"
+        item["quantization"] = {"backend": "pytorch_native_nf4", "block_size": 64}
+    static["static_analysis"]["quantization"] = "analytical_pytorch_native_nf4_workspace"
+
+    report = summarize_cases({"qlora": {"real": real, "static": static}})
+
+    assert report["status"] == "success"
+    assert report["cases"][0]["static_prediction_kind"] == "analytical"
