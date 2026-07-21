@@ -154,6 +154,7 @@ def plan_nf4_lora(
             int(item["dequantization_workspace_bytes"]) for item in modules
         ),
         "lora_parameter_count": sum(int(item["lora_parameter_count"]) for item in modules),
+        "adapter_dtype": "float32",
         "modules": modules,
         "limitations": [
             "PyTorch reference kernels are used instead of fused bitsandbytes CUDA kernels.",
@@ -301,10 +302,10 @@ class NativeNF4LoraLinear(torch.nn.Module):
             linear.bias.detach().clone() if linear.bias is not None else None,
         )
         self.lora_A = torch.nn.Parameter(
-            torch.empty(rank, self.in_features, dtype=linear.weight.dtype)
+            torch.empty(rank, self.in_features, dtype=torch.float32)
         )
         self.lora_B = torch.nn.Parameter(
-            torch.zeros(self.out_features, rank, dtype=linear.weight.dtype)
+            torch.zeros(self.out_features, rank, dtype=torch.float32)
         )
         torch.nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
         self.lora_dropout = torch.nn.Dropout(p=float(dropout))

@@ -39,6 +39,7 @@ def test_plan_excludes_output_embedding_and_counts_lora_parameters() -> None:
     assert plan["quantized_weight_count"] == 48
     assert plan["original_parameter_count"] == 54
     assert plan["lora_parameter_count"] == 28
+    assert plan["adapter_dtype"] == "float32"
 
 
 def test_native_nf4_lora_forward_backward_and_storage_match_plan() -> None:
@@ -63,6 +64,8 @@ def test_native_nf4_lora_forward_backward_and_storage_match_plan() -> None:
         parameter.requires_grad
         for parameter in (model.proj.lora_A, model.proj.lora_B)
     )
+    assert model.proj.lora_A.dtype == torch.float32
+    assert model.proj.lora_B.dtype == torch.float32
     assert model.lm_head.weight.requires_grad is False
 
     inputs = torch.randn(2, 3, 8, dtype=torch.bfloat16, requires_grad=True)
