@@ -6,86 +6,72 @@ from typing import Any
 
 
 class MatmulFlopCounterMode:
-    """Count matrix-multiply FLOPs with grouped-query SDPA support."""
+    """Count matrix-heavy FLOPs, including grouped-query SDPA.
 
-    def __new__(cls):
+    PyTorch's counter already decomposes composite operators so that linear
+    projections are counted even under ``torch.inference_mode``.  This wrapper
+    keeps that behavior and replaces the fused-attention formulas that assume
+    the query and key/value head counts are equal.
+    """
+
+    def __init__(self) -> None:
         import torch
-        from torch.utils._python_dispatch import TorchDispatchMode
+        from torch.utils.flop_counter import FlopCounterMode
 
-        class _Mode(TorchDispatchMode):
-            def __init__(self):
-                super().__init__()
-                self.total_flops = 0
-                self.flops_by_operator: Counter[str] = Counter()
+        custom_mapping = {}
+        for operator_name in (
+            "_scaled_dot_product_efficient_attention",
+            "_scaled_dot_product_flash_attention",
+            "_scaled_dot_product_cudnn_attention",
+            "_scaled_dot_product_flash_attention_for_cpu",
+        ):
+            operator = getattr(torch.ops.aten, operator_name, None)
+            if operator is not None:
+                custom_mapping[operator] = _grouped_query_sdpa_flops
+        self._counter = FlopCounterMode(
+            display=False,
+            custom_mapping=custom_mapping,
+        )
 
-            def __torch_dispatch__(
-                self,
-                func: Any,
-                types: tuple[type, ...],
-                args: tuple[Any, ...] = (),
-                kwargs: dict[str, Any] | None = None,
-            ) -> Any:
-                keyword_args = kwargs or {}
-                output = func(*args, **keyword_args)
-                name = str(getattr(getattr(func, "_schema", None), "name", func))
-                flops = _operator_flops(name, args, keyword_args, output, torch=torch)
-                if flops:
-                    self.total_flops += flops
-                    self.flops_by_operator[name] += flops
-                return output
+    def __enter__(self) -> MatmulFlopCounterMode:
+        self._counter.__enter__()
+        return self
 
-        return _Mode()
+    def __exit__(self, *args: Any) -> Any:
+        return self._counter.__exit__(*args)
+
+    @property
+    def total_flops(self) -> int:
+        return int(self._counter.get_total_flops())
+
+    @property
+    def flops_by_operator(self) -> Counter[str]:
+        counts = self._counter.get_flop_counts().get("Global", {})
+        return Counter(
+            {
+                _operator_name(operator): int(flops)
+                for operator, flops in counts.items()
+            }
+        )
 
 
-def _operator_flops(
-    name: str,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    output: Any,
-    *,
-    torch: Any,
+def _grouped_query_sdpa_flops(
+    query_shape: tuple[int, ...],
+    key_shape: tuple[int, ...],
+    value_shape: tuple[int, ...],
+    *args: Any,
+    out_shape: Any = None,
+    **kwargs: Any,
 ) -> int:
-    if name == "aten::mm" and len(args) >= 2:
-        return _matrix_product_flops(args[0], args[1])
-    if name == "aten::bmm" and len(args) >= 2:
-        return _matrix_product_flops(args[0], args[1])
-    if name == "aten::addmm" and len(args) >= 3:
-        return _matrix_product_flops(args[1], args[2])
-    if name == "aten::matmul" and len(args) >= 2:
-        return _matrix_product_flops(args[0], args[1], output=output)
-    if "scaled_dot_product" in name and len(args) >= 3:
-        return _sdpa_flops(args[0], args[1], args[2])
-    return 0
-
-
-def _matrix_product_flops(left: Any, right: Any, *, output: Any = None) -> int:
-    left_shape = tuple(int(value) for value in left.shape)
-    right_shape = tuple(int(value) for value in right.shape)
-    if len(left_shape) < 2 or len(right_shape) < 2:
-        return 0
-    reduction = left_shape[-1]
-    if reduction != right_shape[-2]:
-        return 0
-    if output is not None and hasattr(output, "numel"):
-        output_elements = int(output.numel())
-    else:
-        batch = math.prod(left_shape[:-2])
-        output_elements = batch * left_shape[-2] * right_shape[-1]
-    return 2 * output_elements * reduction
-
-
-def _sdpa_flops(query: Any, key: Any, value: Any) -> int:
-    query_shape = tuple(int(value) for value in query.shape)
-    key_shape = tuple(int(value) for value in key.shape)
-    value_shape = tuple(int(dimension) for dimension in value.shape)
+    del args, out_shape, kwargs
     if len(query_shape) < 4 or len(key_shape) < 4 or len(value_shape) < 4:
         return 0
-    batch = math.prod(query_shape[:-3])
-    query_heads = query_shape[-3]
-    query_tokens = query_shape[-2]
-    query_head_dim = query_shape[-1]
-    key_tokens = key_shape[-2]
-    value_head_dim = value_shape[-1]
+    batch = math.prod(int(value) for value in query_shape[:-3])
+    query_heads = int(query_shape[-3])
+    query_tokens = int(query_shape[-2])
+    query_head_dim = int(query_shape[-1])
+    key_tokens = int(key_shape[-2])
+    value_head_dim = int(value_shape[-1])
     qk_flops = (
         2 * batch * query_heads * query_tokens * key_tokens * query_head_dim
     )
@@ -93,3 +79,10 @@ def _sdpa_flops(query: Any, key: Any, value: Any) -> int:
         2 * batch * query_heads * query_tokens * key_tokens * value_head_dim
     )
     return qk_flops + attention_value_flops
+
+
+def _operator_name(operator: Any) -> str:
+    name = str(operator)
+    if name.startswith("aten."):
+        return "aten::" + name.removeprefix("aten.")
+    return name
