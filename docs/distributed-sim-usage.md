@@ -182,10 +182,14 @@ python3 -m torch.distributed.run \
 
 The maintained two-host result used PyTorch 2.9.1/CUDA 12.8 on the RTX PRO
 5000 and PyTorch 2.12.1/CUDA 13.0 on the RTX 3090 Ti. Basic DDP, all DDP
-option cases, and FSDP produced the expected gradients and identical rebuilt
-parameters. The complete cluster report recorded 34 successful communication
-operations, 1,104 bytes between the node pair, a 128-byte pair peak per
-operation, and one expected missing-peer timeout.
+option cases, FSDP, and FSDP2 produced the expected gradients and identical
+rebuilt parameters. The complete DDP/FSDP/fault report recorded 34 successful
+communication operations, 1,104 bytes between the node pair, a 128-byte pair
+peak per operation, and one expected missing-peer timeout. Separate FSDP2
+sessions passed FP32/FP16/BF16 parameter paths and FP16/BF16 gradient
+reductions. The low-precision session retained eight operations, 160 node-pair
+bytes, and a 32-byte per-operation peak; its timeline distinguishes
+`float16`/`bfloat16` payloads and `sum`/`avg` reductions.
 
 ### Repeatable SSH controller
 
@@ -209,6 +213,9 @@ The default cases are:
 - heterogeneous two-host Hybrid DDP numerical correctness
 - DDP `no_sync`, rank-dependent unused parameters, static graphs, and gradient bucket views
 - FSDP full sharding, reduce-scatter, optimizer, full-parameter, and state-dict correctness
+- FSDP2/DTensor FP32 sharding, optimizer, and full-tensor reconstruction
+- FSDP2 FP16/BF16 parameters with FP32 gradient reduction
+- FSDP2 FP16/BF16 parameter-dtype gradient reduction
 - mismatched collective reduction operators and persistent async errors
 - a missing-peer communicator timeout from the second physical host
 
@@ -277,6 +284,8 @@ python3 verification/test_group_semantics.py
 ./test/run_hybrid_multinode.sh 2
 python3 verification/run_hybrid_ddp_numerics.py --variant all
 python3 verification/run_hybrid_fsdp_numerics.py
+python3 verification/run_hybrid_fsdp2_numerics.py --world-size 4 --precision bf16
+python3 verification/run_hybrid_fsdp2_numerics.py --world-size 4 --precision bf16 --reduce-precision parameter
 ```
 
 The maintained checks above validate:
@@ -287,6 +296,7 @@ The maintained checks above validate:
 - hybrid compute + simulated communication integration
 - DDP common-option numerical behavior on real CUDA
 - FSDP sharding, reduce-scatter, reconstruction, and checkpoint restoration
+- FSDP2/DTensor sharding and reconstruction with two/four ranks and mixed-precision communication
 
 Recommended order:
 
@@ -300,6 +310,7 @@ Recommended order:
 8. `./test/run_hybrid_multinode.sh 2`
 9. `python3 verification/run_hybrid_ddp_numerics.py --variant all` on a real CUDA host
 10. `python3 verification/run_hybrid_fsdp_numerics.py` on a real CUDA host
+11. `python3 verification/run_hybrid_fsdp2_numerics.py ...` on a real CUDA host
 
 The DDP-oriented scripts above are part of the maintained simulate-mode validation set. They provide smoke and control-flow coverage for ProcessGroupNCCL, but they do not imply full numerical or protocol parity with a real NCCL stack.
 
@@ -308,8 +319,10 @@ gradient accumulation through `no_sync`, rank-dependent unused parameters,
 static graphs, and gradient bucket views. The FSDP runner verifies a real
 two-rank full shard, reduce-scatter gradient averaging, optimizer updates,
 full-parameter reconstruction, and full-state-dict restoration. Both runners
-support two ranks sharing one physical GPU; the physical multi-host controller
-runs one rank on each synchronized SSH host by default.
+support two ranks sharing one physical GPU. The FSDP2 runner additionally
+supports four ranks, DTensor reconstruction, FP16/BF16 parameters, and FP32 or
+parameter-dtype gradient reduction. The physical multi-host controller runs
+one rank on each synchronized SSH host by default.
 
 ## Manual coordinator startup
 
@@ -382,7 +395,7 @@ When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeG
 - intra-node and inter-node link statistics
 - every distinct node pair, with collective/P2P operation breakdowns, directional totals, combined total, per-operation peak payload, transfer count, and modeled average/peak throughput
 - per-rank wait time, timeouts, communicator-init counts, and collective/P2P call counts
-- a bounded operation timeline with global ranks, logical/socket payloads, rendezvous time, coordinator execution time, and modeled time
+- a bounded operation timeline with global ranks, collective data type/reduction operator, logical/socket payloads, rendezvous time, coordinator execution time, and modeled time
 
 The JSON path also produces a sibling `.md` report by default. Use
 `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` or coordinator

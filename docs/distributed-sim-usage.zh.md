@@ -177,9 +177,12 @@ python3 -m torch.distributed.run \
 
 当前维护的两机结果使用 RTX PRO 5000 上的 PyTorch 2.9.1/CUDA 12.8，
 以及 RTX 3090 Ti 上的 PyTorch 2.12.1/CUDA 13.0。基础 DDP、全部 DDP
-选项场景和 FSDP 都得到预期梯度及一致的重建参数。完整 cluster 报告记录
-34 个成功通信操作、节点对总量 1,104 字节、节点对单次峰值 128 字节，
-并记录一次预期的缺少 rank 超时。
+选项场景、FSDP 和 FSDP2 都得到预期梯度及一致的重建参数。DDP/FSDP/异常
+场景的完整 cluster 报告记录 34 个成功通信操作、节点对总量 1,104 字节、
+节点对单次峰值 128 字节，并记录一次预期的缺少 rank 超时。单独的 FSDP2
+会话通过了 FP32/FP16/BF16 参数路径以及 FP16/BF16 梯度归约；其中低精度
+会话保留 8 个操作，节点对总量 160 字节，单次峰值 32 字节，时间线能够
+区分 `float16`/`bfloat16` 负载与 `sum`/`avg` 归约。
 
 ### 可重复执行的 SSH 控制脚本
 
@@ -202,6 +205,9 @@ python3 verification/run_physical_multihost.py \
 - 异构两主机 Hybrid DDP 数值正确性
 - DDP `no_sync`、不同 rank 使用不同分支时的未使用参数、静态图和 gradient bucket view
 - FSDP 全分片、reduce-scatter、optimizer、完整参数和 state dict 正确性
+- FSDP2/DTensor FP32 分片、optimizer 与完整张量重建
+- FSDP2 FP16/BF16 参数配合 FP32 梯度归约
+- FSDP2 FP16/BF16 参数 dtype 梯度归约
 - collective reduction operator 不一致以及持续可见的 async error
 - 从第二台物理主机触发缺少 rank 的 communicator 超时
 
@@ -268,6 +274,8 @@ python3 verification/test_group_semantics.py
 ./test/run_hybrid_multinode.sh 2
 python3 verification/run_hybrid_ddp_numerics.py --variant all
 python3 verification/run_hybrid_fsdp_numerics.py
+python3 verification/run_hybrid_fsdp2_numerics.py --world-size 4 --precision bf16
+python3 verification/run_hybrid_fsdp2_numerics.py --world-size 4 --precision bf16 --reduce-precision parameter
 ```
 
 这些检查分别覆盖：
@@ -278,6 +286,7 @@ python3 verification/run_hybrid_fsdp_numerics.py
 - hybrid 计算 + simulate 通信集成
 - 真实 CUDA 上的 DDP 常见选项数值结果
 - FSDP 分片、reduce-scatter、参数重建与 checkpoint 恢复
+- 双/四 rank FSDP2/DTensor 分片、重建与混合精度通信
 
 建议顺序：
 
@@ -291,6 +300,7 @@ python3 verification/run_hybrid_fsdp_numerics.py
 8. `./test/run_hybrid_multinode.sh 2`
 9. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_ddp_numerics.py --variant all`
 10. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_fsdp_numerics.py`
+11. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_fsdp2_numerics.py ...`
 
 上面的 DDP 脚本已经属于当前维护中的 simulate-mode 验证集。它们提供的是 ProcessGroupNCCL 的 smoke / 控制流覆盖，并不意味着已经达到真实 NCCL 的完整数值或协议等价。
 
@@ -298,8 +308,9 @@ python3 verification/run_hybrid_fsdp_numerics.py
 梯度累积、不同 rank 使用不同分支时的未使用参数、静态图和 gradient bucket
 view。FSDP runner 会验证真实双 rank 全分片、reduce-scatter 梯度平均、
 optimizer 更新、完整参数重建和完整 state dict 恢复。两个 runner 都支持
-两个 rank 共用一张物理卡；物理多主机控制器默认让每台已同步的 SSH 主机
-各承担一个 rank。
+两个 rank 共用一张物理卡。FSDP2 runner 还支持四个 rank、DTensor 重建、
+FP16/BF16 参数，以及 FP32 或参数 dtype 梯度归约；物理多主机控制器默认
+让每台已同步的 SSH 主机各承担一个 rank。
 
 ## 手动启动 coordinator
 
@@ -372,7 +383,7 @@ export LD_PRELOAD="$PWD/build/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
 - 节点间 / 节点内链路统计
 - 全部不同节点的两两组合，包含 collective/P2P 操作分类、方向总量、双向总量、单次操作峰值、传输次数，以及模型平均/峰值吞吐
 - 各 rank 的等待时间、超时次数、communicator 初始化次数，以及 collective/P2P 调用次数
-- 有大小限制的操作时间线，记录全局 ranks、逻辑/socket 负载、汇合时间、coordinator 执行时间和模型时间
+- 有大小限制的操作时间线，记录全局 ranks、collective 数据类型/归约运算、逻辑/socket 负载、汇合时间、coordinator 执行时间和模型时间
 
 设置 JSON 路径后，默认会在同一目录生成 `.md` 报告。通过
 `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` 或 coordinator 的

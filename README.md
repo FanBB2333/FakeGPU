@@ -19,7 +19,7 @@ fakegpu bandwidth --listen 127.0.0.1:29591 --nodes 2  # simulate two TCP nodes
 
 ![Four FakeGPU workflows: simulated PyTorch training, GPU profile switching, preflight OOM checks, and static VRAM estimation](docs/assets/readme/tldr-workflows.png)
 
-_Real command output from the maintained v1.5.2 workflows._
+_Real command output from the maintained v1.5.3 workflows._
 
 > FakeGPU is a development and validation tool. It does not provide numerical or performance parity for arbitrary CUDA kernels.
 
@@ -368,7 +368,10 @@ The distributed paths were also checked on the same two hosts:
 | Check | Placement | Result |
 |---|---|---|
 | Hybrid DDP numerical check | Two ranks sharing the RTX PRO 5000, then two ranks sharing the RTX 3090 Ti | Averaged gradient `[1.5, 3.0]`, identical gathered parameters, and the expected SGD update on both CUDA 12.8 and CUDA 13.0 |
+| Hybrid FSDP numerical check | Two ranks sharing each GPU | Full sharding, averaged reduce-scatter gradients, optimizer update, full-parameter reconstruction, and state-dict restoration passed on both CUDA stacks |
+| Hybrid FSDP2/DTensor matrix | Two or four ranks sharing each GPU | FP32, FP16, and BF16 parameter paths passed; FP16/BF16 gradient reduction also passed with reconstructed DTensor parameters |
 | Physical-host Hybrid DDP | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | The same numerical result across PyTorch 2.9.1/CUDA 12.8 and PyTorch 2.12.1/CUDA 13.0; TCP broadcast, all-reduce, and all-gather completed with zero timeouts |
+| Physical-host Hybrid FSDP2 | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | FP32/FP16/BF16 parameters and FP16/BF16 gradient reductions passed over TCP; the report identifies collective dtype and reduction operator |
 | Physical-host TCP all-reduce | RTX PRO 5000 coordinator/rank 0 ↔ RTX 3090 Ti rank 1 over Tailscale | Correct 1 MiB and 16 MiB reductions, zero coordinator timeouts; 16 MiB × 5 measured about `0.261 Gbit/s` algorithmic and `0.521 Gbit/s` bidirectional socket payload per rank |
 
 The TCP numbers are an end-to-end simulator measurement from this specific
@@ -401,20 +404,23 @@ python3 -m pytest -q
 | `real_gpu_calibration` | Real/passthrough/hybrid/fakecuda comparison on a supported GPU |
 
 Additional distributed and framework checks are listed in [Reports and Validation](docs/reports-and-validation.md).
-On a real CUDA host, the two maintained numerical commands are:
+On a real CUDA host, the maintained numerical commands are:
 
 ```bash
 python3 verification/run_hybrid_ddp_numerics.py --variant all
 python3 verification/run_hybrid_fsdp_numerics.py
+python3 verification/run_hybrid_fsdp2_numerics.py --world-size 4 --precision bf16
+python3 verification/run_hybrid_fsdp2_numerics.py --world-size 4 --precision bf16 --reduce-precision parameter
 ```
 
 The physical two-host controller in
 `verification/run_physical_multihost.py` verifies that both repositories use
 the same Git commit, launches Hybrid DDP (including common execution options),
-FSDP, and TCP fault cases, and collects JSON and Markdown reports on the
-control host. Cluster report validation also reconciles collective/P2P
-counters, operation-timeline retention, directional links, and node-pair
-totals.
+FSDP/FSDP2 (including mixed-precision parameters and reductions), and TCP
+fault cases, and collects JSON and Markdown reports on the control host.
+Cluster report validation also reconciles collective/P2P
+counters, operation-timeline retention, collective dtype/reduction metadata,
+directional links, and node-pair totals.
 
 ## Architecture
 
