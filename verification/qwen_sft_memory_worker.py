@@ -140,6 +140,7 @@ def _parameter_summary(model: Any) -> dict[str, Any]:
         "logical_parameter_bytes": nbytes(parameters),
         "buffer_tensors": len(buffers),
         "buffer_bytes": buffer_bytes,
+        "logical_buffer_bytes": nbytes(buffers),
         "persistent_storage_bytes": physical_parameter_bytes + buffer_bytes,
         "trainable_parameter_tensors": len(trainable),
         "trainable_parameter_count": sum(int(parameter.numel()) for parameter in trainable),
@@ -160,7 +161,9 @@ def _quantized_parameter_summary(
         physical_parameter_bytes = int(summary["parameter_bytes"]) - int(
             plan["original_weight_bytes"]
         )
-        buffer_bytes = int(summary["buffer_bytes"]) + int(
+        # Meta buffers may be views of one placeholder storage even though the
+        # checkpoint loader materializes them independently on CUDA.
+        buffer_bytes = int(summary["logical_buffer_bytes"]) + int(
             plan["quantized_storage_bytes"]
         )
     else:
@@ -388,13 +391,20 @@ def _apply_nf4_static_adjustment(
     adjusted = copy.deepcopy(estimate)
     original_weight_bytes = int(plan["original_weight_bytes"])
     quantized_storage_bytes = int(plan["quantized_storage_bytes"])
-    storage_delta = quantized_storage_bytes - original_weight_bytes
+    materialized_buffer_delta = int(plan.get("base_buffer_materialization_delta_bytes", 0))
+    storage_delta = (
+        quantized_storage_bytes - original_weight_bytes + materialized_buffer_delta
+    )
     dequant_workspace = int(plan["largest_dequantization_workspace_bytes"])
 
     adjusted["unquantized_parameter_bytes"] = int(estimate["parameter_bytes"])
     adjusted["parameter_bytes"] = int(estimate["parameter_bytes"]) - original_weight_bytes
     adjusted["frozen_parameter_bytes"] = int(estimate["frozen_parameter_bytes"]) - original_weight_bytes
-    adjusted["buffer_bytes"] = int(estimate["buffer_bytes"]) + quantized_storage_bytes
+    adjusted["buffer_bytes"] = (
+        int(estimate["buffer_bytes"])
+        + quantized_storage_bytes
+        + materialized_buffer_delta
+    )
     adjusted["persistent_model_storage_bytes"] = (
         int(adjusted["parameter_bytes"]) + int(adjusted["buffer_bytes"])
     )
@@ -436,7 +446,11 @@ def _apply_nf4_static_adjustment(
     for categories_name in ("peak_bytes_by_category", "final_bytes_by_category"):
         categories = graph[categories_name]
         categories["frozen_parameter"] = int(categories.get("frozen_parameter", 0)) - original_weight_bytes
-        categories["buffer"] = int(categories.get("buffer", 0)) + quantized_storage_bytes
+        categories["buffer"] = (
+            int(categories.get("buffer", 0))
+            + quantized_storage_bytes
+            + materialized_buffer_delta
+        )
 
     workspace = adjusted["workspace_estimate"]
     workspace["total_bytes"] = int(workspace["total_bytes"]) + dequant_workspace
@@ -526,6 +540,9 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
     parameters = _parameter_summary(model)
     quantization_plan = training_metadata["quantization_plan"]
     if quantization_plan is not None:
+        quantization_plan["base_buffer_materialization_delta_bytes"] = (
+            int(parameters["logical_buffer_bytes"]) - int(parameters["buffer_bytes"])
+        )
         parameters = _quantized_parameter_summary(
             parameters,
             quantization_plan,
