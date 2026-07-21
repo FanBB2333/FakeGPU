@@ -89,10 +89,10 @@ def _memory_record(torch: Any, sampler: _NvmlProcessSampler, mode: str, label: s
         torch.cuda.synchronize()
     record: dict[str, Any] = {
         "label": label,
-        "allocated_bytes": int(torch.cuda.memory_allocated(0)),
-        "reserved_bytes": int(torch.cuda.memory_reserved(0)),
-        "peak_allocated_bytes": int(torch.cuda.max_memory_allocated(0)),
-        "peak_reserved_bytes": int(torch.cuda.max_memory_reserved(0)),
+        "allocated_bytes": int(torch.cuda.memory_allocated()),
+        "reserved_bytes": int(torch.cuda.memory_reserved()),
+        "peak_allocated_bytes": int(torch.cuda.max_memory_allocated()),
+        "peak_reserved_bytes": int(torch.cuda.max_memory_reserved()),
     }
     if mode == "fakecuda":
         from fakegpu.torch_patch import memory_snapshot
@@ -159,7 +159,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         if args.mode == "real":
             torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats(0)
+        torch.cuda.reset_peak_memory_stats()
         timeline.append(_memory_record(torch, sampler, args.mode, "baseline"))
 
         load_started = time.monotonic()
