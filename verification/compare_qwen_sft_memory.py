@@ -56,6 +56,10 @@ def compare_reports(
             int(fake["memory_phases"]["backward_peak_bytes"]),
             int(real["memory_phases"]["backward_peak_bytes"]),
         ),
+        "static_first_step_graph_peak": _comparison(
+            int(static["memory_phases"]["first_step_graph_phase_peak_bytes"]),
+            int(real["memory_phases"]["backward_peak_bytes"]),
+        ),
         "fakecuda_optimizer_peak": _comparison(
             int(fake["memory_phases"]["optimizer_peak_bytes"]),
             int(real["memory_phases"]["optimizer_peak_bytes"]),
@@ -91,8 +95,8 @@ def compare_reports(
             comparisons["fakecuda_forward_peak"]["absolute_error_percent"]
             <= max_phase_error_percent
         ),
-        "backward_peak_error_within_limit": (
-            comparisons["fakecuda_backward_peak"]["absolute_error_percent"]
+        "static_backward_peak_error_within_limit": (
+            comparisons["static_first_step_graph_peak"]["absolute_error_percent"]
             <= max_phase_error_percent
         ),
         "optimizer_peak_error_within_limit": (
@@ -157,6 +161,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "model_load_allocator": "Model load: FakeCUDA vs real allocator",
         "fakecuda_forward_peak": "Forward peak: FakeCUDA vs real allocator",
         "fakecuda_backward_peak": "Backward peak: FakeCUDA vs real allocator",
+        "static_first_step_graph_peak": "Backward peak: static first-step graph vs real allocator",
         "fakecuda_optimizer_peak": "Optimizer peak: FakeCUDA vs real allocator",
         "fakecuda_overall_peak": "Overall peak: FakeCUDA vs real allocator",
         "static_overall_peak": "Overall peak: static graph vs real allocator",
@@ -203,6 +208,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "The memory reference is PyTorch's peak allocated bytes for this process. "
             "It excludes CUDA context and allocator-reserved-but-unused memory.",
+            "The FakeCUDA execution-only backward value is diagnostic: short-lived CPU-kernel "
+            "temporaries are not all visible to its runtime tracker. The gating backward prediction "
+            "comes from the captured ATen storage-liveness graph.",
             "",
         ]
     )

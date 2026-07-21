@@ -124,11 +124,17 @@ def test_training_estimate_captures_backward_and_adamw_state() -> None:
     assert report["graph_phase_peak_bytes"] == (
         report["graph_peak_live_bytes"] + expected_optimizer_state
     )
+    assert report["first_step_graph_phase_peak_bytes"] == report["graph_peak_live_bytes"]
     assert report["optimizer_phase_peak_bytes"] == (
         report["post_graph_live_bytes"]
         + expected_optimizer_state
         + expected_optimizer_temporary
     )
+    assert report["first_step_estimated_peak_bytes"] == max(
+        report["graph_peak_live_bytes"],
+        report["optimizer_phase_peak_bytes"],
+    )
+    assert report["steady_state_estimated_peak_bytes"] == report["estimated_peak_bytes"]
     assert report["graph"]["peak_bytes_by_category"]["trainable_parameter"] == parameter_bytes
     assert report["graph"]["alias_node_count"] > 0
     assert "optimizer_fused_or_foreach_extra_temporaries" in report["unmodeled_components"]

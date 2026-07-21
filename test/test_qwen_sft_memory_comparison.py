@@ -52,6 +52,7 @@ def _static_report(*, peak_offset: int = 0) -> dict:
             "elapsed_seconds": 2.0,
             "memory_phases": {
                 "overall_peak_bytes": 7_010_000_000 + peak_offset,
+                "first_step_graph_phase_peak_bytes": 4_010_000_000 + peak_offset,
                 "parameter_bytes": 1_500_000_000,
             },
             "static_estimate": {"tracking_confidence": "S2_aot_training_liveness"},
@@ -72,6 +73,7 @@ def test_comparison_accepts_matching_subpercent_sft_reports() -> None:
     assert report["checks"]["random_batch_exact"] is True
     assert report["checks"]["parameter_bytes_exact"] is True
     assert report["comparisons"]["static_overall_peak"]["absolute_error_percent"] < 1.0
+    assert report["comparisons"]["static_first_step_graph_peak"]["absolute_error_percent"] < 1.0
     markdown = render_markdown(report)
     assert "Qwen SFT Memory Validation" in markdown
     assert "Overall peak: static graph vs real allocator" in markdown

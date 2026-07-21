@@ -231,7 +231,10 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
             },
             "elapsed_seconds": time.monotonic() - started,
             "memory_phases": {
-                "overall_peak_bytes": int(estimate["estimated_peak_bytes"]),
+                "overall_peak_bytes": int(estimate["first_step_estimated_peak_bytes"]),
+                "first_step_estimated_peak_bytes": int(estimate["first_step_estimated_peak_bytes"]),
+                "steady_state_estimated_peak_bytes": int(estimate["steady_state_estimated_peak_bytes"]),
+                "first_step_graph_phase_peak_bytes": int(estimate["first_step_graph_phase_peak_bytes"]),
                 "graph_phase_peak_bytes": int(estimate["graph_phase_peak_bytes"]),
                 "optimizer_phase_peak_bytes": int(estimate["optimizer_phase_peak_bytes"]),
                 "parameter_bytes": int(estimate["parameter_bytes"]),

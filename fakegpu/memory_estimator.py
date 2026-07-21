@@ -221,6 +221,9 @@ def estimate_module_memory(
     graph_phase_peak = int(graph["peak_live_bytes"]) + int(
         optimizer_state["total_bytes"]
     ) + int(workspace_estimate["effective_peak_contribution_bytes"])
+    first_step_graph_phase_peak = int(graph["peak_live_bytes"]) + int(
+        workspace_estimate["effective_peak_contribution_bytes"]
+    )
     optimizer_phase_peak: int | None = None
     if normalized_mode == "training" and normalized_optimizer != "none":
         optimizer_phase_peak = (
@@ -230,6 +233,10 @@ def estimate_module_memory(
         )
     estimated_peak = max(
         graph_phase_peak,
+        optimizer_phase_peak if optimizer_phase_peak is not None else 0,
+    )
+    first_step_estimated_peak = max(
+        first_step_graph_phase_peak,
         optimizer_phase_peak if optimizer_phase_peak is not None else 0,
     )
     if optimizer_phase_peak is None or graph_phase_peak > optimizer_phase_peak:
@@ -281,8 +288,11 @@ def estimate_module_memory(
         "optimizer_state_bytes": int(optimizer_state["total_bytes"]),
         "optimizer_temporary": optimizer_temporary,
         "optimizer_temporary_bytes": int(optimizer_temporary["total_bytes"]),
+        "first_step_graph_phase_peak_bytes": first_step_graph_phase_peak,
         "graph_phase_peak_bytes": graph_phase_peak,
         "optimizer_phase_peak_bytes": optimizer_phase_peak,
+        "first_step_estimated_peak_bytes": first_step_estimated_peak,
+        "steady_state_estimated_peak_bytes": estimated_peak,
         "peak_phase": peak_phase,
         "workspace_estimate": workspace_estimate,
         "workspace_estimate_bytes": int(workspace_estimate["total_bytes"]),
@@ -297,6 +307,8 @@ def estimate_module_memory(
             "Storage aliases are deduplicated and tensors are released after their final graph use.",
             "Storage byte arithmetic is device-independent, while target-device dispatch controls the ATen graph and fingerprint.",
             "Known target-backend auxiliary storages are modeled from operator and shape profiles.",
+            "The first-step graph peak excludes optimizer state that does not exist until the first optimizer update.",
+            "The steady-state graph peak includes persistent optimizer state from an earlier update.",
         ],
     }
 
