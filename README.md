@@ -214,6 +214,12 @@ has been calibrated against NVML. See
 [LLM Inference Estimation](docs/llm-inference-estimation.md) for a complete
 real-CUDA/FakeCUDA comparison and the current accuracy boundary.
 
+For training, `verification/qwen_sft_memory_worker.py` can run the same
+full-parameter Qwen3.5 SFT step on real CUDA, CPU-backed FakeCUDA, or a static
+ATen graph. The maintained 0.8B and 2B BF16 checks distinguish first-step from
+steady-state AdamW memory; see
+[LLM SFT Memory Estimation](docs/llm-sft-memory-estimation.md).
+
 ## Runtime model
 
 FakeGPU separates the Python runtime path, native compute mode, and distributed mode.
@@ -514,6 +520,7 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 - [Quick Reference](docs/quick-reference.md)
 - [AI Researcher Preflight](docs/ai-researcher-preflight.md)
 - [LLM Inference Estimation](docs/llm-inference-estimation.md)
+- [LLM SFT Memory Estimation](docs/llm-sft-memory-estimation.md)
 - [Architecture and Project Structure](docs/project-structure.md)
 - [Torch Patch System](docs/phase2-custom-torch.md)
 - [Reports and Validation](docs/reports-and-validation.md)

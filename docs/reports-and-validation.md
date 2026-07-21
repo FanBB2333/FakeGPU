@@ -14,6 +14,7 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `./ftest real_gpu_calibration` | real/passthrough/Hybrid/fakecuda memory and result-signature calibration |
 | `fakegpu estimate-llm ...` | header-only dense-decoder parameter, KV-cache, transient-memory, and matrix-FLOP estimate |
 | `verification/compare_qwen_memory.py ...` | matching real-CUDA/FakeCUDA load, inference, virtual-SMI, token, and FLOP comparison |
+| `verification/compare_qwen_sft_memory.py ...` | matching real-CUDA, FakeCUDA, and ATen static-graph peaks for full-parameter Qwen3.5 SFT |
 | `python3 verification/test_coordinator_smoke.py` | coordinator startup, request/response, and clean shutdown |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce semantics |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |
