@@ -215,10 +215,12 @@ has been calibrated against NVML. See
 real-CUDA/FakeCUDA comparison and the current accuracy boundary.
 
 For training, `verification/qwen_sft_memory_worker.py` can run the same
-full-parameter or LoRA Qwen3.5 SFT step on real CUDA, CPU-backed FakeCUDA, or a
-static ATen graph. The maintained 0.8B and 2B BF16 matrix covers gradient
-checkpointing and accumulation while distinguishing first-step from
-steady-state AdamW memory; see
+full-parameter, LoRA, or packed-NF4 QLoRA reference step on real CUDA,
+CPU-backed FakeCUDA, or a static ATen graph. The maintained 0.8B and 2B BF16
+matrix covers gradient checkpointing and accumulation while distinguishing
+first-step from steady-state AdamW memory. The QLoRA reference needs no
+external quantization package, but it does not claim bitsandbytes fused-kernel
+equivalence; see
 [LLM SFT Memory Estimation](docs/llm-sft-memory-estimation.md).
 
 ## Runtime model
