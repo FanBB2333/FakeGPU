@@ -121,6 +121,13 @@ def _parameter_summary(model: Any) -> dict[str, Any]:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.mode == "fakecuda":
         os.environ.setdefault("FAKEGPU_TERMINAL_REPORT", "0")
+        if args.smi_state:
+            os.environ["FAKEGPU_SMI_STATE_PATH"] = str(
+                Path(args.smi_state).expanduser().resolve()
+            )
+            os.environ["FAKEGPU_SMI_RUNTIME_OVERHEAD_BYTES"] = str(
+                args.smi_runtime_overhead_bytes
+            )
         import fakegpu
 
         fakegpu.init(
@@ -173,8 +180,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         model.eval()
         load_seconds = time.monotonic() - load_started
-        timeline.append(_memory_record(torch, sampler, args.mode, "after_model_load"))
+        model_load_record = _memory_record(torch, sampler, args.mode, "after_model_load")
+        timeline.append(model_load_record)
         parameter_summary = _parameter_summary(model)
+        torch.cuda.reset_peak_memory_stats()
 
         tokenizer = AutoTokenizer.from_pretrained(
             str(model_dir),
@@ -226,7 +235,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 next_token = torch.argmax(outputs.logits[:, -1, :], dim=-1, keepdim=True)
                 generated_ids.append(int(next_token.raw_data.item() if hasattr(next_token, "raw_data") else next_token.item()))
         inference_seconds = time.monotonic() - inference_started
-        timeline.append(_memory_record(torch, sampler, args.mode, "after_inference"))
+        inference_record = _memory_record(torch, sampler, args.mode, "after_inference")
+        timeline.append(inference_record)
 
         from fakegpu.llm_estimator import estimate_decoder_inference
 
@@ -238,6 +248,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             dtype=args.dtype,
             use_cache=True,
             attention_implementation=args.attention_implementation,
+            runtime_overhead_bytes=args.smi_runtime_overhead_bytes,
         )
         expected_steps = [
             int(estimate["compute"]["prefill_flops"]),
@@ -263,7 +274,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
 
         decoded = tokenizer.decode(generated_ids, skip_special_tokens=True)
-        return {
+        report = {
             "schema_version": "fakegpu.qwen_inference_memory_worker.v1",
             "status": "success",
             "mode": args.mode,
@@ -285,10 +296,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "inference_seconds": inference_seconds,
             "elapsed_seconds": time.monotonic() - started,
             "timeline": timeline,
+            "memory_phases": {
+                "model_load_current_bytes": int(model_load_record["allocated_bytes"]),
+                "model_load_peak_bytes": int(model_load_record["peak_allocated_bytes"]),
+                "inference_current_bytes": int(inference_record["allocated_bytes"]),
+                "inference_peak_bytes": int(inference_record["peak_allocated_bytes"]),
+            },
             "measured_matmul_flops_by_step": measured_flops,
             "flop_comparisons": comparisons,
             "static_estimate": estimate,
         }
+        if args.hold_seconds > 0:
+            time.sleep(args.hold_seconds)
+        return report
     finally:
         sampler.close()
 
@@ -304,9 +324,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--attention-implementation", choices=["eager", "sdpa"], default="eager")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--smi-state")
+    parser.add_argument("--smi-runtime-overhead-bytes", type=int, default=0)
+    parser.add_argument("--hold-seconds", type=float, default=0.0)
     args = parser.parse_args(argv)
     if args.generated_tokens <= 0:
         parser.error("--generated-tokens must be greater than zero")
+    if args.smi_runtime_overhead_bytes < 0:
+        parser.error("--smi-runtime-overhead-bytes must be non-negative")
+    if args.hold_seconds < 0:
+        parser.error("--hold-seconds must be non-negative")
 
     output = Path(args.output).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -331,7 +358,8 @@ def main(argv: list[str] | None = None) -> int:
         "prompt_tokens": report["prompt_tokens"],
         "generated_tokens": report["generated_tokens"],
         "parameter_bytes": report["parameters"]["parameter_bytes"],
-        "peak_allocated_bytes": max(item["peak_allocated_bytes"] for item in report["timeline"]),
+        "model_load_current_bytes": report["memory_phases"]["model_load_current_bytes"],
+        "inference_peak_bytes": report["memory_phases"]["inference_peak_bytes"],
         "measured_matmul_flops": sum(report["measured_matmul_flops_by_step"]),
         "estimated_matmul_flops": report["static_estimate"]["compute"]["total_flops"],
         "output": str(output),
