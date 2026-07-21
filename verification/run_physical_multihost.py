@@ -551,11 +551,24 @@ def _run_fsdp2_case(
     remote_root: str,
     timeout: float,
     precision: str,
+    reduce_precision: str = "fp32",
 ) -> list[dict[str, Any]]:
     if precision not in {"fp32", "fp16", "bf16"}:
         raise ValueError(f"unsupported FSDP2 precision: {precision}")
+    if reduce_precision not in {"fp32", "parameter"}:
+        raise ValueError(
+            f"unsupported FSDP2 reduce precision: {reduce_precision}"
+        )
+    if precision == "fp32" and reduce_precision == "parameter":
+        raise ValueError(
+            "FSDP2 parameter reduction requires fp16 or bf16"
+        )
 
-    report_name = f"fsdp2-{precision}"
+    report_name = (
+        f"fsdp2-{precision}"
+        if reduce_precision == "fp32"
+        else f"fsdp2-{precision}-reduce"
+    )
     report_dir = f"{remote_root}/{report_name}"
     processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
     timeout_ms = max(1, round(timeout * 1000))
@@ -580,6 +593,7 @@ def _run_fsdp2_case(
             str(FSDP2_WORKER_RELATIVE),
             f"--report-dir={report_dir}",
             f"--precision={precision}",
+            f"--reduce-precision={reduce_precision}",
         ]
         processes.append(
             (
@@ -616,6 +630,10 @@ def _run_fsdp2_case(
         if report.get("precision") != precision:
             raise AssertionError(
                 f"FSDP2 rank {rank} precision mismatch: {report}"
+            )
+        if report.get("reduce_precision") != reduce_precision:
+            raise AssertionError(
+                f"FSDP2 rank {rank} reduce precision mismatch: {report}"
             )
         if report.get("parameter_type") != "DTensor":
             raise AssertionError(
@@ -855,6 +873,11 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             "- FSDP2 mixed precision: FP16 and BF16 parameter all-gathers "
             "completed with FP32 reduce-scatter gradients on both nodes."
         )
+    if "fsdp2_low_reduce" in cases:
+        lines.append(
+            "- FSDP2 low-precision reduction: FP16 and BF16 reduce-scatter "
+            "matched the analytical averaged gradients across both nodes."
+        )
     if "collective_mismatch" in cases:
         results = [
             item["mismatch_result"] for item in cases["collective_mismatch"]
@@ -943,6 +966,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "fsdp",
         "fsdp2",
         "fsdp2-mixed",
+        "fsdp2-low-reduce",
         "collective-mismatch",
         "missing-peer",
     ]
@@ -1038,6 +1062,20 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 for precision in ("fp16", "bf16")
             }
+        if "fsdp2-low-reduce" in cases:
+            case_reports["fsdp2_low_reduce"] = {
+                precision: _run_fsdp2_case(
+                    nodes,
+                    endpoint=endpoint,
+                    master_host=args.coordinator_host,
+                    master_port=args.master_port,
+                    remote_root=remote_root,
+                    timeout=args.case_timeout,
+                    precision=precision,
+                    reduce_precision="parameter",
+                )
+                for precision in ("fp16", "bf16")
+            }
         if "collective-mismatch" in cases:
             case_reports["collective_mismatch"] = _run_mismatch_case(
                 nodes,
@@ -1089,7 +1127,12 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     expected_collectives: set[str] = set()
     if "ddp" in cases or "ddp-options" in cases:
         expected_collectives.update({"all_reduce", "all_gather"})
-    if "fsdp" in cases or "fsdp2" in cases or "fsdp2-mixed" in cases:
+    if (
+        "fsdp" in cases
+        or "fsdp2" in cases
+        or "fsdp2-mixed" in cases
+        or "fsdp2-low-reduce" in cases
+    ):
         expected_collectives.update({"all_gather", "reduce_scatter"})
     cluster_report = _validate_cluster_report(
         cluster_path,
@@ -1163,6 +1206,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "fsdp",
             "fsdp2",
             "fsdp2-mixed",
+            "fsdp2-low-reduce",
             "collective-mismatch",
             "missing-peer",
         ],
