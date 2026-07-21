@@ -139,8 +139,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     import torch
     import transformers
-    from torch.utils.flop_counter import FlopCounterMode
     from transformers import AutoModelForCausalLM, AutoTokenizer
+    from fakegpu.flop_counter import MatmulFlopCounterMode
 
     transformers.utils.import_utils._torchvision_available = False
     transformers.utils.import_utils._torchvision_version = "0.0"
@@ -203,9 +203,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         measured_flops: list[int] = []
         inference_started = time.monotonic()
         with torch.inference_mode():
-            with FlopCounterMode(display=False) as counter:
+            with MatmulFlopCounterMode() as counter:
                 outputs = model(**model_inputs, use_cache=True)
-            measured_flops.append(int(counter.get_total_flops()))
+            measured_flops.append(int(counter.total_flops))
             next_token = torch.argmax(outputs.logits[:, -1, :], dim=-1, keepdim=True)
             generated_ids.append(int(next_token.raw_data.item() if hasattr(next_token, "raw_data") else next_token.item()))
             attention_mask = model_inputs.get("attention_mask")
@@ -224,14 +224,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     ],
                     dim=1,
                 )
-                with FlopCounterMode(display=False) as counter:
+                with MatmulFlopCounterMode() as counter:
                     outputs = model(
                         input_ids=next_token,
                         attention_mask=attention_mask,
                         past_key_values=outputs.past_key_values,
                         use_cache=True,
                     )
-                measured_flops.append(int(counter.get_total_flops()))
+                measured_flops.append(int(counter.total_flops))
                 next_token = torch.argmax(outputs.logits[:, -1, :], dim=-1, keepdim=True)
                 generated_ids.append(int(next_token.raw_data.item() if hasattr(next_token, "raw_data") else next_token.item()))
         inference_seconds = time.monotonic() - inference_started
