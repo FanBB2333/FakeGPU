@@ -105,6 +105,10 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
             "fsdp": [{}, {}],
             "fsdp2": [{}, {}],
             "fsdp2_mixed": {"fp16": [{}, {}], "bf16": [{}, {}]},
+            "fsdp2_low_reduce": {
+                "fp16": [{}, {}],
+                "bf16": [{}, {}],
+            },
             "collective_mismatch": [
                 {"mismatch_result": 5},
                 {"mismatch_result": 5},
@@ -137,4 +141,5 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     assert "Hybrid FSDP" in markdown
     assert "Hybrid FSDP2" in markdown
     assert "FSDP2 mixed precision" in markdown
+    assert "FSDP2 low-precision reduction" in markdown
     assert "Collective mismatch" in markdown
