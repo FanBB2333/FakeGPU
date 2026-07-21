@@ -53,6 +53,7 @@ combined with that training method:
 ```bash
 --training-method lora --lora-rank 8
 --training-method qlora --lora-rank 8
+--training-method qlora --lora-rank 8 --quantization-double-quantization
 --gradient-checkpointing
 --gradient-accumulation-steps 2
 ```
@@ -61,9 +62,17 @@ combined with that training method:
 
 `--training-method qlora` is a dependency-free reference backend for memory
 validation. It replaces every eligible frozen linear weight except the output
-embedding with two NF4 codes per byte, one BF16/FP16 scale per 64 weights, and a
-small byte lookup table. LoRA A/B matrices stay FP32, matching PEFT's default
-adapter promotion, and use single-tensor AdamW.
+embedding with two NF4 codes per byte and one FP32 absmax per 64 weights. LoRA
+A/B matrices stay FP32, matching PEFT's default adapter promotion, and use
+single-tensor AdamW.
+
+`--quantization-double-quantization` enables nested scale storage. The worker
+subtracts the mean of the first-level absmax values, encodes them with the
+bitsandbytes signed dynamic 8-bit map, and stores an FP32 second-level absmax
+per 256 values plus one FP32 offset. This follows the state layout in the
+[official bitsandbytes implementation](https://github.com/bitsandbytes-foundation/bitsandbytes/blob/main/bitsandbytes/functional.py)
+and the [QLoRA paper](https://arxiv.org/abs/2305.14314). The paper reports an
+average saving of about 0.37 bit per parameter from this step.
 
 A custom autograd function dequantizes one frozen matrix for forward and
 recomputes it for input-gradient calculation during backward. It therefore
@@ -73,8 +82,11 @@ largest implementation-specific dequantization workspace.
 
 This path validates quantized storage, adapter gradients, optimizer state, and
 dequantization lifetime without installing another package. It is not a
-bitsandbytes implementation: it has no fused 4-bit kernel, double quantization,
-paged optimizer, or bitsandbytes allocator behavior.
+bitsandbytes kernel implementation: NF4 and nested-scale lookup use ordinary
+PyTorch operations, and it has no fused 4-bit matmul, paged optimizer, or
+bitsandbytes allocator behavior. In FakeCUDA reports, `runtime_memory_phases`
+retains the raw CPU tracker values while `memory_phases` adds the known
+per-layer reference dequantization workspace to compute peaks.
 
 Summarize completed worker reports as one matrix:
 
@@ -110,26 +122,42 @@ the sequence-128 peak by 30.4% for 0.8B and 19.9% for 2B. Full-parameter AdamW
 remains optimizer-update dominated, so checkpointing mostly changes its forward
 peak rather than the overall peak.
 
-## Native NF4 QLoRA matrix
+## Native NF4 QLoRA matrices
 
 The same RTX PRO 5000 software stack produced the following results. All five
 static predictions are analytical because the packed-storage substitution and
 reference dequantization workspace are added to the captured LoRA graph.
 
+### Direct FP32 scale storage
+
 | Case | Checkpoint | Seq. | Trainable parameters | Real peak | Static peak | Static error | FakeCUDA error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| 0.8B QLoRA | no | 16 | 5,411,328 | 1.057 GiB | 1.065 GiB | 0.690% | 1.017% |
-| 0.8B QLoRA | no | 128 | 5,411,328 | 1.992 GiB | 2.005 GiB | 0.624% | — |
-| 0.8B QLoRA | yes | 128 | 5,411,328 | 1.178 GiB | 1.191 GiB | 1.083% | — |
-| 2B QLoRA | no | 16 | 8,409,600 | 1.999 GiB | 2.027 GiB | 1.414% | — |
-| 2B QLoRA | yes | 128 | 8,409,600 | 2.096 GiB | 2.132 GiB | 1.703% | — |
+| 0.8B QLoRA | no | 16 | 5,411,328 | 1.072 GiB | 1.079 GiB | 0.698% | 0.150% |
+| 0.8B QLoRA | no | 128 | 5,411,328 | 2.007 GiB | 2.019 GiB | 0.628% | — |
+| 0.8B QLoRA | yes | 128 | 5,411,328 | 1.192 GiB | 1.205 GiB | 1.085% | — |
+| 2B QLoRA | no | 16 | 8,409,600 | 2.039 GiB | 2.067 GiB | 1.386% | — |
+| 2B QLoRA | yes | 128 | 8,409,600 | 2.136 GiB | 2.172 GiB | 1.689% | — |
 
-The 0.8B model packs 497,614,848 linear-weight values into 264,548,352
-bytes (4.253 effective bits/weight); the 2B model packs 1,372,717,056 values
-into 729,446,400 bytes (4.251 bits/weight). The short 0.8B case also completes
-the full FakeCUDA optimizer step: model storage and random-batch fingerprints
-match exactly, while load, forward, backward, optimizer, and overall-memory
-checks all pass.
+### Nested 8-bit scale storage
+
+| Case | Checkpoint | Seq. | Trainable parameters | Real peak | Static peak | Static error | FakeCUDA error |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0.8B QLoRA | no | 16 | 5,411,328 | 1.051 GiB | 1.058 GiB | 0.700% | 0.165% |
+| 0.8B QLoRA | no | 128 | 5,411,328 | 1.986 GiB | 1.998 GiB | 0.629% | — |
+| 0.8B QLoRA | yes | 128 | 5,411,328 | 1.171 GiB | 1.184 GiB | 1.094% | — |
+| 2B QLoRA | no | 16 | 8,409,600 | 1.979 GiB | 2.008 GiB | 1.422% | — |
+| 2B QLoRA | yes | 128 | 8,409,600 | 2.077 GiB | 2.113 GiB | 1.732% | — |
+
+| Model | Quantized values | Direct storage | Direct bits/weight | Nested storage | Nested bits/weight | Storage saved |
+|---|---:|---:|---:|---:|---:|---:|
+| 0.8B | 497,614,848 | 280,098,816 B | 4.503 | 257,085,816 B | 4.133 | 23,013,000 B |
+| 2B | 1,372,717,056 | 772,343,808 B | 4.501 | 708,524,040 B | 4.129 | 63,819,768 B |
+
+Nested storage saves 0.370 bit/weight for 0.8B and 0.372 bit/weight for 2B.
+Across the five fixed batches, the SFT loss changes by at most 0.018 compared
+with direct FP32 scales. The short 0.8B case also completes the full FakeCUDA
+optimizer step; all comparison checks pass without relaxing the default error
+limits.
 
 ## Ampere and Blackwell
 
@@ -140,9 +168,10 @@ allocator peaks are effectively identical to the RTX PRO 5000 Blackwell
 results. New attention implementations and shapes outside the workspace
 calibration envelope still require separate validation.
 
-For the native NF4 path, both GPUs also reproduce the 0.8B sequence-16 peak at
-1.057 GiB and the checkpointed sequence-128 peak at 1.178 GiB byte-for-byte.
-Their static errors are 0.690% and 1.083%, respectively.
+For nested-scale NF4, both GPUs reproduce the 0.8B sequence-16 peak at 1.051
+GiB and the checkpointed sequence-128 peak at 1.171 GiB byte-for-byte. Their
+static peaks (1.058 GiB and 1.184 GiB), persistent storage, and random-batch
+fingerprints are also identical across the two software stacks.
 
 ## First step versus steady state
 
@@ -170,8 +199,8 @@ storage-liveness graph as the gating backward prediction and retains the
 runtime value as a diagnostic.
 
 These results cover single-GPU full-parameter and LoRA BF16 training, the
-PyTorch native-NF4 QLoRA reference, single-tensor AdamW, gradient checkpointing,
-accumulation 2, and the Transformers PyTorch fallback linear-attention path.
-Bitsandbytes QLoRA, double quantization, paged/quantized optimizers, Flash
-Linear Attention, custom CUDA/Triton kernels, and sharded training require
-separate validation.
+PyTorch native-NF4 QLoRA reference with direct or nested scales, single-tensor
+AdamW, gradient checkpointing, accumulation 2, and the Transformers PyTorch
+fallback linear-attention path. External bitsandbytes fused kernels and
+allocator behavior, paged/quantized optimizers, Flash Linear Attention, custom
+CUDA/Triton kernels, and sharded training require separate validation.

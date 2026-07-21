@@ -17,16 +17,20 @@
 - A virtual `fakegpu nvidia-smi` view backed by per-process FakeCUDA memory state, with optional same-stack NVML runtime-overhead calibration.
 - Real-CUDA/FakeCUDA Qwen inference workers and a comparison report covering model load, inference peak, NVML process memory, generated tokens, and observed/static FLOPs.
 - A matrix-heavy FLOP counter that preserves PyTorch operator decomposition under inference mode and supports grouped-query SDPA with different query and KV head counts.
+- Reproducible Qwen3.5 SFT workers for full-parameter, LoRA, and PyTorch-native packed-NF4 QLoRA execution on real CUDA, FakeCUDA, and static ATen graphs.
+- Optional QLoRA nested scale quantization using the bitsandbytes dynamic 8-bit map, 256-value second-level blocks, and an FP32 mean offset.
 
 ### Fixed
 
 - Preserved non-default CUDA stream ordering at the Hybrid host-staging boundary by copying on the collective stream and synchronizing before coordinator access. This restores correct FSDP pre-divided gradients with PyTorch 2.12/CUDA 13 while retaining PyTorch 2.9/CUDA 12 behavior.
 - Replaced PyTorch's equal-head fused-SDPA FLOP assumption in the Qwen verifier, allowing Qwen3 grouped-query attention (32 query heads and 8 KV heads) to be measured without assertion failures.
 - Isolated the `Tensor.to("cuda")` redirect microbenchmark from random-tensor creation variance while preserving its 100-microsecond incremental-overhead limit.
+- Corrected native NF4 first-level statistics to FP32, counted every materialized quantization buffer in static estimates, and preserved explicit FP32 buffers in meta-model construction.
+- Added the known native-NF4 dequantization workspace to FakeCUDA compute peaks while retaining the unadjusted CPU tracker phases for inspection.
 
 ### Validation
 
-- Full local suite: 250 passed and 1 skipped.
+- Full local suite: 271 passed and 1 skipped.
 - The distributed resilience suite passed on macOS, the RTX PRO 5000 Linux host, and the RTX 3090 Ti WSL host; its 256-operation case retained the newest 64 timeline entries and counted 192 discarded entries.
 - The automated heterogeneous two-host run used the same `3e6c8b2` commit on both hosts. Hybrid DDP produced gradient `[1.5, 3.0]` and parameters `[0.85, -0.30]`; both mismatched ranks persisted async error 5; the missing-peer case timed out in 0.755 seconds. The cluster report recorded six successful collectives, 192 bytes between the node pair, a 64-byte per-operation peak, and one expected timeout.
 - Single-host Hybrid DDP/FSDP passed on both the RTX PRO 5000 Blackwell (compute capability 12.0, PyTorch 2.9.1/CUDA 12.8) and RTX 3090 Ti (compute capability 8.6, PyTorch 2.12.1/CUDA 13.0). FSDP produced local shard gradients `[1.5]` and `[3.0]`, reconstructed `[0.85, -0.30]`, and restored the same values from a full state dict.
@@ -35,6 +39,8 @@
 - Heterogeneous two-host FSDP2 passed FP32/FP16/BF16 parameter cases plus FP16/BF16 gradient reduction. The low-precision report retained eight operations, 160 node-pair bytes, and a 32-byte per-operation peak while identifying `float16`/`bfloat16` payloads and `sum`/`avg` reductions.
 - Qwen3-8B BF16 SDPA validation on the RTX PRO 5000 matched 8,190,735,360 parameters and both generated token IDs. FakeCUDA load and inference-peak errors versus the real CUDA allocator were 0.012914% and 0.064877%; the checkpoint-only peak error was 0.067234%; calibrated virtual-SMI process memory differed from NVML by 0.063182%.
 - Qwen3-8B observed matrix FLOPs matched exactly between CPU-backed FakeCUDA and real CUDA at 151,415,620,864; the shape estimate differed by 1,280 FLOPs (0.000001%).
+- Five direct-scale and five nested-scale QLoRA cases using Qwen3.5-0.8B/2B all passed with static peak errors at or below 1.732%. Nested scales reduced storage by 0.370-0.372 bit per quantized weight; the complete 0.8B FakeCUDA step differed from real CUDA by 0.165% overall.
+- RTX 3090 Ti Ampere and RTX PRO 5000 Blackwell reproduced both maintained 0.8B nested-scale cases byte-for-byte, including real/static peaks, persistent storage, and random-batch fingerprints.
 
 ## v1.5.3 - 2026-07-20
 
