@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_CONFIG_RELATIVE = Path("verification/data/cluster_tcp_2r.yaml")
 DDP_WORKER_RELATIVE = Path("test/test_ddp_hybrid_numerics.py")
 FSDP_WORKER_RELATIVE = Path("test/test_fsdp_hybrid_numerics.py")
+FSDP2_WORKER_RELATIVE = Path("test/test_fsdp2_hybrid_numerics.py")
 FAULT_WORKER_RELATIVE = Path("verification/remote_nccl_fault_worker.py")
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 DDP_OPTION_VARIANTS = ("no-sync", "find-unused", "static-graph")
@@ -242,6 +243,7 @@ payload = {
     "nccl_exists": pathlib.Path("build/libnccl.so.2").is_file(),
     "ddp_worker_exists": pathlib.Path("test/test_ddp_hybrid_numerics.py").is_file(),
     "fsdp_worker_exists": pathlib.Path("test/test_fsdp_hybrid_numerics.py").is_file(),
+    "fsdp2_worker_exists": pathlib.Path("test/test_fsdp2_hybrid_numerics.py").is_file(),
     "fault_worker_exists": pathlib.Path("verification/remote_nccl_fault_worker.py").is_file(),
 }
 if payload["cuda_available"]:
@@ -260,6 +262,7 @@ print(json.dumps(payload, sort_keys=True))
         "nccl_exists",
         "ddp_worker_exists",
         "fsdp_worker_exists",
+        "fsdp2_worker_exists",
         "fault_worker_exists",
         "cuda_available",
     )
@@ -539,6 +542,119 @@ def _run_fsdp_case(
     return reports
 
 
+def _run_fsdp2_case(
+    nodes: list[NodeSpec],
+    *,
+    endpoint: str,
+    master_host: str,
+    master_port: int,
+    remote_root: str,
+    timeout: float,
+    precision: str,
+) -> list[dict[str, Any]]:
+    if precision not in {"fp32", "fp16", "bf16"}:
+        raise ValueError(f"unsupported FSDP2 precision: {precision}")
+
+    report_name = f"fsdp2-{precision}"
+    report_dir = f"{remote_root}/{report_name}"
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    timeout_ms = max(1, round(timeout * 1000))
+    for rank, node in enumerate(nodes):
+        env = _distributed_env(
+            node=node,
+            endpoint=endpoint,
+            timeout_ms=timeout_ms,
+            hybrid=True,
+        )
+        env["LD_PRELOAD"] = f"{node.repo}/build/libnccl.so.2"
+        argv = [
+            node.python,
+            "-m",
+            "torch.distributed.run",
+            "--nnodes=2",
+            "--nproc-per-node=1",
+            f"--node-rank={rank}",
+            f"--master-addr={master_host}",
+            f"--master-port={master_port}",
+            "--max-restarts=0",
+            str(FSDP2_WORKER_RELATIVE),
+            f"--report-dir={report_dir}",
+            f"--precision={precision}",
+        ]
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        env=env,
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+    _collect_processes(
+        processes,
+        timeout=timeout,
+        label=f"Hybrid FSDP2 ({precision})",
+    )
+
+    reports = [
+        _read_remote_json(node, f"{report_dir}/rank_{rank}.json")
+        for rank, node in enumerate(nodes)
+    ]
+    expected_gradient = [[1.5, 3.0]]
+    expected_full = [[0.85, -0.3], [-0.15, 0.7]]
+    tolerance = 1e-6 if precision == "fp32" else 2e-2
+    for rank, report in enumerate(reports):
+        if report.get("status") != "success":
+            raise AssertionError(
+                f"FSDP2 {precision} rank {rank} failed: {report}"
+            )
+        if report.get("precision") != precision:
+            raise AssertionError(
+                f"FSDP2 rank {rank} precision mismatch: {report}"
+            )
+        if report.get("parameter_type") != "DTensor":
+            raise AssertionError(
+                f"FSDP2 rank {rank} did not expose a DTensor: {report}"
+            )
+        if report.get("local_shard_shape") != [1, 2]:
+            raise AssertionError(
+                f"FSDP2 rank {rank} shard shape mismatch: {report}"
+            )
+        if not _nested_allclose(
+            report.get("local_shard_gradient"),
+            expected_gradient,
+            tolerance=tolerance,
+        ):
+            raise AssertionError(
+                f"FSDP2 rank {rank} gradient mismatch: "
+                f"{report.get('local_shard_gradient')}"
+            )
+        if not _nested_allclose(
+            report.get("local_shard_after_step"),
+            [expected_full[rank]],
+            tolerance=tolerance,
+        ):
+            raise AssertionError(
+                f"FSDP2 rank {rank} local parameter mismatch: "
+                f"{report.get('local_shard_after_step')}"
+            )
+        if not _nested_allclose(
+            report.get("full_parameter_after_step"),
+            expected_full,
+            tolerance=tolerance,
+        ):
+            raise AssertionError(
+                f"FSDP2 rank {rank} full parameter mismatch: "
+                f"{report.get('full_parameter_after_step')}"
+            )
+    return reports
+
+
 def _run_mismatch_case(
     nodes: list[NodeSpec],
     *,
@@ -729,6 +845,16 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             "reduce-scatter gradients, full-parameter reconstruction, and "
             "full-state-dict restoration matched the analytical result."
         )
+    if "fsdp2" in cases:
+        lines.append(
+            "- Hybrid FSDP2: DTensor row shards, averaged gradients, optimizer "
+            "updates, and full-parameter reconstruction matched in FP32."
+        )
+    if "fsdp2_mixed" in cases:
+        lines.append(
+            "- FSDP2 mixed precision: FP16 and BF16 parameter all-gathers "
+            "completed with FP32 reduce-scatter gradients on both nodes."
+        )
     if "collective_mismatch" in cases:
         results = [
             item["mismatch_result"] for item in cases["collective_mismatch"]
@@ -815,6 +941,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "ddp",
         "ddp-options",
         "fsdp",
+        "fsdp2",
+        "fsdp2-mixed",
         "collective-mismatch",
         "missing-peer",
     ]
@@ -887,6 +1015,29 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 remote_root=remote_root,
                 timeout=args.case_timeout,
             )
+        if "fsdp2" in cases:
+            case_reports["fsdp2"] = _run_fsdp2_case(
+                nodes,
+                endpoint=endpoint,
+                master_host=args.coordinator_host,
+                master_port=args.master_port,
+                remote_root=remote_root,
+                timeout=args.case_timeout,
+                precision="fp32",
+            )
+        if "fsdp2-mixed" in cases:
+            case_reports["fsdp2_mixed"] = {
+                precision: _run_fsdp2_case(
+                    nodes,
+                    endpoint=endpoint,
+                    master_host=args.coordinator_host,
+                    master_port=args.master_port,
+                    remote_root=remote_root,
+                    timeout=args.case_timeout,
+                    precision=precision,
+                )
+                for precision in ("fp16", "bf16")
+            }
         if "collective-mismatch" in cases:
             case_reports["collective_mismatch"] = _run_mismatch_case(
                 nodes,
@@ -938,7 +1089,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     expected_collectives: set[str] = set()
     if "ddp" in cases or "ddp-options" in cases:
         expected_collectives.update({"all_reduce", "all_gather"})
-    if "fsdp" in cases:
+    if "fsdp" in cases or "fsdp2" in cases or "fsdp2-mixed" in cases:
         expected_collectives.update({"all_gather", "reduce_scatter"})
     cluster_report = _validate_cluster_report(
         cluster_path,
@@ -986,8 +1137,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run repeatable Hybrid DDP/FSDP and TCP failure checks on two SSH "
-            "hosts that already have the same FakeGPU Git commit."
+            "Run repeatable Hybrid DDP/FSDP/FSDP2 and TCP failure checks on "
+            "two SSH hosts that already have the same FakeGPU Git commit."
         )
     )
     parser.add_argument(
@@ -1010,6 +1161,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "ddp",
             "ddp-options",
             "fsdp",
+            "fsdp2",
+            "fsdp2-mixed",
             "collective-mismatch",
             "missing-peer",
         ],
