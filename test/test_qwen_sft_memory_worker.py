@@ -3,6 +3,7 @@ from __future__ import annotations
 from verification.qwen_sft_memory_worker import (
     _apply_nf4_static_adjustment,
     _checkpoint_graph_estimate,
+    _quantized_parameter_summary,
 )
 
 
@@ -97,3 +98,24 @@ def test_nf4_static_adjustment_substitutes_storage_and_adds_workspace() -> None:
     assert adjusted["optimizer_phase_peak_bytes"] == 1_250
     assert adjusted["workspace_peak_contribution_bytes"] == 110
     assert estimate["parameter_bytes"] == 1_000
+
+
+def test_quantized_static_summary_uses_materialized_logical_buffers() -> None:
+    summary = {
+        "parameter_count": 100,
+        "parameter_bytes": 200,
+        "logical_parameter_bytes": 200,
+        "buffer_bytes": 128,
+        "logical_buffer_bytes": 256,
+    }
+    plan = {
+        "original_weight_bytes": 160,
+        "quantized_storage_bytes": 50,
+        "quantized_weight_count": 80,
+    }
+
+    adjusted = _quantized_parameter_summary(summary, plan, static_surrogate=True)
+
+    assert adjusted["physical_parameter_bytes"] == 40
+    assert adjusted["buffer_bytes"] == 306
+    assert adjusted["parameter_bytes"] == 346
