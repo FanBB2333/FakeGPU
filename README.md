@@ -245,7 +245,7 @@ checks.
 | CUDA Driver/Runtime | Device discovery, memory allocation/copy, streams/events, selected Driver forwarding | The full CUDA API is not implemented |
 | NVML | Device identity, memory information, common monitoring queries | Some telemetry fields are synthetic or unavailable |
 | cuBLAS/cuBLASLt | Selected GEMM/matmul operations with CPU-backed execution | Unsupported algorithms may remain stubbed |
-| PyTorch fake-CUDA | Common tensor, module, autograd, optimizer, Transformers, PEFT, Accelerate, and FSDP smoke paths | Custom CUDA extensions are not emulated |
+| PyTorch fake-CUDA | Common tensor, module, autograd, optimizer, Transformers, PEFT, Accelerate, and FSDP smoke paths; real-CUDA Hybrid DDP/FSDP numerical checks | Custom CUDA extensions are not emulated |
 | NCCL-style communication | Collective and point-to-point control flow, TCP socket payloads, topology-aware reporting, PyTorch-required NCCL 2.29 host symbols | Not a protocol-level NCCL/RDMA/NVLink model; device-communicator and signal/RMA operations are not simulated |
 | Memory preflight | Runtime tracking, ATen static analysis, empirical GPU calibration | Results apply to the validated shape and software envelope |
 | Error simulation | OOM, invalid device, cross-device, dtype/autocast, gradient, and checkpoint cases | Error timing can differ from a real driver |
@@ -401,10 +401,20 @@ python3 -m pytest -q
 | `real_gpu_calibration` | Real/passthrough/hybrid/fakecuda comparison on a supported GPU |
 
 Additional distributed and framework checks are listed in [Reports and Validation](docs/reports-and-validation.md).
+On a real CUDA host, the two maintained numerical commands are:
+
+```bash
+python3 verification/run_hybrid_ddp_numerics.py --variant all
+python3 verification/run_hybrid_fsdp_numerics.py
+```
+
 The physical two-host controller in
 `verification/run_physical_multihost.py` verifies that both repositories use
-the same Git commit, launches Hybrid DDP and TCP fault cases concurrently,
-and collects JSON and Markdown reports on the control host.
+the same Git commit, launches Hybrid DDP (including common execution options),
+FSDP, and TCP fault cases, and collects JSON and Markdown reports on the
+control host. Cluster report validation also reconciles collective/P2P
+counters, operation-timeline retention, directional links, and node-pair
+totals.
 
 ## Architecture
 

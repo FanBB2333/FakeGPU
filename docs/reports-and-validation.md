@@ -19,8 +19,9 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `./ftest tcp_bandwidth` | chosen-port TCP payload correctness and end-to-end simulator throughput |
 | `./ftest distributed_resilience` | TCP collective mismatch, missing-peer timeout, and bounded report-retention behavior |
 | `./test/run_hybrid_multinode.sh 2` | maintained multi-process validation with hybrid compute + simulated communication |
-| `python3 verification/run_hybrid_ddp_numerics.py` | real-CUDA DDP averaged gradients, optimizer update, and cross-rank parameter consistency |
-| `python3 verification/run_physical_multihost.py ...` | repeatable two-host Hybrid DDP, mismatch, timeout, Git-revision, and report checks over SSH |
+| `python3 verification/run_hybrid_ddp_numerics.py --variant all` | real-CUDA DDP basic, `no_sync`, unused-parameter, static-graph, bucket-view, optimizer, and cross-rank parameter checks |
+| `python3 verification/run_hybrid_fsdp_numerics.py` | real-CUDA FSDP sharding, reduce-scatter gradients, optimizer result, full-parameter reconstruction, and state-dict restoration |
+| `python3 verification/run_physical_multihost.py ...` | repeatable two-host Hybrid DDP/FSDP, mismatch, timeout, Git-revision, and report checks over SSH |
 | `./ftest llm` | optional LLM smoke test when local model files are available |
 | `python test/run_error_simulation_suite.py` | unified error simulation suite: cross-device, OOM, invalid device, dtype, checkpoint, gradient (23 tests) |
 | `python test/test_error_cross_device.py` | cross-device tensor operation guards |
@@ -86,7 +87,11 @@ That report includes:
 The repository-root `cluster_report.schema.json` defines the
 `cluster_report.v1` JSON contract. `verification/check_cluster_report.py`
 validates it by default and can additionally require P2P traffic with
-`--expect-point-to-point`.
+`--expect-point-to-point`. The default validation also reconciles all completed
+collective/P2P counters with retained plus discarded timeline entries. When the
+timeline is complete, operation-specific calls and logical bytes must match
+exactly. Directional link samples, bytes, peaks, modeled time, and throughput
+must also match their node-pair direction.
 
 The Markdown companion presents the node-pair data as a complete table:
 
@@ -187,6 +192,7 @@ Treat the following as more environment-sensitive or extended coverage:
 12. Run `./test/run_multinode_sim.sh 4`.
 13. Run `./test/run_ddp_multinode.sh 4`.
 14. Move to `./test/run_hybrid_multinode.sh 2`.
-15. On a real CUDA host, run `python3 verification/run_hybrid_ddp_numerics.py`.
-16. With two synchronized GPU hosts, run `python3 verification/run_physical_multihost.py ...`.
-17. Run `python test/run_error_simulation_suite.py` for error simulation coverage.
+15. On a real CUDA host, run `python3 verification/run_hybrid_ddp_numerics.py --variant all`.
+16. On a real CUDA host, run `python3 verification/run_hybrid_fsdp_numerics.py`.
+17. With two synchronized GPU hosts, run `python3 verification/run_physical_multihost.py ...`.
+18. Run `python test/run_error_simulation_suite.py` for error simulation coverage.

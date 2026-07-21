@@ -180,11 +180,11 @@ python3 -m torch.distributed.run \
   --report-dir="/tmp/fakegpu-cross-ddp-rank${NODE_RANK}"
 ```
 
-The maintained two-host result used PyTorch 2.9.1/CUDA 12.8 on the Blackwell GPU and PyTorch 2.12.1/CUDA 13.0 on the Ampere GPU. Both ranks produced
-gradient `[1.5, 3.0]`, updated parameters approximately
-`[0.85, -0.30]`, and identical all-gather results. The cluster report recorded
-broadcast, all-reduce, and all-gather traffic across two inter-node links with
-zero timeouts.
+The maintained two-host result used PyTorch 2.9.1/CUDA 12.8 on the Blackwell GPU and PyTorch 2.12.1/CUDA 13.0 on the Ampere GPU. Basic DDP, all DDP
+option cases, and FSDP produced the expected gradients and identical rebuilt
+parameters. The complete cluster report recorded 34 successful communication
+operations, 1,104 bytes between the node pair, a 128-byte pair peak per
+operation, and one expected missing-peer timeout.
 
 ### Repeatable SSH controller
 
@@ -206,6 +206,8 @@ python3 verification/run_physical_multihost.py \
 The default cases are:
 
 - heterogeneous two-host Hybrid DDP numerical correctness
+- DDP `no_sync`, rank-dependent unused parameters, static graphs, and gradient bucket views
+- FSDP full sharding, reduce-scatter, optimizer, full-parameter, and state-dict correctness
 - mismatched collective reduction operators and persistent async errors
 - a missing-peer communicator timeout from the second physical host
 
@@ -272,6 +274,8 @@ python3 verification/test_allgather_correctness.py
 python3 verification/test_group_semantics.py
 ./ftest tcp_bandwidth
 ./test/run_hybrid_multinode.sh 2
+python3 verification/run_hybrid_ddp_numerics.py --variant all
+python3 verification/run_hybrid_fsdp_numerics.py
 ```
 
 The maintained checks above validate:
@@ -280,6 +284,8 @@ The maintained checks above validate:
 - direct collective semantics
 - grouped submission semantics
 - hybrid compute + simulated communication integration
+- DDP common-option numerical behavior on real CUDA
+- FSDP sharding, reduce-scatter, reconstruction, and checkpoint restoration
 
 Recommended order:
 
@@ -291,13 +297,18 @@ Recommended order:
 6. `./test/run_multinode_sim.sh 4`
 7. `./test/run_ddp_multinode.sh 4`
 8. `./test/run_hybrid_multinode.sh 2`
-9. `python3 verification/run_hybrid_ddp_numerics.py` on a real CUDA host
+9. `python3 verification/run_hybrid_ddp_numerics.py --variant all` on a real CUDA host
+10. `python3 verification/run_hybrid_fsdp_numerics.py` on a real CUDA host
 
 The DDP-oriented scripts above are part of the maintained simulate-mode validation set. They provide smoke and control-flow coverage for ProcessGroupNCCL, but they do not imply full numerical or protocol parity with a real NCCL stack.
 
-The final real-CUDA check is narrower but numerical: two ranks share one
-physical device, fake NCCL averages a known non-zero gradient, and the test
-verifies the optimizer result and parameters gathered from both ranks.
+The real-CUDA checks are numerical. The DDP runner covers basic averaging,
+gradient accumulation through `no_sync`, rank-dependent unused parameters,
+static graphs, and gradient bucket views. The FSDP runner verifies a real
+two-rank full shard, reduce-scatter gradient averaging, optimizer updates,
+full-parameter reconstruction, and full-state-dict restoration. Both runners
+support two ranks sharing one physical GPU; the physical multi-host controller
+runs one rank on each synchronized SSH host by default.
 
 ## Manual coordinator startup
 
