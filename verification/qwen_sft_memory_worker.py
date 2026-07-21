@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -21,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-SCHEMA_VERSION = "fakegpu.qwen_sft_memory_worker.v2"
+SCHEMA_VERSION = "fakegpu.qwen_sft_memory_worker.v3"
 
 
 class _NvmlProcessSampler:
@@ -109,23 +110,77 @@ def _reset_peak(torch: Any, mode: str) -> None:
     torch.cuda.reset_peak_memory_stats()
 
 
+def _unique_storage_bytes(items: list[Any]) -> int:
+    storages: dict[int, int] = {}
+    fallback = 0
+    for item in items:
+        try:
+            storage = item.untyped_storage()
+            key = int(getattr(storage, "_cdata", id(storage)))
+            storages[key] = max(storages.get(key, 0), int(storage.nbytes()))
+        except Exception:
+            fallback += int(item.numel()) * int(item.element_size())
+    return sum(storages.values()) + fallback
+
+
 def _parameter_summary(model: Any) -> dict[str, Any]:
     parameters = list(model.parameters())
     trainable = [parameter for parameter in parameters if parameter.requires_grad]
+    buffers = list(model.buffers())
 
     def nbytes(items: list[Any]) -> int:
         return sum(int(item.numel()) * int(item.element_size()) for item in items)
 
+    physical_parameter_bytes = _unique_storage_bytes(parameters)
+    buffer_bytes = _unique_storage_bytes(buffers)
     return {
         "parameter_tensors": len(parameters),
         "parameter_count": sum(int(parameter.numel()) for parameter in parameters),
-        "parameter_bytes": nbytes(parameters),
+        "parameter_bytes": physical_parameter_bytes,
+        "logical_parameter_bytes": nbytes(parameters),
+        "buffer_tensors": len(buffers),
+        "buffer_bytes": buffer_bytes,
+        "persistent_storage_bytes": physical_parameter_bytes + buffer_bytes,
         "trainable_parameter_tensors": len(trainable),
         "trainable_parameter_count": sum(int(parameter.numel()) for parameter in trainable),
         "trainable_parameter_bytes": nbytes(trainable),
         "dtypes": sorted({str(parameter.dtype) for parameter in parameters}),
         "devices": sorted({str(parameter.device) for parameter in parameters}),
     }
+
+
+def _quantized_parameter_summary(
+    summary: dict[str, Any],
+    plan: dict[str, Any],
+    *,
+    static_surrogate: bool,
+) -> dict[str, Any]:
+    result = dict(summary)
+    if static_surrogate:
+        physical_parameter_bytes = int(summary["parameter_bytes"]) - int(
+            plan["original_weight_bytes"]
+        )
+        buffer_bytes = int(summary["buffer_bytes"]) + int(
+            plan["quantized_storage_bytes"]
+        )
+    else:
+        result["parameter_count"] = int(summary["parameter_count"]) + int(
+            plan["original_parameter_count"]
+        )
+        result["logical_parameter_bytes"] = int(summary["logical_parameter_bytes"]) + int(
+            plan["original_parameter_bytes"]
+        )
+        physical_parameter_bytes = int(summary["parameter_bytes"])
+        buffer_bytes = int(summary["buffer_bytes"])
+    result["physical_parameter_bytes"] = physical_parameter_bytes
+    result["buffer_bytes"] = buffer_bytes
+    result["persistent_storage_bytes"] = physical_parameter_bytes + buffer_bytes
+    # Keep the historical field useful for model-load comparisons: for a
+    # quantized model it means all persistent model tensor storage.
+    result["parameter_bytes"] = result["persistent_storage_bytes"]
+    result["quantized_weight_count"] = int(plan["quantized_weight_count"])
+    result["quantized_storage_bytes"] = int(plan["quantized_storage_bytes"])
+    return result
 
 
 def _make_batch(torch: Any, *, batch_size: int, sequence_length: int, vocab_size: int, seed: int) -> dict[str, Any]:
@@ -198,9 +253,32 @@ def _load_text_config(AutoConfig: Any, model_dir: Path) -> Any:
 
 def _configure_training_model(model: Any, args: argparse.Namespace, *, static: bool) -> tuple[Any, dict[str, Any]]:
     peft_version: str | None = None
-    if args.training_method == "lora":
+    quantization_plan: dict[str, Any] | None = None
+    if args.training_method == "qlora" and not static:
+        from verification.native_nf4 import convert_model_to_native_nf4_lora
+
+        model, quantization_plan = convert_model_to_native_nf4_lora(
+            model,
+            rank=args.lora_rank,
+            alpha=args.lora_alpha,
+            dropout=args.lora_dropout,
+            block_size=args.quantization_block_size,
+            target_modules=args.lora_target_modules,
+            chunk_blocks=args.quantization_chunk_blocks,
+        )
+    elif args.training_method in {"lora", "qlora"}:
         import peft
         from peft import LoraConfig, get_peft_model
+
+        if args.training_method == "qlora":
+            from verification.native_nf4 import plan_nf4_lora
+
+            quantization_plan = plan_nf4_lora(
+                model,
+                rank=args.lora_rank,
+                block_size=args.quantization_block_size,
+                target_modules=args.lora_target_modules,
+            )
 
         peft_version = str(peft.__version__)
         model = get_peft_model(
@@ -223,13 +301,14 @@ def _configure_training_model(model: Any, args: argparse.Namespace, *, static: b
             model.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": False}
             )
-            if args.training_method == "lora":
+            if args.training_method in {"lora", "qlora"}:
                 model.enable_input_require_grads()
             checkpointing_analysis = "executed_non_reentrant"
 
     return model, {
         "peft_version": peft_version,
         "checkpointing_analysis": checkpointing_analysis,
+        "quantization_plan": quantization_plan,
     }
 
 
@@ -294,6 +373,103 @@ def _checkpoint_graph_estimate(estimate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _apply_nf4_static_adjustment(
+    estimate: dict[str, Any],
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Replace persistent BF16 linear weights with packed NF4 storage.
+
+    The ATen graph is captured from the mathematically equivalent BF16 LoRA
+    surrogate.  Frozen weights remain live throughout that graph, so their
+    storage can be substituted exactly.  The reference backend's largest
+    per-layer dequantization workspace is then added analytically.
+    """
+
+    adjusted = copy.deepcopy(estimate)
+    original_weight_bytes = int(plan["original_weight_bytes"])
+    quantized_storage_bytes = int(plan["quantized_storage_bytes"])
+    storage_delta = quantized_storage_bytes - original_weight_bytes
+    dequant_workspace = int(plan["largest_dequantization_workspace_bytes"])
+
+    adjusted["unquantized_parameter_bytes"] = int(estimate["parameter_bytes"])
+    adjusted["parameter_bytes"] = int(estimate["parameter_bytes"]) - original_weight_bytes
+    adjusted["frozen_parameter_bytes"] = int(estimate["frozen_parameter_bytes"]) - original_weight_bytes
+    adjusted["buffer_bytes"] = int(estimate["buffer_bytes"]) + quantized_storage_bytes
+    adjusted["persistent_model_storage_bytes"] = (
+        int(adjusted["parameter_bytes"]) + int(adjusted["buffer_bytes"])
+    )
+    adjusted["post_graph_live_bytes"] = int(estimate["post_graph_live_bytes"]) + storage_delta
+    adjusted["first_step_graph_phase_peak_bytes"] = (
+        int(estimate["first_step_graph_phase_peak_bytes"])
+        + storage_delta
+        + dequant_workspace
+    )
+    adjusted["graph_phase_peak_bytes"] = (
+        int(estimate["graph_phase_peak_bytes"])
+        + storage_delta
+        + dequant_workspace
+    )
+    optimizer_phase = estimate.get("optimizer_phase_peak_bytes")
+    adjusted["optimizer_phase_peak_bytes"] = (
+        int(optimizer_phase) + storage_delta if optimizer_phase is not None else None
+    )
+    adjusted["first_step_estimated_peak_bytes"] = max(
+        int(adjusted["first_step_graph_phase_peak_bytes"]),
+        int(adjusted["optimizer_phase_peak_bytes"] or 0),
+    )
+    adjusted["steady_state_estimated_peak_bytes"] = max(
+        int(adjusted["graph_phase_peak_bytes"]),
+        int(adjusted["optimizer_phase_peak_bytes"] or 0),
+    )
+    adjusted["estimated_peak_bytes"] = int(adjusted["steady_state_estimated_peak_bytes"])
+    if int(adjusted["graph_phase_peak_bytes"]) > int(adjusted["optimizer_phase_peak_bytes"] or 0):
+        adjusted["peak_phase"] = "graph"
+    elif int(adjusted["graph_phase_peak_bytes"]) < int(adjusted["optimizer_phase_peak_bytes"] or 0):
+        adjusted["peak_phase"] = "optimizer"
+    else:
+        adjusted["peak_phase"] = "graph_and_optimizer"
+
+    graph = adjusted["graph"]
+    graph["peak_live_bytes"] = int(graph["peak_live_bytes"]) + storage_delta
+    graph["final_live_bytes"] = int(graph["final_live_bytes"]) + storage_delta
+    graph["total_unique_storage_bytes"] = int(graph["total_unique_storage_bytes"]) + storage_delta
+    for categories_name in ("peak_bytes_by_category", "final_bytes_by_category"):
+        categories = graph[categories_name]
+        categories["frozen_parameter"] = int(categories.get("frozen_parameter", 0)) - original_weight_bytes
+        categories["buffer"] = int(categories.get("buffer", 0)) + quantized_storage_bytes
+
+    workspace = adjusted["workspace_estimate"]
+    workspace["total_bytes"] = int(workspace["total_bytes"]) + dequant_workspace
+    workspace["effective_peak_contribution_bytes"] = int(
+        workspace["effective_peak_contribution_bytes"]
+    ) + dequant_workspace
+    workspace["profiles"].append(
+        {
+            "kind": "native_nf4_dequantization_workspace",
+            "bytes": dequant_workspace,
+            "confidence": "analytical_reference_implementation",
+            "module_count": int(plan["module_count"]),
+            "description": "largest per-layer int32 lookup and BF16 dequantization workspace",
+        }
+    )
+    adjusted["workspace_estimate_bytes"] = int(estimate["workspace_estimate_bytes"]) + dequant_workspace
+    adjusted["workspace_peak_contribution_bytes"] = int(
+        estimate["workspace_peak_contribution_bytes"]
+    ) + dequant_workspace
+    adjusted["tracking_confidence"] = "S2_aot_training_liveness_plus_analytical_nf4"
+    adjusted["quantization"] = {
+        key: value for key, value in plan.items() if key != "modules"
+    }
+    adjusted["unmodeled_components"] = list(adjusted["unmodeled_components"]) + [
+        "fused_external_4bit_backend_kernel_behavior"
+    ]
+    adjusted["notes"] = list(adjusted["notes"]) + [
+        "Frozen BF16 linear storage is replaced exactly by the native packed NF4 buffers.",
+        "The largest PyTorch reference dequantization workspace is combined analytically with the captured graph.",
+    ]
+    return adjusted
+
+
 def _common_report(args: argparse.Namespace, torch: Any, transformers: Any, model_dir: Path) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -316,7 +492,15 @@ def _common_report(args: argparse.Namespace, torch: Any, transformers: Any, mode
             "dropout": args.lora_dropout,
             "target_modules": args.lora_target_modules,
         }
-        if args.training_method == "lora"
+        if args.training_method in {"lora", "qlora"}
+        else None,
+        "quantization": {
+            "backend": "pytorch_native_nf4",
+            "format": "nf4_blockwise",
+            "block_size": args.quantization_block_size,
+            "double_quantization": False,
+        }
+        if args.training_method == "qlora"
         else None,
         "batch_size": args.batch_size,
         "sequence_length": args.sequence_length,
@@ -340,6 +524,13 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
     model, training_metadata = _configure_training_model(model, args, static=True)
     model.train()
     parameters = _parameter_summary(model)
+    quantization_plan = training_metadata["quantization_plan"]
+    if quantization_plan is not None:
+        parameters = _quantized_parameter_summary(
+            parameters,
+            quantization_plan,
+            static_surrogate=True,
+        )
     batches = _make_batches(
         torch,
         batch_size=args.batch_size,
@@ -364,6 +555,8 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
         retain_forward_outputs=True,
         target_device="cuda",
     )
+    if quantization_plan is not None:
+        estimate = _apply_nf4_static_adjustment(estimate, quantization_plan)
     checkpoint_estimate: dict[str, Any] | None = None
     base_graph_estimate = int(estimate["first_step_graph_phase_peak_bytes"])
     if args.gradient_checkpointing:
@@ -384,6 +577,11 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
         {
             "gpu_name": "static FakeTensor CUDA target",
             "peft_version": training_metadata["peft_version"],
+            "quantization_details": (
+                {key: value for key, value in quantization_plan.items() if key != "modules"}
+                if quantization_plan is not None
+                else None
+            ),
             "parameters": parameters,
             "batch": {
                 "masked_prefix_tokens": batches["masked_prefix_tokens"],
@@ -396,6 +594,11 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
                 "checkpointing": training_metadata["checkpointing_analysis"],
                 "gradient_accumulation": accumulation_analysis,
                 "checkpoint_estimate": checkpoint_estimate,
+                "quantization": (
+                    "analytical_pytorch_native_nf4_workspace"
+                    if quantization_plan is not None
+                    else "disabled"
+                ),
             },
             "elapsed_seconds": time.monotonic() - started,
             "memory_phases": {
@@ -411,7 +614,12 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
                 "accumulation_graph_estimated_peak_bytes": accumulation_graph_estimate,
                 "graph_phase_peak_bytes": int(estimate["graph_phase_peak_bytes"]),
                 "optimizer_phase_peak_bytes": int(estimate["optimizer_phase_peak_bytes"]),
-                "parameter_bytes": int(estimate["parameter_bytes"]),
+                "parameter_bytes": int(
+                    estimate.get(
+                        "persistent_model_storage_bytes",
+                        int(estimate["parameter_bytes"]) + int(estimate["buffer_bytes"]),
+                    )
+                ),
                 "optimizer_state_bytes": int(estimate["optimizer_state_bytes"]),
                 "optimizer_temporary_bytes": int(estimate["optimizer_temporary_bytes"]),
                 "workspace_estimate_bytes": int(estimate["workspace_estimate_bytes"]),
@@ -458,6 +666,13 @@ def _run_execution(args: argparse.Namespace, torch: Any, transformers: Any, mode
         model.to("cuda:0")
         phase_seconds["model_load"] = time.monotonic() - load_started
         parameters = _parameter_summary(model)
+        quantization_plan = training_metadata["quantization_plan"]
+        if quantization_plan is not None:
+            parameters = _quantized_parameter_summary(
+                parameters,
+                quantization_plan,
+                static_surrogate=False,
+            )
         model_load_record = _memory_record(torch, sampler, args.mode, "after_model_load")
         timeline.append(model_load_record)
 
@@ -547,6 +762,11 @@ def _run_execution(args: argparse.Namespace, torch: Any, transformers: Any, mode
             {
                 "gpu_name": str(torch.cuda.get_device_name(0)),
                 "peft_version": training_metadata["peft_version"],
+                "quantization_details": (
+                    {key: value for key, value in quantization_plan.items() if key != "modules"}
+                    if quantization_plan is not None
+                    else None
+                ),
                 "parameters": parameters,
                 "batch": {
                     "masked_prefix_tokens": batches["masked_prefix_tokens"],
@@ -618,13 +838,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--profile", default="rtx-pro-5000-blackwell")
-    parser.add_argument("--training-method", choices=["full", "lora"], default="full")
+    parser.add_argument("--training-method", choices=["full", "lora", "qlora"], default="full")
     parser.add_argument("--gradient-checkpointing", action="store_true")
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--lora-rank", type=int, default=8)
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--lora-dropout", type=float, default=0.0)
     parser.add_argument("--lora-target-modules", default="all-linear")
+    parser.add_argument("--quantization-block-size", type=int, default=64)
+    parser.add_argument("--quantization-chunk-blocks", type=int, default=16_384)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--sequence-length", type=int, default=16)
     parser.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
@@ -645,6 +867,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--lora-alpha must be greater than zero")
     if not 0.0 <= args.lora_dropout < 1.0:
         parser.error("--lora-dropout must be in [0, 1)")
+    if args.quantization_block_size <= 0 or args.quantization_block_size % 2:
+        parser.error("--quantization-block-size must be a positive even integer")
+    if args.quantization_chunk_blocks <= 0:
+        parser.error("--quantization-chunk-blocks must be greater than zero")
     if args.learning_rate <= 0:
         parser.error("--learning-rate must be greater than zero")
 

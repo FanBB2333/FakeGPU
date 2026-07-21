@@ -16,6 +16,7 @@ def _execution_report(mode: str, *, peak_offset: int = 0) -> dict:
         "batch_size": 1,
         "sequence_length": 16,
         "data_seed": 7,
+        "quantization": None,
         "gpu_name": "real GPU" if real else "fake GPU",
         "parameters": {
             "parameter_count": 750_000_000,

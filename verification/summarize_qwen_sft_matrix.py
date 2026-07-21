@@ -20,6 +20,7 @@ MATCHING_FIELDS = (
     "gradient_checkpointing",
     "gradient_accumulation_steps",
     "lora",
+    "quantization",
     "batch_size",
     "sequence_length",
     "data_seed",
@@ -239,9 +240,22 @@ def _prediction_kind(static: dict[str, Any]) -> str:
     analysis = static.get("static_analysis") or {}
     checkpointing = str(analysis.get("checkpointing", "disabled"))
     accumulation = str(analysis.get("gradient_accumulation", "single_microbatch_exact"))
-    if checkpointing == "disabled" and accumulation == "single_microbatch_exact":
+    quantization = str(analysis.get("quantization", "disabled"))
+    if (
+        checkpointing == "disabled"
+        and accumulation == "single_microbatch_exact"
+        and quantization == "disabled"
+    ):
         return "exact"
-    if checkpointing.startswith("analytical_") or accumulation == "in_place_largest_gradient_temporary":
+    if (
+        checkpointing in {"disabled"}
+        or checkpointing.startswith("analytical_")
+    ) and accumulation in {
+        "single_microbatch_exact",
+        "in_place_largest_gradient_temporary",
+    } and (
+        quantization == "disabled" or quantization.startswith("analytical_")
+    ):
         return "analytical"
     return "upper_bound"
 
