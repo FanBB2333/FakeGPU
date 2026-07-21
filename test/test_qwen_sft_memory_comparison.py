@@ -86,7 +86,23 @@ def test_comparison_rejects_large_static_underestimate() -> None:
         _static_report(peak_offset=-1_000_000_000),
     )
     assert report["status"] == "failed"
-    assert report["checks"]["static_overall_error_within_limit"] is False
+    assert report["checks"]["static_overall_within_limit"] is False
+
+
+def test_comparison_accepts_checkpointing_upper_bound() -> None:
+    real = _execution_report("real")
+    fake = _execution_report("fakecuda")
+    static = _static_report(peak_offset=500_000_000)
+    for report in (real, fake, static):
+        report["gradient_checkpointing"] = True
+    static["static_analysis"] = {
+        "checkpointing": "uncheckpointed_upper_bound",
+        "gradient_accumulation": "single_microbatch_exact",
+    }
+
+    report = compare_reports(real, fake, static)
+    assert report["status"] == "success"
+    assert report["static"]["prediction_kind"] == "upper_bound"
 
 
 def test_comparison_rejects_different_random_batch() -> None:

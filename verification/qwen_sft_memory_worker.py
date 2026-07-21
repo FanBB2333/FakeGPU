@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure or statically estimate one text-only Qwen3.5 SFT step."""
+"""Measure or statically estimate a text-only Qwen3.5 SFT optimizer step."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-SCHEMA_VERSION = "fakegpu.qwen_sft_memory_worker.v1"
+SCHEMA_VERSION = "fakegpu.qwen_sft_memory_worker.v2"
 
 
 class _NvmlProcessSampler:
@@ -159,9 +159,78 @@ def _make_batch(torch: Any, *, batch_size: int, sequence_length: int, vocab_size
     }
 
 
+def _make_batches(
+    torch: Any,
+    *,
+    batch_size: int,
+    sequence_length: int,
+    vocab_size: int,
+    seed: int,
+    count: int,
+) -> dict[str, Any]:
+    batches = [
+        _make_batch(
+            torch,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            vocab_size=vocab_size,
+            seed=seed + index,
+        )
+        for index in range(count)
+    ]
+    digest = hashlib.sha256()
+    for batch in batches:
+        digest.update(batch["fingerprint_sha256"].encode("ascii"))
+    return {
+        "items": batches,
+        "masked_prefix_tokens": batches[0]["masked_prefix_tokens"],
+        "fingerprint_sha256": digest.hexdigest(),
+        "microbatch_fingerprints_sha256": [
+            batch["fingerprint_sha256"] for batch in batches
+        ],
+    }
+
+
 def _load_text_config(AutoConfig: Any, model_dir: Path) -> Any:
     root_config = AutoConfig.from_pretrained(str(model_dir), local_files_only=True)
     return getattr(root_config, "text_config", root_config)
+
+
+def _configure_training_model(model: Any, args: argparse.Namespace, *, static: bool) -> tuple[Any, dict[str, Any]]:
+    peft_version: str | None = None
+    if args.training_method == "lora":
+        import peft
+        from peft import LoraConfig, get_peft_model
+
+        peft_version = str(peft.__version__)
+        model = get_peft_model(
+            model,
+            LoraConfig(
+                r=args.lora_rank,
+                lora_alpha=args.lora_alpha,
+                lora_dropout=args.lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+                target_modules=args.lora_target_modules,
+            ),
+        )
+
+    checkpointing_analysis = "disabled"
+    if args.gradient_checkpointing:
+        if static:
+            checkpointing_analysis = "uncheckpointed_upper_bound"
+        else:
+            model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
+            if args.training_method == "lora":
+                model.enable_input_require_grads()
+            checkpointing_analysis = "executed_non_reentrant"
+
+    return model, {
+        "peft_version": peft_version,
+        "checkpointing_analysis": checkpointing_analysis,
+    }
 
 
 def _common_report(args: argparse.Namespace, torch: Any, transformers: Any, model_dir: Path) -> dict[str, Any]:
@@ -177,6 +246,17 @@ def _common_report(args: argparse.Namespace, torch: Any, transformers: Any, mode
         "dtype": args.dtype,
         "attention_implementation": args.attention_implementation,
         "optimizer": "adamw_single_tensor",
+        "training_method": args.training_method,
+        "gradient_checkpointing": bool(args.gradient_checkpointing),
+        "gradient_accumulation_steps": int(args.gradient_accumulation_steps),
+        "lora": {
+            "rank": args.lora_rank,
+            "alpha": args.lora_alpha,
+            "dropout": args.lora_dropout,
+            "target_modules": args.lora_target_modules,
+        }
+        if args.training_method == "lora"
+        else None,
         "batch_size": args.batch_size,
         "sequence_length": args.sequence_length,
         "seed": args.seed,
@@ -196,15 +276,18 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
     with torch.device("meta"):
         model = Qwen3_5ForCausalLM(config)
     model = model.to(dtype=dtype)
+    model, training_metadata = _configure_training_model(model, args, static=True)
     model.train()
     parameters = _parameter_summary(model)
-    batch = _make_batch(
+    batches = _make_batches(
         torch,
         batch_size=args.batch_size,
         sequence_length=args.sequence_length,
         vocab_size=int(config.vocab_size),
         seed=args.data_seed,
+        count=args.gradient_accumulation_steps,
     )
+    batch = batches["items"][0]
     started = time.monotonic()
     estimate = estimate_module_memory(
         model,
@@ -220,21 +303,37 @@ def _run_static(args: argparse.Namespace, torch: Any, transformers: Any, model_d
         retain_forward_outputs=True,
         target_device="cuda",
     )
+    accumulation_graph_upper_bound = int(estimate["first_step_graph_phase_peak_bytes"])
+    accumulation_analysis = "single_microbatch_exact"
+    if args.gradient_accumulation_steps > 1:
+        accumulation_graph_upper_bound += int(estimate["trainable_parameter_bytes"])
+        accumulation_analysis = "existing_gradient_upper_bound"
+    optimizer_peak = int(estimate["optimizer_phase_peak_bytes"])
+    first_step_peak = max(accumulation_graph_upper_bound, optimizer_peak)
     report = _common_report(args, torch, transformers, model_dir)
     report.update(
         {
             "gpu_name": "static FakeTensor CUDA target",
+            "peft_version": training_metadata["peft_version"],
             "parameters": parameters,
             "batch": {
-                "masked_prefix_tokens": batch["masked_prefix_tokens"],
-                "fingerprint_sha256": batch["fingerprint_sha256"],
+                "masked_prefix_tokens": batches["masked_prefix_tokens"],
+                "fingerprint_sha256": batches["fingerprint_sha256"],
+                "microbatch_fingerprints_sha256": batches[
+                    "microbatch_fingerprints_sha256"
+                ],
+            },
+            "static_analysis": {
+                "checkpointing": training_metadata["checkpointing_analysis"],
+                "gradient_accumulation": accumulation_analysis,
             },
             "elapsed_seconds": time.monotonic() - started,
             "memory_phases": {
-                "overall_peak_bytes": int(estimate["first_step_estimated_peak_bytes"]),
-                "first_step_estimated_peak_bytes": int(estimate["first_step_estimated_peak_bytes"]),
+                "overall_peak_bytes": first_step_peak,
+                "first_step_estimated_peak_bytes": first_step_peak,
                 "steady_state_estimated_peak_bytes": int(estimate["steady_state_estimated_peak_bytes"]),
                 "first_step_graph_phase_peak_bytes": int(estimate["first_step_graph_phase_peak_bytes"]),
+                "accumulation_graph_upper_bound_bytes": accumulation_graph_upper_bound,
                 "graph_phase_peak_bytes": int(estimate["graph_phase_peak_bytes"]),
                 "optimizer_phase_peak_bytes": int(estimate["optimizer_phase_peak_bytes"]),
                 "parameter_bytes": int(estimate["parameter_bytes"]),
@@ -279,6 +378,7 @@ def _run_execution(args: argparse.Namespace, torch: Any, transformers: Any, mode
             attn_implementation=args.attention_implementation,
         )
         model.config.use_cache = False
+        model, training_metadata = _configure_training_model(model, args, static=False)
         model.train()
         model.to("cuda:0")
         phase_seconds["model_load"] = time.monotonic() - load_started
@@ -286,38 +386,75 @@ def _run_execution(args: argparse.Namespace, torch: Any, transformers: Any, mode
         model_load_record = _memory_record(torch, sampler, args.mode, "after_model_load")
         timeline.append(model_load_record)
 
-        batch = _make_batch(
+        batches = _make_batches(
             torch,
             batch_size=args.batch_size,
             sequence_length=args.sequence_length,
             vocab_size=int(text_config.vocab_size),
             seed=args.data_seed,
+            count=args.gradient_accumulation_steps,
         )
-        input_ids = batch["input_ids"].to("cuda:0")
-        labels = batch["labels"].to("cuda:0")
-        position_ids = batch["position_ids"].to("cuda:0")
-        optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, foreach=False)
+        device_batches = [
+            {
+                "input_ids": batch["input_ids"].to("cuda:0"),
+                "labels": batch["labels"].to("cuda:0"),
+                "position_ids": batch["position_ids"].to("cuda:0"),
+            }
+            for batch in batches["items"]
+        ]
+        trainable_parameters = [
+            parameter for parameter in model.parameters() if parameter.requires_grad
+        ]
+        optimizer = torch.optim.AdamW(
+            trainable_parameters,
+            lr=args.learning_rate,
+            foreach=False,
+        )
         timeline.append(_memory_record(torch, sampler, args.mode, "after_inputs"))
 
-        _reset_peak(torch, args.mode)
-        forward_started = time.monotonic()
-        outputs = model(
-            input_ids=input_ids,
-            labels=labels,
-            position_ids=position_ids,
-            use_cache=False,
-        )
-        loss = outputs.loss
-        phase_seconds["forward"] = time.monotonic() - forward_started
-        forward_record = _memory_record(torch, sampler, args.mode, "after_forward")
-        timeline.append(forward_record)
+        forward_records: list[dict[str, Any]] = []
+        backward_records: list[dict[str, Any]] = []
+        microstep_seconds: list[dict[str, float]] = []
+        losses: list[float] = []
+        for microstep, device_batch in enumerate(device_batches, start=1):
+            _reset_peak(torch, args.mode)
+            forward_started = time.monotonic()
+            outputs = model(**device_batch, use_cache=False)
+            loss = outputs.loss / args.gradient_accumulation_steps
+            forward_seconds = time.monotonic() - forward_started
+            forward_record = _memory_record(
+                torch,
+                sampler,
+                args.mode,
+                f"microstep_{microstep}_after_forward",
+            )
+            timeline.append(forward_record)
+            forward_records.append(forward_record)
 
-        _reset_peak(torch, args.mode)
-        backward_started = time.monotonic()
-        loss.backward()
-        phase_seconds["backward"] = time.monotonic() - backward_started
-        backward_record = _memory_record(torch, sampler, args.mode, "after_backward")
-        timeline.append(backward_record)
+            _reset_peak(torch, args.mode)
+            backward_started = time.monotonic()
+            loss.backward()
+            backward_seconds = time.monotonic() - backward_started
+            backward_record = _memory_record(
+                torch,
+                sampler,
+                args.mode,
+                f"microstep_{microstep}_after_backward",
+            )
+            timeline.append(backward_record)
+            backward_records.append(backward_record)
+            microstep_seconds.append(
+                {"forward": forward_seconds, "backward": backward_seconds}
+            )
+            losses.append(
+                float(loss.detach().float().cpu().item())
+                * args.gradient_accumulation_steps
+            )
+            if microstep < args.gradient_accumulation_steps:
+                del outputs, loss
+
+        phase_seconds["forward"] = sum(item["forward"] for item in microstep_seconds)
+        phase_seconds["backward"] = sum(item["backward"] for item in microstep_seconds)
 
         _reset_peak(torch, args.mode)
         optimizer_started = time.monotonic()
@@ -326,27 +463,41 @@ def _run_execution(args: argparse.Namespace, torch: Any, transformers: Any, mode
         optimizer_record = _memory_record(torch, sampler, args.mode, "after_optimizer")
         timeline.append(optimizer_record)
 
-        phase_records = [forward_record, backward_record, optimizer_record]
+        phase_records = [*forward_records, *backward_records, optimizer_record]
         overall_peak = max(int(item["peak_allocated_bytes"]) for item in phase_records)
+        forward_peak = max(int(item["peak_allocated_bytes"]) for item in forward_records)
+        backward_peak = max(int(item["peak_allocated_bytes"]) for item in backward_records)
         report = _common_report(args, torch, transformers, model_dir)
         report.update(
             {
                 "gpu_name": str(torch.cuda.get_device_name(0)),
+                "peft_version": training_metadata["peft_version"],
                 "parameters": parameters,
                 "batch": {
-                    "masked_prefix_tokens": batch["masked_prefix_tokens"],
-                    "fingerprint_sha256": batch["fingerprint_sha256"],
+                    "masked_prefix_tokens": batches["masked_prefix_tokens"],
+                    "fingerprint_sha256": batches["fingerprint_sha256"],
+                    "microbatch_fingerprints_sha256": batches[
+                        "microbatch_fingerprints_sha256"
+                    ],
                 },
-                "loss": float(loss.detach().float().cpu().item()),
+                "loss": sum(losses) / len(losses),
+                "microbatch_losses": losses,
+                "microstep_seconds": microstep_seconds,
                 "phase_seconds": phase_seconds,
                 "elapsed_seconds": time.monotonic() - started,
                 "timeline": timeline,
                 "memory_phases": {
                     "model_load_current_bytes": int(model_load_record["allocated_bytes"]),
-                    "forward_current_bytes": int(forward_record["allocated_bytes"]),
-                    "forward_peak_bytes": int(forward_record["peak_allocated_bytes"]),
-                    "backward_current_bytes": int(backward_record["allocated_bytes"]),
-                    "backward_peak_bytes": int(backward_record["peak_allocated_bytes"]),
+                    "forward_current_bytes": int(forward_records[-1]["allocated_bytes"]),
+                    "forward_peak_bytes": forward_peak,
+                    "backward_current_bytes": int(backward_records[-1]["allocated_bytes"]),
+                    "backward_peak_bytes": backward_peak,
+                    "microstep_forward_peak_bytes": [
+                        int(item["peak_allocated_bytes"]) for item in forward_records
+                    ],
+                    "microstep_backward_peak_bytes": [
+                        int(item["peak_allocated_bytes"]) for item in backward_records
+                    ],
                     "optimizer_current_bytes": int(optimizer_record["allocated_bytes"]),
                     "optimizer_peak_bytes": int(optimizer_record["peak_allocated_bytes"]),
                     "overall_peak_bytes": overall_peak,
@@ -392,6 +543,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--profile", default="rtx-pro-5000-blackwell")
+    parser.add_argument("--training-method", choices=["full", "lora"], default="full")
+    parser.add_argument("--gradient-checkpointing", action="store_true")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    parser.add_argument("--lora-rank", type=int, default=8)
+    parser.add_argument("--lora-alpha", type=int, default=16)
+    parser.add_argument("--lora-dropout", type=float, default=0.0)
+    parser.add_argument("--lora-target-modules", default="all-linear")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--sequence-length", type=int, default=16)
     parser.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
@@ -404,6 +562,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--batch-size must be greater than zero")
     if args.sequence_length < 2:
         parser.error("--sequence-length must be at least two")
+    if args.gradient_accumulation_steps <= 0:
+        parser.error("--gradient-accumulation-steps must be greater than zero")
+    if args.lora_rank <= 0:
+        parser.error("--lora-rank must be greater than zero")
+    if args.lora_alpha <= 0:
+        parser.error("--lora-alpha must be greater than zero")
+    if not 0.0 <= args.lora_dropout < 1.0:
+        parser.error("--lora-dropout must be in [0, 1)")
     if args.learning_rate <= 0:
         parser.error("--learning-rate must be greater than zero")
 

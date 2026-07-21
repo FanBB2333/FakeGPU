@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = "fakegpu.qwen_sft_memory_comparison.v1"
+SCHEMA_VERSION = "fakegpu.qwen_sft_memory_comparison.v2"
 
 
 def compare_reports(
@@ -20,6 +20,7 @@ def compare_reports(
     *,
     max_overall_error_percent: float = 2.0,
     max_phase_error_percent: float = 5.0,
+    max_upper_bound_overestimate_percent: float = 25.0,
 ) -> dict[str, Any]:
     _require_success(real, "real")
     _require_success(fake, "fakecuda")
@@ -29,6 +30,10 @@ def compare_reports(
         "dtype",
         "attention_implementation",
         "optimizer",
+        "training_method",
+        "gradient_checkpointing",
+        "gradient_accumulation_steps",
+        "lora",
         "batch_size",
         "sequence_length",
         "data_seed",
@@ -43,6 +48,20 @@ def compare_reports(
     if len(fingerprints) != 1:
         raise ValueError("real/fake/static random SFT batches do not match")
 
+    static_analysis = static.get("static_analysis") or {
+        "checkpointing": "disabled",
+        "gradient_accumulation": "single_microbatch_exact",
+    }
+    static_is_exact = (
+        static_analysis.get("checkpointing") == "disabled"
+        and static_analysis.get("gradient_accumulation") == "single_microbatch_exact"
+    )
+    static_graph_peak = int(
+        static["memory_phases"].get(
+            "accumulation_graph_upper_bound_bytes",
+            static["memory_phases"]["first_step_graph_phase_peak_bytes"],
+        )
+    )
     comparisons = {
         "model_load_allocator": _comparison(
             int(fake["memory_phases"]["model_load_current_bytes"]),
@@ -57,7 +76,7 @@ def compare_reports(
             int(real["memory_phases"]["backward_peak_bytes"]),
         ),
         "static_first_step_graph_peak": _comparison(
-            int(static["memory_phases"]["first_step_graph_phase_peak_bytes"]),
+            static_graph_peak,
             int(real["memory_phases"]["backward_peak_bytes"]),
         ),
         "fakecuda_optimizer_peak": _comparison(
@@ -75,6 +94,40 @@ def compare_reports(
         "fakecuda_loss": _float_comparison(float(fake["loss"]), float(real["loss"])),
     }
     real_parameter_bytes = int(real["parameters"]["parameter_bytes"])
+    static_overall_comparison = comparisons["static_overall_peak"]
+    static_graph_comparison = comparisons["static_first_step_graph_peak"]
+    if static_is_exact:
+        static_overall_passed = (
+            static_overall_comparison["absolute_error_percent"]
+            <= max_overall_error_percent
+        )
+        static_backward_passed = (
+            static_graph_comparison["absolute_error_percent"]
+            <= max_phase_error_percent
+        )
+    else:
+        maximum_underestimate_bytes = (
+            int(real["memory_phases"]["overall_peak_bytes"])
+            * max_overall_error_percent
+            / 100.0
+        )
+        static_overall_passed = (
+            static_overall_comparison["signed_error"] >= -maximum_underestimate_bytes
+            and static_overall_comparison["signed_error"]
+            <= int(real["memory_phases"]["overall_peak_bytes"])
+            * max_upper_bound_overestimate_percent
+            / 100.0
+        )
+        static_backward_passed = (
+            static_graph_comparison["signed_error"]
+            >= -int(real["memory_phases"]["backward_peak_bytes"])
+            * max_phase_error_percent
+            / 100.0
+            and static_graph_comparison["signed_error"]
+            <= int(real["memory_phases"]["backward_peak_bytes"])
+            * max_upper_bound_overestimate_percent
+            / 100.0
+        )
     checks = {
         "random_batch_exact": len(fingerprints) == 1,
         "parameter_count_exact": len(
@@ -95,10 +148,7 @@ def compare_reports(
             comparisons["fakecuda_forward_peak"]["absolute_error_percent"]
             <= max_phase_error_percent
         ),
-        "static_backward_peak_error_within_limit": (
-            comparisons["static_first_step_graph_peak"]["absolute_error_percent"]
-            <= max_phase_error_percent
-        ),
+        "static_backward_peak_within_limit": static_backward_passed,
         "optimizer_peak_error_within_limit": (
             comparisons["fakecuda_optimizer_peak"]["absolute_error_percent"]
             <= max_phase_error_percent
@@ -107,10 +157,7 @@ def compare_reports(
             comparisons["fakecuda_overall_peak"]["absolute_error_percent"]
             <= max_overall_error_percent
         ),
-        "static_overall_error_within_limit": (
-            comparisons["static_overall_peak"]["absolute_error_percent"]
-            <= max_overall_error_percent
-        ),
+        "static_overall_within_limit": static_overall_passed,
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -127,11 +174,18 @@ def compare_reports(
             "masked_prefix_tokens": int(real["batch"]["masked_prefix_tokens"]),
             "optimizer": real["optimizer"],
             "attention_implementation": real["attention_implementation"],
+            "training_method": real.get("training_method", "full"),
+            "gradient_checkpointing": bool(real.get("gradient_checkpointing", False)),
+            "gradient_accumulation_steps": int(real.get("gradient_accumulation_steps", 1)),
+            "lora": real.get("lora"),
             "fingerprint_sha256": next(iter(fingerprints)),
         },
         "limits": {
             "max_overall_error_percent": float(max_overall_error_percent),
             "max_phase_error_percent": float(max_phase_error_percent),
+            "max_upper_bound_overestimate_percent": float(
+                max_upper_bound_overestimate_percent
+            ),
         },
         "comparisons": comparisons,
         "checks": checks,
@@ -152,6 +206,8 @@ def compare_reports(
             "memory_phases": static["memory_phases"],
             "elapsed_seconds": static["elapsed_seconds"],
             "tracking_confidence": static["static_estimate"]["tracking_confidence"],
+            "analysis": static_analysis,
+            "prediction_kind": "exact" if static_is_exact else "upper_bound",
         },
     }
 
@@ -197,6 +253,10 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- Workload: batch `{workload['batch_size']}`, sequence `{workload['sequence_length']}`, "
             f"masked prefix `{workload['masked_prefix_tokens']}`, `{model['dtype']}`",
             f"- Optimizer: `{workload['optimizer']}`; attention: `{workload['attention_implementation']}`",
+            f"- Training: `{workload['training_method']}`; gradient checkpointing: "
+            f"`{workload['gradient_checkpointing']}`; accumulation steps: "
+            f"`{workload['gradient_accumulation_steps']}`",
+            f"- Static prediction: `{report['static']['prediction_kind']}`",
             "",
             "| Comparison | Predicted | Observed | Signed error | Absolute error |",
             "|---|---:|---:|---:|---:|",
@@ -211,6 +271,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             "The FakeCUDA execution-only backward value is diagnostic: short-lived CPU-kernel "
             "temporaries are not all visible to its runtime tracker. The gating backward prediction "
             "comes from the captured ATen storage-liveness graph.",
+            "Gradient-checkpointing static reports are explicit uncheckpointed upper bounds because "
+            "torch.func cannot capture PyTorch checkpoint saved-tensor hooks in this path.",
             "",
         ]
     )
@@ -225,6 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--markdown")
     parser.add_argument("--max-overall-error-percent", type=float, default=2.0)
     parser.add_argument("--max-phase-error-percent", type=float, default=5.0)
+    parser.add_argument("--max-upper-bound-overestimate-percent", type=float, default=25.0)
     args = parser.parse_args(argv)
     try:
         reports = [
@@ -235,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
             *reports,
             max_overall_error_percent=args.max_overall_error_percent,
             max_phase_error_percent=args.max_phase_error_percent,
+            max_upper_bound_overestimate_percent=args.max_upper_bound_overestimate_percent,
         )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         print(f"Qwen SFT memory comparison failed: {exc}", file=sys.stderr)
