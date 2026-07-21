@@ -172,7 +172,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         load_started = time.monotonic()
         model = AutoModelForCausalLM.from_pretrained(
             str(model_dir),
-            torch_dtype=dtype,
+            dtype=dtype,
             device_map="cuda:0",
             low_cpu_mem_usage=True,
             local_files_only=True,
