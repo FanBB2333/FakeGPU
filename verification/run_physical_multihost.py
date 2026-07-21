@@ -22,8 +22,28 @@ from typing import Any, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_CONFIG_RELATIVE = Path("verification/data/cluster_tcp_2r.yaml")
 DDP_WORKER_RELATIVE = Path("test/test_ddp_hybrid_numerics.py")
+FSDP_WORKER_RELATIVE = Path("test/test_fsdp_hybrid_numerics.py")
 FAULT_WORKER_RELATIVE = Path("verification/remote_nccl_fault_worker.py")
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+DDP_OPTION_VARIANTS = ("no-sync", "find-unused", "static-graph")
+DDP_EXPECTED_RESULTS: dict[str, dict[str, list[list[float]]]] = {
+    "basic": {
+        "gradient": [[1.5, 3.0]],
+        "parameters_after_step": [[0.85, -0.3]],
+    },
+    "no-sync": {
+        "gradient": [[4.5, 9.0]],
+        "parameters_after_step": [[0.55, -0.9]],
+    },
+    "find-unused": {
+        "gradient": [[0.5, 1.0], [1.0, 2.0]],
+        "parameters_after_step": [[0.95, -0.1], [-0.1, 0.8]],
+    },
+    "static-graph": {
+        "gradient": [[1.5, 3.0]],
+        "parameters_after_step": [[0.7, -0.6]],
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -221,6 +241,7 @@ payload = {
     "coordinator_exists": pathlib.Path("build/fakegpu-coordinator").is_file(),
     "nccl_exists": pathlib.Path("build/libnccl.so.2").is_file(),
     "ddp_worker_exists": pathlib.Path("test/test_ddp_hybrid_numerics.py").is_file(),
+    "fsdp_worker_exists": pathlib.Path("test/test_fsdp_hybrid_numerics.py").is_file(),
     "fault_worker_exists": pathlib.Path("verification/remote_nccl_fault_worker.py").is_file(),
 }
 if payload["cuda_available"]:
@@ -238,6 +259,7 @@ print(json.dumps(payload, sort_keys=True))
         "coordinator_exists",
         "nccl_exists",
         "ddp_worker_exists",
+        "fsdp_worker_exists",
         "fault_worker_exists",
         "cuda_available",
     )
@@ -332,6 +354,25 @@ def _distributed_env(
     }
 
 
+def _nested_allclose(
+    actual: object,
+    expected: list[list[float]],
+    *,
+    tolerance: float = 1e-6,
+) -> bool:
+    if not isinstance(actual, list) or len(actual) != len(expected):
+        return False
+    for actual_row, expected_row in zip(actual, expected):
+        if not isinstance(actual_row, list) or len(actual_row) != len(expected_row):
+            return False
+        if any(
+            abs(float(actual_value) - expected_value) > tolerance
+            for actual_value, expected_value in zip(actual_row, expected_row)
+        ):
+            return False
+    return True
+
+
 def _run_ddp_case(
     nodes: list[NodeSpec],
     *,
@@ -340,11 +381,15 @@ def _run_ddp_case(
     master_port: int,
     remote_root: str,
     timeout: float,
+    variant: str = "basic",
+    report_name: str = "ddp",
 ) -> list[dict[str, Any]]:
+    if variant not in DDP_EXPECTED_RESULTS:
+        raise ValueError(f"unknown DDP variant: {variant}")
     processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
     timeout_ms = max(1, round(timeout * 1000))
     for rank, node in enumerate(nodes):
-        report_dir = f"{remote_root}/ddp"
+        report_dir = f"{remote_root}/{report_name}"
         env = _distributed_env(
             node=node,
             endpoint=endpoint,
@@ -364,6 +409,7 @@ def _run_ddp_case(
             "--max-restarts=0",
             str(DDP_WORKER_RELATIVE),
             f"--report-dir={report_dir}",
+            f"--variant={variant}",
         ]
         processes.append(
             (
@@ -379,29 +425,117 @@ def _run_ddp_case(
                 ),
             )
         )
-    _collect_processes(processes, timeout=timeout, label="Hybrid DDP")
+    _collect_processes(
+        processes,
+        timeout=timeout,
+        label=f"Hybrid DDP ({variant})",
+    )
 
     reports = [
-        _read_remote_json(node, f"{remote_root}/ddp/rank_{rank}.json")
+        _read_remote_json(
+            node,
+            f"{remote_root}/{report_name}/rank_{rank}.json",
+        )
         for rank, node in enumerate(nodes)
     ]
+    expected = DDP_EXPECTED_RESULTS[variant]
     for rank, report in enumerate(reports):
         if report.get("status") != "success":
-            raise AssertionError(f"DDP rank {rank} failed: {report}")
-        if report.get("gradient") != [[1.5, 3.0]]:
             raise AssertionError(
-                f"DDP rank {rank} gradient mismatch: {report.get('gradient')}"
+                f"DDP {variant} rank {rank} failed: {report}"
             )
-        parameters = report.get("parameters_after_step")
+        if report.get("variant") != variant:
+            raise AssertionError(
+                f"DDP rank {rank} reported variant={report.get('variant')!r}"
+            )
+        for field, expected_value in expected.items():
+            if not _nested_allclose(report.get(field), expected_value):
+                raise AssertionError(
+                    f"DDP {variant} rank {rank} {field} mismatch: "
+                    f"{report.get(field)} != {expected_value}"
+                )
+    return reports
+
+
+def _run_fsdp_case(
+    nodes: list[NodeSpec],
+    *,
+    endpoint: str,
+    master_host: str,
+    master_port: int,
+    remote_root: str,
+    timeout: float,
+) -> list[dict[str, Any]]:
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    timeout_ms = max(1, round(timeout * 1000))
+    for rank, node in enumerate(nodes):
+        report_dir = f"{remote_root}/fsdp"
+        env = _distributed_env(
+            node=node,
+            endpoint=endpoint,
+            timeout_ms=timeout_ms,
+            hybrid=True,
+        )
+        env["LD_PRELOAD"] = f"{node.repo}/build/libnccl.so.2"
+        argv = [
+            node.python,
+            "-m",
+            "torch.distributed.run",
+            "--nnodes=2",
+            "--nproc-per-node=1",
+            f"--node-rank={rank}",
+            f"--master-addr={master_host}",
+            f"--master-port={master_port}",
+            "--max-restarts=0",
+            str(FSDP_WORKER_RELATIVE),
+            f"--report-dir={report_dir}",
+        ]
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        env=env,
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+    _collect_processes(processes, timeout=timeout, label="Hybrid FSDP")
+
+    reports = [
+        _read_remote_json(node, f"{remote_root}/fsdp/rank_{rank}.json")
+        for rank, node in enumerate(nodes)
+    ]
+    expected_local_gradients = ([1.5], [3.0])
+    expected_full = [[0.85, -0.3]]
+    for rank, report in enumerate(reports):
+        if report.get("status") != "success":
+            raise AssertionError(f"FSDP rank {rank} failed: {report}")
+        if report.get("local_shard_numel") != 1:
+            raise AssertionError(f"FSDP rank {rank} was not sharded: {report}")
+        local_gradient = report.get("local_shard_gradient")
         if not (
-            isinstance(parameters, list)
-            and len(parameters) == 1
-            and abs(float(parameters[0][0]) - 0.85) <= 1e-6
-            and abs(float(parameters[0][1]) + 0.3) <= 1e-6
+            isinstance(local_gradient, list)
+            and len(local_gradient) == 1
+            and abs(float(local_gradient[0]) - expected_local_gradients[rank][0])
+            <= 1e-6
         ):
             raise AssertionError(
-                f"DDP rank {rank} parameter mismatch: {parameters}"
+                f"FSDP rank {rank} gradient mismatch: {local_gradient}"
             )
+        for field in (
+            "full_parameter_after_step",
+            "full_state_dict_weight",
+            "restored_full_parameter",
+        ):
+            if not _nested_allclose(report.get(field), expected_full):
+                raise AssertionError(
+                    f"FSDP rank {rank} {field} mismatch: {report.get(field)}"
+                )
     return reports
 
 
@@ -515,7 +649,7 @@ def _run_missing_peer_case(
 def _validate_cluster_report(
     path: Path,
     *,
-    expect_ddp: bool,
+    expected_collectives: set[str],
     expect_timeout: bool,
 ) -> dict[str, Any]:
     report = json.loads(path.read_text(encoding="utf-8"))
@@ -526,10 +660,12 @@ def _validate_cluster_report(
         raise AssertionError(f"unexpected physical topology: {cluster}")
     if cluster.get("coordinator_transport") != "tcp":
         raise AssertionError(f"unexpected coordinator transport: {cluster}")
-    if expect_ddp:
-        for collective in ("all_reduce", "all_gather"):
+    if expected_collectives:
+        for collective in sorted(expected_collectives):
             if report["collectives"][collective]["calls"] <= 0:
-                raise AssertionError(f"DDP did not issue {collective}")
+                raise AssertionError(
+                    f"distributed training did not issue {collective}"
+                )
         node_pairs = report.get("node_pairs", [])
         if len(node_pairs) != 1 or int(node_pairs[0].get("total_bytes", 0)) <= 0:
             raise AssertionError(f"physical node-pair traffic is empty: {node_pairs}")
@@ -580,6 +716,18 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
         lines.append(
             "- Hybrid DDP: averaged gradient `[1.5, 3.0]`; updated "
             "parameters `[0.85, -0.30]` on both ranks."
+        )
+    if "ddp_options" in cases:
+        lines.append(
+            "- DDP options: `no_sync`, `find_unused_parameters`, "
+            "`static_graph`, and gradient bucket views completed with "
+            "matching parameters on both ranks."
+        )
+    if "fsdp" in cases:
+        lines.append(
+            "- Hybrid FSDP: each rank held one parameter shard; "
+            "reduce-scatter gradients, full-parameter reconstruction, and "
+            "full-state-dict restoration matched the analytical result."
         )
     if "collective_mismatch" in cases:
         results = [
@@ -663,7 +811,13 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 + ", ".join(mismatches)
             )
 
-    cases = args.case or ["ddp", "collective-mismatch", "missing-peer"]
+    cases = args.case or [
+        "ddp",
+        "ddp-options",
+        "fsdp",
+        "collective-mismatch",
+        "missing-peer",
+    ]
     remote_root = f"/tmp/fakegpu-physical-{args.session}"
     endpoint = f"{args.coordinator_host}:{args.coordinator_port}"
     coordinator_node = nodes[0]
@@ -703,6 +857,29 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         _wait_for_coordinator(endpoint, coordinator, args.startup_timeout)
         if "ddp" in cases:
             case_reports["ddp"] = _run_ddp_case(
+                nodes,
+                endpoint=endpoint,
+                master_host=args.coordinator_host,
+                master_port=args.master_port,
+                remote_root=remote_root,
+                timeout=args.case_timeout,
+            )
+        if "ddp-options" in cases:
+            case_reports["ddp_options"] = {
+                variant: _run_ddp_case(
+                    nodes,
+                    endpoint=endpoint,
+                    master_host=args.coordinator_host,
+                    master_port=args.master_port,
+                    remote_root=remote_root,
+                    timeout=args.case_timeout,
+                    variant=variant,
+                    report_name=f"ddp-options-{variant}",
+                )
+                for variant in DDP_OPTION_VARIANTS
+            }
+        if "fsdp" in cases:
+            case_reports["fsdp"] = _run_fsdp_case(
                 nodes,
                 endpoint=endpoint,
                 master_host=args.coordinator_host,
@@ -758,9 +935,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         _read_remote_text(coordinator_node, remote_markdown_path),
         encoding="utf-8",
     )
+    expected_collectives: set[str] = set()
+    if "ddp" in cases or "ddp-options" in cases:
+        expected_collectives.update({"all_reduce", "all_gather"})
+    if "fsdp" in cases:
+        expected_collectives.update({"all_gather", "reduce_scatter"})
     cluster_report = _validate_cluster_report(
         cluster_path,
-        expect_ddp="ddp" in cases,
+        expected_collectives=expected_collectives,
         expect_timeout="missing-peer" in cases,
     )
 
@@ -804,8 +986,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run repeatable Hybrid DDP and TCP failure checks on two SSH hosts "
-            "that already have the same FakeGPU Git commit."
+            "Run repeatable Hybrid DDP/FSDP and TCP failure checks on two SSH "
+            "hosts that already have the same FakeGPU Git commit."
         )
     )
     parser.add_argument(
@@ -824,7 +1006,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--case",
         action="append",
-        choices=["ddp", "collective-mismatch", "missing-peer"],
+        choices=[
+            "ddp",
+            "ddp-options",
+            "fsdp",
+            "collective-mismatch",
+            "missing-peer",
+        ],
         default=[],
     )
     parser.add_argument(

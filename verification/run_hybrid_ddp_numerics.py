@@ -61,17 +61,83 @@ def _load_rank_reports(report_dir: Path, world_size: int) -> list[dict[str, Any]
     return reports
 
 
+EXPECTED_RESULTS: dict[str, dict[str, list[list[float]]]] = {
+    "basic": {
+        "gradient": [[1.5, 3.0]],
+        "parameters_after_step": [[0.85, -0.3]],
+    },
+    "no-sync": {
+        "gradient": [[4.5, 9.0]],
+        "parameters_after_step": [[0.55, -0.9]],
+    },
+    "find-unused": {
+        "gradient": [[0.5, 1.0], [1.0, 2.0]],
+        "parameters_after_step": [[0.95, -0.1], [-0.1, 0.8]],
+    },
+    "static-graph": {
+        "gradient": [[1.5, 3.0]],
+        "parameters_after_step": [[0.7, -0.6]],
+    },
+}
+
+
+def _nested_allclose(
+    actual: object,
+    expected: list[list[float]],
+    *,
+    tolerance: float = 1e-6,
+) -> bool:
+    if not isinstance(actual, list) or len(actual) != len(expected):
+        return False
+    for actual_row, expected_row in zip(actual, expected):
+        if not isinstance(actual_row, list) or len(actual_row) != len(expected_row):
+            return False
+        if any(
+            abs(float(actual_value) - expected_value) > tolerance
+            for actual_value, expected_value in zip(actual_row, expected_row)
+        ):
+            return False
+    return True
+
+
+def _validate_variant_reports(
+    variant: str,
+    reports: list[dict[str, Any]],
+) -> None:
+    expected = EXPECTED_RESULTS[variant]
+    for rank, report in enumerate(reports):
+        if report.get("status") != "success":
+            raise AssertionError(f"{variant} rank {rank} failed: {report}")
+        if report.get("variant") != variant:
+            raise AssertionError(
+                f"rank {rank} reported variant={report.get('variant')!r}"
+            )
+        for field, expected_value in expected.items():
+            if not _nested_allclose(report.get(field), expected_value):
+                raise AssertionError(
+                    f"{variant} rank {rank} {field} mismatch: "
+                    f"{report.get(field)} != {expected_value}"
+                )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Run two real-CUDA ranks on one physical GPU while fake NCCL "
-            "validates DDP gradient averaging."
+            "validates DDP gradient averaging and common execution options."
         )
     )
     parser.add_argument("--build-dir", type=Path, default=REPO_ROOT / "build")
     parser.add_argument("--report-dir", type=Path)
     parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument(
+        "--variant",
+        choices=[*EXPECTED_RESULTS, "all"],
+        default="basic",
+        help="DDP execution path to validate (default: basic).",
+    )
     args = parser.parse_args()
+    variants = list(EXPECTED_RESULTS) if args.variant == "all" else [args.variant]
 
     build_dir = args.build_dir.resolve()
     coordinator_bin = build_dir / "fakegpu-coordinator"
@@ -141,58 +207,62 @@ def main() -> int:
                 "FAKEGPU_COORDINATOR_TIMEOUT_MS": "60000",
             }
         )
-        command = [
-            sys.executable,
-            "-m",
-            "torch.distributed.run",
-            "--nnodes=1",
-            "--nproc-per-node=2",
-            "--master-addr=127.0.0.1",
-            f"--master-port={_find_free_port()}",
-            str(WORKER),
-            "--report-dir",
-            str(rank_report_dir),
-        ]
-        completed = subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            env=worker_env,
-            text=True,
-            capture_output=True,
-            timeout=args.timeout,
-            check=False,
-        )
-        if completed.stdout:
-            print(completed.stdout, end="")
-        if completed.stderr:
-            print(completed.stderr, end="", file=sys.stderr)
-        if completed.returncode != 0:
-            return completed.returncode
+        reports_by_variant: dict[str, list[dict[str, Any]]] = {}
+        for variant in variants:
+            variant_report_dir = rank_report_dir / variant
+            command = [
+                sys.executable,
+                "-m",
+                "torch.distributed.run",
+                "--nnodes=1",
+                "--nproc-per-node=2",
+                "--master-addr=127.0.0.1",
+                f"--master-port={_find_free_port()}",
+                str(WORKER),
+                "--report-dir",
+                str(variant_report_dir),
+                "--variant",
+                variant,
+            ]
+            completed = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                env=worker_env,
+                text=True,
+                capture_output=True,
+                timeout=args.timeout,
+                check=False,
+            )
+            if completed.stdout:
+                print(completed.stdout, end="")
+            if completed.stderr:
+                print(completed.stderr, end="", file=sys.stderr)
+            if completed.returncode != 0:
+                return completed.returncode
 
-        rank_reports = _load_rank_reports(rank_report_dir, 2)
-        for report in rank_reports:
-            if report.get("status") != "success":
-                raise AssertionError(f"rank failed: {report}")
-            if report.get("gradient") != [[1.5, 3.0]]:
-                raise AssertionError(f"unexpected gradient: {report}")
-            parameters = report.get("parameters_after_step")
-            if not (
-                isinstance(parameters, list)
-                and len(parameters) == 1
-                and abs(float(parameters[0][0]) - 0.85) <= 1e-6
-                and abs(float(parameters[0][1]) + 0.3) <= 1e-6
-            ):
-                raise AssertionError(f"unexpected parameters: {report}")
+            rank_reports = _load_rank_reports(variant_report_dir, 2)
+            _validate_variant_reports(variant, rank_reports)
+            reports_by_variant[variant] = rank_reports
 
         _shutdown_unix_coordinator(socket_path)
         coordinator.wait(timeout=5)
         cluster_report = json.loads(
             cluster_report_path.read_text(encoding="utf-8")
         )
-        if cluster_report["collectives"]["all_reduce"]["calls"] < 1:
-            raise AssertionError("DDP did not issue a simulated all-reduce")
-        if cluster_report["collectives"]["all_gather"]["calls"] < 1:
-            raise AssertionError("parameter consistency did not issue all-gather")
+        expected_all_reduce_calls = sum(
+            3 if variant == "static-graph" else 2 for variant in variants
+        )
+        all_reduce_calls = cluster_report["collectives"]["all_reduce"]["calls"]
+        if all_reduce_calls != expected_all_reduce_calls:
+            raise AssertionError(
+                "unexpected DDP all-reduce count: "
+                f"{all_reduce_calls} != {expected_all_reduce_calls}"
+            )
+        all_gather_calls = cluster_report["collectives"]["all_gather"]["calls"]
+        if all_gather_calls < len(variants):
+            raise AssertionError(
+                "parameter consistency did not issue one all-gather per variant"
+            )
         node_pairs = cluster_report.get("node_pairs")
         if not isinstance(node_pairs, list) or len(node_pairs) != 1:
             raise AssertionError(
@@ -212,30 +282,39 @@ def main() -> int:
                 f"{markdown_report_path}"
             )
 
-        summary = {
+        first_report = reports_by_variant[variants[0]][0]
+        summary: dict[str, Any] = {
             "status": "success",
-            "physical_device_name": rank_reports[0]["physical_device_name"],
-            "physical_compute_capability": rank_reports[0][
+            "physical_device_name": first_report["physical_device_name"],
+            "physical_compute_capability": first_report[
                 "physical_compute_capability"
             ],
-            "torch_version": rank_reports[0]["torch_version"],
-            "torch_cuda_version": rank_reports[0]["torch_cuda_version"],
-            "gradient": rank_reports[0]["gradient"],
-            "parameters_after_step": rank_reports[0][
-                "parameters_after_step"
-            ],
-            "all_reduce_calls": cluster_report["collectives"]["all_reduce"][
-                "calls"
-            ],
-            "all_gather_calls": cluster_report["collectives"]["all_gather"][
-                "calls"
-            ],
+            "torch_version": first_report["torch_version"],
+            "torch_cuda_version": first_report["torch_cuda_version"],
+            "variants": {
+                variant: {
+                    "gradient": reports[0]["gradient"],
+                    "parameters_after_step": reports[0][
+                        "parameters_after_step"
+                    ],
+                    "training_steps": reports[0]["training_steps"],
+                    "ddp_options": reports[0]["ddp_options"],
+                }
+                for variant, reports in reports_by_variant.items()
+            },
+            "all_reduce_calls": all_reduce_calls,
+            "all_gather_calls": all_gather_calls,
             "node_pair_total_bytes": node_pair["total_bytes"],
             "node_pair_peak_bytes_per_operation": node_pair[
                 "peak_combined_bytes_per_operation"
             ],
             "cluster_markdown_report": str(markdown_report_path),
         }
+        if variants == ["basic"]:
+            summary["gradient"] = first_report["gradient"]
+            summary["parameters_after_step"] = first_report[
+                "parameters_after_step"
+            ]
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0
     finally:

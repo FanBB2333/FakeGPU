@@ -180,6 +180,131 @@ def _validate_pair_direction(obj: object, *, ctx: str) -> dict:
     return obj
 
 
+def _numbers_close(left: object, right: object, *, tolerance: float = 0.002) -> bool:
+    return abs(float(left) - float(right)) <= tolerance
+
+
+def _validate_cross_field_consistency(report: dict[str, Any]) -> None:
+    collectives = report["collectives"]
+    point_to_point = report["point_to_point"]
+    timeline = report["operation_timeline"]
+    retained_entries = int(timeline["retained_entries"])
+    dropped_entries = int(timeline["dropped_entries"])
+    completed_operations = sum(
+        int(counter["calls"]) for counter in collectives.values()
+    ) + int(point_to_point["operations"])
+    if retained_entries + dropped_entries != completed_operations:
+        _die(
+            "operation_timeline retained+dropped entries must equal all "
+            "completed collective, barrier, and point-to-point operations"
+        )
+
+    operation_to_counter = {
+        "allreduce": "all_reduce",
+        "reduce": "reduce",
+        "broadcast": "broadcast",
+        "allgather": "all_gather",
+        "reducescatter": "reduce_scatter",
+        "alltoall": "all_to_all",
+    }
+    if dropped_entries == 0:
+        timeline_calls = {key: 0 for key in collectives}
+        timeline_bytes = {key: 0 for key in collectives}
+        timeline_p2p_operations = 0
+        timeline_p2p_bytes = 0
+        for entry in timeline["entries"]:
+            kind = entry["kind"]
+            operation = entry["operation"]
+            logical_bytes = int(entry["logical_payload_bytes"])
+            if kind == "collective":
+                counter_name = operation_to_counter.get(operation)
+                if counter_name is None:
+                    _die(f"unknown collective timeline operation: {operation!r}")
+                timeline_calls[counter_name] += 1
+                timeline_bytes[counter_name] += logical_bytes
+            elif kind == "barrier":
+                if operation != "barrier":
+                    _die(
+                        "barrier timeline entries must use operation='barrier'"
+                    )
+                timeline_calls["barrier"] += 1
+                timeline_bytes["barrier"] += logical_bytes
+            elif kind == "point_to_point":
+                timeline_p2p_operations += 1
+                timeline_p2p_bytes += logical_bytes
+
+        for counter_name, counter in collectives.items():
+            if timeline_calls[counter_name] != int(counter["calls"]):
+                _die(
+                    f"collectives.{counter_name}.calls disagrees with the "
+                    "complete operation timeline"
+                )
+            if timeline_bytes[counter_name] != int(counter["bytes"]):
+                _die(
+                    f"collectives.{counter_name}.bytes disagrees with the "
+                    "complete operation timeline"
+                )
+        if timeline_p2p_operations != int(point_to_point["operations"]):
+            _die(
+                "point_to_point.operations disagrees with the complete "
+                "operation timeline"
+            )
+        if timeline_p2p_bytes != int(point_to_point["bytes"]):
+            _die(
+                "point_to_point.bytes disagrees with the complete operation "
+                "timeline"
+            )
+
+    directed_links: dict[tuple[str, str], dict[str, Any]] = {}
+    for index, link in enumerate(report.get("links", [])):
+        key = (str(link["src"]), str(link["dst"]))
+        if key in directed_links:
+            _die(f"duplicate directed link: {key[0]} -> {key[1]}")
+        directed_links[key] = link
+
+    direction_fields = (
+        ("transfers", "samples"),
+        ("total_bytes", "bytes"),
+        ("peak_bytes_per_operation", "peak_bytes_per_operation"),
+        ("model_bandwidth_gbps", "bandwidth_gbps"),
+        ("avg_latency_us", "avg_latency_us"),
+        ("estimated_time_us_total", "estimated_time_us_total"),
+        ("contention_penalty_us_total", "contention_penalty_us_total"),
+        (
+            "average_estimated_throughput_gbps",
+            "average_estimated_throughput_gbps",
+        ),
+        (
+            "peak_estimated_throughput_gbps",
+            "peak_estimated_throughput_gbps",
+        ),
+    )
+    for index, pair in enumerate(report["node_pairs"]):
+        for direction_name, src, dst in (
+            ("a_to_b", pair["node_a"], pair["node_b"]),
+            ("b_to_a", pair["node_b"], pair["node_a"]),
+        ):
+            direction = pair[direction_name]
+            link = directed_links.get((src, dst))
+            if link is None:
+                if int(direction["transfers"]) != 0:
+                    _die(
+                        f"node_pairs[{index}].{direction_name} has transfers "
+                        f"but link {src} -> {dst} is missing"
+                    )
+                continue
+            for direction_field, link_field in direction_fields:
+                if not _numbers_close(
+                    direction[direction_field],
+                    link[link_field],
+                ):
+                    _die(
+                        f"node_pairs[{index}].{direction_name}."
+                        f"{direction_field} disagrees with link "
+                        f"{src} -> {dst}.{link_field}"
+                    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate FakeGPU cluster report schema")
     ap.add_argument("--path", default="fake_gpu_cluster_report.json", help="Path to fake_gpu_cluster_report.json")
@@ -612,6 +737,8 @@ def main() -> int:
         )
         if abs(coordinator_duration - rendezvous - execution) > 0.003:
             _die(f"{ctx}.coordinator_duration_us is inconsistent")
+
+    _validate_cross_field_consistency(report)
 
     return 0
 
