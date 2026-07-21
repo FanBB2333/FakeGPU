@@ -665,6 +665,58 @@ def _dump_terminal_summary() -> None:
 
 # Initialized later in patch() after _DEVICE_PROFILES is finalized
 _memory_tracker: _DeviceMemoryTracker | None = None
+_smi_publisher: Any = None
+
+
+def _smi_memory_snapshot() -> dict[str, Any]:
+    tracker = _memory_tracker
+    if tracker is None:
+        return {"tracking_confidence": "C0_incomplete", "devices": []}
+    devices = []
+    for index, profile in enumerate(_DEVICE_PROFILES):
+        if index >= len(tracker._total):
+            break
+        devices.append(
+            {
+                "index": index,
+                "name": str(profile.get("name", "")),
+                "profile_id": str(profile.get("profile_id", "")),
+                "total_memory": int(tracker._total[index]),
+                "current_memory": int(tracker._used[index]),
+                "peak_memory": int(tracker._peak[index]),
+            }
+        )
+    return {
+        "tracking_confidence": "C2_torch_tensor_lifetime",
+        "devices": devices,
+    }
+
+
+def _refresh_smi_publisher() -> None:
+    global _smi_publisher
+    if _smi_publisher is not None:
+        _smi_publisher.stop()
+        _smi_publisher = None
+    from .smi import SmiStatePublisher, configured_state_path
+
+    path = configured_state_path()
+    if path is None or _memory_tracker is None:
+        return
+    try:
+        interval_ms = float(os.environ.get("FAKEGPU_SMI_INTERVAL_MS", "250"))
+    except ValueError:
+        interval_ms = 250.0
+    try:
+        overhead = int(os.environ.get("FAKEGPU_SMI_RUNTIME_OVERHEAD_BYTES", "0"))
+    except ValueError:
+        overhead = 0
+    _smi_publisher = SmiStatePublisher(
+        path,
+        _smi_memory_snapshot,
+        interval_seconds=max(50.0, interval_ms) / 1000.0,
+        runtime_overhead_bytes=max(0, overhead),
+    )
+    _smi_publisher.start()
 
 
 import weakref
@@ -2772,6 +2824,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
             _memory_tracker = _DeviceMemoryTracker(
                 [profile["total_memory"] for profile in _DEVICE_PROFILES]
             )
+        _refresh_smi_publisher()
         _patch_transformers_utils()
         _patch_accelerate_utils()
         _patch_result = PatchResult(
@@ -2785,6 +2838,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     upstream = _activate_upstream(_NUM_DEVICES, _DEVICE_NAME)
     if upstream is not None:
         _apply_enhancements_over_upstream(upstream, torch)
+        _refresh_smi_publisher()
         _patched = True
         _patch_result = PatchResult(
             backend="upstream",
@@ -3191,6 +3245,8 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     _patch_fsdp_device_handling()
     _patch_transformers_utils()
     _patch_accelerate_utils()
+
+    _refresh_smi_publisher()
 
     _patched = True
     _patch_result = PatchResult(
