@@ -506,6 +506,32 @@ def _apply_nf4_static_adjustment(
     return adjusted
 
 
+def _apply_nf4_fakecuda_workspace_adjustment(
+    memory_phases: dict[str, Any],
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Add the reference dequantization workspace missing from CPU tracking."""
+
+    adjusted = copy.deepcopy(memory_phases)
+    workspace_bytes = max(
+        0,
+        int(plan.get("largest_dequantization_workspace_bytes", 0)),
+    )
+    for key in ("forward_peak_bytes", "backward_peak_bytes"):
+        adjusted[key] = int(adjusted[key]) + workspace_bytes
+    for key in (
+        "microstep_forward_peak_bytes",
+        "microstep_backward_peak_bytes",
+    ):
+        adjusted[key] = [int(value) + workspace_bytes for value in adjusted[key]]
+    adjusted["overall_peak_bytes"] = max(
+        int(adjusted["forward_peak_bytes"]),
+        int(adjusted["backward_peak_bytes"]),
+        int(adjusted["optimizer_peak_bytes"]),
+    )
+    return adjusted
+
+
 def _common_report(args: argparse.Namespace, torch: Any, transformers: Any, model_dir: Path) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -800,6 +826,40 @@ def _run_execution(args: argparse.Namespace, torch: Any, transformers: Any, mode
         overall_peak = max(int(item["peak_allocated_bytes"]) for item in phase_records)
         forward_peak = max(int(item["peak_allocated_bytes"]) for item in forward_records)
         backward_peak = max(int(item["peak_allocated_bytes"]) for item in backward_records)
+        runtime_memory_phases = {
+            "model_load_current_bytes": int(model_load_record["allocated_bytes"]),
+            "forward_current_bytes": int(forward_records[-1]["allocated_bytes"]),
+            "forward_peak_bytes": forward_peak,
+            "backward_current_bytes": int(backward_records[-1]["allocated_bytes"]),
+            "backward_peak_bytes": backward_peak,
+            "microstep_forward_peak_bytes": [
+                int(item["peak_allocated_bytes"]) for item in forward_records
+            ],
+            "microstep_backward_peak_bytes": [
+                int(item["peak_allocated_bytes"]) for item in backward_records
+            ],
+            "optimizer_current_bytes": int(optimizer_record["allocated_bytes"]),
+            "optimizer_peak_bytes": int(optimizer_record["peak_allocated_bytes"]),
+            "overall_peak_bytes": overall_peak,
+        }
+        memory_phases = runtime_memory_phases
+        fakecuda_workspace_adjustment = None
+        if args.mode == "fakecuda" and quantization_plan is not None:
+            memory_phases = _apply_nf4_fakecuda_workspace_adjustment(
+                runtime_memory_phases,
+                quantization_plan,
+            )
+            fakecuda_workspace_adjustment = {
+                "kind": "analytical_native_nf4_dequantization_workspace",
+                "bytes": int(
+                    quantization_plan["largest_dequantization_workspace_bytes"]
+                ),
+                "applied_to": ["forward_peak", "backward_peak"],
+                "reason": (
+                    "CPU-backed tensor tracking does not expose the complete "
+                    "reference dequantization temporary lifetime."
+                ),
+            }
         report = _common_report(args, torch, transformers, model_dir)
         report.update(
             {
@@ -824,22 +884,13 @@ def _run_execution(args: argparse.Namespace, torch: Any, transformers: Any, mode
                 "phase_seconds": phase_seconds,
                 "elapsed_seconds": time.monotonic() - started,
                 "timeline": timeline,
-                "memory_phases": {
-                    "model_load_current_bytes": int(model_load_record["allocated_bytes"]),
-                    "forward_current_bytes": int(forward_records[-1]["allocated_bytes"]),
-                    "forward_peak_bytes": forward_peak,
-                    "backward_current_bytes": int(backward_records[-1]["allocated_bytes"]),
-                    "backward_peak_bytes": backward_peak,
-                    "microstep_forward_peak_bytes": [
-                        int(item["peak_allocated_bytes"]) for item in forward_records
-                    ],
-                    "microstep_backward_peak_bytes": [
-                        int(item["peak_allocated_bytes"]) for item in backward_records
-                    ],
-                    "optimizer_current_bytes": int(optimizer_record["allocated_bytes"]),
-                    "optimizer_peak_bytes": int(optimizer_record["peak_allocated_bytes"]),
-                    "overall_peak_bytes": overall_peak,
-                },
+                "memory_phases": memory_phases,
+                "runtime_memory_phases": (
+                    runtime_memory_phases
+                    if fakecuda_workspace_adjustment is not None
+                    else None
+                ),
+                "fakecuda_workspace_adjustment": fakecuda_workspace_adjustment,
             }
         )
         return report

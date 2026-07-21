@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from verification.qwen_sft_memory_worker import (
+    _apply_nf4_fakecuda_workspace_adjustment,
     _apply_nf4_static_adjustment,
     _checkpoint_graph_estimate,
     _construct_meta_model,
@@ -109,6 +110,36 @@ def test_nf4_static_adjustment_substitutes_storage_and_adds_workspace() -> None:
     assert adjusted["optimizer_phase_peak_bytes"] == 1_250
     assert adjusted["workspace_peak_contribution_bytes"] == 110
     assert estimate["parameter_bytes"] == 1_000
+
+
+def test_nf4_fakecuda_adjustment_adds_workspace_only_to_compute_peaks() -> None:
+    phases = {
+        "model_load_current_bytes": 600,
+        "forward_current_bytes": 700,
+        "forward_peak_bytes": 1_000,
+        "backward_current_bytes": 800,
+        "backward_peak_bytes": 1_100,
+        "microstep_forward_peak_bytes": [900, 1_000],
+        "microstep_backward_peak_bytes": [1_050, 1_100],
+        "optimizer_current_bytes": 850,
+        "optimizer_peak_bytes": 1_150,
+        "overall_peak_bytes": 1_150,
+    }
+
+    adjusted = _apply_nf4_fakecuda_workspace_adjustment(
+        phases,
+        {"largest_dequantization_workspace_bytes": 100},
+    )
+
+    assert adjusted["model_load_current_bytes"] == 600
+    assert adjusted["forward_current_bytes"] == 700
+    assert adjusted["forward_peak_bytes"] == 1_100
+    assert adjusted["backward_peak_bytes"] == 1_200
+    assert adjusted["microstep_forward_peak_bytes"] == [1_000, 1_100]
+    assert adjusted["microstep_backward_peak_bytes"] == [1_150, 1_200]
+    assert adjusted["optimizer_peak_bytes"] == 1_150
+    assert adjusted["overall_peak_bytes"] == 1_200
+    assert phases["overall_peak_bytes"] == 1_150
 
 
 def test_quantized_static_summary_uses_materialized_logical_buffers() -> None:
