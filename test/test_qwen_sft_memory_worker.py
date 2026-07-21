@@ -3,8 +3,19 @@ from __future__ import annotations
 from verification.qwen_sft_memory_worker import (
     _apply_nf4_static_adjustment,
     _checkpoint_graph_estimate,
+    _construct_meta_model,
     _quantized_parameter_summary,
 )
+
+
+class _MetaDtypeProbe:
+    def __new__(cls, _config):
+        import torch
+
+        module = torch.nn.Module()
+        module.register_parameter("weight", torch.nn.Parameter(torch.empty(4)))
+        module.register_buffer("explicit_fp32", torch.arange(4).float())
+        return module
 
 
 def _estimate(*, trainable_parameter_bytes: int) -> dict:
@@ -119,3 +130,19 @@ def test_quantized_static_summary_uses_materialized_logical_buffers() -> None:
     assert adjusted["physical_parameter_bytes"] == 40
     assert adjusted["buffer_bytes"] == 306
     assert adjusted["parameter_bytes"] == 346
+
+
+def test_meta_constructor_preserves_explicit_fp32_buffers() -> None:
+    import torch
+
+    previous_dtype = torch.get_default_dtype()
+    model = _construct_meta_model(
+        torch,
+        _MetaDtypeProbe,
+        object(),
+        dtype=torch.bfloat16,
+    )
+
+    assert model.weight.dtype == torch.bfloat16
+    assert model.explicit_fp32.dtype == torch.float32
+    assert torch.get_default_dtype() == previous_dtype
