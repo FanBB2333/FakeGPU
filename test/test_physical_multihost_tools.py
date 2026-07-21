@@ -101,6 +101,8 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
         ],
         "cases": {
             "ddp": [{}, {}],
+            "ddp_options": {},
+            "fsdp": [{}, {}],
             "collective_mismatch": [
                 {"mismatch_result": 5},
                 {"mismatch_result": 5},
@@ -129,4 +131,6 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     _write_markdown(path, report)
     markdown = path.read_text(encoding="utf-8")
     assert "| `gpu-a` | `gpu-b` | 64 | 32 | 2 | 2 | 0 |" in markdown
+    assert "DDP options" in markdown
+    assert "Hybrid FSDP" in markdown
     assert "Collective mismatch" in markdown

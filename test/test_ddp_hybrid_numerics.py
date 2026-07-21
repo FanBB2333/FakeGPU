@@ -21,9 +21,17 @@ def _write_report(report_dir: Path, rank: int, report: dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate numerical DDP gradient averaging with real CUDA and fake NCCL."
+        description=(
+            "Validate DDP gradient averaging and common execution options "
+            "with real CUDA and fake NCCL."
+        )
     )
     parser.add_argument("--report-dir", type=Path, required=True)
+    parser.add_argument(
+        "--variant",
+        choices=["basic", "no-sync", "find-unused", "static-graph"],
+        default="basic",
+    )
     args = parser.parse_args()
 
     rank = int(os.environ["RANK"])
@@ -32,6 +40,7 @@ def main() -> int:
         "schema_version": "fakegpu.hybrid_ddp_numerics.rank.v1",
         "rank": rank,
         "world_size": world_size,
+        "variant": args.variant,
         "physical_device_index": 0,
         "status": "starting",
     }
@@ -65,19 +74,54 @@ def main() -> int:
         )
 
         stage = "construct_ddp"
-        model = torch.nn.Linear(2, 1, bias=False, device=device)
-        with torch.no_grad():
-            model.weight.copy_(
-                torch.tensor([[1.0, 0.0]], dtype=torch.float32, device=device)
-            )
-        ddp_model = DistributedDataParallel(
-            model,
-            device_ids=[0],
-            output_device=0,
-        )
+        ddp_options: dict[str, Any] = {
+            "device_ids": [0],
+            "output_device": 0,
+        }
+        if args.variant == "find-unused":
+            class ConditionalModel(torch.nn.Module):
+                def __init__(self) -> None:
+                    super().__init__()
+                    self.branch_a = torch.nn.Linear(2, 1, bias=False)
+                    self.branch_b = torch.nn.Linear(2, 1, bias=False)
+
+                def forward(self, inputs: Any, branch: int) -> Any:
+                    if branch == 0:
+                        return self.branch_a(inputs)
+                    return self.branch_b(inputs)
+
+            model = ConditionalModel().to(device)
+            with torch.no_grad():
+                model.branch_a.weight.copy_(
+                    torch.tensor([[1.0, 0.0]], device=device)
+                )
+                model.branch_b.weight.copy_(
+                    torch.tensor([[0.0, 1.0]], device=device)
+                )
+            ddp_options["find_unused_parameters"] = True
+        else:
+            model = torch.nn.Linear(2, 1, bias=False, device=device)
+            with torch.no_grad():
+                model.weight.copy_(
+                    torch.tensor([[1.0, 0.0]], device=device)
+                )
+            if args.variant == "static-graph":
+                ddp_options.update(
+                    {
+                        "static_graph": True,
+                        "gradient_as_bucket_view": True,
+                        "bucket_cap_mb": 0.001,
+                    }
+                )
+
+        report["ddp_options"] = {
+            key: value
+            for key, value in ddp_options.items()
+            if key not in {"device_ids", "output_device"}
+        }
+        ddp_model = DistributedDataParallel(model, **ddp_options)
         optimizer = torch.optim.SGD(ddp_model.parameters(), lr=0.1)
 
-        stage = "forward_backward"
         scale = float(rank + 1)
         inputs = torch.tensor(
             [[scale, 2.0 * scale]],
@@ -85,40 +129,111 @@ def main() -> int:
             device=device,
         )
         optimizer.zero_grad(set_to_none=True)
-        loss = ddp_model(inputs).sum()
-        loss.backward()
+
+        stage = "forward_backward"
+        if args.variant == "no-sync":
+            with ddp_model.no_sync():
+                first_loss = ddp_model(inputs).sum()
+                first_loss.backward()
+            second_loss = ddp_model(inputs * 2.0).sum()
+            second_loss.backward()
+            loss = first_loss.detach() + second_loss.detach()
+            expected_gradients = torch.tensor(
+                [[4.5, 9.0]], dtype=torch.float32, device=device
+            )
+            expected_parameters = torch.tensor(
+                [[0.55, -0.9]], dtype=torch.float32, device=device
+            )
+            training_steps = 1
+        elif args.variant == "find-unused":
+            loss = ddp_model(inputs, rank).sum()
+            loss.backward()
+            expected_gradients = torch.tensor(
+                [[0.5, 1.0], [1.0, 2.0]],
+                dtype=torch.float32,
+                device=device,
+            )
+            expected_parameters = torch.tensor(
+                [[0.95, -0.1], [-0.1, 0.8]],
+                dtype=torch.float32,
+                device=device,
+            )
+            training_steps = 1
+        elif args.variant == "static-graph":
+            loss = torch.zeros((), dtype=torch.float32, device=device)
+            for _ in range(2):
+                optimizer.zero_grad(set_to_none=True)
+                loss = ddp_model(inputs).sum()
+                loss.backward()
+                optimizer.step()
+            expected_gradients = torch.tensor(
+                [[1.5, 3.0]], dtype=torch.float32, device=device
+            )
+            expected_parameters = torch.tensor(
+                [[0.7, -0.6]], dtype=torch.float32, device=device
+            )
+            training_steps = 2
+        else:
+            loss = ddp_model(inputs).sum()
+            loss.backward()
+            expected_gradients = torch.tensor(
+                [[1.5, 3.0]], dtype=torch.float32, device=device
+            )
+            expected_parameters = torch.tensor(
+                [[0.85, -0.3]], dtype=torch.float32, device=device
+            )
+            training_steps = 1
         torch.cuda.synchronize()
 
-        gradient = model.weight.grad
-        if gradient is None:
-            raise AssertionError("DDP did not produce a gradient")
-        gradient_cpu = gradient.detach().cpu()
-        expected_gradient = torch.tensor([[1.5, 3.0]], dtype=torch.float32)
+        if args.variant == "find-unused":
+            gradients = torch.cat(
+                [
+                    model.branch_a.weight.grad,
+                    model.branch_b.weight.grad,
+                ],
+                dim=0,
+            )
+        else:
+            gradient = model.weight.grad
+            if gradient is None:
+                raise AssertionError("DDP did not produce a gradient")
+            gradients = gradient
+        if gradients is None:
+            raise AssertionError("DDP did not produce all expected gradients")
+
         report["local_loss"] = float(loss.detach().cpu().item())
-        report["gradient"] = gradient_cpu.tolist()
-        report["expected_averaged_gradient"] = expected_gradient.tolist()
+        report["training_steps"] = training_steps
+        report["gradient"] = gradients.detach().cpu().tolist()
+        report["expected_averaged_gradient"] = (
+            expected_gradients.cpu().tolist()
+        )
         if report["local_loss"] <= 0:
             raise AssertionError(f"loss must be non-zero, got {report['local_loss']}")
         if not torch.allclose(
-            gradient_cpu,
-            expected_gradient,
+            gradients,
+            expected_gradients,
             atol=1e-6,
             rtol=0,
         ):
             raise AssertionError(
-                f"averaged gradient mismatch: {gradient_cpu.tolist()} "
-                f"!= {expected_gradient.tolist()}"
+                f"averaged gradient mismatch: {report['gradient']} "
+                f"!= {report['expected_averaged_gradient']}"
             )
 
         stage = "optimizer_step"
-        optimizer.step()
+        if args.variant != "static-graph":
+            optimizer.step()
         torch.cuda.synchronize()
-        parameters = model.weight.detach().clone()
-        expected_parameters = torch.tensor(
-            [[0.85, -0.3]],
-            dtype=torch.float32,
-            device=device,
-        )
+        if args.variant == "find-unused":
+            parameters = torch.cat(
+                [
+                    model.branch_a.weight.detach(),
+                    model.branch_b.weight.detach(),
+                ],
+                dim=0,
+            )
+        else:
+            parameters = model.weight.detach().clone()
         report["parameters_after_step"] = parameters.cpu().tolist()
         report["expected_parameters_after_step"] = (
             expected_parameters.cpu().tolist()
@@ -130,23 +245,32 @@ def main() -> int:
             rtol=0,
         ):
             raise AssertionError(
-                f"optimizer parameters mismatch: {parameters.cpu().tolist()} "
-                f"!= {expected_parameters.cpu().tolist()}"
+                f"optimizer parameters mismatch: {report['parameters_after_step']} "
+                f"!= {report['expected_parameters_after_step']}"
             )
 
         stage = "parameter_consistency"
-        gathered = [torch.empty_like(parameters) for _ in range(world_size)]
-        dist.all_gather(gathered, parameters)
+        parameter_vector = parameters.reshape(-1)
+        gathered = [
+            torch.empty_like(parameter_vector) for _ in range(world_size)
+        ]
+        dist.all_gather(gathered, parameter_vector)
         torch.cuda.synchronize()
-        report["gathered_parameters"] = [
+        report["gathered_parameter_vectors"] = [
             value.cpu().tolist() for value in gathered
         ]
         if any(
-            not torch.allclose(value, expected_parameters, atol=1e-6, rtol=0)
+            not torch.allclose(
+                value,
+                expected_parameters.reshape(-1),
+                atol=1e-6,
+                rtol=0,
+            )
             for value in gathered
         ):
             raise AssertionError(
-                f"parameters differ across ranks: {report['gathered_parameters']}"
+                "parameters differ across ranks: "
+                f"{report['gathered_parameter_vectors']}"
             )
 
         stage = "barrier"
