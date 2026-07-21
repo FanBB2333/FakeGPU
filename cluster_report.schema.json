@@ -281,6 +281,22 @@
           "enum": ["collective", "point_to_point", "barrier"]
         },
         "operation": {"type": "string"},
+        "data_type": {
+          "type": "string",
+          "enum": [
+            "none",
+            "int32",
+            "int64",
+            "float16",
+            "bfloat16",
+            "float32",
+            "float64"
+          ]
+        },
+        "reduce_op": {
+          "type": "string",
+          "enum": ["none", "sum", "prod", "max", "min", "avg"]
+        },
         "buffer_transport": {
           "type": "string",
           "enum": [
