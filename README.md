@@ -20,7 +20,7 @@ fakegpu bandwidth --listen 127.0.0.1:29591 --nodes 2  # simulate two TCP nodes
 
 ![Four FakeGPU workflows: simulated PyTorch training, GPU profile switching, preflight OOM checks, and static VRAM estimation](docs/assets/readme/tldr-workflows.png)
 
-_Real command output from the maintained v1.5.3 workflows._
+_Real command output from the maintained v1.5.4 workflows._
 
 > FakeGPU is a development and validation tool. It does not provide numerical or performance parity for arbitrary CUDA kernels.
 

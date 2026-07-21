@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v1.5.4 - 2026-07-21
+
+Compared with `v1.5.3`.
+
 ### Added
 
 - A Git-revision-aware physical multi-host controller that launches heterogeneous Hybrid DDP, collective-mismatch, and missing-peer cases over SSH, including Windows-to-WSL command execution and combined JSON/Markdown reports.
@@ -19,6 +23,10 @@
 - A matrix-heavy FLOP counter that preserves PyTorch operator decomposition under inference mode and supports grouped-query SDPA with different query and KV head counts.
 - Reproducible Qwen3.5 SFT workers for full-parameter, LoRA, and PyTorch-native packed-NF4 QLoRA execution on real CUDA, FakeCUDA, and static ATen graphs.
 - Optional QLoRA nested scale quantization using the bitsandbytes dynamic 8-bit map, 256-value second-level blocks, and an FP32 mean offset.
+
+### Changed
+
+- Package, native report, and C++ runtime versions are synchronized at `1.5.4`.
 
 ### Fixed
 

@@ -51,7 +51,7 @@ Example shape:
 
 ```json
 {
-  "report_version": "1.5.3",
+  "report_version": "1.5.4",
   "mode": "simulate",
   "devices": [
     {
