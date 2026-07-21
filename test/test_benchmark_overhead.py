@@ -139,6 +139,7 @@ class TestOverheadBounds(unittest.TestCase):
         criterion = torch.nn.CrossEntropyLoss()
         optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
         y_labels = torch.randint(0, 10, (32,), device="cuda")
+        to_source = torch.randn(_TENSOR_SIZE, _TENSOR_SIZE)
 
         cls.fg: dict[str, float] = {}
         cls.fg["create"] = _bench(
@@ -146,7 +147,7 @@ class TestOverheadBounds(unittest.TestCase):
         )
         cls.fg["matmul"] = _bench(lambda: torch.matmul(a, b))
         cls.fg["to_cuda"] = _bench(
-            lambda: torch.randn(_TENSOR_SIZE, _TENSOR_SIZE).to("cuda"), n=5000
+            lambda: to_source.to("cuda"), n=5000
         )
         cls.fg["forward"] = _bench(lambda: model(x))
 
@@ -208,9 +209,9 @@ class TestOverheadBounds(unittest.TestCase):
             )
         self.assertLess(
             self.fg["to_cuda"],
-            self.fg["create"] + 100,
+            _baseline["to_cpu"] + 100,
             f".to('cuda') ({self.fg['to_cuda']:.1f} µs) adds > 100 µs "
-            f"over creation ({self.fg['create']:.1f} µs)",
+            f"over .to('cpu') ({_baseline['to_cpu']:.1f} µs)",
         )
 
     def test_device_context_fast(self):

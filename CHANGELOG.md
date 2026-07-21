@@ -22,10 +22,11 @@
 
 - Preserved non-default CUDA stream ordering at the Hybrid host-staging boundary by copying on the collective stream and synchronizing before coordinator access. This restores correct FSDP pre-divided gradients with PyTorch 2.12/CUDA 13 while retaining PyTorch 2.9/CUDA 12 behavior.
 - Replaced PyTorch's equal-head fused-SDPA FLOP assumption in the Qwen verifier, allowing Qwen3 grouped-query attention (32 query heads and 8 KV heads) to be measured without assertion failures.
+- Isolated the `Tensor.to("cuda")` redirect microbenchmark from random-tensor creation variance while preserving its 100-microsecond incremental-overhead limit.
 
 ### Validation
 
-- Full local suite: 236 passed and 1 skipped.
+- Full local suite: 250 passed and 1 skipped.
 - The distributed resilience suite passed on macOS, the RTX PRO 5000 Linux host, and the RTX 3090 Ti WSL host; its 256-operation case retained the newest 64 timeline entries and counted 192 discarded entries.
 - The automated heterogeneous two-host run used the same `3e6c8b2` commit on both hosts. Hybrid DDP produced gradient `[1.5, 3.0]` and parameters `[0.85, -0.30]`; both mismatched ranks persisted async error 5; the missing-peer case timed out in 0.755 seconds. The cluster report recorded six successful collectives, 192 bytes between the node pair, a 64-byte per-operation peak, and one expected timeout.
 - Single-host Hybrid DDP/FSDP passed on both the RTX PRO 5000 Blackwell (compute capability 12.0, PyTorch 2.9.1/CUDA 12.8) and RTX 3090 Ti (compute capability 8.6, PyTorch 2.12.1/CUDA 13.0). FSDP produced local shard gradients `[1.5]` and `[3.0]`, reconstructed `[0.85, -0.30]`, and restored the same values from a full state dict.
