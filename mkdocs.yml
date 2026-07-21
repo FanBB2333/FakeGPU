@@ -43,6 +43,7 @@ plugins:
             - 快速开始: getting-started.md
             - 快速参考: quick-reference.md
             - AI Researcher 提交前预检查: ai-researcher-preflight.md
+            - LLM 推理显存估算: llm-inference-estimation.md
             - 项目结构与架构: project-structure.md
             - 报告与验证: reports-and-validation.md
             - 错误模拟: error-simulation.md
@@ -75,6 +76,7 @@ nav:
   - Getting Started: getting-started.md
   - Quick Reference: quick-reference.md
   - AI Researcher Preflight: ai-researcher-preflight.md
+  - LLM Inference Estimation: llm-inference-estimation.md
   - Architecture: project-structure.md
   - Reports & Validation: reports-and-validation.md
   - Error Simulation: error-simulation.md
