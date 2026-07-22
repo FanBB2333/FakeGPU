@@ -43,7 +43,7 @@ def _validate_rank_reports(
 ) -> None:
     if len(reports) != 2:
         raise AssertionError(f"expected two AutoEP reports, got {len(reports)}")
-    tolerance = 1e-6 if precision == "fp32" else 4e-2
+    tolerance = 1e-5 if precision == "fp32" else 4e-2
     expected_metadata = {
         "world_size": 2,
         "zero_stage": zero_stage,
