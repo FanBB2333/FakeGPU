@@ -11,6 +11,7 @@ from verification.run_hybrid_deepspeed_pipeline import (
     _validate_rank_reports,
 )
 from verification.deepspeed_pipeline_worker import (
+    _configure_pipeline_gradient_scaling,
     _enable_batched_deepspeed_p2p,
 )
 
@@ -22,6 +23,12 @@ def _rank_report(rank: int) -> dict[str, object]:
         "pipe_parallel_size": 2,
         "pipe_stage_id": rank,
         "gradient_accumulation_steps": 1,
+        "pipeline_gradient_scaling_mode": "auto",
+        "pipeline_gradient_scaling": {
+            "mode": "auto",
+            "status": "not_required_single_micro_batch",
+            "applied": False,
+        },
         "global_steps": 1,
         "activation_checkpoint_interval": 0,
         "p2p_api": "send_recv",
@@ -138,6 +145,48 @@ def test_enable_batched_deepspeed_p2p_uses_one_work_item() -> None:
         (Dist.irecv, "gradient", 1, process_group),
     ]
     assert validated == [(0, 1), (1, 0)]
+
+
+@pytest.mark.parametrize(
+    ("is_last_stage", "mode", "expected_status", "expected_value"),
+    [
+        (False, "auto", "applied", False),
+        (False, "native", "disabled_by_cli", True),
+        (True, "auto", "not_required_last_stage", True),
+    ],
+)
+def test_configure_pipeline_gradient_scaling(
+    is_last_stage: bool,
+    mode: str,
+    expected_status: str,
+    expected_value: bool,
+) -> None:
+    engine = SimpleNamespace(
+        _scale_wrt_gas=True,
+        is_last_stage=lambda: is_last_stage,
+    )
+
+    details = _configure_pipeline_gradient_scaling(
+        engine,
+        gradient_accumulation_steps=2,
+        mode=mode,
+    )
+
+    assert details["status"] == expected_status
+    assert engine._scale_wrt_gas is expected_value
+
+
+def test_configure_pipeline_gradient_scaling_legacy_engine() -> None:
+    engine = SimpleNamespace(is_last_stage=lambda: False)
+
+    details = _configure_pipeline_gradient_scaling(
+        engine,
+        gradient_accumulation_steps=2,
+        mode="auto",
+    )
+
+    assert details["status"] == "not_required_legacy_autograd"
+    assert details["applied"] is False
 
 
 def test_validate_communication_accepts_pipeline_p2p() -> None:

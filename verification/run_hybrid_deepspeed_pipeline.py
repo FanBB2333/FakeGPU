@@ -64,6 +64,7 @@ def _validate_rank_reports(
     activation_checkpoint_interval: int,
     gradient_accumulation_steps: int,
     batched_p2p: bool,
+    pipeline_gradient_scaling: str = "auto",
 ) -> None:
     tolerance = 1e-6 if precision == "fp32" else 2e-2
     if len(reports) != 2:
@@ -81,6 +82,17 @@ def _validate_rank_reports(
             gradient_accumulation_steps
         ):
             raise AssertionError(f"rank {rank} accumulation mismatch")
+        if report.get("pipeline_gradient_scaling_mode") != (
+            pipeline_gradient_scaling
+        ):
+            raise AssertionError(f"rank {rank} gradient scaling mode mismatch")
+        scaling = report.get("pipeline_gradient_scaling")
+        if not isinstance(scaling, dict) or scaling.get("mode") != (
+            pipeline_gradient_scaling
+        ):
+            raise AssertionError(
+                f"rank {rank} gradient scaling report is incomplete"
+            )
         if report.get("global_steps") != 1:
             raise AssertionError(f"rank {rank} optimizer step mismatch")
         if report.get("activation_checkpoint_interval") != (
@@ -149,6 +161,7 @@ def _run_case(
     activation_checkpoint_interval: int,
     gradient_accumulation_steps: int,
     batched_p2p: bool,
+    pipeline_gradient_scaling: str,
     timeout: float,
 ) -> dict[str, Any]:
     coordinator_bin = build_dir / "fakegpu-coordinator"
@@ -163,6 +176,8 @@ def _run_case(
     )
     if batched_p2p:
         case_name += "-batched-p2p"
+    if pipeline_gradient_scaling == "native":
+        case_name += "-native-gradient-scaling"
     case_root = report_root / case_name
     case_root.mkdir(parents=True, exist_ok=True)
     rank_report_dir = case_root / "ranks"
@@ -229,6 +244,8 @@ def _run_case(
             str(activation_checkpoint_interval),
             "--gradient-accumulation-steps",
             str(gradient_accumulation_steps),
+            "--pipeline-gradient-scaling",
+            pipeline_gradient_scaling,
         ]
         if batched_p2p:
             command.append("--batched-p2p")
@@ -258,6 +275,7 @@ def _run_case(
             activation_checkpoint_interval=activation_checkpoint_interval,
             gradient_accumulation_steps=gradient_accumulation_steps,
             batched_p2p=batched_p2p,
+            pipeline_gradient_scaling=pipeline_gradient_scaling,
         )
 
         from verification.run_hybrid_deepspeed_numerics import (  # noqa: PLC0415
@@ -277,6 +295,10 @@ def _run_case(
             "precision": precision,
             "activation_checkpoint_interval": activation_checkpoint_interval,
             "gradient_accumulation_steps": gradient_accumulation_steps,
+            "pipeline_gradient_scaling_mode": pipeline_gradient_scaling,
+            "pipeline_gradient_scaling_by_rank": [
+                report["pipeline_gradient_scaling"] for report in reports
+            ],
             "p2p_api": first["p2p_api"],
             "p2p_process_group": first["p2p_process_group"],
             "deepspeed_version": first["deepspeed_version"],
@@ -321,6 +343,15 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         choices=(1, 2),
         default=1,
+    )
+    parser.add_argument(
+        "--pipeline-gradient-scaling",
+        choices=("auto", "native"),
+        default="auto",
+        help=(
+            "avoid duplicate GAS scaling on non-last stages, or preserve "
+            "the installed DeepSpeed behavior for compatibility probes"
+        ),
     )
     parser.add_argument("--batched-p2p", action="store_true")
     parser.add_argument("--timeout", type=float, default=240.0)
@@ -369,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
             activation_checkpoint_interval=interval,
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             batched_p2p=args.batched_p2p,
+            pipeline_gradient_scaling=args.pipeline_gradient_scaling,
             timeout=args.timeout,
         )
         for precision in precisions
