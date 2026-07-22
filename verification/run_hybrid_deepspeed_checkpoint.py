@@ -160,10 +160,16 @@ def _consolidate_zero_checkpoint(
     *,
     precision: str,
 ) -> dict[str, Any]:
+    import torch  # noqa: PLC0415
+    from deepspeed.runtime.zero.config import (  # noqa: PLC0415
+        ZeroStageEnum,
+    )
     from deepspeed.utils.zero_to_fp32 import (  # noqa: PLC0415
         get_fp32_state_dict_from_zero_checkpoint,
     )
 
+    if hasattr(torch.serialization, "add_safe_globals"):
+        torch.serialization.add_safe_globals([ZeroStageEnum])
     state_dict = get_fp32_state_dict_from_zero_checkpoint(
         str(checkpoint_dir),
         tag="global_step1",

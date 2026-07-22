@@ -218,6 +218,7 @@ def main() -> int:
 
         stage = "import_deepspeed"
         import deepspeed
+        from deepspeed.runtime.zero.config import ZeroStageEnum
         from deepspeed.utils.logging import logger as deepspeed_logger
 
         deepspeed_logger.setLevel(logging.WARNING)
@@ -340,6 +341,13 @@ def main() -> int:
         )
 
         stage = "load_checkpoint"
+        safe_globals_added = False
+        if hasattr(torch.serialization, "add_safe_globals"):
+            # DeepSpeed 0.15 stores this enum in its model-state payload but
+            # predates PyTorch's weights_only=True default. The checkpoint was
+            # created by this process, so explicitly allow only that type.
+            torch.serialization.add_safe_globals([ZeroStageEnum])
+            safe_globals_added = True
         load_path, client_state = engine.load_checkpoint(
             str(args.checkpoint_dir),
             tag=tag,
@@ -462,6 +470,7 @@ def main() -> int:
                 "status": "success",
                 "stage": "complete",
                 "checkpoint_load_path": str(load_path),
+                "torch_load_safe_globals_added": safe_globals_added,
                 "checkpoint_files": checkpoint_files,
                 "client_state": {
                     "validation_token": client_state.get(
