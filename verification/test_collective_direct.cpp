@@ -4,6 +4,7 @@
 #include "../src/monitor/monitor.hpp"
 #include "../src/nccl/nccl_defs.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -188,7 +189,25 @@ std::vector<T> make_reduction_reference(
     int world_size,
     std::size_t count,
     ncclRedOp_t op) {
-    std::vector<T> reference = make_allreduce_reference<T>(world_size, count);
+    std::vector<T> reference = make_rank_values<T>(0, count);
+    for (int rank = 1; rank < world_size; ++rank) {
+        const std::vector<T> values = make_rank_values<T>(rank, count);
+        for (std::size_t index = 0; index < count; ++index) {
+            if (op == ncclProd) {
+                reference[index] = static_cast<T>(
+                    reference[index] * values[index]);
+            } else if (op == ncclMax) {
+                reference[index] = std::max(
+                    reference[index], values[index]);
+            } else if (op == ncclMin) {
+                reference[index] = std::min(
+                    reference[index], values[index]);
+            } else {
+                reference[index] = static_cast<T>(
+                    reference[index] + values[index]);
+            }
+        }
+    }
     if (op == ncclAvg) {
         for (T& value : reference) {
             value = static_cast<T>(value / static_cast<T>(world_size));
@@ -223,15 +242,14 @@ std::vector<T> make_allgather_reference(int world_size, std::size_t count) {
 }
 
 template <typename T>
-std::vector<T> make_reducescatter_reference(int world_size, std::size_t recvcount, int rank) {
+std::vector<T> make_reducescatter_reference(
+    int world_size,
+    std::size_t recvcount,
+    int rank,
+    ncclRedOp_t op) {
     const std::size_t total_count = recvcount * static_cast<std::size_t>(world_size);
-    std::vector<T> reduced(total_count, static_cast<T>(0));
-    for (int peer = 0; peer < world_size; ++peer) {
-        std::vector<T> values = make_rank_values<T>(peer, total_count);
-        for (std::size_t index = 0; index < total_count; ++index) {
-            reduced[index] += values[index];
-        }
-    }
+    std::vector<T> reduced = make_reduction_reference<T>(
+        world_size, total_count, op);
 
     const std::size_t offset = static_cast<std::size_t>(rank) * recvcount;
     return std::vector<T>(reduced.begin() + static_cast<std::ptrdiff_t>(offset),
@@ -688,7 +706,10 @@ void run_premul_reducescatter_case(
                 label + " preMul reducescatter failed");
             assert_equal_vectors(
                 recv_buffers[static_cast<std::size_t>(rank)],
-                scale_reference(make_reducescatter_reference<T>(world_size, recvcount, rank), scalar),
+                scale_reference(
+                    make_reducescatter_reference<T>(
+                        world_size, recvcount, rank, ncclSum),
+                    scalar),
                 label + " preMul reducescatter result mismatch");
         }
     }
@@ -922,13 +943,8 @@ void run_reducescatter_case(
                 ncclSuccess,
                 label + " reducescatter failed");
             std::vector<T> reference =
-                make_reducescatter_reference<T>(world_size, recvcount, rank);
-            if (op == ncclAvg) {
-                for (T& value : reference) {
-                    value = static_cast<T>(
-                        value / static_cast<T>(world_size));
-                }
-            }
+                make_reducescatter_reference<T>(
+                    world_size, recvcount, rank, op);
             assert_equal_vectors(
                 recv_buffers[static_cast<std::size_t>(rank)],
                 reference,
@@ -1226,6 +1242,12 @@ void run_allreduce_scenario() {
     run_allreduce_case<std::uint8_t>(2, ncclUint8, "2-rank uint8");
     run_allreduce_case<std::int32_t>(2, ncclInt32, "2-rank int32");
     run_allreduce_case<std::int32_t>(4, ncclInt32, "4-rank int32");
+    run_allreduce_case<std::int64_t>(
+        2, ncclInt64, "2-rank max int64", 8, ncclMax);
+    run_allreduce_case<std::int32_t>(
+        4, ncclInt32, "4-rank min int32", 8, ncclMin);
+    run_allreduce_case<float>(
+        2, ncclFloat32, "2-rank prod float32", 8, ncclProd);
     run_allreduce_case<std::uint32_t>(2, ncclUint32, "2-rank uint32");
     run_allreduce_case<std::uint64_t>(2, ncclUint64, "2-rank uint64");
     run_premul_allreduce_case<float>(2, ncclFloat32, 2.0f, "2-rank premul float32");
@@ -1261,6 +1283,8 @@ void run_reduce_scenario() {
     run_reduce_case<float>(
         4, 2, ncclFloat32, "4-rank avg root2 float32", 7, ncclAvg);
     run_reduce_case<std::int64_t>(4, 3, ncclInt64, "4-rank root-last int64");
+    run_reduce_case<std::int64_t>(
+        4, 2, ncclInt64, "4-rank max root2 int64", 7, ncclMax);
     run_premul_reduce_case<float>(2, 1, ncclFloat32, 2.0f, "2-rank premul reduce");
 }
 
@@ -1283,6 +1307,8 @@ void run_reducescatter_scenario() {
     run_reducescatter_case<std::uint8_t>(
         2, ncclUint8, "2-rank uint8");
     run_reducescatter_case<std::int32_t>(4, ncclInt32, "4-rank int32");
+    run_reducescatter_case<std::int32_t>(
+        4, ncclInt32, "4-rank min int32", 4, ncclMin);
     run_premul_reducescatter_case<float>(2, ncclFloat32, 2.0f, "2-rank premul float32");
 }
 
