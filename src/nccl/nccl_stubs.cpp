@@ -261,12 +261,28 @@ bool parse_u64_field(
 bool map_dtype(
     ncclDataType_t datatype,
     fake_gpu::distributed::CollectiveDataType& out) {
+    if (datatype == ncclInt8 || datatype == ncclChar) {
+        out = fake_gpu::distributed::CollectiveDataType::Int8;
+        return true;
+    }
+    if (datatype == ncclUint8) {
+        out = fake_gpu::distributed::CollectiveDataType::Uint8;
+        return true;
+    }
     if (datatype == ncclInt32 || datatype == ncclInt) {
         out = fake_gpu::distributed::CollectiveDataType::Int32;
         return true;
     }
+    if (datatype == ncclUint32) {
+        out = fake_gpu::distributed::CollectiveDataType::Uint32;
+        return true;
+    }
     if (datatype == ncclInt64) {
         out = fake_gpu::distributed::CollectiveDataType::Int64;
+        return true;
+    }
+    if (datatype == ncclUint64) {
+        out = fake_gpu::distributed::CollectiveDataType::Uint64;
         return true;
     }
     if (datatype == ncclFloat16) {

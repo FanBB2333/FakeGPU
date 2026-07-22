@@ -18,8 +18,12 @@ enum class CollectiveType {
 };
 
 enum class CollectiveDataType {
+    Int8,
+    Uint8,
     Int32,
+    Uint32,
     Int64,
+    Uint64,
     Float16,
     BFloat16,
     Float32,
@@ -87,10 +91,18 @@ inline const char* collective_type_name(CollectiveType type) {
 
 inline const char* collective_data_type_name(CollectiveDataType dtype) {
     switch (dtype) {
+        case CollectiveDataType::Int8:
+            return "int8";
+        case CollectiveDataType::Uint8:
+            return "uint8";
         case CollectiveDataType::Int32:
             return "int32";
+        case CollectiveDataType::Uint32:
+            return "uint32";
         case CollectiveDataType::Int64:
             return "int64";
+        case CollectiveDataType::Uint64:
+            return "uint64";
         case CollectiveDataType::Float16:
             return "float16";
         case CollectiveDataType::BFloat16:
@@ -150,12 +162,28 @@ inline bool parse_collective_type(const std::string& text, CollectiveType& out) 
 }
 
 inline bool parse_collective_data_type(const std::string& text, CollectiveDataType& out) {
+    if (text == "int8") {
+        out = CollectiveDataType::Int8;
+        return true;
+    }
+    if (text == "uint8") {
+        out = CollectiveDataType::Uint8;
+        return true;
+    }
     if (text == "int32") {
         out = CollectiveDataType::Int32;
         return true;
     }
+    if (text == "uint32") {
+        out = CollectiveDataType::Uint32;
+        return true;
+    }
     if (text == "int64") {
         out = CollectiveDataType::Int64;
+        return true;
+    }
+    if (text == "uint64") {
+        out = CollectiveDataType::Uint64;
         return true;
     }
     if (text == "float16") {
@@ -207,10 +235,18 @@ inline bool parse_collective_reduce_op(const std::string& text, CollectiveReduce
 
 inline std::size_t collective_data_type_size(CollectiveDataType dtype) {
     switch (dtype) {
+        case CollectiveDataType::Int8:
+            return sizeof(std::int8_t);
+        case CollectiveDataType::Uint8:
+            return sizeof(std::uint8_t);
         case CollectiveDataType::Int32:
             return sizeof(std::int32_t);
+        case CollectiveDataType::Uint32:
+            return sizeof(std::uint32_t);
         case CollectiveDataType::Int64:
             return sizeof(std::int64_t);
+        case CollectiveDataType::Uint64:
+            return sizeof(std::uint64_t);
         case CollectiveDataType::Float16:
         case CollectiveDataType::BFloat16:
             return sizeof(std::uint16_t);
