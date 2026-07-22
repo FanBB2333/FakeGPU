@@ -257,7 +257,11 @@ def main(argv: list[str] | None = None) -> int:
         }
         engine, optimizer, _, _ = deepspeed.initialize(
             model=model,
-            model_parameters=model.parameters(),
+            model_parameters=(
+                parameter
+                for parameter in model.parameters()
+                if parameter.requires_grad
+            ),
             config=config,
             dist_init_required=False,
         )
