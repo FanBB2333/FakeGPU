@@ -116,6 +116,7 @@ def _validate_rank_reports(
     world_size: int,
     zero_stage: int,
     precision: str,
+    offload: str = "none",
 ) -> None:
     rank_average = (world_size + 1.0) / 2.0
     gradient_scale = rank_average * 1.5
@@ -139,6 +140,31 @@ def _validate_rank_reports(
         if report.get("gradient_accumulation_steps") != 2:
             raise AssertionError(
                 f"rank {rank} did not configure gradient accumulation"
+            )
+        offload_report = report.get("offload", {})
+        optimizer_requested = offload != "none"
+        parameters_requested = offload == "optimizer-and-parameter"
+        if bool(offload_report.get("optimizer_requested")) != (
+            optimizer_requested
+        ):
+            raise AssertionError(f"rank {rank} optimizer offload mismatch")
+        if bool(offload_report.get("parameters_requested")) != (
+            parameters_requested
+        ):
+            raise AssertionError(f"rank {rank} parameter offload mismatch")
+        if optimizer_requested:
+            state_devices = offload_report.get("optimizer_state_devices")
+            if state_devices != ["cpu"]:
+                raise AssertionError(
+                    f"rank {rank} optimizer state was not offloaded: "
+                    f"{state_devices}"
+                )
+        if parameters_requested and offload_report.get(
+            "local_parameter_partition_device"
+        ) != "cpu":
+            raise AssertionError(
+                f"rank {rank} parameter partition was not offloaded: "
+                f"{offload_report}"
             )
         if report.get("micro_step_1_global_steps") != 0:
             raise AssertionError(
@@ -212,6 +238,7 @@ def _run_stage(
     world_size: int,
     zero_stage: int,
     precision: str,
+    offload: str,
     timeout: float,
 ) -> dict[str, Any]:
     coordinator_bin = build_dir / "fakegpu-coordinator"
@@ -222,7 +249,7 @@ def _run_stage(
     )
     cluster_config = CLUSTER_CONFIGS[world_size]
     stage_root = report_root / (
-        f"zero{zero_stage}-{precision}-{world_size}r"
+        f"zero{zero_stage}-{precision}-{world_size}r-{offload}"
     )
     stage_root.mkdir(parents=True, exist_ok=True)
     socket_path = stage_root / "coordinator.sock"
@@ -288,6 +315,10 @@ def _run_stage(
             "--precision",
             precision,
         ]
+        if offload != "none":
+            command.append("--offload-optimizer")
+        if offload == "optimizer-and-parameter":
+            command.append("--offload-parameters")
         completed = subprocess.run(
             command,
             cwd=REPO_ROOT,
@@ -314,6 +345,7 @@ def _run_stage(
             world_size=world_size,
             zero_stage=zero_stage,
             precision=precision,
+            offload=offload,
         )
 
         _shutdown_unix_coordinator(socket_path)
@@ -355,6 +387,7 @@ def _run_stage(
             "zero_stage": zero_stage,
             "precision": precision,
             "world_size": world_size,
+            "offload": offload,
             "deepspeed_version": first_report["deepspeed_version"],
             "torch_version": first_report["torch_version"],
             "torch_cuda_version": first_report["torch_cuda_version"],
@@ -364,6 +397,7 @@ def _run_stage(
             ],
             "optimizer_type": first_report["optimizer_type"],
             "parameter_dtype": first_report["parameter_dtype"],
+            "offload_state": first_report["offload"],
             "parameter_after_step": first_report[
                 "parameters_after_micro_steps"
             ][1],
@@ -396,6 +430,11 @@ def main() -> int:
         "--precision",
         choices=("fp32", "bf16"),
         default="fp32",
+    )
+    parser.add_argument(
+        "--offload",
+        choices=("none", "optimizer", "optimizer-and-parameter"),
+        default="none",
     )
     parser.add_argument("--timeout", type=float, default=240.0)
     args = parser.parse_args()
@@ -440,6 +479,12 @@ def main() -> int:
         if args.zero_stage == "all"
         else (int(args.zero_stage),)
     )
+    if args.offload != "none" and any(
+        stage not in (2, 3) for stage in zero_stages
+    ):
+        parser.error("optimizer offload requires ZeRO stage 2 or 3")
+    if args.offload == "optimizer-and-parameter" and zero_stages != (3,):
+        parser.error("parameter offload requires --zero-stage 3")
     try:
         stage_reports = [
             _run_stage(
@@ -448,6 +493,7 @@ def main() -> int:
                 world_size=args.world_size,
                 zero_stage=zero_stage,
                 precision=args.precision,
+                offload=args.offload,
                 timeout=args.timeout,
             )
             for zero_stage in zero_stages
@@ -457,6 +503,7 @@ def main() -> int:
             "status": "success",
             "world_size": args.world_size,
             "precision": args.precision,
+            "offload": args.offload,
             "zero_stages": list(zero_stages),
             "results": stage_reports,
         }

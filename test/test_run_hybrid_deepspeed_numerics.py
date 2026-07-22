@@ -29,6 +29,12 @@ def _rank_report(rank: int, zero_stage: int = 3) -> dict[str, object]:
             final_parameter[0],
             final_parameter[0],
         ],
+        "offload": {
+            "optimizer_requested": False,
+            "parameters_requested": False,
+            "optimizer_state_devices": ["cuda:0"],
+            "local_parameter_partition_device": "cuda:0",
+        },
     }
 
 
@@ -87,3 +93,22 @@ def test_zero3_requires_parameter_all_gather() -> None:
 
     with pytest.raises(AssertionError, match="did not gather parameters"):
         _validate_collective_calls(calls, zero_stage=3)
+
+
+def test_validate_rank_reports_accepts_cpu_offload() -> None:
+    reports = [_rank_report(0), _rank_report(1)]
+    for report in reports:
+        report["offload"] = {
+            "optimizer_requested": True,
+            "parameters_requested": True,
+            "optimizer_state_devices": ["cpu"],
+            "local_parameter_partition_device": "cpu",
+        }
+
+    _validate_rank_reports(
+        reports,
+        world_size=2,
+        zero_stage=3,
+        precision="fp32",
+        offload="optimizer-and-parameter",
+    )

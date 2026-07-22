@@ -77,6 +77,23 @@ def _matrix_close(
     return True
 
 
+def _optimizer_state_devices(optimizer: Any) -> list[str]:
+    devices: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if hasattr(value, "device") and hasattr(value, "shape"):
+            devices.add(str(value.device))
+        elif isinstance(value, dict):
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                visit(item)
+
+    visit(optimizer.state)
+    return sorted(devices)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -91,7 +108,15 @@ def main() -> int:
         choices=("fp32", "bf16"),
         default="fp32",
     )
+    parser.add_argument("--offload-optimizer", action="store_true")
+    parser.add_argument("--offload-parameters", action="store_true")
     args = parser.parse_args()
+    if args.offload_optimizer and args.zero_stage not in (2, 3):
+        parser.error("optimizer offload requires ZeRO stage 2 or 3")
+    if args.offload_parameters and args.zero_stage != 3:
+        parser.error("parameter offload requires ZeRO stage 3")
+    if args.offload_parameters and not args.offload_optimizer:
+        parser.error("parameter offload validation also requires optimizer offload")
 
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
@@ -102,6 +127,8 @@ def main() -> int:
         "world_size": world_size,
         "zero_stage": args.zero_stage,
         "precision": args.precision,
+        "offload_optimizer": bool(args.offload_optimizer),
+        "offload_parameters": bool(args.offload_parameters),
         "torchrun_local_rank": original_local_rank,
         "physical_device_index": 0,
         "status": "starting",
@@ -171,23 +198,39 @@ def main() -> int:
                     device=device,
                 )
             )
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        optimizer = torch.optim.SGD(
+            model.parameters(),
+            lr=0.1,
+            momentum=0.9,
+        )
+        zero_config = {
+            "stage": args.zero_stage,
+            "contiguous_gradients": True,
+            "reduce_scatter": True,
+            "reduce_bucket_size": 32,
+            "allgather_partitions": True,
+            "allgather_bucket_size": 32,
+            "overlap_comm": False,
+            "stage3_prefetch_bucket_size": 0,
+            "stage3_param_persistence_threshold": 0,
+        }
+        if args.offload_optimizer:
+            zero_config["offload_optimizer"] = {
+                "device": "cpu",
+                "pin_memory": False,
+            }
+        if args.offload_parameters:
+            zero_config["offload_param"] = {
+                "device": "cpu",
+                "pin_memory": False,
+            }
         config = {
             "train_batch_size": world_size * 2,
             "train_micro_batch_size_per_gpu": 1,
             "gradient_accumulation_steps": 2,
-            "zero_optimization": {
-                "stage": args.zero_stage,
-                "contiguous_gradients": True,
-                "reduce_scatter": True,
-                "reduce_bucket_size": 32,
-                "allgather_partitions": True,
-                "allgather_bucket_size": 32,
-                "overlap_comm": False,
-                "stage3_prefetch_bucket_size": 0,
-                "stage3_param_persistence_threshold": 0,
-            },
+            "zero_optimization": zero_config,
             "zero_allow_untested_optimizer": True,
+            "zero_force_ds_cpu_optimizer": False,
             "fp16": {"enabled": False},
             "bf16": {"enabled": args.precision == "bf16"},
             "steps_per_print": 1_000_000,
@@ -264,6 +307,20 @@ def main() -> int:
         report["local_losses"] = losses
         report["parameters_after_micro_steps"] = micro_parameters
         report["global_steps"] = int(engine.global_steps)
+        basic_optimizer = getattr(engine_optimizer, "optimizer", optimizer)
+        parameter = next(engine.module.parameters())
+        local_partition = getattr(parameter, "ds_tensor", parameter)
+        report["offload"] = {
+            "optimizer_requested": bool(args.offload_optimizer),
+            "parameters_requested": bool(args.offload_parameters),
+            "basic_optimizer_type": type(basic_optimizer).__name__,
+            "optimizer_state_devices": _optimizer_state_devices(
+                basic_optimizer
+            ),
+            "local_parameter_partition_device": str(
+                local_partition.device
+            ),
+        }
 
         rank_average = (world_size + 1.0) / 2.0
         micro_average = 1.5
