@@ -25,6 +25,7 @@ DDP_WORKER_RELATIVE = Path("test/test_ddp_hybrid_numerics.py")
 FSDP_WORKER_RELATIVE = Path("test/test_fsdp_hybrid_numerics.py")
 FSDP2_WORKER_RELATIVE = Path("test/test_fsdp2_hybrid_numerics.py")
 DEEPSPEED_WORKER_RELATIVE = Path("test/test_deepspeed_hybrid_numerics.py")
+DEEPSPEED_PIPELINE_WORKER_RELATIVE = Path("verification/deepspeed_pipeline_worker.py")
 FAULT_WORKER_RELATIVE = Path("verification/remote_nccl_fault_worker.py")
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 DDP_OPTION_VARIANTS = ("no-sync", "find-unused", "static-graph")
@@ -46,6 +47,10 @@ DDP_EXPECTED_RESULTS: dict[str, dict[str, list[list[float]]]] = {
         "parameters_after_step": [[0.7, -0.6]],
     },
 }
+DEEPSPEED_PIPELINE_EXPECTED_FINAL = [
+    [0.5, -1.0, -0.5, 0.0],
+    [0.5, 0.0],
+]
 
 
 @dataclass(frozen=True)
@@ -70,17 +75,13 @@ def parse_node_spec(value: str) -> NodeSpec:
             )
         normalized = key.strip().lower()
         if normalized in fields:
-            raise argparse.ArgumentTypeError(
-                f"duplicate node field: {normalized}"
-            )
+            raise argparse.ArgumentTypeError(f"duplicate node field: {normalized}")
         fields[normalized] = raw_value.strip()
 
     allowed = {"name", "ssh", "repo", "python", "shell"}
     unknown = sorted(set(fields) - allowed)
     if unknown:
-        raise argparse.ArgumentTypeError(
-            f"unknown node fields: {', '.join(unknown)}"
-        )
+        raise argparse.ArgumentTypeError(f"unknown node fields: {', '.join(unknown)}")
     missing = [key for key in ("ssh", "repo", "python") if not fields.get(key)]
     if missing:
         raise argparse.ArgumentTypeError(
@@ -92,9 +93,7 @@ def parse_node_spec(value: str) -> NodeSpec:
     if not fields["repo"].startswith("/"):
         raise argparse.ArgumentTypeError("node repo must be an absolute Linux path")
     if not fields["python"].startswith("/"):
-        raise argparse.ArgumentTypeError(
-            "node python must be an absolute Linux path"
-        )
+        raise argparse.ArgumentTypeError("node python must be an absolute Linux path")
     return NodeSpec(
         name=fields.get("name", fields["ssh"]),
         ssh=fields["ssh"],
@@ -209,9 +208,7 @@ def _wait_for_coordinator(
         except OSError as exc:
             last_error = exc
         time.sleep(0.1)
-    raise TimeoutError(
-        f"coordinator did not become ready at {endpoint}: {last_error}"
-    )
+    raise TimeoutError(f"coordinator did not become ready at {endpoint}: {last_error}")
 
 
 def _local_head() -> str:
@@ -247,6 +244,7 @@ payload = {
     "fsdp_worker_exists": pathlib.Path("test/test_fsdp_hybrid_numerics.py").is_file(),
     "fsdp2_worker_exists": pathlib.Path("test/test_fsdp2_hybrid_numerics.py").is_file(),
     "deepspeed_worker_exists": pathlib.Path("test/test_deepspeed_hybrid_numerics.py").is_file(),
+    "deepspeed_pipeline_worker_exists": pathlib.Path("verification/deepspeed_pipeline_worker.py").is_file(),
     "fault_worker_exists": pathlib.Path("verification/remote_nccl_fault_worker.py").is_file(),
 }
 try:
@@ -398,17 +396,13 @@ def _validate_deepspeed_reports(
                 f"DeepSpeed ZeRO-{zero_stage} rank {rank} failed: {report}"
             )
         if report.get("effective_zero_stage") != zero_stage:
-            raise AssertionError(
-                f"DeepSpeed rank {rank} stage mismatch: {report}"
-            )
+            raise AssertionError(f"DeepSpeed rank {rank} stage mismatch: {report}")
         if report.get("micro_step_1_global_steps") != 0:
             raise AssertionError(
                 f"DeepSpeed rank {rank} stepped before accumulation boundary"
             )
         if report.get("micro_step_2_global_steps") != 1:
-            raise AssertionError(
-                f"DeepSpeed rank {rank} missed accumulation boundary"
-            )
+            raise AssertionError(f"DeepSpeed rank {rank} missed accumulation boundary")
         parameters = report.get("parameters_after_micro_steps")
         if not isinstance(parameters, list) or len(parameters) != 2:
             raise AssertionError(
@@ -427,9 +421,7 @@ def _validate_deepspeed_reports(
             expected_final,
             tolerance=tolerance,
         ):
-            raise AssertionError(
-                f"DeepSpeed rank {rank} update mismatch: {parameters}"
-            )
+            raise AssertionError(f"DeepSpeed rank {rank} update mismatch: {parameters}")
         gathered = report.get("gathered_parameters")
         if not isinstance(gathered, list) or len(gathered) != 2:
             raise AssertionError(
@@ -445,6 +437,50 @@ def _validate_deepspeed_reports(
         ):
             raise AssertionError(
                 f"DeepSpeed rank {rank} observed inconsistent parameters"
+            )
+
+
+def _validate_deepspeed_pipeline_reports(
+    reports: list[dict[str, Any]],
+) -> None:
+    if len(reports) != 2:
+        raise AssertionError(
+            f"expected two DeepSpeed Pipeline reports, got {len(reports)}"
+        )
+    for rank, report in enumerate(reports):
+        if report.get("status") != "success":
+            raise AssertionError(f"DeepSpeed Pipeline rank {rank} failed: {report}")
+        expected_fields = {
+            "rank": rank,
+            "world_size": 2,
+            "engine_type": "PipelineEngine",
+            "pipe_parallel_size": 2,
+            "pipe_stage_id": rank,
+            "gradient_accumulation_steps": 1,
+            "activation_checkpoint_interval": 0,
+            "global_steps": 1,
+            "precision": "fp32",
+        }
+        mismatches = {
+            field: (report.get(field), expected)
+            for field, expected in expected_fields.items()
+            if report.get(field) != expected
+        }
+        if mismatches:
+            raise AssertionError(
+                f"DeepSpeed Pipeline rank {rank} metadata mismatch: {mismatches}"
+            )
+        if abs(float(report.get("loss", float("nan"))) - 6.25) > 1e-6:
+            raise AssertionError(
+                f"DeepSpeed Pipeline rank {rank} loss mismatch: {report.get('loss')}"
+            )
+        parameters = report.get("all_stage_parameters")
+        if not _nested_allclose(
+            parameters,
+            DEEPSPEED_PIPELINE_EXPECTED_FINAL,
+        ):
+            raise AssertionError(
+                f"DeepSpeed Pipeline rank {rank} parameter mismatch: {parameters}"
             )
 
 
@@ -516,9 +552,7 @@ def _run_ddp_case(
     expected = DDP_EXPECTED_RESULTS[variant]
     for rank, report in enumerate(reports):
         if report.get("status") != "success":
-            raise AssertionError(
-                f"DDP {variant} rank {rank} failed: {report}"
-            )
+            raise AssertionError(f"DDP {variant} rank {rank} failed: {report}")
         if report.get("variant") != variant:
             raise AssertionError(
                 f"DDP rank {rank} reported variant={report.get('variant')!r}"
@@ -628,13 +662,9 @@ def _run_fsdp2_case(
     if precision not in {"fp32", "fp16", "bf16"}:
         raise ValueError(f"unsupported FSDP2 precision: {precision}")
     if reduce_precision not in {"fp32", "parameter"}:
-        raise ValueError(
-            f"unsupported FSDP2 reduce precision: {reduce_precision}"
-        )
+        raise ValueError(f"unsupported FSDP2 reduce precision: {reduce_precision}")
     if precision == "fp32" and reduce_precision == "parameter":
-        raise ValueError(
-            "FSDP2 parameter reduction requires fp16 or bf16"
-        )
+        raise ValueError("FSDP2 parameter reduction requires fp16 or bf16")
 
     report_name = (
         f"fsdp2-{precision}"
@@ -696,13 +726,9 @@ def _run_fsdp2_case(
     tolerance = 1e-6 if precision == "fp32" else 2e-2
     for rank, report in enumerate(reports):
         if report.get("status") != "success":
-            raise AssertionError(
-                f"FSDP2 {precision} rank {rank} failed: {report}"
-            )
+            raise AssertionError(f"FSDP2 {precision} rank {rank} failed: {report}")
         if report.get("precision") != precision:
-            raise AssertionError(
-                f"FSDP2 rank {rank} precision mismatch: {report}"
-            )
+            raise AssertionError(f"FSDP2 rank {rank} precision mismatch: {report}")
         if report.get("reduce_precision") != reduce_precision:
             raise AssertionError(
                 f"FSDP2 rank {rank} reduce precision mismatch: {report}"
@@ -712,9 +738,7 @@ def _run_fsdp2_case(
                 f"FSDP2 rank {rank} did not expose a DTensor: {report}"
             )
         if report.get("local_shard_shape") != [1, 2]:
-            raise AssertionError(
-                f"FSDP2 rank {rank} shard shape mismatch: {report}"
-            )
+            raise AssertionError(f"FSDP2 rank {rank} shard shape mismatch: {report}")
         if not _nested_allclose(
             report.get("local_shard_gradient"),
             expected_gradient,
@@ -818,6 +842,72 @@ def _run_deepspeed_case(
         zero_stage=zero_stage,
         precision=precision,
     )
+    return reports
+
+
+def _run_deepspeed_pipeline_case(
+    nodes: list[NodeSpec],
+    *,
+    endpoint: str,
+    master_host: str,
+    master_port: int,
+    remote_root: str,
+    timeout: float,
+) -> list[dict[str, Any]]:
+    report_dir = f"{remote_root}/deepspeed-pipeline"
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    timeout_ms = max(1, round(timeout * 1000))
+    for rank, node in enumerate(nodes):
+        env = _distributed_env(
+            node=node,
+            endpoint=endpoint,
+            timeout_ms=timeout_ms,
+            hybrid=True,
+        )
+        env["LD_PRELOAD"] = f"{node.repo}/build/libnccl.so.2"
+        if node.shell == "wsl":
+            env["DS_IGNORE_CUDA_DETECTION"] = "1"
+        argv = [
+            node.python,
+            "-m",
+            "torch.distributed.run",
+            "--nnodes=2",
+            "--nproc-per-node=1",
+            f"--node-rank={rank}",
+            f"--master-addr={master_host}",
+            f"--master-port={master_port}",
+            "--max-restarts=0",
+            str(DEEPSPEED_PIPELINE_WORKER_RELATIVE),
+            f"--report-dir={report_dir}",
+            "--precision=fp32",
+            "--activation-checkpoint-interval=0",
+            "--gradient-accumulation-steps=1",
+        ]
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        env=env,
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+    _collect_processes(
+        processes,
+        timeout=timeout,
+        label="Hybrid DeepSpeed Pipeline",
+    )
+
+    reports = [
+        _read_remote_json(node, f"{report_dir}/rank_{rank}.json")
+        for rank, node in enumerate(nodes)
+    ]
+    _validate_deepspeed_pipeline_reports(reports)
     return reports
 
 
@@ -932,6 +1022,7 @@ def _validate_cluster_report(
     path: Path,
     *,
     expected_collectives: set[str],
+    expect_point_to_point: bool,
     expect_timeout: bool,
 ) -> dict[str, Any]:
     report = json.loads(path.read_text(encoding="utf-8"))
@@ -945,12 +1036,30 @@ def _validate_cluster_report(
     if expected_collectives:
         for collective in sorted(expected_collectives):
             if report["collectives"][collective]["calls"] <= 0:
-                raise AssertionError(
-                    f"distributed training did not issue {collective}"
-                )
+                raise AssertionError(f"distributed training did not issue {collective}")
         node_pairs = report.get("node_pairs", [])
         if len(node_pairs) != 1 or int(node_pairs[0].get("total_bytes", 0)) <= 0:
             raise AssertionError(f"physical node-pair traffic is empty: {node_pairs}")
+    if expect_point_to_point:
+        point_to_point = report.get("point_to_point", {})
+        for field in ("operations", "sends", "bytes"):
+            if int(point_to_point.get(field, 0)) <= 0:
+                raise AssertionError(
+                    f"physical point-to-point traffic is empty: {point_to_point}"
+                )
+        ranks = report.get("ranks", [])
+        if len(ranks) != 2 or any(
+            int(rank.get("point_to_point_calls", 0)) <= 0 for rank in ranks
+        ):
+            raise AssertionError(f"physical rank P2P accounting is empty: {ranks}")
+        node_pairs = report.get("node_pairs", [])
+        if (
+            len(node_pairs) != 1
+            or int(node_pairs[0].get("point_to_point_operations", 0)) <= 0
+        ):
+            raise AssertionError(
+                f"physical node-pair P2P accounting is empty: {node_pairs}"
+            )
     if expect_timeout:
         if sum(int(item["timeouts"]) for item in report.get("ranks", [])) <= 0:
             raise AssertionError("missing-peer case did not increment rank timeouts")
@@ -1039,10 +1148,15 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             "cross-rank consistency completed with matching DeepSpeed "
             "versions on both physical hosts."
         )
+    if "deepspeed_pipeline" in cases:
+        lines.append(
+            "- Hybrid DeepSpeed Pipeline: one pipeline stage ran on each "
+            "physical host; FP32 forward activations, backward gradients, "
+            "the optimizer step, and cross-stage parameters matched the "
+            "analytical result over TCP P2P communication."
+        )
     if "collective_mismatch" in cases:
-        results = [
-            item["mismatch_result"] for item in cases["collective_mismatch"]
-        ]
+        results = [item["mismatch_result"] for item in cases["collective_mismatch"]]
         lines.append(
             f"- Collective mismatch: both ranks returned `{results}` and "
             "the async error remained visible."
@@ -1139,17 +1253,24 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         for name, zero_stage in deepspeed_cases.items()
         if name in cases
     }
-    if selected_deepspeed_cases:
+    selected_deepspeed_pipeline = "deepspeed-pipeline" in cases
+    if selected_deepspeed_cases or selected_deepspeed_pipeline:
         unavailable = [
             node.name
             for node, payload in zip(nodes, preflight)
-            if not payload.get("deepspeed_worker_exists")
-            or not payload.get("deepspeed_version")
+            if not payload.get("deepspeed_version")
+            or (
+                bool(selected_deepspeed_cases)
+                and not payload.get("deepspeed_worker_exists")
+            )
+            or (
+                selected_deepspeed_pipeline
+                and not payload.get("deepspeed_pipeline_worker_exists")
+            )
         ]
         if unavailable:
             raise RuntimeError(
-                "DeepSpeed validation is unavailable on: "
-                + ", ".join(unavailable)
+                "DeepSpeed validation is unavailable on: " + ", ".join(unavailable)
             )
     if "deepspeed-zero3" in selected_deepspeed_cases:
         versions = {str(payload["deepspeed_version"]) for payload in preflight}
@@ -1280,6 +1401,15 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 zero_stage=zero_stage,
                 precision="fp32",
             )
+        if selected_deepspeed_pipeline:
+            case_reports["deepspeed_pipeline"] = _run_deepspeed_pipeline_case(
+                nodes,
+                endpoint=endpoint,
+                master_host=args.coordinator_host,
+                master_port=args.master_port,
+                remote_root=remote_root,
+                timeout=args.case_timeout,
+            )
         if "collective-mismatch" in cases:
             case_reports["collective_mismatch"] = _run_mismatch_case(
                 nodes,
@@ -1331,6 +1461,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     expected_collectives: set[str] = set()
     if "ddp" in cases or "ddp-options" in cases or selected_deepspeed_cases:
         expected_collectives.update({"all_reduce", "all_gather"})
+    if selected_deepspeed_pipeline:
+        expected_collectives.add("all_gather")
     if (
         "fsdp" in cases
         or "fsdp2" in cases
@@ -1341,6 +1473,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     cluster_report = _validate_cluster_report(
         cluster_path,
         expected_collectives=expected_collectives,
+        expect_point_to_point=selected_deepspeed_pipeline,
         expect_timeout="missing-peer" in cases,
     )
 
@@ -1385,8 +1518,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run repeatable Hybrid DDP/FSDP/FSDP2/DeepSpeed and TCP failure "
-            "checks on two SSH hosts with the same FakeGPU Git commit."
+            "Run repeatable Hybrid DDP/FSDP/FSDP2/DeepSpeed Pipeline and TCP "
+            "failure checks on two SSH hosts with the same FakeGPU Git commit."
         )
     )
     parser.add_argument(
@@ -1414,6 +1547,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "fsdp2-low-reduce",
             "deepspeed-zero2",
             "deepspeed-zero3",
+            "deepspeed-pipeline",
             "collective-mismatch",
             "missing-peer",
         ],
@@ -1421,9 +1555,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--session",
-        default=(
-            time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3)
-        ),
+        default=(time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3)),
     )
     parser.add_argument(
         "--output-dir",

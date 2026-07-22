@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,8 @@ from verification.run_physical_multihost import (
     NodeSpec,
     _encoded_remote_command,
     _shell_command,
+    _validate_cluster_report,
+    _validate_deepspeed_pipeline_reports,
     _validate_deepspeed_reports,
     _write_markdown,
     parse_node_spec,
@@ -18,8 +21,7 @@ from verification.run_physical_multihost import (
 
 def test_parse_node_spec_supports_posix_and_wsl() -> None:
     posix = parse_node_spec(
-        "name=gpu-a;ssh=gpu-a;repo=/srv/fakegpu;"
-        "python=/opt/python; shell=posix"
+        "name=gpu-a;ssh=gpu-a;repo=/srv/fakegpu;python=/opt/python; shell=posix"
     )
     assert posix == NodeSpec(
         name="gpu-a",
@@ -131,6 +133,102 @@ def test_validate_deepspeed_reports_rejects_cross_rank_divergence() -> None:
         )
 
 
+def test_validate_deepspeed_pipeline_reports_accepts_two_stages() -> None:
+    expected_parameters = [
+        [0.5, -1.0, -0.5, 0.0],
+        [0.5, 0.0],
+    ]
+    reports = [
+        {
+            "status": "success",
+            "rank": rank,
+            "world_size": 2,
+            "engine_type": "PipelineEngine",
+            "pipe_parallel_size": 2,
+            "pipe_stage_id": rank,
+            "gradient_accumulation_steps": 1,
+            "activation_checkpoint_interval": 0,
+            "global_steps": 1,
+            "precision": "fp32",
+            "loss": 6.25,
+            "all_stage_parameters": expected_parameters,
+        }
+        for rank in range(2)
+    ]
+
+    _validate_deepspeed_pipeline_reports(reports)
+
+
+def test_validate_deepspeed_pipeline_reports_rejects_stage_divergence() -> None:
+    reports = [
+        {
+            "status": "success",
+            "rank": rank,
+            "world_size": 2,
+            "engine_type": "PipelineEngine",
+            "pipe_parallel_size": 2,
+            "pipe_stage_id": rank,
+            "gradient_accumulation_steps": 1,
+            "activation_checkpoint_interval": 0,
+            "global_steps": 1,
+            "precision": "fp32",
+            "loss": 6.25,
+            "all_stage_parameters": [
+                [0.5, -1.0, -0.5, 0.0],
+                [0.4, 0.1],
+            ],
+        }
+        for rank in range(2)
+    ]
+
+    with pytest.raises(AssertionError, match="parameter mismatch"):
+        _validate_deepspeed_pipeline_reports(reports)
+
+
+def test_validate_cluster_report_requires_physical_pipeline_p2p(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "schema_version": "cluster_report.v1",
+        "cluster": {
+            "world_size": 2,
+            "node_count": 2,
+            "coordinator_transport": "tcp",
+        },
+        "collectives": {"all_gather": {"calls": 2}},
+        "point_to_point": {"operations": 4, "sends": 4, "bytes": 128},
+        "ranks": [
+            {"point_to_point_calls": 4, "timeouts": 0},
+            {"point_to_point_calls": 4, "timeouts": 0},
+        ],
+        "node_pairs": [
+            {
+                "total_bytes": 160,
+                "point_to_point_operations": 4,
+            }
+        ],
+    }
+    path = tmp_path / "cluster-report.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _validate_cluster_report(
+        path,
+        expected_collectives={"all_gather"},
+        expect_point_to_point=True,
+        expect_timeout=False,
+    )
+
+    payload["point_to_point"] = {"operations": 0, "sends": 0, "bytes": 0}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(AssertionError, match="point-to-point traffic is empty"):
+        _validate_cluster_report(
+            path,
+            expected_collectives={"all_gather"},
+            expect_point_to_point=True,
+            expect_timeout=False,
+        )
+
+
 def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> None:
     report = {
         "status": "success",
@@ -165,6 +263,7 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
             },
             "deepspeed_zero2": [{}, {}],
             "deepspeed_zero3": [{}, {}],
+            "deepspeed_pipeline": [{}, {}],
             "collective_mismatch": [
                 {"mismatch_result": 5},
                 {"mismatch_result": 5},
@@ -199,4 +298,5 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     assert "FSDP2 mixed precision" in markdown
     assert "FSDP2 low-precision reduction" in markdown
     assert "Hybrid DeepSpeed" in markdown
+    assert "DeepSpeed Pipeline" in markdown
     assert "Collective mismatch" in markdown
