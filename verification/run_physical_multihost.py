@@ -486,6 +486,29 @@ def _validate_deepspeed_pipeline_reports(
             )
 
 
+def _require_matching_deepspeed_pipeline_stack(
+    nodes: list[NodeSpec],
+    preflight: list[dict[str, Any]],
+) -> None:
+    fields = ("torch_version", "torch_cuda_version", "deepspeed_version")
+    stacks = {
+        tuple(str(payload.get(field)) for field in fields)
+        for payload in preflight
+    }
+    if len(stacks) == 1:
+        return
+    details = ", ".join(
+        f"{node.name}=(torch={payload.get('torch_version')}, "
+        f"cuda={payload.get('torch_cuda_version')}, "
+        f"deepspeed={payload.get('deepspeed_version')})"
+        for node, payload in zip(nodes, preflight)
+    )
+    raise RuntimeError(
+        "DeepSpeed Pipeline requires matching PyTorch, CUDA runtime, and "
+        f"DeepSpeed versions on every physical stage; found {details}"
+    )
+
+
 def _run_ddp_case(
     nodes: list[NodeSpec],
     *,
@@ -1286,6 +1309,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 "DeepSpeed ZeRO-3 requires the same DeepSpeed version on "
                 f"every physical rank; found {details}"
             )
+    if selected_deepspeed_pipeline:
+        _require_matching_deepspeed_pipeline_stack(nodes, preflight)
     remote_root = f"/tmp/fakegpu-physical-{args.session}"
     endpoint = f"{args.coordinator_host}:{args.coordinator_port}"
     coordinator_node = nodes[0]
