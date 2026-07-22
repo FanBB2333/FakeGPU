@@ -228,6 +228,7 @@ The default cases are:
 
 - heterogeneous two-host Hybrid DDP numerical correctness
 - fixed-size elastic DDP with an active worker exit and full worker-group restart
+- elastic DDP checkpoint recovery for model parameters, optimizer momentum, and completed steps
 - DDP `no_sync`, rank-dependent unused parameters, static graphs, and gradient bucket views
 - FSDP full sharding, reduce-scatter, optimizer, full-parameter, and state-dict correctness
 - FSDP2/DTensor FP32 sharding, optimizer, and full-tensor reconstruction
@@ -257,15 +258,28 @@ Use `--case elastic-ddp-restart` for framework-supervised recovery. The first
 worker group completes an All-Reduce, and the worker on the second host exits
 through `os._exit(86)` while the NCCL communicator remains active. With
 `--max-restarts=1`, `torchrun` replaces the complete fixed-size worker group.
-The workers exchange their local restart counters through the rendezvous store
-and use the maximum as the shared generation because agents can advance their
-local counters at different times. The restarted group must reproduce gradient
-`[1.5, 3.0]`, parameters `[0.85, -0.30]`, and cross-rank parameter equality.
+Each worker atomically increments a rank-specific arrival counter in the
+rendezvous store. The arrival count identifies the shared attempt without
+reusing values from an earlier generation, while the report retains each
+agent's possibly asymmetric local restart counter. The restarted group must
+reproduce gradient `[1.5, 3.0]`, parameters `[0.85, -0.30]`, and cross-rank
+parameter equality.
 The controller selects a reachable source address for each host and explicitly
 hosts c10d rendezvous on the first node, which is required when its Tailscale
 address is not returned by hostname resolution. This check covers worker
 replacement at a fixed world size; it does not add heartbeat detection or
 membership resizing to FakeGPU.
+
+Use `--case elastic-ddp-checkpoint` to validate training-state recovery. The
+initial group performs one DDP step with SGD momentum `0.9` and atomically
+writes one host-local checkpoint per worker. The checkpoint contains model
+parameters, optimizer state, world size, and `completed_steps=1`. After the
+second host exits with code `86`, both replacement workers load their local
+files, compare the restored tensor state across ranks, and execute step 2. The
+expected restored parameters and momentum are `[0.85, -0.30]` and `[1.5, 3.0]`;
+the continued update must produce `[0.565, -0.87]` and `[2.85, 5.7]`. No shared
+filesystem is required. `--elastic-checkpoint-port` selects a rendezvous port
+distinct from the basic elastic-restart case.
 
 DeepSpeed is optional rather than part of the default set. Add
 `--case deepspeed-zero2` to validate one rank per physical host. The maintained
@@ -312,7 +326,7 @@ two successful post-shrink All-Reduces, 32 inter-node bytes total, and a
 16-byte node-pair peak.
 
 The framework-level elastic DDP check passed on the same hosts at commit
-`c6de112`. The RTX 3090 Ti worker exited with code `86`; `torchrun` replaced
+`f9c209c`. The RTX 3090 Ti worker exited with code `86`; `torchrun` replaced
 PIDs on both nodes even though their local restart counters were `1` and `0`.
 Both workers converged on generation 1, initialized a second communicator, and
 completed the expected DDP update. The cluster report retained four
@@ -320,12 +334,24 @@ All-Reduces, two broadcasts, two All-Gathers, 224 node-pair bytes, and a
 64-byte node-pair peak. These counters describe coordinator traffic for the
 small numerical check, not recovery throughput.
 
+At the same commit, two independent checkpoint-recovery runs produced identical
+training and communication results. Both hosts restored parameters
+`[0.85, -0.30]`, SGD momentum `[1.5, 3.0]`, and step 1 before completing step 2
+with parameters `[0.565, -0.87]` and momentum `[2.85, 5.7]`. Each run created
+two communicators and reported four All-Reduces, five All-Gathers, four
+broadcasts, 512 node-pair bytes, and a 64-byte peak. Each replacement worker
+loaded the exact SHA-256 recorded for its host-local file; the files themselves
+may differ across PyTorch versions, while their validated tensor state is the
+same. Running basic restart and checkpoint recovery together created four
+communicators and reported 736 node-pair bytes with the same 64-byte peak.
+
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.
 It writes the combined result under
 `build/physical_multihost_validation/<session>/`, including the per-rank
 results, complete cluster JSON/Markdown reports, node-pair totals, and failure
-observations. Run `./ftest elastic_ddp` for the focused local restart check, or
+observations. Run `./ftest elastic_ddp` for both local elastic checks,
+`./ftest elastic_ddp_checkpoint` for checkpoint recovery alone, or
 `./ftest distributed_resilience` for the complete maintained failure suite.
 
 ## Minimal cluster config
