@@ -211,6 +211,11 @@ python3 verification/run_physical_multihost.py \
 - collective reduction operator 不一致以及持续可见的 async error
 - 从第二台物理主机触发缺少 rank 的 communicator 超时
 
+DeepSpeed 是可选场景，不在默认集合中。添加 `--case deepspeed-zero2` 可以验证
+每台物理主机各运行一个 rank；维护中的异构实验已在 DeepSpeed 0.15.3 和
+0.19.2 之间通过。ZeRO-3 的 collective 序列与 DeepSpeed 版本有关，因此
+`--case deepspeed-zero3` 要求两端版本一致，版本不同时会在预检阶段直接报告。
+
 启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
 信息和 native 构建产物。合并报告写入
 `build/physical_multihost_validation/<session>/`，其中包含各 rank 结果、
