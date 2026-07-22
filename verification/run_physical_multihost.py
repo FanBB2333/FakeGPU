@@ -1420,6 +1420,13 @@ def _run_elastic_ddp_training_state_case(
         backend="nccl",
         require_physical_gpu=True,
     )
+    initial_by_node = {
+        str(item["node_name"]): item for item in initial
+    }
+    if initial_by_node[failed_node.name].get("selected_for_initial_exit") is not True:
+        raise AssertionError(
+            "the configured physical training-state failure node did not exit"
+        )
     summary["failed_node"] = failed_node.name
     summary["rank_nodes"] = {
         str(item["rank"]): str(item["node_name"]) for item in restarted

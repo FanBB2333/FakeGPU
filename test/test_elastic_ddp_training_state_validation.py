@@ -152,3 +152,32 @@ def test_validate_training_state_reports_rejects_scheduler_drift() -> None:
             backend="gloo",
             require_physical_gpu=False,
         )
+
+
+def test_validate_training_state_reports_accepts_dynamic_failed_rank() -> None:
+    initial, restarted = _reports()
+    initial[0].update(
+        {
+            "status": "expected_process_exit",
+            "selected_for_initial_exit": True,
+            "expected_process_exit_code": 86,
+        }
+    )
+    initial[1].update(
+        {
+            "status": "waiting_for_restart",
+            "selected_for_initial_exit": False,
+            "expected_process_exit_code": None,
+        }
+    )
+    restarted[1]["local_restart_count"] = 0
+
+    summary = validate_elastic_ddp_training_state_reports(
+        initial,
+        restarted,
+        backend="gloo",
+        require_physical_gpu=False,
+    )
+
+    assert summary["failed_rank"] == 0
+    assert summary["local_restart_counts"] == {"0": 1, "1": 0}

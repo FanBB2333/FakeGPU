@@ -94,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
             raise AssertionError(
                 "single-agent torchrun did not restart both local workers"
             )
+        if int(summary["failed_rank"]) != 1:
+            raise AssertionError("local validation did not fail rank 1")
 
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
