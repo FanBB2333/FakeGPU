@@ -69,6 +69,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--gradient-checkpointing", action="store_true")
+    parser.add_argument(
+        "--checkpoint-implementation",
+        choices=("reentrant", "non-reentrant"),
+        default="reentrant",
+    )
     parser.add_argument("--lora-rank", type=int, default=8)
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--lora-dropout", type=float, default=0.0)
@@ -165,6 +170,11 @@ def main(argv: list[str] | None = None) -> int:
                 "gradient_checkpointing": bool(
                     args.gradient_checkpointing
                 ),
+                "checkpoint_implementation": (
+                    args.checkpoint_implementation
+                    if args.gradient_checkpointing
+                    else None
+                ),
                 "gradient_accumulation_steps": (
                     args.gradient_accumulation_steps
                 ),
@@ -213,11 +223,27 @@ def main(argv: list[str] | None = None) -> int:
             attn_implementation=args.attention_implementation,
         )
         model.config.use_cache = False
+        checkpointing_requested = bool(args.gradient_checkpointing)
+        args.gradient_checkpointing = False
         model, training_metadata = _configure_training_model(
             model,
             args,
             static=False,
         )
+        args.gradient_checkpointing = checkpointing_requested
+        if checkpointing_requested:
+            use_reentrant = args.checkpoint_implementation == "reentrant"
+            model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={
+                    "use_reentrant": use_reentrant,
+                }
+            )
+            model.enable_input_require_grads()
+            training_metadata["checkpointing_analysis"] = (
+                "executed_reentrant"
+                if use_reentrant
+                else "executed_non_reentrant"
+            )
         model.train()
         model.to(device)
         torch.cuda.synchronize()
@@ -467,6 +493,9 @@ def main(argv: list[str] | None = None) -> int:
                 "status": "success",
                 "stage": "complete",
                 "peft_version": training_metadata["peft_version"],
+                "checkpointing_analysis": training_metadata[
+                    "checkpointing_analysis"
+                ],
                 "parameters": parameter_summary,
                 "batch": {
                     "masked_prefix_tokens": batches[

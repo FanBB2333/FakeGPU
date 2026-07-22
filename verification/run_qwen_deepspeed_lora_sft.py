@@ -217,6 +217,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--gradient-checkpointing", action="store_true")
+    parser.add_argument(
+        "--checkpoint-implementation",
+        choices=("reentrant", "non-reentrant"),
+        default="reentrant",
+    )
     parser.add_argument("--lora-rank", type=int, default=8)
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--lora-dropout", type=float, default=0.0)
@@ -337,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
             args.attention_implementation,
             "--gradient-accumulation-steps",
             str(args.gradient_accumulation_steps),
+            "--checkpoint-implementation",
+            args.checkpoint_implementation,
             "--lora-rank",
             str(args.lora_rank),
             "--lora-alpha",
@@ -454,6 +461,11 @@ def main(argv: list[str] | None = None) -> int:
                 args.gradient_accumulation_steps
             ),
             "gradient_checkpointing": bool(args.gradient_checkpointing),
+            "checkpoint_implementation": (
+                args.checkpoint_implementation
+                if args.gradient_checkpointing
+                else None
+            ),
             "lora": first["lora"],
             "physical_device_name": first["physical_device_name"],
             "physical_compute_capability": first[
