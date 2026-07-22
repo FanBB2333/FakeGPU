@@ -378,6 +378,14 @@ def build_fully_shard_plan(
         int(shard["parameter_storage_bytes"])
         for shard in largest_nested_unit["rank_shards"]
     ]
+    activation_nested_workspace_bytes = (
+        largest_nested_workspace_bytes if nested_units else 0
+    )
+    activation_nested_local_workspace_bytes = (
+        largest_nested_local_workspace_bytes
+        if nested_units
+        else [0 for _ in range(world_size)]
+    )
     return {
         "method": "fsdp2_per_parameter_dim0_sharding",
         "world_size": world_size,
@@ -412,11 +420,26 @@ def build_fully_shard_plan(
             + local_nested_bytes
             for local_nested_bytes in largest_nested_local_workspace_bytes
         ],
+        "forward_activation_workspace_bytes": [
+            root_workspace_bytes
+            + activation_nested_workspace_bytes
+            + local_nested_bytes
+            for local_nested_bytes in activation_nested_local_workspace_bytes
+        ],
         "backward_prefetch_parameter_bytes": (
             root_workspace_bytes + largest_nested_workspace_bytes
         ),
         "backward_collective_extra_bytes": [
             root_workspace_bytes for _ in range(world_size)
+        ],
+        "backward_activation_workspace_bytes": [
+            # The active, prefetched, and retained nested generations may each
+            # keep packed output and parameter copy-out storage. The active
+            # generation also retains its rank-local collective input.
+            root_workspace_bytes
+            + 6 * activation_nested_workspace_bytes
+            + local_nested_bytes
+            for local_nested_bytes in activation_nested_local_workspace_bytes
         ],
         "optimizer_runtime_workspace_bytes": [
             2 * local_nested_bytes
@@ -636,8 +659,14 @@ def estimate_fully_shard_sft_memory(
     forward_collective_workspace_bytes = int(
         sharding_plan["forward_collective_workspace_bytes"][rank]
     )
+    forward_activation_workspace_bytes = int(
+        sharding_plan["forward_activation_workspace_bytes"][rank]
+    )
     backward_collective_extra_bytes = int(
         sharding_plan["backward_collective_extra_bytes"][rank]
+    )
+    backward_activation_workspace_bytes = int(
+        sharding_plan["backward_activation_workspace_bytes"][rank]
     )
     root_local_parameter_bytes = int(
         sharding_plan["root_local_parameter_bytes"][rank]
@@ -711,8 +740,44 @@ def estimate_fully_shard_sft_memory(
         + int(estimate.get("input_bytes", 0))
         + int(estimate.get("workspace_peak_contribution_bytes", 0))
     )
+    forward_phase = graph.get("forward_phase")
+    if isinstance(forward_phase, Mapping):
+        forward_phase_categories = forward_phase.get("peak_bytes_by_category")
+        if not isinstance(forward_phase_categories, Mapping):
+            raise ValueError("forward phase has no categories")
+        forward_phase_peak = int(forward_phase["peak_live_bytes"]) + int(
+            estimate.get("workspace_peak_contribution_bytes", 0)
+        )
+        forward_phase_parameter_bytes = category_bytes(
+            forward_phase_categories,
+            parameter_categories,
+        )
+        forward_phase_gradient_bytes = int(
+            forward_phase_categories.get("gradient", 0)
+        )
+        forward_phase_nonsharded_bytes = (
+            forward_phase_peak
+            - forward_phase_parameter_bytes
+            - forward_phase_gradient_bytes
+        )
+        if forward_phase_nonsharded_bytes < 0:
+            raise ValueError("static forward peak has inconsistent categories")
+        projected_forward_captured_peak = (
+            forward_phase_nonsharded_bytes
+            + local_parameter_bytes
+            + projected_gradient_bytes(forward_phase_gradient_bytes)
+            + forward_activation_workspace_bytes
+        )
+        forward_phase_method = str(
+            forward_phase.get("method")
+            or "captured_forward_liveness"
+        )
+    else:
+        forward_phase_nonsharded_bytes = peak_nonsharded_bytes
+        projected_forward_captured_peak = projected_captured_peak
+        forward_phase_method = "full_graph_peak_fallback"
     projected_forward_peak = max(
-        projected_captured_peak,
+        projected_forward_captured_peak,
         projected_forward_collective_floor,
     )
 
@@ -757,8 +822,29 @@ def estimate_fully_shard_sft_memory(
         + backward_collective_extra_bytes
         + reduce_scatter_workspace_bytes
     )
-    projected_backward_activation_floor = (
+    projected_backward_retained_forward_floor = (
         projected_forward_peak + root_local_parameter_bytes
+    )
+    projected_backward_captured_peak = 0
+    if isinstance(forward_phase, Mapping):
+        backward_start = forward_phase.get("backward_start_node")
+        graph_peak_node = graph.get("peak_node")
+        if isinstance(backward_start, Mapping) and isinstance(
+            graph_peak_node,
+            Mapping,
+        ):
+            if int(graph_peak_node.get("index", -1)) >= int(
+                backward_start.get("index", 0)
+            ):
+                projected_backward_captured_peak = (
+                    peak_nonsharded_bytes
+                    + local_parameter_bytes
+                    + projected_gradient_bytes(peak_gradient_bytes)
+                    + backward_activation_workspace_bytes
+                )
+    projected_backward_activation_floor = max(
+        projected_backward_retained_forward_floor,
+        projected_backward_captured_peak,
     )
     projected_backward_peak = max(
         projected_gradient_phase_peak,
@@ -817,6 +903,7 @@ def estimate_fully_shard_sft_memory(
 
     return {
         "method": "static_aten_liveness_with_fsdp2_projection",
+        "forward_phase_method": forward_phase_method,
         "gradient_phase_method": gradient_phase_method,
         "world_size": world_size,
         "rank": rank,
@@ -832,25 +919,35 @@ def estimate_fully_shard_sft_memory(
         ),
         "local_optimizer_temporary_bytes": local_optimizer_temporary_bytes,
         "peak_nonsharded_bytes": peak_nonsharded_bytes,
+        "forward_phase_nonsharded_bytes": forward_phase_nonsharded_bytes,
         "gradient_phase_nonsharded_bytes": gradient_phase_nonsharded_bytes,
         "optimizer_nonsharded_bytes": optimizer_nonsharded_bytes,
         "root_parameter_workspace_bytes": root_workspace_bytes,
         "forward_collective_workspace_bytes": (
             forward_collective_workspace_bytes
         ),
+        "forward_activation_workspace_bytes": (
+            forward_activation_workspace_bytes
+        ),
         "backward_parameter_workspace_bytes": (
             backward_parameter_workspace_bytes
         ),
         "backward_collective_extra_bytes": backward_collective_extra_bytes,
+        "backward_activation_workspace_bytes": (
+            backward_activation_workspace_bytes
+        ),
         "optimizer_runtime_workspace_bytes": optimizer_runtime_workspace_bytes,
         "reduce_scatter_workspace_bytes": reduce_scatter_workspace_bytes,
         "captured_graph_peak_bytes": projected_captured_peak,
+        "forward_captured_peak_bytes": projected_forward_captured_peak,
         "forward_collective_floor_bytes": projected_forward_collective_floor,
         "forward_graph_peak_bytes": projected_forward_peak,
         "gradient_phase_peak_bytes": projected_gradient_phase_peak,
-        "backward_activation_floor_bytes": (
-            projected_backward_activation_floor
+        "backward_captured_peak_bytes": projected_backward_captured_peak,
+        "backward_retained_forward_floor_bytes": (
+            projected_backward_retained_forward_floor
         ),
+        "backward_activation_floor_bytes": projected_backward_activation_floor,
         "backward_graph_peak_bytes": projected_backward_peak,
         "first_step_graph_peak_bytes": projected_graph_peak,
         "steady_state_graph_peak_bytes": projected_steady_graph_peak,
@@ -861,7 +958,9 @@ def estimate_fully_shard_sft_memory(
             "Frozen and trainable parameter dtypes retain their original element sizes.",
             "The root unit stays unsharded through the forward/loss peak.",
             "FSDP2 all-gather copy-in, packed output, and per-parameter copy-out buffers may overlap at the communication-dominated floor.",
+            "The captured forward/loss phase ends at the first explicit backward ATen operator when that boundary is available.",
             "Default backward prefetch may materialize the root and largest nested unit together.",
+            "The backward activation event includes the root plus current, prefetched, and retained nested-unit collective buffers.",
             "The backward floor retains the forward peak while staging the root rank-local shard.",
             "The largest active trainable gradient is restored before reduce-scatter emits its local shard.",
             "Two largest nested-unit rank-local buffers account for persistent eager FSDP2 runtime staging during optimizer execution.",
