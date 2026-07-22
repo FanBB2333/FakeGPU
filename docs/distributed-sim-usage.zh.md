@@ -200,6 +200,18 @@ python3 verification/run_physical_multihost.py \
   --coordinator-host 100.x.y.z
 ```
 
+all-to-all-v 默认每个分片单位包含一个 FP32 元素。需要验证更大的 TCP payload
+时，可以通过参数放大同一组非均匀与稀疏分片，不需要修改代码：
+
+```bash
+python3 verification/run_physical_multihost.py \
+  --node 'name=blackwell;ssh=gpu-a;repo=/home/user/repos/fakeGPU;python=/opt/fakegpu/bin/python;shell=posix' \
+  --node 'name=ampere-wsl;ssh=user@gpu-b;repo=/home/user/repos/fakeGPU;python=/opt/torch/bin/python;shell=wsl' \
+  --coordinator-host 100.x.y.z \
+  --case alltoallv \
+  --alltoallv-elements-per-unit 262144
+```
+
 默认包含以下场景：
 
 - 异构两主机 Hybrid DDP 数值正确性
@@ -217,10 +229,11 @@ DeepSpeed 是可选场景，不在默认集合中。添加 `--case deepspeed-zer
 0.19.2 之间通过。ZeRO-3 的 collective 序列与 DeepSpeed 版本有关，因此
 `--case deepspeed-zero3` 要求两端版本一致，版本不同时会在预检阶段直接报告。
 
-物理 all-to-all-v 用例已在 RTX PRO 5000 与 RTX 3090 Ti WSL 主机之间通过。
-它逐元素检查非对称分片和稀疏分片的 FP32 payload；稀疏分片包含 PRO 5000 →
-3090 Ti 的零字节方向。合并报告记录了 2 次 all-to-all、48 个逻辑字节、24 个
-跨节点字节，节点对单次峰值为 20 字节。
+MiB 级物理 all-to-all-v 用例已在 RTX PRO 5000 与 RTX 3090 Ti WSL 主机之间
+通过。非均匀跨主机分片为 2 MiB/3 MiB，稀疏分片为 0 MiB/1 MiB，因此覆盖了
+PRO 5000 → 3090 Ti 的零字节方向。合并报告记录了 2 次 all-to-all、12 MiB
+逻辑数据、6 MiB 跨节点数据，节点对单次峰值为 5 MiB。rank 报告保存 payload
+样本、SHA-256 和完整元素检查状态，不会将 MiB 级数组写入 JSON。
 
 启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
 信息和 native 构建产物。合并报告写入

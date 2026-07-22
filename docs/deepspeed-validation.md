@@ -208,11 +208,13 @@ The replacement and routing model follows DeepSpeed's
 
 The native group-semantics command additionally checks 2- and 4-rank
 all-to-all-v with nonuniform and zero-sized peer splits over both Unix shared
-memory and TCP socket payloads. A separate physical-host run passed between
-the RTX PRO 5000 and RTX 3090 Ti: two all-to-all calls carried 48 logical
-bytes and 24 inter-node bytes, with a 20-byte node-pair peak per operation.
-The sparse case included a zero-sized PRO 5000 → 3090 Ti split. These are
-functional transport checks, not NCCL/RDMA performance measurements.
+memory and TCP socket payloads. A separate physical-host stress run passed
+between the RTX PRO 5000 and RTX 3090 Ti with one MiB per split unit. Its
+nonuniform cross-host splits were 2 MiB/3 MiB, while the sparse splits were
+0 MiB/1 MiB. Two all-to-all calls carried 12 MiB of logical data and 6 MiB
+between nodes, with a 5 MiB node-pair peak per operation. Every payload was
+checked element by element and recorded with SHA-256. These are functional
+transport checks, not NCCL/RDMA performance measurements.
 
 Current DeepSpeed releases do not combine training AutoTP and AutoEP in this
 validator. Grouped-GEMM experts are also excluded because the available WSL

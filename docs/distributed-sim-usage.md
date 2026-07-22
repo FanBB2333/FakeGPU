@@ -208,6 +208,19 @@ python3 verification/run_physical_multihost.py \
   --coordinator-host 100.x.y.z
 ```
 
+The default all-to-all-v payload uses one FP32 element per split unit. Scale
+the same nonuniform and sparse plans without changing code when a larger TCP
+payload is needed:
+
+```bash
+python3 verification/run_physical_multihost.py \
+  --node 'name=blackwell;ssh=gpu-a;repo=/home/user/repos/fakeGPU;python=/opt/fakegpu/bin/python;shell=posix' \
+  --node 'name=ampere-wsl;ssh=user@gpu-b;repo=/home/user/repos/fakeGPU;python=/opt/torch/bin/python;shell=wsl' \
+  --coordinator-host 100.x.y.z \
+  --case alltoallv \
+  --alltoallv-elements-per-unit 262144
+```
+
 The default cases are:
 
 - heterogeneous two-host Hybrid DDP numerical correctness
@@ -227,11 +240,14 @@ version-dependent collective sequence, so `--case deepspeed-zero3` requires
 the same DeepSpeed version on both hosts and rejects a mismatch during
 preflight.
 
-The maintained physical all-to-all-v case passed between the RTX PRO 5000
-and RTX 3090 Ti WSL host. It validates exact FP32 payloads for asymmetric
-splits and for a sparse plan with a zero-byte PRO 5000 → 3090 Ti direction.
-The combined report recorded two all-to-all calls, 48 logical bytes, 24
-inter-node bytes, and a 20-byte node-pair peak per operation.
+The maintained MiB-scale physical all-to-all-v case passed between the RTX
+PRO 5000 and RTX 3090 Ti WSL host. The nonuniform cross-host splits were
+2 MiB/3 MiB; the sparse plan used 0 MiB/1 MiB and therefore covered a
+zero-byte PRO 5000 → 3090 Ti direction. The combined report recorded two
+all-to-all calls, 12 MiB of logical data, 6 MiB between nodes, and a 5 MiB
+node-pair peak per operation. Rank reports contain payload samples, SHA-256
+digests, and full element-validation status without embedding MiB-sized JSON
+arrays.
 
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.

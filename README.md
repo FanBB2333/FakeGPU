@@ -497,7 +497,7 @@ The distributed paths were also checked on the same two hosts:
 | Physical-host Hybrid DDP | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | The same numerical result across PyTorch 2.9.1/CUDA 12.8 and PyTorch 2.12.1/CUDA 13.0; TCP broadcast, all-reduce, and all-gather completed with zero timeouts |
 | Physical-host Hybrid FSDP2 | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | FP32/FP16/BF16 parameters and FP16/BF16 gradient reductions passed over TCP; the report identifies collective dtype and reduction operator |
 | Physical-host Hybrid DeepSpeed | One rank per physical GPU over Tailscale | ZeRO-2 passed across DeepSpeed 0.15.3 ↔ 0.19.2 with identical parameters and 176 reported node-pair bytes; ZeRO-3 now rejects mismatched DeepSpeed versions during preflight |
-| Physical-host TCP all-to-all-v | RTX PRO 5000 coordinator/rank 0 ↔ RTX 3090 Ti rank 1 over Tailscale | Nonuniform and sparse split plans, including one zero-byte direction, produced exact payloads; 2 calls reported 48 logical bytes, 24 inter-node bytes, and a 20-byte node-pair peak |
+| Physical-host TCP all-to-all-v | RTX PRO 5000 coordinator/rank 0 ↔ RTX 3090 Ti rank 1 over Tailscale | Nonuniform 2 MiB/3 MiB and sparse 0 MiB/1 MiB cross-host splits produced exact payloads; 2 calls reported 12 MiB logical bytes, 6 MiB inter-node bytes, and a 5 MiB node-pair peak |
 | Physical-host TCP all-reduce | RTX PRO 5000 coordinator/rank 0 ↔ RTX 3090 Ti rank 1 over Tailscale | Correct 1 MiB and 16 MiB reductions, zero coordinator timeouts; 16 MiB × 5 measured about `0.261 Gbit/s` algorithmic and `0.521 Gbit/s` bidirectional socket payload per rank |
 
 The TCP numbers are an end-to-end simulator measurement from this specific
