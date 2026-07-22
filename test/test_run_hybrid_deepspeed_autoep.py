@@ -7,6 +7,7 @@ import pytest
 from verification.deepspeed_autoep_worker import (
     EXPECTED_INITIAL_W1,
     _nested_close,
+    _scalar_close,
 )
 from verification.run_hybrid_deepspeed_autoep import (
     _validate_communication,
@@ -49,6 +50,21 @@ def _rank_report(rank: int) -> dict[str, object]:
 def test_nested_close_supports_autoep_tensors() -> None:
     assert _nested_close([[[1.0, 2.01]]], [[[1.0, 2.0]]], 0.02)
     assert not _nested_close([[[1.0, 2.1]]], [[[1.0, 2.0]]], 0.02)
+
+
+def test_scalar_close_supports_bf16_relative_tolerance() -> None:
+    assert _scalar_close(
+        61.75,
+        61.865,
+        absolute_tolerance=0.04,
+        relative_tolerance=3e-3,
+    )
+    assert not _scalar_close(
+        60.0,
+        61.865,
+        absolute_tolerance=0.04,
+        relative_tolerance=3e-3,
+    )
 
 
 def test_validate_rank_reports_accepts_autoep_update() -> None:
