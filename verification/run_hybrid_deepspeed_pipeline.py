@@ -92,6 +92,11 @@ def _validate_rank_reports(
         )
         if report.get("p2p_api") != expected_p2p_api:
             raise AssertionError(f"rank {rank} P2P API mismatch")
+        expected_p2p_group = (
+            "dedicated" if batched_p2p else "pipeline_default"
+        )
+        if report.get("p2p_process_group") != expected_p2p_group:
+            raise AssertionError(f"rank {rank} P2P process group mismatch")
         expected_loss = EXPECTED_LOSS[gradient_accumulation_steps]
         if abs(
             float(report.get("loss", float("nan"))) - expected_loss
@@ -273,6 +278,7 @@ def _run_case(
             "activation_checkpoint_interval": activation_checkpoint_interval,
             "gradient_accumulation_steps": gradient_accumulation_steps,
             "p2p_api": first["p2p_api"],
+            "p2p_process_group": first["p2p_process_group"],
             "deepspeed_version": first["deepspeed_version"],
             "torch_version": first["torch_version"],
             "torch_cuda_version": first["torch_cuda_version"],

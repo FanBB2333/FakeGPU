@@ -25,6 +25,7 @@ def _rank_report(rank: int) -> dict[str, object]:
         "global_steps": 1,
         "activation_checkpoint_interval": 0,
         "p2p_api": "send_recv",
+        "p2p_process_group": "pipeline_default",
         "loss": 6.25,
         "all_stage_parameters": copy.deepcopy(EXPECTED_FINAL[1]),
     }
@@ -59,6 +60,7 @@ def test_validate_rank_reports_accepts_batched_p2p() -> None:
     reports = [_rank_report(0), _rank_report(1)]
     for report in reports:
         report["p2p_api"] = "batch_isend_irecv"
+        report["p2p_process_group"] = "dedicated"
     _validate_rank_reports(
         reports,
         precision="fp32",
@@ -85,7 +87,7 @@ def test_validate_rank_reports_rejects_stage_divergence() -> None:
 
 
 def test_enable_batched_deepspeed_p2p_uses_one_work_item() -> None:
-    calls: list[tuple[object, object, int]] = []
+    calls: list[tuple[object, object, int, object]] = []
 
     class Work:
         def wait(self) -> str:
@@ -96,12 +98,18 @@ def test_enable_batched_deepspeed_p2p_uses_one_work_item() -> None:
         irecv = object()
 
         @staticmethod
-        def P2POp(operation: object, tensor: object, peer: int) -> tuple[object, object, int]:
-            return operation, tensor, peer
+        def P2POp(
+            operation: object,
+            tensor: object,
+            peer: int,
+            *,
+            group: object,
+        ) -> tuple[object, object, int, object]:
+            return operation, tensor, peer, group
 
         @staticmethod
         def batch_isend_irecv(
-            operations: list[tuple[object, object, int]],
+            operations: list[tuple[object, object, int, object]],
         ) -> list[Work]:
             calls.extend(operations)
             return [Work()]
@@ -120,13 +128,14 @@ def test_enable_batched_deepspeed_p2p_uses_one_work_item() -> None:
         _grid=Grid(),
         _is_valid_send_recv=lambda src, dst: validated.append((src, dst)),
     )
-    _enable_batched_deepspeed_p2p(Dist, p2p)
+    process_group = object()
+    _enable_batched_deepspeed_p2p(Dist, p2p, process_group)
 
     assert p2p.send("activation", 1) == "complete"
     assert p2p.recv("gradient", 1) == "complete"
     assert calls == [
-        (Dist.isend, "activation", 1),
-        (Dist.irecv, "gradient", 1),
+        (Dist.isend, "activation", 1, process_group),
+        (Dist.irecv, "gradient", 1, process_group),
     ]
     assert validated == [(0, 1), (1, 0)]
 

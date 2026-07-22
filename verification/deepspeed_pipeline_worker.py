@@ -89,10 +89,14 @@ def _gather_stage_parameters(
     ]
 
 
-def _enable_batched_deepspeed_p2p(dist: Any, p2p: Any) -> None:
+def _enable_batched_deepspeed_p2p(
+    dist: Any,
+    p2p: Any,
+    process_group: Any,
+) -> None:
     def _run(operation: Any, tensor: Any, peer: int) -> Any:
         works = dist.batch_isend_irecv(
-            [dist.P2POp(operation, tensor, peer)]
+            [dist.P2POp(operation, tensor, peer, group=process_group)]
         )
         if len(works) != 1:
             raise RuntimeError(
@@ -157,6 +161,9 @@ def main(argv: list[str] | None = None) -> int:
         "p2p_api": (
             "batch_isend_irecv" if args.batched_p2p else "send_recv"
         ),
+        "p2p_process_group": (
+            "dedicated" if args.batched_p2p else "pipeline_default"
+        ),
         "status": "starting",
     }
     stage = "import_torch"
@@ -211,7 +218,24 @@ def main(argv: list[str] | None = None) -> int:
             dist_init_required=False,
         )
         if args.batched_p2p:
-            _enable_batched_deepspeed_p2p(dist, deepspeed_p2p)
+            stage = "init_batched_p2p_group"
+            batched_p2p_group = dist.new_group(
+                ranks=list(range(world_size)),
+                backend="nccl",
+                timeout=timedelta(seconds=90),
+                device_id=torch.device("cuda", 0),
+            )
+            group_probe = torch.ones(1, dtype=torch.int64, device="cuda:0")
+            dist.all_reduce(group_probe, group=batched_p2p_group)
+            if int(group_probe.item()) != world_size:
+                raise AssertionError(
+                    "dedicated pipeline P2P process group failed its probe"
+                )
+            _enable_batched_deepspeed_p2p(
+                dist,
+                deepspeed_p2p,
+                batched_p2p_group,
+            )
 
         class FirstStage(torch.nn.Linear):
             def __init__(self) -> None:

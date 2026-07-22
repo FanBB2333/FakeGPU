@@ -461,6 +461,7 @@ def _validate_deepspeed_pipeline_reports(
             "global_steps": 1,
             "precision": "fp32",
             "p2p_api": "batch_isend_irecv",
+            "p2p_process_group": "dedicated",
         }
         mismatches = {
             field: (report.get(field), expected)
