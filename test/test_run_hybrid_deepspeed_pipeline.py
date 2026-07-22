@@ -17,11 +17,11 @@ def _rank_report(rank: int) -> dict[str, object]:
         "engine_type": "PipelineEngine",
         "pipe_parallel_size": 2,
         "pipe_stage_id": rank,
-        "gradient_accumulation_steps": 2,
+        "gradient_accumulation_steps": 1,
         "global_steps": 1,
         "activation_checkpoint_interval": 0,
-        "loss": 4.25,
-        "all_stage_parameters": copy.deepcopy(EXPECTED_FINAL),
+        "loss": 6.25,
+        "all_stage_parameters": copy.deepcopy(EXPECTED_FINAL[1]),
     }
 
 
@@ -30,13 +30,28 @@ def test_validate_rank_reports_accepts_pipeline_update() -> None:
         [_rank_report(0), _rank_report(1)],
         precision="fp32",
         activation_checkpoint_interval=0,
+        gradient_accumulation_steps=1,
+    )
+
+
+def test_validate_rank_reports_accepts_two_micro_batches() -> None:
+    reports = [_rank_report(0), _rank_report(1)]
+    for report in reports:
+        report["gradient_accumulation_steps"] = 2
+        report["loss"] = 4.25
+        report["all_stage_parameters"] = copy.deepcopy(EXPECTED_FINAL[2])
+    _validate_rank_reports(
+        reports,
+        precision="fp32",
+        activation_checkpoint_interval=0,
+        gradient_accumulation_steps=2,
     )
 
 
 def test_validate_rank_reports_rejects_stage_divergence() -> None:
     reports = [_rank_report(0), _rank_report(1)]
     reports[1]["all_stage_parameters"] = [
-        EXPECTED_FINAL[0],
+        EXPECTED_FINAL[1][0],
         [0.4, 0.6],
     ]
     with pytest.raises(AssertionError, match="parameter mismatch"):
@@ -44,6 +59,7 @@ def test_validate_rank_reports_rejects_stage_divergence() -> None:
             reports,
             precision="fp32",
             activation_checkpoint_interval=0,
+            gradient_accumulation_steps=1,
         )
 
 

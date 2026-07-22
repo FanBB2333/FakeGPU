@@ -29,10 +29,17 @@ from verification.run_hybrid_deepspeed_numerics import (  # noqa: E402
 
 WORKER = ROOT / "verification" / "deepspeed_pipeline_worker.py"
 CLUSTER_CONFIG = ROOT / "verification" / "data" / "cluster_hybrid_2r.yaml"
-EXPECTED_FINAL = [
-    [0.45, -0.35, -0.55, 0.65],
-    [0.45, 0.65],
-]
+EXPECTED_LOSS = {1: 6.25, 2: 4.25}
+EXPECTED_FINAL = {
+    1: [
+        [0.5, -1.0, -0.5, 0.0],
+        [0.5, 0.0],
+    ],
+    2: [
+        [0.45, -0.35, -0.55, 0.65],
+        [0.45, 0.65],
+    ],
+}
 
 
 def _vector_close(
@@ -55,6 +62,7 @@ def _validate_rank_reports(
     *,
     precision: str,
     activation_checkpoint_interval: int,
+    gradient_accumulation_steps: int,
 ) -> None:
     tolerance = 1e-6 if precision == "fp32" else 2e-2
     if len(reports) != 2:
@@ -68,7 +76,9 @@ def _validate_rank_reports(
             raise AssertionError(f"rank {rank} pipeline size mismatch")
         if report.get("pipe_stage_id") != rank:
             raise AssertionError(f"rank {rank} pipeline stage mismatch")
-        if report.get("gradient_accumulation_steps") != 2:
+        if report.get("gradient_accumulation_steps") != (
+            gradient_accumulation_steps
+        ):
             raise AssertionError(f"rank {rank} accumulation mismatch")
         if report.get("global_steps") != 1:
             raise AssertionError(f"rank {rank} optimizer step mismatch")
@@ -76,12 +86,17 @@ def _validate_rank_reports(
             activation_checkpoint_interval
         ):
             raise AssertionError(f"rank {rank} checkpoint interval mismatch")
-        if abs(float(report.get("loss", float("nan"))) - 4.25) > tolerance:
+        expected_loss = EXPECTED_LOSS[gradient_accumulation_steps]
+        if abs(
+            float(report.get("loss", float("nan"))) - expected_loss
+        ) > tolerance:
             raise AssertionError(f"rank {rank} pipeline loss mismatch")
         all_parameters = report.get("all_stage_parameters")
         if not isinstance(all_parameters, list) or len(all_parameters) != 2:
             raise AssertionError(f"rank {rank} parameter report is incomplete")
-        for stage_id, expected in enumerate(EXPECTED_FINAL):
+        for stage_id, expected in enumerate(
+            EXPECTED_FINAL[gradient_accumulation_steps]
+        ):
             if not _vector_close(
                 all_parameters[stage_id],
                 expected,
@@ -121,6 +136,7 @@ def _run_case(
     report_root: Path,
     precision: str,
     activation_checkpoint_interval: int,
+    gradient_accumulation_steps: int,
     timeout: float,
 ) -> dict[str, Any]:
     coordinator_bin = build_dir / "fakegpu-coordinator"
@@ -130,7 +146,8 @@ def _run_case(
         else build_dir / "libnccl.so.2"
     )
     case_root = report_root / (
-        f"{precision}-checkpoint{activation_checkpoint_interval}"
+        f"{precision}-gas{gradient_accumulation_steps}-"
+        f"checkpoint{activation_checkpoint_interval}"
     )
     case_root.mkdir(parents=True, exist_ok=True)
     rank_report_dir = case_root / "ranks"
@@ -195,6 +212,8 @@ def _run_case(
             precision,
             "--activation-checkpoint-interval",
             str(activation_checkpoint_interval),
+            "--gradient-accumulation-steps",
+            str(gradient_accumulation_steps),
         ]
         completed = subprocess.run(
             command,
@@ -220,6 +239,7 @@ def _run_case(
             reports,
             precision=precision,
             activation_checkpoint_interval=activation_checkpoint_interval,
+            gradient_accumulation_steps=gradient_accumulation_steps,
         )
 
         from verification.run_hybrid_deepspeed_numerics import (  # noqa: PLC0415
@@ -238,6 +258,7 @@ def _run_case(
             "status": "success",
             "precision": precision,
             "activation_checkpoint_interval": activation_checkpoint_interval,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
             "deepspeed_version": first["deepspeed_version"],
             "torch_version": first["torch_version"],
             "torch_cuda_version": first["torch_cuda_version"],
@@ -275,6 +296,12 @@ def main(argv: list[str] | None = None) -> int:
         default="fp32",
     )
     parser.add_argument("--activation-checkpointing", action="store_true")
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        choices=(1, 2),
+        default=1,
+    )
     parser.add_argument("--timeout", type=float, default=240.0)
     args = parser.parse_args(argv)
 
@@ -319,6 +346,7 @@ def main(argv: list[str] | None = None) -> int:
             report_root=report_root,
             precision=precision,
             activation_checkpoint_interval=interval,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
             timeout=args.timeout,
         )
         for precision in precisions
