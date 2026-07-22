@@ -20,7 +20,7 @@ Suites:
   distributed_resilience  Validate rank failures, elastic recovery, timeouts, and reports
   elastic_ddp  Restart a failed torchrun group; validate three recovery boundaries
   elastic_ddp_checkpoint  Resume model and optimizer state after a worker-group restart
-  elastic_ddp_training_state  Resume AdamW, scheduler, RNG, and partial accumulation
+  elastic_ddp_training_state  Resume rank-mapped AdamW, RNG, sampler, and accumulation
   static_memory_validation  Capture ATen storage liveness and compare with real CUDA when available
   real_gpu_calibration  Calibrate real/passthrough/hybrid/fakecuda workloads on the detected GPU
   rtx3090ti_calibration  Deprecated alias for real_gpu_calibration

@@ -229,7 +229,7 @@ The default cases are:
 - heterogeneous two-host Hybrid DDP numerical correctness
 - fixed-size elastic DDP with an active worker exit and full worker-group restart
 - elastic DDP checkpoint recovery for model parameters, optimizer momentum, and completed steps
-- elastic DDP recovery in the middle of gradient accumulation, including AdamW moments, StepLR, pending gradients, and rank-local RNG
+- elastic DDP recovery in the middle of gradient accumulation, including AdamW moments, StepLR, a replicated rank-state bundle, rank-local RNG, and a `DistributedSampler` cursor
 - DDP `no_sync`, rank-dependent unused parameters, static graphs, and gradient bucket views
 - FSDP full sharding, reduce-scatter, optimizer, full-parameter, and state-dict correctness
 - FSDP2/DTensor FP32 sharding, optimizer, and full-tensor reconstruction
@@ -284,22 +284,27 @@ distinct from the basic elastic-restart case.
 
 Use `--case elastic-ddp-training-state` for the stricter recovery boundary.
 The initial group completes AdamW step 1, advances StepLR, and then executes
-the first of two accumulation microsteps for step 2 under `no_sync`. Each rank atomically saves
-model parameters, AdamW first and second moments, scheduler state, completed
-optimizer steps, the accumulation microstep, pending rank-local gradients, and
-CPU-generator RNG state before one worker exits. Replacement workers restore
-that state and execute the second microstep. The validator checks the exact
-restored tensors, the next RNG sample, the synchronized accumulated gradient,
-and the final AdamW update. `--elastic-training-state-port` selects its
-separate rendezvous port.
+the first of two accumulation microsteps for step 2 under `no_sync`. Before a
+worker exits, all ranks gather their pending gradients, CPU-generator RNG, and
+`DistributedSampler` epoch/cursor into a bundle indexed by the saved global
+rank. Every host atomically saves that complete bundle together with model,
+AdamW, scheduler, optimizer-step, and accumulation state.
 
-This remains fixed-size recovery. A host-local checkpoint is addressed by
-global rank, so the same host must receive the same global rank after restart.
-The initial c10d rank assignment does not have to match the order of `--node`
-arguments: the controller discovers which rank actually exited. If a later
-generation remaps ranks, the worker rejects the checkpoint rather than loading
-another rank's pending gradient or RNG state. Supporting rank remapping would
-require shared, rank-addressable checkpoint storage.
+The maintained test deliberately restores saved rank 1 on current rank 0 and
+saved rank 0 on current rank 1. It reconstructs the sampler, skips the three
+recorded samples, and requires the next samples to be 8 and 7. The validator
+also checks the exact restored tensors, next RNG samples, synchronized
+accumulated gradient, and final AdamW update. A separate unit case swaps the
+global ranks attached to the two checkpoint storage identities, so file
+ownership is not inferred from the restarted rank.
+
+This remains fixed-size DDP recovery. Replicating all rank-local state removes
+the same-host/same-rank requirement and does not need a shared filesystem, but
+it costs O(world-size) rank-state storage per host and assumes each local
+checkpoint survives. The current validation uses `DataLoader(num_workers=0)`;
+worker prefetch queues and sharded ZeRO/FSDP optimizer state are outside this
+recovery format. `--elastic-training-state-port` selects its separate
+rendezvous port.
 
 DeepSpeed is optional rather than part of the default set. Add
 `--case deepspeed-zero2` to validate one rank per physical host. The maintained
@@ -365,22 +370,23 @@ may differ across PyTorch versions, while their validated tensor state is the
 same. Running basic restart and checkpoint recovery together created four
 communicators and reported 736 node-pair bytes with the same 64-byte peak.
 
-At commit `93fd6d3`, two independent accumulated-training-state runs also
-produced identical results. c10d assigned global rank 0 to the RTX 3090 Ti and
-rank 1 to the RTX PRO 5000; rank 0 exited, and both worker PIDs were replaced
-while their local restart counters remained 1 and 0. The replacements restored
-parameters `[0.989, -0.01]`, AdamW first moments `[0.25, 0.5]`, second moments
-`[0.0625, 0.25]`, pending gradients `[2.5, 5.0]` on rank 0 and `[3.0, 6.0]`
-on rank 1, StepLR state, and the exact next rank-local RNG samples
-`0.6766379475593567` and `0.5308855175971985`. Completing the second microstep
-produced parameters `[0.983838, -0.014662]`, first moments `[0.875, 1.75]`, and
-second moments `[0.484375, 1.9375]` on both ranks.
+At commit `e0e3253`, two independent rank-remapped training-state runs produced
+identical results. c10d assigned global rank 0 to the RTX 3090 Ti and rank 1 to
+the RTX PRO 5000; rank 0 exited, and both worker PIDs were replaced while their
+local restart counters remained 1 and 0. Both host-local files contained saved
+states `[0, 1]`. Current rank 0 restored saved rank 1's pending gradient
+`[3.0, 6.0]`, RNG sample `0.5308855175971985`, consumed samples `[2, 4, 6]`,
+and next sample 8. Current rank 1 restored saved rank 0's pending gradient
+`[2.5, 5.0]`, RNG sample `0.6766379475593567`, consumed samples `[1, 3, 5]`,
+and next sample 7.
 
-Each accumulated-state run created two communicators and reported four
-All-Reduces, seven All-Gathers, six broadcasts, 696 node-pair bytes, and a
-96-byte peak. Running all three elastic cases together created six
-communicators and reported 12 All-Reduces, 14 All-Gathers, 12 broadcasts,
-1432 node-pair bytes, and the same 96-byte peak.
+Completing the second microstep still produced parameters
+`[0.983838, -0.014662]`, first moments `[0.875, 1.75]`, and second moments
+`[0.484375, 1.9375]` on both ranks. Each run created two communicators and
+reported four All-Reduces, nine All-Gathers, six broadcasts, 24,652 node-pair
+bytes, and a 23,924-byte peak. Running all three elastic cases together created
+six communicators and reported 12 All-Reduces, 16 All-Gathers, 12 broadcasts,
+25,388 node-pair bytes, and the same 23,924-byte peak.
 
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.

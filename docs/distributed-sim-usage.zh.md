@@ -220,7 +220,7 @@ python3 verification/run_physical_multihost.py \
 - 异构两主机 Hybrid DDP 数值正确性
 - 固定 world size 的 elastic DDP：活跃 worker 退出后重启完整 worker group
 - elastic DDP checkpoint 恢复：模型参数、optimizer momentum 与已完成训练步数
-- 梯度累积中途的 elastic DDP 恢复：AdamW 一阶/二阶矩、StepLR、待处理梯度与 rank-local RNG
+- 梯度累积中途的 elastic DDP 恢复：AdamW 一阶/二阶矩、StepLR、完整 rank-state bundle、rank-local RNG 与 `DistributedSampler` cursor
 - DDP `no_sync`、不同 rank 使用不同分支时的未使用参数、静态图和 gradient bucket view
 - FSDP 全分片、reduce-scatter、optimizer、完整参数和 state dict 正确性
 - FSDP2/DTensor FP32 分片、optimizer 与完整张量重建
@@ -267,18 +267,22 @@ momentum 应为 `[0.85, -0.30]`、`[1.5, 3.0]`，继续更新后的结果应为
 
 更严格的恢复边界使用 `--case elastic-ddp-training-state`。首个 group 完成
 AdamW 第 1 步并推进 StepLR，然后在 `no_sync` 下执行第 2 步两个 accumulation
-microstep 中的第一个。每个 rank 在 worker 退出前原子保存模型参数、AdamW 一阶/二阶矩、
-scheduler 状态、已完成 optimizer 步数、当前 accumulation microstep、尚未归约
-的 rank-local 梯度以及 CPU generator RNG 状态。替换进程恢复这些状态并执行
-第二个 microstep；验证器会逐项检查恢复后的张量、下一次 RNG 采样、同步后的
-累积梯度与最终 AdamW 更新。该场景使用独立的
-`--elastic-training-state-port`。
+microstep 中的第一个。worker 退出前，所有 rank 会汇总各自尚未归约的梯度、
+CPU generator RNG，以及 `DistributedSampler` 的 epoch/cursor，形成按原全局 rank
+索引的 bundle。每台主机把完整 bundle 与模型、AdamW、scheduler、optimizer
+步数和 accumulation 状态写入一个原子 checkpoint。
 
-这仍是固定 world size 的恢复。主机本地 checkpoint 按全局 rank 定位，因此
-重启后同一主机必须继续获得原来的全局 rank。首次 c10d 分配的 rank 不必与
-`--node` 参数顺序一致，控制脚本会识别实际退出的 rank。如果后续代次发生 rank
-重映射，worker 会拒绝读取 checkpoint，避免加载其他 rank 的待处理梯度或 RNG
-状态。支持 rank 重映射需要共享且能够按 rank 寻址的 checkpoint 存储。
+维护中的测试会让当前 rank 0 读取原 rank 1 的状态，让当前 rank 1 读取原 rank 0
+的状态。恢复后重建 sampler，跳过已经记录的三个样本，下一批样本必须分别为 8
+和 7。验证器还会检查恢复后的张量、下一次 RNG 采样、同步后的累积梯度与最终
+AdamW 更新。另一个单元测试会交换两处 checkpoint 存储位置关联的 global rank，
+确认文件归属不会从重启后的 rank 推断。
+
+该方案仍使用固定 world size。每台主机复制全部 rank-local 状态后，不再要求
+同一主机重启前后保持相同 rank，也不需要共享文件系统；代价是每台主机保存
+O(world-size) 的 rank 状态，并要求本地 checkpoint 仍然存在。目前验证使用
+`DataLoader(num_workers=0)`，不恢复 worker 预取队列，也不支持 ZeRO/FSDP 的
+分片 optimizer 状态。该场景使用独立的 `--elastic-training-state-port`。
 
 DeepSpeed 是可选场景，不在默认集合中。添加 `--case deepspeed-zero2` 可以验证
 每台物理主机各运行一个 rank；维护中的异构实验已在 DeepSpeed 0.15.3 和
@@ -330,21 +334,20 @@ SHA-256 都与该主机保存时一致；不同 PyTorch 版本生成的文件可
 张量状态必须一致。基础重启与 checkpoint 恢复组合执行时创建 4 个
 communicator，节点对总量为 736 字节，单次峰值仍为 64 字节。
 
-commit `93fd6d3` 上的两次 accumulation 训练状态恢复也得到了完全一致的结果。
+commit `e0e3253` 上的两次 rank 重映射训练状态恢复得到了完全一致的结果。
 c10d 将全局 rank 0 分配给 RTX 3090 Ti，将 rank 1 分配给 RTX PRO 5000；
 rank 0 退出后，两端 worker PID 均被替换，本地 restart count 分别为 1 和 0。
-替换进程恢复了参数 `[0.989, -0.01]`、AdamW 一阶矩 `[0.25, 0.5]`、二阶矩
-`[0.0625, 0.25]`、rank 0 的待处理梯度 `[2.5, 5.0]`、rank 1 的待处理梯度
-`[3.0, 6.0]`、StepLR 状态以及各 rank 下一次 RNG 采样
-`0.6766379475593567`、`0.5308855175971985`。完成第二个 microstep 后，两个
-rank 的参数均为 `[0.983838, -0.014662]`，一阶矩为 `[0.875, 1.75]`，二阶矩为
-`[0.484375, 1.9375]`。
+两份主机本地文件都包含 `[0, 1]` 的完整状态。当前 rank 0 恢复原 rank 1 的
+待处理梯度 `[3.0, 6.0]`、RNG 采样 `0.5308855175971985`、已读取样本
+`[2, 4, 6]` 和下一样本 8；当前 rank 1 恢复原 rank 0 的梯度 `[2.5, 5.0]`、
+RNG 采样 `0.6766379475593567`、已读取样本 `[1, 3, 5]` 和下一样本 7。
 
-每次 accumulation 状态恢复会创建 2 个 communicator，记录 4 次 All-Reduce、
-7 次 All-Gather、6 次 broadcast、696 字节节点对总量和 96 字节单次峰值。
-三个 elastic 场景组合执行时共创建 6 个 communicator，记录 12 次
-All-Reduce、14 次 All-Gather、12 次 broadcast、1432 字节节点对总量，单次
-峰值仍为 96 字节。
+完成第二个 microstep 后，两个 rank 的参数均为 `[0.983838, -0.014662]`，
+一阶矩为 `[0.875, 1.75]`，二阶矩为 `[0.484375, 1.9375]`。每次实验创建
+2 个 communicator，记录 4 次 All-Reduce、9 次 All-Gather、6 次 broadcast、
+24,652 字节节点对总量和 23,924 字节单次峰值。三个 elastic 场景组合执行时
+共创建 6 个 communicator，记录 12 次 All-Reduce、16 次 All-Gather、12 次
+broadcast、25,388 字节节点对总量，单次峰值仍为 23,924 字节。
 
 启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
 信息和 native 构建产物。合并报告写入
