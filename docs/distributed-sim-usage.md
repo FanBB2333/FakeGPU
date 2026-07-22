@@ -285,6 +285,17 @@ inter-node bytes with a 16-byte node-pair peak. These tiny-payload timings
 validate control flow and reporting; they are not an elastic-training or NCCL
 failover performance benchmark.
 
+The controlled process-exit variant also passed on these hosts at commit
+`3d7c11a`. Rank 2 exited with code `86` after all four ranks initialized.
+Ranks 0, 1, and 3 each returned persistent `ncclSystemError` after the
+configured six-second All-Reduce timeout, received child ranks `[0, 1, 2]`,
+and recovered the sum `7.0`. The coordinator emitted exactly one timeout
+failure event: inferred rank 2, observed ranks `[0, 1, 3]`, and 12 submitted
+bytes. Recovery took about `2103.185 us` in the combined injected-failure plus
+process-exit run. That combined report contained two failures, two recoveries,
+two successful post-shrink All-Reduces, 32 inter-node bytes total, and a
+16-byte node-pair peak.
+
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.
 It writes the combined result under

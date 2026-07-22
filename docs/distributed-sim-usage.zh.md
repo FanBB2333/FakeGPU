@@ -266,6 +266,15 @@ PRO 5000 → 3090 Ti 的零字节方向。合并报告记录了 2 次 all-to-all
 16 字节节点间负载，节点对单次峰值为 16 字节。这组小负载耗时用于验证
 控制流和报告，不代表 elastic training 或 NCCL 故障恢复性能。
 
+受控进程退出版本也在这两台主机上通过，对应 commit 为 `3d7c11a`。四个
+ranks 完成初始化后，rank 2 以状态码 `86` 退出。Ranks 0、1、3 在配置的
+六秒 All-Reduce 超时后都收到持续可见的 `ncclSystemError`，获得子 ranks
+`[0, 1, 2]`，恢复后的求和结果均为 `7.0`。Coordinator 只生成一条超时
+故障事件：推断缺席的是 rank 2，实际提交操作的是 `[0, 1, 3]`，已提交负载
+为 12 字节。在注入故障与进程退出的组合实验中，这次恢复约耗时
+`2103.185 us`；整份报告包含两次故障、两次恢复、两次成功的恢复后
+All-Reduce、32 字节节点间总量和 16 字节节点对单次峰值。
+
 启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
 信息和 native 构建产物。合并报告写入
 `build/physical_multihost_validation/<session>/`，其中包含各 rank 结果、
