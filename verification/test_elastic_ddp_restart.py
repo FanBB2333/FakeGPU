@@ -98,6 +98,10 @@ def _validate_reports(report_dir: Path) -> dict[str, Any]:
         raise AssertionError(f"unexpected initial worker states: {initial}")
     if any(int(item.get("restart_count", -1)) != 0 for item in initial):
         raise AssertionError(f"initial restart counters were invalid: {initial}")
+    if any(int(item.get("local_restart_count", -1)) != 0 for item in initial):
+        raise AssertionError(f"initial local restart counters were invalid: {initial}")
+    if any(item.get("observed_local_restart_counts") != [0, 0] for item in initial):
+        raise AssertionError(f"initial restart generation was invalid: {initial}")
     if any(float(item.get("initial_all_reduce_value", 0.0)) != 3.0 for item in initial):
         raise AssertionError(f"initial all-reduce failed: {initial}")
     if int(initial[1].get("expected_process_exit_code", -1)) != 86:
@@ -114,6 +118,17 @@ def _validate_reports(report_dir: Path) -> dict[str, Any]:
         raise AssertionError(f"restarted workers failed: {restarted}")
     if any(int(item.get("restart_count", -1)) != 1 for item in restarted):
         raise AssertionError(f"restart counters were invalid: {restarted}")
+    if any(int(item.get("local_restart_count", -1)) != 1 for item in restarted):
+        raise AssertionError(f"local restart counters were invalid: {restarted}")
+    if any(
+        max(
+            int(value)
+            for value in item.get("observed_local_restart_counts", [])
+        )
+        != 1
+        for item in restarted
+    ):
+        raise AssertionError(f"restart generation was invalid: {restarted}")
     if sorted(int(item["rank"]) for item in restarted) != [0, 1]:
         raise AssertionError(f"restarted ranks were invalid: {restarted}")
     if any(not _close(item.get("gradient"), EXPECTED_GRADIENT) for item in restarted):
@@ -144,6 +159,9 @@ def _validate_reports(report_dir: Path) -> dict[str, Any]:
         "run_id": next(iter(run_ids)),
         "initial_pids": [int(item["pid"]) for item in initial],
         "restarted_pids": [int(item["pid"]) for item in restarted],
+        "local_restart_counts": [
+            int(item["local_restart_count"]) for item in restarted
+        ],
         "gradient": restarted[0]["gradient"],
         "parameters_after_step": restarted[0]["parameters_after_step"],
         "initial_reports": initial,

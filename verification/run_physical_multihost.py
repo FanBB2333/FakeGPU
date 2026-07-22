@@ -472,6 +472,10 @@ def _validate_elastic_ddp_restart_reports(
             raise AssertionError(f"unexpected initial elastic state: {report}")
         if int(report.get("restart_count", -1)) != 0:
             raise AssertionError(f"invalid initial restart count: {report}")
+        if int(report.get("local_restart_count", -1)) != 0:
+            raise AssertionError(f"invalid initial local restart count: {report}")
+        if report.get("observed_local_restart_counts") != [0, 0]:
+            raise AssertionError(f"initial restart generation mismatch: {report}")
         if int(report.get("max_restarts", -1)) != 1:
             raise AssertionError(f"invalid elastic restart limit: {report}")
         if int(report.get("world_size", 0)) != 2:
@@ -508,6 +512,13 @@ def _validate_elastic_ddp_restart_reports(
             raise AssertionError(f"restarted elastic worker failed: {report}")
         if int(report.get("restart_count", -1)) != 1:
             raise AssertionError(f"restarted elastic count is invalid: {report}")
+        observed_counts = report.get("observed_local_restart_counts")
+        if (
+            not isinstance(observed_counts, list)
+            or len(observed_counts) != 2
+            or max(int(value) for value in observed_counts) != 1
+        ):
+            raise AssertionError(f"restarted generation did not converge: {report}")
         if int(report.get("max_restarts", -1)) != 1:
             raise AssertionError(f"restarted elastic limit is invalid: {report}")
         if int(report.get("world_size", 0)) != 2:
@@ -528,6 +539,10 @@ def _validate_elastic_ddp_restart_reports(
             raise AssertionError(f"physical GPU metadata is missing: {report}")
     if sorted(int(item.get("rank", -1)) for item in restarted) != [0, 1]:
         raise AssertionError(f"restarted elastic ranks are invalid: {restarted}")
+    if int(restarted_by_node[failed_node].get("local_restart_count", -1)) != 1:
+        raise AssertionError(
+            "the failed node did not report its local worker restart"
+        )
     if any(
         int(initial_by_node[node_name]["pid"])
         == int(restarted_by_node[node_name]["pid"])
@@ -556,6 +571,12 @@ def _validate_elastic_ddp_restart_reports(
         },
         "restarted_rank_assignments": {
             node_name: int(restarted_by_node[node_name]["rank"])
+            for node_name in node_names
+        },
+        "local_restart_counts": {
+            node_name: int(
+                restarted_by_node[node_name]["local_restart_count"]
+            )
             for node_name in node_names
         },
         "initial_pids": {
