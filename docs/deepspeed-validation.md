@@ -130,6 +130,86 @@ The configuration follows the
 [Transformers DeepSpeed integration](https://huggingface.co/docs/transformers/main/en/deepspeed),
 including Trainer-resolved `auto` values.
 
+## Pipeline, AutoTP, and AutoEP
+
+Three focused runners validate DeepSpeed's model-parallel training paths.
+They compare outputs and optimizer updates with deterministic references and
+also require a non-empty per-node-pair communication report.
+
+### Pipeline Parallel
+
+```bash
+$PYTHON verification/run_hybrid_deepspeed_pipeline.py \
+  --precision all --activation-checkpointing \
+  --report-dir build/deepspeed-pipeline
+
+$PYTHON verification/run_hybrid_deepspeed_pipeline.py \
+  --precision fp32 --batched-p2p \
+  --report-dir build/deepspeed-pipeline-batched
+```
+
+The two-stage pipeline verifies forward activations, backward gradients, one
+optimizer step, stage placement, direct `send`/`recv`, optional
+`batch_isend_irecv`, activation checkpointing, and P2P byte accounting. The
+FP32/BF16 × checkpoint-off/on matrix passed on DeepSpeed 0.15.3 and 0.19.2.
+A separate FP32 batched-P2P smoke passed on both stacks. Gradient accumulation
+of two passed on 0.15.3. DeepSpeed 0.19.2 produced the correct loss but a
+half-sized stage-0 update in the same GAS=2 probe, so that combination remains
+an explicit compatibility check rather than a passing FakeGPU claim.
+
+The physical `deepspeed-pipeline` case requires identical PyTorch, CUDA
+runtime, and DeepSpeed versions on every stage. It stops during preflight on
+the current mixed 0.15.3/0.19.2 hosts instead of comparing incompatible P2P
+schedules. DeepSpeed's pipeline API and constraints are described in its
+[Pipeline Parallelism documentation](https://deepspeed.readthedocs.io/en/latest/pipeline.html).
+
+### AutoTP training
+
+```bash
+$PYTHON verification/run_hybrid_deepspeed_autotp.py \
+  --zero-stage all --precision all \
+  --report-dir build/deepspeed-autotp
+```
+
+On DeepSpeed 0.19.2 this runs six cases: ZeRO 0/1/2 × FP32/BF16. The validator
+requires two different linear partition styles, the expected local shard
+shapes, exact reconstructed post-step weights, and both all-reduce and
+all-gather traffic. DeepSpeed 0.15.3 does not contain
+`deepspeed.runtime.tensor_parallel`; the runner detects that before launching
+ranks and exits with status 2.
+See DeepSpeed's [AutoTP training documentation](https://deepspeed.readthedocs.io/en/stable/training.html)
+for the upstream configuration boundary.
+
+### AutoEP training and variable all-to-all
+
+```bash
+$PYTHON verification/run_hybrid_deepspeed_autoep.py \
+  --zero-stage all --precision all \
+  --report-dir build/deepspeed-autoep
+
+python3 verification/test_group_semantics.py
+```
+
+The AutoEP workload routes three tokens per rank with nonuniform expert counts
+`[2, 1]` and `[1, 2]`. It checks automatic layer replacement, expert packing,
+forward/loss agreement, full gradients under ZeRO, the SGD update, and exact
+variable-split all-to-all reporting. All six ZeRO 0/1/2 × FP32/BF16 cases
+passed on DeepSpeed 0.19.2. DeepSpeed 0.15.3 has no training
+`auto_ep_layer`, which is reported as an unsupported version rather than a
+runtime failure.
+The replacement and routing model follows DeepSpeed's
+[AutoEP documentation](https://deepspeed.readthedocs.io/en/latest/autoep.html).
+
+The native group-semantics command additionally checks 2- and 4-rank
+all-to-all-v with nonuniform and zero-sized peer splits over both Unix shared
+memory and TCP socket payloads. This covers the transport used by physical
+multi-host simulation without claiming NCCL/RDMA performance parity.
+
+Current DeepSpeed releases do not combine training AutoTP and AutoEP in this
+validator. Grouped-GEMM experts are also excluded because the available WSL
+environment has no matching JIT CUDA toolchain; the maintained AutoEP case
+uses the sequential expert path.
+
 ## Maintained results
 
 The compact numerical matrix passed on both current test systems:
@@ -138,6 +218,22 @@ The compact numerical matrix passed on both current test systems:
 |---|---|---|
 | RTX PRO 5000 72GB Blackwell, CC 12.0 | PyTorch 2.8.0 + CUDA 12.8, DeepSpeed 0.15.3 | 2-rank FP32/BF16 ZeRO 0–3; 4-rank BF16 ZeRO-3 |
 | GeForce RTX 3090 Ti Ampere, CC 8.6 | PyTorch 2.12.1 + CUDA 13.0, DeepSpeed 0.19.2 | 2-rank FP32 ZeRO-0/3 and BF16 ZeRO 0–3 |
+
+The model-parallel compatibility matrix is narrower and version-specific:
+
+| Path | DeepSpeed 0.15.3 / RTX PRO 5000 | DeepSpeed 0.19.2 / RTX 3090 Ti |
+|---|---|---|
+| Pipeline, GAS=1 | FP32/BF16 direct-P2P checkpoint matrix and FP32 batched-P2P smoke passed | FP32/BF16 direct-P2P checkpoint matrix and FP32 batched-P2P smoke passed |
+| Pipeline, GAS=2 | FP32/BF16, checkpoint off/on passed | compatibility probe detects a stage-0 update mismatch |
+| AutoTP | module unavailable; preflight exit 2 | ZeRO 0/1/2 × FP32/BF16 passed |
+| AutoEP | training module unavailable; preflight exit 2 | ZeRO 0/1/2 × FP32/BF16 passed |
+
+For the nonuniform AutoEP matrix, every rank reported five all-to-all calls.
+FP32 node-pair totals were 272 B at ZeRO-0 and 288 B at ZeRO-1/2, with a
+64 B per-operation peak. BF16 totals were 172 B and 184 B, with a 32 B peak.
+The per-rank allocated peaks were about 17.1 MB at ZeRO-0, 2.018 GB for FP32
+ZeRO-1/2, and 1.017 GB for BF16 ZeRO-1/2. The large ZeRO peaks come from the
+default reduction buckets even though the deterministic expert model is tiny.
 
 Qwen3.5-0.8B uses batch size 1, BF16 base weights, LoRA rank 8, and two
 logical ranks. Memory values below are the maximum PyTorch allocated peak of
@@ -226,6 +322,10 @@ The following paths are verified:
 - ZeRO checkpoint save, restore, continued training, and FP32 consolidation
 - Hugging Face `Trainer` with tiny and Qwen LoRA workloads
 - CPU optimizer offload and ZeRO-3 CPU parameter offload
+- two-stage Pipeline Parallel with direct and batched P2P
+- AutoTP training on DeepSpeed 0.19.2, ZeRO 0–2
+- AutoEP training on DeepSpeed 0.19.2, ZeRO 0–2
+- nonuniform and sparse all-to-all-v over Unix and TCP transports
 - physical two-host ZeRO-2 over TCP
 - logical communication reports for every node pair
 
@@ -233,7 +333,10 @@ The following paths still require dedicated experiments:
 
 - DeepSpeed fused optimizers and other JIT-compiled CUDA operators
 - NVMe offload
-- pipeline, tensor, sequence, expert, and MoE parallelism
+- sequence parallelism
+- combined AutoTP and AutoEP training
+- grouped-GEMM/JIT AutoEP experts
+- physical multi-host Pipeline, AutoTP, and AutoEP on matching software stacks
 - physical two-host ZeRO-3 with identical DeepSpeed versions
 
 Passing the maintained suite therefore means the tested DeepSpeed training

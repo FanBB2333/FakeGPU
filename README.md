@@ -488,6 +488,9 @@ The distributed paths were also checked on the same two hosts:
 | Hybrid FSDP numerical check | Two ranks sharing each GPU | Full sharding, averaged reduce-scatter gradients, optimizer update, full-parameter reconstruction, and state-dict restoration passed on both CUDA stacks |
 | Hybrid FSDP2/DTensor matrix | Two or four ranks sharing each GPU | FP32, FP16, and BF16 parameter paths passed; FP16/BF16 gradient reduction also passed with reconstructed DTensor parameters |
 | Hybrid DeepSpeed ZeRO matrix | Two or four ranks sharing each GPU | ZeRO 0–3, FP32/BF16, gradient accumulation, optimizer updates, and cross-rank parameter consistency passed on DeepSpeed 0.15.3 and 0.19.2 |
+| DeepSpeed Pipeline Parallel | Two stages sharing each GPU | FP32/BF16 direct-P2P matrix plus an FP32 batched-P2P smoke covered forward/backward/update, checkpointing, and per-node-pair traffic on DeepSpeed 0.15.3 and 0.19.2 |
+| DeepSpeed AutoTP | Two ranks sharing the RTX 3090 Ti | ZeRO 0–2 × FP32/BF16 passed on DeepSpeed 0.19.2 with sharded weights, numerical updates, all-reduce/all-gather, and communication reports |
+| DeepSpeed AutoEP | Two ranks sharing the RTX 3090 Ti | ZeRO 0–2 × FP32/BF16 passed on DeepSpeed 0.19.2 with nonuniform expert routing, variable-split all-to-all, gradients, updates, and exact split-byte accounting |
 | Qwen3.5 DeepSpeed LoRA SFT | Two ranks sharing each GPU | ZeRO-2/3 forward, backward, AdamW update, communication report, accumulation, and reentrant checkpointing passed with local Qwen3.5-0.8B weights |
 | DeepSpeed checkpoint and offload | Two ranks sharing each GPU | ZeRO-2/3 save/restore/continued training/FP32 consolidation passed; ZeRO-2 optimizer and ZeRO-3 optimizer + parameter CPU offload placed the requested state on CPU |
 | Hugging Face Trainer + DeepSpeed | Two ranks sharing each GPU | Tiny ZeRO-2/3 and Qwen3.5-0.8B LoRA ZeRO-3 completed real updates, gradient accumulation, checkpointing, and rank-consistency checks |
@@ -538,13 +541,19 @@ python3 verification/run_hybrid_deepspeed_numerics.py --zero-stage 3 --precision
 python3 verification/run_hybrid_deepspeed_checkpoint.py --zero-stage 3 --precision fp32
 python3 verification/run_hf_trainer_deepspeed.py --workload tiny --zero-stage 3 --precision bf16
 python3 verification/run_qwen_deepspeed_lora_sft.py --model-dir /path/to/Qwen3.5-0.8B --output-dir build/qwen-deepspeed --zero-stage 3
+python3 verification/run_hybrid_deepspeed_pipeline.py --precision all --activation-checkpointing
+python3 verification/run_hybrid_deepspeed_autotp.py --zero-stage all --precision all
+python3 verification/run_hybrid_deepspeed_autoep.py --zero-stage all --precision all
 ```
 
 The DeepSpeed checks cover the native Engine and a Transformers/PEFT Qwen
 model with PyTorch optimizers, ZeRO checkpoint resume, Hugging Face Trainer,
-and CPU optimizer/parameter offload. Fused/JIT optimizers, NVMe offload,
-pipeline/tensor/MoE parallelism, and physical ZeRO-3 with matching DeepSpeed
-versions remain separate validation targets. See
+CPU optimizer/parameter offload, two-stage Pipeline Parallel, AutoTP, and
+AutoEP. AutoTP and training AutoEP require the newer DeepSpeed 0.19.2 test
+stack; the 0.15.3 stack reports those modules as unavailable. Fused/JIT
+optimizers, NVMe offload, sequence parallelism, combined AutoTP+AutoEP, and
+physical ZeRO-3 with matching DeepSpeed versions remain separate validation
+targets. See
 [DeepSpeed Validation](docs/deepspeed-validation.md) for commands, measured
 results, and the WSL-without-`nvcc` setup.
 

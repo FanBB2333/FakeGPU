@@ -122,6 +122,77 @@ $PYTHON verification/run_hf_trainer_deepspeed.py \
 [Transformers DeepSpeed 集成文档](https://huggingface.co/docs/transformers/main/en/deepspeed)，
 包含由 Trainer 解析的 `auto` 字段。
 
+## Pipeline、AutoTP 与 AutoEP
+
+项目提供三个独立验证器，覆盖 DeepSpeed 的模型并行训练路径。每个验证器都会核对
+确定性输出、optimizer 更新和节点对通信报告。
+
+### Pipeline Parallel
+
+```bash
+$PYTHON verification/run_hybrid_deepspeed_pipeline.py \
+  --precision all --activation-checkpointing \
+  --report-dir build/deepspeed-pipeline
+
+$PYTHON verification/run_hybrid_deepspeed_pipeline.py \
+  --precision fp32 --batched-p2p \
+  --report-dir build/deepspeed-pipeline-batched
+```
+
+双 stage 用例会检查前向 activation、反向梯度、一次 optimizer 更新、stage
+位置、直接 `send`/`recv`、可选 `batch_isend_irecv`、activation checkpoint
+和 P2P 字节统计。FP32/BF16 × checkpoint 关闭/开启矩阵已在 DeepSpeed
+0.15.3 和 0.19.2 上通过；两套环境还各自通过了 FP32 batched-P2P smoke。
+梯度累积为 2 的矩阵在 0.15.3 上通过；0.19.2 在同一用例中得到正确 loss，但
+stage 0 的更新量只有预期的一半，因此该组合保留为兼容性探针，不计入 FakeGPU
+已通过范围。
+
+物理主机的 `deepspeed-pipeline` 用例要求每个 stage 使用相同的 PyTorch、CUDA
+runtime 和 DeepSpeed 版本。当前两台主机分别使用 0.15.3 和 0.19.2，控制器会在
+启动前报告版本不一致，不会比较不兼容的 P2P 调度。DeepSpeed 的相关约束可查看
+[Pipeline Parallelism 文档](https://deepspeed.readthedocs.io/en/latest/pipeline.html)。
+
+### AutoTP 训练
+
+```bash
+$PYTHON verification/run_hybrid_deepspeed_autotp.py \
+  --zero-stage all --precision all \
+  --report-dir build/deepspeed-autotp
+```
+
+DeepSpeed 0.19.2 上已通过 ZeRO 0/1/2 × FP32/BF16 六组用例。验证内容包括两种
+Linear 分片方式、本地 shard 形状、更新后完整权重，以及 all-reduce 和
+all-gather 通信。DeepSpeed 0.15.3 不包含
+`deepspeed.runtime.tensor_parallel`，验证器会在启动 rank 前返回状态码 2，并明确
+说明当前版本不支持训练 AutoTP。
+上游配置范围可查看 DeepSpeed 的
+[AutoTP 训练文档](https://deepspeed.readthedocs.io/en/stable/training.html)。
+
+### AutoEP 训练与可变分片 all-to-all
+
+```bash
+$PYTHON verification/run_hybrid_deepspeed_autoep.py \
+  --zero-stage all --precision all \
+  --report-dir build/deepspeed-autoep
+
+python3 verification/test_group_semantics.py
+```
+
+AutoEP 用例让每个 rank 处理三个 token，两个 rank 的非均匀专家计数分别为
+`[2, 1]` 和 `[1, 2]`。验证器会检查自动替换 MoE 层、expert 打包、前向与
+loss、ZeRO 下的完整梯度、SGD 更新，以及可变分片 all-to-all 的精确字节统计。
+DeepSpeed 0.19.2 上的 ZeRO 0/1/2 × FP32/BF16 六组用例全部通过。
+DeepSpeed 0.15.3 没有训练用 `auto_ep_layer`，验证器会将其报告为版本不支持。
+自动替换与路由模型对应 DeepSpeed 的
+[AutoEP 文档](https://deepspeed.readthedocs.io/en/latest/autoep.html)。
+
+原生 group semantics 命令还会验证 2/4 rank 的非均匀分片和零长度 peer 分片，
+同时覆盖 Unix 共享内存与 TCP socket payload。TCP 路径对应物理多机模拟使用的
+传输方式，但该结果不代表 NCCL/RDMA 性能。
+
+当前验证器不组合训练 AutoTP 与 AutoEP。WSL 环境也没有匹配的 JIT CUDA
+工具链，因此维护中的 AutoEP 用例使用顺序 expert 路径，不包含 grouped GEMM。
+
 ## 当前实测结果
 
 小型数值矩阵已在两套环境中通过：
@@ -130,6 +201,21 @@ $PYTHON verification/run_hf_trainer_deepspeed.py \
 |---|---|---|
 | RTX PRO 5000 72GB Blackwell，CC 12.0 | PyTorch 2.8.0 + CUDA 12.8，DeepSpeed 0.15.3 | 双 rank FP32/BF16 ZeRO 0–3；四 rank BF16 ZeRO-3 |
 | GeForce RTX 3090 Ti Ampere，CC 8.6 | PyTorch 2.12.1 + CUDA 13.0，DeepSpeed 0.19.2 | 双 rank FP32 ZeRO-0/3 和 BF16 ZeRO 0–3 |
+
+模型并行能力与 DeepSpeed 版本直接相关：
+
+| 路径 | DeepSpeed 0.15.3 / RTX PRO 5000 | DeepSpeed 0.19.2 / RTX 3090 Ti |
+|---|---|---|
+| Pipeline，GAS=1 | FP32/BF16 直接 P2P checkpoint 矩阵和 FP32 batched-P2P smoke 通过 | FP32/BF16 直接 P2P checkpoint 矩阵和 FP32 batched-P2P smoke 通过 |
+| Pipeline，GAS=2 | FP32/BF16、checkpoint 开关通过 | 兼容性探针检测到 stage 0 更新量不一致 |
+| AutoTP | 模块不存在，预检返回 2 | ZeRO 0/1/2 × FP32/BF16 通过 |
+| AutoEP | 训练模块不存在，预检返回 2 | ZeRO 0/1/2 × FP32/BF16 通过 |
+
+非均匀 AutoEP 矩阵中，每个 rank 都记录了 5 次 all-to-all。FP32 的节点对
+通信总量在 ZeRO-0 为 272 B，在 ZeRO-1/2 为 288 B，单次峰值为 64 B；BF16
+对应 172 B、184 B 和 32 B。单 rank allocated 峰值在 ZeRO-0 约为 17.1 MB，
+FP32 ZeRO-1/2 约为 2.018 GB，BF16 ZeRO-1/2 约为 1.017 GB。确定性 expert
+模型本身很小，ZeRO 的大峰值来自默认 reduction bucket。
 
 Qwen3.5-0.8B 使用 batch size 1、BF16 基座、LoRA rank 8 和两个逻辑 rank。
 下表的显存是单个 rank 的 PyTorch allocated 峰值；实验中的两个 rank 共用一张
@@ -215,6 +301,10 @@ DS_IGNORE_CUDA_DETECTION=1 $PYTHON \
 - ZeRO checkpoint 保存、恢复、续训和 FP32 合并
 - Hugging Face `Trainer` 小型网络与 Qwen LoRA 路径
 - CPU optimizer offload 和 ZeRO-3 CPU 参数 offload
+- 双 stage Pipeline Parallel，包含直接和 batched P2P
+- DeepSpeed 0.19.2 上的 AutoTP 训练，覆盖 ZeRO 0–2
+- DeepSpeed 0.19.2 上的 AutoEP 训练，覆盖 ZeRO 0–2
+- Unix/TCP 上的非均匀与稀疏 all-to-all-v
 - 物理双主机 TCP ZeRO-2
 - 任意节点对的逻辑通信报告
 
@@ -222,7 +312,10 @@ DS_IGNORE_CUDA_DETECTION=1 $PYTHON \
 
 - DeepSpeed fused optimizer 和其他 JIT CUDA operator
 - NVMe offload
-- pipeline、tensor、sequence、expert 和 MoE 并行
+- sequence parallel
+- AutoTP 与 AutoEP 组合训练
+- grouped-GEMM/JIT AutoEP expert
+- 软件栈一致时的物理多机 Pipeline、AutoTP 和 AutoEP
 - DeepSpeed 版本一致时的物理双主机 ZeRO-3
 
 因此，维护中的测试通过表示上面列出的训练路径可用，不表示 DeepSpeed 全部 API
