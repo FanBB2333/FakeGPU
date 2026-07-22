@@ -22,10 +22,17 @@ EXPECTED_INITIAL = [
     [1.0, 0.0, 0.0, 1.0],
     [1.0, 1.0],
 ]
-EXPECTED_FINAL = [
-    [0.45, -0.35, -0.55, 0.65],
-    [0.45, 0.65],
-]
+EXPECTED_LOSS = {1: 6.25, 2: 4.25}
+EXPECTED_FINAL = {
+    1: [
+        [0.5, -1.0, -0.5, 0.0],
+        [0.5, 0.0],
+    ],
+    2: [
+        [0.45, -0.35, -0.55, 0.65],
+        [0.45, 0.65],
+    ],
+}
 
 
 def _write_report(report_dir: Path, rank: int, report: dict[str, Any]) -> None:
@@ -96,6 +103,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=(0, 1),
         default=0,
     )
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        choices=(1, 2),
+        default=1,
+    )
     args = parser.parse_args(argv)
 
     rank = int(os.environ["RANK"])
@@ -106,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         "world_size": world_size,
         "precision": args.precision,
         "activation_checkpoint_interval": args.activation_checkpoint_interval,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "status": "starting",
     }
     stage = "import_torch"
@@ -174,9 +188,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
         config = {
-            "train_batch_size": 2,
+            "train_batch_size": args.gradient_accumulation_steps,
             "train_micro_batch_size_per_gpu": 1,
-            "gradient_accumulation_steps": 2,
+            "gradient_accumulation_steps": args.gradient_accumulation_steps,
             "zero_optimization": {"stage": 0},
             "fp16": {"enabled": False},
             "bf16": {"enabled": args.precision == "bf16"},
@@ -238,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
                     torch.tensor([[2.0, -1.0]], dtype=torch.float32),
                     torch.tensor([[-0.5]], dtype=torch.float32),
                 ),
-            ]
+            ][: args.gradient_accumulation_steps]
         )
         loss = engine.train_batch(data_iter=micro_batches)
         torch.cuda.synchronize()
@@ -250,22 +264,6 @@ def main(argv: list[str] | None = None) -> int:
             dist,
             final_local_values,
         )
-
-        if int(engine.global_steps) != 1:
-            raise AssertionError(
-                f"expected one pipeline optimizer step, got {engine.global_steps}"
-            )
-        if abs(loss_value - 4.25) > tolerance:
-            raise AssertionError(f"pipeline loss mismatch: {loss_value} != 4.25")
-        for stage_id, (actual, expected) in enumerate(
-            zip(all_stage_parameters, EXPECTED_FINAL)
-        ):
-            if not _vector_close(actual, expected, tolerance):
-                raise AssertionError(
-                    f"pipeline stage {stage_id} update mismatch: "
-                    f"{actual} != {expected}"
-                )
-
         report.update(
             {
                 "loss": loss_value,
@@ -277,6 +275,27 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             }
         )
+
+        if int(engine.global_steps) != 1:
+            raise AssertionError(
+                f"expected one pipeline optimizer step, got {engine.global_steps}"
+            )
+        expected_loss = EXPECTED_LOSS[args.gradient_accumulation_steps]
+        if abs(loss_value - expected_loss) > tolerance:
+            raise AssertionError(
+                f"pipeline loss mismatch: {loss_value} != {expected_loss}"
+            )
+        expected_parameters = EXPECTED_FINAL[
+            args.gradient_accumulation_steps
+        ]
+        for stage_id, (actual, expected) in enumerate(
+            zip(all_stage_parameters, expected_parameters)
+        ):
+            if not _vector_close(actual, expected, tolerance):
+                raise AssertionError(
+                    f"pipeline stage {stage_id} update mismatch: "
+                    f"{actual} != {expected}"
+                )
 
         stage = "barrier"
         dist.barrier(device_ids=[0])
