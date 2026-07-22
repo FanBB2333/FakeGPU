@@ -221,6 +221,7 @@ def main() -> int:
         from deepspeed.runtime.fp16.loss_scaler import LossScaler
         from deepspeed.runtime.zero.config import ZeroStageEnum
         from deepspeed.utils.logging import logger as deepspeed_logger
+        from deepspeed.utils.tensor_fragment import fragment_address
 
         deepspeed_logger.setLevel(logging.WARNING)
         logging.getLogger("deepspeed").setLevel(logging.WARNING)
@@ -349,7 +350,7 @@ def main() -> int:
             # created by this process, so explicitly allow only the two types
             # reported by get_unsafe_globals_in_checkpoint().
             torch.serialization.add_safe_globals(
-                [ZeroStageEnum, LossScaler]
+                [ZeroStageEnum, LossScaler, fragment_address]
             )
             safe_globals_added = True
         load_path, client_state = engine.load_checkpoint(
