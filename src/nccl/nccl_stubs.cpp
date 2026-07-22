@@ -959,6 +959,56 @@ bool validate_stream_handle(
     return true;
 }
 
+ncclResult_t complete_empty_collective(
+    fake_gpu::distributed::CollectiveType collective_type,
+    ncclDataType_t datatype,
+    ncclRedOp_t op,
+    int root,
+    ncclComm_t comm,
+    cudaStream_t stream) {
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
+    if (comm->destroyed) {
+        return fail_with(comm, ncclInvalidUsage, "communicator is already destroyed");
+    }
+    const ncclResult_t pending_error = surface_async_error(comm);
+    if (pending_error != ncclSuccess) {
+        return pending_error;
+    }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
+    }
+
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(datatype, mapped_dtype)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+
+    if (collective_type == fake_gpu::distributed::CollectiveType::AllReduce ||
+        collective_type == fake_gpu::distributed::CollectiveType::Reduce ||
+        collective_type == fake_gpu::distributed::CollectiveType::ReduceScatter) {
+        fake_gpu::distributed::CollectiveReduceOp reduce_op;
+        if (!map_reduce_op(op, reduce_op)) {
+            return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
+        }
+    }
+
+    if ((collective_type == fake_gpu::distributed::CollectiveType::Reduce ||
+         collective_type == fake_gpu::distributed::CollectiveType::Broadcast) &&
+        (root < 0 || root >= comm->world_size)) {
+        return fail_with(comm, ncclInvalidArgument, "root must be within [0, world_size)");
+    }
+
+    const ncclResult_t completion_result =
+        mark_simulated_stream_work_complete(comm, stream);
+    if (completion_result != ncclSuccess) {
+        return completion_result;
+    }
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
 bool validate_group_stream_binding(
     ncclComm_t comm,
     cudaStream_t stream) {
@@ -3127,6 +3177,15 @@ ncclResult_t ncclReduce(
     int root,
     ncclComm_t comm,
     cudaStream_t stream) {
+    if (count == 0) {
+        return complete_empty_collective(
+            fake_gpu::distributed::CollectiveType::Reduce,
+            datatype,
+            op,
+            root,
+            comm,
+            stream);
+    }
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -3244,6 +3303,15 @@ ncclResult_t ncclBroadcast(
     int root,
     ncclComm_t comm,
     cudaStream_t stream) {
+    if (count == 0) {
+        return complete_empty_collective(
+            fake_gpu::distributed::CollectiveType::Broadcast,
+            datatype,
+            ncclSum,
+            root,
+            comm,
+            stream);
+    }
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
@@ -3280,6 +3348,15 @@ ncclResult_t ncclAllReduce(
     ncclRedOp_t op,
     ncclComm_t comm,
     cudaStream_t stream) {
+    if (count == 0) {
+        return complete_empty_collective(
+            fake_gpu::distributed::CollectiveType::AllReduce,
+            datatype,
+            op,
+            -1,
+            comm,
+            stream);
+    }
     if (comm) {
         const ncclResult_t pending_error = surface_async_error(comm);
         if (pending_error != ncclSuccess) {
@@ -3315,6 +3392,15 @@ ncclResult_t ncclReduceScatter(
     ncclRedOp_t op,
     ncclComm_t comm,
     cudaStream_t stream) {
+    if (recvcount == 0) {
+        return complete_empty_collective(
+            fake_gpu::distributed::CollectiveType::ReduceScatter,
+            datatype,
+            op,
+            -1,
+            comm,
+            stream);
+    }
     if (comm) {
         const ncclResult_t pending_error = surface_async_error(comm);
         if (pending_error != ncclSuccess) {
@@ -3349,6 +3435,15 @@ ncclResult_t ncclAllGather(
     ncclDataType_t datatype,
     ncclComm_t comm,
     cudaStream_t stream) {
+    if (sendcount == 0) {
+        return complete_empty_collective(
+            fake_gpu::distributed::CollectiveType::AllGather,
+            datatype,
+            ncclSum,
+            -1,
+            comm,
+            stream);
+    }
     if (comm) {
         const ncclResult_t pending_error = surface_async_error(comm);
         if (pending_error != ncclSuccess) {
@@ -3379,6 +3474,15 @@ ncclResult_t ncclAlltoAll(
     ncclDataType_t datatype,
     ncclComm_t comm,
     cudaStream_t stream) {
+    if (count == 0) {
+        return complete_empty_collective(
+            fake_gpu::distributed::CollectiveType::AllToAll,
+            datatype,
+            ncclSum,
+            -1,
+            comm,
+            stream);
+    }
     if (comm) {
         const ncclResult_t pending_error = surface_async_error(comm);
         if (pending_error != ncclSuccess) {

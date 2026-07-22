@@ -793,8 +793,12 @@ void run_premul_redop_api_case() {
         "null scalar should fail");
     require_result(
         ncclRedOpCreatePreMulSum(&op, &scalar, ncclFloat16, ncclScalarHostImmediate, nullptr),
-        ncclInvalidArgument,
-        "unsupported datatype should fail");
+        ncclSuccess,
+        "float16 preMulSum should be supported");
+    require_result(
+        ncclRedOpDestroy(op, nullptr),
+        ncclSuccess,
+        "float16 preMulSum destroy should succeed");
     require_result(
         ncclRedOpCreatePreMulSum(&op, &scalar, ncclFloat32, ncclScalarDevice, nullptr),
         ncclInvalidUsage,
@@ -1064,6 +1068,68 @@ void run_invalid_stream_collective_case() {
     }
 }
 
+void run_empty_collective_case() {
+    ncclUniqueId unique_id {};
+    require_result(
+        ncclGetUniqueId(&unique_id),
+        ncclSuccess,
+        "empty collective ncclGetUniqueId failed");
+
+    ncclComm_t comm = nullptr;
+    require_result(
+        ncclCommInitRank(&comm, 1, unique_id, 0),
+        ncclSuccess,
+        "empty collective communicator init failed");
+
+    require_result(
+        ncclAllReduce(nullptr, nullptr, 0, ncclFloat32, ncclSum, comm, nullptr),
+        ncclSuccess,
+        "empty all-reduce should be a no-op");
+    require_result(
+        ncclReduce(nullptr, nullptr, 0, ncclFloat32, ncclSum, 0, comm, nullptr),
+        ncclSuccess,
+        "empty reduce should be a no-op");
+    require_result(
+        ncclBroadcast(nullptr, nullptr, 0, ncclFloat32, 0, comm, nullptr),
+        ncclSuccess,
+        "empty broadcast should be a no-op");
+    require_result(
+        ncclReduceScatter(
+            nullptr,
+            nullptr,
+            0,
+            ncclFloat32,
+            ncclSum,
+            comm,
+            nullptr),
+        ncclSuccess,
+        "empty reduce-scatter should be a no-op");
+    require_result(
+        ncclAllGather(nullptr, nullptr, 0, ncclFloat32, comm, nullptr),
+        ncclSuccess,
+        "empty all-gather should be a no-op");
+    require_result(
+        ncclAlltoAll(nullptr, nullptr, 0, ncclFloat32, comm, nullptr),
+        ncclSuccess,
+        "empty all-to-all should be a no-op");
+
+    require_result(ncclGroupStart(), ncclSuccess, "empty group start failed");
+    require_result(
+        ncclBroadcast(nullptr, nullptr, 0, ncclInt64, 0, comm, nullptr),
+        ncclSuccess,
+        "grouped empty broadcast should be a no-op");
+    require_result(ncclGroupEnd(), ncclSuccess, "empty group end failed");
+
+    require_result(
+        ncclAllReduce(nullptr, nullptr, 1, ncclFloat32, ncclSum, comm, nullptr),
+        ncclInvalidArgument,
+        "non-empty all-reduce must still reject null buffers");
+    require_result(
+        ncclCommDestroy(comm),
+        ncclSuccess,
+        "destroy after empty collectives failed");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1105,6 +1171,7 @@ int main(int argc, char** argv) {
         run_async_error_persistence_case();
         run_fake_stream_identity_case();
         run_fake_stream_registry_case();
+        run_empty_collective_case();
         run_invalid_stream_collective_case();
         run_group_stream_mismatch_case();
         run_nccl_229_compat_case();
