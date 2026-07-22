@@ -143,12 +143,12 @@ def main(argv: list[str] | None = None) -> int:
 
         stage = "init_process_group"
         torch.cuda.set_device(0)
-        dist.init_process_group(
-            backend="nccl",
+        os.environ["LOCAL_RANK"] = "0"
+        deepspeed.init_distributed(
+            dist_backend="nccl",
             init_method="env://",
             timeout=timedelta(seconds=90),
         )
-        os.environ["LOCAL_RANK"] = "0"
 
         class FirstStage(torch.nn.Linear):
             def __init__(self) -> None:
