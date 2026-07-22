@@ -214,7 +214,10 @@ def _validate_resilience(
             _die(f"{ctx}.seqno must be positive")
         _require_non_negative_integer(event, "local_rank", ctx=ctx)
         global_rank = _require_non_negative_integer(event, "global_rank", ctx=ctx)
-        for field in ("source", "operation", "error_code", "error_detail"):
+        source = _require(event, "source", ctx=ctx)
+        if not isinstance(source, str) or not source:
+            _die(f"{ctx}.source must be a non-empty string")
+        for field in ("operation", "error_code", "error_detail"):
             value = _require(event, field, ctx=ctx)
             if not isinstance(value, str) or not value:
                 _die(f"{ctx}.{field} must be a non-empty string")
@@ -230,8 +233,13 @@ def _validate_resilience(
             _die(f"{ctx}.observed_ranks must contain non-negative integers")
         if observed_ranks != sorted(set(observed_ranks)):
             _die(f"{ctx}.observed_ranks must be sorted and unique")
-        if global_rank not in observed_ranks:
+        if source == "injected" and global_rank not in observed_ranks:
             _die(f"{ctx}.observed_ranks must include the failed global rank")
+        if source == "collective_timeout" and global_rank in observed_ranks:
+            _die(
+                f"{ctx}.observed_ranks must exclude the rank absent from "
+                "the timed-out collective"
+            )
         _require_non_negative_integer(event, "attempted_payload_bytes", ctx=ctx)
 
     for index, event in enumerate(recovery_events):

@@ -345,9 +345,9 @@ checks.
 | NVML | Device identity, memory information, common monitoring queries | Some telemetry fields are synthetic or unavailable |
 | cuBLAS/cuBLASLt | Selected GEMM/matmul operations with CPU-backed execution | Unsupported algorithms may remain stubbed |
 | PyTorch fake-CUDA | Common tensor, module, autograd, optimizer, Transformers, PEFT, Accelerate, and FSDP smoke paths; real-CUDA Hybrid DDP/FSDP numerical checks | Custom CUDA extensions are not emulated |
-| NCCL-style communication | Collective and point-to-point control flow, TCP socket payloads, deterministic direct-collective rank failure, communicator shrink/recovery, topology-aware reporting, PyTorch-required NCCL 2.29 host symbols | Not a protocol-level NCCL/RDMA/NVLink model; device-communicator and signal/RMA operations are not simulated |
+| NCCL-style communication | Collective and point-to-point control flow, TCP socket payloads, deterministic direct-collective failure, controlled rank-process exit observed through collective timeout, communicator shrink/recovery, topology-aware reporting, PyTorch-required NCCL 2.29 host symbols | Not a protocol-level NCCL/RDMA/NVLink model; no heartbeat-based membership or automatic elastic restart; device-communicator and signal/RMA operations are not simulated |
 | Memory preflight | Runtime tracking, ATen static analysis, empirical GPU calibration | Results apply to the validated shape and software envelope |
-| Error simulation | OOM, invalid device, cross-device, dtype/autocast, gradient, checkpoint, and distributed rank-failure cases | Error timing can differ from a real driver; distributed injection currently targets direct collectives in simulate mode |
+| Error simulation | OOM, invalid device, cross-device, dtype/autocast, gradient, checkpoint, injected rank failure, and controlled process-exit cases | Error timing can differ from a real driver; distributed recovery currently targets direct collectives in simulate mode |
 
 ## GPU profiles
 
@@ -529,7 +529,7 @@ python3 -m pytest -q
 | `python` | Basic PyTorch native-interception path |
 | `preflight_oom` | Fit/OOM classification and report validation |
 | `tcp_bandwidth` | Two logical nodes, TCP payload correctness, and throughput reporting |
-| `distributed_resilience` | Rank-failure injection, persistent async error, communicator shrink/recovery, collective mismatch, missing-peer timeout, and bounded operation-timeline retention |
+| `distributed_resilience` | Rank-failure injection, real worker exit, collective-timeout inference, persistent async errors, communicator shrink/recovery, collective mismatch, missing-peer timeout, and bounded operation-timeline retention |
 | `static_memory_validation` | ATen graph memory estimation; optional real-CUDA comparison |
 | `real_gpu_calibration` | Real/passthrough/hybrid/fakecuda comparison on a supported GPU |
 
@@ -567,9 +567,9 @@ The physical two-host controller in
 `verification/run_physical_multihost.py` verifies that both repositories use
 the same Git commit, launches Hybrid DDP (including common execution options),
 FSDP/FSDP2 (including mixed-precision parameters and reductions), optional
-DeepSpeed ZeRO-2/3 cases, and TCP fault cases including four-rank
-failure/shrink recovery, then collects JSON and Markdown reports on the
-control host.
+DeepSpeed ZeRO-2/3 cases, and TCP fault cases including injected failure and
+real four-rank worker-exit/shrink recovery, then collects JSON and Markdown
+reports on the control host.
 Cluster report validation also reconciles collective/P2P
 counters, operation-timeline retention, collective dtype/reduction metadata,
 resilience-event counts, directional links, and node-pair totals.
@@ -599,7 +599,7 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 - The checkpoint-only LLM estimator supports dense decoder-only safetensors models; it does not infer arbitrary repository control flow, MoE routing, quantization state, or custom kernels.
 - Supported cuBLAS/cuBLASLt operations can be numerically checked on CPU; unsupported operations may be stubs.
 - Distributed simulation checks semantics and control flow. Its TCP result includes coordinator reduction, memory copies, and process scheduling, so it is not an exact NCCL/RDMA or raw-link measurement.
-- Distributed fault injection does not yet kill worker processes, detect heartbeat loss, or provide framework-level elastic restart; the maintained recovery path uses explicit survivor calls to `ncclCommShrink`.
+- The resilience harness can terminate a worker process and infer the absent rank when the next collective times out. FakeGPU does not provide heartbeat-based failure detection, automatic membership changes, or framework-level elastic restart; survivors still call `ncclCommShrink` with an explicit exclusion list.
 - Static and runtime memory estimates can omit backend-internal allocations outside matched profiles.
 - Hybrid mode requires a real GPU and remains limited to validated Driver/runtime surfaces.
 - macOS system binaries can remove `DYLD_*` variables because of SIP; use a Homebrew, conda, or pyenv Python.

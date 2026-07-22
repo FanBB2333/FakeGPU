@@ -226,12 +226,20 @@ python3 verification/run_physical_multihost.py \
 - 两台物理主机之间的 grouped 非均匀与稀疏 all-to-all-v
 - collective reduction operator 不一致以及持续可见的 async error
 - 确定性的 rank 2 All-Reduce 故障、持续 `ncclRemoteError`、三 rank `ncclCommShrink` 与恢复后的 All-Reduce
+- communicator 初始化后 rank 2 worker 真实退出，ranks 0/1/3 通过 collective 超时推断缺席节点，再显式 shrink 并执行恢复后的 All-Reduce
 - 从第二台物理主机触发缺少 rank 的 communicator 超时
 
 只执行恢复场景时使用 `--case fault-shrink`。控制脚本会把四个逻辑 rank
 分布到两个 node 配置：rank 0、2 位于第一台主机，rank 1、3 位于第二台。
 排除 rank 2 后，子 communicator 包含全局 ranks `[0, 1, 3]`，本地 rank
 为 `[0, 1, 2]`。Cluster 报告会同时记录注入故障和恢复事件。
+
+进程退出版本使用 `--case process-exit-shrink`。Rank 2 写入标记后通过
+`os._exit(86)` 直接终止，不清理 communicator。存活 ranks 先从超时的
+All-Reduce 收到持续可见的 `ncclSystemError`，随后使用相同的明确映射完成
+shrink。报告将 rank 2 记为推断出的缺席节点，并把 `[0, 1, 3]` 记为实际
+提交失败操作的 ranks。这是 collective 超时推断，不是 heartbeat 检测或
+自动 elastic 恢复。
 
 DeepSpeed 是可选场景，不在默认集合中。添加 `--case deepspeed-zero2` 可以验证
 每台物理主机各运行一个 rank；维护中的异构实验已在 DeepSpeed 0.15.3 和

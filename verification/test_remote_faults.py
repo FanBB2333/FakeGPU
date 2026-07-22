@@ -17,6 +17,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKER = REPO_ROOT / "verification" / "remote_nccl_fault_worker.py"
 CLUSTER_CONFIG = REPO_ROOT / "verification" / "data" / "cluster_tcp_4r.yaml"
+EXPECTED_PROCESS_EXIT_CODE = 86
 
 
 def _free_port() -> int:
@@ -282,9 +283,88 @@ def _run_fault_shrink(
     return reports
 
 
+def _run_process_exit_shrink(
+    endpoint: str,
+    nccl_lib: Path,
+    temp_dir: Path,
+) -> list[dict[str, Any]]:
+    world_size = 4
+    failed_rank = 2
+    timeout_ms = 1000
+    session = "local-process-exit-shrink"
+    processes: list[tuple[int, Path, subprocess.Popen[str]]] = []
+    for rank in range(world_size):
+        report_path = temp_dir / f"process-exit-shrink-rank-{rank}.json"
+        process = subprocess.Popen(
+            _worker_command(
+                case="process-exit-shrink",
+                rank=rank,
+                session=session,
+                timeout_ms=timeout_ms,
+                nccl_lib=nccl_lib,
+                report_path=report_path,
+                world_size=world_size,
+                failed_rank=failed_rank,
+            ),
+            cwd=REPO_ROOT,
+            env=_worker_env(endpoint, timeout_ms),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        processes.append((rank, report_path, process))
+
+    reports: list[dict[str, Any]] = []
+    failures: list[str] = []
+    for rank, report_path, process in processes:
+        try:
+            stdout, stderr = process.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5)
+            failures.append(f"rank {rank} timed out\n{stdout}\n{stderr}")
+            continue
+        if report_path.is_file():
+            reports.append(json.loads(report_path.read_text(encoding="utf-8")))
+        expected_returncode = (
+            EXPECTED_PROCESS_EXIT_CODE if rank == failed_rank else 0
+        )
+        if process.returncode != expected_returncode:
+            failures.append(
+                f"rank {rank} exited with {process.returncode}; expected "
+                f"{expected_returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            )
+    if failures:
+        raise AssertionError("\n\n".join(failures))
+
+    reports.sort(key=lambda item: int(item["rank"]))
+    assert len(reports) == world_size
+    exited = reports[failed_rank]
+    assert exited["status"] == "expected_process_exit"
+    assert int(exited["process_exit_code"]) == EXPECTED_PROCESS_EXIT_CODE
+    assert exited["expected_exit_performed"] is True
+    assert exited["expected_failure_observed"] is False
+    assert exited["participated_in_collective"] is False
+    assert exited["participated_in_shrink"] is False
+
+    survivors = [item for item in reports if int(item["rank"]) != failed_rank]
+    assert all(item["status"] == "success" for item in survivors)
+    assert all(int(item["failure_result"]) != 0 for item in survivors)
+    assert all("timeout" in item["failure_last_error"].lower() for item in survivors)
+    assert all(int(item["async_error"]) != 0 for item in survivors)
+    assert all(item["participated_in_shrink"] is True for item in survivors)
+    assert [int(item["child_rank"]) for item in survivors] == [0, 1, 2]
+    assert all(int(item["child_world_size"]) == 3 for item in survivors)
+    assert all(
+        float(item["recovered_all_reduce_value"]) == 7.0
+        for item in survivors
+    )
+    return reports
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate mismatch and missing-peer failures over TCP."
+        description="Validate communicator failures and recovery over TCP."
     )
     parser.add_argument("--build-dir", type=Path, default=REPO_ROOT / "build")
     args = parser.parse_args()
@@ -329,6 +409,11 @@ def main() -> int:
                 nccl_lib,
                 temp_dir,
             )
+            process_exit_reports = _run_process_exit_shrink(
+                endpoint,
+                nccl_lib,
+                temp_dir,
+            )
             missing_peer_report = _run_missing_peer(
                 endpoint,
                 nccl_lib,
@@ -359,18 +444,31 @@ def main() -> int:
         assert cluster_report["cluster"]["coordinator_transport"] == "tcp"
         assert cluster_report["cluster"]["world_size"] == 4
         assert cluster_report["cluster"]["node_count"] == 2
-        assert cluster_report["collectives"]["all_reduce"]["calls"] == 1
-        assert cluster_report["operation_timeline"]["retained_entries"] == 1
-        assert cluster_report["resilience"]["failure_count"] == 1
-        assert cluster_report["resilience"]["recovery_count"] == 1
-        failure_event = cluster_report["resilience"]["failure_events"][0]
-        recovery_event = cluster_report["resilience"]["recovery_events"][0]
-        assert failure_event["global_rank"] == 2
-        assert failure_event["operation"] == "all_reduce"
-        assert failure_event["observed_ranks"] == [0, 1, 2, 3]
-        assert failure_event["attempted_payload_bytes"] == 16
-        assert recovery_event["excluded_ranks"] == [2]
-        assert recovery_event["surviving_ranks"] == [0, 1, 3]
+        assert cluster_report["collectives"]["all_reduce"]["calls"] == 2
+        assert cluster_report["operation_timeline"]["retained_entries"] == 2
+        resilience = cluster_report["resilience"]
+        assert resilience["failure_count"] == 2, resilience
+        assert resilience["recovery_count"] == 2, resilience
+        failure_events = {
+            str(item["source"]): item for item in resilience["failure_events"]
+        }
+        injected_failure = failure_events["injected"]
+        timeout_failure = failure_events["collective_timeout"]
+        assert injected_failure["global_rank"] == 2
+        assert injected_failure["operation"] == "all_reduce"
+        assert injected_failure["observed_ranks"] == [0, 1, 2, 3]
+        assert injected_failure["attempted_payload_bytes"] == 16
+        assert timeout_failure["global_rank"] == 2
+        assert timeout_failure["operation"] == "allreduce"
+        assert timeout_failure["observed_ranks"] == [0, 1, 3]
+        assert timeout_failure["attempted_payload_bytes"] == 12
+        assert timeout_failure["error_code"] == "timeout_waiting_for_collective"
+        recovery_events = resilience["recovery_events"]
+        assert all(item["excluded_ranks"] == [2] for item in recovery_events)
+        assert all(
+            item["surviving_ranks"] == [0, 1, 3]
+            for item in recovery_events
+        )
         rank_timeouts = {
             int(item["rank"]): int(item["timeouts"])
             for item in cluster_report["ranks"]
@@ -392,7 +490,15 @@ def main() -> int:
                         int(item["failure_result"])
                         for item in fault_shrink_reports
                     ],
-                    "surviving_ranks": recovery_event["surviving_ranks"],
+                    "process_exit_code": int(
+                        process_exit_reports[2]["process_exit_code"]
+                    ),
+                    "process_exit_failure_results": [
+                        int(item["failure_result"])
+                        for item in process_exit_reports
+                        if int(item["rank"]) != 2
+                    ],
+                    "surviving_ranks": recovery_events[-1]["surviving_ranks"],
                     "rank_timeouts": rank_timeouts,
                 },
                 sort_keys=True,

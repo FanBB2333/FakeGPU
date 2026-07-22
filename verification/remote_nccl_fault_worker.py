@@ -18,6 +18,7 @@ NCCL_FLOAT32 = 7
 NCCL_SUM = 0
 NCCL_PROD = 1
 NCCL_SHRINK_ABORT = 1
+EXPECTED_PROCESS_EXIT_CODE = 86
 
 
 class NcclUniqueId(ctypes.Structure):
@@ -214,49 +215,13 @@ def _run_missing_peer(
         )
 
 
-def _run_fault_shrink(
-    args: argparse.Namespace,
+def _require_persistent_async_error(
     lib: ctypes.CDLL,
     comm: ctypes.c_void_p,
     report: dict[str, Any],
+    *,
+    failure_label: str,
 ) -> None:
-    started = time.monotonic()
-    init_result = int(
-        lib.ncclCommInitRank(
-            ctypes.byref(comm),
-            args.world_size,
-            _unique_id(args.session),
-            args.rank,
-        )
-    )
-    report["comm_init_result"] = init_result
-    report["comm_init_seconds"] = time.monotonic() - started
-    if init_result != NCCL_SUCCESS:
-        raise AssertionError(
-            f"ncclCommInitRank unexpectedly failed with result {init_result}: "
-            f"{_last_error(lib, comm)}"
-        )
-
-    send = (ctypes.c_float * 1)(float(args.rank + 1))
-    recv = (ctypes.c_float * 1)()
-    failure_started = time.monotonic()
-    failure_result = int(
-        lib.ncclAllReduce(
-            ctypes.cast(send, ctypes.c_void_p),
-            ctypes.cast(recv, ctypes.c_void_p),
-            1,
-            NCCL_FLOAT32,
-            NCCL_SUM,
-            comm,
-            None,
-        )
-    )
-    report["failure_result"] = failure_result
-    report["failure_seconds"] = time.monotonic() - failure_started
-    report["failure_last_error"] = _last_error(lib, comm)
-    if failure_result == NCCL_SUCCESS:
-        raise AssertionError("injected collective failure unexpectedly succeeded")
-
     async_error = ctypes.c_int(NCCL_SUCCESS)
     async_query_result = int(
         lib.ncclCommGetAsyncError(comm, ctypes.byref(async_error))
@@ -265,21 +230,17 @@ def _run_fault_shrink(
     report["async_error"] = int(async_error.value)
     if async_query_result != NCCL_SUCCESS or async_error.value == NCCL_SUCCESS:
         raise AssertionError(
-            "injected failure did not persist through ncclCommGetAsyncError"
+            f"{failure_label} did not persist through ncclCommGetAsyncError"
         )
 
-    if args.rank == args.failed_rank:
-        abort_result = int(lib.ncclCommAbort(comm))
-        report["parent_abort_result"] = abort_result
-        report["participated_in_shrink"] = False
-        if abort_result != NCCL_SUCCESS:
-            raise AssertionError(
-                f"excluded rank failed to abort its parent communicator: "
-                f"{abort_result}"
-            )
-        comm.value = None
-        return
 
+def _shrink_and_recover(
+    args: argparse.Namespace,
+    lib: ctypes.CDLL,
+    comm: ctypes.c_void_p,
+    send: ctypes.Array[Any],
+    report: dict[str, Any],
+) -> None:
     excluded = (ctypes.c_int * 1)(args.failed_rank)
     child = ctypes.c_void_p()
     shrink_started = time.monotonic()
@@ -361,6 +322,139 @@ def _run_fault_shrink(
     comm.value = None
 
 
+def _init_communicator(
+    args: argparse.Namespace,
+    lib: ctypes.CDLL,
+    comm: ctypes.c_void_p,
+    report: dict[str, Any],
+) -> None:
+    started = time.monotonic()
+    init_result = int(
+        lib.ncclCommInitRank(
+            ctypes.byref(comm),
+            args.world_size,
+            _unique_id(args.session),
+            args.rank,
+        )
+    )
+    report["comm_init_result"] = init_result
+    report["comm_init_seconds"] = time.monotonic() - started
+    if init_result != NCCL_SUCCESS:
+        raise AssertionError(
+            f"ncclCommInitRank unexpectedly failed with result {init_result}: "
+            f"{_last_error(lib, comm)}"
+        )
+
+
+def _run_fault_shrink(
+    args: argparse.Namespace,
+    lib: ctypes.CDLL,
+    comm: ctypes.c_void_p,
+    report: dict[str, Any],
+) -> None:
+    _init_communicator(args, lib, comm, report)
+
+    send = (ctypes.c_float * 1)(float(args.rank + 1))
+    recv = (ctypes.c_float * 1)()
+    failure_started = time.monotonic()
+    failure_result = int(
+        lib.ncclAllReduce(
+            ctypes.cast(send, ctypes.c_void_p),
+            ctypes.cast(recv, ctypes.c_void_p),
+            1,
+            NCCL_FLOAT32,
+            NCCL_SUM,
+            comm,
+            None,
+        )
+    )
+    report["failure_result"] = failure_result
+    report["failure_seconds"] = time.monotonic() - failure_started
+    report["failure_last_error"] = _last_error(lib, comm)
+    if failure_result == NCCL_SUCCESS:
+        raise AssertionError("injected collective failure unexpectedly succeeded")
+
+    _require_persistent_async_error(
+        lib,
+        comm,
+        report,
+        failure_label="injected failure",
+    )
+
+    if args.rank == args.failed_rank:
+        abort_result = int(lib.ncclCommAbort(comm))
+        report["parent_abort_result"] = abort_result
+        report["participated_in_shrink"] = False
+        if abort_result != NCCL_SUCCESS:
+            raise AssertionError(
+                f"excluded rank failed to abort its parent communicator: "
+                f"{abort_result}"
+            )
+        comm.value = None
+        return
+
+    _shrink_and_recover(args, lib, comm, send, report)
+
+
+def _run_process_exit_shrink(
+    args: argparse.Namespace,
+    lib: ctypes.CDLL,
+    comm: ctypes.c_void_p,
+    report: dict[str, Any],
+) -> None:
+    _init_communicator(args, lib, comm, report)
+
+    if args.rank == args.failed_rank:
+        report.update(
+            {
+                "status": "expected_process_exit",
+                "expected_failure_observed": False,
+                "expected_exit_performed": True,
+                "participated_in_collective": False,
+                "participated_in_shrink": False,
+                "process_exit_code": EXPECTED_PROCESS_EXIT_CODE,
+            }
+        )
+        _write_report(args.report, report)
+        os._exit(EXPECTED_PROCESS_EXIT_CODE)
+
+    send = (ctypes.c_float * 1)(float(args.rank + 1))
+    recv = (ctypes.c_float * 1)()
+    failure_started = time.monotonic()
+    failure_result = int(
+        lib.ncclAllReduce(
+            ctypes.cast(send, ctypes.c_void_p),
+            ctypes.cast(recv, ctypes.c_void_p),
+            1,
+            NCCL_FLOAT32,
+            NCCL_SUM,
+            comm,
+            None,
+        )
+    )
+    report["participated_in_collective"] = True
+    report["failure_result"] = failure_result
+    report["failure_seconds"] = time.monotonic() - failure_started
+    report["failure_last_error"] = _last_error(lib, comm)
+    if failure_result == NCCL_SUCCESS:
+        raise AssertionError(
+            "collective unexpectedly succeeded after one rank exited"
+        )
+    if "timeout" not in report["failure_last_error"].lower():
+        raise AssertionError(
+            "exited rank did not produce a collective timeout diagnostic: "
+            f"{report['failure_last_error']!r}"
+        )
+
+    _require_persistent_async_error(
+        lib,
+        comm,
+        report,
+        failure_label="process-exit failure",
+    )
+    _shrink_and_recover(args, lib, comm, send, report)
+
+
 def run_worker(args: argparse.Namespace) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": "fakegpu.remote_fault.rank.v1",
@@ -383,6 +477,8 @@ def run_worker(args: argparse.Namespace) -> dict[str, Any]:
             _run_missing_peer(args, lib, comm, report)
         elif args.case == "fault-shrink":
             _run_fault_shrink(args, lib, comm, report)
+        elif args.case == "process-exit-shrink":
+            _run_process_exit_shrink(args, lib, comm, report)
         else:  # pragma: no cover - argparse rejects this path
             raise AssertionError(f"unsupported case: {args.case}")
         report["status"] = "success"
@@ -412,7 +508,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--case",
-        choices=["collective-mismatch", "missing-peer", "fault-shrink"],
+        choices=[
+            "collective-mismatch",
+            "missing-peer",
+            "fault-shrink",
+            "process-exit-shrink",
+        ],
         required=True,
     )
     parser.add_argument("--rank", type=int, required=True)
@@ -430,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--rank must be within [0, world-size)")
     if args.timeout_ms <= 0:
         parser.error("--timeout-ms must be greater than zero")
-    if args.case == "fault-shrink" and (
+    if args.case in {"fault-shrink", "process-exit-shrink"} and (
         args.failed_rank < 0 or args.failed_rank >= args.world_size
     ):
         parser.error("--failed-rank must be within [0, world-size)")
