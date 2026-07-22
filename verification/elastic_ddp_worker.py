@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -47,6 +48,75 @@ def _sync_cuda(torch: Any, backend: str) -> None:
         torch.cuda.synchronize()
 
 
+def _store_value_fingerprint(value: object) -> dict[str, object]:
+    raw = bytes(value)  # type: ignore[arg-type]
+    return {
+        "bytes": len(raw),
+        "sha256_12": hashlib.sha256(raw).hexdigest()[:12],
+    }
+
+
+def _make_tracing_store(
+    dist: Any,
+    base_store: Any,
+    events: list[dict[str, object]],
+) -> Any:
+    class TracingStore(dist.Store):
+        def __init__(self) -> None:
+            super().__init__()
+
+        def set(self, key: str, value: object) -> None:
+            event = {
+                "operation": "set",
+                "key": str(key),
+                **_store_value_fingerprint(value),
+            }
+            events.append(event)
+            base_store.set(key, value)
+
+        def get(self, key: str) -> object:
+            event: dict[str, object] = {
+                "operation": "get",
+                "key": str(key),
+                "status": "waiting",
+            }
+            events.append(event)
+            value = base_store.get(key)
+            event.update(_store_value_fingerprint(value))
+            event["status"] = "complete"
+            return value
+
+        def add(self, key: str, amount: int) -> int:
+            events.append(
+                {"operation": "add", "key": str(key), "amount": amount}
+            )
+            return int(base_store.add(key, amount))
+
+        def wait(self, keys: list[str], *args: object) -> None:
+            events.append(
+                {
+                    "operation": "wait",
+                    "keys": [str(key) for key in keys],
+                }
+            )
+            base_store.wait(keys, *args)
+
+        def check(self, keys: list[str]) -> bool:
+            events.append(
+                {
+                    "operation": "check",
+                    "keys": [str(key) for key in keys],
+                }
+            )
+            return bool(base_store.check(keys))
+
+        def delete_key(self, key: str) -> bool:
+            events.append({"operation": "delete_key", "key": str(key)})
+            return bool(base_store.delete_key(key))
+
+    return TracingStore()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -58,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backend", choices=["gloo", "nccl"], required=True)
     parser.add_argument("--fail-rank", type=int, default=-1)
     parser.add_argument("--fail-this-node", action="store_true")
+    parser.add_argument("--trace-store", action="store_true")
     parser.add_argument("--timeout-seconds", type=int, default=30)
     parser.add_argument("--survivor-wait-seconds", type=int, default=30)
     args = parser.parse_args(argv)
@@ -136,6 +207,14 @@ def main(argv: list[str] | None = None) -> int:
             store_prefix,
             rendezvous_store,
         )
+        if args.trace_store:
+            store_events: list[dict[str, object]] = []
+            report["store_events"] = store_events
+            process_group_store = _make_tracing_store(
+                dist,
+                process_group_store,
+                store_events,
+            )
         dist.init_process_group(
             backend=args.backend,
             store=process_group_store,
