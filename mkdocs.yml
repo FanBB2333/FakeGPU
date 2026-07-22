@@ -45,6 +45,7 @@ plugins:
             - AI Researcher 提交前预检查: ai-researcher-preflight.md
             - LLM 推理显存估算: llm-inference-estimation.md
             - LLM SFT 显存估算: llm-sft-memory-estimation.md
+            - DeepSpeed 验证: deepspeed-validation.md
             - 项目结构与架构: project-structure.md
             - 报告与验证: reports-and-validation.md
             - 错误模拟: error-simulation.md
@@ -79,6 +80,7 @@ nav:
   - AI Researcher Preflight: ai-researcher-preflight.md
   - LLM Inference Estimation: llm-inference-estimation.md
   - LLM SFT Memory Estimation: llm-sft-memory-estimation.md
+  - DeepSpeed Validation: deepspeed-validation.md
   - Architecture: project-structure.md
   - Reports & Validation: reports-and-validation.md
   - Error Simulation: error-simulation.md

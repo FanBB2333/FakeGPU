@@ -487,6 +487,8 @@ The distributed paths were also checked on the same two hosts:
 | Hybrid DDP numerical check | Two ranks sharing the RTX PRO 5000, then two ranks sharing the RTX 3090 Ti | Averaged gradient `[1.5, 3.0]`, identical gathered parameters, and the expected SGD update on both CUDA 12.8 and CUDA 13.0 |
 | Hybrid FSDP numerical check | Two ranks sharing each GPU | Full sharding, averaged reduce-scatter gradients, optimizer update, full-parameter reconstruction, and state-dict restoration passed on both CUDA stacks |
 | Hybrid FSDP2/DTensor matrix | Two or four ranks sharing each GPU | FP32, FP16, and BF16 parameter paths passed; FP16/BF16 gradient reduction also passed with reconstructed DTensor parameters |
+| Hybrid DeepSpeed ZeRO matrix | Two or four ranks sharing each GPU | ZeRO 0–3, FP32/BF16, gradient accumulation, optimizer updates, and cross-rank parameter consistency passed on DeepSpeed 0.15.3 and 0.19.2 |
+| Qwen3.5 DeepSpeed LoRA SFT | Two ranks sharing each GPU | ZeRO-2/3 forward, backward, AdamW update, communication report, accumulation, and reentrant checkpointing passed with local Qwen3.5-0.8B weights |
 | Physical-host Hybrid DDP | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | The same numerical result across PyTorch 2.9.1/CUDA 12.8 and PyTorch 2.12.1/CUDA 13.0; TCP broadcast, all-reduce, and all-gather completed with zero timeouts |
 | Physical-host Hybrid FSDP2 | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | FP32/FP16/BF16 parameters and FP16/BF16 gradient reductions passed over TCP; the report identifies collective dtype and reduction operator |
 | Physical-host TCP all-reduce | RTX PRO 5000 coordinator/rank 0 ↔ RTX 3090 Ti rank 1 over Tailscale | Correct 1 MiB and 16 MiB reductions, zero coordinator timeouts; 16 MiB × 5 measured about `0.261 Gbit/s` algorithmic and `0.521 Gbit/s` bidirectional socket payload per rank |
@@ -528,7 +530,16 @@ python3 verification/run_hybrid_ddp_numerics.py --variant all
 python3 verification/run_hybrid_fsdp_numerics.py
 python3 verification/run_hybrid_fsdp2_numerics.py --world-size 4 --precision bf16
 python3 verification/run_hybrid_fsdp2_numerics.py --world-size 4 --precision bf16 --reduce-precision parameter
+python3 verification/run_hybrid_deepspeed_numerics.py --zero-stage all --precision bf16
+python3 verification/run_qwen_deepspeed_lora_sft.py --model-dir /path/to/Qwen3.5-0.8B --output-dir build/qwen-deepspeed --zero-stage 3
 ```
+
+The DeepSpeed checks cover the native Engine and a Transformers/PEFT Qwen
+model with PyTorch optimizers. Fused/JIT optimizers, CPU/NVMe offload,
+pipeline/tensor/MoE parallelism, ZeRO checkpoint restoration, and Hugging Face
+`Trainer` + DeepSpeed remain separate validation targets. See
+[DeepSpeed Validation](docs/deepspeed-validation.md) for commands, measured
+results, and the WSL-without-`nvcc` setup.
 
 The physical two-host controller in
 `verification/run_physical_multihost.py` verifies that both repositories use

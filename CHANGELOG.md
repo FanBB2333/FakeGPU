@@ -8,18 +8,24 @@
 - A FULL_SHARD memory projection that transforms single-GPU ATen storage liveness using per-unit padding, local optimizer storage, and collective workspaces.
 - A two- or four-rank FSDP2 LoRA experiment and per-parameter DTensor projection for frozen BF16 base weights, FP32 adapters, gradient-production liveness, AdamW state, and overlapping collective buffers.
 - Fake NCCL `int8`, `uint8`, `uint32`, and `uint64` payload support, including reduction execution and cluster-report schema coverage.
+- A reusable DeepSpeed matrix for ZeRO 0–3, FP32/BF16, two/four ranks, gradient accumulation, optimizer numerics, and communication reports.
+- A Qwen3.5 LoRA SFT DeepSpeed runner with per-rank phase memory, adapter-update consistency, gradient checkpointing, and JSON/Markdown summaries.
 
 ### Fixed
 
 - Included the active full-gradient buffer retained until FSDP reduce-scatter emits a local shard, reducing the Qwen graph-peak prediction error from 8.420% to at most 0.758%.
 - Accepted FSDP2's byte-packed mixed-dtype all-gathers and separated activation-, communication-, backward-, and optimizer-dominated event floors instead of assuming that every buffer peaks together.
 - Separated forward/loss liveness at the first explicit backward operator and modeled the retained FSDP2 nested-unit buffers at the backward activation peak.
+- Accepted null buffers for zero-element NCCL collectives while retaining strict non-empty validation, restoring DeepSpeed 0.19.2 ZeRO-3 under PyTorch 2.12.
+- Selected reentrant Qwen activation checkpointing for DeepSpeed ZeRO-3 while retaining non-reentrant mode as an explicit compatibility probe.
 
 ### Validation
 
-- Full local suite: 286 passed and 1 skipped.
+- Full local suite: 293 passed and 1 skipped.
 - Qwen3.5-0.8B BF16 FULL_SHARD sequence-16/128 experiments passed on RTX PRO 5000 Blackwell and RTX 3090 Ti Ampere. Overall per-rank errors were 0.730% and 0.633%; both stacks reproduced allocator peaks, shard sizes, optimizer state, and 8,011,593,488 node-pair bytes exactly.
 - Qwen3.5-0.8B FSDP2 LoRA sequence-16/64/128 experiments passed the 3% per-phase limit with two or four ranks on both GPUs. Every phase was within 1.974%; sequence-128 overall errors were 0.071%-0.161%.
+- DeepSpeed ZeRO 0–3 FP32/BF16 numerics passed on RTX PRO 5000 Blackwell with DeepSpeed 0.15.3 and RTX 3090 Ti Ampere with DeepSpeed 0.19.2; four-rank BF16 ZeRO-3 also passed on the PRO 5000.
+- Qwen3.5-0.8B BF16 LoRA ZeRO-2/3 passed on both GPUs. The maintained PRO 5000 sequence-64, accumulation-2 case used 3.052 GiB per rank without checkpointing and 2.409 GiB with reentrant checkpointing; the complete node-pair reports recorded 15.196 GiB and 17.134 GiB respectively.
 
 ## v1.5.4 - 2026-07-21
 
