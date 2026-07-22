@@ -154,7 +154,14 @@ CollectiveExecutionResult execute_alltoall(
         return make_error("invalid_slice_plan", error);
     }
     if (request.bytes != plan.total_bytes) {
-        return make_error("invalid_collective_size", "alltoall bytes do not match world_size * count * dtype_size");
+        return make_error(
+            "invalid_collective_size",
+            "alltoall bytes=" + std::to_string(request.bytes) +
+                " do not match expected=" + std::to_string(plan.total_bytes) +
+                " for participants=" + std::to_string(participants.size()) +
+                ", count=" + std::to_string(request.count) +
+                ", dtype_size=" + std::to_string(
+                    collective_data_type_size(request.dtype)));
     }
 
     std::vector<std::vector<char>> buffers;
