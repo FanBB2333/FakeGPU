@@ -12,6 +12,7 @@ from verification.run_physical_multihost import (
     _encoded_remote_command,
     _require_matching_deepspeed_pipeline_stack,
     _shell_command,
+    _validate_elastic_ddp_restart_reports,
     _validate_cluster_report,
     _validate_alltoallv_reports,
     _validate_deepspeed_pipeline_reports,
@@ -80,6 +81,125 @@ def test_shell_command_quotes_environment_and_paths() -> None:
     assert "cd '/srv/fake gpu'" in command
     assert "mkdir -p '/tmp/report dir'" in command
     assert "'VALUE=with spaces'" in command
+
+
+def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None:
+    initial = [
+        {
+            "node_name": "pro5000",
+            "backend": "nccl",
+            "status": "waiting_for_restart",
+            "rank": 0,
+            "world_size": 2,
+            "restart_count": 0,
+            "max_restarts": 1,
+            "pid": 100,
+            "run_id": "elastic-test",
+            "initial_all_reduce_value": 3.0,
+            "selected_for_initial_exit": False,
+            "initial_process_group_destroyed_before_exit": False,
+        },
+        {
+            "node_name": "rtx3090ti",
+            "backend": "nccl",
+            "status": "expected_process_exit",
+            "rank": 1,
+            "world_size": 2,
+            "restart_count": 0,
+            "max_restarts": 1,
+            "pid": 200,
+            "run_id": "elastic-test",
+            "initial_all_reduce_value": 3.0,
+            "selected_for_initial_exit": True,
+            "expected_process_exit_code": 86,
+            "initial_process_group_destroyed_before_exit": False,
+        },
+    ]
+    restarted = [
+        {
+            "node_name": node_name,
+            "backend": "nccl",
+            "status": "success",
+            "rank": rank,
+            "world_size": 2,
+            "restart_count": 1,
+            "max_restarts": 1,
+            "pid": pid,
+            "run_id": "elastic-test",
+            "gradient": [[1.5, 3.0]],
+            "parameters_after_step": [[0.85, -0.3]],
+            "gathered_parameter_vectors": [
+                [0.85, -0.3],
+                [0.85, -0.3],
+            ],
+            "physical_device_name": gpu,
+        }
+        for node_name, rank, pid, gpu in (
+            ("pro5000", 0, 101, "NVIDIA RTX PRO 5000 Blackwell"),
+            ("rtx3090ti", 1, 201, "NVIDIA GeForce RTX 3090 Ti"),
+        )
+    ]
+
+    summary = _validate_elastic_ddp_restart_reports(
+        initial,
+        restarted,
+        node_names=["pro5000", "rtx3090ti"],
+        failed_node="rtx3090ti",
+    )
+
+    assert summary["status"] == "success"
+    assert summary["initial_pids"] == {"pro5000": 100, "rtx3090ti": 200}
+    assert summary["restarted_pids"] == {"pro5000": 101, "rtx3090ti": 201}
+
+
+def test_validate_elastic_ddp_restart_reports_rejects_reused_worker() -> None:
+    initial = [
+        {
+            "node_name": node_name,
+            "backend": "nccl",
+            "status": status,
+            "rank": rank,
+            "world_size": 2,
+            "restart_count": 0,
+            "max_restarts": 1,
+            "pid": rank + 10,
+            "run_id": "elastic-test",
+            "initial_all_reduce_value": 3.0,
+            "selected_for_initial_exit": rank == 1,
+            "expected_process_exit_code": 86 if rank == 1 else None,
+            "initial_process_group_destroyed_before_exit": False,
+        }
+        for node_name, rank, status in (
+            ("pro5000", 0, "waiting_for_restart"),
+            ("rtx3090ti", 1, "expected_process_exit"),
+        )
+    ]
+    restarted = [
+        {
+            "node_name": node_name,
+            "backend": "nccl",
+            "status": "success",
+            "rank": rank,
+            "world_size": 2,
+            "restart_count": 1,
+            "max_restarts": 1,
+            "pid": rank + 10,
+            "run_id": "elastic-test",
+            "gradient": [[1.5, 3.0]],
+            "parameters_after_step": [[0.85, -0.3]],
+            "gathered_parameter_vectors": [[0.85, -0.3], [0.85, -0.3]],
+            "physical_device_name": "GPU",
+        }
+        for node_name, rank in (("pro5000", 0), ("rtx3090ti", 1))
+    ]
+
+    with pytest.raises(AssertionError, match="did not replace"):
+        _validate_elastic_ddp_restart_reports(
+            initial,
+            restarted,
+            node_names=["pro5000", "rtx3090ti"],
+            failed_node="rtx3090ti",
+        )
 
 
 def test_validate_deepspeed_reports_accepts_two_physical_ranks() -> None:
@@ -269,6 +389,45 @@ def test_validate_cluster_report_requires_physical_pipeline_p2p(
         )
 
 
+def test_validate_cluster_report_requires_new_elastic_communicator(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "schema_version": "cluster_report.v1",
+        "cluster": {
+            "world_size": 2,
+            "node_count": 2,
+            "coordinator_transport": "tcp",
+            "communicators": 2,
+        },
+        "collectives": {},
+        "point_to_point": {"operations": 0, "sends": 0, "bytes": 0},
+        "ranks": [{"timeouts": 0}, {"timeouts": 0}],
+        "node_pairs": [],
+    }
+    path = tmp_path / "cluster-report.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _validate_cluster_report(
+        path,
+        expected_collectives=set(),
+        expect_point_to_point=False,
+        expect_timeout=False,
+        expect_elastic_restart=True,
+    )
+
+    payload["cluster"]["communicators"] = 1
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(AssertionError, match="new communicator"):
+        _validate_cluster_report(
+            path,
+            expected_collectives=set(),
+            expect_point_to_point=False,
+            expect_timeout=False,
+            expect_elastic_restart=True,
+        )
+
+
 def test_validate_cluster_report_accepts_rank_failure_recovery(
     tmp_path: Path,
 ) -> None:
@@ -451,6 +610,7 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
         ],
         "cases": {
             "ddp": [{}, {}],
+            "elastic_ddp_restart": {"failure_exit_code": 86},
             "ddp_options": {},
             "fsdp": [{}, {}],
             "fsdp2": [{}, {}],
@@ -507,6 +667,7 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     markdown = path.read_text(encoding="utf-8")
     assert "| `gpu-a` | `gpu-b` | 64 | 32 | 2 | 2 | 0 |" in markdown
     assert "DDP options" in markdown
+    assert "Elastic DDP restart" in markdown
     assert "Hybrid FSDP" in markdown
     assert "Hybrid FSDP2" in markdown
     assert "FSDP2 mixed precision" in markdown
