@@ -121,6 +121,13 @@ FAKEGPU_NCCL_FAULT_OPERATION=all_reduce \
 ./build/fakegpu_nccl_direct_test --scenario fault-shrink
 ```
 
+The TCP suite also initializes four workers and then terminates rank 2 with
+`os._exit(86)`, without communicator cleanup. Ranks 0, 1, and 3 submit an
+All-Reduce, receive a persistent `ncclSystemError` after the collective
+timeout, explicitly exclude rank 2 with `ncclCommShrink`, and verify the
+recovered sum `7.0`. The report marks this as `source=collective_timeout` and
+keeps the submitted ranks `[0, 1, 3]` separate from the inferred absent rank.
+
 Use `python3 verification/test_fault_injection_recovery.py` for report-schema
 checks, or `./ftest distributed_resilience` for the complete maintained
 failure suite. Cluster JSON and Markdown reports contain the failed rank,
@@ -187,7 +194,7 @@ python test/test_error_gradient.py          # E7: 3 tests
 ## Limitations
 
 - E1–E5 and E7 are Python-level checks; E6 runs through the native NCCL shim and coordinator.
-- E6 currently targets direct collectives in `simulate` mode. It does not inject grouped/P2P failures, kill an operating-system process, detect heartbeat loss, or restart a training framework.
+- E6 targets direct collectives in `simulate` mode. Its maintained harness covers a controlled operating-system process exit, but grouped/P2P injection, heartbeat detection, automatic membership changes, and training-framework restart remain unsupported.
 - The maintained shrink path requires an explicit exclusion list; excluded ranks must not call `ncclCommShrink`.
 - `tensor.device` still reports `cpu` — the fake device index is tracked internally.
 - No stream or event error simulation.

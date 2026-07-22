@@ -235,6 +235,7 @@ The default cases are:
 - grouped nonuniform and sparse all-to-all-v across the two physical hosts
 - mismatched collective reduction operators and persistent async errors
 - a deterministic rank-2 All-Reduce failure, persistent `ncclRemoteError`, three-rank `ncclCommShrink`, and post-recovery All-Reduce
+- a real rank-2 worker exit after communicator initialization, collective-timeout inference on ranks 0/1/3, explicit shrink, and post-recovery All-Reduce
 - a missing-peer communicator timeout from the second physical host
 
 Run only the recovery case with `--case fault-shrink`. The controller starts
@@ -242,6 +243,14 @@ four logical ranks across the two node specifications: ranks 0 and 2 on the
 first host, and ranks 1 and 3 on the second. Rank 2 is excluded, so the child
 communicator contains global ranks `[0, 1, 3]` with local ranks `[0, 1, 2]`.
 The cluster report records both the injected failure and recovery event.
+
+Use `--case process-exit-shrink` for the process-exit variant. Rank 2 writes a
+marker and terminates through `os._exit(86)` without calling communicator
+cleanup. The surviving ranks first receive a persistent `ncclSystemError`
+from the timed-out All-Reduce and then use the same explicit shrink mapping.
+The report records rank 2 as inferred absent and `[0, 1, 3]` as the ranks that
+actually submitted the failed operation. This is collective-timeout inference,
+not heartbeat detection or automatic elastic recovery.
 
 DeepSpeed is optional rather than part of the default set. Add
 `--case deepspeed-zero2` to validate one rank per physical host. The maintained

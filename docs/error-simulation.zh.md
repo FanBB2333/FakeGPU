@@ -121,6 +121,13 @@ FAKEGPU_NCCL_FAULT_OPERATION=all_reduce \
 ./build/fakegpu_nccl_direct_test --scenario fault-shrink
 ```
 
+TCP 套件还会初始化四个 worker，然后让 rank 2 通过 `os._exit(86)` 直接
+退出，不执行 communicator 清理。Ranks 0、1、3 提交 All-Reduce，在
+collective 超时后收到持续可见的 `ncclSystemError`，再明确排除 rank 2 并
+调用 `ncclCommShrink`，最后验证恢复后的求和结果为 `7.0`。报告将该事件
+记为 `source=collective_timeout`，并分别保存已提交 ranks `[0, 1, 3]` 与
+推断出的缺席 rank。
+
 `python3 verification/test_fault_injection_recovery.py` 会校验报告 schema；
 `./ftest distributed_resilience` 会执行完整的维护中异常套件。Cluster JSON
 与 Markdown 报告会记录故障 rank、操作、观测到错误的 ranks、尝试传输量、
@@ -186,7 +193,7 @@ python test/test_error_gradient.py          # E7：3 个测试
 ## 限制
 
 - E1–E5 与 E7 是 Python 层检查；E6 经过 native NCCL shim 与 coordinator。
-- E6 当前只覆盖 `simulate` 模式的 direct collective；尚未注入 grouped/P2P 故障，不会杀死操作系统进程、检测 heartbeat 丢失或重启训练框架。
+- E6 当前覆盖 `simulate` 模式的 direct collective，维护中的测试可以控制一个操作系统进程直接退出；grouped/P2P 故障注入、heartbeat 检测、自动成员变更和训练框架重启仍不支持。
 - 当前维护的 shrink 路径要求显式提供排除列表；被排除的 rank 不能调用 `ncclCommShrink`。
 - `tensor.device` 仍然显示 `cpu`——fake 设备索引在内部跟踪。
 - 不支持 stream 和 event 的错误模拟。

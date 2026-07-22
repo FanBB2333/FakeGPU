@@ -54,6 +54,7 @@ DEEPSPEED_PIPELINE_EXPECTED_FINAL = [
     [0.5, -1.0, -0.5, 0.0],
     [0.5, 0.0],
 ]
+EXPECTED_PROCESS_EXIT_CODE = 86
 
 
 @dataclass(frozen=True)
@@ -294,12 +295,20 @@ def _collect_processes(
     *,
     timeout: float,
     label: str,
+    allowed_returncodes: Sequence[set[int]] | None = None,
 ) -> list[dict[str, Any]]:
+    accepted = (
+        list(allowed_returncodes)
+        if allowed_returncodes is not None
+        else [{0} for _ in processes]
+    )
+    if len(accepted) != len(processes):
+        raise ValueError("allowed_returncodes must match the process count")
     deadline = time.monotonic() + timeout
     outputs: list[dict[str, Any]] = []
     failures: list[str] = []
     try:
-        for node, process in processes:
+        for index, (node, process) in enumerate(processes):
             remaining = max(0.1, deadline - time.monotonic())
             try:
                 stdout, stderr = process.communicate(timeout=remaining)
@@ -319,9 +328,10 @@ def _collect_processes(
                     "stderr": stderr,
                 }
             )
-            if process.returncode != 0:
+            if process.returncode not in accepted[index]:
                 failures.append(
                     f"{label} failed on {node.name} with {process.returncode}\n"
+                    f"accepted return codes: {sorted(accepted[index])}\n"
                     f"stdout:\n{stdout}\nstderr:\n{stderr}"
                 )
         if failures:
@@ -1090,6 +1100,106 @@ def _run_fault_shrink_case(
     return reports
 
 
+def _run_process_exit_shrink_case(
+    nodes: list[NodeSpec],
+    *,
+    endpoint: str,
+    remote_root: str,
+    session: str,
+    timeout: float,
+) -> list[dict[str, Any]]:
+    world_size = 4
+    failed_rank = 2
+    timeout_ms = min(10_000, max(2_000, round(timeout * 100)))
+    rank_nodes = [nodes[0], nodes[1], nodes[0], nodes[1]]
+    report_dir = f"{remote_root}/process-exit-shrink"
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    for rank, node in enumerate(rank_nodes):
+        report_path = f"{report_dir}/rank_{rank}.json"
+        argv = [
+            node.python,
+            str(FAULT_WORKER_RELATIVE),
+            "--case=process-exit-shrink",
+            f"--rank={rank}",
+            f"--world-size={world_size}",
+            f"--failed-rank={failed_rank}",
+            f"--session={session}-process-exit-shrink",
+            f"--timeout-ms={timeout_ms}",
+            f"--nccl-lib={node.repo}/build/libnccl.so.2",
+            f"--report={report_path}",
+        ]
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        env=_distributed_env(
+                            node=node,
+                            endpoint=endpoint,
+                            timeout_ms=timeout_ms,
+                            hybrid=False,
+                        ),
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+
+    allowed_returncodes = [
+        {EXPECTED_PROCESS_EXIT_CODE} if rank == failed_rank else {0}
+        for rank in range(world_size)
+    ]
+    _collect_processes(
+        processes,
+        timeout=timeout,
+        label="physical process exit and communicator shrink",
+        allowed_returncodes=allowed_returncodes,
+    )
+    reports = [
+        _read_remote_json(node, f"{report_dir}/rank_{rank}.json")
+        for rank, node in enumerate(rank_nodes)
+    ]
+    exited = reports[failed_rank]
+    if (
+        exited.get("status") != "expected_process_exit"
+        or int(exited.get("process_exit_code", -1)) != EXPECTED_PROCESS_EXIT_CODE
+        or exited.get("expected_exit_performed") is not True
+        or exited.get("expected_failure_observed") is not False
+        or exited.get("participated_in_collective") is not False
+        or exited.get("participated_in_shrink") is not False
+    ):
+        raise AssertionError(f"failed rank exit marker was invalid: {exited}")
+
+    survivors = [
+        report for report in reports if int(report["rank"]) != failed_rank
+    ]
+    if any(report.get("status") != "success" for report in survivors):
+        raise AssertionError(f"process-exit survivors failed: {survivors}")
+    if any(int(report.get("failure_result", 0)) == 0 for report in survivors):
+        raise AssertionError(f"exited rank was not detected: {survivors}")
+    if any(
+        "timeout" not in str(report.get("failure_last_error", "")).lower()
+        for report in survivors
+    ):
+        raise AssertionError(f"process-exit timeout diagnostic missing: {survivors}")
+    if any(int(report.get("async_error", 0)) == 0 for report in survivors):
+        raise AssertionError(f"process-exit async error was not persistent: {survivors}")
+    if [int(report.get("child_rank", -1)) for report in survivors] != [0, 1, 2]:
+        raise AssertionError(f"process-exit shrink ranks were invalid: {survivors}")
+    if any(int(report.get("child_world_size", 0)) != 3 for report in survivors):
+        raise AssertionError(f"process-exit child world size was invalid: {survivors}")
+    if any(
+        abs(float(report.get("recovered_all_reduce_value", 0.0)) - 7.0)
+        > 1e-6
+        for report in survivors
+    ):
+        raise AssertionError(f"process-exit recovery result mismatch: {survivors}")
+    return reports
+
+
 def _run_missing_peer_case(
     node: NodeSpec,
     *,
@@ -1265,6 +1375,7 @@ def _validate_cluster_report(
     expect_timeout: bool,
     expected_world_size: int = 2,
     expect_recovery: bool = False,
+    expect_process_exit: bool = False,
 ) -> dict[str, Any]:
     report = json.loads(path.read_text(encoding="utf-8"))
     if report.get("schema_version") != "cluster_report.v1":
@@ -1310,24 +1421,51 @@ def _validate_cluster_report(
     if expect_timeout:
         if sum(int(item["timeouts"]) for item in report.get("ranks", [])) <= 0:
             raise AssertionError("missing-peer case did not increment rank timeouts")
-    if expect_recovery:
+    if expect_recovery or expect_process_exit:
         resilience = report.get("resilience", {})
-        if int(resilience.get("failure_count", 0)) <= 0:
+        expected_events = int(expect_recovery) + int(expect_process_exit)
+        if int(resilience.get("failure_count", 0)) < expected_events:
             raise AssertionError("rank failure was not recorded")
-        if int(resilience.get("recovery_count", 0)) <= 0:
+        if int(resilience.get("recovery_count", 0)) < expected_events:
             raise AssertionError("communicator recovery was not recorded")
-        failure = resilience["failure_events"][-1]
-        recovery = resilience["recovery_events"][-1]
-        if int(failure.get("global_rank", -1)) != 2:
-            raise AssertionError(f"unexpected failed rank: {failure}")
-        if failure.get("observed_ranks") != [0, 1, 2, 3]:
-            raise AssertionError(f"incomplete failure observers: {failure}")
-        if int(failure.get("attempted_payload_bytes", 0)) != 16:
-            raise AssertionError(f"unexpected attempted failure payload: {failure}")
-        if recovery.get("excluded_ranks") != [2]:
-            raise AssertionError(f"unexpected shrink exclusions: {recovery}")
-        if recovery.get("surviving_ranks") != [0, 1, 3]:
-            raise AssertionError(f"unexpected surviving ranks: {recovery}")
+        failures = resilience["failure_events"]
+        if expect_recovery:
+            injected = [item for item in failures if item.get("source") == "injected"]
+            if len(injected) != 1:
+                raise AssertionError(f"unexpected injected failures: {injected}")
+            failure = injected[0]
+            if int(failure.get("global_rank", -1)) != 2:
+                raise AssertionError(f"unexpected failed rank: {failure}")
+            if failure.get("observed_ranks") != [0, 1, 2, 3]:
+                raise AssertionError(f"incomplete failure observers: {failure}")
+            if int(failure.get("attempted_payload_bytes", 0)) != 16:
+                raise AssertionError(
+                    f"unexpected attempted failure payload: {failure}"
+                )
+        if expect_process_exit:
+            timed_out = [
+                item
+                for item in failures
+                if item.get("source") == "collective_timeout"
+            ]
+            if len(timed_out) != 1:
+                raise AssertionError(f"unexpected timeout failures: {timed_out}")
+            failure = timed_out[0]
+            if int(failure.get("global_rank", -1)) != 2:
+                raise AssertionError(f"unexpected absent rank: {failure}")
+            if failure.get("observed_ranks") != [0, 1, 3]:
+                raise AssertionError(f"unexpected timeout observers: {failure}")
+            if int(failure.get("attempted_payload_bytes", 0)) != 12:
+                raise AssertionError(
+                    f"unexpected timed-out payload: {failure}"
+                )
+            if failure.get("error_code") != "timeout_waiting_for_collective":
+                raise AssertionError(f"unexpected timeout error: {failure}")
+        for recovery in resilience["recovery_events"]:
+            if recovery.get("excluded_ranks") != [2]:
+                raise AssertionError(f"unexpected shrink exclusions: {recovery}")
+            if recovery.get("surviving_ranks") != [0, 1, 3]:
+                raise AssertionError(f"unexpected surviving ranks: {recovery}")
     return report
 
 
@@ -1453,6 +1591,19 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             f"All-Reduce; surviving ranks became `{child_ranks}` and the "
             "post-shrink sum was `7.0` on both physical hosts."
         )
+    if "process_exit_shrink" in cases:
+        survivors = [
+            item
+            for item in cases["process_exit_shrink"]
+            if item.get("participated_in_shrink")
+        ]
+        child_ranks = [item["child_rank"] for item in survivors]
+        lines.append(
+            "- Process exit and recovery: global rank `2` exited with code "
+            f"`{EXPECTED_PROCESS_EXIT_CODE}` after communicator initialization; "
+            f"the survivors inferred its absence from an All-Reduce timeout, "
+            f"became child ranks `{child_ranks}`, and recovered sum `7.0`."
+        )
     if "missing_peer" in cases:
         lines.append(
             "- Missing peer: communicator initialization returned a timeout "
@@ -1523,6 +1674,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "alltoallv",
         "collective-mismatch",
         "fault-shrink",
+        "process-exit-shrink",
         "missing-peer",
     ]
     git_commit = _local_head()
@@ -1731,6 +1883,16 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 session=args.session,
                 timeout=args.case_timeout,
             )
+        if "process-exit-shrink" in cases:
+            case_reports["process_exit_shrink"] = (
+                _run_process_exit_shrink_case(
+                    nodes,
+                    endpoint=endpoint,
+                    remote_root=remote_root,
+                    session=args.session,
+                    timeout=args.case_timeout,
+                )
+            )
         if "missing-peer" in cases:
             case_reports["missing_peer"] = _run_missing_peer_case(
                 nodes[1],
@@ -1778,7 +1940,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         expected_collectives.add("all_gather")
     if "alltoallv" in cases:
         expected_collectives.add("all_to_all")
-    if "fault-shrink" in cases:
+    if "fault-shrink" in cases or "process-exit-shrink" in cases:
         expected_collectives.add("all_reduce")
     if (
         "fsdp" in cases
@@ -1792,8 +1954,13 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         expected_collectives=expected_collectives,
         expect_point_to_point=selected_deepspeed_pipeline,
         expect_timeout="missing-peer" in cases,
-        expected_world_size=4 if "fault-shrink" in cases else 2,
+        expected_world_size=(
+            4
+            if "fault-shrink" in cases or "process-exit-shrink" in cases
+            else 2
+        ),
         expect_recovery="fault-shrink" in cases,
+        expect_process_exit="process-exit-shrink" in cases,
     )
 
     report: dict[str, Any] = {
@@ -1870,6 +2037,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "alltoallv",
             "collective-mismatch",
             "fault-shrink",
+            "process-exit-shrink",
             "missing-peer",
         ],
         default=[],

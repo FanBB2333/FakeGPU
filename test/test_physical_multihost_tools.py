@@ -288,6 +288,7 @@ def test_validate_cluster_report_accepts_rank_failure_recovery(
             "recovery_count": 1,
             "failure_events": [
                 {
+                    "source": "injected",
                     "global_rank": 2,
                     "observed_ranks": [0, 1, 2, 3],
                     "attempted_payload_bytes": 16,
@@ -323,6 +324,68 @@ def test_validate_cluster_report_accepts_rank_failure_recovery(
             expect_timeout=False,
             expected_world_size=4,
             expect_recovery=True,
+        )
+
+
+def test_validate_cluster_report_accepts_process_exit_recovery(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "schema_version": "cluster_report.v1",
+        "cluster": {
+            "world_size": 4,
+            "node_count": 2,
+            "coordinator_transport": "tcp",
+        },
+        "collectives": {"all_reduce": {"calls": 1}},
+        "point_to_point": {"operations": 0, "sends": 0, "bytes": 0},
+        "ranks": [{"timeouts": 1} for _ in range(4)],
+        "node_pairs": [{"total_bytes": 24}],
+        "resilience": {
+            "failure_count": 1,
+            "recovery_count": 1,
+            "failure_events": [
+                {
+                    "source": "collective_timeout",
+                    "global_rank": 2,
+                    "observed_ranks": [0, 1, 3],
+                    "attempted_payload_bytes": 12,
+                    "error_code": "timeout_waiting_for_collective",
+                }
+            ],
+            "recovery_events": [
+                {
+                    "excluded_ranks": [2],
+                    "surviving_ranks": [0, 1, 3],
+                }
+            ],
+        },
+    }
+    path = tmp_path / "cluster-report.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _validate_cluster_report(
+        path,
+        expected_collectives={"all_reduce"},
+        expect_point_to_point=False,
+        expect_timeout=True,
+        expected_world_size=4,
+        expect_process_exit=True,
+    )
+
+    payload["resilience"]["failure_events"].append(
+        dict(payload["resilience"]["failure_events"][0])
+    )
+    payload["resilience"]["failure_count"] = 2
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(AssertionError, match="unexpected timeout failures"):
+        _validate_cluster_report(
+            path,
+            expected_collectives={"all_reduce"},
+            expect_point_to_point=False,
+            expect_timeout=True,
+            expected_world_size=4,
+            expect_process_exit=True,
         )
 
 
@@ -410,6 +473,15 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
                 {"participated_in_shrink": False},
                 {"participated_in_shrink": True, "child_rank": 2},
             ],
+            "process_exit_shrink": [
+                {"participated_in_shrink": True, "child_rank": 0},
+                {"participated_in_shrink": True, "child_rank": 1},
+                {
+                    "participated_in_shrink": False,
+                    "process_exit_code": 86,
+                },
+                {"participated_in_shrink": True, "child_rank": 2},
+            ],
             "missing_peer": {},
         },
         "cluster_summary": {
@@ -444,3 +516,4 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     assert "Physical all-to-all-v" in markdown
     assert "Collective mismatch" in markdown
     assert "Injected rank failure and recovery" in markdown
+    assert "Process exit and recovery" in markdown

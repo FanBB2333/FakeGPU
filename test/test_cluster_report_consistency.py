@@ -158,6 +158,35 @@ def test_resilience_accepts_failure_and_recovery() -> None:
     )
 
 
+def test_resilience_accepts_rank_inferred_from_collective_timeout() -> None:
+    resilience = _resilience()
+    failure = resilience["failure_events"][0]
+    failure.update(
+        {
+            "source": "collective_timeout",
+            "operation": "allreduce",
+            "error_code": "timeout_waiting_for_collective",
+            "error_detail": "rank 2 did not submit before timeout",
+            "observed_ranks": [0, 1, 3],
+            "attempted_payload_bytes": 12,
+        }
+    )
+    _validate_resilience(
+        resilience,
+        expect_failure=True,
+        expect_recovery=True,
+    )
+
+
+def test_resilience_rejects_timed_out_rank_as_an_observer() -> None:
+    resilience = _resilience()
+    failure = resilience["failure_events"][0]
+    failure["source"] = "collective_timeout"
+    failure["observed_ranks"] = [0, 1, 2, 3]
+    with pytest.raises(SystemExit):
+        _validate_resilience(resilience)
+
+
 def test_resilience_rejects_count_mismatch() -> None:
     resilience = _resilience()
     resilience["failure_count"] = 2

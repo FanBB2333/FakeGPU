@@ -423,6 +423,54 @@ void record_timeout_locked(
     }
 }
 
+void record_collective_timeout_failures_locked(
+    RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::shared_ptr<CollectiveState>& collective) {
+    if (!state || !collective) {
+        return;
+    }
+
+    std::vector<int> observed_ranks;
+    observed_ranks.reserve(collective->participants.size());
+    std::uint64_t attempted_payload_bytes = 0;
+    for (const auto& entry : collective->participants) {
+        observed_ranks.push_back(global_rank_for_local(state, entry.first));
+        attempted_payload_bytes +=
+            static_cast<std::uint64_t>(entry.second.bytes);
+    }
+    std::sort(observed_ranks.begin(), observed_ranks.end());
+    observed_ranks.erase(
+        std::unique(observed_ranks.begin(), observed_ranks.end()),
+        observed_ranks.end());
+
+    for (int local_rank = 0; local_rank < state->world_size; ++local_rank) {
+        if (collective->participants.find(local_rank) !=
+            collective->participants.end()) {
+            continue;
+        }
+
+        ClusterFailureEvent event;
+        event.index = ++registry.report.resilience_event_entries;
+        event.comm_id = state->comm_id;
+        event.seqno = collective->request.seqno;
+        event.local_rank = local_rank;
+        event.global_rank = global_rank_for_local(state, local_rank);
+        event.source = "collective_timeout";
+        event.operation = collective_type_name(collective->request.type);
+        event.error_code = "timeout_waiting_for_collective";
+        event.error_detail =
+            "rank " + std::to_string(event.global_rank) +
+            " did not submit " + event.operation + " seqno " +
+            std::to_string(event.seqno) +
+            " before the collective timeout; absence was inferred from "
+            "the submitted ranks";
+        event.observed_ranks = observed_ranks;
+        event.attempted_payload_bytes = attempted_payload_bytes;
+        registry.report.failure_events.push_back(std::move(event));
+    }
+}
+
 ClusterCollectiveReportStats& collective_report_stats_for_type_locked(
     RegistryImpl& registry,
     CollectiveType type) {
@@ -1453,6 +1501,9 @@ CommunicatorRegistrationResult CommunicatorRegistry::init_communicator(
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!state->ready && !state->failed) {
             if (state->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                if (state->ready || state->failed) {
+                    continue;
+                }
                 record_wait_time_locked(
                     registry,
                     state,
@@ -1589,6 +1640,9 @@ CommunicatorSplitResult CommunicatorRegistry::split_communicator(const Communica
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!split->completed && !split->failed && !state->failed) {
             if (split->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                if (split->completed || split->failed || state->failed) {
+                    continue;
+                }
                 record_wait_time_locked(
                     registry,
                     state,
@@ -1953,6 +2007,9 @@ CommunicatorShrinkResult CommunicatorRegistry::shrink_communicator(
         while (!shrink->completed && !shrink->failed) {
             if (shrink->cv.wait_until(lock, deadline) ==
                 std::cv_status::timeout) {
+                if (shrink->completed || shrink->failed) {
+                    continue;
+                }
                 record_wait_time_locked(
                     registry,
                     state,
@@ -2188,6 +2245,9 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!p2p->completed && !p2p->failed && !state->failed) {
             if (p2p->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                if (p2p->completed || p2p->failed || state->failed) {
+                    continue;
+                }
                 record_wait_time_locked(
                     registry,
                     state,
@@ -2470,12 +2530,19 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!collective->completed && !collective->failed && !state->failed) {
             if (collective->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                if (collective->completed || collective->failed || state->failed) {
+                    continue;
+                }
                 record_wait_time_locked(
                     registry,
                     state,
                     request.rank,
                     std::chrono::steady_clock::now() - wait_begin);
                 record_timeout_locked(registry, state, collective->participants);
+                record_collective_timeout_failures_locked(
+                    registry,
+                    state,
+                    collective);
                 fail_collective_locked(
                     state,
                     collective,
@@ -2644,6 +2711,9 @@ BarrierSubmitResult CommunicatorRegistry::submit_barrier(const BarrierSubmitRequ
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!barrier->completed && !barrier->failed && !state->failed) {
             if (barrier->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                if (barrier->completed || barrier->failed || state->failed) {
+                    continue;
+                }
                 record_wait_time_locked(
                     registry,
                     state,
@@ -2795,6 +2865,9 @@ CollectiveBatchPrepareResult CommunicatorRegistry::prepare_collective_batch(
         const auto wait_begin = std::chrono::steady_clock::now();
         while (!batch->completed && !batch->failed && !state->failed) {
             if (batch->cv.wait_until(lock, deadline) == std::cv_status::timeout) {
+                if (batch->completed || batch->failed || state->failed) {
+                    continue;
+                }
                 record_wait_time_locked(
                     registry,
                     state,
