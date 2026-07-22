@@ -794,7 +794,7 @@ def _run_elastic_ddp_restart_case(
     timeout: float,
 ) -> dict[str, Any]:
     report_dir = f"{remote_root}/elastic-ddp-restart"
-    timeout_ms = max(1, round(timeout * 1000))
+    timeout_ms = min(10_000, max(2_000, round(timeout * 100)))
     process_group_timeout = max(10, min(60, round(timeout / 2)))
     failed_node = nodes[1]
     local_addresses = {
@@ -831,6 +831,7 @@ def _run_elastic_ddp_restart_case(
             f"--report-dir={report_dir}",
             f"--node-name={node.name}",
             "--backend=nccl",
+            "--trace-store",
             f"--timeout-seconds={process_group_timeout}",
             f"--survivor-wait-seconds={process_group_timeout}",
         ]

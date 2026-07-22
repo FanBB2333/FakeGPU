@@ -107,6 +107,8 @@ def _validate_reports(report_dir: Path) -> dict[str, Any]:
         for item in initial
     ):
         raise AssertionError(f"initial process groups were unexpectedly cleaned up: {initial}")
+    if any(not item.get("store_events") for item in initial + restarted):
+        raise AssertionError("elastic process-group store tracing was empty")
 
     if any(item.get("status") != "success" for item in restarted):
         raise AssertionError(f"restarted workers failed: {restarted}")
@@ -181,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
             f"--report-dir={report_dir}",
             "--node-name=local",
             "--backend=gloo",
+            "--trace-store",
             "--fail-rank=1",
             "--survivor-wait-seconds=10",
         ]
