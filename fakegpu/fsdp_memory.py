@@ -416,9 +416,10 @@ def build_fully_shard_plan(
             root_workspace_bytes + largest_nested_workspace_bytes
         ),
         "backward_collective_extra_bytes": [
-            root_workspace_bytes
-            + 2 * largest_nested_workspace_bytes
-            + local_nested_bytes
+            root_workspace_bytes for _ in range(world_size)
+        ],
+        "optimizer_runtime_workspace_bytes": [
+            2 * local_nested_bytes
             for local_nested_bytes in largest_nested_local_workspace_bytes
         ],
         "largest_trainable_unit_name": str(largest_trainable_unit["name"]),
@@ -638,6 +639,12 @@ def estimate_fully_shard_sft_memory(
     backward_collective_extra_bytes = int(
         sharding_plan["backward_collective_extra_bytes"][rank]
     )
+    root_local_parameter_bytes = int(
+        sharding_plan["root_local_parameter_bytes"][rank]
+    )
+    optimizer_runtime_workspace_bytes = int(
+        sharding_plan["optimizer_runtime_workspace_bytes"][rank]
+    )
     largest_unsharded_gradient_bytes = int(
         sharding_plan["largest_trainable_unsharded_gradient_bytes"]
     )
@@ -742,13 +749,20 @@ def estimate_fully_shard_sft_memory(
         raise ValueError(
             "static gradient-production peak has inconsistent categories"
         )
-    projected_backward_peak = (
+    projected_gradient_phase_peak = (
         gradient_phase_nonsharded_bytes
         + local_parameter_bytes
         + projected_gradient_bytes(gradient_phase_gradient_bytes)
         + backward_parameter_workspace_bytes
         + backward_collective_extra_bytes
         + reduce_scatter_workspace_bytes
+    )
+    projected_backward_activation_floor = (
+        projected_forward_peak + root_local_parameter_bytes
+    )
+    projected_backward_peak = max(
+        projected_gradient_phase_peak,
+        projected_backward_activation_floor,
     )
     projected_graph_peak = max(
         projected_forward_peak,
@@ -791,6 +805,7 @@ def estimate_fully_shard_sft_memory(
         + projected_gradient_bytes(final_gradient_bytes)
         + local_optimizer_state_bytes
         + local_optimizer_temporary_bytes
+        + optimizer_runtime_workspace_bytes
     )
     projected_steady_graph_peak = (
         projected_graph_peak + local_optimizer_state_bytes
@@ -827,10 +842,15 @@ def estimate_fully_shard_sft_memory(
             backward_parameter_workspace_bytes
         ),
         "backward_collective_extra_bytes": backward_collective_extra_bytes,
+        "optimizer_runtime_workspace_bytes": optimizer_runtime_workspace_bytes,
         "reduce_scatter_workspace_bytes": reduce_scatter_workspace_bytes,
         "captured_graph_peak_bytes": projected_captured_peak,
         "forward_collective_floor_bytes": projected_forward_collective_floor,
         "forward_graph_peak_bytes": projected_forward_peak,
+        "gradient_phase_peak_bytes": projected_gradient_phase_peak,
+        "backward_activation_floor_bytes": (
+            projected_backward_activation_floor
+        ),
         "backward_graph_peak_bytes": projected_backward_peak,
         "first_step_graph_peak_bytes": projected_graph_peak,
         "steady_state_graph_peak_bytes": projected_steady_graph_peak,
@@ -842,7 +862,9 @@ def estimate_fully_shard_sft_memory(
             "The root unit stays unsharded through the forward/loss peak.",
             "FSDP2 all-gather copy-in, packed output, and per-parameter copy-out buffers may overlap at the communication-dominated floor.",
             "Default backward prefetch may materialize the root and largest nested unit together.",
+            "The backward floor retains the forward peak while staging the root rank-local shard.",
             "The largest active trainable gradient is restored before reduce-scatter emits its local shard.",
+            "Two largest nested-unit rank-local buffers account for persistent eager FSDP2 runtime staging during optimizer execution.",
             "Buffers, inputs, activations, outputs, loss tensors, and profiled operator workspaces remain replicated.",
             "AdamW tensor states follow each rank's logical trainable DTensor shard.",
         ],

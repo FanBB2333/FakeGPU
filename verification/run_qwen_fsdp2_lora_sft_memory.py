@@ -450,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--seed", type=int, default=20260721)
     parser.add_argument("--data-seed", type=int, default=20260721)
-    parser.add_argument("--max-error-percent", type=float, default=5.0)
+    parser.add_argument("--max-error-percent", type=float, default=3.0)
     parser.add_argument("--startup-timeout", type=float, default=10.0)
     parser.add_argument("--timeout", type=float, default=600.0)
     args = parser.parse_args(argv)
