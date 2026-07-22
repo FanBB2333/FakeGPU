@@ -57,6 +57,9 @@ cmake --build build -j4
 | `FAKEGPU_STAGING_CHUNK_BYTES` | staging chunk 阈值 |
 | `FAKEGPU_STAGING_FORCE_SOCKET` | 强制跳过 shared memory，直接验证 socket fallback |
 | `FAKEGPU_DEVICE_COUNT` | 暴露的 fake device 数量 |
+| `FAKEGPU_NCCL_FAULT_RANK` | 可选：在 direct 模拟 collective 中失败的全局 rank |
+| `FAKEGPU_NCCL_FAULT_SEQNO` | 注入故障的正整数 communicator 序号 |
+| `FAKEGPU_NCCL_FAULT_OPERATION` | collective 选择器，默认为 `all_reduce` |
 
 这些参数也都能通过 `./fgpu` 传入：
 
@@ -222,7 +225,13 @@ python3 verification/run_physical_multihost.py \
 - FSDP2 FP16/BF16 参数 dtype 梯度归约
 - 两台物理主机之间的 grouped 非均匀与稀疏 all-to-all-v
 - collective reduction operator 不一致以及持续可见的 async error
+- 确定性的 rank 2 All-Reduce 故障、持续 `ncclRemoteError`、三 rank `ncclCommShrink` 与恢复后的 All-Reduce
 - 从第二台物理主机触发缺少 rank 的 communicator 超时
+
+只执行恢复场景时使用 `--case fault-shrink`。控制脚本会把四个逻辑 rank
+分布到两个 node 配置：rank 0、2 位于第一台主机，rank 1、3 位于第二台。
+排除 rank 2 后，子 communicator 包含全局 ranks `[0, 1, 3]`，本地 rank
+为 `[0, 1, 2]`。Cluster 报告会同时记录注入故障和恢复事件。
 
 DeepSpeed 是可选场景，不在默认集合中。添加 `--case deepspeed-zero2` 可以验证
 每台物理主机各运行一个 rank；维护中的异构实验已在 DeepSpeed 0.15.3 和
@@ -407,6 +416,7 @@ export LD_PRELOAD="$PWD/build/libnccl.so.2${LD_PRELOAD:+:$LD_PRELOAD}"
 - 节点间 / 节点内链路统计
 - 全部不同节点的两两组合，包含 collective/P2P 操作分类、方向总量、双向总量、单次操作峰值、传输次数，以及模型平均/峰值吞吐
 - 各 rank 的等待时间、超时次数、communicator 初始化次数，以及 collective/P2P 调用次数
+- 故障与 communicator 恢复事件，包含全局 rank、操作、观测 ranks、尝试负载、排除/存活集合和恢复耗时
 - 有大小限制的操作时间线，记录全局 ranks、collective 数据类型/归约运算、逻辑/socket 负载、汇合时间、coordinator 执行时间和模型时间
 
 设置 JSON 路径后，默认会在同一目录生成 `.md` 报告。通过

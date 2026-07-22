@@ -17,6 +17,8 @@
 #define NCCL_UNDEF_FLOAT -1.0f
 #define NCCL_SPLIT_NOCOLOR -1
 #define NCCL_SUSPEND_MEM 0x01
+#define NCCL_SHRINK_DEFAULT 0x00
+#define NCCL_SHRINK_ABORT 0x01
 
 #ifdef __cplusplus
 extern "C" {

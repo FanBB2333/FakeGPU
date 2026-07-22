@@ -485,6 +485,85 @@ bool write_json_report(
     }
     out << "  ],\n";
 
+    out << "  \"resilience\": {\n";
+    out << "    \"failure_count\": " << snapshot.failure_events.size()
+        << ",\n";
+    out << "    \"recovery_count\": " << snapshot.recovery_events.size()
+        << ",\n";
+    out << "    \"failure_events\": [\n";
+    for (std::size_t index = 0; index < snapshot.failure_events.size(); ++index) {
+        const ClusterFailureEvent& event = snapshot.failure_events[index];
+        out << "      {\n";
+        out << "        \"index\": " << event.index << ",\n";
+        out << "        \"comm_id\": " << event.comm_id << ",\n";
+        out << "        \"seqno\": " << event.seqno << ",\n";
+        out << "        \"local_rank\": " << event.local_rank << ",\n";
+        out << "        \"global_rank\": " << event.global_rank << ",\n";
+        out << "        \"source\": \"" << json_escape(event.source)
+            << "\",\n";
+        out << "        \"operation\": \""
+            << json_escape(event.operation) << "\",\n";
+        out << "        \"error_code\": \""
+            << json_escape(event.error_code) << "\",\n";
+        out << "        \"error_detail\": \""
+            << json_escape(event.error_detail) << "\",\n";
+        out << "        \"observed_ranks\": [";
+        for (std::size_t rank_index = 0;
+             rank_index < event.observed_ranks.size();
+             ++rank_index) {
+            if (rank_index > 0) {
+                out << ", ";
+            }
+            out << event.observed_ranks[rank_index];
+        }
+        out << "],\n";
+        out << "        \"attempted_payload_bytes\": "
+            << event.attempted_payload_bytes << "\n";
+        out << "      }"
+            << (index + 1 < snapshot.failure_events.size() ? "," : "")
+            << "\n";
+    }
+    out << "    ],\n";
+    out << "    \"recovery_events\": [\n";
+    for (std::size_t index = 0; index < snapshot.recovery_events.size(); ++index) {
+        const ClusterRecoveryEvent& event = snapshot.recovery_events[index];
+        out << "      {\n";
+        out << "        \"index\": " << event.index << ",\n";
+        out << "        \"parent_comm_id\": " << event.parent_comm_id
+            << ",\n";
+        out << "        \"new_comm_id\": " << event.new_comm_id << ",\n";
+        out << "        \"seqno\": " << event.seqno << ",\n";
+        out << "        \"abort_parent\": "
+            << (event.abort_parent ? "true" : "false") << ",\n";
+        out << "        \"excluded_ranks\": [";
+        for (std::size_t rank_index = 0;
+             rank_index < event.excluded_ranks.size();
+             ++rank_index) {
+            if (rank_index > 0) {
+                out << ", ";
+            }
+            out << event.excluded_ranks[rank_index];
+        }
+        out << "],\n";
+        out << "        \"surviving_ranks\": [";
+        for (std::size_t rank_index = 0;
+             rank_index < event.surviving_ranks.size();
+             ++rank_index) {
+            if (rank_index > 0) {
+                out << ", ";
+            }
+            out << event.surviving_ranks[rank_index];
+        }
+        out << "],\n";
+        out << "        \"recovery_time_us\": "
+            << format_decimal(event.recovery_time_us) << "\n";
+        out << "      }"
+            << (index + 1 < snapshot.recovery_events.size() ? "," : "")
+            << "\n";
+    }
+    out << "    ]\n";
+    out << "  },\n";
+
     out << "  \"operation_timeline\": {\n";
     out << "    \"retained_entries\": "
         << snapshot.operation_timeline.size() << ",\n";
@@ -675,6 +754,44 @@ bool write_markdown_report(
             << " | " << rank.barrier_calls
             << " | " << rank.group_prepares
             << " |\n";
+    }
+
+    out << "\n## Resilience Events\n\n";
+    out << "### Failures\n\n";
+    out << "| # | Comm:seq | Failed rank | Source | Operation | Error"
+        << " | Observed ranks | Attempted payload |\n";
+    out << "|---:|---|---:|---|---|---|---|---:|\n";
+    for (const ClusterFailureEvent& event : snapshot.failure_events) {
+        out << "| " << event.index
+            << " | `" << event.comm_id << ':' << event.seqno
+            << "` | " << event.global_rank
+            << " | `" << markdown_escape(event.source)
+            << "` | `" << markdown_escape(event.operation)
+            << "` | `" << markdown_escape(event.error_code)
+            << "` | `" << format_rank_list(event.observed_ranks)
+            << "` | " << format_bytes(event.attempted_payload_bytes)
+            << " |\n";
+    }
+    if (snapshot.failure_events.empty()) {
+        out << "| 0 | _No recorded failures_ |  |  |  |  |  | 0 B |\n";
+    }
+
+    out << "\n### Communicator Recovery\n\n";
+    out << "| # | Parent → new | Seq | Mode | Excluded ranks"
+        << " | Surviving ranks | Recovery time |\n";
+    out << "|---:|---|---:|---|---|---|---:|\n";
+    for (const ClusterRecoveryEvent& event : snapshot.recovery_events) {
+        out << "| " << event.index
+            << " | `" << event.parent_comm_id << " → " << event.new_comm_id
+            << "` | " << event.seqno
+            << " | `" << (event.abort_parent ? "abort" : "default")
+            << "` | `" << format_rank_list(event.excluded_ranks)
+            << "` | `" << format_rank_list(event.surviving_ranks)
+            << "` | " << format_decimal(event.recovery_time_us) << " us"
+            << " |\n";
+    }
+    if (snapshot.recovery_events.empty()) {
+        out << "| 0 | _No communicator recovery_ |  |  |  |  | 0.000 us |\n";
     }
 
     out << "\n## Recent Operation Timeline\n\n";

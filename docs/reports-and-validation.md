@@ -23,14 +23,14 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |
 | `python3 verification/test_group_semantics.py` | grouped collective submission semantics |
 | `./ftest tcp_bandwidth` | chosen-port TCP payload correctness and end-to-end simulator throughput |
-| `./ftest distributed_resilience` | TCP collective mismatch, missing-peer timeout, and bounded report-retention behavior |
+| `./ftest distributed_resilience` | deterministic collective rank failure, async-error propagation, communicator shrink/recovery, TCP mismatch, missing-peer timeout, and bounded report retention |
 | `./test/run_hybrid_multinode.sh 2` | maintained multi-process validation with hybrid compute + simulated communication |
 | `python3 verification/run_hybrid_ddp_numerics.py --variant all` | real-CUDA DDP basic, `no_sync`, unused-parameter, static-graph, bucket-view, optimizer, and cross-rank parameter checks |
 | `python3 verification/run_hybrid_fsdp_numerics.py` | real-CUDA FSDP sharding, reduce-scatter gradients, optimizer result, full-parameter reconstruction, and state-dict restoration |
 | `python3 verification/run_hybrid_fsdp2_numerics.py ...` | real-CUDA FSDP2/DeviceMesh/DTensor numerics with two/four ranks, FP32/FP16/BF16 parameters, and FP32 or parameter-dtype gradient reduction |
-| `python3 verification/run_physical_multihost.py ...` | repeatable two-host Hybrid DDP/FSDP/FSDP2, mixed-precision, mismatch, timeout, Git-revision, and report checks over SSH |
+| `python3 verification/run_physical_multihost.py ...` | repeatable two-host Hybrid DDP/FSDP/FSDP2, mixed-precision, rank-failure recovery, mismatch, timeout, Git-revision, and report checks over SSH |
 | `./ftest llm` | optional LLM smoke test when local model files are available |
-| `python test/run_error_simulation_suite.py` | unified error simulation suite: cross-device, OOM, invalid device, dtype, checkpoint, gradient (23 tests) |
+| `python test/run_error_simulation_suite.py` | unified Python error simulation suite: cross-device, OOM, invalid device, dtype, checkpoint, and gradient |
 | `python test/test_error_cross_device.py` | cross-device tensor operation guards |
 | `python test/test_error_oom.py` | per-device OOM simulation |
 
@@ -89,13 +89,15 @@ That report includes:
 - every distinct node pair from the configured cluster, including zero-traffic pairs
 - collective/P2P operation breakdowns, directional and combined byte totals, largest payload per operation, transfer counts, modeled average/peak throughput, estimated time, and contention
 - per-rank wait time, timeout count, communicator init count, and collective/P2P call counts
+- injected failure and communicator-recovery events, including global rank, operation, observed ranks, attempted payload, exclusions, survivors, and recovery time
 - a bounded recent-operation timeline containing global communicator ranks, collective data type/reduction operator, logical and socket payloads, rendezvous time, coordinator execution time, and topology-modeled time
 
 The repository-root `cluster_report.schema.json` defines the
 `cluster_report.v1` JSON contract. `verification/check_cluster_report.py`
 validates it by default and can additionally require P2P traffic with
-`--expect-point-to-point`. The default validation also reconciles all completed
-collective/P2P counters with retained plus discarded timeline entries. When the
+`--expect-point-to-point` or resilience events with `--expect-failure` and
+`--expect-recovery`. The default validation also reconciles event counters and
+all completed collective/P2P counters with retained plus discarded timeline entries. When the
 timeline is complete, operation-specific calls and logical bytes must match
 exactly. Directional link samples, bytes, peaks, modeled time, and throughput
 must also match their node-pair direction.
@@ -192,7 +194,7 @@ Treat the following as the most stable paths:
 - `python`
 - single-host `simulate + simulate`
 - local chosen-port TCP collective and bandwidth validation
-- direct NCCL verification plus simulate-mode DDP validation (`test_coordinator_smoke.py`, `test_allreduce_correctness.py`, `test_allgather_correctness.py`, `test_group_semantics.py`, `run_multinode_sim.sh`, `run_ddp_multinode.sh`)
+- direct NCCL verification plus simulate-mode DDP validation (`test_coordinator_smoke.py`, `test_allreduce_correctness.py`, `test_allgather_correctness.py`, `test_group_semantics.py`, `test_fault_injection_recovery.py`, `run_multinode_sim.sh`, `run_ddp_multinode.sh`)
 
 Treat the following as more environment-sensitive or extended coverage:
 

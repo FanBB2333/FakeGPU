@@ -150,16 +150,129 @@ def _require_counter(obj: dict, key: str, *, ctx: str) -> dict:
 
 def _require_non_negative_number(obj: dict, key: str, *, ctx: str) -> float:
     value = _require(obj, key, ctx=ctx)
-    if not isinstance(value, (int, float)) or value < 0:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or value < 0
+    ):
         _die(f"{ctx}.{key} must be a non-negative number")
     return float(value)
 
 
 def _require_non_negative_integer(obj: dict, key: str, *, ctx: str) -> int:
     value = _require(obj, key, ctx=ctx)
-    if not isinstance(value, int) or value < 0:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         _die(f"{ctx}.{key} must be a non-negative integer")
     return value
+
+
+def _validate_resilience(
+    resilience: object,
+    *,
+    expect_failure: bool = False,
+    expect_recovery: bool = False,
+) -> None:
+    if not isinstance(resilience, dict):
+        _die("resilience must be an object")
+    failure_count = _require_non_negative_integer(
+        resilience,
+        "failure_count",
+        ctx="resilience",
+    )
+    recovery_count = _require_non_negative_integer(
+        resilience,
+        "recovery_count",
+        ctx="resilience",
+    )
+    failure_events = _require(resilience, "failure_events", ctx="resilience")
+    recovery_events = _require(resilience, "recovery_events", ctx="resilience")
+    if not isinstance(failure_events, list):
+        _die("resilience.failure_events must be an array")
+    if not isinstance(recovery_events, list):
+        _die("resilience.recovery_events must be an array")
+    if failure_count != len(failure_events):
+        _die("resilience.failure_count must equal the failure_events length")
+    if recovery_count != len(recovery_events):
+        _die("resilience.recovery_count must equal the recovery_events length")
+    if expect_failure and failure_count == 0:
+        _die("expected at least one recorded failure event")
+    if expect_recovery and recovery_count == 0:
+        _die("expected at least one communicator recovery event")
+
+    event_indices: set[int] = set()
+    for index, event in enumerate(failure_events):
+        ctx = f"resilience.failure_events[{index}]"
+        if not isinstance(event, dict):
+            _die(f"{ctx} must be an object")
+        event_index = _require_non_negative_integer(event, "index", ctx=ctx)
+        if event_index <= 0 or event_index in event_indices:
+            _die(f"{ctx}.index must be positive and unique")
+        event_indices.add(event_index)
+        if _require_non_negative_integer(event, "comm_id", ctx=ctx) <= 0:
+            _die(f"{ctx}.comm_id must be positive")
+        if _require_non_negative_integer(event, "seqno", ctx=ctx) <= 0:
+            _die(f"{ctx}.seqno must be positive")
+        _require_non_negative_integer(event, "local_rank", ctx=ctx)
+        global_rank = _require_non_negative_integer(event, "global_rank", ctx=ctx)
+        for field in ("source", "operation", "error_code", "error_detail"):
+            value = _require(event, field, ctx=ctx)
+            if not isinstance(value, str) or not value:
+                _die(f"{ctx}.{field} must be a non-empty string")
+        observed_ranks = _require(event, "observed_ranks", ctx=ctx)
+        if (
+            not isinstance(observed_ranks, list)
+            or not observed_ranks
+            or any(
+                not isinstance(rank, int) or isinstance(rank, bool) or rank < 0
+                for rank in observed_ranks
+            )
+        ):
+            _die(f"{ctx}.observed_ranks must contain non-negative integers")
+        if observed_ranks != sorted(set(observed_ranks)):
+            _die(f"{ctx}.observed_ranks must be sorted and unique")
+        if global_rank not in observed_ranks:
+            _die(f"{ctx}.observed_ranks must include the failed global rank")
+        _require_non_negative_integer(event, "attempted_payload_bytes", ctx=ctx)
+
+    for index, event in enumerate(recovery_events):
+        ctx = f"resilience.recovery_events[{index}]"
+        if not isinstance(event, dict):
+            _die(f"{ctx} must be an object")
+        event_index = _require_non_negative_integer(event, "index", ctx=ctx)
+        if event_index <= 0 or event_index in event_indices:
+            _die(f"{ctx}.index must be positive and unique")
+        event_indices.add(event_index)
+        parent_comm_id = _require_non_negative_integer(
+            event,
+            "parent_comm_id",
+            ctx=ctx,
+        )
+        new_comm_id = _require_non_negative_integer(event, "new_comm_id", ctx=ctx)
+        if parent_comm_id <= 0 or new_comm_id <= 0 or parent_comm_id == new_comm_id:
+            _die(f"{ctx} must identify distinct positive communicators")
+        if _require_non_negative_integer(event, "seqno", ctx=ctx) <= 0:
+            _die(f"{ctx}.seqno must be positive")
+        abort_parent = _require(event, "abort_parent", ctx=ctx)
+        if not isinstance(abort_parent, bool):
+            _die(f"{ctx}.abort_parent must be a boolean")
+        rank_sets: dict[str, list[int]] = {}
+        for field in ("excluded_ranks", "surviving_ranks"):
+            ranks = _require(event, field, ctx=ctx)
+            if (
+                not isinstance(ranks, list)
+                or not ranks
+                or any(
+                    not isinstance(rank, int) or isinstance(rank, bool) or rank < 0
+                    for rank in ranks
+                )
+            ):
+                _die(f"{ctx}.{field} must contain non-negative integers")
+            if ranks != sorted(set(ranks)):
+                _die(f"{ctx}.{field} must be sorted and unique")
+            rank_sets[field] = ranks
+        if set(rank_sets["excluded_ranks"]) & set(rank_sets["surviving_ranks"]):
+            _die(f"{ctx} excluded and surviving ranks must be disjoint")
+        _require_non_negative_number(event, "recovery_time_us", ctx=ctx)
 
 
 def _validate_pair_direction(obj: object, *, ctx: str) -> dict:
@@ -341,6 +454,16 @@ def main() -> int:
         action="store_true",
         help="Require the companion Markdown report and node-pair table",
     )
+    ap.add_argument(
+        "--expect-failure",
+        action="store_true",
+        help="Require at least one recorded communicator failure",
+    )
+    ap.add_argument(
+        "--expect-recovery",
+        action="store_true",
+        help="Require at least one recorded communicator recovery",
+    )
     ap.add_argument("--min-ranks", type=int, default=1, help="Minimum number of rank entries expected")
     args = ap.parse_args()
 
@@ -436,6 +559,20 @@ def main() -> int:
         _die("expected at least one completed communication operation")
     if args.expect_point_to_point and (p2p_operations <= 0 or p2p_sends <= 0):
         _die("expected successful point-to-point sends")
+
+    resilience = report.get("resilience")
+    if resilience is None:
+        if args.expect_failure or args.expect_recovery:
+            _die(
+                "expected resilience events, but the report has no "
+                "resilience section"
+            )
+    else:
+        _validate_resilience(
+            resilience,
+            expect_failure=args.expect_failure,
+            expect_recovery=args.expect_recovery,
+        )
 
     links = report.get("links", [])
     if args.expect_links:
@@ -624,13 +761,16 @@ def main() -> int:
         if not markdown_path.is_file():
             _die(f"Markdown report file not found: {markdown_path}")
         markdown = markdown_path.read_text(encoding="utf-8")
-        for required_text in (
+        required_markdown = [
             "# FakeGPU Cluster Communication Report",
             "## Point-to-Point Summary",
             "## Node-Pair Communication",
             "## Recent Operation Timeline",
             "| Node A | Node B |",
-        ):
+        ]
+        if resilience is not None:
+            required_markdown.append("## Resilience Events")
+        for required_text in required_markdown:
             if required_text not in markdown:
                 _die(
                     f"Markdown report is missing required content: "

@@ -209,6 +209,7 @@ run_tcp_bandwidth() {
 
 run_distributed_resilience() {
   build
+  "$PYTHON_BIN" verification/test_fault_injection_recovery.py --build-dir "$SMOKE_BUILD_DIR"
   "$PYTHON_BIN" verification/test_remote_faults.py --build-dir "$SMOKE_BUILD_DIR"
   "$PYTHON_BIN" verification/test_cluster_report_retention.py --build-dir "$SMOKE_BUILD_DIR"
 }

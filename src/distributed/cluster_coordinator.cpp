@@ -164,6 +164,47 @@ bool parse_optional_size_list(
     return true;
 }
 
+bool parse_required_int_list(
+    const std::unordered_map<std::string, std::string>& fields,
+    const char* key,
+    std::vector<int>& values,
+    std::string& error) {
+    values.clear();
+    const auto it = fields.find(key);
+    if (it == fields.end()) {
+        error = std::string("missing required field: ") + key;
+        return false;
+    }
+    if (it->second.empty()) {
+        error = std::string("empty integer list field: ") + key;
+        return false;
+    }
+
+    std::size_t begin = 0;
+    while (begin <= it->second.size()) {
+        const std::size_t end = it->second.find(',', begin);
+        const std::string item = it->second.substr(
+            begin,
+            end == std::string::npos ? std::string::npos : end - begin);
+        try {
+            std::size_t consumed = 0;
+            const int parsed = std::stoi(item, &consumed, 10);
+            if (consumed != item.size()) {
+                throw std::invalid_argument("invalid integer");
+            }
+            values.push_back(parsed);
+        } catch (...) {
+            error = std::string("invalid integer list field: ") + key;
+            return false;
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        begin = end + 1;
+    }
+    return true;
+}
+
 }  // namespace
 
 ClusterCoordinator::ClusterCoordinator(CoordinatorTransport transport, std::string address)
@@ -386,6 +427,133 @@ void ClusterCoordinator::handle_client(int client_fd) {
                                     });
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    } else if (request.command == "INJECT_FAILURE") {
+        CommunicatorFailureRequest failure_request;
+        bool ok = false;
+        std::string error;
+
+        failure_request.comm_id =
+            parse_required_int(request.fields, "comm_id", ok, error);
+        if (!ok) {
+            response = format_error_response("bad_request", error);
+        } else {
+            failure_request.rank =
+                parse_required_int(request.fields, "rank", ok, error);
+            if (!ok) {
+                response = format_error_response("bad_request", error);
+            } else {
+                failure_request.seqno =
+                    parse_required_u64(request.fields, "seqno", ok, error);
+                if (!ok) {
+                    response = format_error_response("bad_request", error);
+                } else {
+                    const auto operation_it = request.fields.find("operation");
+                    const auto error_code_it = request.fields.find("error_code");
+                    if (operation_it == request.fields.end()) {
+                        response = format_error_response(
+                            "bad_request",
+                            "missing required field: operation");
+                    } else if (error_code_it == request.fields.end()) {
+                        response = format_error_response(
+                            "bad_request",
+                            "missing required field: error_code");
+                    } else {
+                        failure_request.operation = operation_it->second;
+                        failure_request.error_code = error_code_it->second;
+                        failure_request.attempted_payload_bytes =
+                            parse_required_size(
+                                request.fields,
+                                "attempted_payload_bytes",
+                                ok,
+                                error);
+                        if (!ok) {
+                            response = format_error_response(
+                                "bad_request",
+                                error);
+                        } else {
+                            CommunicatorFailureResult result =
+                                communicator_registry_.inject_communicator_failure(
+                                    failure_request);
+                            if (!result.ok) {
+                                response = format_error_response(
+                                    result.error_code,
+                                    result.error_detail);
+                            } else {
+                                response = format_ok_response({
+                                    {"comm_id", std::to_string(failure_request.comm_id)},
+                                    {"seqno", std::to_string(failure_request.seqno)},
+                                    {"rank", std::to_string(failure_request.rank)},
+                                    {"event_index", std::to_string(result.event_index)},
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if (request.command == "SHRINK_COMM") {
+        CommunicatorShrinkRequest shrink_request;
+        bool ok = false;
+        std::string error;
+
+        shrink_request.comm_id =
+            parse_required_int(request.fields, "comm_id", ok, error);
+        if (!ok) {
+            response = format_error_response("bad_request", error);
+        } else {
+            shrink_request.rank =
+                parse_required_int(request.fields, "rank", ok, error);
+            if (!ok) {
+                response = format_error_response("bad_request", error);
+            } else {
+                shrink_request.seqno =
+                    parse_required_u64(request.fields, "seqno", ok, error);
+                if (!ok) {
+                    response = format_error_response("bad_request", error);
+                } else if (!parse_required_int_list(
+                               request.fields,
+                               "excluded_ranks",
+                               shrink_request.excluded_ranks,
+                               error)) {
+                    response = format_error_response("bad_request", error);
+                } else {
+                    shrink_request.timeout_ms =
+                        parse_required_int(
+                            request.fields,
+                            "timeout_ms",
+                            ok,
+                            error);
+                    if (!ok) {
+                        response = format_error_response("bad_request", error);
+                    } else if (!parse_optional_bool_field(
+                                   request.fields,
+                                   "abort_parent",
+                                   false,
+                                   shrink_request.abort_parent,
+                                   error)) {
+                        response = format_error_response("bad_request", error);
+                    } else {
+                        CommunicatorShrinkResult result =
+                            communicator_registry_.shrink_communicator(
+                                shrink_request);
+                        if (!result.ok) {
+                            response = format_error_response(
+                                result.error_code,
+                                result.error_detail);
+                        } else {
+                            response = format_ok_response({
+                                {"comm_id", std::to_string(shrink_request.comm_id)},
+                                {"seqno", std::to_string(result.seqno)},
+                                {"rank", std::to_string(shrink_request.rank)},
+                                {"new_comm_id", std::to_string(result.new_comm_id)},
+                                {"new_rank", std::to_string(result.new_rank)},
+                                {"new_world_size", std::to_string(result.new_world_size)},
+                            });
                         }
                     }
                 }
