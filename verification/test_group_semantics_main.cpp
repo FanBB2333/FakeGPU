@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -12,11 +13,15 @@
 #include <thread>
 #include <vector>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 namespace {
 
 using fake_gpu::distributed::ClusterCoordinator;
+using fake_gpu::distributed::CoordinatorTransport;
 
 std::string make_temp_directory() {
     std::string pattern = "/tmp/fakegpu-group-XXXXXX";
@@ -35,6 +40,34 @@ void require(bool condition, const std::string& message) {
     }
 }
 
+std::uint16_t find_free_tcp_port() {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        throw std::runtime_error("failed to create TCP port probe socket");
+    }
+
+    sockaddr_in address {};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(0);
+    if (::bind(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0) {
+        ::close(fd);
+        throw std::runtime_error("failed to bind TCP port probe socket");
+    }
+
+    socklen_t address_length = sizeof(address);
+    if (::getsockname(
+            fd,
+            reinterpret_cast<sockaddr*>(&address),
+            &address_length) != 0) {
+        ::close(fd);
+        throw std::runtime_error("failed to inspect TCP port probe socket");
+    }
+    const std::uint16_t port = ntohs(address.sin_port);
+    ::close(fd);
+    return port;
+}
+
 void require_result(ncclResult_t actual, ncclResult_t expected, const std::string& message) {
     if (actual != expected) {
         throw std::runtime_error(
@@ -45,10 +78,16 @@ void require_result(ncclResult_t actual, ncclResult_t expected, const std::strin
 
 class CoordinatorFixture {
 public:
-    CoordinatorFixture() {
-        temp_dir_ = make_temp_directory();
-        socket_path_ = temp_dir_ + "/coordinator.sock";
-        coordinator_ = std::make_unique<ClusterCoordinator>(socket_path_);
+    explicit CoordinatorFixture(
+        CoordinatorTransport transport = CoordinatorTransport::Unix)
+        : transport_(transport) {
+        if (transport_ == CoordinatorTransport::Unix) {
+            temp_dir_ = make_temp_directory();
+            address_ = temp_dir_ + "/coordinator.sock";
+        } else {
+            address_ = "127.0.0.1:" + std::to_string(find_free_tcp_port());
+        }
+        coordinator_ = std::make_unique<ClusterCoordinator>(transport_, address_);
 
         std::string error;
         if (!coordinator_->start(error)) {
@@ -59,18 +98,26 @@ public:
             coordinator_->run();
         });
 
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (std::filesystem::exists(socket_path_)) {
-                break;
+        if (transport_ == CoordinatorTransport::Unix) {
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (std::filesystem::exists(address_)) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            require(
+                std::filesystem::exists(address_),
+                "coordinator socket did not appear");
         }
-        require(std::filesystem::exists(socket_path_), "coordinator socket did not appear");
 
         ::setenv("FAKEGPU_DIST_MODE", "simulate", 1);
-        ::setenv("FAKEGPU_COORDINATOR_TRANSPORT", "unix", 1);
-        ::setenv("FAKEGPU_COORDINATOR_ADDR", socket_path_.c_str(), 1);
+        ::setenv(
+            "FAKEGPU_COORDINATOR_TRANSPORT",
+            transport_ == CoordinatorTransport::Tcp ? "tcp" : "unix",
+            1);
+        ::setenv("FAKEGPU_COORDINATOR_ADDR", address_.c_str(), 1);
     }
 
     ~CoordinatorFixture() {
@@ -87,8 +134,9 @@ public:
     }
 
 private:
+    CoordinatorTransport transport_ = CoordinatorTransport::Unix;
     std::string temp_dir_;
-    std::string socket_path_;
+    std::string address_;
     std::unique_ptr<ClusterCoordinator> coordinator_;
     std::thread thread_;
 };
@@ -249,11 +297,17 @@ void run_grouped_send_recv_alltoall_case(int world_size) {
     destroy_communicators(comms);
 }
 
-std::size_t variable_split_count(int sender, int receiver) {
-    return 1 + static_cast<std::size_t>((sender * 2 + receiver) % 3);
+std::size_t variable_split_count(int sender, int receiver, bool sparse) {
+    if (!sparse) {
+        return 1 + static_cast<std::size_t>((sender * 2 + receiver) % 3);
+    }
+    if (sender == receiver) {
+        return 2;
+    }
+    return (sender + 2 * receiver) % 3 == 2 ? 0 : 1;
 }
 
-void run_grouped_send_recv_alltoallv_case(int world_size) {
+void run_grouped_send_recv_alltoallv_case(int world_size, bool sparse = false) {
     std::vector<ncclComm_t> comms = init_communicators(world_size);
     std::vector<std::vector<std::size_t>> send_offsets(
         static_cast<std::size_t>(world_size));
@@ -273,13 +327,13 @@ void run_grouped_send_recv_alltoallv_case(int world_size) {
         for (int peer = 0; peer < world_size; ++peer) {
             send_offsets[static_cast<std::size_t>(rank)].push_back(send_total);
             recv_offsets[static_cast<std::size_t>(rank)].push_back(recv_total);
-            send_total += variable_split_count(rank, peer);
-            recv_total += variable_split_count(peer, rank);
+            send_total += variable_split_count(rank, peer, sparse);
+            recv_total += variable_split_count(peer, rank, sparse);
         }
         send_buffers[static_cast<std::size_t>(rank)].assign(send_total, 0.0f);
         recv_buffers[static_cast<std::size_t>(rank)].assign(recv_total, -1.0f);
         for (int peer = 0; peer < world_size; ++peer) {
-            const std::size_t count = variable_split_count(rank, peer);
+            const std::size_t count = variable_split_count(rank, peer, sparse);
             const std::size_t offset =
                 send_offsets[static_cast<std::size_t>(rank)]
                             [static_cast<std::size_t>(peer)];
@@ -296,30 +350,38 @@ void run_grouped_send_recv_alltoallv_case(int world_size) {
                 ncclSuccess,
                 "all-to-all-v ncclGroupStart failed");
             for (int peer = 0; peer < world_size; ++peer) {
-                require_result(
-                    ncclSend(
-                        send_buffers[static_cast<std::size_t>(rank)].data() +
-                            send_offsets[static_cast<std::size_t>(rank)]
-                                        [static_cast<std::size_t>(peer)],
-                        variable_split_count(rank, peer),
-                        ncclFloat32,
-                        peer,
-                        comms[static_cast<std::size_t>(rank)],
-                        nullptr),
-                    ncclSuccess,
-                    "grouped all-to-all-v send enqueue failed");
-                require_result(
-                    ncclRecv(
-                        recv_buffers[static_cast<std::size_t>(rank)].data() +
-                            recv_offsets[static_cast<std::size_t>(rank)]
-                                        [static_cast<std::size_t>(peer)],
-                        variable_split_count(peer, rank),
-                        ncclFloat32,
-                        peer,
-                        comms[static_cast<std::size_t>(rank)],
-                        nullptr),
-                    ncclSuccess,
-                    "grouped all-to-all-v recv enqueue failed");
+                const std::size_t send_count =
+                    variable_split_count(rank, peer, sparse);
+                if (send_count > 0) {
+                    require_result(
+                        ncclSend(
+                            send_buffers[static_cast<std::size_t>(rank)].data() +
+                                send_offsets[static_cast<std::size_t>(rank)]
+                                            [static_cast<std::size_t>(peer)],
+                            send_count,
+                            ncclFloat32,
+                            peer,
+                            comms[static_cast<std::size_t>(rank)],
+                            nullptr),
+                        ncclSuccess,
+                        "grouped all-to-all-v send enqueue failed");
+                }
+                const std::size_t recv_count =
+                    variable_split_count(peer, rank, sparse);
+                if (recv_count > 0) {
+                    require_result(
+                        ncclRecv(
+                            recv_buffers[static_cast<std::size_t>(rank)].data() +
+                                recv_offsets[static_cast<std::size_t>(rank)]
+                                            [static_cast<std::size_t>(peer)],
+                            recv_count,
+                            ncclFloat32,
+                            peer,
+                            comms[static_cast<std::size_t>(rank)],
+                            nullptr),
+                        ncclSuccess,
+                        "grouped all-to-all-v recv enqueue failed");
+                }
             }
             results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
         });
@@ -335,7 +397,7 @@ void run_grouped_send_recv_alltoallv_case(int world_size) {
             ncclSuccess,
             "grouped send/recv all-to-all-v failed");
         for (int sender = 0; sender < world_size; ++sender) {
-            const std::size_t count = variable_split_count(sender, rank);
+            const std::size_t count = variable_split_count(sender, rank, sparse);
             const std::size_t offset =
                 recv_offsets[static_cast<std::size_t>(rank)]
                             [static_cast<std::size_t>(sender)];
@@ -401,17 +463,36 @@ void run_second_op_mismatch_case() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
-        CoordinatorFixture fixture;
-        run_success_case(2);
-        run_success_case(4);
-        run_grouped_send_recv_alltoall_case(2);
-        run_grouped_send_recv_alltoall_case(4);
+        CoordinatorTransport transport = CoordinatorTransport::Unix;
+        if (argc == 3 && std::string(argv[1]) == "--transport") {
+            const std::string value = argv[2];
+            if (value == "tcp") {
+                transport = CoordinatorTransport::Tcp;
+            } else if (value != "unix") {
+                throw std::runtime_error("--transport must be unix or tcp");
+            }
+        } else if (argc != 1) {
+            throw std::runtime_error("usage: fakegpu_group_semantics_test [--transport unix|tcp]");
+        }
+
+        CoordinatorFixture fixture(transport);
+        if (transport == CoordinatorTransport::Unix) {
+            run_success_case(2);
+            run_success_case(4);
+            run_grouped_send_recv_alltoall_case(2);
+            run_grouped_send_recv_alltoall_case(4);
+            run_second_op_mismatch_case();
+        }
         run_grouped_send_recv_alltoallv_case(2);
         run_grouped_send_recv_alltoallv_case(4);
-        run_second_op_mismatch_case();
-        std::cout << "group semantics test passed" << std::endl;
+        run_grouped_send_recv_alltoallv_case(2, true);
+        run_grouped_send_recv_alltoallv_case(4, true);
+        std::cout
+            << "group semantics test passed ("
+            << (transport == CoordinatorTransport::Tcp ? "tcp" : "unix")
+            << ")" << std::endl;
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << std::endl;

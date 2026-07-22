@@ -16,17 +16,20 @@ def main() -> int:
         print(f"missing group semantics probe: {PROBE}", file=sys.stderr)
         return 2
 
-    completed = subprocess.run(
-        [str(PROBE)],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-    )
-    if completed.stdout:
-        sys.stdout.write(completed.stdout)
-    if completed.stderr:
-        sys.stderr.write(completed.stderr)
-    return completed.returncode
+    for transport in ("unix", "tcp"):
+        completed = subprocess.run(
+            [str(PROBE), "--transport", transport],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+        )
+        if completed.stdout:
+            sys.stdout.write(completed.stdout)
+        if completed.stderr:
+            sys.stderr.write(completed.stderr)
+        if completed.returncode != 0:
+            return completed.returncode
+    return 0
 
 
 if __name__ == "__main__":
