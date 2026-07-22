@@ -18,6 +18,7 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
@@ -1500,9 +1501,6 @@ ncclResult_t buffer_group_send(
     if (peer < 0 || peer >= comm->world_size) {
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
     }
-    if (peer == comm->rank) {
-        return fail_with(comm, ncclInvalidArgument, "peer must not equal rank");
-    }
     if (count == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
     }
@@ -1554,9 +1552,6 @@ ncclResult_t buffer_group_recv(
     }
     if (peer < 0 || peer >= comm->world_size) {
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
-    }
-    if (peer == comm->rank) {
-        return fail_with(comm, ncclInvalidArgument, "peer must not equal rank");
     }
     if (count == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
@@ -2320,6 +2315,102 @@ ncclResult_t do_destroy(ncclComm_t comm, bool allow_missing) {
     return ncclSuccess;
 }
 
+bool all_group_operations_are_point_to_point(
+    const std::vector<GroupOperation>& operations) {
+    for (const GroupOperation& operation : operations) {
+        if (operation.kind != GroupOperationKind::PointToPoint) {
+            return false;
+        }
+    }
+    return true;
+}
+
+ncclResult_t flush_even_grouped_alltoall(
+    ncclComm_t comm,
+    const std::vector<GroupOperation>& operations,
+    bool& handled) {
+    handled = false;
+    if (!comm ||
+        comm->world_size <= 0 ||
+        !all_group_operations_are_point_to_point(operations) ||
+        operations.size() != static_cast<std::size_t>(2 * comm->world_size)) {
+        return ncclSuccess;
+    }
+
+    std::vector<const GroupOperation*> sends(
+        static_cast<std::size_t>(comm->world_size), nullptr);
+    std::vector<const GroupOperation*> recvs(
+        static_cast<std::size_t>(comm->world_size), nullptr);
+    for (const GroupOperation& operation : operations) {
+        if (operation.peer < 0 || operation.peer >= comm->world_size) {
+            return ncclSuccess;
+        }
+        std::vector<const GroupOperation*>& by_peer =
+            operation.p2p_type == fake_gpu::distributed::PointToPointType::Send
+            ? sends
+            : recvs;
+        const std::size_t peer = static_cast<std::size_t>(operation.peer);
+        if (by_peer[peer] != nullptr) {
+            return ncclSuccess;
+        }
+        by_peer[peer] = &operation;
+    }
+
+    const GroupOperation* first_send = sends.front();
+    const GroupOperation* first_recv = recvs.front();
+    if (!first_send || !first_recv || first_send->count == 0) {
+        return ncclSuccess;
+    }
+
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(first_send->datatype, mapped_dtype)) {
+        handled = true;
+        return fail_with(
+            comm,
+            ncclInvalidArgument,
+            "unsupported dtype in grouped all-to-all");
+    }
+    const std::size_t dtype_size =
+        fake_gpu::distributed::collective_data_type_size(mapped_dtype);
+    const std::size_t chunk_bytes = first_send->count * dtype_size;
+    const std::uintptr_t send_base =
+        reinterpret_cast<std::uintptr_t>(first_send->sendbuff);
+    const std::uintptr_t recv_base =
+        reinterpret_cast<std::uintptr_t>(first_recv->recvbuff);
+
+    for (int peer = 0; peer < comm->world_size; ++peer) {
+        const GroupOperation* send = sends[static_cast<std::size_t>(peer)];
+        const GroupOperation* recv = recvs[static_cast<std::size_t>(peer)];
+        if (!send || !recv ||
+            send->count != first_send->count ||
+            recv->count != first_send->count ||
+            send->datatype != first_send->datatype ||
+            recv->datatype != first_send->datatype ||
+            send->stream != first_send->stream ||
+            recv->stream != first_send->stream ||
+            reinterpret_cast<std::uintptr_t>(send->sendbuff) !=
+                send_base + static_cast<std::size_t>(peer) * chunk_bytes ||
+            reinterpret_cast<std::uintptr_t>(recv->recvbuff) !=
+                recv_base + static_cast<std::size_t>(peer) * chunk_bytes) {
+            return ncclSuccess;
+        }
+    }
+
+    handled = true;
+    return submit_collective(
+        "ALLTOALL",
+        fake_gpu::distributed::CollectiveType::AllToAll,
+        reinterpret_cast<const void*>(send_base),
+        reinterpret_cast<void*>(recv_base),
+        first_send->count,
+        first_send->datatype,
+        fake_gpu::distributed::CollectiveReduceOp::None,
+        -1,
+        comm,
+        ncclSum,
+        first_send->stream);
+}
+
 ncclResult_t flush_grouped_operations() {
     if (g_group_operations.empty()) {
         g_last_error.clear();
@@ -2339,6 +2430,16 @@ ncclResult_t flush_grouped_operations() {
             clear_group_operations();
             return result;
         }
+    }
+
+    bool handled_as_alltoall = false;
+    ncclResult_t grouped_alltoall_result = flush_even_grouped_alltoall(
+        comm,
+        g_group_operations,
+        handled_as_alltoall);
+    if (handled_as_alltoall) {
+        clear_group_operations();
+        return grouped_alltoall_result;
     }
 
     for (GroupOperation& operation : g_group_operations) {

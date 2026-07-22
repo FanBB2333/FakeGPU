@@ -165,6 +165,90 @@ void run_success_case(int world_size) {
     destroy_communicators(comms);
 }
 
+void run_grouped_send_recv_alltoall_case(int world_size) {
+    constexpr std::size_t count = 2;
+    std::vector<ncclComm_t> comms = init_communicators(world_size);
+    const std::size_t total_count =
+        static_cast<std::size_t>(world_size) * count;
+    std::vector<std::vector<float>> send_buffers(
+        static_cast<std::size_t>(world_size),
+        std::vector<float>(total_count, 0.0f));
+    std::vector<std::vector<float>> recv_buffers(
+        static_cast<std::size_t>(world_size),
+        std::vector<float>(total_count, -1.0f));
+    std::vector<ncclResult_t> results(
+        static_cast<std::size_t>(world_size), ncclInternalError);
+    std::vector<std::thread> threads;
+
+    for (int rank = 0; rank < world_size; ++rank) {
+        for (int peer = 0; peer < world_size; ++peer) {
+            for (std::size_t index = 0; index < count; ++index) {
+                send_buffers[static_cast<std::size_t>(rank)]
+                            [static_cast<std::size_t>(peer) * count + index] =
+                    static_cast<float>(100 * rank + 10 * peer) +
+                    static_cast<float>(index);
+            }
+        }
+        threads.emplace_back([&, rank]() {
+            require_result(
+                ncclGroupStart(),
+                ncclSuccess,
+                "all-to-all ncclGroupStart failed");
+            for (int peer = 0; peer < world_size; ++peer) {
+                require_result(
+                    ncclSend(
+                        send_buffers[static_cast<std::size_t>(rank)].data() +
+                            static_cast<std::size_t>(peer) * count,
+                        count,
+                        ncclFloat32,
+                        peer,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr),
+                    ncclSuccess,
+                    "grouped all-to-all send enqueue failed");
+                require_result(
+                    ncclRecv(
+                        recv_buffers[static_cast<std::size_t>(rank)].data() +
+                            static_cast<std::size_t>(peer) * count,
+                        count,
+                        ncclFloat32,
+                        peer,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr),
+                    ncclSuccess,
+                    "grouped all-to-all recv enqueue failed");
+            }
+            results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
+        });
+    }
+
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+
+    for (int rank = 0; rank < world_size; ++rank) {
+        require_result(
+            results[static_cast<std::size_t>(rank)],
+            ncclSuccess,
+            "grouped send/recv all-to-all failed");
+        for (int sender = 0; sender < world_size; ++sender) {
+            for (std::size_t index = 0; index < count; ++index) {
+                const float expected =
+                    static_cast<float>(100 * sender + 10 * rank) +
+                    static_cast<float>(index);
+                const float actual =
+                    recv_buffers[static_cast<std::size_t>(rank)]
+                                [static_cast<std::size_t>(sender) * count + index];
+                require(
+                    std::fabs(actual - expected) < 1e-6f,
+                    "grouped all-to-all payload mismatch");
+            }
+        }
+    }
+
+    destroy_communicators(comms);
+}
+
 void run_second_op_mismatch_case() {
     std::vector<ncclComm_t> comms = init_communicators(2);
     std::vector<float> rank0_values = {1.0f, 10.0f};
@@ -215,6 +299,8 @@ int main() {
         CoordinatorFixture fixture;
         run_success_case(2);
         run_success_case(4);
+        run_grouped_send_recv_alltoall_case(2);
+        run_grouped_send_recv_alltoall_case(4);
         run_second_op_mismatch_case();
         std::cout << "group semantics test passed" << std::endl;
         return 0;
