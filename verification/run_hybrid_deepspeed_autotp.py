@@ -285,6 +285,19 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        autotp_spec = importlib.util.find_spec(
+            "deepspeed.runtime.tensor_parallel.config"
+        )
+    except ModuleNotFoundError:
+        autotp_spec = None
+    if autotp_spec is None:
+        print(
+            "This DeepSpeed installation does not provide training AutoTP "
+            "(deepspeed.runtime.tensor_parallel).",
+            file=sys.stderr,
+        )
+        return 2
     if args.timeout <= 0:
         parser.error("--timeout must be greater than zero")
     build_dir = args.build_dir.resolve()
