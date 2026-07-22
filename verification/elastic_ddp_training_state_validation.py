@@ -75,10 +75,22 @@ def validate_elastic_ddp_training_state_reports(
     }
     if set(initial_by_rank) != {0, 1} or set(restarted_by_rank) != {0, 1}:
         raise AssertionError("elastic training-state ranks are invalid")
+    selected_failure_ranks = [
+        rank
+        for rank, report in initial_by_rank.items()
+        if report.get("selected_for_initial_exit") is True
+    ]
+    if len(selected_failure_ranks) != 1:
+        raise AssertionError(
+            "elastic training-state recovery requires exactly one failed rank"
+        )
+    failed_rank = selected_failure_ranks[0]
 
     for rank, report in initial_by_rank.items():
         expected_status = (
-            "expected_process_exit" if rank == 1 else "waiting_for_restart"
+            "expected_process_exit"
+            if rank == failed_rank
+            else "waiting_for_restart"
         )
         if report.get("backend") != backend:
             raise AssertionError(f"initial backend mismatch: {report}")
@@ -120,7 +132,7 @@ def validate_elastic_ddp_training_state_reports(
             raise AssertionError(
                 f"initial communicator was cleaned up before exit: {report}"
             )
-        if rank == 1:
+        if rank == failed_rank:
             if (
                 report.get("selected_for_initial_exit") is not True
                 or int(report.get("expected_process_exit_code", -1))
@@ -204,7 +216,10 @@ def validate_elastic_ddp_training_state_reports(
             or max(int(value) for value in observed_counts) != 1
         ):
             raise AssertionError(f"restart counts did not converge: {report}")
-        if rank == 1 and int(report.get("local_restart_count", -1)) != 1:
+        if (
+            rank == failed_rank
+            and int(report.get("local_restart_count", -1)) != 1
+        ):
             raise AssertionError("failed rank did not report its local restart")
         if int(report.get("restored_optimizer_steps", -1)) != 1:
             raise AssertionError(f"optimizer step was not restored: {report}")
@@ -307,7 +322,7 @@ def validate_elastic_ddp_training_state_reports(
         "status": "success",
         "backend": backend,
         "world_size": 2,
-        "failed_rank": 1,
+        "failed_rank": failed_rank,
         "failure_exit_code": EXPECTED_PROCESS_EXIT_CODE,
         "restart_count": 1,
         "completed_optimizer_steps": 2,
