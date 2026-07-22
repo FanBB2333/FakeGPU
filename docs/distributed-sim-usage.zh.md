@@ -220,6 +220,7 @@ python3 verification/run_physical_multihost.py \
 - 异构两主机 Hybrid DDP 数值正确性
 - 固定 world size 的 elastic DDP：活跃 worker 退出后重启完整 worker group
 - elastic DDP checkpoint 恢复：模型参数、optimizer momentum 与已完成训练步数
+- 梯度累积中途的 elastic DDP 恢复：AdamW 一阶/二阶矩、StepLR、待处理梯度与 rank-local RNG
 - DDP `no_sync`、不同 rank 使用不同分支时的未使用参数、静态图和 gradient bucket view
 - FSDP 全分片、reduce-scatter、optimizer、完整参数和 state dict 正确性
 - FSDP2/DTensor FP32 分片、optimizer 与完整张量重建
@@ -263,6 +264,21 @@ checkpoint，其中包含模型参数、optimizer 状态、world size 和
 momentum 应为 `[0.85, -0.30]`、`[1.5, 3.0]`，继续更新后的结果应为
 `[0.565, -0.87]`、`[2.85, 5.7]`。该场景不要求共享文件系统；
 `--elastic-checkpoint-port` 用于指定与基础重启场景不同的 rendezvous 端口。
+
+更严格的恢复边界使用 `--case elastic-ddp-training-state`。首个 group 完成
+AdamW 第 1 步并推进 StepLR，然后在 `no_sync` 下执行第 2 步两个 accumulation
+microstep 中的第一个。每个 rank 在 worker 退出前原子保存模型参数、AdamW 一阶/二阶矩、
+scheduler 状态、已完成 optimizer 步数、当前 accumulation microstep、尚未归约
+的 rank-local 梯度以及 CPU generator RNG 状态。替换进程恢复这些状态并执行
+第二个 microstep；验证器会逐项检查恢复后的张量、下一次 RNG 采样、同步后的
+累积梯度与最终 AdamW 更新。该场景使用独立的
+`--elastic-training-state-port`。
+
+这仍是固定 world size 的恢复。主机本地 checkpoint 按全局 rank 定位，因此
+重启后同一主机必须继续获得原来的全局 rank。首次 c10d 分配的 rank 不必与
+`--node` 参数顺序一致，控制脚本会识别实际退出的 rank。如果后续代次发生 rank
+重映射，worker 会拒绝读取 checkpoint，避免加载其他 rank 的待处理梯度或 RNG
+状态。支持 rank 重映射需要共享且能够按 rank 寻址的 checkpoint 存储。
 
 DeepSpeed 是可选场景，不在默认集合中。添加 `--case deepspeed-zero2` 可以验证
 每台物理主机各运行一个 rank；维护中的异构实验已在 DeepSpeed 0.15.3 和
@@ -314,13 +330,30 @@ SHA-256 都与该主机保存时一致；不同 PyTorch 版本生成的文件可
 张量状态必须一致。基础重启与 checkpoint 恢复组合执行时创建 4 个
 communicator，节点对总量为 736 字节，单次峰值仍为 64 字节。
 
+commit `93fd6d3` 上的两次 accumulation 训练状态恢复也得到了完全一致的结果。
+c10d 将全局 rank 0 分配给 RTX 3090 Ti，将 rank 1 分配给 RTX PRO 5000；
+rank 0 退出后，两端 worker PID 均被替换，本地 restart count 分别为 1 和 0。
+替换进程恢复了参数 `[0.989, -0.01]`、AdamW 一阶矩 `[0.25, 0.5]`、二阶矩
+`[0.0625, 0.25]`、rank 0 的待处理梯度 `[2.5, 5.0]`、rank 1 的待处理梯度
+`[3.0, 6.0]`、StepLR 状态以及各 rank 下一次 RNG 采样
+`0.6766379475593567`、`0.5308855175971985`。完成第二个 microstep 后，两个
+rank 的参数均为 `[0.983838, -0.014662]`，一阶矩为 `[0.875, 1.75]`，二阶矩为
+`[0.484375, 1.9375]`。
+
+每次 accumulation 状态恢复会创建 2 个 communicator，记录 4 次 All-Reduce、
+7 次 All-Gather、6 次 broadcast、696 字节节点对总量和 96 字节单次峰值。
+三个 elastic 场景组合执行时共创建 6 个 communicator，记录 12 次
+All-Reduce、14 次 All-Gather、12 次 broadcast、1432 字节节点对总量，单次
+峰值仍为 96 字节。
+
 启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
 信息和 native 构建产物。合并报告写入
 `build/physical_multihost_validation/<session>/`，其中包含各 rank 结果、
 完整 cluster JSON/Markdown 报告、节点对通信总量和异常观测。聚焦 worker
-重启与 checkpoint 恢复的单机检查入口是 `./ftest elastic_ddp`；只执行
-checkpoint 恢复可使用 `./ftest elastic_ddp_checkpoint`；完整故障测试使用
-`./ftest distributed_resilience`。
+重启及两类训练状态恢复的单机入口是 `./ftest elastic_ddp`；只执行 SGD
+checkpoint 恢复可使用 `./ftest elastic_ddp_checkpoint`；只执行 AdamW
+accumulation 状态恢复可使用 `./ftest elastic_ddp_training_state`；完整故障测试
+使用 `./ftest distributed_resilience`。
 
 ## 最小 cluster config
 

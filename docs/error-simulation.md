@@ -146,6 +146,14 @@ update. Use `./ftest elastic_ddp_checkpoint` locally or
 `verification/run_physical_multihost.py --case elastic-ddp-checkpoint` on two
 GPU hosts.
 
+The accumulated-state variant injects failure after the first of two gradient
+accumulation microsteps. It restores AdamW first and second moments, StepLR,
+completed optimizer steps, pending rank-local gradients, and rank-local RNG
+state before completing the synchronized second microstep. Use
+`./ftest elastic_ddp_training_state` locally or
+`verification/run_physical_multihost.py --case elastic-ddp-training-state` on
+two GPU hosts.
+
 Use `python3 verification/test_fault_injection_recovery.py` for report-schema
 checks, or `./ftest distributed_resilience` for the complete maintained
 failure suite. Cluster JSON and Markdown reports contain the failed rank,
@@ -196,6 +204,8 @@ This runs the Python-layer error tests and generates a unified HTML report at `t
 ```bash
 python3 verification/test_fault_injection_recovery.py
 ./ftest elastic_ddp
+./ftest elastic_ddp_checkpoint
+./ftest elastic_ddp_training_state
 ./ftest distributed_resilience
 ```
 

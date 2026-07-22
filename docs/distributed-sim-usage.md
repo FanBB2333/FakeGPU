@@ -229,6 +229,7 @@ The default cases are:
 - heterogeneous two-host Hybrid DDP numerical correctness
 - fixed-size elastic DDP with an active worker exit and full worker-group restart
 - elastic DDP checkpoint recovery for model parameters, optimizer momentum, and completed steps
+- elastic DDP recovery in the middle of gradient accumulation, including AdamW moments, StepLR, pending gradients, and rank-local RNG
 - DDP `no_sync`, rank-dependent unused parameters, static graphs, and gradient bucket views
 - FSDP full sharding, reduce-scatter, optimizer, full-parameter, and state-dict correctness
 - FSDP2/DTensor FP32 sharding, optimizer, and full-tensor reconstruction
@@ -280,6 +281,25 @@ expected restored parameters and momentum are `[0.85, -0.30]` and `[1.5, 3.0]`;
 the continued update must produce `[0.565, -0.87]` and `[2.85, 5.7]`. No shared
 filesystem is required. `--elastic-checkpoint-port` selects a rendezvous port
 distinct from the basic elastic-restart case.
+
+Use `--case elastic-ddp-training-state` for the stricter recovery boundary.
+The initial group completes AdamW step 1, advances StepLR, and then executes
+the first of two accumulation microsteps for step 2 under `no_sync`. Each rank atomically saves
+model parameters, AdamW first and second moments, scheduler state, completed
+optimizer steps, the accumulation microstep, pending rank-local gradients, and
+CPU-generator RNG state before one worker exits. Replacement workers restore
+that state and execute the second microstep. The validator checks the exact
+restored tensors, the next RNG sample, the synchronized accumulated gradient,
+and the final AdamW update. `--elastic-training-state-port` selects its
+separate rendezvous port.
+
+This remains fixed-size recovery. A host-local checkpoint is addressed by
+global rank, so the same host must receive the same global rank after restart.
+The initial c10d rank assignment does not have to match the order of `--node`
+arguments: the controller discovers which rank actually exited. If a later
+generation remaps ranks, the worker rejects the checkpoint rather than loading
+another rank's pending gradient or RNG state. Supporting rank remapping would
+require shared, rank-addressable checkpoint storage.
 
 DeepSpeed is optional rather than part of the default set. Add
 `--case deepspeed-zero2` to validate one rank per physical host. The maintained
@@ -345,13 +365,31 @@ may differ across PyTorch versions, while their validated tensor state is the
 same. Running basic restart and checkpoint recovery together created four
 communicators and reported 736 node-pair bytes with the same 64-byte peak.
 
+At commit `93fd6d3`, two independent accumulated-training-state runs also
+produced identical results. c10d assigned global rank 0 to the RTX 3090 Ti and
+rank 1 to the RTX PRO 5000; rank 0 exited, and both worker PIDs were replaced
+while their local restart counters remained 1 and 0. The replacements restored
+parameters `[0.989, -0.01]`, AdamW first moments `[0.25, 0.5]`, second moments
+`[0.0625, 0.25]`, pending gradients `[2.5, 5.0]` on rank 0 and `[3.0, 6.0]`
+on rank 1, StepLR state, and the exact next rank-local RNG samples
+`0.6766379475593567` and `0.5308855175971985`. Completing the second microstep
+produced parameters `[0.983838, -0.014662]`, first moments `[0.875, 1.75]`, and
+second moments `[0.484375, 1.9375]` on both ranks.
+
+Each accumulated-state run created two communicators and reported four
+All-Reduces, seven All-Gathers, six broadcasts, 696 node-pair bytes, and a
+96-byte peak. Running all three elastic cases together created six
+communicators and reported 12 All-Reduces, 14 All-Gathers, 12 broadcasts,
+1432 node-pair bytes, and the same 96-byte peak.
+
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.
 It writes the combined result under
 `build/physical_multihost_validation/<session>/`, including the per-rank
 results, complete cluster JSON/Markdown reports, node-pair totals, and failure
-observations. Run `./ftest elastic_ddp` for both local elastic checks,
-`./ftest elastic_ddp_checkpoint` for checkpoint recovery alone, or
+observations. Run `./ftest elastic_ddp` for all three local elastic checks,
+`./ftest elastic_ddp_checkpoint` for SGD checkpoint recovery alone,
+`./ftest elastic_ddp_training_state` for accumulated AdamW state recovery, or
 `./ftest distributed_resilience` for the complete maintained failure suite.
 
 ## Minimal cluster config

@@ -18,7 +18,7 @@ Suites:
   preflight_oom  Run fakecuda preflight pass/OOM report checks (requires torch)
   tcp_bandwidth  Simulate two logical nodes and measure TCP collective throughput
   distributed_resilience  Validate rank failures, elastic recovery, timeouts, and reports
-  elastic_ddp  Restart a failed torchrun group; validate DDP and checkpoint recovery
+  elastic_ddp  Restart a failed torchrun group; validate three recovery boundaries
   elastic_ddp_checkpoint  Resume model and optimizer state after a worker-group restart
   elastic_ddp_training_state  Resume AdamW, scheduler, RNG, and partial accumulation
   static_memory_validation  Capture ATen storage liveness and compare with real CUDA when available

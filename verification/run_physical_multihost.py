@@ -2942,8 +2942,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Run repeatable Hybrid DDP/FSDP/FSDP2/DeepSpeed Pipeline, elastic "
-            "restart/checkpoint recovery, and TCP failure checks on two SSH "
-            "hosts at one Git commit."
+            "restart/checkpoint/training-state recovery, and TCP failure "
+            "checks on two SSH hosts at one Git commit."
         )
     )
     parser.add_argument(

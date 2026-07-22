@@ -345,9 +345,9 @@ checks.
 | NVML | Device identity, memory information, common monitoring queries | Some telemetry fields are synthetic or unavailable |
 | cuBLAS/cuBLASLt | Selected GEMM/matmul operations with CPU-backed execution | Unsupported algorithms may remain stubbed |
 | PyTorch fake-CUDA | Common tensor, module, autograd, optimizer, Transformers, PEFT, Accelerate, and FSDP smoke paths; real-CUDA Hybrid DDP/FSDP numerical checks | Custom CUDA extensions are not emulated |
-| NCCL-style communication | Collective and point-to-point control flow, TCP socket payloads, deterministic direct-collective failure, controlled rank-process exit, communicator shrink/recovery, fixed-size `torchrun` worker-group restart and checkpoint resume, topology-aware reporting, PyTorch-required NCCL 2.29 host symbols | Not a protocol-level NCCL/RDMA/NVLink model; no heartbeat-based membership resizing; device-communicator and signal/RMA operations are not simulated |
+| NCCL-style communication | Collective and point-to-point control flow, TCP socket payloads, deterministic direct-collective failure, controlled rank-process exit, communicator shrink/recovery, fixed-size `torchrun` worker-group restart, checkpoint resume, and partial gradient-accumulation recovery, topology-aware reporting, PyTorch-required NCCL 2.29 host symbols | Not a protocol-level NCCL/RDMA/NVLink model; no heartbeat-based membership resizing; device-communicator and signal/RMA operations are not simulated |
 | Memory preflight | Runtime tracking, ATen static analysis, empirical GPU calibration | Results apply to the validated shape and software envelope |
-| Error simulation | OOM, invalid device, cross-device, dtype/autocast, gradient, checkpoint, injected rank failure, controlled process exit, elastic DDP restart, and model/optimizer checkpoint recovery | Error timing can differ from a real driver; framework recovery is validated for a fixed two-node worker group |
+| Error simulation | OOM, invalid device, cross-device, dtype/autocast, gradient, checkpoint, injected rank failure, controlled process exit, elastic DDP restart, and model/optimizer/scheduler/RNG/accumulation recovery | Error timing can differ from a real driver; framework recovery is validated for a fixed two-node worker group |
 
 ## GPU profiles
 
@@ -500,6 +500,7 @@ The distributed paths were also checked on the same two hosts:
 | Physical-host Hybrid DDP | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | The same numerical result across PyTorch 2.8.0/CUDA 12.8 and PyTorch 2.12.1/CUDA 13.0; TCP broadcast, all-reduce, and all-gather completed with zero timeouts |
 | Physical-host elastic DDP | One rank on each GPU over Tailscale | The 3090 Ti worker exited with code 86 while its communicator was active; `torchrun` replaced both PIDs, synchronized asymmetric local restart counts, created a second communicator, and reproduced gradient `[1.5, 3.0]` and parameters `[0.85, -0.30]` |
 | Physical-host elastic DDP checkpoint recovery | One rank on each GPU with host-local checkpoints | Both replacement workers restored step 1 parameters `[0.85, -0.30]` and SGD momentum `[1.5, 3.0]`, then produced step 2 parameters `[0.565, -0.87]` and momentum `[2.85, 5.7]`; two repeated runs each reported 512 node-pair bytes and a 64-byte peak |
+| Physical-host elastic DDP training-state recovery | One rank on each GPU; failure after one of two accumulation micro-steps | Both replacements restored AdamW moments, StepLR, rank-local RNG, optimizer step 1, and pending gradients; step 2 produced parameters `[0.983838, -0.014662]`; two repeated runs each reported 696 node-pair bytes and a 96-byte peak |
 | Physical-host Hybrid FSDP2 | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | FP32/FP16/BF16 parameters and FP16/BF16 gradient reductions passed over TCP; the report identifies collective dtype and reduction operator |
 | Physical-host Hybrid DeepSpeed | One rank per physical GPU over Tailscale | ZeRO-2 passed across DeepSpeed 0.15.3 ↔ 0.19.2 with identical parameters and 176 reported node-pair bytes; ZeRO-3 now rejects mismatched DeepSpeed versions during preflight |
 | Physical-host TCP all-to-all-v | RTX PRO 5000 coordinator/rank 0 ↔ RTX 3090 Ti rank 1 over Tailscale | Nonuniform 2 MiB/3 MiB and sparse 0 MiB/1 MiB cross-host splits produced exact payloads; 2 calls reported 12 MiB logical bytes, 6 MiB inter-node bytes, and a 5 MiB node-pair peak |
@@ -522,6 +523,7 @@ prediction.
 ./ftest distributed_resilience
 ./ftest elastic_ddp
 ./ftest elastic_ddp_checkpoint
+./ftest elastic_ddp_training_state
 ./ftest static_memory_validation
 ./ftest real_gpu_calibration
 python3 -m pytest -q
@@ -534,9 +536,10 @@ python3 -m pytest -q
 | `python` | Basic PyTorch native-interception path |
 | `preflight_oom` | Fit/OOM classification and report validation |
 | `tcp_bandwidth` | Two logical nodes, TCP payload correctness, and throughput reporting |
-| `distributed_resilience` | Rank-failure injection, real worker exit, elastic DDP restart/checkpoint resume, collective-timeout inference, persistent async errors, communicator shrink/recovery, collective mismatch, missing-peer timeout, and bounded operation-timeline retention |
-| `elastic_ddp` | Two-worker `torchrun --max-restarts=1` process exit, full-group PID replacement, restarted DDP numerics, and model/optimizer checkpoint resume over local Gloo |
+| `distributed_resilience` | Rank-failure injection, real worker exit, elastic DDP restart/checkpoint/training-state resume, collective-timeout inference, persistent async errors, communicator shrink/recovery, collective mismatch, missing-peer timeout, and bounded operation-timeline retention |
+| `elastic_ddp` | Two-worker `torchrun --max-restarts=1` process exit, full-group PID replacement, restarted DDP numerics, SGD checkpoint resume, and accumulated AdamW training-state resume over local Gloo |
 | `elastic_ddp_checkpoint` | Focused model parameter, SGD momentum, completed-step, atomic checkpoint, and resumed-update validation after worker-group replacement |
+| `elastic_ddp_training_state` | Focused AdamW first/second moments, StepLR, rank-local RNG, optimizer-step, and partial gradient-accumulation recovery |
 | `static_memory_validation` | ATen graph memory estimation; optional real-CUDA comparison |
 | `real_gpu_calibration` | Real/passthrough/hybrid/fakecuda comparison on a supported GPU |
 
@@ -574,7 +577,7 @@ The physical two-host controller in
 `verification/run_physical_multihost.py` verifies that both repositories use
 the same Git commit, launches Hybrid DDP (including common execution options),
 FSDP/FSDP2 (including mixed-precision parameters and reductions), optional
-DeepSpeed ZeRO-2/3 cases, fixed-size elastic DDP restart/checkpoint recovery, and TCP fault cases
+DeepSpeed ZeRO-2/3 cases, fixed-size elastic DDP restart/checkpoint/training-state recovery, and TCP fault cases
 including injected failure and real four-rank worker-exit/shrink recovery,
 then collects JSON and Markdown reports on the control host.
 Cluster report validation also reconciles collective/P2P
@@ -606,7 +609,7 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 - The checkpoint-only LLM estimator supports dense decoder-only safetensors models; it does not infer arbitrary repository control flow, MoE routing, quantization state, or custom kernels.
 - Supported cuBLAS/cuBLASLt operations can be numerically checked on CPU; unsupported operations may be stubs.
 - Distributed simulation checks semantics and control flow. Its TCP result includes coordinator reduction, memory copies, and process scheduling, so it is not an exact NCCL/RDMA or raw-link measurement.
-- The fixed-size elastic DDP checks rely on `torchrun` for worker supervision and rendezvous. Checkpoint recovery uses one atomic host-local file per worker and assumes the same world size after restart. FakeGPU does not provide heartbeat-based detection or dynamic membership resizing. The direct-collective recovery path still requires survivors to call `ncclCommShrink` with an explicit exclusion list.
+- The fixed-size elastic DDP checks rely on `torchrun` for worker supervision and rendezvous. Checkpoint recovery uses one atomic host-local file per worker and assumes the same world size after restart. Mid-accumulation recovery additionally requires each host to retain its saved global rank; rank reassignment needs shared, rank-addressable checkpoint storage. FakeGPU does not provide heartbeat-based detection or dynamic membership resizing. The direct-collective recovery path still requires survivors to call `ncclCommShrink` with an explicit exclusion list.
 - Static and runtime memory estimates can omit backend-internal allocations outside matched profiles.
 - Hybrid mode requires a real GPU and remains limited to validated Driver/runtime surfaces.
 - macOS system binaries can remove `DYLD_*` variables because of SIP; use a Homebrew, conda, or pyenv Python.
