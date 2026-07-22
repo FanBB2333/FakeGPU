@@ -367,6 +367,8 @@ def main() -> int:
         recovery_event = cluster_report["resilience"]["recovery_events"][0]
         assert failure_event["global_rank"] == 2
         assert failure_event["operation"] == "all_reduce"
+        assert failure_event["observed_ranks"] == [0, 1, 2, 3]
+        assert failure_event["attempted_payload_bytes"] == 16
         assert recovery_event["excluded_ranks"] == [2]
         assert recovery_event["surviving_ranks"] == [0, 1, 3]
         rank_timeouts = {
