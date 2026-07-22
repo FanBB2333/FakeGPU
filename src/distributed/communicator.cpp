@@ -565,8 +565,21 @@ TopologyOperationTotals record_collective_completion_locked(
     ClusterCollectiveReportStats& stats =
         collective_report_stats_for_type_locked(registry, collective->request.type);
     stats.calls++;
-    stats.bytes += static_cast<std::uint64_t>(collective->request.bytes) *
-                   static_cast<std::uint64_t>(state->world_size);
+    const bool variable_alltoall =
+        collective->request.type == CollectiveType::AllToAll &&
+        !collective->request.input_splits.empty();
+    std::uint64_t logical_payload_bytes = 0;
+    if (variable_alltoall) {
+        for (const auto& entry : collective->participants) {
+            logical_payload_bytes += static_cast<std::uint64_t>(
+                entry.second.input_bytes);
+        }
+    } else {
+        logical_payload_bytes =
+            static_cast<std::uint64_t>(collective->request.bytes) *
+            static_cast<std::uint64_t>(state->world_size);
+    }
+    stats.bytes += logical_payload_bytes;
 
     for (const auto& entry : collective->participants) {
         ClusterRankReportStats& rank_stats = ensure_rank_report_locked(
@@ -584,6 +597,41 @@ TopologyOperationTotals record_collective_completion_locked(
     std::string topology_error;
     if (!TopologyModel::build(dist_config.cluster_config, topology_model, topology_error)) {
         return {};
+    }
+
+    if (variable_alltoall) {
+        const std::size_t dtype_size = collective_data_type_size(
+            collective->request.dtype);
+        std::vector<TopologyLinkEstimate> links;
+        for (const auto& entry : collective->participants) {
+            const CollectiveExecutionParticipant& sender = entry.second;
+            for (int peer = 0; peer < state->world_size; ++peer) {
+                if (peer == sender.rank) {
+                    continue;
+                }
+                const std::size_t count =
+                    sender.input_splits[static_cast<std::size_t>(peer)];
+                if (count == 0) {
+                    continue;
+                }
+                TopologyLinkEstimate link;
+                if (topology_model.estimate_transfer(
+                        global_rank_for_local(state, sender.rank),
+                        global_rank_for_local(state, peer),
+                        static_cast<std::uint64_t>(count * dtype_size),
+                        link,
+                        topology_error)) {
+                    links.push_back(std::move(link));
+                }
+            }
+        }
+        const TopologyOperationTotals totals = record_topology_operation_locked(
+            registry,
+            links,
+            CommunicationOperationKind::Collective);
+        stats.estimated_time_us_total += totals.estimated_time_us;
+        stats.contention_penalty_us_total += totals.contention_penalty_us;
+        return totals;
     }
 
     CollectiveTopologyEstimate estimate;
@@ -806,7 +854,18 @@ bool collective_requests_match(
             ", got " + collective_data_type_name(actual.dtype);
         return false;
     }
-    if (expected.count != actual.count) {
+    const bool expected_variable =
+        expected.type == CollectiveType::AllToAll &&
+        !expected.input_splits.empty();
+    const bool actual_variable =
+        actual.type == CollectiveType::AllToAll &&
+        !actual.input_splits.empty();
+    if (expected_variable != actual_variable) {
+        error_code = "alltoall_split_mode_mismatch";
+        error_detail = "all-to-all ranks disagreed on explicit split mode";
+        return false;
+    }
+    if (!expected_variable && expected.count != actual.count) {
         error_code = "count_mismatch";
         error_detail =
             "expected count=" + std::to_string(expected.count) +
@@ -827,7 +886,7 @@ bool collective_requests_match(
             ", got " + collective_reduce_op_name(actual.reduce_op);
         return false;
     }
-    if (expected.bytes != actual.bytes) {
+    if (!expected_variable && expected.bytes != actual.bytes) {
         error_code = "bytes_mismatch";
         error_detail =
             "expected bytes=" + std::to_string(expected.bytes) +
@@ -841,7 +900,7 @@ bool collective_requests_match(
             ", got " + (actual.proxy_only ? "1" : "0");
         return false;
     }
-    if (expected.payload_bytes != actual.payload_bytes) {
+    if (!expected_variable && expected.payload_bytes != actual.payload_bytes) {
         error_code = "payload_bytes_mismatch";
         error_detail =
             "expected payload_bytes=" + std::to_string(expected.payload_bytes) +
@@ -1716,6 +1775,46 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     if (request.rank >= state->world_size) {
         return make_collective_error("invalid_rank", "rank must be within [0, world_size)");
     }
+    const bool variable_alltoall =
+        request.type == CollectiveType::AllToAll &&
+        !request.input_splits.empty();
+    if (variable_alltoall) {
+        if (request.input_splits.size() !=
+                static_cast<std::size_t>(state->world_size) ||
+            request.output_splits.size() !=
+                static_cast<std::size_t>(state->world_size)) {
+            return make_collective_error(
+                "invalid_split_plan",
+                "all-to-all split vectors must match world_size");
+        }
+        const std::size_t dtype_size = collective_data_type_size(request.dtype);
+        std::size_t input_count = 0;
+        std::size_t output_count = 0;
+        for (std::size_t count : request.input_splits) {
+            input_count += count;
+        }
+        for (std::size_t count : request.output_splits) {
+            output_count += count;
+        }
+        if (dtype_size == 0 ||
+            request.input_bytes != input_count * dtype_size ||
+            request.output_bytes != output_count * dtype_size ||
+            request.bytes < std::max(request.input_bytes, request.output_bytes)) {
+            return make_collective_error(
+                "invalid_split_plan",
+                "all-to-all split bytes are inconsistent");
+        }
+        if (request.transport == BufferTransport::SocketPayload &&
+            request.payload_bytes != request.input_bytes) {
+            return make_collective_error(
+                "invalid_split_plan",
+                "all-to-all socket payload must match input bytes");
+        }
+    } else if (!request.input_splits.empty() || !request.output_splits.empty()) {
+        return make_collective_error(
+            "invalid_split_plan",
+            "explicit splits are only valid for all-to-all");
+    }
     if (request.type == CollectiveType::Broadcast || request.type == CollectiveType::Reduce) {
         if (request.root < 0 || request.root >= state->world_size) {
             return make_collective_error(
@@ -1762,6 +1861,10 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
     participant.bytes = request.bytes;
     participant.payload_bytes = request.payload_bytes;
     participant.payload = request.payload;
+    participant.input_splits = request.input_splits;
+    participant.output_splits = request.output_splits;
+    participant.input_bytes = request.input_bytes;
+    participant.output_bytes = request.output_bytes;
     if (!collective->participants.emplace(request.rank, participant).second) {
         fail_collective_locked(
             state,
@@ -1879,8 +1982,17 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
         collective_data_type_name(request.dtype),
         collective_reduce_op_name(request.reduce_op),
         buffer_transport_name(request.transport),
-        static_cast<std::uint64_t>(request.bytes) *
-            static_cast<std::uint64_t>(state->world_size),
+        variable_alltoall
+            ? [&collective]() {
+                  std::uint64_t bytes = 0;
+                  for (const auto& entry : collective->participants) {
+                      bytes += static_cast<std::uint64_t>(
+                          entry.second.input_bytes);
+                  }
+                  return bytes;
+              }()
+            : static_cast<std::uint64_t>(request.bytes) *
+                  static_cast<std::uint64_t>(state->world_size),
         total_participant_payload_bytes(collective->participants),
         total_payload_bytes(execution.output_payloads),
         collective->first_submit_at,
