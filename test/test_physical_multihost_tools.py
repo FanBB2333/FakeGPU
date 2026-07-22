@@ -286,7 +286,13 @@ def test_validate_cluster_report_accepts_rank_failure_recovery(
         "resilience": {
             "failure_count": 1,
             "recovery_count": 1,
-            "failure_events": [{"global_rank": 2}],
+            "failure_events": [
+                {
+                    "global_rank": 2,
+                    "observed_ranks": [0, 1, 2, 3],
+                    "attempted_payload_bytes": 16,
+                }
+            ],
             "recovery_events": [
                 {
                     "excluded_ranks": [2],

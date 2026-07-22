@@ -903,6 +903,31 @@ void fail_shrink_locked(
     }
 }
 
+void record_failure_observer_locked(
+    RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
+    int local_rank,
+    std::uint64_t attempted_payload_bytes) {
+    const int global_rank = global_rank_for_local(state, local_rank);
+    for (auto it = registry.report.failure_events.rbegin();
+         it != registry.report.failure_events.rend();
+         ++it) {
+        if (it->comm_id != state->comm_id ||
+            it->error_code != state->failure_code) {
+            continue;
+        }
+        const auto position = std::lower_bound(
+            it->observed_ranks.begin(),
+            it->observed_ranks.end(),
+            global_rank);
+        if (position == it->observed_ranks.end() || *position != global_rank) {
+            it->observed_ranks.insert(position, global_rank);
+            it->attempted_payload_bytes += attempted_payload_bytes;
+        }
+        return;
+    }
+}
+
 void fail_pending_operations_locked(
     const std::shared_ptr<CommunicatorState>& state,
     const std::string& code,
@@ -2291,6 +2316,11 @@ CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveS
         return make_collective_error("rank_destroyed", "rank already destroyed this communicator");
     }
     if (state->failed) {
+        record_failure_observer_locked(
+            registry,
+            state,
+            request.rank,
+            static_cast<std::uint64_t>(request.bytes));
         return make_collective_error(state->failure_code, state->failure_detail);
     }
 

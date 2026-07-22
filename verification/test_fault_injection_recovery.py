@@ -76,8 +76,8 @@ def main() -> int:
         assert failure["operation"] == "all_reduce"
         assert failure["error_code"] == "injected_rank_failure"
         assert failure["source"] == "injected"
-        assert 2 in failure["observed_ranks"]
-        assert failure["attempted_payload_bytes"] >= 4
+        assert failure["observed_ranks"] == [0, 1, 2, 3]
+        assert failure["attempted_payload_bytes"] == 16
 
         recovery = resilience["recovery_events"][0]
         assert recovery["abort_parent"] is True

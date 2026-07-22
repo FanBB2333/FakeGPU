@@ -1320,6 +1320,10 @@ def _validate_cluster_report(
         recovery = resilience["recovery_events"][-1]
         if int(failure.get("global_rank", -1)) != 2:
             raise AssertionError(f"unexpected failed rank: {failure}")
+        if failure.get("observed_ranks") != [0, 1, 2, 3]:
+            raise AssertionError(f"incomplete failure observers: {failure}")
+        if int(failure.get("attempted_payload_bytes", 0)) != 16:
+            raise AssertionError(f"unexpected attempted failure payload: {failure}")
         if recovery.get("excluded_ranks") != [2]:
             raise AssertionError(f"unexpected shrink exclusions: {recovery}")
         if recovery.get("surviving_ranks") != [0, 1, 3]:
