@@ -43,6 +43,41 @@ struct CommunicatorSplitResult {
     std::string error_detail;
 };
 
+struct CommunicatorFailureRequest {
+    int comm_id = -1;
+    int rank = -1;
+    std::uint64_t seqno = 0;
+    std::string operation;
+    std::string error_code;
+    std::uint64_t attempted_payload_bytes = 0;
+};
+
+struct CommunicatorFailureResult {
+    bool ok = false;
+    std::uint64_t event_index = 0;
+    std::string error_code;
+    std::string error_detail;
+};
+
+struct CommunicatorShrinkRequest {
+    int comm_id = -1;
+    int rank = -1;
+    std::uint64_t seqno = 0;
+    std::vector<int> excluded_ranks;
+    int timeout_ms = 0;
+    bool abort_parent = false;
+};
+
+struct CommunicatorShrinkResult {
+    bool ok = false;
+    std::uint64_t seqno = 0;
+    int new_comm_id = -1;
+    int new_rank = -1;
+    int new_world_size = 0;
+    std::string error_code;
+    std::string error_detail;
+};
+
 enum class PointToPointType {
     Send,
     Recv,
@@ -225,6 +260,31 @@ struct ClusterOperationTimelineEntry {
     double modeled_time_us = 0.0;
 };
 
+struct ClusterFailureEvent {
+    std::uint64_t index = 0;
+    int comm_id = -1;
+    std::uint64_t seqno = 0;
+    int local_rank = -1;
+    int global_rank = -1;
+    std::string source;
+    std::string operation;
+    std::string error_code;
+    std::string error_detail;
+    std::vector<int> observed_ranks;
+    std::uint64_t attempted_payload_bytes = 0;
+};
+
+struct ClusterRecoveryEvent {
+    std::uint64_t index = 0;
+    int parent_comm_id = -1;
+    int new_comm_id = -1;
+    std::uint64_t seqno = 0;
+    bool abort_parent = false;
+    std::vector<int> excluded_ranks;
+    std::vector<int> surviving_ranks;
+    double recovery_time_us = 0.0;
+};
+
 struct ClusterReportSnapshot {
     bool has_data = false;
     std::size_t world_size = 0;
@@ -242,6 +302,8 @@ struct ClusterReportSnapshot {
     std::vector<ClusterRankReportStats> ranks;
     std::vector<ClusterOperationTimelineEntry> operation_timeline;
     std::uint64_t dropped_operation_timeline_entries = 0;
+    std::vector<ClusterFailureEvent> failure_events;
+    std::vector<ClusterRecoveryEvent> recovery_events;
 };
 
 class CommunicatorRegistry {
@@ -254,6 +316,10 @@ public:
 
     CommunicatorDestroyResult destroy_communicator(int comm_id, int rank);
     CommunicatorSplitResult split_communicator(const CommunicatorSplitRequest& request);
+    CommunicatorFailureResult inject_communicator_failure(
+        const CommunicatorFailureRequest& request);
+    CommunicatorShrinkResult shrink_communicator(
+        const CommunicatorShrinkRequest& request);
     PointToPointSubmitResult submit_point_to_point(const PointToPointSubmitRequest& request);
     CollectiveSubmitResult submit_collective(const CollectiveSubmitRequest& request);
     BarrierSubmitResult submit_barrier(const BarrierSubmitRequest& request);

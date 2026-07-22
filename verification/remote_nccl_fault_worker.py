@@ -17,6 +17,7 @@ NCCL_SUCCESS = 0
 NCCL_FLOAT32 = 7
 NCCL_SUM = 0
 NCCL_PROD = 1
+NCCL_SHRINK_ABORT = 1
 
 
 class NcclUniqueId(ctypes.Structure):
@@ -53,6 +54,19 @@ def _configure_nccl(lib: ctypes.CDLL) -> None:
         ctypes.POINTER(ctypes.c_int),
     ]
     lib.ncclCommGetAsyncError.restype = ctypes.c_int
+    lib.ncclCommShrink.argtypes = [
+        comm_type,
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.c_int,
+        ctypes.POINTER(comm_type),
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
+    lib.ncclCommShrink.restype = ctypes.c_int
+    lib.ncclCommCount.argtypes = [comm_type, ctypes.POINTER(ctypes.c_int)]
+    lib.ncclCommCount.restype = ctypes.c_int
+    lib.ncclCommUserRank.argtypes = [comm_type, ctypes.POINTER(ctypes.c_int)]
+    lib.ncclCommUserRank.restype = ctypes.c_int
     lib.ncclCommDestroy.argtypes = [comm_type]
     lib.ncclCommDestroy.restype = ctypes.c_int
     lib.ncclCommAbort.argtypes = [comm_type]
@@ -200,6 +214,153 @@ def _run_missing_peer(
         )
 
 
+def _run_fault_shrink(
+    args: argparse.Namespace,
+    lib: ctypes.CDLL,
+    comm: ctypes.c_void_p,
+    report: dict[str, Any],
+) -> None:
+    started = time.monotonic()
+    init_result = int(
+        lib.ncclCommInitRank(
+            ctypes.byref(comm),
+            args.world_size,
+            _unique_id(args.session),
+            args.rank,
+        )
+    )
+    report["comm_init_result"] = init_result
+    report["comm_init_seconds"] = time.monotonic() - started
+    if init_result != NCCL_SUCCESS:
+        raise AssertionError(
+            f"ncclCommInitRank unexpectedly failed with result {init_result}: "
+            f"{_last_error(lib, comm)}"
+        )
+
+    send = (ctypes.c_float * 1)(float(args.rank + 1))
+    recv = (ctypes.c_float * 1)()
+    failure_started = time.monotonic()
+    failure_result = int(
+        lib.ncclAllReduce(
+            ctypes.cast(send, ctypes.c_void_p),
+            ctypes.cast(recv, ctypes.c_void_p),
+            1,
+            NCCL_FLOAT32,
+            NCCL_SUM,
+            comm,
+            None,
+        )
+    )
+    report["failure_result"] = failure_result
+    report["failure_seconds"] = time.monotonic() - failure_started
+    report["failure_last_error"] = _last_error(lib, comm)
+    if failure_result == NCCL_SUCCESS:
+        raise AssertionError("injected collective failure unexpectedly succeeded")
+
+    async_error = ctypes.c_int(NCCL_SUCCESS)
+    async_query_result = int(
+        lib.ncclCommGetAsyncError(comm, ctypes.byref(async_error))
+    )
+    report["async_query_result"] = async_query_result
+    report["async_error"] = int(async_error.value)
+    if async_query_result != NCCL_SUCCESS or async_error.value == NCCL_SUCCESS:
+        raise AssertionError(
+            "injected failure did not persist through ncclCommGetAsyncError"
+        )
+
+    if args.rank == args.failed_rank:
+        abort_result = int(lib.ncclCommAbort(comm))
+        report["parent_abort_result"] = abort_result
+        report["participated_in_shrink"] = False
+        if abort_result != NCCL_SUCCESS:
+            raise AssertionError(
+                f"excluded rank failed to abort its parent communicator: "
+                f"{abort_result}"
+            )
+        comm.value = None
+        return
+
+    excluded = (ctypes.c_int * 1)(args.failed_rank)
+    child = ctypes.c_void_p()
+    shrink_started = time.monotonic()
+    shrink_result = int(
+        lib.ncclCommShrink(
+            comm,
+            excluded,
+            1,
+            ctypes.byref(child),
+            None,
+            NCCL_SHRINK_ABORT,
+        )
+    )
+    report["participated_in_shrink"] = True
+    report["shrink_result"] = shrink_result
+    report["shrink_seconds"] = time.monotonic() - shrink_started
+    report["shrink_last_error"] = _last_error(lib, comm)
+    if shrink_result != NCCL_SUCCESS or not child.value:
+        raise AssertionError(
+            f"ncclCommShrink failed with result {shrink_result}: "
+            f"{report['shrink_last_error']}"
+        )
+
+    child_count = ctypes.c_int(-1)
+    child_rank = ctypes.c_int(-1)
+    count_result = int(lib.ncclCommCount(child, ctypes.byref(child_count)))
+    rank_result = int(lib.ncclCommUserRank(child, ctypes.byref(child_rank)))
+    report["child_count_result"] = count_result
+    report["child_rank_result"] = rank_result
+    report["child_world_size"] = int(child_count.value)
+    report["child_rank"] = int(child_rank.value)
+    expected_child_rank = args.rank - int(args.rank > args.failed_rank)
+    if count_result != NCCL_SUCCESS or child_count.value != args.world_size - 1:
+        raise AssertionError(
+            f"shrunk communicator count mismatch: {child_count.value}"
+        )
+    if rank_result != NCCL_SUCCESS or child_rank.value != expected_child_rank:
+        raise AssertionError(
+            f"shrunk communicator rank mismatch: expected {expected_child_rank}, "
+            f"got {child_rank.value}"
+        )
+
+    recovered_recv = (ctypes.c_float * 1)()
+    recovered_result = int(
+        lib.ncclAllReduce(
+            ctypes.cast(send, ctypes.c_void_p),
+            ctypes.cast(recovered_recv, ctypes.c_void_p),
+            1,
+            NCCL_FLOAT32,
+            NCCL_SUM,
+            child,
+            None,
+        )
+    )
+    expected_sum = (
+        args.world_size * (args.world_size + 1) / 2 - (args.failed_rank + 1)
+    )
+    report["recovered_all_reduce_result"] = recovered_result
+    report["recovered_all_reduce_value"] = float(recovered_recv[0])
+    report["expected_recovered_value"] = float(expected_sum)
+    if recovered_result != NCCL_SUCCESS:
+        raise AssertionError(
+            f"post-shrink All-Reduce failed with result {recovered_result}"
+        )
+    if abs(float(recovered_recv[0]) - float(expected_sum)) > 1e-6:
+        raise AssertionError(
+            f"post-shrink All-Reduce mismatch: expected {expected_sum}, "
+            f"got {recovered_recv[0]}"
+        )
+
+    child_destroy_result = int(lib.ncclCommDestroy(child))
+    parent_destroy_result = int(lib.ncclCommDestroy(comm))
+    report["child_destroy_result"] = child_destroy_result
+    report["parent_destroy_result"] = parent_destroy_result
+    if child_destroy_result != NCCL_SUCCESS or parent_destroy_result != NCCL_SUCCESS:
+        raise AssertionError(
+            "communicator cleanup failed after rank-failure recovery"
+        )
+    comm.value = None
+
+
 def run_worker(args: argparse.Namespace) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": "fakegpu.remote_fault.rank.v1",
@@ -220,6 +381,8 @@ def run_worker(args: argparse.Namespace) -> dict[str, Any]:
             _run_collective_mismatch(args, lib, comm, report)
         elif args.case == "missing-peer":
             _run_missing_peer(args, lib, comm, report)
+        elif args.case == "fault-shrink":
+            _run_fault_shrink(args, lib, comm, report)
         else:  # pragma: no cover - argparse rejects this path
             raise AssertionError(f"unsupported case: {args.case}")
         report["status"] = "success"
@@ -249,13 +412,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--case",
-        choices=["collective-mismatch", "missing-peer"],
+        choices=["collective-mismatch", "missing-peer", "fault-shrink"],
         required=True,
     )
     parser.add_argument("--rank", type=int, required=True)
     parser.add_argument("--world-size", type=int, required=True)
     parser.add_argument("--session", required=True)
     parser.add_argument("--timeout-ms", type=int, required=True)
+    parser.add_argument("--failed-rank", type=int, default=-1)
     parser.add_argument("--nccl-lib", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -266,6 +430,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--rank must be within [0, world-size)")
     if args.timeout_ms <= 0:
         parser.error("--timeout-ms must be greater than zero")
+    if args.case == "fault-shrink" and (
+        args.failed_rank < 0 or args.failed_rank >= args.world_size
+    ):
+        parser.error("--failed-rank must be within [0, world-size)")
     if not args.nccl_lib.is_file():
         parser.error(f"fake NCCL library does not exist: {args.nccl_lib}")
 

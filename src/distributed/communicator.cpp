@@ -76,6 +76,24 @@ struct SplitState {
     std::condition_variable cv;
 };
 
+struct ShrinkParticipantResult {
+    int new_comm_id = -1;
+    int new_rank = -1;
+    int new_world_size = 0;
+};
+
+struct ShrinkState {
+    CommunicatorShrinkRequest request;
+    bool completed = false;
+    bool failed = false;
+    std::string failure_code;
+    std::string failure_detail;
+    std::unordered_map<int, CommunicatorShrinkRequest> participants;
+    std::unordered_map<int, ShrinkParticipantResult> results;
+    SteadyTimePoint first_submit_at;
+    std::condition_variable cv;
+};
+
 struct PointToPointState {
     PointToPointSubmitRequest request;
     bool completed = false;
@@ -105,7 +123,9 @@ struct CommunicatorState {
     std::unordered_map<std::uint64_t, std::shared_ptr<BarrierState>> barriers;
     std::unordered_map<std::uint64_t, std::shared_ptr<BatchState>> batches;
     std::unordered_map<std::uint64_t, std::shared_ptr<SplitState>> splits;
+    std::unordered_map<std::uint64_t, std::shared_ptr<ShrinkState>> shrinks;
     std::unordered_map<std::uint64_t, std::shared_ptr<PointToPointState>> point_to_points;
+    SteadyTimePoint failed_at;
     std::condition_variable cv;
 };
 
@@ -131,6 +151,9 @@ struct RegistryImpl {
         std::deque<ClusterOperationTimelineEntry> operation_timeline;
         std::uint64_t operation_timeline_entries = 0;
         std::uint64_t dropped_operation_timeline_entries = 0;
+        std::vector<ClusterFailureEvent> failure_events;
+        std::vector<ClusterRecoveryEvent> recovery_events;
+        std::uint64_t resilience_event_entries = 0;
     } report;
 };
 
@@ -157,6 +180,26 @@ CommunicatorDestroyResult make_destroy_error(std::string code, std::string detai
 
 CommunicatorSplitResult make_split_error(std::string code, std::string detail) {
     CommunicatorSplitResult result;
+    result.ok = false;
+    result.error_code = std::move(code);
+    result.error_detail = std::move(detail);
+    return result;
+}
+
+CommunicatorFailureResult make_failure_error(
+    std::string code,
+    std::string detail) {
+    CommunicatorFailureResult result;
+    result.ok = false;
+    result.error_code = std::move(code);
+    result.error_detail = std::move(detail);
+    return result;
+}
+
+CommunicatorShrinkResult make_shrink_error(
+    std::string code,
+    std::string detail) {
+    CommunicatorShrinkResult result;
     result.ok = false;
     result.error_code = std::move(code);
     result.error_detail = std::move(detail);
@@ -739,6 +782,9 @@ void fail_pending_group_locked(
     std::string code,
     std::string detail) {
     state->failed = true;
+    if (state->failed_at == SteadyTimePoint{}) {
+        state->failed_at = std::chrono::steady_clock::now();
+    }
     state->failure_code = std::move(code);
     state->failure_detail = std::move(detail);
     registry.pending_by_unique_id.erase(state->unique_id);
@@ -751,6 +797,9 @@ void fail_collective_locked(
     std::string code,
     std::string detail) {
     state->failed = true;
+    if (state->failed_at == SteadyTimePoint{}) {
+        state->failed_at = std::chrono::steady_clock::now();
+    }
     state->failure_code = std::move(code);
     state->failure_detail = std::move(detail);
     if (collective) {
@@ -768,6 +817,9 @@ void fail_barrier_locked(
     std::string code,
     std::string detail) {
     state->failed = true;
+    if (state->failed_at == SteadyTimePoint{}) {
+        state->failed_at = std::chrono::steady_clock::now();
+    }
     state->failure_code = std::move(code);
     state->failure_detail = std::move(detail);
     if (barrier) {
@@ -785,6 +837,9 @@ void fail_batch_locked(
     std::string code,
     std::string detail) {
     state->failed = true;
+    if (state->failed_at == SteadyTimePoint{}) {
+        state->failed_at = std::chrono::steady_clock::now();
+    }
     state->failure_code = std::move(code);
     state->failure_detail = std::move(detail);
     if (batch) {
@@ -802,6 +857,9 @@ void fail_split_locked(
     std::string code,
     std::string detail) {
     state->failed = true;
+    if (state->failed_at == SteadyTimePoint{}) {
+        state->failed_at = std::chrono::steady_clock::now();
+    }
     state->failure_code = std::move(code);
     state->failure_detail = std::move(detail);
     if (split) {
@@ -819,6 +877,9 @@ void fail_point_to_point_locked(
     std::string code,
     std::string detail) {
     state->failed = true;
+    if (state->failed_at == SteadyTimePoint{}) {
+        state->failed_at = std::chrono::steady_clock::now();
+    }
     state->failure_code = std::move(code);
     state->failure_detail = std::move(detail);
     if (p2p) {
@@ -828,6 +889,68 @@ void fail_point_to_point_locked(
         p2p->cv.notify_all();
         state->point_to_points.erase(p2p->request.seqno);
     }
+}
+
+void fail_shrink_locked(
+    const std::shared_ptr<ShrinkState>& shrink,
+    std::string code,
+    std::string detail) {
+    if (shrink) {
+        shrink->failed = true;
+        shrink->failure_code = std::move(code);
+        shrink->failure_detail = std::move(detail);
+        shrink->cv.notify_all();
+    }
+}
+
+void fail_pending_operations_locked(
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::string& code,
+    const std::string& detail) {
+    state->failed = true;
+    if (state->failed_at == SteadyTimePoint{}) {
+        state->failed_at = std::chrono::steady_clock::now();
+    }
+    state->failure_code = code;
+    state->failure_detail = detail;
+
+    for (const auto& entry : state->collectives) {
+        entry.second->failed = true;
+        entry.second->failure_code = code;
+        entry.second->failure_detail = detail;
+        entry.second->cv.notify_all();
+    }
+    for (const auto& entry : state->barriers) {
+        entry.second->failed = true;
+        entry.second->failure_code = code;
+        entry.second->failure_detail = detail;
+        entry.second->cv.notify_all();
+    }
+    for (const auto& entry : state->batches) {
+        entry.second->failed = true;
+        entry.second->failure_code = code;
+        entry.second->failure_detail = detail;
+        entry.second->cv.notify_all();
+    }
+    for (const auto& entry : state->splits) {
+        entry.second->failed = true;
+        entry.second->failure_code = code;
+        entry.second->failure_detail = detail;
+        entry.second->cv.notify_all();
+    }
+    for (const auto& entry : state->point_to_points) {
+        entry.second->failed = true;
+        entry.second->failure_code = code;
+        entry.second->failure_detail = detail;
+        entry.second->cv.notify_all();
+    }
+
+    state->collectives.clear();
+    state->barriers.clear();
+    state->batches.clear();
+    state->splits.clear();
+    state->point_to_points.clear();
+    state->cv.notify_all();
 }
 
 bool collective_requests_match(
@@ -944,6 +1067,31 @@ bool split_requests_match(
     std::string& error_detail) {
     if (expected.timeout_ms != actual.timeout_ms) {
         error_code = "split_timeout_mismatch";
+        error_detail =
+            "expected timeout_ms=" + std::to_string(expected.timeout_ms) +
+            ", got " + std::to_string(actual.timeout_ms);
+        return false;
+    }
+    return true;
+}
+
+bool shrink_requests_match(
+    const CommunicatorShrinkRequest& expected,
+    const CommunicatorShrinkRequest& actual,
+    std::string& error_code,
+    std::string& error_detail) {
+    if (expected.excluded_ranks != actual.excluded_ranks) {
+        error_code = "shrink_excluded_ranks_mismatch";
+        error_detail = "communicator ranks disagreed on the shrink exclusion list";
+        return false;
+    }
+    if (expected.abort_parent != actual.abort_parent) {
+        error_code = "shrink_flags_mismatch";
+        error_detail = "communicator ranks disagreed on shrink flags";
+        return false;
+    }
+    if (expected.timeout_ms != actual.timeout_ms) {
+        error_code = "shrink_timeout_mismatch";
         error_detail =
             "expected timeout_ms=" + std::to_string(expected.timeout_ms) +
             ", got " + std::to_string(actual.timeout_ms);
@@ -1528,6 +1676,380 @@ CommunicatorSplitResult CommunicatorRegistry::split_communicator(const Communica
         true,
         request.seqno,
         per_rank.participating,
+        per_rank.new_comm_id,
+        per_rank.new_rank,
+        per_rank.new_world_size,
+        "",
+        "",
+    };
+}
+
+CommunicatorFailureResult CommunicatorRegistry::inject_communicator_failure(
+    const CommunicatorFailureRequest& request) {
+    if (request.comm_id <= 0) {
+        return make_failure_error("invalid_comm_id", "comm_id must be > 0");
+    }
+    if (request.rank < 0) {
+        return make_failure_error("invalid_rank", "rank must be >= 0");
+    }
+    if (request.seqno == 0) {
+        return make_failure_error("invalid_seqno", "seqno must be > 0");
+    }
+    if (request.operation.empty()) {
+        return make_failure_error("invalid_operation", "operation must not be empty");
+    }
+    if (request.error_code.empty()) {
+        return make_failure_error("invalid_error_code", "error_code must not be empty");
+    }
+
+    RegistryImpl& registry = registry_impl();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    const auto state_it = registry.active_by_comm_id.find(request.comm_id);
+    if (state_it == registry.active_by_comm_id.end()) {
+        return make_failure_error("unknown_comm_id", "communicator not found");
+    }
+
+    const std::shared_ptr<CommunicatorState>& state = state_it->second;
+    if (request.rank >= state->world_size ||
+        state->participants.find(request.rank) == state->participants.end()) {
+        return make_failure_error(
+            "unknown_rank",
+            "rank is not a member of this communicator");
+    }
+    if (state->destroyed_ranks.find(request.rank) !=
+        state->destroyed_ranks.end()) {
+        return make_failure_error(
+            "rank_destroyed",
+            "rank already destroyed this communicator");
+    }
+    if (state->failed) {
+        return make_failure_error(state->failure_code, state->failure_detail);
+    }
+    if (request.seqno != state->next_seqno) {
+        const std::string code = request.seqno < state->next_seqno
+            ? "stale_seqno"
+            : "out_of_order_seqno";
+        return make_failure_error(
+            code,
+            "expected seqno " + std::to_string(state->next_seqno) +
+                ", got " + std::to_string(request.seqno));
+    }
+
+    ClusterFailureEvent event;
+    event.index = ++registry.report.resilience_event_entries;
+    event.comm_id = state->comm_id;
+    event.seqno = request.seqno;
+    event.local_rank = request.rank;
+    event.global_rank = global_rank_for_local(state, request.rank);
+    event.source = "injected";
+    event.operation = request.operation;
+    event.error_code = request.error_code;
+    event.error_detail =
+        "injected failure on rank " + std::to_string(event.global_rank) +
+        " during " + request.operation + " seqno " +
+        std::to_string(request.seqno);
+    event.attempted_payload_bytes = request.attempted_payload_bytes;
+
+    const auto collective_it = state->collectives.find(request.seqno);
+    if (collective_it != state->collectives.end()) {
+        for (const auto& entry : collective_it->second->participants) {
+            event.observed_ranks.push_back(
+                global_rank_for_local(state, entry.first));
+            event.attempted_payload_bytes +=
+                static_cast<std::uint64_t>(entry.second.bytes);
+        }
+    }
+    event.observed_ranks.push_back(event.global_rank);
+    std::sort(event.observed_ranks.begin(), event.observed_ranks.end());
+    event.observed_ranks.erase(
+        std::unique(event.observed_ranks.begin(), event.observed_ranks.end()),
+        event.observed_ranks.end());
+
+    const std::uint64_t event_index = event.index;
+    const std::string detail = event.error_detail;
+    registry.report.failure_events.push_back(std::move(event));
+    fail_pending_operations_locked(state, request.error_code, detail);
+
+    CommunicatorFailureResult result;
+    result.ok = true;
+    result.event_index = event_index;
+    return result;
+}
+
+CommunicatorShrinkResult CommunicatorRegistry::shrink_communicator(
+    const CommunicatorShrinkRequest& request) {
+    if (request.comm_id <= 0) {
+        return make_shrink_error("invalid_comm_id", "comm_id must be > 0");
+    }
+    if (request.rank < 0) {
+        return make_shrink_error("invalid_rank", "rank must be >= 0");
+    }
+    if (request.seqno == 0) {
+        return make_shrink_error("invalid_seqno", "seqno must be > 0");
+    }
+    if (request.excluded_ranks.empty()) {
+        return make_shrink_error(
+            "invalid_excluded_ranks",
+            "at least one rank must be excluded");
+    }
+    if (request.timeout_ms <= 0) {
+        return make_shrink_error("invalid_timeout", "timeout_ms must be > 0");
+    }
+    if (!std::is_sorted(
+            request.excluded_ranks.begin(), request.excluded_ranks.end()) ||
+        std::adjacent_find(
+            request.excluded_ranks.begin(), request.excluded_ranks.end()) !=
+            request.excluded_ranks.end()) {
+        return make_shrink_error(
+            "invalid_excluded_ranks",
+            "excluded ranks must be sorted and unique");
+    }
+
+    RegistryImpl& registry = registry_impl();
+    std::shared_ptr<CommunicatorState> state;
+    std::shared_ptr<ShrinkState> shrink;
+    std::unique_lock<std::mutex> lock(registry.mutex);
+
+    const auto state_it = registry.active_by_comm_id.find(request.comm_id);
+    if (state_it == registry.active_by_comm_id.end()) {
+        return make_shrink_error("unknown_comm_id", "communicator not found");
+    }
+    state = state_it->second;
+    if (request.rank >= state->world_size ||
+        state->participants.find(request.rank) == state->participants.end()) {
+        return make_shrink_error(
+            "unknown_rank",
+            "rank is not a member of this communicator");
+    }
+    if (state->destroyed_ranks.find(request.rank) !=
+        state->destroyed_ranks.end()) {
+        return make_shrink_error(
+            "rank_destroyed",
+            "rank already destroyed this communicator");
+    }
+    if (request.excluded_ranks.size() >=
+        static_cast<std::size_t>(state->world_size)) {
+        return make_shrink_error(
+            "invalid_excluded_ranks",
+            "shrink must retain at least one rank");
+    }
+    for (int excluded_rank : request.excluded_ranks) {
+        if (excluded_rank < 0 || excluded_rank >= state->world_size) {
+            return make_shrink_error(
+                "invalid_excluded_ranks",
+                "excluded rank must be within [0, world_size)");
+        }
+    }
+    if (std::binary_search(
+            request.excluded_ranks.begin(),
+            request.excluded_ranks.end(),
+            request.rank)) {
+        return make_shrink_error(
+            "excluded_rank_called_shrink",
+            "an excluded rank must not call communicator shrink");
+    }
+    if (state->failed && !request.abort_parent) {
+        return make_shrink_error(
+            "parent_failed_requires_abort",
+            "NCCL_SHRINK_ABORT is required after a communicator error");
+    }
+    if (!state->failed && !request.abort_parent &&
+        (!state->collectives.empty() || !state->barriers.empty() ||
+         !state->batches.empty() || !state->splits.empty() ||
+         !state->point_to_points.empty())) {
+        return make_shrink_error(
+            "outstanding_operations",
+            "normal communicator shrink requires no outstanding operations");
+    }
+    if (request.seqno != state->next_seqno) {
+        const std::string code = request.seqno < state->next_seqno
+            ? "stale_seqno"
+            : "out_of_order_seqno";
+        return make_shrink_error(
+            code,
+            "expected seqno " + std::to_string(state->next_seqno) +
+                ", got " + std::to_string(request.seqno));
+    }
+
+    if (request.abort_parent && !state->failed) {
+        fail_pending_operations_locked(
+            state,
+            "communicator_shrink_abort",
+            "parent communicator was aborted during shrink");
+    }
+
+    auto shrink_it = state->shrinks.find(request.seqno);
+    if (shrink_it == state->shrinks.end()) {
+        shrink = std::make_shared<ShrinkState>();
+        shrink->request = request;
+        shrink->first_submit_at = std::chrono::steady_clock::now();
+        state->shrinks.emplace(request.seqno, shrink);
+    } else {
+        shrink = shrink_it->second;
+    }
+
+    std::string error_code;
+    std::string error_detail;
+    if (!shrink_requests_match(
+            shrink->request,
+            request,
+            error_code,
+            error_detail)) {
+        fail_shrink_locked(
+            shrink,
+            std::move(error_code),
+            std::move(error_detail));
+        return make_shrink_error(
+            shrink->failure_code,
+            shrink->failure_detail);
+    }
+    if (shrink->failed) {
+        return make_shrink_error(
+            shrink->failure_code,
+            shrink->failure_detail);
+    }
+    if (!shrink->participants.emplace(request.rank, request).second) {
+        fail_shrink_locked(
+            shrink,
+            "duplicate_shrink_rank",
+            "rank already submitted this communicator shrink");
+        return make_shrink_error(
+            shrink->failure_code,
+            shrink->failure_detail);
+    }
+
+    const int expected_participants = state->world_size -
+        static_cast<int>(request.excluded_ranks.size());
+    if (static_cast<int>(shrink->participants.size()) !=
+        expected_participants) {
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(request.timeout_ms);
+        const auto wait_begin = std::chrono::steady_clock::now();
+        while (!shrink->completed && !shrink->failed) {
+            if (shrink->cv.wait_until(lock, deadline) ==
+                std::cv_status::timeout) {
+                record_wait_time_locked(
+                    registry,
+                    state,
+                    request.rank,
+                    std::chrono::steady_clock::now() - wait_begin);
+                record_timeout_locked(
+                    registry,
+                    state,
+                    shrink->participants);
+                fail_shrink_locked(
+                    shrink,
+                    "timeout_waiting_for_shrink",
+                    "timeout waiting for surviving ranks to join shrink seqno " +
+                        std::to_string(request.seqno));
+                return make_shrink_error(
+                    shrink->failure_code,
+                    shrink->failure_detail);
+            }
+        }
+        record_wait_time_locked(
+            registry,
+            state,
+            request.rank,
+            std::chrono::steady_clock::now() - wait_begin);
+
+        if (!shrink->completed) {
+            return make_shrink_error(
+                shrink->failure_code,
+                shrink->failure_detail);
+        }
+        const auto result_it = shrink->results.find(request.rank);
+        if (result_it == shrink->results.end()) {
+            return make_shrink_error(
+                "internal_error",
+                "shrink completed without a per-rank result");
+        }
+        const ShrinkParticipantResult& per_rank = result_it->second;
+        return CommunicatorShrinkResult{
+            true,
+            request.seqno,
+            per_rank.new_comm_id,
+            per_rank.new_rank,
+            per_rank.new_world_size,
+            "",
+            "",
+        };
+    }
+
+    auto child = std::make_shared<CommunicatorState>();
+    child->unique_id =
+        "shrink-parent" + std::to_string(state->comm_id) +
+        "-seq" + std::to_string(request.seqno);
+    child->world_size = expected_participants;
+    child->comm_id = registry.next_comm_id++;
+    child->ready = true;
+    child->global_ranks.reserve(
+        static_cast<std::size_t>(expected_participants));
+
+    std::vector<int> excluded_global_ranks;
+    excluded_global_ranks.reserve(request.excluded_ranks.size());
+    for (int excluded_rank : request.excluded_ranks) {
+        excluded_global_ranks.push_back(
+            global_rank_for_local(state, excluded_rank));
+    }
+
+    int child_rank = 0;
+    for (int parent_rank = 0; parent_rank < state->world_size; ++parent_rank) {
+        if (std::binary_search(
+                request.excluded_ranks.begin(),
+                request.excluded_ranks.end(),
+                parent_rank)) {
+            continue;
+        }
+        const int global_rank = global_rank_for_local(state, parent_rank);
+        child->global_ranks.push_back(global_rank);
+        child->participants.emplace(child_rank, true);
+        shrink->results.emplace(
+            parent_rank,
+            ShrinkParticipantResult{
+                child->comm_id,
+                child_rank,
+                child->world_size,
+            });
+        ensure_rank_report_locked(registry, global_rank).communicator_inits++;
+        child_rank++;
+    }
+
+    registry.active_by_comm_id.emplace(child->comm_id, child);
+    registry.report.communicator_count++;
+    state->next_seqno++;
+
+    ClusterRecoveryEvent recovery;
+    recovery.index = ++registry.report.resilience_event_entries;
+    recovery.parent_comm_id = state->comm_id;
+    recovery.new_comm_id = child->comm_id;
+    recovery.seqno = request.seqno;
+    recovery.abort_parent = request.abort_parent;
+    recovery.excluded_ranks = std::move(excluded_global_ranks);
+    recovery.surviving_ranks = child->global_ranks;
+    const SteadyTimePoint recovery_begin =
+        state->failed_at == SteadyTimePoint{}
+        ? shrink->first_submit_at
+        : state->failed_at;
+    recovery.recovery_time_us = elapsed_us(
+        recovery_begin,
+        std::chrono::steady_clock::now());
+    registry.report.recovery_events.push_back(std::move(recovery));
+
+    shrink->completed = true;
+    state->shrinks.erase(request.seqno);
+    shrink->cv.notify_all();
+
+    const auto result_it = shrink->results.find(request.rank);
+    if (result_it == shrink->results.end()) {
+        return make_shrink_error(
+            "internal_error",
+            "shrink completed without a per-rank result");
+    }
+    const ShrinkParticipantResult& per_rank = result_it->second;
+    return CommunicatorShrinkResult{
+        true,
+        request.seqno,
         per_rank.new_comm_id,
         per_rank.new_rank,
         per_rank.new_world_size,
@@ -2298,6 +2820,8 @@ ClusterReportSnapshot snapshot_cluster_report() {
         registry.report.operation_timeline.size());
     snapshot.dropped_operation_timeline_entries =
         registry.report.dropped_operation_timeline_entries;
+    snapshot.failure_events = registry.report.failure_events;
+    snapshot.recovery_events = registry.report.recovery_events;
 
     for (const auto& entry : registry.report.links) {
         snapshot.links.push_back(entry.second);
@@ -2353,7 +2877,9 @@ ClusterReportSnapshot snapshot_cluster_report() {
         !snapshot.links.empty() ||
         !snapshot.node_pairs.empty() ||
         !snapshot.ranks.empty() ||
-        !snapshot.operation_timeline.empty();
+        !snapshot.operation_timeline.empty() ||
+        !snapshot.failure_events.empty() ||
+        !snapshot.recovery_events.empty();
     return snapshot;
 }
 

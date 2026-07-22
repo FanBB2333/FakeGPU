@@ -285,9 +285,9 @@ void run_nccl_229_compat_case() {
     ncclComm_t shrunk = nullptr;
     require_result(
         ncclCommShrink(comm, nullptr, 0, &shrunk, nullptr, 0),
-        ncclInvalidUsage,
-        "unsupported communicator shrink should be explicit");
-    require(shrunk == nullptr, "unsupported communicator shrink returned a handle");
+        ncclInvalidArgument,
+        "communicator shrink without exclusions should fail");
+    require(shrunk == nullptr, "invalid communicator shrink returned a handle");
 
     require_result(
         ncclDevCommCreate(comm, nullptr, nullptr),
@@ -880,6 +880,205 @@ void run_async_error_persistence_case() {
     require_result(ncclCommDestroy(comms[1]), ncclSuccess, "destroy after async error failed");
 }
 
+void run_fault_injection_shrink_case() {
+    constexpr int world_size = 4;
+    constexpr int excluded_rank = 2;
+    ncclUniqueId unique_id {};
+    require_result(
+        ncclGetUniqueId(&unique_id),
+        ncclSuccess,
+        "fault-shrink unique ID failed");
+
+    std::array<ncclComm_t, world_size> parents = {
+        nullptr, nullptr, nullptr, nullptr};
+    std::array<ncclResult_t, world_size> init_results = {
+        ncclInternalError,
+        ncclInternalError,
+        ncclInternalError,
+        ncclInternalError,
+    };
+    std::vector<std::thread> init_threads;
+    for (int rank = 0; rank < world_size; ++rank) {
+        init_threads.emplace_back([&, rank]() {
+            init_results[static_cast<std::size_t>(rank)] = ncclCommInitRank(
+                &parents[static_cast<std::size_t>(rank)],
+                world_size,
+                unique_id,
+                rank);
+        });
+    }
+    for (std::thread& thread : init_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < world_size; ++rank) {
+        require_result(
+            init_results[static_cast<std::size_t>(rank)],
+            ncclSuccess,
+            "fault-shrink parent init failed");
+    }
+
+    std::array<float, world_size> send = {1.0f, 2.0f, 3.0f, 4.0f};
+    std::array<float, world_size> recv = {0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<ncclResult_t, world_size> failure_results = {
+        ncclInternalError,
+        ncclInternalError,
+        ncclInternalError,
+        ncclInternalError,
+    };
+    std::vector<std::thread> failure_threads;
+    for (int rank = 0; rank < world_size; ++rank) {
+        failure_threads.emplace_back([&, rank]() {
+            failure_results[static_cast<std::size_t>(rank)] = ncclAllReduce(
+                &send[static_cast<std::size_t>(rank)],
+                &recv[static_cast<std::size_t>(rank)],
+                1,
+                ncclFloat32,
+                ncclSum,
+                parents[static_cast<std::size_t>(rank)],
+                nullptr);
+        });
+    }
+    for (std::thread& thread : failure_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < world_size; ++rank) {
+        require_result(
+            failure_results[static_cast<std::size_t>(rank)],
+            ncclRemoteError,
+            "injected rank failure should reach every parent rank");
+        ncclResult_t async_error = ncclSuccess;
+        require_result(
+            ncclCommGetAsyncError(
+                parents[static_cast<std::size_t>(rank)],
+                &async_error),
+            ncclSuccess,
+            "fault-shrink async error query failed");
+        require(
+            async_error == ncclRemoteError,
+            "fault-shrink async error should persist as ncclRemoteError");
+    }
+
+    std::array<ncclComm_t, world_size> children = {
+        nullptr, nullptr, nullptr, nullptr};
+    std::array<ncclResult_t, world_size> shrink_results = {
+        ncclSuccess,
+        ncclSuccess,
+        ncclSuccess,
+        ncclSuccess,
+    };
+    std::vector<std::thread> shrink_threads;
+    for (int rank = 0; rank < world_size; ++rank) {
+        if (rank == excluded_rank) {
+            continue;
+        }
+        shrink_results[static_cast<std::size_t>(rank)] = ncclInternalError;
+        shrink_threads.emplace_back([&, rank]() {
+            int excluded = excluded_rank;
+            shrink_results[static_cast<std::size_t>(rank)] = ncclCommShrink(
+                parents[static_cast<std::size_t>(rank)],
+                &excluded,
+                1,
+                &children[static_cast<std::size_t>(rank)],
+                nullptr,
+                NCCL_SHRINK_ABORT);
+        });
+    }
+    for (std::thread& thread : shrink_threads) {
+        thread.join();
+    }
+
+    const std::array<int, world_size> expected_child_ranks = {0, 1, -1, 2};
+    for (int rank = 0; rank < world_size; ++rank) {
+        if (rank == excluded_rank) {
+            require(
+                children[static_cast<std::size_t>(rank)] == nullptr,
+                "excluded rank unexpectedly received a shrunk communicator");
+            continue;
+        }
+        require_result(
+            shrink_results[static_cast<std::size_t>(rank)],
+            ncclSuccess,
+            "communicator shrink failed");
+        require(
+            children[static_cast<std::size_t>(rank)] != nullptr,
+            "communicator shrink returned a null child");
+        int child_count = -1;
+        int child_rank = -1;
+        require_result(
+            ncclCommCount(
+                children[static_cast<std::size_t>(rank)],
+                &child_count),
+            ncclSuccess,
+            "shrunk communicator count failed");
+        require_result(
+            ncclCommUserRank(
+                children[static_cast<std::size_t>(rank)],
+                &child_rank),
+            ncclSuccess,
+            "shrunk communicator rank failed");
+        require(child_count == 3, "shrunk communicator should contain three ranks");
+        require(
+            child_rank == expected_child_ranks[static_cast<std::size_t>(rank)],
+            "shrunk communicator did not assign contiguous ranks");
+    }
+
+    std::array<float, world_size> recovered_recv = {
+        0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<ncclResult_t, world_size> recovered_results = {
+        ncclSuccess,
+        ncclSuccess,
+        ncclSuccess,
+        ncclSuccess,
+    };
+    std::vector<std::thread> recovered_threads;
+    for (int rank = 0; rank < world_size; ++rank) {
+        if (rank == excluded_rank) {
+            continue;
+        }
+        recovered_results[static_cast<std::size_t>(rank)] = ncclInternalError;
+        recovered_threads.emplace_back([&, rank]() {
+            recovered_results[static_cast<std::size_t>(rank)] = ncclAllReduce(
+                &send[static_cast<std::size_t>(rank)],
+                &recovered_recv[static_cast<std::size_t>(rank)],
+                1,
+                ncclFloat32,
+                ncclSum,
+                children[static_cast<std::size_t>(rank)],
+                nullptr);
+        });
+    }
+    for (std::thread& thread : recovered_threads) {
+        thread.join();
+    }
+    for (int rank = 0; rank < world_size; ++rank) {
+        if (rank == excluded_rank) {
+            continue;
+        }
+        require_result(
+            recovered_results[static_cast<std::size_t>(rank)],
+            ncclSuccess,
+            "all-reduce on the shrunk communicator failed");
+        require(
+            recovered_recv[static_cast<std::size_t>(rank)] == 7.0f,
+            "all-reduce on the shrunk communicator returned the wrong sum");
+    }
+
+    for (int rank = 0; rank < world_size; ++rank) {
+        if (children[static_cast<std::size_t>(rank)]) {
+            require_result(
+                ncclCommDestroy(children[static_cast<std::size_t>(rank)]),
+                ncclSuccess,
+                "shrunk communicator destroy failed");
+        }
+        require_result(
+            rank == excluded_rank
+                ? ncclCommAbort(parents[static_cast<std::size_t>(rank)])
+                : ncclCommDestroy(parents[static_cast<std::size_t>(rank)]),
+            ncclSuccess,
+            "fault-shrink parent cleanup failed");
+    }
+}
+
 void run_group_stream_mismatch_case() {
     ncclUniqueId unique_id {};
     require_result(ncclGetUniqueId(&unique_id), ncclSuccess, "ncclGetUniqueId failed");
@@ -1145,10 +1344,19 @@ int main(int argc, char** argv) {
             std::cout << "NCCL communication report scenario passed" << std::endl;
             return 0;
         }
+        if (argc == 3 &&
+            std::string(argv[1]) == "--scenario" &&
+            std::string(argv[2]) == "fault-shrink") {
+            run_fault_injection_shrink_case();
+            dump_cluster_report();
+            std::cout << "NCCL fault injection and shrink scenario passed"
+                      << std::endl;
+            return 0;
+        }
         if (argc != 1) {
             throw std::runtime_error(
                 "usage: fakegpu_nccl_direct_test "
-                "[--scenario communication-report]");
+                "[--scenario {communication-report|fault-shrink}]");
         }
 
         int version = 0;

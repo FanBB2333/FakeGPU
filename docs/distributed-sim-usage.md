@@ -57,6 +57,9 @@ For `torchrun`-based validation you also need:
 | `FAKEGPU_STAGING_CHUNK_BYTES` | Chunk size threshold for staged transfers |
 | `FAKEGPU_STAGING_FORCE_SOCKET` | Force socket fallback instead of shared memory |
 | `FAKEGPU_DEVICE_COUNT` | Number of exposed fake devices |
+| `FAKEGPU_NCCL_FAULT_RANK` | Optional global rank to fail during a direct simulated collective |
+| `FAKEGPU_NCCL_FAULT_SEQNO` | Positive communicator sequence number for the injected failure |
+| `FAKEGPU_NCCL_FAULT_OPERATION` | Collective selector; defaults to `all_reduce` |
 
 The same knobs are available through `./fgpu` flags:
 
@@ -231,7 +234,14 @@ The default cases are:
 - FSDP2 FP16/BF16 parameter-dtype gradient reduction
 - grouped nonuniform and sparse all-to-all-v across the two physical hosts
 - mismatched collective reduction operators and persistent async errors
+- a deterministic rank-2 All-Reduce failure, persistent `ncclRemoteError`, three-rank `ncclCommShrink`, and post-recovery All-Reduce
 - a missing-peer communicator timeout from the second physical host
+
+Run only the recovery case with `--case fault-shrink`. The controller starts
+four logical ranks across the two node specifications: ranks 0 and 2 on the
+first host, and ranks 1 and 3 on the second. Rank 2 is excluded, so the child
+communicator contains global ranks `[0, 1, 3]` with local ranks `[0, 1, 2]`.
+The cluster report records both the injected failure and recovery event.
 
 DeepSpeed is optional rather than part of the default set. Add
 `--case deepspeed-zero2` to validate one rank per physical host. The maintained
@@ -425,6 +435,7 @@ When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeG
 - intra-node and inter-node link statistics
 - every distinct node pair, with collective/P2P operation breakdowns, directional totals, combined total, per-operation peak payload, transfer count, and modeled average/peak throughput
 - per-rank wait time, timeouts, communicator-init counts, and collective/P2P call counts
+- failure and communicator-recovery events, including global rank, operation, observed ranks, attempted payload, exclusion/survivor sets, and recovery time
 - a bounded operation timeline with global ranks, collective data type/reduction operator, logical/socket payloads, rendezvous time, coordinator execution time, and modeled time
 
 The JSON path also produces a sibling `.md` report by default. Use

@@ -18,6 +18,7 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -41,12 +42,14 @@ struct ncclComm {
     int comm_id = -1;
     int world_size = 0;
     int rank = -1;
+    int global_rank = -1;
     int device = -1;
     std::uint64_t next_seqno = 1;
     void* real_comm = nullptr;
     bool destroyed = false;
     bool finalized = false;
     bool suspended = false;
+    bool fault_injected = false;
     ncclResult_t async_error = ncclSuccess;
     std::string last_error;
 };
@@ -105,6 +108,110 @@ int coordinator_timeout_ms() {
         return static_cast<int>(parsed);
     }();
     return timeout_ms;
+}
+
+struct CollectiveFaultInjectionConfig {
+    bool enabled = false;
+    bool valid = true;
+    int rank = -1;
+    std::uint64_t seqno = 0;
+    std::string operation = "all_reduce";
+    std::string error;
+};
+
+std::string canonical_collective_operation(std::string value) {
+    std::string normalized;
+    normalized.reserve(value.size() + 2);
+    for (unsigned char character : value) {
+        if (character == '-') {
+            normalized.push_back('_');
+        } else {
+            normalized.push_back(
+                static_cast<char>(std::tolower(character)));
+        }
+    }
+    if (normalized == "allreduce") {
+        return "all_reduce";
+    }
+    if (normalized == "allgather") {
+        return "all_gather";
+    }
+    if (normalized == "reducescatter") {
+        return "reduce_scatter";
+    }
+    if (normalized == "alltoall") {
+        return "all_to_all";
+    }
+    return normalized;
+}
+
+const CollectiveFaultInjectionConfig& collective_fault_injection_config() {
+    static const CollectiveFaultInjectionConfig config = [] {
+        CollectiveFaultInjectionConfig value;
+        const char* rank_raw = std::getenv("FAKEGPU_NCCL_FAULT_RANK");
+        const char* seqno_raw = std::getenv("FAKEGPU_NCCL_FAULT_SEQNO");
+        const char* operation_raw =
+            std::getenv("FAKEGPU_NCCL_FAULT_OPERATION");
+        if ((!rank_raw || !*rank_raw) && (!seqno_raw || !*seqno_raw) &&
+            (!operation_raw || !*operation_raw)) {
+            return value;
+        }
+
+        value.enabled = true;
+        if (!rank_raw || !*rank_raw || !seqno_raw || !*seqno_raw) {
+            value.valid = false;
+            value.error =
+                "FAKEGPU_NCCL_FAULT_RANK and FAKEGPU_NCCL_FAULT_SEQNO "
+                "must both be set";
+            return value;
+        }
+
+        char* rank_end = nullptr;
+        errno = 0;
+        const long parsed_rank = std::strtol(rank_raw, &rank_end, 10);
+        if (errno != 0 || rank_end == rank_raw ||
+            (rank_end && *rank_end != '\0') || parsed_rank < 0 ||
+            parsed_rank > std::numeric_limits<int>::max()) {
+            value.valid = false;
+            value.error = "FAKEGPU_NCCL_FAULT_RANK must be a non-negative integer";
+            return value;
+        }
+
+        char* seqno_end = nullptr;
+        errno = 0;
+        const unsigned long long parsed_seqno =
+            std::strtoull(seqno_raw, &seqno_end, 10);
+        if (seqno_raw[0] == '-' || errno != 0 || seqno_end == seqno_raw ||
+            (seqno_end && *seqno_end != '\0') || parsed_seqno == 0) {
+            value.valid = false;
+            value.error = "FAKEGPU_NCCL_FAULT_SEQNO must be a positive integer";
+            return value;
+        }
+
+        value.rank = static_cast<int>(parsed_rank);
+        value.seqno = static_cast<std::uint64_t>(parsed_seqno);
+        if (operation_raw && *operation_raw) {
+            value.operation = canonical_collective_operation(operation_raw);
+        }
+        const std::array<const char*, 6> supported = {
+            "all_reduce",
+            "reduce",
+            "broadcast",
+            "all_gather",
+            "reduce_scatter",
+            "all_to_all",
+        };
+        if (std::find(
+                supported.begin(),
+                supported.end(),
+                value.operation) == supported.end()) {
+            value.valid = false;
+            value.error =
+                "FAKEGPU_NCCL_FAULT_OPERATION names an unsupported collective";
+        }
+        return value;
+    }();
+    return config;
 }
 
 struct PreMulSumOpInfo {
@@ -516,7 +623,10 @@ ncclResult_t map_response_error(const std::string& error_code) {
         error_code == "invalid_collective_size" ||
         error_code == "invalid_comm_id" ||
         error_code == "invalid_seqno" ||
-        error_code == "invalid_timeout") {
+        error_code == "invalid_timeout" ||
+        error_code == "invalid_operation" ||
+        error_code == "invalid_error_code" ||
+        error_code == "invalid_excluded_ranks") {
         return ncclInvalidArgument;
     }
     if (error_code == "duplicate_destroy" ||
@@ -554,6 +664,13 @@ ncclResult_t map_response_error(const std::string& error_code) {
         error_code == "out_of_order_seqno" ||
         error_code == "stale_seqno" ||
         error_code == "rank_destroyed" ||
+        error_code == "excluded_rank_called_shrink" ||
+        error_code == "parent_failed_requires_abort" ||
+        error_code == "outstanding_operations" ||
+        error_code == "duplicate_shrink_rank" ||
+        error_code == "shrink_excluded_ranks_mismatch" ||
+        error_code == "shrink_flags_mismatch" ||
+        error_code == "shrink_timeout_mismatch" ||
         error_code == "empty_group" ||
         error_code == "unsupported_reduce_op" ||
         error_code == "unsupported_dtype" ||
@@ -565,8 +682,13 @@ ncclResult_t map_response_error(const std::string& error_code) {
         error_code == "timeout_waiting_for_p2p" ||
         error_code == "timeout_waiting_for_barrier" ||
         error_code == "timeout_waiting_for_group" ||
+        error_code == "timeout_waiting_for_shrink" ||
         error_code == "staging_open_failed") {
         return ncclSystemError;
+    }
+    if (error_code == "injected_rank_failure" ||
+        error_code == "communicator_shrink_abort") {
+        return ncclRemoteError;
     }
     return ncclInternalError;
 }
@@ -628,6 +750,64 @@ bool coordinator_request_response(
     return coordinator_request_response(config, request_line, kEmptyPayload, response, error);
 }
 
+ncclResult_t maybe_inject_collective_failure(
+    const fake_gpu::distributed::DistributedConfig& config,
+    const char* command,
+    std::uint64_t seqno,
+    std::uint64_t attempted_payload_bytes,
+    ncclComm_t comm) {
+    const CollectiveFaultInjectionConfig& fault =
+        collective_fault_injection_config();
+    if (!fault.enabled) {
+        return ncclSuccess;
+    }
+    if (!fault.valid) {
+        return fail_with(comm, ncclInvalidArgument, fault.error);
+    }
+    if (!comm ||
+        comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "collective fault injection requires FAKEGPU_DIST_MODE=simulate");
+    }
+    if (comm->fault_injected || comm->global_rank != fault.rank ||
+        seqno != fault.seqno ||
+        canonical_collective_operation(command) != fault.operation) {
+        return ncclSuccess;
+    }
+
+    comm->fault_injected = true;
+    std::ostringstream request;
+    request << "INJECT_FAILURE"
+            << " comm_id=" << comm->comm_id
+            << " rank=" << comm->rank
+            << " seqno=" << seqno
+            << " operation=" << fault.operation
+            << " error_code=injected_rank_failure"
+            << " attempted_payload_bytes=" << attempted_payload_bytes;
+
+    fake_gpu::distributed::CoordinatorResponse response;
+    std::string error;
+    if (!coordinator_request_response(config, request.str(), response, error)) {
+        return fail_with(comm, ncclSystemError, error);
+    }
+    if (!response.ok) {
+        return fail_with(
+            comm,
+            map_response_error(response.error_code),
+            response.error_detail.empty()
+                ? response.error_code
+                : response.error_detail);
+    }
+
+    return fail_with(
+        comm,
+        ncclRemoteError,
+        "injected rank failure during " + fault.operation + " seqno " +
+            std::to_string(seqno));
+}
+
 bool collective_transfer_sizes(
     fake_gpu::distributed::CollectiveType type,
     std::size_t element_count,
@@ -666,6 +846,16 @@ ncclResult_t submit_proxy_collective_record(
             output_bytes,
             error)) {
         return fail_with(comm, ncclInvalidArgument, error);
+    }
+
+    const ncclResult_t fault_result = maybe_inject_collective_failure(
+        config,
+        command,
+        comm->next_seqno,
+        static_cast<std::uint64_t>(staging_bytes),
+        comm);
+    if (fault_result != ncclSuccess) {
+        return fault_result;
     }
 
     std::ostringstream request;
@@ -1626,6 +1816,15 @@ ncclResult_t submit_collective_chunk(
     }
 
     const std::uint64_t seqno = comm->next_seqno;
+    const ncclResult_t fault_result = maybe_inject_collective_failure(
+        config,
+        command,
+        seqno,
+        static_cast<std::uint64_t>(staging_bytes),
+        comm);
+    if (fault_result != ncclSuccess) {
+        return fault_result;
+    }
     const std::string staging_name = make_staging_name(*comm, seqno, command);
     fake_gpu::distributed::BufferTransport buffer_transport =
         fake_gpu::distributed::BufferTransport::SharedMemory;
@@ -2336,6 +2535,17 @@ std::string join_split_counts(const std::vector<std::size_t>& counts) {
     return output.str();
 }
 
+std::string join_int_values(const std::vector<int>& values) {
+    std::ostringstream output;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index > 0) {
+            output << ',';
+        }
+        output << values[index];
+    }
+    return output.str();
+}
+
 ncclResult_t flush_grouped_alltoallv(
     ncclComm_t comm,
     const std::vector<GroupOperation>& operations,
@@ -2932,6 +3142,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
     state->comm_id = coordinator_comm_id;
     state->world_size = nranks;
     state->rank = rank;
+    state->global_rank = rank;
     state->device = infer_device_for_rank(rank);
     state->real_comm = reinterpret_cast<void*>(real_comm);
     *comm = state;
@@ -3121,6 +3332,7 @@ ncclResult_t ncclCommSplit(
         child->comm_id = new_comm_id;
         child->world_size = new_world_size;
         child->rank = new_rank;
+        child->global_rank = comm->global_rank;
         child->device = comm->device;
         *newcomm = child;
         clear_last_error(*newcomm);
@@ -3133,11 +3345,11 @@ ncclResult_t ncclCommSplit(
 
 ncclResult_t ncclCommShrink(
     ncclComm_t comm,
-    int* /*exclude_ranks_list*/,
-    int /*exclude_ranks_count*/,
+    int* exclude_ranks_list,
+    int exclude_ranks_count,
     ncclComm_t* newcomm,
     ncclConfig_t* /*config*/,
-    int /*shrink_flags*/) {
+    int shrink_flags) {
     if (newcomm) {
         *newcomm = nullptr;
     }
@@ -3147,10 +3359,136 @@ ncclResult_t ncclCommShrink(
             ncclInvalidArgument,
             "communicator and newcomm must not be null");
     }
-    return fail_with(
-        comm,
-        ncclInvalidUsage,
-        "ncclCommShrink is not implemented by the simulated NCCL backend");
+    if (comm->destroyed) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "communicator is already destroyed");
+    }
+    if (!exclude_ranks_list || exclude_ranks_count <= 0) {
+        return fail_with(
+            comm,
+            ncclInvalidArgument,
+            "communicator shrink requires at least one excluded rank");
+    }
+    if (exclude_ranks_count >= comm->world_size) {
+        return fail_with(
+            comm,
+            ncclInvalidArgument,
+            "communicator shrink must retain at least one rank");
+    }
+    if (shrink_flags != NCCL_SHRINK_DEFAULT &&
+        shrink_flags != NCCL_SHRINK_ABORT) {
+        return fail_with(
+            comm,
+            ncclInvalidArgument,
+            "unsupported communicator shrink flags");
+    }
+    if (comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "ncclCommShrink is currently only implemented for "
+            "FAKEGPU_DIST_MODE=simulate");
+    }
+
+    std::vector<int> excluded_ranks(
+        exclude_ranks_list,
+        exclude_ranks_list + exclude_ranks_count);
+    std::sort(excluded_ranks.begin(), excluded_ranks.end());
+    if (std::adjacent_find(
+            excluded_ranks.begin(),
+            excluded_ranks.end()) != excluded_ranks.end()) {
+        return fail_with(
+            comm,
+            ncclInvalidArgument,
+            "communicator shrink ranks must be unique");
+    }
+    for (int excluded_rank : excluded_ranks) {
+        if (excluded_rank < 0 || excluded_rank >= comm->world_size) {
+            return fail_with(
+                comm,
+                ncclInvalidArgument,
+                "excluded rank must be within [0, world_size)");
+        }
+    }
+    if (std::binary_search(
+            excluded_ranks.begin(),
+            excluded_ranks.end(),
+            comm->rank)) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "an excluded rank must not call ncclCommShrink");
+    }
+    if (comm->async_error != ncclSuccess &&
+        shrink_flags != NCCL_SHRINK_ABORT) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "NCCL_SHRINK_ABORT is required after a communicator error");
+    }
+
+    fake_gpu::distributed::DistributedConfig config;
+    std::string error;
+    if (!validate_runtime_config(comm, config, error)) {
+        return ncclInvalidUsage;
+    }
+
+    std::ostringstream request;
+    request << "SHRINK_COMM"
+            << " comm_id=" << comm->comm_id
+            << " rank=" << comm->rank
+            << " seqno=" << comm->next_seqno
+            << " excluded_ranks=" << join_int_values(excluded_ranks)
+            << " abort_parent="
+            << (shrink_flags == NCCL_SHRINK_ABORT ? 1 : 0)
+            << " timeout_ms=" << coordinator_timeout_ms();
+
+    fake_gpu::distributed::CoordinatorResponse response;
+    if (!coordinator_request_response(config, request.str(), response, error)) {
+        return fail_with(comm, ncclSystemError, error);
+    }
+    if (!response.ok) {
+        return fail_with(
+            comm,
+            map_response_error(response.error_code),
+            response.error_detail.empty()
+                ? response.error_code
+                : response.error_detail);
+    }
+
+    int response_comm_id = -1;
+    int new_comm_id = -1;
+    int new_rank = -1;
+    int new_world_size = 0;
+    std::uint64_t response_seqno = 0;
+    if (!parse_int_field(response, "comm_id", response_comm_id) ||
+        !parse_u64_field(response, "seqno", response_seqno) ||
+        !parse_int_field(response, "new_comm_id", new_comm_id) ||
+        !parse_int_field(response, "new_rank", new_rank) ||
+        !parse_int_field(response, "new_world_size", new_world_size) ||
+        response_comm_id != comm->comm_id ||
+        response_seqno != comm->next_seqno || new_comm_id <= 0 ||
+        new_rank < 0 || new_world_size <= 0) {
+        return fail_with(
+            comm,
+            ncclInternalError,
+            "shrink coordinator returned inconsistent communicator metadata");
+    }
+
+    ncclComm* child = new ncclComm();
+    child->dist_mode = comm->dist_mode;
+    child->comm_id = new_comm_id;
+    child->world_size = new_world_size;
+    child->rank = new_rank;
+    child->global_rank = comm->global_rank;
+    child->device = comm->device;
+    *newcomm = child;
+    comm->next_seqno++;
+    clear_last_error(*newcomm);
+    clear_last_error(comm);
+    return ncclSuccess;
 }
 
 ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* async_error) {

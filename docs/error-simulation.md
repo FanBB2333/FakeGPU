@@ -1,6 +1,6 @@
 # Error Simulation
 
-FakeGPU can reproduce common real-GPU runtime errors so that error-handling code paths can be validated on machines without physical GPUs. All error simulation features are part of the Python-level `torch_patch` layer and are enabled by default.
+FakeGPU can reproduce common real-GPU runtime errors so that error-handling code paths can be validated on machines without physical GPUs. E1–E5 and E7 are Python-level `torch_patch` checks. E6 is implemented by the native NCCL shim and distributed coordinator and is opt-in.
 
 ## Error categories
 
@@ -11,7 +11,7 @@ FakeGPU can reproduce common real-GPU runtime errors so that error-handling code
 | E3 | Invalid device index | References to device IDs beyond the configured count |
 | E4 | dtype / autocast | bfloat16 autocast on devices that do not support it (compute capability < 8.0) |
 | E5 | Checkpoint load | Loading checkpoints saved for a different GPU architecture |
-| E6 | Distributed | (not yet implemented) |
+| E6 | Distributed | Deterministic collective rank failure, persistent async error, communicator shrink, and survivor recovery |
 | E7 | Gradient | Gradient computation on non-leaf or detached tensors |
 
 ## E1: Cross-device operations
@@ -99,6 +99,34 @@ import torch
 # Saving on "A100", loading on "T4" profile raises RuntimeError
 ```
 
+## E6: Distributed rank failure and recovery
+
+In `FAKEGPU_DIST_MODE=simulate`, one global rank can be failed before a
+selected direct collective is submitted. Every participating rank receives
+`ncclRemoteError`, and `ncclCommGetAsyncError` keeps returning that error on
+the parent communicator. Surviving ranks can call `ncclCommShrink` with an
+explicit exclusion list and `NCCL_SHRINK_ABORT`; the child communicator uses
+contiguous local ranks while preserving global-rank identity in reports.
+
+The maintained four-rank experiment fails global rank 2 on the first
+All-Reduce, shrinks `[0, 1, 2, 3]` to global ranks `[0, 1, 3]`, and verifies a
+second All-Reduce on the recovered communicator:
+
+```bash
+FAKEGPU_MODE=simulate \
+FAKEGPU_DIST_MODE=simulate \
+FAKEGPU_NCCL_FAULT_RANK=2 \
+FAKEGPU_NCCL_FAULT_SEQNO=1 \
+FAKEGPU_NCCL_FAULT_OPERATION=all_reduce \
+./build/fakegpu_nccl_direct_test --scenario fault-shrink
+```
+
+Use `python3 verification/test_fault_injection_recovery.py` for report-schema
+checks, or `./ftest distributed_resilience` for the complete maintained
+failure suite. Cluster JSON and Markdown reports contain the failed rank,
+operation, observed ranks, attempted payload, exclusions, survivors, and
+recovery time.
+
 ## E7: Gradient errors
 
 Catches `grad` access on non-leaf tensors and `backward()` on detached tensors. Raises `RuntimeError`.
@@ -124,8 +152,13 @@ y.grad  # this is a non-leaf; RuntimeError if misused
 | `FAKEGPU_CROSS_DEVICE_CHECK` | `1` (enabled) | Enable cross-device operation guards (E1) |
 | `FAKEGPU_MEMORY_TRACKING` | `1` (enabled) | Enable per-device memory tracking and OOM simulation (E2) |
 | `FAKEGPU_STRICT_COMPAT` | `1` (enabled) | Enable strict dtype / architecture compatibility checks (E4, E5) |
+| `FAKEGPU_NCCL_FAULT_RANK` | unset | Global rank to fail during a direct simulated collective (E6) |
+| `FAKEGPU_NCCL_FAULT_SEQNO` | unset | Positive communicator sequence number at which to fail (E6) |
+| `FAKEGPU_NCCL_FAULT_OPERATION` | `all_reduce` | Collective selector: `all_reduce`, `reduce`, `broadcast`, `all_gather`, `reduce_scatter`, or `all_to_all` (E6) |
 
-Set any of these to `0` to disable the corresponding guard.
+Set one of the first three guard variables to `0` to disable that guard. The
+E6 rank and seqno variables must be used together; operation is optional and
+defaults to `all_reduce`.
 
 ## Running the error simulation test suite
 
@@ -133,7 +166,12 @@ Set any of these to `0` to disable the corresponding guard.
 python test/run_error_simulation_suite.py
 ```
 
-This runs all 23 error simulation tests and generates a unified HTML report at `test/report.html`. The report has tab navigation covering Phase 1 (device discovery), Phase 2 (training flow), Phase 3 (MoE), and Phase 4 (error simulation).
+This runs the Python-layer error tests and generates a unified HTML report at `test/report.html`. The report has tab navigation covering Phase 1 (device discovery), Phase 2 (training flow), Phase 3 (MoE), and Phase 4 (error simulation). E6 uses the native build and is maintained separately:
+
+```bash
+python3 verification/test_fault_injection_recovery.py
+./ftest distributed_resilience
+```
 
 Individual test files:
 
@@ -148,8 +186,9 @@ python test/test_error_gradient.py          # E7: 3 tests
 
 ## Limitations
 
-- Error simulation is Python-level only (`torch_patch` layer); the C stub layer has partial cross-device support.
-- E6 (distributed errors) is not yet implemented.
+- E1–E5 and E7 are Python-level checks; E6 runs through the native NCCL shim and coordinator.
+- E6 currently targets direct collectives in `simulate` mode. It does not inject grouped/P2P failures, kill an operating-system process, detect heartbeat loss, or restart a training framework.
+- The maintained shrink path requires an explicit exclusion list; excluded ranks must not call `ncclCommShrink`.
 - `tensor.device` still reports `cpu` — the fake device index is tracked internally.
 - No stream or event error simulation.
 

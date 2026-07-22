@@ -4,7 +4,10 @@ from copy import deepcopy
 
 import pytest
 
-from verification.check_cluster_report import _validate_cross_field_consistency
+from verification.check_cluster_report import (
+    _validate_cross_field_consistency,
+    _validate_resilience,
+)
 
 
 def _counter(calls: int = 0, bytes_value: int = 0) -> dict[str, int]:
@@ -111,3 +114,59 @@ def test_cross_field_consistency_supports_bounded_timeline() -> None:
     report["collectives"]["all_reduce"] = _counter(3, 48)
     report["operation_timeline"]["dropped_entries"] = 2
     _validate_cross_field_consistency(report)
+
+
+def _resilience() -> dict:
+    return {
+        "failure_count": 1,
+        "recovery_count": 1,
+        "failure_events": [
+            {
+                "index": 1,
+                "comm_id": 1,
+                "seqno": 1,
+                "local_rank": 2,
+                "global_rank": 2,
+                "source": "injected",
+                "operation": "all_reduce",
+                "error_code": "injected_rank_failure",
+                "error_detail": "injected rank failure",
+                "observed_ranks": [0, 2],
+                "attempted_payload_bytes": 8,
+            }
+        ],
+        "recovery_events": [
+            {
+                "index": 2,
+                "parent_comm_id": 1,
+                "new_comm_id": 2,
+                "seqno": 1,
+                "abort_parent": True,
+                "excluded_ranks": [2],
+                "surviving_ranks": [0, 1, 3],
+                "recovery_time_us": 12.5,
+            }
+        ],
+    }
+
+
+def test_resilience_accepts_failure_and_recovery() -> None:
+    _validate_resilience(
+        _resilience(),
+        expect_failure=True,
+        expect_recovery=True,
+    )
+
+
+def test_resilience_rejects_count_mismatch() -> None:
+    resilience = _resilience()
+    resilience["failure_count"] = 2
+    with pytest.raises(SystemExit):
+        _validate_resilience(resilience)
+
+
+def test_resilience_rejects_overlapping_rank_sets() -> None:
+    resilience = _resilience()
+    resilience["recovery_events"][0]["surviving_ranks"] = [0, 1, 2, 3]
+    with pytest.raises(SystemExit):
+        _validate_resilience(resilience)

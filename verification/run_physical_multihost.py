@@ -20,7 +20,7 @@ from typing import Any, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CLUSTER_CONFIG_RELATIVE = Path("verification/data/cluster_tcp_2r.yaml")
+CLUSTER_CONFIG_RELATIVE = Path("verification/data/cluster_tcp_4r.yaml")
 DDP_WORKER_RELATIVE = Path("test/test_ddp_hybrid_numerics.py")
 FSDP_WORKER_RELATIVE = Path("test/test_fsdp_hybrid_numerics.py")
 FSDP2_WORKER_RELATIVE = Path("test/test_fsdp2_hybrid_numerics.py")
@@ -1000,6 +1000,96 @@ def _run_mismatch_case(
     return reports
 
 
+def _run_fault_shrink_case(
+    nodes: list[NodeSpec],
+    *,
+    endpoint: str,
+    remote_root: str,
+    session: str,
+    timeout: float,
+) -> list[dict[str, Any]]:
+    world_size = 4
+    failed_rank = 2
+    timeout_ms = min(10_000, max(2_000, round(timeout * 100)))
+    rank_nodes = [nodes[0], nodes[1], nodes[0], nodes[1]]
+    report_dir = f"{remote_root}/fault-shrink"
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    for rank, node in enumerate(rank_nodes):
+        report_path = f"{report_dir}/rank_{rank}.json"
+        env = _distributed_env(
+            node=node,
+            endpoint=endpoint,
+            timeout_ms=timeout_ms,
+            hybrid=False,
+        )
+        env.update(
+            {
+                "FAKEGPU_NCCL_FAULT_RANK": str(failed_rank),
+                "FAKEGPU_NCCL_FAULT_SEQNO": "1",
+                "FAKEGPU_NCCL_FAULT_OPERATION": "all_reduce",
+            }
+        )
+        argv = [
+            node.python,
+            str(FAULT_WORKER_RELATIVE),
+            "--case=fault-shrink",
+            f"--rank={rank}",
+            f"--world-size={world_size}",
+            f"--failed-rank={failed_rank}",
+            f"--session={session}-fault-shrink",
+            f"--timeout-ms={timeout_ms}",
+            f"--nccl-lib={node.repo}/build/libnccl.so.2",
+            f"--report={report_path}",
+        ]
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        env=env,
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+
+    _collect_processes(
+        processes,
+        timeout=timeout,
+        label="physical rank failure and communicator shrink",
+    )
+    reports = [
+        _read_remote_json(node, f"{report_dir}/rank_{rank}.json")
+        for rank, node in enumerate(rank_nodes)
+    ]
+    if any(report.get("status") != "success" for report in reports):
+        raise AssertionError(f"fault-shrink validation failed: {reports}")
+    if any(int(report.get("failure_result", 0)) == 0 for report in reports):
+        raise AssertionError(f"fault injection did not reach every rank: {reports}")
+    if any(int(report.get("async_error", 0)) == 0 for report in reports):
+        raise AssertionError(f"fault async error was not persistent: {reports}")
+    if reports[failed_rank].get("participated_in_shrink") is not False:
+        raise AssertionError("excluded rank unexpectedly participated in shrink")
+
+    survivors = [
+        report for report in reports if int(report["rank"]) != failed_rank
+    ]
+    if [int(report.get("child_rank", -1)) for report in survivors] != [0, 1, 2]:
+        raise AssertionError(f"shrunk ranks were not contiguous: {survivors}")
+    if any(int(report.get("child_world_size", 0)) != 3 for report in survivors):
+        raise AssertionError(f"shrunk world size mismatch: {survivors}")
+    if any(
+        abs(float(report.get("recovered_all_reduce_value", 0.0)) - 7.0)
+        > 1e-6
+        for report in survivors
+    ):
+        raise AssertionError(f"post-shrink All-Reduce mismatch: {survivors}")
+    return reports
+
+
 def _run_missing_peer_case(
     node: NodeSpec,
     *,
@@ -1173,12 +1263,17 @@ def _validate_cluster_report(
     expected_collectives: set[str],
     expect_point_to_point: bool,
     expect_timeout: bool,
+    expected_world_size: int = 2,
+    expect_recovery: bool = False,
 ) -> dict[str, Any]:
     report = json.loads(path.read_text(encoding="utf-8"))
     if report.get("schema_version") != "cluster_report.v1":
         raise AssertionError("unexpected cluster report schema")
     cluster = report.get("cluster", {})
-    if cluster.get("world_size") != 2 or cluster.get("node_count") != 2:
+    if (
+        cluster.get("world_size") != expected_world_size
+        or cluster.get("node_count") != 2
+    ):
         raise AssertionError(f"unexpected physical topology: {cluster}")
     if cluster.get("coordinator_transport") != "tcp":
         raise AssertionError(f"unexpected coordinator transport: {cluster}")
@@ -1197,9 +1292,12 @@ def _validate_cluster_report(
                     f"physical point-to-point traffic is empty: {point_to_point}"
                 )
         ranks = report.get("ranks", [])
-        if len(ranks) != 2 or any(
-            int(rank.get("point_to_point_calls", 0)) <= 0 for rank in ranks
-        ):
+        active_ranks = [
+            rank
+            for rank in ranks
+            if int(rank.get("point_to_point_calls", 0)) > 0
+        ]
+        if len(active_ranks) < 2:
             raise AssertionError(f"physical rank P2P accounting is empty: {ranks}")
         node_pairs = report.get("node_pairs", [])
         if (
@@ -1212,6 +1310,20 @@ def _validate_cluster_report(
     if expect_timeout:
         if sum(int(item["timeouts"]) for item in report.get("ranks", [])) <= 0:
             raise AssertionError("missing-peer case did not increment rank timeouts")
+    if expect_recovery:
+        resilience = report.get("resilience", {})
+        if int(resilience.get("failure_count", 0)) <= 0:
+            raise AssertionError("rank failure was not recorded")
+        if int(resilience.get("recovery_count", 0)) <= 0:
+            raise AssertionError("communicator recovery was not recorded")
+        failure = resilience["failure_events"][-1]
+        recovery = resilience["recovery_events"][-1]
+        if int(failure.get("global_rank", -1)) != 2:
+            raise AssertionError(f"unexpected failed rank: {failure}")
+        if recovery.get("excluded_ranks") != [2]:
+            raise AssertionError(f"unexpected shrink exclusions: {recovery}")
+        if recovery.get("surviving_ranks") != [0, 1, 3]:
+            raise AssertionError(f"unexpected surviving ranks: {recovery}")
     return report
 
 
@@ -1222,6 +1334,15 @@ def _cluster_summary(report: dict[str, Any]) -> dict[str, Any]:
         "point_to_point": report["point_to_point"],
         "node_pairs": report["node_pairs"],
         "ranks": report["ranks"],
+        "resilience": report.get(
+            "resilience",
+            {
+                "failure_count": 0,
+                "recovery_count": 0,
+                "failure_events": [],
+                "recovery_events": [],
+            },
+        ),
         "operation_timeline": {
             "retained_entries": report["operation_timeline"]["retained_entries"],
             "dropped_entries": report["operation_timeline"]["dropped_entries"],
@@ -1316,6 +1437,18 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             f"- Collective mismatch: both ranks returned `{results}` and "
             "the async error remained visible."
         )
+    if "fault_shrink" in cases:
+        survivors = [
+            item
+            for item in cases["fault_shrink"]
+            if item.get("participated_in_shrink")
+        ]
+        child_ranks = [item["child_rank"] for item in survivors]
+        lines.append(
+            "- Injected rank failure and recovery: global rank `2` failed on "
+            f"All-Reduce; surviving ranks became `{child_ranks}` and the "
+            "post-shrink sum was `7.0` on both physical hosts."
+        )
     if "missing_peer" in cases:
         lines.append(
             "- Missing peer: communicator initialization returned a timeout "
@@ -1385,6 +1518,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "fsdp2-low-reduce",
         "alltoallv",
         "collective-mismatch",
+        "fault-shrink",
         "missing-peer",
     ]
     git_commit = _local_head()
@@ -1585,6 +1719,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 session=args.session,
                 timeout=args.case_timeout,
             )
+        if "fault-shrink" in cases:
+            case_reports["fault_shrink"] = _run_fault_shrink_case(
+                nodes,
+                endpoint=endpoint,
+                remote_root=remote_root,
+                session=args.session,
+                timeout=args.case_timeout,
+            )
         if "missing-peer" in cases:
             case_reports["missing_peer"] = _run_missing_peer_case(
                 nodes[1],
@@ -1632,6 +1774,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         expected_collectives.add("all_gather")
     if "alltoallv" in cases:
         expected_collectives.add("all_to_all")
+    if "fault-shrink" in cases:
+        expected_collectives.add("all_reduce")
     if (
         "fsdp" in cases
         or "fsdp2" in cases
@@ -1644,6 +1788,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         expected_collectives=expected_collectives,
         expect_point_to_point=selected_deepspeed_pipeline,
         expect_timeout="missing-peer" in cases,
+        expected_world_size=4 if "fault-shrink" in cases else 2,
+        expect_recovery="fault-shrink" in cases,
     )
 
     report: dict[str, Any] = {
@@ -1719,6 +1865,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "deepspeed-pipeline",
             "alltoallv",
             "collective-mismatch",
+            "fault-shrink",
             "missing-peer",
         ],
         default=[],
