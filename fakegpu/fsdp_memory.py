@@ -113,6 +113,10 @@ def estimate_full_shard_sft_memory(
     all_gather_workspace_bytes = int(
         sharding_plan["largest_unsharded_unit_bytes"]
     )
+    reduce_scatter_workspace_bytes = (
+        int(sharding_plan["largest_unsharded_unit_bytes"])
+        - int(sharding_plan["largest_local_shard_bytes"])
+    )
 
     optimizer_state_bytes = int(estimate["optimizer_state_bytes"])
     local_optimizer_state_bytes = ceil(
@@ -145,6 +149,7 @@ def estimate_full_shard_sft_memory(
         + local_parameter_bytes
         + local_gradient_bytes
         + all_gather_workspace_bytes
+        + reduce_scatter_workspace_bytes
     )
 
     optimizer_peak = int(estimate["optimizer_phase_peak_bytes"])
@@ -187,6 +192,7 @@ def estimate_full_shard_sft_memory(
         "graph_nonsharded_bytes": graph_nonsharded_bytes,
         "optimizer_nonsharded_bytes": optimizer_nonsharded_bytes,
         "all_gather_workspace_bytes": all_gather_workspace_bytes,
+        "reduce_scatter_workspace_bytes": reduce_scatter_workspace_bytes,
         "first_step_graph_peak_bytes": projected_graph_peak,
         "steady_state_graph_peak_bytes": projected_steady_graph_peak,
         "optimizer_peak_bytes": projected_optimizer_peak,
@@ -197,5 +203,6 @@ def estimate_full_shard_sft_memory(
             "Parameters, gradients, and AdamW state are evenly sharded after per-unit padding.",
             "Buffers, inputs, activations, loss tensors, and profiled operator workspaces remain replicated.",
             "One padded full FSDP unit is materialized during forward or backward compute.",
+            "Backward retains the active unit's full gradient until reduce-scatter produces its local shard.",
         ],
     }

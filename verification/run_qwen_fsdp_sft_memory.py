@@ -255,7 +255,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"dtype `{report['dtype']}`",
             f"- FSDP units: {report['sharding_plan']['unit_count']}; local parameter shard "
             f"{_gib(projection['local_parameter_bytes']):.3f} GiB; largest all-gather unit "
-            f"{_gib(projection['all_gather_workspace_bytes']):.3f} GiB",
+            f"{_gib(projection['all_gather_workspace_bytes']):.3f} GiB; reduce-scatter workspace "
+            f"{_gib(projection['reduce_scatter_workspace_bytes']):.3f} GiB",
             "",
             "| Rank | Graph observed GiB | Graph predicted GiB | Graph error | Optimizer observed GiB | Optimizer predicted GiB | Optimizer error | Overall observed GiB | Overall predicted GiB | Overall error | Status |",
             "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
@@ -479,7 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--seed", type=int, default=20260721)
     parser.add_argument("--data-seed", type=int, default=20260721)
-    parser.add_argument("--max-error-percent", type=float, default=10.0)
+    parser.add_argument("--max-error-percent", type=float, default=2.0)
     parser.add_argument("--startup-timeout", type=float, default=10.0)
     parser.add_argument("--timeout", type=float, default=600.0)
     args = parser.parse_args(argv)
