@@ -152,10 +152,16 @@ The two-stage pipeline verifies forward activations, backward gradients, one
 optimizer step, stage placement, direct `send`/`recv`, optional
 `batch_isend_irecv`, activation checkpointing, and P2P byte accounting. The
 FP32/BF16 × checkpoint-off/on matrix passed on DeepSpeed 0.15.3 and 0.19.2.
-A separate FP32 batched-P2P smoke passed on both stacks. Gradient accumulation
-of two passed on 0.15.3. DeepSpeed 0.19.2 produced the correct loss but a
-half-sized stage-0 update in the same GAS=2 probe, so that combination remains
-an explicit compatibility check rather than a passing FakeGPU claim.
+A separate FP32 batched-P2P smoke passed on both stacks. The FP32/BF16 ×
+checkpoint-off/on matrix with two accumulated micro-batches also passed on
+both stacks. DeepSpeed 0.19.2 scales the loss gradient on the last stage and,
+by default, scales the received activation gradient again on earlier stages.
+The runner's default `--pipeline-gradient-scaling auto` disables that second
+division only on non-last stages and records the action in every rank report.
+Use `--pipeline-gradient-scaling native` to preserve and reproduce the
+installed DeepSpeed behavior; on 0.19.2 it produces the previously observed
+half-sized stage-0 update. DeepSpeed 0.15.3 has no corresponding tensor hook,
+so the compatibility setting is reported as unnecessary.
 
 The physical `deepspeed-pipeline` case requires identical PyTorch, CUDA
 runtime, and DeepSpeed versions on every stage. It stops during preflight on
@@ -202,8 +208,11 @@ The replacement and routing model follows DeepSpeed's
 
 The native group-semantics command additionally checks 2- and 4-rank
 all-to-all-v with nonuniform and zero-sized peer splits over both Unix shared
-memory and TCP socket payloads. This covers the transport used by physical
-multi-host simulation without claiming NCCL/RDMA performance parity.
+memory and TCP socket payloads. A separate physical-host run passed between
+the RTX PRO 5000 and RTX 3090 Ti: two all-to-all calls carried 48 logical
+bytes and 24 inter-node bytes, with a 20-byte node-pair peak per operation.
+The sparse case included a zero-sized PRO 5000 → 3090 Ti split. These are
+functional transport checks, not NCCL/RDMA performance measurements.
 
 Current DeepSpeed releases do not combine training AutoTP and AutoEP in this
 validator. Grouped-GEMM experts are also excluded because the available WSL
@@ -224,7 +233,7 @@ The model-parallel compatibility matrix is narrower and version-specific:
 | Path | DeepSpeed 0.15.3 / RTX PRO 5000 | DeepSpeed 0.19.2 / RTX 3090 Ti |
 |---|---|---|
 | Pipeline, GAS=1 | FP32/BF16 direct-P2P checkpoint matrix and FP32 batched-P2P smoke passed | FP32/BF16 direct-P2P checkpoint matrix and FP32 batched-P2P smoke passed |
-| Pipeline, GAS=2 | FP32/BF16, checkpoint off/on passed | compatibility probe detects a stage-0 update mismatch |
+| Pipeline, GAS=2 | FP32/BF16, checkpoint off/on passed; compatibility setting not required | FP32/BF16, checkpoint off/on passed with the recorded non-last-stage scaling compatibility setting; native mode reproduces the upstream half update |
 | AutoTP | module unavailable; preflight exit 2 | ZeRO 0/1/2 × FP32/BF16 passed |
 | AutoEP | training module unavailable; preflight exit 2 | ZeRO 0/1/2 × FP32/BF16 passed |
 
@@ -325,7 +334,7 @@ The following paths are verified:
 - two-stage Pipeline Parallel with direct and batched P2P
 - AutoTP training on DeepSpeed 0.19.2, ZeRO 0–2
 - AutoEP training on DeepSpeed 0.19.2, ZeRO 0–2
-- nonuniform and sparse all-to-all-v over Unix and TCP transports
+- nonuniform and sparse all-to-all-v over Unix, loopback TCP, and physical two-host TCP
 - physical two-host ZeRO-2 over TCP
 - logical communication reports for every node pair
 

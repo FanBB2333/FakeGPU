@@ -208,6 +208,7 @@ python3 verification/run_physical_multihost.py \
 - FSDP2/DTensor FP32 分片、optimizer 与完整张量重建
 - FSDP2 FP16/BF16 参数配合 FP32 梯度归约
 - FSDP2 FP16/BF16 参数 dtype 梯度归约
+- 两台物理主机之间的 grouped 非均匀与稀疏 all-to-all-v
 - collective reduction operator 不一致以及持续可见的 async error
 - 从第二台物理主机触发缺少 rank 的 communicator 超时
 
@@ -215,6 +216,11 @@ DeepSpeed 是可选场景，不在默认集合中。添加 `--case deepspeed-zer
 每台物理主机各运行一个 rank；维护中的异构实验已在 DeepSpeed 0.15.3 和
 0.19.2 之间通过。ZeRO-3 的 collective 序列与 DeepSpeed 版本有关，因此
 `--case deepspeed-zero3` 要求两端版本一致，版本不同时会在预检阶段直接报告。
+
+物理 all-to-all-v 用例已在 RTX PRO 5000 与 RTX 3090 Ti WSL 主机之间通过。
+它逐元素检查非对称分片和稀疏分片的 FP32 payload；稀疏分片包含 PRO 5000 →
+3090 Ti 的零字节方向。合并报告记录了 2 次 all-to-all、48 个逻辑字节、24 个
+跨节点字节，节点对单次峰值为 20 字节。
 
 启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
 信息和 native 构建产物。合并报告写入

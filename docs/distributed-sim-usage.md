@@ -216,6 +216,7 @@ The default cases are:
 - FSDP2/DTensor FP32 sharding, optimizer, and full-tensor reconstruction
 - FSDP2 FP16/BF16 parameters with FP32 gradient reduction
 - FSDP2 FP16/BF16 parameter-dtype gradient reduction
+- grouped nonuniform and sparse all-to-all-v across the two physical hosts
 - mismatched collective reduction operators and persistent async errors
 - a missing-peer communicator timeout from the second physical host
 
@@ -225,6 +226,12 @@ heterogeneous run passed across DeepSpeed 0.15.3 and 0.19.2. ZeRO-3 has a
 version-dependent collective sequence, so `--case deepspeed-zero3` requires
 the same DeepSpeed version on both hosts and rejects a mismatch during
 preflight.
+
+The maintained physical all-to-all-v case passed between the RTX PRO 5000
+and RTX 3090 Ti WSL host. It validates exact FP32 payloads for asymmetric
+splits and for a sparse plan with a zero-byte PRO 5000 → 3090 Ti direction.
+The combined report recorded two all-to-all calls, 48 logical bytes, 24
+inter-node bytes, and a 20-byte node-pair peak per operation.
 
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.
