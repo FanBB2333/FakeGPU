@@ -165,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
             "train_micro_batch_size_per_gpu": 1,
             "gradient_accumulation_steps": 1,
             "zero_optimization": {"stage": args.zero_stage},
+            "zero_allow_untested_optimizer": True,
             "fp16": {"enabled": False},
             "bf16": {"enabled": args.precision == "bf16"},
             "optimizer": {"type": "SGD", "params": {"lr": 0.01}},
