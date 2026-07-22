@@ -163,10 +163,8 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
                 "fp16": [{}, {}],
                 "bf16": [{}, {}],
             },
-            "deepspeed": {
-                "zero2-fp32": [{}, {}],
-                "zero3-fp32": [{}, {}],
-            },
+            "deepspeed_zero2": [{}, {}],
+            "deepspeed_zero3": [{}, {}],
             "collective_mismatch": [
                 {"mismatch_result": 5},
                 {"mismatch_result": 5},

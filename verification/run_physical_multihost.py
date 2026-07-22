@@ -1026,11 +1026,18 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             "- FSDP2 low-precision reduction: FP16 and BF16 reduce-scatter "
             "matched the analytical averaged gradients across both nodes."
         )
-    if "deepspeed" in cases:
+    if "deepspeed_zero2" in cases:
         lines.append(
-            "- Hybrid DeepSpeed: ZeRO-2 and ZeRO-3 completed FP32 forward, "
+            "- Hybrid DeepSpeed ZeRO-2: FP32 forward, backward, gradient "
+            "accumulation, optimizer updates, and cross-rank consistency "
+            "completed with one rank on each physical host."
+        )
+    if "deepspeed_zero3" in cases:
+        lines.append(
+            "- Hybrid DeepSpeed ZeRO-3: FP32 parameter partitioning, forward, "
             "backward, gradient accumulation, optimizer updates, and "
-            "cross-rank consistency with one rank on each physical host."
+            "cross-rank consistency completed with matching DeepSpeed "
+            "versions on both physical hosts."
         )
     if "collective_mismatch" in cases:
         results = [
@@ -1123,7 +1130,16 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 f"remote Git commits differ from local {git_commit}: "
                 + ", ".join(mismatches)
             )
-    if "deepspeed" in cases:
+    deepspeed_cases = {
+        "deepspeed-zero2": 2,
+        "deepspeed-zero3": 3,
+    }
+    selected_deepspeed_cases = {
+        name: zero_stage
+        for name, zero_stage in deepspeed_cases.items()
+        if name in cases
+    }
+    if selected_deepspeed_cases:
         unavailable = [
             node.name
             for node, payload in zip(nodes, preflight)
@@ -1134,6 +1150,17 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(
                 "DeepSpeed validation is unavailable on: "
                 + ", ".join(unavailable)
+            )
+    if "deepspeed-zero3" in selected_deepspeed_cases:
+        versions = {str(payload["deepspeed_version"]) for payload in preflight}
+        if len(versions) != 1:
+            details = ", ".join(
+                f"{node.name}={payload['deepspeed_version']}"
+                for node, payload in zip(nodes, preflight)
+            )
+            raise RuntimeError(
+                "DeepSpeed ZeRO-3 requires the same DeepSpeed version on "
+                f"every physical rank; found {details}"
             )
     remote_root = f"/tmp/fakegpu-physical-{args.session}"
     endpoint = f"{args.coordinator_host}:{args.coordinator_port}"
@@ -1241,20 +1268,18 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 for precision in ("fp16", "bf16")
             }
-        if "deepspeed" in cases:
-            case_reports["deepspeed"] = {
-                f"zero{zero_stage}-fp32": _run_deepspeed_case(
-                    nodes,
-                    endpoint=endpoint,
-                    master_host=args.coordinator_host,
-                    master_port=args.master_port,
-                    remote_root=remote_root,
-                    timeout=args.case_timeout,
-                    zero_stage=zero_stage,
-                    precision="fp32",
-                )
-                for zero_stage in (2, 3)
-            }
+        for case_name, zero_stage in selected_deepspeed_cases.items():
+            report_name = case_name.replace("-", "_")
+            case_reports[report_name] = _run_deepspeed_case(
+                nodes,
+                endpoint=endpoint,
+                master_host=args.coordinator_host,
+                master_port=args.master_port,
+                remote_root=remote_root,
+                timeout=args.case_timeout,
+                zero_stage=zero_stage,
+                precision="fp32",
+            )
         if "collective-mismatch" in cases:
             case_reports["collective_mismatch"] = _run_mismatch_case(
                 nodes,
@@ -1304,7 +1329,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         encoding="utf-8",
     )
     expected_collectives: set[str] = set()
-    if "ddp" in cases or "ddp-options" in cases or "deepspeed" in cases:
+    if "ddp" in cases or "ddp-options" in cases or selected_deepspeed_cases:
         expected_collectives.update({"all_reduce", "all_gather"})
     if (
         "fsdp" in cases
@@ -1387,7 +1412,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "fsdp2",
             "fsdp2-mixed",
             "fsdp2-low-reduce",
-            "deepspeed",
+            "deepspeed-zero2",
+            "deepspeed-zero3",
             "collective-mismatch",
             "missing-peer",
         ],
