@@ -140,6 +140,12 @@ def test_training_estimate_captures_backward_and_adamw_state() -> None:
     assert gradient_phase is not None
     assert gradient_phase["peak_live_bytes"] >= parameter_bytes
     assert gradient_phase["peak_bytes_by_category"]["gradient"] > 0
+    forward_phase = report["graph"]["forward_phase"]
+    assert forward_phase is not None
+    assert forward_phase["method"] == "explicit_backward_operator_boundary"
+    assert forward_phase["peak_node"]["index"] < forward_phase[
+        "backward_start_node"
+    ]["index"]
     assert report["graph"]["alias_node_count"] > 0
     assert "optimizer_fused_or_foreach_extra_temporaries" in report["unmodeled_components"]
 

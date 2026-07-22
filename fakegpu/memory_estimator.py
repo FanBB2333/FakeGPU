@@ -445,6 +445,17 @@ def analyze_graph_memory(
     gradient_phase_start_index = (
         min(gradient_producer_indices) if gradient_producer_indices else None
     )
+    backward_phase_start_index = None
+    if gradient_output_start is not None:
+        backward_phase_start_index = next(
+            (
+                index
+                for index, node in enumerate(nodes)
+                if node.op in {"call_function", "call_method", "call_module"}
+                and "backward" in _target_name(node.target).lower()
+            ),
+            None,
+        )
 
     live_keys: set[int] = set()
     live_bytes = 0
@@ -454,6 +465,9 @@ def analyze_graph_memory(
     gradient_phase_peak_bytes = 0
     gradient_phase_peak_index: int | None = None
     gradient_phase_peak_live_keys: set[int] = set()
+    forward_phase_peak_bytes = 0
+    forward_phase_peak_index: int | None = None
+    forward_phase_peak_live_keys: set[int] = set()
     live_bytes_by_node: dict[str, int] = {}
     for index, node in enumerate(nodes):
         for key in records_by_producer.get(index, []):
@@ -465,6 +479,14 @@ def analyze_graph_memory(
             peak_bytes = live_bytes
             peak_index = index
             peak_live_keys = set(live_keys)
+        if (
+            backward_phase_start_index is not None
+            and index < backward_phase_start_index
+            and live_bytes > forward_phase_peak_bytes
+        ):
+            forward_phase_peak_bytes = live_bytes
+            forward_phase_peak_index = index
+            forward_phase_peak_live_keys = set(live_keys)
         if (
             gradient_phase_start_index is not None
             and index >= gradient_phase_start_index
@@ -525,6 +547,41 @@ def analyze_graph_memory(
             },
             "peak_bytes_by_category": dict(
                 sorted(gradient_phase_category_bytes.items())
+            ),
+        }
+
+    forward_phase: dict[str, Any] | None = None
+    if (
+        forward_phase_peak_index is not None
+        and backward_phase_start_index is not None
+    ):
+        forward_phase_category_bytes: dict[str, int] = {}
+        for key in forward_phase_peak_live_keys:
+            record = storage_records[key]
+            category = str(record.get("category") or "unknown")
+            forward_phase_category_bytes[category] = (
+                forward_phase_category_bytes.get(category, 0)
+                + int(record["bytes"])
+            )
+        forward_phase_peak_node = nodes[forward_phase_peak_index]
+        backward_phase_start_node = nodes[backward_phase_start_index]
+        forward_phase = {
+            "method": "explicit_backward_operator_boundary",
+            "backward_start_node": {
+                "index": backward_phase_start_index,
+                "name": backward_phase_start_node.name,
+                "op": backward_phase_start_node.op,
+                "target": _target_name(backward_phase_start_node.target),
+            },
+            "peak_live_bytes": forward_phase_peak_bytes,
+            "peak_node": {
+                "index": forward_phase_peak_index,
+                "name": forward_phase_peak_node.name,
+                "op": forward_phase_peak_node.op,
+                "target": _target_name(forward_phase_peak_node.target),
+            },
+            "peak_bytes_by_category": dict(
+                sorted(forward_phase_category_bytes.items())
             ),
         }
 
@@ -591,6 +648,7 @@ def analyze_graph_memory(
         },
         "peak_bytes_by_category": dict(sorted(category_bytes.items())),
         "final_bytes_by_category": dict(sorted(final_category_bytes.items())),
+        "forward_phase": forward_phase,
         "gradient_production_phase": gradient_phase,
         "top_peak_storages": top_peak_storages,
         "retained_output_storage_count": len(output_keys),

@@ -124,13 +124,39 @@ def test_fully_shard_plan_tracks_per_parameter_padding_and_trainability() -> Non
     assert plan["root_local_parameter_bytes"] == [12, 12]
     assert plan["largest_nested_local_parameter_bytes"] == [16, 16]
     assert plan["forward_collective_workspace_bytes"] == [128, 128]
+    assert plan["forward_activation_workspace_bytes"] == [72, 72]
     assert plan["backward_prefetch_parameter_bytes"] == 56
     assert plan["backward_collective_extra_bytes"] == [24, 24]
+    assert plan["backward_activation_workspace_bytes"] == [232, 232]
     assert plan["optimizer_runtime_workspace_bytes"] == [32, 32]
     assert plan["largest_trainable_unsharded_gradient_bytes"] == 32
     assert plan["largest_trainable_local_gradient_bytes"] == [16, 16]
     assert plan["rank_shards"][0]["adamw_optimizer_temporary_bytes"] == 32
     assert plan["rank_shards"][1]["adamw_optimizer_temporary_bytes"] == 16
+
+
+def test_fully_shard_activation_workspaces_handle_root_only_plan() -> None:
+    plan = build_fully_shard_plan(
+        [
+            {
+                "name": "root",
+                "is_root": True,
+                "parameters": [
+                    {
+                        "name": "root.adapter",
+                        "shape": [4, 2],
+                        "element_size": 4,
+                        "trainable": True,
+                    }
+                ],
+            }
+        ],
+        world_size=2,
+    )
+
+    assert plan["root_unsharded_parameter_bytes"] == 32
+    assert plan["forward_activation_workspace_bytes"] == [32, 32]
+    assert plan["backward_activation_workspace_bytes"] == [32, 32]
 
 
 def test_fully_shard_projection_uses_forward_and_gradient_events() -> None:
@@ -225,8 +251,10 @@ def test_fully_shard_projection_uses_forward_and_gradient_events() -> None:
     assert estimate["local_gradient_bytes"] == 16
     assert estimate["root_parameter_workspace_bytes"] == 16
     assert estimate["forward_collective_workspace_bytes"] == 152
+    assert estimate["forward_activation_workspace_bytes"] == 88
     assert estimate["backward_parameter_workspace_bytes"] == 64
     assert estimate["backward_collective_extra_bytes"] == 16
+    assert estimate["backward_activation_workspace_bytes"] == 328
     assert estimate["optimizer_runtime_workspace_bytes"] == 48
     assert estimate["reduce_scatter_workspace_bytes"] == 16
     assert estimate["captured_graph_peak_bytes"] == 148
@@ -240,3 +268,101 @@ def test_fully_shard_projection_uses_forward_and_gradient_events() -> None:
     assert estimate["local_optimizer_temporary_bytes"] == 24
     assert estimate["optimizer_peak_bytes"] == 172
     assert estimate["first_step_peak_bytes"] == 194
+
+
+def test_fully_shard_projection_separates_forward_and_backward_graph_peaks() -> None:
+    plan = build_fully_shard_plan(
+        [
+            {
+                "name": "root",
+                "is_root": True,
+                "parameters": [
+                    {
+                        "name": "root.weight",
+                        "parameter_index": 0,
+                        "shape": [4, 2],
+                        "element_size": 2,
+                        "trainable": False,
+                    }
+                ],
+            },
+            {
+                "name": "layer",
+                "parameters": [
+                    {
+                        "name": "layer.weight",
+                        "parameter_index": 1,
+                        "shape": [4, 2],
+                        "element_size": 2,
+                        "trainable": False,
+                    },
+                    {
+                        "name": "layer.adapter",
+                        "parameter_index": 2,
+                        "shape": [4, 1],
+                        "element_size": 4,
+                        "trainable": True,
+                    },
+                ],
+            },
+        ],
+        world_size=2,
+    )
+    report = {
+        "static_estimate": {
+            "parameter_bytes": 48,
+            "trainable_parameter_bytes": 16,
+            "frozen_parameter_bytes": 32,
+            "first_step_graph_phase_peak_bytes": 148,
+            "post_graph_live_bytes": 84,
+            "optimizer_phase_peak_bytes": 140,
+            "optimizer_state_bytes": 32,
+            "optimizer_temporary_bytes": 24,
+            "workspace_peak_contribution_bytes": 0,
+            "optimizer_temporary": {"optimizer": "adamw"},
+            "graph": {
+                "peak_node": {"index": 20},
+                "peak_bytes_by_category": {
+                    "frozen_parameter": 32,
+                    "trainable_parameter": 16,
+                    "temporary": 100,
+                },
+                "forward_phase": {
+                    "method": "explicit_backward_operator_boundary",
+                    "backward_start_node": {"index": 10},
+                    "peak_live_bytes": 108,
+                    "peak_bytes_by_category": {
+                        "frozen_parameter": 32,
+                        "trainable_parameter": 16,
+                        "temporary": 60,
+                    },
+                },
+                "gradient_production_phase": {
+                    "peak_live_bytes": 100,
+                    "peak_bytes_by_category": {
+                        "frozen_parameter": 32,
+                        "trainable_parameter": 16,
+                        "gradient": 16,
+                        "temporary": 36,
+                    },
+                },
+                "final_bytes_by_category": {
+                    "frozen_parameter": 32,
+                    "trainable_parameter": 16,
+                    "gradient": 16,
+                    "output": 20,
+                },
+            },
+        }
+    }
+
+    estimate = estimate_fully_shard_sft_memory(report, plan, rank=0)
+
+    assert estimate["forward_phase_method"] == (
+        "explicit_backward_operator_boundary"
+    )
+    assert estimate["forward_captured_peak_bytes"] == 148
+    assert estimate["forward_graph_peak_bytes"] == 148
+    assert estimate["backward_captured_peak_bytes"] == 348
+    assert estimate["backward_graph_peak_bytes"] == 348
+    assert estimate["first_step_peak_bytes"] == 348
