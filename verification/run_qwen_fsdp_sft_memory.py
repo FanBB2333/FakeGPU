@@ -15,6 +15,9 @@ from typing import Any, Mapping
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 WORKER = REPO_ROOT / "verification" / "qwen_fsdp_sft_memory_worker.py"
 CLUSTER_CONFIG = REPO_ROOT / "verification" / "data" / "cluster_hybrid_2r.yaml"
 SCHEMA_VERSION = "fakegpu.qwen_fsdp_sft_memory_comparison.v1"
