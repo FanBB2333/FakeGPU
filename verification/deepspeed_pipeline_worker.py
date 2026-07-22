@@ -162,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             backend="nccl",
             init_method="env://",
             timeout=timedelta(seconds=90),
+            device_id=torch.device("cuda", 0),
         )
 
         stage = "init_deepspeed_backend"
