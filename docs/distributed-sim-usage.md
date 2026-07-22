@@ -259,6 +259,23 @@ node-pair peak per operation. Rank reports contain payload samples, SHA-256
 digests, and full element-validation status without embedding MiB-sized JSON
 arrays.
 
+### Maintained rank-failure recovery snapshot
+
+On 2026-07-22, the four-rank recovery case passed between the RTX PRO 5000
+(compute capability 12.0, PyTorch 2.8.0/CUDA 12.8) and RTX 3090 Ti WSL host
+(compute capability 8.6, PyTorch 2.12.1/CUDA 13.0). Logical ranks 0/2 ran on
+the first host and 1/3 on the second. Rank 2 failed on All-Reduce seqno 1; all
+four workers returned persistent `ncclRemoteError`. The surviving global ranks
+`[0, 1, 3]` received contiguous child ranks `[0, 1, 2]`, and their recovered
+All-Reduce values were all `7.0`.
+
+The report recorded all four failure observers, 16 bytes of attempted failed
+payload, one failure, one recovery, and about `2828.746 us` from failure to
+communicator recovery. The successful post-recovery operation contributed 16
+inter-node bytes with a 16-byte node-pair peak. These tiny-payload timings
+validate control flow and reporting; they are not an elastic-training or NCCL
+failover performance benchmark.
+
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.
 It writes the combined result under

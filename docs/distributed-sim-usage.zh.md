@@ -244,6 +244,20 @@ PRO 5000 → 3090 Ti 的零字节方向。合并报告记录了 2 次 all-to-all
 逻辑数据、6 MiB 跨节点数据，节点对单次峰值为 5 MiB。rank 报告保存 payload
 样本、SHA-256 和完整元素检查状态，不会将 MiB 级数组写入 JSON。
 
+### 当前维护的 rank 故障恢复结果
+
+2026-07-22，四 rank 恢复场景在 RTX PRO 5000（计算能力 12.0、PyTorch
+2.8.0/CUDA 12.8）和 RTX 3090 Ti WSL（计算能力 8.6、PyTorch
+2.12.1/CUDA 13.0）之间通过。逻辑 ranks 0/2 位于第一台主机，1/3 位于
+第二台。rank 2 在 All-Reduce seqno 1 失败，四个 worker 都返回持续可见的
+`ncclRemoteError`。存活的全局 ranks `[0, 1, 3]` 获得连续子 ranks
+`[0, 1, 2]`，恢复后的 All-Reduce 结果均为 `7.0`。
+
+报告记录了四个故障观察者、16 字节失败尝试负载、一次故障、一次恢复，
+从故障到 communicator 恢复约为 `2828.746 us`。恢复后成功的操作产生
+16 字节节点间负载，节点对单次峰值为 16 字节。这组小负载耗时用于验证
+控制流和报告，不代表 elastic training 或 NCCL 故障恢复性能。
+
 启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
 信息和 native 构建产物。合并报告写入
 `build/physical_multihost_validation/<session>/`，其中包含各 rank 结果、
