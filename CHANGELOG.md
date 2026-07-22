@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- A two-rank Hybrid FSDP Qwen SFT memory experiment that reports per-rank allocator phases, parameter/gradient/AdamW shards, and all-gather/reduce-scatter traffic.
+- A FULL_SHARD memory projection that transforms single-GPU ATen storage liveness using per-unit padding, local optimizer storage, and collective workspaces.
+
+### Fixed
+
+- Included the active full-gradient buffer retained until FSDP reduce-scatter emits a local shard, reducing the Qwen graph-peak prediction error from 8.420% to at most 0.758%.
+
+### Validation
+
+- Full local suite: 277 passed and 1 skipped.
+- Qwen3.5-0.8B BF16 FULL_SHARD sequence-16/128 experiments passed on RTX PRO 5000 Blackwell and RTX 3090 Ti Ampere. Overall per-rank errors were 0.730% and 0.633%; both stacks reproduced allocator peaks, shard sizes, optimizer state, and 8,011,593,488 node-pair bytes exactly.
+
 ## v1.5.4 - 2026-07-21
 
 Compared with `v1.5.3`.

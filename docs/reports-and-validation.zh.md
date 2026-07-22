@@ -16,6 +16,7 @@
 | `verification/compare_qwen_memory.py ...` | 对比相同配置下的真实 CUDA/FakeCUDA 加载、推理、虚拟 SMI、token 与 FLOPs |
 | `verification/compare_qwen_sft_memory.py ...` | 对比 Qwen3.5 full、LoRA、原生 NF4 QLoRA SFT 的真实 CUDA、FakeCUDA 与 ATen 静态图峰值 |
 | `verification/summarize_qwen_sft_matrix.py ...` | 汇总 full、LoRA、QLoRA、checkpointing、accumulation 和不同序列长度的 SFT 矩阵 |
+| `verification/run_qwen_fsdp_sft_memory.py ...` | 双 rank Hybrid FSDP Qwen SFT 的参数、梯度、AdamW 分片、阶段峰值、静态投影和 collective 通信量 |
 | `python3 verification/test_coordinator_smoke.py` | coordinator 启停、请求/响应与正常关闭 |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce 语义正确性 |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather 语义正确性 |
@@ -216,5 +217,6 @@ python test/run_error_simulation_suite.py
 15. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_ddp_numerics.py --variant all`。
 16. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_fsdp_numerics.py`。
 17. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_fsdp2_numerics.py ...`，覆盖 FSDP2 参数与梯度精度组合。
-18. 两台 GPU 主机同步到相同 commit 后，执行 `python3 verification/run_physical_multihost.py ...`。
-19. 执行 `python test/run_error_simulation_suite.py`，检查错误模拟覆盖。
+18. 使用匹配的 Qwen SFT 静态报告执行 `python3 verification/run_qwen_fsdp_sft_memory.py ...`。
+19. 两台 GPU 主机同步到相同 commit 后，执行 `python3 verification/run_physical_multihost.py ...`。
+20. 执行 `python test/run_error_simulation_suite.py`，检查错误模拟覆盖。

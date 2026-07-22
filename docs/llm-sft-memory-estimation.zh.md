@@ -191,6 +191,45 @@ Ampere 8.6 与 Blackwell 12.0 使用。backend workspace 仍需针对新的 atte
 16 的真实峰值为 1.051 GiB，checkpointed sequence 128 为 1.171 GiB；对应
 静态峰值为 1.058 GiB 和 1.184 GiB。持久存储和随机 batch 指纹也完全一致。
 
+## 双 rank FSDP 全分片
+
+FSDP 投影以单卡 ATen storage 生命周期报告为基础，按 FSDP unit 分片参数、
+梯度、AdamW state 和 optimizer 临时张量；buffer 与 activation 仍由各 rank
+保留完整副本。graph 峰值还包括最大的 padded parameter all-gather，以及
+reduce-scatter 生成本地 shard 之前保留的完整 unit 梯度。
+
+生成配置完全一致的静态报告，然后执行真实 CUDA 与 fake NCCL 控制器：
+
+```bash
+$PYTHON verification/qwen_sft_memory_worker.py \
+  --mode static --model-dir "$MODEL" --sequence-length 16 \
+  --output build/qwen-fsdp-sft-memory/static.json
+
+$PYTHON verification/run_qwen_fsdp_sft_memory.py \
+  --model-dir "$MODEL" \
+  --static-report build/qwen-fsdp-sft-memory/static.json \
+  --output-dir build/qwen-fsdp-sft-memory/result
+```
+
+控制器对 24 个 decoder layer 和一个 root unit 应用 FULL_SHARD，关闭参数
+prefetch，并在一张物理 GPU 上启动两个 rank。两个进程拥有独立的 CUDA
+allocator，因此可以验证当前主机条件下的每 rank 显存和 collective 语义；
+执行耗时不能作为多 GPU NCCL 性能数据。
+
+| GPU | Seq. | graph 实测 | graph 预测 | graph 误差 | 整体实测 | 整体预测 | 整体误差 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| RTX PRO 5000 Blackwell | 16 | 3.091 GiB | 3.067 GiB | 0.758% | 3.308 GiB | 3.284 GiB | 0.730% |
+| RTX 3090 Ti Ampere | 16 | 3.091 GiB | 3.067 GiB | 0.758% | 3.308 GiB | 3.284 GiB | 0.730% |
+| RTX PRO 5000 Blackwell | 128 | 3.143 GiB | 3.130 GiB | 0.396% | 3.357 GiB | 3.336 GiB | 0.633% |
+| RTX 3090 Ti Ampere | 128 | 3.143 GiB | 3.130 GiB | 0.396% | 3.357 GiB | 3.336 GiB | 0.633% |
+
+1,504,786,048 字节的 BF16 模型在每个 rank 上形成 752,393,024 字节的参数
+shard。最大的 all-gather unit 为 508,561,408 字节，额外的 reduce-scatter
+梯度 workspace 为 254,280,704 字节。一个完整 step 记录 49 次 all-gather
+（5,002,021,376 字节）、25 次 reduce-scatter（3,009,572,096 字节），加上
+最终 barrier 后，node-pair 总量为 8,011,593,488 字节。两套 GPU 软件环境的
+参数、梯度、optimizer state、阶段峰值和通信字节数完全一致。
+
 ## 首步与稳态显存
 
 AdamW 的 moment state 在第一次 `optimizer.step()` 中才创建。静态估算器
@@ -224,9 +263,10 @@ CPU-backed FakeCUDA 的 forward 和整体峰值在这两组测试中较接近真
 ATen storage-liveness 静态图作为 backward 的判定值，仍保留运行时数值用于
 诊断。
 
-当前结果覆盖全参数、LoRA、使用 FP32 scale 或二级 scale 的原生 NF4 QLoRA
-参考实现、单卡、BF16、single-tensor AdamW、gradient checkpointing、
-gradient accumulation 2，以及 Transformers 的 PyTorch fallback
-linear-attention 实现。外部 bitsandbytes fused kernel 与 allocator、paged/量化
-optimizer、Flash Linear Attention、自定义 CUDA/Triton kernel 和多卡 sharding
-仍需分别验证，不能直接套用上述误差。
+当前结果覆盖单卡全参数与 LoRA BF16 训练、使用 FP32 scale 或二级 scale 的
+原生 NF4 QLoRA 参考实现、single-tensor AdamW、gradient checkpointing、
+gradient accumulation 2、Transformers 的 PyTorch fallback linear-attention，
+以及 sequence 16/128 的双 rank 全参数 FSDP。外部 bitsandbytes fused kernel
+与 allocator、paged/量化 optimizer、Flash Linear Attention、自定义
+CUDA/Triton kernel、FSDP LoRA/QLoRA、mixed precision policy 和超过两个 rank
+的场景仍需分别验证，不能直接套用上述误差。

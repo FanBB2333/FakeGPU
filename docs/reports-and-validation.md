@@ -16,6 +16,7 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `verification/compare_qwen_memory.py ...` | matching real-CUDA/FakeCUDA load, inference, virtual-SMI, token, and FLOP comparison |
 | `verification/compare_qwen_sft_memory.py ...` | matching real-CUDA, FakeCUDA, and ATen static-graph peaks for full/LoRA/native-NF4 QLoRA Qwen3.5 SFT |
 | `verification/summarize_qwen_sft_matrix.py ...` | full/LoRA/QLoRA, checkpointing, accumulation, and sequence-length SFT matrix summary |
+| `verification/run_qwen_fsdp_sft_memory.py ...` | two-rank Hybrid FSDP Qwen SFT parameter/gradient/AdamW sharding, phase peaks, static projection, and collective traffic |
 | `python3 verification/test_coordinator_smoke.py` | coordinator startup, request/response, and clean shutdown |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce semantics |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |
@@ -218,5 +219,6 @@ Treat the following as more environment-sensitive or extended coverage:
 15. On a real CUDA host, run `python3 verification/run_hybrid_ddp_numerics.py --variant all`.
 16. On a real CUDA host, run `python3 verification/run_hybrid_fsdp_numerics.py`.
 17. On a real CUDA host, run the FSDP2 matrix with `python3 verification/run_hybrid_fsdp2_numerics.py ...`.
-18. With two synchronized GPU hosts, run `python3 verification/run_physical_multihost.py ...`.
-19. Run `python test/run_error_simulation_suite.py` for error simulation coverage.
+18. Run `python3 verification/run_qwen_fsdp_sft_memory.py ...` with a matching static Qwen SFT report.
+19. With two synchronized GPU hosts, run `python3 verification/run_physical_multihost.py ...`.
+20. Run `python test/run_error_simulation_suite.py` for error simulation coverage.

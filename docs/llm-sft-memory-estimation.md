@@ -173,6 +173,48 @@ GiB and the checkpointed sequence-128 peak at 1.171 GiB byte-for-byte. Their
 static peaks (1.058 GiB and 1.184 GiB), persistent storage, and random-batch
 fingerprints are also identical across the two software stacks.
 
+## Two-rank FSDP full sharding
+
+The FSDP projection starts with the single-GPU ATen storage-liveness report,
+then shards parameters, gradients, AdamW state, and optimizer temporaries per
+FSDP unit. Buffers and activations remain replicated. The graph peak also
+includes the largest padded parameter all-gather and the full-gradient bytes
+retained until reduce-scatter emits the corresponding local shard.
+
+Generate a matching static report, then run the real-CUDA/fake-NCCL controller:
+
+```bash
+$PYTHON verification/qwen_sft_memory_worker.py \
+  --mode static --model-dir "$MODEL" --sequence-length 16 \
+  --output build/qwen-fsdp-sft-memory/static.json
+
+$PYTHON verification/run_qwen_fsdp_sft_memory.py \
+  --model-dir "$MODEL" \
+  --static-report build/qwen-fsdp-sft-memory/static.json \
+  --output-dir build/qwen-fsdp-sft-memory/result
+```
+
+The controller applies FULL_SHARD to 24 decoder layers and one root unit,
+disables parameter prefetch, and launches two ranks on the physical GPU. Each
+process has an independent CUDA allocator. This validates per-rank memory and
+collective semantics on the available single-GPU hosts; its execution time is
+not a multi-GPU NCCL performance measurement.
+
+| GPU | Seq. | Graph observed | Graph predicted | Graph error | Overall observed | Overall predicted | Overall error |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| RTX PRO 5000 Blackwell | 16 | 3.091 GiB | 3.067 GiB | 0.758% | 3.308 GiB | 3.284 GiB | 0.730% |
+| RTX 3090 Ti Ampere | 16 | 3.091 GiB | 3.067 GiB | 0.758% | 3.308 GiB | 3.284 GiB | 0.730% |
+| RTX PRO 5000 Blackwell | 128 | 3.143 GiB | 3.130 GiB | 0.396% | 3.357 GiB | 3.336 GiB | 0.633% |
+| RTX 3090 Ti Ampere | 128 | 3.143 GiB | 3.130 GiB | 0.396% | 3.357 GiB | 3.336 GiB | 0.633% |
+
+The 1,504,786,048-byte BF16 model becomes a 752,393,024-byte local parameter
+shard. The largest all-gather unit is 508,561,408 bytes and its additional
+reduce-scatter gradient workspace is 254,280,704 bytes. A complete step records
+49 all-gathers (5,002,021,376 bytes), 25 reduce-scatters (3,009,572,096 bytes),
+and 8,011,593,488 total node-pair bytes including the final barrier. Both GPU
+software stacks reproduce parameter, gradient, optimizer-state, phase-peak,
+and communication byte counts exactly.
+
 ## First step versus steady state
 
 AdamW moment tensors do not exist until the first optimizer update. The static
@@ -200,7 +242,9 @@ runtime value as a diagnostic.
 
 These results cover single-GPU full-parameter and LoRA BF16 training, the
 PyTorch native-NF4 QLoRA reference with direct or nested scales, single-tensor
-AdamW, gradient checkpointing, accumulation 2, and the Transformers PyTorch
-fallback linear-attention path. External bitsandbytes fused kernels and
-allocator behavior, paged/quantized optimizers, Flash Linear Attention, custom
-CUDA/Triton kernels, and sharded training require separate validation.
+AdamW, gradient checkpointing, accumulation 2, the Transformers PyTorch
+fallback linear-attention path, and two-rank full-parameter FSDP at sequence
+lengths 16 and 128. External bitsandbytes fused kernels and allocator behavior,
+paged/quantized optimizers, Flash Linear Attention, custom CUDA/Triton kernels,
+FSDP LoRA/QLoRA, mixed precision policies, and world sizes above two require
+separate validation.
