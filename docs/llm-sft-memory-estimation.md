@@ -215,6 +215,41 @@ and 8,011,593,488 total node-pair bytes including the final barrier. Both GPU
 software stacks reproduce parameter, gradient, optimizer-state, phase-peak,
 and communication byte counts exactly.
 
+## Two-rank FSDP2 LoRA
+
+LoRA keeps the frozen base in BF16 and PEFT adapters in FP32. The FSDP2 plan
+therefore shards each original parameter independently along dimension zero,
+including per-parameter padding, rather than flattening one unit into a single
+dtype. The projection evaluates separate forward/loss, backward-gradient,
+collective-buffer, and optimizer events.
+
+```bash
+$PYTHON verification/qwen_sft_memory_worker.py \
+  --mode static --model-dir "$MODEL" --training-method lora \
+  --lora-rank 8 --sequence-length 16 \
+  --output build/qwen-fsdp2-lora-s16/static.json
+
+$PYTHON verification/run_qwen_fsdp2_lora_sft_memory.py \
+  --model-dir "$MODEL" \
+  --static-report build/qwen-fsdp2-lora-s16/static.json \
+  --sequence-length 16 --output-dir build/qwen-fsdp2-lora-s16/result
+```
+
+| GPU | Seq. | Overall observed | Overall predicted | Overall error | Largest phase error |
+|---|---:|---:|---:|---:|---:|
+| RTX PRO 5000 Blackwell | 16 | 1.961 GiB | 1.998 GiB | 1.881% | 1.881% |
+| RTX 3090 Ti Ampere | 16 | 1.961 GiB | 1.998 GiB | 1.906% | 1.906% |
+| RTX PRO 5000 Blackwell | 128 | 2.689 GiB | 2.662 GiB | 1.003% | 2.387% |
+| RTX 3090 Ti Ampere | 128 | 2.687 GiB | 2.662 GiB | 0.949% | 2.450% |
+
+The 1,526,431,360-byte mixed-dtype model occupies 763,215,680 bytes of local
+parameter storage per rank. Each rank has 10,822,656 bytes of FP32 adapter
+parameters and gradients plus 21,645,312 bytes of AdamW tensor state. A step
+records 50 byte-packed all-gathers (6,105,725,440 bytes), 24 FP32
+reduce-scatters (43,290,624 bytes), and 6,149,016,080 node-pair bytes including
+the barrier. Ampere/PyTorch 2.12/CUDA 13 and Blackwell/PyTorch 2.8/CUDA 12.8
+produce identical static projections, shard sizes, and communication totals.
+
 ## First step versus steady state
 
 AdamW moment tensors do not exist until the first optimizer update. The static
@@ -243,8 +278,8 @@ runtime value as a diagnostic.
 These results cover single-GPU full-parameter and LoRA BF16 training, the
 PyTorch native-NF4 QLoRA reference with direct or nested scales, single-tensor
 AdamW, gradient checkpointing, accumulation 2, the Transformers PyTorch
-fallback linear-attention path, and two-rank full-parameter FSDP at sequence
-lengths 16 and 128. External bitsandbytes fused kernels and allocator behavior,
-paged/quantized optimizers, Flash Linear Attention, custom CUDA/Triton kernels,
-FSDP LoRA/QLoRA, mixed precision policies, and world sizes above two require
-separate validation.
+fallback linear-attention path, two-rank full-parameter FSDP, and two-rank
+mixed-dtype FSDP2 LoRA at sequence lengths 16 and 128. External bitsandbytes
+fused kernels and allocator behavior, paged/quantized optimizers, Flash Linear
+Attention, custom CUDA/Triton kernels, FSDP2 QLoRA, explicit mixed-precision
+policies, and world sizes above two require separate validation.

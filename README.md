@@ -247,6 +247,26 @@ The maintained Ampere and Blackwell sequence-16/128 experiments keep graph
 and overall peak errors below 0.76% while recording all-gather and
 reduce-scatter traffic.
 
+LoRA uses the FSDP2 controller because its frozen BF16 base and trainable FP32
+adapters cannot be represented by one FSDP1 flat-parameter dtype:
+
+```bash
+python3 verification/qwen_sft_memory_worker.py \
+  --mode static --model-dir /models/Qwen3.5-0.8B \
+  --training-method lora --lora-rank 8 --sequence-length 16 \
+  --output build/qwen-fsdp2-lora-static.json
+
+python3 verification/run_qwen_fsdp2_lora_sft_memory.py \
+  --model-dir /models/Qwen3.5-0.8B \
+  --static-report build/qwen-fsdp2-lora-static.json \
+  --sequence-length 16 --output-dir build/qwen-fsdp2-lora
+```
+
+This path models each DTensor shard and all-gather/reduce-scatter buffer
+lifetime separately. Qwen3.5-0.8B sequence-16/128 runs on both the RTX PRO
+5000 and RTX 3090 Ti keep every phase within 2.46% and overall peaks within
+1.91% while exercising mixed-dtype `uint8` all-gathers.
+
 The native NF4 path needs no external quantization package, but it does not
 claim bitsandbytes fused-kernel equivalence; see
 [LLM SFT Memory Estimation](docs/llm-sft-memory-estimation.md).
