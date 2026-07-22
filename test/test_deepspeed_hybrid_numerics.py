@@ -33,6 +33,30 @@ def _gather_weight(engine: Any, deepspeed: Any) -> list[list[float]]:
         return parameters[0].detach().float().cpu().tolist()
 
 
+def _local_parameter_partition(engine: Any) -> list[float]:
+    parameters = list(engine.module.parameters())
+    if len(parameters) != 1:
+        raise AssertionError(
+            f"expected one model parameter, got {len(parameters)}"
+        )
+    parameter = parameters[0]
+    partition = getattr(parameter, "ds_tensor", None)
+    if partition is None:
+        partition = parameter
+    return partition.detach().float().cpu().reshape(-1).tolist()
+
+
+def _vector_close(
+    actual: list[float],
+    expected: list[float],
+    tolerance: float,
+) -> bool:
+    return len(actual) == len(expected) and all(
+        abs(float(actual_value) - float(expected_value)) <= tolerance
+        for actual_value, expected_value in zip(actual, expected)
+    )
+
+
 def _matrix_close(
     actual: object,
     expected: list[list[float]],
@@ -91,7 +115,9 @@ def main() -> int:
 
         stage = "import_deepspeed"
         import deepspeed
+        from deepspeed.utils.logging import logger as deepspeed_logger
 
+        deepspeed_logger.setLevel(logging.WARNING)
         logging.getLogger("deepspeed").setLevel(logging.WARNING)
         if world_size not in (2, 4):
             raise AssertionError(
@@ -182,6 +208,8 @@ def main() -> int:
         )
         report["parameter_dtype"] = str(next(engine.module.parameters()).dtype)
         report["initial_parameter"] = _gather_weight(engine, deepspeed)
+        initial_local_partition = _local_parameter_partition(engine)
+        report["initial_local_partition"] = initial_local_partition
 
         expected_initial = [[1.0, 0.0]]
         tolerance = 1e-6 if args.precision == "fp32" else 1e-2
@@ -209,10 +237,29 @@ def main() -> int:
             engine.backward(loss)
             engine.step()
             torch.cuda.synchronize()
-            micro_parameters.append(_gather_weight(engine, deepspeed))
             report[f"micro_step_{micro_step}_global_steps"] = int(
                 engine.global_steps
             )
+            if micro_step == 1:
+                local_partition = _local_parameter_partition(engine)
+                report["local_partition_after_micro_step_1"] = local_partition
+                if not _vector_close(
+                    local_partition,
+                    initial_local_partition,
+                    tolerance,
+                ):
+                    raise AssertionError(
+                        "DeepSpeed updated the local parameter partition "
+                        "before the gradient accumulation boundary: "
+                        f"{local_partition} != {initial_local_partition}"
+                    )
+                # ZeRO-3 keeps parameters active between accumulated micro
+                # steps. Re-gathering them here violates DeepSpeed's own
+                # lifecycle, so the full initial value represents the verified
+                # unchanged local partitions.
+                micro_parameters.append(report["initial_parameter"])
+            else:
+                micro_parameters.append(_gather_weight(engine, deepspeed))
 
         report["local_losses"] = losses
         report["parameters_after_micro_steps"] = micro_parameters
