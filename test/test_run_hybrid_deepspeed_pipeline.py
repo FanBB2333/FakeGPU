@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,9 @@ from verification.run_hybrid_deepspeed_pipeline import (
     EXPECTED_FINAL,
     _validate_communication,
     _validate_rank_reports,
+)
+from verification.deepspeed_pipeline_worker import (
+    _enable_batched_deepspeed_p2p,
 )
 
 
@@ -20,6 +24,7 @@ def _rank_report(rank: int) -> dict[str, object]:
         "gradient_accumulation_steps": 1,
         "global_steps": 1,
         "activation_checkpoint_interval": 0,
+        "p2p_api": "send_recv",
         "loss": 6.25,
         "all_stage_parameters": copy.deepcopy(EXPECTED_FINAL[1]),
     }
@@ -31,6 +36,7 @@ def test_validate_rank_reports_accepts_pipeline_update() -> None:
         precision="fp32",
         activation_checkpoint_interval=0,
         gradient_accumulation_steps=1,
+        batched_p2p=False,
     )
 
 
@@ -45,6 +51,20 @@ def test_validate_rank_reports_accepts_two_micro_batches() -> None:
         precision="fp32",
         activation_checkpoint_interval=0,
         gradient_accumulation_steps=2,
+        batched_p2p=False,
+    )
+
+
+def test_validate_rank_reports_accepts_batched_p2p() -> None:
+    reports = [_rank_report(0), _rank_report(1)]
+    for report in reports:
+        report["p2p_api"] = "batch_isend_irecv"
+    _validate_rank_reports(
+        reports,
+        precision="fp32",
+        activation_checkpoint_interval=0,
+        gradient_accumulation_steps=1,
+        batched_p2p=True,
     )
 
 
@@ -60,7 +80,55 @@ def test_validate_rank_reports_rejects_stage_divergence() -> None:
             precision="fp32",
             activation_checkpoint_interval=0,
             gradient_accumulation_steps=1,
+            batched_p2p=False,
         )
+
+
+def test_enable_batched_deepspeed_p2p_uses_one_work_item() -> None:
+    calls: list[tuple[object, object, int]] = []
+
+    class Work:
+        def wait(self) -> str:
+            return "complete"
+
+    class Dist:
+        isend = object()
+        irecv = object()
+
+        @staticmethod
+        def P2POp(operation: object, tensor: object, peer: int) -> tuple[object, object, int]:
+            return operation, tensor, peer
+
+        @staticmethod
+        def batch_isend_irecv(
+            operations: list[tuple[object, object, int]],
+        ) -> list[Work]:
+            calls.extend(operations)
+            return [Work()]
+
+    class Grid:
+        @staticmethod
+        def get_stage_id() -> int:
+            return 0
+
+        @staticmethod
+        def stage_to_global(*, stage_id: int) -> int:
+            return stage_id
+
+    validated: list[tuple[int, int]] = []
+    p2p = SimpleNamespace(
+        _grid=Grid(),
+        _is_valid_send_recv=lambda src, dst: validated.append((src, dst)),
+    )
+    _enable_batched_deepspeed_p2p(Dist, p2p)
+
+    assert p2p.send("activation", 1) == "complete"
+    assert p2p.recv("gradient", 1) == "complete"
+    assert calls == [
+        (Dist.isend, "activation", 1),
+        (Dist.irecv, "gradient", 1),
+    ]
+    assert validated == [(0, 1), (1, 0)]
 
 
 def test_validate_communication_accepts_pipeline_p2p() -> None:

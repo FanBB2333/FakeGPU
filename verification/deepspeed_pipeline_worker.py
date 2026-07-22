@@ -89,6 +89,39 @@ def _gather_stage_parameters(
     ]
 
 
+def _enable_batched_deepspeed_p2p(dist: Any, p2p: Any) -> None:
+    def _run(operation: Any, tensor: Any, peer: int) -> Any:
+        works = dist.batch_isend_irecv(
+            [dist.P2POp(operation, tensor, peer)]
+        )
+        if len(works) != 1:
+            raise RuntimeError(
+                f"expected one batched P2P work item, got {len(works)}"
+            )
+        return works[0].wait()
+
+    def send(tensor: Any, dest_stage: int, async_op: bool = False) -> Any:
+        if async_op:
+            raise AssertionError("batched pipeline P2P requires blocking sends")
+        grid = p2p._grid
+        src_stage = grid.get_stage_id()
+        p2p._is_valid_send_recv(src_stage, dest_stage)
+        dest_rank = grid.stage_to_global(stage_id=dest_stage)
+        return _run(dist.isend, tensor, dest_rank)
+
+    def recv(tensor: Any, src_stage: int, async_op: bool = False) -> Any:
+        if async_op:
+            raise AssertionError("batched pipeline P2P requires blocking receives")
+        grid = p2p._grid
+        dest_stage = grid.get_stage_id()
+        p2p._is_valid_send_recv(src_stage, dest_stage)
+        src_rank = grid.stage_to_global(stage_id=src_stage)
+        return _run(dist.irecv, tensor, src_rank)
+
+    p2p.send = send
+    p2p.recv = recv
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report-dir", type=Path, required=True)
@@ -109,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=(1, 2),
         default=1,
     )
+    parser.add_argument("--batched-p2p", action="store_true")
     args = parser.parse_args(argv)
 
     rank = int(os.environ["RANK"])
@@ -120,6 +154,9 @@ def main(argv: list[str] | None = None) -> int:
         "precision": args.precision,
         "activation_checkpoint_interval": args.activation_checkpoint_interval,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "p2p_api": (
+            "batch_isend_irecv" if args.batched_p2p else "send_recv"
+        ),
         "status": "starting",
     }
     stage = "import_torch"
@@ -132,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         stage = "import_deepspeed"
         import deepspeed
         from deepspeed.pipe import LayerSpec, PipelineModule
+        from deepspeed.runtime.pipe import p2p as deepspeed_p2p
         from deepspeed.utils.logging import logger as deepspeed_logger
 
         deepspeed_logger.setLevel(logging.WARNING)
@@ -172,6 +210,8 @@ def main(argv: list[str] | None = None) -> int:
             timeout=timedelta(seconds=90),
             dist_init_required=False,
         )
+        if args.batched_p2p:
+            _enable_batched_deepspeed_p2p(dist, deepspeed_p2p)
 
         class FirstStage(torch.nn.Linear):
             def __init__(self) -> None:
