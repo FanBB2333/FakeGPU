@@ -31,7 +31,7 @@ def _rank_report(rank: int) -> dict[str, object]:
         "num_local_experts": 1,
         "local_expert_shape": [1, 2, 2],
         "global_steps": 1,
-        "tokens_per_expert": [1.0, 1.0],
+        "tokens_per_expert": [2.0, 1.0] if rank == 0 else [1.0, 2.0],
         "initial_full_w1": copy.deepcopy(EXPECTED_INITIAL_W1),
         "final_full_w1": [
             [[0.9, 0.0], [0.0, 0.9]],

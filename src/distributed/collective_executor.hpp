@@ -62,6 +62,10 @@ struct CollectiveExecutionParticipant {
     std::size_t bytes = 0;
     std::size_t payload_bytes = 0;
     std::vector<char> payload;
+    std::vector<std::size_t> input_splits;
+    std::vector<std::size_t> output_splits;
+    std::size_t input_bytes = 0;
+    std::size_t output_bytes = 0;
 };
 
 struct CollectiveExecutionResult {

@@ -249,6 +249,113 @@ void run_grouped_send_recv_alltoall_case(int world_size) {
     destroy_communicators(comms);
 }
 
+std::size_t variable_split_count(int sender, int receiver) {
+    return 1 + static_cast<std::size_t>((sender * 2 + receiver) % 3);
+}
+
+void run_grouped_send_recv_alltoallv_case(int world_size) {
+    std::vector<ncclComm_t> comms = init_communicators(world_size);
+    std::vector<std::vector<std::size_t>> send_offsets(
+        static_cast<std::size_t>(world_size));
+    std::vector<std::vector<std::size_t>> recv_offsets(
+        static_cast<std::size_t>(world_size));
+    std::vector<std::vector<float>> send_buffers(
+        static_cast<std::size_t>(world_size));
+    std::vector<std::vector<float>> recv_buffers(
+        static_cast<std::size_t>(world_size));
+    std::vector<ncclResult_t> results(
+        static_cast<std::size_t>(world_size), ncclInternalError);
+    std::vector<std::thread> threads;
+
+    for (int rank = 0; rank < world_size; ++rank) {
+        std::size_t send_total = 0;
+        std::size_t recv_total = 0;
+        for (int peer = 0; peer < world_size; ++peer) {
+            send_offsets[static_cast<std::size_t>(rank)].push_back(send_total);
+            recv_offsets[static_cast<std::size_t>(rank)].push_back(recv_total);
+            send_total += variable_split_count(rank, peer);
+            recv_total += variable_split_count(peer, rank);
+        }
+        send_buffers[static_cast<std::size_t>(rank)].assign(send_total, 0.0f);
+        recv_buffers[static_cast<std::size_t>(rank)].assign(recv_total, -1.0f);
+        for (int peer = 0; peer < world_size; ++peer) {
+            const std::size_t count = variable_split_count(rank, peer);
+            const std::size_t offset =
+                send_offsets[static_cast<std::size_t>(rank)]
+                            [static_cast<std::size_t>(peer)];
+            for (std::size_t index = 0; index < count; ++index) {
+                send_buffers[static_cast<std::size_t>(rank)][offset + index] =
+                    static_cast<float>(1000 * rank + 100 * peer) +
+                    static_cast<float>(index);
+            }
+        }
+
+        threads.emplace_back([&, rank]() {
+            require_result(
+                ncclGroupStart(),
+                ncclSuccess,
+                "all-to-all-v ncclGroupStart failed");
+            for (int peer = 0; peer < world_size; ++peer) {
+                require_result(
+                    ncclSend(
+                        send_buffers[static_cast<std::size_t>(rank)].data() +
+                            send_offsets[static_cast<std::size_t>(rank)]
+                                        [static_cast<std::size_t>(peer)],
+                        variable_split_count(rank, peer),
+                        ncclFloat32,
+                        peer,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr),
+                    ncclSuccess,
+                    "grouped all-to-all-v send enqueue failed");
+                require_result(
+                    ncclRecv(
+                        recv_buffers[static_cast<std::size_t>(rank)].data() +
+                            recv_offsets[static_cast<std::size_t>(rank)]
+                                        [static_cast<std::size_t>(peer)],
+                        variable_split_count(peer, rank),
+                        ncclFloat32,
+                        peer,
+                        comms[static_cast<std::size_t>(rank)],
+                        nullptr),
+                    ncclSuccess,
+                    "grouped all-to-all-v recv enqueue failed");
+            }
+            results[static_cast<std::size_t>(rank)] = ncclGroupEnd();
+        });
+    }
+
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+
+    for (int rank = 0; rank < world_size; ++rank) {
+        require_result(
+            results[static_cast<std::size_t>(rank)],
+            ncclSuccess,
+            "grouped send/recv all-to-all-v failed");
+        for (int sender = 0; sender < world_size; ++sender) {
+            const std::size_t count = variable_split_count(sender, rank);
+            const std::size_t offset =
+                recv_offsets[static_cast<std::size_t>(rank)]
+                            [static_cast<std::size_t>(sender)];
+            for (std::size_t index = 0; index < count; ++index) {
+                const float expected =
+                    static_cast<float>(1000 * sender + 100 * rank) +
+                    static_cast<float>(index);
+                require(
+                    std::fabs(
+                        recv_buffers[static_cast<std::size_t>(rank)]
+                                    [offset + index] -
+                        expected) < 1e-6f,
+                    "grouped all-to-all-v payload mismatch");
+            }
+        }
+    }
+
+    destroy_communicators(comms);
+}
+
 void run_second_op_mismatch_case() {
     std::vector<ncclComm_t> comms = init_communicators(2);
     std::vector<float> rank0_values = {1.0f, 10.0f};
@@ -301,6 +408,8 @@ int main() {
         run_success_case(4);
         run_grouped_send_recv_alltoall_case(2);
         run_grouped_send_recv_alltoall_case(4);
+        run_grouped_send_recv_alltoallv_case(2);
+        run_grouped_send_recv_alltoallv_case(4);
         run_second_op_mismatch_case();
         std::cout << "group semantics test passed" << std::endl;
         return 0;

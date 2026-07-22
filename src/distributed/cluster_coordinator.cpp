@@ -10,6 +10,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <unordered_map>
+#include <vector>
 
 namespace fake_gpu::distributed {
 
@@ -119,6 +120,48 @@ std::size_t parse_optional_size(
         return default_value;
     }
     return parse_required_size(fields, key, ok, error);
+}
+
+bool parse_optional_size_list(
+    const std::unordered_map<std::string, std::string>& fields,
+    const char* key,
+    std::vector<std::size_t>& values,
+    std::string& error) {
+    values.clear();
+    auto it = fields.find(key);
+    if (it == fields.end()) {
+        return true;
+    }
+    if (it->second.empty()) {
+        error = std::string("empty size list field: ") + key;
+        return false;
+    }
+
+    std::size_t begin = 0;
+    while (begin <= it->second.size()) {
+        const std::size_t end = it->second.find(',', begin);
+        const std::string item = it->second.substr(
+            begin,
+            end == std::string::npos ? std::string::npos : end - begin);
+        try {
+            std::size_t consumed = 0;
+            const std::uint64_t parsed = std::stoull(item, &consumed, 10);
+            if (consumed != item.size() ||
+                parsed > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::size_t>::max())) {
+                throw std::invalid_argument("invalid size");
+            }
+            values.push_back(static_cast<std::size_t>(parsed));
+        } catch (...) {
+            error = std::string("invalid size list field: ") + key;
+            return false;
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        begin = end + 1;
+    }
+    return true;
 }
 
 }  // namespace
@@ -526,56 +569,98 @@ void ClusterCoordinator::handle_client(int client_fd) {
                                                 response = format_error_response("bad_request", error);
                                             } else {
                                                 collective_request.payload = request.payload;
-                                                auto dtype_it = request.fields.find("dtype");
-                                                auto reduce_it = request.fields.find("reduce_op");
-                                                if (dtype_it == request.fields.end()) {
+                                                const bool has_input_splits =
+                                                    request.fields.find("input_splits") !=
+                                                    request.fields.end();
+                                                const bool has_output_splits =
+                                                    request.fields.find("output_splits") !=
+                                                    request.fields.end();
+                                                if (has_input_splits != has_output_splits) {
                                                     response = format_error_response(
                                                         "bad_request",
-                                                        "missing required field: dtype");
-                                                } else if (reduce_it == request.fields.end()) {
+                                                        "input_splits and output_splits must be provided together");
+                                                } else if (!parse_optional_size_list(
+                                                               request.fields,
+                                                               "input_splits",
+                                                               collective_request.input_splits,
+                                                               error) ||
+                                                           !parse_optional_size_list(
+                                                               request.fields,
+                                                               "output_splits",
+                                                               collective_request.output_splits,
+                                                               error)) {
                                                     response = format_error_response(
-                                                        "bad_request",
-                                                        "missing required field: reduce_op");
-                                                } else if (!parse_collective_data_type(
-                                                               dtype_it->second,
-                                                               collective_request.dtype)) {
-                                                    response = format_error_response(
-                                                        "bad_request",
-                                                        "unsupported dtype");
-                                                } else if (!parse_collective_reduce_op(
-                                                               reduce_it->second,
-                                                               collective_request.reduce_op)) {
-                                                    response = format_error_response(
-                                                        "bad_request",
-                                                        "unsupported reduce_op");
+                                                        "bad_request", error);
                                                 } else {
-                                                    if (request.command == "ALLREDUCE") {
-                                                        collective_request.type = CollectiveType::AllReduce;
-                                                    } else if (request.command == "REDUCE") {
-                                                        collective_request.type = CollectiveType::Reduce;
-                                                    } else if (request.command == "BROADCAST") {
-                                                        collective_request.type = CollectiveType::Broadcast;
-                                                    } else if (request.command == "ALLGATHER") {
-                                                        collective_request.type = CollectiveType::AllGather;
-                                                    } else if (request.command == "ALLTOALL") {
-                                                        collective_request.type = CollectiveType::AllToAll;
-                                                    } else {
-                                                        collective_request.type = CollectiveType::ReduceScatter;
+                                                    collective_request.input_bytes = parse_optional_size(
+                                                        request.fields,
+                                                        "input_bytes",
+                                                        collective_request.bytes,
+                                                        ok,
+                                                        error);
+                                                    if (ok) {
+                                                        collective_request.output_bytes = parse_optional_size(
+                                                            request.fields,
+                                                            "output_bytes",
+                                                            collective_request.bytes,
+                                                            ok,
+                                                            error);
                                                     }
-                                                    CollectiveSubmitResult result =
-                                                        communicator_registry_.submit_collective(collective_request);
-                                                    if (!result.ok) {
+                                                    auto dtype_it = request.fields.find("dtype");
+                                                    auto reduce_it = request.fields.find("reduce_op");
+                                                    if (!ok) {
                                                         response = format_error_response(
-                                                            result.error_code,
-                                                            result.error_detail);
+                                                            "bad_request", error);
+                                                    } else if (dtype_it == request.fields.end()) {
+                                                        response = format_error_response(
+                                                            "bad_request",
+                                                            "missing required field: dtype");
+                                                    } else if (reduce_it == request.fields.end()) {
+                                                        response = format_error_response(
+                                                            "bad_request",
+                                                            "missing required field: reduce_op");
+                                                    } else if (!parse_collective_data_type(
+                                                                   dtype_it->second,
+                                                                   collective_request.dtype)) {
+                                                        response = format_error_response(
+                                                            "bad_request",
+                                                            "unsupported dtype");
+                                                    } else if (!parse_collective_reduce_op(
+                                                                   reduce_it->second,
+                                                                   collective_request.reduce_op)) {
+                                                        response = format_error_response(
+                                                            "bad_request",
+                                                            "unsupported reduce_op");
                                                     } else {
-                                                        response_payload = std::move(result.output_payload);
-                                                        response = format_ok_response({
-                                                            {"comm_id", std::to_string(collective_request.comm_id)},
-                                                            {"seqno", std::to_string(result.seqno)},
-                                                            {"rank", std::to_string(collective_request.rank)},
-                                                            {"op", collective_type_name(collective_request.type)},
-                                                        });
+                                                        if (request.command == "ALLREDUCE") {
+                                                            collective_request.type = CollectiveType::AllReduce;
+                                                        } else if (request.command == "REDUCE") {
+                                                            collective_request.type = CollectiveType::Reduce;
+                                                        } else if (request.command == "BROADCAST") {
+                                                            collective_request.type = CollectiveType::Broadcast;
+                                                        } else if (request.command == "ALLGATHER") {
+                                                            collective_request.type = CollectiveType::AllGather;
+                                                        } else if (request.command == "ALLTOALL") {
+                                                            collective_request.type = CollectiveType::AllToAll;
+                                                        } else {
+                                                            collective_request.type = CollectiveType::ReduceScatter;
+                                                        }
+                                                        CollectiveSubmitResult result =
+                                                            communicator_registry_.submit_collective(
+                                                                collective_request);
+                                                        if (!result.ok) {
+                                                            response = format_error_response(
+                                                                result.error_code,
+                                                                result.error_detail);
+                                                        } else {
+                                                            response_payload = std::move(result.output_payload);
+                                                            response = format_ok_response({
+                                                                {"comm_id", std::to_string(collective_request.comm_id)},
+                                                                {"seqno", std::to_string(result.seqno)},
+                                                                {"rank", std::to_string(collective_request.rank)},
+                                                                {"op", collective_type_name(collective_request.type)},
+                                                            });
+                                                        }
                                                     }
                                                 }
                                             }

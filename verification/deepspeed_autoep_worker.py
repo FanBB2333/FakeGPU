@@ -182,9 +182,9 @@ def main(argv: list[str] | None = None) -> int:
         model = TinyAutoEPModel()
         reference_model = copy.deepcopy(model)
         input_values = (
-            [[[4.0, 1.0], [1.0, 4.0]]]
+            [[[4.0, 1.0], [3.0, 1.0], [1.0, 4.0]]]
             if rank == 0
-            else [[[3.0, 1.0], [1.0, 3.0]]]
+            else [[[4.0, 1.0], [1.0, 4.0], [1.0, 3.0]]]
         )
         reference_input = torch.tensor(input_values, dtype=torch.float32)
         with torch.no_grad():
@@ -329,7 +329,12 @@ def main(argv: list[str] | None = None) -> int:
             raise AssertionError(f"missing expert gradients: {gradient_norms}")
         if min(parameter_deltas.values()) <= 0:
             raise AssertionError(f"expert parameters did not update: {parameter_deltas}")
-        if not _nested_close(block.tokens_per_expert.cpu().tolist(), [1.0, 1.0], 0):
+        expected_tokens = [2.0, 1.0] if rank == 0 else [1.0, 2.0]
+        if not _nested_close(
+            block.tokens_per_expert.cpu().tolist(),
+            expected_tokens,
+            0,
+        ):
             raise AssertionError(
                 f"unexpected expert utilization: {block.tokens_per_expert}"
             )

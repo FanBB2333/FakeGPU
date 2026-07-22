@@ -56,7 +56,6 @@ def _validate_rank_reports(
         "num_local_experts": 1,
         "local_expert_shape": [1, 2, 2],
         "global_steps": 1,
-        "tokens_per_expert": [1.0, 1.0],
     }
     final_weights: object | None = None
     for rank, report in enumerate(reports):
@@ -72,6 +71,12 @@ def _validate_rank_reports(
             raise AssertionError(f"AutoEP rank {rank} identity mismatch")
         if report.get("expert_parallel_rank") != rank:
             raise AssertionError(f"AutoEP rank {rank} EP rank mismatch")
+        expected_tokens = [2.0, 1.0] if rank == 0 else [1.0, 2.0]
+        if report.get("tokens_per_expert") != expected_tokens:
+            raise AssertionError(
+                f"AutoEP rank {rank} token routing mismatch: "
+                f"{report.get('tokens_per_expert')} != {expected_tokens}"
+            )
         if not _nested_close(
             report.get("initial_full_w1"),
             EXPECTED_INITIAL_W1,
