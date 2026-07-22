@@ -128,6 +128,15 @@ timeout, explicitly exclude rank 2 with `ncclCommShrink`, and verify the
 recovered sum `7.0`. The report marks this as `source=collective_timeout` and
 keeps the submitted ranks `[0, 1, 3]` separate from the inferred absent rank.
 
+A separate framework check runs one worker per physical host under
+`torchrun --max-restarts=1`. After the initial All-Reduce, one worker exits
+with code `86` while its communicator is active. Both agents replace their
+workers, exchange their possibly asymmetric local restart counters through the
+store, and enter the same recovery generation. The restarted DDP step verifies
+averaged gradients, optimizer parameters, and cross-rank equality. Run the
+local Gloo version with `./ftest elastic_ddp`; the physical version is
+`verification/run_physical_multihost.py --case elastic-ddp-restart`.
+
 Use `python3 verification/test_fault_injection_recovery.py` for report-schema
 checks, or `./ftest distributed_resilience` for the complete maintained
 failure suite. Cluster JSON and Markdown reports contain the failed rank,
@@ -177,6 +186,7 @@ This runs the Python-layer error tests and generates a unified HTML report at `t
 
 ```bash
 python3 verification/test_fault_injection_recovery.py
+./ftest elastic_ddp
 ./ftest distributed_resilience
 ```
 
@@ -194,7 +204,7 @@ python test/test_error_gradient.py          # E7: 3 tests
 ## Limitations
 
 - E1–E5 and E7 are Python-level checks; E6 runs through the native NCCL shim and coordinator.
-- E6 targets direct collectives in `simulate` mode. Its maintained harness covers a controlled operating-system process exit, but grouped/P2P injection, heartbeat detection, automatic membership changes, and training-framework restart remain unsupported.
+- E6 direct failure injection targets collectives in `simulate` mode. The maintained Hybrid check also covers fixed-size `torchrun` worker-group restart; grouped/P2P injection, heartbeat detection, automatic membership changes, and world-size changes remain unsupported.
 - The maintained shrink path requires an explicit exclusion list; excluded ranks must not call `ncclCommShrink`.
 - `tensor.device` still reports `cpu` — the fake device index is tracked internally.
 - No stream or event error simulation.
