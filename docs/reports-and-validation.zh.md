@@ -17,7 +17,7 @@
 | `verification/compare_qwen_sft_memory.py ...` | 对比 Qwen3.5 full、LoRA、原生 NF4 QLoRA SFT 的真实 CUDA、FakeCUDA 与 ATen 静态图峰值 |
 | `verification/summarize_qwen_sft_matrix.py ...` | 汇总 full、LoRA、QLoRA、checkpointing、accumulation 和不同序列长度的 SFT 矩阵 |
 | `verification/run_qwen_fsdp_sft_memory.py ...` | 双 rank Hybrid FSDP Qwen SFT 的参数、梯度、AdamW 分片、阶段峰值、静态投影和 collective 通信量 |
-| `verification/run_qwen_fsdp2_lora_sft_memory.py ...` | 双 rank mixed-BF16/FP32 FSDP2 LoRA 的 DTensor shard、阶段峰值、字节打包 all-gather、FP32 reduce-scatter 与静态投影 |
+| `verification/run_qwen_fsdp2_lora_sft_memory.py ...` | 双/四 rank mixed-BF16/FP32 FSDP2 LoRA 的 DTensor shard、阶段峰值、字节打包 all-gather、FP32 reduce-scatter 与静态投影 |
 | `python3 verification/test_coordinator_smoke.py` | coordinator 启停、请求/响应与正常关闭 |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce 语义正确性 |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather 语义正确性 |
