@@ -22,6 +22,7 @@ from typing import Any, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_CONFIG_RELATIVE = Path("verification/data/cluster_tcp_4r.yaml")
 DDP_WORKER_RELATIVE = Path("test/test_ddp_hybrid_numerics.py")
+ELASTIC_DDP_WORKER_RELATIVE = Path("verification/elastic_ddp_worker.py")
 FSDP_WORKER_RELATIVE = Path("test/test_fsdp_hybrid_numerics.py")
 FSDP2_WORKER_RELATIVE = Path("test/test_fsdp2_hybrid_numerics.py")
 DEEPSPEED_WORKER_RELATIVE = Path("test/test_deepspeed_hybrid_numerics.py")
@@ -245,6 +246,7 @@ payload = {
     "coordinator_exists": pathlib.Path("build/fakegpu-coordinator").is_file(),
     "nccl_exists": pathlib.Path("build/libnccl.so.2").is_file(),
     "ddp_worker_exists": pathlib.Path("test/test_ddp_hybrid_numerics.py").is_file(),
+    "elastic_ddp_worker_exists": pathlib.Path("verification/elastic_ddp_worker.py").is_file(),
     "fsdp_worker_exists": pathlib.Path("test/test_fsdp_hybrid_numerics.py").is_file(),
     "fsdp2_worker_exists": pathlib.Path("test/test_fsdp2_hybrid_numerics.py").is_file(),
     "deepspeed_worker_exists": pathlib.Path("test/test_deepspeed_hybrid_numerics.py").is_file(),
@@ -271,6 +273,7 @@ print(json.dumps(payload, sort_keys=True))
         "coordinator_exists",
         "nccl_exists",
         "ddp_worker_exists",
+        "elastic_ddp_worker_exists",
         "fsdp_worker_exists",
         "fsdp2_worker_exists",
         "fault_worker_exists",
@@ -394,6 +397,148 @@ def _nested_allclose(
         ):
             return False
     return True
+
+
+def _safe_report_component(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-.")
+    return normalized or "node"
+
+
+def _validate_elastic_ddp_restart_reports(
+    initial: list[dict[str, Any]],
+    restarted: list[dict[str, Any]],
+    *,
+    node_names: list[str],
+    failed_node: str,
+) -> dict[str, Any]:
+    if len(initial) != 2 or len(restarted) != 2:
+        raise AssertionError(
+            "elastic DDP requires two initial and two restarted worker reports"
+        )
+    if len(set(node_names)) != 2 or failed_node not in node_names:
+        raise AssertionError("elastic DDP node metadata is invalid")
+
+    initial_by_node = {str(item.get("node_name")): item for item in initial}
+    restarted_by_node = {str(item.get("node_name")): item for item in restarted}
+    if set(initial_by_node) != set(node_names):
+        raise AssertionError(f"initial elastic node reports mismatch: {initial}")
+    if set(restarted_by_node) != set(node_names):
+        raise AssertionError(f"restarted elastic node reports mismatch: {restarted}")
+
+    expected_states = {
+        node_name: (
+            "expected_process_exit"
+            if node_name == failed_node
+            else "waiting_for_restart"
+        )
+        for node_name in node_names
+    }
+    for node_name, report in initial_by_node.items():
+        if report.get("backend") != "nccl":
+            raise AssertionError(f"physical elastic backend mismatch: {report}")
+        if report.get("status") != expected_states[node_name]:
+            raise AssertionError(f"unexpected initial elastic state: {report}")
+        if int(report.get("restart_count", -1)) != 0:
+            raise AssertionError(f"invalid initial restart count: {report}")
+        if int(report.get("max_restarts", -1)) != 1:
+            raise AssertionError(f"invalid elastic restart limit: {report}")
+        if int(report.get("world_size", 0)) != 2:
+            raise AssertionError(f"invalid initial elastic world size: {report}")
+        if abs(float(report.get("initial_all_reduce_value", 0.0)) - 3.0) > 1e-6:
+            raise AssertionError(f"initial elastic all-reduce mismatch: {report}")
+        if report.get("initial_process_group_destroyed_before_exit") is not False:
+            raise AssertionError(
+                f"physical elastic worker cleaned up before failure: {report}"
+            )
+    failed = initial_by_node[failed_node]
+    if (
+        failed.get("selected_for_initial_exit") is not True
+        or int(failed.get("expected_process_exit_code", -1))
+        != EXPECTED_PROCESS_EXIT_CODE
+    ):
+        raise AssertionError(f"elastic failure marker is invalid: {failed}")
+    survivors = [
+        report
+        for node_name, report in initial_by_node.items()
+        if node_name != failed_node
+    ]
+    if any(report.get("selected_for_initial_exit") is not False for report in survivors):
+        raise AssertionError(f"unexpected elastic failure selection: {survivors}")
+    if sorted(int(item.get("rank", -1)) for item in initial) != [0, 1]:
+        raise AssertionError(f"initial elastic ranks are invalid: {initial}")
+
+    expected_gradient = [[1.5, 3.0]]
+    expected_parameters = [[0.85, -0.3]]
+    for report in restarted:
+        if report.get("backend") != "nccl":
+            raise AssertionError(f"restarted elastic backend mismatch: {report}")
+        if report.get("status") != "success":
+            raise AssertionError(f"restarted elastic worker failed: {report}")
+        if int(report.get("restart_count", -1)) != 1:
+            raise AssertionError(f"restarted elastic count is invalid: {report}")
+        if int(report.get("max_restarts", -1)) != 1:
+            raise AssertionError(f"restarted elastic limit is invalid: {report}")
+        if int(report.get("world_size", 0)) != 2:
+            raise AssertionError(f"restarted elastic world size is invalid: {report}")
+        if not _nested_allclose(report.get("gradient"), expected_gradient):
+            raise AssertionError(f"restarted elastic gradient mismatch: {report}")
+        if not _nested_allclose(
+            report.get("parameters_after_step"),
+            expected_parameters,
+        ):
+            raise AssertionError(f"restarted elastic parameters mismatch: {report}")
+        gathered = report.get("gathered_parameter_vectors")
+        if not _nested_allclose(gathered, expected_parameters * 2):
+            raise AssertionError(
+                f"restarted elastic parameters differ across ranks: {report}"
+            )
+        if not report.get("physical_device_name"):
+            raise AssertionError(f"physical GPU metadata is missing: {report}")
+    if sorted(int(item.get("rank", -1)) for item in restarted) != [0, 1]:
+        raise AssertionError(f"restarted elastic ranks are invalid: {restarted}")
+    if any(
+        int(initial_by_node[node_name]["pid"])
+        == int(restarted_by_node[node_name]["pid"])
+        for node_name in node_names
+    ):
+        raise AssertionError("torchrun did not replace every physical worker")
+
+    run_ids = {
+        str(item.get("run_id", "")) for item in initial + restarted
+    }
+    if len(run_ids) != 1 or not next(iter(run_ids)):
+        raise AssertionError(f"elastic run IDs are inconsistent: {run_ids}")
+    run_id = next(iter(run_ids))
+    return {
+        "schema_version": "fakegpu.elastic_ddp_validation.v1",
+        "status": "success",
+        "backend": "nccl",
+        "world_size": 2,
+        "failed_node": failed_node,
+        "failure_exit_code": EXPECTED_PROCESS_EXIT_CODE,
+        "restart_count": 1,
+        "run_id": run_id,
+        "initial_rank_assignments": {
+            node_name: int(initial_by_node[node_name]["rank"])
+            for node_name in node_names
+        },
+        "restarted_rank_assignments": {
+            node_name: int(restarted_by_node[node_name]["rank"])
+            for node_name in node_names
+        },
+        "initial_pids": {
+            node_name: int(initial_by_node[node_name]["pid"])
+            for node_name in node_names
+        },
+        "restarted_pids": {
+            node_name: int(restarted_by_node[node_name]["pid"])
+            for node_name in node_names
+        },
+        "gradient": restarted[0]["gradient"],
+        "parameters_after_step": restarted[0]["parameters_after_step"],
+        "initial_workers": initial,
+        "restarted_workers": restarted,
+    }
 
 
 def _validate_deepspeed_reports(
@@ -604,6 +749,91 @@ def _run_ddp_case(
                     f"{report.get(field)} != {expected_value}"
                 )
     return reports
+
+
+def _run_elastic_ddp_restart_case(
+    nodes: list[NodeSpec],
+    *,
+    endpoint: str,
+    rendezvous_host: str,
+    rendezvous_port: int,
+    remote_root: str,
+    session: str,
+    timeout: float,
+) -> dict[str, Any]:
+    report_dir = f"{remote_root}/elastic-ddp-restart"
+    timeout_ms = max(1, round(timeout * 1000))
+    process_group_timeout = max(10, min(60, round(timeout / 2)))
+    failed_node = nodes[1]
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    for node in nodes:
+        env = _distributed_env(
+            node=node,
+            endpoint=endpoint,
+            timeout_ms=timeout_ms,
+            hybrid=True,
+        )
+        env["LD_PRELOAD"] = f"{node.repo}/build/libnccl.so.2"
+        argv = [
+            node.python,
+            "-m",
+            "torch.distributed.run",
+            "--nnodes=2",
+            "--nproc-per-node=1",
+            "--max-restarts=1",
+            "--monitor-interval=0.2",
+            "--rdzv-backend=c10d",
+            f"--rdzv-endpoint={rendezvous_host}:{rendezvous_port}",
+            f"--rdzv-id={session}-elastic-ddp",
+            str(ELASTIC_DDP_WORKER_RELATIVE),
+            f"--report-dir={report_dir}",
+            f"--node-name={node.name}",
+            "--backend=nccl",
+            f"--timeout-seconds={process_group_timeout}",
+            f"--survivor-wait-seconds={process_group_timeout}",
+        ]
+        if node == failed_node:
+            argv.append("--fail-this-node")
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        env=env,
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+    _collect_processes(
+        processes,
+        timeout=timeout,
+        label="Hybrid elastic DDP worker restart",
+    )
+
+    initial = [
+        _read_remote_json(
+            node,
+            f"{report_dir}/attempt_0_{_safe_report_component(node.name)}_local_0.json",
+        )
+        for node in nodes
+    ]
+    restarted = [
+        _read_remote_json(
+            node,
+            f"{report_dir}/attempt_1_{_safe_report_component(node.name)}_local_0.json",
+        )
+        for node in nodes
+    ]
+    return _validate_elastic_ddp_restart_reports(
+        initial,
+        restarted,
+        node_names=[node.name for node in nodes],
+        failed_node=failed_node.name,
+    )
 
 
 def _run_fsdp_case(
@@ -1376,6 +1606,7 @@ def _validate_cluster_report(
     expected_world_size: int = 2,
     expect_recovery: bool = False,
     expect_process_exit: bool = False,
+    expect_elastic_restart: bool = False,
 ) -> dict[str, Any]:
     report = json.loads(path.read_text(encoding="utf-8"))
     if report.get("schema_version") != "cluster_report.v1":
@@ -1388,6 +1619,10 @@ def _validate_cluster_report(
         raise AssertionError(f"unexpected physical topology: {cluster}")
     if cluster.get("coordinator_transport") != "tcp":
         raise AssertionError(f"unexpected coordinator transport: {cluster}")
+    if expect_elastic_restart and int(cluster.get("communicators", 0)) < 2:
+        raise AssertionError(
+            f"elastic restart did not initialize a new communicator: {cluster}"
+        )
     if expected_collectives:
         for collective in sorted(expected_collectives):
             if report["collectives"][collective]["calls"] <= 0:
@@ -1519,6 +1754,15 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
         lines.append(
             "- Hybrid DDP: averaged gradient `[1.5, 3.0]`; updated "
             "parameters `[0.85, -0.30]` on both ranks."
+        )
+    if "elastic_ddp_restart" in cases:
+        elastic = cases["elastic_ddp_restart"]
+        lines.append(
+            "- Elastic DDP restart: one worker exited with code "
+            f"`{elastic['failure_exit_code']}` while its NCCL communicator "
+            "was active; torchrun replaced both workers and the restarted "
+            "gradient `[1.5, 3.0]` and parameters `[0.85, -0.30]` matched "
+            "on both physical hosts."
         )
     if "ddp_options" in cases:
         lines.append(
@@ -1666,6 +1910,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 
     cases = args.case or [
         "ddp",
+        "elastic-ddp-restart",
         "ddp-options",
         "fsdp",
         "fsdp2",
@@ -1776,6 +2021,18 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 master_port=args.master_port,
                 remote_root=remote_root,
                 timeout=args.case_timeout,
+            )
+        if "elastic-ddp-restart" in cases:
+            case_reports["elastic_ddp_restart"] = (
+                _run_elastic_ddp_restart_case(
+                    nodes,
+                    endpoint=endpoint,
+                    rendezvous_host=args.coordinator_host,
+                    rendezvous_port=args.elastic_port,
+                    remote_root=remote_root,
+                    session=args.session,
+                    timeout=args.case_timeout,
+                )
             )
         if "ddp-options" in cases:
             case_reports["ddp_options"] = {
@@ -1934,7 +2191,12 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         encoding="utf-8",
     )
     expected_collectives: set[str] = set()
-    if "ddp" in cases or "ddp-options" in cases or selected_deepspeed_cases:
+    if (
+        "ddp" in cases
+        or "elastic-ddp-restart" in cases
+        or "ddp-options" in cases
+        or selected_deepspeed_cases
+    ):
         expected_collectives.update({"all_reduce", "all_gather"})
     if selected_deepspeed_pipeline:
         expected_collectives.add("all_gather")
@@ -1961,6 +2223,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         ),
         expect_recovery="fault-shrink" in cases,
         expect_process_exit="process-exit-shrink" in cases,
+        expect_elastic_restart="elastic-ddp-restart" in cases,
     )
 
     report: dict[str, Any] = {
@@ -2004,8 +2267,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run repeatable Hybrid DDP/FSDP/FSDP2/DeepSpeed Pipeline and TCP "
-            "failure checks on two SSH hosts with the same FakeGPU Git commit."
+            "Run repeatable Hybrid DDP/FSDP/FSDP2/DeepSpeed Pipeline, elastic "
+            "restart, and TCP failure checks on two SSH hosts at one Git commit."
         )
     )
     parser.add_argument(
@@ -2021,11 +2284,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--coordinator-host", required=True)
     parser.add_argument("--coordinator-port", type=int, default=29591)
     parser.add_argument("--master-port", type=int, default=29592)
+    parser.add_argument("--elastic-port", type=int, default=29593)
     parser.add_argument(
         "--case",
         action="append",
         choices=[
             "ddp",
+            "elastic-ddp-restart",
             "ddp-options",
             "fsdp",
             "fsdp2",
@@ -2070,12 +2335,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    for port_name in ("coordinator_port", "master_port"):
+    for port_name in ("coordinator_port", "master_port", "elastic_port"):
         port = int(getattr(args, port_name))
         if port < 1 or port > 65535:
             parser.error(f"--{port_name.replace('_', '-')} must be within 1..65535")
-    if args.coordinator_port == args.master_port:
-        parser.error("coordinator and torch rendezvous ports must differ")
+    if len(
+        {args.coordinator_port, args.master_port, args.elastic_port}
+    ) != 3:
+        parser.error("coordinator and torch rendezvous ports must be distinct")
     if args.startup_timeout <= 0 or args.case_timeout <= 0:
         parser.error("timeouts must be greater than zero")
     if args.timeline_limit < 0 or args.timeline_limit > 1_000_000:
