@@ -34,6 +34,10 @@ EXPECTED_NEXT_RANDOM = {
     0: 0.6766379475593567,
     1: 0.5308855175971985,
 }
+EXPECTED_SAMPLE_IDS = {
+    0: [1, 3, 5, 7],
+    1: [2, 4, 6, 8],
+}
 EXPECTED_PROCESS_EXIT_CODE = 86
 
 
@@ -56,6 +60,14 @@ def _nested_allclose(
     return True
 
 
+def _storage_identity(report: dict[str, Any]) -> tuple[str, int]:
+    node_name = str(report.get("node_name", ""))
+    local_rank = int(report.get("local_rank", -1))
+    if not node_name or local_rank < 0:
+        raise AssertionError(f"checkpoint storage identity is invalid: {report}")
+    return node_name, local_rank
+
+
 def validate_elastic_ddp_training_state_reports(
     initial: list[dict[str, Any]],
     restarted: list[dict[str, Any]],
@@ -63,6 +75,7 @@ def validate_elastic_ddp_training_state_reports(
     backend: str,
     require_physical_gpu: bool,
     check_checkpoint_files: bool = False,
+    require_rank_remap: bool = True,
 ) -> dict[str, Any]:
     if len(initial) != 2 or len(restarted) != 2:
         raise AssertionError(
@@ -75,6 +88,17 @@ def validate_elastic_ddp_training_state_reports(
     }
     if set(initial_by_rank) != {0, 1} or set(restarted_by_rank) != {0, 1}:
         raise AssertionError("elastic training-state ranks are invalid")
+    initial_by_storage = {_storage_identity(item): item for item in initial}
+    restarted_by_storage = {
+        _storage_identity(item): item for item in restarted
+    }
+    if (
+        len(initial_by_storage) != 2
+        or set(initial_by_storage) != set(restarted_by_storage)
+    ):
+        raise AssertionError(
+            "elastic training-state checkpoint storage identities changed"
+        )
     selected_failure_ranks = [
         rank
         for rank, report in initial_by_rank.items()
@@ -85,6 +109,30 @@ def validate_elastic_ddp_training_state_reports(
             "elastic training-state recovery requires exactly one failed rank"
         )
     failed_rank = selected_failure_ranks[0]
+    failed_storage = _storage_identity(initial_by_rank[failed_rank])
+
+    resume_source_by_rank = {
+        rank: int(report.get("resume_source_rank", -1))
+        for rank, report in restarted_by_rank.items()
+    }
+    if set(resume_source_by_rank.values()) != {0, 1}:
+        raise AssertionError(
+            f"resume source ranks are not a permutation: {resume_source_by_rank}"
+        )
+    for rank, source_rank in resume_source_by_rank.items():
+        report = restarted_by_rank[rank]
+        shift = int(report.get("resume_rank_shift", -1))
+        if source_rank != (rank + shift) % 2:
+            raise AssertionError(f"resume rank shift is inconsistent: {report}")
+        if bool(report.get("rank_remapped")) != (source_rank != rank):
+            raise AssertionError(f"rank remap marker is invalid: {report}")
+        if require_rank_remap and source_rank == rank:
+            raise AssertionError(f"rank-local state was not remapped: {report}")
+
+    expected_restored_pending = [
+        EXPECTED_PENDING_GRADIENTS[resume_source_by_rank[rank]][0]
+        for rank in (0, 1)
+    ]
 
     for rank, report in initial_by_rank.items():
         expected_status = (
@@ -124,6 +172,16 @@ def validate_elastic_ddp_training_state_reports(
             )
         if report.get("optimizer") != "adamw":
             raise AssertionError(f"unexpected optimizer metadata: {report}")
+        if report.get("checkpoint_replication_mode") != (
+            "all_rank_states_per_host"
+        ):
+            raise AssertionError(
+                f"checkpoint replication mode is invalid: {report}"
+            )
+        if report.get("replicated_rank_state_ids") != [0, 1]:
+            raise AssertionError(f"rank-state bundle is incomplete: {report}")
+        if int(report.get("rank_state_replica_count", -1)) != 2:
+            raise AssertionError(f"rank-state replica count is invalid: {report}")
         if abs(float(report.get("learning_rate", -1.0)) - 0.005) > 1e-12:
             raise AssertionError(f"initial learning rate is invalid: {report}")
         if int(report.get("scheduler_last_epoch", -1)) != 1:
@@ -182,6 +240,16 @@ def validate_elastic_ddp_training_state_reports(
             > 1e-12
         ):
             raise AssertionError(f"initial RNG state is invalid: {report}")
+        if (
+            report.get("sampler") != "DistributedSampler"
+            or int(report.get("sampler_epoch", -1)) != 0
+            or int(report.get("samples_consumed", -1)) != 3
+            or report.get("consumed_sample_ids")
+            != EXPECTED_SAMPLE_IDS[rank][:3]
+            or int(report.get("next_sample_id", -1))
+            != EXPECTED_SAMPLE_IDS[rank][3]
+        ):
+            raise AssertionError(f"initial sampler state is invalid: {report}")
         saved = report.get("saved_checkpoint")
         if (
             not isinstance(saved, dict)
@@ -216,11 +284,14 @@ def validate_elastic_ddp_training_state_reports(
             or max(int(value) for value in observed_counts) != 1
         ):
             raise AssertionError(f"restart counts did not converge: {report}")
+        storage_identity = _storage_identity(report)
         if (
-            rank == failed_rank
+            storage_identity == failed_storage
             and int(report.get("local_restart_count", -1)) != 1
         ):
-            raise AssertionError("failed rank did not report its local restart")
+            raise AssertionError(
+                "failed worker storage identity did not report its local restart"
+            )
         if int(report.get("restored_optimizer_steps", -1)) != 1:
             raise AssertionError(f"optimizer step was not restored: {report}")
         if int(report.get("restored_accumulation_micro_step", -1)) != 1:
@@ -233,7 +304,7 @@ def validate_elastic_ddp_training_state_reports(
             raise AssertionError(f"final accumulation state is invalid: {report}")
         if report.get("checkpoint_loaded") is not True:
             raise AssertionError(f"checkpoint was not loaded: {report}")
-        before = initial_by_rank[rank]
+        before = initial_by_storage[storage_identity]
         saved = before["saved_checkpoint"]
         loaded = report.get("loaded_checkpoint")
         if (
@@ -245,6 +316,23 @@ def validate_elastic_ddp_training_state_reports(
             raise AssertionError(
                 f"loaded checkpoint differs from saved file: {report}"
             )
+        if int(report.get("checkpoint_storage_owner_rank", -1)) != int(
+            before.get("rank", -1)
+        ):
+            raise AssertionError(
+                f"checkpoint storage owner rank is invalid: {report}"
+            )
+        if report.get("checkpoint_replication_mode") != (
+            "all_rank_states_per_host"
+        ):
+            raise AssertionError(
+                f"restored checkpoint replication mode is invalid: {report}"
+            )
+        if (
+            report.get("replicated_rank_state_ids") != [0, 1]
+            or int(report.get("rank_state_replica_count", -1)) != 2
+        ):
+            raise AssertionError(f"restored rank-state bundle is invalid: {report}")
         if check_checkpoint_files and not Path(str(loaded.get("path", ""))).is_file():
             raise AssertionError(f"loaded checkpoint is missing: {loaded}")
         if (
@@ -261,11 +349,11 @@ def validate_elastic_ddp_training_state_reports(
             )
             or not _nested_allclose(
                 report.get("restored_pending_gradient"),
-                EXPECTED_PENDING_GRADIENTS[rank],
+                EXPECTED_PENDING_GRADIENTS[resume_source_by_rank[rank]],
             )
             or not _nested_allclose(
                 report.get("gathered_restored_pending_gradients"),
-                EXPECTED_GATHERED_PENDING_GRADIENTS,
+                expected_restored_pending,
             )
             or not _nested_allclose(
                 report.get("gathered_restored_state"),
@@ -293,6 +381,17 @@ def validate_elastic_ddp_training_state_reports(
             )
         ):
             raise AssertionError(f"resumed AdamW state is invalid: {report}")
+        source_rank = resume_source_by_rank[rank]
+        if (
+            report.get("restored_sampler") != "DistributedSampler"
+            or int(report.get("restored_sampler_epoch", -1)) != 0
+            or int(report.get("restored_samples_consumed", -1)) != 3
+            or report.get("restored_consumed_sample_ids")
+            != EXPECTED_SAMPLE_IDS[source_rank][:3]
+            or int(report.get("resumed_sample_id", -1))
+            != EXPECTED_SAMPLE_IDS[source_rank][3]
+        ):
+            raise AssertionError(f"restored sampler state is invalid: {report}")
         if int(report.get("optimizer_state_step", -1)) != 2:
             raise AssertionError(f"final AdamW step is invalid: {report}")
         if abs(float(report.get("learning_rate", -1.0)) - 0.0025) > 1e-12:
@@ -302,7 +401,7 @@ def validate_elastic_ddp_training_state_reports(
         if (
             abs(
                 float(report.get("restored_next_random", -1.0))
-                - EXPECTED_NEXT_RANDOM[rank]
+                - EXPECTED_NEXT_RANDOM[source_rank]
             )
             > 1e-12
         ):
@@ -318,7 +417,7 @@ def validate_elastic_ddp_training_state_reports(
     if len(run_ids) != 1 or not next(iter(run_ids)):
         raise AssertionError(f"elastic run IDs are inconsistent: {run_ids}")
     return {
-        "schema_version": "fakegpu.elastic_ddp_training_state_validation.v1",
+        "schema_version": "fakegpu.elastic_ddp_training_state_validation.v2",
         "status": "success",
         "backend": backend,
         "world_size": 2,
@@ -338,6 +437,20 @@ def validate_elastic_ddp_training_state_reports(
             str(rank): int(restarted_by_rank[rank]["local_restart_count"])
             for rank in (0, 1)
         },
+        "resume_rank_map": {
+            str(rank): resume_source_by_rank[rank] for rank in (0, 1)
+        },
+        "storage_rank_transitions": {
+            f"{node_name}/local_{local_rank}": {
+                "initial_rank": int(
+                    initial_by_storage[(node_name, local_rank)]["rank"]
+                ),
+                "restarted_rank": int(
+                    restarted_by_storage[(node_name, local_rank)]["rank"]
+                ),
+            }
+            for node_name, local_rank in sorted(initial_by_storage)
+        },
         "restored_parameters": restarted_by_rank[0]["restored_parameters"],
         "restored_exp_avg": restarted_by_rank[0]["restored_exp_avg"],
         "restored_exp_avg_sq": restarted_by_rank[0]["restored_exp_avg_sq"],
@@ -352,6 +465,10 @@ def validate_elastic_ddp_training_state_reports(
         ],
         "restored_next_random": {
             str(rank): float(restarted_by_rank[rank]["restored_next_random"])
+            for rank in (0, 1)
+        },
+        "resumed_sample_ids": {
+            str(rank): int(restarted_by_rank[rank]["resumed_sample_id"])
             for rank in (0, 1)
         },
         "initial_workers": initial,

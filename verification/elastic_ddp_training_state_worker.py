@@ -24,6 +24,7 @@ from elastic_ddp_checkpoint_worker import (
 from elastic_ddp_training_state_validation import (
     EXPECTED_GATHERED_PENDING_GRADIENTS,
     EXPECTED_PENDING_GRADIENTS,
+    EXPECTED_SAMPLE_IDS,
     EXPECTED_STEP_ONE_EXP_AVG,
     EXPECTED_STEP_ONE_EXP_AVG_SQ,
     EXPECTED_STEP_ONE_GRADIENT,
@@ -129,6 +130,50 @@ def _tensor(
     return torch.tensor(values, dtype=torch.float32, device=device)
 
 
+def _distributed_data_iterator(
+    torch: Any,
+    *,
+    logical_rank: int,
+    world_size: int,
+    epoch: int,
+    consumed_samples: int,
+) -> tuple[Any, list[int]]:
+    from torch.utils.data import DataLoader, TensorDataset
+    from torch.utils.data.distributed import DistributedSampler
+
+    dataset = TensorDataset(torch.arange(1, 9, dtype=torch.int64))
+    sampler = DistributedSampler(
+        dataset,
+        num_replicas=world_size,
+        rank=logical_rank,
+        shuffle=False,
+        drop_last=False,
+    )
+    sampler.set_epoch(epoch)
+    iterator = iter(
+        DataLoader(
+            dataset,
+            batch_size=1,
+            sampler=sampler,
+            num_workers=0,
+        )
+    )
+    skipped: list[int] = []
+    for _ in range(consumed_samples):
+        skipped.append(_next_sample_id(iterator))
+    return iterator, skipped
+
+
+def _next_sample_id(iterator: Any) -> int:
+    try:
+        batch = next(iterator)
+    except StopIteration as exc:
+        raise AssertionError("distributed sampler exhausted unexpectedly") from exc
+    if not isinstance(batch, (list, tuple)) or len(batch) != 1:
+        raise AssertionError(f"unexpected DataLoader batch: {batch!r}")
+    return int(batch[0].reshape(-1)[0].item())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -143,6 +188,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fail-rank", type=int, default=-1)
     parser.add_argument("--fail-this-node", action="store_true")
     parser.add_argument("--trace-store", action="store_true")
+    parser.add_argument(
+        "--resume-rank-shift",
+        type=int,
+        default=0,
+        help=(
+            "Load rank-local state from (current rank + shift) modulo world "
+            "size; validation uses 1 to exercise rank remapping."
+        ),
+    )
     parser.add_argument("--timeout-seconds", type=int, default=30)
     parser.add_argument("--survivor-wait-seconds", type=int, default=30)
     args = parser.parse_args(argv)
@@ -154,6 +208,8 @@ def main(argv: list[str] | None = None) -> int:
     rank = int(os.environ["RANK"])
     local_rank = int(os.environ["LOCAL_RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
+    if not 0 <= args.resume_rank_shift < world_size:
+        parser.error("--resume-rank-shift must be in [0, world size)")
     local_restart_count = int(
         os.environ.get("TORCHELASTIC_RESTART_COUNT", "0")
     )
@@ -173,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         local_rank=local_rank,
     )
     report: dict[str, Any] = {
-        "schema_version": "fakegpu.elastic_ddp_training_state.rank.v1",
+        "schema_version": "fakegpu.elastic_ddp_training_state.rank.v2",
         "status": "starting",
         "stage": "import_torch",
         "node_name": args.node_name,
@@ -193,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
         "optimizer": "adamw",
         "scheduler": "step_lr",
         "gradient_accumulation_steps": 2,
+        "checkpoint_replication_mode": "all_rank_states_per_host",
+        "resume_rank_shift": args.resume_rank_shift,
     }
     dist = None
 
@@ -320,19 +378,34 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 ddp_model = DistributedDataParallel(model)
 
+            data_iterator, skipped_sample_ids = _distributed_data_iterator(
+                torch,
+                logical_rank=rank,
+                world_size=world_size,
+                epoch=0,
+                consumed_samples=0,
+            )
+            if skipped_sample_ids:
+                raise AssertionError("fresh sampler unexpectedly skipped samples")
+            consumed_sample_ids: list[int] = []
+
             report["stage"] = "optimizer_step_one"
             optimizer.zero_grad(set_to_none=True)
+            sample_one_a = _next_sample_id(data_iterator)
+            consumed_sample_ids.append(sample_one_a)
             loss_one_a = _backward_micro_step(
                 torch,
                 ddp_model,
-                scale=float(rank + 1),
+                scale=float(sample_one_a),
                 synchronize=False,
                 backend=args.backend,
             )
+            sample_one_b = _next_sample_id(data_iterator)
+            consumed_sample_ids.append(sample_one_b)
             loss_one_b = _backward_micro_step(
                 torch,
                 ddp_model,
-                scale=float(rank + 3),
+                scale=float(sample_one_b),
                 synchronize=True,
                 backend=args.backend,
             )
@@ -385,10 +458,12 @@ def main(argv: list[str] | None = None) -> int:
 
             report["stage"] = "partial_accumulation_step_two"
             optimizer.zero_grad(set_to_none=True)
+            sample_two_a = _next_sample_id(data_iterator)
+            consumed_sample_ids.append(sample_two_a)
             loss_two_a = _backward_micro_step(
                 torch,
                 ddp_model,
-                scale=float(rank + 5),
+                scale=float(sample_two_a),
                 synchronize=False,
                 backend=args.backend,
             )
@@ -414,6 +489,11 @@ def main(argv: list[str] | None = None) -> int:
             expected_next_random = float(
                 torch.rand((), generator=probe_rng).item()
             )
+            if consumed_sample_ids != EXPECTED_SAMPLE_IDS[rank][:3]:
+                raise AssertionError(
+                    "initial DistributedSampler sequence is invalid: "
+                    f"{consumed_sample_ids}"
+                )
             gathered_pending = _gather_vectors(
                 torch,
                 dist,
@@ -445,6 +525,40 @@ def main(argv: list[str] | None = None) -> int:
                 world_size=world_size,
                 backend=args.backend,
             )
+            local_rank_state = {
+                "saved_rank": rank,
+                "gradients": {
+                    "weight": pending_gradient.detach().cpu().clone()
+                },
+                "rng_state": rng_state.cpu().clone(),
+                "expected_next_random": expected_next_random,
+                "data_state": {
+                    "sampler": "DistributedSampler",
+                    "sampler_epoch": 0,
+                    "samples_consumed": len(consumed_sample_ids),
+                    "consumed_sample_ids": list(consumed_sample_ids),
+                    "next_sample_id": EXPECTED_SAMPLE_IDS[rank][3],
+                },
+            }
+            gathered_rank_states: list[Any] = [None] * world_size
+            dist.all_gather_object(gathered_rank_states, local_rank_state)
+            _sync_cuda(torch, args.backend)
+            rank_state_bundle: dict[str, dict[str, Any]] = {}
+            for state in gathered_rank_states:
+                if not isinstance(state, dict):
+                    raise AssertionError("gathered rank state is not a dictionary")
+                saved_rank = int(state.get("saved_rank", -1))
+                if saved_rank in {int(key) for key in rank_state_bundle}:
+                    raise AssertionError("rank state bundle contains duplicates")
+                rank_state_bundle[str(saved_rank)] = state
+            replicated_rank_state_ids = sorted(
+                int(key) for key in rank_state_bundle
+            )
+            if replicated_rank_state_ids != list(range(world_size)):
+                raise AssertionError(
+                    "rank state bundle is incomplete: "
+                    f"{replicated_rank_state_ids}"
+                )
             report.update(
                 {
                     "completed_optimizer_steps": 1,
@@ -462,6 +576,13 @@ def main(argv: list[str] | None = None) -> int:
                     "rng_seed": 20260723 + rank,
                     "random_before_checkpoint": random_before_checkpoint,
                     "expected_next_random": expected_next_random,
+                    "sampler": "DistributedSampler",
+                    "sampler_epoch": 0,
+                    "samples_consumed": len(consumed_sample_ids),
+                    "consumed_sample_ids": consumed_sample_ids,
+                    "next_sample_id": EXPECTED_SAMPLE_IDS[rank][3],
+                    "replicated_rank_state_ids": replicated_rank_state_ids,
+                    "rank_state_replica_count": len(rank_state_bundle),
                     "local_losses_step_one": [loss_one_a, loss_one_b],
                     "local_loss_partial_step_two": loss_two_a,
                 }
@@ -469,8 +590,8 @@ def main(argv: list[str] | None = None) -> int:
 
             report["stage"] = "save_training_state_checkpoint"
             checkpoint = {
-                "schema_version": "fakegpu.elastic_ddp_training_state.v1",
-                "saved_rank": rank,
+                "schema_version": "fakegpu.elastic_ddp_training_state.v2",
+                "storage_owner_rank": rank,
                 "world_size": world_size,
                 "completed_optimizer_steps": 1,
                 "accumulation_micro_step": 1,
@@ -478,11 +599,8 @@ def main(argv: list[str] | None = None) -> int:
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
-                "gradients": {
-                    "weight": pending_gradient.detach().clone()
-                },
-                "rng_state": rng_state,
-                "expected_next_random": expected_next_random,
+                "checkpoint_replication_mode": "all_rank_states_per_host",
+                "rank_states": rank_state_bundle,
             }
             _atomic_torch_save(torch, checkpoint, checkpoint_path)
             report["saved_checkpoint"] = _checkpoint_metadata(
@@ -518,13 +636,9 @@ def main(argv: list[str] | None = None) -> int:
         report["stage"] = "load_training_state_checkpoint"
         checkpoint = _torch_load(torch, checkpoint_path, device)
         if checkpoint.get("schema_version") != (
-            "fakegpu.elastic_ddp_training_state.v1"
+            "fakegpu.elastic_ddp_training_state.v2"
         ):
             raise AssertionError("unexpected training-state checkpoint schema")
-        if int(checkpoint.get("saved_rank", -1)) != rank:
-            raise AssertionError(
-                "host-local checkpoint rank does not match the restarted rank"
-            )
         if int(checkpoint.get("world_size", -1)) != world_size:
             raise AssertionError("checkpoint world size does not match restart")
         if int(checkpoint.get("completed_optimizer_steps", -1)) != 1:
@@ -534,17 +648,34 @@ def main(argv: list[str] | None = None) -> int:
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         scheduler.load_state_dict(checkpoint["scheduler"])
+        rank_states = checkpoint.get("rank_states")
+        if not isinstance(rank_states, dict):
+            raise AssertionError("checkpoint rank-state bundle is missing")
+        replicated_rank_state_ids = sorted(int(key) for key in rank_states)
+        if replicated_rank_state_ids != list(range(world_size)):
+            raise AssertionError(
+                "checkpoint rank-state bundle is incomplete: "
+                f"{replicated_rank_state_ids}"
+            )
+        resume_source_rank = (rank + args.resume_rank_shift) % world_size
+        rank_state = rank_states.get(str(resume_source_rank))
+        if not isinstance(rank_state, dict):
+            raise AssertionError(
+                f"checkpoint state for rank {resume_source_rank} is missing"
+            )
+        if int(rank_state.get("saved_rank", -1)) != resume_source_rank:
+            raise AssertionError("checkpoint rank-state identity is invalid")
         if args.backend == "nccl":
             ddp_model = DistributedDataParallel(
                 model, device_ids=[0], output_device=0
             )
         else:
             ddp_model = DistributedDataParallel(model)
-        restored_gradient = checkpoint["gradients"]["weight"].to(device)
+        restored_gradient = rank_state["gradients"]["weight"].to(device)
         model.weight.grad = restored_gradient.detach().clone()
-        rng.set_state(checkpoint["rng_state"].cpu())
+        rng.set_state(rank_state["rng_state"].cpu())
         restored_next_random = float(torch.rand((), generator=rng).item())
-        expected_next_random = float(checkpoint["expected_next_random"])
+        expected_next_random = float(rank_state["expected_next_random"])
         if abs(restored_next_random - expected_next_random) > 1e-12:
             raise AssertionError(
                 "restored RNG state did not reproduce the next value"
@@ -566,7 +697,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             (
                 model.weight.grad,
-                EXPECTED_PENDING_GRADIENTS[rank],
+                EXPECTED_PENDING_GRADIENTS[resume_source_rank],
                 "restored pending gradient",
             ),
         ):
@@ -595,10 +726,40 @@ def main(argv: list[str] | None = None) -> int:
             world_size=world_size,
             backend=args.backend,
         )
+        data_state = rank_state.get("data_state")
+        if not isinstance(data_state, dict):
+            raise AssertionError("checkpoint sampler state is missing")
+        restored_sampler_epoch = int(data_state.get("sampler_epoch", -1))
+        restored_samples_consumed = int(
+            data_state.get("samples_consumed", -1)
+        )
+        data_iterator, skipped_sample_ids = _distributed_data_iterator(
+            torch,
+            logical_rank=resume_source_rank,
+            world_size=world_size,
+            epoch=restored_sampler_epoch,
+            consumed_samples=restored_samples_consumed,
+        )
+        if skipped_sample_ids != data_state.get("consumed_sample_ids"):
+            raise AssertionError(
+                "restored sampler cursor did not reproduce consumed samples"
+            )
+        resumed_sample_id = _next_sample_id(data_iterator)
+        if resumed_sample_id != int(data_state.get("next_sample_id", -1)):
+            raise AssertionError(
+                "restored sampler did not produce the expected next sample"
+            )
         report.update(
             {
                 "checkpoint_loaded": True,
                 "loaded_checkpoint": _checkpoint_metadata(checkpoint_path),
+                "checkpoint_storage_owner_rank": int(
+                    checkpoint.get("storage_owner_rank", -1)
+                ),
+                "replicated_rank_state_ids": replicated_rank_state_ids,
+                "rank_state_replica_count": len(rank_states),
+                "resume_source_rank": resume_source_rank,
+                "rank_remapped": resume_source_rank != rank,
                 "restored_optimizer_steps": int(
                     checkpoint["completed_optimizer_steps"]
                 ),
@@ -612,6 +773,11 @@ def main(argv: list[str] | None = None) -> int:
                 "gathered_restored_pending_gradients": gathered_restored_pending,
                 "gathered_restored_state": gathered_restored_state,
                 "restored_next_random": restored_next_random,
+                "restored_sampler": data_state.get("sampler"),
+                "restored_sampler_epoch": restored_sampler_epoch,
+                "restored_samples_consumed": restored_samples_consumed,
+                "restored_consumed_sample_ids": skipped_sample_ids,
+                "resumed_sample_id": resumed_sample_id,
             }
         )
 
@@ -619,7 +785,7 @@ def main(argv: list[str] | None = None) -> int:
         loss_two_b = _backward_micro_step(
             torch,
             ddp_model,
-            scale=float(rank + 7),
+            scale=float(resumed_sample_id),
             synchronize=True,
             backend=args.backend,
         )

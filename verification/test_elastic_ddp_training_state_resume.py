@@ -67,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
             "--backend=gloo",
             "--trace-store",
             "--fail-rank=1",
+            "--resume-rank-shift=1",
             "--survivor-wait-seconds=10",
         ]
         completed = _run_torchrun(command, env=env, timeout=args.timeout)

@@ -1373,6 +1373,7 @@ def _run_elastic_ddp_training_state_case(
             f"--node-name={node.name}",
             "--backend=nccl",
             "--trace-store",
+            "--resume-rank-shift=1",
             f"--timeout-seconds={process_group_timeout}",
             f"--survivor-wait-seconds={process_group_timeout}",
         ]
