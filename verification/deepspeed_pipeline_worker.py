@@ -242,15 +242,20 @@ def main(argv: list[str] | None = None) -> int:
 
         stage = "train_batch"
         torch.cuda.reset_peak_memory_stats(0)
+        input_dtype = (
+            torch.bfloat16
+            if args.precision == "bf16"
+            else torch.float32
+        )
         micro_batches = iter(
             [
                 (
-                    torch.tensor([[1.0, 2.0]], dtype=torch.float32),
-                    torch.tensor([[0.5]], dtype=torch.float32),
+                    torch.tensor([[1.0, 2.0]], dtype=input_dtype),
+                    torch.tensor([[0.5]], dtype=input_dtype),
                 ),
                 (
-                    torch.tensor([[2.0, -1.0]], dtype=torch.float32),
-                    torch.tensor([[-0.5]], dtype=torch.float32),
+                    torch.tensor([[2.0, -1.0]], dtype=input_dtype),
+                    torch.tensor([[-0.5]], dtype=input_dtype),
                 ),
             ][: args.gradient_accumulation_steps]
         )
