@@ -1222,8 +1222,12 @@ void run_allreduce_scenario() {
     run_allreduce_case<float>(4, ncclFloat32, "4-rank float32");
     run_allreduce_case<float>(
         4, ncclFloat32, "4-rank avg float32", 8, ncclAvg);
+    run_allreduce_case<std::int8_t>(2, ncclInt8, "2-rank int8");
+    run_allreduce_case<std::uint8_t>(2, ncclUint8, "2-rank uint8");
     run_allreduce_case<std::int32_t>(2, ncclInt32, "2-rank int32");
     run_allreduce_case<std::int32_t>(4, ncclInt32, "4-rank int32");
+    run_allreduce_case<std::uint32_t>(2, ncclUint32, "2-rank uint32");
+    run_allreduce_case<std::uint64_t>(2, ncclUint64, "2-rank uint64");
     run_premul_allreduce_case<float>(2, ncclFloat32, 2.0f, "2-rank premul float32");
     run_low_precision_allreduce_case(
         ncclFloat16,
@@ -1263,6 +1267,7 @@ void run_reduce_scenario() {
 void run_allgather_scenario() {
     run_allgather_case<float>(2, ncclFloat32, "2-rank float32");
     run_allgather_case<float>(4, ncclFloat32, "4-rank float32");
+    run_allgather_case<std::uint8_t>(2, ncclUint8, "2-rank uint8 payload");
     run_allgather_case<std::int32_t>(4, ncclInt32, "4-rank int32");
     run_allgather_case<std::uint16_t>(
         2, ncclFloat16, "2-rank float16 payload");
@@ -1275,6 +1280,8 @@ void run_reducescatter_scenario() {
     run_reducescatter_case<float>(4, ncclFloat32, "4-rank float32");
     run_reducescatter_case<float>(
         4, ncclFloat32, "4-rank avg float32", 4, ncclAvg);
+    run_reducescatter_case<std::uint8_t>(
+        2, ncclUint8, "2-rank uint8");
     run_reducescatter_case<std::int32_t>(4, ncclInt32, "4-rank int32");
     run_premul_reducescatter_case<float>(2, ncclFloat32, 2.0f, "2-rank premul float32");
 }

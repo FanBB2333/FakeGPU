@@ -141,12 +141,28 @@ CollectiveExecutionResult execute_reducescatter(
 
     std::vector<std::vector<char>> outputs;
     switch (request.dtype) {
+        case CollectiveDataType::Int8:
+            reduce_scatter_sum_or_average<std::int8_t>(
+                request, plan, buffers, outputs);
+            break;
+        case CollectiveDataType::Uint8:
+            reduce_scatter_sum_or_average<std::uint8_t>(
+                request, plan, buffers, outputs);
+            break;
         case CollectiveDataType::Int32:
             reduce_scatter_sum_or_average<std::int32_t>(
                 request, plan, buffers, outputs);
             break;
+        case CollectiveDataType::Uint32:
+            reduce_scatter_sum_or_average<std::uint32_t>(
+                request, plan, buffers, outputs);
+            break;
         case CollectiveDataType::Int64:
             reduce_scatter_sum_or_average<std::int64_t>(
+                request, plan, buffers, outputs);
+            break;
+        case CollectiveDataType::Uint64:
+            reduce_scatter_sum_or_average<std::uint64_t>(
                 request, plan, buffers, outputs);
             break;
         case CollectiveDataType::Float16:

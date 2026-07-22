@@ -705,8 +705,12 @@ def main() -> int:
     previous_index = 0
     valid_data_types = {
         "none",
+        "int8",
+        "uint8",
         "int32",
+        "uint32",
         "int64",
+        "uint64",
         "float16",
         "bfloat16",
         "float32",

@@ -116,11 +116,23 @@ void sum_or_average_reduce_buffers(
     const std::vector<std::vector<char>>& buffers,
     std::vector<char>& reduced_bytes) {
     switch (request.dtype) {
+        case CollectiveDataType::Int8:
+            sum_or_average_reduce<std::int8_t>(request, buffers, reduced_bytes);
+            break;
+        case CollectiveDataType::Uint8:
+            sum_or_average_reduce<std::uint8_t>(request, buffers, reduced_bytes);
+            break;
         case CollectiveDataType::Int32:
             sum_or_average_reduce<std::int32_t>(request, buffers, reduced_bytes);
             break;
+        case CollectiveDataType::Uint32:
+            sum_or_average_reduce<std::uint32_t>(request, buffers, reduced_bytes);
+            break;
         case CollectiveDataType::Int64:
             sum_or_average_reduce<std::int64_t>(request, buffers, reduced_bytes);
+            break;
+        case CollectiveDataType::Uint64:
+            sum_or_average_reduce<std::uint64_t>(request, buffers, reduced_bytes);
             break;
         case CollectiveDataType::Float16:
             sum_or_average_reduce_16bit(
