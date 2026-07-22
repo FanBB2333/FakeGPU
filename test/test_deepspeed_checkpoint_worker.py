@@ -218,6 +218,7 @@ def main() -> int:
 
         stage = "import_deepspeed"
         import deepspeed
+        from deepspeed.runtime.fp16.loss_scaler import LossScaler
         from deepspeed.runtime.zero.config import ZeroStageEnum
         from deepspeed.utils.logging import logger as deepspeed_logger
 
@@ -345,8 +346,11 @@ def main() -> int:
         if hasattr(torch.serialization, "add_safe_globals"):
             # DeepSpeed 0.15 stores this enum in its model-state payload but
             # predates PyTorch's weights_only=True default. The checkpoint was
-            # created by this process, so explicitly allow only that type.
-            torch.serialization.add_safe_globals([ZeroStageEnum])
+            # created by this process, so explicitly allow only the two types
+            # reported by get_unsafe_globals_in_checkpoint().
+            torch.serialization.add_safe_globals(
+                [ZeroStageEnum, LossScaler]
+            )
             safe_globals_added = True
         load_path, client_state = engine.load_checkpoint(
             str(args.checkpoint_dir),
