@@ -437,11 +437,23 @@ def analyze_graph_memory(
         records_by_producer.setdefault(int(record["producer_index"]), []).append(key)
         records_by_last_use.setdefault(int(record["last_use_index"]), []).append(key)
 
+    gradient_producer_indices = [
+        int(record["producer_index"])
+        for record in storage_records.values()
+        if str(record.get("category") or "") == "gradient"
+    ]
+    gradient_phase_start_index = (
+        min(gradient_producer_indices) if gradient_producer_indices else None
+    )
+
     live_keys: set[int] = set()
     live_bytes = 0
     peak_bytes = 0
     peak_index = 0
     peak_live_keys: set[int] = set()
+    gradient_phase_peak_bytes = 0
+    gradient_phase_peak_index: int | None = None
+    gradient_phase_peak_live_keys: set[int] = set()
     live_bytes_by_node: dict[str, int] = {}
     for index, node in enumerate(nodes):
         for key in records_by_producer.get(index, []):
@@ -453,6 +465,14 @@ def analyze_graph_memory(
             peak_bytes = live_bytes
             peak_index = index
             peak_live_keys = set(live_keys)
+        if (
+            gradient_phase_start_index is not None
+            and index >= gradient_phase_start_index
+            and live_bytes > gradient_phase_peak_bytes
+        ):
+            gradient_phase_peak_bytes = live_bytes
+            gradient_phase_peak_index = index
+            gradient_phase_peak_live_keys = set(live_keys)
         for key in records_by_last_use.get(index, []):
             if key in protected_keys or key not in live_keys:
                 continue
@@ -476,6 +496,37 @@ def analyze_graph_memory(
         final_category_bytes[category] = final_category_bytes.get(category, 0) + int(
             record["bytes"]
         )
+
+    gradient_phase: dict[str, Any] | None = None
+    if gradient_phase_peak_index is not None:
+        gradient_phase_category_bytes: dict[str, int] = {}
+        for key in gradient_phase_peak_live_keys:
+            record = storage_records[key]
+            category = str(record.get("category") or "unknown")
+            gradient_phase_category_bytes[category] = (
+                gradient_phase_category_bytes.get(category, 0)
+                + int(record["bytes"])
+            )
+        gradient_phase_peak_node = nodes[gradient_phase_peak_index]
+        gradient_phase_start_node = nodes[gradient_phase_start_index]
+        gradient_phase = {
+            "start_node": {
+                "index": gradient_phase_start_index,
+                "name": gradient_phase_start_node.name,
+                "op": gradient_phase_start_node.op,
+                "target": _target_name(gradient_phase_start_node.target),
+            },
+            "peak_live_bytes": gradient_phase_peak_bytes,
+            "peak_node": {
+                "index": gradient_phase_peak_index,
+                "name": gradient_phase_peak_node.name,
+                "op": gradient_phase_peak_node.op,
+                "target": _target_name(gradient_phase_peak_node.target),
+            },
+            "peak_bytes_by_category": dict(
+                sorted(gradient_phase_category_bytes.items())
+            ),
+        }
 
     top_peak_storages = sorted(
         (
@@ -540,6 +591,7 @@ def analyze_graph_memory(
         },
         "peak_bytes_by_category": dict(sorted(category_bytes.items())),
         "final_bytes_by_category": dict(sorted(final_category_bytes.items())),
+        "gradient_production_phase": gradient_phase,
         "top_peak_storages": top_peak_storages,
         "retained_output_storage_count": len(output_keys),
         "retained_placeholder_storage_count": len(retained_keys),

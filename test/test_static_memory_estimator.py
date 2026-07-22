@@ -136,6 +136,10 @@ def test_training_estimate_captures_backward_and_adamw_state() -> None:
     )
     assert report["steady_state_estimated_peak_bytes"] == report["estimated_peak_bytes"]
     assert report["graph"]["peak_bytes_by_category"]["trainable_parameter"] == parameter_bytes
+    gradient_phase = report["graph"]["gradient_production_phase"]
+    assert gradient_phase is not None
+    assert gradient_phase["peak_live_bytes"] >= parameter_bytes
+    assert gradient_phase["peak_bytes_by_category"]["gradient"] > 0
     assert report["graph"]["alias_node_count"] > 0
     assert "optimizer_fused_or_foreach_extra_temporaries" in report["unmodeled_components"]
 
