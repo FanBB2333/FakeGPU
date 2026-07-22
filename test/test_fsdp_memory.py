@@ -4,7 +4,9 @@ import pytest
 
 from fakegpu.fsdp_memory import (
     build_full_shard_plan,
+    build_fully_shard_plan,
     estimate_full_shard_sft_memory,
+    estimate_fully_shard_sft_memory,
 )
 
 
@@ -76,3 +78,153 @@ def test_full_shard_projection_rejects_partially_frozen_training() -> None:
 
     with pytest.raises(ValueError, match="full-parameter training"):
         estimate_full_shard_sft_memory(report, plan)
+
+
+def test_fully_shard_plan_tracks_per_parameter_padding_and_trainability() -> None:
+    plan = build_fully_shard_plan(
+        [
+            {
+                "name": "root",
+                "is_root": True,
+                "parameters": [
+                    {
+                        "name": "embedding",
+                        "parameter_index": 0,
+                        "shape": [5, 2],
+                        "element_size": 2,
+                        "trainable": False,
+                    }
+                ],
+            },
+            {
+                "name": "layer",
+                "parameters": [
+                    {
+                        "name": "adapter",
+                        "parameter_index": 1,
+                        "shape": [3, 2],
+                        "element_size": 4,
+                        "trainable": True,
+                    }
+                ],
+            },
+        ],
+        world_size=2,
+    )
+
+    assert plan["unsharded_parameter_bytes"] == 44
+    assert plan["unsharded_trainable_parameter_bytes"] == 24
+    assert plan["padding_bytes"] == 12
+    assert plan["rank_shards"][0]["parameter_storage_bytes"] == 28
+    assert plan["rank_shards"][1]["parameter_storage_bytes"] == 28
+    assert plan["rank_shards"][0]["logical_trainable_parameter_bytes"] == 16
+    assert plan["rank_shards"][1]["logical_trainable_parameter_bytes"] == 8
+    assert plan["rank_shards"][0]["gradient_storage_bytes"] == 16
+    assert plan["root_unsharded_parameter_bytes"] == 24
+    assert plan["backward_prefetch_parameter_bytes"] == 56
+    assert plan["largest_trainable_unsharded_gradient_bytes"] == 32
+    assert plan["largest_trainable_local_gradient_bytes"] == [16, 16]
+    assert plan["rank_shards"][0]["adamw_optimizer_temporary_bytes"] == 32
+    assert plan["rank_shards"][1]["adamw_optimizer_temporary_bytes"] == 16
+
+
+def test_fully_shard_projection_uses_forward_and_gradient_events() -> None:
+    plan = build_fully_shard_plan(
+        [
+            {
+                "name": "root",
+                "is_root": True,
+                "parameters": [
+                    {
+                        "name": "root.weight",
+                        "parameter_index": 0,
+                        "shape": [4, 2],
+                        "element_size": 2,
+                        "trainable": False,
+                    }
+                ],
+            },
+            {
+                "name": "layer",
+                "parameters": [
+                    {
+                        "name": "layer.weight",
+                        "parameter_index": 1,
+                        "shape": [4, 2],
+                        "element_size": 2,
+                        "trainable": False,
+                    },
+                    {
+                        "name": "layer.lora_a",
+                        "parameter_index": 2,
+                        "shape": [4, 1],
+                        "element_size": 4,
+                        "trainable": True,
+                    },
+                    {
+                        "name": "layer.lora_b",
+                        "parameter_index": 3,
+                        "shape": [2, 2],
+                        "element_size": 4,
+                        "trainable": True,
+                    },
+                ],
+            },
+        ],
+        world_size=2,
+    )
+    report = {
+        "static_estimate": {
+            "parameter_bytes": 64,
+            "trainable_parameter_bytes": 32,
+            "frozen_parameter_bytes": 32,
+            "first_step_graph_phase_peak_bytes": 164,
+            "post_graph_live_bytes": 116,
+            "optimizer_phase_peak_bytes": 228,
+            "optimizer_state_bytes": 64,
+            "optimizer_temporary_bytes": 48,
+            "workspace_peak_contribution_bytes": 0,
+            "optimizer_temporary": {
+                "optimizer": "adamw",
+                "current_parameter_temporary_count": 2,
+                "retained_previous_temporary_count": 1,
+            },
+            "graph": {
+                "peak_bytes_by_category": {
+                    "frozen_parameter": 32,
+                    "trainable_parameter": 32,
+                    "temporary": 100,
+                },
+                "final_bytes_by_category": {
+                    "frozen_parameter": 32,
+                    "trainable_parameter": 32,
+                    "gradient": 32,
+                    "output": 20,
+                },
+                "gradient_production_phase": {
+                    "peak_live_bytes": 146,
+                    "peak_bytes_by_category": {
+                        "frozen_parameter": 32,
+                        "trainable_parameter": 32,
+                        "gradient": 32,
+                        "temporary": 50,
+                    },
+                },
+            },
+        }
+    }
+
+    estimate = estimate_fully_shard_sft_memory(report, plan, rank=0)
+
+    assert estimate["local_parameter_bytes"] == 32
+    assert estimate["local_gradient_bytes"] == 16
+    assert estimate["root_parameter_workspace_bytes"] == 16
+    assert estimate["backward_parameter_workspace_bytes"] == 64
+    assert estimate["reduce_scatter_workspace_bytes"] == 16
+    assert estimate["captured_graph_peak_bytes"] == 148
+    assert estimate["backward_graph_peak_bytes"] == 178
+    assert estimate["first_step_graph_peak_bytes"] == 178
+    assert estimate["local_optimizer_state_bytes"] == 32
+    assert estimate["local_optimizer_temporary_bytes"] == 24
+    assert estimate["optimizer_peak_bytes"] == 124
+    assert estimate["first_step_peak_bytes"] == 178
