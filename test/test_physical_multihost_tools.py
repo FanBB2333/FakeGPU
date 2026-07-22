@@ -150,6 +150,7 @@ def test_validate_deepspeed_pipeline_reports_accepts_two_stages() -> None:
             "activation_checkpoint_interval": 0,
             "global_steps": 1,
             "precision": "fp32",
+            "p2p_api": "batch_isend_irecv",
             "loss": 6.25,
             "all_stage_parameters": expected_parameters,
         }
@@ -172,6 +173,7 @@ def test_validate_deepspeed_pipeline_reports_rejects_stage_divergence() -> None:
             "activation_checkpoint_interval": 0,
             "global_steps": 1,
             "precision": "fp32",
+            "p2p_api": "batch_isend_irecv",
             "loss": 6.25,
             "all_stage_parameters": [
                 [0.5, -1.0, -0.5, 0.0],

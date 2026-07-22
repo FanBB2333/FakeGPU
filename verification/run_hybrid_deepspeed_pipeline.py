@@ -63,6 +63,7 @@ def _validate_rank_reports(
     precision: str,
     activation_checkpoint_interval: int,
     gradient_accumulation_steps: int,
+    batched_p2p: bool,
 ) -> None:
     tolerance = 1e-6 if precision == "fp32" else 2e-2
     if len(reports) != 2:
@@ -86,6 +87,11 @@ def _validate_rank_reports(
             activation_checkpoint_interval
         ):
             raise AssertionError(f"rank {rank} checkpoint interval mismatch")
+        expected_p2p_api = (
+            "batch_isend_irecv" if batched_p2p else "send_recv"
+        )
+        if report.get("p2p_api") != expected_p2p_api:
+            raise AssertionError(f"rank {rank} P2P API mismatch")
         expected_loss = EXPECTED_LOSS[gradient_accumulation_steps]
         if abs(
             float(report.get("loss", float("nan"))) - expected_loss
@@ -137,6 +143,7 @@ def _run_case(
     precision: str,
     activation_checkpoint_interval: int,
     gradient_accumulation_steps: int,
+    batched_p2p: bool,
     timeout: float,
 ) -> dict[str, Any]:
     coordinator_bin = build_dir / "fakegpu-coordinator"
@@ -145,10 +152,13 @@ def _run_case(
         if sys.platform == "darwin"
         else build_dir / "libnccl.so.2"
     )
-    case_root = report_root / (
+    case_name = (
         f"{precision}-gas{gradient_accumulation_steps}-"
         f"checkpoint{activation_checkpoint_interval}"
     )
+    if batched_p2p:
+        case_name += "-batched-p2p"
+    case_root = report_root / case_name
     case_root.mkdir(parents=True, exist_ok=True)
     rank_report_dir = case_root / "ranks"
     cluster_report_path = case_root / "cluster-report.json"
@@ -215,6 +225,8 @@ def _run_case(
             "--gradient-accumulation-steps",
             str(gradient_accumulation_steps),
         ]
+        if batched_p2p:
+            command.append("--batched-p2p")
         completed = subprocess.run(
             command,
             cwd=ROOT,
@@ -240,6 +252,7 @@ def _run_case(
             precision=precision,
             activation_checkpoint_interval=activation_checkpoint_interval,
             gradient_accumulation_steps=gradient_accumulation_steps,
+            batched_p2p=batched_p2p,
         )
 
         from verification.run_hybrid_deepspeed_numerics import (  # noqa: PLC0415
@@ -259,6 +272,7 @@ def _run_case(
             "precision": precision,
             "activation_checkpoint_interval": activation_checkpoint_interval,
             "gradient_accumulation_steps": gradient_accumulation_steps,
+            "p2p_api": first["p2p_api"],
             "deepspeed_version": first["deepspeed_version"],
             "torch_version": first["torch_version"],
             "torch_cuda_version": first["torch_cuda_version"],
@@ -302,6 +316,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=(1, 2),
         default=1,
     )
+    parser.add_argument("--batched-p2p", action="store_true")
     parser.add_argument("--timeout", type=float, default=240.0)
     args = parser.parse_args(argv)
 
@@ -347,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
             precision=precision,
             activation_checkpoint_interval=interval,
             gradient_accumulation_steps=args.gradient_accumulation_steps,
+            batched_p2p=args.batched_p2p,
             timeout=args.timeout,
         )
         for precision in precisions

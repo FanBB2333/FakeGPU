@@ -460,6 +460,7 @@ def _validate_deepspeed_pipeline_reports(
             "activation_checkpoint_interval": 0,
             "global_steps": 1,
             "precision": "fp32",
+            "p2p_api": "batch_isend_irecv",
         }
         mismatches = {
             field: (report.get(field), expected)
@@ -882,6 +883,7 @@ def _run_deepspeed_pipeline_case(
             "--precision=fp32",
             "--activation-checkpoint-interval=0",
             "--gradient-accumulation-steps=1",
+            "--batched-p2p",
         ]
         processes.append(
             (
