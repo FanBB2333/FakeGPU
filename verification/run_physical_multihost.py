@@ -360,6 +360,38 @@ def _read_remote_json(node: NodeSpec, path: str) -> dict[str, Any]:
     return json.loads(_read_remote_text(node, path))
 
 
+def _remote_route_source(
+    node: NodeSpec,
+    *,
+    destination_host: str,
+    destination_port: int,
+) -> str:
+    code = f"""
+import socket
+
+addresses = socket.getaddrinfo(
+    {destination_host!r},
+    {destination_port},
+    type=socket.SOCK_DGRAM,
+)
+if not addresses:
+    raise RuntimeError("rendezvous host did not resolve")
+family, socket_type, protocol, _, address = addresses[0]
+with socket.socket(family, socket_type, protocol) as probe:
+    probe.connect(address)
+    print(probe.getsockname()[0])
+""".strip()
+    completed = _run_remote(
+        node,
+        _shell_command(node, [node.python, "-c", code]),
+        timeout=20.0,
+    )
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError(f"could not determine route source on {node.name}")
+    return lines[-1]
+
+
 def _distributed_env(
     *,
     node: NodeSpec,
@@ -765,8 +797,16 @@ def _run_elastic_ddp_restart_case(
     timeout_ms = max(1, round(timeout * 1000))
     process_group_timeout = max(10, min(60, round(timeout / 2)))
     failed_node = nodes[1]
+    local_addresses = {
+        node.name: _remote_route_source(
+            node,
+            destination_host=rendezvous_host,
+            destination_port=rendezvous_port,
+        )
+        for node in nodes
+    }
     processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
-    for node in nodes:
+    for node_index, node in enumerate(nodes):
         env = _distributed_env(
             node=node,
             endpoint=endpoint,
@@ -785,6 +825,8 @@ def _run_elastic_ddp_restart_case(
             "--rdzv-backend=c10d",
             f"--rdzv-endpoint={rendezvous_host}:{rendezvous_port}",
             f"--rdzv-id={session}-elastic-ddp",
+            f"--rdzv-conf=is_host={'true' if node_index == 0 else 'false'}",
+            f"--local-addr={local_addresses[node.name]}",
             str(ELASTIC_DDP_WORKER_RELATIVE),
             f"--report-dir={report_dir}",
             f"--node-name={node.name}",
@@ -828,12 +870,17 @@ def _run_elastic_ddp_restart_case(
         )
         for node in nodes
     ]
-    return _validate_elastic_ddp_restart_reports(
+    summary = _validate_elastic_ddp_restart_reports(
         initial,
         restarted,
         node_names=[node.name for node in nodes],
         failed_node=failed_node.name,
     )
+    summary["rendezvous_endpoint"] = (
+        f"{rendezvous_host}:{rendezvous_port}"
+    )
+    summary["local_addresses"] = local_addresses
+    return summary
 
 
 def _run_fsdp_case(
