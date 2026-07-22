@@ -118,7 +118,7 @@ def _static_report() -> dict:
     }
 
 
-def _rank_report(rank: int, *, overall: int = 314) -> dict:
+def _rank_report(rank: int, *, overall: int = 194) -> dict:
     return {
         "status": "success",
         "rank": rank,
@@ -157,9 +157,9 @@ def _rank_report(rank: int, *, overall: int = 314) -> dict:
         "fsdp2": {"sharding_plan": _plan()},
         "memory_phases": {
             "forward_peak_bytes": 184,
-            "backward_peak_bytes": 314,
-            "graph_peak_bytes": 314,
-            "optimizer_peak_bytes": 124,
+            "backward_peak_bytes": 194,
+            "graph_peak_bytes": 194,
+            "optimizer_peak_bytes": 172,
             "overall_peak_bytes": overall,
         },
         "phase_seconds": {
@@ -191,7 +191,7 @@ def test_fsdp2_lora_comparison_accepts_matching_phase_predictions() -> None:
     )
 
     assert report["status"] == "success"
-    assert report["projections"][0]["first_step_peak_bytes"] == 314
+    assert report["projections"][0]["first_step_peak_bytes"] == 194
     assert report["ranks"][0]["comparisons"]["overall"][
         "absolute_error_percent"
     ] == 0.0
@@ -200,7 +200,7 @@ def test_fsdp2_lora_comparison_accepts_matching_phase_predictions() -> None:
 
 def test_fsdp2_lora_comparison_rejects_large_phase_error() -> None:
     report = compare_fsdp2_lora_reports(
-        [_rank_report(0, overall=400), _rank_report(1, overall=400)],
+        [_rank_report(0, overall=300), _rank_report(1, overall=300)],
         _static_report(),
         _cluster_report(),
         max_error_percent=5.0,

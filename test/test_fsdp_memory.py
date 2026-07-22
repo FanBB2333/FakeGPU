@@ -125,7 +125,8 @@ def test_fully_shard_plan_tracks_per_parameter_padding_and_trainability() -> Non
     assert plan["largest_nested_local_parameter_bytes"] == [16, 16]
     assert plan["forward_collective_workspace_bytes"] == [128, 128]
     assert plan["backward_prefetch_parameter_bytes"] == 56
-    assert plan["backward_collective_extra_bytes"] == [104, 104]
+    assert plan["backward_collective_extra_bytes"] == [24, 24]
+    assert plan["optimizer_runtime_workspace_bytes"] == [32, 32]
     assert plan["largest_trainable_unsharded_gradient_bytes"] == 32
     assert plan["largest_trainable_local_gradient_bytes"] == [16, 16]
     assert plan["rank_shards"][0]["adamw_optimizer_temporary_bytes"] == 32
@@ -225,14 +226,17 @@ def test_fully_shard_projection_uses_forward_and_gradient_events() -> None:
     assert estimate["root_parameter_workspace_bytes"] == 16
     assert estimate["forward_collective_workspace_bytes"] == 152
     assert estimate["backward_parameter_workspace_bytes"] == 64
-    assert estimate["backward_collective_extra_bytes"] == 136
+    assert estimate["backward_collective_extra_bytes"] == 16
+    assert estimate["optimizer_runtime_workspace_bytes"] == 48
     assert estimate["reduce_scatter_workspace_bytes"] == 16
     assert estimate["captured_graph_peak_bytes"] == 148
     assert estimate["forward_collective_floor_bytes"] == 184
     assert estimate["forward_graph_peak_bytes"] == 184
-    assert estimate["backward_graph_peak_bytes"] == 314
-    assert estimate["first_step_graph_peak_bytes"] == 314
+    assert estimate["gradient_phase_peak_bytes"] == 194
+    assert estimate["backward_activation_floor_bytes"] == 192
+    assert estimate["backward_graph_peak_bytes"] == 194
+    assert estimate["first_step_graph_peak_bytes"] == 194
     assert estimate["local_optimizer_state_bytes"] == 32
     assert estimate["local_optimizer_temporary_bytes"] == 24
-    assert estimate["optimizer_peak_bytes"] == 124
-    assert estimate["first_step_peak_bytes"] == 314
+    assert estimate["optimizer_peak_bytes"] == 172
+    assert estimate["first_step_peak_bytes"] == 194
