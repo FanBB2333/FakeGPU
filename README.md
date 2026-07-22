@@ -345,9 +345,9 @@ checks.
 | NVML | Device identity, memory information, common monitoring queries | Some telemetry fields are synthetic or unavailable |
 | cuBLAS/cuBLASLt | Selected GEMM/matmul operations with CPU-backed execution | Unsupported algorithms may remain stubbed |
 | PyTorch fake-CUDA | Common tensor, module, autograd, optimizer, Transformers, PEFT, Accelerate, and FSDP smoke paths; real-CUDA Hybrid DDP/FSDP numerical checks | Custom CUDA extensions are not emulated |
-| NCCL-style communication | Collective and point-to-point control flow, TCP socket payloads, deterministic direct-collective failure, controlled rank-process exit observed through collective timeout, communicator shrink/recovery, topology-aware reporting, PyTorch-required NCCL 2.29 host symbols | Not a protocol-level NCCL/RDMA/NVLink model; no heartbeat-based membership or automatic elastic restart; device-communicator and signal/RMA operations are not simulated |
+| NCCL-style communication | Collective and point-to-point control flow, TCP socket payloads, deterministic direct-collective failure, controlled rank-process exit, communicator shrink/recovery, fixed-size `torchrun` worker-group restart, topology-aware reporting, PyTorch-required NCCL 2.29 host symbols | Not a protocol-level NCCL/RDMA/NVLink model; no heartbeat-based membership resizing; device-communicator and signal/RMA operations are not simulated |
 | Memory preflight | Runtime tracking, ATen static analysis, empirical GPU calibration | Results apply to the validated shape and software envelope |
-| Error simulation | OOM, invalid device, cross-device, dtype/autocast, gradient, checkpoint, injected rank failure, and controlled process-exit cases | Error timing can differ from a real driver; distributed recovery currently targets direct collectives in simulate mode |
+| Error simulation | OOM, invalid device, cross-device, dtype/autocast, gradient, checkpoint, injected rank failure, controlled process exit, and elastic DDP restart | Error timing can differ from a real driver; framework restart is validated for a fixed two-node worker group |
 
 ## GPU profiles
 
@@ -497,7 +497,8 @@ The distributed paths were also checked on the same two hosts:
 | Qwen3.5 DeepSpeed LoRA SFT | Two ranks sharing each GPU | ZeRO-2/3 forward, backward, AdamW update, communication report, accumulation, and reentrant checkpointing passed with local Qwen3.5-0.8B weights |
 | DeepSpeed checkpoint and offload | Two ranks sharing each GPU | ZeRO-2/3 save/restore/continued training/FP32 consolidation passed; ZeRO-2 optimizer and ZeRO-3 optimizer + parameter CPU offload placed the requested state on CPU |
 | Hugging Face Trainer + DeepSpeed | Two ranks sharing each GPU | Tiny ZeRO-2/3 and Qwen3.5-0.8B LoRA ZeRO-3 completed real updates, gradient accumulation, checkpointing, and rank-consistency checks |
-| Physical-host Hybrid DDP | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | The same numerical result across PyTorch 2.9.1/CUDA 12.8 and PyTorch 2.12.1/CUDA 13.0; TCP broadcast, all-reduce, and all-gather completed with zero timeouts |
+| Physical-host Hybrid DDP | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | The same numerical result across PyTorch 2.8.0/CUDA 12.8 and PyTorch 2.12.1/CUDA 13.0; TCP broadcast, all-reduce, and all-gather completed with zero timeouts |
+| Physical-host elastic DDP | One rank on each GPU over Tailscale | The 3090 Ti worker exited with code 86 while its communicator was active; `torchrun` replaced both PIDs, synchronized asymmetric local restart counts, created a second communicator, and reproduced gradient `[1.5, 3.0]` and parameters `[0.85, -0.30]` |
 | Physical-host Hybrid FSDP2 | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | FP32/FP16/BF16 parameters and FP16/BF16 gradient reductions passed over TCP; the report identifies collective dtype and reduction operator |
 | Physical-host Hybrid DeepSpeed | One rank per physical GPU over Tailscale | ZeRO-2 passed across DeepSpeed 0.15.3 ↔ 0.19.2 with identical parameters and 176 reported node-pair bytes; ZeRO-3 now rejects mismatched DeepSpeed versions during preflight |
 | Physical-host TCP all-to-all-v | RTX PRO 5000 coordinator/rank 0 ↔ RTX 3090 Ti rank 1 over Tailscale | Nonuniform 2 MiB/3 MiB and sparse 0 MiB/1 MiB cross-host splits produced exact payloads; 2 calls reported 12 MiB logical bytes, 6 MiB inter-node bytes, and a 5 MiB node-pair peak |
@@ -518,6 +519,7 @@ prediction.
 ./ftest preflight_oom
 ./ftest tcp_bandwidth
 ./ftest distributed_resilience
+./ftest elastic_ddp
 ./ftest static_memory_validation
 ./ftest real_gpu_calibration
 python3 -m pytest -q
@@ -530,7 +532,8 @@ python3 -m pytest -q
 | `python` | Basic PyTorch native-interception path |
 | `preflight_oom` | Fit/OOM classification and report validation |
 | `tcp_bandwidth` | Two logical nodes, TCP payload correctness, and throughput reporting |
-| `distributed_resilience` | Rank-failure injection, real worker exit, collective-timeout inference, persistent async errors, communicator shrink/recovery, collective mismatch, missing-peer timeout, and bounded operation-timeline retention |
+| `distributed_resilience` | Rank-failure injection, real worker exit, elastic DDP restart, collective-timeout inference, persistent async errors, communicator shrink/recovery, collective mismatch, missing-peer timeout, and bounded operation-timeline retention |
+| `elastic_ddp` | Two-worker `torchrun --max-restarts=1` process exit, full-group PID replacement, and restarted DDP numerics over local Gloo |
 | `static_memory_validation` | ATen graph memory estimation; optional real-CUDA comparison |
 | `real_gpu_calibration` | Real/passthrough/hybrid/fakecuda comparison on a supported GPU |
 
@@ -568,9 +571,9 @@ The physical two-host controller in
 `verification/run_physical_multihost.py` verifies that both repositories use
 the same Git commit, launches Hybrid DDP (including common execution options),
 FSDP/FSDP2 (including mixed-precision parameters and reductions), optional
-DeepSpeed ZeRO-2/3 cases, and TCP fault cases including injected failure and
-real four-rank worker-exit/shrink recovery, then collects JSON and Markdown
-reports on the control host.
+DeepSpeed ZeRO-2/3 cases, fixed-size elastic DDP restart, and TCP fault cases
+including injected failure and real four-rank worker-exit/shrink recovery,
+then collects JSON and Markdown reports on the control host.
 Cluster report validation also reconciles collective/P2P
 counters, operation-timeline retention, collective dtype/reduction metadata,
 resilience-event counts, directional links, and node-pair totals.
@@ -600,7 +603,7 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 - The checkpoint-only LLM estimator supports dense decoder-only safetensors models; it does not infer arbitrary repository control flow, MoE routing, quantization state, or custom kernels.
 - Supported cuBLAS/cuBLASLt operations can be numerically checked on CPU; unsupported operations may be stubs.
 - Distributed simulation checks semantics and control flow. Its TCP result includes coordinator reduction, memory copies, and process scheduling, so it is not an exact NCCL/RDMA or raw-link measurement.
-- The resilience harness can terminate a worker process and infer the absent rank when the next collective times out. FakeGPU does not provide heartbeat-based failure detection, automatic membership changes, or framework-level elastic restart; survivors still call `ncclCommShrink` with an explicit exclusion list.
+- The fixed-size elastic DDP check relies on `torchrun` for worker supervision and rendezvous. FakeGPU does not provide heartbeat-based detection or dynamic membership resizing. The direct-collective recovery path still requires survivors to call `ncclCommShrink` with an explicit exclusion list.
 - Static and runtime memory estimates can omit backend-internal allocations outside matched profiles.
 - Hybrid mode requires a real GPU and remains limited to validated Driver/runtime surfaces.
 - macOS system binaries can remove `DYLD_*` variables because of SIP; use a Homebrew, conda, or pyenv Python.

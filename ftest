@@ -17,7 +17,7 @@ Suites:
   python    Run PyTorch tests (requires torch)
   preflight_oom  Run fakecuda preflight pass/OOM report checks (requires torch)
   tcp_bandwidth  Simulate two logical nodes and measure TCP collective throughput
-  distributed_resilience  Validate TCP mismatch/missing-peer failures and bounded reports
+  distributed_resilience  Validate rank failures, elastic restart, timeouts, and reports
   elastic_ddp  Restart a failed torchrun worker group and validate DDP numerics
   static_memory_validation  Capture ATen storage liveness and compare with real CUDA when available
   real_gpu_calibration  Calibrate real/passthrough/hybrid/fakecuda workloads on the detected GPU

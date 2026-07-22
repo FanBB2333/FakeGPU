@@ -183,7 +183,7 @@ python3 -m torch.distributed.run \
   --report-dir="/tmp/fakegpu-cross-ddp-rank${NODE_RANK}"
 ```
 
-The maintained two-host result used PyTorch 2.9.1/CUDA 12.8 on the RTX PRO
+The maintained two-host result used PyTorch 2.8.0/CUDA 12.8 on the RTX PRO
 5000 and PyTorch 2.12.1/CUDA 13.0 on the RTX 3090 Ti. Basic DDP, all DDP
 option cases, FSDP, and FSDP2 produced the expected gradients and identical
 rebuilt parameters. The complete DDP/FSDP/fault report recorded 34 successful
@@ -227,6 +227,7 @@ python3 verification/run_physical_multihost.py \
 The default cases are:
 
 - heterogeneous two-host Hybrid DDP numerical correctness
+- fixed-size elastic DDP with an active worker exit and full worker-group restart
 - DDP `no_sync`, rank-dependent unused parameters, static graphs, and gradient bucket views
 - FSDP full sharding, reduce-scatter, optimizer, full-parameter, and state-dict correctness
 - FSDP2/DTensor FP32 sharding, optimizer, and full-tensor reconstruction
@@ -251,6 +252,20 @@ from the timed-out All-Reduce and then use the same explicit shrink mapping.
 The report records rank 2 as inferred absent and `[0, 1, 3]` as the ranks that
 actually submitted the failed operation. This is collective-timeout inference,
 not heartbeat detection or automatic elastic recovery.
+
+Use `--case elastic-ddp-restart` for framework-supervised recovery. The first
+worker group completes an All-Reduce, and the worker on the second host exits
+through `os._exit(86)` while the NCCL communicator remains active. With
+`--max-restarts=1`, `torchrun` replaces the complete fixed-size worker group.
+The workers exchange their local restart counters through the rendezvous store
+and use the maximum as the shared generation because agents can advance their
+local counters at different times. The restarted group must reproduce gradient
+`[1.5, 3.0]`, parameters `[0.85, -0.30]`, and cross-rank parameter equality.
+The controller selects a reachable source address for each host and explicitly
+hosts c10d rendezvous on the first node, which is required when its Tailscale
+address is not returned by hostname resolution. This check covers worker
+replacement at a fixed world size; it does not add heartbeat detection or
+membership resizing to FakeGPU.
 
 DeepSpeed is optional rather than part of the default set. Add
 `--case deepspeed-zero2` to validate one rank per physical host. The maintained
@@ -296,13 +311,22 @@ process-exit run. That combined report contained two failures, two recoveries,
 two successful post-shrink All-Reduces, 32 inter-node bytes total, and a
 16-byte node-pair peak.
 
+The framework-level elastic DDP check passed on the same hosts at commit
+`c6de112`. The RTX 3090 Ti worker exited with code `86`; `torchrun` replaced
+PIDs on both nodes even though their local restart counters were `1` and `0`.
+Both workers converged on generation 1, initialized a second communicator, and
+completed the expected DDP update. The cluster report retained four
+All-Reduces, two broadcasts, two All-Gathers, 224 node-pair bytes, and a
+64-byte node-pair peak. These counters describe coordinator traffic for the
+small numerical check, not recovery throughput.
+
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.
 It writes the combined result under
 `build/physical_multihost_validation/<session>/`, including the per-rank
 results, complete cluster JSON/Markdown reports, node-pair totals, and failure
-observations. Run `./ftest distributed_resilience` for the corresponding
-single-host regression checks.
+observations. Run `./ftest elastic_ddp` for the focused local restart check, or
+`./ftest distributed_resilience` for the complete maintained failure suite.
 
 ## Minimal cluster config
 

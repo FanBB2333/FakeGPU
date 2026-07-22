@@ -178,7 +178,7 @@ python3 -m torch.distributed.run \
   --report-dir="/tmp/fakegpu-cross-ddp-rank${NODE_RANK}"
 ```
 
-当前维护的两机结果使用 RTX PRO 5000 上的 PyTorch 2.9.1/CUDA 12.8，
+当前维护的两机结果使用 RTX PRO 5000 上的 PyTorch 2.8.0/CUDA 12.8，
 以及 RTX 3090 Ti 上的 PyTorch 2.12.1/CUDA 13.0。基础 DDP、全部 DDP
 选项场景、FSDP 和 FSDP2 都得到预期梯度及一致的重建参数。DDP/FSDP/异常
 场景的完整 cluster 报告记录 34 个成功通信操作、节点对总量 1,104 字节、
@@ -218,6 +218,7 @@ python3 verification/run_physical_multihost.py \
 默认包含以下场景：
 
 - 异构两主机 Hybrid DDP 数值正确性
+- 固定 world size 的 elastic DDP：活跃 worker 退出后重启完整 worker group
 - DDP `no_sync`、不同 rank 使用不同分支时的未使用参数、静态图和 gradient bucket view
 - FSDP 全分片、reduce-scatter、optimizer、完整参数和 state dict 正确性
 - FSDP2/DTensor FP32 分片、optimizer 与完整张量重建
@@ -240,6 +241,17 @@ All-Reduce 收到持续可见的 `ncclSystemError`，随后使用相同的明确
 shrink。报告将 rank 2 记为推断出的缺席节点，并把 `[0, 1, 3]` 记为实际
 提交失败操作的 ranks。这是 collective 超时推断，不是 heartbeat 检测或
 自动 elastic 恢复。
+
+框架管理的恢复使用 `--case elastic-ddp-restart`。首个 worker group 完成
+All-Reduce 后，第二台主机上的 worker 在 NCCL communicator 仍然活跃时通过
+`os._exit(86)` 退出。`torchrun --max-restarts=1` 随后替换固定 world size
+中的全部 worker。不同 agent 的本地 restart count 可能不会同时递增，因此
+worker 会通过 rendezvous store 交换本地计数，并以最大值确定共同代次。重启
+后的 group 必须得到梯度 `[1.5, 3.0]`、参数 `[0.85, -0.30]`，且两个 rank
+看到的参数完全一致。控制脚本还会自动选择每台主机访问 rendezvous 的源地址，
+并明确让第一台主机托管 c10d store，适用于主机名解析不包含 Tailscale 地址
+的情况。该测试覆盖固定 world size 的 worker 替换，不包含 heartbeat 检测
+或动态成员调整。
 
 DeepSpeed 是可选场景，不在默认集合中。添加 `--case deepspeed-zero2` 可以验证
 每台物理主机各运行一个 rank；维护中的异构实验已在 DeepSpeed 0.15.3 和
@@ -275,11 +287,19 @@ ranks 完成初始化后，rank 2 以状态码 `86` 退出。Ranks 0、1、3 在
 `2103.185 us`；整份报告包含两次故障、两次恢复、两次成功的恢复后
 All-Reduce、32 字节节点间总量和 16 字节节点对单次峰值。
 
+同一组主机还在 commit `c6de112` 上通过了框架级 elastic DDP。RTX 3090 Ti
+worker 以状态码 `86` 退出后，两台主机的 worker PID 都被 `torchrun` 替换。
+两端本地 restart count 分别为 `1` 和 `0`，但都进入共享代次 1，建立第二个
+communicator，并完成符合解析结果的 DDP 更新。Cluster 报告记录 4 次
+All-Reduce、2 次 broadcast、2 次 All-Gather、224 字节节点对总量和 64 字节
+节点对单次峰值。这些数据用于验证 coordinator 通信，不表示恢复吞吐率。
+
 启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
 信息和 native 构建产物。合并报告写入
 `build/physical_multihost_validation/<session>/`，其中包含各 rank 结果、
-完整 cluster JSON/Markdown 报告、节点对通信总量和异常观测。对应的单机
-回归检查入口是 `./ftest distributed_resilience`。
+完整 cluster JSON/Markdown 报告、节点对通信总量和异常观测。聚焦 worker
+重启的单机检查入口是 `./ftest elastic_ddp`；完整故障测试使用
+`./ftest distributed_resilience`。
 
 ## 最小 cluster config
 
