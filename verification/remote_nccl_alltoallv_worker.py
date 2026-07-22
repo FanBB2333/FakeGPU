@@ -22,9 +22,11 @@ class NcclUniqueId(ctypes.Structure):
 
 
 def _session_token(session: str) -> bytes:
-    return hashlib.sha256(
-        f"fakegpu-remote-alltoallv-v1:{session}".encode("utf-8")
-    ).hexdigest()[:32].encode("ascii")
+    return (
+        hashlib.sha256(f"fakegpu-remote-alltoallv-v1:{session}".encode("utf-8"))
+        .hexdigest()[:32]
+        .encode("ascii")
+    )
 
 
 def _unique_id(session: str) -> NcclUniqueId:
@@ -91,12 +93,20 @@ def split_count(sender: int, receiver: int, *, sparse: bool) -> int:
     return 0 if (sender + 2 * receiver) % 3 == 2 else 1
 
 
-def split_plan(rank: int, world_size: int, *, sparse: bool) -> tuple[list[int], list[int]]:
+def split_plan(
+    rank: int,
+    world_size: int,
+    *,
+    sparse: bool,
+    elements_per_unit: int = 1,
+) -> tuple[list[int], list[int]]:
     sends = [
-        split_count(rank, peer, sparse=sparse) for peer in range(world_size)
+        split_count(rank, peer, sparse=sparse) * elements_per_unit
+        for peer in range(world_size)
     ]
     receives = [
-        split_count(peer, rank, sparse=sparse) for peer in range(world_size)
+        split_count(peer, rank, sparse=sparse) * elements_per_unit
+        for peer in range(world_size)
     ]
     return sends, receives
 
@@ -106,10 +116,12 @@ def expected_receive_values(
     world_size: int,
     *,
     sparse: bool,
+    elements_per_unit: int = 1,
 ) -> list[float]:
     values: list[float] = []
     for sender in range(world_size):
-        for index in range(split_count(sender, rank, sparse=sparse)):
+        count = split_count(sender, rank, sparse=sparse) * elements_per_unit
+        for index in range(count):
             values.append(float(1000 * sender + 100 * rank + index))
     return values
 
@@ -130,15 +142,46 @@ def _buffer_pointer(buffer: Any, element_offset: int) -> ctypes.c_void_p:
     )
 
 
+def _buffer_digest(buffer: Any, element_count: int) -> str:
+    raw = ctypes.string_at(
+        ctypes.addressof(buffer),
+        element_count * ctypes.sizeof(ctypes.c_float),
+    )
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _buffer_sample(buffer: Any, element_count: int) -> list[float]:
+    if element_count <= 8:
+        indices = list(range(element_count))
+    else:
+        indices = [
+            0,
+            1,
+            2,
+            3,
+            element_count - 4,
+            element_count - 3,
+            element_count - 2,
+            element_count - 1,
+        ]
+    return [float(buffer[index]) for index in indices]
+
+
 def _run_variant(
     *,
     rank: int,
     world_size: int,
     sparse: bool,
+    elements_per_unit: int,
     lib: ctypes.CDLL,
     comm: ctypes.c_void_p,
 ) -> dict[str, Any]:
-    send_splits, recv_splits = split_plan(rank, world_size, sparse=sparse)
+    send_splits, recv_splits = split_plan(
+        rank,
+        world_size,
+        sparse=sparse,
+        elements_per_unit=elements_per_unit,
+    )
     send_offsets = _offsets(send_splits)
     recv_offsets = _offsets(recv_splits)
     send_total = sum(send_splits)
@@ -194,11 +237,23 @@ def _run_variant(
     _require_success(int(lib.ncclGroupEnd()), "ncclGroupEnd", lib, comm)
     elapsed = time.monotonic() - started
 
-    received = [float(recv_buffer[index]) for index in range(recv_total)]
-    expected = expected_receive_values(rank, world_size, sparse=sparse)
-    if received != expected:
+    mismatch: tuple[int, float, float] | None = None
+    received_index = 0
+    for sender in range(world_size):
+        for index in range(recv_splits[sender]):
+            actual = float(recv_buffer[received_index])
+            expected = float(1000 * sender + 100 * rank + index)
+            if actual != expected:
+                mismatch = (received_index, actual, expected)
+                break
+            received_index += 1
+        if mismatch is not None:
+            break
+    if mismatch is not None:
+        index, actual, expected = mismatch
         raise AssertionError(
-            f"all-to-all-v payload mismatch: received={received}, expected={expected}"
+            "all-to-all-v payload mismatch at element "
+            f"{index}: received={actual}, expected={expected}"
         )
     remote_peer = 1 - rank if world_size == 2 else None
     cross_host_send_bytes = (
@@ -206,18 +261,39 @@ def _run_variant(
         if remote_peer is not None
         else None
     )
-    return {
+    result = {
         "name": "sparse" if sparse else "nonuniform",
+        "elements_per_unit": elements_per_unit,
         "send_splits": send_splits,
         "recv_splits": recv_splits,
-        "send_values": [float(send_buffer[index]) for index in range(send_total)],
-        "received_values": received,
-        "expected_values": expected,
+        "payload_validated": True,
+        "send_sha256": _buffer_digest(send_buffer, send_total),
+        "received_sha256": _buffer_digest(recv_buffer, recv_total),
+        "send_sample": _buffer_sample(send_buffer, send_total),
+        "received_sample": _buffer_sample(recv_buffer, recv_total),
         "send_bytes": send_total * ctypes.sizeof(ctypes.c_float),
         "recv_bytes": recv_total * ctypes.sizeof(ctypes.c_float),
         "cross_host_send_bytes": cross_host_send_bytes,
         "operation_seconds": elapsed,
     }
+    if max(send_total, recv_total) <= 64:
+        result.update(
+            {
+                "send_values": [
+                    float(send_buffer[index]) for index in range(send_total)
+                ],
+                "received_values": [
+                    float(recv_buffer[index]) for index in range(recv_total)
+                ],
+                "expected_values": expected_receive_values(
+                    rank,
+                    world_size,
+                    sparse=sparse,
+                    elements_per_unit=elements_per_unit,
+                ),
+            }
+        )
+    return result
 
 
 def run_worker(args: argparse.Namespace) -> dict[str, Any]:
@@ -227,6 +303,7 @@ def run_worker(args: argparse.Namespace) -> dict[str, Any]:
         "world_size": args.world_size,
         "session": args.session,
         "timeout_ms": args.timeout_ms,
+        "elements_per_unit": args.elements_per_unit,
         "coordinator": os.environ.get("FAKEGPU_COORDINATOR_ADDR", ""),
         "status": "starting",
     }
@@ -253,6 +330,7 @@ def run_worker(args: argparse.Namespace) -> dict[str, Any]:
                 rank=args.rank,
                 world_size=args.world_size,
                 sparse=sparse,
+                elements_per_unit=args.elements_per_unit,
                 lib=lib,
                 comm=comm,
             )
@@ -297,6 +375,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--world-size", type=int, required=True)
     parser.add_argument("--session", required=True)
     parser.add_argument("--timeout-ms", type=int, required=True)
+    parser.add_argument("--elements-per-unit", type=int, default=1)
     parser.add_argument("--nccl-lib", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -307,6 +386,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--rank must be within [0, world-size)")
     if args.timeout_ms <= 0:
         parser.error("--timeout-ms must be greater than zero")
+    if args.elements_per_unit < 1 or args.elements_per_unit > 4_194_304:
+        parser.error("--elements-per-unit must be within 1..4194304")
     if not args.nccl_lib.is_file():
         parser.error(f"fake NCCL library does not exist: {args.nccl_lib}")
 

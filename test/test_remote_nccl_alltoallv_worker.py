@@ -38,3 +38,20 @@ def test_expected_receive_values_follow_sender_order() -> None:
     assert expected_receive_values(1, 2, sparse=False) == [100.0, 101.0, 1100.0]
     assert expected_receive_values(0, 2, sparse=True) == [0.0, 1.0, 1000.0]
     assert expected_receive_values(1, 2, sparse=True) == [1100.0, 1101.0]
+
+
+def test_split_plan_scales_without_changing_sparsity() -> None:
+    assert split_plan(0, 2, sparse=False, elements_per_unit=4) == (
+        [4, 8],
+        [4, 12],
+    )
+    assert split_plan(0, 2, sparse=True, elements_per_unit=4) == (
+        [8, 0],
+        [8, 4],
+    )
+    assert expected_receive_values(
+        1,
+        2,
+        sparse=True,
+        elements_per_unit=2,
+    ) == [1100.0, 1101.0, 1102.0, 1103.0]
