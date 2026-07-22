@@ -755,6 +755,7 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
             "ddp": [{}, {}],
             "elastic_ddp_restart": {"failure_exit_code": 86},
             "elastic_ddp_checkpoint": {"failure_exit_code": 86},
+            "elastic_ddp_training_state": {"failure_exit_code": 86},
             "ddp_options": {},
             "fsdp": [{}, {}],
             "fsdp2": [{}, {}],
@@ -813,6 +814,7 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     assert "DDP options" in markdown
     assert "Elastic DDP restart" in markdown
     assert "Elastic DDP checkpoint recovery" in markdown
+    assert "Elastic DDP training-state recovery" in markdown
     assert "Hybrid FSDP" in markdown
     assert "Hybrid FSDP2" in markdown
     assert "FSDP2 mixed precision" in markdown

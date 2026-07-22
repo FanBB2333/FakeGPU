@@ -18,6 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+try:
+    from verification.elastic_ddp_training_state_validation import (
+        validate_elastic_ddp_training_state_reports,
+    )
+except ModuleNotFoundError:
+    from elastic_ddp_training_state_validation import (  # type: ignore[no-redef]
+        validate_elastic_ddp_training_state_reports,
+    )
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_CONFIG_RELATIVE = Path("verification/data/cluster_tcp_4r.yaml")
@@ -25,6 +34,9 @@ DDP_WORKER_RELATIVE = Path("test/test_ddp_hybrid_numerics.py")
 ELASTIC_DDP_WORKER_RELATIVE = Path("verification/elastic_ddp_worker.py")
 ELASTIC_DDP_CHECKPOINT_WORKER_RELATIVE = Path(
     "verification/elastic_ddp_checkpoint_worker.py"
+)
+ELASTIC_DDP_TRAINING_STATE_WORKER_RELATIVE = Path(
+    "verification/elastic_ddp_training_state_worker.py"
 )
 FSDP_WORKER_RELATIVE = Path("test/test_fsdp_hybrid_numerics.py")
 FSDP2_WORKER_RELATIVE = Path("test/test_fsdp2_hybrid_numerics.py")
@@ -251,6 +263,7 @@ payload = {
     "ddp_worker_exists": pathlib.Path("test/test_ddp_hybrid_numerics.py").is_file(),
     "elastic_ddp_worker_exists": pathlib.Path("verification/elastic_ddp_worker.py").is_file(),
     "elastic_ddp_checkpoint_worker_exists": pathlib.Path("verification/elastic_ddp_checkpoint_worker.py").is_file(),
+    "elastic_ddp_training_state_worker_exists": pathlib.Path("verification/elastic_ddp_training_state_worker.py").is_file(),
     "fsdp_worker_exists": pathlib.Path("test/test_fsdp_hybrid_numerics.py").is_file(),
     "fsdp2_worker_exists": pathlib.Path("test/test_fsdp2_hybrid_numerics.py").is_file(),
     "deepspeed_worker_exists": pathlib.Path("test/test_deepspeed_hybrid_numerics.py").is_file(),
@@ -279,6 +292,7 @@ print(json.dumps(payload, sort_keys=True))
         "ddp_worker_exists",
         "elastic_ddp_worker_exists",
         "elastic_ddp_checkpoint_worker_exists",
+        "elastic_ddp_training_state_worker_exists",
         "fsdp_worker_exists",
         "fsdp2_worker_exists",
         "fault_worker_exists",
@@ -1306,6 +1320,117 @@ def _run_elastic_ddp_checkpoint_case(
     return summary
 
 
+def _run_elastic_ddp_training_state_case(
+    nodes: list[NodeSpec],
+    *,
+    endpoint: str,
+    rendezvous_host: str,
+    rendezvous_port: int,
+    remote_root: str,
+    session: str,
+    timeout: float,
+) -> dict[str, Any]:
+    report_dir = f"{remote_root}/elastic-ddp-training-state/reports"
+    checkpoint_dir = (
+        f"{remote_root}/elastic-ddp-training-state/checkpoints"
+    )
+    timeout_ms = min(10_000, max(2_000, round(timeout * 100)))
+    process_group_timeout = max(10, min(60, round(timeout / 2)))
+    failed_node = nodes[1]
+    local_addresses = {
+        node.name: _remote_route_source(
+            node,
+            destination_host=rendezvous_host,
+            destination_port=rendezvous_port,
+        )
+        for node in nodes
+    }
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    for node_index, node in enumerate(nodes):
+        env = _distributed_env(
+            node=node,
+            endpoint=endpoint,
+            timeout_ms=timeout_ms,
+            hybrid=True,
+        )
+        env["LD_PRELOAD"] = f"{node.repo}/build/libnccl.so.2"
+        argv = [
+            node.python,
+            "-m",
+            "torch.distributed.run",
+            "--nnodes=2",
+            "--nproc-per-node=1",
+            "--max-restarts=1",
+            "--monitor-interval=0.2",
+            "--rdzv-backend=c10d",
+            f"--rdzv-endpoint={rendezvous_host}:{rendezvous_port}",
+            f"--rdzv-id={session}-elastic-ddp-training-state",
+            f"--rdzv-conf=is_host={'true' if node_index == 0 else 'false'}",
+            f"--local-addr={local_addresses[node.name]}",
+            str(ELASTIC_DDP_TRAINING_STATE_WORKER_RELATIVE),
+            f"--report-dir={report_dir}",
+            f"--checkpoint-dir={checkpoint_dir}",
+            f"--node-name={node.name}",
+            "--backend=nccl",
+            "--trace-store",
+            f"--timeout-seconds={process_group_timeout}",
+            f"--survivor-wait-seconds={process_group_timeout}",
+        ]
+        if node == failed_node:
+            argv.append("--fail-this-node")
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        env=env,
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+    _collect_processes(
+        processes,
+        timeout=timeout,
+        label="Hybrid elastic DDP training-state recovery",
+    )
+
+    initial = [
+        _read_remote_json(
+            node,
+            f"{report_dir}/attempt_0_"
+            f"{_safe_report_component(node.name)}_local_0.json",
+        )
+        for node in nodes
+    ]
+    restarted = [
+        _read_remote_json(
+            node,
+            f"{report_dir}/attempt_1_"
+            f"{_safe_report_component(node.name)}_local_0.json",
+        )
+        for node in nodes
+    ]
+    summary = validate_elastic_ddp_training_state_reports(
+        initial,
+        restarted,
+        backend="nccl",
+        require_physical_gpu=True,
+    )
+    summary["failed_node"] = failed_node.name
+    summary["rank_nodes"] = {
+        str(item["rank"]): str(item["node_name"]) for item in restarted
+    }
+    summary["rendezvous_endpoint"] = (
+        f"{rendezvous_host}:{rendezvous_port}"
+    )
+    summary["local_addresses"] = local_addresses
+    return summary
+
+
 def _run_fsdp_case(
     nodes: list[NodeSpec],
     *,
@@ -2249,6 +2374,15 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             f"momentum `[2.85, 5.7]` after worker exit code "
             f"`{checkpoint['failure_exit_code']}`."
         )
+    if "elastic_ddp_training_state" in cases:
+        training_state = cases["elastic_ddp_training_state"]
+        lines.append(
+            "- Elastic DDP training-state recovery: AdamW moments, StepLR, "
+            "rank-local RNG, and one pending accumulation micro-step were "
+            "restored after worker exit code "
+            f"`{training_state['failure_exit_code']}`; step 2 produced "
+            "parameters `[0.983838, -0.014662]` on both hosts."
+        )
     if "ddp_options" in cases:
         lines.append(
             "- DDP options: `no_sync`, `find_unused_parameters`, "
@@ -2397,6 +2531,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "ddp",
         "elastic-ddp-restart",
         "elastic-ddp-checkpoint",
+        "elastic-ddp-training-state",
         "ddp-options",
         "fsdp",
         "fsdp2",
@@ -2527,6 +2662,18 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                     endpoint=endpoint,
                     rendezvous_host=args.coordinator_host,
                     rendezvous_port=args.elastic_checkpoint_port,
+                    remote_root=remote_root,
+                    session=args.session,
+                    timeout=args.case_timeout,
+                )
+            )
+        if "elastic-ddp-training-state" in cases:
+            case_reports["elastic_ddp_training_state"] = (
+                _run_elastic_ddp_training_state_case(
+                    nodes,
+                    endpoint=endpoint,
+                    rendezvous_host=args.coordinator_host,
+                    rendezvous_port=args.elastic_training_state_port,
                     remote_root=remote_root,
                     session=args.session,
                     timeout=args.case_timeout,
@@ -2693,13 +2840,17 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "ddp" in cases
         or "elastic-ddp-restart" in cases
         or "elastic-ddp-checkpoint" in cases
+        or "elastic-ddp-training-state" in cases
         or "ddp-options" in cases
         or selected_deepspeed_cases
     ):
         expected_collectives.update({"all_reduce", "all_gather"})
     if selected_deepspeed_pipeline:
         expected_collectives.add("all_gather")
-    if "elastic-ddp-checkpoint" in cases:
+    if (
+        "elastic-ddp-checkpoint" in cases
+        or "elastic-ddp-training-state" in cases
+    ):
         expected_collectives.add("broadcast")
     if "alltoallv" in cases:
         expected_collectives.add("all_to_all")
@@ -2727,6 +2878,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         expect_elastic_restart=(
             "elastic-ddp-restart" in cases
             or "elastic-ddp-checkpoint" in cases
+            or "elastic-ddp-training-state" in cases
         ),
         expected_minimum_communicators=(
             2
@@ -2735,6 +2887,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 for name in (
                     "elastic-ddp-restart",
                     "elastic-ddp-checkpoint",
+                    "elastic-ddp-training-state",
                 )
             )
         ),
@@ -2801,6 +2954,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--master-port", type=int, default=29592)
     parser.add_argument("--elastic-port", type=int, default=29593)
     parser.add_argument("--elastic-checkpoint-port", type=int, default=29594)
+    parser.add_argument("--elastic-training-state-port", type=int, default=29595)
     parser.add_argument(
         "--case",
         action="append",
@@ -2808,6 +2962,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "ddp",
             "elastic-ddp-restart",
             "elastic-ddp-checkpoint",
+            "elastic-ddp-training-state",
             "ddp-options",
             "fsdp",
             "fsdp2",
@@ -2857,6 +3012,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "master_port",
         "elastic_port",
         "elastic_checkpoint_port",
+        "elastic_training_state_port",
     ):
         port = int(getattr(args, port_name))
         if port < 1 or port > 65535:
@@ -2867,8 +3023,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.master_port,
             args.elastic_port,
             args.elastic_checkpoint_port,
+            args.elastic_training_state_port,
         }
-    ) != 4:
+    ) != 5:
         parser.error("coordinator and torch rendezvous ports must be distinct")
     if args.startup_timeout <= 0 or args.case_timeout <= 0:
         parser.error("timeouts must be greater than zero")
