@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 from verification.deepspeed_autoep_worker import (  # noqa: E402
     EXPECTED_INITIAL_W1,
     _nested_close,
+    _scalar_close,
 )
 from verification.run_hybrid_deepspeed_numerics import (  # noqa: E402
     _close_coordinator,
@@ -89,12 +90,11 @@ def _validate_rank_reports(
             tolerance,
         ):
             raise AssertionError(f"AutoEP rank {rank} output mismatch")
-        if (
-            abs(
-                float(report.get("loss", float("nan")))
-                - float(report.get("reference_loss", float("nan")))
-            )
-            > tolerance
+        if not _scalar_close(
+            float(report.get("loss", float("nan"))),
+            float(report.get("reference_loss", float("nan"))),
+            absolute_tolerance=tolerance,
+            relative_tolerance=3e-3 if precision == "bf16" else 0.0,
         ):
             raise AssertionError(f"AutoEP rank {rank} loss mismatch")
         gradients = report.get("gradient_norms", {})

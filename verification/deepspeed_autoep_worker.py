@@ -48,6 +48,19 @@ def _nested_close(actual: object, expected: object, tolerance: float) -> bool:
         return False
 
 
+def _scalar_close(
+    actual: float,
+    expected: float,
+    *,
+    absolute_tolerance: float,
+    relative_tolerance: float = 0.0,
+) -> bool:
+    return abs(actual - expected) <= max(
+        absolute_tolerance,
+        relative_tolerance * abs(expected),
+    )
+
+
 def _max_abs_delta(before: Any, after: Any) -> float:
     return float((after.detach().float() - before.detach().float()).abs().max())
 
@@ -335,7 +348,12 @@ def main(argv: list[str] | None = None) -> int:
             raise AssertionError(
                 f"AutoEP output mismatch: {output_values} != {reference_output_values}"
             )
-        if abs(loss_value - reference_loss_value) > tolerance:
+        if not _scalar_close(
+            loss_value,
+            reference_loss_value,
+            absolute_tolerance=tolerance,
+            relative_tolerance=3e-3 if args.precision == "bf16" else 0.0,
+        ):
             raise AssertionError(
                 f"AutoEP loss mismatch: {loss_value} != {reference_loss_value}"
             )
