@@ -161,6 +161,7 @@ def _consolidate_zero_checkpoint(
     precision: str,
 ) -> dict[str, Any]:
     import torch  # noqa: PLC0415
+    from deepspeed.runtime.fp16.loss_scaler import LossScaler  # noqa: PLC0415
     from deepspeed.runtime.zero.config import (  # noqa: PLC0415
         ZeroStageEnum,
     )
@@ -169,7 +170,7 @@ def _consolidate_zero_checkpoint(
     )
 
     if hasattr(torch.serialization, "add_safe_globals"):
-        torch.serialization.add_safe_globals([ZeroStageEnum])
+        torch.serialization.add_safe_globals([ZeroStageEnum, LossScaler])
     state_dict = get_fp32_state_dict_from_zero_checkpoint(
         str(checkpoint_dir),
         tag="global_step1",
