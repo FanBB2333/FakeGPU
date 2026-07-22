@@ -143,9 +143,13 @@ $PYTHON verification/run_hybrid_deepspeed_pipeline.py \
 位置、直接 `send`/`recv`、可选 `batch_isend_irecv`、activation checkpoint
 和 P2P 字节统计。FP32/BF16 × checkpoint 关闭/开启矩阵已在 DeepSpeed
 0.15.3 和 0.19.2 上通过；两套环境还各自通过了 FP32 batched-P2P smoke。
-梯度累积为 2 的矩阵在 0.15.3 上通过；0.19.2 在同一用例中得到正确 loss，但
-stage 0 的更新量只有预期的一半，因此该组合保留为兼容性探针，不计入 FakeGPU
-已通过范围。
+梯度累积为 2 的 FP32/BF16 × checkpoint 关闭/开启矩阵也已在两套环境通过。
+DeepSpeed 0.19.2 在 last stage 按 GAS 缩放 loss 梯度后，默认还会在前序 stage
+对收到的 activation gradient 再除一次 GAS。runner 默认使用
+`--pipeline-gradient-scaling auto`，只在 non-last stage 关闭第二次缩放，并将
+处理状态写入每个 rank 的报告。设置 `--pipeline-gradient-scaling native` 可保留
+DeepSpeed 原生行为；0.19.2 会稳定复现 stage 0 更新量减半。DeepSpeed 0.15.3
+没有对应的 tensor hook，报告会标记该设置不需要执行。
 
 物理主机的 `deepspeed-pipeline` 用例要求每个 stage 使用相同的 PyTorch、CUDA
 runtime 和 DeepSpeed 版本。当前两台主机分别使用 0.15.3 和 0.19.2，控制器会在
@@ -187,8 +191,10 @@ DeepSpeed 0.15.3 没有训练用 `auto_ep_layer`，验证器会将其报告为�
 [AutoEP 文档](https://deepspeed.readthedocs.io/en/latest/autoep.html)。
 
 原生 group semantics 命令还会验证 2/4 rank 的非均匀分片和零长度 peer 分片，
-同时覆盖 Unix 共享内存与 TCP socket payload。TCP 路径对应物理多机模拟使用的
-传输方式，但该结果不代表 NCCL/RDMA 性能。
+同时覆盖 Unix 共享内存与 TCP socket payload。Blackwell GPU 与 Ampere GPU
+之间的物理双主机用例也已通过：2 次 all-to-all 共记录 48 个逻辑字节、24 个
+跨节点字节，节点对单次峰值为 20 字节；稀疏用例包含 Blackwell GPU → 3090 Ti 的
+零长度分片。这些结果验证功能与 TCP 传输，不代表 NCCL/RDMA 性能。
 
 当前验证器不组合训练 AutoTP 与 AutoEP。WSL 环境也没有匹配的 JIT CUDA
 工具链，因此维护中的 AutoEP 用例使用顺序 expert 路径，不包含 grouped GEMM。
@@ -207,7 +213,7 @@ DeepSpeed 0.15.3 没有训练用 `auto_ep_layer`，验证器会将其报告为�
 | 路径 | DeepSpeed 0.15.3 / Blackwell GPU | DeepSpeed 0.19.2 / Ampere GPU |
 |---|---|---|
 | Pipeline，GAS=1 | FP32/BF16 直接 P2P checkpoint 矩阵和 FP32 batched-P2P smoke 通过 | FP32/BF16 直接 P2P checkpoint 矩阵和 FP32 batched-P2P smoke 通过 |
-| Pipeline，GAS=2 | FP32/BF16、checkpoint 开关通过 | 兼容性探针检测到 stage 0 更新量不一致 |
+| Pipeline，GAS=2 | FP32/BF16、checkpoint 开关通过，不需要兼容设置 | FP32/BF16、checkpoint 开关通过，报告记录 non-last-stage 缩放兼容设置；native 模式可复现上游半更新 |
 | AutoTP | 模块不存在，预检返回 2 | ZeRO 0/1/2 × FP32/BF16 通过 |
 | AutoEP | 训练模块不存在，预检返回 2 | ZeRO 0/1/2 × FP32/BF16 通过 |
 
@@ -304,7 +310,7 @@ DS_IGNORE_CUDA_DETECTION=1 $PYTHON \
 - 双 stage Pipeline Parallel，包含直接和 batched P2P
 - DeepSpeed 0.19.2 上的 AutoTP 训练，覆盖 ZeRO 0–2
 - DeepSpeed 0.19.2 上的 AutoEP 训练，覆盖 ZeRO 0–2
-- Unix/TCP 上的非均匀与稀疏 all-to-all-v
+- Unix、单机 TCP 和物理双主机 TCP 上的非均匀与稀疏 all-to-all-v
 - 物理双主机 TCP ZeRO-2
 - 任意节点对的逻辑通信报告
 
