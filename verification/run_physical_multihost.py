@@ -1049,7 +1049,11 @@ def _run_missing_peer_case(
     return report
 
 
-def _validate_alltoallv_reports(reports: list[dict[str, Any]]) -> None:
+def _validate_alltoallv_reports(
+    reports: list[dict[str, Any]],
+    *,
+    elements_per_unit: int = 1,
+) -> None:
     expected_splits = {
         "nonuniform": [
             {"send": [1, 2], "recv": [1, 3]},
@@ -1067,6 +1071,8 @@ def _validate_alltoallv_reports(reports: list[dict[str, Any]]) -> None:
             raise AssertionError(f"all-to-all-v rank {rank} failed: {report}")
         if report.get("rank") != rank or report.get("world_size") != 2:
             raise AssertionError(f"all-to-all-v rank metadata mismatch: {report}")
+        if report.get("elements_per_unit") != elements_per_unit:
+            raise AssertionError(f"all-to-all-v rank {rank} element scale mismatch")
         variants = report.get("variants")
         if not isinstance(variants, list) or len(variants) != 2:
             raise AssertionError(f"all-to-all-v rank {rank} variants are incomplete")
@@ -1078,17 +1084,25 @@ def _validate_alltoallv_reports(reports: list[dict[str, Any]]) -> None:
         for name, plans in expected_splits.items():
             variant = by_name[name]
             expected = plans[rank]
-            if variant.get("send_splits") != expected["send"]:
+            expected_send = [value * elements_per_unit for value in expected["send"]]
+            expected_recv = [value * elements_per_unit for value in expected["recv"]]
+            if variant.get("send_splits") != expected_send:
                 raise AssertionError(
                     f"all-to-all-v rank {rank} {name} send split mismatch"
                 )
-            if variant.get("recv_splits") != expected["recv"]:
+            if variant.get("recv_splits") != expected_recv:
                 raise AssertionError(
                     f"all-to-all-v rank {rank} {name} receive split mismatch"
                 )
-            if variant.get("received_values") != variant.get("expected_values"):
+            if variant.get("payload_validated") is not True:
                 raise AssertionError(
                     f"all-to-all-v rank {rank} {name} payload mismatch"
+                )
+            if "received_values" in variant and variant.get(
+                "received_values"
+            ) != variant.get("expected_values"):
+                raise AssertionError(
+                    f"all-to-all-v rank {rank} {name} inline payload mismatch"
                 )
             if float(variant.get("operation_seconds", 0.0)) <= 0:
                 raise AssertionError(
@@ -1103,6 +1117,7 @@ def _run_alltoallv_case(
     remote_root: str,
     session: str,
     timeout: float,
+    elements_per_unit: int,
 ) -> list[dict[str, Any]]:
     report_dir = f"{remote_root}/alltoallv"
     timeout_ms = max(1, round(timeout * 1000))
@@ -1122,6 +1137,7 @@ def _run_alltoallv_case(
             "--world-size=2",
             f"--session={session}-alltoallv",
             f"--timeout-ms={timeout_ms}",
+            f"--elements-per-unit={elements_per_unit}",
             f"--nccl-lib={node.repo}/build/libnccl.so.2",
             f"--report={report_path}",
         ]
@@ -1144,7 +1160,10 @@ def _run_alltoallv_case(
         _read_remote_json(node, f"{report_dir}/rank_{rank}.json")
         for rank, node in enumerate(nodes)
     ]
-    _validate_alltoallv_reports(reports)
+    _validate_alltoallv_reports(
+        reports,
+        elements_per_unit=elements_per_unit,
+    )
     return reports
 
 
@@ -1556,6 +1575,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 remote_root=remote_root,
                 session=args.session,
                 timeout=args.case_timeout,
+                elements_per_unit=args.alltoallv_elements_per_unit,
             )
         if "collective-mismatch" in cases:
             case_reports["collective_mismatch"] = _run_mismatch_case(
@@ -1716,6 +1736,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--case-timeout", type=float, default=120.0)
     parser.add_argument("--timeline-limit", type=int, default=4096)
     parser.add_argument(
+        "--alltoallv-elements-per-unit",
+        type=int,
+        default=1,
+        help=(
+            "scale each nonuniform/sparse all-to-all-v split unit by this "
+            "many FP32 elements"
+        ),
+    )
+    parser.add_argument(
         "--allow-head-mismatch",
         action="store_true",
         help="Allow remote repositories to differ from the local Git commit.",
@@ -1732,6 +1761,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("timeouts must be greater than zero")
     if args.timeline_limit < 0 or args.timeline_limit > 1_000_000:
         parser.error("--timeline-limit must be within 0..1000000")
+    if not 1 <= args.alltoallv_elements_per_unit <= 4_194_304:
+        parser.error("--alltoallv-elements-per-unit must be within 1..4194304")
 
     try:
         report = _run(args)

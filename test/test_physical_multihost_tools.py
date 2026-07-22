@@ -289,6 +289,7 @@ def test_validate_alltoallv_reports_accepts_nonuniform_and_sparse() -> None:
                 "recv_splits": receives,
                 "received_values": values,
                 "expected_values": values,
+                "payload_validated": True,
                 "operation_seconds": 0.01,
             }
             for name, sends, receives, values in plans[rank]
@@ -298,6 +299,7 @@ def test_validate_alltoallv_reports_accepts_nonuniform_and_sparse() -> None:
                 "status": "success",
                 "rank": rank,
                 "world_size": 2,
+                "elements_per_unit": 1,
                 "variants": variants,
             }
         )
