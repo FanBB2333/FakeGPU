@@ -92,6 +92,8 @@ def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None
             "rank": 0,
             "world_size": 2,
             "restart_count": 0,
+            "local_restart_count": 0,
+            "observed_local_restart_counts": [0, 0],
             "max_restarts": 1,
             "pid": 100,
             "run_id": "elastic-test",
@@ -106,6 +108,8 @@ def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None
             "rank": 1,
             "world_size": 2,
             "restart_count": 0,
+            "local_restart_count": 0,
+            "observed_local_restart_counts": [0, 0],
             "max_restarts": 1,
             "pid": 200,
             "run_id": "elastic-test",
@@ -123,6 +127,8 @@ def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None
             "rank": rank,
             "world_size": 2,
             "restart_count": 1,
+            "local_restart_count": 1 if node_name == "rtx3090ti" else 0,
+            "observed_local_restart_counts": [1, 0],
             "max_restarts": 1,
             "pid": pid,
             "run_id": "elastic-test",
@@ -150,6 +156,10 @@ def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None
     assert summary["status"] == "success"
     assert summary["initial_pids"] == {"pro5000": 100, "rtx3090ti": 200}
     assert summary["restarted_pids"] == {"pro5000": 101, "rtx3090ti": 201}
+    assert summary["local_restart_counts"] == {
+        "pro5000": 0,
+        "rtx3090ti": 1,
+    }
 
 
 def test_validate_elastic_ddp_restart_reports_rejects_reused_worker() -> None:
@@ -161,6 +171,8 @@ def test_validate_elastic_ddp_restart_reports_rejects_reused_worker() -> None:
             "rank": rank,
             "world_size": 2,
             "restart_count": 0,
+            "local_restart_count": 0,
+            "observed_local_restart_counts": [0, 0],
             "max_restarts": 1,
             "pid": rank + 10,
             "run_id": "elastic-test",
@@ -182,6 +194,8 @@ def test_validate_elastic_ddp_restart_reports_rejects_reused_worker() -> None:
             "rank": rank,
             "world_size": 2,
             "restart_count": 1,
+            "local_restart_count": 1 if node_name == "rtx3090ti" else 0,
+            "observed_local_restart_counts": [1, 0],
             "max_restarts": 1,
             "pid": rank + 10,
             "run_id": "elastic-test",

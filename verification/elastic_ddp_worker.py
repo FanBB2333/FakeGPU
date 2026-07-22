@@ -141,13 +141,14 @@ def main(argv: list[str] | None = None) -> int:
     rank = int(os.environ["RANK"])
     local_rank = int(os.environ["LOCAL_RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
-    restart_count = int(os.environ.get("TORCHELASTIC_RESTART_COUNT", "0"))
+    local_restart_count = int(
+        os.environ.get("TORCHELASTIC_RESTART_COUNT", "0")
+    )
+    restart_count = local_restart_count
     max_restarts = int(os.environ.get("TORCHELASTIC_MAX_RESTARTS", "0"))
     run_id = os.environ.get("TORCHELASTIC_RUN_ID", "")
     group_rank = int(os.environ.get("GROUP_RANK", "0"))
-    should_exit = restart_count == 0 and (
-        args.fail_this_node or rank == args.fail_rank
-    )
+    should_exit = False
     report_path = _report_path(
         args.report_dir,
         restart_count=restart_count,
@@ -166,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         "world_size": world_size,
         "backend": args.backend,
         "restart_count": restart_count,
+        "local_restart_count": local_restart_count,
         "max_restarts": max_restarts,
         "run_id": run_id,
         "selected_for_initial_exit": should_exit,
@@ -193,9 +195,7 @@ def main(argv: list[str] | None = None) -> int:
             device = torch.device("cpu")
 
         report["device"] = str(device)
-        report["stage"] = "init_process_group"
-        store_prefix = f"fakegpu.elastic_ddp.attempt.{restart_count}"
-        report["process_group_store_prefix"] = store_prefix
+        report["stage"] = "synchronize_restart_generation"
         rendezvous_store = dist.TCPStore(
             os.environ["MASTER_ADDR"],
             int(os.environ["MASTER_PORT"]),
@@ -203,6 +203,40 @@ def main(argv: list[str] | None = None) -> int:
             False,
             timedelta(seconds=args.timeout_seconds),
         )
+        control_store = dist.PrefixStore(
+            f"fakegpu.elastic_ddp.control.{_safe_component(run_id)}",
+            rendezvous_store,
+        )
+        control_store.set(
+            f"local_restart_count/{rank}",
+            str(local_restart_count).encode("ascii"),
+        )
+        observed_local_restart_counts = [
+            int(control_store.get(f"local_restart_count/{peer_rank}"))
+            for peer_rank in range(world_size)
+        ]
+        restart_count = max(observed_local_restart_counts)
+        should_exit = restart_count == 0 and (
+            args.fail_this_node or rank == args.fail_rank
+        )
+        report.update(
+            {
+                "restart_count": restart_count,
+                "observed_local_restart_counts": (
+                    observed_local_restart_counts
+                ),
+                "selected_for_initial_exit": should_exit,
+            }
+        )
+        report_path = _report_path(
+            args.report_dir,
+            restart_count=restart_count,
+            node_name=args.node_name,
+            local_rank=local_rank,
+        )
+        report["stage"] = "init_process_group"
+        store_prefix = f"fakegpu.elastic_ddp.attempt.{restart_count}"
+        report["process_group_store_prefix"] = store_prefix
         process_group_store = dist.PrefixStore(
             store_prefix,
             rendezvous_store,
