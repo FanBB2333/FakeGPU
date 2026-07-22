@@ -503,6 +503,7 @@ The distributed paths were also checked on the same two hosts:
 | Physical-host TCP all-to-all-v | Blackwell GPU coordinator/rank 0 ↔ Ampere GPU rank 1 over Tailscale | Nonuniform 2 MiB/3 MiB and sparse 0 MiB/1 MiB cross-host splits produced exact payloads; 2 calls reported 12 MiB logical bytes, 6 MiB inter-node bytes, and a 5 MiB node-pair peak |
 | Physical-host TCP all-reduce | Blackwell GPU coordinator/rank 0 ↔ Ampere GPU rank 1 over Tailscale | Correct 1 MiB and 16 MiB reductions, zero coordinator timeouts; 16 MiB × 5 measured about `0.261 Gbit/s` algorithmic and `0.521 Gbit/s` bidirectional socket payload per rank |
 | Physical-host rank-failure recovery | Ranks 0/2 on the Blackwell GPU ↔ ranks 1/3 on the Ampere GPU WSL host | Injected rank 2 failure reached all four ranks as persistent `ncclRemoteError`; global ranks `[0,1,3]` recovered through `ncclCommShrink`, and all three obtained the post-recovery sum `7.0` |
+| Physical-host process-exit recovery | Ranks 0/2 on the Blackwell GPU ↔ ranks 1/3 on the Ampere GPU WSL host | Rank 2 exited with code 86 after communicator initialization; ranks `[0,1,3]` inferred its absence from one AllReduce timeout, retained `ncclSystemError`, explicitly shrank the communicator, and all obtained the recovered sum `7.0` |
 
 The TCP numbers are an end-to-end simulator measurement from this specific
 test network. They are not raw link capacity or an NCCL/RDMA performance
