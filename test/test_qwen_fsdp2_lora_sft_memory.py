@@ -4,7 +4,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fakegpu.fsdp_memory import build_fully_shard_plan
+import pytest
+
+from fakegpu.fsdp_memory import (
+    build_fully_shard_plan,
+    estimate_fully_shard_sft_memory,
+)
 from verification.run_qwen_fsdp2_lora_sft_memory import (
     compare_fsdp2_lora_reports,
     render_markdown,
@@ -14,7 +19,7 @@ from verification.run_qwen_fsdp2_lora_sft_memory import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _plan() -> dict:
+def _plan(world_size: int = 2) -> dict:
     return build_fully_shard_plan(
         [
             {
@@ -57,7 +62,7 @@ def _plan() -> dict:
                 ],
             },
         ],
-        world_size=2,
+        world_size=world_size,
     )
 
 
@@ -118,11 +123,18 @@ def _static_report() -> dict:
     }
 
 
-def _rank_report(rank: int, *, overall: int = 194) -> dict:
+def _rank_report(
+    rank: int,
+    *,
+    overall: int = 194,
+    world_size: int = 2,
+) -> dict:
+    plan = _plan(world_size)
+    rank_shard = plan["rank_shards"][rank]
     return {
         "status": "success",
         "rank": rank,
-        "world_size": 2,
+        "world_size": world_size,
         "model_dir": "/models/Qwen3.5-0.8B",
         "dtype": "bfloat16",
         "attention_implementation": "sdpa",
@@ -148,13 +160,20 @@ def _rank_report(rank: int, *, overall: int = 194) -> dict:
         "parameters": {
             "logical": {"parameter_bytes": 64},
             "local_shard": {
-                "parameter_storage_bytes": 32,
-                "logical_trainable_parameter_bytes": 16,
+                "parameter_storage_bytes": rank_shard[
+                    "parameter_storage_bytes"
+                ],
+                "logical_trainable_parameter_bytes": rank_shard[
+                    "logical_trainable_parameter_bytes"
+                ],
             },
-            "local_gradient_storage_bytes": 16,
-            "optimizer_state_tensor_bytes": 32,
+            "local_gradient_storage_bytes": rank_shard[
+                "gradient_storage_bytes"
+            ],
+            "optimizer_state_tensor_bytes": 2
+            * rank_shard["logical_trainable_parameter_bytes"],
         },
-        "fsdp2": {"sharding_plan": _plan()},
+        "fsdp2": {"sharding_plan": plan},
         "memory_phases": {
             "forward_peak_bytes": 184,
             "backward_peak_bytes": 194,
@@ -208,6 +227,52 @@ def test_fsdp2_lora_comparison_rejects_large_phase_error() -> None:
 
     assert report["status"] == "failed"
     assert report["ranks"][0]["status"] == "failed"
+
+
+def test_fsdp2_lora_comparison_supports_four_ranks() -> None:
+    static_report = _static_report()
+    plan = _plan(world_size=4)
+    reports = []
+    for rank in range(4):
+        projection = estimate_fully_shard_sft_memory(
+            static_report,
+            plan,
+            rank=rank,
+        )
+        rank_report = _rank_report(rank, world_size=4)
+        rank_report["memory_phases"] = {
+            "forward_peak_bytes": projection["forward_graph_peak_bytes"],
+            "backward_peak_bytes": projection["backward_graph_peak_bytes"],
+            "graph_peak_bytes": projection["first_step_graph_peak_bytes"],
+            "optimizer_peak_bytes": projection["optimizer_peak_bytes"],
+            "overall_peak_bytes": projection["first_step_peak_bytes"],
+        }
+        reports.append(rank_report)
+
+    report = compare_fsdp2_lora_reports(
+        reports,
+        static_report,
+        _cluster_report(),
+        max_error_percent=0.0,
+    )
+
+    assert report["status"] == "success"
+    assert report["world_size"] == 4
+    assert len(report["ranks"]) == 4
+    assert "World size: 4" in render_markdown(report)
+
+
+def test_fsdp2_lora_comparison_rejects_inconsistent_world_size() -> None:
+    reports = [_rank_report(rank, world_size=4) for rank in range(4)]
+    reports[-1]["world_size"] = 2
+
+    with pytest.raises(ValueError, match="rank metadata mismatch"):
+        compare_fsdp2_lora_reports(
+            reports,
+            _static_report(),
+            _cluster_report(),
+            max_error_percent=5.0,
+        )
 
 
 def test_fsdp2_lora_controller_imports_package_when_started_as_script() -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run and compare a two-rank Hybrid FSDP2 Qwen LoRA memory experiment."""
+"""Run and compare a multi-rank Hybrid FSDP2 Qwen LoRA memory experiment."""
 
 from __future__ import annotations
 
@@ -28,7 +28,10 @@ from verification.run_qwen_fsdp_sft_memory import (  # noqa: E402
 
 
 WORKER = REPO_ROOT / "verification" / "qwen_fsdp2_lora_sft_memory_worker.py"
-CLUSTER_CONFIG = REPO_ROOT / "verification" / "data" / "cluster_hybrid_2r.yaml"
+CLUSTER_CONFIGS = {
+    2: REPO_ROOT / "verification" / "data" / "cluster_hybrid_2r.yaml",
+    4: REPO_ROOT / "verification" / "data" / "cluster_hybrid_4r.yaml",
+}
 SCHEMA_VERSION = "fakegpu.qwen_fsdp2_lora_sft_memory_comparison.v1"
 
 
@@ -41,8 +44,9 @@ def compare_fsdp2_lora_reports(
 ) -> dict[str, Any]:
     from fakegpu.fsdp_memory import estimate_fully_shard_sft_memory
 
-    if len(rank_reports) != 2:
-        raise ValueError("exactly two rank reports are required")
+    world_size = len(rank_reports)
+    if world_size <= 1:
+        raise ValueError("at least two rank reports are required")
     if static_report.get("status") != "success" or static_report.get("mode") != "static":
         raise ValueError("a successful static Qwen SFT report is required")
     if static_report.get("training_method") != "lora":
@@ -64,7 +68,10 @@ def compare_fsdp2_lora_reports(
     for rank, report in enumerate(rank_reports):
         if report.get("status") != "success":
             raise ValueError(f"rank {rank} did not complete successfully")
-        if int(report.get("rank", -1)) != rank or int(report.get("world_size", 0)) != 2:
+        if (
+            int(report.get("rank", -1)) != rank
+            or int(report.get("world_size", 0)) != world_size
+        ):
             raise ValueError(f"rank metadata mismatch in report {rank}")
         for field in matching_fields:
             if report.get(field) != static_report.get(field):
@@ -81,6 +88,8 @@ def compare_fsdp2_lora_reports(
             raise ValueError("rank reports contain different losses")
 
     sharding_plan = reference["fsdp2"]["sharding_plan"]
+    if int(sharding_plan.get("world_size", 0)) != world_size:
+        raise ValueError("FSDP2 sharding plan world size does not match reports")
     static_parameter_bytes = int(static_report["static_estimate"]["parameter_bytes"])
     projections = []
     for rank, report in enumerate(rank_reports):
@@ -161,6 +170,7 @@ def compare_fsdp2_lora_reports(
             else "failed"
         ),
         "max_error_percent": max_error_percent,
+        "world_size": world_size,
         "model_dir": reference["model_dir"],
         "dtype": reference["dtype"],
         "lora": reference["lora"],
@@ -217,6 +227,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"- PyTorch/CUDA: `{report['torch_version']}` / "
             f"`{report['torch_cuda_version']}`",
             f"- Model: `{report['model_dir']}`",
+            f"- World size: {report['world_size']}",
             f"- Workload: LoRA r{report['lora']['rank']}, batch "
             f"{report['batch_size']}, sequence {report['sequence_length']}, "
             f"dtype `{report['dtype']}`",
@@ -257,10 +268,10 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         cluster_report_path,
         comparison_path,
         markdown_path,
-        rank_dir / "rank_0.json",
-        rank_dir / "rank_1.json",
     ):
         stale.unlink(missing_ok=True)
+    for stale_rank_report in rank_dir.glob("rank_*.json"):
+        stale_rank_report.unlink()
 
     build_dir = args.build_dir.expanduser().resolve()
     coordinator_bin = build_dir / "fakegpu-coordinator"
@@ -269,13 +280,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     )
     static_report_path = args.static_report.expanduser().resolve()
     model_dir = args.model_dir.expanduser().resolve()
+    cluster_config = CLUSTER_CONFIGS[args.world_size]
     for required in (
         coordinator_bin,
         nccl_lib,
         static_report_path,
         model_dir,
         WORKER,
-        CLUSTER_CONFIG,
+        cluster_config,
     ):
         if not required.exists():
             raise FileNotFoundError(f"missing required input: {required}")
@@ -286,7 +298,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         {
             "FAKEGPU_MODE": "simulate",
             "FAKEGPU_DIST_MODE": "simulate",
-            "FAKEGPU_CLUSTER_CONFIG": str(CLUSTER_CONFIG),
+            "FAKEGPU_CLUSTER_CONFIG": str(cluster_config),
             "FAKEGPU_COORDINATOR_TRANSPORT": "unix",
             "FAKEGPU_COORDINATOR_ADDR": str(socket_path),
             "FAKEGPU_CLUSTER_REPORT_PATH": str(cluster_report_path),
@@ -320,7 +332,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 "FAKEGPU_MODE": "hybrid",
                 "FAKEGPU_DEVICE_COUNT": "1",
                 "FAKEGPU_DIST_MODE": "simulate",
-                "FAKEGPU_CLUSTER_CONFIG": str(CLUSTER_CONFIG),
+                "FAKEGPU_CLUSTER_CONFIG": str(cluster_config),
                 "FAKEGPU_COORDINATOR_TRANSPORT": "unix",
                 "FAKEGPU_COORDINATOR_ADDR": str(socket_path),
                 "FAKEGPU_COORDINATOR_TIMEOUT_MS": str(
@@ -335,7 +347,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "-m",
             "torch.distributed.run",
             "--nnodes=1",
-            "--nproc-per-node=2",
+            f"--nproc-per-node={args.world_size}",
             "--master-addr=127.0.0.1",
             f"--master-port={_find_free_port()}",
             str(WORKER),
@@ -383,7 +395,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             )
 
         rank_reports = [
-            _load_json(rank_dir / f"rank_{rank}.json") for rank in range(2)
+            _load_json(rank_dir / f"rank_{rank}.json")
+            for rank in range(args.world_size)
         ]
         static_report = _load_json(static_report_path)
         cluster_report = _load_json(cluster_report_path)
@@ -397,7 +410,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "static_report": str(static_report_path),
             "cluster_report": str(cluster_report_path),
             "rank_reports": [
-                str(rank_dir / f"rank_{rank}.json") for rank in range(2)
+                str(rank_dir / f"rank_{rank}.json")
+                for rank in range(args.world_size)
             ],
         }
         comparison_path.write_text(
@@ -432,6 +446,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--sequence-length", type=int, default=16)
+    parser.add_argument(
+        "--world-size",
+        type=int,
+        choices=tuple(CLUSTER_CONFIGS),
+        default=2,
+    )
     parser.add_argument(
         "--dtype",
         choices=("float16", "bfloat16", "float32"),

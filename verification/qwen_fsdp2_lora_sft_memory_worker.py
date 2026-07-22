@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure one Qwen LoRA SFT step under two-rank Hybrid FSDP2."""
+"""Measure one Qwen LoRA SFT step under multi-rank Hybrid FSDP2."""
 
 from __future__ import annotations
 
@@ -233,8 +233,10 @@ def main(argv: list[str] | None = None) -> int:
             _reset_peak,
         )
 
-        if world_size != 2:
-            raise ValueError(f"expected world_size=2, got {world_size}")
+        if world_size <= 1:
+            raise ValueError(
+                f"expected world_size greater than one, got {world_size}"
+            )
         if not torch.cuda.is_available():
             raise RuntimeError("real CUDA is not available")
 
