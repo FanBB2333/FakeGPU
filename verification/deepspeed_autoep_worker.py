@@ -52,6 +52,24 @@ def _max_abs_delta(before: Any, after: Any) -> float:
     return float((after.detach().float() - before.detach().float()).abs().max())
 
 
+def _fake_nccl_last_error() -> str | None:
+    """Return FakeNCCL's thread-local detail after a distributed failure."""
+    try:
+        import ctypes
+
+        library = ctypes.CDLL("libnccl.so.2")
+        get_last_error = library.ncclGetLastError
+        get_last_error.argtypes = [ctypes.c_void_p]
+        get_last_error.restype = ctypes.c_char_p
+        detail = get_last_error(None)
+        if detail:
+            decoded = detail.decode("utf-8", errors="replace")
+            return decoded if decoded != "success" else None
+    except (AttributeError, OSError):
+        pass
+    return None
+
+
 def _gather_expert_tensor(torch: Any, dist: Any, local: Any) -> Any:
     gathered = [torch.empty_like(local) for _ in range(2)]
     dist.all_gather(gathered, local)
@@ -348,6 +366,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, sort_keys=True), flush=True)
         return 0
     except Exception as exc:
+        fake_nccl_error = _fake_nccl_last_error()
         report.update(
             {
                 "status": "error",
@@ -357,6 +376,8 @@ def main(argv: list[str] | None = None) -> int:
                 "traceback": traceback.format_exc(),
             }
         )
+        if fake_nccl_error is not None:
+            report["fake_nccl_error"] = fake_nccl_error
         _write_report(args.report_dir, rank, report)
         print(
             f"rank {rank} failed at {stage}: {type(exc).__name__}: {exc}",
