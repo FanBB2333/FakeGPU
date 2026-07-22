@@ -228,8 +228,27 @@ python3 verification/qwen_sft_memory_worker.py \
   --output build/qwen-sft-qlora-static.json
 ```
 
-It needs no external quantization package, but it does not claim bitsandbytes
-fused-kernel equivalence; see
+For full-parameter FSDP, a second controller projects the same static ATen
+graph onto per-unit FULL_SHARD storage and checks it against a real two-rank
+optimizer step:
+
+```bash
+python3 verification/qwen_sft_memory_worker.py \
+  --mode static --model-dir /models/Qwen3.5-0.8B \
+  --output build/qwen-sft-static.json
+
+python3 verification/run_qwen_fsdp_sft_memory.py \
+  --model-dir /models/Qwen3.5-0.8B \
+  --static-report build/qwen-sft-static.json \
+  --output-dir build/qwen-fsdp-sft-memory
+```
+
+The maintained Ampere and Blackwell sequence-16/128 experiments keep graph
+and overall peak errors below 0.76% while recording all-gather and
+reduce-scatter traffic.
+
+The native NF4 path needs no external quantization package, but it does not
+claim bitsandbytes fused-kernel equivalence; see
 [LLM SFT Memory Estimation](docs/llm-sft-memory-estimation.md).
 
 ## Runtime model
