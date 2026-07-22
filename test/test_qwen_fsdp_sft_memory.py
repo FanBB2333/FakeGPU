@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 from verification.run_qwen_fsdp_sft_memory import (
     compare_fsdp_reports,
     render_markdown,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _static_report() -> dict:
@@ -124,3 +131,24 @@ def test_fsdp_comparison_rejects_large_phase_error() -> None:
 
     assert report["status"] == "failed"
     assert report["ranks"][0]["status"] == "failed"
+
+
+def test_fsdp_controller_can_import_package_when_started_as_a_script() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import run_qwen_fsdp_sft_memory; "
+                "import fakegpu.fsdp_memory; "
+                "print('ok')"
+            ),
+        ],
+        cwd=ROOT / "verification",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "ok"
