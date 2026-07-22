@@ -13,6 +13,7 @@ from verification.run_physical_multihost import (
     _require_matching_deepspeed_pipeline_stack,
     _shell_command,
     _validate_cluster_report,
+    _validate_alltoallv_reports,
     _validate_deepspeed_pipeline_reports,
     _validate_deepspeed_reports,
     _write_markdown,
@@ -268,6 +269,42 @@ def test_validate_cluster_report_requires_physical_pipeline_p2p(
         )
 
 
+def test_validate_alltoallv_reports_accepts_nonuniform_and_sparse() -> None:
+    plans = [
+        [
+            ("nonuniform", [1, 2], [1, 3], [0.0, 1000.0, 1001.0, 1002.0]),
+            ("sparse", [2, 0], [2, 1], [0.0, 1.0, 1000.0]),
+        ],
+        [
+            ("nonuniform", [3, 1], [2, 1], [100.0, 101.0, 1100.0]),
+            ("sparse", [1, 2], [0, 2], [1100.0, 1101.0]),
+        ],
+    ]
+    reports = []
+    for rank in range(2):
+        variants = [
+            {
+                "name": name,
+                "send_splits": sends,
+                "recv_splits": receives,
+                "received_values": values,
+                "expected_values": values,
+                "operation_seconds": 0.01,
+            }
+            for name, sends, receives, values in plans[rank]
+        ]
+        reports.append(
+            {
+                "status": "success",
+                "rank": rank,
+                "world_size": 2,
+                "variants": variants,
+            }
+        )
+
+    _validate_alltoallv_reports(reports)
+
+
 def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> None:
     report = {
         "status": "success",
@@ -303,6 +340,7 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
             "deepspeed_zero2": [{}, {}],
             "deepspeed_zero3": [{}, {}],
             "deepspeed_pipeline": [{}, {}],
+            "alltoallv": [{}, {}],
             "collective_mismatch": [
                 {"mismatch_result": 5},
                 {"mismatch_result": 5},
@@ -338,4 +376,5 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     assert "FSDP2 low-precision reduction" in markdown
     assert "Hybrid DeepSpeed" in markdown
     assert "DeepSpeed Pipeline" in markdown
+    assert "Physical all-to-all-v" in markdown
     assert "Collective mismatch" in markdown

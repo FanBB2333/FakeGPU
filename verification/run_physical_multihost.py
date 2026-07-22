@@ -27,6 +27,9 @@ FSDP2_WORKER_RELATIVE = Path("test/test_fsdp2_hybrid_numerics.py")
 DEEPSPEED_WORKER_RELATIVE = Path("test/test_deepspeed_hybrid_numerics.py")
 DEEPSPEED_PIPELINE_WORKER_RELATIVE = Path("verification/deepspeed_pipeline_worker.py")
 FAULT_WORKER_RELATIVE = Path("verification/remote_nccl_fault_worker.py")
+ALLTOALLV_WORKER_RELATIVE = Path(
+    "verification/remote_nccl_alltoallv_worker.py"
+)
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 DDP_OPTION_VARIANTS = ("no-sync", "find-unused", "static-graph")
 DDP_EXPECTED_RESULTS: dict[str, dict[str, list[list[float]]]] = {
@@ -246,6 +249,7 @@ payload = {
     "deepspeed_worker_exists": pathlib.Path("test/test_deepspeed_hybrid_numerics.py").is_file(),
     "deepspeed_pipeline_worker_exists": pathlib.Path("verification/deepspeed_pipeline_worker.py").is_file(),
     "fault_worker_exists": pathlib.Path("verification/remote_nccl_fault_worker.py").is_file(),
+    "alltoallv_worker_exists": pathlib.Path("verification/remote_nccl_alltoallv_worker.py").is_file(),
 }
 try:
     payload["deepspeed_version"] = importlib.metadata.version("deepspeed")
@@ -269,6 +273,7 @@ print(json.dumps(payload, sort_keys=True))
         "fsdp_worker_exists",
         "fsdp2_worker_exists",
         "fault_worker_exists",
+        "alltoallv_worker_exists",
         "cuda_available",
     )
     missing = [key for key in required if not payload.get(key)]
@@ -1044,6 +1049,105 @@ def _run_missing_peer_case(
     return report
 
 
+def _validate_alltoallv_reports(reports: list[dict[str, Any]]) -> None:
+    expected_splits = {
+        "nonuniform": [
+            {"send": [1, 2], "recv": [1, 3]},
+            {"send": [3, 1], "recv": [2, 1]},
+        ],
+        "sparse": [
+            {"send": [2, 0], "recv": [2, 1]},
+            {"send": [1, 2], "recv": [0, 2]},
+        ],
+    }
+    if len(reports) != 2:
+        raise AssertionError(f"expected two all-to-all-v reports, got {len(reports)}")
+    for rank, report in enumerate(reports):
+        if report.get("status") != "success":
+            raise AssertionError(f"all-to-all-v rank {rank} failed: {report}")
+        if report.get("rank") != rank or report.get("world_size") != 2:
+            raise AssertionError(f"all-to-all-v rank metadata mismatch: {report}")
+        variants = report.get("variants")
+        if not isinstance(variants, list) or len(variants) != 2:
+            raise AssertionError(f"all-to-all-v rank {rank} variants are incomplete")
+        by_name = {variant.get("name"): variant for variant in variants}
+        if set(by_name) != set(expected_splits):
+            raise AssertionError(
+                f"all-to-all-v rank {rank} variant names mismatch: {by_name}"
+            )
+        for name, plans in expected_splits.items():
+            variant = by_name[name]
+            expected = plans[rank]
+            if variant.get("send_splits") != expected["send"]:
+                raise AssertionError(
+                    f"all-to-all-v rank {rank} {name} send split mismatch"
+                )
+            if variant.get("recv_splits") != expected["recv"]:
+                raise AssertionError(
+                    f"all-to-all-v rank {rank} {name} receive split mismatch"
+                )
+            if variant.get("received_values") != variant.get("expected_values"):
+                raise AssertionError(
+                    f"all-to-all-v rank {rank} {name} payload mismatch"
+                )
+            if float(variant.get("operation_seconds", 0.0)) <= 0:
+                raise AssertionError(
+                    f"all-to-all-v rank {rank} {name} timing is missing"
+                )
+
+
+def _run_alltoallv_case(
+    nodes: list[NodeSpec],
+    *,
+    endpoint: str,
+    remote_root: str,
+    session: str,
+    timeout: float,
+) -> list[dict[str, Any]]:
+    report_dir = f"{remote_root}/alltoallv"
+    timeout_ms = max(1, round(timeout * 1000))
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    for rank, node in enumerate(nodes):
+        report_path = f"{report_dir}/rank_{rank}.json"
+        env = _distributed_env(
+            node=node,
+            endpoint=endpoint,
+            timeout_ms=timeout_ms,
+            hybrid=False,
+        )
+        argv = [
+            node.python,
+            str(ALLTOALLV_WORKER_RELATIVE),
+            f"--rank={rank}",
+            "--world-size=2",
+            f"--session={session}-alltoallv",
+            f"--timeout-ms={timeout_ms}",
+            f"--nccl-lib={node.repo}/build/libnccl.so.2",
+            f"--report={report_path}",
+        ]
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        env=env,
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+    _collect_processes(processes, timeout=timeout, label="physical all-to-all-v")
+    reports = [
+        _read_remote_json(node, f"{report_dir}/rank_{rank}.json")
+        for rank, node in enumerate(nodes)
+    ]
+    _validate_alltoallv_reports(reports)
+    return reports
+
+
 def _validate_cluster_report(
     path: Path,
     *,
@@ -1181,6 +1285,12 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             "the optimizer step, and cross-stage parameters matched the "
             "analytical result over TCP P2P communication."
         )
+    if "alltoallv" in cases:
+        lines.append(
+            "- Physical all-to-all-v: nonuniform and sparse split plans, "
+            "including a zero-sized cross-host direction, transferred the "
+            "expected FP32 payloads over the TCP coordinator."
+        )
     if "collective_mismatch" in cases:
         results = [item["mismatch_result"] for item in cases["collective_mismatch"]]
         lines.append(
@@ -1254,6 +1364,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "fsdp2",
         "fsdp2-mixed",
         "fsdp2-low-reduce",
+        "alltoallv",
         "collective-mismatch",
         "missing-peer",
     ]
@@ -1438,6 +1549,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 remote_root=remote_root,
                 timeout=args.case_timeout,
             )
+        if "alltoallv" in cases:
+            case_reports["alltoallv"] = _run_alltoallv_case(
+                nodes,
+                endpoint=endpoint,
+                remote_root=remote_root,
+                session=args.session,
+                timeout=args.case_timeout,
+            )
         if "collective-mismatch" in cases:
             case_reports["collective_mismatch"] = _run_mismatch_case(
                 nodes,
@@ -1491,6 +1610,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         expected_collectives.update({"all_reduce", "all_gather"})
     if selected_deepspeed_pipeline:
         expected_collectives.add("all_gather")
+    if "alltoallv" in cases:
+        expected_collectives.add("all_to_all")
     if (
         "fsdp" in cases
         or "fsdp2" in cases
@@ -1576,6 +1697,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "deepspeed-zero2",
             "deepspeed-zero3",
             "deepspeed-pipeline",
+            "alltoallv",
             "collective-mismatch",
             "missing-peer",
         ],
