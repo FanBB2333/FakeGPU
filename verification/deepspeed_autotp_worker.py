@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
         stage = "initialize_engine"
         model = TinyAutoTPModel()
         config = {
-            "train_batch_size": 1,
+            "train_batch_size": 2,
             "train_micro_batch_size_per_gpu": 1,
             "gradient_accumulation_steps": 1,
             "zero_optimization": {"stage": args.zero_stage},
