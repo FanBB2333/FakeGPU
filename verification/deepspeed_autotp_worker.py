@@ -170,7 +170,6 @@ def main(argv: list[str] | None = None) -> int:
             "optimizer": {"type": "SGD", "params": {"lr": 0.01}},
             "tensor_parallel": {
                 "autotp_size": 2,
-                "dtype": dtype,
                 "partition_config": {
                     "use_default_specs": False,
                     "strict_mode": True,
