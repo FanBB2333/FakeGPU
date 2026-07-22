@@ -324,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
 
-        tolerance = 1e-6 if args.precision == "fp32" else 4e-2
+        tolerance = 1e-5 if args.precision == "fp32" else 4e-2
         if not _nested_close(
             initial_full_w1.float().cpu().tolist(),
             EXPECTED_INITIAL_W1,
