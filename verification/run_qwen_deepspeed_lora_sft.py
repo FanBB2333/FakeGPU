@@ -23,6 +23,7 @@ from verification.run_hybrid_deepspeed_numerics import (  # noqa: E402
     _close_coordinator,
     _collective_calls,
     _find_free_port,
+    _temporary_coordinator_socket,
     _validate_collective_calls,
     _wait_for_unix_socket,
 )
@@ -269,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     rank_report_dir = output_dir / "ranks"
-    socket_path = output_dir / "coordinator.sock"
+    socket_directory, socket_path = _temporary_coordinator_socket()
     cluster_report_path = output_dir / "cluster-report.json"
     summary_path = output_dir / "summary.json"
     markdown_path = output_dir / "summary.md"
@@ -521,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         _close_coordinator(coordinator, socket_path)
         coordinator.communicate(timeout=5)
+        socket_directory.cleanup()
 
 
 if __name__ == "__main__":

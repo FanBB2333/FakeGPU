@@ -32,6 +32,7 @@ from verification.run_hybrid_deepspeed_numerics import (  # noqa: E402
     _find_free_port,
     _load_rank_reports,
     _shutdown_unix_coordinator,
+    _temporary_coordinator_socket,
     _validate_collective_calls,
     _wait_for_unix_socket,
 )
@@ -130,7 +131,7 @@ def _run(
     )
     cluster_config = CLUSTER_CONFIGS[world_size]
     report_dir.mkdir(parents=True, exist_ok=True)
-    socket_path = report_dir / "coordinator.sock"
+    socket_directory, socket_path = _temporary_coordinator_socket()
     cluster_report_path = report_dir / "cluster-report.json"
     rank_report_dir = report_dir / "ranks"
     trainer_output_dir = report_dir / "trainer-output"
@@ -286,6 +287,7 @@ def _run(
     finally:
         _close_coordinator(coordinator, socket_path)
         coordinator.communicate(timeout=5)
+        socket_directory.cleanup()
 
 
 def main() -> int:
