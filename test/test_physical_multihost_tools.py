@@ -12,6 +12,7 @@ from verification.run_physical_multihost import (
     _encoded_remote_command,
     _require_matching_deepspeed_pipeline_stack,
     _shell_command,
+    _validate_elastic_ddp_checkpoint_reports,
     _validate_elastic_ddp_restart_reports,
     _validate_cluster_report,
     _validate_alltoallv_reports,
@@ -92,6 +93,7 @@ def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None
             "rank": 0,
             "world_size": 2,
             "restart_count": 0,
+            "restart_arrival_count": 1,
             "local_restart_count": 0,
             "observed_local_restart_counts": [0, 0],
             "max_restarts": 1,
@@ -108,6 +110,7 @@ def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None
             "rank": 1,
             "world_size": 2,
             "restart_count": 0,
+            "restart_arrival_count": 1,
             "local_restart_count": 0,
             "observed_local_restart_counts": [0, 0],
             "max_restarts": 1,
@@ -127,6 +130,7 @@ def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None
             "rank": rank,
             "world_size": 2,
             "restart_count": 1,
+            "restart_arrival_count": 2,
             "local_restart_count": 1 if node_name == "rtx3090ti" else 0,
             "observed_local_restart_counts": [1, 0],
             "max_restarts": 1,
@@ -171,6 +175,7 @@ def test_validate_elastic_ddp_restart_reports_rejects_reused_worker() -> None:
             "rank": rank,
             "world_size": 2,
             "restart_count": 0,
+            "restart_arrival_count": 1,
             "local_restart_count": 0,
             "observed_local_restart_counts": [0, 0],
             "max_restarts": 1,
@@ -194,6 +199,7 @@ def test_validate_elastic_ddp_restart_reports_rejects_reused_worker() -> None:
             "rank": rank,
             "world_size": 2,
             "restart_count": 1,
+            "restart_arrival_count": 2,
             "local_restart_count": 1 if node_name == "rtx3090ti" else 0,
             "observed_local_restart_counts": [1, 0],
             "max_restarts": 1,
@@ -214,6 +220,118 @@ def test_validate_elastic_ddp_restart_reports_rejects_reused_worker() -> None:
             node_names=["pro5000", "rtx3090ti"],
             failed_node="rtx3090ti",
         )
+
+
+def test_validate_elastic_ddp_checkpoint_reports_accepts_optimizer_resume() -> None:
+    node_names = ["pro5000", "rtx3090ti"]
+    initial = []
+    restarted = []
+    for rank, node_name in enumerate(node_names):
+        checkpoint_path = f"/tmp/checkpoint-{node_name}.pt"
+        digest = f"sha256-{node_name}"
+        initial.append(
+            {
+                "node_name": node_name,
+                "backend": "nccl",
+                "status": (
+                    "expected_process_exit"
+                    if node_name == "rtx3090ti"
+                    else "waiting_for_restart"
+                ),
+                "rank": rank,
+                "world_size": 2,
+                "restart_count": 0,
+                "restart_arrival_count": 1,
+                "local_restart_count": 0,
+                "observed_local_restart_counts": [0, 0],
+                "max_restarts": 1,
+                "completed_steps": 1,
+                "pid": 100 + rank,
+                "run_id": "checkpoint-test",
+                "selected_for_initial_exit": node_name == "rtx3090ti",
+                "expected_process_exit_code": (
+                    86 if node_name == "rtx3090ti" else None
+                ),
+                "initial_process_group_destroyed_before_exit": False,
+                "gradient_after_step_one": [[1.5, 3.0]],
+                "parameters_after_step_one": [[0.85, -0.3]],
+                "momentum_after_step_one": [[1.5, 3.0]],
+                "gathered_state_after_step_one": [
+                    [0.85, -0.3, 1.5, 3.0],
+                    [0.85, -0.3, 1.5, 3.0],
+                ],
+                "saved_checkpoint": {
+                    "path": checkpoint_path,
+                    "bytes": 2048,
+                    "sha256": digest,
+                },
+                "physical_device_name": (
+                    "NVIDIA RTX PRO 5000 Blackwell"
+                    if rank == 0
+                    else "NVIDIA GeForce RTX 3090 Ti"
+                ),
+            }
+        )
+        restarted.append(
+            {
+                "node_name": node_name,
+                "backend": "nccl",
+                "status": "success",
+                "rank": rank,
+                "world_size": 2,
+                "restart_count": 1,
+                "restart_arrival_count": 2,
+                "local_restart_count": (
+                    1 if node_name == "rtx3090ti" else 0
+                ),
+                "observed_local_restart_counts": [0, 1],
+                "max_restarts": 1,
+                "completed_steps": 2,
+                "restored_completed_steps": 1,
+                "checkpoint_loaded": True,
+                "pid": 200 + rank,
+                "run_id": "checkpoint-test",
+                "loaded_checkpoint": {
+                    "path": checkpoint_path,
+                    "bytes": 2048,
+                    "sha256": digest,
+                },
+                "restored_parameters": [[0.85, -0.3]],
+                "restored_momentum": [[1.5, 3.0]],
+                "gathered_restored_state": [
+                    [0.85, -0.3, 1.5, 3.0],
+                    [0.85, -0.3, 1.5, 3.0],
+                ],
+                "gradient_after_step_two": [[1.5, 3.0]],
+                "parameters_after_step_two": [[0.565, -0.87]],
+                "momentum_after_step_two": [[2.85, 5.7]],
+                "gathered_state_after_step_two": [
+                    [0.565, -0.87, 2.85, 5.7],
+                    [0.565, -0.87, 2.85, 5.7],
+                ],
+                "physical_device_name": (
+                    "NVIDIA RTX PRO 5000 Blackwell"
+                    if rank == 0
+                    else "NVIDIA GeForce RTX 3090 Ti"
+                ),
+            }
+        )
+
+    summary = _validate_elastic_ddp_checkpoint_reports(
+        initial,
+        restarted,
+        node_names=node_names,
+        failed_node="rtx3090ti",
+    )
+
+    assert summary["status"] == "success"
+    assert summary["completed_steps"] == 2
+    assert summary["restored_momentum"] == [[1.5, 3.0]]
+    assert summary["momentum_after_step_two"] == [[2.85, 5.7]]
+    assert summary["local_restart_counts"] == {
+        "pro5000": 0,
+        "rtx3090ti": 1,
+    }
 
 
 def test_validate_deepspeed_reports_accepts_two_physical_ranks() -> None:
@@ -441,6 +559,17 @@ def test_validate_cluster_report_requires_new_elastic_communicator(
             expect_elastic_restart=True,
         )
 
+    payload["cluster"]["communicators"] = 3
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(AssertionError, match=r"communicators \(4\)"):
+        _validate_cluster_report(
+            path,
+            expected_collectives=set(),
+            expect_point_to_point=False,
+            expect_timeout=False,
+            expected_minimum_communicators=4,
+        )
+
 
 def test_validate_cluster_report_accepts_rank_failure_recovery(
     tmp_path: Path,
@@ -625,6 +754,7 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
         "cases": {
             "ddp": [{}, {}],
             "elastic_ddp_restart": {"failure_exit_code": 86},
+            "elastic_ddp_checkpoint": {"failure_exit_code": 86},
             "ddp_options": {},
             "fsdp": [{}, {}],
             "fsdp2": [{}, {}],
@@ -682,6 +812,7 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     assert "| `gpu-a` | `gpu-b` | 64 | 32 | 2 | 2 | 0 |" in markdown
     assert "DDP options" in markdown
     assert "Elastic DDP restart" in markdown
+    assert "Elastic DDP checkpoint recovery" in markdown
     assert "Hybrid FSDP" in markdown
     assert "Hybrid FSDP2" in markdown
     assert "FSDP2 mixed precision" in markdown

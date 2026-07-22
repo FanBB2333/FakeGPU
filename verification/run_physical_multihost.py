@@ -23,6 +23,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_CONFIG_RELATIVE = Path("verification/data/cluster_tcp_4r.yaml")
 DDP_WORKER_RELATIVE = Path("test/test_ddp_hybrid_numerics.py")
 ELASTIC_DDP_WORKER_RELATIVE = Path("verification/elastic_ddp_worker.py")
+ELASTIC_DDP_CHECKPOINT_WORKER_RELATIVE = Path(
+    "verification/elastic_ddp_checkpoint_worker.py"
+)
 FSDP_WORKER_RELATIVE = Path("test/test_fsdp_hybrid_numerics.py")
 FSDP2_WORKER_RELATIVE = Path("test/test_fsdp2_hybrid_numerics.py")
 DEEPSPEED_WORKER_RELATIVE = Path("test/test_deepspeed_hybrid_numerics.py")
@@ -247,6 +250,7 @@ payload = {
     "nccl_exists": pathlib.Path("build/libnccl.so.2").is_file(),
     "ddp_worker_exists": pathlib.Path("test/test_ddp_hybrid_numerics.py").is_file(),
     "elastic_ddp_worker_exists": pathlib.Path("verification/elastic_ddp_worker.py").is_file(),
+    "elastic_ddp_checkpoint_worker_exists": pathlib.Path("verification/elastic_ddp_checkpoint_worker.py").is_file(),
     "fsdp_worker_exists": pathlib.Path("test/test_fsdp_hybrid_numerics.py").is_file(),
     "fsdp2_worker_exists": pathlib.Path("test/test_fsdp2_hybrid_numerics.py").is_file(),
     "deepspeed_worker_exists": pathlib.Path("test/test_deepspeed_hybrid_numerics.py").is_file(),
@@ -274,6 +278,7 @@ print(json.dumps(payload, sort_keys=True))
         "nccl_exists",
         "ddp_worker_exists",
         "elastic_ddp_worker_exists",
+        "elastic_ddp_checkpoint_worker_exists",
         "fsdp_worker_exists",
         "fsdp2_worker_exists",
         "fault_worker_exists",
@@ -472,6 +477,8 @@ def _validate_elastic_ddp_restart_reports(
             raise AssertionError(f"unexpected initial elastic state: {report}")
         if int(report.get("restart_count", -1)) != 0:
             raise AssertionError(f"invalid initial restart count: {report}")
+        if int(report.get("restart_arrival_count", -1)) != 1:
+            raise AssertionError(f"invalid initial arrival count: {report}")
         if int(report.get("local_restart_count", -1)) != 0:
             raise AssertionError(f"invalid initial local restart count: {report}")
         if report.get("observed_local_restart_counts") != [0, 0]:
@@ -512,6 +519,10 @@ def _validate_elastic_ddp_restart_reports(
             raise AssertionError(f"restarted elastic worker failed: {report}")
         if int(report.get("restart_count", -1)) != 1:
             raise AssertionError(f"restarted elastic count is invalid: {report}")
+        if int(report.get("restart_arrival_count", -1)) != 2:
+            raise AssertionError(
+                f"restarted elastic arrival count is invalid: {report}"
+            )
         observed_counts = report.get("observed_local_restart_counts")
         if (
             not isinstance(observed_counts, list)
@@ -589,6 +600,291 @@ def _validate_elastic_ddp_restart_reports(
         },
         "gradient": restarted[0]["gradient"],
         "parameters_after_step": restarted[0]["parameters_after_step"],
+        "initial_workers": initial,
+        "restarted_workers": restarted,
+    }
+
+
+def _validate_elastic_ddp_checkpoint_reports(
+    initial: list[dict[str, Any]],
+    restarted: list[dict[str, Any]],
+    *,
+    node_names: list[str],
+    failed_node: str,
+) -> dict[str, Any]:
+    if len(initial) != 2 or len(restarted) != 2:
+        raise AssertionError(
+            "elastic checkpoint recovery requires two initial and two "
+            "restarted worker reports"
+        )
+    if len(set(node_names)) != 2 or failed_node not in node_names:
+        raise AssertionError("elastic checkpoint node metadata is invalid")
+
+    initial_by_node = {str(item.get("node_name")): item for item in initial}
+    restarted_by_node = {
+        str(item.get("node_name")): item for item in restarted
+    }
+    if set(initial_by_node) != set(node_names):
+        raise AssertionError(
+            f"initial checkpoint node reports mismatch: {initial}"
+        )
+    if set(restarted_by_node) != set(node_names):
+        raise AssertionError(
+            f"restarted checkpoint node reports mismatch: {restarted}"
+        )
+
+    expected_states = {
+        node_name: (
+            "expected_process_exit"
+            if node_name == failed_node
+            else "waiting_for_restart"
+        )
+        for node_name in node_names
+    }
+    expected_gradient = [[1.5, 3.0]]
+    expected_step_one_parameters = [[0.85, -0.3]]
+    expected_step_one_momentum = [[1.5, 3.0]]
+    expected_step_two_parameters = [[0.565, -0.87]]
+    expected_step_two_momentum = [[2.85, 5.7]]
+    expected_restored_state = [[0.85, -0.3, 1.5, 3.0]] * 2
+    expected_final_state = [[0.565, -0.87, 2.85, 5.7]] * 2
+
+    for node_name, report in initial_by_node.items():
+        if report.get("backend") != "nccl":
+            raise AssertionError(
+                f"physical checkpoint backend mismatch: {report}"
+            )
+        if report.get("status") != expected_states[node_name]:
+            raise AssertionError(
+                f"unexpected initial checkpoint state: {report}"
+            )
+        if int(report.get("restart_count", -1)) != 0:
+            raise AssertionError(
+                f"invalid initial checkpoint restart count: {report}"
+            )
+        if int(report.get("restart_arrival_count", -1)) != 1:
+            raise AssertionError(
+                f"invalid initial checkpoint arrival count: {report}"
+            )
+        if int(report.get("local_restart_count", -1)) != 0:
+            raise AssertionError(
+                f"invalid initial local restart count: {report}"
+            )
+        if report.get("observed_local_restart_counts") != [0, 0]:
+            raise AssertionError(
+                f"initial checkpoint generation mismatch: {report}"
+            )
+        if int(report.get("max_restarts", -1)) != 1:
+            raise AssertionError(
+                f"invalid checkpoint restart limit: {report}"
+            )
+        if int(report.get("world_size", 0)) != 2:
+            raise AssertionError(
+                f"invalid initial checkpoint world size: {report}"
+            )
+        if int(report.get("completed_steps", -1)) != 1:
+            raise AssertionError(
+                f"checkpoint was saved at an invalid step: {report}"
+            )
+        if report.get("initial_process_group_destroyed_before_exit") is not False:
+            raise AssertionError(
+                f"checkpoint worker cleaned up before failure: {report}"
+            )
+        if (
+            not _nested_allclose(
+                report.get("gradient_after_step_one"), expected_gradient
+            )
+            or not _nested_allclose(
+                report.get("parameters_after_step_one"),
+                expected_step_one_parameters,
+            )
+            or not _nested_allclose(
+                report.get("momentum_after_step_one"),
+                expected_step_one_momentum,
+            )
+            or not _nested_allclose(
+                report.get("gathered_state_after_step_one"),
+                expected_restored_state,
+            )
+        ):
+            raise AssertionError(
+                f"initial checkpoint training state mismatch: {report}"
+            )
+        saved = report.get("saved_checkpoint")
+        if (
+            not isinstance(saved, dict)
+            or int(saved.get("bytes", 0)) <= 0
+            or not saved.get("sha256")
+        ):
+            raise AssertionError(
+                f"saved checkpoint metadata is invalid: {report}"
+            )
+        if not report.get("physical_device_name"):
+            raise AssertionError(f"physical GPU metadata is missing: {report}")
+
+    failed = initial_by_node[failed_node]
+    if (
+        failed.get("selected_for_initial_exit") is not True
+        or int(failed.get("expected_process_exit_code", -1))
+        != EXPECTED_PROCESS_EXIT_CODE
+    ):
+        raise AssertionError(
+            f"elastic checkpoint failure marker is invalid: {failed}"
+        )
+    if sorted(int(item.get("rank", -1)) for item in initial) != [0, 1]:
+        raise AssertionError(
+            f"initial checkpoint ranks are invalid: {initial}"
+        )
+    survivors = [
+        report
+        for node_name, report in initial_by_node.items()
+        if node_name != failed_node
+    ]
+    if any(
+        report.get("selected_for_initial_exit") is not False
+        for report in survivors
+    ):
+        raise AssertionError(
+            f"unexpected checkpoint failure selection: {survivors}"
+        )
+
+    for node_name, report in restarted_by_node.items():
+        if report.get("backend") != "nccl" or report.get("status") != "success":
+            raise AssertionError(
+                f"restarted checkpoint worker failed: {report}"
+            )
+        if int(report.get("restart_count", -1)) != 1:
+            raise AssertionError(
+                f"restarted checkpoint generation is invalid: {report}"
+            )
+        if int(report.get("restart_arrival_count", -1)) != 2:
+            raise AssertionError(
+                f"restarted checkpoint arrival count is invalid: {report}"
+            )
+        if int(report.get("max_restarts", -1)) != 1:
+            raise AssertionError(
+                f"restarted checkpoint limit is invalid: {report}"
+            )
+        if int(report.get("world_size", 0)) != 2:
+            raise AssertionError(
+                f"restarted checkpoint world size is invalid: {report}"
+            )
+        observed_counts = report.get("observed_local_restart_counts")
+        if (
+            not isinstance(observed_counts, list)
+            or len(observed_counts) != 2
+            or max(int(value) for value in observed_counts) != 1
+        ):
+            raise AssertionError(
+                f"checkpoint restart generation did not converge: {report}"
+            )
+        if int(report.get("restored_completed_steps", -1)) != 1:
+            raise AssertionError(
+                f"checkpoint training step was not restored: {report}"
+            )
+        if int(report.get("completed_steps", -1)) != 2:
+            raise AssertionError(
+                f"resumed checkpoint step is invalid: {report}"
+            )
+        if report.get("checkpoint_loaded") is not True:
+            raise AssertionError(f"checkpoint was not loaded: {report}")
+        saved = initial_by_node[node_name]["saved_checkpoint"]
+        loaded = report.get("loaded_checkpoint")
+        if (
+            not isinstance(loaded, dict)
+            or saved.get("sha256") != loaded.get("sha256")
+            or int(saved.get("bytes", 0)) != int(loaded.get("bytes", -1))
+            or saved.get("path") != loaded.get("path")
+        ):
+            raise AssertionError(
+                f"loaded checkpoint differs from saved file: {report}"
+            )
+        if (
+            not _nested_allclose(
+                report.get("restored_parameters"),
+                expected_step_one_parameters,
+            )
+            or not _nested_allclose(
+                report.get("restored_momentum"), expected_step_one_momentum
+            )
+            or not _nested_allclose(
+                report.get("gathered_restored_state"),
+                expected_restored_state,
+            )
+            or not _nested_allclose(
+                report.get("gradient_after_step_two"), expected_gradient
+            )
+            or not _nested_allclose(
+                report.get("parameters_after_step_two"),
+                expected_step_two_parameters,
+            )
+            or not _nested_allclose(
+                report.get("momentum_after_step_two"),
+                expected_step_two_momentum,
+            )
+            or not _nested_allclose(
+                report.get("gathered_state_after_step_two"),
+                expected_final_state,
+            )
+        ):
+            raise AssertionError(
+                f"resumed checkpoint training state mismatch: {report}"
+            )
+        if not report.get("physical_device_name"):
+            raise AssertionError(f"physical GPU metadata is missing: {report}")
+
+    if sorted(int(item.get("rank", -1)) for item in restarted) != [0, 1]:
+        raise AssertionError(
+            f"restarted checkpoint ranks are invalid: {restarted}"
+        )
+    if int(restarted_by_node[failed_node].get("local_restart_count", -1)) != 1:
+        raise AssertionError(
+            "the failed checkpoint node did not report a local restart"
+        )
+    if any(
+        int(initial_by_node[node_name]["pid"])
+        == int(restarted_by_node[node_name]["pid"])
+        for node_name in node_names
+    ):
+        raise AssertionError(
+            "torchrun did not replace every checkpoint worker"
+        )
+
+    run_ids = {
+        str(item.get("run_id", "")) for item in initial + restarted
+    }
+    if len(run_ids) != 1 or not next(iter(run_ids)):
+        raise AssertionError(
+            f"elastic checkpoint run IDs are inconsistent: {run_ids}"
+        )
+    return {
+        "schema_version": "fakegpu.elastic_ddp_checkpoint_validation.v1",
+        "status": "success",
+        "backend": "nccl",
+        "world_size": 2,
+        "failed_node": failed_node,
+        "failure_exit_code": EXPECTED_PROCESS_EXIT_CODE,
+        "restart_count": 1,
+        "completed_steps": 2,
+        "run_id": next(iter(run_ids)),
+        "local_restart_counts": {
+            node_name: int(
+                restarted_by_node[node_name]["local_restart_count"]
+            )
+            for node_name in node_names
+        },
+        "initial_pids": {
+            node_name: int(initial_by_node[node_name]["pid"])
+            for node_name in node_names
+        },
+        "restarted_pids": {
+            node_name: int(restarted_by_node[node_name]["pid"])
+            for node_name in node_names
+        },
+        "restored_parameters": restarted[0]["restored_parameters"],
+        "restored_momentum": restarted[0]["restored_momentum"],
+        "parameters_after_step_two": restarted[0]["parameters_after_step_two"],
+        "momentum_after_step_two": restarted[0]["momentum_after_step_two"],
         "initial_workers": initial,
         "restarted_workers": restarted,
     }
@@ -893,6 +1189,111 @@ def _run_elastic_ddp_restart_case(
         for node in nodes
     ]
     summary = _validate_elastic_ddp_restart_reports(
+        initial,
+        restarted,
+        node_names=[node.name for node in nodes],
+        failed_node=failed_node.name,
+    )
+    summary["rendezvous_endpoint"] = (
+        f"{rendezvous_host}:{rendezvous_port}"
+    )
+    summary["local_addresses"] = local_addresses
+    return summary
+
+
+def _run_elastic_ddp_checkpoint_case(
+    nodes: list[NodeSpec],
+    *,
+    endpoint: str,
+    rendezvous_host: str,
+    rendezvous_port: int,
+    remote_root: str,
+    session: str,
+    timeout: float,
+) -> dict[str, Any]:
+    report_dir = f"{remote_root}/elastic-ddp-checkpoint/reports"
+    checkpoint_dir = f"{remote_root}/elastic-ddp-checkpoint/checkpoints"
+    timeout_ms = min(10_000, max(2_000, round(timeout * 100)))
+    process_group_timeout = max(10, min(60, round(timeout / 2)))
+    failed_node = nodes[1]
+    local_addresses = {
+        node.name: _remote_route_source(
+            node,
+            destination_host=rendezvous_host,
+            destination_port=rendezvous_port,
+        )
+        for node in nodes
+    }
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    for node_index, node in enumerate(nodes):
+        env = _distributed_env(
+            node=node,
+            endpoint=endpoint,
+            timeout_ms=timeout_ms,
+            hybrid=True,
+        )
+        env["LD_PRELOAD"] = f"{node.repo}/build/libnccl.so.2"
+        argv = [
+            node.python,
+            "-m",
+            "torch.distributed.run",
+            "--nnodes=2",
+            "--nproc-per-node=1",
+            "--max-restarts=1",
+            "--monitor-interval=0.2",
+            "--rdzv-backend=c10d",
+            f"--rdzv-endpoint={rendezvous_host}:{rendezvous_port}",
+            f"--rdzv-id={session}-elastic-ddp-checkpoint",
+            f"--rdzv-conf=is_host={'true' if node_index == 0 else 'false'}",
+            f"--local-addr={local_addresses[node.name]}",
+            str(ELASTIC_DDP_CHECKPOINT_WORKER_RELATIVE),
+            f"--report-dir={report_dir}",
+            f"--checkpoint-dir={checkpoint_dir}",
+            f"--node-name={node.name}",
+            "--backend=nccl",
+            "--trace-store",
+            f"--timeout-seconds={process_group_timeout}",
+            f"--survivor-wait-seconds={process_group_timeout}",
+        ]
+        if node == failed_node:
+            argv.append("--fail-this-node")
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        env=env,
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+    _collect_processes(
+        processes,
+        timeout=timeout,
+        label="Hybrid elastic DDP checkpoint recovery",
+    )
+
+    initial = [
+        _read_remote_json(
+            node,
+            f"{report_dir}/attempt_0_"
+            f"{_safe_report_component(node.name)}_local_0.json",
+        )
+        for node in nodes
+    ]
+    restarted = [
+        _read_remote_json(
+            node,
+            f"{report_dir}/attempt_1_"
+            f"{_safe_report_component(node.name)}_local_0.json",
+        )
+        for node in nodes
+    ]
+    summary = _validate_elastic_ddp_checkpoint_reports(
         initial,
         restarted,
         node_names=[node.name for node in nodes],
@@ -1676,6 +2077,7 @@ def _validate_cluster_report(
     expect_recovery: bool = False,
     expect_process_exit: bool = False,
     expect_elastic_restart: bool = False,
+    expected_minimum_communicators: int = 0,
 ) -> dict[str, Any]:
     report = json.loads(path.read_text(encoding="utf-8"))
     if report.get("schema_version") != "cluster_report.v1":
@@ -1688,9 +2090,14 @@ def _validate_cluster_report(
         raise AssertionError(f"unexpected physical topology: {cluster}")
     if cluster.get("coordinator_transport") != "tcp":
         raise AssertionError(f"unexpected coordinator transport: {cluster}")
-    if expect_elastic_restart and int(cluster.get("communicators", 0)) < 2:
+    minimum_communicators = max(
+        expected_minimum_communicators,
+        2 if expect_elastic_restart else 0,
+    )
+    if int(cluster.get("communicators", 0)) < minimum_communicators:
         raise AssertionError(
-            f"elastic restart did not initialize a new communicator: {cluster}"
+            "elastic recovery did not initialize new communicators "
+            f"({minimum_communicators}): {cluster}"
         )
     if expected_collectives:
         for collective in sorted(expected_collectives):
@@ -1832,6 +2239,15 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             "was active; torchrun replaced both workers and the restarted "
             "gradient `[1.5, 3.0]` and parameters `[0.85, -0.30]` matched "
             "on both physical hosts."
+        )
+    if "elastic_ddp_checkpoint" in cases:
+        checkpoint = cases["elastic_ddp_checkpoint"]
+        lines.append(
+            "- Elastic DDP checkpoint recovery: both workers loaded step `1` "
+            "model parameters `[0.85, -0.30]` and SGD momentum `[1.5, 3.0]`; "
+            "the resumed step produced parameters `[0.565, -0.87]` and "
+            f"momentum `[2.85, 5.7]` after worker exit code "
+            f"`{checkpoint['failure_exit_code']}`."
         )
     if "ddp_options" in cases:
         lines.append(
@@ -1980,6 +2396,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     cases = args.case or [
         "ddp",
         "elastic-ddp-restart",
+        "elastic-ddp-checkpoint",
         "ddp-options",
         "fsdp",
         "fsdp2",
@@ -2098,6 +2515,18 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                     endpoint=endpoint,
                     rendezvous_host=args.coordinator_host,
                     rendezvous_port=args.elastic_port,
+                    remote_root=remote_root,
+                    session=args.session,
+                    timeout=args.case_timeout,
+                )
+            )
+        if "elastic-ddp-checkpoint" in cases:
+            case_reports["elastic_ddp_checkpoint"] = (
+                _run_elastic_ddp_checkpoint_case(
+                    nodes,
+                    endpoint=endpoint,
+                    rendezvous_host=args.coordinator_host,
+                    rendezvous_port=args.elastic_checkpoint_port,
                     remote_root=remote_root,
                     session=args.session,
                     timeout=args.case_timeout,
@@ -2263,12 +2692,15 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     if (
         "ddp" in cases
         or "elastic-ddp-restart" in cases
+        or "elastic-ddp-checkpoint" in cases
         or "ddp-options" in cases
         or selected_deepspeed_cases
     ):
         expected_collectives.update({"all_reduce", "all_gather"})
     if selected_deepspeed_pipeline:
         expected_collectives.add("all_gather")
+    if "elastic-ddp-checkpoint" in cases:
+        expected_collectives.add("broadcast")
     if "alltoallv" in cases:
         expected_collectives.add("all_to_all")
     if "fault-shrink" in cases or "process-exit-shrink" in cases:
@@ -2292,7 +2724,20 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         ),
         expect_recovery="fault-shrink" in cases,
         expect_process_exit="process-exit-shrink" in cases,
-        expect_elastic_restart="elastic-ddp-restart" in cases,
+        expect_elastic_restart=(
+            "elastic-ddp-restart" in cases
+            or "elastic-ddp-checkpoint" in cases
+        ),
+        expected_minimum_communicators=(
+            2
+            * sum(
+                name in cases
+                for name in (
+                    "elastic-ddp-restart",
+                    "elastic-ddp-checkpoint",
+                )
+            )
+        ),
     )
 
     report: dict[str, Any] = {
@@ -2337,7 +2782,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Run repeatable Hybrid DDP/FSDP/FSDP2/DeepSpeed Pipeline, elastic "
-            "restart, and TCP failure checks on two SSH hosts at one Git commit."
+            "restart/checkpoint recovery, and TCP failure checks on two SSH "
+            "hosts at one Git commit."
         )
     )
     parser.add_argument(
@@ -2354,12 +2800,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--coordinator-port", type=int, default=29591)
     parser.add_argument("--master-port", type=int, default=29592)
     parser.add_argument("--elastic-port", type=int, default=29593)
+    parser.add_argument("--elastic-checkpoint-port", type=int, default=29594)
     parser.add_argument(
         "--case",
         action="append",
         choices=[
             "ddp",
             "elastic-ddp-restart",
+            "elastic-ddp-checkpoint",
             "ddp-options",
             "fsdp",
             "fsdp2",
@@ -2404,13 +2852,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    for port_name in ("coordinator_port", "master_port", "elastic_port"):
+    for port_name in (
+        "coordinator_port",
+        "master_port",
+        "elastic_port",
+        "elastic_checkpoint_port",
+    ):
         port = int(getattr(args, port_name))
         if port < 1 or port > 65535:
             parser.error(f"--{port_name.replace('_', '-')} must be within 1..65535")
     if len(
-        {args.coordinator_port, args.master_port, args.elastic_port}
-    ) != 3:
+        {
+            args.coordinator_port,
+            args.master_port,
+            args.elastic_port,
+            args.elastic_checkpoint_port,
+        }
+    ) != 4:
         parser.error("coordinator and torch rendezvous ports must be distinct")
     if args.startup_timeout <= 0 or args.case_timeout <= 0:
         parser.error("timeouts must be greater than zero")
