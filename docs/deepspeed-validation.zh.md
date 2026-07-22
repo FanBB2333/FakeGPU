@@ -192,9 +192,10 @@ DeepSpeed 0.15.3 没有训练用 `auto_ep_layer`，验证器会将其报告为�
 
 原生 group semantics 命令还会验证 2/4 rank 的非均匀分片和零长度 peer 分片，
 同时覆盖 Unix 共享内存与 TCP socket payload。Blackwell GPU 与 Ampere GPU
-之间的物理双主机用例也已通过：2 次 all-to-all 共记录 48 个逻辑字节、24 个
-跨节点字节，节点对单次峰值为 20 字节；稀疏用例包含 Blackwell GPU → 3090 Ti 的
-零长度分片。这些结果验证功能与 TCP 传输，不代表 NCCL/RDMA 性能。
+之间还通过了每个分片单位为 1 MiB 的物理双主机压力用例。非均匀跨主机分片为
+2 MiB/3 MiB，稀疏分片为 0 MiB/1 MiB；2 次 all-to-all 共记录 12 MiB 逻辑
+数据、6 MiB 跨节点数据，节点对单次峰值为 5 MiB。每个 payload 都经过逐元素
+检查并记录 SHA-256。这些结果验证功能与 TCP 传输，不代表 NCCL/RDMA 性能。
 
 当前验证器不组合训练 AutoTP 与 AutoEP。WSL 环境也没有匹配的 JIT CUDA
 工具链，因此维护中的 AutoEP 用例使用顺序 expert 路径，不包含 grouped GEMM。
