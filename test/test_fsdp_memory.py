@@ -56,8 +56,9 @@ def test_full_shard_projection_replaces_shardable_memory() -> None:
     assert estimate["local_parameter_bytes"] == 500
     assert estimate["local_optimizer_state_bytes"] == 1_000
     assert estimate["all_gather_workspace_bytes"] == 500
+    assert estimate["reduce_scatter_workspace_bytes"] == 250
     assert estimate["graph_nonsharded_bytes"] == 600
-    assert estimate["first_step_graph_peak_bytes"] == 2_100
+    assert estimate["first_step_graph_peak_bytes"] == 2_350
     assert estimate["local_optimizer_temporary_bytes"] == 500
     assert estimate["optimizer_nonsharded_bytes"] == 0
     assert estimate["optimizer_peak_bytes"] == 2_500

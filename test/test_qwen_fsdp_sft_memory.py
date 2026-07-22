@@ -81,7 +81,7 @@ def _rank_report(rank: int, *, overall: int = 2_500) -> dict:
         },
         "fsdp": {"sharding_plan": plan},
         "memory_phases": {
-            "graph_peak_bytes": 2_100,
+            "graph_peak_bytes": 2_350,
             "optimizer_peak_bytes": 2_500,
             "overall_peak_bytes": overall,
         },
