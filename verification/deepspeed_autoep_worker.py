@@ -116,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         stage = "import_deepspeed"
         import deepspeed
         from deepspeed.module_inject.auto_ep_layer import AutoEPMoELayer
+        from deepspeed.utils import safe_get_full_grad
         from deepspeed.utils.logging import logger as deepspeed_logger
 
         deepspeed_logger.setLevel(logging.WARNING)
@@ -300,10 +301,12 @@ def main(argv: list[str] | None = None) -> int:
         output = engine(inputs)
         loss = torch.nn.functional.mse_loss(output, target, reduction="mean")
         engine.backward(loss)
-        gradient_norms = {
-            name: float(getattr(block.experts, name).grad.detach().float().norm())
-            for name in ("w1", "w2", "w3")
-        }
+        gradient_norms = {}
+        for name in ("w1", "w2", "w3"):
+            gradient = safe_get_full_grad(getattr(block.experts, name))
+            if gradient is None:
+                raise AssertionError(f"missing expert gradient for {name}")
+            gradient_norms[name] = float(gradient.detach().float().norm())
         engine.step()
         torch.cuda.synchronize()
 
