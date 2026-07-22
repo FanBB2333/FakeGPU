@@ -126,6 +126,52 @@ def _enable_batched_deepspeed_p2p(
     p2p.recv = recv
 
 
+def _configure_pipeline_gradient_scaling(
+    engine: Any,
+    *,
+    gradient_accumulation_steps: int,
+    mode: str,
+) -> dict[str, Any]:
+    """Avoid scaling an already GAS-scaled gradient on non-last stages.
+
+    DeepSpeed 0.19 introduced tensor backward hooks that divide incoming
+    gradients by GAS.  The last pipeline stage has already applied that
+    division while backpropagating the loss, so applying it again to the
+    activation gradient on an earlier stage produces a smaller update.
+    Older DeepSpeed releases use ``torch.autograd.backward`` here and do not
+    expose ``_scale_wrt_gas``.
+    """
+
+    details: dict[str, Any] = {
+        "mode": mode,
+        "applied": False,
+        "has_scale_wrt_gas_flag": hasattr(engine, "_scale_wrt_gas"),
+    }
+    if gradient_accumulation_steps <= 1:
+        details["status"] = "not_required_single_micro_batch"
+        return details
+    if engine.is_last_stage():
+        details["status"] = "not_required_last_stage"
+        return details
+    if mode == "native":
+        details["status"] = "disabled_by_cli"
+        return details
+    if not details["has_scale_wrt_gas_flag"]:
+        details["status"] = "not_required_legacy_autograd"
+        return details
+
+    previous = bool(engine._scale_wrt_gas)
+    engine._scale_wrt_gas = False
+    details.update(
+        {
+            "applied": previous,
+            "previous_scale_wrt_gas": previous,
+            "status": "applied" if previous else "already_disabled",
+        }
+    )
+    return details
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report-dir", type=Path, required=True)
@@ -146,6 +192,15 @@ def main(argv: list[str] | None = None) -> int:
         choices=(1, 2),
         default=1,
     )
+    parser.add_argument(
+        "--pipeline-gradient-scaling",
+        choices=("auto", "native"),
+        default="auto",
+        help=(
+            "avoid duplicate GAS scaling on non-last stages, or preserve "
+            "the installed DeepSpeed behavior for compatibility probes"
+        ),
+    )
     parser.add_argument("--batched-p2p", action="store_true")
     args = parser.parse_args(argv)
 
@@ -158,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         "precision": args.precision,
         "activation_checkpoint_interval": args.activation_checkpoint_interval,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "pipeline_gradient_scaling_mode": args.pipeline_gradient_scaling,
         "p2p_api": (
             "batch_isend_irecv" if args.batched_p2p else "send_recv"
         ),
@@ -281,6 +337,11 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             dist_init_required=False,
         )
+        gradient_scaling = _configure_pipeline_gradient_scaling(
+            engine,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            mode=args.pipeline_gradient_scaling,
+        )
         local_parameters = [
             parameter.detach().float().cpu().reshape(-1).tolist()
             for parameter in engine.module.parameters()
@@ -306,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
                 "gradient_accumulation_steps": int(
                     engine.gradient_accumulation_steps()
                 ),
+                "pipeline_gradient_scaling": gradient_scaling,
                 "initial_local_parameter": initial_local,
                 "local_parameter_names": [
                     name for name, _ in engine.module.named_parameters()
