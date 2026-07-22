@@ -98,6 +98,8 @@ def _validate_reports(report_dir: Path) -> dict[str, Any]:
         raise AssertionError(f"unexpected initial worker states: {initial}")
     if any(int(item.get("restart_count", -1)) != 0 for item in initial):
         raise AssertionError(f"initial restart counters were invalid: {initial}")
+    if any(int(item.get("restart_arrival_count", -1)) != 1 for item in initial):
+        raise AssertionError(f"initial arrival counters were invalid: {initial}")
     if any(int(item.get("local_restart_count", -1)) != 0 for item in initial):
         raise AssertionError(f"initial local restart counters were invalid: {initial}")
     if any(item.get("observed_local_restart_counts") != [0, 0] for item in initial):
@@ -118,6 +120,8 @@ def _validate_reports(report_dir: Path) -> dict[str, Any]:
         raise AssertionError(f"restarted workers failed: {restarted}")
     if any(int(item.get("restart_count", -1)) != 1 for item in restarted):
         raise AssertionError(f"restart counters were invalid: {restarted}")
+    if any(int(item.get("restart_arrival_count", -1)) != 2 for item in restarted):
+        raise AssertionError(f"restart arrival counters were invalid: {restarted}")
     if any(int(item.get("local_restart_count", -1)) != 1 for item in restarted):
         raise AssertionError(f"local restart counters were invalid: {restarted}")
     if any(

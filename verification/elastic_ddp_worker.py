@@ -207,21 +207,29 @@ def main(argv: list[str] | None = None) -> int:
             f"fakegpu.elastic_ddp.control.{_safe_component(run_id)}",
             rendezvous_store,
         )
+        restart_arrival_count = int(
+            control_store.add(f"restart_arrival/{rank}", 1)
+        )
+        restart_count = restart_arrival_count - 1
         control_store.set(
-            f"local_restart_count/{rank}",
+            f"local_restart_count/{restart_count}/{rank}",
             str(local_restart_count).encode("ascii"),
         )
         observed_local_restart_counts = [
-            int(control_store.get(f"local_restart_count/{peer_rank}"))
+            int(
+                control_store.get(
+                    f"local_restart_count/{restart_count}/{peer_rank}"
+                )
+            )
             for peer_rank in range(world_size)
         ]
-        restart_count = max(observed_local_restart_counts)
         should_exit = restart_count == 0 and (
             args.fail_this_node or rank == args.fail_rank
         )
         report.update(
             {
                 "restart_count": restart_count,
+                "restart_arrival_count": restart_arrival_count,
                 "observed_local_restart_counts": (
                     observed_local_restart_counts
                 ),

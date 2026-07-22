@@ -17,8 +17,9 @@ Suites:
   python    Run PyTorch tests (requires torch)
   preflight_oom  Run fakecuda preflight pass/OOM report checks (requires torch)
   tcp_bandwidth  Simulate two logical nodes and measure TCP collective throughput
-  distributed_resilience  Validate rank failures, elastic restart, timeouts, and reports
-  elastic_ddp  Restart a failed torchrun worker group and validate DDP numerics
+  distributed_resilience  Validate rank failures, elastic recovery, timeouts, and reports
+  elastic_ddp  Restart a failed torchrun group; validate DDP and checkpoint recovery
+  elastic_ddp_checkpoint  Resume model and optimizer state after a worker-group restart
   static_memory_validation  Capture ATen storage liveness and compare with real CUDA when available
   real_gpu_calibration  Calibrate real/passthrough/hybrid/fakecuda workloads on the detected GPU
   rtx3090ti_calibration  Deprecated alias for real_gpu_calibration
@@ -224,6 +225,17 @@ run_elastic_ddp() {
 
   "$PYTHON_BIN" verification/test_elastic_ddp_restart.py \
     --output "$SMOKE_BUILD_DIR/elastic_ddp_restart.json"
+  run_elastic_ddp_checkpoint
+}
+
+run_elastic_ddp_checkpoint() {
+  if ! "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
+    echo "torch not found in current python; skipping elastic DDP checkpoint test."
+    return 0
+  fi
+
+  "$PYTHON_BIN" verification/test_elastic_ddp_checkpoint_resume.py \
+    --output "$SMOKE_BUILD_DIR/elastic_ddp_checkpoint_resume.json"
 }
 
 run_real_gpu_calibration() {
@@ -345,6 +357,9 @@ case "$suite" in
     ;;
   elastic_ddp)
     run_elastic_ddp
+    ;;
+  elastic_ddp_checkpoint)
+    run_elastic_ddp_checkpoint
     ;;
   static_memory_validation)
     run_static_memory_validation
