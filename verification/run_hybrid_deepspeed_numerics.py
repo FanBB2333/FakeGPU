@@ -37,6 +37,14 @@ def _find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _temporary_coordinator_socket() -> tuple[
+    tempfile.TemporaryDirectory[str],
+    Path,
+]:
+    directory = tempfile.TemporaryDirectory(prefix="fgpu-coord-")
+    return directory, Path(directory.name) / "c.sock"
+
+
 def _shutdown_unix_coordinator(socket_path: Path) -> None:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.settimeout(2.0)
@@ -252,7 +260,7 @@ def _run_stage(
         f"zero{zero_stage}-{precision}-{world_size}r-{offload}"
     )
     stage_root.mkdir(parents=True, exist_ok=True)
-    socket_path = stage_root / "coordinator.sock"
+    socket_directory, socket_path = _temporary_coordinator_socket()
     cluster_report_path = stage_root / "cluster-report.json"
     rank_report_dir = stage_root / "ranks"
 
@@ -409,6 +417,7 @@ def _run_stage(
     finally:
         _close_coordinator(coordinator, socket_path)
         coordinator.communicate(timeout=5)
+        socket_directory.cleanup()
 
 
 def main() -> int:

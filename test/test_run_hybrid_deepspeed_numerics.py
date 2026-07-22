@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import os
 
 import pytest
 
 from verification.run_hybrid_deepspeed_numerics import (
     _collective_calls,
+    _temporary_coordinator_socket,
     _validate_collective_calls,
     _validate_rank_reports,
 )
@@ -112,3 +114,12 @@ def test_validate_rank_reports_accepts_cpu_offload() -> None:
         precision="fp32",
         offload="optimizer-and-parameter",
     )
+
+
+def test_temporary_coordinator_socket_uses_short_path() -> None:
+    directory, socket_path = _temporary_coordinator_socket()
+    try:
+        assert len(os.fsencode(socket_path)) < 100
+        assert socket_path.parent.is_dir()
+    finally:
+        directory.cleanup()

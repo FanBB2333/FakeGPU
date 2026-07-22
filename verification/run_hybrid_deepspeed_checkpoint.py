@@ -30,6 +30,7 @@ from verification.run_hybrid_deepspeed_numerics import (  # noqa: E402
     _find_free_port,
     _load_rank_reports,
     _shutdown_unix_coordinator,
+    _temporary_coordinator_socket,
     _validate_collective_calls,
     _wait_for_unix_socket,
 )
@@ -217,7 +218,7 @@ def _run_stage(
     cluster_config = CLUSTER_CONFIGS[world_size]
     stage_root = report_root / f"zero{zero_stage}-{precision}-{world_size}r"
     stage_root.mkdir(parents=True, exist_ok=True)
-    socket_path = stage_root / "coordinator.sock"
+    socket_directory, socket_path = _temporary_coordinator_socket()
     cluster_report_path = stage_root / "cluster-report.json"
     rank_report_dir = stage_root / "ranks"
     checkpoint_dir = stage_root / "checkpoint"
@@ -363,6 +364,7 @@ def _run_stage(
     finally:
         _close_coordinator(coordinator, socket_path)
         coordinator.communicate(timeout=5)
+        socket_directory.cleanup()
 
 
 def main() -> int:
