@@ -10,6 +10,7 @@ from verification.run_physical_multihost import (
     NodeSpec,
     _encoded_remote_command,
     _shell_command,
+    _validate_deepspeed_reports,
     _write_markdown,
     parse_node_spec,
 )
@@ -77,6 +78,59 @@ def test_shell_command_quotes_environment_and_paths() -> None:
     assert "'VALUE=with spaces'" in command
 
 
+def test_validate_deepspeed_reports_accepts_two_physical_ranks() -> None:
+    reports = [
+        {
+            "status": "success",
+            "effective_zero_stage": 3,
+            "micro_step_1_global_steps": 0,
+            "micro_step_2_global_steps": 1,
+            "parameters_after_micro_steps": [
+                [[1.0, 0.0]],
+                [[0.775, -0.45]],
+            ],
+            "gathered_parameters": [
+                [0.775, -0.45],
+                [0.775, -0.45],
+            ],
+        }
+        for _ in range(2)
+    ]
+
+    _validate_deepspeed_reports(
+        reports,
+        zero_stage=3,
+        precision="fp32",
+    )
+
+
+def test_validate_deepspeed_reports_rejects_cross_rank_divergence() -> None:
+    reports = [
+        {
+            "status": "success",
+            "effective_zero_stage": 2,
+            "micro_step_1_global_steps": 0,
+            "micro_step_2_global_steps": 1,
+            "parameters_after_micro_steps": [
+                [[1.0, 0.0]],
+                [[0.775, -0.45]],
+            ],
+            "gathered_parameters": [
+                [0.775, -0.45],
+                [0.7, -0.4],
+            ],
+        }
+        for _ in range(2)
+    ]
+
+    with pytest.raises(AssertionError, match="inconsistent"):
+        _validate_deepspeed_reports(
+            reports,
+            zero_stage=2,
+            precision="fp32",
+        )
+
+
 def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> None:
     report = {
         "status": "success",
@@ -108,6 +162,10 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
             "fsdp2_low_reduce": {
                 "fp16": [{}, {}],
                 "bf16": [{}, {}],
+            },
+            "deepspeed": {
+                "zero2-fp32": [{}, {}],
+                "zero3-fp32": [{}, {}],
             },
             "collective_mismatch": [
                 {"mismatch_result": 5},
@@ -142,4 +200,5 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     assert "Hybrid FSDP2" in markdown
     assert "FSDP2 mixed precision" in markdown
     assert "FSDP2 low-precision reduction" in markdown
+    assert "Hybrid DeepSpeed" in markdown
     assert "Collective mismatch" in markdown

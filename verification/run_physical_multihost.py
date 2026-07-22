@@ -24,6 +24,7 @@ CLUSTER_CONFIG_RELATIVE = Path("verification/data/cluster_tcp_2r.yaml")
 DDP_WORKER_RELATIVE = Path("test/test_ddp_hybrid_numerics.py")
 FSDP_WORKER_RELATIVE = Path("test/test_fsdp_hybrid_numerics.py")
 FSDP2_WORKER_RELATIVE = Path("test/test_fsdp2_hybrid_numerics.py")
+DEEPSPEED_WORKER_RELATIVE = Path("test/test_deepspeed_hybrid_numerics.py")
 FAULT_WORKER_RELATIVE = Path("verification/remote_nccl_fault_worker.py")
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 DDP_OPTION_VARIANTS = ("no-sync", "find-unused", "static-graph")
@@ -223,6 +224,7 @@ def _local_head() -> str:
 
 def _remote_preflight(node: NodeSpec) -> dict[str, Any]:
     code = """
+import importlib.metadata
 import json
 import pathlib
 import subprocess
@@ -244,8 +246,13 @@ payload = {
     "ddp_worker_exists": pathlib.Path("test/test_ddp_hybrid_numerics.py").is_file(),
     "fsdp_worker_exists": pathlib.Path("test/test_fsdp_hybrid_numerics.py").is_file(),
     "fsdp2_worker_exists": pathlib.Path("test/test_fsdp2_hybrid_numerics.py").is_file(),
+    "deepspeed_worker_exists": pathlib.Path("test/test_deepspeed_hybrid_numerics.py").is_file(),
     "fault_worker_exists": pathlib.Path("verification/remote_nccl_fault_worker.py").is_file(),
 }
+try:
+    payload["deepspeed_version"] = importlib.metadata.version("deepspeed")
+except importlib.metadata.PackageNotFoundError:
+    payload["deepspeed_version"] = None
 if payload["cuda_available"]:
     payload["gpu_name"] = torch.cuda.get_device_name(0)
     payload["compute_capability"] = list(torch.cuda.get_device_capability(0))
@@ -374,6 +381,71 @@ def _nested_allclose(
         ):
             return False
     return True
+
+
+def _validate_deepspeed_reports(
+    reports: list[dict[str, Any]],
+    *,
+    zero_stage: int,
+    precision: str,
+) -> None:
+    expected_initial = [[1.0, 0.0]]
+    expected_final = [[0.775, -0.45]]
+    tolerance = 1e-6 if precision == "fp32" else 1e-2
+    for rank, report in enumerate(reports):
+        if report.get("status") != "success":
+            raise AssertionError(
+                f"DeepSpeed ZeRO-{zero_stage} rank {rank} failed: {report}"
+            )
+        if report.get("effective_zero_stage") != zero_stage:
+            raise AssertionError(
+                f"DeepSpeed rank {rank} stage mismatch: {report}"
+            )
+        if report.get("micro_step_1_global_steps") != 0:
+            raise AssertionError(
+                f"DeepSpeed rank {rank} stepped before accumulation boundary"
+            )
+        if report.get("micro_step_2_global_steps") != 1:
+            raise AssertionError(
+                f"DeepSpeed rank {rank} missed accumulation boundary"
+            )
+        parameters = report.get("parameters_after_micro_steps")
+        if not isinstance(parameters, list) or len(parameters) != 2:
+            raise AssertionError(
+                f"DeepSpeed rank {rank} report is incomplete: {report}"
+            )
+        if not _nested_allclose(
+            parameters[0],
+            expected_initial,
+            tolerance=tolerance,
+        ):
+            raise AssertionError(
+                f"DeepSpeed rank {rank} changed parameters early: {parameters}"
+            )
+        if not _nested_allclose(
+            parameters[1],
+            expected_final,
+            tolerance=tolerance,
+        ):
+            raise AssertionError(
+                f"DeepSpeed rank {rank} update mismatch: {parameters}"
+            )
+        gathered = report.get("gathered_parameters")
+        if not isinstance(gathered, list) or len(gathered) != 2:
+            raise AssertionError(
+                f"DeepSpeed rank {rank} cross-rank result is incomplete"
+            )
+        if any(
+            not _nested_allclose(
+                [value],
+                expected_final,
+                tolerance=tolerance,
+            )
+            for value in gathered
+        ):
+            raise AssertionError(
+                f"DeepSpeed rank {rank} observed inconsistent parameters"
+            )
 
 
 def _run_ddp_case(
@@ -673,6 +745,82 @@ def _run_fsdp2_case(
     return reports
 
 
+def _run_deepspeed_case(
+    nodes: list[NodeSpec],
+    *,
+    endpoint: str,
+    master_host: str,
+    master_port: int,
+    remote_root: str,
+    timeout: float,
+    zero_stage: int,
+    precision: str,
+) -> list[dict[str, Any]]:
+    if zero_stage not in {2, 3}:
+        raise ValueError(f"unsupported DeepSpeed ZeRO stage: {zero_stage}")
+    if precision not in {"fp32", "bf16"}:
+        raise ValueError(f"unsupported DeepSpeed precision: {precision}")
+
+    report_dir = f"{remote_root}/deepspeed-zero{zero_stage}-{precision}"
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    timeout_ms = max(1, round(timeout * 1000))
+    for rank, node in enumerate(nodes):
+        env = _distributed_env(
+            node=node,
+            endpoint=endpoint,
+            timeout_ms=timeout_ms,
+            hybrid=True,
+        )
+        env["LD_PRELOAD"] = f"{node.repo}/build/libnccl.so.2"
+        if node.shell == "wsl":
+            env["DS_IGNORE_CUDA_DETECTION"] = "1"
+        argv = [
+            node.python,
+            "-m",
+            "torch.distributed.run",
+            "--nnodes=2",
+            "--nproc-per-node=1",
+            f"--node-rank={rank}",
+            f"--master-addr={master_host}",
+            f"--master-port={master_port}",
+            "--max-restarts=0",
+            str(DEEPSPEED_WORKER_RELATIVE),
+            f"--report-dir={report_dir}",
+            f"--zero-stage={zero_stage}",
+            f"--precision={precision}",
+        ]
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        env=env,
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+    _collect_processes(
+        processes,
+        timeout=timeout,
+        label=f"Hybrid DeepSpeed ZeRO-{zero_stage} ({precision})",
+    )
+
+    reports = [
+        _read_remote_json(node, f"{report_dir}/rank_{rank}.json")
+        for rank, node in enumerate(nodes)
+    ]
+    _validate_deepspeed_reports(
+        reports,
+        zero_stage=zero_stage,
+        precision=precision,
+    )
+    return reports
+
+
 def _run_mismatch_case(
     nodes: list[NodeSpec],
     *,
@@ -878,6 +1026,12 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             "- FSDP2 low-precision reduction: FP16 and BF16 reduce-scatter "
             "matched the analytical averaged gradients across both nodes."
         )
+    if "deepspeed" in cases:
+        lines.append(
+            "- Hybrid DeepSpeed: ZeRO-2 and ZeRO-3 completed FP32 forward, "
+            "backward, gradient accumulation, optimizer updates, and "
+            "cross-rank consistency with one rank on each physical host."
+        )
     if "collective_mismatch" in cases:
         results = [
             item["mismatch_result"] for item in cases["collective_mismatch"]
@@ -946,6 +1100,16 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "session may contain only letters, digits, underscore, dot, and dash"
         )
 
+    cases = args.case or [
+        "ddp",
+        "ddp-options",
+        "fsdp",
+        "fsdp2",
+        "fsdp2-mixed",
+        "fsdp2-low-reduce",
+        "collective-mismatch",
+        "missing-peer",
+    ]
     git_commit = _local_head()
     preflight = [_remote_preflight(node) for node in nodes]
     if not args.allow_head_mismatch:
@@ -959,17 +1123,18 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 f"remote Git commits differ from local {git_commit}: "
                 + ", ".join(mismatches)
             )
-
-    cases = args.case or [
-        "ddp",
-        "ddp-options",
-        "fsdp",
-        "fsdp2",
-        "fsdp2-mixed",
-        "fsdp2-low-reduce",
-        "collective-mismatch",
-        "missing-peer",
-    ]
+    if "deepspeed" in cases:
+        unavailable = [
+            node.name
+            for node, payload in zip(nodes, preflight)
+            if not payload.get("deepspeed_worker_exists")
+            or not payload.get("deepspeed_version")
+        ]
+        if unavailable:
+            raise RuntimeError(
+                "DeepSpeed validation is unavailable on: "
+                + ", ".join(unavailable)
+            )
     remote_root = f"/tmp/fakegpu-physical-{args.session}"
     endpoint = f"{args.coordinator_host}:{args.coordinator_port}"
     coordinator_node = nodes[0]
@@ -1076,6 +1241,20 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 for precision in ("fp16", "bf16")
             }
+        if "deepspeed" in cases:
+            case_reports["deepspeed"] = {
+                f"zero{zero_stage}-fp32": _run_deepspeed_case(
+                    nodes,
+                    endpoint=endpoint,
+                    master_host=args.coordinator_host,
+                    master_port=args.master_port,
+                    remote_root=remote_root,
+                    timeout=args.case_timeout,
+                    zero_stage=zero_stage,
+                    precision="fp32",
+                )
+                for zero_stage in (2, 3)
+            }
         if "collective-mismatch" in cases:
             case_reports["collective_mismatch"] = _run_mismatch_case(
                 nodes,
@@ -1125,7 +1304,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         encoding="utf-8",
     )
     expected_collectives: set[str] = set()
-    if "ddp" in cases or "ddp-options" in cases:
+    if "ddp" in cases or "ddp-options" in cases or "deepspeed" in cases:
         expected_collectives.update({"all_reduce", "all_gather"})
     if (
         "fsdp" in cases
@@ -1157,6 +1336,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 "torch_cuda_version": payload["torch_cuda_version"],
                 "gpu_name": payload["gpu_name"],
                 "compute_capability": payload["compute_capability"],
+                "deepspeed_version": payload.get("deepspeed_version"),
             }
             for node, payload in zip(nodes, preflight)
         ],
@@ -1180,8 +1360,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run repeatable Hybrid DDP/FSDP/FSDP2 and TCP failure checks on "
-            "two SSH hosts that already have the same FakeGPU Git commit."
+            "Run repeatable Hybrid DDP/FSDP/FSDP2/DeepSpeed and TCP failure "
+            "checks on two SSH hosts with the same FakeGPU Git commit."
         )
     )
     parser.add_argument(
@@ -1207,6 +1387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "fsdp2",
             "fsdp2-mixed",
             "fsdp2-low-reduce",
+            "deepspeed",
             "collective-mismatch",
             "missing-peer",
         ],
