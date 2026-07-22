@@ -2,9 +2,8 @@
 
 #include "buffer_transfer.hpp"
 #include "collective_slice_plan.hpp"
-#include "low_precision.hpp"
+#include "reduction.hpp"
 
-#include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -21,82 +20,15 @@ CollectiveExecutionResult make_error(std::string code, std::string detail) {
     return result;
 }
 
-template <typename T>
-void reduce_scatter_sum_or_average(
-    const CollectiveExecutionRequest& request,
-    const CollectiveSlicePlan& plan,
-    const std::vector<std::vector<char>>& buffers,
-    std::vector<std::vector<char>>& outputs) {
-    std::vector<T> reduced(plan.total_elements, static_cast<T>(0));
-    for (const std::vector<char>& buffer : buffers) {
-        const T* values = reinterpret_cast<const T*>(buffer.data());
-        for (std::size_t index = 0; index < plan.total_elements; ++index) {
-            reduced[index] += values[index];
-        }
-    }
-    if (request.reduce_op == CollectiveReduceOp::Avg) {
-        const T divisor = static_cast<T>(buffers.size());
-        for (T& value : reduced) {
-            value = static_cast<T>(value / divisor);
-        }
-    }
-
-    outputs.resize(buffers.size());
-    for (std::size_t index = 0; index < buffers.size(); ++index) {
-        outputs[index].assign(plan.chunk_bytes, '\0');
-        std::memcpy(
-            outputs[index].data(),
-            reduced.data() + index * plan.chunk_elements,
-            plan.chunk_bytes);
-    }
-}
-
-template <typename Decode, typename Encode>
-void reduce_scatter_sum_or_average_16bit(
-    const CollectiveExecutionRequest& request,
-    const CollectiveSlicePlan& plan,
-    const std::vector<std::vector<char>>& buffers,
-    Decode decode,
-    Encode encode,
-    std::vector<std::vector<char>>& outputs) {
-    std::vector<std::uint16_t> reduced(plan.total_elements, 0);
-    for (const std::vector<char>& buffer : buffers) {
-        for (std::size_t index = 0; index < plan.total_elements; ++index) {
-            std::uint16_t bits = 0;
-            std::memcpy(
-                &bits,
-                buffer.data() + index * sizeof(bits),
-                sizeof(bits));
-            reduced[index] = encode(decode(reduced[index]) + decode(bits));
-        }
-    }
-    if (request.reduce_op == CollectiveReduceOp::Avg) {
-        const float divisor = static_cast<float>(buffers.size());
-        for (std::uint16_t& value : reduced) {
-            value = encode(decode(value) / divisor);
-        }
-    }
-
-    outputs.resize(buffers.size());
-    for (std::size_t index = 0; index < buffers.size(); ++index) {
-        outputs[index].assign(plan.chunk_bytes, '\0');
-        std::memcpy(
-            outputs[index].data(),
-            reduced.data() + index * plan.chunk_elements,
-            plan.chunk_bytes);
-    }
-}
-
 }  // namespace
 
 CollectiveExecutionResult execute_reducescatter(
     const CollectiveExecutionRequest& request,
     const std::vector<CollectiveExecutionParticipant>& participants) {
-    if (request.reduce_op != CollectiveReduceOp::Sum &&
-        request.reduce_op != CollectiveReduceOp::Avg) {
+    if (!is_supported_reduce_op(request.reduce_op)) {
         return make_error(
             "unsupported_reduce_op",
-            "only reducescatter(sum/avg) is implemented");
+            "unsupported reducescatter operation");
     }
 
     CollectiveSlicePlan plan;
@@ -139,58 +71,16 @@ CollectiveExecutionResult execute_reducescatter(
         buffers.push_back(std::move(buffer));
     }
 
-    std::vector<std::vector<char>> outputs;
-    switch (request.dtype) {
-        case CollectiveDataType::Int8:
-            reduce_scatter_sum_or_average<std::int8_t>(
-                request, plan, buffers, outputs);
-            break;
-        case CollectiveDataType::Uint8:
-            reduce_scatter_sum_or_average<std::uint8_t>(
-                request, plan, buffers, outputs);
-            break;
-        case CollectiveDataType::Int32:
-            reduce_scatter_sum_or_average<std::int32_t>(
-                request, plan, buffers, outputs);
-            break;
-        case CollectiveDataType::Uint32:
-            reduce_scatter_sum_or_average<std::uint32_t>(
-                request, plan, buffers, outputs);
-            break;
-        case CollectiveDataType::Int64:
-            reduce_scatter_sum_or_average<std::int64_t>(
-                request, plan, buffers, outputs);
-            break;
-        case CollectiveDataType::Uint64:
-            reduce_scatter_sum_or_average<std::uint64_t>(
-                request, plan, buffers, outputs);
-            break;
-        case CollectiveDataType::Float16:
-            reduce_scatter_sum_or_average_16bit(
-                request,
-                plan,
-                buffers,
-                float16_bits_to_float,
-                float_to_float16_bits,
-                outputs);
-            break;
-        case CollectiveDataType::BFloat16:
-            reduce_scatter_sum_or_average_16bit(
-                request,
-                plan,
-                buffers,
-                bfloat16_bits_to_float,
-                float_to_bfloat16_bits,
-                outputs);
-            break;
-        case CollectiveDataType::Float32:
-            reduce_scatter_sum_or_average<float>(
-                request, plan, buffers, outputs);
-            break;
-        case CollectiveDataType::Float64:
-            reduce_scatter_sum_or_average<double>(
-                request, plan, buffers, outputs);
-            break;
+    std::vector<char> reduced;
+    reduce_buffers(request, buffers, plan.total_elements, reduced);
+
+    std::vector<std::vector<char>> outputs(buffers.size());
+    for (std::size_t index = 0; index < buffers.size(); ++index) {
+        const std::size_t offset = index * plan.chunk_bytes;
+        outputs[index].assign(
+            reduced.begin() + static_cast<std::ptrdiff_t>(offset),
+            reduced.begin() + static_cast<std::ptrdiff_t>(
+                offset + plan.chunk_bytes));
     }
 
     CollectiveExecutionResult result;
