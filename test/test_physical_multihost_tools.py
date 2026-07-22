@@ -10,6 +10,7 @@ import pytest
 from verification.run_physical_multihost import (
     NodeSpec,
     _encoded_remote_command,
+    _require_matching_deepspeed_pipeline_stack,
     _shell_command,
     _validate_cluster_report,
     _validate_deepspeed_pipeline_reports,
@@ -187,6 +188,40 @@ def test_validate_deepspeed_pipeline_reports_rejects_stage_divergence() -> None:
 
     with pytest.raises(AssertionError, match="parameter mismatch"):
         _validate_deepspeed_pipeline_reports(reports)
+
+
+def test_require_matching_deepspeed_pipeline_stack_accepts_same_versions() -> None:
+    nodes = [
+        NodeSpec("gpu-a", "gpu-a", "/repo", "/python"),
+        NodeSpec("gpu-b", "gpu-b", "/repo", "/python"),
+    ]
+    payload = {
+        "torch_version": "2.8.0+cu128",
+        "torch_cuda_version": "12.8",
+        "deepspeed_version": "0.15.3",
+    }
+    _require_matching_deepspeed_pipeline_stack(nodes, [payload, payload])
+
+
+def test_require_matching_deepspeed_pipeline_stack_rejects_mismatch() -> None:
+    nodes = [
+        NodeSpec("gpu-a", "gpu-a", "/repo", "/python"),
+        NodeSpec("gpu-b", "gpu-b", "/repo", "/python"),
+    ]
+    preflight = [
+        {
+            "torch_version": "2.8.0+cu128",
+            "torch_cuda_version": "12.8",
+            "deepspeed_version": "0.15.3",
+        },
+        {
+            "torch_version": "2.12.1+cu130",
+            "torch_cuda_version": "13.0",
+            "deepspeed_version": "0.19.2",
+        },
+    ]
+    with pytest.raises(RuntimeError, match="requires matching PyTorch"):
+        _require_matching_deepspeed_pipeline_stack(nodes, preflight)
 
 
 def test_validate_cluster_report_requires_physical_pipeline_p2p(
