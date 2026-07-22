@@ -128,6 +128,20 @@ collective 超时后收到持续可见的 `ncclSystemError`，再明确排除 ra
 记为 `source=collective_timeout`，并分别保存已提交 ranks `[0, 1, 3]` 与
 推断出的缺席 rank。
 
+另一项框架级测试会在两台物理主机上各启动一个
+`torchrun --max-restarts=1` worker。首个 All-Reduce 完成后，其中一个 worker
+以状态码 `86` 退出，且不清理仍然活跃的 communicator。两个 agent 都会替换
+worker；新进程通过 rendezvous store 中每个 rank 的原子到达计数进入相同恢复
+代次，即使两端本地 restart count 分别为 `1` 和 `0`。本地 Gloo 入口为
+`./ftest elastic_ddp`，物理双机入口为
+`verification/run_physical_multihost.py --case elastic-ddp-restart`。
+
+checkpoint 版本会先使用 SGD momentum 完成一个 DDP step，通过原子替换写入
+主机本地的模型、optimizer 和训练步数，再注入相同的 worker 退出。替换进程
+必须读取保存时的同一文件，确认两个 rank 恢复的张量状态一致，并完成符合理论
+计算结果的第 2 次更新。本地使用 `./ftest elastic_ddp_checkpoint`，物理双机使用
+`verification/run_physical_multihost.py --case elastic-ddp-checkpoint`。
+
 `python3 verification/test_fault_injection_recovery.py` 会校验报告 schema；
 `./ftest distributed_resilience` 会执行完整的维护中异常套件。Cluster JSON
 与 Markdown 报告会记录故障 rank、操作、观测到错误的 ranks、尝试传输量、
@@ -176,6 +190,8 @@ python test/run_error_simulation_suite.py
 
 ```bash
 python3 verification/test_fault_injection_recovery.py
+./ftest elastic_ddp
+./ftest elastic_ddp_checkpoint
 ./ftest distributed_resilience
 ```
 

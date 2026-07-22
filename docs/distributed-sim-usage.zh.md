@@ -219,6 +219,7 @@ python3 verification/run_physical_multihost.py \
 
 - 异构两主机 Hybrid DDP 数值正确性
 - 固定 world size 的 elastic DDP：活跃 worker 退出后重启完整 worker group
+- elastic DDP checkpoint 恢复：模型参数、optimizer momentum 与已完成训练步数
 - DDP `no_sync`、不同 rank 使用不同分支时的未使用参数、静态图和 gradient bucket view
 - FSDP 全分片、reduce-scatter、optimizer、完整参数和 state dict 正确性
 - FSDP2/DTensor FP32 分片、optimizer 与完整张量重建
@@ -245,13 +246,23 @@ shrink。报告将 rank 2 记为推断出的缺席节点，并把 `[0, 1, 3]` �
 框架管理的恢复使用 `--case elastic-ddp-restart`。首个 worker group 完成
 All-Reduce 后，第二台主机上的 worker 在 NCCL communicator 仍然活跃时通过
 `os._exit(86)` 退出。`torchrun --max-restarts=1` 随后替换固定 world size
-中的全部 worker。不同 agent 的本地 restart count 可能不会同时递增，因此
-worker 会通过 rendezvous store 交换本地计数，并以最大值确定共同代次。重启
-后的 group 必须得到梯度 `[1.5, 3.0]`、参数 `[0.85, -0.30]`，且两个 rank
+中的全部 worker。每个 worker 会在 rendezvous store 中原子递增当前 rank 的
+到达计数，以该计数区分共同代次，避免读取上一代留下的键值；报告仍保留不同
+agent 可能不一致的本地 restart count。重启后的 group 必须得到梯度
+`[1.5, 3.0]`、参数 `[0.85, -0.30]`，且两个 rank
 看到的参数完全一致。控制脚本还会自动选择每台主机访问 rendezvous 的源地址，
 并明确让第一台主机托管 c10d store，适用于主机名解析不包含 Tailscale 地址
 的情况。该测试覆盖固定 world size 的 worker 替换，不包含 heartbeat 检测
 或动态成员调整。
+
+训练状态恢复使用 `--case elastic-ddp-checkpoint`。首个 group 使用 momentum
+为 `0.9` 的 SGD 完成一个 DDP step，每个 worker 通过原子替换写入一份主机本地
+checkpoint，其中包含模型参数、optimizer 状态、world size 和
+`completed_steps=1`。第二台主机以状态码 `86` 退出后，替换进程分别读取各自的
+本地文件，对比两个 rank 恢复的张量状态，再执行第 2 步。恢复时的参数和
+momentum 应为 `[0.85, -0.30]`、`[1.5, 3.0]`，继续更新后的结果应为
+`[0.565, -0.87]`、`[2.85, 5.7]`。该场景不要求共享文件系统；
+`--elastic-checkpoint-port` 用于指定与基础重启场景不同的 rendezvous 端口。
 
 DeepSpeed 是可选场景，不在默认集合中。添加 `--case deepspeed-zero2` 可以验证
 每台物理主机各运行一个 rank；维护中的异构实验已在 DeepSpeed 0.15.3 和
@@ -287,18 +298,28 @@ ranks 完成初始化后，rank 2 以状态码 `86` 退出。Ranks 0、1、3 在
 `2103.185 us`；整份报告包含两次故障、两次恢复、两次成功的恢复后
 All-Reduce、32 字节节点间总量和 16 字节节点对单次峰值。
 
-同一组主机还在 commit `c6de112` 上通过了框架级 elastic DDP。Ampere GPU
+同一组主机还在 commit `f9c209c` 上通过了框架级 elastic DDP。Ampere GPU
 worker 以状态码 `86` 退出后，两台主机的 worker PID 都被 `torchrun` 替换。
 两端本地 restart count 分别为 `1` 和 `0`，但都进入共享代次 1，建立第二个
-communicator，并完成符合解析结果的 DDP 更新。Cluster 报告记录 4 次
+communicator，并完成符合理论计算结果的 DDP 更新。Cluster 报告记录 4 次
 All-Reduce、2 次 broadcast、2 次 All-Gather、224 字节节点对总量和 64 字节
 节点对单次峰值。这些数据用于验证 coordinator 通信，不表示恢复吞吐率。
+
+同一 commit 上连续两次执行 checkpoint 恢复，训练结果与通信统计完全一致。
+两台主机都恢复了参数 `[0.85, -0.30]`、SGD momentum `[1.5, 3.0]` 和第 1 步
+状态，继续执行后得到参数 `[0.565, -0.87]` 与 momentum `[2.85, 5.7]`。每次
+实验创建 2 个 communicator，记录 4 次 All-Reduce、5 次 All-Gather、4 次
+broadcast、512 字节节点对总量和 64 字节单次峰值。每个替换进程读取的文件
+SHA-256 都与该主机保存时一致；不同 PyTorch 版本生成的文件可以不同，但恢复的
+张量状态必须一致。基础重启与 checkpoint 恢复组合执行时创建 4 个
+communicator，节点对总量为 736 字节，单次峰值仍为 64 字节。
 
 启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
 信息和 native 构建产物。合并报告写入
 `build/physical_multihost_validation/<session>/`，其中包含各 rank 结果、
 完整 cluster JSON/Markdown 报告、节点对通信总量和异常观测。聚焦 worker
-重启的单机检查入口是 `./ftest elastic_ddp`；完整故障测试使用
+重启与 checkpoint 恢复的单机检查入口是 `./ftest elastic_ddp`；只执行
+checkpoint 恢复可使用 `./ftest elastic_ddp_checkpoint`；完整故障测试使用
 `./ftest distributed_resilience`。
 
 ## 最小 cluster config

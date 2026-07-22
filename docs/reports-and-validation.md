@@ -23,13 +23,14 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |
 | `python3 verification/test_group_semantics.py` | grouped collective submission semantics |
 | `./ftest tcp_bandwidth` | chosen-port TCP payload correctness and end-to-end simulator throughput |
-| `./ftest elastic_ddp` | active worker exit, full `torchrun` worker-group replacement, restart generation synchronization, and resumed DDP numerics over Gloo |
-| `./ftest distributed_resilience` | deterministic collective failure, real worker exit, elastic DDP restart, collective-timeout inference, async-error propagation, communicator shrink/recovery, TCP mismatch, missing-peer timeout, and bounded report retention |
+| `./ftest elastic_ddp` | active worker exit, full `torchrun` worker-group replacement, restart generation synchronization, resumed DDP numerics, and model/optimizer checkpoint recovery over Gloo |
+| `./ftest elastic_ddp_checkpoint` | focused atomic checkpoint, completed-step, model parameter, SGD momentum, and continued-update recovery after worker replacement |
+| `./ftest distributed_resilience` | deterministic collective failure, real worker exit, elastic DDP restart/checkpoint resume, collective-timeout inference, async-error propagation, communicator shrink/recovery, TCP mismatch, missing-peer timeout, and bounded report retention |
 | `./test/run_hybrid_multinode.sh 2` | maintained multi-process validation with hybrid compute + simulated communication |
 | `python3 verification/run_hybrid_ddp_numerics.py --variant all` | real-CUDA DDP basic, `no_sync`, unused-parameter, static-graph, bucket-view, optimizer, and cross-rank parameter checks |
 | `python3 verification/run_hybrid_fsdp_numerics.py` | real-CUDA FSDP sharding, reduce-scatter gradients, optimizer result, full-parameter reconstruction, and state-dict restoration |
 | `python3 verification/run_hybrid_fsdp2_numerics.py ...` | real-CUDA FSDP2/DeviceMesh/DTensor numerics with two/four ranks, FP32/FP16/BF16 parameters, and FP32 or parameter-dtype gradient reduction |
-| `python3 verification/run_physical_multihost.py ...` | repeatable two-host Hybrid DDP/FSDP/FSDP2, fixed-size elastic restart, mixed precision, injected failure and worker-exit recovery, mismatch, timeout, Git-revision, and report checks over SSH |
+| `python3 verification/run_physical_multihost.py ...` | repeatable two-host Hybrid DDP/FSDP/FSDP2, fixed-size elastic restart/checkpoint recovery, mixed precision, injected failure and worker-exit recovery, mismatch, timeout, Git-revision, and report checks over SSH |
 | `./ftest llm` | optional LLM smoke test when local model files are available |
 | `python test/run_error_simulation_suite.py` | unified Python error simulation suite: cross-device, OOM, invalid device, dtype, checkpoint, and gradient |
 | `python test/test_error_cross_device.py` | cross-device tensor operation guards |

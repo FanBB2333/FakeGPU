@@ -23,12 +23,14 @@
 | `python3 verification/test_allgather_correctness.py` | direct all-gather 语义正确性 |
 | `python3 verification/test_group_semantics.py` | grouped collective 提交语义 |
 | `./ftest tcp_bandwidth` | 指定端口的 TCP 负载正确性与端到端模拟吞吐 |
-| `./ftest distributed_resilience` | 确定性 collective 故障、真实 worker 退出、collective 超时推断、async error 传播、communicator shrink/恢复、TCP 参数不一致、缺少 rank 超时和报告时间线容量限制 |
+| `./ftest elastic_ddp` | 活跃 worker 退出、完整 `torchrun` worker group 替换、restart 代次同步、DDP 数值恢复以及模型/optimizer checkpoint 恢复 |
+| `./ftest elastic_ddp_checkpoint` | 集中验证原子 checkpoint、训练步数、模型参数、SGD momentum 与 worker 替换后的继续更新 |
+| `./ftest distributed_resilience` | 确定性 collective 故障、真实 worker 退出、elastic DDP 重启/checkpoint 恢复、collective 超时推断、async error 传播、communicator shrink/恢复、TCP 参数不一致、缺少 rank 超时和报告时间线容量限制 |
 | `./test/run_hybrid_multinode.sh 2` | hybrid 计算 + simulate 通信的维护中多进程验证 |
 | `python3 verification/run_hybrid_ddp_numerics.py --variant all` | 真实 CUDA DDP 基础路径、`no_sync`、未使用参数、静态图、bucket view、optimizer 与跨 rank 参数一致性 |
 | `python3 verification/run_hybrid_fsdp_numerics.py` | 真实 CUDA FSDP 参数分片、reduce-scatter 梯度、optimizer 结果、完整参数重建与 state dict 恢复 |
 | `python3 verification/run_hybrid_fsdp2_numerics.py ...` | 真实 CUDA FSDP2/DeviceMesh/DTensor 数值验证，覆盖双/四 rank、FP32/FP16/BF16 参数，以及 FP32 或参数 dtype 梯度归约 |
-| `python3 verification/run_physical_multihost.py ...` | 通过 SSH 重复执行两主机 Hybrid DDP/FSDP/FSDP2、混合精度、注入故障与 worker 退出恢复、参数不一致、超时、Git 版本和报告检查 |
+| `python3 verification/run_physical_multihost.py ...` | 通过 SSH 重复执行两主机 Hybrid DDP/FSDP/FSDP2、固定 world size 的 elastic 重启/checkpoint 恢复、混合精度、注入故障与 worker 退出恢复、参数不一致、超时、Git 版本和报告检查 |
 | `./ftest llm` | 在本地模型文件可用时运行的可选 LLM smoke test |
 | `python test/run_error_simulation_suite.py` | 统一 Python 错误模拟套件：跨设备、OOM、无效设备、dtype、checkpoint 和梯度 |
 | `python test/test_error_cross_device.py` | 跨设备张量操作守卫 |

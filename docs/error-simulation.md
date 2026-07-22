@@ -131,11 +131,20 @@ keeps the submitted ranks `[0, 1, 3]` separate from the inferred absent rank.
 A separate framework check runs one worker per physical host under
 `torchrun --max-restarts=1`. After the initial All-Reduce, one worker exits
 with code `86` while its communicator is active. Both agents replace their
-workers, exchange their possibly asymmetric local restart counters through the
-store, and enter the same recovery generation. The restarted DDP step verifies
+workers, atomically increment per-rank arrival counters in the store, and enter
+the same recovery generation despite possibly asymmetric local restart
+counters. The restarted DDP step verifies
 averaged gradients, optimizer parameters, and cross-rank equality. Run the
 local Gloo version with `./ftest elastic_ddp`; the physical version is
 `verification/run_physical_multihost.py --case elastic-ddp-restart`.
+
+The checkpoint variant performs one DDP step with SGD momentum, atomically
+writes host-local model/optimizer/step state, and then injects the same worker
+exit. Replacement workers must load the exact files, verify equal restored
+tensor state across ranks, and continue with the analytically expected second
+update. Use `./ftest elastic_ddp_checkpoint` locally or
+`verification/run_physical_multihost.py --case elastic-ddp-checkpoint` on two
+GPU hosts.
 
 Use `python3 verification/test_fault_injection_recovery.py` for report-schema
 checks, or `./ftest distributed_resilience` for the complete maintained
