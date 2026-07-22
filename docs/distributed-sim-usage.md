@@ -219,6 +219,13 @@ The default cases are:
 - mismatched collective reduction operators and persistent async errors
 - a missing-peer communicator timeout from the second physical host
 
+DeepSpeed is optional rather than part of the default set. Add
+`--case deepspeed-zero2` to validate one rank per physical host. The maintained
+heterogeneous run passed across DeepSpeed 0.15.3 and 0.19.2. ZeRO-3 has a
+version-dependent collective sequence, so `--case deepspeed-zero3` requires
+the same DeepSpeed version on both hosts and rejects a mismatch during
+preflight.
+
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.
 It writes the combined result under

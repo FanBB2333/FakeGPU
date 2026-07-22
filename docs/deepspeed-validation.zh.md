@@ -29,6 +29,26 @@ $PYTHON verification/run_hybrid_deepspeed_numerics.py \
 同一命令支持 `--world-size 4`。如果只需要验证通信最复杂的阶段，可以使用
 `--zero-stage 3`。
 
+### CPU offload
+
+同一验证器可以直接选择 optimizer 和参数 offload：
+
+```bash
+$PYTHON verification/run_hybrid_deepspeed_numerics.py \
+  --zero-stage 2 --precision fp32 --world-size 2 \
+  --offload optimizer \
+  --report-dir build/deepspeed-offload-zero2
+
+$PYTHON verification/run_hybrid_deepspeed_numerics.py \
+  --zero-stage 3 --precision fp32 --world-size 2 \
+  --offload optimizer-and-parameter \
+  --report-dir build/deepspeed-offload-zero3
+```
+
+这些用例使用调用方提供的 PyTorch SGD，并设置
+`zero_force_ds_cpu_optimizer=false`，不会编译 DeepSpeed CPUAdam。验证器会确认
+optimizer state 位于 CPU；ZeRO-3 参数 offload 还会确认本地参数分片位于 CPU。
+
 ## Qwen LoRA SFT
 
 真实模型路径会从本地加载 Qwen3.5 权重、应用 PEFT LoRA，通过 DeepSpeed
@@ -61,6 +81,46 @@ DeepSpeed 路径默认使用重入 checkpoint。当前 Qwen/PEFT 软件栈在 De
 0.15.3 ZeRO-3 下使用非重入重算时，会让分片参数的 `[0]` 占位符进入 PyTorch
 元数据检查。验证器保留了 `--checkpoint-implementation non-reentrant`，用于后续
 版本的兼容性复测，但它不是当前维护中的通过配置。
+
+## Checkpoint 保存与恢复
+
+checkpoint 验证器会执行一次更新，让所有 rank 保存状态，创建新的 engine，恢复
+model、optimizer、scheduler 和 client state，继续训练，并与不中断训练的结果
+比较。ZeRO-2/3 还会重建 FP32 state dict。
+
+```bash
+$PYTHON verification/run_hybrid_deepspeed_checkpoint.py \
+  --zero-stage 3 --precision fp32 --world-size 2 \
+  --report-dir build/deepspeed-checkpoint
+```
+
+PyTorch 2.8 加载 DeepSpeed 0.15.3 checkpoint 时，会要求登记三个旧版
+DeepSpeed 类型。验证器只放行 PyTorch 从自身生成的 checkpoint 中识别出的类型，
+不会全局关闭 `weights_only` 保护。DeepSpeed 要求所有 rank 都参与 checkpoint
+保存，详见 [DeepSpeed checkpoint 文档](https://deepspeed.readthedocs.io/en/latest/model-checkpointing.html)。
+
+## Hugging Face Trainer
+
+Trainer 验证器既支持不依赖模型文件的小型网络，也支持本地 Qwen LoRA 权重。
+它通过 `TrainingArguments(deepspeed=...)` 传入配置，并检查每个 rank 上真实发生的
+参数更新。
+
+```bash
+$PYTHON verification/run_hf_trainer_deepspeed.py \
+  --workload tiny --zero-stage 2 --precision bf16 \
+  --gradient-accumulation-steps 2 \
+  --report-dir build/hf-trainer-deepspeed-tiny
+
+$PYTHON verification/run_hf_trainer_deepspeed.py \
+  --workload qwen-lora --model-dir "$MODEL" \
+  --zero-stage 3 --precision bf16 --sequence-length 64 \
+  --gradient-accumulation-steps 2 --gradient-checkpointing \
+  --report-dir build/hf-trainer-deepspeed-qwen
+```
+
+配置遵循
+[Transformers DeepSpeed 集成文档](https://huggingface.co/docs/transformers/main/en/deepspeed)，
+包含由 Trainer 解析的 `auto` 字段。
 
 ## 当前实测结果
 
@@ -95,6 +155,36 @@ Qwen3.5-0.8B 使用 batch size 1、BF16 基座、LoRA rank 8 和两个逻辑 ran
 - `cluster-report.json` 和 `cluster-report.md`
 - collective 调用次数和完整节点对通信表
 
+下列附加路径也已在两套 GPU/软件环境中通过：
+
+| 路径 | 覆盖范围 | 结果 |
+|---|---|---|
+| ZeRO checkpoint | ZeRO-3 FP32；ZeRO-2/3 BF16 | 保存、创建新 engine 后恢复、AdamW/StepLR/client-state 续训、与不中断训练一致、FP32 合并 |
+| Hugging Face Trainer | 小型 ZeRO-2/3 BF16；Qwen3.5-0.8B LoRA ZeRO-3 BF16 | loss 有限、参数真实更新、梯度累积、rank 一致、通信报告完整 |
+| CPU offload | ZeRO-2 optimizer；ZeRO-3 optimizer + 参数，FP32 | 更新结果符合解析值，optimizer state 和指定参数分片位于 CPU |
+
+## 物理双主机 DeepSpeed
+
+SSH 控制脚本可以让每台物理主机各运行一个 DeepSpeed rank：
+
+```bash
+python3 verification/run_physical_multihost.py \
+  --node 'name=blackwell;ssh=gpu-a;repo=/home/user/repos/fakeGPU;python=/opt/torch/bin/python;shell=posix' \
+  --node 'name=ampere-wsl;ssh=user@gpu-b;repo=/home/user/repos/fakeGPU;python=/opt/torch/bin/python;shell=wsl' \
+  --coordinator-host 100.x.y.z \
+  --case deepspeed-zero2
+```
+
+维护中的 RTX PRO 5000 ↔ RTX 3090 Ti ZeRO-2 实验完成了 7 次 TCP
+collective；节点对通信总量为 176 B，单次峰值为 32 B；两个 rank 都得到参数
+`[0.775, -0.45]`。两端分别使用 DeepSpeed 0.15.3 和 0.19.2。
+
+ZeRO-3 的参数 trace 会产生与 DeepSpeed 版本有关的 collective 序列。本次两台
+主机版本不同：未加检查时，0.15.3 在同一序号执行 all-gather，0.19.2 执行
+broadcast。因此，`--case deepspeed-zero3` 要求两端 DeepSpeed 版本一致；版本
+不同时会在训练前给出明确的预检错误。ZeRO-3 已分别在两张 GPU 上通过单机多
+rank 验证。
+
 ## 没有 `nvcc` 的 WSL 环境
 
 DeepSpeed 0.19.2 会在导入时探测可选 CUDA operator。当前 3090 Ti WSL 环境
@@ -122,16 +212,18 @@ DS_IGNORE_CUDA_DETECTION=1 $PYTHON \
 - 梯度累积
 - Transformers Qwen3.5 + PEFT LoRA SFT
 - 重入 activation checkpoint
+- ZeRO checkpoint 保存、恢复、续训和 FP32 合并
+- Hugging Face `Trainer` 小型网络与 Qwen LoRA 路径
+- CPU optimizer offload 和 ZeRO-3 CPU 参数 offload
+- 物理双主机 TCP ZeRO-2
 - 任意节点对的逻辑通信报告
 
 仍需要专门实验的路径：
 
 - DeepSpeed fused optimizer 和其他 JIT CUDA operator
-- CPU optimizer/parameter offload 和 NVMe offload
-- ZeRO checkpoint 保存、恢复和合并
+- NVMe offload
 - pipeline、tensor、sequence、expert 和 MoE 并行
-- DeepSpeed 多物理主机启动
-- Hugging Face `Trainer` 直接接入 DeepSpeed 配置
+- DeepSpeed 版本一致时的物理双主机 ZeRO-3
 
 因此，维护中的测试通过表示上面列出的训练路径可用，不表示 DeepSpeed 全部 API
 或性能都与真实集群等价。

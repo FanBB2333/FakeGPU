@@ -10,6 +10,10 @@
 - Fake NCCL `int8`, `uint8`, `uint32`, and `uint64` payload support, including reduction execution and cluster-report schema coverage.
 - A reusable DeepSpeed matrix for ZeRO 0–3, FP32/BF16, two/four ranks, gradient accumulation, optimizer numerics, and communication reports.
 - A Qwen3.5 LoRA SFT DeepSpeed runner with per-rank phase memory, adapter-update consistency, gradient checkpointing, and JSON/Markdown summaries.
+- A ZeRO checkpoint validator covering all-rank save, fresh-engine restore, optimizer/scheduler/client-state resume, uninterrupted-result comparison, and FP32 consolidation.
+- A Hugging Face Trainer + DeepSpeed validator for self-contained tiny models and local Qwen LoRA weights.
+- DeepSpeed CPU optimizer and ZeRO-3 parameter-offload axes with explicit state-device validation.
+- Optional physical multi-host DeepSpeed ZeRO-2/3 cases with per-host package preflight and combined communication reports.
 
 ### Fixed
 
@@ -18,14 +22,22 @@
 - Separated forward/loss liveness at the first explicit backward operator and modeled the retained FSDP2 nested-unit buffers at the backward activation peak.
 - Accepted null buffers for zero-element NCCL collectives while retaining strict non-empty validation, restoring DeepSpeed 0.19.2 ZeRO-3 under PyTorch 2.12.
 - Selected reentrant Qwen activation checkpointing for DeepSpeed ZeRO-3 while retaining non-reentrant mode as an explicit compatibility probe.
+- Executed NCCL product, minimum, and maximum reductions used by DeepSpeed checkpoint metadata instead of accepting them as sum-only collectives.
+- Registered only the legacy DeepSpeed checkpoint types identified by PyTorch's safe loader, preserving `weights_only` protection under DeepSpeed 0.15.3/PyTorch 2.8.
+- Used short temporary Unix coordinator sockets in every DeepSpeed runner, avoiding platform path-length failures for descriptive report directories.
+- Rejected physical ZeRO-3 launches when DeepSpeed versions differ, replacing an in-training collective-order failure with a package preflight diagnostic.
 
 ### Validation
 
-- Full local suite: 293 passed and 1 skipped.
+- Full local suite: 303 passed and 1 skipped.
 - Qwen3.5-0.8B BF16 FULL_SHARD sequence-16/128 experiments passed on RTX PRO 5000 Blackwell and RTX 3090 Ti Ampere. Overall per-rank errors were 0.730% and 0.633%; both stacks reproduced allocator peaks, shard sizes, optimizer state, and 8,011,593,488 node-pair bytes exactly.
 - Qwen3.5-0.8B FSDP2 LoRA sequence-16/64/128 experiments passed the 3% per-phase limit with two or four ranks on both GPUs. Every phase was within 1.974%; sequence-128 overall errors were 0.071%-0.161%.
 - DeepSpeed ZeRO 0–3 FP32/BF16 numerics passed on RTX PRO 5000 Blackwell with DeepSpeed 0.15.3 and RTX 3090 Ti Ampere with DeepSpeed 0.19.2; four-rank BF16 ZeRO-3 also passed on the PRO 5000.
 - Qwen3.5-0.8B BF16 LoRA ZeRO-2/3 passed on both GPUs. The maintained PRO 5000 sequence-64, accumulation-2 case used 3.052 GiB per rank without checkpointing and 2.409 GiB with reentrant checkpointing; the complete node-pair reports recorded 15.196 GiB and 17.134 GiB respectively.
+- ZeRO-3 FP32 and ZeRO-2/3 BF16 checkpoint save/restore/continue/consolidate checks passed on both GPUs and DeepSpeed versions.
+- Tiny Hugging Face Trainer ZeRO-2/3 and Qwen3.5-0.8B LoRA Trainer ZeRO-3 passed on both GPU stacks; the PRO 5000 sequence-64 run also passed accumulation-2 with reentrant checkpointing.
+- FP32 ZeRO-2 optimizer offload and ZeRO-3 optimizer + parameter offload produced the exact analytical update on both GPUs, with the requested state verified on CPU.
+- Physical RTX PRO 5000 ↔ RTX 3090 Ti ZeRO-2 passed across DeepSpeed 0.15.3/0.19.2, producing identical parameters and reporting seven TCP collectives, 176 node-pair bytes, and a 32-byte per-operation peak.
 
 ## v1.5.4 - 2026-07-21
 
