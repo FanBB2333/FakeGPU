@@ -815,6 +815,8 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     assert "Elastic DDP restart" in markdown
     assert "Elastic DDP checkpoint recovery" in markdown
     assert "Elastic DDP training-state recovery" in markdown
+    assert "DistributedSampler cursor" in markdown
+    assert "rank mapping `0 -> 1`, `1 -> 0`" in markdown
     assert "Hybrid FSDP" in markdown
     assert "Hybrid FSDP2" in markdown
     assert "FSDP2 mixed precision" in markdown

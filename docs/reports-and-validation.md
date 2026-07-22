@@ -23,9 +23,9 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |
 | `python3 verification/test_group_semantics.py` | grouped collective submission semantics |
 | `./ftest tcp_bandwidth` | chosen-port TCP payload correctness and end-to-end simulator throughput |
-| `./ftest elastic_ddp` | active worker exit, full `torchrun` worker-group replacement, restart generation synchronization, resumed DDP numerics, SGD checkpoint recovery, and accumulated AdamW training-state recovery over Gloo |
+| `./ftest elastic_ddp` | active worker exit, full `torchrun` worker-group replacement, restart generation synchronization, resumed DDP numerics, SGD checkpoint recovery, and rank-remapped accumulated AdamW/data-state recovery over Gloo |
 | `./ftest elastic_ddp_checkpoint` | focused atomic checkpoint, completed-step, model parameter, SGD momentum, and continued-update recovery after worker replacement |
-| `./ftest elastic_ddp_training_state` | focused AdamW moments, StepLR, rank-local RNG, optimizer-step, pending gradient, and continued accumulation recovery |
+| `./ftest elastic_ddp_training_state` | focused AdamW moments, StepLR, replicated rank-state bundle, rank-local RNG, `DistributedSampler` cursor, optimizer-step, pending gradient, and continued accumulation recovery |
 | `./ftest distributed_resilience` | deterministic collective failure, real worker exit, elastic DDP restart/checkpoint/training-state resume, collective-timeout inference, async-error propagation, communicator shrink/recovery, TCP mismatch, missing-peer timeout, and bounded report retention |
 | `./test/run_hybrid_multinode.sh 2` | maintained multi-process validation with hybrid compute + simulated communication |
 | `python3 verification/run_hybrid_ddp_numerics.py --variant all` | real-CUDA DDP basic, `no_sync`, unused-parameter, static-graph, bucket-view, optimizer, and cross-rank parameter checks |

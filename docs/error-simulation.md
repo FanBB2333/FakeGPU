@@ -148,8 +148,11 @@ GPU hosts.
 
 The accumulated-state variant injects failure after the first of two gradient
 accumulation microsteps. It restores AdamW first and second moments, StepLR,
-completed optimizer steps, pending rank-local gradients, and rank-local RNG
-state before completing the synchronized second microstep. Use
+completed optimizer steps, pending rank-local gradients, rank-local RNG, and a
+`DistributedSampler` cursor before completing the synchronized second
+microstep. Every host checkpoint contains a bundle for all saved ranks; the
+maintained test reverses the logical rank mapping to verify that recovery does
+not depend on the checkpoint file owner's original rank. Use
 `./ftest elastic_ddp_training_state` locally or
 `verification/run_physical_multihost.py --case elastic-ddp-training-state` on
 two GPU hosts.

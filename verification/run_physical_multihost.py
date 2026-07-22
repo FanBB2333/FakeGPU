@@ -2385,9 +2385,11 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
     if "elastic_ddp_training_state" in cases:
         training_state = cases["elastic_ddp_training_state"]
         lines.append(
-            "- Elastic DDP training-state recovery: AdamW moments, StepLR, "
-            "rank-local RNG, and one pending accumulation micro-step were "
-            "restored after worker exit code "
+            "- Elastic DDP training-state recovery: each host replicated a "
+            "complete rank-state bundle; AdamW moments, StepLR, rank-local "
+            "RNG, a DistributedSampler cursor, and one pending accumulation "
+            "micro-step were restored with rank mapping `0 -> 1`, `1 -> 0` "
+            "after worker exit code "
             f"`{training_state['failure_exit_code']}`; step 2 produced "
             "parameters `[0.983838, -0.014662]` on both hosts."
         )
