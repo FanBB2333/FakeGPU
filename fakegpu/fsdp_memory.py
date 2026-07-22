@@ -367,9 +367,17 @@ def build_fully_shard_plan(
         )
 
     root_workspace_bytes = int(root_unit["padded_unsharded_parameter_bytes"])
+    root_local_workspace_bytes = [
+        int(shard["parameter_storage_bytes"])
+        for shard in root_unit["rank_shards"]
+    ]
     largest_nested_workspace_bytes = int(
         largest_nested_unit["padded_unsharded_parameter_bytes"]
     )
+    largest_nested_local_workspace_bytes = [
+        int(shard["parameter_storage_bytes"])
+        for shard in largest_nested_unit["rank_shards"]
+    ]
     return {
         "method": "fsdp2_per_parameter_dim0_sharding",
         "world_size": world_size,
@@ -390,13 +398,29 @@ def build_fully_shard_plan(
         ),
         "root_unit_name": str(root_unit["name"]),
         "root_unsharded_parameter_bytes": root_workspace_bytes,
+        "root_local_parameter_bytes": root_local_workspace_bytes,
         "largest_nested_unit_name": str(largest_nested_unit["name"]),
         "largest_nested_unsharded_parameter_bytes": (
             largest_nested_workspace_bytes
         ),
+        "largest_nested_local_parameter_bytes": (
+            largest_nested_local_workspace_bytes
+        ),
+        "forward_collective_workspace_bytes": [
+            2 * root_workspace_bytes
+            + 2 * largest_nested_workspace_bytes
+            + local_nested_bytes
+            for local_nested_bytes in largest_nested_local_workspace_bytes
+        ],
         "backward_prefetch_parameter_bytes": (
             root_workspace_bytes + largest_nested_workspace_bytes
         ),
+        "backward_collective_extra_bytes": [
+            root_workspace_bytes
+            + 2 * largest_nested_workspace_bytes
+            + local_nested_bytes
+            for local_nested_bytes in largest_nested_local_workspace_bytes
+        ],
         "largest_trainable_unit_name": str(largest_trainable_unit["name"]),
         "largest_trainable_unsharded_gradient_bytes": int(
             largest_trainable_unit[
@@ -608,6 +632,12 @@ def estimate_fully_shard_sft_memory(
     backward_parameter_workspace_bytes = int(
         sharding_plan["backward_prefetch_parameter_bytes"]
     )
+    forward_collective_workspace_bytes = int(
+        sharding_plan["forward_collective_workspace_bytes"][rank]
+    )
+    backward_collective_extra_bytes = int(
+        sharding_plan["backward_collective_extra_bytes"][rank]
+    )
     largest_unsharded_gradient_bytes = int(
         sharding_plan["largest_trainable_unsharded_gradient_bytes"]
     )
@@ -667,6 +697,17 @@ def estimate_fully_shard_sft_memory(
         )
         + (reduce_scatter_workspace_bytes if peak_is_backward else 0)
     )
+    projected_forward_collective_floor = (
+        local_parameter_bytes
+        + forward_collective_workspace_bytes
+        + int(estimate.get("buffer_bytes", 0))
+        + int(estimate.get("input_bytes", 0))
+        + int(estimate.get("workspace_peak_contribution_bytes", 0))
+    )
+    projected_forward_peak = max(
+        projected_captured_peak,
+        projected_forward_collective_floor,
+    )
 
     gradient_phase = graph.get("gradient_production_phase")
     if isinstance(gradient_phase, Mapping):
@@ -706,10 +747,11 @@ def estimate_fully_shard_sft_memory(
         + local_parameter_bytes
         + projected_gradient_bytes(gradient_phase_gradient_bytes)
         + backward_parameter_workspace_bytes
+        + backward_collective_extra_bytes
         + reduce_scatter_workspace_bytes
     )
     projected_graph_peak = max(
-        projected_captured_peak,
+        projected_forward_peak,
         projected_backward_peak,
     )
 
@@ -778,11 +820,17 @@ def estimate_fully_shard_sft_memory(
         "gradient_phase_nonsharded_bytes": gradient_phase_nonsharded_bytes,
         "optimizer_nonsharded_bytes": optimizer_nonsharded_bytes,
         "root_parameter_workspace_bytes": root_workspace_bytes,
+        "forward_collective_workspace_bytes": (
+            forward_collective_workspace_bytes
+        ),
         "backward_parameter_workspace_bytes": (
             backward_parameter_workspace_bytes
         ),
+        "backward_collective_extra_bytes": backward_collective_extra_bytes,
         "reduce_scatter_workspace_bytes": reduce_scatter_workspace_bytes,
         "captured_graph_peak_bytes": projected_captured_peak,
+        "forward_collective_floor_bytes": projected_forward_collective_floor,
+        "forward_graph_peak_bytes": projected_forward_peak,
         "backward_graph_peak_bytes": projected_backward_peak,
         "first_step_graph_peak_bytes": projected_graph_peak,
         "steady_state_graph_peak_bytes": projected_steady_graph_peak,
@@ -792,6 +840,7 @@ def estimate_fully_shard_sft_memory(
             "FSDP2 shards every original parameter independently along dimension zero.",
             "Frozen and trainable parameter dtypes retain their original element sizes.",
             "The root unit stays unsharded through the forward/loss peak.",
+            "FSDP2 all-gather copy-in, packed output, and per-parameter copy-out buffers may overlap at the communication-dominated floor.",
             "Default backward prefetch may materialize the root and largest nested unit together.",
             "The largest active trainable gradient is restored before reduce-scatter emits its local shard.",
             "Buffers, inputs, activations, outputs, loss tensors, and profiled operator workspaces remain replicated.",
