@@ -259,13 +259,16 @@ python3 verification/qwen_sft_memory_worker.py \
 python3 verification/run_qwen_fsdp2_lora_sft_memory.py \
   --model-dir /models/Qwen3.5-0.8B \
   --static-report build/qwen-fsdp2-lora-static.json \
-  --sequence-length 16 --output-dir build/qwen-fsdp2-lora
+  --sequence-length 16 --world-size 4 \
+  --output-dir build/qwen-fsdp2-lora
 ```
 
 This path models each DTensor shard and all-gather/reduce-scatter buffer
-lifetime separately. Qwen3.5-0.8B sequence-16/128 runs on both the RTX PRO
-5000 and RTX 3090 Ti keep every phase within 2.46% and overall peaks within
-1.91% while exercising mixed-dtype `uint8` all-gathers.
+lifetime separately. Qwen3.5-0.8B sequence-16/64/128 runs with two or four
+ranks on both the RTX PRO 5000 and RTX 3090 Ti keep every phase within 1.98%
+while exercising mixed-dtype `uint8` all-gathers. Existing dimensions such as
+sequence length, LoRA rank, dtype, and world size 2/4 are command parameters;
+new tests along those dimensions do not require source changes.
 
 The native NF4 path needs no external quantization package, but it does not
 claim bitsandbytes fused-kernel equivalence; see

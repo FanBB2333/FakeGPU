@@ -230,7 +230,7 @@ shard。最大的 all-gather unit 为 508,561,408 字节，额外的 reduce-scat
 最终 barrier 后，node-pair 总量为 8,011,593,488 字节。两套 GPU 软件环境的
 参数、梯度、optimizer state、阶段峰值和通信字节数完全一致。
 
-## 双 rank FSDP2 LoRA
+## 双/四 rank FSDP2 LoRA
 
 LoRA 的冻结基座参数为 BF16，PEFT adapter 为 FP32。FSDP2 投影按原始参数
 分别计算维度 0 的 shard 和 padding，不把一个 unit 强制展平为同一 dtype；
@@ -246,15 +246,22 @@ $PYTHON verification/qwen_sft_memory_worker.py \
 $PYTHON verification/run_qwen_fsdp2_lora_sft_memory.py \
   --model-dir "$MODEL" \
   --static-report build/qwen-fsdp2-lora-s16/static.json \
-  --sequence-length 16 --output-dir build/qwen-fsdp2-lora-s16/result
+  --sequence-length 16 --world-size 4 \
+  --output-dir build/qwen-fsdp2-lora-s16/result
 ```
 
-| GPU | Seq. | 整体实测 | 整体预测 | 整体误差 | 最大阶段误差 |
-|---|---:|---:|---:|---:|---:|
-| RTX PRO 5000 Blackwell | 16 | 1.961 GiB | 1.998 GiB | 1.881% | 1.881% |
-| RTX 3090 Ti Ampere | 16 | 1.961 GiB | 1.998 GiB | 1.906% | 1.906% |
-| RTX PRO 5000 Blackwell | 128 | 2.689 GiB | 2.662 GiB | 1.003% | 2.387% |
-| RTX 3090 Ti Ampere | 128 | 2.687 GiB | 2.662 GiB | 0.949% | 2.450% |
+| GPU | Ranks | Seq. | 整体实测 | 整体预测 | 整体误差 | 最大阶段误差 |
+|---|---:|---:|---:|---:|---:|---:|
+| RTX PRO 5000 Blackwell | 2 | 16 | 1.961 GiB | 1.998 GiB | 1.881% | 1.881% |
+| RTX 3090 Ti Ampere | 2 | 16 | 1.961 GiB | 1.998 GiB | 1.906% | 1.906% |
+| RTX PRO 5000 Blackwell | 4 | 16 | 1.593 GiB | 1.600 GiB | 0.487% | 1.228% |
+| RTX 3090 Ti Ampere | 4 | 16 | 1.594 GiB | 1.600 GiB | 0.380% | 1.644% |
+| RTX PRO 5000 Blackwell | 4 | 64 | 1.801 GiB | 1.768 GiB | 1.881% | 1.881% |
+| RTX 3090 Ti Ampere | 4 | 64 | 1.803 GiB | 1.768 GiB | 1.974% | 1.974% |
+| RTX PRO 5000 Blackwell | 2 | 128 | 2.689 GiB | 2.691 GiB | 0.106% | 0.373% |
+| RTX 3090 Ti Ampere | 2 | 128 | 2.687 GiB | 2.691 GiB | 0.161% | 0.431% |
+| RTX PRO 5000 Blackwell | 4 | 128 | 2.324 GiB | 2.326 GiB | 0.071% | 1.107% |
+| RTX 3090 Ti Ampere | 4 | 128 | 2.322 GiB | 2.326 GiB | 0.148% | 1.477% |
 
 1,526,431,360 字节的 mixed-dtype 模型在每个 rank 上占用 763,215,680
 字节参数 storage。每个 rank 包含 10,822,656 字节 FP32 adapter 参数与同等
@@ -263,6 +270,15 @@ $PYTHON verification/run_qwen_fsdp2_lora_sft_memory.py \
 （43,290,624 字节）；包含 barrier 的 node-pair 总量为 6,149,016,080 字节。
 Ampere/PyTorch 2.12/CUDA 13 与 Blackwell/PyTorch 2.8/CUDA 12.8 的静态投影、
 shard 大小和通信总量一致。
+四 rank 时，每个 rank 的参数、adapter 梯度和 AdamW state 分别为
+381,607,840、5,411,328 和 10,822,656 字节。估算器以首个显式 backward
+ATen 算子区分 forward/loss 与 backward，并分别计算 backward activation
+和梯度生成阶段与 FSDP2 buffer 的重叠。
+
+已有测试维度不需要修改源码。sequence length、LoRA 配置、dtype 和 2/4 rank
+都由命令参数控制。不同 sharding 策略、量化参数表示、optimizer 或算子
+workspace 会引入新的执行语义，此时需要增加可复用的模型和参数化测试，不应
+为某一个 workload 添加专用公式。
 
 ## 首步与稳态显存
 
@@ -300,7 +316,8 @@ ATen storage-liveness 静态图作为 backward 的判定值，仍保留运行时
 当前结果覆盖单卡全参数与 LoRA BF16 训练、使用 FP32 scale 或二级 scale 的
 原生 NF4 QLoRA 参考实现、single-tensor AdamW、gradient checkpointing、
 gradient accumulation 2、Transformers 的 PyTorch fallback linear-attention，
-以及 sequence 16/128 的双 rank 全参数 FSDP 和 mixed-dtype FSDP2 LoRA。
+以及 sequence 16/128 的双 rank 全参数 FSDP、sequence 16/64/128 的双/四
+rank mixed-dtype FSDP2 LoRA。
 外部 bitsandbytes fused kernel 与 allocator、paged/量化 optimizer、Flash
 Linear Attention、自定义 CUDA/Triton kernel、FSDP2 QLoRA、显式 mixed
-precision policy 和超过两个 rank 的场景仍需分别验证，不能直接套用上述误差。
+precision policy 和超过四个 rank 的场景仍需分别验证，不能直接套用上述误差。

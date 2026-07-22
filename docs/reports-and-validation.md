@@ -17,7 +17,7 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `verification/compare_qwen_sft_memory.py ...` | matching real-CUDA, FakeCUDA, and ATen static-graph peaks for full/LoRA/native-NF4 QLoRA Qwen3.5 SFT |
 | `verification/summarize_qwen_sft_matrix.py ...` | full/LoRA/QLoRA, checkpointing, accumulation, and sequence-length SFT matrix summary |
 | `verification/run_qwen_fsdp_sft_memory.py ...` | two-rank Hybrid FSDP Qwen SFT parameter/gradient/AdamW sharding, phase peaks, static projection, and collective traffic |
-| `verification/run_qwen_fsdp2_lora_sft_memory.py ...` | two-rank mixed-BF16/FP32 FSDP2 LoRA DTensor shards, phase peaks, byte-packed all-gathers, FP32 reduce-scatters, and static projection |
+| `verification/run_qwen_fsdp2_lora_sft_memory.py ...` | two- or four-rank mixed-BF16/FP32 FSDP2 LoRA DTensor shards, phase peaks, byte-packed all-gathers, FP32 reduce-scatters, and static projection |
 | `python3 verification/test_coordinator_smoke.py` | coordinator startup, request/response, and clean shutdown |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce semantics |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |

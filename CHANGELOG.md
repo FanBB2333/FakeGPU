@@ -6,19 +6,20 @@
 
 - A two-rank Hybrid FSDP Qwen SFT memory experiment that reports per-rank allocator phases, parameter/gradient/AdamW shards, and all-gather/reduce-scatter traffic.
 - A FULL_SHARD memory projection that transforms single-GPU ATen storage liveness using per-unit padding, local optimizer storage, and collective workspaces.
-- A two-rank FSDP2 LoRA experiment and per-parameter DTensor projection for frozen BF16 base weights, FP32 adapters, gradient-production liveness, AdamW state, and overlapping collective buffers.
+- A two- or four-rank FSDP2 LoRA experiment and per-parameter DTensor projection for frozen BF16 base weights, FP32 adapters, gradient-production liveness, AdamW state, and overlapping collective buffers.
 - Fake NCCL `int8`, `uint8`, `uint32`, and `uint64` payload support, including reduction execution and cluster-report schema coverage.
 
 ### Fixed
 
 - Included the active full-gradient buffer retained until FSDP reduce-scatter emits a local shard, reducing the Qwen graph-peak prediction error from 8.420% to at most 0.758%.
 - Accepted FSDP2's byte-packed mixed-dtype all-gathers and separated activation-, communication-, backward-, and optimizer-dominated event floors instead of assuming that every buffer peaks together.
+- Separated forward/loss liveness at the first explicit backward operator and modeled the retained FSDP2 nested-unit buffers at the backward activation peak.
 
 ### Validation
 
-- Full local suite: 282 passed and 1 skipped.
+- Full local suite: 286 passed and 1 skipped.
 - Qwen3.5-0.8B BF16 FULL_SHARD sequence-16/128 experiments passed on RTX PRO 5000 Blackwell and RTX 3090 Ti Ampere. Overall per-rank errors were 0.730% and 0.633%; both stacks reproduced allocator peaks, shard sizes, optimizer state, and 8,011,593,488 node-pair bytes exactly.
-- Qwen3.5-0.8B FSDP2 LoRA sequence-16/128 experiments passed the 3% per-phase limit on both GPUs. Overall errors were 0.949%-1.906%, optimizer errors were at most 0.460%, and both stacks recorded 50 byte-packed all-gathers, 24 FP32 reduce-scatters, and 6,149,016,080 node-pair bytes per step.
+- Qwen3.5-0.8B FSDP2 LoRA sequence-16/64/128 experiments passed the 3% per-phase limit with two or four ranks on both GPUs. Every phase was within 1.974%; sequence-128 overall errors were 0.071%-0.161%.
 
 ## v1.5.4 - 2026-07-21
 

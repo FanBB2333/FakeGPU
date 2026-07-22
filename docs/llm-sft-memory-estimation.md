@@ -215,7 +215,7 @@ and 8,011,593,488 total node-pair bytes including the final barrier. Both GPU
 software stacks reproduce parameter, gradient, optimizer-state, phase-peak,
 and communication byte counts exactly.
 
-## Two-rank FSDP2 LoRA
+## Two- and four-rank FSDP2 LoRA
 
 LoRA keeps the frozen base in BF16 and PEFT adapters in FP32. The FSDP2 plan
 therefore shards each original parameter independently along dimension zero,
@@ -232,15 +232,22 @@ $PYTHON verification/qwen_sft_memory_worker.py \
 $PYTHON verification/run_qwen_fsdp2_lora_sft_memory.py \
   --model-dir "$MODEL" \
   --static-report build/qwen-fsdp2-lora-s16/static.json \
-  --sequence-length 16 --output-dir build/qwen-fsdp2-lora-s16/result
+  --sequence-length 16 --world-size 4 \
+  --output-dir build/qwen-fsdp2-lora-s16/result
 ```
 
-| GPU | Seq. | Overall observed | Overall predicted | Overall error | Largest phase error |
-|---|---:|---:|---:|---:|---:|
-| RTX PRO 5000 Blackwell | 16 | 1.961 GiB | 1.998 GiB | 1.881% | 1.881% |
-| RTX 3090 Ti Ampere | 16 | 1.961 GiB | 1.998 GiB | 1.906% | 1.906% |
-| RTX PRO 5000 Blackwell | 128 | 2.689 GiB | 2.662 GiB | 1.003% | 2.387% |
-| RTX 3090 Ti Ampere | 128 | 2.687 GiB | 2.662 GiB | 0.949% | 2.450% |
+| GPU | Ranks | Seq. | Overall observed | Overall predicted | Overall error | Largest phase error |
+|---|---:|---:|---:|---:|---:|---:|
+| RTX PRO 5000 Blackwell | 2 | 16 | 1.961 GiB | 1.998 GiB | 1.881% | 1.881% |
+| RTX 3090 Ti Ampere | 2 | 16 | 1.961 GiB | 1.998 GiB | 1.906% | 1.906% |
+| RTX PRO 5000 Blackwell | 4 | 16 | 1.593 GiB | 1.600 GiB | 0.487% | 1.228% |
+| RTX 3090 Ti Ampere | 4 | 16 | 1.594 GiB | 1.600 GiB | 0.380% | 1.644% |
+| RTX PRO 5000 Blackwell | 4 | 64 | 1.801 GiB | 1.768 GiB | 1.881% | 1.881% |
+| RTX 3090 Ti Ampere | 4 | 64 | 1.803 GiB | 1.768 GiB | 1.974% | 1.974% |
+| RTX PRO 5000 Blackwell | 2 | 128 | 2.689 GiB | 2.691 GiB | 0.106% | 0.373% |
+| RTX 3090 Ti Ampere | 2 | 128 | 2.687 GiB | 2.691 GiB | 0.161% | 0.431% |
+| RTX PRO 5000 Blackwell | 4 | 128 | 2.324 GiB | 2.326 GiB | 0.071% | 1.107% |
+| RTX 3090 Ti Ampere | 4 | 128 | 2.322 GiB | 2.326 GiB | 0.148% | 1.477% |
 
 The 1,526,431,360-byte mixed-dtype model occupies 763,215,680 bytes of local
 parameter storage per rank. Each rank has 10,822,656 bytes of FP32 adapter
@@ -249,6 +256,17 @@ records 50 byte-packed all-gathers (6,105,725,440 bytes), 24 FP32
 reduce-scatters (43,290,624 bytes), and 6,149,016,080 node-pair bytes including
 the barrier. Ampere/PyTorch 2.12/CUDA 13 and Blackwell/PyTorch 2.8/CUDA 12.8
 produce identical static projections, shard sizes, and communication totals.
+The four-rank plan uses 381,607,840 parameter bytes, 5,411,328 adapter-gradient
+bytes, and 10,822,656 AdamW-state bytes per rank. The estimator separates the
+forward/loss phase at the first explicit backward ATen operator and evaluates
+backward activation overlap independently from gradient-production overlap.
+
+Changing a maintained test dimension does not require a source edit. The
+controller accepts sequence length, LoRA configuration, dtype, and world size
+2/4 as arguments. A source change is appropriate only when a test introduces
+new semantics, such as a different sharding strategy, quantized parameter
+representation, optimizer, or operator workspace. That change should add one
+reusable model plus parameterized cases instead of a workload-specific formula.
 
 ## First step versus steady state
 
@@ -278,8 +296,8 @@ runtime value as a diagnostic.
 These results cover single-GPU full-parameter and LoRA BF16 training, the
 PyTorch native-NF4 QLoRA reference with direct or nested scales, single-tensor
 AdamW, gradient checkpointing, accumulation 2, the Transformers PyTorch
-fallback linear-attention path, two-rank full-parameter FSDP, and two-rank
-mixed-dtype FSDP2 LoRA at sequence lengths 16 and 128. External bitsandbytes
+fallback linear-attention path, two-rank full-parameter FSDP, and two-/four-rank
+mixed-dtype FSDP2 LoRA at sequence lengths 16, 64, and 128. External bitsandbytes
 fused kernels and allocator behavior, paged/quantized optimizers, Flash Linear
 Attention, custom CUDA/Triton kernels, FSDP2 QLoRA, explicit mixed-precision
-policies, and world sizes above two require separate validation.
+policies, and world sizes above four require separate validation.
