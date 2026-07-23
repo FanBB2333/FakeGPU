@@ -23,9 +23,9 @@
 | `python3 verification/test_allgather_correctness.py` | direct all-gather 语义正确性 |
 | `python3 verification/test_group_semantics.py` | grouped collective 提交语义 |
 | `./ftest tcp_bandwidth` | 指定端口的 TCP 负载正确性与端到端模拟吞吐 |
-| `./ftest elastic_ddp` | 活跃 worker 退出、完整 `torchrun` worker group 替换、restart 代次同步、DDP 数值恢复、SGD checkpoint 恢复以及 rank 重映射的 AdamW accumulation/数据状态恢复 |
+| `./ftest elastic_ddp` | 活跃 worker 退出、完整 `torchrun` worker group 替换、restart 代次同步、DDP 数值恢复、SGD checkpoint 恢复以及 rank 重映射的 AdamW accumulation/多 worker DataLoader 恢复 |
 | `./ftest elastic_ddp_checkpoint` | 集中验证原子 checkpoint、训练步数、模型参数、SGD momentum 与 worker 替换后的继续更新 |
-| `./ftest elastic_ddp_training_state` | 集中验证 AdamW 一阶/二阶矩、StepLR、完整 rank-state bundle、rank-local RNG、`DistributedSampler` cursor、optimizer step、待处理梯度与 accumulation 恢复 |
+| `./ftest elastic_ddp_training_state` | 集中验证 AdamW 一阶/二阶矩、StepLR、完整 rank-state bundle、rank-local RNG、`DistributedSampler` cursor、双 worker DataLoader 重建、暂存批次和 worker RNG 重放、optimizer step、待处理梯度与 accumulation 恢复 |
 | `./ftest distributed_resilience` | 确定性 collective 故障、真实 worker 退出、elastic DDP 重启/checkpoint/训练状态恢复、collective 超时推断、async error 传播、communicator shrink/恢复、TCP 参数不一致、缺少 rank 超时和报告时间线容量限制 |
 | `./test/run_hybrid_multinode.sh 2` | hybrid 计算 + simulate 通信的维护中多进程验证 |
 | `python3 verification/run_hybrid_ddp_numerics.py --variant all` | 真实 CUDA DDP 基础路径、`no_sync`、未使用参数、静态图、bucket view、optimizer 与跨 rank 参数一致性 |
