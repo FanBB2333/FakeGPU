@@ -816,6 +816,9 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     assert "Elastic DDP checkpoint recovery" in markdown
     assert "Elastic DDP training-state recovery" in markdown
     assert "DistributedSampler cursor" in markdown
+    assert "two persistent spawn DataLoader workers" in markdown
+    assert "worker-generated random values were replayed exactly" in markdown
+    assert "every DataLoader worker PID changed" in markdown
     assert "rank mapping `0 -> 1`, `1 -> 0`" in markdown
     assert "Hybrid FSDP" in markdown
     assert "Hybrid FSDP2" in markdown

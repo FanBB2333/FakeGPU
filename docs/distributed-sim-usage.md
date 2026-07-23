@@ -229,7 +229,7 @@ The default cases are:
 - heterogeneous two-host Hybrid DDP numerical correctness
 - fixed-size elastic DDP with an active worker exit and full worker-group restart
 - elastic DDP checkpoint recovery for model parameters, optimizer momentum, and completed steps
-- elastic DDP recovery in the middle of gradient accumulation, including AdamW moments, StepLR, a replicated rank-state bundle, rank-local RNG, and a `DistributedSampler` cursor
+- elastic DDP recovery in the middle of gradient accumulation, including AdamW moments, StepLR, a replicated rank-state bundle, rank-local RNG, a `DistributedSampler` cursor, and deterministic multi-worker DataLoader replay
 - DDP `no_sync`, rank-dependent unused parameters, static graphs, and gradient bucket views
 - FSDP full sharding, reduce-scatter, optimizer, full-parameter, and state-dict correctness
 - FSDP2/DTensor FP32 sharding, optimizer, and full-tensor reconstruction
@@ -284,27 +284,34 @@ distinct from the basic elastic-restart case.
 
 Use `--case elastic-ddp-training-state` for the stricter recovery boundary.
 The initial group completes AdamW step 1, advances StepLR, and then executes
-the first of two accumulation microsteps for step 2 under `no_sync`. Before a
-worker exits, all ranks gather their pending gradients, CPU-generator RNG, and
-`DistributedSampler` epoch/cursor into a bundle indexed by the saved global
-rank. Every host atomically saves that complete bundle together with model,
-AdamW, scheduler, optimizer-step, and accumulation state.
+the first of two accumulation microsteps for step 2 under `no_sync`. Each rank
+uses a seeded `DataLoader` with two persistent spawn workers and
+`prefetch_factor=2`; the dataset applies `torch.rand` inside the worker. Before
+a worker exits, all ranks gather their pending gradients, CPU-generator RNG,
+`DistributedSampler` epoch/cursor, DataLoader construction settings, the three
+training-committed samples, and one application-staged prefetched sample into a
+bundle indexed by the saved global rank. Every host atomically saves that
+complete bundle together with model, AdamW, scheduler, optimizer-step, and
+accumulation state.
 
 The maintained test deliberately restores saved rank 1 on current rank 0 and
-saved rank 0 on current rank 1. It reconstructs the sampler, skips the three
-recorded samples, and requires the next samples to be 8 and 7. The validator
-also checks the exact restored tensors, next RNG samples, synchronized
-accumulated gradient, and final AdamW update. A separate unit case swaps the
-global ranks attached to the two checkpoint storage identities, so file
-ownership is not inferred from the restarted rank.
+saved rank 0 on current rank 1. It reconstructs each DataLoader, replays the
+three committed batches, and requires the staged samples to remain 8 and 7
+with the same worker IDs and worker-generated random values. It also requires
+all DataLoader worker PIDs to change after restart. The validator checks the
+exact restored tensors, next rank-local RNG samples, synchronized accumulated
+gradient, and final AdamW update. A separate unit case swaps the global ranks
+attached to the two checkpoint storage identities, so file ownership is not
+inferred from the restarted rank.
 
 This remains fixed-size DDP recovery. Replicating all rank-local state removes
 the same-host/same-rank requirement and does not need a shared filesystem, but
 it costs O(world-size) rank-state storage per host and assumes each local
-checkpoint survives. The current validation uses `DataLoader(num_workers=0)`;
-worker prefetch queues and sharded ZeRO/FSDP optimizer state are outside this
-recovery format. `--elastic-training-state-port` selects its separate
-rendezvous port.
+checkpoint survives. Recovery reconstructs and deterministically replays a
+map-style DataLoader; it does not serialize the live multiprocessing queues.
+Iterable datasets, external side effects, nondeterministic transforms, and
+sharded ZeRO/FSDP optimizer state remain outside this recovery format.
+`--elastic-training-state-port` selects its separate rendezvous port.
 
 DeepSpeed is optional rather than part of the default set. Add
 `--case deepspeed-zero2` to validate one rank per physical host. The maintained
@@ -387,6 +394,17 @@ reported four All-Reduces, nine All-Gathers, six broadcasts, 24,652 node-pair
 bytes, and a 23,924-byte peak. Running all three elastic cases together created
 six communicators and reported 12 All-Reduces, 16 All-Gathers, 12 broadcasts,
 25,388 node-pair bytes, and the same 23,924-byte peak.
+
+At commit `ea390c0`, two further independent runs extended this case to two
+persistent DataLoader workers per host. After rank mapping `0 -> 1` and
+`1 -> 0`, current ranks 0 and 1 exactly replayed staged samples 8 and 7,
+worker ID 1, and worker random values `0.47501373291015625` and
+`0.1462690830230713`. Every DataLoader worker PID changed. Both runs produced
+the same final parameters and communication counters: four All-Reduces, nine
+All-Gathers, six broadcasts, 25,960 node-pair bytes, and a 25,232-byte peak.
+The combined basic-restart, SGD-checkpoint, and multi-worker training-state run
+created six communicators and reported 26,680 node-pair bytes with a
+25,216-byte peak.
 
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.
