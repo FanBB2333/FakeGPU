@@ -76,9 +76,18 @@ class SmiStatePublisher:
         for item in raw.get("devices") or []:
             current = int(item.get("current_memory", 0) or 0)
             peak = max(current, int(item.get("peak_memory", current) or current))
+            reserved = max(
+                current,
+                int(item.get("current_reserved_memory", current) or current),
+            )
+            reserved_peak = max(
+                reserved,
+                peak,
+                int(item.get("peak_reserved_memory", reserved) or reserved),
+            )
             total = int(item.get("total_memory", 0) or 0)
-            reported = current + self.runtime_overhead_bytes
-            reported_peak = peak + self.runtime_overhead_bytes
+            reported = reserved + self.runtime_overhead_bytes
+            reported_peak = reserved_peak + self.runtime_overhead_bytes
             if total:
                 reported = min(total, reported)
                 reported_peak = min(total, reported_peak)
@@ -90,6 +99,13 @@ class SmiStatePublisher:
                     "total_memory": total,
                     "tracked_memory": current,
                     "peak_tracked_memory": peak,
+                    "reserved_memory": reserved,
+                    "peak_reserved_memory": reserved_peak,
+                    "inactive_split_bytes": int(
+                        item.get("inactive_split_bytes", 0) or 0
+                    ),
+                    "segment_count": int(item.get("segment_count", 0) or 0),
+                    "reported_memory_source": "reserved",
                     "runtime_overhead_bytes": self.runtime_overhead_bytes,
                     "reported_memory": reported,
                     "reported_peak_memory": reported_peak,
@@ -273,9 +289,18 @@ def render_table(
                 tracked,
                 int(device.get("peak_tracked_memory", tracked) or tracked),
             )
+            reserved = max(
+                tracked,
+                int(device.get("reserved_memory", tracked) or tracked),
+            )
+            peak_reserved = max(
+                reserved,
+                peak_tracked,
+                int(device.get("peak_reserved_memory", reserved) or reserved),
+            )
             reported_peak = device.get("reported_peak_memory")
             if reported_peak is None:
-                reported_peak = peak_tracked + int(
+                reported_peak = peak_reserved + int(
                     device.get("runtime_overhead_bytes", 0) or 0
                 )
                 if total:
@@ -295,6 +320,8 @@ def render_table(
                     "peak": reported_peak,
                     "tracked": tracked,
                     "tracked_peak": peak_tracked,
+                    "reserved": reserved,
+                    "reserved_peak": peak_reserved,
                     "running": bool(state.get("running")),
                 }
             )
@@ -321,8 +348,8 @@ def render_table(
         lines.extend(
             [
                 "Processes:",
-                "| Host | GPU | Profile | PID | Process | Stage | Simulated current | Simulated peak | Tracked current | Tracked peak | Confidence |",
-                "|---|---:|---|---:|---|---|---:|---:|---:|---:|---|",
+                "| Host | GPU | Profile | PID | Process | Stage | Simulated current | Simulated peak | Allocated current | Allocated peak | Reserved current | Reserved peak | Confidence |",
+                "|---|---:|---|---:|---|---|---:|---:|---:|---:|---:|---:|---|",
             ]
         )
         for item in sorted(
@@ -336,6 +363,7 @@ def render_table(
                 f"{_table_cell(item['name'] + suffix)} | {_table_cell(item['stage'])} | "
                 f"{_mib(item['used'])} MiB | {_mib(item['peak'])} MiB | "
                 f"{_mib(item['tracked'])} MiB | {_mib(item['tracked_peak'])} MiB | "
+                f"{_mib(item['reserved'])} MiB | {_mib(item['reserved_peak'])} MiB | "
                 f"{_table_cell(item['confidence'])} |"
             )
     for error in errors:

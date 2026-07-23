@@ -215,6 +215,14 @@
             "type": "integer",
             "minimum": 0
           },
+          "allocated_peak_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "peak_reserved_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
           "tracked_peak_memory": {
             "type": "integer",
             "minimum": 0
@@ -226,6 +234,21 @@
           "current_memory": {
             "type": "integer",
             "minimum": 0
+          },
+          "current_reserved_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inactive_split_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "segment_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "allocator_model": {
+            "type": ["string", "null"]
           },
           "headroom_bytes": {
             "type": "integer"
@@ -291,6 +314,20 @@
             }
           },
           "peak_by_stage": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "allocated_peak_by_stage": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "reserved_peak_by_stage": {
             "type": "object",
             "additionalProperties": {
               "type": "integer",

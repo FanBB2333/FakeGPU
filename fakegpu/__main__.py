@@ -38,6 +38,14 @@ def main(argv: list[str] | None = None) -> int:
         from .smi import main as smi_main
 
         return smi_main(argv[1:])
+    if argv and argv[0] == "workspace-profiles":
+        from .workspace_cli import main as workspace_main
+
+        return workspace_main(argv[1:])
+    if argv and argv[0] == "validate":
+        from .validation import main as validation_main
+
+        return validation_main(argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="fakegpu",
@@ -45,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         epilog=(
             "Built-in commands: fakegpu demo, fakegpu doctor, fakegpu preflight, "
             "fakegpu coordinator, fakegpu bandwidth, fakegpu estimate-llm, "
-            "fakegpu nvidia-smi. "
+            "fakegpu nvidia-smi, fakegpu workspace-profiles, fakegpu validate. "
             "Run 'fakegpu <command> --help' for details."
         ),
     )

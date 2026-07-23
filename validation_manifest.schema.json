@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fakegpu.local/schemas/validation_manifest.schema.json",
+  "title": "FakeGPU validation manifest",
+  "type": "object",
+  "required": ["schema_version", "cases"],
+  "properties": {
+    "schema_version": {
+      "const": "fakegpu.validation_manifest.v1"
+    },
+    "defaults": {
+      "$ref": "#/$defs/caseDefaults"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "scalar": {
+      "type": ["string", "integer", "number", "boolean"]
+    },
+    "stringOrList": {
+      "oneOf": [
+        {"type": "string"},
+        {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      ]
+    },
+    "requires": {
+      "type": "object",
+      "properties": {
+        "platforms": {"$ref": "#/$defs/stringOrList"},
+        "commands": {"$ref": "#/$defs/stringOrList"},
+        "python_modules": {"$ref": "#/$defs/stringOrList"},
+        "env": {"$ref": "#/$defs/stringOrList"},
+        "files": {"$ref": "#/$defs/stringOrList"}
+      },
+      "additionalProperties": false
+    },
+    "jsonCheck": {
+      "type": "object",
+      "required": ["path", "pointer", "op", "value"],
+      "properties": {
+        "path": {"type": "string"},
+        "pointer": {"type": "string"},
+        "op": {
+          "enum": ["eq", "ne", "lt", "le", "gt", "ge", "contains", "approx"]
+        },
+        "value": {},
+        "tolerance": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "expect": {
+      "type": "object",
+      "properties": {
+        "exit_code": {"type": "integer"},
+        "stdout_contains": {"$ref": "#/$defs/stringOrList"},
+        "stderr_contains": {"$ref": "#/$defs/stringOrList"},
+        "stdout_not_contains": {"$ref": "#/$defs/stringOrList"},
+        "stderr_not_contains": {"$ref": "#/$defs/stringOrList"},
+        "duration_seconds_max": {"type": "number", "exclusiveMinimum": 0},
+        "files_exist": {"$ref": "#/$defs/stringOrList"},
+        "json_checks": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/jsonCheck"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "caseDefaults": {
+      "type": "object",
+      "properties": {
+        "cwd": {"type": "string"},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "env": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/scalar"}
+        },
+        "requires": {"$ref": "#/$defs/requires"},
+        "expect": {"$ref": "#/$defs/expect"}
+      },
+      "additionalProperties": false
+    },
+    "case": {
+      "type": "object",
+      "required": ["name", "command"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "command": {
+          "oneOf": [
+            {"type": "string"},
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {"$ref": "#/$defs/scalar"}
+            }
+          ]
+        },
+        "matrix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"$ref": "#/$defs/scalar"}
+          }
+        },
+        "cwd": {"type": "string"},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "env": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/scalar"}
+        },
+        "requires": {"$ref": "#/$defs/requires"},
+        "expect": {"$ref": "#/$defs/expect"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

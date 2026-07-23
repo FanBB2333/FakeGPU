@@ -45,8 +45,10 @@ import functools
 import importlib
 import os
 import sys
+import threading
 import traceback
 import types
+import weakref
 import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -68,12 +70,10 @@ _PROFILE_CC: dict[str, tuple[int, int]] = {
     for profile_id, profile in _PROFILE_CATALOG.items()
 }
 _PROFILE_NAMES: dict[str, str] = {
-    profile_id: profile.torch_name
-    for profile_id, profile in _PROFILE_CATALOG.items()
+    profile_id: profile.torch_name for profile_id, profile in _PROFILE_CATALOG.items()
 }
 _PROFILE_TOTAL_MEMORY: dict[str, int] = {
-    profile_id: profile.memory_bytes
-    for profile_id, profile in _PROFILE_CATALOG.items()
+    profile_id: profile.memory_bytes for profile_id, profile in _PROFILE_CATALOG.items()
 }
 _PROFILE_SUPPORTED_TYPES: dict[str, tuple[str, ...]] = {
     profile_id: profile.supported_types
@@ -123,14 +123,20 @@ def _resolve_total_memory() -> int:
     return 80 * 1024**3
 
 
-def _resolve_per_device_profiles(num_devices: int | None = None) -> list[dict[str, Any]]:
+def _resolve_per_device_profiles(
+    num_devices: int | None = None,
+) -> list[dict[str, Any]]:
     """Resolve per-device profile info from FAKEGPU_PROFILES.
 
     Returns a list of dicts, one per device, each with keys:
       'profile_id', 'name', 'total_memory', 'compute_major', 'compute_minor'
     """
     profiles_env = os.environ.get("FAKEGPU_PROFILES", "")
-    target_count = int(num_devices if num_devices is not None else os.environ.get("FAKEGPU_DEVICE_COUNT", "8"))
+    target_count = int(
+        num_devices
+        if num_devices is not None
+        else os.environ.get("FAKEGPU_DEVICE_COUNT", "8")
+    )
     result: list[dict[str, Any]] = []
 
     if profiles_env:
@@ -140,16 +146,20 @@ def _resolve_per_device_profiles(num_devices: int | None = None) -> list[dict[st
                 continue
             parts = spec.split(":")
             pid = parts[0].strip().lower()
-            count = int(parts[1]) if len(parts) > 1 and parts[1].strip().isdigit() else 1
+            count = (
+                int(parts[1]) if len(parts) > 1 and parts[1].strip().isdigit() else 1
+            )
             for _ in range(count):
                 cc = _PROFILE_CC.get(pid, (8, 0))
-                result.append({
-                    "profile_id": pid,
-                    "name": _PROFILE_NAMES.get(pid, "NVIDIA A100-SXM4-80GB"),
-                    "total_memory": _PROFILE_TOTAL_MEMORY.get(pid, 80 * 1024**3),
-                    "compute_major": cc[0],
-                    "compute_minor": cc[1],
-                })
+                result.append(
+                    {
+                        "profile_id": pid,
+                        "name": _PROFILE_NAMES.get(pid, "NVIDIA A100-SXM4-80GB"),
+                        "total_memory": _PROFILE_TOTAL_MEMORY.get(pid, 80 * 1024**3),
+                        "compute_major": cc[0],
+                        "compute_minor": cc[1],
+                    }
+                )
 
     if not result:
         # Uniform config: all devices share the same profile
@@ -183,9 +193,17 @@ _TOTAL_MEMORY = _resolve_total_memory()
 _current_device: int = 0
 
 
-def _refresh_runtime_profile_state(*, num_devices: int | None = None, device_name: str | None = None) -> None:
+def _refresh_runtime_profile_state(
+    *, num_devices: int | None = None, device_name: str | None = None
+) -> None:
     """Refresh per-device profile globals after runtime options change."""
-    global _NUM_DEVICES, _DEVICE_PROFILES, _DEVICE_NAME, _COMPUTE_MAJOR, _COMPUTE_MINOR, _TOTAL_MEMORY
+    global \
+        _NUM_DEVICES, \
+        _DEVICE_PROFILES, \
+        _DEVICE_NAME, \
+        _COMPUTE_MAJOR, \
+        _COMPUTE_MINOR, \
+        _TOTAL_MEMORY
 
     if num_devices is None:
         num_devices = int(os.environ.get("FAKEGPU_DEVICE_COUNT", str(_NUM_DEVICES)))
@@ -205,6 +223,7 @@ def _refresh_runtime_profile_state(*, num_devices: int | None = None, device_nam
             _DEVICE_NAME = device_name
     elif device_name is not None:
         _DEVICE_NAME = device_name
+
 
 # ---------------------------------------------------------------------------
 # Device registry: tracks which fake CUDA device each tensor lives on.
@@ -354,66 +373,144 @@ def _extract_cuda_device_index(device: Any) -> int | None:
 # ---------------------------------------------------------------------------
 
 _MEMORY_TRACKING = os.environ.get("FAKEGPU_MEMORY_TRACKING", "1") != "0"
+_ALLOCATOR_ALIGNMENT_BYTES = 512
+_ALLOCATOR_SMALL_SEGMENT_BYTES = 2 * 1024**2
+_ALLOCATOR_MEDIUM_SEGMENT_BYTES = 20 * 1024**2
+_ALLOCATOR_LARGE_ALIGNMENT_BYTES = 2 * 1024**2
+_ALLOCATOR_SMALL_REQUEST_LIMIT = 1024**2
+_ALLOCATOR_MEDIUM_REQUEST_LIMIT = 10 * 1024**2
 
 
 class _DeviceMemoryTracker:
-    """Track per-device memory allocations in the torch_patch layer."""
+    """Track tensor bytes and a simplified CUDA caching allocator per device."""
 
-    def __init__(self, per_device_bytes: list[int]):
+    def __init__(
+        self,
+        per_device_bytes: list[int],
+        *,
+        caching_allocator: bool | None = None,
+    ):
         self._total = list(per_device_bytes)
         self._used = [0] * len(per_device_bytes)
         self._peak = [0] * len(per_device_bytes)
+        self._reserved = [0] * len(per_device_bytes)
+        self._reserved_peak = [0] * len(per_device_bytes)
+        self._active_peak = [0] * len(per_device_bytes)
+        self._inactive_split_peak = [0] * len(per_device_bytes)
+        self._segment_peak = [0] * len(per_device_bytes)
+        self._allocation_peak = [0] * len(per_device_bytes)
         self._alloc_calls = [0] * len(per_device_bytes)
         self._free_calls = [0] * len(per_device_bytes)
+        self._allocated_bytes_total = [0] * len(per_device_bytes)
+        self._freed_bytes_total = [0] * len(per_device_bytes)
+        self._reserved_bytes_total = [0] * len(per_device_bytes)
+        self._released_reserved_bytes_total = [0] * len(per_device_bytes)
+        self._num_alloc_retries = [0] * len(per_device_bytes)
+        self._num_ooms = [0] * len(per_device_bytes)
         self._peak_by_stage: list[dict[str, int]] = [dict() for _ in per_device_bytes]
-        self._largest_allocations: list[list[dict[str, Any]]] = [[] for _ in per_device_bytes]
+        self._reserved_peak_by_stage: list[dict[str, int]] = [
+            dict() for _ in per_device_bytes
+        ]
+        self._largest_allocations: list[list[dict[str, Any]]] = [
+            [] for _ in per_device_bytes
+        ]
         # data_ptr -> allocation record
         self._allocs: dict[int, dict[str, Any]] = {}
+        # Each segment contains ordered blocks with ``offset``, ``size``, and
+        # an optional active ``data_ptr``. This is sufficient to model best-fit
+        # reuse, splitting, coalescing, fragmentation, and empty_cache().
+        self._segments: list[list[dict[str, Any]]] = [[] for _ in per_device_bytes]
+        self._allocation_blocks: dict[int, tuple[int, int]] = {}
+        self._next_segment_id = 1
+        if caching_allocator is None:
+            caching_allocator = os.environ.get("FAKEGPU_CACHING_ALLOCATOR", "1") != "0"
+        self._caching_allocator = bool(caching_allocator)
+        self._lock = threading.RLock()
         self._next_synthetic_data_ptr = -1
         self._synthetic_saved_raw_ptrs: dict[int, dict[str, int]] = {}
         self._held_saved_raw_ptrs: dict[int, int] = {}
         self._pending_saved_releases: set[int] = set()
 
-    def allocate(self, data_ptr: int, nbytes: int, device: int, metadata: dict[str, Any] | None = None) -> bool:
+    def allocate(
+        self,
+        data_ptr: int,
+        nbytes: int,
+        device: int,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
         """Register allocation. Raise OutOfMemoryError if exceeds limit."""
         import torch
 
-        if device < 0 or device >= len(self._total):
-            return False
-        if data_ptr in self._allocs:
-            return False  # already tracked
-        if self._used[device] + nbytes > self._total[device]:
-            free = self._total[device] - self._used[device]
-            raise torch.cuda.OutOfMemoryError(
-                f"CUDA out of memory. Tried to allocate "
-                f"{nbytes / 2**20:.2f} MiB. "
-                f"GPU {device} has a total capacity of "
-                f"{self._total[device] / 2**30:.2f} GiB "
-                f"of which {free / 2**30:.2f} GiB is free."
+        with self._lock:
+            if device < 0 or device >= len(self._total):
+                return False
+            if data_ptr in self._allocs:
+                return False  # already tracked
+            nbytes = max(0, int(nbytes))
+            block_size = _round_allocator_bytes(nbytes)
+            block = self._allocate_allocator_block(
+                data_ptr=data_ptr,
+                block_size=block_size,
+                device=device,
             )
-        meta = dict(metadata or {})
-        stage = str(meta.get("stage") or os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown")
-        meta["stage"] = stage
+            if block is None:
+                released = self._release_empty_segments(device)
+                if released:
+                    self._num_alloc_retries[device] += 1
+                    block = self._allocate_allocator_block(
+                        data_ptr=data_ptr,
+                        block_size=block_size,
+                        device=device,
+                    )
+            if block is None:
+                self._num_ooms[device] += 1
+                free = max(0, self._total[device] - self._reserved[device])
+                raise torch.cuda.OutOfMemoryError(
+                    f"CUDA out of memory. Tried to allocate "
+                    f"{nbytes / 2**20:.2f} MiB. "
+                    f"GPU {device} has a total capacity of "
+                    f"{self._total[device] / 2**30:.2f} GiB "
+                    f"of which {free / 2**30:.2f} GiB is free. "
+                    f"FakeGPU has {self._used[device] / 2**30:.2f} GiB allocated "
+                    f"and {self._reserved[device] / 2**30:.2f} GiB reserved."
+                )
+            meta = dict(metadata or {})
+            stage = str(
+                meta.get("stage")
+                or os.environ.get("FAKEGPU_PREFLIGHT_STAGE")
+                or "unknown"
+            )
+            meta["stage"] = stage
 
-        self._allocs[data_ptr] = {
-            "device": device,
-            "bytes": int(nbytes),
-            **meta,
-        }
-        self._used[device] += nbytes
-        self._peak[device] = max(self._peak[device], self._used[device])
-        stage_peaks = self._peak_by_stage[device]
-        stage_peaks[stage] = max(stage_peaks.get(stage, 0), self._used[device])
-        self._alloc_calls[device] += 1
-        self._record_largest_allocation(data_ptr, device, nbytes, meta)
-        return True
+            self._allocs[data_ptr] = {
+                "device": device,
+                "bytes": nbytes,
+                "block_bytes": block_size,
+                "segment_id": int(block["segment_id"]),
+                **meta,
+            }
+            self._used[device] += nbytes
+            self._allocated_bytes_total[device] += nbytes
+            self._peak[device] = max(self._peak[device], self._used[device])
+            stage_peaks = self._peak_by_stage[device]
+            stage_peaks[stage] = max(stage_peaks.get(stage, 0), self._used[device])
+            reserved_stage_peaks = self._reserved_peak_by_stage[device]
+            reserved_stage_peaks[stage] = max(
+                reserved_stage_peaks.get(stage, 0),
+                self._reserved[device],
+            )
+            self._alloc_calls[device] += 1
+            self._update_allocator_peaks(device)
+            self._record_largest_allocation(data_ptr, device, nbytes, meta)
+            return True
 
     def release(self, data_ptr: int) -> None:
         """Unregister allocation."""
-        if self._held_saved_raw_ptrs.get(data_ptr, 0) > 0:
-            self._pending_saved_releases.add(data_ptr)
-            return
-        self._release_now(data_ptr)
+        with self._lock:
+            if self._held_saved_raw_ptrs.get(data_ptr, 0) > 0:
+                self._pending_saved_releases.add(data_ptr)
+                return
+            self._release_now(data_ptr)
 
     def _release_now(self, data_ptr: int) -> None:
         rec = self._allocs.pop(data_ptr, None)
@@ -421,7 +518,10 @@ class _DeviceMemoryTracker:
             dev = int(rec.get("device", 0))
             nbytes = int(rec.get("bytes", 0))
             self._used[dev] = max(0, self._used[dev] - nbytes)
+            self._freed_bytes_total[dev] += nbytes
             self._free_calls[dev] += 1
+            self._free_allocator_block(data_ptr, dev)
+            self._update_allocator_peaks(dev)
 
     def allocate_saved_tensor(
         self,
@@ -432,139 +532,452 @@ class _DeviceMemoryTracker:
         metadata: dict[str, Any] | None = None,
     ) -> int | None:
         """Track an autograd-saved raw tensor that is hidden behind a high-level op."""
-        if raw_data_ptr in self._allocs:
-            self._held_saved_raw_ptrs[raw_data_ptr] = self._held_saved_raw_ptrs.get(raw_data_ptr, 0) + 1
-            return raw_data_ptr
-        existing = self._synthetic_saved_raw_ptrs.get(raw_data_ptr)
-        if existing is not None:
-            existing["refs"] += 1
-            return int(existing["synthetic_data_ptr"])
+        with self._lock:
+            if raw_data_ptr in self._allocs:
+                self._held_saved_raw_ptrs[raw_data_ptr] = (
+                    self._held_saved_raw_ptrs.get(raw_data_ptr, 0) + 1
+                )
+                return raw_data_ptr
+            existing = self._synthetic_saved_raw_ptrs.get(raw_data_ptr)
+            if existing is not None:
+                existing["refs"] += 1
+                return int(existing["synthetic_data_ptr"])
 
-        synthetic_data_ptr = self._next_synthetic_data_ptr
-        self._next_synthetic_data_ptr -= 1
-        meta = {
-            "category": "activation",
-            "synthetic": True,
-            "source": "autograd_saved_tensor",
-            **(metadata or {}),
-        }
-        self.allocate(synthetic_data_ptr, nbytes, device, metadata=meta)
-        self._synthetic_saved_raw_ptrs[raw_data_ptr] = {
-            "synthetic_data_ptr": synthetic_data_ptr,
-            "refs": 1,
-        }
-        return synthetic_data_ptr
+            synthetic_data_ptr = self._next_synthetic_data_ptr
+            self._next_synthetic_data_ptr -= 1
+            meta = {
+                "category": "activation",
+                "synthetic": True,
+                "source": "autograd_saved_tensor",
+                **(metadata or {}),
+            }
+            self.allocate(synthetic_data_ptr, nbytes, device, metadata=meta)
+            self._synthetic_saved_raw_ptrs[raw_data_ptr] = {
+                "synthetic_data_ptr": synthetic_data_ptr,
+                "refs": 1,
+            }
+            return synthetic_data_ptr
 
     def release_saved_tensor(self, raw_data_ptr: int) -> None:
-        held_refs = self._held_saved_raw_ptrs.get(raw_data_ptr)
-        if held_refs is not None:
-            held_refs -= 1
-            if held_refs > 0:
-                self._held_saved_raw_ptrs[raw_data_ptr] = held_refs
+        with self._lock:
+            held_refs = self._held_saved_raw_ptrs.get(raw_data_ptr)
+            if held_refs is not None:
+                held_refs -= 1
+                if held_refs > 0:
+                    self._held_saved_raw_ptrs[raw_data_ptr] = held_refs
+                    return
+                self._held_saved_raw_ptrs.pop(raw_data_ptr, None)
+                if raw_data_ptr in self._pending_saved_releases:
+                    self._pending_saved_releases.remove(raw_data_ptr)
+                    self._release_now(raw_data_ptr)
                 return
-            self._held_saved_raw_ptrs.pop(raw_data_ptr, None)
-            if raw_data_ptr in self._pending_saved_releases:
-                self._pending_saved_releases.remove(raw_data_ptr)
-                self._release_now(raw_data_ptr)
-            return
 
-        existing = self._synthetic_saved_raw_ptrs.get(raw_data_ptr)
-        if existing is None:
-            return
-        refs = int(existing.get("refs", 1)) - 1
-        if refs > 0:
-            existing["refs"] = refs
-            return
-        synthetic_data_ptr = int(existing["synthetic_data_ptr"])
-        self._synthetic_saved_raw_ptrs.pop(raw_data_ptr, None)
-        self._release_now(synthetic_data_ptr)
+            existing = self._synthetic_saved_raw_ptrs.get(raw_data_ptr)
+            if existing is None:
+                return
+            refs = int(existing.get("refs", 1)) - 1
+            if refs > 0:
+                existing["refs"] = refs
+                return
+            synthetic_data_ptr = int(existing["synthetic_data_ptr"])
+            self._synthetic_saved_raw_ptrs.pop(raw_data_ptr, None)
+            self._release_now(synthetic_data_ptr)
 
     def memory_allocated(self, device: int) -> int:
-        if device < 0 or device >= len(self._used):
-            return 0
-        return self._used[device]
+        with self._lock:
+            if device < 0 or device >= len(self._used):
+                return 0
+            return self._used[device]
 
     def max_memory_allocated(self, device: int) -> int:
-        if device < 0 or device >= len(self._peak):
-            return 0
-        return self._peak[device]
+        with self._lock:
+            if device < 0 or device >= len(self._peak):
+                return 0
+            return self._peak[device]
+
+    def memory_reserved(self, device: int) -> int:
+        with self._lock:
+            if device < 0 or device >= len(self._reserved):
+                return 0
+            return self._reserved[device]
+
+    def max_memory_reserved(self, device: int) -> int:
+        with self._lock:
+            if device < 0 or device >= len(self._reserved_peak):
+                return 0
+            return self._reserved_peak[device]
 
     def mem_get_info(self, device: int) -> tuple[int, int]:
-        if device < 0 or device >= len(self._total):
-            return (0, 0)
-        free = self._total[device] - self._used[device]
-        return (max(0, free), self._total[device])
+        with self._lock:
+            if device < 0 or device >= len(self._total):
+                return (0, 0)
+            free = self._total[device] - self._reserved[device]
+            return (max(0, free), self._total[device])
 
     def reset_peak(self, device: int) -> None:
-        if 0 <= device < len(self._peak):
-            self._peak[device] = self._used[device]
-            self._peak_by_stage[device] = {}
+        with self._lock:
+            if 0 <= device < len(self._peak):
+                self._peak[device] = self._used[device]
+                self._reserved_peak[device] = self._reserved[device]
+                self._active_peak[device] = self._active_block_bytes(device)
+                self._inactive_split_peak[device] = self._inactive_split_bytes(device)
+                self._segment_peak[device] = len(self._segments[device])
+                self._allocation_peak[device] = self._allocation_count(device)
+                self._peak_by_stage[device] = {}
+                self._reserved_peak_by_stage[device] = {}
+
+    def reset_accumulated(self, device: int) -> None:
+        with self._lock:
+            if device < 0 or device >= len(self._total):
+                return
+            self._allocated_bytes_total[device] = self._used[device]
+            self._freed_bytes_total[device] = 0
+            self._reserved_bytes_total[device] = self._reserved[device]
+            self._released_reserved_bytes_total[device] = 0
+            self._num_alloc_retries[device] = 0
+            self._num_ooms[device] = 0
+
+    def empty_cache(self, device: int | None = None) -> None:
+        with self._lock:
+            devices = range(len(self._total)) if device is None else (int(device),)
+            for index in devices:
+                if 0 <= index < len(self._total):
+                    self._release_empty_segments(index)
 
     def peak_by_stage(self, device: int) -> dict[str, int]:
-        if device < 0 or device >= len(self._peak_by_stage):
-            return {}
-        return dict(self._peak_by_stage[device])
+        with self._lock:
+            if device < 0 or device >= len(self._peak_by_stage):
+                return {}
+            return dict(self._peak_by_stage[device])
+
+    def reserved_peak_by_stage(self, device: int) -> dict[str, int]:
+        with self._lock:
+            if device < 0 or device >= len(self._reserved_peak_by_stage):
+                return {}
+            return dict(self._reserved_peak_by_stage[device])
 
     def largest_allocations(self, device: int, limit: int = 10) -> list[dict[str, Any]]:
-        if device < 0 or device >= len(self._largest_allocations):
-            return []
-        return [_public_allocation_record(item) for item in self._largest_allocations[device][:limit]]
+        with self._lock:
+            if device < 0 or device >= len(self._largest_allocations):
+                return []
+            return [
+                _public_allocation_record(item)
+                for item in self._largest_allocations[device][:limit]
+            ]
 
     def current_bytes_by_category(self, device: int) -> dict[str, int]:
-        if device < 0 or device >= len(self._used):
-            return {}
-        totals: dict[str, int] = {}
-        for record in self._allocs.values():
-            if int(record.get("device", -1)) != device:
-                continue
-            category = str(record.get("category") or "unknown")
-            totals[category] = totals.get(category, 0) + int(record.get("bytes", 0))
-        return totals
+        with self._lock:
+            if device < 0 or device >= len(self._used):
+                return {}
+            totals: dict[str, int] = {}
+            for record in self._allocs.values():
+                if int(record.get("device", -1)) != device:
+                    continue
+                category = str(record.get("category") or "unknown")
+                totals[category] = totals.get(category, 0) + int(record.get("bytes", 0))
+            return totals
 
     def mark_category(self, data_ptr: int, category: str) -> None:
-        record = self._allocs.get(data_ptr)
-        if record is not None:
-            record["category"] = category
-            device = int(record.get("device", -1))
-            if 0 <= device < len(self._largest_allocations):
-                for item in self._largest_allocations[device]:
-                    if int(item.get("_data_ptr", -1)) == data_ptr:
-                        item["category"] = category
+        with self._lock:
+            record = self._allocs.get(data_ptr)
+            if record is not None:
+                record["category"] = category
+                device = int(record.get("device", -1))
+                if 0 <= device < len(self._largest_allocations):
+                    for item in self._largest_allocations[device]:
+                        if int(item.get("_data_ptr", -1)) == data_ptr:
+                            item["category"] = category
 
     def snapshot(self, profiles: list[dict[str, Any]]) -> dict[str, Any]:
-        devices: list[dict[str, Any]] = []
-        for index, prof in enumerate(profiles):
-            if index >= len(self._total):
-                break
-            total = int(self._total[index])
-            peak = int(self._peak[index])
-            current = int(self._used[index])
-            headroom = total - peak
-            headroom_percent = (100.0 * headroom / total) if total > 0 else None
-            devices.append(
+        with self._lock:
+            devices: list[dict[str, Any]] = []
+            for index, prof in enumerate(profiles):
+                if index >= len(self._total):
+                    break
+                total = int(self._total[index])
+                peak = int(self._peak[index])
+                current = int(self._used[index])
+                reserved = int(self._reserved[index])
+                reserved_peak = int(self._reserved_peak[index])
+                conservative_peak = max(peak, reserved_peak)
+                headroom = total - conservative_peak
+                headroom_percent = (100.0 * headroom / total) if total > 0 else None
+                devices.append(
+                    {
+                        "index": index,
+                        "name": str(prof.get("name", "")),
+                        "profile_id": str(prof.get("profile_id", "")),
+                        "total_memory": total,
+                        "current_memory": current,
+                        "peak_memory": peak,
+                        "current_reserved_memory": reserved,
+                        "peak_reserved_memory": reserved_peak,
+                        "inactive_split_bytes": self._inactive_split_bytes(index),
+                        "segment_count": len(self._segments[index]),
+                        "headroom_bytes": headroom,
+                        "headroom_percent": (
+                            round(headroom_percent, 3)
+                            if headroom_percent is not None
+                            else None
+                        ),
+                        "allocation_count": int(self._alloc_calls[index]),
+                        "free_count": int(self._free_calls[index]),
+                        "current_bytes_by_category": self.current_bytes_by_category(
+                            index
+                        ),
+                        "peak_by_stage": self.peak_by_stage(index),
+                        "reserved_peak_by_stage": self.reserved_peak_by_stage(index),
+                        "largest_allocations": self.largest_allocations(index),
+                        "allocator_model": (
+                            "cuda_caching_allocator.v1"
+                            if self._caching_allocator
+                            else "direct_segments.v1"
+                        ),
+                        "tracking_confidence": "C2_torch_tensor_lifetime",
+                    }
+                )
+            return {
+                "tracking_confidence": "C2_torch_tensor_lifetime",
+                "allocator_model": (
+                    "cuda_caching_allocator.v1"
+                    if self._caching_allocator
+                    else "direct_segments.v1"
+                ),
+                "devices": devices,
+            }
+
+    def memory_stats(self, device: int) -> dict[str, Any]:
+        with self._lock:
+            if device < 0 or device >= len(self._total):
+                return _build_memory_stats_dict(0, 0)
+            active_bytes = self._active_block_bytes(device)
+            inactive_split = self._inactive_split_bytes(device)
+            return _build_memory_stats_dict(
+                self._used[device],
+                self._peak[device],
+                active_current=active_bytes,
+                active_peak=self._active_peak[device],
+                reserved_current=self._reserved[device],
+                reserved_peak=self._reserved_peak[device],
+                allocated_total=self._allocated_bytes_total[device],
+                freed_total=self._freed_bytes_total[device],
+                reserved_total=self._reserved_bytes_total[device],
+                reserved_freed_total=self._released_reserved_bytes_total[device],
+                inactive_split_current=inactive_split,
+                inactive_split_peak=self._inactive_split_peak[device],
+                segment_current=len(self._segments[device]),
+                segment_peak=self._segment_peak[device],
+                allocation_current=self._allocation_count(device),
+                allocation_peak=self._allocation_peak[device],
+                num_alloc_retries=self._num_alloc_retries[device],
+                num_ooms=self._num_ooms[device],
+            )
+
+    def allocator_snapshot(self) -> list[dict[str, Any]]:
+        with self._lock:
+            result: list[dict[str, Any]] = []
+            for device, segments in enumerate(self._segments):
+                for segment in segments:
+                    blocks = []
+                    allocated_size = 0
+                    requested_size = 0
+                    for block in segment["blocks"]:
+                        data_ptr = block.get("data_ptr")
+                        record = (
+                            self._allocs.get(int(data_ptr))
+                            if data_ptr is not None
+                            else None
+                        )
+                        requested = int((record or {}).get("bytes", 0))
+                        if data_ptr is not None:
+                            allocated_size += int(block["size"])
+                            requested_size += requested
+                        blocks.append(
+                            {
+                                "address": int(block["offset"]),
+                                "size": int(block["size"]),
+                                "requested_size": requested,
+                                "state": (
+                                    "active_allocated"
+                                    if data_ptr is not None
+                                    else "inactive"
+                                ),
+                            }
+                        )
+                    result.append(
+                        {
+                            "device": device,
+                            "segment_id": int(segment["id"]),
+                            "total_size": int(segment["size"]),
+                            "allocated_size": allocated_size,
+                            "active_size": allocated_size,
+                            "requested_size": requested_size,
+                            "segment_type": str(segment["type"]),
+                            "blocks": blocks,
+                        }
+                    )
+            return result
+
+    def _allocate_allocator_block(
+        self,
+        *,
+        data_ptr: int,
+        block_size: int,
+        device: int,
+    ) -> dict[str, Any] | None:
+        best: tuple[int, int, int] | None = None
+        for segment_index, segment in enumerate(self._segments[device]):
+            for block_index, block in enumerate(segment["blocks"]):
+                if block.get("data_ptr") is not None:
+                    continue
+                size = int(block["size"])
+                if size < block_size:
+                    continue
+                candidate = (size, segment_index, block_index)
+                if best is None or candidate < best:
+                    best = candidate
+        if best is None:
+            segment_size, segment_type = _allocator_segment_size(block_size)
+            if self._reserved[device] + segment_size > self._total[device]:
+                return None
+            segment = {
+                "id": self._next_segment_id,
+                "device": device,
+                "size": segment_size,
+                "type": segment_type,
+                "blocks": [
+                    {
+                        "offset": 0,
+                        "size": segment_size,
+                        "data_ptr": None,
+                    }
+                ],
+            }
+            self._next_segment_id += 1
+            self._segments[device].append(segment)
+            self._reserved[device] += segment_size
+            self._reserved_bytes_total[device] += segment_size
+            best = (segment_size, len(self._segments[device]) - 1, 0)
+
+        _, segment_index, block_index = best
+        segment = self._segments[device][segment_index]
+        block = segment["blocks"][block_index]
+        remainder = int(block["size"]) - block_size
+        allocated = {
+            "offset": int(block["offset"]),
+            "size": block_size,
+            "data_ptr": data_ptr,
+            "segment_id": int(segment["id"]),
+        }
+        replacement = [allocated]
+        if remainder > 0:
+            replacement.append(
                 {
-                    "index": index,
-                    "name": str(prof.get("name", "")),
-                    "profile_id": str(prof.get("profile_id", "")),
-                    "total_memory": total,
-                    "current_memory": current,
-                    "peak_memory": peak,
-                    "headroom_bytes": headroom,
-                    "headroom_percent": round(headroom_percent, 3) if headroom_percent is not None else None,
-                    "allocation_count": int(self._alloc_calls[index]),
-                    "free_count": int(self._free_calls[index]),
-                    "current_bytes_by_category": self.current_bytes_by_category(index),
-                    "peak_by_stage": self.peak_by_stage(index),
-                    "largest_allocations": self.largest_allocations(index),
-                    "tracking_confidence": "C2_torch_tensor_lifetime",
+                    "offset": int(block["offset"]) + block_size,
+                    "size": remainder,
+                    "data_ptr": None,
                 }
             )
-        return {
-            "tracking_confidence": "C2_torch_tensor_lifetime",
-            "devices": devices,
-        }
+        segment["blocks"][block_index : block_index + 1] = replacement
+        self._allocation_blocks[data_ptr] = (device, int(segment["id"]))
+        return allocated
 
-    def _record_largest_allocation(self, data_ptr: int, device: int, nbytes: int, metadata: dict[str, Any]) -> None:
+    def _free_allocator_block(self, data_ptr: int, device: int) -> None:
+        location = self._allocation_blocks.pop(data_ptr, None)
+        if location is None:
+            return
+        _, segment_id = location
+        for segment in self._segments[device]:
+            if int(segment["id"]) != segment_id:
+                continue
+            for block in segment["blocks"]:
+                if block.get("data_ptr") == data_ptr:
+                    block["data_ptr"] = None
+                    block.pop("segment_id", None)
+                    break
+            segment["blocks"] = _coalesce_allocator_blocks(segment["blocks"])
+            if not self._caching_allocator and all(
+                block.get("data_ptr") is None for block in segment["blocks"]
+            ):
+                self._remove_segment(device, segment_id)
+            return
+
+    def _release_empty_segments(self, device: int) -> int:
+        released = 0
+        retained = []
+        for segment in self._segments[device]:
+            if all(block.get("data_ptr") is None for block in segment["blocks"]):
+                released += int(segment["size"])
+            else:
+                retained.append(segment)
+        if released:
+            self._segments[device] = retained
+            self._reserved[device] = max(0, self._reserved[device] - released)
+            self._released_reserved_bytes_total[device] += released
+        return released
+
+    def _remove_segment(self, device: int, segment_id: int) -> None:
+        retained = []
+        released = 0
+        for segment in self._segments[device]:
+            if int(segment["id"]) == segment_id:
+                released += int(segment["size"])
+            else:
+                retained.append(segment)
+        self._segments[device] = retained
+        if released:
+            self._reserved[device] = max(0, self._reserved[device] - released)
+            self._released_reserved_bytes_total[device] += released
+
+    def _active_block_bytes(self, device: int) -> int:
+        return sum(
+            int(block["size"])
+            for segment in self._segments[device]
+            for block in segment["blocks"]
+            if block.get("data_ptr") is not None
+        )
+
+    def _inactive_split_bytes(self, device: int) -> int:
+        return sum(
+            int(block["size"])
+            for segment in self._segments[device]
+            if any(block.get("data_ptr") is not None for block in segment["blocks"])
+            for block in segment["blocks"]
+            if block.get("data_ptr") is None
+        )
+
+    def _allocation_count(self, device: int) -> int:
+        return sum(
+            1
+            for record in self._allocs.values()
+            if int(record.get("device", -1)) == device
+        )
+
+    def _update_allocator_peaks(self, device: int) -> None:
+        self._active_peak[device] = max(
+            self._active_peak[device],
+            self._active_block_bytes(device),
+        )
+        self._reserved_peak[device] = max(
+            self._reserved_peak[device],
+            self._reserved[device],
+        )
+        self._inactive_split_peak[device] = max(
+            self._inactive_split_peak[device],
+            self._inactive_split_bytes(device),
+        )
+        self._segment_peak[device] = max(
+            self._segment_peak[device],
+            len(self._segments[device]),
+        )
+        self._allocation_peak[device] = max(
+            self._allocation_peak[device],
+            self._allocation_count(device),
+        )
+
+    def _record_largest_allocation(
+        self, data_ptr: int, device: int, nbytes: int, metadata: dict[str, Any]
+    ) -> None:
         item = {
             "_data_ptr": int(data_ptr),
             "bytes": int(nbytes),
@@ -582,17 +995,57 @@ class _DeviceMemoryTracker:
         del entries[10:]
 
 
+def _round_allocator_bytes(nbytes: int) -> int:
+    value = max(0, int(nbytes))
+    if value == 0:
+        return 0
+    return (
+        (value + _ALLOCATOR_ALIGNMENT_BYTES - 1)
+        // _ALLOCATOR_ALIGNMENT_BYTES
+        * _ALLOCATOR_ALIGNMENT_BYTES
+    )
+
+
+def _allocator_segment_size(block_size: int) -> tuple[int, str]:
+    if block_size <= _ALLOCATOR_SMALL_REQUEST_LIMIT:
+        return _ALLOCATOR_SMALL_SEGMENT_BYTES, "small"
+    if block_size < _ALLOCATOR_MEDIUM_REQUEST_LIMIT:
+        return _ALLOCATOR_MEDIUM_SEGMENT_BYTES, "large"
+    size = (
+        (block_size + _ALLOCATOR_LARGE_ALIGNMENT_BYTES - 1)
+        // _ALLOCATOR_LARGE_ALIGNMENT_BYTES
+        * _ALLOCATOR_LARGE_ALIGNMENT_BYTES
+    )
+    return size, "large"
+
+
+def _coalesce_allocator_blocks(
+    blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for block in blocks:
+        current = dict(block)
+        if (
+            merged
+            and merged[-1].get("data_ptr") is None
+            and current.get("data_ptr") is None
+            and int(merged[-1]["offset"]) + int(merged[-1]["size"])
+            == int(current["offset"])
+        ):
+            merged[-1]["size"] = int(merged[-1]["size"]) + int(current["size"])
+            continue
+        merged.append(current)
+    return merged
+
+
 def _public_allocation_record(record: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in record.items()
-        if not str(key).startswith("_")
-    }
+    return {key: value for key, value in record.items() if not str(key).startswith("_")}
 
 
 # ---------------------------------------------------------------------------
 # Architecture name lookup (mirrors C++ gpu_profile.cpp)
 # ---------------------------------------------------------------------------
+
 
 def _arch_name(major: int, minor: int) -> str:
     """Return the architecture name for a compute capability."""
@@ -603,6 +1056,7 @@ def _arch_name(major: int, minor: int) -> str:
 # ---------------------------------------------------------------------------
 # Terminal Report Summary (atexit handler, mirrors C++ monitor.cpp)
 # ---------------------------------------------------------------------------
+
 
 def _fmt_bytes(b: int) -> str:
     if b >= 1024**3:
@@ -641,19 +1095,27 @@ def _dump_terminal_summary() -> None:
 
         total = tracker._total[i]
         peak = tracker._peak[i]
-        peak_pct = (100.0 * peak / total) if total > 0 else 0.0
+        reserved_peak = tracker._reserved_peak[i]
+        peak_pct = (100.0 * reserved_peak / total) if total > 0 else 0.0
 
         alloc = tracker._alloc_calls[i]
         free = tracker._free_calls[i]
 
         lines.append(f" Device {i}: {name} ({arch}, cc {cc_major}.{cc_minor})")
-        lines.append(f"   Memory: {_fmt_bytes(peak)} / {_fmt_bytes(total)} peak ({peak_pct:.1f}%)")
+        lines.append(
+            f"   Memory: {_fmt_bytes(peak)} allocated | "
+            f"{_fmt_bytes(reserved_peak)} reserved / {_fmt_bytes(total)} "
+            f"({peak_pct:.1f}%)"
+        )
         lines.append(f"   Alloc: {alloc} calls | Free: {free} calls")
         lines.append("------------------------------------------------------")
 
     lines.append(" Peak VRAM by GPU:")
     for i, peak in enumerate(tracker._peak[: len(_DEVICE_PROFILES)]):
-        lines.append(f"   GPU {i}: {_fmt_bytes(peak)}")
+        lines.append(
+            f"   GPU {i}: {_fmt_bytes(peak)} allocated | "
+            f"{_fmt_bytes(tracker._reserved_peak[i])} reserved"
+        )
     lines.append("------------------------------------------------------")
 
     lines.append("======================================================")
@@ -688,6 +1150,10 @@ def _smi_memory_snapshot() -> dict[str, Any]:
                 "total_memory": int(tracker._total[index]),
                 "current_memory": int(tracker._used[index]),
                 "peak_memory": int(tracker._peak[index]),
+                "current_reserved_memory": int(tracker._reserved[index]),
+                "peak_reserved_memory": int(tracker._reserved_peak[index]),
+                "inactive_split_bytes": int(tracker._inactive_split_bytes(index)),
+                "segment_count": len(tracker._segments[index]),
             }
         )
     return {
@@ -722,9 +1188,6 @@ def _refresh_smi_publisher() -> None:
         runtime_overhead_bytes=max(0, overhead),
     )
     _smi_publisher.start()
-
-
-import weakref
 
 
 def _set_tracked_data_ptr(tensor: Any, data_ptr: int) -> None:
@@ -843,7 +1306,9 @@ def _is_internal_allocation_frame(filename: str) -> bool:
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         path = os.path.abspath(filename)
-        return path == os.path.abspath(__file__) or path.startswith(current_dir + os.sep)
+        return path == os.path.abspath(__file__) or path.startswith(
+            current_dir + os.sep
+        )
     except Exception:
         return False
 
@@ -864,7 +1329,9 @@ def _infer_tensor_memory_category(tensor: Any, raw: Any) -> str:
     try:
         import torch
 
-        if isinstance(tensor, torch.nn.Parameter) or isinstance(raw, torch.nn.Parameter):
+        if isinstance(tensor, torch.nn.Parameter) or isinstance(
+            raw, torch.nn.Parameter
+        ):
             return "parameter"
     except Exception:
         pass
@@ -1081,7 +1548,9 @@ def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> No
         module_cls = None
     if module_cls is not None:
         original_module_cuda = getattr(module_cls, "cuda", None)
-        if callable(original_module_cuda) and not getattr(original_module_cuda, "_fakegpu_category_patch", False):
+        if callable(original_module_cuda) and not getattr(
+            original_module_cuda, "_fakegpu_category_patch", False
+        ):
 
             @functools.wraps(original_module_cuda)
             def _tracked_module_cuda(self, *args, **kwargs):
@@ -1093,7 +1562,9 @@ def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> No
             module_cls.cuda = _tracked_module_cuda
 
         original_module_to = getattr(module_cls, "to", None)
-        if callable(original_module_to) and not getattr(original_module_to, "_fakegpu_category_patch", False):
+        if callable(original_module_to) and not getattr(
+            original_module_to, "_fakegpu_category_patch", False
+        ):
 
             @functools.wraps(original_module_to)
             def _tracked_module_to(self, *args, **kwargs):
@@ -1105,7 +1576,9 @@ def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> No
             module_cls.to = _tracked_module_to
 
     original_register_parameter = getattr(upstream, "register_parameter", None)
-    if callable(original_register_parameter) and not getattr(original_register_parameter, "_fakegpu_category_patch", False):
+    if callable(original_register_parameter) and not getattr(
+        original_register_parameter, "_fakegpu_category_patch", False
+    ):
 
         @functools.wraps(original_register_parameter)
         def _tracked_register_parameter(tensor):
@@ -1119,7 +1592,9 @@ def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> No
     fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
     if fake_tensor_cls is not None:
         original_backward = getattr(fake_tensor_cls, "backward", None)
-        if callable(original_backward) and not getattr(original_backward, "_fakegpu_category_patch", False):
+        if callable(original_backward) and not getattr(
+            original_backward, "_fakegpu_category_patch", False
+        ):
 
             @functools.wraps(original_backward)
             def _tracked_backward(self, *args, **kwargs):
@@ -1132,7 +1607,9 @@ def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> No
             fake_tensor_cls.backward = _tracked_backward
 
         grad_property = getattr(fake_tensor_cls, "grad", None)
-        if isinstance(grad_property, property) and not getattr(grad_property.fget, "_fakegpu_category_patch", False):
+        if isinstance(grad_property, property) and not getattr(
+            grad_property.fget, "_fakegpu_category_patch", False
+        ):
             original_get = grad_property.fget
             original_set = grad_property.fset
 
@@ -1185,7 +1662,9 @@ def _install_optimizer_state_category_patch(torch_mod: Any) -> None:
         if cls is None:
             continue
         original_step = getattr(cls, "step", None)
-        if not callable(original_step) or getattr(original_step, "_fakegpu_category_patch", False):
+        if not callable(original_step) or getattr(
+            original_step, "_fakegpu_category_patch", False
+        ):
             continue
 
         @functools.wraps(original_step)
@@ -1230,6 +1709,7 @@ class PatchResult:
     backend: str
     num_devices: int
     device_name: str
+
 
 # ---------------------------------------------------------------------------
 # Device helpers
@@ -1329,7 +1809,11 @@ def _patched_tensor_to(self: Any, *args: Any, **kwargs: Any) -> Any:
             if target_dev is None:
                 target_dev = _extract_cuda_device_index(first)
             args = (torch.device("cpu"),) + args[1:]
-        elif isinstance(first, int) and len(args) >= 2 and isinstance(args[1], torch.dtype):
+        elif (
+            isinstance(first, int)
+            and len(args) >= 2
+            and isinstance(args[1], torch.dtype)
+        ):
             if target_dev is None:
                 target_dev = first
             args = (torch.device("cpu"),) + args[1:]
@@ -1348,7 +1832,9 @@ def _patched_tensor_cuda(
 ) -> Any:
     import torch
 
-    target_dev = _extract_cuda_device_index(device) if device is not None else _current_device
+    target_dev = (
+        _extract_cuda_device_index(device) if device is not None else _current_device
+    )
     if memory_format is not None and memory_format is not torch.preserve_format:
         result = self.contiguous(memory_format=memory_format)
     else:
@@ -1388,8 +1874,10 @@ def _install_compile_compat_shim(torch_mod: Any) -> None:
 
     def _fakegpu_compile(model: Any = None, *args: Any, **kwargs: Any) -> Any:
         if model is None:
+
             def _decorator(fn: Any) -> Any:
                 return fn
+
             return _decorator
         return model
 
@@ -1418,10 +1906,14 @@ def _patched_module_to(self: Any, *args: Any, **kwargs: Any) -> Any:
     if args:
         first = args[0]
         if isinstance(first, str):
-            target_dev = _extract_cuda_device_index(first) if target_dev is None else target_dev
+            target_dev = (
+                _extract_cuda_device_index(first) if target_dev is None else target_dev
+            )
             args = (_normalize_device(first),) + args[1:]
         elif isinstance(first, torch.device) and first.type == "cuda":
-            target_dev = _extract_cuda_device_index(first) if target_dev is None else target_dev
+            target_dev = (
+                _extract_cuda_device_index(first) if target_dev is None else target_dev
+            )
             args = (torch.device("cpu"),) + args[1:]
 
     result = _orig_module_to(self, *args, **kwargs)
@@ -1483,7 +1975,12 @@ class _FakeStream:
 class _FakeEvent:
     """Minimal stub for ``torch.cuda.Event``."""
 
-    def __init__(self, enable_timing: bool = False, blocking: bool = False, interprocess: bool = False):
+    def __init__(
+        self,
+        enable_timing: bool = False,
+        blocking: bool = False,
+        interprocess: bool = False,
+    ):
         self._time: float = 0.0
 
     def record(self, stream: Any = None) -> None:
@@ -1633,6 +2130,8 @@ def _stub_get_arch_list() -> list[str]:
 
 
 def _stub_mem_get_info(device: Any = None) -> tuple[int, int]:
+    if _memory_tracker is not None:
+        return _memory_tracker.mem_get_info(_normalize_device_index(device))
     return (_TOTAL_MEMORY, _TOTAL_MEMORY)
 
 
@@ -1641,82 +2140,146 @@ def _stub_synchronize(device: Any = None) -> None:
 
 
 def _stub_empty_cache() -> None:
-    pass
+    if _memory_tracker is not None:
+        _memory_tracker.empty_cache()
 
 
 def _stub_memory_allocated(device: Any = None) -> int:
+    if _memory_tracker is not None:
+        return _memory_tracker.memory_allocated(_normalize_device_index(device))
     return 0
 
 
 def _stub_memory_reserved(device: Any = None) -> int:
+    if _memory_tracker is not None:
+        return _memory_tracker.memory_reserved(_normalize_device_index(device))
     return 0
 
 
 def _stub_max_memory_allocated(device: Any = None) -> int:
+    if _memory_tracker is not None:
+        return _memory_tracker.max_memory_allocated(_normalize_device_index(device))
     return 0
 
 
 def _stub_max_memory_reserved(device: Any = None) -> int:
+    if _memory_tracker is not None:
+        return _memory_tracker.max_memory_reserved(_normalize_device_index(device))
     return 0
 
 
 def _stub_memory_cached(device: Any = None) -> int:
-    return 0
+    return _stub_memory_reserved(device)
 
 
 def _stub_max_memory_cached(device: Any = None) -> int:
-    return 0
+    return _stub_max_memory_reserved(device)
 
 
 def _stub_reset_peak_memory_stats(device: Any = None) -> None:
-    pass
+    if _memory_tracker is not None:
+        _memory_tracker.reset_peak(_normalize_device_index(device))
 
 
 def _stub_reset_max_memory_allocated(device: Any = None) -> None:
-    pass
+    _stub_reset_peak_memory_stats(device)
 
 
 def _stub_reset_max_memory_cached(device: Any = None) -> None:
-    pass
+    _stub_reset_peak_memory_stats(device)
 
 
 def _stub_reset_accumulated_memory_stats(device: Any = None) -> None:
-    pass
+    if _memory_tracker is not None:
+        _memory_tracker.reset_accumulated(_normalize_device_index(device))
 
 
-def _build_memory_stats_dict(current: int, peak: int) -> dict[str, Any]:
+def _build_memory_stats_dict(
+    current: int,
+    peak: int,
+    *,
+    active_current: int | None = None,
+    active_peak: int | None = None,
+    reserved_current: int | None = None,
+    reserved_peak: int | None = None,
+    allocated_total: int | None = None,
+    freed_total: int = 0,
+    reserved_total: int | None = None,
+    reserved_freed_total: int = 0,
+    inactive_split_current: int = 0,
+    inactive_split_peak: int = 0,
+    segment_current: int = 0,
+    segment_peak: int = 0,
+    allocation_current: int = 0,
+    allocation_peak: int = 0,
+    num_alloc_retries: int = 0,
+    num_ooms: int = 0,
+) -> dict[str, Any]:
     current_i = int(current)
     peak_i = int(max(current, peak))
+    active_current_i = int(
+        max(current_i, active_current if active_current is not None else current_i)
+    )
+    active_peak_i = int(
+        max(
+            active_current_i,
+            active_peak if active_peak is not None else peak_i,
+        )
+    )
+    reserved_current_i = int(
+        max(
+            active_current_i,
+            reserved_current if reserved_current is not None else current_i,
+        )
+    )
+    reserved_peak_i = int(
+        max(
+            reserved_current_i,
+            reserved_peak if reserved_peak is not None else peak_i,
+        )
+    )
+    allocated_total_i = int(
+        max(current_i, allocated_total if allocated_total is not None else peak_i)
+    )
+    reserved_total_i = int(
+        max(
+            reserved_current_i,
+            reserved_total if reserved_total is not None else reserved_peak_i,
+        )
+    )
     return {
-        "active_bytes.all.current": current_i,
-        "active_bytes.all.peak": peak_i,
-        "active_bytes.all.allocated": peak_i,
-        "active_bytes.all.freed": 0,
+        "active_bytes.all.current": active_current_i,
+        "active_bytes.all.peak": active_peak_i,
+        "active_bytes.all.allocated": allocated_total_i,
+        "active_bytes.all.freed": int(freed_total),
         "allocated_bytes.all.current": current_i,
         "allocated_bytes.all.peak": peak_i,
-        "allocated_bytes.all.allocated": peak_i,
-        "allocated_bytes.all.freed": 0,
-        "reserved_bytes.all.current": current_i,
-        "reserved_bytes.all.peak": peak_i,
-        "reserved_bytes.all.allocated": peak_i,
-        "reserved_bytes.all.freed": 0,
-        "inactive_split_bytes.all.current": 0,
-        "inactive_split_bytes.all.peak": 0,
-        "segment.all.current": 0,
-        "segment.all.peak": 0,
-        "num_alloc_retries": 0,
-        "num_ooms": 0,
+        "allocated_bytes.all.allocated": allocated_total_i,
+        "allocated_bytes.all.freed": int(freed_total),
+        "requested_bytes.all.current": current_i,
+        "requested_bytes.all.peak": peak_i,
+        "requested_bytes.all.allocated": allocated_total_i,
+        "requested_bytes.all.freed": int(freed_total),
+        "reserved_bytes.all.current": reserved_current_i,
+        "reserved_bytes.all.peak": reserved_peak_i,
+        "reserved_bytes.all.allocated": reserved_total_i,
+        "reserved_bytes.all.freed": int(reserved_freed_total),
+        "inactive_split_bytes.all.current": int(inactive_split_current),
+        "inactive_split_bytes.all.peak": int(inactive_split_peak),
+        "segment.all.current": int(segment_current),
+        "segment.all.peak": int(segment_peak),
+        "allocation.all.current": int(allocation_current),
+        "allocation.all.peak": int(max(allocation_current, allocation_peak)),
+        "num_alloc_retries": int(num_alloc_retries),
+        "num_ooms": int(num_ooms),
     }
 
 
 def _stub_memory_stats(device: Any = None) -> dict[str, Any]:
-    current = 0
-    peak = 0
     if _memory_tracker is not None:
-        idx = _resolve_device_index(device)
-        current = _memory_tracker.memory_allocated(idx)
-        peak = _memory_tracker.max_memory_allocated(idx)
-    return _build_memory_stats_dict(current, peak)
+        idx = _normalize_device_index(device)
+        return _memory_tracker.memory_stats(idx)
+    return _build_memory_stats_dict(0, 0)
 
 
 def _stub_memory_summary(device: Any = None, abbreviated: bool = False) -> str:
@@ -1724,6 +2287,8 @@ def _stub_memory_summary(device: Any = None, abbreviated: bool = False) -> str:
 
 
 def _stub_memory_snapshot() -> list[Any]:
+    if _memory_tracker is not None:
+        return _memory_tracker.allocator_snapshot()
     return []
 
 
@@ -1819,12 +2384,16 @@ def _stub_cudart() -> Any:
 # Wrap non-default-stream context manager
 # ---------------------------------------------------------------------------
 
+
 class _FakeStreamCtx:
     """Replacement for ``torch.cuda.stream(s)``."""
+
     def __init__(self, stream: Any) -> None:
         pass
+
     def __enter__(self) -> "_FakeStreamCtx":
         return self
+
     def __exit__(self, *args: Any) -> None:
         pass
 
@@ -2106,10 +2675,13 @@ def _patch_dist_group_fallback(torch_mod: Any) -> None:
 
     # ---- new_group fallback ----
     if not hasattr(dist, "new_group") or dist.new_group is None:
-        def _fallback_new_group(ranks=None, timeout=None, backend=None, pg_options=None):
+
+        def _fallback_new_group(
+            ranks=None, timeout=None, backend=None, pg_options=None
+        ):
             return types.SimpleNamespace(
                 rank=lambda: 0,
-                size=lambda: (len(ranks) if ranks else 1),
+                size=lambda: len(ranks) if ranks else 1,
             )
 
         dist.new_group = _fallback_new_group  # type: ignore[attr-defined]
@@ -2190,7 +2762,9 @@ def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
 
         try:
             from torch.distributed._shard.metadata import ShardMetadata
-            from torch.distributed._shard.sharded_tensor.metadata import ShardedTensorMetadata
+            from torch.distributed._shard.sharded_tensor.metadata import (
+                ShardedTensorMetadata,
+            )
         except Exception:
             ShardMetadata = None
             ShardedTensorMetadata = None
@@ -2199,7 +2773,9 @@ def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
             shard_offsets = list(obj.shard_offsets)
             if shard_offsets:
                 shard_offsets[0] = int(obj.shard_sizes[0]) * rank
-            placement = re.sub(r"rank:\\d+/", f"rank:{rank}/", str(obj.placement), count=1)
+            placement = re.sub(
+                r"rank:\\d+/", f"rank:{rank}/", str(obj.placement), count=1
+            )
             return dataclasses.replace(
                 obj,
                 shard_offsets=shard_offsets,
@@ -2226,7 +2802,9 @@ def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
             )
         return copy.deepcopy(obj)
 
-    def _patched_all_gather_object(object_list: list[Any], obj: Any, group: Any = None) -> None:
+    def _patched_all_gather_object(
+        object_list: list[Any], obj: Any, group: Any = None
+    ) -> None:
         for index in range(len(object_list)):
             object_list[index] = _clone_gathered_object_for_rank(obj, index)
         return None
@@ -2326,7 +2904,9 @@ def _patch_fsdp_device_handling() -> None:
 
         # Remap non-cuda device types to cuda for FakeGPU
         if device.type not in ("cuda", "cpu", "meta"):
-            device = _torch.device("cuda", device.index if device.index is not None else 0)
+            device = _torch.device(
+                "cuda", device.index if device.index is not None else 0
+            )
         return _orig_from_device(cls, device)
 
     _FSDPDeviceHandle.from_device = _patched_from_device
@@ -2348,7 +2928,9 @@ def _patch_fsdp_device_handling() -> None:
             if result is not None and result.type not in ("cuda", "cpu", "meta"):
                 import torch as _torch
 
-                result = _torch.device("cuda", result.index if result.index is not None else 0)
+                result = _torch.device(
+                    "cuda", result.index if result.index is not None else 0
+                )
             return result
 
         _fsdp_init._get_device_from_device_id = _patched_get_device
@@ -2457,6 +3039,7 @@ def _activate_upstream(num_devices: int, device_name: str) -> Any:
     if upstream is None:
         try:
             from . import _upstream
+
             upstream = _upstream
         except Exception:
             return None
@@ -2565,7 +3148,9 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     def _hooked_wrap_tensor(t, device_index=None):
         # Validate device index bounds
-        actual_idx = upstream._CURRENT_DEVICE if device_index is None else int(device_index)
+        actual_idx = (
+            upstream._CURRENT_DEVICE if device_index is None else int(device_index)
+        )
         if actual_idx < 0 or actual_idx >= _NUM_DEVICES:
             raise RuntimeError(
                 f"CUDA error: invalid device ordinal "
@@ -2594,7 +3179,10 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         if isinstance(obj, list):
             return [_dynamo_friendly_tree_map(fn, item) for item in obj]
         if isinstance(obj, dict):
-            items = ((key, _dynamo_friendly_tree_map(fn, value)) for key, value in obj.items())
+            items = (
+                (key, _dynamo_friendly_tree_map(fn, value))
+                for key, value in obj.items()
+            )
             if isinstance(obj, dict) and type(obj) is dict:
                 return dict(items)
             return obj.__class__(items)
@@ -2635,8 +3223,10 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         idx = _normalize_device_index(device)
         if idx < len(_DEVICE_PROFILES):
             prof = _DEVICE_PROFILES[idx]
-            return (prof.get("compute_major", _COMPUTE_MAJOR),
-                    prof.get("compute_minor", _COMPUTE_MINOR))
+            return (
+                prof.get("compute_major", _COMPUTE_MAJOR),
+                prof.get("compute_minor", _COMPUTE_MINOR),
+            )
         return (_COMPUTE_MAJOR, _COMPUTE_MINOR)
 
     def _profiled_get_device_properties(device=None):
@@ -2658,6 +3248,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     # ---- 4. Tracked memory query functions ----
     if _memory_tracker is not None:
+
         def _active_tracker():
             if _memory_tracker is None:
                 raise RuntimeError("FakeGPU memory tracking is not initialized")
@@ -2671,36 +3262,73 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
             idx = _normalize_device_index(device)
             return _active_tracker().max_memory_allocated(idx)
 
+        def _tracked_memory_reserved(device=None):
+            idx = _normalize_device_index(device)
+            return _active_tracker().memory_reserved(idx)
+
+        def _tracked_max_memory_reserved(device=None):
+            idx = _normalize_device_index(device)
+            return _active_tracker().max_memory_reserved(idx)
+
         def _tracked_mem_get_info(device=None):
             idx = _normalize_device_index(device)
             return _active_tracker().mem_get_info(idx)
+
+        def _tracked_empty_cache():
+            _active_tracker().empty_cache()
 
         def _tracked_reset_peak_memory_stats(device=None):
             idx = _normalize_device_index(device)
             _active_tracker().reset_peak(idx)
 
+        def _tracked_reset_accumulated_memory_stats(device=None):
+            idx = _normalize_device_index(device)
+            _active_tracker().reset_accumulated(idx)
+
         def _tracked_memory_stats(device=None):
             idx = _normalize_device_index(device)
-            tracker = _active_tracker()
-            return _build_memory_stats_dict(
-                tracker.memory_allocated(idx),
-                tracker.max_memory_allocated(idx),
-            )
+            return _active_tracker().memory_stats(idx)
 
+        def _tracked_memory_snapshot():
+            return _active_tracker().allocator_snapshot()
+
+        torch.cuda.empty_cache = _tracked_empty_cache
         torch.cuda.memory_allocated = _tracked_memory_allocated
         torch.cuda.max_memory_allocated = _tracked_max_memory_allocated
+        torch.cuda.memory_reserved = _tracked_memory_reserved
+        torch.cuda.max_memory_reserved = _tracked_max_memory_reserved
+        torch.cuda.memory_cached = _tracked_memory_reserved
+        torch.cuda.max_memory_cached = _tracked_max_memory_reserved
         torch.cuda.mem_get_info = _tracked_mem_get_info
         torch.cuda.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
+        torch.cuda.reset_max_memory_allocated = _tracked_reset_peak_memory_stats
+        torch.cuda.reset_max_memory_cached = _tracked_reset_peak_memory_stats
+        torch.cuda.reset_accumulated_memory_stats = (
+            _tracked_reset_accumulated_memory_stats
+        )
         torch.cuda.memory_stats = _tracked_memory_stats
+        torch.cuda.memory_snapshot = _tracked_memory_snapshot
 
         # Also patch torch.cuda.memory submodule
         try:
             import torch.cuda.memory as _memory_mod
+
+            _memory_mod.empty_cache = _tracked_empty_cache
             _memory_mod.memory_allocated = _tracked_memory_allocated
             _memory_mod.max_memory_allocated = _tracked_max_memory_allocated
+            _memory_mod.memory_reserved = _tracked_memory_reserved
+            _memory_mod.max_memory_reserved = _tracked_max_memory_reserved
+            _memory_mod.memory_cached = _tracked_memory_reserved
+            _memory_mod.max_memory_cached = _tracked_max_memory_reserved
             _memory_mod.mem_get_info = _tracked_mem_get_info
             _memory_mod.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
+            _memory_mod.reset_max_memory_allocated = _tracked_reset_peak_memory_stats
+            _memory_mod.reset_max_memory_cached = _tracked_reset_peak_memory_stats
+            _memory_mod.reset_accumulated_memory_stats = (
+                _tracked_reset_accumulated_memory_stats
+            )
             _memory_mod.memory_stats = _tracked_memory_stats
+            _memory_mod.memory_snapshot = _tracked_memory_snapshot
         except Exception:
             pass
 
@@ -2726,8 +3354,15 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         import torch.nn.functional as F
 
         _MULTI_TENSOR_OPS = [
-            "matmul", "mm", "bmm", "cat", "stack", "where",
-            "addmm", "addcmul", "addcdiv",
+            "matmul",
+            "mm",
+            "bmm",
+            "cat",
+            "stack",
+            "where",
+            "addmm",
+            "addcmul",
+            "addcdiv",
         ]
         for op_name in _MULTI_TENSOR_OPS:
             orig = getattr(torch_mod, op_name, None)
@@ -2740,17 +3375,31 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
             if orig is not None:
                 setattr(F, op_name, _wrap_multi_tensor_op(orig))
 
-        _FUNCTIONAL_OPS = ["linear", "conv1d", "conv2d", "conv3d",
-                           "embedding", "batch_norm", "layer_norm"]
+        _FUNCTIONAL_OPS = [
+            "linear",
+            "conv1d",
+            "conv2d",
+            "conv3d",
+            "embedding",
+            "batch_norm",
+            "layer_norm",
+        ]
         for op_name in _FUNCTIONAL_OPS:
             orig = getattr(F, op_name, None)
             if orig is not None:
                 setattr(F, op_name, _wrap_multi_tensor_op(orig))
 
         _BINARY_DUNDERS = [
-            "__add__", "__radd__", "__sub__", "__rsub__",
-            "__mul__", "__rmul__", "__truediv__", "__rtruediv__",
-            "__matmul__", "__rmatmul__",
+            "__add__",
+            "__radd__",
+            "__sub__",
+            "__rsub__",
+            "__mul__",
+            "__rmul__",
+            "__truediv__",
+            "__rtruediv__",
+            "__matmul__",
+            "__rmatmul__",
         ]
         for dunder in _BINARY_DUNDERS:
             orig = getattr(torch_mod.Tensor, dunder, None)
@@ -2764,6 +3413,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     torch.cuda.set_rng_state_all = _stub_set_rng_state_all
     try:
         import torch.cuda.random as _random
+
         _random.get_rng_state = _stub_get_rng_state
         _random.get_rng_state_all = _stub_get_rng_state_all
         _random.set_rng_state = _stub_set_rng_state
@@ -2787,7 +3437,9 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def patch(*, num_devices: int | None = None, device_name: str | None = None) -> PatchResult:
+def patch(
+    *, num_devices: int | None = None, device_name: str | None = None
+) -> PatchResult:
     """Apply monkey-patches to ``torch`` so CUDA code runs transparently on CPU.
 
     Safe to call multiple times. Later calls refresh device/profile state while
@@ -2806,10 +3458,17 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
         standalone CPU-backed fallback was activated.
     """
 
-    global _patched, _NUM_DEVICES, _DEVICE_NAME, _patch_result, _memory_tracker, _current_device
+    global \
+        _patched, \
+        _NUM_DEVICES, \
+        _DEVICE_NAME, \
+        _patch_result, \
+        _memory_tracker, \
+        _current_device
 
     import torch
     import torch.cuda
+    import torch.cuda.memory as _memory
     import torch.nn
 
     _refresh_runtime_profile_state(num_devices=num_devices, device_name=device_name)
@@ -2908,6 +3567,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
 
     # Override memory stubs to use tracker
     if _memory_tracker is not None:
+
         def _active_tracker():
             if _memory_tracker is None:
                 raise RuntimeError("FakeGPU memory tracking is not initialized")
@@ -2921,32 +3581,66 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
             idx = _normalize_device_index(device)
             return _active_tracker().max_memory_allocated(idx)
 
+        def _tracked_memory_reserved(device=None):
+            idx = _normalize_device_index(device)
+            return _active_tracker().memory_reserved(idx)
+
+        def _tracked_max_memory_reserved(device=None):
+            idx = _normalize_device_index(device)
+            return _active_tracker().max_memory_reserved(idx)
+
         def _tracked_mem_get_info(device=None):
             idx = _normalize_device_index(device)
             return _active_tracker().mem_get_info(idx)
+
+        def _tracked_empty_cache():
+            _active_tracker().empty_cache()
 
         def _tracked_reset_peak_memory_stats(device=None):
             idx = _normalize_device_index(device)
             _active_tracker().reset_peak(idx)
 
+        def _tracked_reset_accumulated_memory_stats(device=None):
+            idx = _normalize_device_index(device)
+            _active_tracker().reset_accumulated(idx)
+
         def _tracked_memory_stats(device=None):
             idx = _normalize_device_index(device)
-            tracker = _active_tracker()
-            return _build_memory_stats_dict(
-                tracker.memory_allocated(idx),
-                tracker.max_memory_allocated(idx),
-            )
+            return _active_tracker().memory_stats(idx)
 
+        def _tracked_memory_snapshot():
+            return _active_tracker().allocator_snapshot()
+
+        torch.cuda.empty_cache = _tracked_empty_cache
         torch.cuda.memory_allocated = _tracked_memory_allocated
         torch.cuda.max_memory_allocated = _tracked_max_memory_allocated
+        torch.cuda.memory_reserved = _tracked_memory_reserved
+        torch.cuda.max_memory_reserved = _tracked_max_memory_reserved
+        torch.cuda.memory_cached = _tracked_memory_reserved
+        torch.cuda.max_memory_cached = _tracked_max_memory_reserved
         torch.cuda.mem_get_info = _tracked_mem_get_info
         torch.cuda.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
+        torch.cuda.reset_max_memory_allocated = _tracked_reset_peak_memory_stats
+        torch.cuda.reset_max_memory_cached = _tracked_reset_peak_memory_stats
+        torch.cuda.reset_accumulated_memory_stats = (
+            _tracked_reset_accumulated_memory_stats
+        )
         torch.cuda.memory_stats = _tracked_memory_stats
+        torch.cuda.memory_snapshot = _tracked_memory_snapshot
+        _memory.empty_cache = _tracked_empty_cache
         _memory.memory_stats = _tracked_memory_stats
         _memory.memory_allocated = _tracked_memory_allocated
         _memory.max_memory_allocated = _tracked_max_memory_allocated
+        _memory.memory_reserved = _tracked_memory_reserved
+        _memory.max_memory_reserved = _tracked_max_memory_reserved
+        _memory.memory_cached = _tracked_memory_reserved
+        _memory.max_memory_cached = _tracked_max_memory_reserved
         _memory.mem_get_info = _tracked_mem_get_info
         _memory.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
+        _memory.reset_max_memory_allocated = _tracked_reset_peak_memory_stats
+        _memory.reset_max_memory_cached = _tracked_reset_peak_memory_stats
+        _memory.reset_accumulated_memory_stats = _tracked_reset_accumulated_memory_stats
+        _memory.memory_snapshot = _tracked_memory_snapshot
 
     # Internal helpers PyTorch relies on
     torch.cuda._is_compiled = lambda: True
@@ -3037,11 +3731,14 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     # The modules are already imported by the time patch() runs, so we must
     # patch the local bindings directly.
     import torch.cuda.graphs as _graphs
-    if hasattr(_graphs, "_cuda_isCurrentStreamCapturing"):
-        _graphs._cuda_isCurrentStreamCapturing = _c_stubs["_cuda_isCurrentStreamCapturing"]
 
-    import torch.cuda.memory as _memory
+    if hasattr(_graphs, "_cuda_isCurrentStreamCapturing"):
+        _graphs._cuda_isCurrentStreamCapturing = _c_stubs[
+            "_cuda_isCurrentStreamCapturing"
+        ]
+
     import torch.cuda.random as _random
+
     _mem_stubs = {
         "_cuda_CUDAAllocator": lambda: None,
         "_cuda_beginAllocateCurrentThreadToPool": lambda *a: None,
@@ -3067,13 +3764,26 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
 
     # Fake CUDAGraph class if missing
     if not hasattr(torch._C, "_CUDAGraph"):
+
         class _FakeCUDAGraph:
-            def __init__(self): pass
-            def capture_begin(self, *a, **kw): pass
-            def capture_end(self): pass
-            def replay(self): pass
-            def reset(self): pass
-            def pool(self): return 0
+            def __init__(self):
+                pass
+
+            def capture_begin(self, *a, **kw):
+                pass
+
+            def capture_end(self):
+                pass
+
+            def replay(self):
+                pass
+
+            def reset(self):
+                pass
+
+            def pool(self):
+                return 0
+
         torch._C._CUDAGraph = _FakeCUDAGraph  # type: ignore[attr-defined]
 
     if not hasattr(torch._C, "_graph_pool_handle"):
@@ -3089,7 +3799,9 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     torch.cuda.stream = _FakeStreamCtx  # type: ignore[misc]
     torch.cuda.current_stream = lambda device=None: _FakeStream(device=device)
     torch.cuda.default_stream = lambda device=None: _FakeStream(device=device)
-    torch.cuda.set_stream = lambda stream: _stub_set_device(getattr(stream, "device_index", 0))
+    torch.cuda.set_stream = lambda stream: _stub_set_device(
+        getattr(stream, "device_index", 0)
+    )
 
     # ---- Tensor.to / Tensor.cuda ----
     global _orig_tensor_to, _orig_tensor_cuda
@@ -3142,8 +3854,15 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
 
         # Multi-input torch functions
         _MULTI_TENSOR_OPS = [
-            "matmul", "mm", "bmm", "cat", "stack", "where",
-            "addmm", "addcmul", "addcdiv",
+            "matmul",
+            "mm",
+            "bmm",
+            "cat",
+            "stack",
+            "where",
+            "addmm",
+            "addcmul",
+            "addcdiv",
         ]
         for op_name in _MULTI_TENSOR_OPS:
             orig = getattr(torch, op_name, None)
@@ -3158,8 +3877,15 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
                 setattr(F, op_name, _wrap_multi_tensor_op(orig))
 
         # Also wrap F.linear for model forward cross-device checks
-        _FUNCTIONAL_OPS = ["linear", "conv1d", "conv2d", "conv3d",
-                           "embedding", "batch_norm", "layer_norm"]
+        _FUNCTIONAL_OPS = [
+            "linear",
+            "conv1d",
+            "conv2d",
+            "conv3d",
+            "embedding",
+            "batch_norm",
+            "layer_norm",
+        ]
         for op_name in _FUNCTIONAL_OPS:
             orig = getattr(F, op_name, None)
             if orig is not None:
@@ -3167,9 +3893,16 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
 
         # Tensor binary dunder methods
         _BINARY_DUNDERS = [
-            "__add__", "__radd__", "__sub__", "__rsub__",
-            "__mul__", "__rmul__", "__truediv__", "__rtruediv__",
-            "__matmul__", "__rmatmul__",
+            "__add__",
+            "__radd__",
+            "__sub__",
+            "__rsub__",
+            "__mul__",
+            "__rmul__",
+            "__truediv__",
+            "__rtruediv__",
+            "__matmul__",
+            "__rmatmul__",
         ]
         for dunder in _BINARY_DUNDERS:
             orig = getattr(torch.Tensor, dunder, None)
@@ -3240,6 +3973,7 @@ def patch(*, num_devices: int | None = None, device_name: str | None = None) -> 
     # ---- NCCL stubs ----
     try:
         import torch.distributed as dist
+
         if hasattr(dist, "is_nccl_available"):
             dist.is_nccl_available = lambda: True
     except Exception:

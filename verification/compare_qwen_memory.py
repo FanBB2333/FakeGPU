@@ -33,13 +33,20 @@ def compare_reports(real: dict[str, Any], fake: dict[str, Any]) -> dict[str, Any
     nvml_process = int((real_inference.get("nvml") or {}).get("process_memory") or 0)
     if nvml_process <= 0:
         raise ValueError("real report does not contain NVML process memory")
-    real_inference_current = int(real_inference["allocated_bytes"])
-    runtime_overhead = max(0, nvml_process - real_inference_current)
-    simulated_process = int(fake_inference["allocated_bytes"]) + runtime_overhead
+    real_inference_reserved = int(
+        real_inference.get("reserved_bytes", real_inference["allocated_bytes"])
+    )
+    fake_inference_reserved = int(
+        fake_inference.get("reserved_bytes", fake_inference["allocated_bytes"])
+    )
+    runtime_overhead = max(0, nvml_process - real_inference_reserved)
+    simulated_process = fake_inference_reserved + runtime_overhead
 
     comparisons = {
         "model_load_allocator": _comparison(fake_load, real_load),
-        "inference_allocator_peak": _comparison(fake_inference_peak, real_inference_peak),
+        "inference_allocator_peak": _comparison(
+            fake_inference_peak, real_inference_peak
+        ),
         "static_inference_peak": _comparison(static_peak, real_inference_peak),
         "virtual_smi_process": _comparison(simulated_process, nvml_process),
         "fakecuda_flops": _comparison(fake_flops, real_flops),
@@ -56,12 +63,28 @@ def compare_reports(real: dict[str, Any], fake: dict[str, Any]) -> dict[str, Any
             == int(fake["parameters"]["parameter_bytes"])
             == int(fake["static_estimate"]["memory"]["parameter_bytes"])
         ),
-        "generated_tokens_match": real.get("generated_tokens") == fake.get("generated_tokens"),
-        "model_load_error_below_1_percent": comparisons["model_load_allocator"]["absolute_error_percent"] < 1.0,
-        "inference_peak_error_below_1_percent": comparisons["inference_allocator_peak"]["absolute_error_percent"] < 1.0,
-        "static_peak_error_below_1_percent": comparisons["static_inference_peak"]["absolute_error_percent"] < 1.0,
-        "virtual_smi_error_below_1_percent": comparisons["virtual_smi_process"]["absolute_error_percent"] < 1.0,
-        "static_flop_error_below_0_01_percent": comparisons["static_flops"]["absolute_error_percent"] < 0.01,
+        "generated_tokens_match": real.get("generated_tokens")
+        == fake.get("generated_tokens"),
+        "model_load_error_below_1_percent": comparisons["model_load_allocator"][
+            "absolute_error_percent"
+        ]
+        < 1.0,
+        "inference_peak_error_below_1_percent": comparisons["inference_allocator_peak"][
+            "absolute_error_percent"
+        ]
+        < 1.0,
+        "static_peak_error_below_1_percent": comparisons["static_inference_peak"][
+            "absolute_error_percent"
+        ]
+        < 1.0,
+        "virtual_smi_error_below_1_percent": comparisons["virtual_smi_process"][
+            "absolute_error_percent"
+        ]
+        < 1.0,
+        "static_flop_error_below_0_01_percent": comparisons["static_flops"][
+            "absolute_error_percent"
+        ]
+        < 0.01,
         "fakecuda_flops_match_real": fake_flops == real_flops,
     }
     return {
@@ -77,19 +100,21 @@ def compare_reports(real: dict[str, Any], fake: dict[str, Any]) -> dict[str, Any
         },
         "calibration": {
             "nvml_runtime_overhead_bytes": runtime_overhead,
-            "method": "real_nvml_process_minus_real_allocator_current_after_inference",
+            "method": "real_nvml_process_minus_real_allocator_reserved_after_inference",
         },
         "comparisons": comparisons,
         "checks": checks,
         "real": {
             "model_load_allocator_bytes": real_load,
             "inference_allocator_peak_bytes": real_inference_peak,
+            "inference_allocator_reserved_bytes": real_inference_reserved,
             "inference_nvml_process_bytes": nvml_process,
             "matrix_flops": real_flops,
         },
         "fakecuda": {
             "model_load_tracked_bytes": fake_load,
             "inference_tracked_peak_bytes": fake_inference_peak,
+            "inference_reserved_bytes": fake_inference_reserved,
             "virtual_smi_process_bytes": simulated_process,
             "matrix_flops": fake_flops,
         },
@@ -163,8 +188,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     output = Path(args.output).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    markdown = Path(args.markdown).expanduser().resolve() if args.markdown else output.with_suffix(".md")
+    output.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    markdown = (
+        Path(args.markdown).expanduser().resolve()
+        if args.markdown
+        else output.with_suffix(".md")
+    )
     markdown.write_text(render_markdown(report), encoding="utf-8")
     print(f"Qwen memory comparison: {report['status']}")
     print(f"JSON: {output}")
@@ -179,7 +210,9 @@ def _comparison(predicted: int, observed: int) -> dict[str, int | float]:
         "observed": int(observed),
         "signed_error": signed,
         "absolute_error_bytes": abs(signed),
-        "absolute_error_percent": round(100.0 * abs(signed) / observed, 9) if observed else 0.0,
+        "absolute_error_percent": round(100.0 * abs(signed) / observed, 9)
+        if observed
+        else 0.0,
     }
 
 
