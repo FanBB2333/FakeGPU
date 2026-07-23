@@ -68,7 +68,17 @@ python3 -m fakegpu nvidia-smi --state /tmp/fakegpu-qwen.json
 ```
 
 多进程场景可以设置 `FAKEGPU_SMI_STATE_DIR=/tmp/fakegpu-smi`，每个进程会
-写入独立状态文件，查看器会按逻辑 GPU 汇总。
+写入独立状态文件，查看器会按逻辑 GPU 汇总，并显示主机、profile、stage、
+tracking confidence，以及模拟值和原始 tracked memory 的当前值与峰值。
+下面的命令每秒刷新一次，共采样十次：
+
+```bash
+python3 -m fakegpu nvidia-smi \
+  --state-dir /tmp/fakegpu-smi --loop 1 --count 10
+```
+
+查看器会在每次刷新时重新扫描状态目录，因此启动后出现的新进程也能被发现。
+循环模式配合 `--json` 时，每行输出一个 JSON 对象。
 
 ## 与真实 CUDA 对比
 

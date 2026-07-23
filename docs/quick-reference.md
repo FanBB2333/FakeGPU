@@ -87,7 +87,13 @@ Publish FakeCUDA process memory and view it from another terminal:
 ```bash
 FAKEGPU_SMI_STATE_DIR=/tmp/fakegpu-smi python3 inference.py
 fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi
+fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi --loop 1 --count 10
 ```
+
+The viewer shows host, logical GPU, profile, process, stage, tracking
+confidence, simulated current/peak memory, and raw tracked current/peak memory.
+`--loop` rescans the directory before every sample. Omit `--count` to continue
+until interrupted; combine `--loop` with `--json` for NDJSON output.
 
 See [LLM Inference Estimation](llm-inference-estimation.md) for CPU execution,
 real-CUDA calibration, Qwen3-8B results, and scope limits.

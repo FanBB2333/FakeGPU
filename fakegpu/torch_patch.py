@@ -671,7 +671,11 @@ _smi_publisher: Any = None
 def _smi_memory_snapshot() -> dict[str, Any]:
     tracker = _memory_tracker
     if tracker is None:
-        return {"tracking_confidence": "C0_incomplete", "devices": []}
+        return {
+            "tracking_confidence": "C0_incomplete",
+            "stage": os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown",
+            "devices": [],
+        }
     devices = []
     for index, profile in enumerate(_DEVICE_PROFILES):
         if index >= len(tracker._total):
@@ -688,6 +692,7 @@ def _smi_memory_snapshot() -> dict[str, Any]:
         )
     return {
         "tracking_confidence": "C2_torch_tensor_lifetime",
+        "stage": os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown",
         "devices": devices,
     }
 

@@ -87,7 +87,13 @@ fakegpu estimate-llm \
 ```bash
 FAKEGPU_SMI_STATE_DIR=/tmp/fakegpu-smi python3 inference.py
 fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi
+fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi --loop 1 --count 10
 ```
+
+查看器会显示主机、逻辑 GPU、profile、进程、stage、tracking confidence，
+并分别列出模拟值和原始 tracked memory 的当前值与峰值。`--loop` 每次刷新
+都会重新扫描状态目录；省略 `--count` 时会持续刷新，配合 `--json` 时输出
+NDJSON。
 
 CPU 执行、真实 CUDA 校准、Qwen3-8B 实测数据和适用范围参见
 [LLM 推理显存与计算量估算](llm-inference-estimation.md)。
