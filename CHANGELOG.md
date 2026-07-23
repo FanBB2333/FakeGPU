@@ -14,6 +14,7 @@
 - A Hugging Face Trainer + DeepSpeed validator for self-contained tiny models and local Qwen LoRA weights.
 - DeepSpeed CPU optimizer and ZeRO-3 parameter-offload axes with explicit state-device validation.
 - Optional physical multi-host DeepSpeed ZeRO-2/3 cases with per-host package preflight and combined communication reports.
+- A parameterized deterministic DataLoader replay matrix covering shuffled `DistributedSampler` epochs, worker counts, prefetch depths, batch sizes, replacement PIDs, and PyTorch/Python/NumPy RNG streams locally or across SSH hosts.
 
 ### Fixed
 
@@ -26,10 +27,13 @@
 - Registered only the legacy DeepSpeed checkpoint types identified by PyTorch's safe loader, preserving `weights_only` protection under DeepSpeed 0.15.3/PyTorch 2.8.
 - Used short temporary Unix coordinator sockets in every DeepSpeed runner, avoiding platform path-length failures for descriptive report directories.
 - Rejected physical ZeRO-3 launches when DeepSpeed versions differ, replacing an in-training collective-order failure with a package preflight diagnostic.
+- Drained the remaining DataLoader epoch before persistent-worker shutdown, avoiding active-prefetch teardown failures on PyTorch 2.8 without changing the captured replay prefix.
+- Emitted schema-valid JSON and Markdown cluster reports for zero-operation coordinator sessions, including configured zero-traffic node pairs.
 
 ### Validation
 
-- Full local suite: 303 passed and 1 skipped.
+- Full local suite: 367 passed and 1 skipped.
+- The five-scenario DataLoader replay matrix matched sample-order and PyTorch/Python/NumPy RNG digests across macOS PyTorch 2.9.1, RTX PRO 5000 Linux PyTorch 2.8.0, and RTX 3090 Ti WSL2 PyTorch 2.12.1. Two physical repeats each started 52 fresh workers per host with no cross-run PID overlap.
 - Qwen3.5-0.8B BF16 FULL_SHARD sequence-16/128 experiments passed on RTX PRO 5000 Blackwell and RTX 3090 Ti Ampere. Overall per-rank errors were 0.730% and 0.633%; both stacks reproduced allocator peaks, shard sizes, optimizer state, and 8,011,593,488 node-pair bytes exactly.
 - Qwen3.5-0.8B FSDP2 LoRA sequence-16/64/128 experiments passed the 3% per-phase limit with two or four ranks on both GPUs. Every phase was within 1.974%; sequence-128 overall errors were 0.071%-0.161%.
 - DeepSpeed ZeRO 0–3 FP32/BF16 numerics passed on RTX PRO 5000 Blackwell with DeepSpeed 0.15.3 and RTX 3090 Ti Ampere with DeepSpeed 0.19.2; four-rank BF16 ZeRO-3 also passed on the PRO 5000.

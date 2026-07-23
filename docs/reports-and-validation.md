@@ -18,7 +18,7 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `verification/summarize_qwen_sft_matrix.py ...` | full/LoRA/QLoRA, checkpointing, accumulation, and sequence-length SFT matrix summary |
 | `verification/run_qwen_fsdp_sft_memory.py ...` | two-rank Hybrid FSDP Qwen SFT parameter/gradient/AdamW sharding, phase peaks, static projection, and collective traffic |
 | `verification/run_qwen_fsdp2_lora_sft_memory.py ...` | two- or four-rank mixed-BF16/FP32 FSDP2 LoRA DTensor shards, phase peaks, byte-packed all-gathers, FP32 reduce-scatters, and static projection |
-| `python3 verification/test_coordinator_smoke.py` | coordinator startup, request/response, and clean shutdown |
+| `python3 verification/test_coordinator_smoke.py` | coordinator startup, request/response, clean shutdown, and zero-operation JSON/Markdown reports |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce semantics |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather semantics |
 | `python3 verification/test_group_semantics.py` | grouped collective submission semantics |
@@ -26,12 +26,13 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `./ftest elastic_ddp` | active worker exit, full `torchrun` worker-group replacement, restart generation synchronization, resumed DDP numerics, SGD checkpoint recovery, and rank-remapped accumulated AdamW/multi-worker DataLoader recovery over Gloo |
 | `./ftest elastic_ddp_checkpoint` | focused atomic checkpoint, completed-step, model parameter, SGD momentum, and continued-update recovery after worker replacement |
 | `./ftest elastic_ddp_training_state` | focused AdamW moments, StepLR, replicated rank-state bundle, rank-local RNG, `DistributedSampler` cursor, two-worker DataLoader reconstruction, staged-batch/worker-RNG replay, optimizer-step, pending gradient, and continued accumulation recovery |
+| `./ftest dataloader_replay` | parameterized shuffled persistent-worker reconstruction across epochs, worker/prefetch/batch settings, and PyTorch/Python/NumPy RNG sources |
 | `./ftest distributed_resilience` | deterministic collective failure, real worker exit, elastic DDP restart/checkpoint/training-state resume, collective-timeout inference, async-error propagation, communicator shrink/recovery, TCP mismatch, missing-peer timeout, and bounded report retention |
 | `./test/run_hybrid_multinode.sh 2` | maintained multi-process validation with hybrid compute + simulated communication |
 | `python3 verification/run_hybrid_ddp_numerics.py --variant all` | real-CUDA DDP basic, `no_sync`, unused-parameter, static-graph, bucket-view, optimizer, and cross-rank parameter checks |
 | `python3 verification/run_hybrid_fsdp_numerics.py` | real-CUDA FSDP sharding, reduce-scatter gradients, optimizer result, full-parameter reconstruction, and state-dict restoration |
 | `python3 verification/run_hybrid_fsdp2_numerics.py ...` | real-CUDA FSDP2/DeviceMesh/DTensor numerics with two/four ranks, FP32/FP16/BF16 parameters, and FP32 or parameter-dtype gradient reduction |
-| `python3 verification/run_physical_multihost.py ...` | repeatable two-host Hybrid DDP/FSDP/FSDP2, fixed-size elastic restart/checkpoint/training-state recovery, mixed precision, injected failure and worker-exit recovery, mismatch, timeout, Git-revision, and report checks over SSH |
+| `python3 verification/run_physical_multihost.py ...` | repeatable two-host Hybrid DDP/FSDP/FSDP2, fixed-size elastic recovery, optional DataLoader replay matrix, mixed precision, failure recovery, Git-revision, and report checks over SSH |
 | `./ftest llm` | optional LLM smoke test when local model files are available |
 | `python test/run_error_simulation_suite.py` | unified Python error simulation suite: cross-device, OOM, invalid device, dtype, checkpoint, and gradient |
 | `python test/test_error_cross_device.py` | cross-device tensor operation guards |
@@ -80,6 +81,9 @@ When distributed mode is enabled and `FAKEGPU_CLUSTER_REPORT_PATH` is set,
 FakeGPU writes the cluster data to JSON and automatically creates a sibling
 Markdown project report. Set `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` to choose
 a different Markdown path, or set it to `off` to disable the companion.
+An orderly zero-operation shutdown still produces both files: configured
+nodes and node pairs remain visible while communicator, traffic, and timeline
+counters stay at zero.
 The maintained DDP and Hybrid validation scripts also embed this complete
 node-pair table directly in their final validation reports.
 
@@ -125,6 +129,34 @@ to 4096 latest entries and can be changed with
 `FAKEGPU_CLUSTER_REPORT_MAX_OPERATIONS`.
 
 This report is useful for validating control flow, topology modeling, and broad communication-volume trends.
+
+## DataLoader replay report
+
+`./ftest dataloader_replay` writes
+`build/dataloader_replay_matrix.json`. The maintained matrix contains five
+shuffle/epoch/worker/prefetch/batch scenarios, 12 rank cases, and 52 initial or
+replacement worker processes. Its `fakegpu.dataloader_replay_matrix.v1`
+payload records:
+
+- exact `DistributedSampler` partitions and epoch-dependent sample order
+- committed and application-staged batch prefixes
+- worker IDs, seeds, and PyTorch/Python/NumPy random values
+- initial and reconstructed worker PIDs
+- diagnostic prefetch counters and the number of cleanup batches drained
+- stable matrix, sample-order, and RNG SHA-256 digests
+
+Use repeatable `--scenario` arguments on
+`verification/dataloader_replay_matrix.py` to add combinations without editing
+the test. The physical controller exposes the maintained matrix through
+`--case dataloader-replay --case-timeout 600`; this case is intentionally not
+in the default physical set because each runtime creates 52 workers.
+
+Cross-runtime validation requires all three digests to match. The maintained
+2026-07-23 result matched across macOS PyTorch 2.9.1, Linux PyTorch 2.8.0 on an
+RTX PRO 5000 host, and WSL2 PyTorch 2.12.1 on an RTX 3090 Ti host. The test is
+CPU DataLoader coverage and does not claim GPU-kernel equivalence. For safe
+cleanup on PyTorch 2.8, it drains each remaining epoch before shutting down
+workers; live multiprocessing queues are not serialized.
 
 ## Preflight report
 
@@ -197,6 +229,7 @@ Treat the following as the most stable paths:
 - `python`
 - single-host `simulate + simulate`
 - local chosen-port TCP collective and bandwidth validation
+- parameterized multi-worker DataLoader reconstruction
 - direct NCCL verification plus simulate-mode DDP validation (`test_coordinator_smoke.py`, `test_allreduce_correctness.py`, `test_allgather_correctness.py`, `test_group_semantics.py`, `test_fault_injection_recovery.py`, `run_multinode_sim.sh`, `run_ddp_multinode.sh`)
 
 Treat the following as more environment-sensitive or extended coverage:
@@ -218,14 +251,15 @@ Treat the following as more environment-sensitive or extended coverage:
 8. Run `python3 verification/test_group_semantics.py`.
 9. Run `./ftest tcp_bandwidth`.
 10. Run `./ftest distributed_resilience`.
-11. Run `./test/run_multinode_sim.sh 2`.
-12. Run `./test/run_multinode_sim.sh 4`.
-13. Run `./test/run_ddp_multinode.sh 4`.
-14. Move to `./test/run_hybrid_multinode.sh 2`.
-15. On a real CUDA host, run `python3 verification/run_hybrid_ddp_numerics.py --variant all`.
-16. On a real CUDA host, run `python3 verification/run_hybrid_fsdp_numerics.py`.
-17. On a real CUDA host, run the FSDP2 matrix with `python3 verification/run_hybrid_fsdp2_numerics.py ...`.
-18. Run `python3 verification/run_qwen_fsdp_sft_memory.py ...` with a matching static Qwen SFT report.
-19. Run `python3 verification/run_qwen_fsdp2_lora_sft_memory.py ...` with a matching LoRA static report.
-20. With two synchronized GPU hosts, run `python3 verification/run_physical_multihost.py ...`.
-21. Run `python test/run_error_simulation_suite.py` for error simulation coverage.
+11. Run `./ftest dataloader_replay` when DataLoader recovery matters.
+12. Run `./test/run_multinode_sim.sh 2`.
+13. Run `./test/run_multinode_sim.sh 4`.
+14. Run `./test/run_ddp_multinode.sh 4`.
+15. Move to `./test/run_hybrid_multinode.sh 2`.
+16. On a real CUDA host, run `python3 verification/run_hybrid_ddp_numerics.py --variant all`.
+17. On a real CUDA host, run `python3 verification/run_hybrid_fsdp_numerics.py`.
+18. On a real CUDA host, run the FSDP2 matrix with `python3 verification/run_hybrid_fsdp2_numerics.py ...`.
+19. Run `python3 verification/run_qwen_fsdp_sft_memory.py ...` with a matching static Qwen SFT report.
+20. Run `python3 verification/run_qwen_fsdp2_lora_sft_memory.py ...` with a matching LoRA static report.
+21. With two synchronized GPU hosts, run `python3 verification/run_physical_multihost.py ...`.
+22. Run `python test/run_error_simulation_suite.py` for error simulation coverage.

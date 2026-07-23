@@ -241,6 +241,51 @@ The default cases are:
 - a real rank-2 worker exit after communicator initialization, collective-timeout inference on ranks 0/1/3, explicit shrink, and post-recovery All-Reduce
 - a missing-peer communicator timeout from the second physical host
 
+The standalone parameterized DataLoader replay matrix is intentionally not in
+that default set because it creates 52 worker processes per runtime. Run the
+maintained matrix locally with:
+
+```bash
+./ftest dataloader_replay
+```
+
+Its five maintained scenarios are:
+
+| Scenario | World size | Workers/rank | Prefetch | Epoch | Batch | Committed + staged batches |
+|---|---:|---:|---:|---:|---:|---:|
+| `single-worker-prefetch1` | 2 | 1 | 1 | 0 | 1 | 3 + 2 |
+| `two-worker-epoch0` | 2 | 2 | 2 | 0 | 2 | 2 + 2 |
+| `two-worker-epoch3` | 2 | 2 | 2 | 3 | 2 | 2 + 2 |
+| `deep-prefetch-world4` | 4 | 2 | 4 | 5 | 1 | 5 + 3 |
+| `four-worker-batched` | 2 | 4 | 2 | 7 | 3 | 2 + 2 |
+
+Add repeatable scenarios without changing project code:
+
+```bash
+python3 verification/dataloader_replay_matrix.py \
+  --scenario 'name=custom;world-size=4;workers=2;prefetch-factor=3;epoch=2;batch-size=2;committed-batches=2;staged-batches=2' \
+  --output build/dataloader-custom.json
+```
+
+The matrix uses a shuffled `DistributedSampler`, persistent spawn workers,
+and random values from PyTorch, Python, and NumPy. It verifies exact sampler
+partitions, epoch-dependent order, worker seed assignment, committed/staged
+prefix reconstruction, and replacement worker PIDs. For PyTorch 2.8
+compatibility, it captures the prefix and prefetch diagnostics, drains the
+remaining epoch, and then closes the worker group. It does not serialize live
+queues, in-flight samples, iterable datasets, or external side effects.
+
+Select the matrix explicitly for two synchronized hosts:
+
+```bash
+python3 verification/run_physical_multihost.py \
+  --node 'name=blackwell;ssh=gpu-a;repo=/home/user/repos/fakeGPU;python=/opt/fakegpu/bin/python;shell=posix' \
+  --node 'name=ampere-wsl;ssh=user@gpu-b;repo=/home/user/repos/fakeGPU;python=/opt/torch/bin/python;shell=wsl' \
+  --coordinator-host 100.x.y.z \
+  --case dataloader-replay \
+  --case-timeout 600
+```
+
 Run only the recovery case with `--case fault-shrink`. The controller starts
 four logical ranks across the two node specifications: ranks 0 and 2 on the
 first host, and ranks 1 and 3 on the second. Rank 2 is excluded, so the child
@@ -406,14 +451,41 @@ The combined basic-restart, SGD-checkpoint, and multi-worker training-state run
 created six communicators and reported 26,680 node-pair bytes with a
 25,216-byte peak.
 
+On 2026-07-23, the standalone matrix also passed locally and in two independent
+physical-controller runs at commit `5476f1e`:
+
+| Runtime | Host context | Python | PyTorch / CUDA | NumPy |
+|---|---|---|---|---|
+| macOS | CPU-only controller | 3.11.9 | 2.9.1 / none | 2.2.6 |
+| Linux | RTX PRO 5000, compute capability 12.0 | 3.10.15 | 2.8.0+cu128 / 12.8 | 1.26.4 |
+| WSL2 | RTX 3090 Ti, compute capability 8.6 | 3.13.14 | 2.12.1+cu130 / 13.0 | 2.4.6 |
+
+All three runtimes produced the same matrix digest
+`ada93f391ec5396ea7531b50935c141e4e31110e5d67d1eea5e7d5eee692549f`,
+sample-order digest
+`1aa22d9137e3c8d76daa4950b62908f9ea4b5934520703d76547ce9d66ff45f9`,
+and RNG digest
+`5d40e1f97355fae8d319bc74a22946052969ce54dc425e76ab3d64d4b4abbba8`.
+Each runtime covered 5 scenarios, 12 rank cases, and 52 worker processes. The
+two physical repeats had no worker PID overlap. Because this matrix performs
+CPU DataLoader work, it validates cross-version process/RNG reconstruction on
+hosts attached to different GPU architectures; it does not by itself exercise
+GPU kernels.
+
+The DataLoader-only physical session has no communication operations. The
+coordinator still emits valid JSON and Markdown reports with the configured
+four-rank/two-node topology, every collective and timeline counter at zero,
+and the RTX PRO 5000 ↔ RTX 3090 Ti node pair present with zero bytes.
+
 Before launch, the controller checks the tracked Git state, exact commit,
 Python/PyTorch/CUDA metadata, and required native artifacts on both hosts.
 It writes the combined result under
 `build/physical_multihost_validation/<session>/`, including the per-rank
 results, complete cluster JSON/Markdown reports, node-pair totals, and failure
-observations. Run `./ftest elastic_ddp` for all three local elastic checks,
+observations. Use `./ftest elastic_ddp` for all three local elastic checks,
 `./ftest elastic_ddp_checkpoint` for SGD checkpoint recovery alone,
-`./ftest elastic_ddp_training_state` for accumulated AdamW state recovery, or
+`./ftest elastic_ddp_training_state` for accumulated AdamW state recovery,
+`./ftest dataloader_replay` for the standalone reconstruction matrix, and
 `./ftest distributed_resilience` for the complete maintained failure suite.
 
 ## Minimal cluster config

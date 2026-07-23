@@ -18,7 +18,7 @@
 | `verification/summarize_qwen_sft_matrix.py ...` | 汇总 full、LoRA、QLoRA、checkpointing、accumulation 和不同序列长度的 SFT 矩阵 |
 | `verification/run_qwen_fsdp_sft_memory.py ...` | 双 rank Hybrid FSDP Qwen SFT 的参数、梯度、AdamW 分片、阶段峰值、静态投影和 collective 通信量 |
 | `verification/run_qwen_fsdp2_lora_sft_memory.py ...` | 双/四 rank mixed-BF16/FP32 FSDP2 LoRA 的 DTensor shard、阶段峰值、字节打包 all-gather、FP32 reduce-scatter 与静态投影 |
-| `python3 verification/test_coordinator_smoke.py` | coordinator 启停、请求/响应与正常关闭 |
+| `python3 verification/test_coordinator_smoke.py` | coordinator 启停、请求/响应、正常关闭，以及零操作 JSON/Markdown 报告 |
 | `python3 test/test_allreduce_correctness.py` | direct all-reduce 语义正确性 |
 | `python3 verification/test_allgather_correctness.py` | direct all-gather 语义正确性 |
 | `python3 verification/test_group_semantics.py` | grouped collective 提交语义 |
@@ -26,12 +26,13 @@
 | `./ftest elastic_ddp` | 活跃 worker 退出、完整 `torchrun` worker group 替换、restart 代次同步、DDP 数值恢复、SGD checkpoint 恢复以及 rank 重映射的 AdamW accumulation/多 worker DataLoader 恢复 |
 | `./ftest elastic_ddp_checkpoint` | 集中验证原子 checkpoint、训练步数、模型参数、SGD momentum 与 worker 替换后的继续更新 |
 | `./ftest elastic_ddp_training_state` | 集中验证 AdamW 一阶/二阶矩、StepLR、完整 rank-state bundle、rank-local RNG、`DistributedSampler` cursor、双 worker DataLoader 重建、暂存批次和 worker RNG 重放、optimizer step、待处理梯度与 accumulation 恢复 |
+| `./ftest dataloader_replay` | 参数化验证 shuffle 常驻 worker 在不同 epoch、worker/prefetch/batch 设置及 PyTorch/Python/NumPy RNG 下的重建 |
 | `./ftest distributed_resilience` | 确定性 collective 故障、真实 worker 退出、elastic DDP 重启/checkpoint/训练状态恢复、collective 超时推断、async error 传播、communicator shrink/恢复、TCP 参数不一致、缺少 rank 超时和报告时间线容量限制 |
 | `./test/run_hybrid_multinode.sh 2` | hybrid 计算 + simulate 通信的维护中多进程验证 |
 | `python3 verification/run_hybrid_ddp_numerics.py --variant all` | 真实 CUDA DDP 基础路径、`no_sync`、未使用参数、静态图、bucket view、optimizer 与跨 rank 参数一致性 |
 | `python3 verification/run_hybrid_fsdp_numerics.py` | 真实 CUDA FSDP 参数分片、reduce-scatter 梯度、optimizer 结果、完整参数重建与 state dict 恢复 |
 | `python3 verification/run_hybrid_fsdp2_numerics.py ...` | 真实 CUDA FSDP2/DeviceMesh/DTensor 数值验证，覆盖双/四 rank、FP32/FP16/BF16 参数，以及 FP32 或参数 dtype 梯度归约 |
-| `python3 verification/run_physical_multihost.py ...` | 通过 SSH 重复执行两主机 Hybrid DDP/FSDP/FSDP2、固定 world size 的 elastic 重启/checkpoint/训练状态恢复、混合精度、注入故障与 worker 退出恢复、参数不一致、超时、Git 版本和报告检查 |
+| `python3 verification/run_physical_multihost.py ...` | 通过 SSH 重复执行两主机 Hybrid DDP/FSDP/FSDP2、固定 world size 的 elastic 恢复、可选 DataLoader 重放矩阵、混合精度、故障恢复、Git 版本和报告检查 |
 | `./ftest llm` | 在本地模型文件可用时运行的可选 LLM smoke test |
 | `python test/run_error_simulation_suite.py` | 统一 Python 错误模拟套件：跨设备、OOM、无效设备、dtype、checkpoint 和梯度 |
 | `python test/test_error_cross_device.py` | 跨设备张量操作守卫 |
@@ -80,6 +81,8 @@
 JSON 数据，并自动在同一目录生成 Markdown 项目报告。可以通过
 `FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH` 指定 Markdown 路径，也可以将其
 设为 `off`，只保留 JSON。
+会话正常结束但没有通信操作时，这两个文件仍会生成：配置中的节点与节点对
+保持可见，communicator、流量和 timeline 计数均为 0。
 维护中的 DDP 和 Hybrid 验证脚本还会把这张完整节点对表直接写入最终
 验证报告。
 
@@ -120,6 +123,31 @@ Markdown 报告中的节点对表格如下：
 `FAKEGPU_CLUSTER_REPORT_MAX_OPERATIONS` 调整。
 
 这份报告很适合用来验证控制流、拓扑模型，以及通信量的大致趋势。
+
+## DataLoader 重放报告
+
+`./ftest dataloader_replay` 会写入
+`build/dataloader_replay_matrix.json`。维护中的矩阵包含 5 个
+shuffle/epoch/worker/prefetch/batch 场景、12 个 rank case，以及 52 个初始或
+替换 worker 进程。`fakegpu.dataloader_replay_matrix.v1` 报告记录：
+
+- `DistributedSampler` 的精确分区和随 epoch 变化的样本顺序
+- 已提交批次与应用暂存批次的前缀
+- worker ID、seed，以及 PyTorch/Python/NumPy 随机数
+- 初始与重建后的 worker PID
+- prefetch 诊断计数和关闭前读取的剩余批次数
+- 稳定的矩阵、样本顺序及 RNG SHA-256 摘要
+
+`verification/dataloader_replay_matrix.py` 接受可重复的 `--scenario` 参数，
+新增组合不需要编辑测试代码。物理控制器通过
+`--case dataloader-replay --case-timeout 600` 提供同一矩阵。该场景不属于
+默认物理集合，因为每个运行时会创建 52 个 worker。
+
+跨运行时校验要求三个摘要全部一致。2026-07-23 的维护结果覆盖 macOS
+PyTorch 2.9.1、RTX PRO 5000 Linux 主机上的 PyTorch 2.8.0，以及 RTX 3090 Ti
+WSL2 主机上的 PyTorch 2.12.1。该测试验证 CPU DataLoader，不代表 GPU kernel
+等价。为了在 PyTorch 2.8 上安全关闭，测试会在对比前缀后读取完剩余 epoch；
+活跃多进程队列不会被序列化。
 
 ## Preflight report
 
@@ -195,6 +223,7 @@ python test/run_error_simulation_suite.py
 - `python`
 - 单机 `simulate + simulate`
 - 本地指定端口的 TCP collective 与带宽验证
+- 参数化多 worker DataLoader 重建
 - direct NCCL 验证加 simulate-mode DDP 验证（`test_coordinator_smoke.py`、`test_allreduce_correctness.py`、`test_allgather_correctness.py`、`test_group_semantics.py`、`test_fault_injection_recovery.py`、`run_multinode_sim.sh`、`run_ddp_multinode.sh`）
 
 下面这些路径更依赖环境，或者属于扩展覆盖：
@@ -216,14 +245,15 @@ python test/run_error_simulation_suite.py
 8. 执行 `python3 verification/test_group_semantics.py`。
 9. 执行 `./ftest tcp_bandwidth`。
 10. 执行 `./ftest distributed_resilience`。
-11. 执行 `./test/run_multinode_sim.sh 2`。
-12. 执行 `./test/run_multinode_sim.sh 4`。
-13. 执行 `./test/run_ddp_multinode.sh 4`。
-14. 然后再进入 `./test/run_hybrid_multinode.sh 2`。
-15. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_ddp_numerics.py --variant all`。
-16. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_fsdp_numerics.py`。
-17. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_fsdp2_numerics.py ...`，覆盖 FSDP2 参数与梯度精度组合。
-18. 使用匹配的 Qwen SFT 静态报告执行 `python3 verification/run_qwen_fsdp_sft_memory.py ...`。
-19. 使用匹配的 LoRA 静态报告执行 `python3 verification/run_qwen_fsdp2_lora_sft_memory.py ...`。
-20. 两台 GPU 主机同步到相同 commit 后，执行 `python3 verification/run_physical_multihost.py ...`。
-21. 执行 `python test/run_error_simulation_suite.py`，检查错误模拟覆盖。
+11. 需要 DataLoader 恢复时，执行 `./ftest dataloader_replay`。
+12. 执行 `./test/run_multinode_sim.sh 2`。
+13. 执行 `./test/run_multinode_sim.sh 4`。
+14. 执行 `./test/run_ddp_multinode.sh 4`。
+15. 然后再进入 `./test/run_hybrid_multinode.sh 2`。
+16. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_ddp_numerics.py --variant all`。
+17. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_fsdp_numerics.py`。
+18. 在真实 CUDA 主机上执行 `python3 verification/run_hybrid_fsdp2_numerics.py ...`，覆盖 FSDP2 参数与梯度精度组合。
+19. 使用匹配的 Qwen SFT 静态报告执行 `python3 verification/run_qwen_fsdp_sft_memory.py ...`。
+20. 使用匹配的 LoRA 静态报告执行 `python3 verification/run_qwen_fsdp2_lora_sft_memory.py ...`。
+21. 两台 GPU 主机同步到相同 commit 后，执行 `python3 verification/run_physical_multihost.py ...`。
+22. 执行 `python test/run_error_simulation_suite.py`，检查错误模拟覆盖。

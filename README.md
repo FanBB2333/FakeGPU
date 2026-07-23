@@ -39,6 +39,7 @@ _Real command output from the maintained v1.5.4 workflows._
 | Compare an unmodified real-GPU baseline | Yes | `./fgpu --mode passthrough ...` |
 | Keep real CUDA compute while virtualizing selected surfaces | Yes | `./fgpu --mode hybrid --oom-policy clamp ...` |
 | Simulate multi-rank collective control flow | No | `FAKEGPU_DIST_MODE=simulate` |
+| Validate deterministic multi-worker DataLoader reconstruction | No | `./ftest dataloader_replay` |
 | Simulate logical machines over TCP and measure throughput | No | `fakegpu bandwidth --listen 127.0.0.1:29591 --nodes 2` |
 
 ## Quick start
@@ -440,6 +441,8 @@ FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH=/path/to/project_communication.md
 When only `FAKEGPU_CLUSTER_REPORT_PATH` is set, FakeGPU automatically writes
 the Markdown report beside the JSON file. Every distinct node pair from the
 cluster configuration appears in its table, including pairs with zero traffic.
+The coordinator writes both reports even when a session completes without any
+communication, preserving the configured topology and explicit zero counters.
 The JSON contract is `cluster_report.v1`, defined by
 `cluster_report.schema.json`; `verification/check_cluster_report.py` validates
 it by default. Sub-communicators retain their global-rank membership, and
@@ -501,6 +504,7 @@ The distributed paths were also checked on the same two hosts:
 | Physical-host elastic DDP | One rank on each GPU over Tailscale | The 3090 Ti worker exited with code 86 while its communicator was active; `torchrun` replaced both PIDs, synchronized asymmetric local restart counts, created a second communicator, and reproduced gradient `[1.5, 3.0]` and parameters `[0.85, -0.30]` |
 | Physical-host elastic DDP checkpoint recovery | One rank on each GPU with host-local checkpoints | Both replacement workers restored step 1 parameters `[0.85, -0.30]` and SGD momentum `[1.5, 3.0]`, then produced step 2 parameters `[0.565, -0.87]` and momentum `[2.85, 5.7]`; two repeated runs each reported 512 node-pair bytes and a 64-byte peak |
 | Physical-host elastic DDP training-state recovery | One rank and two persistent DataLoader workers on each GPU host; failure after one of two accumulation micro-steps | Every host checkpoint replicated both rank-local states; recovery deliberately mapped `0 → 1` and `1 → 0`, rebuilt seeded spawn DataLoaders, exactly replayed staged samples `8` and `7` with worker RNG values `0.4750137329` and `0.1462690830`, replaced all worker PIDs, and produced parameters `[0.983838, -0.014662]`; two repeated runs each reported 25,960 node-pair bytes and a 25,232-byte peak |
+| Cross-runtime DataLoader replay matrix | CPU DataLoaders on macOS, RTX PRO 5000 Linux, and RTX 3090 Ti WSL | Five shuffle/epoch/worker/prefetch/batch scenarios covered 12 rank cases and 52 fresh workers per runtime. Sample-order plus PyTorch/Python/NumPy RNG digests matched across PyTorch 2.8.0, 2.9.1, and 2.12.1; two physical repeats used disjoint worker PID sets |
 | Physical-host Hybrid FSDP2 | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | FP32/FP16/BF16 parameters and FP16/BF16 gradient reductions passed over TCP; the report identifies collective dtype and reduction operator |
 | Physical-host Hybrid DeepSpeed | One rank per physical GPU over Tailscale | ZeRO-2 passed across DeepSpeed 0.15.3 ↔ 0.19.2 with identical parameters and 176 reported node-pair bytes; ZeRO-3 now rejects mismatched DeepSpeed versions during preflight |
 | Physical-host TCP all-to-all-v | RTX PRO 5000 coordinator/rank 0 ↔ RTX 3090 Ti rank 1 over Tailscale | Nonuniform 2 MiB/3 MiB and sparse 0 MiB/1 MiB cross-host splits produced exact payloads; 2 calls reported 12 MiB logical bytes, 6 MiB inter-node bytes, and a 5 MiB node-pair peak |
@@ -524,6 +528,7 @@ prediction.
 ./ftest elastic_ddp
 ./ftest elastic_ddp_checkpoint
 ./ftest elastic_ddp_training_state
+./ftest dataloader_replay
 ./ftest static_memory_validation
 ./ftest real_gpu_calibration
 python3 -m pytest -q
@@ -540,6 +545,7 @@ python3 -m pytest -q
 | `elastic_ddp` | Two-worker `torchrun --max-restarts=1` process exit, full-group PID replacement, restarted DDP numerics, SGD checkpoint resume, and accumulated AdamW training-state resume over local Gloo |
 | `elastic_ddp_checkpoint` | Focused model parameter, SGD momentum, completed-step, atomic checkpoint, and resumed-update validation after worker-group replacement |
 | `elastic_ddp_training_state` | Focused AdamW first/second moments, StepLR, replicated rank-state bundle, rank-local RNG, `DistributedSampler` cursor, two-worker DataLoader reconstruction, staged-batch/worker-RNG replay, optimizer-step, and partial gradient-accumulation recovery |
+| `dataloader_replay` | Parameterized shuffled persistent-worker reconstruction across epochs, worker counts, prefetch depths, batch sizes, and PyTorch/Python/NumPy RNG sources |
 | `static_memory_validation` | ATen graph memory estimation; optional real-CUDA comparison |
 | `real_gpu_calibration` | Real/passthrough/hybrid/fakecuda comparison on a supported GPU |
 
@@ -580,6 +586,9 @@ FSDP/FSDP2 (including mixed-precision parameters and reductions), optional
 DeepSpeed ZeRO-2/3 cases, fixed-size elastic DDP restart/checkpoint/training-state recovery, and TCP fault cases
 including injected failure and real four-rank worker-exit/shrink recovery,
 then collects JSON and Markdown reports on the control host.
+The standalone DataLoader matrix is selected explicitly with
+`--case dataloader-replay --case-timeout 600`; it is excluded from the default
+physical case set because it creates 52 worker processes on each runtime.
 Cluster report validation also reconciles collective/P2P
 counters, operation-timeline retention, collective dtype/reduction metadata,
 resilience-event counts, directional links, and node-pair totals.
@@ -610,6 +619,7 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 - Supported cuBLAS/cuBLASLt operations can be numerically checked on CPU; unsupported operations may be stubs.
 - Distributed simulation checks semantics and control flow. Its TCP result includes coordinator reduction, memory copies, and process scheduling, so it is not an exact NCCL/RDMA or raw-link measurement.
 - The fixed-size elastic DDP checks rely on `torchrun` for worker supervision and rendezvous. Mid-accumulation recovery stores one atomic file per host and replicates every rank-local gradient, RNG state, sampler cursor, deterministic DataLoader construction seed, committed sample record, and one application-staged prefetched batch into each file, so a replacement can select state by logical rank after reassignment. The maintained two-worker case rebuilds a spawn DataLoader and replays deterministic map-style worker transforms; it does not serialize live multiprocessing queues or guarantee replay for iterable datasets, external side effects, or nondeterministic transforms. This approach keeps the world size fixed, has O(world-size) rank-state storage per host, assumes the local checkpoint survives, and does not restore sharded ZeRO/FSDP optimizer state. FakeGPU does not provide heartbeat-based detection or dynamic membership resizing. The direct-collective recovery path still requires survivors to call `ncclCommShrink` with an explicit exclusion list.
+- The standalone DataLoader matrix validates exact reconstruction of an application-visible committed/staged prefix. Internal prefetch counters are diagnostics only; it drains the remaining epoch before worker shutdown for compatibility with PyTorch 2.8 and does not serialize live queues or in-flight dataset side effects.
 - Static and runtime memory estimates can omit backend-internal allocations outside matched profiles.
 - Hybrid mode requires a real GPU and remains limited to validated Driver/runtime surfaces.
 - macOS system binaries can remove `DYLD_*` variables because of SIP; use a Homebrew, conda, or pyenv Python.
