@@ -232,6 +232,49 @@ python3 verification/run_physical_multihost.py \
 - communicator 初始化后 rank 2 worker 真实退出，ranks 0/1/3 通过 collective 超时推断缺席节点，再显式 shrink 并执行恢复后的 All-Reduce
 - 从第二台物理主机触发缺少 rank 的 communicator 超时
 
+独立的参数化 DataLoader 重放矩阵不在上述默认集合中，因为每个运行时会创建
+52 个 worker 进程。本地执行入口为：
+
+```bash
+./ftest dataloader_replay
+```
+
+当前维护 5 个场景：
+
+| 场景 | World size | 每 rank worker | Prefetch | Epoch | Batch | 已提交 + 暂存批次 |
+|---|---:|---:|---:|---:|---:|---:|
+| `single-worker-prefetch1` | 2 | 1 | 1 | 0 | 1 | 3 + 2 |
+| `two-worker-epoch0` | 2 | 2 | 2 | 0 | 2 | 2 + 2 |
+| `two-worker-epoch3` | 2 | 2 | 2 | 3 | 2 | 2 + 2 |
+| `deep-prefetch-world4` | 4 | 2 | 4 | 5 | 1 | 5 + 3 |
+| `four-worker-batched` | 2 | 4 | 2 | 7 | 3 | 2 + 2 |
+
+新增组合不需要修改项目代码，`--scenario` 可以重复使用：
+
+```bash
+python3 verification/dataloader_replay_matrix.py \
+  --scenario 'name=custom;world-size=4;workers=2;prefetch-factor=3;epoch=2;batch-size=2;committed-batches=2;staged-batches=2' \
+  --output build/dataloader-custom.json
+```
+
+矩阵使用 shuffle `DistributedSampler`、常驻 spawn worker，并在数据集内分别
+读取 PyTorch、Python 和 NumPy 随机数。检查内容包括 sampler 分区、不同 epoch
+顺序、worker seed、已提交/暂存前缀重建，以及替换后的 worker PID。为兼容
+PyTorch 2.8，验证器在保存前缀与 prefetch 诊断值后读取完当前 epoch，再关闭
+worker group。它不会序列化活跃队列、正在处理的样本、IterableDataset 或外部
+副作用。
+
+两台已同步主机的显式入口为：
+
+```bash
+python3 verification/run_physical_multihost.py \
+  --node 'name=blackwell;ssh=gpu-a;repo=/home/user/repos/fakeGPU;python=/opt/fakegpu/bin/python;shell=posix' \
+  --node 'name=ampere-wsl;ssh=user@gpu-b;repo=/home/user/repos/fakeGPU;python=/opt/torch/bin/python;shell=wsl' \
+  --coordinator-host 100.x.y.z \
+  --case dataloader-replay \
+  --case-timeout 600
+```
+
 只执行恢复场景时使用 `--case fault-shrink`。控制脚本会把四个逻辑 rank
 分布到两个 node 配置：rank 0、2 位于第一台主机，rank 1、3 位于第二台。
 排除 rank 2 后，子 communicator 包含全局 ranks `[0, 1, 3]`，本地 rank
@@ -364,14 +407,39 @@ All-Gather、6 次 broadcast、25,960 字节节点对总量和 25,232 字节单�
 基础重启、SGD checkpoint 与多 worker 训练状态恢复的组合实验创建 6 个
 communicator，记录 26,680 字节节点对总量和 25,216 字节单次峰值。
 
+2026-07-23，独立矩阵在本地以及 commit `5476f1e` 的两次物理控制器实验中
+通过：
+
+| 运行时 | 主机环境 | Python | PyTorch / CUDA | NumPy |
+|---|---|---|---|---|
+| macOS | 仅 CPU 控制端 | 3.11.9 | 2.9.1 / 无 CUDA | 2.2.6 |
+| Linux | Blackwell GPU，计算能力 12.0 | 3.10.15 | 2.8.0+cu128 / 12.8 | 1.26.4 |
+| WSL2 | Ampere GPU，计算能力 8.6 | 3.13.14 | 2.12.1+cu130 / 13.0 | 2.4.6 |
+
+三个运行时的矩阵摘要均为
+`ada93f391ec5396ea7531b50935c141e4e31110e5d67d1eea5e7d5eee692549f`，
+样本顺序摘要均为
+`1aa22d9137e3c8d76daa4950b62908f9ea4b5934520703d76547ce9d66ff45f9`，
+随机数摘要均为
+`5d40e1f97355fae8d319bc74a22946052969ce54dc425e76ab3d64d4b4abbba8`。
+每个运行时包含 5 个场景、12 个 rank case 和 52 个 worker 进程；两次物理
+实验的 worker PID 集合没有交集。该矩阵在 CPU 上执行 DataLoader 工作，证明
+不同软件版本和不同 GPU 主机环境下的进程/RNG 重建一致；它本身不执行 GPU
+kernel。
+
+DataLoader-only 物理会话没有通信操作。Coordinator 仍会生成有效的 JSON 与
+Markdown，保留配置中的四 rank、两节点拓扑；所有 collective 与 timeline
+计数均为 0，Blackwell GPU ↔ Ampere GPU 节点对也明确显示 0 字节。
+
 启动前会检查两端的 tracked Git 状态、精确 commit、Python/PyTorch/CUDA
 信息和 native 构建产物。合并报告写入
 `build/physical_multihost_validation/<session>/`，其中包含各 rank 结果、
 完整 cluster JSON/Markdown 报告、节点对通信总量和异常观测。聚焦 worker
 重启及两类训练状态恢复的单机入口是 `./ftest elastic_ddp`；只执行 SGD
 checkpoint 恢复可使用 `./ftest elastic_ddp_checkpoint`；只执行 AdamW
-accumulation 状态恢复可使用 `./ftest elastic_ddp_training_state`；完整故障测试
-使用 `./ftest distributed_resilience`。
+accumulation 状态恢复可使用 `./ftest elastic_ddp_training_state`；独立 DataLoader
+重放矩阵使用 `./ftest dataloader_replay`；完整故障测试使用
+`./ftest distributed_resilience`。
 
 ## 最小 cluster config
 
