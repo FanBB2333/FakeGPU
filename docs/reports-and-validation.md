@@ -191,7 +191,11 @@ memory, tensor/process peaks, and per-step matrix FLOPs.
 When `FAKEGPU_SMI_STATE_PATH` or `FAKEGPU_SMI_STATE_DIR` is set before the
 FakeCUDA runtime starts, each process publishes a `fakegpu.smi_state.v1` JSON
 file. `fakegpu nvidia-smi` displays current and peak tracked tensor memory plus
-an optional empirically calibrated runtime overhead.
+an optional empirically calibrated runtime overhead. The state also records
+host, logical device/profile, stage, and tracking confidence. Use
+`--loop <seconds>` for repeated refreshes and `--count <n>` for a bounded run;
+looped JSON output is NDJSON, and the state directory is rediscovered before
+each sample.
 
 The Qwen validation worker separates model-load and inference peaks, records
 NVML process memory in real mode, executes CPU-backed FakeCUDA with the physical

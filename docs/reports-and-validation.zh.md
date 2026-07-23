@@ -182,7 +182,10 @@ runner 会写出 `preflight_report.json`，并配套生成 `preflight_report.md`
 如果在 FakeCUDA runtime 启动前设置 `FAKEGPU_SMI_STATE_PATH` 或
 `FAKEGPU_SMI_STATE_DIR`，每个进程都会发布 `fakegpu.smi_state.v1` JSON。
 `fakegpu nvidia-smi` 会显示当前及峰值 tracked tensor 显存，并可加入同一
-软件与硬件路径实测得到的 runtime overhead。
+软件与硬件路径实测得到的 runtime overhead。状态中还包括主机、逻辑
+device/profile、stage 和 tracking confidence。`--loop <seconds>` 可以持续
+刷新，`--count <n>` 可以限制刷新次数；JSON 循环模式输出 NDJSON，并在
+每次采样前重新扫描状态目录。
 
 Qwen 验证 worker 会分别记录模型加载和推理峰值；真实模式读取 NVML 进程
 显存，无 GPU 模式隐藏物理 GPU 并用 CPU-backed FakeCUDA 执行，还会对比

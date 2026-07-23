@@ -4,6 +4,7 @@
 
 ### Added
 
+- Virtual `nvidia-smi` process tables with host/profile/stage identity, simulated and tracked current/peak memory, bounded live refresh, dynamic state-directory discovery, and NDJSON sampling.
 - A two-rank Hybrid FSDP Qwen SFT memory experiment that reports per-rank allocator phases, parameter/gradient/AdamW shards, and all-gather/reduce-scatter traffic.
 - A FULL_SHARD memory projection that transforms single-GPU ATen storage liveness using per-unit padding, local optimizer storage, and collective workspaces.
 - A two- or four-rank FSDP2 LoRA experiment and per-parameter DTensor projection for frozen BF16 base weights, FP32 adapters, gradient-production liveness, AdamW state, and overlapping collective buffers.

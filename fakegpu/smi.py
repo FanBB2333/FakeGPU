@@ -75,8 +75,13 @@ class SmiStatePublisher:
         devices: list[dict[str, Any]] = []
         for item in raw.get("devices") or []:
             current = int(item.get("current_memory", 0) or 0)
+            peak = max(current, int(item.get("peak_memory", current) or current))
             total = int(item.get("total_memory", 0) or 0)
-            reported = min(total, current + self.runtime_overhead_bytes) if total else current
+            reported = current + self.runtime_overhead_bytes
+            reported_peak = peak + self.runtime_overhead_bytes
+            if total:
+                reported = min(total, reported)
+                reported_peak = min(total, reported_peak)
             devices.append(
                 {
                     "index": int(item.get("index", len(devices))),
@@ -84,9 +89,10 @@ class SmiStatePublisher:
                     "profile_id": str(item.get("profile_id", "")),
                     "total_memory": total,
                     "tracked_memory": current,
-                    "peak_tracked_memory": int(item.get("peak_memory", current) or current),
+                    "peak_tracked_memory": peak,
                     "runtime_overhead_bytes": self.runtime_overhead_bytes,
                     "reported_memory": reported,
+                    "reported_peak_memory": reported_peak,
                 }
             )
         state = {
@@ -97,7 +103,14 @@ class SmiStatePublisher:
             "process_name": _process_name(),
             "runtime": "fakecuda",
             "running": bool(running),
-            "tracking_confidence": raw.get("tracking_confidence", "C2_torch_tensor_lifetime"),
+            "tracking_confidence": raw.get(
+                "tracking_confidence", "C2_torch_tensor_lifetime"
+            ),
+            "stage": str(
+                raw.get("stage")
+                or os.environ.get("FAKEGPU_PREFLIGHT_STAGE")
+                or "unknown"
+            ),
             "devices": devices,
         }
         _atomic_write_json(self.path, state)
@@ -120,52 +133,154 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--state-dir")
     parser.add_argument("--include-exited", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "-l",
+        "--loop",
+        type=_positive_float,
+        metavar="SECONDS",
+        help="Refresh repeatedly at the given interval; JSON output becomes NDJSON.",
+    )
+    parser.add_argument(
+        "--count",
+        type=_positive_int,
+        help="Stop after this many refreshes; requires --loop.",
+    )
     args = parser.parse_args(argv)
 
-    paths = [Path(value).expanduser().resolve() for value in args.state]
-    state_dir = args.state_dir or os.environ.get("FAKEGPU_SMI_STATE_DIR")
-    if state_dir:
-        paths.extend(sorted(Path(state_dir).expanduser().resolve().glob("*.json")))
-    if not paths:
-        explicit = os.environ.get("FAKEGPU_SMI_STATE_PATH")
-        if explicit:
-            paths.append(Path(explicit).expanduser().resolve())
-    if not paths:
+    if args.count is not None and args.loop is None:
+        parser.error("--count requires --loop")
+
+    explicit_paths = [Path(value).expanduser().resolve() for value in args.state]
+    state_dir_text = args.state_dir or os.environ.get("FAKEGPU_SMI_STATE_DIR")
+    state_dir = Path(state_dir_text).expanduser().resolve() if state_dir_text else None
+    fallback_state_text = None
+    if not explicit_paths and state_dir is None:
+        fallback_state_text = os.environ.get("FAKEGPU_SMI_STATE_PATH")
+    fallback_state = (
+        Path(fallback_state_text).expanduser().resolve()
+        if fallback_state_text
+        else None
+    )
+    if not explicit_paths and state_dir is None and fallback_state is None:
         parser.error("provide --state, --state-dir, or FAKEGPU_SMI_STATE_PATH")
 
+    refresh = 0
+    saw_states = False
+    try:
+        while True:
+            paths = _discover_state_paths(
+                explicit_paths=explicit_paths,
+                state_dir=state_dir,
+                fallback_state=fallback_state,
+            )
+            states, errors = _load_states(
+                paths,
+                include_exited=bool(args.include_exited),
+            )
+            saw_states = saw_states or bool(states)
+
+            if refresh and not args.json:
+                if sys.stdout.isatty():
+                    sys.stdout.write("\x1b[2J\x1b[H")
+                else:
+                    print()
+            if args.json:
+                payload = {"states": states, "errors": errors}
+                if args.loop is None:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    print(json.dumps(payload, sort_keys=True))
+            else:
+                print(render_table(states, errors=errors))
+            sys.stdout.flush()
+
+            refresh += 1
+            if args.loop is None:
+                break
+            if args.count is not None and refresh >= args.count:
+                break
+            time.sleep(args.loop)
+    except KeyboardInterrupt:
+        pass
+    return 0 if saw_states else 1
+
+
+def _discover_state_paths(
+    *,
+    explicit_paths: Sequence[Path],
+    state_dir: Path | None,
+    fallback_state: Path | None,
+) -> list[Path]:
+    paths = list(explicit_paths)
+    if state_dir is not None:
+        paths.extend(sorted(state_dir.glob("*.json")))
+    if fallback_state is not None:
+        paths.append(fallback_state)
+    return list(dict.fromkeys(paths))
+
+
+def _load_states(
+    paths: Sequence[Path],
+    *,
+    include_exited: bool,
+) -> tuple[list[dict[str, Any]], list[str]]:
     states: list[dict[str, Any]] = []
     errors: list[str] = []
-    for path in dict.fromkeys(paths):
+    for path in paths:
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                raise ValueError("state root must be an object")
             if state.get("schema_version") != SCHEMA_VERSION:
                 raise ValueError("unsupported schema")
-            if args.include_exited or bool(state.get("running")):
+            if include_exited or bool(state.get("running")):
                 states.append(state)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             errors.append(f"{path}: {exc}")
-    if args.json:
-        print(json.dumps({"states": states, "errors": errors}, indent=2, sort_keys=True))
-    else:
-        print(render_table(states, errors=errors))
-    return 0 if states else 1
+    return states, errors
 
 
-def render_table(states: Sequence[dict[str, Any]], *, errors: Sequence[str] = ()) -> str:
+def render_table(
+    states: Sequence[dict[str, Any]], *, errors: Sequence[str] = ()
+) -> str:
     device_rows: dict[tuple[str, int], dict[str, Any]] = {}
     process_rows: list[dict[str, Any]] = []
     for state in states:
+        host = str(state.get("hostname", "localhost"))
+        stage = str(state.get("stage") or "unknown")
+        confidence = str(state.get("tracking_confidence") or "unknown")
         for device in state.get("devices") or []:
-            key = (str(state.get("hostname", "localhost")), int(device.get("index", 0)))
+            key = (host, int(device.get("index", 0)))
             aggregate = device_rows.setdefault(
                 key,
                 {
-                    "name": str(device.get("name", "Fake NVIDIA GPU")),
-                    "total": int(device.get("total_memory", 0) or 0),
+                    "names": set(),
+                    "profiles": set(),
+                    "total": 0,
                     "used": 0,
                 },
             )
-            used = int(device.get("reported_memory", device.get("tracked_memory", 0)) or 0)
+            aggregate["names"].add(str(device.get("name", "Fake NVIDIA GPU")))
+            profile_id = str(device.get("profile_id", "") or "unknown")
+            aggregate["profiles"].add(profile_id)
+            total = int(device.get("total_memory", 0) or 0)
+            aggregate["total"] = max(int(aggregate["total"]), total)
+            used = int(
+                device.get("reported_memory", device.get("tracked_memory", 0)) or 0
+            )
+            tracked = int(device.get("tracked_memory", 0) or 0)
+            peak_tracked = max(
+                tracked,
+                int(device.get("peak_tracked_memory", tracked) or tracked),
+            )
+            reported_peak = device.get("reported_peak_memory")
+            if reported_peak is None:
+                reported_peak = peak_tracked + int(
+                    device.get("runtime_overhead_bytes", 0) or 0
+                )
+                if total:
+                    reported_peak = min(total, reported_peak)
+            reported_peak = max(used, int(reported_peak or used))
             aggregate["used"] += used
             process_rows.append(
                 {
@@ -173,8 +288,13 @@ def render_table(states: Sequence[dict[str, Any]], *, errors: Sequence[str] = ()
                     "gpu": key[1],
                     "pid": int(state.get("pid", 0) or 0),
                     "name": str(state.get("process_name", "python")),
+                    "profile": profile_id,
+                    "stage": stage,
+                    "confidence": confidence,
                     "used": used,
-                    "tracked": int(device.get("tracked_memory", 0) or 0),
+                    "peak": reported_peak,
+                    "tracked": tracked,
+                    "tracked_peak": peak_tracked,
                     "running": bool(state.get("running")),
                 }
             )
@@ -185,29 +305,38 @@ def render_table(states: Sequence[dict[str, Any]], *, errors: Sequence[str] = ()
     else:
         lines.extend(
             [
-                "+------+------------------------------+-------------------------+",
-                "| GPU  | Name                         | Memory-Usage            |",
-                "+------+------------------------------+-------------------------+",
+                "Devices:",
+                "| Host | GPU | Profile | Name | Current / Total |",
+                "|---|---:|---|---|---:|",
             ]
         )
-        for (_host, index), item in sorted(device_rows.items()):
+        for (host, index), item in sorted(device_rows.items()):
+            names = ", ".join(sorted(item["names"]))
+            profiles = ", ".join(sorted(item["profiles"]))
             lines.append(
-                f"| {index:<4} | {item['name'][:28]:<28} | "
-                f"{_mib(item['used']):>8} MiB / {_mib(item['total']):>8} MiB |"
+                f"| {_table_cell(host)} | {index} | {_table_cell(profiles)} | "
+                f"{_table_cell(names)} | {_mib(item['used'])} MiB / "
+                f"{_mib(item['total'])} MiB |"
             )
         lines.extend(
             [
-                "+------+------------------------------+-------------------------+",
                 "Processes:",
-                "| GPU | PID      | Process                    | Simulated GPU Memory | Tracked tensors |",
-                "|---:|---:|---|---:|---:|",
+                "| Host | GPU | Profile | PID | Process | Stage | Simulated current | Simulated peak | Tracked current | Tracked peak | Confidence |",
+                "|---|---:|---|---:|---|---|---:|---:|---:|---:|---|",
             ]
         )
-        for item in sorted(process_rows, key=lambda row: (row["gpu"], row["pid"])):
+        for item in sorted(
+            process_rows,
+            key=lambda row: (row["host"], row["gpu"], row["pid"]),
+        ):
             suffix = "" if item["running"] else " (exited)"
             lines.append(
-                f"| {item['gpu']} | {item['pid']} | `{item['name']}`{suffix} | "
-                f"{_mib(item['used'])} MiB | {_mib(item['tracked'])} MiB |"
+                f"| {_table_cell(item['host'])} | {item['gpu']} | "
+                f"{_table_cell(item['profile'])} | {item['pid']} | "
+                f"{_table_cell(item['name'] + suffix)} | {_table_cell(item['stage'])} | "
+                f"{_mib(item['used'])} MiB | {_mib(item['peak'])} MiB | "
+                f"{_mib(item['tracked'])} MiB | {_mib(item['tracked_peak'])} MiB | "
+                f"{_table_cell(item['confidence'])} |"
             )
     for error in errors:
         lines.append(f"warning: {error}")
@@ -229,3 +358,27 @@ def _process_name() -> str:
 
 def _mib(value: int) -> int:
     return int(round(int(value) / 2**20))
+
+
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected a number") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be greater than zero")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected an integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be greater than zero")
+    return parsed
+
+
+def _table_cell(value: Any) -> str:
+    return str(value).replace("|", "\\|").replace("\r", " ").replace("\n", " ")

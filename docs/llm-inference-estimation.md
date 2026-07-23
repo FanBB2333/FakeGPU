@@ -71,7 +71,16 @@ python3 -m fakegpu nvidia-smi --state /tmp/fakegpu-qwen.json
 
 Use `FAKEGPU_SMI_STATE_DIR=/tmp/fakegpu-smi` when several processes should
 publish separate files. The viewer aggregates their reported memory per
-logical GPU.
+logical GPU. It shows host, profile, stage, tracking confidence, and both
+current/peak simulated and raw tracked memory. For a bounded live view:
+
+```bash
+python3 -m fakegpu nvidia-smi \
+  --state-dir /tmp/fakegpu-smi --loop 1 --count 10
+```
+
+The state directory is scanned again on every refresh so processes can appear
+after the viewer starts. Looped `--json` output uses one JSON object per line.
 
 ## Calibrate against real CUDA
 

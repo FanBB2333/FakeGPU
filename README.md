@@ -208,7 +208,13 @@ terminal:
 ```bash
 FAKEGPU_SMI_STATE_DIR=/tmp/fakegpu-smi python3 your_inference.py
 python3 -m fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi
+python3 -m fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi --loop 1 --count 10
 ```
+
+The table identifies each host, logical GPU, profile, process, current stage,
+and tracking-confidence level. It reports simulated and raw tracked current
+and peak memory separately. `--loop` rescans the state directory on every
+refresh; with `--json`, repeated samples are emitted as NDJSON.
 
 Set `FAKEGPU_SMI_RUNTIME_OVERHEAD_BYTES` only when the same GPU/software path
 has been calibrated against NVML. See
@@ -368,7 +374,7 @@ Coverage labels used below:
 | `./fgpu ...` / `python3 -m fakegpu ...` | Launches an arbitrary command with mode, OOM policy, distributed mode, coordinator, and uniform or heterogeneous device settings | Maintained |
 | `fakegpu preflight -- ...` | Runs an arbitrary command to a requested stage and produces fit/OOM, memory-category, confidence, stdout, and stderr reports | Maintained; accuracy is execution-path and calibration dependent |
 | `fakegpu estimate-llm` | Estimates dense decoder checkpoint storage, KV cache, transient tensors, process memory, and matrix FLOPs without loading weights | Maintained for dense decoder-only safetensors checkpoints |
-| `fakegpu nvidia-smi` | Displays current and peak tracked memory published by one or more FakeCUDA processes | Maintained; this is FakeGPU state rather than host-driver telemetry |
+| `fakegpu nvidia-smi` | Displays host/profile/stage-aware current and peak process memory; supports bounded live refresh and NDJSON samples | Maintained; this is FakeGPU state rather than host-driver telemetry |
 | `fakegpu coordinator` | Starts, probes, stops, and reports on the TCP distributed coordinator | Maintained |
 | `fakegpu bandwidth` | Creates logical nodes or connects physical hosts, checks payload correctness, and measures simulator-path TCP throughput | Maintained and physically validated; not an NCCL/RDMA speed predictor |
 | `fakegpu.init`, `patch_torch`, `env`, `run`, `library_dir` | Selects a runtime or embeds launch/preload behavior in Python | Maintained public Python API |
@@ -421,7 +427,7 @@ Coverage labels used below:
 | SFT memory references | Full-parameter, LoRA, and native packed-NF4 QLoRA; BF16, checkpointing, accumulation, first/steady AdamW steps, and direct or nested scale storage | Validated for maintained Qwen3.5-0.8B/2B matrices; native NF4 does not claim bitsandbytes fused-kernel parity |
 | Sharded training projection | Projects a static graph onto FSDP FULL_SHARD or FSDP2 DTensor parameter/gradient/optimizer storage and all-gather/reduce-scatter buffer lifetimes | Validated for documented Qwen full-parameter and mixed-dtype LoRA cases at world sizes 2/4 |
 | FLOP accounting | Native maintained GEMM/cuBLASLt FLOPs, checkpoint-shape inference FLOPs, and PyTorch matrix-heavy operation counts including grouped-query attention | Maintained for recognized matrix operations; it is not a kernel latency model |
-| Virtual `nvidia-smi` | Publishes per-process current/peak tracked memory, device/profile identity, tracking confidence, and optional calibrated runtime overhead | Maintained; similarity to physical NVML depends on matching calibration |
+| Virtual `nvidia-smi` | Publishes per-process current/peak tracked memory, host/device/profile identity, current stage, tracking confidence, and optional calibrated runtime overhead; the viewer supports repeated state-directory discovery | Maintained; similarity to physical NVML depends on matching calibration |
 
 ### Distributed communication and topology
 
@@ -554,7 +560,7 @@ FAKEGPU_PROFILES=a100:4,h100:4
 | Real-GPU calibration report | `./ftest real_gpu_calibration` | Real, passthrough, hybrid, fakecuda, allocator, and NVML observations |
 | Static memory validation report | `./ftest static_memory_validation` | Graph liveness, optimizer phases, workspace profiles, and real-CUDA comparison |
 | LLM inference estimate | `fakegpu estimate-llm --json ...` | Checkpoint storage, KV cache, transient tensors, process-memory estimate, and matrix FLOPs |
-| Virtual SMI state | `FAKEGPU_SMI_STATE_PATH` / `FAKEGPU_SMI_STATE_DIR` | Per-process current/peak tracked bytes and optional calibrated runtime overhead |
+| Virtual SMI state | `FAKEGPU_SMI_STATE_PATH` / `FAKEGPU_SMI_STATE_DIR` | Per-process current/peak tracked and simulated bytes, stage/confidence metadata, and optional calibrated runtime overhead |
 
 Output paths can be configured with:
 
