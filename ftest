@@ -21,6 +21,7 @@ Suites:
   elastic_ddp  Restart a failed torchrun group; validate three recovery boundaries
   elastic_ddp_checkpoint  Resume model and optimizer state after a worker-group restart
   elastic_ddp_training_state  Resume rank-mapped AdamW, RNG, sampler, and accumulation
+  dataloader_replay  Validate shuffled multi-worker DataLoader replay across RNG sources
   static_memory_validation  Capture ATen storage liveness and compare with real CUDA when available
   real_gpu_calibration  Calibrate real/passthrough/hybrid/fakecuda workloads on the detected GPU
   rtx3090ti_calibration  Deprecated alias for real_gpu_calibration
@@ -250,6 +251,16 @@ run_elastic_ddp_training_state() {
     --output "$SMOKE_BUILD_DIR/elastic_ddp_training_state_resume.json"
 }
 
+run_dataloader_replay() {
+  if ! "$PYTHON_BIN" -c "import torch, numpy" >/dev/null 2>&1; then
+    echo "torch/numpy not found in current python; skipping DataLoader replay matrix."
+    return 0
+  fi
+
+  "$PYTHON_BIN" verification/dataloader_replay_matrix.py \
+    --output "$SMOKE_BUILD_DIR/dataloader_replay_matrix.json"
+}
+
 run_real_gpu_calibration() {
   local report_root="$SMOKE_BUILD_DIR/real_gpu_calibration"
   rm -rf "$report_root"
@@ -375,6 +386,9 @@ case "$suite" in
     ;;
   elastic_ddp_training_state)
     run_elastic_ddp_training_state
+    ;;
+  dataloader_replay)
+    run_dataloader_replay
     ;;
   static_memory_validation)
     run_static_memory_validation

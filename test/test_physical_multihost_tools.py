@@ -756,6 +756,11 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
             "elastic_ddp_restart": {"failure_exit_code": 86},
             "elastic_ddp_checkpoint": {"failure_exit_code": 86},
             "elastic_ddp_training_state": {"failure_exit_code": 86},
+            "dataloader_replay": {
+                "scenario_count": 5,
+                "rank_case_count": 12,
+                "worker_processes_started_per_report": 52,
+            },
             "ddp_options": {},
             "fsdp": [{}, {}],
             "fsdp2": [{}, {}],
@@ -820,6 +825,8 @@ def test_physical_report_markdown_contains_node_pair_table(tmp_path: Path) -> No
     assert "worker-generated random values were replayed exactly" in markdown
     assert "every DataLoader worker PID changed" in markdown
     assert "rank mapping `0 -> 1`, `1 -> 0`" in markdown
+    assert "Cross-runtime DataLoader replay matrix" in markdown
+    assert "PyTorch/Python/NumPy worker RNG" in markdown
     assert "Hybrid FSDP" in markdown
     assert "Hybrid FSDP2" in markdown
     assert "FSDP2 mixed precision" in markdown
