@@ -1,0 +1,36 @@
+id: rtx-4000-ada
+name: Fake NVIDIA RTX 4000 Ada Generation
+torch_name: NVIDIA RTX 4000 Ada Generation
+official_model: NVIDIA RTX 4000 Ada
+architecture: ada
+compute_major: 8
+compute_minor: 9
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/products/workstations/professional-desktop-gpus/
+notes: Reference professional-board profile using NVIDIA specifications and Ada device limits.
+memory_bytes: 21474836480
+sm_count: 48
+memory_bus_width_bits: 160
+core_clock_mhz: 2175
+memory_clock_mhz: 9000
+l2_cache_bytes: 41943040
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 130000
+max_power_limit_mw: 130000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - fp8
+  - int8
+  - int4

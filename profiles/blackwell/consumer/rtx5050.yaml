@@ -1,0 +1,37 @@
+id: rtx5050
+name: Fake NVIDIA GeForce RTX 5050
+torch_name: NVIDIA GeForce RTX 5050
+official_model: GeForce RTX 5050
+architecture: blackwell
+compute_major: 12
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/
+notes: Reference 8 GB desktop profile using NVIDIA GeForce specifications and Blackwell device limits; board clocks and power limits can differ.
+memory_bytes: 8589934592
+sm_count: 20
+memory_bus_width_bits: 128
+core_clock_mhz: 2570
+memory_clock_mhz: 10000
+l2_cache_bytes: 25165824
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 130000
+max_power_limit_mw: 130000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - fp8
+  - fp4
+  - int8
+  - int4

@@ -1,0 +1,33 @@
+id: quadro-rtx8000
+name: Fake NVIDIA Quadro RTX 8000
+torch_name: Quadro RTX 8000
+official_model: QUADRO RTX 8000
+architecture: turing
+compute_major: 7
+compute_minor: 5
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://www.nvidia.com/en-us/products/workstations/previous-quadro-desktop-gpus/
+notes: Reference professional-board profile using NVIDIA Quadro specifications and Turing device limits.
+memory_bytes: 51539607552
+sm_count: 72
+memory_bus_width_bits: 384
+core_clock_mhz: 1770
+memory_clock_mhz: 7000
+l2_cache_bytes: 6291456
+shared_mem_per_sm: 65536
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 65536
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1024
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 295000
+max_power_limit_mw: 295000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - fp16
+  - int8
+  - int4
