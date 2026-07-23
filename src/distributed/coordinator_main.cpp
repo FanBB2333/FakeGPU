@@ -27,9 +27,6 @@ bool dump_cluster_report(
 
     const fake_gpu::distributed::ClusterReportSnapshot snapshot =
         fake_gpu::distributed::snapshot_cluster_report();
-    if (!snapshot.has_data) {
-        return true;
-    }
     return fake_gpu::distributed::write_cluster_report_files(
         config,
         snapshot,

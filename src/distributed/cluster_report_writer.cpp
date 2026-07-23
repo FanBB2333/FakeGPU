@@ -900,9 +900,6 @@ bool write_cluster_report_files(
         error = "cluster JSON report path must not be empty";
         return false;
     }
-    if (!snapshot.has_data) {
-        return true;
-    }
 
     const std::vector<ClusterNodePairReportStats> node_pairs =
         complete_node_pairs(config, snapshot);
