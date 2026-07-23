@@ -22,6 +22,22 @@ from verification.elastic_ddp_training_state_validation import (
 )
 
 
+DATA_SAMPLES = {
+    0: [
+        {"sample_id": 1, "worker_id": 0, "worker_random": 0.11},
+        {"sample_id": 3, "worker_id": 1, "worker_random": 0.31},
+        {"sample_id": 5, "worker_id": 0, "worker_random": 0.51},
+        {"sample_id": 7, "worker_id": 1, "worker_random": 0.71},
+    ],
+    1: [
+        {"sample_id": 2, "worker_id": 0, "worker_random": 0.21},
+        {"sample_id": 4, "worker_id": 1, "worker_random": 0.41},
+        {"sample_id": 6, "worker_id": 0, "worker_random": 0.61},
+        {"sample_id": 8, "worker_id": 1, "worker_random": 0.81},
+    ],
+}
+
+
 def _reports() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     initial: list[dict[str, object]] = []
     restarted: list[dict[str, object]] = []
@@ -50,6 +66,14 @@ def _reports() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
                 "completed_optimizer_steps": 1,
                 "accumulation_micro_step": 1,
                 "optimizer": "adamw",
+                "dataloader_workers": 2,
+                "dataloader_prefetch_factor": 2,
+                "dataloader_persistent_workers": True,
+                "dataloader_start_method": "spawn",
+                "dataloader_worker_pids": [
+                    300 + rank * 10,
+                    301 + rank * 10,
+                ],
                 "checkpoint_replication_mode": "all_rank_states_per_host",
                 "replicated_rank_state_ids": [0, 1],
                 "rank_state_replica_count": 2,
@@ -75,6 +99,10 @@ def _reports() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
                 "samples_consumed": 3,
                 "consumed_sample_ids": EXPECTED_SAMPLE_IDS[rank][:3],
                 "next_sample_id": EXPECTED_SAMPLE_IDS[rank][3],
+                "committed_data_samples": DATA_SAMPLES[rank][:3],
+                "staged_prefetched_sample": DATA_SAMPLES[rank][3],
+                "loader_batches_yielded": 4,
+                "loader_seed": 2026072300 + rank,
                 "saved_checkpoint": {
                     "path": path,
                     "bytes": 9000,
@@ -99,6 +127,14 @@ def _reports() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
                 "observed_local_restart_counts": [1, 1],
                 "max_restarts": 1,
                 "optimizer": "adamw",
+                "dataloader_workers": 2,
+                "dataloader_prefetch_factor": 2,
+                "dataloader_persistent_workers": True,
+                "dataloader_start_method": "spawn",
+                "dataloader_worker_pids": [
+                    400 + rank * 10,
+                    401 + rank * 10,
+                ],
                 "checkpoint_replication_mode": "all_rank_states_per_host",
                 "checkpoint_storage_owner_rank": rank,
                 "replicated_rank_state_ids": [0, 1],
@@ -144,6 +180,15 @@ def _reports() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
                 "restored_consumed_sample_ids": (
                     EXPECTED_SAMPLE_IDS[source_rank][:3]
                 ),
+                "restored_committed_data_samples": (
+                    DATA_SAMPLES[source_rank][:3]
+                ),
+                "restored_loader_seed": 2026072300 + source_rank,
+                "restored_dataloader_workers": 2,
+                "restored_prefetch_factor": 2,
+                "restored_persistent_workers": True,
+                "restored_multiprocessing_context": "spawn",
+                "replayed_prefetched_sample": DATA_SAMPLES[source_rank][3],
                 "resumed_sample_id": EXPECTED_SAMPLE_IDS[source_rank][3],
                 "store_events": [{"operation": "set"}],
                 "pid": 200 + rank,
@@ -174,6 +219,10 @@ def test_validate_training_state_reports_accepts_complete_resume() -> None:
     }
     assert summary["resume_rank_map"] == {"0": 1, "1": 0}
     assert summary["resumed_sample_ids"] == {"0": 8, "1": 7}
+    assert summary["replayed_prefetched_samples"] == {
+        "0": DATA_SAMPLES[1][3],
+        "1": DATA_SAMPLES[0][3],
+    }
 
 
 def test_validate_training_state_reports_rejects_scheduler_drift() -> None:
@@ -239,6 +288,22 @@ def test_validate_training_state_reports_rejects_duplicate_resume_source() -> No
     invalid[1]["resume_source_rank"] = 1
 
     with pytest.raises(AssertionError, match="not a permutation"):
+        validate_elastic_ddp_training_state_reports(
+            initial,
+            invalid,
+            backend="gloo",
+            require_physical_gpu=False,
+        )
+
+
+def test_validate_training_state_reports_rejects_worker_rng_drift() -> None:
+    initial, restarted = _reports()
+    invalid = deepcopy(restarted)
+    replayed = invalid[0]["replayed_prefetched_sample"]
+    assert isinstance(replayed, dict)
+    replayed["worker_random"] = 0.99
+
+    with pytest.raises(AssertionError, match="DataLoader state"):
         validate_elastic_ddp_training_state_reports(
             initial,
             invalid,

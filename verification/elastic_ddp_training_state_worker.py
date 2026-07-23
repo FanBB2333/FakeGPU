@@ -43,6 +43,27 @@ from elastic_ddp_worker import (
 )
 
 
+DATA_LOADER_SEED_BASE = 2026072300
+
+
+class _WorkerRandomDataset:
+    def __len__(self) -> int:
+        return 8
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        import torch
+
+        worker = torch.utils.data.get_worker_info()
+        return {
+            "sample_id": torch.tensor(index + 1, dtype=torch.int64),
+            "worker_random": torch.rand((), dtype=torch.float32),
+            "worker_id": torch.tensor(
+                -1 if worker is None else worker.id,
+                dtype=torch.int64,
+            ),
+        }
+
+
 def _optimizer_state(optimizer: Any, parameter: Any) -> tuple[Any, Any, int]:
     state = optimizer.state.get(parameter)
     if not isinstance(state, dict):
@@ -137,11 +158,14 @@ def _distributed_data_iterator(
     world_size: int,
     epoch: int,
     consumed_samples: int,
-) -> tuple[Any, list[int]]:
-    from torch.utils.data import DataLoader, TensorDataset
+    loader_seed: int,
+    num_workers: int,
+    prefetch_factor: int,
+) -> tuple[Any, list[dict[str, Any]]]:
+    from torch.utils.data import DataLoader
     from torch.utils.data.distributed import DistributedSampler
 
-    dataset = TensorDataset(torch.arange(1, 9, dtype=torch.int64))
+    dataset = _WorkerRandomDataset()
     sampler = DistributedSampler(
         dataset,
         num_replicas=world_size,
@@ -150,28 +174,98 @@ def _distributed_data_iterator(
         drop_last=False,
     )
     sampler.set_epoch(epoch)
-    iterator = iter(
-        DataLoader(
-            dataset,
-            batch_size=1,
-            sampler=sampler,
-            num_workers=0,
+    loader_generator = torch.Generator(device="cpu")
+    loader_generator.manual_seed(loader_seed)
+    loader_options: dict[str, Any] = {
+        "batch_size": 1,
+        "sampler": sampler,
+        "num_workers": num_workers,
+        "generator": loader_generator,
+        "persistent_workers": num_workers > 0,
+    }
+    if num_workers > 0:
+        loader_options.update(
+            {
+                "prefetch_factor": prefetch_factor,
+                "multiprocessing_context": "spawn",
+            }
         )
+    else:
+        torch.manual_seed(loader_seed)
+    iterator = iter(
+        DataLoader(dataset, **loader_options)
     )
-    skipped: list[int] = []
+    skipped: list[dict[str, Any]] = []
     for _ in range(consumed_samples):
-        skipped.append(_next_sample_id(iterator))
+        skipped.append(_next_data_sample(iterator))
     return iterator, skipped
 
 
-def _next_sample_id(iterator: Any) -> int:
+def _next_data_sample(iterator: Any) -> dict[str, Any]:
     try:
         batch = next(iterator)
     except StopIteration as exc:
         raise AssertionError("distributed sampler exhausted unexpectedly") from exc
-    if not isinstance(batch, (list, tuple)) or len(batch) != 1:
+    if not isinstance(batch, dict) or set(batch) != {
+        "sample_id",
+        "worker_random",
+        "worker_id",
+    }:
         raise AssertionError(f"unexpected DataLoader batch: {batch!r}")
-    return int(batch[0].reshape(-1)[0].item())
+    return {
+        "sample_id": int(batch["sample_id"].reshape(-1)[0].item()),
+        "worker_random": float(
+            batch["worker_random"].reshape(-1)[0].item()
+        ),
+        "worker_id": int(batch["worker_id"].reshape(-1)[0].item()),
+    }
+
+
+def _data_worker_pids(iterator: Any) -> list[int]:
+    workers = getattr(iterator, "_workers", None)
+    if not isinstance(workers, (list, tuple)):
+        return []
+    return [int(worker.pid) for worker in workers if worker.pid is not None]
+
+
+def _shutdown_data_iterator(iterator: Any) -> None:
+    shutdown = getattr(iterator, "_shutdown_workers", None)
+    if callable(shutdown):
+        shutdown()
+
+
+def _data_samples_equal(
+    actual: object,
+    expected: object,
+    *,
+    tolerance: float = 1e-12,
+) -> bool:
+    if not isinstance(actual, list) or not isinstance(expected, list):
+        return False
+    if len(actual) != len(expected):
+        return False
+    for actual_item, expected_item in zip(actual, expected):
+        if not isinstance(actual_item, dict) or not isinstance(
+            expected_item, dict
+        ):
+            return False
+        if int(actual_item.get("sample_id", -1)) != int(
+            expected_item.get("sample_id", -1)
+        ):
+            return False
+        if int(actual_item.get("worker_id", -2)) != int(
+            expected_item.get("worker_id", -3)
+        ):
+            return False
+        if (
+            abs(
+                float(actual_item.get("worker_random", -1.0))
+                - float(expected_item.get("worker_random", -2.0))
+            )
+            > tolerance
+        ):
+            return False
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -197,6 +291,8 @@ def main(argv: list[str] | None = None) -> int:
             "size; validation uses 1 to exercise rank remapping."
         ),
     )
+    parser.add_argument("--dataloader-workers", type=int, default=0)
+    parser.add_argument("--prefetch-factor", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=int, default=30)
     parser.add_argument("--survivor-wait-seconds", type=int, default=30)
     args = parser.parse_args(argv)
@@ -204,6 +300,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--timeout-seconds must be positive")
     if args.survivor_wait_seconds <= 0:
         parser.error("--survivor-wait-seconds must be positive")
+    if args.dataloader_workers < 0:
+        parser.error("--dataloader-workers must be non-negative")
+    if args.prefetch_factor <= 0:
+        parser.error("--prefetch-factor must be positive")
 
     rank = int(os.environ["RANK"])
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -229,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
         local_rank=local_rank,
     )
     report: dict[str, Any] = {
-        "schema_version": "fakegpu.elastic_ddp_training_state.rank.v2",
+        "schema_version": "fakegpu.elastic_ddp_training_state.rank.v3",
         "status": "starting",
         "stage": "import_torch",
         "node_name": args.node_name,
@@ -251,8 +351,17 @@ def main(argv: list[str] | None = None) -> int:
         "gradient_accumulation_steps": 2,
         "checkpoint_replication_mode": "all_rank_states_per_host",
         "resume_rank_shift": args.resume_rank_shift,
+        "dataloader_workers": args.dataloader_workers,
+        "dataloader_prefetch_factor": (
+            args.prefetch_factor if args.dataloader_workers > 0 else None
+        ),
+        "dataloader_persistent_workers": args.dataloader_workers > 0,
+        "dataloader_start_method": (
+            "spawn" if args.dataloader_workers > 0 else None
+        ),
     }
     dist = None
+    data_iterator = None
 
     try:
         import torch
@@ -378,34 +487,38 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 ddp_model = DistributedDataParallel(model)
 
-            data_iterator, skipped_sample_ids = _distributed_data_iterator(
+            loader_seed = DATA_LOADER_SEED_BASE + rank
+            data_iterator, skipped_data_samples = _distributed_data_iterator(
                 torch,
                 logical_rank=rank,
                 world_size=world_size,
                 epoch=0,
                 consumed_samples=0,
+                loader_seed=loader_seed,
+                num_workers=args.dataloader_workers,
+                prefetch_factor=args.prefetch_factor,
             )
-            if skipped_sample_ids:
+            if skipped_data_samples:
                 raise AssertionError("fresh sampler unexpectedly skipped samples")
-            consumed_sample_ids: list[int] = []
+            committed_data_samples: list[dict[str, Any]] = []
 
             report["stage"] = "optimizer_step_one"
             optimizer.zero_grad(set_to_none=True)
-            sample_one_a = _next_sample_id(data_iterator)
-            consumed_sample_ids.append(sample_one_a)
+            sample_one_a = _next_data_sample(data_iterator)
+            committed_data_samples.append(sample_one_a)
             loss_one_a = _backward_micro_step(
                 torch,
                 ddp_model,
-                scale=float(sample_one_a),
+                scale=float(sample_one_a["sample_id"]),
                 synchronize=False,
                 backend=args.backend,
             )
-            sample_one_b = _next_sample_id(data_iterator)
-            consumed_sample_ids.append(sample_one_b)
+            sample_one_b = _next_data_sample(data_iterator)
+            committed_data_samples.append(sample_one_b)
             loss_one_b = _backward_micro_step(
                 torch,
                 ddp_model,
-                scale=float(sample_one_b),
+                scale=float(sample_one_b["sample_id"]),
                 synchronize=True,
                 backend=args.backend,
             )
@@ -458,12 +571,12 @@ def main(argv: list[str] | None = None) -> int:
 
             report["stage"] = "partial_accumulation_step_two"
             optimizer.zero_grad(set_to_none=True)
-            sample_two_a = _next_sample_id(data_iterator)
-            consumed_sample_ids.append(sample_two_a)
+            sample_two_a = _next_data_sample(data_iterator)
+            committed_data_samples.append(sample_two_a)
             loss_two_a = _backward_micro_step(
                 torch,
                 ddp_model,
-                scale=float(sample_two_a),
+                scale=float(sample_two_a["sample_id"]),
                 synchronize=False,
                 backend=args.backend,
             )
@@ -489,10 +602,27 @@ def main(argv: list[str] | None = None) -> int:
             expected_next_random = float(
                 torch.rand((), generator=probe_rng).item()
             )
-            if consumed_sample_ids != EXPECTED_SAMPLE_IDS[rank][:3]:
+            committed_sample_ids = [
+                int(item["sample_id"]) for item in committed_data_samples
+            ]
+            if committed_sample_ids != EXPECTED_SAMPLE_IDS[rank][:3]:
                 raise AssertionError(
                     "initial DistributedSampler sequence is invalid: "
-                    f"{consumed_sample_ids}"
+                    f"{committed_sample_ids}"
+                )
+            staged_prefetched_sample = _next_data_sample(data_iterator)
+            if int(staged_prefetched_sample["sample_id"]) != (
+                EXPECTED_SAMPLE_IDS[rank][3]
+            ):
+                raise AssertionError(
+                    "staged prefetched batch has an invalid sample ID"
+                )
+            dataloader_worker_pids = _data_worker_pids(data_iterator)
+            if args.dataloader_workers > 0 and len(dataloader_worker_pids) != (
+                args.dataloader_workers
+            ):
+                raise AssertionError(
+                    "DataLoader did not start the configured worker count"
                 )
             gathered_pending = _gather_vectors(
                 torch,
@@ -535,9 +665,23 @@ def main(argv: list[str] | None = None) -> int:
                 "data_state": {
                     "sampler": "DistributedSampler",
                     "sampler_epoch": 0,
-                    "samples_consumed": len(consumed_sample_ids),
-                    "consumed_sample_ids": list(consumed_sample_ids),
+                    "samples_consumed": len(committed_data_samples),
+                    "consumed_sample_ids": committed_sample_ids,
+                    "committed_data_samples": committed_data_samples,
                     "next_sample_id": EXPECTED_SAMPLE_IDS[rank][3],
+                    "staged_prefetched_sample": staged_prefetched_sample,
+                    "loader_batches_yielded": 4,
+                    "loader_seed": loader_seed,
+                    "dataloader_workers": args.dataloader_workers,
+                    "prefetch_factor": (
+                        args.prefetch_factor
+                        if args.dataloader_workers > 0
+                        else None
+                    ),
+                    "persistent_workers": args.dataloader_workers > 0,
+                    "multiprocessing_context": (
+                        "spawn" if args.dataloader_workers > 0 else None
+                    ),
                 },
             }
             gathered_rank_states: list[Any] = [None] * world_size
@@ -578,9 +722,14 @@ def main(argv: list[str] | None = None) -> int:
                     "expected_next_random": expected_next_random,
                     "sampler": "DistributedSampler",
                     "sampler_epoch": 0,
-                    "samples_consumed": len(consumed_sample_ids),
-                    "consumed_sample_ids": consumed_sample_ids,
+                    "samples_consumed": len(committed_data_samples),
+                    "consumed_sample_ids": committed_sample_ids,
+                    "committed_data_samples": committed_data_samples,
                     "next_sample_id": EXPECTED_SAMPLE_IDS[rank][3],
+                    "staged_prefetched_sample": staged_prefetched_sample,
+                    "loader_batches_yielded": 4,
+                    "loader_seed": loader_seed,
+                    "dataloader_worker_pids": dataloader_worker_pids,
                     "replicated_rank_state_ids": replicated_rank_state_ids,
                     "rank_state_replica_count": len(rank_state_bundle),
                     "local_losses_step_one": [loss_one_a, loss_one_b],
@@ -590,7 +739,7 @@ def main(argv: list[str] | None = None) -> int:
 
             report["stage"] = "save_training_state_checkpoint"
             checkpoint = {
-                "schema_version": "fakegpu.elastic_ddp_training_state.v2",
+                "schema_version": "fakegpu.elastic_ddp_training_state.v3",
                 "storage_owner_rank": rank,
                 "world_size": world_size,
                 "completed_optimizer_steps": 1,
@@ -636,7 +785,7 @@ def main(argv: list[str] | None = None) -> int:
         report["stage"] = "load_training_state_checkpoint"
         checkpoint = _torch_load(torch, checkpoint_path, device)
         if checkpoint.get("schema_version") != (
-            "fakegpu.elastic_ddp_training_state.v2"
+            "fakegpu.elastic_ddp_training_state.v3"
         ):
             raise AssertionError("unexpected training-state checkpoint schema")
         if int(checkpoint.get("world_size", -1)) != world_size:
@@ -733,21 +882,60 @@ def main(argv: list[str] | None = None) -> int:
         restored_samples_consumed = int(
             data_state.get("samples_consumed", -1)
         )
-        data_iterator, skipped_sample_ids = _distributed_data_iterator(
+        restored_loader_seed = int(data_state.get("loader_seed", -1))
+        restored_dataloader_workers = int(
+            data_state.get("dataloader_workers", -1)
+        )
+        restored_prefetch_factor = data_state.get("prefetch_factor")
+        if restored_dataloader_workers != args.dataloader_workers:
+            raise AssertionError(
+                "checkpoint DataLoader worker count differs from restart"
+            )
+        if restored_dataloader_workers > 0 and int(
+            restored_prefetch_factor
+        ) != args.prefetch_factor:
+            raise AssertionError(
+                "checkpoint prefetch factor differs from restart"
+            )
+        data_iterator, skipped_data_samples = _distributed_data_iterator(
             torch,
             logical_rank=resume_source_rank,
             world_size=world_size,
             epoch=restored_sampler_epoch,
             consumed_samples=restored_samples_consumed,
+            loader_seed=restored_loader_seed,
+            num_workers=restored_dataloader_workers,
+            prefetch_factor=args.prefetch_factor,
         )
-        if skipped_sample_ids != data_state.get("consumed_sample_ids"):
+        expected_committed_data_samples = data_state.get(
+            "committed_data_samples"
+        )
+        if not _data_samples_equal(
+            skipped_data_samples,
+            expected_committed_data_samples,
+        ):
             raise AssertionError(
-                "restored sampler cursor did not reproduce consumed samples"
+                "restored DataLoader did not reproduce committed batches"
             )
-        resumed_sample_id = _next_sample_id(data_iterator)
+        replayed_prefetched_sample = _next_data_sample(data_iterator)
+        if not _data_samples_equal(
+            [replayed_prefetched_sample],
+            [data_state.get("staged_prefetched_sample")],
+        ):
+            raise AssertionError(
+                "restored DataLoader did not replay the staged prefetched batch"
+            )
+        resumed_sample_id = int(replayed_prefetched_sample["sample_id"])
         if resumed_sample_id != int(data_state.get("next_sample_id", -1)):
             raise AssertionError(
                 "restored sampler did not produce the expected next sample"
+            )
+        restored_dataloader_worker_pids = _data_worker_pids(data_iterator)
+        if restored_dataloader_workers > 0 and len(
+            restored_dataloader_worker_pids
+        ) != restored_dataloader_workers:
+            raise AssertionError(
+                "restored DataLoader did not start the configured workers"
             )
         report.update(
             {
@@ -776,7 +964,21 @@ def main(argv: list[str] | None = None) -> int:
                 "restored_sampler": data_state.get("sampler"),
                 "restored_sampler_epoch": restored_sampler_epoch,
                 "restored_samples_consumed": restored_samples_consumed,
-                "restored_consumed_sample_ids": skipped_sample_ids,
+                "restored_consumed_sample_ids": [
+                    int(item["sample_id"]) for item in skipped_data_samples
+                ],
+                "restored_committed_data_samples": skipped_data_samples,
+                "restored_loader_seed": restored_loader_seed,
+                "restored_dataloader_workers": restored_dataloader_workers,
+                "restored_prefetch_factor": restored_prefetch_factor,
+                "restored_persistent_workers": data_state.get(
+                    "persistent_workers"
+                ),
+                "restored_multiprocessing_context": data_state.get(
+                    "multiprocessing_context"
+                ),
+                "replayed_prefetched_sample": replayed_prefetched_sample,
+                "dataloader_worker_pids": restored_dataloader_worker_pids,
                 "resumed_sample_id": resumed_sample_id,
             }
         )
@@ -852,6 +1054,9 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         report["stage"] = "final_barrier"
+        if data_iterator is not None:
+            _shutdown_data_iterator(data_iterator)
+            data_iterator = None
         _barrier(dist, args.backend)
         dist.destroy_process_group()
         dist = None
@@ -870,6 +1075,11 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
         _write_report(report_path, report)
+        if data_iterator is not None:
+            try:
+                _shutdown_data_iterator(data_iterator)
+            except Exception:
+                pass
         if dist is not None:
             try:
                 if dist.is_initialized():

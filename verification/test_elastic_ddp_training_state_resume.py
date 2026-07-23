@@ -68,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
             "--trace-store",
             "--fail-rank=1",
             "--resume-rank-shift=1",
+            "--dataloader-workers=2",
+            "--prefetch-factor=2",
             "--survivor-wait-seconds=10",
         ]
         completed = _run_torchrun(command, env=env, timeout=args.timeout)

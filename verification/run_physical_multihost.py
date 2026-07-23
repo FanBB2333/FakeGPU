@@ -1374,6 +1374,8 @@ def _run_elastic_ddp_training_state_case(
             "--backend=nccl",
             "--trace-store",
             "--resume-rank-shift=1",
+            "--dataloader-workers=2",
+            "--prefetch-factor=2",
             f"--timeout-seconds={process_group_timeout}",
             f"--survivor-wait-seconds={process_group_timeout}",
         ]
