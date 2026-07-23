@@ -27,6 +27,8 @@ cmake --build build
 fakegpu doctor --list-profiles
 fakegpu demo --profile l4
 fakegpu demo --profile b300 --json
+fakegpu workspace-profiles --json
+fakegpu validate --manifest verification/data/validation_smoke.yaml --strict
 ./fgpu nvidia-smi
 ./fgpu python3 your_script.py
 ./fgpu --profile t4 --device-count 2 python3 your_script.py
@@ -91,7 +93,9 @@ fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi --loop 1 --count 10
 ```
 
 The viewer shows host, logical GPU, profile, process, stage, tracking
-confidence, simulated current/peak memory, and raw tracked current/peak memory.
+confidence, simulated current/peak memory, requested tensor bytes, and
+caching-allocator reserved current/peak memory. Simulated process memory uses
+reserved bytes plus an optional calibrated runtime overhead.
 `--loop` rescans the directory before every sample. Omit `--count` to continue
 until interrupted; combine `--loop` with `--json` for NDJSON output.
 
@@ -120,7 +124,7 @@ The runner writes:
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. For lightweight regression tests, `test-512m` is also available as a 512 MB fakecuda/native profile. The runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, including stage peaks, top allocations, optional allocation stack traces, coarse memory categories, shared-storage alias handling, basic logical-device attribution, and saved autograd tensors visible through PyTorch hooks. CUDA backend-internal workspaces can still be undercounted; use `--memory-safety-margin <bytes>` when real-GPU calibration shows a mostly fixed gap, and reserve `--memory-safety-factor <factor>` for gaps that scale with workload size.
+Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. For lightweight regression tests, `test-512m` is also available as a 512 MB fakecuda/native profile. The runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, including stage peaks, allocated and reserved allocator peaks, inactive split bytes, top allocations, optional allocation stack traces, coarse memory categories, shared-storage alias handling, basic logical-device attribution, and saved autograd tensors visible through PyTorch hooks. CUDA backend-internal workspaces can still be undercounted; use `--memory-safety-margin <bytes>` when real-GPU calibration shows a mostly fixed gap, and reserve `--memory-safety-factor <factor>` for gaps that scale with workload size.
 
 `./ftest preflight_oom` now includes a profile matrix check: the same 560 MB allocation must fail on `test-512m` and pass on `a100`.
 
@@ -133,6 +137,31 @@ For graph-based training-memory estimation, run:
 ```
 
 The estimator captures a fake-tensor ATen forward/backward graph with `make_fx` and `torch.func.grad_and_value`, deduplicates aliased storages, and releases each storage after its final graph use. `target_device="auto"` uses fake CUDA tensors when PyTorch is linked with CUDA, so Attention and other device-dependent operators select the CUDA ATen path without allocating real GPU memory. Its default training-step model retains the module output through backward and `optimizer.step()`. It compares graph and optimizer phases instead of adding non-overlapping peaks, then accounts for Adam/AdamW moment state. The eager single-tensor optimizer model follows parameter iteration order: two current-parameter intermediates can overlap the previous parameter's denominator. CUDA Flash Attention auxiliary storage is derived from query shape, dtype, and 64-token sequence tiles. FP32 Efficient Attention backward uses an operator-local profile based on batch, sequence length, and query storage; it is added only to storage live at that ATen node. On a CUDA host, the validation suite records separate forward, backward, and optimizer peaks, measures one post-release backend-resident allocation, and compares 13 MLP/Transformer FP32/BF16 workloads with `torch.cuda.max_memory_allocated()`. The maintained suite rejects a measured allocator or requested-byte underestimation above 5%.
+
+Inspect the built-in and optional backend-workspace catalogs:
+
+```bash
+fakegpu workspace-profiles --json
+fakegpu workspace-profiles --path my-workspaces.yaml --json
+```
+
+The built-in catalog contains exact-stack convolution and matrix profiles
+measured on the RTX 3090 Ti and RTX PRO 5000. Set
+`FAKEGPU_WORKSPACE_PROFILE_PATHS` or pass `workspace_profile_paths` to the
+Python estimator to add JSON/YAML catalogs. Matching includes operator, GPU
+profile, compute capability, PyTorch/CUDA versions, dtype, and shape.
+
+## Declarative validation matrix
+
+```bash
+fakegpu validate \
+  --manifest verification/data/validation_smoke.yaml \
+  --report-dir build/validation-smoke \
+  --strict
+```
+
+See [Declarative Validation Manifests](validation-manifests.md) for matrix
+axes, prerequisites, result assertions, JSON checks, and cross-host reports.
 
 Reports from different GPUs can be compared with:
 

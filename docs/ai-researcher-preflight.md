@@ -117,7 +117,17 @@ fakegpu preflight \
   -- python train.py --cluster-config
 ```
 
-Important limitation: fakecuda preflight now tracks torch-level tensor lifetimes, saved autograd tensors visible through PyTorch hooks, stage peaks, top allocations, optional allocation stack traces, coarse categories for parameters, buffers, gradients, optimizer state, activations, and temporaries, shared-storage aliases, and basic logical-device attribution. CUDA backend-internal workspaces and optimizer temporaries may still be invisible in fakecuda, especially for Transformer-heavy workloads. Treat `PASS_FIT` as a preflight signal rather than proof that a full cluster run will fit.
+Important limitation: fakecuda preflight tracks torch-level tensor lifetimes,
+saved autograd tensors visible through PyTorch hooks, stage peaks, top
+allocations, optional allocation stack traces, coarse categories for
+parameters, buffers, gradients, optimizer state, activations, and temporaries,
+shared-storage aliases, and basic logical-device attribution. Its caching
+allocator models 512-byte blocks, small/medium/large segments, best-fit reuse,
+splitting, coalescing, fragmentation, retry, and `empty_cache()`, and reports
+both requested tensor bytes and reserved bytes. CUDA backend-internal
+workspaces and optimizer temporaries can still be invisible unless an exact
+workspace profile matches. Treat `PASS_FIT` as a preflight signal rather than
+proof that a full cluster run will fit.
 
 ### 3. Calibrate On The Real GPU
 
@@ -192,7 +202,17 @@ python3 verification/aggregate_static_memory_validations.py \
   --markdown build/static_memory_validation_bundle.md
 ```
 
-Other unmatched backend workspaces, fused/foreach optimizer extras, allocator fragmentation, custom CUDA kernels, distributed buffers, and graph breaks still require additional modeling or empirical measurements.
+External JSON/YAML workspace catalogs can be supplied through
+`FAKEGPU_WORKSPACE_PROFILE_PATHS` or `workspace_profile_paths`. A profile can
+match operator, target GPU profile, compute capability, PyTorch/CUDA stack,
+dtype, and exact/ranged shapes, then provide fixed, linear-IO, or tiled
+workspace formulas with operator-local or graph-phase lifetime. The built-in
+catalog contains exact-stack matrix/convolution observations from the RTX
+3090 Ti and RTX PRO 5000.
+
+Unmatched backend workspaces, fused/foreach optimizer extras, custom CUDA
+kernels, distributed buffers, and graph breaks still require additional
+modeling or empirical measurements.
 
 To produce an individual preflight report for every maintained workload:
 

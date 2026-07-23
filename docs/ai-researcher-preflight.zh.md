@@ -117,7 +117,15 @@ fakegpu preflight \
   -- python train.py --cluster-config
 ```
 
-重要限制：fakecuda preflight 现在会跟踪 torch 层 tensor 生命周期、PyTorch hooks 能看到的 autograd saved tensor、分阶段峰值、top allocations、可选 allocation stack trace，粗略区分 parameters、buffers、gradients、optimizer state、activations 和 temporaries，并处理共享 storage alias 和基础 logical-device 归属。CUDA 后端内部的 workspace 和 optimizer 临时分配仍可能不可见，Transformer-heavy workload 尤其明显。所以 `PASS_FIT` 只能作为提交前信号，不能证明完整集群任务一定能放下。
+重要限制：fakecuda preflight 会跟踪 torch 层 tensor 生命周期、PyTorch hooks
+能看到的 autograd saved tensor、分阶段峰值、top allocations、可选 allocation
+stack trace，粗略区分 parameters、buffers、gradients、optimizer state、
+activations 和 temporaries，并处理共享 storage alias 和基础 logical-device
+归属。caching allocator 会模拟 512-byte block、小/中/大 segment、best-fit
+复用、split、coalesce、碎片、allocation retry 和 `empty_cache()`，报告中会
+分别保留 tensor requested bytes 与 reserved bytes。没有精确 workspace
+profile 时，CUDA backend 内部 workspace 和 optimizer 临时分配仍可能不可见。
+因此 `PASS_FIT` 只能作为提交前信号，不能证明完整集群任务一定能放下。
 
 ### 3. 用真实 GPU 做校准
 
@@ -192,7 +200,15 @@ python3 verification/aggregate_static_memory_validations.py \
   --markdown build/static_memory_validation_bundle.md
 ```
 
-其他未匹配的 backend workspace、fused/foreach optimizer 额外临时分配、allocator 碎片、自定义 CUDA kernel、分布式 buffer 和 graph break 仍需要继续建模或实测。
+可以通过 `FAKEGPU_WORKSPACE_PROFILE_PATHS` 或 `workspace_profile_paths`
+加入外部 JSON/YAML workspace catalog。profile 可以匹配 operator、目标 GPU
+profile、Compute Capability、PyTorch/CUDA 软件栈、dtype 和精确或范围 shape，
+再用固定值、linear-IO 或 tiled 公式表示 operator-local 或 graph-phase
+workspace。内置 catalog 包含 RTX 3090 Ti 与 RTX PRO 5000 的精确软件栈
+矩阵/卷积观测。
+
+未匹配的 backend workspace、fused/foreach optimizer 额外临时分配、自定义
+CUDA kernel、分布式 buffer 和 graph break 仍需要继续建模或实测。
 
 如需为每个维护中的 workload 分别生成 preflight 报告，可以运行：
 

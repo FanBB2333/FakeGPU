@@ -27,6 +27,8 @@ cmake --build build
 fakegpu doctor --list-profiles
 fakegpu demo --profile l4
 fakegpu demo --profile b300 --json
+fakegpu workspace-profiles --json
+fakegpu validate --manifest verification/data/validation_smoke.yaml --strict
 ./fgpu nvidia-smi
 ./fgpu python3 your_script.py
 ./fgpu --profile t4 --device-count 2 python3 your_script.py
@@ -91,7 +93,9 @@ fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi --loop 1 --count 10
 ```
 
 查看器会显示主机、逻辑 GPU、profile、进程、stage、tracking confidence，
-并分别列出模拟值和原始 tracked memory 的当前值与峰值。`--loop` 每次刷新
+并分别列出模拟进程显存、tensor requested bytes，以及 caching allocator
+reserved memory 的当前值与峰值。模拟进程显存使用 reserved bytes，再加上
+可选的实测 runtime overhead。`--loop` 每次刷新
 都会重新扫描状态目录；省略 `--count` 时会持续刷新，配合 `--json` 时输出
 NDJSON。
 
@@ -120,7 +124,7 @@ runner 会写出：
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。轻量回归测试也可以使用 `test-512m`，它是 512 MB 的 fakecuda/native 测试 profile。runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，报告中包含分阶段峰值、top allocations、可选 allocation stack trace、粗粒度内存类别、共享 storage alias 处理、基础 logical-device 归属，以及 PyTorch hooks 能看到的 autograd saved tensor。CUDA 后端内部 workspace 仍可能被低估；如果真实 GPU 校准显示 gap 大致固定，优先用 `--memory-safety-margin <bytes>`；只有当 gap 随 workload 规模增长时，再用 `--memory-safety-factor <factor>`。
+建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。轻量回归测试也可以使用 `test-512m`，它是 512 MB 的 fakecuda/native 测试 profile。runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，报告中包含分阶段峰值、allocator allocated/reserved 峰值、inactive split bytes、top allocations、可选 allocation stack trace、粗粒度内存类别、共享 storage alias 处理、基础 logical-device 归属，以及 PyTorch hooks 能看到的 autograd saved tensor。CUDA 后端内部 workspace 仍可能被低估；如果真实 GPU 校准显示 gap 大致固定，优先用 `--memory-safety-margin <bytes>`；只有当 gap 随 workload 规模增长时，再用 `--memory-safety-factor <factor>`。
 
 `./ftest preflight_oom` 现在包含 profile 矩阵检查：同一个 560 MB allocation 在 `test-512m` 下必须失败，在 `a100` 下必须通过。
 
@@ -133,6 +137,31 @@ runner 会写出：
 ```
 
 估算器通过 `make_fx` 和 `torch.func.grad_and_value` 捕获 fake-tensor ATen 前向/反向图，合并共享 storage 的 alias，并在最后一次图使用后释放 storage。PyTorch 含 CUDA 支持时，`target_device="auto"` 会使用 fake CUDA tensor，使 Attention 等设备相关算子选择 CUDA ATen 路径，但不会分配真实 GPU 显存。默认训练步骤会保留 module output，直到 backward 和 `optimizer.step()` 结束。graph 和 optimizer 两个阶段分别计算，不会叠加并不同时存在的峰值；Adam/AdamW 还会计算常驻 moment state。eager single-tensor optimizer 会按参数迭代顺序计算临时张量：当前参数的两个中间结果可能与上一个参数的 denominator 同时存在。CUDA Flash Attention auxiliary storage 按 query shape、dtype 和 64-token sequence tile 计算。FP32 Efficient Attention backward workspace 按 batch、sequence length 和 query storage 计算，并且只与对应 ATen 节点的 live storage 相加。CUDA 主机会分别记录 forward、backward 和 optimizer 峰值，测量一次 workload 释放后的 backend 常驻分配，再用 13 个 MLP/Transformer FP32/BF16 workload 对比 `torch.cuda.max_memory_allocated()`。维护中的套件会同时检查 allocator 和 requested-byte 低估是否超过 5%。
+
+查看内置及自定义 backend workspace catalog：
+
+```bash
+fakegpu workspace-profiles --json
+fakegpu workspace-profiles --path my-workspaces.yaml --json
+```
+
+内置 catalog 包含 RTX 3090 Ti 与 RTX PRO 5000 实测的卷积和矩阵 profile，
+只匹配对应的 operator、GPU profile、Compute Capability、PyTorch/CUDA
+版本、dtype 和 shape。可以设置 `FAKEGPU_WORKSPACE_PROFILE_PATHS`，也可以
+通过 Python estimator 的 `workspace_profile_paths` 参数加入 JSON/YAML
+catalog。
+
+## 声明式验证矩阵
+
+```bash
+fakegpu validate \
+  --manifest verification/data/validation_smoke.yaml \
+  --report-dir build/validation-smoke \
+  --strict
+```
+
+矩阵参数、依赖条件、结果断言、JSON 检查和跨主机报告格式见
+[声明式验证清单](validation-manifests.md)。
 
 不同 GPU 的报告可以这样比较：
 

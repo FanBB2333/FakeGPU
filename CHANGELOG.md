@@ -2,8 +2,19 @@
 
 ## Unreleased
 
+## v1.5.5 - 2026-07-23
+
+Compared with `v1.5.4`.
+
 ### Added
 
+- A CUDA-style caching allocator model with 512-byte blocks, small/medium/large segments, best-fit reuse, split/coalesce, cached empty segments, retry, OOM counters, `empty_cache()`, reserved-memory APIs, memory statistics, and allocator snapshots.
+- Allocated/reserved/inactive-split reporting in preflight and virtual SMI, with simulated process memory based on allocator-reserved bytes plus optional same-stack runtime-overhead calibration.
+- A JSON/YAML backend-workspace profile registry with exact GPU/software/dtype/shape matching, fixed/linear/tiled formulas, explicit lifetimes, priorities, catalog validation, and a `fakegpu workspace-profiles` command.
+- Ten exact-stack cuBLAS/cuDNN matrix and convolution workspace profiles measured on the RTX 3090 Ti Ampere and RTX PRO 5000 Blackwell.
+- A `fakegpu validate` command for declarative JSON/TOML/YAML test matrices, prerequisite handling, timeouts, output/file/JSON assertions, per-case logs, and unified Git/host-aware JSON and Markdown reports.
+- Fixed allocator-trace and workspace-capture validators plus a maintained cross-profile smoke manifest.
+- A GitHub Actions matrix for Python 3.10–3.12 CPU PyTorch checks and native CMake smoke/CPU-simulation builds.
 - Virtual `nvidia-smi` process tables with host/profile/stage identity, simulated and tracked current/peak memory, bounded live refresh, dynamic state-directory discovery, and NDJSON sampling.
 - A two-rank Hybrid FSDP Qwen SFT memory experiment that reports per-rank allocator phases, parameter/gradient/AdamW shards, and all-gather/reduce-scatter traffic.
 - A FULL_SHARD memory projection that transforms single-GPU ATen storage liveness using per-unit padding, local optimizer storage, and collective workspaces.
@@ -17,8 +28,14 @@
 - Optional physical multi-host DeepSpeed ZeRO-2/3 cases with per-host package preflight and combined communication reports.
 - A parameterized deterministic DataLoader replay matrix covering shuffled `DistributedSampler` epochs, worker counts, prefetch depths, batch sizes, replacement PIDs, and PyTorch/Python/NumPy RNG streams locally or across SSH hosts.
 
+### Changed
+
+- Package, native report, and C++ runtime versions are synchronized at `1.5.5`.
+
 ### Fixed
 
+- Preserved conservative preflight headroom after introducing caching by using the larger of requested and reserved peaks while retaining both per-stage series.
+- Calibrated Qwen virtual-SMI process memory against real reserved memory rather than requested tensor bytes, avoiding double-counting allocator cache.
 - Included the active full-gradient buffer retained until FSDP reduce-scatter emits a local shard, reducing the Qwen graph-peak prediction error from 8.420% to at most 0.758%.
 - Accepted FSDP2's byte-packed mixed-dtype all-gathers and separated activation-, communication-, backward-, and optimizer-dominated event floors instead of assuming that every buffer peaks together.
 - Separated forward/loss liveness at the first explicit backward operator and modeled the retained FSDP2 nested-unit buffers at the backward activation peak.
@@ -33,7 +50,10 @@
 
 ### Validation
 
-- Full local suite: 367 passed and 1 skipped.
+- Full local suite: 396 passed and 1 skipped.
+- The 15-stage allocator trace matched real CUDA allocated and reserved bytes exactly on both RTX 3090 Ti/PyTorch 2.12.1/CUDA 13.0 and RTX PRO 5000/PyTorch 2.9.1/CUDA 12.8.
+- Ten controlled workspace observations were captured across both stacks. The FP32 `N=2,C=64,H=W=128,K=64` convolution used 8,536,576 bytes on Ampere and 16,925,184 bytes on Blackwell; exact-stack matching prevents unsupported cross-architecture extrapolation.
+- The declarative smoke manifest passed all six expanded cases on macOS, RTX 3090 Ti WSL, and RTX PRO 5000 Linux.
 - The five-scenario DataLoader replay matrix matched sample-order and PyTorch/Python/NumPy RNG digests across macOS PyTorch 2.9.1, RTX PRO 5000 Linux PyTorch 2.8.0, and RTX 3090 Ti WSL2 PyTorch 2.12.1. Two physical repeats each started 52 fresh workers per host with no cross-run PID overlap.
 - Qwen3.5-0.8B BF16 FULL_SHARD sequence-16/128 experiments passed on RTX PRO 5000 Blackwell and RTX 3090 Ti Ampere. Overall per-rank errors were 0.730% and 0.633%; both stacks reproduced allocator peaks, shard sizes, optimizer state, and 8,011,593,488 node-pair bytes exactly.
 - Qwen3.5-0.8B FSDP2 LoRA sequence-16/64/128 experiments passed the 3% per-phase limit with two or four ranks on both GPUs. Every phase was within 1.974%; sequence-128 overall errors were 0.071%-0.161%.

@@ -244,7 +244,11 @@ with fakegpu.stage("backward"):
   - [x] MLP/Transformer、FP32/BF16 参数网格验证
 - [x] 在 RTX 3090 Ti Ampere 与 RTX PRO 5000 Blackwell 上完成 13 个 workload、26 个观测的静态估算跨卡验证；allocator 最大低估和最大绝对误差为 0.08%，Efficient Attention requested-byte 差异为 0–28 bytes。
 - [x] 支持聚合多台 GPU 的静态估算报告，分别检查 byte peak 与 graph fingerprint 一致性。
-- [ ] 继续为 cuDNN/cuBLASLt 和 fused optimizer 建立按架构、软件版本、dtype 和 shape 索引的 workspace profile。
+- [x] 新增 caching allocator 模型，覆盖 CUDA 默认 small/medium/large segment、best-fit 复用、split/coalesce、碎片、retry、`empty_cache()` 和 reserved-memory API。
+- [x] 在 RTX 3090 Ti 与 RTX PRO 5000 上验证固定 allocator trace；15 个阶段的 allocated/reserved bytes 均与真实 CUDA 完全一致。
+- [x] 新增可扩展 JSON/YAML workspace profile registry，按 operator、GPU profile、Compute Capability、PyTorch/CUDA、dtype 和 shape 精确匹配。
+- [x] 为两套实测软件栈加入 10 组 cuDNN/cuBLAS 矩阵与卷积 workspace profile。
+- [ ] 继续为更多 cuDNN/cuBLASLt shape 和 fused optimizer 建立按架构、软件版本、dtype 和 shape 索引的 workspace profile。
 - [ ] 扩展静态验证到动态 shape、graph break、自定义 CUDA op、FSDP/ZeRO 和 fused/foreach optimizer。
 - [x] 报告 `tracking_confidence`：
   - `C0_incomplete`：只跑通流程，不适合判断 OOM。

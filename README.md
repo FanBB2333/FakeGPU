@@ -16,11 +16,12 @@ fakegpu doctor --list-profiles       # inspect the installation and GPU catalog
 fakegpu demo --profile l4            # run a tiny CUDA-visible training step on CPU
 fakegpu estimate-llm --model-dir /models/qwen --prompt-tokens 128  # inspect VRAM/FLOPs without loading weights
 fakegpu bandwidth --listen 127.0.0.1:29591 --nodes 2  # simulate two TCP nodes
+fakegpu validate --manifest verification/data/validation_smoke.yaml --strict  # run a repeatable test matrix
 ```
 
 ![Four FakeGPU workflows: simulated PyTorch training, GPU profile switching, preflight OOM checks, and static VRAM estimation](docs/assets/readme/tldr-workflows.png)
 
-_Real command output from the maintained v1.5.4 workflows._
+_Real command output from the maintained v1.5.5 workflows._
 
 > FakeGPU is a development and validation tool. It does not provide numerical or performance parity for arbitrary CUDA kernels.
 
@@ -36,6 +37,7 @@ _Real command output from the maintained v1.5.4 workflows._
 | Estimate training memory from an ATen graph | No | `./ftest static_memory_validation` |
 | Estimate dense-decoder inference memory/FLOPs from safetensors metadata | No | `fakegpu estimate-llm ...` |
 | Display memory from running FakeCUDA processes | No | `fakegpu nvidia-smi --state-dir ...` |
+| Run a declarative profile/framework/host test matrix | Depends on cases | `fakegpu validate --manifest ... --strict` |
 | Compare an unmodified real-GPU baseline | Yes | `./fgpu --mode passthrough ...` |
 | Keep real CUDA compute while virtualizing selected surfaces | Yes | `./fgpu --mode hybrid --oom-policy clamp ...` |
 | Simulate multi-rank collective control flow | No | `FAKEGPU_DIST_MODE=simulate` |
@@ -212,9 +214,11 @@ python3 -m fakegpu nvidia-smi --state-dir /tmp/fakegpu-smi --loop 1 --count 10
 ```
 
 The table identifies each host, logical GPU, profile, process, current stage,
-and tracking-confidence level. It reports simulated and raw tracked current
-and peak memory separately. `--loop` rescans the state directory on every
-refresh; with `--json`, repeated samples are emitted as NDJSON.
+and tracking-confidence level. It reports simulated process memory, requested
+tensor bytes, and caching-allocator reserved bytes separately. Simulated
+process memory uses reserved bytes plus any calibrated runtime overhead.
+`--loop` rescans the state directory on every refresh; with `--json`, repeated
+samples are emitted as NDJSON.
 
 Set `FAKEGPU_SMI_RUNTIME_OVERHEAD_BYTES` only when the same GPU/software path
 has been calibrated against NVML. See
@@ -375,6 +379,8 @@ Coverage labels used below:
 | `fakegpu preflight -- ...` | Runs an arbitrary command to a requested stage and produces fit/OOM, memory-category, confidence, stdout, and stderr reports | Maintained; accuracy is execution-path and calibration dependent |
 | `fakegpu estimate-llm` | Estimates dense decoder checkpoint storage, KV cache, transient tensors, process memory, and matrix FLOPs without loading weights | Maintained for dense decoder-only safetensors checkpoints |
 | `fakegpu nvidia-smi` | Displays host/profile/stage-aware current and peak process memory; supports bounded live refresh and NDJSON samples | Maintained; this is FakeGPU state rather than host-driver telemetry |
+| `fakegpu workspace-profiles` | Validates and lists built-in plus user-supplied backend-workspace catalogs | Maintained; profile accuracy is limited to each declared match envelope |
+| `fakegpu validate` | Expands a JSON/TOML/YAML case matrix, checks prerequisites and assertions, and writes unified JSON/Markdown plus per-case logs | Maintained |
 | `fakegpu coordinator` | Starts, probes, stops, and reports on the TCP distributed coordinator | Maintained |
 | `fakegpu bandwidth` | Creates logical nodes or connects physical hosts, checks payload correctness, and measures simulator-path TCP throughput | Maintained and physically validated; not an NCCL/RDMA speed predictor |
 | `fakegpu.init`, `patch_torch`, `env`, `run`, `library_dir` | Selects a runtime or embeds launch/preload behavior in Python | Maintained public Python API |
@@ -417,11 +423,11 @@ Coverage labels used below:
 
 | Feature | What is measured or modeled | Status and boundary |
 |---|---|---|
-| Runtime allocation tracking | Current/peak bytes per logical device, allocation/free events, storage aliases, coarse categories, stages, top allocations, and optional Python stack traces | Maintained; allocations hidden inside unobserved backend code need calibration |
-| Profile-aware OOM simulation | Enforces each selected GPU profile's memory limit and raises `torch.cuda.OutOfMemoryError` | Maintained; failure timing can differ from a real allocator |
+| Runtime allocation tracking | Requested and reserved current/peak bytes per logical device, allocation/free events, storage aliases, coarse categories, stages, top allocations, optional Python stack traces, inactive split bytes, and allocator snapshots/stats | Maintained; allocations hidden inside unobserved backend code need calibration |
+| Caching allocator and profile-aware OOM | Models 512-byte blocks, CUDA-style small/medium/large segments, best-fit reuse, split/coalesce, cached empty segments, retry, `empty_cache()`, and profile memory limits | Maintained simplified allocator; configuration-specific CUDA allocator policies can still differ |
 | Repository/workload preflight | Wraps any command, checks arrival at `import`, `model_load`, `forward`, `backward`, `optimizer_step`, or `n_steps`, and reports fit, headroom, failure class, and confidence | Maintained; only the code path and shapes actually executed are assessed |
 | Static ATen graph estimator | Captures forward/backward without real CUDA allocation; deduplicates storage aliases, follows last-use lifetimes, and models parameters, buffers, gradients, optimizer state, and separate graph/optimizer phases | Maintained; target-device ATen traces need a CUDA-enabled PyTorch build for CUDA-specific dispatch |
-| Workspace modeling | Adds graph-persistent or operator-local workspace at the correct liveness point, including maintained Flash/Efficient Attention profiles | Validated for the profiled operator, dtype, shape, PyTorch, CUDA, and GPU combinations |
+| Workspace modeling | Adds graph-persistent or operator-local workspace at the correct liveness point; built-ins cover Attention plus exact-stack matrix/convolution observations, and JSON/YAML registries support fixed, linear-IO, or tiled formulas | Validated only for each matched operator, dtype, shape, PyTorch, CUDA, and GPU envelope |
 | Real-GPU calibration | Compares real CUDA, passthrough, Hybrid clamp, FakeCUDA, allocator counters, and NVML; aggregates multiple GPUs into signature-matched calibration bundles | Validated on RTX 3090 Ti and RTX PRO 5000 datasets; calibration is not extrapolated across changed workload signatures |
 | Dense-decoder inference estimator | Reads safetensors headers without materializing weights and derives parameter bytes, KV cache, eager/SDPA transients, runtime overhead, and prefill/decode matrix FLOPs | Maintained for dense decoder-only models; MoE, adapters, quantized checkpoints, custom kernels, and backend workspaces need dedicated models |
 | SFT memory references | Full-parameter, LoRA, and native packed-NF4 QLoRA; BF16, checkpointing, accumulation, first/steady AdamW steps, and direct or nested scale storage | Validated for maintained Qwen3.5-0.8B/2B matrices; native NF4 does not claim bitsandbytes fused-kernel parity |
@@ -475,6 +481,7 @@ Coverage labels used below:
 | Native device report | Memory peaks, IO, calls, kernel-launch counts, compatibility events, and maintained GEMM statistics | Maintained `fake_gpu_report.json` |
 | Preflight and estimator reports | JSON/Markdown preflight, calibration, static-memory, LLM inference, SFT, FSDP/FSDP2, and comparison artifacts | Maintained for their documented runners; see [Reports](#reports) |
 | Schema and consistency checks | JSON Schema validation plus cross-field reconciliation of bytes, timelines, directions, ranks, topology, failures, and recovery events | Maintained validation tooling |
+| Declarative validation matrices | JSON/TOML/YAML matrices, prerequisites, timeouts, output/file/JSON assertions, strict skip handling, per-case logs, and unified host/Git-aware reports | Maintained |
 | Human-readable test evidence | Markdown companions, a unified HTML error/test report, focused suite summaries, and the checked-in [validation snapshot](#validation-snapshot) | Maintained documentation artifacts |
 
 The list above describes implemented behavior, not a promise that every CUDA,
@@ -561,6 +568,8 @@ FAKEGPU_PROFILES=a100:4,h100:4
 | Static memory validation report | `./ftest static_memory_validation` | Graph liveness, optimizer phases, workspace profiles, and real-CUDA comparison |
 | LLM inference estimate | `fakegpu estimate-llm --json ...` | Checkpoint storage, KV cache, transient tensors, process-memory estimate, and matrix FLOPs |
 | Virtual SMI state | `FAKEGPU_SMI_STATE_PATH` / `FAKEGPU_SMI_STATE_DIR` | Per-process current/peak tracked and simulated bytes, stage/confidence metadata, and optional calibrated runtime overhead |
+| Declarative validation report | `fakegpu validate --manifest ...` | Git/host identity, expanded matrix values, prerequisites, assertions, duration, and per-case stdout/stderr |
+| Allocator trace comparison | `verification/allocator_trace_validation.py` | Real/FakeCUDA allocated and reserved bytes across reuse, free, and `empty_cache()` stages |
 
 Output paths can be configured with:
 
@@ -601,6 +610,15 @@ Across 13 MLP/Transformer workloads and 26 GPU observations:
 - no maintained Attention workload used an unprofiled or extrapolated profile
 
 These results validate the maintained parameter grid. They do not establish accuracy for arbitrary models, shapes, PyTorch releases, or CUDA backends.
+
+The v1.5.5 allocator trace was also checked on both hosts. All 15
+small/medium/large allocation, reuse, free, and `empty_cache()` stages matched
+real CUDA exactly for allocated and reserved bytes. Controlled matrix and
+convolution workspace capture produced ten exact-stack profiles. The same
+FP32 convolution required `8,536,576` workspace bytes on the RTX 3090 Ti and
+`16,925,184` bytes on the RTX PRO 5000, demonstrating why these measurements
+are matched by architecture and software stack rather than treated as a
+portable formula.
 
 The Qwen3-8B BF16 inference path was also checked on the RTX PRO 5000 with
 SDPA, a 9-token prompt, and two generated token IDs:
@@ -663,6 +681,7 @@ prediction.
 ./ftest dataloader_replay
 ./ftest static_memory_validation
 ./ftest real_gpu_calibration
+fakegpu validate --manifest verification/data/validation_smoke.yaml --strict
 python3 -m pytest -q
 ```
 
@@ -753,6 +772,8 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 - The fixed-size elastic DDP checks rely on `torchrun` for worker supervision and rendezvous. Mid-accumulation recovery stores one atomic file per host and replicates every rank-local gradient, RNG state, sampler cursor, deterministic DataLoader construction seed, committed sample record, and one application-staged prefetched batch into each file, so a replacement can select state by logical rank after reassignment. The maintained two-worker case rebuilds a spawn DataLoader and replays deterministic map-style worker transforms; it does not serialize live multiprocessing queues or guarantee replay for iterable datasets, external side effects, or nondeterministic transforms. This approach keeps the world size fixed, has O(world-size) rank-state storage per host, assumes the local checkpoint survives, and does not restore sharded ZeRO/FSDP optimizer state. FakeGPU does not provide heartbeat-based detection or dynamic membership resizing. The direct-collective recovery path still requires survivors to call `ncclCommShrink` with an explicit exclusion list.
 - The standalone DataLoader matrix validates exact reconstruction of an application-visible committed/staged prefix. Internal prefetch counters are diagnostics only; it drains the remaining epoch before worker shutdown for compatibility with PyTorch 2.8 and does not serialize live queues or in-flight dataset side effects.
 - Static and runtime memory estimates can omit backend-internal allocations outside matched profiles.
+- The built-in caching allocator follows the observed default segment policy for the validated traces; custom allocator settings, expandable segments, stream-order effects, and backend-private pools can differ.
+- Workspace profiles are applied only when their operator, GPU profile, compute capability, software stack, dtype, and shape constraints match. Unmatched operators remain visible in the estimator report instead of being extrapolated silently.
 - Hybrid mode requires a real GPU and remains limited to validated Driver/runtime surfaces.
 - macOS system binaries can remove `DYLD_*` variables because of SIP; use a Homebrew, conda, or pyenv Python.
 
@@ -766,6 +787,7 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 - [Architecture and Project Structure](docs/project-structure.md)
 - [Torch Patch System](docs/phase2-custom-torch.md)
 - [Reports and Validation](docs/reports-and-validation.md)
+- [Declarative Validation Manifests](docs/validation-manifests.md)
 - [Distributed Simulation Usage](docs/distributed-sim-usage.md)
 - [Distributed Design Notes](docs/multi-node-design.md)
 - [cuBLASLt Compatibility Notes](docs/cublaslt-fix.md)

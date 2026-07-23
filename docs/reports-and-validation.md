@@ -57,7 +57,7 @@ Example shape:
 
 ```json
 {
-  "report_version": "1.5.4",
+  "report_version": "1.5.5",
   "mode": "simulate",
   "devices": [
     {
@@ -173,7 +173,15 @@ Status values:
 | `FAIL_RUNTIME` | Dependencies, data, model loading, code, or environment setup failed. |
 | `WARN_INCOMPLETE_TRACKING` | The run completed, but memory tracking was not complete enough for a strong fit/no-fit judgment. |
 
-Each device entry includes total memory, peak memory, headroom, allocation count, `current_bytes_by_category`, `peak_by_stage`, and `largest_allocations`. In fakecuda mode, top allocations include bytes, dtype, shape, stage, and a coarse category such as `parameter`, `buffer`, `gradient`, `optimizer_state`, `activation`, `temporary`, or `tensor`. Add `--allocation-stacks` to include short Python stack traces for those top allocations.
+Each device entry includes total memory, conservative peak memory, requested
+tensor peak, caching-allocator reserved peak, inactive split bytes, segment
+count, headroom, allocation count, `current_bytes_by_category`,
+`peak_by_stage`, and `largest_allocations`. The conservative peak and
+headroom use the larger of allocated and reserved memory. In fakecuda mode,
+top allocations include bytes, dtype, shape, stage, and a coarse category such
+as `parameter`, `buffer`, `gradient`, `optimizer_state`, `activation`,
+`temporary`, or `tensor`. Add `--allocation-stacks` to include short Python
+stack traces for those top allocations.
 
 Static-memory validation reports retain forward, backward, and optimizer CUDA peaks separately. Workspace details distinguish total profiled bytes from the effective peak contribution: graph-phase persistent storage applies across the graph, while operator-local workspace is combined only with the live storage at its ATen node. Reports also list graph-modeled and unprofiled Attention operators.
 
@@ -191,7 +199,9 @@ memory, tensor/process peaks, and per-step matrix FLOPs.
 When `FAKEGPU_SMI_STATE_PATH` or `FAKEGPU_SMI_STATE_DIR` is set before the
 FakeCUDA runtime starts, each process publishes a `fakegpu.smi_state.v1` JSON
 file. `fakegpu nvidia-smi` displays current and peak tracked tensor memory plus
-an optional empirically calibrated runtime overhead. The state also records
+allocator-reserved memory and an optional empirically calibrated runtime
+overhead. Simulated process memory uses reserved memory as its baseline, which
+includes reusable cached segments. The state also records
 host, logical device/profile, stage, and tracking confidence. Use
 `--loop <seconds>` for repeated refreshes and `--count <n>` for a bounded run;
 looped JSON output is NDJSON, and the state directory is rediscovered before
@@ -202,6 +212,49 @@ NVML process memory in real mode, executes CPU-backed FakeCUDA with the physical
 GPU hidden, and compares observed FLOPs with the shape estimator. See
 [LLM Inference Estimation](llm-inference-estimation.md) for commands, measured
 results, and the exact scope of the current model.
+
+## Declarative validation report
+
+`fakegpu validate --manifest <path>` executes a parameter matrix and writes
+`validation_report.json`, `validation_report.md`, and per-case stdout/stderr
+logs. Reports preserve the Git commit, host, expanded matrix parameters,
+prerequisite skips, assertion failures, and durations. The manifest supports
+command/module/file prerequisites, output and duration assertions, created
+files, and JSON Pointer checks.
+
+The maintained cross-profile smoke matrix is:
+
+```bash
+fakegpu validate \
+  --manifest verification/data/validation_smoke.yaml \
+  --report-dir build/validation-smoke \
+  --strict
+```
+
+The schema is `fakegpu.validation_manifest.v1`; see
+[Declarative Validation Manifests](validation-manifests.md).
+
+## Allocator and backend-workspace validation
+
+The fixed allocator trace compares allocated and reserved bytes after small,
+medium, and large allocations, reuse, frees, and `empty_cache()`:
+
+```bash
+python3 verification/allocator_trace_validation.py capture \
+  --mode real --profile rtx3090ti --output build/allocator-real.json
+python3 verification/allocator_trace_validation.py capture \
+  --mode fakecuda --profile rtx3090ti --output build/allocator-fake.json
+python3 verification/allocator_trace_validation.py compare \
+  --real build/allocator-real.json \
+  --fakecuda build/allocator-fake.json \
+  --output build/allocator-comparison.json
+```
+
+`verification/workspace_profile_validation.py capture` measures controlled
+matrix and convolution workspace peaks on real CUDA. `build-catalog` converts
+one or more captures into exact-stack profiles. The built-in catalog includes
+ten Ampere/Blackwell observations and can be inspected with
+`fakegpu workspace-profiles --json`.
 
 ## Unified HTML test report
 
