@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
+import verification.run_physical_multihost as physical_multihost
 
 from verification.run_physical_multihost import (
     NodeSpec,
@@ -82,6 +84,49 @@ def test_shell_command_quotes_environment_and_paths() -> None:
     assert "cd '/srv/fake gpu'" in command
     assert "mkdir -p '/tmp/report dir'" in command
     assert "'VALUE=with spaces'" in command
+
+
+def test_read_remote_text_retries_transient_ssh_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def fake_run_remote(
+        node: NodeSpec,
+        command: str,
+        *,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal attempts
+        attempts += 1
+        assert node.name == "gpu"
+        assert "/tmp/report.json" in command
+        assert timeout == 20.0
+        if attempts < 3:
+            raise RuntimeError("transient SSH failure")
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"status": "success"}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(physical_multihost, "_run_remote", fake_run_remote)
+    monkeypatch.setattr(physical_multihost.time, "sleep", lambda _: None)
+    node = NodeSpec(
+        name="gpu",
+        ssh="gpu",
+        repo="/srv/fakegpu",
+        python="/opt/python",
+    )
+
+    result = physical_multihost._read_remote_text(
+        node,
+        "/tmp/report.json",
+    )
+
+    assert result == '{"status": "success"}'
+    assert attempts == 3
 
 
 def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None:
