@@ -1,4 +1,529 @@
 {
   "schema_version": "fakegpu.workspace_profiles.v1",
-  "profiles": []
+  "profiles": [
+    {
+      "id": "conv-bf16-n2-c64-h128-k64.rtx-pro-5000-blackwell.torch-2.9.1.cuda-12.8",
+      "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
+      "lifetime": "operator_local",
+      "kind": "operator_workspace_storage",
+      "priority": 100,
+      "confidence": "measured_physical_gpu_exact_stack_shape",
+      "match": {
+        "device_types": [
+          "cuda"
+        ],
+        "profile_ids": [
+          "rtx-pro-5000-blackwell"
+        ],
+        "compute_capabilities": [
+          "12.0"
+        ],
+        "torch_versions": [
+          "2.9.1+cu128"
+        ],
+        "cuda_versions": [
+          "12.8"
+        ],
+        "input_dtypes": [
+          "torch.bfloat16",
+          "torch.bfloat16"
+        ],
+        "input_shapes": [
+          [
+            2,
+            64,
+            128,
+            128
+          ],
+          [
+            64,
+            64,
+            3,
+            3
+          ]
+        ]
+      },
+      "bytes": 8462848,
+      "validated_envelope": {
+        "gpu_name": "NVIDIA RTX PRO 5000 72GB Blackwell",
+        "profile_id": "rtx-pro-5000-blackwell",
+        "compute_capability": "12.0",
+        "torch_version": "2.9.1+cu128",
+        "cuda_version": "12.8",
+        "cudnn_version": 91002,
+        "workload": "conv-bf16-n2-c64-h128-k64",
+        "warmups": 3
+      }
+    },
+    {
+      "id": "conv-bf16-n2-c64-h128-k64.rtx3090ti.torch-2.12.1.cuda-13.0",
+      "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
+      "lifetime": "operator_local",
+      "kind": "operator_workspace_storage",
+      "priority": 100,
+      "confidence": "measured_physical_gpu_exact_stack_shape",
+      "match": {
+        "device_types": [
+          "cuda"
+        ],
+        "profile_ids": [
+          "rtx3090ti"
+        ],
+        "compute_capabilities": [
+          "8.6"
+        ],
+        "torch_versions": [
+          "2.12.1+cu130"
+        ],
+        "cuda_versions": [
+          "13.0"
+        ],
+        "input_dtypes": [
+          "torch.bfloat16",
+          "torch.bfloat16"
+        ],
+        "input_shapes": [
+          [
+            2,
+            64,
+            128,
+            128
+          ],
+          [
+            64,
+            64,
+            3,
+            3
+          ]
+        ]
+      },
+      "bytes": 8462848,
+      "validated_envelope": {
+        "gpu_name": "NVIDIA GeForce RTX 3090 Ti",
+        "profile_id": "rtx3090ti",
+        "compute_capability": "8.6",
+        "torch_version": "2.12.1+cu130",
+        "cuda_version": "13.0",
+        "cudnn_version": 92000,
+        "workload": "conv-bf16-n2-c64-h128-k64",
+        "warmups": 3
+      }
+    },
+    {
+      "id": "conv-fp32-n2-c64-h128-k64.rtx-pro-5000-blackwell.torch-2.9.1.cuda-12.8",
+      "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
+      "lifetime": "operator_local",
+      "kind": "operator_workspace_storage",
+      "priority": 100,
+      "confidence": "measured_physical_gpu_exact_stack_shape",
+      "match": {
+        "device_types": [
+          "cuda"
+        ],
+        "profile_ids": [
+          "rtx-pro-5000-blackwell"
+        ],
+        "compute_capabilities": [
+          "12.0"
+        ],
+        "torch_versions": [
+          "2.9.1+cu128"
+        ],
+        "cuda_versions": [
+          "12.8"
+        ],
+        "input_dtypes": [
+          "torch.float32",
+          "torch.float32"
+        ],
+        "input_shapes": [
+          [
+            2,
+            64,
+            128,
+            128
+          ],
+          [
+            64,
+            64,
+            3,
+            3
+          ]
+        ]
+      },
+      "bytes": 16925184,
+      "validated_envelope": {
+        "gpu_name": "NVIDIA RTX PRO 5000 72GB Blackwell",
+        "profile_id": "rtx-pro-5000-blackwell",
+        "compute_capability": "12.0",
+        "torch_version": "2.9.1+cu128",
+        "cuda_version": "12.8",
+        "cudnn_version": 91002,
+        "workload": "conv-fp32-n2-c64-h128-k64",
+        "warmups": 3
+      }
+    },
+    {
+      "id": "conv-fp32-n2-c64-h128-k64.rtx3090ti.torch-2.12.1.cuda-13.0",
+      "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
+      "lifetime": "operator_local",
+      "kind": "operator_workspace_storage",
+      "priority": 100,
+      "confidence": "measured_physical_gpu_exact_stack_shape",
+      "match": {
+        "device_types": [
+          "cuda"
+        ],
+        "profile_ids": [
+          "rtx3090ti"
+        ],
+        "compute_capabilities": [
+          "8.6"
+        ],
+        "torch_versions": [
+          "2.12.1+cu130"
+        ],
+        "cuda_versions": [
+          "13.0"
+        ],
+        "input_dtypes": [
+          "torch.float32",
+          "torch.float32"
+        ],
+        "input_shapes": [
+          [
+            2,
+            64,
+            128,
+            128
+          ],
+          [
+            64,
+            64,
+            3,
+            3
+          ]
+        ]
+      },
+      "bytes": 8536576,
+      "validated_envelope": {
+        "gpu_name": "NVIDIA GeForce RTX 3090 Ti",
+        "profile_id": "rtx3090ti",
+        "compute_capability": "8.6",
+        "torch_version": "2.12.1+cu130",
+        "cuda_version": "13.0",
+        "cudnn_version": 92000,
+        "workload": "conv-fp32-n2-c64-h128-k64",
+        "warmups": 3
+      }
+    },
+    {
+      "id": "conv-fp32-n4-c128-h64-k128.rtx-pro-5000-blackwell.torch-2.9.1.cuda-12.8",
+      "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
+      "lifetime": "operator_local",
+      "kind": "operator_workspace_storage",
+      "priority": 100,
+      "confidence": "measured_physical_gpu_exact_stack_shape",
+      "match": {
+        "device_types": [
+          "cuda"
+        ],
+        "profile_ids": [
+          "rtx-pro-5000-blackwell"
+        ],
+        "compute_capabilities": [
+          "12.0"
+        ],
+        "torch_versions": [
+          "2.9.1+cu128"
+        ],
+        "cuda_versions": [
+          "12.8"
+        ],
+        "input_dtypes": [
+          "torch.float32",
+          "torch.float32"
+        ],
+        "input_shapes": [
+          [
+            4,
+            128,
+            64,
+            64
+          ],
+          [
+            128,
+            128,
+            3,
+            3
+          ]
+        ]
+      },
+      "bytes": 17367552,
+      "validated_envelope": {
+        "gpu_name": "NVIDIA RTX PRO 5000 72GB Blackwell",
+        "profile_id": "rtx-pro-5000-blackwell",
+        "compute_capability": "12.0",
+        "torch_version": "2.9.1+cu128",
+        "cuda_version": "12.8",
+        "cudnn_version": 91002,
+        "workload": "conv-fp32-n4-c128-h64-k128",
+        "warmups": 3
+      }
+    },
+    {
+      "id": "conv-fp32-n4-c128-h64-k128.rtx3090ti.torch-2.12.1.cuda-13.0",
+      "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
+      "lifetime": "operator_local",
+      "kind": "operator_workspace_storage",
+      "priority": 100,
+      "confidence": "measured_physical_gpu_exact_stack_shape",
+      "match": {
+        "device_types": [
+          "cuda"
+        ],
+        "profile_ids": [
+          "rtx3090ti"
+        ],
+        "compute_capabilities": [
+          "8.6"
+        ],
+        "torch_versions": [
+          "2.12.1+cu130"
+        ],
+        "cuda_versions": [
+          "13.0"
+        ],
+        "input_dtypes": [
+          "torch.float32",
+          "torch.float32"
+        ],
+        "input_shapes": [
+          [
+            4,
+            128,
+            64,
+            64
+          ],
+          [
+            128,
+            128,
+            3,
+            3
+          ]
+        ]
+      },
+      "bytes": 8978944,
+      "validated_envelope": {
+        "gpu_name": "NVIDIA GeForce RTX 3090 Ti",
+        "profile_id": "rtx3090ti",
+        "compute_capability": "8.6",
+        "torch_version": "2.12.1+cu130",
+        "cuda_version": "13.0",
+        "cudnn_version": 92000,
+        "workload": "conv-fp32-n4-c128-h64-k128",
+        "warmups": 3
+      }
+    },
+    {
+      "id": "mm-bf16-1024.rtx-pro-5000-blackwell.torch-2.9.1.cuda-12.8",
+      "operator": "aten::mm(Tensor self, Tensor mat2) -> Tensor",
+      "lifetime": "operator_local",
+      "kind": "operator_workspace_storage",
+      "priority": 100,
+      "confidence": "measured_physical_gpu_exact_stack_shape",
+      "match": {
+        "device_types": [
+          "cuda"
+        ],
+        "profile_ids": [
+          "rtx-pro-5000-blackwell"
+        ],
+        "compute_capabilities": [
+          "12.0"
+        ],
+        "torch_versions": [
+          "2.9.1+cu128"
+        ],
+        "cuda_versions": [
+          "12.8"
+        ],
+        "input_dtypes": [
+          "torch.bfloat16",
+          "torch.bfloat16"
+        ],
+        "input_shapes": [
+          [
+            1024,
+            1024
+          ],
+          [
+            1024,
+            1024
+          ]
+        ]
+      },
+      "bytes": 0,
+      "validated_envelope": {
+        "gpu_name": "NVIDIA RTX PRO 5000 72GB Blackwell",
+        "profile_id": "rtx-pro-5000-blackwell",
+        "compute_capability": "12.0",
+        "torch_version": "2.9.1+cu128",
+        "cuda_version": "12.8",
+        "cudnn_version": 91002,
+        "workload": "mm-bf16-1024",
+        "warmups": 3
+      }
+    },
+    {
+      "id": "mm-bf16-1024.rtx3090ti.torch-2.12.1.cuda-13.0",
+      "operator": "aten::mm(Tensor self, Tensor mat2) -> Tensor",
+      "lifetime": "operator_local",
+      "kind": "operator_workspace_storage",
+      "priority": 100,
+      "confidence": "measured_physical_gpu_exact_stack_shape",
+      "match": {
+        "device_types": [
+          "cuda"
+        ],
+        "profile_ids": [
+          "rtx3090ti"
+        ],
+        "compute_capabilities": [
+          "8.6"
+        ],
+        "torch_versions": [
+          "2.12.1+cu130"
+        ],
+        "cuda_versions": [
+          "13.0"
+        ],
+        "input_dtypes": [
+          "torch.bfloat16",
+          "torch.bfloat16"
+        ],
+        "input_shapes": [
+          [
+            1024,
+            1024
+          ],
+          [
+            1024,
+            1024
+          ]
+        ]
+      },
+      "bytes": 0,
+      "validated_envelope": {
+        "gpu_name": "NVIDIA GeForce RTX 3090 Ti",
+        "profile_id": "rtx3090ti",
+        "compute_capability": "8.6",
+        "torch_version": "2.12.1+cu130",
+        "cuda_version": "13.0",
+        "cudnn_version": 92000,
+        "workload": "mm-bf16-1024",
+        "warmups": 3
+      }
+    },
+    {
+      "id": "mm-fp32-1024.rtx-pro-5000-blackwell.torch-2.9.1.cuda-12.8",
+      "operator": "aten::mm(Tensor self, Tensor mat2) -> Tensor",
+      "lifetime": "operator_local",
+      "kind": "operator_workspace_storage",
+      "priority": 100,
+      "confidence": "measured_physical_gpu_exact_stack_shape",
+      "match": {
+        "device_types": [
+          "cuda"
+        ],
+        "profile_ids": [
+          "rtx-pro-5000-blackwell"
+        ],
+        "compute_capabilities": [
+          "12.0"
+        ],
+        "torch_versions": [
+          "2.9.1+cu128"
+        ],
+        "cuda_versions": [
+          "12.8"
+        ],
+        "input_dtypes": [
+          "torch.float32",
+          "torch.float32"
+        ],
+        "input_shapes": [
+          [
+            1024,
+            1024
+          ],
+          [
+            1024,
+            1024
+          ]
+        ]
+      },
+      "bytes": 0,
+      "validated_envelope": {
+        "gpu_name": "NVIDIA RTX PRO 5000 72GB Blackwell",
+        "profile_id": "rtx-pro-5000-blackwell",
+        "compute_capability": "12.0",
+        "torch_version": "2.9.1+cu128",
+        "cuda_version": "12.8",
+        "cudnn_version": 91002,
+        "workload": "mm-fp32-1024",
+        "warmups": 3
+      }
+    },
+    {
+      "id": "mm-fp32-1024.rtx3090ti.torch-2.12.1.cuda-13.0",
+      "operator": "aten::mm(Tensor self, Tensor mat2) -> Tensor",
+      "lifetime": "operator_local",
+      "kind": "operator_workspace_storage",
+      "priority": 100,
+      "confidence": "measured_physical_gpu_exact_stack_shape",
+      "match": {
+        "device_types": [
+          "cuda"
+        ],
+        "profile_ids": [
+          "rtx3090ti"
+        ],
+        "compute_capabilities": [
+          "8.6"
+        ],
+        "torch_versions": [
+          "2.12.1+cu130"
+        ],
+        "cuda_versions": [
+          "13.0"
+        ],
+        "input_dtypes": [
+          "torch.float32",
+          "torch.float32"
+        ],
+        "input_shapes": [
+          [
+            1024,
+            1024
+          ],
+          [
+            1024,
+            1024
+          ]
+        ]
+      },
+      "bytes": 0,
+      "validated_envelope": {
+        "gpu_name": "NVIDIA GeForce RTX 3090 Ti",
+        "profile_id": "rtx3090ti",
+        "compute_capability": "8.6",
+        "torch_version": "2.12.1+cu130",
+        "cuda_version": "13.0",
+        "cudnn_version": 92000,
+        "workload": "mm-fp32-1024",
+        "warmups": 3
+      }
+    }
+  ]
 }

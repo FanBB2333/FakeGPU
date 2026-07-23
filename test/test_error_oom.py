@@ -13,6 +13,8 @@ os.environ["FAKEGPU_MEMORY_TRACKING"] = "1"
 
 class TestOOMErrors(unittest.TestCase):
     torch = None
+    _tracker = None
+    _original_total = None
     _SMALL_MEM = 10 * 1024**2  # 10 MB for testing (avoids allocating real 80GB)
 
     @classmethod
@@ -28,11 +30,22 @@ class TestOOMErrors(unittest.TestCase):
         # We shrink it so OOM tests don't require allocating real 80GB of RAM.
         import fakegpu.torch_patch as tp
         if tp._memory_tracker is not None:
+            cls._tracker = tp._memory_tracker
+            cls._original_total = list(tp._memory_tracker._total)
             tp._memory_tracker._total = [cls._SMALL_MEM] * 2
 
-    def setUp(self):
-        # Force GC to reclaim any leftover tensors between tests
+    @classmethod
+    def tearDownClass(cls):
         gc.collect()
+        cls.torch.cuda.empty_cache()
+        if cls._tracker is not None and cls._original_total is not None:
+            cls._tracker._total = cls._original_total
+
+    def setUp(self):
+        # Force GC to reclaim live tensors and release cached allocator
+        # segments before applying the synthetic 10 MiB capacity.
+        gc.collect()
+        self.torch.cuda.empty_cache()
 
     def test_e2_1_single_allocation_exceeds_capacity(self):
         """E2-1: create tensor larger than device memory -> OutOfMemoryError."""
@@ -50,7 +63,7 @@ class TestOOMErrors(unittest.TestCase):
         sixty_pct_floats = int((total * 0.6) // 4)
         a = torch.randn(sixty_pct_floats, device="cuda:0")
         with self.assertRaises(torch.cuda.OutOfMemoryError):
-            b = torch.randn(sixty_pct_floats, device="cuda:0")
+            torch.randn(sixty_pct_floats, device="cuda:0")
         del a
 
     def test_e2_3_gc_reclaims_memory(self):
@@ -82,7 +95,7 @@ class TestOOMErrors(unittest.TestCase):
         gc.collect()
 
     def test_e2_5_mem_get_info_reflects_allocations(self):
-        """E2-5: mem_get_info free = total - allocated."""
+        """E2-5: mem_get_info free reflects allocator-reserved bytes."""
         torch = self.torch
         gc.collect()
         free_before, total = torch.cuda.mem_get_info(0)
@@ -90,6 +103,10 @@ class TestOOMErrors(unittest.TestCase):
         free_after, total2 = torch.cuda.mem_get_info(0)
         self.assertEqual(total, total2)
         self.assertLess(free_after, free_before)
+        self.assertEqual(
+            free_after,
+            total2 - torch.cuda.memory_reserved(0),
+        )
         del a
         gc.collect()
 
