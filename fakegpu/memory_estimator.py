@@ -5,7 +5,13 @@ import hashlib
 import json
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from os import PathLike
 from typing import Any
+
+from .workspace_profiles import (
+    match_workspace_profile,
+    workspace_profile_summary,
+)
 
 
 SCHEMA_VERSION = "static_memory_estimate.v1"
@@ -26,6 +32,8 @@ def estimate_module_memory(
     retain_input_storages: bool = True,
     retain_forward_outputs: bool = True,
     target_device: str = "auto",
+    target_profile: str | None = None,
+    workspace_profile_paths: Sequence[str | PathLike[str]] | None = None,
 ) -> dict[str, Any]:
     """Estimate a module's tensor-storage peak from a captured ATen graph.
 
@@ -43,6 +51,7 @@ def estimate_module_memory(
 
     import torch
     from torch.func import functional_call, grad_and_value
+
     trace_device = _resolve_trace_device(
         torch,
         parameters_source=module.parameters(),
@@ -58,7 +67,9 @@ def estimate_module_memory(
     normalized_optimizer = str(optimizer).strip().lower()
     if normalized_optimizer not in SUPPORTED_OPTIMIZERS:
         choices = ", ".join(sorted(SUPPORTED_OPTIMIZERS))
-        raise ValueError(f"unsupported optimizer {optimizer!r}; expected one of: {choices}")
+        raise ValueError(
+            f"unsupported optimizer {optimizer!r}; expected one of: {choices}"
+        )
     if normalized_mode == "forward" and normalized_optimizer != "none":
         normalized_optimizer = "none"
 
@@ -78,7 +89,9 @@ def estimate_module_memory(
     buffers = dict(module.named_buffers())
 
     if normalized_mode == "training" and not trainable_parameters:
-        raise ValueError("training estimation requires at least one trainable parameter")
+        raise ValueError(
+            "training estimation requires at least one trainable parameter"
+        )
 
     placeholder_categories: list[str]
     gradient_output_start: int | None
@@ -199,7 +212,9 @@ def estimate_module_memory(
     )
 
     parameter_bytes = _unique_tensor_storage_bytes(parameters.values())
-    trainable_parameter_bytes = _unique_tensor_storage_bytes(trainable_parameters.values())
+    trainable_parameter_bytes = _unique_tensor_storage_bytes(
+        trainable_parameters.values()
+    )
     frozen_parameter_bytes = _unique_tensor_storage_bytes(frozen_parameters.values())
     buffer_bytes = _unique_tensor_storage_bytes(buffers.values())
     input_bytes = _unique_tensor_storage_bytes(
@@ -217,10 +232,14 @@ def estimate_module_memory(
         graph_module,
         graph=graph,
         target_device=trace_device,
+        target_profile=target_profile,
+        workspace_profile_paths=workspace_profile_paths,
     )
-    graph_phase_peak = int(graph["peak_live_bytes"]) + int(
-        optimizer_state["total_bytes"]
-    ) + int(workspace_estimate["effective_peak_contribution_bytes"])
+    graph_phase_peak = (
+        int(graph["peak_live_bytes"])
+        + int(optimizer_state["total_bytes"])
+        + int(workspace_estimate["effective_peak_contribution_bytes"])
+    )
     first_step_graph_phase_peak = int(graph["peak_live_bytes"]) + int(
         workspace_estimate["effective_peak_contribution_bytes"]
     )
@@ -273,6 +292,7 @@ def estimate_module_memory(
         ),
         "mode": normalized_mode,
         "trace_device": str(trace_device),
+        "target_profile": target_profile,
         "retain_forward_outputs": bool(
             normalized_mode == "training" and retain_forward_outputs
         ),
@@ -331,7 +351,9 @@ def analyze_graph_memory(
     try:
         from torch.fx import Node
     except Exception as exc:  # pragma: no cover - torch import error surface
-        raise RuntimeError(f"torch.fx is required for graph memory analysis: {exc}") from exc
+        raise RuntimeError(
+            f"torch.fx is required for graph memory analysis: {exc}"
+        ) from exc
 
     nodes = list(graph_module.graph.nodes)
     node_index = {node: index for index, node in enumerate(nodes)}
@@ -502,14 +524,18 @@ def analyze_graph_memory(
             live_bytes -= int(storage_records[key]["bytes"])
 
     final_live_keys = set(live_keys)
-    final_live_bytes = sum(int(storage_records[key]["bytes"]) for key in final_live_keys)
+    final_live_bytes = sum(
+        int(storage_records[key]["bytes"]) for key in final_live_keys
+    )
 
     peak_node = nodes[peak_index] if nodes else None
     category_bytes: dict[str, int] = {}
     for key in peak_live_keys:
         record = storage_records[key]
         category = str(record.get("category") or "unknown")
-        category_bytes[category] = category_bytes.get(category, 0) + int(record["bytes"])
+        category_bytes[category] = category_bytes.get(category, 0) + int(
+            record["bytes"]
+        )
 
     final_category_bytes: dict[str, int] = {}
     for key in final_live_keys:
@@ -525,10 +551,9 @@ def analyze_graph_memory(
         for key in gradient_phase_peak_live_keys:
             record = storage_records[key]
             category = str(record.get("category") or "unknown")
-            gradient_phase_category_bytes[category] = (
-                gradient_phase_category_bytes.get(category, 0)
-                + int(record["bytes"])
-            )
+            gradient_phase_category_bytes[category] = gradient_phase_category_bytes.get(
+                category, 0
+            ) + int(record["bytes"])
         gradient_phase_peak_node = nodes[gradient_phase_peak_index]
         gradient_phase_start_node = nodes[gradient_phase_start_index]
         gradient_phase = {
@@ -551,18 +576,14 @@ def analyze_graph_memory(
         }
 
     forward_phase: dict[str, Any] | None = None
-    if (
-        forward_phase_peak_index is not None
-        and backward_phase_start_index is not None
-    ):
+    if forward_phase_peak_index is not None and backward_phase_start_index is not None:
         forward_phase_category_bytes: dict[str, int] = {}
         for key in forward_phase_peak_live_keys:
             record = storage_records[key]
             category = str(record.get("category") or "unknown")
-            forward_phase_category_bytes[category] = (
-                forward_phase_category_bytes.get(category, 0)
-                + int(record["bytes"])
-            )
+            forward_phase_category_bytes[category] = forward_phase_category_bytes.get(
+                category, 0
+            ) + int(record["bytes"])
         forward_phase_peak_node = nodes[forward_phase_peak_index]
         backward_phase_start_node = nodes[backward_phase_start_index]
         forward_phase = {
@@ -625,7 +646,9 @@ def analyze_graph_memory(
     return {
         "node_count": len(nodes),
         "operator_count": sum(
-            1 for node in nodes if node.op in {"call_function", "call_method", "call_module"}
+            1
+            for node in nodes
+            if node.op in {"call_function", "call_method", "call_module"}
         ),
         "operator_histogram": dict(sorted(operator_histogram.items())),
         "unique_storage_count": len(storage_records),
@@ -751,10 +774,13 @@ def _estimate_backend_workspace(
     *,
     graph: Mapping[str, Any],
     target_device: Any,
+    target_profile: str | None,
+    workspace_profile_paths: Sequence[str | PathLike[str]] | None,
 ) -> dict[str, Any]:
     profiles: list[dict[str, Any]] = []
     graph_modeled_attention_operators: dict[str, int] = {}
     unprofiled_attention_operators: dict[str, int] = {}
+    unprofiled_workspace_candidates: dict[str, int] = {}
 
     for node in graph_module.graph.nodes:
         if node.op not in {"call_function", "call_method", "call_module"}:
@@ -764,6 +790,8 @@ def _estimate_backend_workspace(
             node,
             target,
             target_device=target_device,
+            target_profile=target_profile,
+            workspace_profile_paths=workspace_profile_paths,
         )
         if profile is not None:
             profiles.append(profile)
@@ -777,12 +805,18 @@ def _estimate_backend_workspace(
             unprofiled_attention_operators[target] = (
                 unprofiled_attention_operators.get(target, 0) + 1
             )
+        if _is_workspace_candidate_operator(target):
+            unprofiled_workspace_candidates[target] = (
+                unprofiled_workspace_candidates.get(target, 0) + 1
+            )
 
     summary = _workspace_peak_summary(graph, profiles)
     return {
-        "method": "target_aten_operator_shape_profiles",
+        "method": "target_aten_operator_shape_profiles_with_registry",
         "lifetime_model": "node_liveness.v1",
         "target_device": str(target_device),
+        "target_profile": target_profile,
+        "catalog": workspace_profile_summary(workspace_profile_paths),
         **summary,
         "profiles": profiles,
         "profiled_operator_count": len(profiles),
@@ -796,7 +830,11 @@ def _estimate_backend_workspace(
         "unprofiled_attention_operators": dict(
             sorted(unprofiled_attention_operators.items())
         ),
+        "unprofiled_workspace_candidates": dict(
+            sorted(unprofiled_workspace_candidates.items())
+        ),
         "notes": [
+            "External JSON/YAML profiles are matched by operator, GPU/software stack, dtype, and shape before built-in formulas.",
             "Graph-phase persistent profiles are added across the graph phase.",
             "Operator-local workspaces are combined only with storage live at their execution node.",
             "Flash Attention auxiliary storage uses query shape, dtype, and 64-token sequence tiles.",
@@ -811,7 +849,18 @@ def _backend_workspace_profile(
     target: str,
     *,
     target_device: Any,
+    target_profile: str | None = None,
+    workspace_profile_paths: Sequence[str | PathLike[str]] | None = None,
 ) -> dict[str, Any] | None:
+    external = match_workspace_profile(
+        node,
+        target,
+        target_device=target_device,
+        target_profile=target_profile,
+        profile_paths=workspace_profile_paths,
+    )
+    if external is not None:
+        return external
     if "attention" not in target.lower():
         return None
     device_type = str(
@@ -974,9 +1023,7 @@ def _workspace_peak_summary(
             peak_graph_live_bytes = graph_live_bytes
             peak_operator_workspace_bytes = operator_workspace_bytes
 
-    profiled_bytes_sum = sum(
-        int(profile.get("bytes", 0) or 0) for profile in profiles
-    )
+    profiled_bytes_sum = sum(int(profile.get("bytes", 0) or 0) for profile in profiles)
     effective_peak_contribution = max(0, combined_peak_bytes - graph_peak_bytes)
     return {
         "total_bytes": profiled_bytes_sum,
@@ -1005,6 +1052,23 @@ def _is_graph_modeled_attention_operator(target: str) -> bool:
         "_scaled_dot_product_efficient_attention(" in target
         or "_scaled_dot_product_flash_attention(" in target
         or "_flash_attention_forward(" in target
+    )
+
+
+def _is_workspace_candidate_operator(target: str) -> bool:
+    lowered = target.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "attention",
+            "convolution",
+            "cudnn",
+            "addmm",
+            "bmm",
+            "matmul",
+            "mm.",
+            "::mm(",
+        )
     )
 
 
@@ -1050,7 +1114,9 @@ def _efficient_attention_backward_workspace_bytes(
 ) -> tuple[int, int, int, int, int, int]:
     shape = tuple(query.shape)
     if len(shape) != 4:
-        raise ValueError("Efficient Attention workspace profile requires a rank-4 query")
+        raise ValueError(
+            "Efficient Attention workspace profile requires a rank-4 query"
+        )
     batch_size = int(shape[0])
     sequence_length = int(shape[2])
     fixed_bytes = batch_size * _EFFICIENT_ATTENTION_BATCH_WORKSPACE_BYTES
@@ -1089,13 +1155,17 @@ def _default_loss(output: Any) -> Any:
 
     tensor = next(_iter_tensor_leaves(output), None)
     if tensor is None:
-        raise ValueError("unable to derive a loss because the module returned no tensor")
+        raise ValueError(
+            "unable to derive a loss because the module returned no tensor"
+        )
     if tensor.numel() == 1 and tensor.is_floating_point():
         return tensor.reshape(())
     if tensor.is_complex():
         return tensor.abs().square().mean()
     if not tensor.is_floating_point():
-        raise ValueError("default loss requires a floating-point or complex output tensor")
+        raise ValueError(
+            "default loss requires a floating-point or complex output tensor"
+        )
     return tensor.square().mean()
 
 
@@ -1129,9 +1199,7 @@ def _resolve_trace_device(
             ),
             None,
         )
-        return torch.device(
-            getattr(first_tensor, "device", torch.device("cpu"))
-        )
+        return torch.device(getattr(first_tensor, "device", torch.device("cpu")))
 
     device = torch.device(target_device)
     if device.type == "cuda" and not _torch_has_cuda_build(torch):
@@ -1291,7 +1359,9 @@ def _target_name(target: Any) -> str:
     if schema is not None:
         return str(schema)
     module = getattr(target, "__module__", None)
-    qualname = getattr(target, "__qualname__", None) or getattr(target, "__name__", None)
+    qualname = getattr(target, "__qualname__", None) or getattr(
+        target, "__name__", None
+    )
     if module and qualname:
         return f"{module}.{qualname}"
     return str(target)

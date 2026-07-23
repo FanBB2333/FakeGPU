@@ -31,6 +31,7 @@ def _report(mode: str, scale: int = 0) -> dict:
             {
                 "label": "after_inference",
                 "allocated_bytes": inference_current,
+                "reserved_bytes": inference_current,
                 "nvml": {"process_memory": process_memory} if real else None,
             }
         ],

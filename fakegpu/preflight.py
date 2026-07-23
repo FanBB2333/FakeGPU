@@ -750,8 +750,32 @@ def _normalize_devices(raw_report: dict[str, Any] | None, raw_report_kind: str |
     devices: list[dict[str, Any]] = []
     for raw in raw_report.get("devices", []) or []:
         total = int(raw.get("total_memory", 0) or 0)
-        peak = int(raw.get("peak_memory", raw.get("used_memory_peak", 0)) or 0)
+        allocated_peak = int(
+            raw.get("peak_memory", raw.get("used_memory_peak", 0)) or 0
+        )
+        reserved_peak = int(
+            raw.get("peak_reserved_memory", allocated_peak) or allocated_peak
+        )
+        peak = max(allocated_peak, reserved_peak)
         current = int(raw.get("current_memory", raw.get("used_memory_current", 0)) or 0)
+        current_reserved = int(raw.get("current_reserved_memory", current) or current)
+        allocated_peak_by_stage = {
+            str(stage): int(value)
+            for stage, value in dict(raw.get("peak_by_stage", {}) or {}).items()
+        }
+        reserved_peak_by_stage = {
+            str(stage): int(value)
+            for stage, value in dict(
+                raw.get("reserved_peak_by_stage", {}) or {}
+            ).items()
+        }
+        peak_by_stage = {
+            stage: max(
+                allocated_peak_by_stage.get(stage, 0),
+                reserved_peak_by_stage.get(stage, 0),
+            )
+            for stage in allocated_peak_by_stage.keys() | reserved_peak_by_stage.keys()
+        }
         alloc = raw.get("alloc", {})
         allocation_count = int(raw.get("allocation_count", alloc.get("calls", 0) if isinstance(alloc, dict) else 0) or 0)
         headroom = total - peak
@@ -763,12 +787,22 @@ def _normalize_devices(raw_report: dict[str, Any] | None, raw_report_kind: str |
                 "profile_id": raw.get("profile_id"),
                 "total_memory": total,
                 "peak_memory": peak,
+                "allocated_peak_memory": allocated_peak,
+                "peak_reserved_memory": reserved_peak,
                 "current_memory": current,
+                "current_reserved_memory": current_reserved,
+                "inactive_split_bytes": int(
+                    raw.get("inactive_split_bytes", 0) or 0
+                ),
+                "segment_count": int(raw.get("segment_count", 0) or 0),
+                "allocator_model": raw.get("allocator_model"),
                 "headroom_bytes": headroom,
                 "headroom_percent": round(headroom_percent, 3) if headroom_percent is not None else None,
                 "allocation_count": allocation_count,
                 "current_bytes_by_category": dict(raw.get("current_bytes_by_category", {}) or {}),
-                "peak_by_stage": dict(raw.get("peak_by_stage", {}) or {}),
+                "peak_by_stage": peak_by_stage,
+                "allocated_peak_by_stage": allocated_peak_by_stage,
+                "reserved_peak_by_stage": reserved_peak_by_stage,
                 "largest_allocations": list(raw.get("largest_allocations", []) or []),
                 "tracking_confidence": confidence,
             }

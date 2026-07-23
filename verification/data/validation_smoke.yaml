@@ -1,0 +1,63 @@
+schema_version: fakegpu.validation_manifest.v1
+
+defaults:
+  cwd: ../..
+  timeout_seconds: 60
+  env:
+    FAKEGPU_TERMINAL_REPORT: "0"
+  expect:
+    exit_code: 0
+
+cases:
+  - name: profile-doctor
+    matrix:
+      profile:
+        - rtx3090ti
+        - rtx-pro-5000-blackwell
+    command:
+      - "{python}"
+      - -m
+      - fakegpu
+      - doctor
+      - --profile
+      - "{profile}"
+      - --json
+    expect:
+      stdout_contains:
+        - '"ok": true'
+        - '"id": "{profile}"'
+
+  - name: allocator-api
+    matrix:
+      profile:
+        - test-512m
+        - rtx3090ti
+        - rtx-pro-5000-blackwell
+    requires:
+      python_modules:
+        - torch
+    command:
+      - "{python}"
+      - -c
+      - >-
+        import fakegpu;
+        fakegpu.init(runtime="fakecuda", profile="{profile}", device_count=1);
+        import torch;
+        tensor=torch.empty(1024, device="cuda", dtype=torch.float32);
+        assert torch.cuda.memory_allocated() >= 4096;
+        assert torch.cuda.memory_reserved() >= torch.cuda.memory_allocated();
+        assert torch.cuda.memory_stats()["segment.all.current"] >= 1;
+        print("allocator-ok")
+    expect:
+      stdout_contains: allocator-ok
+
+  - name: workspace-catalog
+    command:
+      - "{python}"
+      - -m
+      - fakegpu
+      - workspace-profiles
+      - --json
+    expect:
+      stdout_contains:
+        - '"schema_version": "fakegpu.workspace_profiles.v1"'

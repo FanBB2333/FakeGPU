@@ -1,0 +1,100 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest ruff PyYAML jsonschema
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Lint Python package
+        run: python -m ruff check fakegpu
+
+      - name: Run maintained CPU regression surface
+        env:
+          FAKEGPU_TERMINAL_REPORT: "0"
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            test/test_allocator_trace_validation.py \
+            test/test_cli_commands.py \
+            test/test_fakecuda_allocator.py \
+            test/test_preflight_cli.py \
+            test/test_runtime_init.py \
+            test/test_static_memory_estimator.py \
+            test/test_validation_manifest.py \
+            test/test_version_consistency.py \
+            test/test_virtual_smi.py \
+            test/test_workspace_profiles.py
+
+      - name: Run declarative smoke matrix
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m fakegpu validate \
+            --manifest verification/data/validation_smoke.yaml \
+            --report-dir build/validation-smoke \
+            --strict
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-${{ matrix.python-version }}
+          path: build/validation-smoke
+          if-no-files-found: ignore
+
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Validate native interception
+        run: ./ftest smoke
+
+      - name: Validate CPU numerical simulation
+        run: ./ftest cpu_sim
