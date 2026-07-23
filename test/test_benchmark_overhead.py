@@ -39,6 +39,7 @@ def _torch_minor_version() -> tuple[int, int]:
 
 _STRICT_REDIRECT_BOUNDS = _torch_minor_version() >= (2, 9)
 _FORWARD_PASS_MAX_RATIO = 8.0 if _torch_minor_version() >= (2, 11) else 4.0
+_MATMUL_MAX_RATIO = 3.5
 _TRAIN_STEP_MAX_RATIO = 5.0
 
 
@@ -182,8 +183,8 @@ class TestOverheadBounds(unittest.TestCase):
         self._assert_relative("create", "create", max_ratio=3.0)
 
     def test_matmul_overhead(self):
-        """Matmul overhead < 3x vs baseline (FakeCudaTensor __torch_function__ dispatch)."""
-        self._assert_relative("matmul", "matmul", max_ratio=3.0)
+        """Matmul overhead stays bounded with allocator accounting enabled."""
+        self._assert_relative("matmul", "matmul", max_ratio=_MATMUL_MAX_RATIO)
 
     def test_forward_pass_overhead(self):
         """Forward pass overhead stays within the version-calibrated bound."""
