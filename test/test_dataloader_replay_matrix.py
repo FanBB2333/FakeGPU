@@ -62,6 +62,7 @@ def _report(*, runtime_name: str = "runtime-a") -> dict[str, object]:
         "all_worker_pids_replaced": True,
         "sampler_partitions_exact": True,
         "epoch_variation_verified": True,
+        "scenario_process_isolation": True,
         "matrix_digest": "a" * 64,
         "sample_order_digest": "b" * 64,
         "rng_digest": "c" * 64,

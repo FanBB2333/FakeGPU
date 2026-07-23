@@ -10,6 +10,9 @@ import os
 import platform
 import random
 import re
+import subprocess
+import sys
+import tempfile
 import traceback
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -201,6 +204,17 @@ def _digest(payload: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _loader_seed(
+    loader_seed_base: int,
+    *,
+    scenario_name: str,
+    rank: int,
+) -> int:
+    name_digest = hashlib.sha256(scenario_name.encode("utf-8")).digest()
+    scenario_offset = int.from_bytes(name_digest[:4], "big") * 16
+    return loader_seed_base + scenario_offset + rank
+
+
 def _batch_to_record(batch: object) -> dict[str, list[int | float]]:
     if not isinstance(batch, dict):
         raise AssertionError(f"unexpected DataLoader batch: {batch!r}")
@@ -368,6 +382,158 @@ def _scenario_epoch_key(scenario: ReplayScenario) -> tuple[int, ...]:
     )
 
 
+def _runtime_metadata() -> dict[str, object]:
+    return {
+        "hostname": platform.node(),
+        "pid": os.getpid(),
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+        "torch_version": str(torch.__version__),
+        "torch_cuda_version": str(torch.version.cuda),
+        "numpy_version": str(np.__version__),
+    }
+
+
+def _build_matrix_report(
+    case_reports: list[dict[str, Any]],
+    scenarios: Sequence[ReplayScenario],
+    *,
+    dataset_size: int,
+    sampler_seed: int,
+    loader_seed_base: int,
+    isolated_scenario_processes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    if len(case_reports) != len(scenarios):
+        raise AssertionError("DataLoader case reports do not match scenarios")
+    deterministic_cases: list[dict[str, Any]] = []
+    sample_order_cases: list[dict[str, Any]] = []
+    rng_cases: list[dict[str, Any]] = []
+    for case, scenario in zip(case_reports, scenarios):
+        if case.get("scenario") != asdict(scenario):
+            raise AssertionError(
+                f"DataLoader scenario report changed: {case.get('scenario')}"
+            )
+        ranks = case.get("ranks")
+        if not isinstance(ranks, list):
+            raise AssertionError("DataLoader rank reports are missing")
+        deterministic_ranks = [
+            {
+                key: rank[key]
+                for key in (
+                    "rank",
+                    "loader_seed",
+                    "worker_seed_base",
+                    "expected_sample_ids",
+                    "committed_batches",
+                    "staged_batches",
+                )
+            }
+            for rank in ranks
+        ]
+        deterministic_cases.append(
+            {"scenario": asdict(scenario), "ranks": deterministic_ranks}
+        )
+        sample_order_cases.append(
+            {
+                "scenario": asdict(scenario),
+                "ranks": [
+                    {
+                        "rank": rank["rank"],
+                        "expected_sample_ids": rank["expected_sample_ids"],
+                    }
+                    for rank in ranks
+                ],
+            }
+        )
+        rng_cases.append(
+            {
+                "scenario": asdict(scenario),
+                "ranks": [
+                    {
+                        "rank": rank["rank"],
+                        "committed_batches": _rng_projection(
+                            rank["committed_batches"]
+                        ),
+                        "staged_batches": _rng_projection(
+                            rank["staged_batches"]
+                        ),
+                    }
+                    for rank in ranks
+                ],
+            }
+        )
+
+    epoch_comparisons: list[dict[str, Any]] = []
+    for left_index, left in enumerate(scenarios):
+        for right_index in range(left_index + 1, len(scenarios)):
+            right = scenarios[right_index]
+            if (
+                left.epoch == right.epoch
+                or _scenario_epoch_key(left) != _scenario_epoch_key(right)
+            ):
+                continue
+            left_orders = [
+                rank["expected_sample_ids"]
+                for rank in case_reports[left_index]["ranks"]
+            ]
+            right_orders = [
+                rank["expected_sample_ids"]
+                for rank in case_reports[right_index]["ranks"]
+            ]
+            changed = all(
+                left_order != right_order
+                for left_order, right_order in zip(left_orders, right_orders)
+            )
+            if not changed:
+                raise AssertionError(
+                    f"sampler order did not change between {left.name} and "
+                    f"{right.name}"
+                )
+            epoch_comparisons.append(
+                {
+                    "left": left.name,
+                    "left_epoch": left.epoch,
+                    "right": right.name,
+                    "right_epoch": right.epoch,
+                    "all_rank_orders_changed": True,
+                }
+            )
+
+    report: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "success",
+        "runtime": _runtime_metadata(),
+        "dataset_size": dataset_size,
+        "sampler_seed": sampler_seed,
+        "loader_seed_base": loader_seed_base,
+        "multiprocessing_context": "spawn",
+        "persistent_workers": True,
+        "rng_sources": ["torch", "python", "numpy"],
+        "scenario_count": len(case_reports),
+        "rank_case_count": sum(
+            scenario.world_size for scenario in scenarios
+        ),
+        "worker_processes_started": sum(
+            scenario.world_size * scenario.workers * 2
+            for scenario in scenarios
+        ),
+        "all_worker_pids_replaced": True,
+        "sampler_partitions_exact": True,
+        "epoch_variation_verified": bool(epoch_comparisons),
+        "epoch_comparisons": epoch_comparisons,
+        "scenario_process_isolation": (
+            isolated_scenario_processes is not None
+        ),
+        "matrix_digest": _digest(deterministic_cases),
+        "sample_order_digest": _digest(sample_order_cases),
+        "rng_digest": _digest(rng_cases),
+        "cases": case_reports,
+    }
+    if isolated_scenario_processes is not None:
+        report["isolated_scenario_processes"] = isolated_scenario_processes
+    return report
+
+
 def run_replay_matrix(
     scenarios: Sequence[ReplayScenario] = DEFAULT_SCENARIOS,
     *,
@@ -384,12 +550,7 @@ def run_replay_matrix(
         raise ValueError("replay scenario names must be unique")
 
     case_reports: list[dict[str, Any]] = []
-    deterministic_cases: list[dict[str, Any]] = []
-    sample_order_cases: list[dict[str, Any]] = []
-    rng_cases: list[dict[str, Any]] = []
-    total_worker_processes = 0
-
-    for case_index, scenario in enumerate(scenarios):
+    for scenario in scenarios:
         if dataset_size % scenario.world_size != 0:
             raise ValueError(
                 f"dataset size must be divisible by world size for {scenario.name}"
@@ -408,10 +569,12 @@ def run_replay_matrix(
 
         rank_reports: list[dict[str, Any]] = []
         deterministic_ranks: list[dict[str, Any]] = []
-        sample_order_ranks: list[dict[str, Any]] = []
-        rng_ranks: list[dict[str, Any]] = []
         for rank in range(scenario.world_size):
-            loader_seed = loader_seed_base + case_index * 100 + rank
+            loader_seed = _loader_seed(
+                loader_seed_base,
+                scenario_name=scenario.name,
+                rank=rank,
+            )
             initial_iterator, expected_sample_ids = _make_iterator(
                 scenario,
                 dataset_size=dataset_size,
@@ -520,20 +683,6 @@ def run_replay_matrix(
                 }
             )
             deterministic_ranks.append(deterministic_rank)
-            sample_order_ranks.append(
-                {
-                    "rank": rank,
-                    "expected_sample_ids": expected_sample_ids,
-                }
-            )
-            rng_ranks.append(
-                {
-                    "rank": rank,
-                    "committed_batches": _rng_projection(committed),
-                    "staged_batches": _rng_projection(staged),
-                }
-            )
-            total_worker_processes += scenario.workers * 2
 
         all_expected_ids = [
             sample_id
@@ -562,82 +711,98 @@ def run_replay_matrix(
                 "case_digest": _digest(deterministic_case),
             }
         )
-        deterministic_cases.append(deterministic_case)
-        sample_order_cases.append(
-            {"scenario": scenario_payload, "ranks": sample_order_ranks}
-        )
-        rng_cases.append(
-            {"scenario": scenario_payload, "ranks": rng_ranks}
-        )
+    return _build_matrix_report(
+        case_reports,
+        scenarios,
+        dataset_size=dataset_size,
+        sampler_seed=sampler_seed,
+        loader_seed_base=loader_seed_base,
+    )
 
-    epoch_comparisons: list[dict[str, Any]] = []
-    for left_index, left in enumerate(scenarios):
-        for right_index in range(left_index + 1, len(scenarios)):
-            right = scenarios[right_index]
-            if (
-                left.epoch == right.epoch
-                or _scenario_epoch_key(left) != _scenario_epoch_key(right)
-            ):
-                continue
-            left_orders = [
-                rank["expected_sample_ids"]
-                for rank in case_reports[left_index]["ranks"]
+
+def _scenario_argument(scenario: ReplayScenario) -> str:
+    return ";".join(
+        (
+            f"name={scenario.name}",
+            f"world-size={scenario.world_size}",
+            f"workers={scenario.workers}",
+            f"prefetch-factor={scenario.prefetch_factor}",
+            f"epoch={scenario.epoch}",
+            f"batch-size={scenario.batch_size}",
+            f"committed-batches={scenario.committed_batches}",
+            f"staged-batches={scenario.staged_batches}",
+        )
+    )
+
+
+def run_isolated_replay_matrix(
+    scenarios: Sequence[ReplayScenario] = DEFAULT_SCENARIOS,
+    *,
+    dataset_size: int = 48,
+    sampler_seed: int = 20260724,
+    loader_seed_base: int = 2026072400,
+    scenario_timeout: float = 300.0,
+) -> dict[str, Any]:
+    if scenario_timeout <= 0:
+        raise ValueError("scenario timeout must be positive")
+    case_reports: list[dict[str, Any]] = []
+    isolated_processes: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(
+        prefix="fakegpu-dataloader-replay-"
+    ) as raw:
+        temporary_root = Path(raw)
+        for index, scenario in enumerate(scenarios):
+            output_path = temporary_root / f"scenario-{index}.json"
+            command = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--in-process",
+                f"--dataset-size={dataset_size}",
+                f"--sampler-seed={sampler_seed}",
+                f"--loader-seed-base={loader_seed_base}",
+                f"--scenario={_scenario_argument(scenario)}",
+                f"--output={output_path}",
             ]
-            right_orders = [
-                rank["expected_sample_ids"]
-                for rank in case_reports[right_index]["ranks"]
-            ]
-            changed = all(
-                left_order != right_order
-                for left_order, right_order in zip(left_orders, right_orders)
+            completed = subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                timeout=scenario_timeout,
+                check=False,
             )
-            if not changed:
-                raise AssertionError(
-                    f"sampler order did not change between {left.name} and "
-                    f"{right.name}"
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    f"isolated DataLoader scenario {scenario.name} failed with "
+                    f"{completed.returncode}\nstdout:\n{completed.stdout}\n"
+                    f"stderr:\n{completed.stderr}"
                 )
-            epoch_comparisons.append(
+            child_report = json.loads(output_path.read_text(encoding="utf-8"))
+            child_cases = child_report.get("cases")
+            if (
+                child_report.get("status") != "success"
+                or not isinstance(child_cases, list)
+                or len(child_cases) != 1
+                or child_cases[0].get("scenario") != asdict(scenario)
+            ):
+                raise AssertionError(
+                    f"isolated DataLoader scenario report is invalid: "
+                    f"{child_report}"
+                )
+            case_reports.append(child_cases[0])
+            isolated_processes.append(
                 {
-                    "left": left.name,
-                    "left_epoch": left.epoch,
-                    "right": right.name,
-                    "right_epoch": right.epoch,
-                    "all_rank_orders_changed": True,
+                    "scenario": scenario.name,
+                    "runtime": child_report["runtime"],
                 }
             )
-
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "status": "success",
-        "runtime": {
-            "hostname": platform.node(),
-            "pid": os.getpid(),
-            "platform": platform.platform(),
-            "python_version": platform.python_version(),
-            "torch_version": str(torch.__version__),
-            "torch_cuda_version": str(torch.version.cuda),
-            "numpy_version": str(np.__version__),
-        },
-        "dataset_size": dataset_size,
-        "sampler_seed": sampler_seed,
-        "loader_seed_base": loader_seed_base,
-        "multiprocessing_context": "spawn",
-        "persistent_workers": True,
-        "rng_sources": ["torch", "python", "numpy"],
-        "scenario_count": len(case_reports),
-        "rank_case_count": sum(
-            scenario.world_size for scenario in scenarios
-        ),
-        "worker_processes_started": total_worker_processes,
-        "all_worker_pids_replaced": True,
-        "sampler_partitions_exact": True,
-        "epoch_variation_verified": bool(epoch_comparisons),
-        "epoch_comparisons": epoch_comparisons,
-        "matrix_digest": _digest(deterministic_cases),
-        "sample_order_digest": _digest(sample_order_cases),
-        "rng_digest": _digest(rng_cases),
-        "cases": case_reports,
-    }
+    return _build_matrix_report(
+        case_reports,
+        scenarios,
+        dataset_size=dataset_size,
+        sampler_seed=sampler_seed,
+        loader_seed_base=loader_seed_base,
+        isolated_scenario_processes=isolated_processes,
+    )
 
 
 def validate_replay_matrix_reports(
@@ -671,6 +836,10 @@ def validate_replay_matrix_reports(
             or (
                 require_default_matrix
                 and report.get("epoch_variation_verified") is not True
+            )
+            or (
+                require_default_matrix
+                and report.get("scenario_process_isolation") is not True
             )
         ):
             raise AssertionError(
@@ -773,6 +942,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dataset-size", type=int, default=48)
     parser.add_argument("--sampler-seed", type=int, default=20260724)
     parser.add_argument("--loader-seed-base", type=int, default=2026072400)
+    parser.add_argument("--scenario-timeout", type=float, default=300.0)
+    parser.add_argument(
+        "--in-process",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--scenario",
         action="append",
@@ -785,13 +960,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+    scenarios = args.scenario or DEFAULT_SCENARIOS
     try:
-        report = run_replay_matrix(
-            args.scenario or DEFAULT_SCENARIOS,
-            dataset_size=args.dataset_size,
-            sampler_seed=args.sampler_seed,
-            loader_seed_base=args.loader_seed_base,
-        )
+        if args.in_process or len(scenarios) == 1:
+            report = run_replay_matrix(
+                scenarios,
+                dataset_size=args.dataset_size,
+                sampler_seed=args.sampler_seed,
+                loader_seed_base=args.loader_seed_base,
+            )
+        else:
+            report = run_isolated_replay_matrix(
+                scenarios,
+                dataset_size=args.dataset_size,
+                sampler_seed=args.sampler_seed,
+                loader_seed_base=args.loader_seed_base,
+                scenario_timeout=args.scenario_timeout,
+            )
     except Exception as exc:
         report = {
             "schema_version": SCHEMA_VERSION,
@@ -814,6 +999,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "scenario_count",
             "rank_case_count",
             "worker_processes_started",
+            "scenario_process_isolation",
             "matrix_digest",
             "sample_order_digest",
             "rng_digest",
