@@ -374,14 +374,15 @@ def _collect_processes(
 def _read_remote_text(node: NodeSpec, path: str) -> str:
     command = f"test -f {shlex.quote(path)} && cat {shlex.quote(path)}"
     last_error: RuntimeError | None = None
-    for attempt in range(3):
+    max_attempts = 8
+    for attempt in range(max_attempts):
         try:
             completed = _run_remote(node, command, timeout=20.0)
             return completed.stdout
         except RuntimeError as exc:
             last_error = exc
-            if attempt < 2:
-                time.sleep(0.25 * (attempt + 1))
+            if attempt + 1 < max_attempts:
+                time.sleep(min(2.0, 0.25 * (2**attempt)))
     if last_error is None:
         raise AssertionError("remote report retry did not execute")
     raise last_error
