@@ -33,10 +33,11 @@ project(FakeGPU VERSION "${FAKEGPU_VERSION}")
 
 find_package(Threads REQUIRED)
 
-set(FAKEGPU_POSIX_SHM_LIB "")
 if(UNIX AND NOT APPLE)
     # On older glibc targets such as manylinux2014, shm_open/shm_unlink live in librt.
-    find_library(FAKEGPU_POSIX_SHM_LIB rt)
+    set(FAKEGPU_POSIX_SHM_LIB rt)
+else()
+    set(FAKEGPU_POSIX_SHM_LIB "")
 endif()
 
 function(fakegpu_link_common_system_libs target_name)
