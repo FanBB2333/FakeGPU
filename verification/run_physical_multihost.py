@@ -2408,10 +2408,11 @@ def _cluster_summary(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _expected_cluster_world_size(cases: set[str]) -> int:
-    if "fault-shrink" in cases or "process-exit-shrink" in cases:
+def _expected_cluster_world_size(cases: Sequence[str] | set[str]) -> int:
+    selected = set(cases)
+    if "fault-shrink" in selected or "process-exit-shrink" in selected:
         return 4
-    if not cases - {"dataloader-replay"}:
+    if not selected - {"dataloader-replay"}:
         return 4
     return 2
 

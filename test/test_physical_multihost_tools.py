@@ -133,14 +133,14 @@ def test_read_remote_text_retries_transient_ssh_failure(
 @pytest.mark.parametrize(
     "cases, expected",
     [
-        ({"dataloader-replay"}, 4),
+        (["dataloader-replay"], 4),
         ({"dataloader-replay", "ddp"}, 2),
         ({"fault-shrink"}, 4),
         ({"process-exit-shrink", "dataloader-replay"}, 4),
     ],
 )
 def test_expected_cluster_world_size_distinguishes_empty_configured_topology(
-    cases: set[str],
+    cases: list[str] | set[str],
     expected: int,
 ) -> None:
     assert _expected_cluster_world_size(cases) == expected
