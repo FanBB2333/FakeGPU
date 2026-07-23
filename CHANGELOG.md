@@ -36,6 +36,7 @@ Compared with `v1.5.4`.
 
 - Preserved conservative preflight headroom after introducing caching by using the larger of requested and reserved peaks while retaining both per-stage series.
 - Calibrated Qwen virtual-SMI process memory against real reserved memory rather than requested tensor bytes, avoiding double-counting allocator cache.
+- Linked POSIX shared-memory calls against `librt` on Linux, restoring the manylinux2014 coordinator wheel build.
 - Included the active full-gradient buffer retained until FSDP reduce-scatter emits a local shard, reducing the Qwen graph-peak prediction error from 8.420% to at most 0.758%.
 - Accepted FSDP2's byte-packed mixed-dtype all-gathers and separated activation-, communication-, backward-, and optimizer-dominated event floors instead of assuming that every buffer peaks together.
 - Separated forward/loss liveness at the first explicit backward operator and modeled the retained FSDP2 nested-unit buffers at the backward activation peak.
