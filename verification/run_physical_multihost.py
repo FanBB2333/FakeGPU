@@ -2408,6 +2408,14 @@ def _cluster_summary(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _expected_cluster_world_size(cases: set[str]) -> int:
+    if "fault-shrink" in cases or "process-exit-shrink" in cases:
+        return 4
+    if not cases - {"dataloader-replay"}:
+        return 4
+    return 2
+
+
 def _write_markdown(path: Path, report: dict[str, Any]) -> None:
     lines = [
         "# FakeGPU Physical Multi-Host Validation",
@@ -2973,11 +2981,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         expected_collectives=expected_collectives,
         expect_point_to_point=selected_deepspeed_pipeline,
         expect_timeout="missing-peer" in cases,
-        expected_world_size=(
-            4
-            if "fault-shrink" in cases or "process-exit-shrink" in cases
-            else 2
-        ),
+        expected_world_size=_expected_cluster_world_size(cases),
         expect_recovery="fault-shrink" in cases,
         expect_process_exit="process-exit-shrink" in cases,
         expect_elastic_restart=(

@@ -12,6 +12,7 @@ import verification.run_physical_multihost as physical_multihost
 from verification.run_physical_multihost import (
     NodeSpec,
     _encoded_remote_command,
+    _expected_cluster_world_size,
     _require_matching_deepspeed_pipeline_stack,
     _shell_command,
     _validate_elastic_ddp_checkpoint_reports,
@@ -127,6 +128,22 @@ def test_read_remote_text_retries_transient_ssh_failure(
 
     assert result == '{"status": "success"}'
     assert attempts == 8
+
+
+@pytest.mark.parametrize(
+    "cases, expected",
+    [
+        ({"dataloader-replay"}, 4),
+        ({"dataloader-replay", "ddp"}, 2),
+        ({"fault-shrink"}, 4),
+        ({"process-exit-shrink", "dataloader-replay"}, 4),
+    ],
+)
+def test_expected_cluster_world_size_distinguishes_empty_configured_topology(
+    cases: set[str],
+    expected: int,
+) -> None:
+    assert _expected_cluster_world_size(cases) == expected
 
 
 def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None:
