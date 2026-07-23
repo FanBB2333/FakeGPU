@@ -102,7 +102,7 @@ def test_read_remote_text_retries_transient_ssh_failure(
         assert node.name == "gpu"
         assert "/tmp/report.json" in command
         assert timeout == 20.0
-        if attempts < 3:
+        if attempts < 8:
             raise RuntimeError("transient SSH failure")
         return subprocess.CompletedProcess(
             args=[],
@@ -126,7 +126,7 @@ def test_read_remote_text_retries_transient_ssh_failure(
     )
 
     assert result == '{"status": "success"}'
-    assert attempts == 3
+    assert attempts == 8
 
 
 def test_validate_elastic_ddp_restart_reports_accepts_physical_restart() -> None:
