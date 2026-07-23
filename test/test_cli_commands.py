@@ -75,7 +75,7 @@ def test_profile_catalog_matches_nvidia_snapshot() -> None:
     summary = catalog_summary(profiles)
 
     assert validation.errors == ()
-    assert summary["profile_count"] == 24
+    assert summary["profile_count"] == 82
     assert set(summary["architectures"]) == {
         "maxwell",
         "pascal",
@@ -87,11 +87,11 @@ def test_profile_catalog_matches_nvidia_snapshot() -> None:
         "blackwell",
     }
     assert summary["segments"] == {
-        "consumer": 2,
+        "consumer": 40,
         "datacenter": 16,
         "embedded": 2,
         "test": 1,
-        "workstation": 3,
+        "workstation": 23,
     }
     assert summary["compute_capabilities"] == [
         "5.2",
@@ -117,6 +117,22 @@ def test_profile_catalog_matches_nvidia_snapshot() -> None:
             profile.segment,
             f"{profile.id}.yaml",
         )
+
+    expected_profile_capabilities = {
+        "gtx1080ti": "6.1",
+        "rtx2080": "7.5",
+        "rtx2080-super": "7.5",
+        "rtx2080ti": "7.5",
+        "rtx3070": "8.6",
+        "rtx4090": "8.9",
+        "rtx5090": "12.0",
+        "quadro-rtx8000": "7.5",
+        "rtx-a6000": "8.6",
+        "rtx-6000-ada": "8.9",
+        "rtx-pro-4000-blackwell": "12.0",
+    }
+    for profile_id, capability in expected_profile_capabilities.items():
+        assert profiles[profile_id].compute_capability_text == capability
 
     official = official_compute_capabilities()
     expected_models = {
@@ -162,7 +178,7 @@ def test_doctor_reports_selected_blackwell_profile_as_json() -> None:
     payload = json.loads(result.stdout)
 
     assert payload["ok"] is True
-    assert payload["profile_summary"]["profile_count"] == 24
+    assert payload["profile_summary"]["profile_count"] == 82
     assert payload["selected_profile"]["id"] == "b300"
     assert payload["selected_profile"]["architecture"] == "blackwell"
     assert payload["selected_profile"]["segment"] == "datacenter"
@@ -201,6 +217,7 @@ def test_demo_runs_tiny_training_with_ada_profile() -> None:
 
 
 def test_fakecuda_profile_matrix() -> None:
+    profiles = load_profiles()
     env = dict(os.environ)
     env["PYTHONPATH"] = (
         str(ROOT)
@@ -216,7 +233,10 @@ def test_fakecuda_profile_matrix() -> None:
         timeout=90,
     )
     assert result.returncode == 0, result.stderr
-    assert "validated 15 profiles across 15 compute capabilities" in result.stdout
+    assert (
+        f"validated {len(profiles)} profiles across 15 compute capabilities"
+        in result.stdout
+    )
 
 
 def test_top_level_help_names_builtin_commands() -> None:

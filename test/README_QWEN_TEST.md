@@ -25,7 +25,7 @@
 ### 1. 编译FakeGPU库（关闭日志）
 
 ```bash
-cd /home/l1ght/repos/fakeGPU
+cd /path/to/FakeGPU
 cmake -S . -B build -DENABLE_FAKEGPU_LOGGING=OFF
 cmake --build build
 ```
@@ -83,7 +83,7 @@ python3 test/compare_results.py
 真实GPU:
 ```
 Using device: cuda
-GPU: NVIDIA GeForce RTX 3090 Ti
+GPU: NVIDIA CUDA GPU
 Model loaded successfully!
 Generated token: Hello
 === TEST PASSED ===

@@ -21,7 +21,7 @@ device API 尚未模拟，调用时会返回 `ncclInvalidUsage`。
 ```
 
 这将:
-1. 在真实 GPU 上测试（当前为 RTX PRO 5000 72GB Blackwell）
+1. 在配置了 CUDA 的真实 GPU 主机上测试
 2. 在FakeGPU上测试
 3. 证明测试代码在真实硬件上正常工作
 4. 证明任何FakeGPU问题都是实现缺口，而非测试代码问题

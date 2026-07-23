@@ -1,0 +1,33 @@
+id: rtx2060
+name: Fake NVIDIA GeForce RTX 2060
+torch_name: NVIDIA GeForce RTX 2060
+official_model: GeForce RTX 2060
+architecture: turing
+compute_major: 7
+compute_minor: 5
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/
+notes: Reference 6 GB board profile using NVIDIA GeForce comparison specifications and Turing device limits; add-in-board clocks and power limits can differ.
+memory_bytes: 6442450944
+sm_count: 30
+memory_bus_width_bits: 192
+core_clock_mhz: 1680
+memory_clock_mhz: 7000
+l2_cache_bytes: 3145728
+shared_mem_per_sm: 65536
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 65536
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1024
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 160000
+max_power_limit_mw: 160000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - fp16
+  - int8
+  - int4

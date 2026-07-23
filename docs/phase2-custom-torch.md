@@ -40,7 +40,7 @@ The core problem is that `tensor.device` and `tensor.is_cuda` are C-level descri
 | 0 | **Device index bounds validation** — replaces upstream's permissive `_normalize_device_index` with a bounds-checked version that raises "CUDA error: invalid device ordinal" matching real CUDA behavior |
 | 1 | **Memory tracker initialization** — per-device memory limits from GPU profiles |
 | 2 | **Tensor creation hooks** — hooks `upstream.wrap_tensor` for automatic memory tracking on tensor creation |
-| 3 | **GPU profiles** — 24 YAML-backed presets (see below); overrides `get_device_name`, `get_device_capability`, `get_device_properties` |
+| 3 | **GPU profiles** — 82 YAML-backed presets (see below); overrides `get_device_name`, `get_device_capability`, `get_device_properties` |
 | 4 | **Memory query functions** — tracked memory queries replacing upstream's zero-returning stubs |
 | 5 | **Autocast dtype validation** — bf16 requires compute capability >= 8.0; GradScaler passthrough |
 | 6 | **Cross-device operation validation** — validates tensor ops, loss functions, functional ops, and binary dunders |
@@ -49,18 +49,18 @@ The core problem is that `tensor.device` and `tensor.is_cuda` are C-level descri
 
 ### GPU profiles
 
-24 built-in profiles cover 8 architectures and 15 compute capabilities:
+82 built-in profiles cover 8 architectures and 15 compute capabilities:
 
-| Architecture | Compute capability | Profiles |
-|---|---|---|
-| Maxwell | 5.2 | `gtx980` |
-| Pascal | 6.0, 6.1 | `p100`, `p4` |
-| Volta | 7.0 | `v100` |
-| Turing | 7.5 | `t4` |
-| Ampere | 8.0, 8.6, 8.7 | `a100`, `a100-1g`, `a30`, `a10`, `a40`, `rtx3090ti`, `jetson-agx-orin-64gb`, `test-512m` |
-| Ada | 8.9 | `l4`, `l40s` |
-| Hopper | 9.0 | `h100`, `h200` |
-| Blackwell | 10.0, 10.3, 11.0, 12.0, 12.1 | `b100`, `b200`, `b300`, `jetson-t5000`, `rtx-pro-5000-blackwell`, `rtx-pro-6000-blackwell`, `gb10` |
+| Architecture | Profiles | Compute capability | Product families |
+|---|---:|---|---|
+| Maxwell | 1 | 5.2 | GeForce GTX 900 series |
+| Pascal | 9 | 6.0, 6.1 | GeForce GTX 10 series, Tesla P-series |
+| Volta | 1 | 7.0 | Tesla V-series |
+| Turing | 12 | 7.5 | GeForce RTX 20 series, Quadro RTX, T4 |
+| Ampere | 22 | 8.0, 8.6, 8.7 | GeForce RTX 30 series, RTX A-series, A-series accelerators, Jetson |
+| Ada | 17 | 8.9 | GeForce RTX 40 series, RTX Ada Generation, L-series accelerators |
+| Hopper | 2 | 9.0 | H-series accelerators |
+| Blackwell | 18 | 10.0, 10.3, 11.0, 12.0, 12.1 | GeForce RTX 50 series, RTX PRO Blackwell, B-series accelerators, Jetson and GB10 |
 
 The registries used by `torch_patch.py` are generated from the same YAML
 catalog as native builds. The repository's `profiles/README.md` records source
@@ -76,7 +76,7 @@ From the combination of both layers:
 - `nn.DistributedDataParallel`
 - `torch.distributed.*` (single-process shims for all collective ops)
 - Autocast / GradScaler with dtype validation
-- GPU profiles (24 presets)
+- GPU profiles (82 presets)
 - Memory tracking with OOM simulation
 - Cross-device validation
 - `torch.load` with `map_location` normalization

@@ -84,12 +84,20 @@ run_cpu_sim() {
 }
 
 run_smoke() {
+  local profile_matrix
+  profile_matrix="$(
+    "$PYTHON_BIN" -c \
+      'from fakegpu.profile_catalog import load_profiles; print(",".join(sorted(load_profiles())))'
+  )"
   build
   "$PYTHON_BIN" verification/check_library_boundaries.py --lib-dir "$SMOKE_BUILD_DIR"
   compile_verify_preload
   FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$SMOKE_BUILD_DIR/verify_preload"
   "$PYTHON_BIN" verification/check_report.py --path "$SMOKE_BUILD_DIR/fake_gpu_report.json"
-  FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_multi_arch.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" --devices "gtx980,p100,p4,v100,t4,a100,a40,jetson-agx-orin-64gb,l4,h100,b200,b300,jetson-t5000,rtx-pro-5000-blackwell,gb10" "$PYTHON_BIN" verification/test_multi_arch_compute_units.py
+  FAKEGPU_TERMINAL_REPORT=0 \
+    FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_multi_arch.json" \
+    ./fgpu --build-dir "$SMOKE_BUILD_DIR" --devices "$profile_matrix" \
+      "$PYTHON_BIN" verification/test_multi_arch_compute_units.py
   FAKEGPU_REPORT_PATH="$SMOKE_BUILD_DIR/fake_gpu_report_memory_types.json" ./fgpu --build-dir "$SMOKE_BUILD_DIR" "$PYTHON_BIN" verification/test_memory_types.py
   FAKEGPU_BUILD_DIR="$SMOKE_BUILD_DIR" "$PYTHON_BIN" verification/test_coordinator_smoke.py
 }

@@ -12,34 +12,16 @@ import fakegpu  # noqa: E402
 from fakegpu.profile_catalog import load_profiles  # noqa: E402
 
 
-PROFILE_MATRIX = (
-    "gtx980",
-    "p100",
-    "p4",
-    "v100",
-    "t4",
-    "a100",
-    "a40",
-    "jetson-agx-orin-64gb",
-    "l4",
-    "h100",
-    "b200",
-    "b300",
-    "jetson-t5000",
-    "rtx-pro-5000-blackwell",
-    "gb10",
-)
-
-
 def main() -> None:
     os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
     catalog = load_profiles()
-    runtime = fakegpu.init(runtime="fakecuda", devices=PROFILE_MATRIX)
+    profile_matrix = tuple(sorted(catalog))
+    runtime = fakegpu.init(runtime="fakecuda", devices=profile_matrix)
 
     import torch
 
-    assert torch.cuda.device_count() == len(PROFILE_MATRIX)
-    for index, profile_id in enumerate(PROFILE_MATRIX):
+    assert torch.cuda.device_count() == len(profile_matrix)
+    for index, profile_id in enumerate(profile_matrix):
         expected = catalog[profile_id]
         assert torch.cuda.get_device_name(index) == expected.torch_name
         assert torch.cuda.get_device_capability(index) == expected.compute_capability
@@ -56,12 +38,12 @@ def main() -> None:
         assert result.cpu().tolist() == [1.0, 2.0, 5.0, 10.0]
 
     capabilities = sorted(
-        {catalog[profile_id].compute_capability_text for profile_id in PROFILE_MATRIX},
+        {catalog[profile_id].compute_capability_text for profile_id in profile_matrix},
         key=lambda value: tuple(int(part) for part in value.split(".")),
     )
     print(
         f"OK: fakecuda backend={runtime.backend} validated "
-        f"{len(PROFILE_MATRIX)} profiles across {len(capabilities)} compute capabilities"
+        f"{len(profile_matrix)} profiles across {len(capabilities)} compute capabilities"
     )
 
 

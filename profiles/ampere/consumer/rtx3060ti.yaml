@@ -1,0 +1,35 @@
+id: rtx3060ti
+name: Fake NVIDIA GeForce RTX 3060 Ti
+torch_name: NVIDIA GeForce RTX 3060 Ti
+official_model: GeForce RTX 3060 Ti
+architecture: ampere
+compute_major: 8
+compute_minor: 6
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/
+notes: Reference 8 GB Founders Edition profile using NVIDIA GeForce specifications and Ampere device limits.
+memory_bytes: 8589934592
+sm_count: 38
+memory_bus_width_bits: 256
+core_clock_mhz: 1670
+memory_clock_mhz: 7000
+l2_cache_bytes: 4194304
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 200000
+max_power_limit_mw: 200000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4

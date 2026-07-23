@@ -178,7 +178,7 @@
     <header>
       <div>
         <h1>FakeGPU · common workflows</h1>
-        <p>Real command output captured from the maintained v1.5.2 paths</p>
+        <p>Real command output captured from maintained workflows</p>
       </div>
       <div class="badge">CUDA-facing validation without a production cluster</div>
     </header>
@@ -224,7 +224,7 @@ step=5 loss=5.8198 logits_device=<span class="name">cuda:0</span> is_cuda=<span 
         <pre><span class="prompt">$</span> <span class="command">FAKEGPU_TERMINAL_REPORT=0 python3 - &lt;&lt;'PY'
 import fakegpu
 fakegpu.init(runtime="fakecuda",
-  devices="test-512m,rtx3090ti,rtx-pro-5000-blackwell")
+  devices="test-512m,rtx2080ti,rtx5090")
 import torch
 for i in range(torch.cuda.device_count()):
     p = torch.cuda.get_device_properties(i)
@@ -234,8 +234,8 @@ for i in range(torch.cuda.device_count()):
 PY</span>
 
 GPU 0: FakeGPU Test Profile 512MB | <span class="value">0.5 GiB</span> | cc 8.0
-GPU 1: NVIDIA GeForce RTX 3090 Ti | <span class="value">23.6 GiB</span> | cc 8.6
-GPU 2: NVIDIA RTX PRO 5000 72GB Blackwell | <span class="value">71.1 GiB</span> | cc 12.0</pre>
+GPU 1: NVIDIA GeForce RTX 2080 Ti | <span class="value">11.0 GiB</span> | cc 7.5
+GPU 2: NVIDIA GeForce RTX 5090 | <span class="value">32.0 GiB</span> | cc 12.0</pre>
       </article>
 
       <article>

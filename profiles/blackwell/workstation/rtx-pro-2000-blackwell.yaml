@@ -1,0 +1,37 @@
+id: rtx-pro-2000-blackwell
+name: Fake NVIDIA RTX PRO 2000 Blackwell
+torch_name: NVIDIA RTX PRO 2000 Blackwell
+official_model: NVIDIA RTX PRO 2000 Blackwell
+architecture: blackwell
+compute_major: 12
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/professional-desktop-gpus/rtx-pro-2000/workstation-datasheet-blackwell-rtx-pro-2000-nvidia-us-4016661.pdf
+notes: Reference professional-board profile using the NVIDIA product data sheet and Blackwell device limits.
+memory_bytes: 17179869184
+sm_count: 34
+memory_bus_width_bits: 128
+core_clock_mhz: 1953
+memory_clock_mhz: 9000
+l2_cache_bytes: 33554432
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 70000
+max_power_limit_mw: 70000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - fp8
+  - fp4
+  - int8
+  - int4

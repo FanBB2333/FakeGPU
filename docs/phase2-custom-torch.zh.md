@@ -40,7 +40,7 @@ FakeGPU 的 torch patch 采用两层架构：
 | 第 0 部分 | 设备索引越界校验 -- 替换上游宽松的 `_normalize_device_index`，使用匹配真实 CUDA 行为的 "CUDA error: invalid device ordinal" 错误 |
 | 第 1 部分 | 内存跟踪器初始化，使用 GPU profile 中的每设备内存限制 |
 | 第 2 部分 | Hook `upstream.wrap_tensor`，实现 tensor 创建时自动内存跟踪 |
-| 第 3 部分 | 每设备 GPU profile（24 种 YAML profile）-- 覆写 `get_device_name`, `get_device_capability`, `get_device_properties` |
+| 第 3 部分 | 每设备 GPU profile（82 种 YAML profile）-- 覆写 `get_device_name`, `get_device_capability`, `get_device_properties` |
 | 第 4 部分 | 使用跟踪器的内存查询函数，替换上游返回零值的 stub |
 | 第 5 部分 | Autocast dtype 校验（bf16 要求 compute capability >= 8.0）+ GradScaler 透传 |
 | 第 6 部分 | 跨设备操作校验（tensor ops、loss functions、functional ops、binary dunders） |
@@ -49,18 +49,18 @@ FakeGPU 的 torch patch 采用两层架构：
 
 ### 支持的 GPU profiles
 
-24 种内置 profile 覆盖 8 个架构和 15 种 compute capability：
+82 种内置 profile 覆盖 8 个架构和 15 种 compute capability：
 
-| 架构 | Compute capability | Profile |
-|---|---|---|
-| Maxwell | 5.2 | `gtx980` |
-| Pascal | 6.0、6.1 | `p100`、`p4` |
-| Volta | 7.0 | `v100` |
-| Turing | 7.5 | `t4` |
-| Ampere | 8.0、8.6、8.7 | `a100`、`a100-1g`、`a30`、`a10`、`a40`、`rtx3090ti`、`jetson-agx-orin-64gb`、`test-512m` |
-| Ada | 8.9 | `l4`、`l40s` |
-| Hopper | 9.0 | `h100`、`h200` |
-| Blackwell | 10.0、10.3、11.0、12.0、12.1 | `b100`、`b200`、`b300`、`jetson-t5000`、`rtx-pro-5000-blackwell`、`rtx-pro-6000-blackwell`、`gb10` |
+| 架构 | 数量 | Compute capability | 产品系列 |
+|---|---:|---|---|
+| Maxwell | 1 | 5.2 | GeForce GTX 900 系列 |
+| Pascal | 9 | 6.0、6.1 | GeForce GTX 10 系列、Tesla P 系列 |
+| Volta | 1 | 7.0 | Tesla V 系列 |
+| Turing | 12 | 7.5 | GeForce RTX 20 系列、Quadro RTX、T4 |
+| Ampere | 22 | 8.0、8.6、8.7 | GeForce RTX 30 系列、RTX A 系列、A 系列加速卡、Jetson |
+| Ada | 17 | 8.9 | GeForce RTX 40 系列、RTX Ada Generation、L 系列加速卡 |
+| Hopper | 2 | 9.0 | H 系列加速卡 |
+| Blackwell | 18 | 10.0、10.3、11.0、12.0、12.1 | GeForce RTX 50 系列、RTX PRO Blackwell、B 系列加速卡、Jetson 和 GB10 |
 
 `torch_patch.py` 的型号表由 native build 使用的同一组 YAML 生成。数据来源和校验规则记录在仓库的
 `profiles/README.md` 中。
@@ -77,7 +77,7 @@ FakeGPU 的 torch patch 采用两层架构：
 | `nn.DistributedDataParallel` | 支持 |
 | `torch.distributed.*`（单进程 shim，覆盖所有 collective ops） | 支持 |
 | Autocast / GradScaler with dtype validation | 支持 |
-| GPU profiles（24 种预设） | 支持 |
+| GPU profiles（82 种预设） | 支持 |
 | Memory tracking with OOM simulation | 支持 |
 | Cross-device validation | 支持 |
 | `torch.load` with `map_location` normalization | 支持 |

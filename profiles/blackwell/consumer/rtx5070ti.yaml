@@ -1,0 +1,37 @@
+id: rtx5070ti
+name: Fake NVIDIA GeForce RTX 5070 Ti
+torch_name: NVIDIA GeForce RTX 5070 Ti
+official_model: GeForce RTX 5070 Ti
+architecture: blackwell
+compute_major: 12
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/
+notes: Reference 16 GB desktop profile using NVIDIA GeForce specifications and Blackwell device limits; board clocks and power limits can differ.
+memory_bytes: 17179869184
+sm_count: 70
+memory_bus_width_bits: 256
+core_clock_mhz: 2450
+memory_clock_mhz: 14000
+l2_cache_bytes: 67108864
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 300000
+max_power_limit_mw: 300000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - fp8
+  - fp4
+  - int8
+  - int4

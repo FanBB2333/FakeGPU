@@ -276,10 +276,11 @@ python3 verification/run_qwen_fsdp2_lora_sft_memory.py \
 
 This path models each DTensor shard and all-gather/reduce-scatter buffer
 lifetime separately. Qwen3.5-0.8B sequence-16/64/128 runs with two or four
-ranks on both the RTX PRO 5000 and RTX 3090 Ti keep every phase within 1.98%
-while exercising mixed-dtype `uint8` all-gathers. Existing dimensions such as
-sequence length, LoRA rank, dtype, and world size 2/4 are command parameters;
-new tests along those dimensions do not require source changes.
+ranks across independent Ampere and Blackwell CUDA stacks keep every phase
+within 1.98% while exercising mixed-dtype `uint8` all-gathers. Existing
+dimensions such as sequence length, LoRA rank, dtype, and world size 2/4 are
+command parameters; new tests along those dimensions do not require source
+changes.
 
 The native NF4 path needs no external quantization package, but it does not
 claim bitsandbytes fused-kernel equivalence; see
@@ -428,7 +429,7 @@ Coverage labels used below:
 | Repository/workload preflight | Wraps any command, checks arrival at `import`, `model_load`, `forward`, `backward`, `optimizer_step`, or `n_steps`, and reports fit, headroom, failure class, and confidence | Maintained; only the code path and shapes actually executed are assessed |
 | Static ATen graph estimator | Captures forward/backward without real CUDA allocation; deduplicates storage aliases, follows last-use lifetimes, and models parameters, buffers, gradients, optimizer state, and separate graph/optimizer phases | Maintained; target-device ATen traces need a CUDA-enabled PyTorch build for CUDA-specific dispatch |
 | Workspace modeling | Adds graph-persistent or operator-local workspace at the correct liveness point; built-ins cover Attention plus exact-stack matrix/convolution observations, and JSON/YAML registries support fixed, linear-IO, or tiled formulas | Validated only for each matched operator, dtype, shape, PyTorch, CUDA, and GPU envelope |
-| Real-GPU calibration | Compares real CUDA, passthrough, Hybrid clamp, FakeCUDA, allocator counters, and NVML; aggregates multiple GPUs into signature-matched calibration bundles | Validated on RTX 3090 Ti and RTX PRO 5000 datasets; calibration is not extrapolated across changed workload signatures |
+| Real-GPU calibration | Compares real CUDA, passthrough, Hybrid clamp, FakeCUDA, allocator counters, and NVML; aggregates multiple GPUs into signature-matched calibration bundles | Validated across independent Ampere and Blackwell datasets; calibration is not extrapolated across changed workload signatures |
 | Dense-decoder inference estimator | Reads safetensors headers without materializing weights and derives parameter bytes, KV cache, eager/SDPA transients, runtime overhead, and prefill/decode matrix FLOPs | Maintained for dense decoder-only models; MoE, adapters, quantized checkpoints, custom kernels, and backend workspaces need dedicated models |
 | SFT memory references | Full-parameter, LoRA, and native packed-NF4 QLoRA; BF16, checkpointing, accumulation, first/steady AdamW steps, and direct or nested scale storage | Validated for maintained Qwen3.5-0.8B/2B matrices; native NF4 does not claim bitsandbytes fused-kernel parity |
 | Sharded training projection | Projects a static graph onto FSDP FULL_SHARD or FSDP2 DTensor parameter/gradient/optimizer storage and all-gather/reduce-scatter buffer lifetimes | Validated for documented Qwen full-parameter and mixed-dtype LoRA cases at world sizes 2/4 |
@@ -450,7 +451,7 @@ Coverage labels used below:
 | Communication reports | Per-collective and P2P calls/bytes, complete node-pair matrix including zero-traffic pairs, directional/per-operation peaks, links, ranks, communicators, timeline, failures, and recovery | Maintained `cluster_report.v1` JSON plus Markdown table |
 | Bandwidth experiment | Validates reduction payloads and reports per-rank timings plus algorithmic and socket-payload throughput | Maintained simulator benchmark; values include coordinator, copies, and scheduling overhead |
 | PyTorch distributed flow | ProcessGroupNCCL-facing symbols required by tested PyTorch stacks, `torchrun`, DDP, FSDP/FSDP2, and DeepSpeed workflows | Maintained/validated subset; not complete NCCL 2.29 protocol or device-API parity |
-| Physical-host controller | Checks identical Git revisions, launches selected two-host cases over SSH, applies rank placement, collects artifacts, and validates report consistency | Maintained validation tooling for the documented Linux/WSL hosts |
+| Physical-host controller | Checks identical Git revisions, launches selected two-host cases over SSH, applies rank placement, collects artifacts, and validates report consistency | Maintained validation tooling for configured Linux/WSL hosts |
 
 ### Error injection, resilience, and recovery
 
@@ -474,7 +475,7 @@ Coverage labels used below:
 
 | Feature | What is included | Status and boundary |
 |---|---|---|
-| GPU profile catalog | 24 profiles across Maxwell, Pascal, Volta, Turing, Ampere, Ada, Hopper, and Blackwell; consumer, data-center, workstation, embedded, and test segments | Maintained; see [GPU profiles](#gpu-profiles) for every profile ID |
+| GPU profile catalog | 82 profiles across Maxwell, Pascal, Volta, Turing, Ampere, Ada, Hopper, and Blackwell; consumer, data-center, workstation, embedded, and test segments | Maintained; see [GPU profiles](#gpu-profiles) for coverage and profile discovery |
 | Architecture validation | Every profile declares compute capability; Python and C++ validators reject architecture/capability mismatches | Maintained |
 | Source provenance | Per-profile NVIDIA specification URLs and measured/reference/synthetic status, plus checked-in current/legacy NVIDIA model tables | Maintained; `scripts/update_nvidia_gpu_catalog.py --check` verifies the snapshot |
 | Uniform and heterogeneous inventories | One profile repeated by device count or mixed specifications such as `a100:4,h100:4` | Maintained in Python and native runtimes |
@@ -497,30 +498,34 @@ the Python runtime, and compiled into native builds. Catalog segments are
 
 ```text
 profiles/
+├── pascal/consumer/gtx1080ti.yaml
+├── turing/
+│   ├── consumer/rtx2080ti.yaml
+│   └── workstation/quadro-rtx8000.yaml
 ├── ampere/
-│   ├── consumer/rtx3090ti.yaml
-│   ├── datacenter/a100.yaml
-│   ├── embedded/jetson-agx-orin-64gb.yaml
-│   └── test/test-512m.yaml
+│   ├── consumer/rtx3080.yaml
+│   └── workstation/rtx-a6000.yaml
+├── ada/
+│   ├── consumer/rtx4090.yaml
+│   └── workstation/rtx-6000-ada.yaml
 └── blackwell/
-    ├── datacenter/b200.yaml
-    ├── embedded/jetson-t5000.yaml
-    └── workstation/rtx-pro-5000-blackwell.yaml
+    ├── consumer/rtx5090.yaml
+    └── workstation/rtx-pro-4000-blackwell.yaml
 ```
 
-The catalog currently contains 24 profiles across 8 NVIDIA architectures and
+The catalog currently contains 82 profiles across 8 NVIDIA architectures and
 15 compute capabilities:
 
-| Architecture | Segment(s) | Compute capability | Profile IDs |
-|---|---|---|---|
-| Maxwell | Consumer | 5.2 | `gtx980` |
-| Pascal | Data center | 6.0, 6.1 | `p100`, `p4` |
-| Volta | Data center | 7.0 | `v100` |
-| Turing | Data center | 7.5 | `t4` |
-| Ampere | Consumer, data center, embedded, test | 8.0, 8.6, 8.7 | `a100`, `a100-1g`, `a30`, `a10`, `a40`, `rtx3090ti`, `jetson-agx-orin-64gb`, `test-512m` |
-| Ada | Data center | 8.9 | `l4`, `l40s` |
-| Hopper | Data center | 9.0 | `h100`, `h200` |
-| Blackwell | Data center, embedded, workstation | 10.0, 10.3, 11.0, 12.0, 12.1 | `b100`, `b200`, `b300`, `jetson-t5000`, `rtx-pro-5000-blackwell`, `rtx-pro-6000-blackwell`, `gb10` |
+| Architecture | Profiles | Segment(s) | Compute capability | Product coverage |
+|---|---:|---|---|---|
+| Maxwell | 1 | Consumer | 5.2 | GeForce GTX 900 series |
+| Pascal | 9 | Consumer, data center | 6.0, 6.1 | GeForce GTX 10 series, Tesla P-series |
+| Volta | 1 | Data center | 7.0 | Tesla V-series |
+| Turing | 12 | Consumer, data center, workstation | 7.5 | GeForce RTX 20 series, Quadro RTX, T4 |
+| Ampere | 22 | Consumer, data center, workstation, embedded, test | 8.0, 8.6, 8.7 | GeForce RTX 30 series, RTX A-series, A-series accelerators, Jetson |
+| Ada | 17 | Consumer, data center, workstation | 8.9 | GeForce RTX 40 series, RTX Ada Generation, L-series accelerators |
+| Hopper | 2 | Data center | 9.0 | H-series accelerators |
+| Blackwell | 18 | Consumer, data center, workstation, embedded | 10.0, 10.3, 11.0, 12.0, 12.1 | GeForce RTX 50 series, RTX PRO Blackwell, B-series accelerators, Jetson and GB10 |
 
 Every profile declares `compute_major` and `compute_minor`; both the Python
 catalog validator and native C++ loader reject an architecture/compute
@@ -544,7 +549,7 @@ provenance, status meanings, and validation rules.
 Select one uniform profile or a heterogeneous device list:
 
 ```bash
-./fgpu --profile rtx3090ti --device-count 2 python3 your_script.py
+./fgpu --profile rtx4090 --device-count 2 python3 your_script.py
 ./fgpu --devices "t4,a100:2,h100" python3 your_script.py
 ```
 
@@ -594,12 +599,8 @@ time.
 
 ## Validation snapshot
 
-The maintained cross-GPU static-memory grid was checked on:
-
-| GPU | Compute capability | PyTorch / CUDA |
-|---|---:|---|
-| NVIDIA GeForce RTX 3090 Ti | 8.6 | PyTorch 2.12.1 / CUDA 13.0 |
-| NVIDIA RTX PRO 5000 72GB Blackwell | 12.0 | PyTorch 2.9.1 / CUDA 12.8 |
+The maintained cross-architecture static-memory grid spans compute
+capabilities 8.6 and 12.0 on two independent PyTorch/CUDA stacks.
 
 Across 13 MLP/Transformer workloads and 26 GPU observations:
 
@@ -611,17 +612,16 @@ Across 13 MLP/Transformer workloads and 26 GPU observations:
 
 These results validate the maintained parameter grid. They do not establish accuracy for arbitrary models, shapes, PyTorch releases, or CUDA backends.
 
-The v1.5.5 allocator trace was also checked on both hosts. All 15
+The v1.5.5 allocator trace was also checked on both stacks. All 15
 small/medium/large allocation, reuse, free, and `empty_cache()` stages matched
 real CUDA exactly for allocated and reserved bytes. Controlled matrix and
-convolution workspace capture produced ten exact-stack profiles. The same
-FP32 convolution required `8,536,576` workspace bytes on the RTX 3090 Ti and
-`16,925,184` bytes on the RTX PRO 5000, demonstrating why these measurements
-are matched by architecture and software stack rather than treated as a
+convolution workspace capture produced ten exact-stack profiles. Workspace
+requirements differed between the two stacks, so these observations are
+matched by architecture and software signature instead of being treated as a
 portable formula.
 
-The Qwen3-8B BF16 inference path was also checked on the RTX PRO 5000 with
-SDPA, a 9-token prompt, and two generated token IDs:
+The Qwen3-8B BF16 inference path was also checked against real CUDA with SDPA,
+a 9-token prompt, and two generated token IDs:
 
 | Comparison | Predicted | Real CUDA | Absolute error |
 |---|---:|---:|---:|
@@ -636,31 +636,32 @@ The virtual-SMI row includes a `442,049,024`-byte runtime overhead measured in
 that same CUDA run. That value is evidence for this GPU, PyTorch, CUDA, model,
 and operator path—not a portable constant.
 
-The distributed paths were also checked on the same two hosts:
+The distributed paths were also checked across independent single-host and
+two-host placements:
 
 | Check | Placement | Result |
 |---|---|---|
-| Hybrid DDP numerical check | Two ranks sharing the RTX PRO 5000, then two ranks sharing the RTX 3090 Ti | Averaged gradient `[1.5, 3.0]`, identical gathered parameters, and the expected SGD update on both CUDA 12.8 and CUDA 13.0 |
-| Hybrid FSDP numerical check | Two ranks sharing each GPU | Full sharding, averaged reduce-scatter gradients, optimizer update, full-parameter reconstruction, and state-dict restoration passed on both CUDA stacks |
-| Hybrid FSDP2/DTensor matrix | Two or four ranks sharing each GPU | FP32, FP16, and BF16 parameter paths passed; FP16/BF16 gradient reduction also passed with reconstructed DTensor parameters |
-| Hybrid DeepSpeed ZeRO matrix | Two or four ranks sharing each GPU | ZeRO 0–3, FP32/BF16, gradient accumulation, optimizer updates, and cross-rank parameter consistency passed on DeepSpeed 0.15.3 and 0.19.2 |
-| DeepSpeed Pipeline Parallel | Two stages sharing each GPU | FP32/BF16 direct-P2P, GAS=2, and checkpoint matrices plus an FP32 batched-P2P smoke passed on DeepSpeed 0.15.3 and 0.19.2; the report identifies the 0.19.2 non-last-stage gradient-scaling compatibility setting |
-| DeepSpeed AutoTP | Two ranks sharing the RTX 3090 Ti | ZeRO 0–2 × FP32/BF16 passed on DeepSpeed 0.19.2 with sharded weights, numerical updates, all-reduce/all-gather, and communication reports |
-| DeepSpeed AutoEP | Two ranks sharing the RTX 3090 Ti | ZeRO 0–2 × FP32/BF16 passed on DeepSpeed 0.19.2 with nonuniform expert routing, variable-split all-to-all, gradients, updates, and exact split-byte accounting |
-| Qwen3.5 DeepSpeed LoRA SFT | Two ranks sharing each GPU | ZeRO-2/3 forward, backward, AdamW update, communication report, accumulation, and reentrant checkpointing passed with local Qwen3.5-0.8B weights |
-| DeepSpeed checkpoint and offload | Two ranks sharing each GPU | ZeRO-2/3 save/restore/continued training/FP32 consolidation passed; ZeRO-2 optimizer and ZeRO-3 optimizer + parameter CPU offload placed the requested state on CPU |
-| Hugging Face Trainer + DeepSpeed | Two ranks sharing each GPU | Tiny ZeRO-2/3 and Qwen3.5-0.8B LoRA ZeRO-3 completed real updates, gradient accumulation, checkpointing, and rank-consistency checks |
-| Physical-host Hybrid DDP | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | The same numerical result across PyTorch 2.8.0/CUDA 12.8 and PyTorch 2.12.1/CUDA 13.0; TCP broadcast, all-reduce, and all-gather completed with zero timeouts |
-| Physical-host elastic DDP | One rank on each GPU over Tailscale | The 3090 Ti worker exited with code 86 while its communicator was active; `torchrun` replaced both PIDs, synchronized asymmetric local restart counts, created a second communicator, and reproduced gradient `[1.5, 3.0]` and parameters `[0.85, -0.30]` |
-| Physical-host elastic DDP checkpoint recovery | One rank on each GPU with host-local checkpoints | Both replacement workers restored step 1 parameters `[0.85, -0.30]` and SGD momentum `[1.5, 3.0]`, then produced step 2 parameters `[0.565, -0.87]` and momentum `[2.85, 5.7]`; two repeated runs each reported 512 node-pair bytes and a 64-byte peak |
-| Physical-host elastic DDP training-state recovery | One rank and two persistent DataLoader workers on each GPU host; failure after one of two accumulation micro-steps | Every host checkpoint replicated both rank-local states; recovery deliberately mapped `0 → 1` and `1 → 0`, rebuilt seeded spawn DataLoaders, exactly replayed staged samples `8` and `7` with worker RNG values `0.4750137329` and `0.1462690830`, replaced all worker PIDs, and produced parameters `[0.983838, -0.014662]`; two repeated runs each reported 25,960 node-pair bytes and a 25,232-byte peak |
-| Cross-runtime DataLoader replay matrix | CPU DataLoaders on macOS, RTX PRO 5000 Linux, and RTX 3090 Ti WSL | Five shuffle/epoch/worker/prefetch/batch scenarios covered 12 rank cases and 52 fresh workers per runtime. Sample-order plus PyTorch/Python/NumPy RNG digests matched across PyTorch 2.8.0, 2.9.1, and 2.12.1; two physical repeats used disjoint worker PID sets |
-| Physical-host Hybrid FSDP2 | One rank on the RTX PRO 5000 ↔ one rank on the RTX 3090 Ti | FP32/FP16/BF16 parameters and FP16/BF16 gradient reductions passed over TCP; the report identifies collective dtype and reduction operator |
+| Hybrid DDP numerical check | Two ranks per single-device validation run | Averaged gradient `[1.5, 3.0]`, identical gathered parameters, and the expected SGD update on both CUDA stacks |
+| Hybrid FSDP numerical check | Two ranks per single-device validation run | Full sharding, averaged reduce-scatter gradients, optimizer update, full-parameter reconstruction, and state-dict restoration passed on both CUDA stacks |
+| Hybrid FSDP2/DTensor matrix | Two or four ranks per single-device validation run | FP32, FP16, and BF16 parameter paths passed; FP16/BF16 gradient reduction also passed with reconstructed DTensor parameters |
+| Hybrid DeepSpeed ZeRO matrix | Two or four ranks per single-device validation run | ZeRO 0–3, FP32/BF16, gradient accumulation, optimizer updates, and cross-rank parameter consistency passed on DeepSpeed 0.15.3 and 0.19.2 |
+| DeepSpeed Pipeline Parallel | Two stages per single-device validation run | FP32/BF16 direct-P2P, GAS=2, and checkpoint matrices plus an FP32 batched-P2P smoke passed on DeepSpeed 0.15.3 and 0.19.2; the report identifies the 0.19.2 non-last-stage gradient-scaling compatibility setting |
+| DeepSpeed AutoTP | Two ranks on one validation device | ZeRO 0–2 × FP32/BF16 passed on DeepSpeed 0.19.2 with sharded weights, numerical updates, all-reduce/all-gather, and communication reports |
+| DeepSpeed AutoEP | Two ranks on one validation device | ZeRO 0–2 × FP32/BF16 passed on DeepSpeed 0.19.2 with nonuniform expert routing, variable-split all-to-all, gradients, updates, and exact split-byte accounting |
+| Qwen3.5 DeepSpeed LoRA SFT | Two ranks per single-device validation run | ZeRO-2/3 forward, backward, AdamW update, communication report, accumulation, and reentrant checkpointing passed with local Qwen3.5-0.8B weights |
+| DeepSpeed checkpoint and offload | Two ranks per single-device validation run | ZeRO-2/3 save/restore/continued training/FP32 consolidation passed; ZeRO-2 optimizer and ZeRO-3 optimizer + parameter CPU offload placed the requested state on CPU |
+| Hugging Face Trainer + DeepSpeed | Two ranks per single-device validation run | Tiny ZeRO-2/3 and Qwen3.5-0.8B LoRA ZeRO-3 completed real updates, gradient accumulation, checkpointing, and rank-consistency checks |
+| Physical-host Hybrid DDP | One rank on each of two physical nodes | Identical numerical results across independent software stacks; TCP broadcast, all-reduce, and all-gather completed with zero timeouts |
+| Physical-host elastic DDP | One rank on each node over Tailscale | One worker exited with code 86 while its communicator was active; `torchrun` replaced both PIDs, synchronized asymmetric local restart counts, created a second communicator, and reproduced gradient `[1.5, 3.0]` and parameters `[0.85, -0.30]` |
+| Physical-host elastic DDP checkpoint recovery | One rank on each node with host-local checkpoints | Both replacement workers restored step 1 parameters `[0.85, -0.30]` and SGD momentum `[1.5, 3.0]`, then produced step 2 parameters `[0.565, -0.87]` and momentum `[2.85, 5.7]`; two repeated runs each reported 512 node-pair bytes and a 64-byte peak |
+| Physical-host elastic DDP training-state recovery | One rank and two persistent DataLoader workers on each node; failure after one of two accumulation micro-steps | Every host checkpoint replicated both rank-local states; recovery deliberately mapped `0 → 1` and `1 → 0`, rebuilt seeded spawn DataLoaders, exactly replayed staged samples `8` and `7` with worker RNG values `0.4750137329` and `0.1462690830`, replaced all worker PIDs, and produced parameters `[0.983838, -0.014662]`; two repeated runs each reported 25,960 node-pair bytes and a 25,232-byte peak |
+| Cross-runtime DataLoader replay matrix | CPU DataLoaders on macOS, Linux, and WSL | Five shuffle/epoch/worker/prefetch/batch scenarios covered 12 rank cases and 52 fresh workers per runtime. Sample-order plus PyTorch/Python/NumPy RNG digests matched across three PyTorch releases; two physical repeats used disjoint worker PID sets |
+| Physical-host Hybrid FSDP2 | One rank on each of two physical nodes | FP32/FP16/BF16 parameters and FP16/BF16 gradient reductions passed over TCP; the report identifies collective dtype and reduction operator |
 | Physical-host Hybrid DeepSpeed | One rank per physical GPU over Tailscale | ZeRO-2 passed across DeepSpeed 0.15.3 ↔ 0.19.2 with identical parameters and 176 reported node-pair bytes; ZeRO-3 now rejects mismatched DeepSpeed versions during preflight |
-| Physical-host TCP all-to-all-v | RTX PRO 5000 coordinator/rank 0 ↔ RTX 3090 Ti rank 1 over Tailscale | Nonuniform 2 MiB/3 MiB and sparse 0 MiB/1 MiB cross-host splits produced exact payloads; 2 calls reported 12 MiB logical bytes, 6 MiB inter-node bytes, and a 5 MiB node-pair peak |
-| Physical-host TCP all-reduce | RTX PRO 5000 coordinator/rank 0 ↔ RTX 3090 Ti rank 1 over Tailscale | Correct 1 MiB and 16 MiB reductions, zero coordinator timeouts; 16 MiB × 5 measured about `0.261 Gbit/s` algorithmic and `0.521 Gbit/s` bidirectional socket payload per rank |
-| Physical-host rank-failure recovery | Ranks 0/2 on the RTX PRO 5000 ↔ ranks 1/3 on the RTX 3090 Ti WSL host | Injected rank 2 failure reached all four ranks as persistent `ncclRemoteError`; global ranks `[0,1,3]` recovered through `ncclCommShrink`, and all three obtained the post-recovery sum `7.0` |
-| Physical-host process-exit recovery | Ranks 0/2 on the RTX PRO 5000 ↔ ranks 1/3 on the RTX 3090 Ti WSL host | Rank 2 exited with code 86 after communicator initialization; ranks `[0,1,3]` inferred its absence from one AllReduce timeout, retained `ncclSystemError`, explicitly shrank the communicator, and all obtained the recovered sum `7.0` |
+| Physical-host TCP all-to-all-v | Coordinator/rank 0 ↔ rank 1 over Tailscale | Nonuniform 2 MiB/3 MiB and sparse 0 MiB/1 MiB cross-host splits produced exact payloads; 2 calls reported 12 MiB logical bytes, 6 MiB inter-node bytes, and a 5 MiB node-pair peak |
+| Physical-host TCP all-reduce | Coordinator/rank 0 ↔ rank 1 over Tailscale | Correct 1 MiB and 16 MiB reductions, zero coordinator timeouts; 16 MiB × 5 measured about `0.261 Gbit/s` algorithmic and `0.521 Gbit/s` bidirectional socket payload per rank |
+| Physical-host rank-failure recovery | Ranks 0/2 ↔ ranks 1/3 across two physical nodes | Injected rank 2 failure reached all four ranks as persistent `ncclRemoteError`; global ranks `[0,1,3]` recovered through `ncclCommShrink`, and all three obtained the post-recovery sum `7.0` |
+| Physical-host process-exit recovery | Ranks 0/2 ↔ ranks 1/3 across two physical nodes | Rank 2 exited with code 86 after communicator initialization; ranks `[0,1,3]` inferred its absence from one AllReduce timeout, retained `ncclSystemError`, explicitly shrank the communicator, and all obtained the recovered sum `7.0` |
 
 The TCP numbers are an end-to-end simulator measurement from this specific
 test network. They are not raw link capacity or an NCCL/RDMA performance
