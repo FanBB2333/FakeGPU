@@ -57,7 +57,7 @@
 
 ```json
 {
-  "report_version": "1.5.4",
+  "report_version": "1.5.5",
   "mode": "simulate",
   "devices": [
     {
@@ -164,7 +164,14 @@ runner 会写出 `preflight_report.json`，并配套生成 `preflight_report.md`
 | `FAIL_RUNTIME` | 依赖、数据、模型加载、代码或环境设置失败。 |
 | `WARN_INCOMPLETE_TRACKING` | 运行完成，但显存跟踪不够完整，不能给出强 fit/no-fit 判断。 |
 
-每个 device entry 会包含总显存、峰值显存、余量、allocation 次数、`current_bytes_by_category`、`peak_by_stage` 和 `largest_allocations`。fakecuda 模式下，top allocations 会记录 bytes、dtype、shape、stage，以及 `parameter` / `buffer` / `gradient` / `optimizer_state` / `activation` / `temporary` / `tensor` 这类粗粒度 category。加上 `--allocation-stacks` 后，还会为这些 top allocations 记录短 Python stack trace。
+每个 device entry 会包含总显存、保守峰值、tensor requested 峰值、
+caching allocator reserved 峰值、inactive split bytes、segment 数量、余量、
+allocation 次数、`current_bytes_by_category`、`peak_by_stage` 和
+`largest_allocations`。保守峰值和余量使用 allocated 与 reserved 中的较大值。
+fakecuda 模式下，top allocations 会记录 bytes、dtype、shape、stage，以及
+`parameter` / `buffer` / `gradient` / `optimizer_state` / `activation` /
+`temporary` / `tensor` 这类粗粒度 category。加上 `--allocation-stacks`
+后，还会为这些 top allocations 记录短 Python stack trace。
 
 静态显存验证报告会分别保留 forward、backward 和 optimizer 的 CUDA 峰值。workspace 字段会区分 profile 总字节数与实际影响峰值的增量：graph-phase persistent storage 作用于整个计算图，operator-local workspace 只与对应 ATen 节点的 live storage 相加。报告还会列出已由计算图覆盖和仍未匹配的 Attention 算子。
 
@@ -181,8 +188,10 @@ runner 会写出 `preflight_report.json`，并配套生成 `preflight_report.md`
 
 如果在 FakeCUDA runtime 启动前设置 `FAKEGPU_SMI_STATE_PATH` 或
 `FAKEGPU_SMI_STATE_DIR`，每个进程都会发布 `fakegpu.smi_state.v1` JSON。
-`fakegpu nvidia-smi` 会显示当前及峰值 tracked tensor 显存，并可加入同一
-软件与硬件路径实测得到的 runtime overhead。状态中还包括主机、逻辑
+`fakegpu nvidia-smi` 会显示当前及峰值 tracked tensor 显存、allocator
+reserved 显存，并可加入同一软件与硬件路径实测得到的 runtime overhead。
+模拟进程显存以 reserved 显存为基线，因此包含可复用的缓存 segment。状态中
+还包括主机、逻辑
 device/profile、stage 和 tracking confidence。`--loop <seconds>` 可以持续
 刷新，`--count <n>` 可以限制刷新次数；JSON 循环模式输出 NDJSON，并在
 每次采样前重新扫描状态目录。
@@ -191,6 +200,47 @@ Qwen 验证 worker 会分别记录模型加载和推理峰值；真实模式读�
 显存，无 GPU 模式隐藏物理 GPU 并用 CPU-backed FakeCUDA 执行，还会对比
 实际 FLOPs 与形状估算。命令、实测结果和适用范围参见
 [LLM 推理显存与计算量估算](llm-inference-estimation.md)。
+
+## 声明式验证报告
+
+`fakegpu validate --manifest <path>` 会执行参数矩阵，并生成
+`validation_report.json`、`validation_report.md` 和每个 case 的
+stdout/stderr 日志。报告会记录 Git commit、主机、展开后的矩阵参数、依赖
+缺失、断言失败和耗时。清单可以检查命令、Python module、文件与环境变量，
+也可以验证输出文本、最长耗时、生成文件和 JSON Pointer 指定的值。
+
+仓库中的跨 profile smoke 矩阵可以这样执行：
+
+```bash
+fakegpu validate \
+  --manifest verification/data/validation_smoke.yaml \
+  --report-dir build/validation-smoke \
+  --strict
+```
+
+schema 为 `fakegpu.validation_manifest.v1`，详细说明见
+[声明式验证清单](validation-manifests.md)。
+
+## Allocator 与 backend workspace 验证
+
+固定 allocator trace 会比较小、中、大 allocation 在复用、释放和
+`empty_cache()` 各阶段的 allocated/reserved 字节数：
+
+```bash
+python3 verification/allocator_trace_validation.py capture \
+  --mode real --profile "$TARGET_GPU_PROFILE" --output build/allocator-real.json
+python3 verification/allocator_trace_validation.py capture \
+  --mode fakecuda --profile "$TARGET_GPU_PROFILE" --output build/allocator-fake.json
+python3 verification/allocator_trace_validation.py compare \
+  --real build/allocator-real.json \
+  --fakecuda build/allocator-fake.json \
+  --output build/allocator-comparison.json
+```
+
+`verification/workspace_profile_validation.py capture` 会在真实 CUDA 上测量
+受控矩阵和卷积的 workspace 峰值；`build-catalog` 可以把一份或多份采样
+转换为精确匹配软件栈的 profile。内置 catalog 包含 10 组 Ampere/Blackwell
+观测，可用 `fakegpu workspace-profiles --json` 查看。
 
 Qwen3.5 SFT worker 会用固定随机 token 和 loss mask 对比真实 CUDA、
 FakeCUDA 与静态训练图，覆盖 full/LoRA、checkpointing、accumulation，并区分 AdamW 首步和稳态显存。命令、实测误差及

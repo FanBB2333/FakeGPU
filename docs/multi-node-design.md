@@ -449,7 +449,7 @@ faults:
 
 ```json
 {
-  "report_version": "1.5.4",
+  "report_version": "1.5.5",
   "schema_version": "cluster_report.v1",
   "cluster": {
     "world_size": 8,

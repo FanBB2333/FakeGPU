@@ -48,6 +48,7 @@ plugins:
             - DeepSpeed 验证: deepspeed-validation.md
             - 项目结构与架构: project-structure.md
             - 报告与验证: reports-and-validation.md
+            - 声明式验证清单: validation-manifests.md
             - 错误模拟: error-simulation.md
             - 分布式模拟:
                 - 使用说明: distributed-sim-usage.md
@@ -83,6 +84,7 @@ nav:
   - DeepSpeed Validation: deepspeed-validation.md
   - Architecture: project-structure.md
   - Reports & Validation: reports-and-validation.md
+  - Validation Manifests: validation-manifests.md
   - Error Simulation: error-simulation.md
   - Distributed Simulation:
       - Usage Guide: distributed-sim-usage.md
