@@ -39,6 +39,7 @@ EXPECTED_SAMPLE_IDS = {
     1: [2, 4, 6, 8],
 }
 EXPECTED_PROCESS_EXIT_CODE = 86
+EXPECTED_DATA_LOADER_SEED_BASE = 2026072300
 
 
 def _nested_allclose(
@@ -66,6 +67,56 @@ def _storage_identity(report: dict[str, Any]) -> tuple[str, int]:
     if not node_name or local_rank < 0:
         raise AssertionError(f"checkpoint storage identity is invalid: {report}")
     return node_name, local_rank
+
+
+def _data_sample_matches(
+    actual: object,
+    expected: object,
+    *,
+    tolerance: float = 1e-12,
+) -> bool:
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        return False
+    return (
+        int(actual.get("sample_id", -1))
+        == int(expected.get("sample_id", -2))
+        and int(actual.get("worker_id", -2))
+        == int(expected.get("worker_id", -3))
+        and abs(
+            float(actual.get("worker_random", -1.0))
+            - float(expected.get("worker_random", -2.0))
+        )
+        <= tolerance
+    )
+
+
+def _data_sample_sequence_matches(
+    actual: object,
+    expected: object,
+) -> bool:
+    if not isinstance(actual, list) or not isinstance(expected, list):
+        return False
+    return len(actual) == len(expected) and all(
+        _data_sample_matches(actual_item, expected_item)
+        for actual_item, expected_item in zip(actual, expected)
+    )
+
+
+def _valid_worker_data_sample(
+    sample: object,
+    *,
+    expected_sample_id: int,
+    worker_count: int,
+) -> bool:
+    if not isinstance(sample, dict):
+        return False
+    worker_random = float(sample.get("worker_random", -1.0))
+    worker_id = int(sample.get("worker_id", -1))
+    return (
+        int(sample.get("sample_id", -1)) == expected_sample_id
+        and 0.0 <= worker_random < 1.0
+        and 0 <= worker_id < worker_count
+    )
 
 
 def validate_elastic_ddp_training_state_reports(
@@ -172,6 +223,22 @@ def validate_elastic_ddp_training_state_reports(
             )
         if report.get("optimizer") != "adamw":
             raise AssertionError(f"unexpected optimizer metadata: {report}")
+        dataloader_workers = int(report.get("dataloader_workers", -1))
+        if dataloader_workers < 2:
+            raise AssertionError(f"multi-worker DataLoader is missing: {report}")
+        if (
+            int(report.get("dataloader_prefetch_factor", -1)) != 2
+            or report.get("dataloader_persistent_workers") is not True
+            or report.get("dataloader_start_method") != "spawn"
+        ):
+            raise AssertionError(f"DataLoader configuration is invalid: {report}")
+        dataloader_worker_pids = report.get("dataloader_worker_pids")
+        if (
+            not isinstance(dataloader_worker_pids, list)
+            or len(dataloader_worker_pids) != dataloader_workers
+            or any(int(pid) <= 0 for pid in dataloader_worker_pids)
+        ):
+            raise AssertionError(f"DataLoader worker PIDs are invalid: {report}")
         if report.get("checkpoint_replication_mode") != (
             "all_rank_states_per_host"
         ):
@@ -250,6 +317,31 @@ def validate_elastic_ddp_training_state_reports(
             != EXPECTED_SAMPLE_IDS[rank][3]
         ):
             raise AssertionError(f"initial sampler state is invalid: {report}")
+        committed_data_samples = report.get("committed_data_samples")
+        if (
+            not isinstance(committed_data_samples, list)
+            or len(committed_data_samples) != 3
+            or any(
+                not _valid_worker_data_sample(
+                    sample,
+                    expected_sample_id=expected_sample_id,
+                    worker_count=dataloader_workers,
+                )
+                for sample, expected_sample_id in zip(
+                    committed_data_samples,
+                    EXPECTED_SAMPLE_IDS[rank][:3],
+                )
+            )
+            or not _valid_worker_data_sample(
+                report.get("staged_prefetched_sample"),
+                expected_sample_id=EXPECTED_SAMPLE_IDS[rank][3],
+                worker_count=dataloader_workers,
+            )
+            or int(report.get("loader_batches_yielded", -1)) != 4
+            or int(report.get("loader_seed", -1))
+            != EXPECTED_DATA_LOADER_SEED_BASE + rank
+        ):
+            raise AssertionError(f"initial DataLoader state is invalid: {report}")
         saved = report.get("saved_checkpoint")
         if (
             not isinstance(saved, dict)
@@ -382,6 +474,7 @@ def validate_elastic_ddp_training_state_reports(
         ):
             raise AssertionError(f"resumed AdamW state is invalid: {report}")
         source_rank = resume_source_by_rank[rank]
+        source_before = initial_by_rank[source_rank]
         if (
             report.get("restored_sampler") != "DistributedSampler"
             or int(report.get("restored_sampler_epoch", -1)) != 0
@@ -392,6 +485,38 @@ def validate_elastic_ddp_training_state_reports(
             != EXPECTED_SAMPLE_IDS[source_rank][3]
         ):
             raise AssertionError(f"restored sampler state is invalid: {report}")
+        if (
+            int(report.get("restored_dataloader_workers", -1))
+            != int(source_before.get("dataloader_workers", -2))
+            or int(report.get("restored_prefetch_factor", -1))
+            != int(source_before.get("dataloader_prefetch_factor", -2))
+            or report.get("restored_persistent_workers") is not True
+            or report.get("restored_multiprocessing_context") != "spawn"
+            or int(report.get("restored_loader_seed", -1))
+            != int(source_before.get("loader_seed", -2))
+            or not _data_sample_sequence_matches(
+                report.get("restored_committed_data_samples"),
+                source_before.get("committed_data_samples"),
+            )
+            or not _data_sample_matches(
+                report.get("replayed_prefetched_sample"),
+                source_before.get("staged_prefetched_sample"),
+            )
+        ):
+            raise AssertionError(f"restored DataLoader state is invalid: {report}")
+        restarted_data_worker_pids = report.get("dataloader_worker_pids")
+        initial_storage_worker_pids = before.get("dataloader_worker_pids")
+        if (
+            not isinstance(restarted_data_worker_pids, list)
+            or len(restarted_data_worker_pids)
+            != int(report.get("restored_dataloader_workers", -1))
+            or not isinstance(initial_storage_worker_pids, list)
+            or set(int(pid) for pid in restarted_data_worker_pids)
+            & set(int(pid) for pid in initial_storage_worker_pids)
+        ):
+            raise AssertionError(
+                f"DataLoader worker processes were not replaced: {report}"
+            )
         if int(report.get("optimizer_state_step", -1)) != 2:
             raise AssertionError(f"final AdamW step is invalid: {report}")
         if abs(float(report.get("learning_rate", -1.0)) - 0.0025) > 1e-12:
@@ -417,7 +542,7 @@ def validate_elastic_ddp_training_state_reports(
     if len(run_ids) != 1 or not next(iter(run_ids)):
         raise AssertionError(f"elastic run IDs are inconsistent: {run_ids}")
     return {
-        "schema_version": "fakegpu.elastic_ddp_training_state_validation.v2",
+        "schema_version": "fakegpu.elastic_ddp_training_state_validation.v3",
         "status": "success",
         "backend": backend,
         "world_size": 2,
@@ -469,6 +594,18 @@ def validate_elastic_ddp_training_state_reports(
         },
         "resumed_sample_ids": {
             str(rank): int(restarted_by_rank[rank]["resumed_sample_id"])
+            for rank in (0, 1)
+        },
+        "replayed_prefetched_samples": {
+            str(rank): restarted_by_rank[rank]["replayed_prefetched_sample"]
+            for rank in (0, 1)
+        },
+        "initial_dataloader_worker_pids": {
+            str(rank): initial_by_rank[rank]["dataloader_worker_pids"]
+            for rank in (0, 1)
+        },
+        "restarted_dataloader_worker_pids": {
+            str(rank): restarted_by_rank[rank]["dataloader_worker_pids"]
             for rank in (0, 1)
         },
         "initial_workers": initial,
