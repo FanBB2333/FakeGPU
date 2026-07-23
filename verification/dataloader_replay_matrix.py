@@ -317,6 +317,16 @@ def _collect_batches(iterator: object, count: int) -> list[dict[str, Any]]:
     return batches
 
 
+def _drain_iterator(iterator: object) -> int:
+    drained = 0
+    while True:
+        try:
+            next(iterator)  # type: ignore[arg-type]
+        except StopIteration:
+            return drained
+        drained += 1
+
+
 def _flatten_sample_ids(batches: list[dict[str, Any]]) -> list[int]:
     return [
         int(sample_id)
@@ -589,6 +599,7 @@ def run_replay_matrix(
                     requested_batches,
                 )
                 initial_prefetch_state = _prefetch_state(initial_iterator)
+                initial_cleanup_batches = _drain_iterator(initial_iterator)
             finally:
                 _shutdown_iterator(initial_iterator)
             if (
@@ -626,6 +637,7 @@ def run_replay_matrix(
                     requested_batches,
                 )
                 replay_prefetch_state = _prefetch_state(replay_iterator)
+                replay_cleanup_batches = _drain_iterator(replay_iterator)
             finally:
                 _shutdown_iterator(replay_iterator)
             if replay_expected_sample_ids != expected_sample_ids:
@@ -653,6 +665,14 @@ def run_replay_matrix(
             )
             if replay_worker_seed_base != initial_worker_seed_base:
                 raise AssertionError("DataLoader worker base seed changed")
+            expected_cleanup_batches = batches_per_rank - requested_batches
+            if (
+                initial_cleanup_batches != expected_cleanup_batches
+                or replay_cleanup_batches != expected_cleanup_batches
+            ):
+                raise AssertionError(
+                    "DataLoader cleanup did not drain the remaining epoch"
+                )
 
             committed = initial_batches[: scenario.committed_batches]
             staged = initial_batches[scenario.committed_batches :]
@@ -674,6 +694,7 @@ def run_replay_matrix(
                     "replayed_worker_pids": replay_pids,
                     "initial_prefetch_state": initial_prefetch_state,
                     "replayed_prefetch_state": replay_prefetch_state,
+                    "cleanup_batches_drained": expected_cleanup_batches,
                     "sequence_digest": _digest(
                         {
                             "committed_batches": committed,
