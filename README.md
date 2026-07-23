@@ -2,7 +2,7 @@
 
 FakeGPU is a CUDA, cuBLAS, NVML, and NCCL interception toolkit for validating GPU-facing code without depending on a production GPU cluster. It provides a Python fake-CUDA path, native shared-library interception, configurable GPU profiles, distributed control-flow simulation, and memory preflight reports.
 
-[Getting started](docs/getting-started.md) · [Quick reference](docs/quick-reference.md) · [中文文档](docs/index.zh.md) · [Changelog](CHANGELOG.md)
+[Getting started](docs/getting-started.md) · [Complete feature list](#complete-feature-list) · [Quick reference](docs/quick-reference.md) · [中文文档](docs/index.zh.md) · [Changelog](CHANGELOG.md)
 
 ## TL;DR
 
@@ -338,17 +338,143 @@ end-to-end throughput, and shuts the coordinator down. A separately hosted
 coordinator and per-host rank selection are available for physical multi-host
 checks.
 
-## Capability map
+## Complete feature list
 
-| Surface | Maintained behavior | Important boundary |
+FakeGPU has three complementary paths. Choosing the right path is important
+because they answer different questions:
+
+| Path | Main question | What actually runs |
 |---|---|---|
-| CUDA Driver/Runtime | Device discovery, memory allocation/copy, streams/events, selected Driver forwarding | The full CUDA API is not implemented |
-| NVML | Device identity, memory information, common monitoring queries | Some telemetry fields are synthetic or unavailable |
-| cuBLAS/cuBLASLt | Selected GEMM/matmul operations with CPU-backed execution | Unsupported algorithms may remain stubbed |
-| PyTorch fake-CUDA | Common tensor, module, autograd, optimizer, Transformers, PEFT, Accelerate, and FSDP smoke paths; real-CUDA Hybrid DDP/FSDP numerical checks | Custom CUDA extensions are not emulated |
-| NCCL-style communication | Collective and point-to-point control flow, TCP socket payloads, deterministic direct-collective failure, controlled rank-process exit, communicator shrink/recovery, fixed-size `torchrun` worker-group restart, checkpoint resume, rank-mapped partial accumulation, and deterministic multi-worker DataLoader replay, topology-aware reporting, PyTorch-required NCCL 2.29 host symbols | Not a protocol-level NCCL/RDMA/NVLink model; no heartbeat-based membership resizing; live multiprocessing queues, device-communicator, and signal/RMA operations are not simulated |
-| Memory preflight | Runtime tracking, ATen static analysis, empirical GPU calibration | Results apply to the validated shape and software envelope |
-| Error simulation | OOM, invalid device, cross-device, dtype/autocast, gradient, checkpoint, injected rank failure, controlled process exit, elastic DDP restart, and model/optimizer/scheduler/RNG/accumulation/DataLoader recovery | Error timing can differ from a real driver; framework recovery is validated for a fixed two-node worker group |
+| Python FakeCUDA | Will this Python/PyTorch workload follow the expected CUDA-facing control flow? | Maintained tensor, module, autograd, optimizer, and framework operations execute on CPU while reporting `cuda` devices |
+| Native interception | Can an unmodified process discover and call the expected CUDA-family libraries? | Fake shared libraries expose selected CUDA Driver, CUDA Runtime, NVML, cuBLAS/cuBLASLt, and NCCL entry points; maintained matrix operations can execute on CPU |
+| Analysis and reporting | How much memory, matrix work, or communication should a workload require? | Runtime traces, ATen graphs, safetensors metadata, calibrated measurements, and distributed events are converted into structured reports |
+
+Coverage labels used below:
+
+- **Maintained** — included in the repository's regular regression surface.
+- **Validated** — has dedicated numerical or physical-host experiments; the
+  result applies to the documented model, shape, GPU, and software envelope.
+- **Compatibility-tested** — an optional framework integration has focused
+  smoke or workflow tests, not complete upstream API coverage.
+- **Experimental** — usable for its documented prototype scope, but not a
+  general compatibility promise.
+
+### Commands and public entry points
+
+| Entry point | Function | Coverage |
+|---|---|---|
+| `fakegpu doctor` | Checks profiles, native libraries, and PyTorch; can inspect one profile or list the complete catalog in text/JSON | Maintained |
+| `fakegpu demo` | Runs a small CUDA-visible PyTorch forward, backward, and optimizer step on CPU | Maintained |
+| `./fgpu ...` / `python3 -m fakegpu ...` | Launches an arbitrary command with mode, OOM policy, distributed mode, coordinator, and uniform or heterogeneous device settings | Maintained |
+| `fakegpu preflight -- ...` | Runs an arbitrary command to a requested stage and produces fit/OOM, memory-category, confidence, stdout, and stderr reports | Maintained; accuracy is execution-path and calibration dependent |
+| `fakegpu estimate-llm` | Estimates dense decoder checkpoint storage, KV cache, transient tensors, process memory, and matrix FLOPs without loading weights | Maintained for dense decoder-only safetensors checkpoints |
+| `fakegpu nvidia-smi` | Displays current and peak tracked memory published by one or more FakeCUDA processes | Maintained; this is FakeGPU state rather than host-driver telemetry |
+| `fakegpu coordinator` | Starts, probes, stops, and reports on the TCP distributed coordinator | Maintained |
+| `fakegpu bandwidth` | Creates logical nodes or connects physical hosts, checks payload correctness, and measures simulator-path TCP throughput | Maintained and physically validated; not an NCCL/RDMA speed predictor |
+| `fakegpu.init`, `patch_torch`, `env`, `run`, `library_dir` | Selects a runtime or embeds launch/preload behavior in Python | Maintained public Python API |
+| `estimate_module_memory`, `analyze_graph_memory`, `estimate_decoder_inference`, `inspect_safetensors_checkpoint` | Exposes graph and checkpoint estimators as Python APIs | Maintained public Python API |
+| `fakegpu.stage(...)`, `MatmulFlopCounterMode` | Annotates preflight stages and counts matrix-heavy FLOPs, including grouped-query SDPA | Maintained helper APIs |
+
+### Runtime and native-library features
+
+| Feature | What is covered | Status and boundary |
+|---|---|---|
+| Python FakeCUDA runtime | `torch.cuda` discovery, CUDA-looking tensors and modules, logical devices, CPU-backed execution, and runtime memory tracking | Maintained; it does not emulate binary CUDA extensions |
+| Native simulate mode | Virtual NVIDIA device identity, host-backed allocations, selected native API behavior, and CPU-backed maintained GEMM/matmul paths | Maintained; arbitrary CUDA kernel launches remain no-ops |
+| Passthrough mode | Runs an unmodified real-CUDA baseline without FakeGPU CUDA/NVML injection | Maintained comparison path; requires a real GPU |
+| Hybrid mode | Keeps real CUDA compute while virtualizing selected Driver/NVML surfaces and recording reports | `clamp` is validated; `managed`, `mapped_host`, and `spill_cpu` are experimental |
+| Distributed mode selection | `disabled`, coordinator-backed `simulate`, real-NCCL `proxy` with reporting, and thin `passthrough` | Simulate is maintained; proxy/passthrough require a matching real stack |
+| CUDA Driver and Runtime | Device count/properties, current-device state, allocation/free, memory information and types, memset/copies including peer copies, streams/events, and selected Driver forwarding | Maintained subset; the full CUDA API is not implemented |
+| NVML | Device identity, memory information, and common monitoring queries used by tools and framework probes | Maintained subset; unavailable telemetry is synthetic or explicitly unsupported |
+| cuBLAS and cuBLASLt | Selected GEMM and matmul calls, typed operation accounting, FLOP reports, and CPU numerical execution | Maintained subset; unsupported algorithms or attributes may be stubs |
+| Library preload | Linux `LD_PRELOAD`, macOS `DYLD_INSERT_LIBRARIES`, explicit build/library directories, and mode-specific library selection | Maintained; macOS SIP can strip `DYLD_*` from system binaries |
+| PrivateUse1 `fgpu` device | `torch.device("fgpu")`, tensor/module conversion, CPU-backed forward/backward, one-step Adam, alias-preserving save/load, and disabled autocast | Experimental local-debug prototype; it is separate from CUDA semantics and distributed support |
+
+### PyTorch and training-framework features
+
+| Feature | What is covered | Status and boundary |
+|---|---|---|
+| Core PyTorch | Common tensor creation/manipulation, modules, device propagation, autograd, gradients, optimizers, memory APIs, pinned-memory DataLoader paths, and multithreaded use | Maintained regression surface; unsupported operators can still expose CPU/FakeTensor gaps |
+| CUDA-facing training flow | Forward, loss, backward, gradient accumulation, optimizer updates, gradient checkpointing, autocast, GradScaler-facing behavior, and checkpoint round trips | Maintained for tested operations and dtypes |
+| Multi-device correctness guards | Logical `cuda:N` placement, per-device profiles and memory, invalid ordinals, and cross-device operation checks | Maintained |
+| `torch.compile` | Eager-backend compilation smoke for functions, modules, autograd, dynamic shapes, and fake-CUDA inputs | Compatibility-tested; arbitrary Inductor/Triton CUDA code generation is not claimed |
+| Transformers and Accelerate | Model loading, Trainer train/eval/predict/checkpoint flows, CUDA selection, mixed precision, and device-map helpers | Compatibility-tested with focused tiny-model and local-model workflows |
+| PEFT and TRL | LoRA, SFTTrainer, DPOTrainer, adapter save/load, and LLaMA-Factory-style LoRA SFT/DPO flows | Compatibility-tested; not every trainer option or quantization backend is covered |
+| torchtune, Lightning Fabric, and LitGPT | Single-device fine-tuning/training-loop and import-level compatibility checks | Compatibility-tested optional integrations |
+| nanoGPT and MoE components | Model construction, routing-related components, forward/loss, and training-wrapper helpers | Compatibility-tested components; not arbitrary production MoE kernels |
+| DDP | Simulated control flow plus Hybrid numerical validation for gradient averaging, accumulation/`no_sync`, unused parameters, static graph, bucket views, checkpointing, and failure restart cases | Maintained/validated within the documented rank and option matrix |
+| FSDP and FSDP2 | Basic fake-CUDA smoke, state-dict round trips, Hybrid sharding numerics, mixed-precision parameter/reduction cases, and Qwen memory projection | Validated on the documented two- and four-rank cases |
+| DeepSpeed | ZeRO 1/2/3, CPU optimizer/parameter offload, checkpoint resume, Hugging Face Trainer, Qwen LoRA SFT, two-stage Pipeline Parallel, AutoTP, AutoEP, and variable all-to-all workflows | Targeted Hybrid validation; fused/JIT optimizers, NVMe offload, sequence parallelism, and combined AutoTP+AutoEP remain outside the validated set |
+| Local LLM execution | Dense Hugging Face models can load and run tokenization/generation or training reference steps through CPU-backed FakeCUDA when all exercised operators are covered | Compatibility-tested; output comes from real CPU math, so it can be much slower than CUDA |
+
+### Memory and compute estimation
+
+| Feature | What is measured or modeled | Status and boundary |
+|---|---|---|
+| Runtime allocation tracking | Current/peak bytes per logical device, allocation/free events, storage aliases, coarse categories, stages, top allocations, and optional Python stack traces | Maintained; allocations hidden inside unobserved backend code need calibration |
+| Profile-aware OOM simulation | Enforces each selected GPU profile's memory limit and raises `torch.cuda.OutOfMemoryError` | Maintained; failure timing can differ from a real allocator |
+| Repository/workload preflight | Wraps any command, checks arrival at `import`, `model_load`, `forward`, `backward`, `optimizer_step`, or `n_steps`, and reports fit, headroom, failure class, and confidence | Maintained; only the code path and shapes actually executed are assessed |
+| Static ATen graph estimator | Captures forward/backward without real CUDA allocation; deduplicates storage aliases, follows last-use lifetimes, and models parameters, buffers, gradients, optimizer state, and separate graph/optimizer phases | Maintained; target-device ATen traces need a CUDA-enabled PyTorch build for CUDA-specific dispatch |
+| Workspace modeling | Adds graph-persistent or operator-local workspace at the correct liveness point, including maintained Flash/Efficient Attention profiles | Validated for the profiled operator, dtype, shape, PyTorch, CUDA, and GPU combinations |
+| Real-GPU calibration | Compares real CUDA, passthrough, Hybrid clamp, FakeCUDA, allocator counters, and NVML; aggregates multiple GPUs into signature-matched calibration bundles | Validated on RTX 3090 Ti and RTX PRO 5000 datasets; calibration is not extrapolated across changed workload signatures |
+| Dense-decoder inference estimator | Reads safetensors headers without materializing weights and derives parameter bytes, KV cache, eager/SDPA transients, runtime overhead, and prefill/decode matrix FLOPs | Maintained for dense decoder-only models; MoE, adapters, quantized checkpoints, custom kernels, and backend workspaces need dedicated models |
+| SFT memory references | Full-parameter, LoRA, and native packed-NF4 QLoRA; BF16, checkpointing, accumulation, first/steady AdamW steps, and direct or nested scale storage | Validated for maintained Qwen3.5-0.8B/2B matrices; native NF4 does not claim bitsandbytes fused-kernel parity |
+| Sharded training projection | Projects a static graph onto FSDP FULL_SHARD or FSDP2 DTensor parameter/gradient/optimizer storage and all-gather/reduce-scatter buffer lifetimes | Validated for documented Qwen full-parameter and mixed-dtype LoRA cases at world sizes 2/4 |
+| FLOP accounting | Native maintained GEMM/cuBLASLt FLOPs, checkpoint-shape inference FLOPs, and PyTorch matrix-heavy operation counts including grouped-query attention | Maintained for recognized matrix operations; it is not a kernel latency model |
+| Virtual `nvidia-smi` | Publishes per-process current/peak tracked memory, device/profile identity, tracking confidence, and optional calibrated runtime overhead | Maintained; similarity to physical NVML depends on matching calibration |
+
+### Distributed communication and topology
+
+| Feature | What is covered | Status and boundary |
+|---|---|---|
+| Logical cluster model | YAML nodes, ranks, per-rank GPU profiles, links, bandwidth/latency, heterogeneous devices, sub-communicator membership, and preserved global-rank identity | Maintained |
+| Coordinator transports | Unix sockets for local runs and chosen-port TCP for logical or physical multi-host runs | Maintained; TCP payloads have been validated across two physical hosts |
+| Collectives | All-Reduce, Reduce, Broadcast, All-Gather, Reduce-Scatter, All-to-All, grouped operations, chunked payloads, and zero-element cases | Maintained direct/native suite |
+| Variable all-to-all | Nonuniform and sparse all-to-all-v through grouped send/receive | Validated over Unix, loopback TCP, and physical two-host TCP |
+| Reductions and dtypes | `sum`, `prod`, `min`, `max`, `avg`, and pre-multiplied sum across maintained integer, FP16, BF16, FP32, and FP64 payload paths | Maintained direct/native suite; support varies by operation where NCCL semantics require it |
+| Point-to-point and groups | Send/receive, grouped collective/P2P submission, subgroup isolation, communicator split/shrink, zero-byte payloads, and mismatch detection | Maintained subset of NCCL host semantics |
+| Socket staging | Copies submitted payloads through coordinator TCP sockets and falls back to socket staging when shared memory is unavailable | Maintained and physically validated |
+| Topology/time model | Accounts for modeled link bandwidth, latency, routes, contention, operation duration, and bounded coordinator-observed timelines | Maintained analytical model; it does not reproduce NCCL protocols, NVLink, or RDMA behavior |
+| Communication reports | Per-collective and P2P calls/bytes, complete node-pair matrix including zero-traffic pairs, directional/per-operation peaks, links, ranks, communicators, timeline, failures, and recovery | Maintained `cluster_report.v1` JSON plus Markdown table |
+| Bandwidth experiment | Validates reduction payloads and reports per-rank timings plus algorithmic and socket-payload throughput | Maintained simulator benchmark; values include coordinator, copies, and scheduling overhead |
+| PyTorch distributed flow | ProcessGroupNCCL-facing symbols required by tested PyTorch stacks, `torchrun`, DDP, FSDP/FSDP2, and DeepSpeed workflows | Maintained/validated subset; not complete NCCL 2.29 protocol or device-API parity |
+| Physical-host controller | Checks identical Git revisions, launches selected two-host cases over SSH, applies rank placement, collects artifacts, and validates report consistency | Maintained validation tooling for the documented Linux/WSL hosts |
+
+### Error injection, resilience, and recovery
+
+| Feature | Simulated behavior | Status and boundary |
+|---|---|---|
+| Cross-device errors (E1) | Rejects arithmetic, matmul, concatenation, linear, and module calls that mix logical CUDA devices | Maintained Python check |
+| Out of memory (E2) | Fails allocations that exceed the selected profile and exposes PyTorch CUDA OOM errors | Maintained Python/native checks |
+| Invalid device (E3) | Rejects device indices outside the configured inventory | Maintained Python/native checks |
+| dtype/autocast compatibility (E4) | Rejects BF16 autocast on profiles below compute capability 8.0 | Maintained Python check |
+| Checkpoint compatibility (E5) | Detects checkpoint GPU architecture/compute-capability mismatches | Maintained Python check |
+| Distributed failure (E6) | Injects a deterministic rank/sequence/collective failure, persists async error state, and recovers survivors through explicit communicator shrink | Maintained direct-collective suite and physical four-rank validation |
+| Gradient errors (E7) | Detects invalid non-leaf/detached gradient use in covered paths | Maintained Python check |
+| Collective contract errors | Detects operation, dtype, reduction, root, count, missing-peer, and timeout mismatches | Maintained coordinator/direct suite |
+| Real worker exit | Terminates a rank while its communicator is active, infers the absent rank from timeout, preserves `ncclSystemError`, and permits explicit shrink | Validated on local and physical multi-host fixed-rank cases |
+| Elastic DDP restart | Uses `torchrun --max-restarts=1` to replace the fixed-size worker group and verifies resumed DDP numerics | Maintained local Gloo and physical-host validation |
+| Checkpoint recovery | Atomically restores model parameters, completed steps, SGD momentum, and continued updates | Maintained two-worker validation |
+| Mid-accumulation recovery | Restores AdamW moments, scheduler, pending gradients, rank-local RNG, sampler cursor, and rank-remapped state before completing the step | Maintained two-worker validation; not sharded ZeRO/FSDP optimizer recovery |
+| DataLoader replay | Reconstructs deterministic shuffled map-style multi-worker DataLoaders across epochs, worker counts, prefetch depths, batch sizes, and PyTorch/Python/NumPy RNG | Maintained parameterized matrix; live queues, iterable datasets, external side effects, and nondeterministic transforms are outside scope |
+
+### GPU catalog, monitoring, and reports
+
+| Feature | What is included | Status and boundary |
+|---|---|---|
+| GPU profile catalog | 24 profiles across Maxwell, Pascal, Volta, Turing, Ampere, Ada, Hopper, and Blackwell; consumer, data-center, workstation, embedded, and test segments | Maintained; see [GPU profiles](#gpu-profiles) for every profile ID |
+| Architecture validation | Every profile declares compute capability; Python and C++ validators reject architecture/capability mismatches | Maintained |
+| Source provenance | Per-profile NVIDIA specification URLs and measured/reference/synthetic status, plus checked-in current/legacy NVIDIA model tables | Maintained; `scripts/update_nvidia_gpu_catalog.py --check` verifies the snapshot |
+| Uniform and heterogeneous inventories | One profile repeated by device count or mixed specifications such as `a100:4,h100:4` | Maintained in Python and native runtimes |
+| Native device report | Memory peaks, IO, calls, kernel-launch counts, compatibility events, and maintained GEMM statistics | Maintained `fake_gpu_report.json` |
+| Preflight and estimator reports | JSON/Markdown preflight, calibration, static-memory, LLM inference, SFT, FSDP/FSDP2, and comparison artifacts | Maintained for their documented runners; see [Reports](#reports) |
+| Schema and consistency checks | JSON Schema validation plus cross-field reconciliation of bytes, timelines, directions, ranks, topology, failures, and recovery events | Maintained validation tooling |
+| Human-readable test evidence | Markdown companions, a unified HTML error/test report, focused suite summaries, and the checked-in [validation snapshot](#validation-snapshot) | Maintained documentation artifacts |
+
+The list above describes implemented behavior, not a promise that every CUDA,
+PyTorch, NCCL, or framework API is emulated. See [Limitations](#limitations)
+for the boundaries that should be reviewed before using a result for capacity
+planning or production decisions.
 
 ## GPU profiles
 
