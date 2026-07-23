@@ -38,6 +38,9 @@ ELASTIC_DDP_CHECKPOINT_WORKER_RELATIVE = Path(
 ELASTIC_DDP_TRAINING_STATE_WORKER_RELATIVE = Path(
     "verification/elastic_ddp_training_state_worker.py"
 )
+DATALOADER_REPLAY_MATRIX_RELATIVE = Path(
+    "verification/dataloader_replay_matrix.py"
+)
 FSDP_WORKER_RELATIVE = Path("test/test_fsdp_hybrid_numerics.py")
 FSDP2_WORKER_RELATIVE = Path("test/test_fsdp2_hybrid_numerics.py")
 DEEPSPEED_WORKER_RELATIVE = Path("test/test_deepspeed_hybrid_numerics.py")
@@ -264,6 +267,7 @@ payload = {
     "elastic_ddp_worker_exists": pathlib.Path("verification/elastic_ddp_worker.py").is_file(),
     "elastic_ddp_checkpoint_worker_exists": pathlib.Path("verification/elastic_ddp_checkpoint_worker.py").is_file(),
     "elastic_ddp_training_state_worker_exists": pathlib.Path("verification/elastic_ddp_training_state_worker.py").is_file(),
+    "dataloader_replay_matrix_exists": pathlib.Path("verification/dataloader_replay_matrix.py").is_file(),
     "fsdp_worker_exists": pathlib.Path("test/test_fsdp_hybrid_numerics.py").is_file(),
     "fsdp2_worker_exists": pathlib.Path("test/test_fsdp2_hybrid_numerics.py").is_file(),
     "deepspeed_worker_exists": pathlib.Path("test/test_deepspeed_hybrid_numerics.py").is_file(),
@@ -293,6 +297,7 @@ print(json.dumps(payload, sort_keys=True))
         "elastic_ddp_worker_exists",
         "elastic_ddp_checkpoint_worker_exists",
         "elastic_ddp_training_state_worker_exists",
+        "dataloader_replay_matrix_exists",
         "fsdp_worker_exists",
         "fsdp2_worker_exists",
         "fault_worker_exists",
@@ -1441,6 +1446,63 @@ def _run_elastic_ddp_training_state_case(
     return summary
 
 
+def _run_dataloader_replay_matrix_case(
+    nodes: list[NodeSpec],
+    *,
+    remote_root: str,
+    timeout: float,
+) -> dict[str, Any]:
+    try:
+        from verification.dataloader_replay_matrix import (
+            validate_replay_matrix_reports,
+        )
+    except ModuleNotFoundError:
+        from dataloader_replay_matrix import validate_replay_matrix_reports
+
+    report_dir = f"{remote_root}/dataloader-replay-matrix"
+    report_paths = {
+        node.name: (
+            f"{report_dir}/{_safe_report_component(node.name)}.json"
+        )
+        for node in nodes
+    }
+    processes: list[tuple[NodeSpec, subprocess.Popen[str]]] = []
+    for node in nodes:
+        argv = [
+            node.python,
+            str(DATALOADER_REPLAY_MATRIX_RELATIVE),
+            f"--output={report_paths[node.name]}",
+        ]
+        processes.append(
+            (
+                node,
+                _start_remote(
+                    node,
+                    _shell_command(
+                        node,
+                        argv,
+                        create_dir=report_dir,
+                    ),
+                ),
+            )
+        )
+    _collect_processes(
+        processes,
+        timeout=timeout,
+        label="cross-runtime DataLoader replay matrix",
+    )
+    reports = [
+        _read_remote_json(node, report_paths[node.name])
+        for node in nodes
+    ]
+    summary = validate_replay_matrix_reports(reports)
+    summary["nodes"] = {
+        node.name: report["runtime"]
+        for node, report in zip(nodes, reports)
+    }
+    return summary
+
+
 def _run_fsdp_case(
     nodes: list[NodeSpec],
     *,
@@ -2398,6 +2460,18 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             f"`{training_state['failure_exit_code']}`; step 2 produced "
             "parameters `[0.983838, -0.014662]` on both hosts."
         )
+    if "dataloader_replay" in cases:
+        replay = cases["dataloader_replay"]
+        lines.append(
+            "- Cross-runtime DataLoader replay matrix: "
+            f"`{replay['scenario_count']}` shuffled scenarios and "
+            f"`{replay['rank_case_count']}` rank cases covered worker counts "
+            "1/2/4, prefetch factors 1/2/4, epochs 0/3/5/7, batch sizes "
+            "1/2/3, and PyTorch/Python/NumPy worker RNG. Both hosts produced "
+            "the same sample-order and RNG digests after replacing "
+            f"`{replay['worker_processes_started_per_report']}` worker "
+            "processes per runtime."
+        )
     if "ddp_options" in cases:
         lines.append(
             "- DDP options: `no_sync`, `find_unused_parameters`, "
@@ -2694,6 +2768,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                     timeout=args.case_timeout,
                 )
             )
+        if "dataloader-replay" in cases:
+            case_reports["dataloader_replay"] = (
+                _run_dataloader_replay_matrix_case(
+                    nodes,
+                    remote_root=remote_root,
+                    timeout=args.case_timeout,
+                )
+            )
         if "ddp-options" in cases:
             case_reports["ddp_options"] = {
                 variant: _run_ddp_case(
@@ -2950,8 +3032,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Run repeatable Hybrid DDP/FSDP/FSDP2/DeepSpeed Pipeline, elastic "
-            "restart/checkpoint/training-state recovery, and TCP failure "
-            "checks on two SSH hosts at one Git commit."
+            "restart/checkpoint/training-state recovery, DataLoader replay, "
+            "and TCP failure checks on two SSH hosts at one Git commit."
         )
     )
     parser.add_argument(
@@ -2978,6 +3060,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "elastic-ddp-restart",
             "elastic-ddp-checkpoint",
             "elastic-ddp-training-state",
+            "dataloader-replay",
             "ddp-options",
             "fsdp",
             "fsdp2",
