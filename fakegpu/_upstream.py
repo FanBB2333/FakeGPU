@@ -157,6 +157,9 @@ class _FakeStream:
     def query(self) -> bool:
         return True
 
+    def is_capturing(self) -> bool:
+        return False
+
     def __enter__(self) -> "_FakeStream":
         return self
 

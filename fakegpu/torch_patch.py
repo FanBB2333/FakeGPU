@@ -2234,6 +2234,9 @@ class _FakeStream:
     def query(self) -> bool:
         return True
 
+    def is_capturing(self) -> bool:
+        return False
+
     def __enter__(self) -> "_FakeStream":
         return self
 
@@ -2266,6 +2269,51 @@ class _FakeEvent:
 
     def elapsed_time(self, other: "_FakeEvent") -> float:
         return 0.0
+
+
+def _install_torch_accelerator_compat(torch_mod: Any) -> None:
+    """Route the generic accelerator API through FakeGPU's CUDA surface.
+
+    PyTorch 2.13 optimizers query ``torch.accelerator.current_stream()``
+    before every step. On a CPU runner compiled with CUDA support, the
+    unpatched implementation enters the real driver even though
+    ``torch.cuda`` has already been redirected by FakeGPU.
+    """
+
+    accelerator = getattr(torch_mod, "accelerator", None)
+    if accelerator is None:
+        return
+
+    def _current_accelerator(check_available: bool = False):
+        if check_available and not torch_mod.cuda.is_available():
+            return None
+        return torch_mod.device("cuda")
+
+    def _current_device_index() -> int:
+        return int(torch_mod.cuda.current_device())
+
+    def _set_device_index(device: Any) -> None:
+        if isinstance(device, int) and device < 0:
+            return
+        torch_mod.cuda.set_device(device)
+
+    def _current_stream(device: Any = None):
+        return torch_mod.cuda.current_stream(device)
+
+    def _set_stream(stream: Any) -> None:
+        torch_mod.cuda.set_stream(stream)
+
+    def _synchronize(device: Any = None) -> None:
+        torch_mod.cuda.synchronize(device)
+
+    accelerator.current_accelerator = _current_accelerator
+    accelerator.current_device_index = _current_device_index
+    accelerator.set_device_index = _set_device_index
+    accelerator.current_stream = _current_stream
+    accelerator.set_stream = _set_stream
+    accelerator.synchronize = _synchronize
+    accelerator.is_available = lambda: bool(torch_mod.cuda.is_available())
+    accelerator.device_count = lambda: int(torch_mod.cuda.device_count())
 
 
 # ---------------------------------------------------------------------------
@@ -3449,6 +3497,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     _patch_upstream_collective_tensor_compat(upstream)
     _patch_upstream_all_gather_object(upstream, torch_mod)
     _patch_upstream_process_group_compat(upstream, torch_mod)
+    _install_torch_accelerator_compat(torch_mod)
 
     def _dynamo_friendly_tree_map(fn, obj):
         # torch.Size is a tuple subclass but must be preserved as-is so that
@@ -4090,6 +4139,7 @@ def patch(
     torch.cuda.set_stream = lambda stream: _stub_set_device(
         getattr(stream, "device_index", 0)
     )
+    _install_torch_accelerator_compat(torch)
 
     # ---- Tensor.to / Tensor.cuda ----
     global _orig_tensor_to, _orig_tensor_cuda
