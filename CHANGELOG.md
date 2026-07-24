@@ -4,6 +4,22 @@
 
 ### Added
 
+- `fakegpu calibrate` for phase-aware prediction/measurement error analysis,
+  safety recommendations, and reusable exact-scope calibration bundles.
+- `fakegpu plan-training` for DeepSpeed, Accelerate, FSDP, and FSDP2 config
+  normalization with rank-local phase memory and CPU-offload estimates.
+- `fakegpu replay-trace` for PyTorch Profiler, NCCL-style, and FakeGPU
+  timelines with rank waits/overlap, pair/link totals, memory samples,
+  operator profiles, fusion handling, and recovery events.
+- `fakegpu simulate-topology` for rack/switch/multi-NIC/NVLink-domain graphs,
+  deterministic ECMP, ring/tree/hierarchical algorithms, contention, and
+  critical-link reports.
+- `fakegpu analyze-kernel` for PTX/SASS/CUDA static instruction, register,
+  shared-memory, FLOP, and profile occupancy analysis.
+- Phase-normalized static and LLM memory timelines with virtual-SMI
+  projections.
+- CPU numeric coverage for FP16 GEMM plus real-valued `scal`, `gemv`, and
+  `ger` cuBLAS paths.
 - Call-based workspace coverage summaries, a public
   `require_workspace_coverage()` gate, validation thresholds, and cross-report
   coverage aggregation.
@@ -50,7 +66,7 @@
 
 ### Validation
 
-- Full local suite: 427 passed and 1 skipped.
+- Full local suite: 438 passed and 1 skipped.
 - CI-equivalent PyTorch 2.13, Transformers 5.14, Accelerate 1.14, and PEFT
   0.19 environment: 418 passed and 10 optional skips; the maintained CPU
   matrix passed 133 tests and all six declarative validation cases.

@@ -58,6 +58,26 @@ def main(argv: list[str] | None = None) -> int:
         from .performance_model import main as performance_model_main
 
         return performance_model_main(argv[1:])
+    if argv and argv[0] == "calibrate":
+        from .calibration import main as calibration_main
+
+        return calibration_main(argv[1:])
+    if argv and argv[0] == "plan-training":
+        from .training_plan import main as training_plan_main
+
+        return training_plan_main(argv[1:])
+    if argv and argv[0] == "simulate-topology":
+        from .topology import main as topology_main
+
+        return topology_main(argv[1:])
+    if argv and argv[0] == "replay-trace":
+        from .trace_replay import main as trace_replay_main
+
+        return trace_replay_main(argv[1:])
+    if argv and argv[0] == "analyze-kernel":
+        from .kernel_analysis import main as kernel_analysis_main
+
+        return kernel_analysis_main(argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="fakegpu",
@@ -73,6 +93,11 @@ def main(argv: list[str] | None = None) -> int:
             "  fakegpu estimate-llm\n"
             "  fakegpu estimate-roofline\n"
             "  fakegpu analyze-repo\n"
+            "  fakegpu analyze-kernel\n"
+            "  fakegpu calibrate\n"
+            "  fakegpu plan-training\n"
+            "  fakegpu simulate-topology\n"
+            "  fakegpu replay-trace\n"
             "  fakegpu nvidia-smi\n"
             "  fakegpu workspace-profiles\n"
             "  fakegpu validate\n"

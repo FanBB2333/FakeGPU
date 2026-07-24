@@ -392,6 +392,7 @@ otool -L ./build/libnvidia-ml.dylib
 ## 相关页面
 
 - [快速开始](getting-started.md)
+- [高级分析工具](advanced-analysis.zh.md)
 - [项目结构与架构](project-structure.md)
 - [报告与验证](reports-and-validation.md)
 - [分布式模拟使用说明](distributed-sim-usage.md)

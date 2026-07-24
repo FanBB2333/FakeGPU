@@ -394,6 +394,7 @@ otool -L ./build/libnvidia-ml.dylib
 ## Related pages
 
 - [Getting Started](getting-started.md)
+- [Advanced Analysis](advanced-analysis.md)
 - [Architecture](project-structure.md)
 - [Reports & Validation](reports-and-validation.md)
 - [Distributed Simulation Usage Guide](distributed-sim-usage.md)

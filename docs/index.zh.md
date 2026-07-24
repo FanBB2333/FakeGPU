@@ -79,6 +79,7 @@ FAKEGPU_DIST_MODE=simulate
 - [快速参考](quick-reference.md)
 - [AI Researcher 提交前预检查](ai-researcher-preflight.md)
 - [仓库与性能静态分析](repository-and-performance-analysis.zh.md)
+- [高级分析工具](advanced-analysis.zh.md)
 - [LLM 推理显存与计算量估算](llm-inference-estimation.zh.md)
 - [项目结构与架构](project-structure.md)
 - [Torch Patch 系统](phase2-custom-torch.zh.md)

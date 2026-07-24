@@ -75,6 +75,10 @@ FakeGPU 也提供靜態記憶體與運算量估算。
 | 某個工作負載能否放入指定的 GPU profile？ | Preflight 或靜態記憶體估算 | 否 |
 | LLM 的權重、KV cache、Adapter 或 MoE 記憶體大約是多少？ | LLM 估算器 | 否 |
 | 儲存庫中有哪些 GPU 入口、相依套件與原生擴充？ | 儲存庫分析器 | 否 |
+| DeepSpeed/Accelerate/FSDP 設定對應多少單 rank 記憶體？ | 訓練規劃器 | 否 |
+| PTX/SASS 中能靜態識別哪些資源與運算？ | Kernel 分析器 | 否 |
+| Trace 中的運算、通訊、等待與記憶體如何重疊？ | Trace 重播 | 否 |
+| Collective 如何經過機架、交換器與網卡？ | 拓撲模擬器 | 否 |
 | 指定 profile 的運算/頻寬延遲範圍是多少？ | Roofline 估算器 | 否 |
 | 多 rank 控制流程、通訊與復原是否符合預期？ | 分散式模擬器 | 否 |
 | 估算值與真實 CUDA 執行結果相差多少？ | Passthrough/hybrid 校準 | 是 |
@@ -314,12 +318,13 @@ coordinator 可用於多台實體主機。
 | 領域 | 已實作範圍 | 限制 |
 |---|---|---|
 | FakeCUDA runtime | 常見 tensor 建立與操作、module、autograd、optimizer、裝置傳遞、記憶體 API、混合精度、checkpoint、DataLoader 與 dispatch storage 生命週期統計 | 二進位 CUDA 擴充與未涵蓋的 PyTorch operator 需要個別驗證 |
-| 原生 CUDA stack | 部分 Driver、Runtime、NVML、cuBLAS/cuBLASLt 與 NCCL 符號；主機記憶體；CPU GEMM；可設定的不支援 API 策略 | native simulate 模式不執行任意 CUDA kernel |
-| 記憶體估算 | 執行峰值、簡化 caching allocator、ATen graph 生命週期、optimizer 階段、workspace 區間、校準資料與 OOM 檢查 | backend 內部記憶體與未配對的自訂 kernel 需要校準 |
+| 原生 CUDA stack | 部分 Driver、Runtime、NVML、cuBLAS/cuBLASLt 與 NCCL 符號；主機記憶體；CPU FP32/FP64/FP16 GEMM 與已維護 BLAS1/2 路徑；可設定的不支援 API 策略 | native simulate 模式不執行任意 CUDA kernel |
+| 記憶體估算 | 執行峰值、caching allocator、ATen graph 生命週期、階段時間軸、optimizer/分片/卸載規劃、workspace 區間、校準比較/bundle 與 OOM 檢查 | backend 內部記憶體與未配對的自訂 kernel 需要校準 |
 | LLM 分析 | Dense/MoE 推論、量化權重、PEFT Adapter、KV cache、暫存 tensor、expert 通訊、FLOP、SFT 參考與 FSDP/FSDP2 投影 | 不會自動推斷融合量化 kernel、expert 不均衡與任意模型架構 |
 | 效能模型 | 純量運算與記憶體頻寬 Roofline，以及 lower/expected/upper 效率假設 | 只提供分析區間；Tensor Core 加速需要明確傳入 |
-| 儲存庫分析 | Python 入口、import、訓練框架、設定、CUDA/PTX 原始碼、二進位擴充與建議實驗 | 動態 import、產生的 kernel 與資料相依分支需要執行驗證 |
-| 分散式模擬 | TCP/Unix coordinator、collective、P2P、subgroup、異質拓撲、節點對報告、timeout、錯誤注入、communicator shrink 與固定規模 elastic restart | 不重現 NCCL 協定、NVLink 或 RDMA 時序 |
+| 儲存庫與 Kernel 分析 | Python 入口、別名/裝飾器 GPU 呼叫、建置系統、產生式 kernel、自訂 operator、CUDA/PTX/SASS、二進位擴充、靜態指令/FLOP/資源與 occupancy 上限 | 下載或加密的 kernel、動態執行次數與資料相依分支需要執行驗證 |
+| Trace 與 Operator 分析 | PyTorch Profiler/Chrome、NCCL 風格與 FakeGPU 時間軸；自訂 operator profile；融合去重；各 rank 運算/通訊/等待/記憶體/復原報告 | 無法重建 trace 中缺少的 stream 相依與真實 GPU kernel 時序 |
+| 分散式模擬 | TCP/Unix coordinator、collective、P2P、subgroup、節點對報告與故障復原；分析式機架/交換器/多網卡/NVLink domain 路由、ECMP、競爭以及 ring/tree/hierarchical 演算法 | 不重現 NCCL、RDMA 或交換器緩衝協定 |
 | 框架相容性 | 針對 Transformers、Accelerate、PEFT、TRL、DDP、FSDP/FSDP2、DeepSpeed ZeRO/Pipeline/AutoTP/AutoEP、torchtune、Lightning、LitGPT 與 nanoGPT 的測試 | 相容性只適用於文件記錄的版本與選項 |
 | 監控與報告 | 虛擬 `nvidia-smi`、原生裝置報告、preflight、cluster matrix、驗證 manifest 與 JSON Schema 檢查 | 虛擬資料只反映已統計或已校準的狀態 |
 | GPU 目錄 | 82 個 profile，涵蓋八種 NVIDIA 架構以及消費級、工作站、資料中心、嵌入式與測試裝置 | 硬體規格不能保證 kernel 層級的效能等價 |
@@ -340,6 +345,11 @@ coordinator 可用於多台實體主機。
 | `fakegpu demo` | 執行小型 CPU FakeCUDA 訓練步驟 |
 | `fakegpu preflight` | 將工作負載執行到指定階段並判斷 fit/OOM |
 | `fakegpu analyze-repo` | 統計儲存庫入口與 GPU 相依風險 |
+| `fakegpu analyze-kernel` | 檢查 PTX/SASS/CUDA 指令、資源、FLOP 與 occupancy 上限 |
+| `fakegpu calibrate` | 比較預測/實測記憶體，或產生適用範圍明確的校準 bundle |
+| `fakegpu plan-training` | 統一 DeepSpeed/Accelerate/FSDP 設定並估算單 rank 階段記憶體 |
+| `fakegpu replay-trace` | 彙整各 rank 運算、通訊、等待、記憶體、鏈路與復原事件 |
+| `fakegpu simulate-topology` | 在機架/交換器/網卡圖上路由 collective 並估算鏈路競爭 |
 | `fakegpu estimate-llm` | 估算 decoder 權重、執行記憶體、通訊與 FLOP |
 | `fakegpu estimate-roofline` | 產生與 profile 相關的分析延遲區間 |
 | `fakegpu capabilities` | 檢視或嚴格檢查原生 API 分類 |
@@ -417,6 +427,11 @@ python3 scripts/update_nvidia_gpu_catalog.py --check
 | `preflight_report.json/.md` | Preflight CLI | 階段進度、fit/OOM、記憶體類別、workspace 涵蓋率與可信度 |
 | LLM estimate | `fakegpu estimate-llm` | 權重、KV cache、暫存 tensor、Adapter、MoE 通訊、FLOP 與 Roofline |
 | 靜態記憶體報告 | `./ftest static_memory_validation` | graph 生命週期、optimizer 階段、workspace profiles 與選用的 CUDA 比較 |
+| 校準比較/bundle | `fakegpu calibrate` | 階段誤差、區間涵蓋、誤差來源、安全參數與索引化證據 |
+| 訓練規劃 | `fakegpu plan-training` | 統一的分片、卸載、精度設定與單 rank 階段峰值 |
+| Trace 重播 | `fakegpu replay-trace` | Rank 等待/重疊、節點對/鏈路總量、記憶體時間軸、operator profile 與復原 |
+| 拓撲模擬 | `fakegpu simulate-topology` | 路由流量、競爭、rank 對、有效頻寬與關鍵鏈路 |
+| Kernel 分析 | `fakegpu analyze-kernel` | 靜態 PTX/SASS/CUDA 指令、資源、FLOP 與 occupancy 上限 |
 | 宣告式驗證報告 | `fakegpu validate` | 展開的測試矩陣、前置條件、斷言、主機/Git 資訊、耗時與日誌 |
 | Virtual SMI state | FakeCUDA runtime | 單一程序 requested、reserved、simulated 目前/峰值位元組、階段與可信度 |
 
@@ -433,7 +448,7 @@ python3 -m fakegpu validate \
   --strict
 ```
 
-目前迴歸基準為 425 個測試通過，1 個選用測試略過。原生 smoke、CPU 數值模擬、
+目前迴歸基準為 438 個測試通過，1 個選用測試略過。原生 smoke、CPU 數值模擬、
 嚴格能力檢查、wheel 安裝與嚴格 MkDocs 建置也已通過。精確度資料只適用於文件
 記錄的工作負載與校準簽章。
 
@@ -500,10 +515,21 @@ python3 -m fakegpu validate \
 - [x] 儲存庫分析器與 profile Roofline 估算器
 - [x] TCP 多節點模擬與完整節點對通訊報告
 - [x] DDP、FSDP/FSDP2、DeepSpeed 與 elastic recovery 專項驗證
-- [ ] 擴充可執行的原生 CUDA 與 cuBLAS 操作
-- [ ] 增加更多軟體環境與工作負載的校準資料
-- [ ] 加強產生 kernel 與自訂擴充偵測
-- [ ] 增加分層與高基數網路拓撲模型
+- [x] 已維護的原生 cuBLAS/cuBLASLt 運算可在 CPU 執行數值計算
+- [x] 按精確軟體堆疊與 shape 比對的 workspace 校準目錄及 bundle 彙整
+- [x] 偵測 CUDA/PTX 原始碼、二進位擴充、`torch.compile`、
+  `cpp_extension` 與 Triton 入口
+- [x] 含鏈路統計的兩級 intra/inter-node ring 拓撲
+- [x] 偵測別名、裝飾器、建置系統、執行階段產生 kernel 與自訂 operator
+- [x] PTX/SASS 靜態指令、資源、FLOP 與 occupancy 分析
+- [x] 匯入 DeepSpeed/Accelerate/FSDP/FSDP2 設定並規劃階段記憶體
+- [x] 重播 PyTorch/NCCL/FakeGPU trace，並支援 operator profile 與融合去重
+- [x] 機架、交換器、多網卡、NVLink domain、ECMP、鏈路競爭以及
+  ring/tree/hierarchical 分析式拓撲模型
+- [x] 分階段校準比較與可重複使用的精確適用範圍 bundle
+- [ ] 擴充可執行的原生 CUDA 操作及剩餘 complex/batched cuBLAS
+  資料型別與演算法
+- [ ] 蒐集更多軟體堆疊、工作負載、融合 optimizer 與動態 shape 的真實校準證據
 
 提議功能與已知限制請參閱
 [GitHub Issues](https://github.com/FanBB2333/FakeGPU/issues)。
@@ -516,6 +542,7 @@ python3 -m fakegpu validate \
 - [快速參考（簡體中文）](docs/quick-reference.zh.md)
 - [AI 工作負載 Preflight（簡體中文）](docs/ai-researcher-preflight.zh.md)
 - [儲存庫與 Roofline 分析（簡體中文）](docs/repository-and-performance-analysis.zh.md)
+- [進階分析工具（簡體中文）](docs/advanced-analysis.zh.md)
 - [LLM 推論估算（簡體中文）](docs/llm-inference-estimation.zh.md)
 - [LLM SFT 記憶體估算（簡體中文）](docs/llm-sft-memory-estimation.zh.md)
 - [分散式模擬使用說明（簡體中文）](docs/distributed-sim-usage.zh.md)
