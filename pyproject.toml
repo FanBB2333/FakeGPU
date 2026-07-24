@@ -7,6 +7,12 @@ testpaths = ["test"]
 pythonpath = [".", "test"]
 asyncio_default_fixture_loop_scope = "function"
 
+[tool.ruff.lint]
+# Ruff 0.16 expanded its zero-configuration defaults. Keep CI on the
+# project's established correctness-focused rules instead of inheriting a
+# tool-version-dependent rule set.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.fakegpu.uv]
 # Dependency sets consumed by scripts (especially for macOS→Linux VM flows).
 # Keep these under `[tool.*]` to avoid impacting the setuptools packaging config.

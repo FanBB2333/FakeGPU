@@ -38,10 +38,19 @@
 - Unified native runtime statistics across the CUDA Runtime, Driver, cuBLAS,
   and NVML compatibility libraries so one library cannot overwrite a report
   with an empty or partial DSO-local snapshot.
+- Routed PyTorch's generic `torch.accelerator` device, stream, and
+  synchronization APIs through FakeCUDA, including `is_capturing()` support
+  required by optimizer steps in PyTorch 2.13 CPU runners.
+- Made CI independent of Ruff's changing zero-configuration defaults, added
+  the PEFT dependency required by the full regression suite, and isolated
+  microsecond-scale overhead measurements from process-global PyTorch state.
 
 ### Validation
 
-- Full local suite: 425 passed and 1 skipped.
+- Full local suite: 426 passed and 1 skipped.
+- CI-equivalent PyTorch 2.13, Transformers 5.14, Accelerate 1.14, and PEFT
+  0.19 environment: 417 passed and 10 optional skips; the maintained CPU
+  matrix passed 133 tests and all six declarative validation cases.
 - Native smoke, all three unsupported-API policies, strict classification of
   818 exports across five native libraries, CPU-backed cuBLAS/cuBLASLt
   numerics, and combined IO/FLOP/no-op reporting passed on macOS.

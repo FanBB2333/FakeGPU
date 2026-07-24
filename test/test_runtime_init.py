@@ -106,6 +106,46 @@ print("runtime router dispatch passed")
     _assert_ok(_run(code), "runtime router dispatch")
 
 
+def test_torch_accelerator_routes_through_fakecuda() -> None:
+    code = f"""
+from pathlib import Path
+import sys
+
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root))
+
+from fakegpu.torch_patch import patch
+
+patch(num_devices=2)
+
+import torch
+
+if hasattr(torch, "accelerator"):
+    assert torch.accelerator.current_accelerator().type == "cuda"
+    assert torch.accelerator.current_accelerator(check_available=True).type == "cuda"
+    assert torch.accelerator.is_available() is True
+    assert torch.accelerator.device_count() == 2
+    assert torch.accelerator.current_device_index() == 0
+
+    stream = torch.accelerator.current_stream()
+    assert stream.is_capturing() is False
+
+    torch.accelerator.set_device_index(1)
+    assert torch.accelerator.current_device_index() == 1
+    torch.accelerator.set_device_index(0)
+    torch.accelerator.synchronize()
+
+model = torch.nn.Linear(2, 1).to("cuda")
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+loss = model(torch.ones(1, 2, device="cuda")).sum()
+loss.backward()
+optimizer.step()
+
+print("torch accelerator compatibility passed")
+"""
+    _assert_ok(_run(code), "torch accelerator compatibility")
+
+
 def test_editable_custom_torch_detection() -> None:
     code = f"""
 from pathlib import Path
@@ -185,6 +225,7 @@ def test_unsupported_api_policy_environment() -> None:
 def main() -> None:
     test_import_is_side_effect_free()
     test_runtime_router_dispatch()
+    test_torch_accelerator_routes_through_fakecuda()
     test_editable_custom_torch_detection()
     test_native_mode_preload_boundaries()
     test_unsupported_api_policy_environment()
