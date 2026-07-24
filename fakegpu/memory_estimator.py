@@ -121,11 +121,14 @@ def estimate_module_memory(
 ) -> dict[str, Any]:
     """Estimate a module's tensor-storage peak from a captured ATen graph.
 
-    The estimator creates target-device fake tensors and traces them with
-    ``make_fx``. It does not allocate CUDA memory or execute real kernels.
-    Training mode captures a functional forward/backward graph with
-    ``torch.func.grad_and_value`` and adds persistent optimizer state and eager
-    single-tensor optimizer update temporaries explicitly.
+    The estimator creates fake tensors and traces them with ``make_fx``. When
+    the logical target is CUDA but no real CUDA runtime is available, the
+    metadata-only trace is carried by CPU FakeTensors so recent PyTorch
+    versions cannot initialize a physical CUDA context. It does not allocate
+    CUDA memory or execute real kernels. Training mode captures a functional
+    forward/backward graph with ``torch.func.grad_and_value`` and adds
+    persistent optimizer state and eager single-tensor optimizer update
+    temporaries explicitly.
 
     Matched backend workspaces are included through explicit static profiles.
     Unmatched workspaces, CUDA context memory, caching-allocator fragmentation,
@@ -143,6 +146,7 @@ def estimate_module_memory(
         example_kwargs=example_kwargs,
         target_device=target_device,
     )
+    trace_execution_device = _resolve_trace_execution_device(torch, trace_device)
 
     normalized_mode = str(mode).strip().lower()
     if normalized_mode not in {"forward", "training"}:
@@ -248,7 +252,7 @@ def estimate_module_memory(
                     args,
                     kwargs,
                 ),
-                device=trace_device,
+                device=trace_execution_device,
             )
         placeholder_categories = [
             *["trainable_parameter" for _ in _iter_tensor_leaves(trainable_parameters)],
@@ -283,7 +287,7 @@ def estimate_module_memory(
                     args,
                     kwargs,
                 ),
-                device=trace_device,
+                device=trace_execution_device,
             )
         placeholder_categories = [
             *["parameter" for _ in _iter_tensor_leaves(parameters)],
@@ -422,6 +426,10 @@ def estimate_module_memory(
         "cuda_context_and_loaded_modules",
         "caching_allocator_fragmentation",
     ]
+    if trace_execution_device.type != trace_device.type:
+        unmodeled_components.append(
+            "target_device_specific_operator_lowering_during_cpu_fake_trace"
+        )
     if any(
         str(profile.get("confidence", "")).startswith("extrapolated_")
         for profile in workspace_estimate["profiles"]
@@ -444,6 +452,8 @@ def estimate_module_memory(
         ),
         "mode": normalized_mode,
         "trace_device": str(trace_device),
+        "trace_execution_device": str(trace_execution_device),
+        "trace_device_emulated": trace_execution_device.type != trace_device.type,
         "target_profile": target_profile,
         "retain_forward_outputs": bool(
             normalized_mode == "training" and retain_forward_outputs
@@ -1593,6 +1603,31 @@ def _torch_has_cuda_build(torch: Any) -> bool:
     if compiled_flag is not None:
         return bool(compiled_flag)
     return bool(getattr(torch.version, "cuda", None))
+
+
+def _resolve_trace_execution_device(torch: Any, target_device: Any) -> Any:
+    """Choose a driver-free device for the FakeTensor graph execution.
+
+    PyTorch 2.13 initializes a real CUDA context for some CUDA FakeTensor
+    backward and view operations.  A CUDA-enabled build without a working
+    driver therefore cannot safely use CUDA FakeTensors even though their
+    payload is metadata-only.  CPU FakeTensors preserve tensor sizes, aliases,
+    and ATen liveness while the logical target remains available separately
+    for CUDA workspace modeling.
+    """
+
+    if target_device.type != "cuda":
+        return target_device
+
+    cuda = getattr(torch, "cuda", None)
+    if cuda is None or bool(getattr(cuda, "_fakegpu_simulated", False)):
+        return torch.device("cpu")
+    try:
+        if not bool(cuda.is_available()):
+            return torch.device("cpu")
+    except Exception:
+        return torch.device("cpu")
+    return target_device
 
 
 def _trace_with_fake_device(

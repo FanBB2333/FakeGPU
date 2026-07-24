@@ -65,6 +65,19 @@ def test_forward_estimate_uses_fx_storage_liveness() -> None:
     assert report["tracking_confidence"] == "S1_fx_forward_liveness"
     expected_trace_device = "cuda:0" if torch._C._has_cuda else "cpu"
     assert report["trace_device"] == expected_trace_device
+    expected_execution_device = (
+        expected_trace_device
+        if expected_trace_device == "cpu"
+        or (
+            torch.cuda.is_available()
+            and not bool(getattr(torch.cuda, "_fakegpu_simulated", False))
+        )
+        else "cpu"
+    )
+    assert report["trace_execution_device"] == expected_execution_device
+    assert report["trace_device_emulated"] is (
+        expected_execution_device != expected_trace_device
+    )
     assert report["parameter_bytes"] == expected_parameter_bytes
     assert report["input_bytes"] == inputs.numel() * inputs.element_size()
     assert report["optimizer_state_bytes"] == 0
@@ -471,6 +484,31 @@ def test_explicit_cuda_trace_requires_cuda_enabled_torch() -> None:
             mode="forward",
             target_device="cuda",
         )
+
+
+def test_cuda_target_uses_cpu_fake_trace_without_real_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fakegpu.memory_estimator as memory_estimator
+
+    monkeypatch.setattr(memory_estimator, "_torch_has_cuda_build", lambda _torch: True)
+    monkeypatch.setattr(torch.cuda, "_fakegpu_simulated", True, raising=False)
+
+    report = memory_estimator.estimate_module_memory(
+        torch.nn.Linear(4, 2),
+        (torch.randn(3, 4),),
+        mode="training",
+        target_device="cuda",
+    )
+
+    assert report["trace_device"] == "cuda"
+    assert report["trace_execution_device"] == "cpu"
+    assert report["trace_device_emulated"] is True
+    assert report["estimated_peak_bytes"] > 0
+    assert (
+        "target_device_specific_operator_lowering_during_cpu_fake_trace"
+        in report["unmodeled_components"]
+    )
 
 
 def test_static_validation_cli_writes_checkable_static_only_report(tmp_path: Path) -> None:

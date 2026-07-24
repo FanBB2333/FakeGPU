@@ -3408,6 +3408,11 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     import torch.cuda
 
+    # Let analysis helpers distinguish FakeGPU's simulated availability from a
+    # real CUDA runtime.  In particular, PyTorch 2.13 FakeTensor tracing may
+    # initialize a physical CUDA context when is_available() reports true.
+    torch_mod.cuda._fakegpu_simulated = True
+
     # ---- 0. Device index bounds validation ----
     # The upstream uses a different error message ("Invalid fake CUDA device index N").
     # Replace _normalize_device_index entirely so that all paths (set_device,
@@ -3855,6 +3860,7 @@ def patch(
         return _patch_result
 
     # ---- torch.cuda module functions ----
+    torch.cuda._fakegpu_simulated = True
     torch.cuda.is_available = _stub_is_available
     torch.cuda.device_count = _stub_device_count
     torch.cuda.current_device = _stub_current_device
