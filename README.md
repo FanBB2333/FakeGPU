@@ -8,13 +8,16 @@ FakeGPU is a CUDA, cuBLAS, NVML, and NCCL interception toolkit for validating GP
 
 **FakeGPU lets PyTorch/CUDA programs see simulated NVIDIA GPUs.** It runs common test flows on CPU, switches GPU profiles, checks likely out-of-memory failures, and estimates training memory before you use a real GPU.
 
-It checks code paths and memory plans; it does not predict GPU kernel speed.
+It checks code paths and memory plans; its roofline model gives an analytical
+range, not exact GPU kernel speed.
 Its TCP benchmark measures the simulator path, not production NCCL/RDMA.
 
 ```bash
 fakegpu doctor --list-profiles       # inspect the installation and GPU catalog
 fakegpu demo --profile l4            # run a tiny CUDA-visible training step on CPU
 fakegpu estimate-llm --model-dir /models/qwen --prompt-tokens 128  # inspect VRAM/FLOPs without loading weights
+fakegpu analyze-repo .               # find entrypoints and GPU-only dependencies
+fakegpu capabilities --source-root . --strict  # audit native API classifications
 fakegpu bandwidth --listen 127.0.0.1:29591 --nodes 2  # simulate two TCP nodes
 fakegpu validate --manifest verification/data/validation_smoke.yaml --strict  # run a repeatable test matrix
 ```
@@ -35,7 +38,10 @@ _Real command output from the maintained v1.5.5 workflows._
 | Intercept CUDA, NVML, cuBLAS, or NCCL shared-library calls | No | `./fgpu --mode simulate ...` |
 | Check whether a workload reaches a stage or exceeds a GPU profile | No | `python3 -m fakegpu preflight ...` |
 | Estimate training memory from an ATen graph | No | `./ftest static_memory_validation` |
-| Estimate dense-decoder inference memory/FLOPs from safetensors metadata | No | `fakegpu estimate-llm ...` |
+| Scan a repository for FakeGPU readiness and GPU-only paths | No | `fakegpu analyze-repo .` |
+| Estimate dense/MoE inference memory, communication, and FLOPs from safetensors metadata | No | `fakegpu estimate-llm ...` |
+| Estimate a profile-aware roofline latency interval | No | `fakegpu estimate-roofline ...` |
+| Audit native API behavior classifications | No | `fakegpu capabilities --source-root . --strict` |
 | Display memory from running FakeCUDA processes | No | `fakegpu nvidia-smi --state-dir ...` |
 | Run a declarative profile/framework/host test matrix | Depends on cases | `fakegpu validate --manifest ... --strict` |
 | Compare an unmodified real-GPU baseline | Yes | `./fgpu --mode passthrough ...` |
@@ -106,7 +112,13 @@ This route uses FakeCudaTensor semantics and CPU execution. It is suitable for t
 ./fgpu --profile a100 --device-count 2 nvidia-smi  # when nvidia-smi is installed
 ./fgpu --mode simulate python3 your_script.py
 ./fgpu --devices "a100:2,h100:2" python3 your_script.py
+./fgpu --unsupported-api error python3 your_script.py
 ```
+
+Recognized native calls that FakeGPU cannot execute are reported explicitly.
+The default `warn` policy prints one warning per API and keeps compatibility;
+`error` returns `cudaErrorNotSupported`/`CUDA_ERROR_NOT_SUPPORTED`, while
+`allow` records the event without printing a warning.
 
 The same native route can be enabled before importing CUDA-using libraries:
 
@@ -165,7 +177,7 @@ Run the maintained workload grid:
 Or call the API directly:
 
 ```python
-from fakegpu import estimate_module_memory
+from fakegpu import estimate_module_memory, require_workspace_coverage
 
 report = estimate_module_memory(
     model,
@@ -175,15 +187,27 @@ report = estimate_module_memory(
     target_device="auto",
 )
 print(report["estimated_peak_bytes"])
+coverage = require_workspace_coverage(
+    report,
+    minimum_fraction=1.0,
+    allow_extrapolated=False,
+    require_upper_bound=True,
+)
+print(coverage["non_extrapolated_fraction"])
 ```
 
 CUDA-specific ATen traces require a CUDA-enabled PyTorch build, but the trace itself does not allocate physical GPU memory.
 
-Backend context memory, allocator fragmentation, unmatched workspaces, custom CUDA operators, and fused/foreach optimizer temporaries require device- and software-specific calibration.
+Workspace profiles can declare lower/expected/upper bytes. Unmatched calls
+remain unbounded unless the caller supplies
+`unknown_workspace_upper_bound_bytes`; reports expose the resulting peak
+interval and `require_upper_bound=True` rejects incomplete bounds. Backend
+context memory, allocator fragmentation, custom CUDA operators, and
+fused/foreach optimizer temporaries still require calibration.
 
 ## LLM inference without a GPU
 
-For a local dense decoder checkpoint, FakeGPU can inspect safetensors headers
+For a local dense or MoE decoder checkpoint, FakeGPU can inspect safetensors headers
 without materializing the weights or creating a CUDA context:
 
 ```bash
@@ -194,15 +218,18 @@ python3 -m fakegpu estimate-llm \
   --generated-tokens 2 \
   --dtype bfloat16 \
   --attention-implementation sdpa \
+  --target-profile a100 \
   --json build/qwen-estimate.json
 ```
 
 The report derives parameter storage from checkpoint metadata, KV-cache size
 from layer/KV-head dimensions, transient tensor storage from the selected
-attention path, and matrix FLOPs from model shapes. It currently targets dense
-decoder-only safetensors checkpoints; MoE, quantized weights, adapters, custom
-CUDA operators, and backend-specific workspaces need a dedicated model or
-empirical calibration.
+attention path, and matrix FLOPs from model shapes. It understands active MoE
+experts, uniform expert-parallel traffic, quantized checkpoint storage, and
+one or more PEFT adapter checkpoints. `--target-profile` adds an analytical
+roofline interval; it is not a kernel benchmark. Custom CUDA operators,
+backend-specific workspaces, expert imbalance, and fused quantization kernels
+still need targeted execution or calibration.
 
 A FakeCUDA process can also publish its live tracked memory for a second
 terminal:
@@ -378,22 +405,25 @@ Coverage labels used below:
 | `fakegpu demo` | Runs a small CUDA-visible PyTorch forward, backward, and optimizer step on CPU | Maintained |
 | `./fgpu ...` / `python3 -m fakegpu ...` | Launches an arbitrary command with mode, OOM policy, distributed mode, coordinator, and uniform or heterogeneous device settings | Maintained |
 | `fakegpu preflight -- ...` | Runs an arbitrary command to a requested stage and produces fit/OOM, memory-category, confidence, stdout, and stderr reports | Maintained; accuracy is execution-path and calibration dependent |
-| `fakegpu estimate-llm` | Estimates dense decoder checkpoint storage, KV cache, transient tensors, process memory, and matrix FLOPs without loading weights | Maintained for dense decoder-only safetensors checkpoints |
+| `fakegpu analyze-repo` | Scans entrypoints, dependencies, acceleration frameworks, native CUDA sources, compiled extensions, and distributed configs, then recommends validation experiments | Maintained static analysis; dynamic imports and generated kernels still need runtime checks |
+| `fakegpu estimate-llm` | Estimates dense/MoE checkpoint storage, quantized weights, adapters, KV cache, transient tensors, expert traffic, matrix FLOPs, and optional roofline latency without loading weights | Maintained analytical model for decoder-only safetensors checkpoints |
+| `fakegpu estimate-roofline` | Converts profile clocks, SM topology, bus width, workload FLOPs, memory traffic, and launch count into a lower/expected/upper latency interval | Maintained analytical model; not measured kernel latency |
+| `fakegpu capabilities` | Lists native CUDA/Driver/cuBLAS/NVML/NCCL behavior classifications and audits source or built exports for unclassified stubs | Maintained; `--strict` rejects incomplete audits |
 | `fakegpu nvidia-smi` | Displays host/profile/stage-aware current and peak process memory; supports bounded live refresh and NDJSON samples | Maintained; this is FakeGPU state rather than host-driver telemetry |
 | `fakegpu workspace-profiles` | Validates and lists built-in plus user-supplied backend-workspace catalogs | Maintained; profile accuracy is limited to each declared match envelope |
 | `fakegpu validate` | Expands a JSON/TOML/YAML case matrix, checks prerequisites and assertions, and writes unified JSON/Markdown plus per-case logs | Maintained |
 | `fakegpu coordinator` | Starts, probes, stops, and reports on the TCP distributed coordinator | Maintained |
 | `fakegpu bandwidth` | Creates logical nodes or connects physical hosts, checks payload correctness, and measures simulator-path TCP throughput | Maintained and physically validated; not an NCCL/RDMA speed predictor |
-| `fakegpu.init`, `patch_torch`, `env`, `run`, `library_dir` | Selects a runtime or embeds launch/preload behavior in Python | Maintained public Python API |
-| `estimate_module_memory`, `analyze_graph_memory`, `estimate_decoder_inference`, `inspect_safetensors_checkpoint` | Exposes graph and checkpoint estimators as Python APIs | Maintained public Python API |
+| `fakegpu.init`, `patch_torch`, `env`, `run`, `library_dir` | Selects a runtime or embeds launch/preload behavior in Python, including unsupported-native-API policy | Maintained public Python API |
+| `estimate_module_memory`, `require_workspace_coverage`, `analyze_graph_memory`, `analyze_repository`, `estimate_decoder_inference`, `inspect_safetensors_checkpoint`, `estimate_roofline`, `profile_roofline`, `native_capability_report` | Exposes graph/checkpoint/repository/performance estimators and native-capability audits as Python APIs | Maintained public Python API |
 | `fakegpu.stage(...)`, `MatmulFlopCounterMode` | Annotates preflight stages and counts matrix-heavy FLOPs, including grouped-query SDPA | Maintained helper APIs |
 
 ### Runtime and native-library features
 
 | Feature | What is covered | Status and boundary |
 |---|---|---|
-| Python FakeCUDA runtime | `torch.cuda` discovery, CUDA-looking tensors and modules, logical devices, CPU-backed execution, and runtime memory tracking | Maintained; it does not emulate binary CUDA extensions |
-| Native simulate mode | Virtual NVIDIA device identity, host-backed allocations, selected native API behavior, and CPU-backed maintained GEMM/matmul paths | Maintained; arbitrary CUDA kernel launches remain no-ops |
+| Python FakeCUDA runtime | `torch.cuda` discovery, CUDA-looking tensors and modules, logical devices, CPU-backed execution, dispatch-created storage/alias lifetime tracking, and runtime memory tracking | Maintained; it does not emulate binary CUDA extensions |
+| Native simulate mode | Virtual NVIDIA device identity, host-backed allocations, selected native API behavior, CPU-backed maintained GEMM/matmul paths, and classified no-op API events | Maintained; arbitrary CUDA kernel launches remain no-ops and can be warned, allowed, or rejected |
 | Passthrough mode | Runs an unmodified real-CUDA baseline without FakeGPU CUDA/NVML injection | Maintained comparison path; requires a real GPU |
 | Hybrid mode | Keeps real CUDA compute while virtualizing selected Driver/NVML surfaces and recording reports | `clamp` is validated; `managed`, `mapped_host`, and `spill_cpu` are experimental |
 | Distributed mode selection | `disabled`, coordinator-backed `simulate`, real-NCCL `proxy` with reporting, and thin `passthrough` | Simulate is maintained; proxy/passthrough require a matching real stack |
@@ -428,12 +458,12 @@ Coverage labels used below:
 | Caching allocator and profile-aware OOM | Models 512-byte blocks, CUDA-style small/medium/large segments, best-fit reuse, split/coalesce, cached empty segments, retry, `empty_cache()`, and profile memory limits | Maintained simplified allocator; configuration-specific CUDA allocator policies can still differ |
 | Repository/workload preflight | Wraps any command, checks arrival at `import`, `model_load`, `forward`, `backward`, `optimizer_step`, or `n_steps`, and reports fit, headroom, failure class, and confidence | Maintained; only the code path and shapes actually executed are assessed |
 | Static ATen graph estimator | Captures forward/backward without real CUDA allocation; deduplicates storage aliases, follows last-use lifetimes, and models parameters, buffers, gradients, optimizer state, and separate graph/optimizer phases | Maintained; target-device ATen traces need a CUDA-enabled PyTorch build for CUDA-specific dispatch |
-| Workspace modeling | Adds graph-persistent or operator-local workspace at the correct liveness point; built-ins cover Attention plus exact-stack matrix/convolution observations, and JSON/YAML registries support fixed, linear-IO, or tiled formulas | Validated only for each matched operator, dtype, shape, PyTorch, CUDA, and GPU envelope |
+| Workspace modeling | Adds graph-persistent or operator-local workspace at the correct liveness point; profiles may declare lower/expected/upper bytes; unmatched calls can receive an explicit per-call upper bound; reports expose modeled/non-extrapolated coverage and complete peak intervals | Validated only for each matched operator, dtype, shape, PyTorch, CUDA, and GPU envelope; unknown calls remain visibly unbounded unless the caller supplies a bound |
 | Real-GPU calibration | Compares real CUDA, passthrough, Hybrid clamp, FakeCUDA, allocator counters, and NVML; aggregates multiple GPUs into signature-matched calibration bundles | Validated across independent Ampere and Blackwell datasets; calibration is not extrapolated across changed workload signatures |
-| Dense-decoder inference estimator | Reads safetensors headers without materializing weights and derives parameter bytes, KV cache, eager/SDPA transients, runtime overhead, and prefill/decode matrix FLOPs | Maintained for dense decoder-only models; MoE, adapters, quantized checkpoints, custom kernels, and backend workspaces need dedicated models |
+| Decoder inference estimator | Reads safetensors headers without materializing weights and derives dense/MoE active FLOPs, exact quantized checkpoint storage, Adapter runtime bytes, KV cache, eager/SDPA transients, expert-parallel traffic, and optional roofline ranges | Maintained analytical model; expert imbalance, custom kernels, fused quantization state, and backend workspaces need targeted validation |
 | SFT memory references | Full-parameter, LoRA, and native packed-NF4 QLoRA; BF16, checkpointing, accumulation, first/steady AdamW steps, and direct or nested scale storage | Validated for maintained Qwen3.5-0.8B/2B matrices; native NF4 does not claim bitsandbytes fused-kernel parity |
 | Sharded training projection | Projects a static graph onto FSDP FULL_SHARD or FSDP2 DTensor parameter/gradient/optimizer storage and all-gather/reduce-scatter buffer lifetimes | Validated for documented Qwen full-parameter and mixed-dtype LoRA cases at world sizes 2/4 |
-| FLOP accounting | Native maintained GEMM/cuBLASLt FLOPs, checkpoint-shape inference FLOPs, and PyTorch matrix-heavy operation counts including grouped-query attention | Maintained for recognized matrix operations; it is not a kernel latency model |
+| FLOP and roofline accounting | Native maintained GEMM/cuBLASLt FLOPs, checkpoint-shape inference FLOPs, PyTorch matrix-heavy operation counts, profile scalar-compute ceilings, memory bandwidth, and explicit efficiency intervals | Maintained for recognized matrix operations; the roofline interval is analytical and tensor acceleration must be supplied explicitly |
 | Virtual `nvidia-smi` | Publishes per-process current/peak tracked memory, host/device/profile identity, current stage, tracking confidence, and optional calibrated runtime overhead; the viewer supports repeated state-directory discovery | Maintained; similarity to physical NVML depends on matching calibration |
 
 ### Distributed communication and topology
@@ -479,7 +509,8 @@ Coverage labels used below:
 | Architecture validation | Every profile declares compute capability; Python and C++ validators reject architecture/capability mismatches | Maintained |
 | Source provenance | Per-profile NVIDIA specification URLs and measured/reference/synthetic status, plus checked-in current/legacy NVIDIA model tables | Maintained; `scripts/update_nvidia_gpu_catalog.py --check` verifies the snapshot |
 | Uniform and heterogeneous inventories | One profile repeated by device count or mixed specifications such as `a100:4,h100:4` | Maintained in Python and native runtimes |
-| Native device report | Memory peaks, IO, calls, kernel-launch counts, compatibility events, and maintained GEMM statistics | Maintained `fake_gpu_report.json` |
+| Native device report | Memory peaks, IO, calls, kernel-launch counts, unsupported-API behavior/policy/count events, compatibility events, and maintained GEMM statistics | Maintained `fake_gpu_report.json` |
+| Native capability manifest | Versioned CUDA Runtime/Driver, cuBLAS, NVML, and NCCL classifications plus strict source/export audits | Maintained; classifications describe FakeGPU behavior, not complete vendor API coverage |
 | Preflight and estimator reports | JSON/Markdown preflight, calibration, static-memory, LLM inference, SFT, FSDP/FSDP2, and comparison artifacts | Maintained for their documented runners; see [Reports](#reports) |
 | Schema and consistency checks | JSON Schema validation plus cross-field reconciliation of bytes, timelines, directions, ranks, topology, failures, and recovery events | Maintained validation tooling |
 | Declarative validation matrices | JSON/TOML/YAML matrices, prerequisites, timeouts, output/file/JSON assertions, strict skip handling, per-case logs, and unified host/Git-aware reports | Maintained |
@@ -765,9 +796,17 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 
 ## Limitations
 
-- Native simulate mode does not execute arbitrary CUDA kernels.
+- Native simulate mode does not execute arbitrary CUDA kernels. Recognized
+  no-op calls use `FAKEGPU_UNSUPPORTED_API=warn` by default; use `error` when a
+  silent compatibility result would invalidate the test.
 - FakeCudaTensor covers Python/PyTorch behavior, not binary CUDA extensions.
-- The checkpoint-only LLM estimator supports dense decoder-only safetensors models; it does not infer arbitrary repository control flow, MoE routing, quantization state, or custom kernels.
+- Repository scanning is static: dynamic imports, generated kernels, runtime
+  shapes, and data-dependent branches still require preflight or a targeted
+  experiment.
+- The checkpoint-only LLM estimator models dense and common MoE decoder
+  metadata, quantized checkpoint bytes, and adapters; it does not execute or
+  time custom kernels, infer expert imbalance, or reproduce fused-kernel
+  workspaces.
 - Supported cuBLAS/cuBLASLt operations can be numerically checked on CPU; unsupported operations may be stubs.
 - Distributed simulation checks semantics and control flow. Its TCP result includes coordinator reduction, memory copies, and process scheduling, so it is not an exact NCCL/RDMA or raw-link measurement.
 - The fixed-size elastic DDP checks rely on `torchrun` for worker supervision and rendezvous. Mid-accumulation recovery stores one atomic file per host and replicates every rank-local gradient, RNG state, sampler cursor, deterministic DataLoader construction seed, committed sample record, and one application-staged prefetched batch into each file, so a replacement can select state by logical rank after reassignment. The maintained two-worker case rebuilds a spawn DataLoader and replays deterministic map-style worker transforms; it does not serialize live multiprocessing queues or guarantee replay for iterable datasets, external side effects, or nondeterministic transforms. This approach keeps the world size fixed, has O(world-size) rank-state storage per host, assumes the local checkpoint survives, and does not restore sharded ZeRO/FSDP optimizer state. FakeGPU does not provide heartbeat-based detection or dynamic membership resizing. The direct-collective recovery path still requires survivors to call `ncclCommShrink` with an explicit exclusion list.
@@ -784,6 +823,7 @@ Reports: device JSON · cluster JSON · preflight · calibration · static memor
 - [Quick Reference](docs/quick-reference.md)
 - [AI Researcher Preflight](docs/ai-researcher-preflight.md)
 - [LLM Inference Estimation](docs/llm-inference-estimation.md)
+- [Repository and Roofline Analysis](docs/repository-and-performance-analysis.md)
 - [LLM SFT Memory Estimation](docs/llm-sft-memory-estimation.md)
 - [Architecture and Project Structure](docs/project-structure.md)
 - [Torch Patch System](docs/phase2-custom-torch.md)

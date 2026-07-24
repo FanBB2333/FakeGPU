@@ -12,7 +12,9 @@ This page summarizes the built-in test entry points and the report files FakeGPU
 | `./ftest preflight_oom` | fakecuda fit/OOM classification and report schema |
 | `./ftest static_memory_validation` | fake-tensor ATen forward/backward storage liveness, optimizer memory, and optional real-CUDA allocator comparison |
 | `./ftest real_gpu_calibration` | real/passthrough/Hybrid/fakecuda memory and result-signature calibration |
-| `fakegpu estimate-llm ...` | header-only dense-decoder parameter, KV-cache, transient-memory, and matrix-FLOP estimate |
+| `fakegpu estimate-llm ...` | header-only dense/MoE, quantization, adapter, KV-cache, transient-memory, communication, FLOP, and optional roofline estimate |
+| `fakegpu analyze-repo ...` | repository inventory, entrypoint/framework detection, readiness findings, and suggested experiments |
+| `fakegpu capabilities ...` | native API behavior manifest plus source/build coverage audits |
 | `verification/compare_qwen_memory.py ...` | matching real-CUDA/FakeCUDA load, inference, virtual-SMI, token, and FLOP comparison |
 | `verification/compare_qwen_sft_memory.py ...` | matching real-CUDA, FakeCUDA, and ATen static-graph peaks for full/LoRA/native-NF4 QLoRA Qwen3.5 SFT |
 | `verification/summarize_qwen_sft_matrix.py ...` | full/LoRA/QLoRA, checkpointing, accumulation, and sequence-length SFT matrix summary |
@@ -51,6 +53,7 @@ The report includes:
 - current and peak device memory usage
 - IO counters for H2D, D2H, D2D, peer, and memset activity
 - compute counters and FLOP estimates for maintained cuBLAS and cuBLASLt paths
+- the configured unsupported-API policy and per-device recognized no-op events
 - host-to-host copy counters
 
 Example shape:
@@ -59,6 +62,7 @@ Example shape:
 {
   "report_version": "1.5.5",
   "mode": "simulate",
+  "unsupported_api_policy": "warn",
   "devices": [
     {
       "index": 0,
@@ -69,7 +73,15 @@ Example shape:
       },
       "compute": {
         "cublas_gemm": {"calls": 2, "flops": 8192}
-      }
+      },
+      "unsupported_api_events": [
+        {
+          "operation": "cuLaunchKernel",
+          "behavior": "not_executed",
+          "policy": "warn",
+          "count": 1
+        }
+      ]
     }
   ]
 }
@@ -183,7 +195,7 @@ as `parameter`, `buffer`, `gradient`, `optimizer_state`, `activation`,
 `temporary`, or `tensor`. Add `--allocation-stacks` to include short Python
 stack traces for those top allocations.
 
-Static-memory validation reports retain forward, backward, and optimizer CUDA peaks separately. Workspace details distinguish total profiled bytes from the effective peak contribution: graph-phase persistent storage applies across the graph, while operator-local workspace is combined only with the live storage at its ATen node. Reports also list graph-modeled and unprofiled Attention operators.
+Static-memory validation reports retain forward, backward, and optimizer CUDA peaks separately. Workspace details distinguish total profiled bytes from the effective peak contribution: graph-phase persistent storage applies across the graph, while operator-local workspace is combined only with the live storage at its ATen node. Profiles may declare lower/expected/upper values. Unmatched calls remain visible and unbounded unless the caller supplies an explicit per-call upper bound. Reports expose the full peak interval; `require_upper_bound=True` rejects incomplete bounds.
 
 The current real calibration target is a single NVIDIA RTX PRO 5000 72GB Blackwell (compute capability 12.0). The maintained suite covers seven controlled workloads, requires passthrough and Hybrid result signatures to match real CUDA, records Hybrid Driver allocation peaks, and verifies the PyTorch OOM surface under Hybrid clamp. It does not prove that a multi-node target cluster will fit or perform well.
 
@@ -193,8 +205,10 @@ See [AI Researcher Preflight](ai-researcher-preflight.md) for usage and current 
 
 `fakegpu estimate-llm --json <path>` writes a
 `fakegpu.llm_inference_estimate.v1` report without loading checkpoint payloads.
-It includes parameter/checkpoint metadata, KV cache, prefill/decode transient
-memory, tensor/process peaks, and per-step matrix FLOPs.
+It includes dense/MoE and quantized parameter metadata, adapters, KV cache,
+prefill/decode transient memory, tensor/process peaks, expert-parallel
+communication, memory-traffic intervals, per-step matrix FLOPs, and an
+optional profile roofline interval.
 
 When `FAKEGPU_SMI_STATE_PATH` or `FAKEGPU_SMI_STATE_DIR` is set before the
 FakeCUDA runtime starts, each process publishes a `fakegpu.smi_state.v1` JSON
@@ -275,7 +289,7 @@ The report is designed for co-deployment with the mkdocs site at `/test/report.h
 
 For the proof-oriented Markdown companion, see:
 
-- `test/real_scene/nanoGPT/TORCH_PATCH_PROOF.md` — 520M / 1.0B load-only scaling, a100-1g OOM validation, and the current scope limitation that op-produced activations are not yet reflected in fakecuda terminal summary peaks.
+- `test/real_scene/nanoGPT/TORCH_PATCH_PROOF.md` — 520M / 1.0B load-only scaling and a100-1g OOM validation. Current dispatch tracking also records operator-produced storages and aliases in fakecuda summaries.
 
 ## Stability guidance
 

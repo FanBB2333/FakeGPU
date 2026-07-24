@@ -28,13 +28,22 @@ fakegpu doctor --list-profiles
 fakegpu demo --profile l4
 fakegpu demo --profile b300 --json
 fakegpu workspace-profiles --json
+fakegpu capabilities --source-root . --strict
+fakegpu analyze-repo . --json
+fakegpu estimate-roofline --profile a100 --flops 1000000000000 --memory-bytes 4000000000
 fakegpu validate --manifest verification/data/validation_smoke.yaml --strict
 ./fgpu nvidia-smi
 ./fgpu python3 your_script.py
 ./fgpu --profile t4 --device-count 2 python3 your_script.py
 ./fgpu --devices "a100:4,h100:4" python3 your_script.py
+./fgpu --unsupported-api error python3 your_script.py
 ./fgpu --mode hybrid --oom-policy clamp python3 your_script.py
 ```
+
+`FAKEGPU_UNSUPPORTED_API` accepts `allow`, `warn`, or `error`. The default
+`warn` keeps the compatibility return, emits one warning per recognized no-op
+API, and records the event in the native report. `error` returns CUDA error
+801 (`NotSupported`) from APIs with an error return.
 
 Dynamic initialization inside Python:
 
@@ -72,7 +81,8 @@ fakegpu doctor --profile rtx-pro-5000-blackwell --json
 
 ## LLM inference estimate and virtual SMI
 
-Inspect a dense decoder safetensors checkpoint without loading its weights:
+Inspect a dense or MoE decoder safetensors checkpoint without loading its
+weights:
 
 ```bash
 fakegpu estimate-llm \
@@ -81,8 +91,14 @@ fakegpu estimate-llm \
   --generated-tokens 2 \
   --dtype bfloat16 \
   --attention-implementation sdpa \
+  --target-profile a100 \
   --json build/qwen-estimate.json
 ```
+
+Repeat `--adapter-dir` for PEFT adapters and set `--expert-parallel-size` for
+an analytical MoE dispatch/combine estimate. Quantized checkpoints use exact
+safetensors payload bytes for base-weight storage. The optional profile result
+is a roofline interval, not measured kernel latency.
 
 Publish FakeCUDA process memory and view it from another terminal:
 
@@ -124,7 +140,7 @@ The runner writes:
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. For lightweight regression tests, `test-512m` is also available as a 512 MB fakecuda/native profile. The runner auto-initializes fakecuda for Python commands and reports `C2_torch_tensor_lifetime` confidence, including stage peaks, allocated and reserved allocator peaks, inactive split bytes, top allocations, optional allocation stack traces, coarse memory categories, shared-storage alias handling, basic logical-device attribution, and saved autograd tensors visible through PyTorch hooks. CUDA backend-internal workspaces can still be undercounted; use `--memory-safety-margin <bytes>` when real-GPU calibration shows a mostly fixed gap, and reserve `--memory-safety-factor <factor>` for gaps that scale with workload size.
+Use a small profile such as `a100-1g` to confirm OOM detection, then repeat with the target profile. For lightweight regression tests, `test-512m` is also available as a 512 MB fakecuda/native profile. The runner auto-initializes fakecuda for Python commands and reports `C3_torch_dispatch_lifetime` confidence. In addition to stage and allocator statistics, dispatch tracking records operator-created storages, aliases, and outputs that cannot be inspected. CUDA backend-internal workspaces can still be undercounted; use `--memory-safety-margin <bytes>` when real-GPU calibration shows a mostly fixed gap, and reserve `--memory-safety-factor <factor>` for gaps that scale with workload size.
 
 `./ftest preflight_oom` now includes a profile matrix check: the same 560 MB allocation must fail on `test-512m` and pass on `a100`.
 
@@ -137,6 +153,22 @@ For graph-based training-memory estimation, run:
 ```
 
 The estimator captures a fake-tensor ATen forward/backward graph with `make_fx` and `torch.func.grad_and_value`, deduplicates aliased storages, and releases each storage after its final graph use. `target_device="auto"` uses fake CUDA tensors when PyTorch is linked with CUDA, so Attention and other device-dependent operators select the CUDA ATen path without allocating real GPU memory. Its default training-step model retains the module output through backward and `optimizer.step()`. It compares graph and optimizer phases instead of adding non-overlapping peaks, then accounts for Adam/AdamW moment state. The eager single-tensor optimizer model follows parameter iteration order: two current-parameter intermediates can overlap the previous parameter's denominator. CUDA Flash Attention auxiliary storage is derived from query shape, dtype, and 64-token sequence tiles. FP32 Efficient Attention backward uses an operator-local profile based on batch, sequence length, and query storage; it is added only to storage live at that ATen node. On a CUDA host, the validation suite records separate forward, backward, and optimizer peaks, measures one post-release backend-resident allocation, and compares 13 MLP/Transformer FP32/BF16 workloads with `torch.cuda.max_memory_allocated()`. The maintained suite rejects a measured allocator or requested-byte underestimation above 5%.
+
+Require every workspace-candidate call to have a non-extrapolated model:
+
+```bash
+python3 verification/static_memory_validation.py \
+  --static-only \
+  --min-workspace-coverage 1 \
+  --reject-extrapolated-workspaces
+```
+
+The same check is available as
+`require_workspace_coverage(report, minimum_fraction=1.0,
+allow_extrapolated=False, require_upper_bound=True)`. Workspace profiles may
+declare lower/expected/upper values. An unmatched call remains unbounded unless
+`estimate_module_memory(..., unknown_workspace_upper_bound_bytes=N)` supplies
+an explicit per-call upper bound.
 
 Inspect the built-in and optional backend-workspace catalogs:
 
@@ -172,7 +204,7 @@ python3 verification/aggregate_static_memory_validations.py \
   --output build/static_memory_validation_bundle.json
 ```
 
-Storage-size arithmetic is device-independent, but the captured ATen graph is target-device-specific. Backend-resident memory remains specific to the GPU, PyTorch, CUDA, and selected operator path. Measured reports keep allocator-allocated and allocator-requested comparisons, phase peaks, profile coverage, total profiled bytes, and the effective peak contribution. These fields separate size-class rounding from missing logical storage or operator workspace. A changed graph fingerprint must be reviewed even when the estimated byte count is unchanged.
+Storage-size arithmetic is device-independent, but the captured ATen graph is target-device-specific. Backend-resident memory remains specific to the GPU, PyTorch, CUDA, and selected operator path. Measured reports keep allocator-allocated and allocator-requested comparisons, phase peaks, profile coverage, total profiled bytes, and the effective peak contribution. Aggregated reports also retain missing/incomplete coverage counts and the minimum modeled and non-extrapolated fractions. These fields separate size-class rounding from missing logical storage or operator workspace. A changed graph fingerprint must be reviewed even when the estimated byte count is unchanged.
 
 For real-GPU calibration, run a reduced workload directly on the GPU and compare with passthrough or hybrid when available:
 
@@ -304,6 +336,7 @@ Mode-specific preload behavior in the Python API:
 | Variable | Meaning |
 |---|---|
 | `FAKEGPU_REPORT_PATH` | Output path for `fake_gpu_report.json` |
+| `FAKEGPU_UNSUPPORTED_API` | Recognized native no-op policy: `allow`, `warn` (default), or `error` |
 | `PYTORCH_NO_CUDA_MEMORY_CACHING` | Useful when debugging allocation flow |
 | `TORCH_SDPA_KERNEL=math` | Helpful for avoiding Flash Attention-specific paths |
 | `CUDA_LAUNCH_BLOCKING=1` | Forces synchronous error surfacing |

@@ -1,6 +1,7 @@
 #include "cuda_defs.hpp"
 #include "../core/global_state.hpp"
 #include "../core/logging.hpp"
+#include "../core/unsupported_api.hpp"
 #include "../monitor/monitor.hpp"
 #include <cstdio>
 #include <cstring>
@@ -219,6 +220,9 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim, void
     FGPU_LOG("[FakeCUDA] cudaLaunchKernel (stub) '%s' Grid(%d,%d,%d) Block(%d,%d,%d)\n",
            kernel_name.c_str(), gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
     GlobalState::instance().record_kernel_launch(kernel_name);
+    if (record_unsupported_api("cudaLaunchKernel")) {
+        return cudaErrorNotSupported;
+    }
     return cudaSuccess;
 }
 
@@ -320,6 +324,8 @@ const char* cudaGetErrorString(cudaError_t error) {
             return "invalid device ordinal";
         case cudaErrorNoDevice:
             return "no CUDA-capable device is detected";
+        case cudaErrorNotSupported:
+            return "operation not supported";
         default:
             return "unknown error";
     }
@@ -339,6 +345,8 @@ const char* cudaGetErrorName(cudaError_t error) {
             return "cudaErrorInvalidDevice";
         case cudaErrorNoDevice:
             return "cudaErrorNoDevice";
+        case cudaErrorNotSupported:
+            return "cudaErrorNotSupported";
         default:
             return "cudaErrorUnknown";
     }

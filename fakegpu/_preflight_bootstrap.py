@@ -79,12 +79,17 @@ def _write_child_report(*, init_result: Any, exception: BaseException | None, ex
     if not path_text:
         return
 
+    snapshot = _snapshot_fakecuda()
     payload: dict[str, Any] = {
         "runtime": "fakecuda",
         "backend": getattr(init_result, "backend", None),
         "stage": os.environ.get("FAKEGPU_PREFLIGHT_STAGE"),
         "exit_code": int(exit_code),
-        "devices": _snapshot_fakecuda_devices(),
+        "tracking_confidence": snapshot.get(
+            "tracking_confidence", "C0_incomplete"
+        ),
+        "dispatch_tracking": snapshot.get("dispatch_tracking"),
+        "devices": snapshot.get("devices", []),
     }
     if exception is not None:
         payload["exception"] = {
@@ -98,17 +103,24 @@ def _write_child_report(*, init_result: Any, exception: BaseException | None, ex
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _snapshot_fakecuda_devices() -> list[dict[str, Any]]:
+def _snapshot_fakecuda() -> dict[str, Any]:
     try:
         from fakegpu import torch_patch as tp
     except Exception:
-        return []
+        return {"tracking_confidence": "C0_incomplete", "devices": []}
 
     try:
         snapshot = tp.memory_snapshot()
         devices = snapshot.get("devices")
         if isinstance(devices, list):
-            return [dict(device) for device in devices if isinstance(device, dict)]
+            return {
+                **dict(snapshot),
+                "devices": [
+                    dict(device)
+                    for device in devices
+                    if isinstance(device, dict)
+                ],
+            }
     except Exception:
         pass
 
@@ -138,7 +150,12 @@ def _snapshot_fakecuda_devices() -> list[dict[str, Any]]:
                 "allocation_count": allocation_count,
             }
         )
-    return devices
+    return {
+        "tracking_confidence": (
+            "C2_torch_tensor_lifetime" if devices else "C0_incomplete"
+        ),
+        "devices": devices,
+    }
 
 
 def _system_exit_code(exc: SystemExit) -> int:

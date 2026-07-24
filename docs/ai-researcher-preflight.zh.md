@@ -207,6 +207,26 @@ profile、Compute Capability、PyTorch/CUDA 软件栈、dtype 和精确或范围
 workspace。内置 catalog 包含 RTX 3090 Ti 与 RTX PRO 5000 的精确软件栈
 矩阵/卷积观测。
 
+每份估算现在都包含 `workspace_estimate.coverage`，分别统计已建模、非外推、
+外推和未建模的 workspace 候选算子调用。调用覆盖率可以发现缺失模型，但
+无法推算未建模调用的未知字节数。Python 中可以这样设置门槛：
+
+```python
+from fakegpu import require_workspace_coverage
+
+require_workspace_coverage(
+    report,
+    minimum_fraction=1.0,
+    allow_extrapolated=False,
+)
+```
+
+验证 runner 可以使用
+`--min-workspace-coverage 1 --reject-extrapolated-workspaces` 执行相同检查。
+未达到门槛时，状态为 `FAIL_WORKSPACE_COVERAGE`，退出码为 2。跨 GPU
+聚合报告会保留最低 modeled/non-extrapolated 覆盖率，并统计缺失或不完整的
+覆盖观测。
+
 未匹配的 backend workspace、fused/foreach optimizer 额外临时分配、自定义
 CUDA kernel、分布式 buffer 和 graph break 仍需要继续建模或实测。
 
@@ -255,7 +275,7 @@ fakegpu preflight \
 
 ## Stage 标记
 
-未来 runner 应该支持可选 Python 标记：
+runner 支持可选 Python 标记：
 
 ```python
 import fakegpu
@@ -303,15 +323,16 @@ preflight 报告应包含：
 | `C0_incomplete` | 命令跑了，但显存跟踪不足以判断 OOM。 |
 | `C1_weight_storage` | 主要跟踪权重和显式 fake-CUDA storage。 |
 | `C2_torch_tensor_lifetime` | torch tensor 生命周期跟踪足够用于 fakecuda preflight。 |
+| `C3_torch_dispatch_lifetime` | 在 PyTorch dispatch 边界继续跟踪算子新建的 storage 和 alias。 |
 | `C3_native_cuda_allocations` | native simulate 模式下 CUDA allocation 跟踪较完整。 |
 | `C4_real_gpu_calibrated` | 该类 workload 有明确记录 GPU 型号的真实校准数据。 |
 
 ## 建议下一步
 
-下一版实现应优先做：
+后续实现优先级：
 
-1. 增加按执行阶段处理的 cuDNN/cuBLASLt 和 fused optimizer workspace profile。
-2. 在当前真实校准 GPU 上增加手动大 tensor OOM probe。
-3. 为更真实的 HF 和 LoRA workload 增加小/大 profile pass-fail matrix。
-4. 更多把 `preflight_report.json` 作为 Slurm 提交说明附件的 workload 示例。
-5. 文档中明确区分 fit/no-fit 检查和性能预测。
+1. 增加按执行阶段处理的 cuDNN/cuBLASLt 与 fused/foreach optimizer workspace 模型。
+2. 为更多算子族和软件栈采集可复用的显存上下界。
+3. 扩展到更多 PyTorch/CUDA 版本和 graph fingerprint 的精确软件栈校准。
+4. 用同一份 manifest 在小/大 profile 上运行更接近真实 HF/LoRA 的 pass-fail 矩阵。
+5. 增加调度系统示例，为每个提交任务归档 `preflight_report.json`。

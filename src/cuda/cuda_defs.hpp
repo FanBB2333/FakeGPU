@@ -111,6 +111,7 @@ typedef enum {
     cudaErrorInvalidValue = 11,
     cudaErrorInvalidDevice = 10,
     cudaErrorNoDevice = 100,
+    cudaErrorNotSupported = 801,
     cudaErrorUnknown = 30
 } cudaError_t;
 

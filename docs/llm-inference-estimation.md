@@ -4,7 +4,7 @@ FakeGPU offers three complementary levels for decoder-only inference:
 
 | Level | GPU required | What it measures |
 |---|---:|---|
-| Checkpoint-only estimate | No | Parameter bytes, KV cache, transient tensors, and matrix FLOPs from safetensors/config metadata |
+| Checkpoint-only estimate | No | Dense/MoE parameter bytes, quantized storage, adapters, KV cache, transient tensors, expert traffic, matrix FLOPs, and an optional profile roofline interval |
 | FakeCUDA execution | No | Real CPU execution through CUDA-shaped PyTorch code, tensor-lifetime memory, generated tokens, and observed matrix FLOPs |
 | CUDA calibration | Yes | PyTorch allocator and NVML process memory for one exact GPU/software/operator path |
 
@@ -22,6 +22,7 @@ python3 -m fakegpu estimate-llm \
   --generated-tokens 2 \
   --dtype bfloat16 \
   --attention-implementation sdpa \
+  --target-profile a100 \
   --json build/qwen-estimate.json
 ```
 
@@ -30,13 +31,35 @@ tensor payloads, materialize the model, or create a CUDA context. The estimate
 contains:
 
 - exact checkpoint parameter count and storage metadata
-- parameter bytes at the requested inference dtype
+- base and adapter parameter bytes at the selected runtime representation
 - KV-cache bytes from layers, KV heads, head dimension, batch, and sequence
 - eager- or SDPA-specific transient tensor estimates
-- prefill and per-decode-step matrix FLOPs, using two FLOPs per multiply-add
+- dense or active routed/shared-expert matrix FLOPs
+- uniform expert-parallel dispatch/combine bytes when world size is specified
+- lower/expected/upper memory-traffic and optional roofline latency intervals
 
-The current shape model supports dense decoder-only architectures. It rejects
-MoE configurations instead of returning a misleading dense estimate.
+Quantized base checkpoints use the exact safetensors payload size, including
+scale tensors. Dense checkpoints and adapters use parameter count multiplied
+by the selected runtime dtype. The compute model includes only active experts,
+router matrix multiplication, shared experts, attention, and the LM head.
+
+Pass adapters and expert-parallel size explicitly:
+
+```bash
+fakegpu estimate-llm \
+  --model-dir /models/moe-decoder \
+  --adapter-dir /models/adapters/domain-lora \
+  --adapter-dir /models/adapters/style-lora \
+  --expert-parallel-size 4 \
+  --prompt-tokens 128 \
+  --generated-tokens 16 \
+  --target-profile h100 \
+  --json build/moe-adapter-estimate.json
+```
+
+The expert traffic estimate assumes uniform placement and routing. It does not
+predict hot experts, capacity-factor drops, all-to-all protocol overhead, or
+fused quantization workspace.
 
 ## Execute the model with no visible GPU
 
@@ -129,17 +152,19 @@ that number as a universal CUDA-context constant.
 ## Accuracy boundary
 
 This result supports a concrete statement: FakeGPU is accurate for this
-maintained dense-Qwen inference envelope. It is not yet a general GPU emulator
-for an arbitrary repository.
+maintained dense-Qwen inference envelope. MoE, quantized, and adapter support
+is an analytical checkpoint model and does not inherit the same empirical
+error bound.
 
 Check or calibrate separately when a workload uses:
 
-- MoE routing, quantized checkpoints, adapters, or mixed per-tensor dtypes
+- nonuniform MoE routing, fused quantization kernels, adapter merge state, or mixed per-tensor runtime dtypes
 - custom CUDA extensions, Triton kernels, or operators outside FakeCUDA coverage
 - model-specific persistent buffers or dynamically changing control flow
 - a different attention backend, PyTorch/CUDA release, allocator policy, or GPU
-- throughput/latency prediction, which FakeGPU does not model
+- exact throughput/latency prediction; profile roofline output is an analytical interval, not a benchmark
 
-For an arbitrary training repository, use
-[`fakegpu preflight`](ai-researcher-preflight.md) or the ATen graph estimator in
-addition to the checkpoint-only inference estimate.
+For an arbitrary repository, run
+[`fakegpu analyze-repo`](repository-and-performance-analysis.md) first, then
+use [`fakegpu preflight`](ai-researcher-preflight.md) or the ATen graph
+estimator for the selected entrypoint and shapes.

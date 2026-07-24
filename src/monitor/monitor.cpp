@@ -76,6 +76,7 @@ private:
             if (dev.cublaslt_matmul_calls > 0 || dev.cublaslt_matmul_flops > 0) return true;
             if (dev.kernel_launch_total > 0) return true;
             if (!dev.compat_events.empty()) return true;
+            if (!dev.unsupported_api_events.empty()) return true;
         }
 
         return false;
@@ -195,6 +196,20 @@ private:
                 }
                 std::fprintf(stderr, "\n");
             }
+            if (!dev.unsupported_api_events.empty()) {
+                std::fprintf(stderr, "   UNSUPPORTED APIS:");
+                for (const auto& [op, behavior, policy, count] :
+                     dev.unsupported_api_events) {
+                    std::fprintf(
+                        stderr,
+                        " %s(%s,%s)x%llu",
+                        op.c_str(),
+                        behavior.c_str(),
+                        policy.c_str(),
+                        (unsigned long long)count);
+                }
+                std::fprintf(stderr, "\n");
+            }
 
             std::fprintf(stderr, "------------------------------------------------------\n");
         }
@@ -286,6 +301,10 @@ private:
             // Add mode information
             const BackendConfig& config = BackendConfig::instance();
             fprintf(out, "  \"mode\": \"%s\",\n", mode_name(config.mode()));
+            fprintf(
+                out,
+                "  \"unsupported_api_policy\": \"%s\",\n",
+                unsupported_api_policy_name(config.unsupported_api_policy()));
             if (config.mode() == FakeGpuMode::Hybrid) {
                 fprintf(out, "  \"oom_policy\": \"%s\",\n", policy_name(config.oom_policy()));
 
@@ -459,6 +478,23 @@ private:
                                 dtype.c_str(),
                                 (unsigned long long)count,
                                 (ci + 1 < dev.compat_events.size() ? "," : ""));
+                    }
+                    fprintf(out, "      ]\n");
+                }
+                if (!dev.unsupported_api_events.empty()) {
+                    fprintf(out, "      ,\"unsupported_api_events\": [\n");
+                    for (size_t ui = 0; ui < dev.unsupported_api_events.size(); ++ui) {
+                        const auto& [op, behavior, policy, count] =
+                            dev.unsupported_api_events[ui];
+                        fprintf(
+                            out,
+                            "        {\"operation\": \"%s\", \"behavior\": \"%s\", "
+                            "\"policy\": \"%s\", \"count\": %llu}%s\n",
+                            op.c_str(),
+                            behavior.c_str(),
+                            policy.c_str(),
+                            (unsigned long long)count,
+                            (ui + 1 < dev.unsupported_api_events.size() ? "," : ""));
                     }
                     fprintf(out, "      ]\n");
                 }

@@ -69,7 +69,9 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
         "\n".join(
             [
                 "import fakegpu",
+                "import os",
                 "import torch",
+                "assert os.environ['FAKEGPU_UNSUPPORTED_API'] == 'error'",
                 "with fakegpu.stage('forward'):",
                 "    x = torch.empty((1024, 1024), device='cuda', dtype=torch.float32)",
                 "    print('peak', torch.cuda.max_memory_allocated())",
@@ -80,7 +82,11 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     )
 
     report_dir = tmp_path / "preflight-pass"
-    completed = _run_preflight([sys.executable, str(script)], report_dir=report_dir)
+    completed = _run_preflight(
+        [sys.executable, str(script)],
+        report_dir=report_dir,
+        preflight_args=["--unsupported-api", "error"],
+    )
 
     assert completed.returncode == 0, completed.stderr
     assert (report_dir / "preflight_report.md").is_file()
@@ -101,8 +107,9 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     assert report["status"] == "PASS_FIT"
     assert report["runtime"] == "fakecuda"
     assert report["stage"] == "forward"
-    assert report["tracking_confidence"] == "C2_torch_tensor_lifetime"
+    assert report["tracking_confidence"] == "C3_torch_dispatch_lifetime"
     assert report["command"] == [sys.executable, str(script)]
+    assert report["target"]["unsupported_api"] == "error"
     assert report["target_profiles"] == [{"profile_id": "a100-1g", "count": 1}]
     assert report["calibration_gpu"] is None
     assert report["logs"]["stdout"].endswith("preflight_stdout.log")
@@ -113,7 +120,8 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     assert devices[0]["peak_memory"] >= 4 * 1024**2
     assert devices[0]["headroom_bytes"] > 0
     assert devices[0]["allocation_count"] >= 1
-    assert devices[0]["tracking_confidence"] == "C2_torch_tensor_lifetime"
+    assert devices[0]["tracking_confidence"] == "C3_torch_dispatch_lifetime"
+    assert report["dispatch_tracking"]["enabled"] is True
     assert isinstance(devices[0]["current_bytes_by_category"], dict)
     assert devices[0]["peak_by_stage"]["forward"] >= devices[0]["peak_memory"]
     assert devices[0]["largest_allocations"]
@@ -129,6 +137,9 @@ def test_preflight_fakecuda_pass_generates_json_markdown_and_logs(tmp_path: Path
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert "target_profiles" in schema["required"]
     assert "calibration_gpu" in schema["required"]
+    assert schema["properties"]["target"]["properties"]["unsupported_api"][
+        "enum"
+    ] == ["allow", "warn", "error", None]
 
     checked = subprocess.run(
         [

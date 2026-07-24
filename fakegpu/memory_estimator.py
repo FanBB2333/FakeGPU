@@ -21,6 +21,89 @@ _EFFICIENT_ATTENTION_SEQUENCE_ROW_BYTES = 16
 _EFFICIENT_ATTENTION_BATCH_METADATA_BYTES = 64
 
 
+class WorkspaceCoverageError(RuntimeError):
+    """Raised when a static estimate does not meet a requested coverage level."""
+
+    def __init__(self, message: str, *, evaluation: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.evaluation = dict(evaluation)
+
+
+def require_workspace_coverage(
+    report: Mapping[str, Any],
+    *,
+    minimum_fraction: float = 1.0,
+    allow_extrapolated: bool = True,
+    require_upper_bound: bool = False,
+) -> dict[str, Any]:
+    """Require modeled workspace coverage for an estimator report.
+
+    Coverage is based on calls to operators that can use backend-private
+    workspace. It does not estimate the bytes of an unprofiled operator and
+    therefore cannot provide an upper memory bound by itself.
+    """
+
+    minimum = float(minimum_fraction)
+    if not 0.0 <= minimum <= 1.0:
+        raise ValueError("minimum_fraction must be between 0 and 1")
+
+    workspace = report.get("workspace_estimate")
+    if not isinstance(workspace, Mapping):
+        if "coverage" in report:
+            workspace = report
+        else:
+            raise ValueError("report does not contain workspace_estimate coverage")
+    coverage = workspace.get("coverage")
+    if not isinstance(coverage, Mapping):
+        raise ValueError("report does not contain workspace coverage")
+
+    fraction_field = (
+        "modeled_fraction"
+        if allow_extrapolated
+        else "non_extrapolated_fraction"
+    )
+    fraction = float(coverage.get(fraction_field, 0.0) or 0.0)
+    interval = workspace.get("interval")
+    upper_bound_complete = bool(
+        isinstance(interval, Mapping)
+        and interval.get("upper_bound_complete", False)
+    )
+    coverage_passed = fraction + 1e-12 >= minimum
+    upper_bound_passed = not require_upper_bound or upper_bound_complete
+    evaluation = {
+        **dict(coverage),
+        "minimum_fraction": minimum,
+        "allow_extrapolated": bool(allow_extrapolated),
+        "require_upper_bound": bool(require_upper_bound),
+        "upper_bound_complete": upper_bound_complete,
+        "selected_fraction": fraction,
+        "coverage_passed": coverage_passed,
+        "upper_bound_passed": upper_bound_passed,
+        "passed": coverage_passed and upper_bound_passed,
+    }
+    if evaluation["passed"]:
+        return evaluation
+
+    unprofiled = dict(workspace.get("unprofiled_workspace_candidates") or {})
+    unprofiled_text = ", ".join(
+        f"{operator} x{int(count)}"
+        for operator, count in sorted(unprofiled.items())
+    )
+    details = f"; unprofiled operators: {unprofiled_text}" if unprofiled_text else ""
+    failures = []
+    if not coverage_passed:
+        failures.append(
+            "workspace operator-call coverage "
+            f"{fraction:.1%} is below the required {minimum:.1%}"
+        )
+    if not upper_bound_passed:
+        failures.append("workspace upper bound is incomplete")
+    raise WorkspaceCoverageError(
+        "; ".join(failures) + details,
+        evaluation=evaluation,
+    )
+
+
 def estimate_module_memory(
     module: Any,
     example_args: Sequence[Any],
@@ -34,6 +117,7 @@ def estimate_module_memory(
     target_device: str = "auto",
     target_profile: str | None = None,
     workspace_profile_paths: Sequence[str | PathLike[str]] | None = None,
+    unknown_workspace_upper_bound_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Estimate a module's tensor-storage peak from a captured ATen graph.
 
@@ -72,6 +156,17 @@ def estimate_module_memory(
         )
     if normalized_mode == "forward" and normalized_optimizer != "none":
         normalized_optimizer = "none"
+    if (
+        unknown_workspace_upper_bound_bytes is not None
+        and (
+            not isinstance(unknown_workspace_upper_bound_bytes, int)
+            or isinstance(unknown_workspace_upper_bound_bytes, bool)
+            or unknown_workspace_upper_bound_bytes < 0
+        )
+    ):
+        raise ValueError(
+            "unknown_workspace_upper_bound_bytes must be a non-negative integer"
+        )
 
     args = tuple(example_args)
     kwargs = dict(example_kwargs or {})
@@ -234,14 +329,47 @@ def estimate_module_memory(
         target_device=trace_device,
         target_profile=target_profile,
         workspace_profile_paths=workspace_profile_paths,
+        unknown_workspace_upper_bound_bytes=unknown_workspace_upper_bound_bytes,
+    )
+    workspace_interval = dict(workspace_estimate["interval"])
+    lower_workspace_peak = int(
+        workspace_interval["lower"]["effective_peak_contribution_bytes"]
+    )
+    upper_workspace_peak_raw = (
+        workspace_interval.get("upper") or {}
+    ).get("effective_peak_contribution_bytes")
+    upper_workspace_peak = (
+        int(upper_workspace_peak_raw)
+        if upper_workspace_peak_raw is not None
+        else None
     )
     graph_phase_peak = (
         int(graph["peak_live_bytes"])
         + int(optimizer_state["total_bytes"])
         + int(workspace_estimate["effective_peak_contribution_bytes"])
     )
+    lower_graph_phase_peak = (
+        int(graph["peak_live_bytes"])
+        + int(optimizer_state["total_bytes"])
+        + lower_workspace_peak
+    )
+    upper_graph_phase_peak = (
+        int(graph["peak_live_bytes"])
+        + int(optimizer_state["total_bytes"])
+        + upper_workspace_peak
+        if upper_workspace_peak is not None
+        else None
+    )
     first_step_graph_phase_peak = int(graph["peak_live_bytes"]) + int(
         workspace_estimate["effective_peak_contribution_bytes"]
+    )
+    lower_first_step_graph_phase_peak = (
+        int(graph["peak_live_bytes"]) + lower_workspace_peak
+    )
+    upper_first_step_graph_phase_peak = (
+        int(graph["peak_live_bytes"]) + upper_workspace_peak
+        if upper_workspace_peak is not None
+        else None
     )
     optimizer_phase_peak: int | None = None
     if normalized_mode == "training" and normalized_optimizer != "none":
@@ -254,9 +382,33 @@ def estimate_module_memory(
         graph_phase_peak,
         optimizer_phase_peak if optimizer_phase_peak is not None else 0,
     )
+    lower_estimated_peak = max(
+        lower_graph_phase_peak,
+        optimizer_phase_peak if optimizer_phase_peak is not None else 0,
+    )
+    upper_estimated_peak = (
+        max(
+            upper_graph_phase_peak,
+            optimizer_phase_peak if optimizer_phase_peak is not None else 0,
+        )
+        if upper_graph_phase_peak is not None
+        else None
+    )
     first_step_estimated_peak = max(
         first_step_graph_phase_peak,
         optimizer_phase_peak if optimizer_phase_peak is not None else 0,
+    )
+    lower_first_step_estimated_peak = max(
+        lower_first_step_graph_phase_peak,
+        optimizer_phase_peak if optimizer_phase_peak is not None else 0,
+    )
+    upper_first_step_estimated_peak = (
+        max(
+            upper_first_step_graph_phase_peak,
+            optimizer_phase_peak if optimizer_phase_peak is not None else 0,
+        )
+        if upper_first_step_graph_phase_peak is not None
+        else None
     )
     if optimizer_phase_peak is None or graph_phase_peak > optimizer_phase_peak:
         peak_phase = "graph"
@@ -310,8 +462,18 @@ def estimate_module_memory(
         "optimizer_temporary_bytes": int(optimizer_temporary["total_bytes"]),
         "first_step_graph_phase_peak_bytes": first_step_graph_phase_peak,
         "graph_phase_peak_bytes": graph_phase_peak,
+        "graph_phase_peak_interval_bytes": {
+            "lower": lower_graph_phase_peak,
+            "expected": graph_phase_peak,
+            "upper": upper_graph_phase_peak,
+        },
         "optimizer_phase_peak_bytes": optimizer_phase_peak,
         "first_step_estimated_peak_bytes": first_step_estimated_peak,
+        "first_step_estimated_peak_interval_bytes": {
+            "lower": lower_first_step_estimated_peak,
+            "expected": first_step_estimated_peak,
+            "upper": upper_first_step_estimated_peak,
+        },
         "steady_state_estimated_peak_bytes": estimated_peak,
         "peak_phase": peak_phase,
         "workspace_estimate": workspace_estimate,
@@ -320,6 +482,13 @@ def estimate_module_memory(
             workspace_estimate["effective_peak_contribution_bytes"]
         ),
         "estimated_peak_bytes": estimated_peak,
+        "estimated_peak_interval_bytes": {
+            "lower": lower_estimated_peak,
+            "expected": estimated_peak,
+            "upper": upper_estimated_peak,
+            "upper_bound_complete": upper_estimated_peak is not None,
+            "source": "graph_liveness_plus_workspace_interval",
+        },
         "graph": graph,
         "unmodeled_components": unmodeled_components,
         "notes": [
@@ -776,11 +945,13 @@ def _estimate_backend_workspace(
     target_device: Any,
     target_profile: str | None,
     workspace_profile_paths: Sequence[str | PathLike[str]] | None,
+    unknown_workspace_upper_bound_bytes: int | None,
 ) -> dict[str, Any]:
     profiles: list[dict[str, Any]] = []
     graph_modeled_attention_operators: dict[str, int] = {}
     unprofiled_attention_operators: dict[str, int] = {}
     unprofiled_workspace_candidates: dict[str, int] = {}
+    unprofiled_workspace_calls: list[dict[str, Any]] = []
 
     for node in graph_module.graph.nodes:
         if node.op not in {"call_function", "call_method", "call_module"}:
@@ -794,6 +965,10 @@ def _estimate_backend_workspace(
             workspace_profile_paths=workspace_profile_paths,
         )
         if profile is not None:
+            profile.setdefault("lower_bytes", int(profile.get("bytes", 0) or 0))
+            profile.setdefault("upper_bytes", int(profile.get("bytes", 0) or 0))
+            profile.setdefault("bound_kind", "point_estimate")
+            profile.setdefault("declared_interval", False)
             profiles.append(profile)
             continue
         if _is_graph_modeled_attention_operator(target):
@@ -809,8 +984,25 @@ def _estimate_backend_workspace(
             unprofiled_workspace_candidates[target] = (
                 unprofiled_workspace_candidates.get(target, 0) + 1
             )
+            unprofiled_workspace_calls.append(
+                _unprofiled_workspace_call(
+                    node,
+                    target,
+                    upper_bound_bytes=unknown_workspace_upper_bound_bytes,
+                )
+            )
 
-    summary = _workspace_peak_summary(graph, profiles)
+    summary = _workspace_peak_summary(
+        graph,
+        profiles,
+        unprofiled_workspace_calls=unprofiled_workspace_calls,
+    )
+    coverage = _workspace_coverage_summary(
+        profiles=profiles,
+        graph_modeled_attention_operators=graph_modeled_attention_operators,
+        unprofiled_workspace_candidates=unprofiled_workspace_candidates,
+        unprofiled_workspace_calls=unprofiled_workspace_calls,
+    )
     return {
         "method": "target_aten_operator_shape_profiles_with_registry",
         "lifetime_model": "node_liveness.v1",
@@ -833,14 +1025,89 @@ def _estimate_backend_workspace(
         "unprofiled_workspace_candidates": dict(
             sorted(unprofiled_workspace_candidates.items())
         ),
+        "unprofiled_workspace_calls": unprofiled_workspace_calls,
+        "coverage": coverage,
         "notes": [
             "External JSON/YAML profiles are matched by operator, GPU/software stack, dtype, and shape before built-in formulas.",
             "Graph-phase persistent profiles are added across the graph phase.",
             "Operator-local workspaces are combined only with storage live at their execution node.",
             "Flash Attention auxiliary storage uses query shape, dtype, and 64-token sequence tiles.",
             "FP32 Efficient Attention backward workspace uses batch, sequence, and query storage shape.",
-            "Unprofiled operators remain listed instead of receiving a generic multiplier.",
+            "Unprofiled operators remain listed without an inferred point estimate.",
+            "An unknown per-call upper bound is used only when the caller supplies one explicitly.",
         ],
+    }
+
+
+def _workspace_coverage_summary(
+    *,
+    profiles: Sequence[Mapping[str, Any]],
+    graph_modeled_attention_operators: Mapping[str, int],
+    unprofiled_workspace_candidates: Mapping[str, int],
+    unprofiled_workspace_calls: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    profiled_operator_count = len(profiles)
+    extrapolated_operator_count = sum(
+        str(profile.get("confidence", "")).startswith("extrapolated_")
+        for profile in profiles
+    )
+    non_extrapolated_profiled_operator_count = (
+        profiled_operator_count - extrapolated_operator_count
+    )
+    graph_modeled_operator_count = sum(
+        int(count) for count in graph_modeled_attention_operators.values()
+    )
+    unprofiled_operator_count = sum(
+        int(count) for count in unprofiled_workspace_candidates.values()
+    )
+    modeled_operator_count = (
+        profiled_operator_count + graph_modeled_operator_count
+    )
+    non_extrapolated_operator_count = (
+        non_extrapolated_profiled_operator_count + graph_modeled_operator_count
+    )
+    candidate_operator_count = modeled_operator_count + unprofiled_operator_count
+
+    if candidate_operator_count:
+        modeled_fraction = modeled_operator_count / candidate_operator_count
+        non_extrapolated_fraction = (
+            non_extrapolated_operator_count / candidate_operator_count
+        )
+    else:
+        modeled_fraction = 1.0
+        non_extrapolated_fraction = 1.0
+
+    if candidate_operator_count == 0:
+        status = "no_workspace_candidates"
+    elif unprofiled_operator_count:
+        status = "incomplete"
+    elif extrapolated_operator_count:
+        status = "complete_with_extrapolation"
+    else:
+        status = "complete"
+    unbounded_operator_count = sum(
+        call.get("upper_bytes") is None for call in unprofiled_workspace_calls
+    )
+
+    return {
+        "unit": "workspace_candidate_operator_calls",
+        "status": status,
+        "candidate_operator_count": candidate_operator_count,
+        "modeled_operator_count": modeled_operator_count,
+        "profiled_operator_count": profiled_operator_count,
+        "graph_modeled_operator_count": graph_modeled_operator_count,
+        "extrapolated_operator_count": extrapolated_operator_count,
+        "non_extrapolated_operator_count": non_extrapolated_operator_count,
+        "unprofiled_operator_count": unprofiled_operator_count,
+        "modeled_fraction": round(modeled_fraction, 6),
+        "non_extrapolated_fraction": round(non_extrapolated_fraction, 6),
+        "all_candidate_calls_modeled": unprofiled_operator_count == 0,
+        "upper_bound_complete": unbounded_operator_count == 0,
+        "unbounded_operator_count": unbounded_operator_count,
+        "caveat": (
+            "Call coverage identifies missing workspace models. Unknown calls "
+            "have an upper bound only when supplied explicitly."
+        ),
     }
 
 
@@ -990,14 +1257,73 @@ def _backend_workspace_profile(
 def _workspace_peak_summary(
     graph: Mapping[str, Any],
     profiles: Sequence[Mapping[str, Any]],
+    *,
+    unprofiled_workspace_calls: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
+    expected = _workspace_peak_for_values(
+        graph,
+        profiles,
+        value_field="bytes",
+        unprofiled_workspace_calls=unprofiled_workspace_calls,
+    )
+    lower = _workspace_peak_for_values(
+        graph,
+        profiles,
+        value_field="lower_bytes",
+        unprofiled_workspace_calls=unprofiled_workspace_calls,
+    )
+    upper = _workspace_peak_for_values(
+        graph,
+        profiles,
+        value_field="upper_bytes",
+        unprofiled_workspace_calls=unprofiled_workspace_calls,
+        allow_unknown=True,
+    )
+    unbounded_calls = [
+        {
+            "node": str(call.get("node") or ""),
+            "operator": str(call.get("operator") or ""),
+        }
+        for call in unprofiled_workspace_calls
+        if call.get("upper_bytes") is None
+    ]
+    return {
+        **expected,
+        "lower_total_bytes": int(lower["total_bytes"]),
+        "upper_total_bytes": (
+            int(upper["total_bytes"]) if upper is not None else None
+        ),
+        "interval": {
+            "lower": lower,
+            "expected": expected,
+            "upper": upper,
+            "upper_bound_complete": upper is not None,
+            "unbounded_operator_count": len(unbounded_calls),
+            "unbounded_calls": unbounded_calls,
+            "semantics": (
+                "Known profiles use their declared interval or point estimate. "
+                "Unprofiled calls contribute zero to lower/expected and require "
+                "an explicit per-call value for the upper estimate."
+            ),
+        },
+    }
+
+
+def _workspace_peak_for_values(
+    graph: Mapping[str, Any],
+    profiles: Sequence[Mapping[str, Any]],
+    *,
+    value_field: str,
+    unprofiled_workspace_calls: Sequence[Mapping[str, Any]],
+    allow_unknown: bool = False,
+) -> dict[str, Any] | None:
     graph_peak_bytes = int(graph.get("peak_live_bytes", 0) or 0)
     live_bytes_by_node = {
         str(name): int(value)
         for name, value in dict(graph.get("live_bytes_by_node") or {}).items()
     }
     persistent_bytes = sum(
-        int(profile.get("bytes", 0) or 0)
+        int(profile.get(value_field, profile.get("bytes", 0)) or 0)
         for profile in profiles
         if profile.get("lifetime") == "graph_phase_persistent"
     )
@@ -1007,7 +1333,17 @@ def _workspace_peak_summary(
             continue
         node = str(profile.get("node") or "")
         local_bytes_by_node[node] = local_bytes_by_node.get(node, 0) + int(
-            profile.get("bytes", 0) or 0
+            profile.get(value_field, profile.get("bytes", 0)) or 0
+        )
+    for call in unprofiled_workspace_calls:
+        raw_value = call.get(value_field)
+        if raw_value is None:
+            if allow_unknown:
+                return None
+            raw_value = 0
+        node = str(call.get("node") or "")
+        local_bytes_by_node[node] = local_bytes_by_node.get(node, 0) + int(
+            raw_value
         )
 
     peak_node = str((graph.get("peak_node") or {}).get("name") or "")
@@ -1023,12 +1359,20 @@ def _workspace_peak_summary(
             peak_graph_live_bytes = graph_live_bytes
             peak_operator_workspace_bytes = operator_workspace_bytes
 
-    profiled_bytes_sum = sum(int(profile.get("bytes", 0) or 0) for profile in profiles)
+    profiled_bytes_sum = sum(
+        int(profile.get(value_field, profile.get("bytes", 0)) or 0)
+        for profile in profiles
+    )
+    unprofiled_bytes_sum = sum(
+        int(call.get(value_field, 0) or 0)
+        for call in unprofiled_workspace_calls
+    )
     effective_peak_contribution = max(0, combined_peak_bytes - graph_peak_bytes)
     return {
-        "total_bytes": profiled_bytes_sum,
+        "total_bytes": profiled_bytes_sum + unprofiled_bytes_sum,
         "effective_peak_contribution_bytes": effective_peak_contribution,
         "profiled_bytes_sum": profiled_bytes_sum,
+        "unprofiled_bytes_sum": unprofiled_bytes_sum,
         "graph_phase_persistent_bytes": persistent_bytes,
         "operator_local_peak_bytes": max(local_bytes_by_node.values(), default=0),
         "peak_candidate": {
@@ -1038,6 +1382,40 @@ def _workspace_peak_summary(
             "operator_workspace_bytes": peak_operator_workspace_bytes,
             "combined_live_bytes": combined_peak_bytes,
         },
+    }
+
+
+def _unprofiled_workspace_call(
+    node: Any,
+    target: str,
+    *,
+    upper_bound_bytes: int | None,
+) -> dict[str, Any]:
+    input_tensors: list[Any] = []
+    for referenced in _iter_node_references((node.args, node.kwargs), type(node)):
+        input_tensors.extend(_iter_tensor_leaves(referenced.meta.get("val")))
+    output_tensors = list(_iter_tensor_leaves(node.meta.get("val")))
+    return {
+        "node": str(node.name),
+        "operator": target,
+        "lifetime": "operator_local",
+        "input_bytes": sum(_tensor_logical_bytes(tensor) for tensor in input_tensors),
+        "output_bytes": sum(
+            _tensor_logical_bytes(tensor) for tensor in output_tensors
+        ),
+        "lower_bytes": 0,
+        "bytes": 0,
+        "upper_bytes": (
+            int(upper_bound_bytes)
+            if upper_bound_bytes is not None
+            else None
+        ),
+        "bound_kind": (
+            "caller_declared_per_call_upper_bound"
+            if upper_bound_bytes is not None
+            else "unbounded"
+        ),
+        "confidence": "unprofiled",
     }
 
 
@@ -1380,6 +1758,8 @@ def _shape_list(shape: Any) -> list[int | str]:
 __all__ = [
     "SCHEMA_VERSION",
     "SUPPORTED_OPTIMIZERS",
+    "WorkspaceCoverageError",
     "analyze_graph_memory",
     "estimate_module_memory",
+    "require_workspace_coverage",
 ]

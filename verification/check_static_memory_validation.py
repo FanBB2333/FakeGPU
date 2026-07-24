@@ -16,7 +16,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--path", type=Path, required=True)
     parser.add_argument("--allow-static-only", action="store_true")
     parser.add_argument("--max-underestimate-percent", type=float)
+    parser.add_argument("--min-workspace-coverage", type=float)
+    parser.add_argument("--reject-extrapolated-workspaces", action="store_true")
     ns = parser.parse_args(argv)
+    if ns.min_workspace_coverage is not None:
+        _require(
+            math.isfinite(ns.min_workspace_coverage)
+            and 0.0 <= ns.min_workspace_coverage <= 1.0,
+            "--min-workspace-coverage must be between 0 and 1",
+        )
+    if ns.reject_extrapolated_workspaces:
+        _require(
+            ns.min_workspace_coverage is not None,
+            "--reject-extrapolated-workspaces requires --min-workspace-coverage",
+        )
 
     report = _load_report(ns.path)
     _require(report.get("schema_version") == "static_memory_validation.v1", "unexpected schema")
@@ -42,6 +55,70 @@ def main(argv: list[str] | None = None) -> int:
                 int(summary.get(field, -1)) >= 0,
                 f"summary.{field} must be non-negative",
             )
+    coverage = summary.get("workspace_coverage")
+    if coverage is None:
+        _require(
+            ns.min_workspace_coverage is None,
+            "summary.workspace_coverage is required for a coverage threshold",
+        )
+    elif isinstance(coverage, dict):
+        for field in (
+            "candidate_operator_count",
+            "modeled_operator_count",
+            "non_extrapolated_operator_count",
+            "unprofiled_operator_count",
+        ):
+            _require(
+                int(coverage.get(field, -1)) >= 0,
+                f"summary.workspace_coverage.{field} must be non-negative",
+            )
+        candidate_count = int(coverage["candidate_operator_count"])
+        modeled_count = int(coverage["modeled_operator_count"])
+        non_extrapolated_count = int(coverage["non_extrapolated_operator_count"])
+        unprofiled_count = int(coverage["unprofiled_operator_count"])
+        _require(
+            modeled_count + unprofiled_count == candidate_count,
+            "summary.workspace_coverage counts are inconsistent",
+        )
+        _require(
+            0 <= non_extrapolated_count <= modeled_count,
+            "summary.workspace_coverage non-extrapolated count is inconsistent",
+        )
+        expected_modeled_fraction = (
+            modeled_count / candidate_count if candidate_count else 1.0
+        )
+        expected_non_extrapolated_fraction = (
+            non_extrapolated_count / candidate_count if candidate_count else 1.0
+        )
+        _require(
+            math.isclose(
+                float(coverage.get("modeled_fraction", -1.0)),
+                expected_modeled_fraction,
+                abs_tol=1e-6,
+            ),
+            "summary.workspace_coverage.modeled_fraction is inconsistent",
+        )
+        _require(
+            math.isclose(
+                float(coverage.get("non_extrapolated_fraction", -1.0)),
+                expected_non_extrapolated_fraction,
+                abs_tol=1e-6,
+            ),
+            "summary.workspace_coverage.non_extrapolated_fraction is inconsistent",
+        )
+        if ns.min_workspace_coverage is not None:
+            selected_fraction = (
+                expected_non_extrapolated_fraction
+                if ns.reject_extrapolated_workspaces
+                else expected_modeled_fraction
+            )
+            _require(
+                selected_fraction + 1e-12 >= ns.min_workspace_coverage,
+                f"workspace coverage {selected_fraction:.6f} is below "
+                f"{ns.min_workspace_coverage:.6f}",
+            )
+    else:
+        _require(False, "summary.workspace_coverage must be an object")
     if status == "PASS_MEASURED":
         backend = report.get("backend_calibration")
         _require(isinstance(backend, dict), "backend_calibration is required")
@@ -70,6 +147,12 @@ def main(argv: list[str] | None = None) -> int:
             isinstance(workspace, dict),
             f"{context}.static_estimate.workspace_estimate is required",
         )
+        item_coverage = workspace.get("coverage")
+        if item_coverage is not None:
+            _require(
+                isinstance(item_coverage, dict),
+                f"{context}.static_estimate.workspace_estimate.coverage must be an object",
+            )
         workspace_bytes = int(static.get("workspace_estimate_bytes", 0) or 0)
         _require(workspace_bytes >= 0, f"{context} workspace bytes must be non-negative")
         _require(

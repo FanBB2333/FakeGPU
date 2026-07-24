@@ -136,8 +136,12 @@ See `test-results/index.html` for the full compatibility matrix report.
 
 - All compute is CPU-backed — no actual GPU execution.
 - `__torch_function__` overhead: ~2-3x slower than direct CPU tensor operations (measured via benchmark suite).
-- Stream/Event are API-compatible stubs only (no real async).
-- Distributed is single-process semantic compatibility only.
+- Python FakeCUDA Stream/Event objects track logical identity and context, but
+  do not execute asynchronously. Native Runtime stubs additionally expose a
+  limited logical pending/ready timeline.
+- The Python `torch.distributed` fallback is in-process compatibility. Separate
+  multi-process and multi-host semantic tests use the native NCCL shim and
+  coordinator; neither path reproduces NCCL transport internals.
 - CUDA extensions, custom kernels, and storage-level CUDA allocators do not work.
 - Some internal PyTorch paths may bypass `__torch_function__` (rare).
 

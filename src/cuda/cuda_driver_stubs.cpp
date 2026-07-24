@@ -4,6 +4,7 @@
 #include "../core/version.hpp"
 #include "../core/global_state.hpp"
 #include "../core/hybrid_memory_manager.hpp"
+#include "../core/unsupported_api.hpp"
 #include <cstdio>
 #include <algorithm>
 #include <atomic>
@@ -19,8 +20,6 @@ static int current_context_device = 0;
 static bool driver_initialized = false;
 
 namespace {
-bool g_report_dump_registered = false;
-
 uint64_t saturating_add_u64(uint64_t a, uint64_t b) {
     const uint64_t max_value = std::numeric_limits<uint64_t>::max();
     if (a >= max_value - b) return max_value;
@@ -83,6 +82,20 @@ void dump_terminal_summary(const std::vector<fake_gpu::DeviceReportStats>& devic
             for (const auto& [op, dtype, count] : dev.compat_events) {
                 std::fprintf(stderr, " %s(%s)x%llu",
                              op.c_str(), dtype.c_str(), (unsigned long long)count);
+            }
+            std::fprintf(stderr, "\n");
+        }
+        if (!dev.unsupported_api_events.empty()) {
+            std::fprintf(stderr, "   UNSUPPORTED APIS:");
+            for (const auto& [op, behavior, policy, count] :
+                 dev.unsupported_api_events) {
+                std::fprintf(
+                    stderr,
+                    " %s(%s,%s)x%llu",
+                    op.c_str(),
+                    behavior.c_str(),
+                    policy.c_str(),
+                    (unsigned long long)count);
             }
             std::fprintf(stderr, "\n");
         }
@@ -169,6 +182,10 @@ void dump_active_cuda_report() {
     std::fprintf(out, "{\n");
     std::fprintf(out, "  \"report_version\": \"%s\",\n", FAKEGPU_VERSION);
     std::fprintf(out, "  \"mode\": \"%s\",\n", fake_gpu::mode_name(config.mode()));
+    std::fprintf(
+        out,
+        "  \"unsupported_api_policy\": \"%s\",\n",
+        fake_gpu::unsupported_api_policy_name(config.unsupported_api_policy()));
     std::fprintf(out, "  \"host_io\": {\n");
     std::fprintf(out, "    \"memcpy_calls\": %llu,\n", (unsigned long long)host_io.memcpy_calls);
     std::fprintf(out, "    \"memcpy_bytes\": %llu\n", (unsigned long long)host_io.memcpy_bytes);
@@ -302,6 +319,23 @@ void dump_active_cuda_report() {
             }
             std::fprintf(out, "      ]\n");
         }
+        if (!dev.unsupported_api_events.empty()) {
+            std::fprintf(out, "      ,\"unsupported_api_events\": [\n");
+            for (size_t ui = 0; ui < dev.unsupported_api_events.size(); ++ui) {
+                const auto& [op, behavior, policy, count] =
+                    dev.unsupported_api_events[ui];
+                std::fprintf(
+                    out,
+                    "        {\"operation\": \"%s\", \"behavior\": \"%s\", "
+                    "\"policy\": \"%s\", \"count\": %llu}%s\n",
+                    op.c_str(),
+                    behavior.c_str(),
+                    policy.c_str(),
+                    (unsigned long long)count,
+                    (ui + 1 < dev.unsupported_api_events.size() ? "," : ""));
+            }
+            std::fprintf(out, "      ]\n");
+        }
         std::fprintf(out, "    }%s\n", (i + 1 < devices.size() ? "," : ""));
     }
 
@@ -312,10 +346,9 @@ void dump_active_cuda_report() {
 }
 
 void ensure_report_dump_registered() {
-    if (!g_report_dump_registered) {
-        std::atexit(dump_active_cuda_report);
-        g_report_dump_registered = true;
-    }
+    // The linked ResourceMonitor owns process-exit reporting. Registering a
+    // second Driver-specific atexit writer duplicates terminal output and can
+    // overwrite the unified cross-library snapshot.
 }
 
 bool real_driver_available() {
@@ -1702,6 +1735,9 @@ CUresult cuGetErrorString(CUresult error, const char **pStr) {
             case CUDA_ERROR_NOT_READY:
                 *pStr = "CUDA_ERROR_NOT_READY";
                 break;
+            case CUDA_ERROR_NOT_SUPPORTED:
+                *pStr = "CUDA_ERROR_NOT_SUPPORTED";
+                break;
             default:
                 *pStr = "CUDA_ERROR_UNKNOWN";
                 break;
@@ -2309,6 +2345,12 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
             f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
     }
     FGPU_LOG("[FakeCUDA-Driver] cuLaunchKernel (no-op)\n");
+    GlobalState& state = GlobalState::instance();
+    state.initialize();
+    state.record_kernel_launch("cuLaunchKernel");
+    if (record_unsupported_api(state, "cuLaunchKernel")) {
+        return CUDA_ERROR_NOT_SUPPORTED;
+    }
     return CUDA_SUCCESS;
 }
 
@@ -3716,6 +3758,12 @@ CUresult cuLaunchKernelEx(const void *config, CUfunction f, void **kernelParams,
             CudaDriverPassthrough::instance().getRealFunction("cuLaunchKernelEx"));
         if (real_fn) return real_fn(config, f, kernelParams, extra);
     }
+    GlobalState& state = GlobalState::instance();
+    state.initialize();
+    state.record_kernel_launch("cuLaunchKernelEx");
+    if (record_unsupported_api(state, "cuLaunchKernelEx")) {
+        return CUDA_ERROR_NOT_SUPPORTED;
+    }
     return CUDA_SUCCESS;
 }
 
@@ -3956,6 +4004,11 @@ CUresult cuGraphLaunch(void *graphExec, CUstream stream) {
         static fn_t real_fn = reinterpret_cast<fn_t>(
             CudaDriverPassthrough::instance().getRealFunction("cuGraphLaunch"));
         if (real_fn) return real_fn(graphExec, stream);
+    }
+    GlobalState& state = GlobalState::instance();
+    state.initialize();
+    if (record_unsupported_api(state, "cuGraphLaunch")) {
+        return CUDA_ERROR_NOT_SUPPORTED;
     }
     return CUDA_SUCCESS;
 }

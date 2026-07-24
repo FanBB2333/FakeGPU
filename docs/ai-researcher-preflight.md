@@ -210,6 +210,27 @@ workspace formulas with operator-local or graph-phase lifetime. The built-in
 catalog contains exact-stack matrix/convolution observations from the RTX
 3090 Ti and RTX PRO 5000.
 
+Every estimate now includes `workspace_estimate.coverage`. It counts modeled,
+non-extrapolated, extrapolated, and unprofiled workspace-candidate operator
+calls. Call coverage is useful for finding missing models, but it cannot
+estimate the unknown bytes of an unprofiled call. Enforce it in Python with:
+
+```python
+from fakegpu import require_workspace_coverage
+
+require_workspace_coverage(
+    report,
+    minimum_fraction=1.0,
+    allow_extrapolated=False,
+)
+```
+
+The validation runner can enforce the same rule with
+`--min-workspace-coverage 1 --reject-extrapolated-workspaces`. A violation
+produces `FAIL_WORKSPACE_COVERAGE` and exit code 2. Cross-GPU bundles retain
+the minimum modeled/non-extrapolated fractions and count missing or incomplete
+coverage observations.
+
 Unmatched backend workspaces, fused/foreach optimizer extras, custom CUDA
 kernels, distributed buffers, and graph breaks still require additional
 modeling or empirical measurements.
@@ -259,7 +280,7 @@ Use `--memory-safety-factor` only when calibration shows the gap scales with wor
 
 ## Stage Markers
 
-The future runner should support optional Python markers:
+The runner supports optional Python markers:
 
 ```python
 import fakegpu
@@ -307,15 +328,16 @@ Suggested confidence levels:
 | `C0_incomplete` | The command ran, but memory tracking is insufficient for OOM judgment. |
 | `C1_weight_storage` | Mostly tracks weights and explicit fake-CUDA storage. |
 | `C2_torch_tensor_lifetime` | Tracks torch tensor lifetimes well enough for fakecuda preflight. |
+| `C3_torch_dispatch_lifetime` | Also tracks operator-created storage and aliases at PyTorch dispatch boundaries. |
 | `C3_native_cuda_allocations` | Tracks native CUDA allocations in simulate mode. |
 | `C4_real_gpu_calibrated` | Has calibration data from an identified real GPU for this workload class. |
 
 ## Recommended Next Work
 
-The next implementation should prioritize:
+The next implementation priorities are:
 
-1. Adding phase-local cuDNN/cuBLASLt and fused optimizer workspace profiles.
-2. A manual large tensor OOM probe on the current real calibration GPU.
-3. Small/large profile pass-fail matrix for more realistic HF and LoRA workloads.
-4. More workload examples that attach `preflight_report.json` to Slurm submission notes.
-5. Documentation that clearly separates fit/no-fit checks from performance prediction.
+1. Add phase-local cuDNN/cuBLASLt and fused/foreach optimizer workspace models.
+2. Collect reusable bounds for more operator families and software stacks.
+3. Expand exact-stack calibration across additional PyTorch/CUDA versions and graph fingerprints.
+4. Add realistic HF/LoRA pass-fail matrices that run the same manifest against small and large profiles.
+5. Add scheduler examples that archive `preflight_report.json` with each submitted job.

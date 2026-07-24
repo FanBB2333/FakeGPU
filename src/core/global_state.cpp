@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <dlfcn.h>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -13,6 +14,7 @@ namespace fake_gpu {
 
 namespace {
 constexpr int kDefaultDeviceCount = 8;
+thread_local bool g_resolving_process_global_state = false;
 
 const char* cuda_dtype_name(int data_type) {
     switch (data_type) {
@@ -112,8 +114,33 @@ std::vector<GpuProfile> build_default_profiles() {
 } // namespace
 
 GlobalState& GlobalState::instance() {
-    static GlobalState* s_instance = new GlobalState();
-    return *s_instance;
+    static GlobalState* local_instance = new GlobalState();
+    if (g_resolving_process_global_state) {
+        return *local_instance;
+    }
+
+    // Every compatibility library embeds the core objects. Resolve a
+    // process-global provider explicitly so CUDA Runtime, Driver, cuBLAS, and
+    // NVML calls contribute to one report instead of isolated DSO snapshots.
+    static GlobalState* process_instance = []() {
+        using provider_t = GlobalState* (*)();
+        g_resolving_process_global_state = true;
+        void* symbol = dlsym(RTLD_DEFAULT, "fakegpu_process_global_state_v1");
+        GlobalState* selected = local_instance;
+        if (symbol) {
+            auto provider = reinterpret_cast<provider_t>(symbol);
+            if (GlobalState* shared = provider()) {
+                selected = shared;
+            }
+        }
+        g_resolving_process_global_state = false;
+        return selected;
+    }();
+    return *process_instance;
+}
+
+extern "C" GlobalState* fakegpu_process_global_state_v1() {
+    return &GlobalState::instance();
 }
 
 GlobalState::GlobalState() {
@@ -336,6 +363,7 @@ void GlobalState::record_memset(const void* dst_device_ptr, size_t bytes) {
 
 void GlobalState::record_cublas_gemm(const void* output_device_ptr, uint64_t flops) {
     if (!output_device_ptr) return;
+    initialize();
     std::lock_guard<std::mutex> lock(mutex);
     const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
@@ -346,6 +374,7 @@ void GlobalState::record_cublas_gemm(const void* output_device_ptr, uint64_t flo
 
 void GlobalState::record_cublaslt_matmul(const void* output_device_ptr, uint64_t flops) {
     if (!output_device_ptr) return;
+    initialize();
     std::lock_guard<std::mutex> lock(mutex);
     const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
@@ -368,6 +397,7 @@ void GlobalState::record_kernel_launch(const std::string& kernel_name) {
 
 void GlobalState::record_cublas_gemm_typed(const void* output_device_ptr, uint64_t flops, int cuda_data_type) {
     if (!output_device_ptr) return;
+    initialize();
     std::lock_guard<std::mutex> lock(mutex);
     const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
@@ -381,6 +411,7 @@ void GlobalState::record_cublas_gemm_typed(const void* output_device_ptr, uint64
 
 void GlobalState::record_cublaslt_matmul_typed(const void* output_device_ptr, uint64_t flops, int cuda_data_type) {
     if (!output_device_ptr) return;
+    initialize();
     std::lock_guard<std::mutex> lock(mutex);
     const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
@@ -403,6 +434,26 @@ void GlobalState::record_compat_event(int device, const std::string& operation, 
         evt.dtype = dtype;
     }
     evt.count += 1;
+}
+
+bool GlobalState::record_unsupported_api(
+    int device,
+    const std::string& operation,
+    const std::string& behavior,
+    const std::string& policy) {
+    std::lock_guard<std::mutex> lock(mutex);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    if (!stats) return false;
+    const std::string key = operation + ":" + behavior + ":" + policy;
+    auto& evt = stats->unsupported_api_events[key];
+    const bool first_occurrence = evt.count == 0;
+    if (first_occurrence) {
+        evt.operation = operation;
+        evt.behavior = behavior;
+        evt.policy = policy;
+    }
+    evt.count += 1;
+    return first_occurrence;
 }
 
 std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
@@ -458,6 +509,13 @@ std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
             }
             for (const auto& [key, evt] : stats.compat_events) {
                 entry.compat_events.emplace_back(evt.operation, evt.dtype, evt.count);
+            }
+            for (const auto& [key, evt] : stats.unsupported_api_events) {
+                entry.unsupported_api_events.emplace_back(
+                    evt.operation,
+                    evt.behavior,
+                    evt.policy,
+                    evt.count);
             }
         }
 

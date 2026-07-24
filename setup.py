@@ -94,6 +94,10 @@ class build_py(_build_py):
 
         super().run()
 
+        package_root = Path(self.build_lib) / "fakegpu"
+        for cache_dir in list(package_root.rglob("__pycache__")):
+            shutil.rmtree(cache_dir)
+
         package_native = Path(self.build_lib) / "fakegpu" / "_native"
         _copy_native_artifacts(native_out, package_native)
         package_profiles = Path(self.build_lib) / "fakegpu" / "_profiles"

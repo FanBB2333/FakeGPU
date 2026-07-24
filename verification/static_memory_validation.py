@@ -49,7 +49,26 @@ def main(argv: list[str] | None = None) -> int:
         type=_nonnegative_float,
         help="Return exit code 2 when any measured workload exceeds this underestimation limit.",
     )
+    parser.add_argument(
+        "--min-workspace-coverage",
+        type=_fraction,
+        help=(
+            "Return exit code 2 when modeled workspace-candidate call coverage "
+            "is below this fraction."
+        ),
+    )
+    parser.add_argument(
+        "--reject-extrapolated-workspaces",
+        action="store_true",
+        help=(
+            "Exclude extrapolated workspace profiles from --min-workspace-coverage."
+        ),
+    )
     ns = parser.parse_args(argv)
+    if ns.reject_extrapolated_workspaces and ns.min_workspace_coverage is None:
+        parser.error(
+            "--reject-extrapolated-workspaces requires --min-workspace-coverage"
+        )
 
     selected_names = ns.workload or list(_workloads())
     report = run_validation(
@@ -58,6 +77,10 @@ def main(argv: list[str] | None = None) -> int:
         repeats=ns.repeats,
         static_only=bool(ns.static_only),
         max_underestimate_percent=ns.max_underestimate_percent,
+        min_workspace_coverage=ns.min_workspace_coverage,
+        reject_extrapolated_workspaces=bool(
+            ns.reject_extrapolated_workspaces
+        ),
     )
 
     output = ns.output.resolve()
@@ -68,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     markdown.write_text(render_markdown(report), encoding="utf-8")
     print(f"static memory validation: {output}")
     print(f"static memory validation markdown: {markdown}")
-    return 2 if report["status"] == "FAIL_UNDERESTIMATE" else 0
+    return 2 if str(report["status"]).startswith("FAIL_") else 0
 
 
 def run_validation(
@@ -78,6 +101,8 @@ def run_validation(
     repeats: int,
     static_only: bool,
     max_underestimate_percent: float | None,
+    min_workspace_coverage: float | None = None,
+    reject_extrapolated_workspaces: bool = False,
 ) -> dict[str, Any]:
     import torch
 
@@ -145,6 +170,45 @@ def run_validation(
         dict(item["static_estimate"].get("workspace_estimate") or {})
         for item in results
     ]
+    coverage_candidates = sum(
+        int((workspace.get("coverage") or {}).get("candidate_operator_count", 0) or 0)
+        for workspace in workspace_estimates
+    )
+    coverage_modeled = sum(
+        int((workspace.get("coverage") or {}).get("modeled_operator_count", 0) or 0)
+        for workspace in workspace_estimates
+    )
+    coverage_non_extrapolated = sum(
+        int(
+            (workspace.get("coverage") or {}).get(
+                "non_extrapolated_operator_count",
+                0,
+            )
+            or 0
+        )
+        for workspace in workspace_estimates
+    )
+    coverage_unprofiled = sum(
+        int((workspace.get("coverage") or {}).get("unprofiled_operator_count", 0) or 0)
+        for workspace in workspace_estimates
+    )
+    modeled_fraction = (
+        coverage_modeled / coverage_candidates if coverage_candidates else 1.0
+    )
+    non_extrapolated_fraction = (
+        coverage_non_extrapolated / coverage_candidates
+        if coverage_candidates
+        else 1.0
+    )
+    aggregate_workspace_coverage = {
+        "unit": "workspace_candidate_operator_calls",
+        "candidate_operator_count": coverage_candidates,
+        "modeled_operator_count": coverage_modeled,
+        "non_extrapolated_operator_count": coverage_non_extrapolated,
+        "unprofiled_operator_count": coverage_unprofiled,
+        "modeled_fraction": round(modeled_fraction, 6),
+        "non_extrapolated_fraction": round(non_extrapolated_fraction, 6),
+    }
     summary.update(
         {
             "workspace_profile_count": sum(
@@ -173,15 +237,27 @@ def run_validation(
                 )
                 for workspace in workspace_estimates
             ),
+            "workspace_coverage": aggregate_workspace_coverage,
         }
     )
-    failed = (
+    failed_underestimate = (
         max_underestimate_percent is not None
         and summary.get("max_underestimate_percent") is not None
         and float(summary["max_underestimate_percent"]) > max_underestimate_percent
     )
-    if failed:
+    selected_workspace_fraction = (
+        non_extrapolated_fraction
+        if reject_extrapolated_workspaces
+        else modeled_fraction
+    )
+    failed_workspace_coverage = (
+        min_workspace_coverage is not None
+        and selected_workspace_fraction + 1e-12 < min_workspace_coverage
+    )
+    if failed_underestimate:
         status = "FAIL_UNDERESTIMATE"
+    elif failed_workspace_coverage:
+        status = "FAIL_WORKSPACE_COVERAGE"
     elif has_real_cuda:
         status = "PASS_MEASURED"
     else:
@@ -208,6 +284,8 @@ def run_validation(
         "backend_calibration": backend_calibration,
         "validation_limit": {
             "max_underestimate_percent": max_underestimate_percent,
+            "min_workspace_coverage": min_workspace_coverage,
+            "reject_extrapolated_workspaces": reject_extrapolated_workspaces,
         },
         "summary": summary,
         "workloads": results,
@@ -222,6 +300,7 @@ def run_validation(
             "FP32 Efficient Attention backward workspace is evaluated at the operator's graph-liveness point.",
             "Real CUDA peaks are retained separately for forward, backward, and optimizer phases.",
             "Backend operations without a matched profile, allocator fragmentation, and fused/foreach optimizer extras remain unmodeled.",
+            "Workspace coverage is based on candidate operator calls and does not bound bytes missing from an unprofiled operator.",
             "Cross-GPU claims require comparing reports from multiple GPU/software profiles.",
         ],
     }
@@ -905,10 +984,20 @@ def _transformer_spec(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    workspace_coverage = dict(
+        (report.get("summary") or {}).get("workspace_coverage") or {}
+    )
     lines = [
         "# Static Memory Estimator Validation",
         "",
         f"**Status:** `{report.get('status')}`",
+        (
+            "**Workspace coverage:** "
+            f"{float(workspace_coverage.get('modeled_fraction', 1.0)):.1%} "
+            f"({int(workspace_coverage.get('modeled_operator_count', 0))}/"
+            f"{int(workspace_coverage.get('candidate_operator_count', 0))} "
+            "candidate calls)"
+        ),
         "",
     ]
     gpu = report.get("gpu")
@@ -1030,6 +1119,13 @@ def _nonnegative_float(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed < 0:
         raise argparse.ArgumentTypeError("value must be a non-negative finite number")
+    return parsed
+
+
+def _fraction(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or not 0.0 <= parsed <= 1.0:
+        raise argparse.ArgumentTypeError("value must be a finite number between 0 and 1")
     return parsed
 
 

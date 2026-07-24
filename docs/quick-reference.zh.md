@@ -28,13 +28,22 @@ fakegpu doctor --list-profiles
 fakegpu demo --profile l4
 fakegpu demo --profile b300 --json
 fakegpu workspace-profiles --json
+fakegpu capabilities --source-root . --strict
+fakegpu analyze-repo . --json
+fakegpu estimate-roofline --profile a100 --flops 1000000000000 --memory-bytes 4000000000
 fakegpu validate --manifest verification/data/validation_smoke.yaml --strict
 ./fgpu nvidia-smi
 ./fgpu python3 your_script.py
 ./fgpu --profile t4 --device-count 2 python3 your_script.py
 ./fgpu --devices "a100:4,h100:4" python3 your_script.py
+./fgpu --unsupported-api error python3 your_script.py
 ./fgpu --mode hybrid --oom-policy clamp python3 your_script.py
 ```
+
+`FAKEGPU_UNSUPPORTED_API` 可设为 `allow`、`warn` 或 `error`。默认值
+`warn` 会保留兼容返回值，每种已识别的 no-op API 只提示一次，并把事件写入
+native 报告。`error` 会让具有错误返回值的 API 返回 CUDA 801
+（`NotSupported`）。
 
 在 Python 进程内动态启用：
 
@@ -72,7 +81,7 @@ fakegpu doctor --profile rtx-pro-5000-blackwell --json
 
 ## LLM 推理估算与虚拟 SMI
 
-无需加载权重即可检查 dense decoder safetensors checkpoint：
+无需加载权重即可检查 dense 或 MoE decoder safetensors checkpoint：
 
 ```bash
 fakegpu estimate-llm \
@@ -81,8 +90,13 @@ fakegpu estimate-llm \
   --generated-tokens 2 \
   --dtype bfloat16 \
   --attention-implementation sdpa \
+  --target-profile a100 \
   --json build/qwen-estimate.json
 ```
+
+PEFT adapter 可以重复传入 `--adapter-dir`，MoE 通信估算使用
+`--expert-parallel-size`。量化 base weight 使用 safetensors payload 的精确
+字节数。profile 结果是 roofline 区间，不是 kernel 实测延迟。
 
 让 FakeCUDA 进程发布显存状态，并在另一个终端查看：
 
@@ -124,7 +138,7 @@ runner 会写出：
 - `preflight_stdout.log`
 - `preflight_stderr.log`
 
-建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。轻量回归测试也可以使用 `test-512m`，它是 512 MB 的 fakecuda/native 测试 profile。runner 会为 Python 命令自动初始化 fakecuda，并给出 `C2_torch_tensor_lifetime` 可信度，报告中包含分阶段峰值、allocator allocated/reserved 峰值、inactive split bytes、top allocations、可选 allocation stack trace、粗粒度内存类别、共享 storage alias 处理、基础 logical-device 归属，以及 PyTorch hooks 能看到的 autograd saved tensor。CUDA 后端内部 workspace 仍可能被低估；如果真实 GPU 校准显示 gap 大致固定，优先用 `--memory-safety-margin <bytes>`；只有当 gap 随 workload 规模增长时，再用 `--memory-safety-factor <factor>`。
+建议先用 `a100-1g` 这类小显存 profile 确认 OOM 能被检测到，再换成目标 profile。轻量回归测试也可以使用 `test-512m`，它是 512 MB 的 fakecuda/native 测试 profile。runner 会为 Python 命令自动初始化 fakecuda，并给出 `C3_torch_dispatch_lifetime` 可信度。除了分阶段峰值与 allocator 统计，dispatch 跟踪还会记录算子产生的新 storage、alias 和无法检查的输出。CUDA 后端内部 workspace 仍可能被低估；如果真实 GPU 校准显示 gap 大致固定，优先用 `--memory-safety-margin <bytes>`；只有当 gap 随 workload 规模增长时，再用 `--memory-safety-factor <factor>`。
 
 `./ftest preflight_oom` 现在包含 profile 矩阵检查：同一个 560 MB allocation 在 `test-512m` 下必须失败，在 `a100` 下必须通过。
 
@@ -137,6 +151,22 @@ runner 会写出：
 ```
 
 估算器通过 `make_fx` 和 `torch.func.grad_and_value` 捕获 fake-tensor ATen 前向/反向图，合并共享 storage 的 alias，并在最后一次图使用后释放 storage。PyTorch 含 CUDA 支持时，`target_device="auto"` 会使用 fake CUDA tensor，使 Attention 等设备相关算子选择 CUDA ATen 路径，但不会分配真实 GPU 显存。默认训练步骤会保留 module output，直到 backward 和 `optimizer.step()` 结束。graph 和 optimizer 两个阶段分别计算，不会叠加并不同时存在的峰值；Adam/AdamW 还会计算常驻 moment state。eager single-tensor optimizer 会按参数迭代顺序计算临时张量：当前参数的两个中间结果可能与上一个参数的 denominator 同时存在。CUDA Flash Attention auxiliary storage 按 query shape、dtype 和 64-token sequence tile 计算。FP32 Efficient Attention backward workspace 按 batch、sequence length 和 query storage 计算，并且只与对应 ATen 节点的 live storage 相加。CUDA 主机会分别记录 forward、backward 和 optimizer 峰值，测量一次 workload 释放后的 backend 常驻分配，再用 13 个 MLP/Transformer FP32/BF16 workload 对比 `torch.cuda.max_memory_allocated()`。维护中的套件会同时检查 allocator 和 requested-byte 低估是否超过 5%。
+
+如果要求所有 workspace 候选调用都有非外推模型，可以运行：
+
+```bash
+python3 verification/static_memory_validation.py \
+  --static-only \
+  --min-workspace-coverage 1 \
+  --reject-extrapolated-workspaces
+```
+
+Python API 也可以调用
+`require_workspace_coverage(report, minimum_fraction=1.0,
+allow_extrapolated=False, require_upper_bound=True)`。workspace profile
+可以声明 lower/expected/upper；未匹配调用只有在
+`estimate_module_memory(..., unknown_workspace_upper_bound_bytes=N)` 显式
+传入每次调用的上界后，才能得到完整峰值区间。
 
 查看内置及自定义 backend workspace catalog：
 
@@ -172,7 +202,7 @@ python3 verification/aggregate_static_memory_validations.py \
   --output build/static_memory_validation_bundle.json
 ```
 
-storage 大小计算本身与设备无关，但捕获的 ATen 图取决于目标设备。backend 常驻显存仍取决于 GPU、PyTorch、CUDA 和算子路径。实测报告会保存 allocator allocated 与 requested 对比、分阶段峰值、profile 覆盖率、profile 总字节数和实际影响峰值的增量，用于区分 size-class 对齐误差、缺失的逻辑 storage 和算子 workspace。即使估算字节数相同，只要 graph fingerprint 变化，仍需要检查图结构差异。
+storage 大小计算本身与设备无关，但捕获的 ATen 图取决于目标设备。backend 常驻显存仍取决于 GPU、PyTorch、CUDA 和算子路径。实测报告会保存 allocator allocated 与 requested 对比、分阶段峰值、profile 覆盖率、profile 总字节数和实际影响峰值的增量；聚合报告还会保存缺失/不完整覆盖观测数，以及最低 modeled 和 non-extrapolated 覆盖率。这些字段用于区分 size-class 对齐误差、缺失的逻辑 storage 和算子 workspace。即使估算字节数相同，只要 graph fingerprint 变化，仍需要检查图结构差异。
 
 真实 GPU 校准需要先运行缩小版 workload，再按环境能力对比 passthrough 或 hybrid：
 
@@ -304,6 +334,7 @@ Python API 在不同模式下会预加载不同的库：
 | 变量 | 含义 |
 |---|---|
 | `FAKEGPU_REPORT_PATH` | `fake_gpu_report.json` 输出路径 |
+| `FAKEGPU_UNSUPPORTED_API` | 已识别 native no-op 的处理方式：`allow`、`warn`（默认）或 `error` |
 | `PYTORCH_NO_CUDA_MEMORY_CACHING` | 调试分配路径时常用 |
 | `TORCH_SDPA_KERNEL=math` | 避开 Flash Attention 特定路径时常用 |
 | `CUDA_LAUNCH_BLOCKING=1` | 让错误更早、同步地暴露出来 |
