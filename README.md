@@ -77,6 +77,10 @@ use a real CUDA stack.
 | Will a selected GPU profile fit this workload? | Preflight or static memory estimator | No |
 | How much checkpoint, KV-cache, adapter, or MoE memory should an LLM use? | LLM estimator | No |
 | Where are the GPU-only entry points and dependencies in a repository? | Repository analyzer | No |
+| What does a DeepSpeed/Accelerate/FSDP config imply for rank-local memory? | Training planner | No |
+| Which PTX/SASS resources and operations are statically visible? | Kernel analyzer | No |
+| Where do compute, communication, wait, and memory overlap in a trace? | Trace replay | No |
+| How does a collective route through racks, switches, and NICs? | Topology simulator | No |
 | What is the analytical compute/memory latency range for a profile? | Roofline estimator | No |
 | Does multi-rank control flow and recovery behave as expected? | Distributed simulator | No |
 | How does the estimate compare with an actual CUDA run? | Passthrough/hybrid calibration | Yes |
@@ -322,12 +326,13 @@ See [Distributed Simulation Usage](docs/distributed-sim-usage.md) for
 | Area | Implemented coverage | Boundary |
 |---|---|---|
 | FakeCUDA runtime | Common tensor creation/manipulation, modules, autograd, optimizers, device propagation, memory APIs, mixed precision, checkpointing, DataLoader paths, and dispatch-level storage lifetime tracking | Binary CUDA extensions and unsupported PyTorch operators need targeted validation |
-| Native CUDA stack | Selected Driver, Runtime, NVML, cuBLAS/cuBLASLt, and NCCL symbols; host-backed memory; CPU GEMM; configurable unsupported-API policy | Arbitrary CUDA kernels do not execute in native simulate mode |
-| Memory estimation | Runtime peaks, simplified caching allocator, ATen graph liveness, optimizer phases, workspace intervals, calibration bundles, and OOM checks | Backend-private allocations and unmatched custom kernels require calibration |
+| Native CUDA stack | Selected Driver, Runtime, NVML, cuBLAS/cuBLASLt, and NCCL symbols; host-backed memory; CPU FP32/FP64/FP16 GEMM and maintained BLAS1/2 paths; configurable unsupported-API policy | Arbitrary CUDA kernels do not execute in native simulate mode |
+| Memory estimation | Runtime peaks, caching allocator, ATen graph liveness, phase timelines, optimizer/sharding/offload plans, workspace intervals, calibration comparison/bundles, and OOM checks | Backend-private allocations and unmatched custom kernels require calibration |
 | LLM analysis | Dense/MoE inference, quantized checkpoint bytes, PEFT adapters, KV cache, transients, expert traffic, FLOPs, SFT references, and FSDP/FSDP2 projections | Fused quantization kernels, expert imbalance, and arbitrary architectures are not inferred automatically |
 | Performance model | Scalar-compute and memory-bandwidth roofline with lower/expected/upper efficiency assumptions | Analytical interval only; Tensor Core acceleration must be supplied explicitly |
-| Repository analysis | Python entry points, imports, frameworks, configs, CUDA/PTX sources, compiled extensions, and recommended experiments | Dynamic imports, generated kernels, and data-dependent branches need runtime checks |
-| Distributed simulation | TCP/Unix coordinator, collectives, P2P, subgroups, heterogeneous topologies, node-pair reports, timeout/failure injection, communicator shrink, and fixed-size elastic restart workflows | Does not reproduce NCCL protocols, NVLink, or RDMA timing |
+| Repository/kernel analysis | Python entry points, alias/decorator-aware GPU call detection, build systems, generated kernels, custom operators, CUDA/PTX/SASS, compiled extensions, static instructions/FLOPs/resources, and occupancy ceilings | Downloaded/encrypted kernels, dynamic counts, and data-dependent branches need runtime checks |
+| Trace and operator analysis | PyTorch Profiler/Chrome, NCCL-style, and FakeGPU timelines; custom operator profiles; fusion deduplication; per-rank compute/communication/wait/memory/recovery reports | Missing stream dependencies and real-GPU kernel timing cannot be reconstructed |
+| Distributed simulation | TCP/Unix coordinator, collectives, P2P, subgroups, node-pair reports, failures/recovery, plus analytical rack/switch/multi-NIC/NVLink-domain routing, ECMP, contention, ring/tree/hierarchical algorithms | Does not reproduce NCCL, RDMA, or switch-buffer protocols |
 | Framework compatibility | Focused Transformers, Accelerate, PEFT, TRL, DDP, FSDP/FSDP2, DeepSpeed ZeRO/Pipeline/AutoTP/AutoEP, torchtune, Lightning, LitGPT, and nanoGPT workflows | Compatibility tests cover documented versions and options, not every upstream API |
 | Monitoring and reports | Virtual `nvidia-smi`, per-device native report, preflight artifacts, cluster matrix, validation manifests, and JSON schema checks | Virtual telemetry reflects tracked or calibrated state only |
 | GPU catalog | 82 consumer, workstation, data-center, embedded, and test profiles across eight NVIDIA architectures | Profile specifications do not guarantee kernel-level performance equivalence |
@@ -349,6 +354,11 @@ Coverage terms:
 | `fakegpu demo` | Run a small CPU-backed CUDA-visible training step |
 | `fakegpu preflight` | Execute a workload to a target stage and classify fit/OOM |
 | `fakegpu analyze-repo` | Inventory repository entry points and GPU-only risks |
+| `fakegpu analyze-kernel` | Inspect PTX/SASS/CUDA instructions, resources, FLOPs, and occupancy ceilings |
+| `fakegpu calibrate` | Compare predicted/observed memory or build an exact-scope calibration bundle |
+| `fakegpu plan-training` | Normalize DeepSpeed/Accelerate/FSDP configs and estimate rank memory phases |
+| `fakegpu replay-trace` | Summarize rank compute, communication, wait, memory, links, and recovery |
+| `fakegpu simulate-topology` | Route collectives across rack/switch/NIC graphs and model contention |
 | `fakegpu estimate-llm` | Estimate decoder checkpoint, runtime memory, communication, and FLOPs |
 | `fakegpu estimate-roofline` | Produce a profile-aware analytical latency interval |
 | `fakegpu capabilities` | List or strictly audit native API classifications |
@@ -428,6 +438,11 @@ rules.
 | `preflight_report.json/.md` | Preflight CLI | Stage progress, fit/OOM result, memory categories, workspace coverage, and confidence |
 | LLM estimate | `fakegpu estimate-llm` | Checkpoint, KV cache, transients, adapters, MoE traffic, FLOPs, and roofline interval |
 | Static memory report | `./ftest static_memory_validation` | Graph liveness, optimizer phases, workspace profiles, and optional CUDA comparison |
+| Calibration comparison/bundle | `fakegpu calibrate` | Phase errors, interval coverage, attribution, safety recommendations, and indexed evidence |
+| Training plan | `fakegpu plan-training` | Normalized sharding/offload/precision settings and rank-local phase peaks |
+| Trace replay | `fakegpu replay-trace` | Rank waits/overlap, pair/link totals, memory timeline, operator profiles, and recovery |
+| Topology simulation | `fakegpu simulate-topology` | Routed flows, contention, rank pairs, effective bandwidth, and critical links |
+| Kernel analysis | `fakegpu analyze-kernel` | Static PTX/SASS/CUDA instructions, resource use, FLOPs, and occupancy ceiling |
 | Declarative validation report | `fakegpu validate` | Expanded case matrix, prerequisites, assertions, host/Git identity, duration, and logs |
 | Virtual SMI state | FakeCUDA runtime | Per-process requested, reserved, simulated current/peak bytes, stage, and confidence |
 
@@ -444,7 +459,7 @@ python3 -m fakegpu validate \
   --strict
 ```
 
-The current regression baseline contains 425 passing tests and one optional
+The current regression baseline contains 438 passing tests and one optional
 skip. Native smoke, CPU numerical simulation, strict native capability audit,
 wheel installation, and strict MkDocs builds are also checked. Accuracy
 numbers apply only to the documented workloads and calibration signatures.
@@ -516,10 +531,25 @@ For a file-level map, see
 - [x] Repository analyzer and profile-aware roofline estimator
 - [x] TCP multi-node simulation and complete node-pair communication reports
 - [x] Focused DDP, FSDP/FSDP2, DeepSpeed, and elastic recovery validation
-- [ ] Expand executable native CUDA and cuBLAS operation coverage
-- [ ] Add more calibration bundles across software stacks and workload classes
-- [ ] Extend generated-kernel and custom-extension detection
-- [ ] Expand topology models for hierarchical and high-radix fabrics
+- [x] CPU-executed numeric paths for maintained native cuBLAS/cuBLASLt operations
+- [x] Exact-stack-and-shape workspace calibration catalog and bundle aggregation
+- [x] Detection of CUDA/PTX sources, binary extensions, `torch.compile`,
+  `cpp_extension`, and Triton entry points
+- [x] Two-tier intra/inter-node ring topology with per-link statistics
+- [x] Alias/decorator/build-system/runtime-generated kernel and custom-operator
+  detection
+- [x] PTX/SASS static instruction, resource, FLOP, and occupancy analysis
+- [x] DeepSpeed/Accelerate/FSDP/FSDP2 config import and phase memory planning
+- [x] PyTorch/NCCL/FakeGPU trace replay with operator profiles and fusion
+  deduplication
+- [x] Rack/switch/multi-NIC/NVLink-domain routing, ECMP, link contention, and
+  ring/tree/hierarchical analytical topology models
+- [x] Phase-aware calibration comparison and reusable exact-scope bundle
+  generation
+- [ ] Expand executable native CUDA operations and remaining complex/batched
+  cuBLAS data types and algorithms
+- [ ] Collect more real calibration evidence across software stacks, workload
+  classes, fused optimizers, and dynamic shapes
 
 See the [open issues](https://github.com/FanBB2333/FakeGPU/issues) for proposed
 features and known limitations.
@@ -532,6 +562,7 @@ features and known limitations.
 - [Quick Reference](docs/quick-reference.md)
 - [AI Researcher Preflight](docs/ai-researcher-preflight.md)
 - [Repository and Roofline Analysis](docs/repository-and-performance-analysis.md)
+- [Advanced Analysis](docs/advanced-analysis.md)
 - [LLM Inference Estimation](docs/llm-inference-estimation.md)
 - [LLM SFT Memory Estimation](docs/llm-sft-memory-estimation.md)
 - [Distributed Simulation Usage](docs/distributed-sim-usage.md)

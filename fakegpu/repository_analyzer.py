@@ -5,10 +5,12 @@ import ast
 import json
 import os
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+from .kernel_analysis import KernelAnalysisError, analyze_kernel_file
 
 
 SCHEMA_VERSION = "fakegpu.repository_analysis.v1"
@@ -32,6 +34,8 @@ _NATIVE_CUDA_SUFFIXES = {
     ".cu",
     ".cuh",
     ".ptx",
+    ".sass",
+    ".disasm",
     ".cubin",
     ".fatbin",
 }
@@ -140,12 +144,18 @@ def analyze_repository(
     )
 
     config_markers = _configuration_markers(files)
+    build_system = _build_system_markers(files, root=root)
+    kernel_analyses = _kernel_analyses(
+        native_cuda_files,
+        root=root,
+    )
     findings = _build_findings(
         native_cuda_files=native_cuda_files,
         binary_extensions=binary_extensions,
         frameworks=frameworks,
         call_markers=call_markers,
         config_markers=config_markers,
+        build_system_markers=build_system["markers"],
         syntax_errors=syntax_errors,
         entrypoints=selected_entrypoints,
         root=root,
@@ -196,6 +206,8 @@ def analyze_repository(
             "call_markers": dict(sorted(call_markers.items())),
             "syntax_errors": syntax_errors,
         },
+        "kernel_static_analysis": kernel_analyses,
+        "build_system": build_system,
         "dependencies": sorted(dependency_names),
         "frameworks": frameworks,
         "configuration_markers": sorted(config_markers),
@@ -223,7 +235,7 @@ def analyze_repository(
         ),
         "limitations": [
             "Static scanning does not execute repository code or infer runtime tensor shapes.",
-            "Dynamic imports and generated CUDA/Triton code may not be visible.",
+            "Encrypted, downloaded, or data-dependent generated kernels may not be visible.",
             "Use fakegpu preflight and the ATen graph estimator for the selected entrypoint and shapes.",
         ],
     }
@@ -331,26 +343,103 @@ def _python_imports(tree: ast.AST) -> Counter[str]:
 
 
 def _python_call_markers(tree: ast.AST) -> Counter[str]:
+    aliases = _python_aliases(tree)
     markers: Counter[str] = Counter()
+    known = {
+        "torch.compile",
+        "torch.jit.script",
+        "torch.jit.trace",
+        "torch.utils.cpp_extension.load",
+        "torch.utils.cpp_extension.load_inline",
+        "torch.utils.cpp_extension.CUDAExtension",
+        "triton.jit",
+        "triton.autotune",
+        "cupy.RawKernel",
+        "cupy.RawModule",
+        "numba.cuda.jit",
+        "torch.library.custom_op",
+        "torch.library.Library",
+    }
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        name = _qualified_ast_name(node.func)
+        name = _resolve_python_name(_qualified_ast_name(node.func), aliases)
         if not name:
             continue
-        if name in {
-            "torch.compile",
-            "torch.jit.script",
-            "torch.jit.trace",
-            "torch.utils.cpp_extension.load",
-            "torch.utils.cpp_extension.load_inline",
-            "torch.utils.cpp_extension.CUDAExtension",
-            "triton.jit",
-        }:
+        if name in known:
             markers[name] += 1
+        elif name.endswith((".impl", ".define")) and name.startswith(
+            "torch.library"
+        ):
+            markers["torch.library.custom_operator_registration"] += 1
+        elif "nvrtc" in name.lower() or name in {
+            "cuda.core.experimental.Program",
+            "cuda.bindings.nvrtc.nvrtcCompileProgram",
+        }:
+            markers["runtime_generated_cuda"] += 1
         elif name.endswith(".cuda"):
             markers["tensor_or_module.cuda"] += 1
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for decorator in node.decorator_list:
+            target = decorator.func if isinstance(decorator, ast.Call) else decorator
+            name = _resolve_python_name(_qualified_ast_name(target), aliases)
+            if name in known:
+                markers[name] += 1
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        value = node.value
+        if "__global__" in value or (
+            ".version" in value and ".target" in value and ".entry" in value
+        ):
+            markers["embedded_cuda_or_ptx_source"] += 1
     return markers
+
+
+def _python_aliases(tree: ast.AST) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for item in node.names:
+                local = item.asname or item.name.split(".", 1)[0]
+                aliases[local] = item.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for item in node.names:
+                if item.name == "*":
+                    continue
+                local = item.asname or item.name
+                aliases[local] = f"{node.module}.{item.name}"
+    # Resolve simple function aliases such as ``compile_fn = torch.compile``.
+    for _ in range(2):
+        for node in ast.walk(tree):
+            if (
+                not isinstance(node, (ast.Assign, ast.AnnAssign))
+                or isinstance(node, ast.Assign)
+                and len(node.targets) != 1
+            ):
+                continue
+            target = (
+                node.targets[0]
+                if isinstance(node, ast.Assign)
+                else node.target
+            )
+            value = node.value
+            if not isinstance(target, ast.Name) or value is None:
+                continue
+            qualified = _qualified_ast_name(value)
+            if qualified:
+                aliases[target.id] = _resolve_python_name(qualified, aliases)
+    return aliases
+
+
+def _resolve_python_name(name: str, aliases: Mapping[str, str]) -> str:
+    if not name:
+        return ""
+    head, separator, tail = name.partition(".")
+    resolved = aliases.get(head, head)
+    return f"{resolved}.{tail}" if separator else resolved
 
 
 def _qualified_ast_name(node: ast.AST) -> str:
@@ -510,6 +599,111 @@ def _configuration_markers(files: Sequence[Path]) -> set[str]:
     return markers
 
 
+def _build_system_markers(
+    files: Sequence[Path],
+    *,
+    root: Path,
+) -> dict[str, Any]:
+    patterns = {
+        "cmake_cuda_language": re.compile(
+            r"(?:enable_language\s*\(\s*CUDA|project\s*\([^)]*\bCUDA\b)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "cmake_cuda_toolkit": re.compile(
+            r"(?:find_package\s*\(\s*CUDAToolkit|CUDA::)",
+            re.IGNORECASE,
+        ),
+        "nvcc_compilation": re.compile(
+            r"(?:\bnvcc\b|CMAKE_CUDA_COMPILER)",
+            re.IGNORECASE,
+        ),
+        "setuptools_cuda_extension": re.compile(
+            r"(?:CUDAExtension|BuildExtension\.with_options)",
+        ),
+        "runtime_cpp_extension": re.compile(
+            r"(?:load_inline|cpp_extension\.load\s*\()",
+        ),
+        "runtime_nvrtc_compilation": re.compile(
+            r"(?:nvrtcCreateProgram|nvrtcCompileProgram|cuModuleLoadDataEx?)",
+        ),
+        "custom_operator_registration": re.compile(
+            r"(?:TORCH_LIBRARY|torch\.library\.(?:custom_op|Library))",
+        ),
+        "triton_kernel_decorator": re.compile(
+            r"@(?:triton\.)?(?:jit|autotune)\b",
+        ),
+    }
+    markers: Counter[str] = Counter()
+    evidence: dict[str, list[str]] = defaultdict(list)
+    candidate_names = {
+        "cmakelists.txt",
+        "setup.py",
+        "pyproject.toml",
+        "build",
+        "build.bazel",
+        "workspace",
+        "meson.build",
+    }
+    for file in files:
+        if (
+            file.name.lower() not in candidate_names
+            and file.suffix.lower()
+            not in {".py", ".cpp", ".cc", ".cxx", ".cu", ".cuh"}
+        ):
+            continue
+        try:
+            text = _read_text(file)
+        except OSError:
+            continue
+        if not text:
+            continue
+        relative = str(file.relative_to(root))
+        for name, pattern in patterns.items():
+            matches = list(pattern.finditer(text))
+            if not matches:
+                continue
+            markers[name] += len(matches)
+            evidence[name].append(relative)
+    return {
+        "markers": dict(sorted(markers.items())),
+        "evidence": {
+            name: sorted(set(paths))
+            for name, paths in sorted(evidence.items())
+        },
+    }
+
+
+def _kernel_analyses(
+    files: Sequence[Path],
+    *,
+    root: Path,
+) -> list[dict[str, Any]]:
+    analyses = []
+    for file in files:
+        if file.suffix.lower() not in {".ptx", ".sass", ".disasm", ".cu", ".cuh"}:
+            continue
+        try:
+            report = analyze_kernel_file(file)
+        except (FileNotFoundError, KernelAnalysisError, OSError, ValueError) as exc:
+            analyses.append(
+                {
+                    "path": str(file.relative_to(root)),
+                    "status": "analysis_failed",
+                    "error": str(exc),
+                }
+            )
+            continue
+        analyses.append(
+            {
+                "path": str(file.relative_to(root)),
+                "status": "analyzed",
+                "kind": report["kind"],
+                "analysis": report["analysis"],
+            }
+        )
+    return analyses
+
+
 def _build_findings(
     *,
     native_cuda_files: Sequence[Path],
@@ -517,6 +711,7 @@ def _build_findings(
     frameworks: Sequence[str],
     call_markers: Mapping[str, int],
     config_markers: set[str],
+    build_system_markers: Mapping[str, int],
     syntax_errors: Sequence[Mapping[str, Any]],
     entrypoints: Sequence[str],
     root: Path,
@@ -575,12 +770,74 @@ def _build_findings(
     if any(
         marker.startswith("torch.utils.cpp_extension")
         for marker in call_markers
+    ) or any(
+        marker in build_system_markers
+        for marker in (
+            "setuptools_cuda_extension",
+            "runtime_cpp_extension",
+            "cmake_cuda_language",
+            "nvcc_compilation",
+        )
     ):
         add(
             "runtime_cuda_extension_build",
             "requires_real_gpu_or_hybrid",
-            "The repository builds a native extension at runtime.",
-            sorted(call_markers),
+            "The repository builds or configures a CUDA extension.",
+            sorted(
+                set(call_markers)
+                | {
+                    marker
+                    for marker in build_system_markers
+                    if marker
+                    in {
+                        "setuptools_cuda_extension",
+                        "runtime_cpp_extension",
+                        "cmake_cuda_language",
+                        "nvcc_compilation",
+                    }
+                }
+            ),
+        )
+    generated_markers = sorted(
+        marker
+        for marker in set(call_markers) | set(build_system_markers)
+        if marker
+        in {
+            "triton.jit",
+            "triton.autotune",
+            "cupy.RawKernel",
+            "cupy.RawModule",
+            "numba.cuda.jit",
+            "runtime_generated_cuda",
+            "embedded_cuda_or_ptx_source",
+            "runtime_nvrtc_compilation",
+            "triton_kernel_decorator",
+        }
+    )
+    if generated_markers:
+        add(
+            "generated_kernel_path",
+            "requires_real_gpu_or_hybrid",
+            "The repository contains decorated, embedded, or runtime-generated GPU kernels.",
+            generated_markers,
+        )
+    custom_operator_markers = sorted(
+        marker
+        for marker in set(call_markers) | set(build_system_markers)
+        if marker
+        in {
+            "torch.library.custom_op",
+            "torch.library.Library",
+            "torch.library.custom_operator_registration",
+            "custom_operator_registration",
+        }
+    )
+    if custom_operator_markers:
+        add(
+            "custom_operator_registration",
+            "requires_targeted_validation",
+            "Custom operators require an operator profile or a matching real-stack measurement.",
+            custom_operator_markers,
         )
     if "torch.compile" in call_markers:
         add(

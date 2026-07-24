@@ -1,12 +1,13 @@
 # 仓库与性能静态分析
 
-FakeGPU 提供三项无需执行 workload 的检查：
+FakeGPU 提供以下无需执行 workload 的检查：
 
 | 命令 | 用途 |
 |---|---|
 | `fakegpu analyze-repo` | 找出入口、GPU 专用依赖和需要验证的路径 |
 | `fakegpu capabilities` | 检查 native API 是真实实现、模拟实现还是不支持 |
 | `fakegpu estimate-roofline` | 根据 GPU profile 与显式 workload 参数估算延迟区间 |
+| `fakegpu analyze-kernel` | 检查 PTX/SASS/CUDA 文本中的指令、资源与可识别 FLOP |
 
 这些命令不会导入目标仓库、执行 kernel 或分配 GPU 显存。
 
@@ -18,10 +19,14 @@ fakegpu analyze-repo /path/to/project \
   --json build/repository-analysis.json
 ```
 
-扫描器会统计 Python、CUDA、PTX、本地扩展和配置文件，解析 Python import
-与部分关键调用，收集依赖并发现可能的入口。它可以识别 PyTorch、
+扫描器会统计 Python、CUDA、PTX/SASS、本地扩展、构建和配置文件，解析
+Python import、别名、装饰器与部分关键调用，收集依赖并发现可能的入口。
+它可以识别 PyTorch、
 Transformers、Accelerate、DeepSpeed、PEFT、TRL、Triton、bitsandbytes、
 Flash Attention、xFormers、Apex、Lightning 与 torchtune。
+它也能识别 CMake CUDA/toolkit、`nvcc`、NVRTC、内嵌 CUDA/PTX 字符串、
+CuPy RawKernel、Numba CUDA、`cpp_extension` 与自定义 operator 注册，并
+静态分析可读取的 kernel 文件。
 
 报告中的结论分为三类：
 
@@ -32,8 +37,24 @@ Flash Attention、xFormers、Apex、Lightning 与 torchtune。
 | `requires_real_gpu_or_hybrid` | CUDA、Triton 或其他编译扩展需要匹配的真实 CUDA/Hybrid 环境 |
 | `analysis_incomplete` | 没有选择可运行入口，或部分 Python 文件无法解析 |
 
-报告还会给出建议的 preflight 与 Hybrid 实验。动态 import、运行时生成的
-kernel、tensor 形状和依赖数据的分支不在静态扫描范围内。
+报告还会给出建议的 preflight 与 Hybrid 实验。加密或运行时下载的 kernel、
+tensor 形状和依赖数据的分支不在静态扫描范围内。
+
+## 检查 PTX、SASS 或 CUDA 源码
+
+```bash
+fakegpu analyze-kernel kernel.ptx \
+  --profile rtx4090 \
+  --threads-per-block 256 \
+  --json build/kernel-analysis.json
+```
+
+PTX 报告包含静态 opcode 分类、entry point、声明的寄存器、静态共享内存和
+可识别的运算 FLOP。指定 profile 后，还会给出受寄存器、共享内存和线程数
+约束的 occupancy 上限。SASS 输入必须是文本反汇编。CUDA 源码报告包含
+kernel 定义、launch、共享内存声明和运行时编译标记。
+
+静态指令计数不会推断循环次数、分支频率、缓存行为或实际 occupancy。
 
 ## 审计 native API
 

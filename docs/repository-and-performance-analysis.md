@@ -1,12 +1,13 @@
 # Repository and Performance Analysis
 
-FakeGPU provides three static checks before a workload is executed:
+FakeGPU provides static checks before a workload is executed:
 
 | Command | Question answered |
 |---|---|
 | `fakegpu analyze-repo` | Which entrypoints and GPU-specific dependencies need validation? |
 | `fakegpu capabilities` | How does the native layer classify supported, simulated, and unsupported APIs? |
 | `fakegpu estimate-roofline` | What latency interval follows from one GPU profile and an explicit workload model? |
+| `fakegpu analyze-kernel` | What instructions, resources, and recognized FLOPs are visible in PTX/SASS/CUDA text? |
 
 These checks do not import repository code, execute a kernel, or allocate GPU
 memory.
@@ -19,11 +20,15 @@ fakegpu analyze-repo /path/to/project \
   --json build/repository-analysis.json
 ```
 
-The scanner inventories Python, CUDA, PTX, compiled-extension, and
-configuration files. It parses Python imports and selected call sites,
+The scanner inventories Python, CUDA, PTX/SASS, compiled-extension, build, and
+configuration files. It parses Python imports, aliases, decorators, and
+selected call sites,
 collects package dependencies, discovers likely entrypoints, and detects
 PyTorch, Transformers, Accelerate, DeepSpeed, PEFT, TRL, Triton,
 bitsandbytes, Flash Attention, xFormers, Apex, Lightning, and torchtune.
+It also recognizes CMake CUDA/toolkit configuration, `nvcc`, NVRTC, embedded
+CUDA/PTX strings, CuPy RawKernel, Numba CUDA, `cpp_extension`, custom operator
+registration, and statically analyzes readable kernel files.
 
 The readiness verdict has three useful levels:
 
@@ -34,9 +39,27 @@ The readiness verdict has three useful levels:
 | `requires_real_gpu_or_hybrid` | Native CUDA, Triton, or another compiled acceleration path must be checked on a matching real stack |
 | `analysis_incomplete` | No runnable entrypoint was selected or a Python file could not be parsed |
 
-The report includes suggested preflight and Hybrid experiments. Dynamic
-imports, generated kernels, runtime tensor shapes, and data-dependent branches
-remain outside a static scan.
+The report includes suggested preflight and Hybrid experiments. Encrypted or
+downloaded kernels, runtime tensor shapes, and data-dependent branches remain
+outside a static scan.
+
+## Inspect PTX, SASS, or CUDA source
+
+```bash
+fakegpu analyze-kernel kernel.ptx \
+  --profile rtx4090 \
+  --threads-per-block 256 \
+  --json build/kernel-analysis.json
+```
+
+PTX reports include static opcode classes, entry points, declared registers,
+static shared memory, and recognized arithmetic FLOPs. With a profile, the
+report also gives a register/shared-memory/thread occupancy ceiling. SASS
+input must be text disassembly. CUDA source reports kernel definitions,
+launches, shared declarations, and runtime-compilation markers.
+
+Static instruction counts do not infer loop trip counts, branch frequency,
+cache behavior, or achieved occupancy.
 
 ## Audit native API behavior
 

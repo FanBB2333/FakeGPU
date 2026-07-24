@@ -44,6 +44,7 @@ plugins:
             - 快速参考: quick-reference.md
             - AI Researcher 提交前预检查: ai-researcher-preflight.md
             - 仓库与性能静态分析: repository-and-performance-analysis.md
+            - 高级分析工具: advanced-analysis.md
             - LLM 推理显存估算: llm-inference-estimation.md
             - LLM SFT 显存估算: llm-sft-memory-estimation.md
             - DeepSpeed 验证: deepspeed-validation.md
@@ -81,6 +82,7 @@ nav:
   - Quick Reference: quick-reference.md
   - AI Researcher Preflight: ai-researcher-preflight.md
   - Repository and Roofline Analysis: repository-and-performance-analysis.md
+  - Advanced Analysis: advanced-analysis.md
   - LLM Inference Estimation: llm-inference-estimation.md
   - LLM SFT Memory Estimation: llm-sft-memory-estimation.md
   - DeepSpeed Validation: deepspeed-validation.md

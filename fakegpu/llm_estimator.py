@@ -343,6 +343,48 @@ def estimate_decoder_inference(
             "runtime_overhead_bytes": runtime_overhead_bytes,
             "estimated_process_peak_bytes": tensor_peak + runtime_overhead_bytes,
         },
+        "memory_timeline": {
+            "unit": "bytes",
+            "source": "checkpoint_and_decoder_shape_model",
+            "phases": [
+                {
+                    "phase": "prefill",
+                    "peak_bytes": prefill_peak + runtime_overhead_bytes,
+                    "tensor_peak_bytes": prefill_peak,
+                    "process_peak_bytes": prefill_peak + runtime_overhead_bytes,
+                    "components": {
+                        "parameters": parameter_bytes,
+                        "inputs": input_bytes,
+                        "kv_cache": kv_cache_prefill,
+                        "transient": prefill_transient["peak_bytes"],
+                        "runtime_overhead": runtime_overhead_bytes,
+                    },
+                },
+                {
+                    "phase": "decode",
+                    "peak_bytes": decode_peak + runtime_overhead_bytes,
+                    "tensor_peak_bytes": decode_peak,
+                    "process_peak_bytes": decode_peak + runtime_overhead_bytes,
+                    "components": {
+                        "parameters": parameter_bytes,
+                        "inputs": 8 * batch_size,
+                        "kv_cache": kv_cache_final,
+                        "transient": decode_transient["peak_bytes"],
+                        "runtime_overhead": runtime_overhead_bytes,
+                    },
+                },
+            ],
+            "peak_bytes": tensor_peak + runtime_overhead_bytes,
+            "peak_phase": (
+                "prefill" if prefill_peak >= decode_peak else "decode"
+            ),
+            "virtual_smi_projection": {
+                "tracked_process_memory_bytes": (
+                    tensor_peak + runtime_overhead_bytes
+                ),
+                "runtime_overhead_calibrated": runtime_overhead_bytes > 0,
+            },
+        },
         "compute": {
             "metric": "matrix_multiply_flops",
             "convention": "one multiply-add is two FLOPs",

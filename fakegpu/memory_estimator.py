@@ -421,6 +421,61 @@ def estimate_module_memory(
     else:
         peak_phase = "graph_and_optimizer"
 
+    memory_timeline_phases = [
+        {
+            "phase": "first_step_graph",
+            "peak_bytes": first_step_graph_phase_peak,
+            "interval_bytes": {
+                "lower": lower_first_step_graph_phase_peak,
+                "expected": first_step_graph_phase_peak,
+                "upper": upper_first_step_graph_phase_peak,
+            },
+            "persistent_bytes": parameter_bytes + buffer_bytes + input_bytes,
+            "workspace_peak_contribution_bytes": int(
+                workspace_estimate["effective_peak_contribution_bytes"]
+            ),
+        },
+        {
+            "phase": "steady_state_graph",
+            "peak_bytes": graph_phase_peak,
+            "interval_bytes": {
+                "lower": lower_graph_phase_peak,
+                "expected": graph_phase_peak,
+                "upper": upper_graph_phase_peak,
+            },
+            "persistent_bytes": (
+                parameter_bytes
+                + buffer_bytes
+                + input_bytes
+                + int(optimizer_state["total_bytes"])
+            ),
+            "workspace_peak_contribution_bytes": int(
+                workspace_estimate["effective_peak_contribution_bytes"]
+            ),
+        },
+    ]
+    if optimizer_phase_peak is not None:
+        memory_timeline_phases.append(
+            {
+                "phase": "optimizer_step",
+                "peak_bytes": optimizer_phase_peak,
+                "interval_bytes": {
+                    "lower": optimizer_phase_peak,
+                    "expected": optimizer_phase_peak,
+                    "upper": optimizer_phase_peak,
+                },
+                "persistent_bytes": (
+                    parameter_bytes
+                    + buffer_bytes
+                    + input_bytes
+                    + int(optimizer_state["total_bytes"])
+                ),
+                "optimizer_temporary_bytes": int(
+                    optimizer_temporary["total_bytes"]
+                ),
+            }
+        )
+
     unmodeled_components = [
         "backend_operator_workspaces_without_profiles",
         "cuda_context_and_loaded_modules",
@@ -498,6 +553,19 @@ def estimate_module_memory(
             "upper": upper_estimated_peak,
             "upper_bound_complete": upper_estimated_peak is not None,
             "source": "graph_liveness_plus_workspace_interval",
+        },
+        "memory_timeline": {
+            "unit": "bytes",
+            "source": "static_aten_liveness",
+            "phases": memory_timeline_phases,
+            "first_step_peak_bytes": first_step_estimated_peak,
+            "steady_state_peak_bytes": estimated_peak,
+            "peak_phase": peak_phase,
+            "virtual_smi_projection": {
+                "tracked_process_memory_bytes": estimated_peak,
+                "physical_process_memory_bytes": None,
+                "requires_runtime_overhead_calibration": True,
+            },
         },
         "graph": graph,
         "unmodeled_components": unmodeled_components,

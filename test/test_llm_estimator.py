@@ -110,6 +110,12 @@ def test_dense_decoder_memory_and_flops_are_shape_aware(tmp_path: Path) -> None:
     assert report["memory"]["estimated_process_peak_bytes"] == (
         report["memory"]["estimated_tensor_peak_bytes"] + 1024
     )
+    assert report["memory_timeline"]["peak_bytes"] == report["memory"][
+        "estimated_process_peak_bytes"
+    ]
+    assert {
+        phase["phase"] for phase in report["memory_timeline"]["phases"]
+    } == {"prefill", "decode"}
     assert report["model"]["model_kind"] == "dense_decoder"
     assert report["communication"]["enabled"] is False
     assert report["memory_traffic"]["lower_bytes"] > 0

@@ -82,6 +82,12 @@ def test_forward_estimate_uses_fx_storage_liveness() -> None:
     assert report["input_bytes"] == inputs.numel() * inputs.element_size()
     assert report["optimizer_state_bytes"] == 0
     assert report["estimated_peak_bytes"] == report["graph_peak_live_bytes"]
+    assert report["memory_timeline"]["steady_state_peak_bytes"] == report[
+        "estimated_peak_bytes"
+    ]
+    assert report["memory_timeline"]["virtual_smi_projection"][
+        "requires_runtime_overhead_calibration"
+    ] is True
     assert report["graph"]["operator_count"] > 0
     assert len(report["graph"]["graph_fingerprint"]) == 64
     json.dumps(report)

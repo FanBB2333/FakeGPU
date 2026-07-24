@@ -661,6 +661,160 @@ int main() {
         std::printf("Test6 OK: BLAS1 ops (axpy/dot/nrm2/asum/isamax)\n");
     }
 
+    // -------------------------
+    // Test 7: cuBLAS BLAS1/2 numeric paths (scal, gemv, ger)
+    // -------------------------
+    {
+        const int m = 3;
+        const int n = 2;
+        const int lda = 4;
+        const float alpha = 1.25f;
+        const float beta = -0.5f;
+        std::vector<float> hA(static_cast<size_t>(lda) * n, 0.0f);
+        std::vector<float> hx(static_cast<size_t>(n));
+        std::vector<float> hy(static_cast<size_t>(m));
+        for (auto& value : hA) value = rand_f32(rng);
+        for (auto& value : hx) value = rand_f32(rng);
+        for (auto& value : hy) value = rand_f32(rng);
+
+        float* dA = nullptr;
+        float* dX = nullptr;
+        float* dY = nullptr;
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dA), hA.size() * sizeof(float)), "cudaMalloc A");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dX), hx.size() * sizeof(float)), "cudaMalloc X");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dY), hy.size() * sizeof(float)), "cudaMalloc Y");
+        check_cuda(cudaMemcpy(dA, hA.data(), hA.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D A");
+        check_cuda(cudaMemcpy(dX, hx.data(), hx.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D X");
+        check_cuda(cudaMemcpy(dY, hy.data(), hy.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D Y");
+
+        cublasHandle_t handle = nullptr;
+        check_cublas(cublasCreate_v2(&handle), "cublasCreate_v2");
+        std::vector<float> expected_y = hy;
+        for (int row = 0; row < m; ++row) {
+            double acc = 0.0;
+            for (int col = 0; col < n; ++col) {
+                acc += static_cast<double>(hA[idx_col_major(row, col, lda)]) *
+                       static_cast<double>(hx[static_cast<size_t>(col)]);
+            }
+            expected_y[static_cast<size_t>(row)] =
+                static_cast<float>(alpha * acc + beta * hy[static_cast<size_t>(row)]);
+        }
+        check_cublas(
+            cublasSgemv_v2(handle, CUBLAS_OP_N, m, n, &alpha, dA, lda, dX, 1, &beta, dY, 1),
+            "cublasSgemv_v2"
+        );
+        std::vector<float> got_y(hy.size());
+        check_cuda(cudaMemcpy(got_y.data(), dY, got_y.size() * sizeof(float), cudaMemcpyDeviceToHost), "D2H Y");
+        if (!allclose(got_y, expected_y, 1e-5f, 1e-5f)) {
+            std::fprintf(stderr, "Test7 failed: cublasSgemv_v2 mismatch\n");
+            return 1;
+        }
+
+        const float scale = -2.0f;
+        check_cublas(cublasSscal_v2(handle, m, &scale, dY, 1), "cublasSscal_v2");
+        for (float& value : expected_y) value *= scale;
+        check_cuda(cudaMemcpy(got_y.data(), dY, got_y.size() * sizeof(float), cudaMemcpyDeviceToHost), "D2H scaled Y");
+        if (!allclose(got_y, expected_y, 1e-5f, 1e-5f)) {
+            std::fprintf(stderr, "Test7 failed: cublasSscal_v2 mismatch\n");
+            return 1;
+        }
+
+        std::vector<float> hGerX = {1.0f, -2.0f, 0.5f};
+        std::vector<float> hGerY = {3.0f, -1.0f};
+        check_cuda(cudaFree(dX), "cudaFree X");
+        check_cuda(cudaFree(dY), "cudaFree Y");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dX), hGerX.size() * sizeof(float)), "cudaMalloc ger X");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dY), hGerY.size() * sizeof(float)), "cudaMalloc ger Y");
+        check_cuda(cudaMemcpy(dX, hGerX.data(), hGerX.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D ger X");
+        check_cuda(cudaMemcpy(dY, hGerY.data(), hGerY.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D ger Y");
+        const float ger_alpha = 0.5f;
+        std::vector<float> expected_a = hA;
+        for (int col = 0; col < n; ++col) {
+            for (int row = 0; row < m; ++row) {
+                expected_a[idx_col_major(row, col, lda)] +=
+                    ger_alpha * hGerX[static_cast<size_t>(row)] *
+                    hGerY[static_cast<size_t>(col)];
+            }
+        }
+        check_cublas(
+            cublasSger_v2(handle, m, n, &ger_alpha, dX, 1, dY, 1, dA, lda),
+            "cublasSger_v2"
+        );
+        std::vector<float> got_a(hA.size());
+        check_cuda(cudaMemcpy(got_a.data(), dA, got_a.size() * sizeof(float), cudaMemcpyDeviceToHost), "D2H ger A");
+        if (!allclose(got_a, expected_a, 1e-5f, 1e-5f)) {
+            std::fprintf(stderr, "Test7 failed: cublasSger_v2 mismatch\n");
+            return 1;
+        }
+
+        check_cublas(cublasDestroy_v2(handle), "cublasDestroy_v2");
+        check_cuda(cudaFree(dA), "cudaFree A");
+        check_cuda(cudaFree(dX), "cudaFree X");
+        check_cuda(cudaFree(dY), "cudaFree Y");
+        std::printf("Test7 OK: BLAS1/2 ops (scal/gemv/ger)\n");
+    }
+
+    // -------------------------
+    // Test 8: cublasHgemm exact half path
+    // -------------------------
+    {
+        const int m = 2;
+        const int n = 2;
+        const int k = 2;
+        std::vector<__half> hA(4);
+        std::vector<__half> hB(4);
+        std::vector<__half> hC(4);
+        hA[0].x = 0x3C00; // 1
+        hA[1].x = 0x4200; // 3
+        hA[2].x = 0x4000; // 2
+        hA[3].x = 0x4400; // 4
+        hB[0].x = 0x3C00; // identity
+        hB[1].x = 0x0000;
+        hB[2].x = 0x0000;
+        hB[3].x = 0x3C00;
+        for (auto& value : hC) value.x = 0;
+        __half alpha{};
+        __half beta{};
+        alpha.x = 0x3C00;
+        beta.x = 0;
+
+        __half* dA = nullptr;
+        __half* dB = nullptr;
+        __half* dC = nullptr;
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dA), hA.size() * sizeof(__half)), "cudaMalloc half A");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dB), hB.size() * sizeof(__half)), "cudaMalloc half B");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dC), hC.size() * sizeof(__half)), "cudaMalloc half C");
+        check_cuda(cudaMemcpy(dA, hA.data(), hA.size() * sizeof(__half), cudaMemcpyHostToDevice), "H2D half A");
+        check_cuda(cudaMemcpy(dB, hB.data(), hB.size() * sizeof(__half), cudaMemcpyHostToDevice), "H2D half B");
+        check_cuda(cudaMemcpy(dC, hC.data(), hC.size() * sizeof(__half), cudaMemcpyHostToDevice), "H2D half C");
+
+        cublasHandle_t handle = nullptr;
+        check_cublas(cublasCreate_v2(&handle), "cublasCreate_v2");
+        check_cublas(
+            cublasHgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, dA, m, dB, k, &beta, dC, m),
+            "cublasHgemm"
+        );
+        std::vector<__half> got(hC.size());
+        check_cuda(cudaMemcpy(got.data(), dC, got.size() * sizeof(__half), cudaMemcpyDeviceToHost), "D2H half C");
+        for (size_t index = 0; index < got.size(); ++index) {
+            if (got[index].x != hA[index].x) {
+                std::fprintf(
+                    stderr,
+                    "Test8 failed: cublasHgemm mismatch at %zu: got=0x%04x expected=0x%04x\n",
+                    index,
+                    static_cast<unsigned>(got[index].x),
+                    static_cast<unsigned>(hA[index].x)
+                );
+                return 1;
+            }
+        }
+        check_cublas(cublasDestroy_v2(handle), "cublasDestroy_v2");
+        check_cuda(cudaFree(dA), "cudaFree half A");
+        check_cuda(cudaFree(dB), "cudaFree half B");
+        check_cuda(cudaFree(dC), "cudaFree half C");
+        std::printf("Test8 OK: cublasHgemm (FP16)\n");
+    }
+
     std::printf("All FakeGPU CPU simulation tests passed.\n");
     return 0;
 }

@@ -1,0 +1,25 @@
+{
+  "schema_version": "fakegpu.operator_profiles.v1",
+  "profiles": [
+    {
+      "id": "example-fused-attention-bf16",
+      "priority": 10,
+      "match": {
+        "operator_regex": "(?:custom::)?fused_attention",
+        "dtype": "bf16"
+      },
+      "model": {
+        "workspace_bytes": 65536,
+        "flops_per_element": 8,
+        "memory_bytes_per_element": 4,
+        "launch_count": 1
+      },
+      "fused_operators": [
+        "matmul",
+        "softmax",
+        "dropout"
+      ],
+      "confidence": "example_replace_with_measurement"
+    }
+  ]
+}
