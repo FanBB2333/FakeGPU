@@ -80,6 +80,8 @@ FAKEGPU_DIST_MODE=simulate
 - [Getting Started](getting-started.md)
 - [Quick Reference](quick-reference.md)
 - [AI Researcher Preflight](ai-researcher-preflight.md)
+- [Repository and Roofline Analysis](repository-and-performance-analysis.md)
+- [LLM Inference Estimation](llm-inference-estimation.md)
 - [Architecture](project-structure.md)
 - [Torch Patch System](phase2-custom-torch.md)
 - [Reports & Validation](reports-and-validation.md)

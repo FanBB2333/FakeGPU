@@ -56,6 +56,8 @@ struct DeviceReportStats {
     uint64_t kernel_launch_total = 0;
     std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> gemm_by_dtype;
     std::vector<std::tuple<std::string, std::string, uint64_t>> compat_events;
+    std::vector<std::tuple<std::string, std::string, std::string, uint64_t>>
+        unsupported_api_events;
 };
 
 class GlobalState {
@@ -100,6 +102,11 @@ public:
     void record_cublas_gemm_typed(const void* output_device_ptr, uint64_t flops, int cuda_data_type);
     void record_cublaslt_matmul_typed(const void* output_device_ptr, uint64_t flops, int cuda_data_type);
     void record_compat_event(int device, const std::string& operation, const std::string& dtype);
+    bool record_unsupported_api(
+        int device,
+        const std::string& operation,
+        const std::string& behavior,
+        const std::string& policy);
 
     // Snapshot for reporting (thread-safe)
     std::vector<DeviceReportStats> snapshot_device_report() const;
@@ -148,6 +155,14 @@ private:
             uint64_t count = 0;
         };
         std::unordered_map<std::string, CompatEvent> compat_events;
+
+        struct UnsupportedApiEvent {
+            std::string operation;
+            std::string behavior;
+            std::string policy;
+            uint64_t count = 0;
+        };
+        std::unordered_map<std::string, UnsupportedApiEvent> unsupported_api_events;
     };
 
     bool initialized = false;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import math
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -110,6 +111,7 @@ def match_workspace_profile(
             inputs=inputs,
             outputs=outputs,
         )
+        bounds = _workspace_bounds(profile, expected_bytes=workspace_bytes)
         matches.append(
             {
                 "operator": target,
@@ -118,6 +120,7 @@ def match_workspace_profile(
                 "kind": str(profile.get("kind", "operator_workspace_storage")),
                 "lifetime": str(profile["lifetime"]),
                 "bytes": workspace_bytes,
+                **bounds,
                 "confidence": str(profile.get("confidence", "external_profile")),
                 "priority": int(profile.get("priority", 0)),
                 "source": str(profile.get("_source", "")),
@@ -252,7 +255,11 @@ def _validate_profile(
     if (formula is None) == (direct_bytes is None):
         raise WorkspaceProfileError(f"{prefix}: set exactly one of bytes or formula")
     if direct_bytes is not None:
-        if not isinstance(direct_bytes, int) or direct_bytes < 0:
+        if (
+            not isinstance(direct_bytes, int)
+            or isinstance(direct_bytes, bool)
+            or direct_bytes < 0
+        ):
             raise WorkspaceProfileError(
                 f"{prefix}: bytes must be a non-negative integer"
             )
@@ -267,8 +274,75 @@ def _validate_profile(
             )
         profile["formula"] = dict(formula)
     priority = profile.get("priority", 0)
-    if not isinstance(priority, int):
+    if not isinstance(priority, int) or isinstance(priority, bool):
         raise WorkspaceProfileError(f"{prefix}: priority must be an integer")
+
+    bounds = profile.get("bounds")
+    if bounds is not None:
+        if not isinstance(bounds, Mapping):
+            raise WorkspaceProfileError(f"{prefix}: bounds must be an object")
+        supported_bound_keys = {
+            "lower_bytes",
+            "upper_bytes",
+            "lower_multiplier",
+            "upper_multiplier",
+        }
+        unknown_keys = sorted(set(bounds) - supported_bound_keys)
+        if unknown_keys:
+            raise WorkspaceProfileError(
+                f"{prefix}: unsupported bounds fields: {', '.join(unknown_keys)}"
+            )
+        if "lower_bytes" in bounds and "lower_multiplier" in bounds:
+            raise WorkspaceProfileError(
+                f"{prefix}: set at most one of bounds.lower_bytes and "
+                "bounds.lower_multiplier"
+            )
+        if "upper_bytes" in bounds and "upper_multiplier" in bounds:
+            raise WorkspaceProfileError(
+                f"{prefix}: set at most one of bounds.upper_bytes and "
+                "bounds.upper_multiplier"
+            )
+        for key in ("lower_bytes", "upper_bytes"):
+            value = bounds.get(key)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            ):
+                raise WorkspaceProfileError(
+                    f"{prefix}: bounds.{key} must be a non-negative integer"
+                )
+        for key in ("lower_multiplier", "upper_multiplier"):
+            value = bounds.get(key)
+            if value is not None and (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+                or float(value) < 0
+            ):
+                raise WorkspaceProfileError(
+                    f"{prefix}: bounds.{key} must be a non-negative number"
+                )
+        lower_multiplier = bounds.get("lower_multiplier")
+        upper_multiplier = bounds.get("upper_multiplier")
+        if lower_multiplier is not None and float(lower_multiplier) > 1.0:
+            raise WorkspaceProfileError(
+                f"{prefix}: bounds.lower_multiplier must not exceed 1"
+            )
+        if upper_multiplier is not None and float(upper_multiplier) < 1.0:
+            raise WorkspaceProfileError(
+                f"{prefix}: bounds.upper_multiplier must be at least 1"
+            )
+        if direct_bytes is not None:
+            lower_bytes = bounds.get("lower_bytes")
+            upper_bytes = bounds.get("upper_bytes")
+            if lower_bytes is not None and int(lower_bytes) > int(direct_bytes):
+                raise WorkspaceProfileError(
+                    f"{prefix}: bounds.lower_bytes exceeds bytes"
+                )
+            if upper_bytes is not None and int(upper_bytes) < int(direct_bytes):
+                raise WorkspaceProfileError(
+                    f"{prefix}: bounds.upper_bytes is below bytes"
+                )
+        profile["bounds"] = dict(bounds)
     return profile
 
 
@@ -492,6 +566,45 @@ def _workspace_bytes(
     calculation["alignment_bytes"] = alignment
     calculation["aligned_bytes"] = aligned
     return aligned, calculation
+
+
+def _workspace_bounds(
+    profile: Mapping[str, Any],
+    *,
+    expected_bytes: int,
+) -> dict[str, Any]:
+    bounds = profile.get("bounds")
+    if not isinstance(bounds, Mapping):
+        return {
+            "lower_bytes": int(expected_bytes),
+            "upper_bytes": int(expected_bytes),
+            "bound_kind": "point_estimate",
+            "declared_interval": False,
+        }
+
+    lower = bounds.get("lower_bytes")
+    if lower is None:
+        lower = int(
+            float(bounds.get("lower_multiplier", 1.0)) * int(expected_bytes)
+        )
+    upper = bounds.get("upper_bytes")
+    if upper is None:
+        upper = math.ceil(
+            float(bounds.get("upper_multiplier", 1.0)) * int(expected_bytes)
+        )
+    lower_bytes = int(lower)
+    upper_bytes = int(upper)
+    if lower_bytes > expected_bytes or upper_bytes < expected_bytes:
+        raise WorkspaceProfileError(
+            f"workspace profile {profile['id']!r} produces invalid bounds "
+            f"{lower_bytes} <= {expected_bytes} <= {upper_bytes}"
+        )
+    return {
+        "lower_bytes": lower_bytes,
+        "upper_bytes": upper_bytes,
+        "bound_kind": "declared_profile_interval",
+        "declared_interval": True,
+    }
 
 
 def _node_input_tensors(node: Any) -> list[Any]:

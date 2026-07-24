@@ -69,6 +69,13 @@ jobs:
         env:
           CIBW_BUILD: "cp311-manylinux_x86_64"
           CIBW_BUILD_VERBOSITY: "1"
+          CIBW_TEST_COMMAND: >-
+            python -c "import fakegpu;
+            from fakegpu.profile_catalog import load_profiles;
+            native = fakegpu.library_dir();
+            assert len(load_profiles()) >= 80;
+            assert (native / 'libcuda.so.1').is_file();
+            assert (native / 'libcudart.so.12').is_file()"
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')

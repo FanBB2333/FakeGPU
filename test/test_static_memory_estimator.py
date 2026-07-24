@@ -501,6 +501,11 @@ def test_static_validation_cli_writes_checkable_static_only_report(tmp_path: Pat
     assert static["workspace_peak_contribution_bytes"] == 0
     assert static["workspace_estimate"]["peak_candidate"]["combined_live_bytes"] > 0
     assert report["summary"]["extrapolated_workspace_profile_count"] == 0
+    coverage = report["summary"]["workspace_coverage"]
+    assert coverage["candidate_operator_count"] == 5
+    assert coverage["modeled_operator_count"] == 0
+    assert coverage["unprofiled_operator_count"] == 5
+    assert coverage["modeled_fraction"] == 0.0
 
     checked = subprocess.run(
         [
@@ -509,6 +514,8 @@ def test_static_validation_cli_writes_checkable_static_only_report(tmp_path: Pat
             "--path",
             str(report_path),
             "--allow-static-only",
+            "--min-workspace-coverage",
+            "0",
         ],
         cwd=str(ROOT),
         text=True,
@@ -516,9 +523,33 @@ def test_static_validation_cli_writes_checkable_static_only_report(tmp_path: Pat
     )
     assert checked.returncode == 0, checked.stderr
 
+    gated_report_path = tmp_path / "static_memory_validation_gated.json"
+    gated = subprocess.run(
+        [
+            sys.executable,
+            "verification/static_memory_validation.py",
+            "--static-only",
+            "--workload",
+            "mlp_b8_d256_h512_float32",
+            "--min-workspace-coverage",
+            "1",
+            "--output",
+            str(gated_report_path),
+        ],
+        cwd=str(ROOT),
+        text=True,
+        capture_output=True,
+    )
+    assert gated.returncode == 2, gated.stderr
+    gated_report = json.loads(gated_report_path.read_text(encoding="utf-8"))
+    assert gated_report["status"] == "FAIL_WORKSPACE_COVERAGE"
+
 
 def test_static_validation_bundle_separates_peak_and_graph_consistency(tmp_path: Path) -> None:
-    from verification.aggregate_static_memory_validations import aggregate_reports
+    from verification.aggregate_static_memory_validations import (
+        aggregate_reports,
+        render_markdown,
+    )
 
     reports = []
     for index, (gpu_name, fingerprint, backend_bytes, error_percent) in enumerate(
@@ -549,6 +580,14 @@ def test_static_validation_bundle_separates_peak_and_graph_consistency(tmp_path:
                             "parameters": {"batch_size": 2},
                             "static_estimate": {
                                 "estimated_peak_bytes": 1000,
+                                "workspace_estimate": {
+                                    "coverage": {
+                                        "modeled_fraction": 1.0 if index == 0 else 0.5,
+                                        "non_extrapolated_fraction": (
+                                            1.0 if index == 0 else 0.25
+                                        ),
+                                    }
+                                },
                                 "graph": {
                                     "graph_fingerprint": fingerprint,
                                     "node_count": 10,
@@ -573,9 +612,20 @@ def test_static_validation_bundle_separates_peak_and_graph_consistency(tmp_path:
     assert bundle["summary"]["all_static_peaks_consistent"] is True
     assert bundle["summary"]["all_graph_fingerprints_consistent"] is False
     assert bundle["summary"]["max_absolute_error_percent"] == 2.0
+    assert bundle["summary"]["workspace_coverage_observation_count"] == 2
+    assert bundle["summary"]["missing_workspace_coverage_observation_count"] == 0
+    assert bundle["summary"]["incomplete_workspace_coverage_observation_count"] == 1
+    assert bundle["summary"]["minimum_workspace_modeled_fraction"] == 0.5
+    assert (
+        bundle["summary"]["minimum_workspace_non_extrapolated_fraction"]
+        == 0.25
+    )
     assert bundle["workloads"][0]["static_peak_consistent"] is True
     assert bundle["workloads"][0]["graph_fingerprint_consistent"] is False
     assert bundle["workloads"][0]["present_in_all_reports"] is True
+    markdown = render_markdown(bundle)
+    assert "Minimum workspace call coverage" in markdown
+    assert "50.0%" in markdown
 
     reports[1][1]["workloads"][0]["name"] = "different-probe"
     incomplete_bundle = aggregate_reports(reports)

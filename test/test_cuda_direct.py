@@ -47,6 +47,21 @@ fake_cuda.cuMemFree_v2.restype = ctypes.c_int
 fake_cuda.cuMemGetInfo_v2.argtypes = [ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t)]
 fake_cuda.cuMemGetInfo_v2.restype = ctypes.c_int
 
+fake_cuda.cuLaunchKernel.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_uint,
+    ctypes.c_uint,
+    ctypes.c_uint,
+    ctypes.c_uint,
+    ctypes.c_uint,
+    ctypes.c_uint,
+    ctypes.c_uint,
+    ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_void_p),
+    ctypes.POINTER(ctypes.c_void_p),
+]
+fake_cuda.cuLaunchKernel.restype = ctypes.c_int
+
 # Run tests
 print("\n1. cuInit...")
 result = fake_cuda.cuInit(0)
@@ -104,5 +119,22 @@ print(f"   Result: {result}, free: {free_mem.value / 1024**3:.2f} GB, total: {to
 print("\n12. cuMemFree_v2...")
 result = fake_cuda.cuMemFree_v2(dptr)
 print(f"   Result: {result}")
+
+print("\n13. cuLaunchKernel (classified no-op)...")
+result = fake_cuda.cuLaunchKernel(
+    ctypes.c_void_p(1),
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    0,
+    None,
+    None,
+    None,
+)
+print(f"   Result: {result}")
+assert result == 0
 
 print("\n=== All tests completed ===")

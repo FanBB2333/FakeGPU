@@ -4,7 +4,7 @@ FakeGPU 为 decoder-only 推理提供三种互补的验证方式：
 
 | 方式 | 是否需要 GPU | 观测内容 |
 |---|---:|---|
-| 仅检查 checkpoint | 否 | 根据 safetensors/config 元数据计算参数、KV cache、临时张量和矩阵 FLOPs |
+| 仅检查 checkpoint | 否 | 根据 safetensors/config 元数据计算 dense/MoE 参数、量化存储、adapter、KV cache、临时张量、expert 通信、矩阵 FLOPs 和可选 roofline 区间 |
 | FakeCUDA 执行 | 否 | 在 CPU 上执行 CUDA 形式的 PyTorch 代码，记录张量生命周期显存、生成 token 和实际矩阵 FLOPs |
 | 真实 CUDA 校准 | 是 | 针对确定的 GPU、软件版本和算子路径记录 PyTorch allocator 与 NVML 进程显存 |
 
@@ -22,6 +22,7 @@ python3 -m fakegpu estimate-llm \
   --generated-tokens 2 \
   --dtype bfloat16 \
   --attention-implementation sdpa \
+  --target-profile a100 \
   --json build/qwen-estimate.json
 ```
 
@@ -29,13 +30,34 @@ python3 -m fakegpu estimate-llm \
 也不会实例化模型或创建 CUDA context。报告包含：
 
 - checkpoint 的精确参数量与存储信息
-- 指定推理 dtype 下的参数字节数
+- base model 与 adapter 的运行时参数字节数
 - 根据层数、KV heads、head dimension、batch 和序列长度计算的 KV cache
 - eager 或 SDPA 路径的临时张量估算
-- prefill 和每个 decode step 的矩阵 FLOPs；一次乘加记作两个 FLOPs
+- dense 或实际激活的 routed/shared expert 矩阵 FLOPs
+- 指定 expert parallel 大小时的 dispatch/combine 字节数
+- memory traffic 上下界，以及可选的 profile roofline 延迟区间
 
-当前形状模型适用于 dense decoder-only 架构。遇到 MoE 配置时会明确拒绝，
-不会错误地按 dense 模型计算。
+量化 base checkpoint 会使用 safetensors payload 的精确字节数，其中包含
+scale tensor。dense checkpoint 与 adapter 按参数量乘以选择的运行时 dtype
+计算。计算量包含 attention、LM head、router，以及实际激活的 routed/shared
+expert。
+
+adapter 与 expert parallel 需要显式指定：
+
+```bash
+fakegpu estimate-llm \
+  --model-dir /models/moe-decoder \
+  --adapter-dir /models/adapters/domain-lora \
+  --adapter-dir /models/adapters/style-lora \
+  --expert-parallel-size 4 \
+  --prompt-tokens 128 \
+  --generated-tokens 16 \
+  --target-profile h100 \
+  --json build/moe-adapter-estimate.json
+```
+
+expert 通信量假设 expert placement 与 token routing 均匀，不会预测热点 expert、
+capacity factor 丢弃、all-to-all 协议开销或 fused quantization workspace。
 
 ## 在不可见 GPU 的环境中执行模型
 
@@ -125,17 +147,18 @@ python3 verification/compare_qwen_memory.py \
 
 ## 精度适用范围
 
-目前可以确认：FakeGPU 对上述 dense Qwen 推理范围足够准确；它还不是可对
-任意仓库给出同等保证的完整 GPU 模拟器。
+目前可以确认：FakeGPU 对上述 dense Qwen 推理范围足够准确。MoE、量化和
+adapter 属于 checkpoint 静态模型，不沿用同一误差保证。
 
 以下场景需要单独建模或重新校准：
 
-- MoE 路由、量化 checkpoint、adapter 或 tensor 间混合 dtype
+- 非均匀 MoE 路由、fused quantization kernel、adapter merge state 或运行时混合 dtype
 - 自定义 CUDA extension、Triton kernel 或 FakeCUDA 尚未覆盖的算子
 - 模型特有的常驻 buffer 或动态变化的控制流
 - 不同 attention backend、PyTorch/CUDA 版本、allocator 策略或 GPU
-- 吞吐量和延迟预测；FakeGPU 当前不提供这类估算
+- 精确吞吐量与延迟；profile roofline 是分析区间，不是 benchmark
 
-对于任意训练仓库，还应结合
-[`fakegpu preflight`](ai-researcher-preflight.md) 或 ATen 计算图估算器，而不是
-只使用 checkpoint 推理估算。
+对于任意仓库，应先运行
+[`fakegpu analyze-repo`](repository-and-performance-analysis.zh.md)，再针对选定
+入口和形状使用 [`fakegpu preflight`](ai-researcher-preflight.zh.md) 或 ATen
+计算图估算器。

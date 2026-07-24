@@ -1,0 +1,224 @@
+{
+  "schema_version": "fakegpu.native_api_capabilities.v1",
+  "groups": [
+    {
+      "id": "cuda_runtime",
+      "library": "cudart",
+      "symbol_regex": "^(cuda|__cuda)",
+      "classification": "stateful_simulation",
+      "simulate_behavior": "Device, allocation, copy, stream, event, and registration state is modeled on the host. Exact APIs can override this group classification."
+    },
+    {
+      "id": "cuda_driver",
+      "library": "cuda_driver",
+      "symbol_regex": "^cu(?!da|blas)",
+      "classification": "stateful_simulation",
+      "simulate_behavior": "Driver identity, context, allocation, copy, stream, event, module, and graph surfaces are modeled or forwarded according to runtime mode."
+    },
+    {
+      "id": "cublas",
+      "library": "cublas",
+      "symbol_regex": "^cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Maintained GEMM and matmul paths can execute on CPU; other algorithms and attributes may provide compatibility state only."
+    },
+    {
+      "id": "nvml",
+      "library": "nvml",
+      "symbol_regex": "^nvml",
+      "classification": "stateful_or_synthetic_telemetry",
+      "simulate_behavior": "Identity and memory state are modeled. Hardware telemetry that cannot be observed is synthetic or explicitly unsupported."
+    },
+    {
+      "id": "nccl",
+      "library": "nccl",
+      "symbol_regex": "^nccl",
+      "classification": "coordinator_simulation",
+      "simulate_behavior": "Maintained collective and point-to-point calls use FakeGPU coordinator transports and analytical topology accounting."
+    }
+  ],
+  "apis": [
+    {
+      "api": "cudaLaunchKernel",
+      "library": "cudart",
+      "classification": "not_executed",
+      "simulate_behavior": "Kernel launch is recorded but arbitrary device code is not executed.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaConfigureCall",
+      "library": "cudart",
+      "classification": "state_not_materialized",
+      "simulate_behavior": "Legacy launch configuration is not materialized.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaSetupArgument",
+      "library": "cudart",
+      "classification": "state_not_materialized",
+      "simulate_behavior": "Legacy launch arguments are not materialized.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaLaunch",
+      "library": "cudart",
+      "classification": "not_executed",
+      "simulate_behavior": "Legacy kernel launch is not executed.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaLaunchKernelExC",
+      "library": "cudart",
+      "classification": "not_executed",
+      "simulate_behavior": "Extended kernel launch is not executed.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaGraphLaunch",
+      "library": "cudart",
+      "classification": "not_executed",
+      "simulate_behavior": "Graph execution is recorded as a logical stream operation without executing graph kernels.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaGraphUpload",
+      "library": "cudart",
+      "classification": "state_not_materialized",
+      "simulate_behavior": "Graph upload state is not materialized.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaGraphDebugDotPrint",
+      "library": "cudart",
+      "classification": "output_not_written",
+      "simulate_behavior": "No graph DOT file is written.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaLaunchCooperativeKernel",
+      "library": "cudart",
+      "classification": "not_executed",
+      "simulate_behavior": "Cooperative kernel launch is not executed.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaLaunchCooperativeKernelMultiDevice",
+      "library": "cudart",
+      "classification": "not_executed",
+      "simulate_behavior": "Multi-device cooperative kernel launch is not executed.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaStreamAddCallback",
+      "library": "cudart",
+      "classification": "callback_not_registered",
+      "simulate_behavior": "The callback is not registered or invoked.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaStreamUpdateCaptureDependencies",
+      "library": "cudart",
+      "classification": "state_not_materialized",
+      "simulate_behavior": "Capture dependency changes are not materialized.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaImportExternalMemory",
+      "library": "cudart",
+      "classification": "synthetic_state",
+      "simulate_behavior": "A synthetic external-memory handle is returned.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaExternalMemoryGetMappedBuffer",
+      "library": "cudart",
+      "classification": "synthetic_state",
+      "simulate_behavior": "A fixed-size host buffer is returned instead of mapping the external resource.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaDestroyExternalMemory",
+      "library": "cudart",
+      "classification": "synthetic_state",
+      "simulate_behavior": "The synthetic external-memory handle is released.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaImportExternalSemaphore",
+      "library": "cudart",
+      "classification": "synthetic_state",
+      "simulate_behavior": "A synthetic external-semaphore handle is returned.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaSignalExternalSemaphoresAsync",
+      "library": "cudart",
+      "classification": "external_sync_not_performed",
+      "simulate_behavior": "No external semaphore signal is performed.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaWaitExternalSemaphoresAsync",
+      "library": "cudart",
+      "classification": "external_sync_not_performed",
+      "simulate_behavior": "No external semaphore wait is performed.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaDestroyExternalSemaphore",
+      "library": "cudart",
+      "classification": "synthetic_state",
+      "simulate_behavior": "The synthetic external-semaphore handle is released.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaProfilerStart",
+      "library": "cudart",
+      "classification": "not_executed",
+      "simulate_behavior": "No profiler session is started.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cudaProfilerStop",
+      "library": "cudart",
+      "classification": "not_executed",
+      "simulate_behavior": "No profiler session is stopped.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cuLaunchKernel",
+      "library": "cuda_driver",
+      "classification": "not_executed",
+      "simulate_behavior": "Driver kernel launch is recorded but arbitrary device code is not executed.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cuLaunchKernelEx",
+      "library": "cuda_driver",
+      "classification": "not_executed",
+      "simulate_behavior": "Extended Driver kernel launch is not executed.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cuGraphLaunch",
+      "library": "cuda_driver",
+      "classification": "not_executed",
+      "simulate_behavior": "Driver graph execution does not execute graph kernels.",
+      "policy_enforced": true
+    },
+    {
+      "api": "nvmlDeviceGetAccountingMode",
+      "library": "nvml",
+      "classification": "synthetic_telemetry",
+      "simulate_behavior": "Accounting mode is reported as disabled.",
+      "policy_enforced": false
+    },
+    {
+      "api": "nvmlDeviceGetAccountingPids",
+      "library": "nvml",
+      "classification": "synthetic_telemetry",
+      "simulate_behavior": "No accounting PIDs are reported.",
+      "policy_enforced": false
+    }
+  ]
+}

@@ -73,6 +73,10 @@ def test_workspace_profile_matches_stack_dtype_shape_and_formula(
                     "output_bytes_multiplier": 2,
                     "alignment_bytes": 256,
                 },
+                "bounds": {
+                    "lower_multiplier": 0.5,
+                    "upper_multiplier": 1.5,
+                },
             }
         ],
     )
@@ -90,6 +94,9 @@ def test_workspace_profile_matches_stack_dtype_shape_and_formula(
     assert profile["signature"]["compute_capability"] == "8.6"
     assert profile["calculation"]["input_bytes"] == 160
     assert profile["calculation"]["output_bytes"] == 64
+    assert profile["lower_bytes"] == 256
+    assert profile["upper_bytes"] == 768
+    assert profile["declared_interval"] is True
 
 
 def test_highest_priority_profile_shadows_generic_match(tmp_path: Path) -> None:
@@ -208,3 +215,129 @@ def test_static_estimator_applies_external_workspace_profile(
     assert report["workspace_estimate"]["profiles"][0]["profile"] == "cpu-mm-test"
     assert report["workspace_peak_contribution_bytes"] == 4096
     assert report["workspace_estimate"]["unprofiled_workspace_candidates"] == {}
+    coverage = report["workspace_estimate"]["coverage"]
+    assert coverage["status"] == "complete"
+    assert coverage["candidate_operator_count"] == 1
+    assert coverage["modeled_fraction"] == 1.0
+
+    from fakegpu import require_workspace_coverage
+
+    evaluation = require_workspace_coverage(
+        report,
+        minimum_fraction=1.0,
+        allow_extrapolated=False,
+    )
+    assert evaluation["passed"] is True
+    assert evaluation["selected_fraction"] == 1.0
+
+
+def test_workspace_coverage_gate_rejects_unprofiled_operator() -> None:
+    torch = pytest.importorskip("torch")
+    from fakegpu import WorkspaceCoverageError, require_workspace_coverage
+    from fakegpu.memory_estimator import estimate_module_memory
+
+    class Matmul(torch.nn.Module):
+        def forward(self, left, right):
+            return torch.mm(left, right)
+
+    report = estimate_module_memory(
+        Matmul(),
+        (torch.randn(2, 4), torch.randn(4, 8)),
+        mode="forward",
+        optimizer="none",
+        target_device="cpu",
+    )
+    coverage = report["workspace_estimate"]["coverage"]
+    assert coverage["status"] == "incomplete"
+    assert coverage["candidate_operator_count"] == 1
+    assert coverage["unprofiled_operator_count"] == 1
+    assert coverage["modeled_fraction"] == 0.0
+    assert coverage["all_candidate_calls_modeled"] is False
+    assert coverage["upper_bound_complete"] is False
+    assert report["estimated_peak_interval_bytes"]["upper"] is None
+
+    with pytest.raises(WorkspaceCoverageError, match="below the required") as exc:
+        require_workspace_coverage(report, minimum_fraction=1.0)
+    assert exc.value.evaluation["passed"] is False
+    assert exc.value.evaluation["unprofiled_operator_count"] == 1
+
+    with pytest.raises(
+        WorkspaceCoverageError, match="upper bound is incomplete"
+    ):
+        require_workspace_coverage(
+            report,
+            minimum_fraction=0.0,
+            require_upper_bound=True,
+        )
+
+
+def test_explicit_unknown_workspace_upper_bound_produces_memory_interval() -> None:
+    torch = pytest.importorskip("torch")
+    from fakegpu import require_workspace_coverage
+    from fakegpu.memory_estimator import estimate_module_memory
+
+    class Matmul(torch.nn.Module):
+        def forward(self, left, right):
+            return torch.mm(left, right)
+
+    report = estimate_module_memory(
+        Matmul(),
+        (torch.randn(2, 4), torch.randn(4, 8)),
+        mode="forward",
+        optimizer="none",
+        target_device="cpu",
+        unknown_workspace_upper_bound_bytes=8192,
+    )
+    interval = report["estimated_peak_interval_bytes"]
+    assert interval["lower"] == interval["expected"]
+    assert interval["upper"] == interval["expected"] + 8192
+    assert interval["upper_bound_complete"] is True
+    call = report["workspace_estimate"]["unprofiled_workspace_calls"][0]
+    assert call["upper_bytes"] == 8192
+    assert call["input_bytes"] == 160
+    assert call["output_bytes"] == 64
+    evaluation = require_workspace_coverage(
+        report,
+        minimum_fraction=0.0,
+        require_upper_bound=True,
+    )
+    assert evaluation["upper_bound_passed"] is True
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "1024"])
+def test_unknown_workspace_upper_bound_requires_integer(
+    value: object,
+) -> None:
+    torch = pytest.importorskip("torch")
+    from fakegpu.memory_estimator import estimate_module_memory
+
+    with pytest.raises(
+        ValueError,
+        match="unknown_workspace_upper_bound_bytes",
+    ):
+        estimate_module_memory(
+            torch.nn.Linear(4, 4),
+            (torch.ones(1, 4),),
+            mode="forward",
+            optimizer="none",
+            unknown_workspace_upper_bound_bytes=value,
+        )
+
+
+def test_workspace_coverage_without_candidates_is_complete() -> None:
+    torch = pytest.importorskip("torch")
+    from fakegpu import require_workspace_coverage
+    from fakegpu.memory_estimator import estimate_module_memory
+
+    report = estimate_module_memory(
+        torch.nn.ReLU(),
+        (torch.randn(2, 4),),
+        mode="forward",
+        optimizer="none",
+        target_device="cpu",
+    )
+    coverage = report["workspace_estimate"]["coverage"]
+    assert coverage["status"] == "no_workspace_candidates"
+    assert coverage["candidate_operator_count"] == 0
+    assert coverage["modeled_fraction"] == 1.0
+    assert require_workspace_coverage(report)["passed"] is True

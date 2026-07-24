@@ -80,6 +80,7 @@ def aggregate_reports(
             static = dict(item.get("static_estimate") or {})
             graph = dict(static.get("graph") or {})
             workspace = dict(static.get("workspace_estimate") or {})
+            workspace_coverage = dict(workspace.get("coverage") or {})
             comparison = dict(item.get("comparison") or {})
             observation = {
                 "source_report": str(path),
@@ -103,6 +104,7 @@ def aggregate_reports(
                 "extrapolated_workspace_profile_count": int(
                     workspace.get("extrapolated_profile_count", 0) or 0
                 ),
+                "workspace_coverage": workspace_coverage or None,
                 "unprofiled_attention_operator_count": sum(
                     int(count)
                     for count in dict(
@@ -182,6 +184,24 @@ def aggregate_reports(
         float(item["requested_absolute_error_percent"])
         for item in requested_comparisons
     ]
+    observations = [
+        observation
+        for workload in workloads
+        for observation in workload["observations"]
+    ]
+    workspace_coverages = [
+        dict(observation["workspace_coverage"])
+        for observation in observations
+        if isinstance(observation.get("workspace_coverage"), dict)
+    ]
+    modeled_workspace_fractions = [
+        float(coverage.get("modeled_fraction", 0.0) or 0.0)
+        for coverage in workspace_coverages
+    ]
+    non_extrapolated_workspace_fractions = [
+        float(coverage.get("non_extrapolated_fraction", 0.0) or 0.0)
+        for coverage in workspace_coverages
+    ]
     return {
         "schema_version": SCHEMA_VERSION,
         "created_at_unix": int(time.time()),
@@ -216,6 +236,23 @@ def aggregate_reports(
                 for workload in workloads
                 for observation in workload["observations"]
             ),
+            "workspace_coverage_observation_count": len(workspace_coverages),
+            "missing_workspace_coverage_observation_count": (
+                len(observations) - len(workspace_coverages)
+            ),
+            "incomplete_workspace_coverage_observation_count": sum(
+                fraction < 1.0 for fraction in modeled_workspace_fractions
+            ),
+            "minimum_workspace_modeled_fraction": (
+                min(modeled_workspace_fractions)
+                if modeled_workspace_fractions
+                else None
+            ),
+            "minimum_workspace_non_extrapolated_fraction": (
+                min(non_extrapolated_workspace_fractions)
+                if non_extrapolated_workspace_fractions
+                else None
+            ),
             "max_underestimate_percent": max(underestimates) if underestimates else None,
             "median_absolute_error_percent": (
                 statistics.median(absolute_errors) if absolute_errors else None
@@ -245,6 +282,7 @@ def aggregate_reports(
             "Static peak consistency checks the device-independent ATen storage estimate across reports.",
             "Backend-resident calibration remains scoped to each GPU and software stack.",
             "Validation covers only the recorded workload parameters, dtypes, optimizers, and graph fingerprints.",
+            "Workspace coverage is call based; it identifies missing models but does not bound their unknown bytes.",
         ],
     }
 
@@ -263,9 +301,10 @@ def render_markdown(bundle: dict[str, Any]) -> str:
         f"**Maximum absolute error:** `{_fmt_percent(summary.get('max_absolute_error_percent'))}`",
         f"**Maximum requested-byte underestimate:** `{_fmt_percent(summary.get('max_requested_underestimate_percent'))}`",
         f"**Maximum requested-byte absolute error:** `{_fmt_percent(summary.get('max_requested_absolute_error_percent'))}`",
+        f"**Minimum workspace call coverage:** `{_fmt_fraction(summary.get('minimum_workspace_modeled_fraction'))}`",
         "",
-        "| workload | GPU | static peak | profile bytes | peak contribution | backend resident | calibrated peak | real peak | phase | error | underestimate | static consistent | graph consistent |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---|",
+        "| workload | GPU | static peak | workspace coverage | profile bytes | peak contribution | backend resident | calibrated peak | real peak | phase | error | underestimate | static consistent | graph consistent |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---|",
     ]
     for workload in bundle.get("workloads", []):
         static_consistent = bool(workload.get("static_peak_consistent"))
@@ -275,11 +314,16 @@ def render_markdown(bundle: dict[str, Any]) -> str:
             backend = observation.get("backend_calibration") or {}
             comparison = observation.get("comparison") or {}
             lines.append(
-                "| `{name}` | `{gpu}` | {static} | {profile_sum} | {workspace} | {backend} | {calibrated} | {real} | `{phase}` | {error} | {underestimate} | `{static_consistent}` | `{graph_consistent}` |".format(
+                "| `{name}` | `{gpu}` | {static} | {coverage} | {profile_sum} | {workspace} | {backend} | {calibrated} | {real} | `{phase}` | {error} | {underestimate} | `{static_consistent}` | `{graph_consistent}` |".format(
                     name=workload.get("name"),
                     gpu=gpu.get("name"),
                     static=_fmt_bytes(
                         int(observation.get("static_estimated_peak_bytes", 0) or 0)
+                    ),
+                    coverage=_fmt_fraction(
+                        (observation.get("workspace_coverage") or {}).get(
+                            "modeled_fraction"
+                        )
                     ),
                     workspace=_fmt_bytes(
                         int(observation.get("profiled_workspace_bytes", 0) or 0)
@@ -366,6 +410,12 @@ def _fmt_percent(value: Any) -> str:
     if value is None:
         return "n/a"
     return f"{float(value):.2f}%"
+
+
+def _fmt_fraction(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.1%}"
 
 
 if __name__ == "__main__":

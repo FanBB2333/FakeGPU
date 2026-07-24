@@ -12,7 +12,9 @@
 | `./ftest preflight_oom` | fakecuda fit/OOM 判定与报告 schema |
 | `./ftest static_memory_validation` | fake-tensor ATen 前向/反向 storage 生命周期、optimizer 显存和可选真实 CUDA allocator 对比 |
 | `./ftest real_gpu_calibration` | real/passthrough/Hybrid/fakecuda 显存与结果签名校准 |
-| `fakegpu estimate-llm ...` | 仅检查 header 的 dense decoder 参数、KV cache、临时显存与矩阵 FLOPs 估算 |
+| `fakegpu estimate-llm ...` | 仅检查 header 的 dense/MoE、量化、adapter、KV cache、临时显存、通信、FLOPs 与可选 roofline 估算 |
+| `fakegpu analyze-repo ...` | 仓库文件、入口、框架依赖、可运行性结论和建议实验 |
+| `fakegpu capabilities ...` | native API 行为清单与源码/编译产物覆盖审计 |
 | `verification/compare_qwen_memory.py ...` | 对比相同配置下的真实 CUDA/FakeCUDA 加载、推理、虚拟 SMI、token 与 FLOPs |
 | `verification/compare_qwen_sft_memory.py ...` | 对比 Qwen3.5 full、LoRA、原生 NF4 QLoRA SFT 的真实 CUDA、FakeCUDA 与 ATen 静态图峰值 |
 | `verification/summarize_qwen_sft_matrix.py ...` | 汇总 full、LoRA、QLoRA、checkpointing、accumulation 和不同序列长度的 SFT 矩阵 |
@@ -51,6 +53,7 @@
 - 当前显存占用和峰值显存占用
 - H2D / D2H / D2D / peer / memset 的 IO 计数
 - 已维护 cuBLAS / cuBLASLt 路径的调用次数和 FLOP 估算
+- 配置的 unsupported API 策略，以及每个设备已识别的 no-op 事件
 - host-to-host copy 计数
 
 大致结构如下：
@@ -59,6 +62,7 @@
 {
   "report_version": "1.5.5",
   "mode": "simulate",
+  "unsupported_api_policy": "warn",
   "devices": [
     {
       "index": 0,
@@ -69,7 +73,15 @@
       },
       "compute": {
         "cublas_gemm": {"calls": 2, "flops": 8192}
-      }
+      },
+      "unsupported_api_events": [
+        {
+          "operation": "cuLaunchKernel",
+          "behavior": "not_executed",
+          "policy": "warn",
+          "count": 1
+        }
+      ]
     }
   ]
 }
@@ -173,7 +185,7 @@ fakecuda 模式下，top allocations 会记录 bytes、dtype、shape、stage，�
 `temporary` / `tensor` 这类粗粒度 category。加上 `--allocation-stacks`
 后，还会为这些 top allocations 记录短 Python stack trace。
 
-静态显存验证报告会分别保留 forward、backward 和 optimizer 的 CUDA 峰值。workspace 字段会区分 profile 总字节数与实际影响峰值的增量：graph-phase persistent storage 作用于整个计算图，operator-local workspace 只与对应 ATen 节点的 live storage 相加。报告还会列出已由计算图覆盖和仍未匹配的 Attention 算子。
+静态显存验证报告会分别保留 forward、backward 和 optimizer 的 CUDA 峰值。workspace 字段会区分 profile 总字节数与实际影响峰值的增量：graph-phase persistent storage 作用于整个计算图，operator-local workspace 只与对应 ATen 节点的 live storage 相加。profile 可以声明 lower/expected/upper；未匹配调用会保留在报告中，只有调用方显式提供每次调用的上界后，完整峰值区间才有上界。`require_upper_bound=True` 可以拒绝不完整区间。
 
 当前真实校准目标是一张 Blackwell GPU（Compute Capability 12.0）。维护中的套件覆盖七个受控 workload，要求 passthrough 与 Hybrid 的结果签名匹配 real CUDA，记录 Hybrid Driver allocation 峰值，并验证 Hybrid clamp 下的 PyTorch OOM 表现。它不能证明多机目标集群一定能容纳 workload，也不能证明性能表现。
 
@@ -183,8 +195,9 @@ fakecuda 模式下，top allocations 会记录 bytes、dtype、shape、stage，�
 
 `fakegpu estimate-llm --json <path>` 会写出
 `fakegpu.llm_inference_estimate.v1` 报告，并且不会加载 checkpoint payload。
-内容包括参数/checkpoint 元数据、KV cache、prefill/decode 临时显存、tensor
-与进程峰值，以及逐 step 的矩阵 FLOPs。
+内容包括 dense/MoE 和量化参数元数据、adapter、KV cache、
+prefill/decode 临时显存、tensor 与进程峰值、expert-parallel 通信量、
+memory traffic 区间、逐 step 矩阵 FLOPs，以及可选的 profile roofline 区间。
 
 如果在 FakeCUDA runtime 启动前设置 `FAKEGPU_SMI_STATE_PATH` 或
 `FAKEGPU_SMI_STATE_DIR`，每个进程都会发布 `fakegpu.smi_state.v1` JSON。

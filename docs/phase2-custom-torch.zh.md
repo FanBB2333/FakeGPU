@@ -140,8 +140,10 @@ fakegpu.init(runtime="fakecuda")
 
 - 所有计算由 CPU 执行 -- 没有实际 GPU 执行。
 - `__torch_function__` 开销：比直接 CPU tensor 操作慢约 2-3 倍（benchmark 测量值）。
-- Stream/Event 仅为 API 兼容 stub（无真实异步）。
-- Distributed 仅提供单进程语义兼容。
+- Python FakeCUDA 的 Stream/Event 会跟踪逻辑身份和上下文，但不会异步执行；
+  native Runtime stub 还提供有限的 pending/ready 逻辑时间线。
+- Python `torch.distributed` fallback 只提供进程内兼容；多进程和多机语义测试
+  使用 native NCCL shim 与 coordinator，两条路径都不复现 NCCL 传输层内部实现。
 - CUDA 扩展、自定义 kernel、storage 级 CUDA allocator 不可用。
 - 部分 PyTorch 内部路径可能绕过 `__torch_function__`（极少见）。
 

@@ -108,6 +108,7 @@ def init(
     lib_dir: str | os.PathLike[str] | None = None,
     mode: str | None = None,
     oom_policy: str | None = None,
+    unsupported_api: str | None = None,
     dist_mode: str | None = None,
     cluster_config: str | os.PathLike[str] | None = None,
     coordinator_addr: str | None = None,
@@ -140,6 +141,7 @@ def init(
                 resolved_dir,
                 mode=mode,
                 oom_policy=oom_policy,
+                unsupported_api=unsupported_api,
                 dist_mode=dist_mode,
                 cluster_config=cluster_config,
                 coordinator_addr=coordinator_addr,
@@ -152,6 +154,7 @@ def init(
             _apply_config_env_inplace(
                 mode=mode,
                 oom_policy=oom_policy,
+                unsupported_api=unsupported_api,
                 dist_mode=dist_mode,
                 cluster_config=cluster_config,
                 coordinator_addr=coordinator_addr,
@@ -190,6 +193,7 @@ def env(
     lib_dir: str | os.PathLike[str] | None = None,
     mode: str | None = None,
     oom_policy: str | None = None,
+    unsupported_api: str | None = None,
     dist_mode: str | None = None,
     cluster_config: str | os.PathLike[str] | None = None,
     coordinator_addr: str | None = None,
@@ -214,6 +218,7 @@ def env(
         env_map,
         mode=mode,
         oom_policy=oom_policy,
+        unsupported_api=unsupported_api,
         dist_mode=dist_mode,
         cluster_config=cluster_config,
         coordinator_addr=coordinator_addr,
@@ -233,6 +238,7 @@ def run(
     lib_dir: str | os.PathLike[str] | None = None,
     mode: str | None = None,
     oom_policy: str | None = None,
+    unsupported_api: str | None = None,
     dist_mode: str | None = None,
     cluster_config: str | os.PathLike[str] | None = None,
     coordinator_addr: str | None = None,
@@ -257,6 +263,7 @@ def run(
             lib_dir=lib_dir,
             mode=mode,
             oom_policy=oom_policy,
+            unsupported_api=unsupported_api,
             dist_mode=dist_mode,
             cluster_config=cluster_config,
             coordinator_addr=coordinator_addr,
@@ -325,6 +332,7 @@ def _apply_env_inplace(
     *,
     mode: str | None,
     oom_policy: str | None,
+    unsupported_api: str | None,
     dist_mode: str | None,
     cluster_config: str | os.PathLike[str] | None,
     coordinator_addr: str | None,
@@ -337,6 +345,7 @@ def _apply_env_inplace(
         lib_dir=resolved_dir,
         mode=mode,
         oom_policy=oom_policy,
+        unsupported_api=unsupported_api,
         dist_mode=dist_mode,
         cluster_config=cluster_config,
         coordinator_addr=coordinator_addr,
@@ -352,6 +361,7 @@ def _apply_config_env_inplace(
     *,
     mode: str | None,
     oom_policy: str | None,
+    unsupported_api: str | None,
     dist_mode: str | None,
     cluster_config: str | os.PathLike[str] | None,
     coordinator_addr: str | None,
@@ -365,6 +375,7 @@ def _apply_config_env_inplace(
         updated,
         mode=mode,
         oom_policy=oom_policy,
+        unsupported_api=unsupported_api,
         dist_mode=dist_mode,
         cluster_config=cluster_config,
         coordinator_addr=coordinator_addr,
@@ -381,6 +392,7 @@ def _apply_config_env(
     *,
     mode: str | None,
     oom_policy: str | None,
+    unsupported_api: str | None,
     dist_mode: str | None,
     cluster_config: str | os.PathLike[str] | None,
     coordinator_addr: str | None,
@@ -394,6 +406,14 @@ def _apply_config_env(
 
     if oom_policy is not None:
         env_map["FAKEGPU_OOM_POLICY"] = str(oom_policy)
+
+    if unsupported_api is not None:
+        policy = str(unsupported_api).strip().lower()
+        if policy not in {"allow", "warn", "error"}:
+            raise ValueError(
+                "unsupported_api must be one of: 'allow', 'warn', 'error'"
+            )
+        env_map["FAKEGPU_UNSUPPORTED_API"] = policy
 
     if dist_mode is not None:
         env_map["FAKEGPU_DIST_MODE"] = str(dist_mode)

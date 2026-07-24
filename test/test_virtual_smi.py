@@ -232,7 +232,7 @@ def test_fakecuda_runtime_publishes_profile_stage_and_peak(tmp_path: Path) -> No
     assert completed.returncode == 0, completed.stderr
     state = json.loads(completed.stdout.strip().splitlines()[-1])
     assert state["stage"] == "forward"
-    assert state["tracking_confidence"] == "C2_torch_tensor_lifetime"
+    assert state["tracking_confidence"] == "C3_torch_dispatch_lifetime"
     assert state["devices"][0]["profile_id"] == "test-512m"
     assert state["devices"][0]["tracked_memory"] >= 4 * 2**20
     assert state["devices"][0]["peak_tracked_memory"] >= 4 * 2**20

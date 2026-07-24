@@ -51,7 +51,7 @@ def test_memory_snapshot_records_stage_peaks_and_largest_allocations() -> None:
 
     snapshot = json.loads(completed.stdout.strip())
     device = snapshot["devices"][0]
-    assert device["tracking_confidence"] == "C2_torch_tensor_lifetime"
+    assert device["tracking_confidence"] == "C3_torch_dispatch_lifetime"
     assert device["peak_by_stage"]["forward"] >= 12 * 1024**2
     assert device["peak_memory"] >= 12 * 1024**2
     assert device["allocation_count"] >= 3
@@ -63,6 +63,61 @@ def test_memory_snapshot_records_stage_peaks_and_largest_allocations() -> None:
     assert largest["device"] == 0
     assert largest["stage"] == "forward"
     assert largest["category"] in {"activation", "temporary", "tensor"}
+
+
+def test_dispatch_tracker_records_allocations_and_storage_aliases() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", devices="a100-1g:1")
+
+        import torch
+        import fakegpu.torch_patch as tp
+
+        x = torch.ones(4, device="cuda")
+        y = torch.ones(4, device="cuda")
+        z = x + y
+        viewed = z.view(2, 2)
+        snapshot = tp.memory_snapshot()
+        print(json.dumps({
+            "snapshot": snapshot,
+            "same_storage": (
+                z.untyped_storage().data_ptr()
+                == viewed.untyped_storage().data_ptr()
+            ),
+        }, sort_keys=True))
+        """
+    )
+
+    env = dict(os.environ)
+    env.setdefault("XONSH_HISTORY_BACKEND", "dummy")
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    payload = json.loads(completed.stdout.strip())
+    tracking = payload["snapshot"]["dispatch_tracking"]
+    assert payload["same_storage"] is True
+    assert payload["snapshot"]["tracking_confidence"] == (
+        "C3_torch_dispatch_lifetime"
+    )
+    assert tracking["enabled"] is True
+    assert tracking["operator_calls"] >= 2
+    assert tracking["new_allocations"] >= 1
+    assert tracking["alias_outputs"] >= 1
+    assert tracking["operators"]["aten.add.Tensor"]["new_allocations"] == 1
+    assert tracking["operators"]["aten.view.default"]["alias_outputs"] == 1
 
 
 def test_memory_snapshot_classifies_training_state_categories() -> None:

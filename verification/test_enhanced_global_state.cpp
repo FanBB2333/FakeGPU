@@ -28,6 +28,11 @@ int main() {
     gs.record_kernel_launch("unit_test_kernel");
     gs.record_cublas_gemm_typed(ptr, 128, 0);
     gs.record_cublaslt_matmul_typed(ptr, 64, 14);
+    gs.record_unsupported_api(
+        0,
+        "cudaLaunchKernel",
+        "not_executed",
+        "warn");
 
     auto devices = gs.snapshot_device_report();
     require(!devices.empty(), "snapshot_device_report returned no devices");
@@ -50,6 +55,16 @@ int main() {
     require(bf16_it != dev0.gemm_by_dtype.end(), "missing BF16 dtype stats");
     require(bf16_it->second.first == 1, "unexpected BF16 call count");
     require(bf16_it->second.second == 64, "unexpected BF16 flop count");
+
+    require(
+        dev0.unsupported_api_events.size() == 1,
+        "missing unsupported API event");
+    const auto& [operation, behavior, policy, unsupported_count] =
+        dev0.unsupported_api_events.front();
+    require(operation == "cudaLaunchKernel", "unexpected unsupported API operation");
+    require(behavior == "not_executed", "unexpected unsupported API behavior");
+    require(policy == "warn", "unexpected unsupported API policy");
+    require(unsupported_count == 1, "unexpected unsupported API count");
 
     size_t released_size = 0;
     int released_device = -1;

@@ -89,6 +89,10 @@
         },
         "calibration_workload": {
           "type": ["string", "null"]
+        },
+        "unsupported_api": {
+          "type": ["string", "null"],
+          "enum": ["allow", "warn", "error", null]
         }
       }
     },
@@ -131,9 +135,13 @@
         "C0_incomplete",
         "C1_weight_storage",
         "C2_torch_tensor_lifetime",
+        "C3_torch_dispatch_lifetime",
         "C3_native_cuda_allocations",
         "C4_real_gpu_calibrated"
       ]
+    },
+    "dispatch_tracking": {
+      "type": "object"
     },
     "memory_safety_factor": {
       "type": "number",

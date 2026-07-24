@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Added
+
+- Call-based workspace coverage summaries, a public
+  `require_workspace_coverage()` gate, validation thresholds, and cross-report
+  coverage aggregation.
+- A native unsupported-API policy with `allow`, one-time `warn`, and
+  `error`/CUDA 801 behavior, plus per-device report events.
+- Lower/expected/upper workspace intervals, explicit bounds for unmatched
+  calls, and a strict complete-upper-bound gate.
+- PyTorch-dispatch storage tracking for operator-created tensors, aliases,
+  inaccessible outputs, and per-operation statistics in preflight and virtual
+  SMI state.
+- A versioned native API capability manifest with strict source and built
+  export audits.
+- `fakegpu analyze-repo` for entrypoint, dependency, compiled-acceleration,
+  and distributed-configuration readiness analysis.
+- `fakegpu estimate-roofline` for profile-derived scalar-compute and memory
+  ceilings with explicit lower/expected/upper latency assumptions.
+- MoE active-expert FLOPs, expert-parallel traffic, quantized safetensors
+  storage, PEFT adapter storage, and optional profile roofline output in
+  `fakegpu estimate-llm`.
+
+### Changed
+
+- Expanded CI with a full Python regression job, Linux/macOS native builds,
+  and installed-wheel checks for bundled profiles and native libraries.
+- Updated runtime, preflight, report, memory-estimation, and distributed
+  documentation to describe the implemented behavior and remaining limits.
+- Expanded the public analysis API with repository, native-capability, and
+  profile-roofline reports.
+
+### Fixed
+
+- Unified native runtime statistics across the CUDA Runtime, Driver, cuBLAS,
+  and NVML compatibility libraries so one library cannot overwrite a report
+  with an empty or partial DSO-local snapshot.
+
+### Validation
+
+- Full local suite: 425 passed and 1 skipped.
+- Native smoke, all three unsupported-API policies, strict classification of
+  818 exports across five native libraries, CPU-backed cuBLAS/cuBLASLt
+  numerics, and combined IO/FLOP/no-op reporting passed on macOS.
+- The built wheel contains all 82 profiles, the native capability manifest,
+  the repository and performance analyzers, and no stale bytecode from an
+  incremental build.
+- Strict bilingual MkDocs generation and analytical roofline coverage for all
+  82 GPU profiles passed.
+
 ## v1.5.5 - 2026-07-23
 
 Compared with `v1.5.4`.

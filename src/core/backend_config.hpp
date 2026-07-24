@@ -22,6 +22,24 @@ enum class OomPolicy {
     SpillCpu     // Spill to CPU memory, fail unsupported kernels
 };
 
+enum class UnsupportedApiPolicy {
+    Allow,
+    Warn,
+    Error,
+};
+
+inline const char* unsupported_api_policy_name(UnsupportedApiPolicy policy) {
+    switch (policy) {
+        case UnsupportedApiPolicy::Allow:
+            return "allow";
+        case UnsupportedApiPolicy::Error:
+            return "error";
+        case UnsupportedApiPolicy::Warn:
+        default:
+            return "warn";
+    }
+}
+
 // Backend configuration singleton
 class BackendConfig {
 public:
@@ -60,6 +78,12 @@ public:
     }
 
     bool strict_compat() const { return strict_compat_; }
+    UnsupportedApiPolicy unsupported_api_policy() const {
+        return unsupported_api_policy_;
+    }
+    bool reject_unsupported_api() const {
+        return unsupported_api_policy_ == UnsupportedApiPolicy::Error;
+    }
 
     // For testing: allow mode override
     void set_mode(FakeGpuMode mode) { mode_ = mode; }
@@ -107,6 +131,16 @@ private:
 
         if (const char* strict_env = std::getenv("FAKEGPU_STRICT_COMPAT")) {
             strict_compat_ = std::string(strict_env) != "0";
+        }
+
+        if (const char* unsupported_env = std::getenv("FAKEGPU_UNSUPPORTED_API")) {
+            if (strcasecmp(unsupported_env, "allow") == 0) {
+                unsupported_api_policy_ = UnsupportedApiPolicy::Allow;
+            } else if (strcasecmp(unsupported_env, "error") == 0) {
+                unsupported_api_policy_ = UnsupportedApiPolicy::Error;
+            } else {
+                unsupported_api_policy_ = UnsupportedApiPolicy::Warn;
+            }
         }
 
         // Try to find real library paths
@@ -232,6 +266,7 @@ private:
     distributed::DistributedConfig distributed_config_;
     std::string configuration_error_;
     bool strict_compat_ = true;
+    UnsupportedApiPolicy unsupported_api_policy_ = UnsupportedApiPolicy::Warn;
 };
 
 // Helper function to get mode name

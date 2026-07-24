@@ -2,6 +2,7 @@
 #include "cuda_driver_defs.hpp"
 #include "../core/global_state.hpp"
 #include "../core/logging.hpp"
+#include "../core/unsupported_api.hpp"
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -85,6 +86,8 @@ static cudaError_t convertDriverError(CUresult result) {
             return cudaErrorInitializationError;
         case CUDA_ERROR_NOT_READY:
             return cudaErrorNotReady;
+        case CUDA_ERROR_NOT_SUPPORTED:
+            return cudaErrorNotSupported;
         default:
             return cudaErrorUnknown;
     }
@@ -96,6 +99,17 @@ static bool validateStreamArgument(cudaStream_t stream) {
         return false;
     }
     return true;
+}
+
+static bool rejectUnsupportedApi(
+    const char* operation,
+    const char* behavior = "not_executed") {
+    if (fake_gpu::record_unsupported_api(operation, behavior)) {
+        last_error = cudaErrorNotSupported;
+        return true;
+    }
+    last_error = cudaSuccess;
+    return false;
 }
 
 static bool submitAsyncStreamOperation(cudaStream_t stream) {
@@ -585,6 +599,8 @@ const char* cudaGetErrorString(cudaError_t error) {
             return "invalid memcpy direction";
         case cudaErrorNotReady:
             return "not ready";
+        case cudaErrorNotSupported:
+            return "operation not supported";
         default:
             return "unknown error";
     }
@@ -606,6 +622,8 @@ const char* cudaGetErrorName(cudaError_t error) {
             return "cudaErrorInvalidMemcpyDirection";
         case cudaErrorNotReady:
             return "cudaErrorNotReady";
+        case cudaErrorNotSupported:
+            return "cudaErrorNotSupported";
         default:
             return "cudaErrorUnknown";
     }
@@ -664,7 +682,9 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
     fake_gpu::GlobalState::instance().record_kernel_launch(kernel_name);
 
     // No actual kernel execution
-    last_error = cudaSuccess;
+    if (rejectUnsupportedApi("cudaLaunchKernel")) {
+        return last_error;
+    }
     if (!submitAsyncStreamOperation(stream)) {
         return last_error;
     }
@@ -676,6 +696,10 @@ cudaError_t cudaConfigureCall(dim3 gridDim, dim3 blockDim, size_t sharedMem, cud
         return last_error;
     }
     FGPU_LOG("[FakeCUDART] cudaConfigureCall (stub)\n");
+    if (rejectUnsupportedApi(
+            "cudaConfigureCall", "launch_configuration_not_materialized")) {
+        return last_error;
+    }
     last_error = cudaSuccess;
     if (!submitAsyncStreamOperation(stream)) {
         return last_error;
@@ -684,20 +708,19 @@ cudaError_t cudaConfigureCall(dim3 gridDim, dim3 blockDim, size_t sharedMem, cud
 }
 
 cudaError_t cudaSetupArgument(const void *arg, size_t size, size_t offset) {
-    // Just a stub
-    last_error = cudaSuccess;
+    rejectUnsupportedApi("cudaSetupArgument", "launch_argument_not_materialized");
     return last_error;
 }
 
 cudaError_t cudaLaunch(const void *func) {
     FGPU_LOG("[FakeCUDART] cudaLaunch (stub)\n");
-    last_error = cudaSuccess;
+    rejectUnsupportedApi("cudaLaunch");
     return last_error;
 }
 
 cudaError_t cudaLaunchKernelExC(const void *config, const void *func, void **args) {
     FGPU_LOG("[FakeCUDART] cudaLaunchKernelExC (stub)\n");
-    last_error = cudaSuccess;
+    rejectUnsupportedApi("cudaLaunchKernelExC");
     return last_error;
 }
 
@@ -901,8 +924,9 @@ cudaError_t cudaStreamAddCallback(cudaStream_t stream, void (*callback)(cudaStre
         return last_error;
     }
 
-    // Simplified: just succeed without actually adding callback.
-    last_error = cudaSuccess;
+    if (rejectUnsupportedApi("cudaStreamAddCallback", "callback_not_registered")) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaStreamAddCallback (stub)\n");
     return last_error;
 }
@@ -912,8 +936,11 @@ cudaError_t cudaStreamUpdateCaptureDependencies(cudaStream_t stream, cudaGraphNo
         return last_error;
     }
 
-    // Simplified: just succeed after validating the stream handle.
-    last_error = cudaSuccess;
+    if (rejectUnsupportedApi(
+            "cudaStreamUpdateCaptureDependencies",
+            "capture_dependencies_not_materialized")) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaStreamUpdateCaptureDependencies (stub)\n");
     return last_error;
 }
@@ -1670,7 +1697,9 @@ cudaError_t cudaGraphLaunch(cudaGraphExec_t graphExec, cudaStream_t stream) {
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
-    last_error = cudaSuccess;
+    if (rejectUnsupportedApi("cudaGraphLaunch")) {
+        return last_error;
+    }
     if (!submitAsyncStreamOperation(stream)) {
         return last_error;
     }
@@ -1686,7 +1715,9 @@ cudaError_t cudaGraphUpload(cudaGraphExec_t graphExec, cudaStream_t stream) {
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
-    last_error = cudaSuccess;
+    if (rejectUnsupportedApi("cudaGraphUpload", "state_not_materialized")) {
+        return last_error;
+    }
     if (!submitAsyncStreamOperation(stream)) {
         return last_error;
     }
@@ -1695,7 +1726,7 @@ cudaError_t cudaGraphUpload(cudaGraphExec_t graphExec, cudaStream_t stream) {
 }
 
 cudaError_t cudaGraphDebugDotPrint(cudaGraph_t graph, const char *path, unsigned int flags) {
-    last_error = cudaSuccess;
+    rejectUnsupportedApi("cudaGraphDebugDotPrint", "output_not_written");
     FGPU_LOG("[FakeCUDART] cudaGraphDebugDotPrint path=%s flags=%u (stub)\n", path ? path : "NULL", flags);
     return last_error;
 }
@@ -1895,13 +1926,13 @@ cudaError_t cudaGetSurfaceObjectResourceDesc(cudaResourceDesc *pResDesc, cudaSur
 cudaError_t cudaLaunchCooperativeKernel(const void *func, dim3 gridDim, dim3 blockDim, void **args, size_t sharedMem, cudaStream_t stream) {
     FGPU_LOG("[FakeCUDART] cudaLaunchCooperativeKernel (stub) Grid(%d,%d,%d) Block(%d,%d,%d)\n",
            gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
-    last_error = cudaSuccess;
+    rejectUnsupportedApi("cudaLaunchCooperativeKernel");
     return last_error;
 }
 
 cudaError_t cudaLaunchCooperativeKernelMultiDevice(void *launchParamsList, unsigned int numDevices, unsigned int flags) {
     FGPU_LOG("[FakeCUDART] cudaLaunchCooperativeKernelMultiDevice (stub) numDevices=%u\n", numDevices);
-    last_error = cudaSuccess;
+    rejectUnsupportedApi("cudaLaunchCooperativeKernelMultiDevice");
     return last_error;
 }
 
@@ -1987,6 +2018,10 @@ cudaError_t cudaImportExternalMemory(void **extMem_out, const void *memHandleDes
         return last_error;
     }
 
+    if (rejectUnsupportedApi(
+            "cudaImportExternalMemory", "synthetic_external_memory_handle")) {
+        return last_error;
+    }
     *extMem_out = malloc(sizeof(void*));
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaImportExternalMemory (stub)\n");
@@ -1999,6 +2034,10 @@ cudaError_t cudaExternalMemoryGetMappedBuffer(void **devPtr, void *extMem, const
         return last_error;
     }
 
+    if (rejectUnsupportedApi(
+            "cudaExternalMemoryGetMappedBuffer", "synthetic_fixed_size_buffer")) {
+        return last_error;
+    }
     *devPtr = malloc(1024);  // Dummy buffer
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaExternalMemoryGetMappedBuffer (stub)\n");
@@ -2006,6 +2045,10 @@ cudaError_t cudaExternalMemoryGetMappedBuffer(void **devPtr, void *extMem, const
 }
 
 cudaError_t cudaDestroyExternalMemory(void *extMem) {
+    if (rejectUnsupportedApi(
+            "cudaDestroyExternalMemory", "synthetic_external_memory_handle")) {
+        return last_error;
+    }
     free(extMem);
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaDestroyExternalMemory (stub)\n");
@@ -2018,6 +2061,10 @@ cudaError_t cudaImportExternalSemaphore(void **extSem_out, const void *semHandle
         return last_error;
     }
 
+    if (rejectUnsupportedApi(
+            "cudaImportExternalSemaphore", "synthetic_external_semaphore_handle")) {
+        return last_error;
+    }
     *extSem_out = malloc(sizeof(void*));
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaImportExternalSemaphore (stub)\n");
@@ -2028,7 +2075,11 @@ cudaError_t cudaSignalExternalSemaphoresAsync(const void **extSemArray, const vo
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
-    last_error = cudaSuccess;
+    if (rejectUnsupportedApi(
+            "cudaSignalExternalSemaphoresAsync",
+            "external_semaphore_signal_not_performed")) {
+        return last_error;
+    }
     if (!submitAsyncStreamOperation(stream)) {
         return last_error;
     }
@@ -2040,7 +2091,11 @@ cudaError_t cudaWaitExternalSemaphoresAsync(const void **extSemArray, const void
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
-    last_error = cudaSuccess;
+    if (rejectUnsupportedApi(
+            "cudaWaitExternalSemaphoresAsync",
+            "external_semaphore_wait_not_performed")) {
+        return last_error;
+    }
     if (!submitAsyncStreamOperation(stream)) {
         return last_error;
     }
@@ -2049,6 +2104,10 @@ cudaError_t cudaWaitExternalSemaphoresAsync(const void **extSemArray, const void
 }
 
 cudaError_t cudaDestroyExternalSemaphore(void *extSem) {
+    if (rejectUnsupportedApi(
+            "cudaDestroyExternalSemaphore", "synthetic_external_semaphore_handle")) {
+        return last_error;
+    }
     free(extSem);
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaDestroyExternalSemaphore (stub)\n");
@@ -2060,13 +2119,17 @@ cudaError_t cudaDestroyExternalSemaphore(void *extSem) {
 // ============================================================================
 
 cudaError_t cudaProfilerStart(void) {
-    last_error = cudaSuccess;
+    if (rejectUnsupportedApi("cudaProfilerStart", "profiler_not_started")) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaProfilerStart (stub)\n");
     return last_error;
 }
 
 cudaError_t cudaProfilerStop(void) {
-    last_error = cudaSuccess;
+    if (rejectUnsupportedApi("cudaProfilerStop", "profiler_not_started")) {
+        return last_error;
+    }
     FGPU_LOG("[FakeCUDART] cudaProfilerStop (stub)\n");
     return last_error;
 }

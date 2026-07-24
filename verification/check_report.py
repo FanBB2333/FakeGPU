@@ -23,6 +23,11 @@ def main() -> int:
     ap.add_argument("--path", default="fake_gpu_report.json", help="Path to fake_gpu_report.json")
     ap.add_argument("--expect-io", action="store_true", help="Require non-zero device IO counters")
     ap.add_argument("--expect-flops", action="store_true", help="Require non-zero GEMM/Matmul FLOPs counters")
+    ap.add_argument(
+        "--expect-unsupported-api",
+        action="store_true",
+        help="Require at least one classified unsupported API event",
+    )
     args = ap.parse_args()
 
     path = Path(args.path)
@@ -36,6 +41,9 @@ def main() -> int:
     version = report.get("report_version")
     if not isinstance(version, str):
         _die(f"unexpected report_version={version!r} (expected a version string)")
+    unsupported_policy = _require(report, "unsupported_api_policy", ctx="root")
+    if unsupported_policy not in {"allow", "warn", "error"}:
+        _die(f"unexpected unsupported_api_policy={unsupported_policy!r}")
 
     host_io = _require(report, "host_io", ctx="root")
     if not isinstance(host_io, dict):
@@ -50,6 +58,7 @@ def main() -> int:
     total_io_bytes = 0
     total_flops = 0
     saw_memory_peak = False
+    unsupported_api_event_count = 0
 
     for idx, dev in enumerate(devices):
         ctx = f"devices[{idx}]"
@@ -94,12 +103,30 @@ def main() -> int:
             _die(f"{ctx}.compute.total_flops must be an integer")
         total_flops += dev_flops
 
+        unsupported_events = dev.get("unsupported_api_events", [])
+        if not isinstance(unsupported_events, list):
+            _die(f"{ctx}.unsupported_api_events must be an array")
+        for event_index, event in enumerate(unsupported_events):
+            event_ctx = f"{ctx}.unsupported_api_events[{event_index}]"
+            if not isinstance(event, dict):
+                _die(f"{event_ctx} must be an object")
+            for key in ("operation", "behavior", "policy", "count"):
+                _require(event, key, ctx=event_ctx)
+            if event["policy"] not in {"allow", "warn", "error"}:
+                _die(f"{event_ctx}.policy is invalid")
+            count = event["count"]
+            if not isinstance(count, int) or count < 1:
+                _die(f"{event_ctx}.count must be a positive integer")
+            unsupported_api_event_count += count
+
     if not saw_memory_peak:
         _die("no device reported non-zero used_memory_peak (did the workload allocate anything?)")
     if args.expect_io and total_io_bytes <= 0:
         _die("expected non-zero device IO counters but total_io_bytes is 0")
     if args.expect_flops and total_flops <= 0:
         _die("expected non-zero FLOPs counters but total_flops is 0")
+    if args.expect_unsupported_api and unsupported_api_event_count <= 0:
+        _die("expected an unsupported API event but none was reported")
 
     return 0
 

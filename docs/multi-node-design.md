@@ -85,9 +85,14 @@ Keeping them separate lets you test combinations such as:
 
 Near-term improvements that fit the current design:
 
-- broader direct tests for communicator lifecycle and grouped semantics
-- wider coverage for proxy and passthrough validation
-- repeatable automation for broader multi-host topologies and network conditions
+- calibrate the topology/timing model against controlled TCP bandwidth,
+  latency, and contention conditions, with an explicit confidence envelope
+- model stream dependencies and compute/communication overlap without
+  pretending to reproduce NCCL protocol scheduling
+- widen proxy and passthrough validation across compatible CUDA/NCCL stacks
+- automate broader multi-host topology, failure, and network-condition matrices
+- extend recovery beyond fixed-size worker replacement toward optional dynamic
+  membership and sharded optimizer/checkpoint state
 - additional failure injection and timeout-debugging features
 - 将每个 collective 转换成 coordinator 可以理解的请求
 

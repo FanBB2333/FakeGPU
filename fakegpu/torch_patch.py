@@ -373,12 +373,94 @@ def _extract_cuda_device_index(device: Any) -> int | None:
 # ---------------------------------------------------------------------------
 
 _MEMORY_TRACKING = os.environ.get("FAKEGPU_MEMORY_TRACKING", "1") != "0"
+_DISPATCH_MEMORY_TRACKING = (
+    os.environ.get("FAKEGPU_DISPATCH_MEMORY_TRACKING", "1") != "0"
+)
 _ALLOCATOR_ALIGNMENT_BYTES = 512
 _ALLOCATOR_SMALL_SEGMENT_BYTES = 2 * 1024**2
 _ALLOCATOR_MEDIUM_SEGMENT_BYTES = 20 * 1024**2
 _ALLOCATOR_LARGE_ALIGNMENT_BYTES = 2 * 1024**2
 _ALLOCATOR_SMALL_REQUEST_LIMIT = 1024**2
 _ALLOCATOR_MEDIUM_REQUEST_LIMIT = 10 * 1024**2
+
+_dispatch_tracking_lock = threading.RLock()
+_dispatch_tracking_stats: dict[str, Any] = {
+    "enabled": False,
+    "operator_calls": 0,
+    "output_tensors": 0,
+    "new_allocations": 0,
+    "alias_outputs": 0,
+    "inaccessible_outputs": 0,
+    "operators": {},
+}
+
+
+def _reset_dispatch_tracking_stats(*, enabled: bool) -> None:
+    with _dispatch_tracking_lock:
+        _dispatch_tracking_stats.clear()
+        _dispatch_tracking_stats.update(
+            {
+                "enabled": bool(enabled),
+                "operator_calls": 0,
+                "output_tensors": 0,
+                "new_allocations": 0,
+                "alias_outputs": 0,
+                "inaccessible_outputs": 0,
+                "operators": {},
+            }
+        )
+
+
+def _record_dispatch_tracking(
+    operator: str,
+    *,
+    output_tensors: int,
+    new_allocations: int,
+    alias_outputs: int,
+    inaccessible_outputs: int,
+) -> None:
+    with _dispatch_tracking_lock:
+        _dispatch_tracking_stats["operator_calls"] += 1
+        _dispatch_tracking_stats["output_tensors"] += int(output_tensors)
+        _dispatch_tracking_stats["new_allocations"] += int(new_allocations)
+        _dispatch_tracking_stats["alias_outputs"] += int(alias_outputs)
+        _dispatch_tracking_stats["inaccessible_outputs"] += int(
+            inaccessible_outputs
+        )
+        operators = _dispatch_tracking_stats["operators"]
+        record = operators.setdefault(
+            operator,
+            {
+                "calls": 0,
+                "output_tensors": 0,
+                "new_allocations": 0,
+                "alias_outputs": 0,
+                "inaccessible_outputs": 0,
+            },
+        )
+        record["calls"] += 1
+        record["output_tensors"] += int(output_tensors)
+        record["new_allocations"] += int(new_allocations)
+        record["alias_outputs"] += int(alias_outputs)
+        record["inaccessible_outputs"] += int(inaccessible_outputs)
+
+
+def _dispatch_tracking_snapshot() -> dict[str, Any]:
+    with _dispatch_tracking_lock:
+        operators = {
+            name: dict(values)
+            for name, values in sorted(
+                _dispatch_tracking_stats["operators"].items()
+            )
+        }
+        return {
+            **{
+                key: value
+                for key, value in _dispatch_tracking_stats.items()
+                if key != "operators"
+            },
+            "operators": operators,
+        }
 
 
 class _DeviceMemoryTracker:
@@ -596,6 +678,10 @@ class _DeviceMemoryTracker:
             self._synthetic_saved_raw_ptrs.pop(raw_data_ptr, None)
             self._release_now(synthetic_data_ptr)
 
+    def has_allocation(self, data_ptr: int) -> bool:
+        with self._lock:
+            return int(data_ptr) in self._allocs
+
     def memory_allocated(self, device: int) -> int:
         with self._lock:
             if device < 0 or device >= len(self._used):
@@ -746,16 +832,25 @@ class _DeviceMemoryTracker:
                             if self._caching_allocator
                             else "direct_segments.v1"
                         ),
-                        "tracking_confidence": "C2_torch_tensor_lifetime",
+                        "tracking_confidence": (
+                            "C3_torch_dispatch_lifetime"
+                            if _dispatch_tracking_stats.get("enabled")
+                            else "C2_torch_tensor_lifetime"
+                        ),
                     }
                 )
             return {
-                "tracking_confidence": "C2_torch_tensor_lifetime",
+                "tracking_confidence": (
+                    "C3_torch_dispatch_lifetime"
+                    if _dispatch_tracking_stats.get("enabled")
+                    else "C2_torch_tensor_lifetime"
+                ),
                 "allocator_model": (
                     "cuda_caching_allocator.v1"
                     if self._caching_allocator
                     else "direct_segments.v1"
                 ),
+                "dispatch_tracking": _dispatch_tracking_snapshot(),
                 "devices": devices,
             }
 
@@ -1018,6 +1113,10 @@ class _DeviceMemoryTracker:
             "stage": metadata.get("stage"),
             "category": metadata.get("category", "tensor"),
         }
+        if metadata.get("source"):
+            item["source"] = str(metadata["source"])
+        if metadata.get("operator"):
+            item["operator"] = str(metadata["operator"])
         if metadata.get("stack"):
             item["stack"] = metadata["stack"]
         position = next(
@@ -1200,8 +1299,13 @@ def _smi_memory_snapshot() -> dict[str, Any]:
             }
         )
     return {
-        "tracking_confidence": "C2_torch_tensor_lifetime",
+        "tracking_confidence": (
+            "C3_torch_dispatch_lifetime"
+            if _dispatch_tracking_stats.get("enabled")
+            else "C2_torch_tensor_lifetime"
+        ),
         "stage": os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown",
+        "dispatch_tracking": _dispatch_tracking_snapshot(),
         "devices": devices,
     }
 
@@ -1246,12 +1350,18 @@ def _release_tracked_storage(data_ptr: int) -> None:
     _device_registry.pop(data_ptr, None)
 
 
-def _register_tensor_for_memory_tracking(tensor: Any, device_index: int) -> None:
+def _register_tensor_for_memory_tracking(
+    tensor: Any,
+    device_index: int,
+    *,
+    metadata: dict[str, Any] | None = None,
+    storage_info: tuple[Any, int, int] | None = None,
+) -> bool:
     """Register a tensor's memory and set up GC cleanup via weakref."""
     if _memory_tracker is None or not _MEMORY_TRACKING:
-        return
+        return False
     if _is_fake_tensor(tensor):
-        return
+        return False
 
     # Functional transforms such as vmap expose BatchedTensorImpl objects
     # whose storage is intentionally inaccessible.  Meta tensors and some
@@ -1259,37 +1369,45 @@ def _register_tensor_for_memory_tracking(tensor: Any, device_index: int) -> None
     # distinct allocation that FakeGPU can track, so skip them without
     # suppressing errors raised later by the actual tracker (notably OOM).
     try:
-        storage = tensor.untyped_storage()
-        dp = storage.data_ptr()
-        nbytes = storage.nbytes()
+        if storage_info is None:
+            storage = tensor.untyped_storage()
+            dp = int(storage.data_ptr())
+            nbytes = int(storage.nbytes())
+        else:
+            storage, dp, nbytes = storage_info
     except (NotImplementedError, RuntimeError):
-        return
+        return False
     except Exception:
-        return
+        return False
 
     if dp == 0 or nbytes == 0:
-        return
+        return False
 
     try:
         _set_tracked_data_ptr(tensor, int(dp))
+        if _memory_tracker.has_allocation(int(dp)):
+            return False
+        allocation_metadata = _tensor_allocation_metadata(tensor)
+        allocation_metadata.update(metadata or {})
         did_allocate = _memory_tracker.allocate(
             dp,
             nbytes,
             device_index,
-            metadata=_tensor_allocation_metadata(tensor),
+            metadata=allocation_metadata,
         )
         if not did_allocate:
-            return
+            return False
 
         # Set up weakref callback to release memory when tensor is GC'd.
         # We weakref the storage, not the tensor, because multiple tensor
         # views can share one storage.
         # Only add weakref if not already tracked (avoid double-counting)
         weakref.finalize(storage, _release_tracked_storage, int(dp))
+        return True
     except (MemoryError, RuntimeError):
         raise  # Preserve simulated OOM and other tracker errors.
     except Exception:
-        pass
+        return False
 
 
 def _tensor_allocation_metadata(tensor: Any) -> dict[str, Any]:
@@ -1436,6 +1554,113 @@ def _iter_tensors(value: Any):
     if isinstance(value, (list, tuple, set)):
         for item in value:
             yield from _iter_tensors(item)
+
+
+def _install_upstream_dispatch_memory_tracking(
+    upstream: Any,
+    torch_mod: Any,
+) -> None:
+    fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
+    if (
+        fake_tensor_cls is None
+        or not _MEMORY_TRACKING
+        or not _DISPATCH_MEMORY_TRACKING
+    ):
+        _reset_dispatch_tracking_stats(enabled=False)
+        return
+    if getattr(fake_tensor_cls, "_fakegpu_dispatch_tracking", False):
+        _reset_dispatch_tracking_stats(enabled=True)
+        return
+
+    try:
+        from torch.utils._python_dispatch import TorchDispatchMode
+    except (ImportError, AttributeError):
+        _reset_dispatch_tracking_stats(enabled=False)
+        return
+
+    class _AllocationTrackingMode(TorchDispatchMode):
+        def __init__(self, device_index: int) -> None:
+            super().__init__()
+            self.device_index = int(device_index)
+
+        def __torch_dispatch__(
+            self,
+            func: Any,
+            types: Any,
+            args: tuple[Any, ...] = (),
+            kwargs: dict[str, Any] | None = None,
+        ) -> Any:
+            result = func(*args, **(kwargs or {}))
+            tracker = _memory_tracker
+            operator = str(func)
+            output_tensors = 0
+            new_allocations = 0
+            alias_outputs = 0
+            inaccessible_outputs = 0
+            for tensor in _iter_tensors(result):
+                output_tensors += 1
+                try:
+                    storage = tensor.untyped_storage()
+                    data_ptr = int(storage.data_ptr())
+                    nbytes = int(storage.nbytes())
+                    if data_ptr == 0 or nbytes == 0:
+                        inaccessible_outputs += 1
+                        continue
+                except (NotImplementedError, RuntimeError):
+                    inaccessible_outputs += 1
+                    continue
+                except Exception:
+                    inaccessible_outputs += 1
+                    continue
+
+                allocated = _register_tensor_for_memory_tracking(
+                    tensor,
+                    self.device_index,
+                    metadata={
+                        "source": "torch_dispatch",
+                        "operator": operator,
+                    },
+                    storage_info=(storage, data_ptr, nbytes),
+                )
+                if allocated:
+                    new_allocations += 1
+                elif tracker is not None and tracker.has_allocation(data_ptr):
+                    alias_outputs += 1
+                else:
+                    inaccessible_outputs += 1
+            _record_dispatch_tracking(
+                operator,
+                output_tensors=output_tensors,
+                new_allocations=new_allocations,
+                alias_outputs=alias_outputs,
+                inaccessible_outputs=inaccessible_outputs,
+            )
+            return result
+
+    @classmethod
+    def _tracked_torch_function(
+        cls,
+        func: Any,
+        types: Any,
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Any:
+        del cls, types
+        call_kwargs = kwargs or {}
+        device_index = upstream._infer_device_index(args, call_kwargs)
+        cpu_args = upstream._tree_map(upstream.unwrap_tensor, args)
+        cpu_kwargs = upstream._tree_map(upstream.unwrap_tensor, call_kwargs)
+        with _AllocationTrackingMode(device_index):
+            result = func(*cpu_args, **cpu_kwargs)
+        return upstream._tree_map(
+            lambda obj: upstream._wrap_function_result(obj, device_index),
+            result,
+        )
+
+    _tracked_torch_function._fakegpu_dispatch_tracking = True  # type: ignore[attr-defined]
+    fake_tensor_cls.__torch_function__ = _tracked_torch_function
+    fake_tensor_cls._fakegpu_dispatch_tracking = True
+    _reset_dispatch_tracking_stats(enabled=True)
 
 
 def memory_snapshot() -> dict[str, Any]:
@@ -3203,10 +3428,22 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         result = _orig_wrap_tensor(t, device_index=device_index)
         if _memory_tracker is not None:
             actual_idx = getattr(result, "device_index", 0)
-            _register_tensor_for_memory_tracking(result, actual_idx)
+            tracked_data_ptr = getattr(
+                t,
+                "_fakegpu_memory_data_ptr",
+                None,
+            )
+            if (
+                tracked_data_ptr is not None
+                and _memory_tracker.has_allocation(int(tracked_data_ptr))
+            ):
+                _set_tracked_data_ptr(result, int(tracked_data_ptr))
+            else:
+                _register_tensor_for_memory_tracking(result, actual_idx)
         return result
 
     upstream.wrap_tensor = _hooked_wrap_tensor
+    _install_upstream_dispatch_memory_tracking(upstream, torch_mod)
     _install_upstream_memory_category_hooks(upstream, torch_mod)
     _patch_upstream_fakecuda_tensor_compat(upstream, torch_mod)
     _patch_upstream_collective_tensor_compat(upstream)
@@ -3532,6 +3769,13 @@ def patch(
             _memory_tracker = _DeviceMemoryTracker(
                 [profile["total_memory"] for profile in _DEVICE_PROFILES]
             )
+        _reset_dispatch_tracking_stats(
+            enabled=bool(
+                _upstream_mod is not None
+                and _MEMORY_TRACKING
+                and _DISPATCH_MEMORY_TRACKING
+            )
+        )
         _refresh_smi_publisher()
         _patch_transformers_utils()
         _patch_accelerate_utils()

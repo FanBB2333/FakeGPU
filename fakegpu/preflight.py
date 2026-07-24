@@ -70,6 +70,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report-dir", default="preflight-report", help="Directory for preflight outputs.")
     parser.add_argument("--strict", action="store_true", help="Treat incomplete tracking as a failing result.")
     parser.add_argument(
+        "--unsupported-api",
+        choices=["allow", "warn", "error"],
+        default=None,
+        help=(
+            "Behavior for recognized native APIs that are not executed. "
+            "The default inherits FAKEGPU_UNSUPPORTED_API or uses warn."
+        ),
+    )
+    parser.add_argument(
         "--allocation-stacks",
         action="store_true",
         help="Record short Python stack traces for largest fakecuda allocations.",
@@ -260,6 +269,7 @@ def build_report(
             "memory_safety_margin_bytes": memory_safety_margin,
             "memory_calibration": str(calibration_path) if calibration_path else None,
             "calibration_workload": str(calibration_workload) if calibration_workload else None,
+            "unsupported_api": getattr(ns, "unsupported_api", None),
         },
         "target_profiles": _target_profiles(ns),
         "calibration_gpu": calibration_gpu,
@@ -268,6 +278,11 @@ def build_report(
         "exit_code": exit_code,
         "duration_seconds": round(duration_seconds, 3),
         "tracking_confidence": tracking_confidence,
+        "dispatch_tracking": (
+            dict(raw_report.get("dispatch_tracking") or {})
+            if isinstance(raw_report, dict)
+            else {}
+        ),
         "memory_safety_factor": memory_safety_factor,
         "memory_safety_margin_bytes": memory_safety_margin,
         "memory_estimation": memory_estimation,
@@ -525,6 +540,7 @@ def _confidence_sentence(confidence: str) -> str:
         "C0_incomplete": "C0 means no usable runtime memory report was produced.",
         "C1_weight_storage": "C1 mainly covers weights and explicit storage.",
         "C2_torch_tensor_lifetime": "C2 tracks torch-level tensor lifetimes and is suitable for fakecuda preflight decisions.",
+        "C3_torch_dispatch_lifetime": "C3 tracks operator outputs and storage aliases at PyTorch dispatch boundaries.",
         "C3_native_cuda_allocations": "C3 tracks native CUDA allocation events.",
         "C4_real_gpu_calibrated": "C4 means the result has been calibrated against a real GPU run.",
     }
@@ -636,6 +652,8 @@ def _build_child_env(ns: argparse.Namespace, paths: PreflightPaths) -> dict[str,
             base.pop("FAKEGPU_PROFILES", None)
     if ns.devices:
         base["FAKEGPU_PROFILES"] = str(ns.devices)
+    if ns.unsupported_api:
+        base["FAKEGPU_UNSUPPORTED_API"] = str(ns.unsupported_api)
 
     if ns.runtime == "fakecuda":
         return base
@@ -645,6 +663,7 @@ def _build_child_env(ns: argparse.Namespace, paths: PreflightPaths) -> dict[str,
         build_dir=ns.build_dir,
         lib_dir=ns.lib_dir,
         mode=mode,
+        unsupported_api=ns.unsupported_api,
         profile=ns.profile,
         device_count=ns.device_count,
         devices=ns.devices,
@@ -746,7 +765,11 @@ def _normalize_devices(raw_report: dict[str, Any] | None, raw_report_kind: str |
     if raw_report is None:
         return [], "C0_incomplete"
 
-    confidence = "C2_torch_tensor_lifetime" if raw_report_kind == "fakecuda_child" else "C3_native_cuda_allocations"
+    confidence = (
+        str(raw_report.get("tracking_confidence") or "C2_torch_tensor_lifetime")
+        if raw_report_kind == "fakecuda_child"
+        else "C3_native_cuda_allocations"
+    )
     devices: list[dict[str, Any]] = []
     for raw in raw_report.get("devices", []) or []:
         total = int(raw.get("total_memory", 0) or 0)

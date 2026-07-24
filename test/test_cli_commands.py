@@ -244,3 +244,6 @@ def test_top_level_help_names_builtin_commands() -> None:
     assert result.returncode == 0
     assert "fakegpu demo" in result.stdout
     assert "fakegpu doctor" in result.stdout
+    assert "fakegpu capabilities" in result.stdout
+    assert "fakegpu analyze-repo" in result.stdout
+    assert "fakegpu estimate-roofline" in result.stdout

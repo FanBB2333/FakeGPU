@@ -71,12 +71,22 @@ def main() -> None:
 
     kernel_launches = dev0.get("kernel_launches")
     assert isinstance(kernel_launches, dict), dev0
-    assert "total" in kernel_launches, kernel_launches
+    assert kernel_launches.get("total", 0) >= 1, kernel_launches
+
+    unsupported_events = dev0.get("unsupported_api_events")
+    assert isinstance(unsupported_events, list) and unsupported_events, dev0
+    assert any(
+        event.get("operation") == "cuLaunchKernel"
+        and event.get("behavior") == "not_executed"
+        and event.get("policy") == "warn"
+        for event in unsupported_events
+    ), unsupported_events
 
     gemm_by_dtype = dev0.get("gemm_by_dtype")
     assert isinstance(gemm_by_dtype, dict), dev0
 
     stderr = completed.stderr
+    assert stderr.count("[FakeGPU] warning: cuLaunchKernel") == 1, stderr
     assert "FakeGPU Report Summary" in stderr, stderr
     assert "Device 0:" in stderr, stderr
 

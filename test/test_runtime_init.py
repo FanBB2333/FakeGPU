@@ -143,11 +143,51 @@ def test_native_mode_preload_boundaries() -> None:
     assert passthrough == ()
 
 
+def test_unsupported_api_policy_environment() -> None:
+    from fakegpu._api import _apply_config_env
+
+    env: dict[str, str] = {}
+    _apply_config_env(
+        env,
+        mode=None,
+        oom_policy=None,
+        unsupported_api=" WARN ",
+        dist_mode=None,
+        cluster_config=None,
+        coordinator_addr=None,
+        coordinator_transport=None,
+        profile=None,
+        device_count=None,
+        devices=None,
+    )
+    assert env["FAKEGPU_UNSUPPORTED_API"] == "warn"
+
+    try:
+        _apply_config_env(
+            {},
+            mode=None,
+            oom_policy=None,
+            unsupported_api="ignore",
+            dist_mode=None,
+            cluster_config=None,
+            coordinator_addr=None,
+            coordinator_transport=None,
+            profile=None,
+            device_count=None,
+            devices=None,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid unsupported API policy should raise ValueError")
+
+
 def main() -> None:
     test_import_is_side_effect_free()
     test_runtime_router_dispatch()
     test_editable_custom_torch_detection()
     test_native_mode_preload_boundaries()
+    test_unsupported_api_policy_environment()
     print("runtime init smoke passed")
 
 

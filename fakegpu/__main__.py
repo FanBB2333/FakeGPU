@@ -46,14 +46,38 @@ def main(argv: list[str] | None = None) -> int:
         from .validation import main as validation_main
 
         return validation_main(argv[1:])
+    if argv and argv[0] == "capabilities":
+        from .capabilities import main as capabilities_main
+
+        return capabilities_main(argv[1:])
+    if argv and argv[0] == "analyze-repo":
+        from .repository_analyzer import main as repository_analyzer_main
+
+        return repository_analyzer_main(argv[1:])
+    if argv and argv[0] == "estimate-roofline":
+        from .performance_model import main as performance_model_main
+
+        return performance_model_main(argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="fakegpu",
         description="Run a command with FakeGPU libraries preloaded (LD_PRELOAD/DYLD_INSERT_LIBRARIES).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Built-in commands: fakegpu demo, fakegpu doctor, fakegpu preflight, "
-            "fakegpu coordinator, fakegpu bandwidth, fakegpu estimate-llm, "
-            "fakegpu nvidia-smi, fakegpu workspace-profiles, fakegpu validate. "
+            "Built-in commands:\n"
+            "  fakegpu demo\n"
+            "  fakegpu doctor\n"
+            "  fakegpu preflight\n"
+            "  fakegpu coordinator\n"
+            "  fakegpu bandwidth\n"
+            "  fakegpu estimate-llm\n"
+            "  fakegpu estimate-roofline\n"
+            "  fakegpu analyze-repo\n"
+            "  fakegpu nvidia-smi\n"
+            "  fakegpu workspace-profiles\n"
+            "  fakegpu validate\n"
+            "  fakegpu capabilities\n"
+            "\n"
             "Run 'fakegpu <command> --help' for details."
         ),
     )
@@ -66,6 +90,14 @@ def main(argv: list[str] | None = None) -> int:
         "--oom-policy",
         choices=["clamp", "managed", "mapped_host", "spill_cpu"],
         help="Hybrid OOM policy. Equivalent to setting $FAKEGPU_OOM_POLICY.",
+    )
+    parser.add_argument(
+        "--unsupported-api",
+        choices=["allow", "warn", "error"],
+        help=(
+            "Behavior for recognized native APIs that FakeGPU does not execute. "
+            "Equivalent to setting $FAKEGPU_UNSUPPORTED_API."
+        ),
     )
     parser.add_argument(
         "--dist-mode",
@@ -123,6 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         lib_dir=ns.lib_dir,
         mode=ns.mode,
         oom_policy=ns.oom_policy,
+        unsupported_api=ns.unsupported_api,
         dist_mode=ns.dist_mode,
         cluster_config=ns.cluster_config,
         coordinator_addr=ns.coordinator_addr,

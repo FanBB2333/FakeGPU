@@ -6,6 +6,7 @@
 #include "../core/global_state.hpp"
 #include "../core/hybrid_memory_manager.hpp"
 #include "../core/logging.hpp"
+#include "../core/unsupported_api.hpp"
 
 namespace fake_gpu {
 
@@ -365,6 +366,10 @@ public:
         }
         // Simulate mode - no-op
         FGPU_LOG("[CudaModeDispatch] cuLaunchKernel (no-op in simulate mode)\n");
+        GlobalState::instance().record_kernel_launch("cuLaunchKernel");
+        if (record_unsupported_api("cuLaunchKernel")) {
+            return CUDA_ERROR_NOT_SUPPORTED;
+        }
         return CUDA_SUCCESS;
     }
 
