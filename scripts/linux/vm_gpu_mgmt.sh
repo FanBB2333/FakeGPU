@@ -87,22 +87,20 @@ fi
 
 export PATH="$REPO_ROOT/$VENV_DIR/bin:$PATH"
 
-deps="$("$PYTHON_BIN" tools/fakegpu_uv_deps.py "$UV_GROUP" | tr '\n' ' ')"
+deps="$("$PYTHON_BIN" scripts/lib/fakegpu_uv_deps.py "$UV_GROUP" | tr '\n' ' ')"
 if [[ -n "$deps" ]]; then
   uv pip install --python "$VENV_PY" $deps
 fi
 
-cmake -S . -B "$BUILD_DIR"
-cmake --build "$BUILD_DIR"
-
 # Sanity: preload works (no torch required).
-FAKEGPU_PYTHON="$VENV_PY" BUILD_DIR="$BUILD_DIR" ./ftest smoke
+FAKEGPU_PYTHON="$VENV_PY" BUILD_DIR="$BUILD_DIR" scripts/test.sh smoke
 
 # GPU management: NVML via pynvml + gpustat.
-FAKEGPU_PYTHON="$VENV_PY" "$VENV_PY" verification/test_nvml_pynvml.py --build-dir "$BUILD_DIR"
+FAKEGPU_PYTHON="$VENV_PY" \
+  "$VENV_PY" tests/native/nvml_pynvml.py --build-dir "$BUILD_DIR"
 
 if command -v gpustat >/dev/null 2>&1; then
   echo
   echo "gpustat (FakeGPU-enabled):"
-  ./fgpu --build-dir "$BUILD_DIR" gpustat -cp || true
+  "$VENV_PY" -m fakegpu --build-dir "$BUILD_DIR" gpustat -cp || true
 fi

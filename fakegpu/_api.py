@@ -209,7 +209,7 @@ def env(
     - Linux: `LD_LIBRARY_PATH` + `LD_PRELOAD`
     - macOS: `DYLD_LIBRARY_PATH` + `DYLD_INSERT_LIBRARIES`
 
-    Useful for subprocesses (equivalent to the repo's `./fgpu` script).
+    Useful for subprocesses and the ``python -m fakegpu`` command.
     """
 
     resolved_dir = library_dir(build_dir=build_dir, lib_dir=lib_dir)

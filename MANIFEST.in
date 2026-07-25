@@ -1,10 +1,6 @@
 include CMakeLists.txt
 include LICENSE
 include README.md
-include README.zh-CN.md
-include README.zh-TW.md
-include fgpu
-include ftest
 recursive-include fakegpu *.py
 recursive-include fakegpu/data *.json
 recursive-include profiles *.yaml

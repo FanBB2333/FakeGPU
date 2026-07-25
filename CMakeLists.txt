@@ -281,22 +281,6 @@ else()
     )
 endif()
 
-add_executable(fakegpu_config_probe
-    verification/test_cluster_config_main.cpp
-    $<TARGET_OBJECTS:fake_gpu_core>
-    $<TARGET_OBJECTS:fake_gpu_distributed>
-)
-target_include_directories(fakegpu_config_probe PRIVATE src/core src/distributed)
-fakegpu_link_common_system_libs(fakegpu_config_probe)
-
-add_executable(fakegpu_topology_probe
-    verification/test_topology_model_main.cpp
-    $<TARGET_OBJECTS:fake_gpu_core>
-    $<TARGET_OBJECTS:fake_gpu_distributed>
-)
-target_include_directories(fakegpu_topology_probe PRIVATE src/core src/distributed)
-fakegpu_link_common_system_libs(fakegpu_topology_probe)
-
 add_executable(fakegpu_coordinator
     src/distributed/coordinator_main.cpp
     $<TARGET_OBJECTS:fake_gpu_core>
@@ -305,27 +289,3 @@ add_executable(fakegpu_coordinator
 target_include_directories(fakegpu_coordinator PRIVATE src/distributed)
 fakegpu_link_common_system_libs(fakegpu_coordinator)
 set_target_properties(fakegpu_coordinator PROPERTIES OUTPUT_NAME "fakegpu-coordinator")
-
-add_executable(fakegpu_nccl_direct_test
-    verification/test_nccl_direct.cpp
-)
-target_include_directories(fakegpu_nccl_direct_test PRIVATE src/nccl src/distributed)
-target_link_libraries(fakegpu_nccl_direct_test PRIVATE fake_nccl fake_cuda fake_gpu Threads::Threads)
-
-add_executable(fakegpu_staging_buffer_probe
-    verification/test_staging_buffer_main.cpp
-)
-target_include_directories(fakegpu_staging_buffer_probe PRIVATE src/distributed)
-target_link_libraries(fakegpu_staging_buffer_probe PRIVATE fake_gpu Threads::Threads)
-
-add_executable(fakegpu_collective_direct_test
-    verification/test_collective_direct.cpp
-)
-target_include_directories(fakegpu_collective_direct_test PRIVATE src/nccl src/distributed)
-target_link_libraries(fakegpu_collective_direct_test PRIVATE fake_nccl fake_gpu Threads::Threads)
-
-add_executable(fakegpu_group_semantics_test
-    verification/test_group_semantics_main.cpp
-)
-target_include_directories(fakegpu_group_semantics_test PRIVATE src/nccl src/distributed)
-target_link_libraries(fakegpu_group_semantics_test PRIVATE fake_nccl fake_gpu Threads::Threads)
