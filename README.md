@@ -12,6 +12,8 @@ distributed GPU workflows without a production GPU cluster.**
 [![Python][python-shield]][python-url]
 [![License][license-shield]][license-url]
 
+[English](README.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
+
 [Report a bug](https://github.com/FanBB2333/FakeGPU/issues/new?labels=bug) ·
 [Request a feature](https://github.com/FanBB2333/FakeGPU/issues/new?labels=enhancement)
 

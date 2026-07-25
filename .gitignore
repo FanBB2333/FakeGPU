@@ -70,6 +70,8 @@ tests/output/
 # Local design and planning documents
 docs/
 README.*.md
+!README.zh-CN.md
+!README.zh-TW.md
 PROJECT_STRUCTURE.md
 TODO*.md
 design.md

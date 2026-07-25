@@ -252,8 +252,17 @@ def test_top_level_help_names_builtin_commands() -> None:
             command_result.stderr,
         )
 
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    documented_commands = set(
-        re.findall(r"^\| `fakegpu ([a-z0-9-]+)` \|", readme, flags=re.MULTILINE)
-    )
-    assert documented_commands == set(BUILTIN_COMMANDS)
+    for readme_path in (
+        "README.md",
+        "README.zh-CN.md",
+        "README.zh-TW.md",
+    ):
+        readme = (ROOT / readme_path).read_text(encoding="utf-8")
+        documented_commands = set(
+            re.findall(
+                r"^\| `fakegpu ([a-z0-9-]+)` \|",
+                readme,
+                flags=re.MULTILINE,
+            )
+        )
+        assert documented_commands == set(BUILTIN_COMMANDS), readme_path
