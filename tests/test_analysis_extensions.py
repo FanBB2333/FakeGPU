@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from fakegpu.calibration import (
     BUNDLE_SCHEMA_VERSION,
     build_workload_calibration_bundle,
@@ -24,6 +26,9 @@ from fakegpu.training_plan import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MEMORY_EVIDENCE_PATH = (
+    ROOT / "tests" / "data" / "memory_validation_evidence.json"
+)
 
 
 def test_analysis_apis_are_exported_from_package() -> None:
@@ -169,6 +174,105 @@ def test_calibration_comparison_and_bundle() -> None:
     )
     assert bundle["schema_version"] == BUNDLE_SCHEMA_VERSION
     assert bundle["entries"][0]["id"] == "tiny-sft"
+
+
+def test_published_memory_evidence_matches_calibration_math() -> None:
+    evidence = json.loads(MEMORY_EVIDENCE_PATH.read_text(encoding="utf-8"))
+    assert (
+        evidence["schema_version"]
+        == "fakegpu.memory_validation_evidence.v1"
+    )
+    revision = evidence["source_revision"]
+    assert len(revision) == 40
+    int(revision, 16)
+
+    groups = {
+        group["id"]: group for group in evidence["evidence_groups"]
+    }
+    assert set(groups) == {
+        "controlled_aten",
+        "qwen3_8b_inference",
+        "qwen_sft",
+        "qwen_qlora",
+    }
+    for group in groups.values():
+        assert group["source_path"].startswith("docs/")
+        assert group["source_anchor"]
+
+    controlled = groups["controlled_aten"]
+    assert controlled["workload_count"] == 13
+    assert controlled["observation_count"] == 26
+    assert (
+        controlled[
+            "published_maximum_absolute_percentage_error_percent"
+        ]
+        == 0.08
+    )
+    assert controlled["published_maximum_underestimate_percent"] == 0.08
+
+    inference = groups["qwen3_8b_inference"]
+    prediction = {
+        "schema_version": "readme_evidence_prediction.v1",
+        "memory_timeline": {
+            "phases": [
+                {
+                    "phase": item["id"],
+                    "peak_bytes": item["predicted_bytes"],
+                }
+                for item in inference["measurements"]
+            ]
+        },
+    }
+    observation = {
+        "schema_version": "readme_evidence_observation.v1",
+        "memory_timeline": {
+            "phases": [
+                {
+                    "phase": item["id"],
+                    "peak_bytes": item["observed_bytes"],
+                }
+                for item in inference["measurements"]
+            ]
+        },
+    }
+    comparison = compare_memory_reports(
+        prediction,
+        observation,
+        workload=inference["id"],
+    )
+    comparisons = {
+        item["phase"]: item for item in comparison["comparisons"]
+    }
+    for measurement in inference["measurements"]:
+        actual_percent = (
+            comparisons[measurement["id"]][
+                "absolute_percentage_error"
+            ]
+            * 100
+        )
+        assert actual_percent == pytest.approx(
+            measurement[
+                "published_absolute_percentage_error_percent"
+            ],
+            abs=0.0000005,
+        )
+    assert comparison["summary"]["underprediction_phase_count"] == 2
+    assert comparison["summary"]["recommended_memory_safety_margin_bytes"] > 0
+    assert comparison["summary"]["recommended_memory_safety_factor"] > 1
+
+    sft_errors = [
+        item["published_absolute_percentage_error_percent"]
+        for item in groups["qwen_sft"]["measurements"]
+    ]
+    assert len(sft_errors) == 10
+    assert (min(sft_errors), max(sft_errors)) == (0.102, 1.921)
+
+    qlora_errors = [
+        item["published_absolute_percentage_error_percent"]
+        for item in groups["qwen_qlora"]["measurements"]
+    ]
+    assert len(qlora_errors) == 10
+    assert (min(qlora_errors), max(qlora_errors)) == (0.628, 1.732)
 
 
 def test_training_plan_normalizes_deepspeed_zero3_offload() -> None:

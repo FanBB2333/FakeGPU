@@ -20,6 +20,27 @@ from fakegpu.profile_catalog import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+README_PATHS = (
+    "README.md",
+    "README.zh-CN.md",
+    "README.zh-TW.md",
+)
+MEMORY_EVIDENCE_PATH = (
+    ROOT / "tests" / "data" / "memory_validation_evidence.json"
+)
+
+
+def _anchored_readme_section(readme: str, anchor: str) -> str:
+    match = re.search(
+        rf'<a id="{re.escape(anchor)}"></a>\n\n'
+        rf"### [^\n]+\n\n"
+        rf"(?P<body>.*?)"
+        rf'(?=\n(?:<a id="[^"]+"></a>\n\n)?### )',
+        readme,
+        flags=re.DOTALL,
+    )
+    assert match is not None, anchor
+    return match.group("body")
 
 
 def _run_fakegpu(*args: str) -> subprocess.CompletedProcess[str]:
@@ -241,6 +262,63 @@ def test_fakecuda_profile_matrix() -> None:
     )
 
 
+def test_calibrate_compare_cli_writes_error_and_safety_data(
+    tmp_path: Path,
+) -> None:
+    prediction_path = tmp_path / "prediction.json"
+    observation_path = tmp_path / "observation.json"
+    output_path = tmp_path / "comparison.json"
+    prediction_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "test_prediction.v1",
+                "memory_timeline": {
+                    "phases": [
+                        {"phase": "peak", "peak_bytes": 900},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    observation_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "test_observation.v1",
+                "memory_timeline": {
+                    "phases": [
+                        {"phase": "peak", "peak_bytes": 1_000},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_fakegpu(
+        "calibrate",
+        "compare",
+        str(prediction_path),
+        str(observation_path),
+        "--json",
+        str(output_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    comparison = json.loads(output_path.read_text(encoding="utf-8"))
+    assert (
+        comparison["schema_version"]
+        == "fakegpu.calibration_comparison.v1"
+    )
+    assert comparison["comparisons"][0]["absolute_percentage_error"] == 0.1
+    summary = comparison["summary"]
+    assert summary["underprediction_phase_count"] == 1
+    assert summary["recommended_memory_safety_margin_bytes"] == 100
+    assert summary["recommended_memory_safety_factor"] == pytest.approx(
+        10 / 9
+    )
+
+
 def test_top_level_help_names_builtin_commands() -> None:
     result = _run_fakegpu("--help")
     assert result.returncode == 0
@@ -252,11 +330,7 @@ def test_top_level_help_names_builtin_commands() -> None:
             command_result.stderr,
         )
 
-    for readme_path in (
-        "README.md",
-        "README.zh-CN.md",
-        "README.zh-TW.md",
-    ):
+    for readme_path in README_PATHS:
         readme = (ROOT / readme_path).read_text(encoding="utf-8")
         documented_commands = set(
             re.findall(
@@ -266,3 +340,107 @@ def test_top_level_help_names_builtin_commands() -> None:
             )
         )
         assert documented_commands == set(BUILTIN_COMMANDS), readme_path
+
+
+def test_readmes_document_supported_use_cases() -> None:
+    use_case_commands = {
+        "estimate-llm",
+        "preflight",
+        "demo",
+        "validate",
+        "plan-training",
+        "analyze-repo",
+        "analyze-kernel",
+        "capabilities",
+        "simulate-topology",
+        "replay-trace",
+        "bandwidth",
+        "calibrate",
+    }
+    assert use_case_commands <= set(BUILTIN_COMMANDS)
+
+    for readme_path in README_PATHS:
+        readme = (ROOT / readme_path).read_text(encoding="utf-8")
+        for language_path in README_PATHS:
+            assert f"({language_path})" in readme, (
+                readme_path,
+                language_path,
+            )
+
+        section = _anchored_readme_section(readme, "use-cases")
+        table_rows = [
+            line for line in section.splitlines() if line.startswith("|")
+        ]
+        assert len(table_rows) == 8, readme_path
+        for command in use_case_commands:
+            assert re.search(
+                rf"`{re.escape(command)}(?:`| )",
+                section,
+            ), (readme_path, command)
+
+
+def test_readmes_match_memory_validation_evidence() -> None:
+    evidence = json.loads(MEMORY_EVIDENCE_PATH.read_text(encoding="utf-8"))
+    revision = evidence["source_revision"]
+    groups = {
+        group["id"]: group for group in evidence["evidence_groups"]
+    }
+
+    controlled = groups["controlled_aten"]
+    controlled_error = float(
+        controlled[
+            "published_maximum_absolute_percentage_error_percent"
+        ]
+    )
+    inference = groups["qwen3_8b_inference"]["measurements"]
+    inference_errors = [
+        abs(item["predicted_bytes"] - item["observed_bytes"])
+        / item["observed_bytes"]
+        * 100
+        for item in inference
+    ]
+    sft_errors = [
+        item["published_absolute_percentage_error_percent"]
+        for item in groups["qwen_sft"]["measurements"]
+    ]
+    qlora_errors = [
+        item["published_absolute_percentage_error_percent"]
+        for item in groups["qwen_qlora"]["measurements"]
+    ]
+    expected_claims = {
+        str(controlled["workload_count"]),
+        str(controlled["observation_count"]),
+        f"{controlled_error:.2f}%",
+        f"{100 - controlled_error:.2f}%",
+        *(f"{error:.4f}%" for error in inference_errors),
+        *(f"{100 - error:.4f}%" for error in inference_errors),
+        f"{min(sft_errors):.3f}%–{max(sft_errors):.3f}%",
+        f"{100 - max(sft_errors):.3f}%–{100 - min(sft_errors):.3f}%",
+        f"{min(qlora_errors):.3f}%–{max(qlora_errors):.3f}%",
+        (
+            f"{100 - max(qlora_errors):.3f}%–"
+            f"{100 - min(qlora_errors):.3f}%"
+        ),
+    }
+
+    for readme_path in README_PATHS:
+        readme = (ROOT / readme_path).read_text(encoding="utf-8")
+        section = _anchored_readme_section(
+            readme,
+            "memory-estimation-evidence",
+        )
+        evidence_rows = [
+            line for line in section.splitlines() if line.startswith("|")
+        ]
+        assert len(evidence_rows) == 6, readme_path
+        for claim in expected_claims:
+            assert claim in section, (readme_path, claim)
+        assert "tests/data/memory_validation_evidence.json" in section
+
+        for group in groups.values():
+            source_url = (
+                "https://github.com/FanBB2333/FakeGPU/blob/"
+                f"{revision}/{group['source_path']}"
+                f"#{group['source_anchor']}"
+            )
+            assert source_url in readme, (readme_path, group["id"])
