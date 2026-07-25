@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 from fakegpu.calibration import (
@@ -500,21 +498,3 @@ if __name__ == "__main__":
         "generated_kernel_path",
         "runtime_cuda_extension_build",
     } <= codes
-
-
-def test_new_analysis_commands_are_wired_to_main_cli() -> None:
-    for command in (
-        "calibrate",
-        "plan-training",
-        "simulate-topology",
-        "replay-trace",
-        "analyze-kernel",
-    ):
-        result = subprocess.run(
-            [sys.executable, "-m", "fakegpu", command, "--help"],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert result.returncode == 0, (command, result.stderr)

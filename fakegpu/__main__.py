@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import sys
 
@@ -8,76 +9,36 @@ from ._api import env as fakegpu_env
 from ._api import _warn_if_macos_injection_may_be_blocked
 
 
+_BUILTIN_HANDLERS = {
+    "demo": (".demo", "main"),
+    "doctor": (".doctor", "main"),
+    "preflight": (".preflight", "main"),
+    "coordinator": (".distributed_cli", "coordinator_main"),
+    "bandwidth": (".distributed_cli", "bandwidth_main"),
+    "estimate-llm": (".llm_cli", "main"),
+    "estimate-roofline": (".performance_model", "main"),
+    "analyze-repo": (".repository_analyzer", "main"),
+    "analyze-kernel": (".kernel_analysis", "main"),
+    "calibrate": (".calibration", "main"),
+    "plan-training": (".training_plan", "main"),
+    "simulate-topology": (".topology", "main"),
+    "replay-trace": (".trace_replay", "main"),
+    "nvidia-smi": (".smi", "main"),
+    "workspace-profiles": (".workspace_cli", "main"),
+    "validate": (".validation", "main"),
+    "capabilities": (".capabilities", "main"),
+}
+BUILTIN_COMMANDS = tuple(_BUILTIN_HANDLERS)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] == "demo":
-        from .demo import main as demo_main
-
-        return demo_main(argv[1:])
-    if argv and argv[0] == "doctor":
-        from .doctor import main as doctor_main
-
-        return doctor_main(argv[1:])
-    if argv and argv[0] == "preflight":
-        from .preflight import main as preflight_main
-
-        return preflight_main(argv[1:])
-    if argv and argv[0] == "coordinator":
-        from .distributed_cli import coordinator_main
-
-        return coordinator_main(argv[1:])
-    if argv and argv[0] == "bandwidth":
-        from .distributed_cli import bandwidth_main
-
-        return bandwidth_main(argv[1:])
-    if argv and argv[0] == "estimate-llm":
-        from .llm_cli import main as llm_main
-
-        return llm_main(argv[1:])
-    if argv and argv[0] == "nvidia-smi":
-        from .smi import main as smi_main
-
-        return smi_main(argv[1:])
-    if argv and argv[0] == "workspace-profiles":
-        from .workspace_cli import main as workspace_main
-
-        return workspace_main(argv[1:])
-    if argv and argv[0] == "validate":
-        from .validation import main as validation_main
-
-        return validation_main(argv[1:])
-    if argv and argv[0] == "capabilities":
-        from .capabilities import main as capabilities_main
-
-        return capabilities_main(argv[1:])
-    if argv and argv[0] == "analyze-repo":
-        from .repository_analyzer import main as repository_analyzer_main
-
-        return repository_analyzer_main(argv[1:])
-    if argv and argv[0] == "estimate-roofline":
-        from .performance_model import main as performance_model_main
-
-        return performance_model_main(argv[1:])
-    if argv and argv[0] == "calibrate":
-        from .calibration import main as calibration_main
-
-        return calibration_main(argv[1:])
-    if argv and argv[0] == "plan-training":
-        from .training_plan import main as training_plan_main
-
-        return training_plan_main(argv[1:])
-    if argv and argv[0] == "simulate-topology":
-        from .topology import main as topology_main
-
-        return topology_main(argv[1:])
-    if argv and argv[0] == "replay-trace":
-        from .trace_replay import main as trace_replay_main
-
-        return trace_replay_main(argv[1:])
-    if argv and argv[0] == "analyze-kernel":
-        from .kernel_analysis import main as kernel_analysis_main
-
-        return kernel_analysis_main(argv[1:])
+    handler_reference = _BUILTIN_HANDLERS.get(argv[0]) if argv else None
+    if handler_reference is not None:
+        module_name, function_name = handler_reference
+        module = importlib.import_module(module_name, package=__package__)
+        handler = getattr(module, function_name)
+        return handler(argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="fakegpu",
@@ -85,25 +46,8 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Built-in commands:\n"
-            "  fakegpu demo\n"
-            "  fakegpu doctor\n"
-            "  fakegpu preflight\n"
-            "  fakegpu coordinator\n"
-            "  fakegpu bandwidth\n"
-            "  fakegpu estimate-llm\n"
-            "  fakegpu estimate-roofline\n"
-            "  fakegpu analyze-repo\n"
-            "  fakegpu analyze-kernel\n"
-            "  fakegpu calibrate\n"
-            "  fakegpu plan-training\n"
-            "  fakegpu simulate-topology\n"
-            "  fakegpu replay-trace\n"
-            "  fakegpu nvidia-smi\n"
-            "  fakegpu workspace-profiles\n"
-            "  fakegpu validate\n"
-            "  fakegpu capabilities\n"
-            "\n"
-            "Run 'fakegpu <command> --help' for details."
+            + "".join(f"  fakegpu {command}\n" for command in BUILTIN_COMMANDS)
+            + "\nRun 'fakegpu <command> --help' for details."
         ),
     )
     parser.add_argument(
