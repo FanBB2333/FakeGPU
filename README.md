@@ -29,8 +29,8 @@ distributed GPU workflows without a production GPU cluster.**
 
 1. [About the project](#about-the-project)
    - [What FakeGPU answers](#what-fakegpu-answers)
-   - [Typical use cases](#typical-use-cases)
-   - [Real-GPU memory-estimation evidence](#real-gpu-memory-estimation-evidence)
+   - [Typical use cases](#use-cases)
+   - [Real-GPU memory-estimation evidence](#memory-estimation-evidence)
    - [How it works](#how-it-works)
    - [Built with](#built-with)
 2. [Getting started](#getting-started)
@@ -80,6 +80,8 @@ runs.
 | Where do compute, communication, wait, and memory overlap in a trace? | Trace replay | No |
 | How does an estimate compare with an actual CUDA run? | Passthrough or hybrid calibration | Yes |
 
+<a id="use-cases"></a>
+
 ### Typical use cases
 
 | When this is useful | What FakeGPU provides | Start with |
@@ -90,6 +92,8 @@ runs.
 | Reviewing an unfamiliar GPU repository or native extension | GPU entry-point, dependency, kernel, and unsupported-API inventory | `analyze-repo`, `analyze-kernel`, `capabilities` |
 | Designing or debugging a distributed workflow | Collective routing, link contention, rank waits, memory timelines, and TCP payload validation | `simulate-topology`, `replay-trace`, `bandwidth` |
 | Turning a small real-GPU trial into evidence for repeated runs | Prediction-versus-observation reports and signature-scoped calibration data | `calibrate`, `preflight --memory-calibration` |
+
+<a id="memory-estimation-evidence"></a>
 
 ### Real-GPU memory-estimation evidence
 
@@ -110,11 +114,24 @@ measurement.
 | [Qwen 0.8B/2B full and LoRA SFT][validation-sft] | RTX PRO 5000; PyTorch 2.8/CUDA 12.8 | 10 training cases | **0.102%–1.921%** | **98.079%–99.898%** |
 | [Qwen 0.8B/2B native NF4 QLoRA][validation-qlora] | RTX PRO 5000; PyTorch 2.8/CUDA 12.8 | 10 quantized training cases | **0.628%–1.732%** | **98.268%–99.372%** |
 
+How to read these numbers:
+
+- The Qwen rows use `torch.cuda.max_memory_allocated()` as the reference. CUDA
+  context memory and reserved-but-unused allocator memory are excluded.
+- The controlled ATen row adds one backend-resident measurement from the exact
+  GPU and software stack; that value must not be reused on another stack.
+- Ranges show the minimum and maximum case error, not an average. Maximum
+  underestimation is the important failure mode when evaluating OOM risk.
+- A `99.x%` agreement value is not spare capacity. Capacity decisions should
+  still apply a workload-specific safety margin or factor.
+
 These are fixed-workload measurements, not a universal accuracy claim.
 Different models, shapes, attention backends, quantization kernels, allocators,
 PyTorch/CUDA versions, or GPUs require a matching calibration. The links above
 point to the immutable validation snapshot containing the full configurations
-and measured byte counts.
+and measured byte counts. A
+[machine-readable evidence summary](https://github.com/FanBB2333/FakeGPU/blob/main/tests/data/memory_validation_evidence.json)
+is checked against the README in CI.
 
 On a CUDA host, regenerate the maintained controlled comparison with:
 
@@ -124,6 +141,22 @@ python3 scripts/validation/static_memory_validation.py \
   --markdown build/static-memory-validation.md \
   --max-underestimate-percent 5
 ```
+
+On a CPU-only host, add `--static-only`; this checks the estimation path but
+does not produce a real-GPU accuracy measurement. To compare compatible
+prediction and observation reports for your own workload:
+
+```bash
+python3 -m fakegpu calibrate compare \
+  build/prediction.json \
+  build/observation.json \
+  --json build/calibration-comparison.json
+```
+
+The comparison reports per-phase signed and absolute error, interval coverage,
+and a recommended memory safety margin and factor. Apply those recommendations
+only to the same workload signature, shapes, dtype, software stack, and GPU
+profile.
 
 ### How it works
 

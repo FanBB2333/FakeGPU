@@ -1,0 +1,172 @@
+{
+  "schema_version": "fakegpu.memory_validation_evidence.v1",
+  "source_revision": "df254c21eebc0a5bbf13992f3f5a8e995cfa8708",
+  "metric": {
+    "name": "absolute_percentage_error",
+    "unit": "percent",
+    "formula": "abs(predicted_bytes - observed_bytes) / observed_bytes * 100",
+    "agreement_formula": "100 - absolute_percentage_error"
+  },
+  "evidence_groups": [
+    {
+      "id": "controlled_aten",
+      "source_path": "docs/ai-researcher-preflight.md",
+      "source_anchor": "4-static-aten-storage-liveness-validation",
+      "reference": "real CUDA allocator peak with stack-matched backend-resident calibration",
+      "environments": [
+        {
+          "gpu": "NVIDIA RTX 3090 Ti",
+          "pytorch": "2.12",
+          "cuda": "13.0"
+        },
+        {
+          "gpu": "NVIDIA RTX PRO 5000 Blackwell",
+          "pytorch": "2.9",
+          "cuda": "12.8"
+        }
+      ],
+      "workload_count": 13,
+      "observation_count": 26,
+      "published_maximum_absolute_percentage_error_percent": 0.08,
+      "published_maximum_underestimate_percent": 0.08
+    },
+    {
+      "id": "qwen3_8b_inference",
+      "source_path": "docs/llm-inference-estimation.md",
+      "source_anchor": "maintained-qwen3-8b-result",
+      "reference": "torch.cuda.max_memory_allocated",
+      "environment": {
+        "gpu": "NVIDIA RTX PRO 5000 72GB Blackwell",
+        "pytorch": "2.9.1",
+        "cuda": "12.8",
+        "dtype": "bfloat16",
+        "attention": "sdpa",
+        "prompt_tokens": 9,
+        "generated_tokens": 2
+      },
+      "measurements": [
+        {
+          "id": "model_load",
+          "predicted_bytes": 16381470976,
+          "observed_bytes": 16383586816,
+          "published_absolute_percentage_error_percent": 0.012914
+        },
+        {
+          "id": "static_inference_peak",
+          "predicted_bytes": 16385606472,
+          "observed_bytes": 16396630528,
+          "published_absolute_percentage_error_percent": 0.067234
+        }
+      ]
+    },
+    {
+      "id": "qwen_sft",
+      "source_path": "docs/llm-sft-memory-estimation.md",
+      "source_anchor": "rtx-pro-5000-matrix",
+      "reference": "torch.cuda.max_memory_allocated",
+      "environment": {
+        "gpu": "NVIDIA RTX PRO 5000 72GB Blackwell",
+        "pytorch": "2.8.0+cu128",
+        "cuda": "12.8",
+        "transformers": "5.12.1"
+      },
+      "measurements": [
+        {
+          "id": "qwen_0_8b_full_accum2_s16",
+          "published_absolute_percentage_error_percent": 0.989
+        },
+        {
+          "id": "qwen_0_8b_full_s128",
+          "published_absolute_percentage_error_percent": 1.121
+        },
+        {
+          "id": "qwen_0_8b_full_checkpoint_s128",
+          "published_absolute_percentage_error_percent": 1.006
+        },
+        {
+          "id": "qwen_0_8b_lora_s16",
+          "published_absolute_percentage_error_percent": 1.921
+        },
+        {
+          "id": "qwen_0_8b_lora_s128",
+          "published_absolute_percentage_error_percent": 1.271
+        },
+        {
+          "id": "qwen_0_8b_lora_checkpoint_s128",
+          "published_absolute_percentage_error_percent": 1.506
+        },
+        {
+          "id": "qwen_2b_full_accum2_s16",
+          "published_absolute_percentage_error_percent": 0.102
+        },
+        {
+          "id": "qwen_2b_lora_s16",
+          "published_absolute_percentage_error_percent": 0.266
+        },
+        {
+          "id": "qwen_2b_lora_s128",
+          "published_absolute_percentage_error_percent": 0.359
+        },
+        {
+          "id": "qwen_2b_lora_checkpoint_s128",
+          "published_absolute_percentage_error_percent": 0.281
+        }
+      ]
+    },
+    {
+      "id": "qwen_qlora",
+      "source_path": "docs/llm-sft-memory-estimation.md",
+      "source_anchor": "native-nf4-qlora-matrices",
+      "reference": "torch.cuda.max_memory_allocated",
+      "environment": {
+        "gpu": "NVIDIA RTX PRO 5000 72GB Blackwell",
+        "pytorch": "2.8.0+cu128",
+        "cuda": "12.8",
+        "transformers": "5.12.1",
+        "quantization": "native NF4"
+      },
+      "measurements": [
+        {
+          "id": "qwen_0_8b_direct_s16",
+          "published_absolute_percentage_error_percent": 0.698
+        },
+        {
+          "id": "qwen_0_8b_direct_s128",
+          "published_absolute_percentage_error_percent": 0.628
+        },
+        {
+          "id": "qwen_0_8b_direct_checkpoint_s128",
+          "published_absolute_percentage_error_percent": 1.085
+        },
+        {
+          "id": "qwen_2b_direct_s16",
+          "published_absolute_percentage_error_percent": 1.386
+        },
+        {
+          "id": "qwen_2b_direct_checkpoint_s128",
+          "published_absolute_percentage_error_percent": 1.689
+        },
+        {
+          "id": "qwen_0_8b_nested_s16",
+          "published_absolute_percentage_error_percent": 0.7
+        },
+        {
+          "id": "qwen_0_8b_nested_s128",
+          "published_absolute_percentage_error_percent": 0.629
+        },
+        {
+          "id": "qwen_0_8b_nested_checkpoint_s128",
+          "published_absolute_percentage_error_percent": 1.094
+        },
+        {
+          "id": "qwen_2b_nested_s16",
+          "published_absolute_percentage_error_percent": 1.422
+        },
+        {
+          "id": "qwen_2b_nested_checkpoint_s128",
+          "published_absolute_percentage_error_percent": 1.732
+        }
+      ]
+    }
+  ]
+}

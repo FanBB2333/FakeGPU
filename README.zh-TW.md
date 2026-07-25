@@ -27,8 +27,8 @@
 
 1. [專案介紹](#專案介紹)
    - [FakeGPU 能回答哪些問題](#fakegpu-能回答哪些問題)
-   - [典型使用情境](#典型使用情境)
-   - [實體 GPU 記憶體估算驗證](#實體-gpu-記憶體估算驗證)
+   - [典型使用情境](#use-cases)
+   - [實體 GPU 記憶體估算驗證](#memory-estimation-evidence)
    - [運作方式](#運作方式)
    - [主要技術](#主要技術)
 2. [快速開始](#快速開始)
@@ -76,6 +76,8 @@ FakeGPU 為開發、CI、相容性檢查與容量規劃模擬面向 CUDA 的執�
 | Trace 中的運算、通訊、等待與 GPU 記憶體如何重疊？ | Trace 重播 | 否 |
 | 估算結果與真實 CUDA 執行結果相差多少？ | Passthrough 或 hybrid 校準 | 是 |
 
+<a id="use-cases"></a>
+
 ### 典型使用情境
 
 | 適用情境 | FakeGPU 提供的能力 | 建議入口 |
@@ -86,6 +88,8 @@ FakeGPU 為開發、CI、相容性檢查與容量規劃模擬面向 CUDA 的執�
 | 檢查不熟悉的 GPU 儲存庫或原生擴充 | 統計 GPU 入口、相依套件、kernel 與不支援的 API | `analyze-repo`、`analyze-kernel`、`capabilities` |
 | 設計或診斷分散式工作流程 | 分析 collective 路由、鏈路競爭、rank 等待、GPU 記憶體時間軸與 TCP payload | `simulate-topology`、`replay-trace`、`bandwidth` |
 | 將小規模實體 GPU 試驗用於後續重複工作 | 產生預測值與實測值的比較報告，並依工作負載簽章保存校準資料 | `calibrate`、`preflight --memory-calibration` |
+
+<a id="memory-estimation-evidence"></a>
 
 ### 實體 GPU 記憶體估算驗證
 
@@ -105,9 +109,23 @@ FakeGPU 為開發、CI、相容性檢查與容量規劃模擬面向 CUDA 的執�
 | [Qwen 0.8B/2B 完整參數與 LoRA SFT][validation-sft] | RTX PRO 5000；PyTorch 2.8/CUDA 12.8 | 10 個訓練案例 | **0.102%–1.921%** | **98.079%–99.898%** |
 | [Qwen 0.8B/2B 原生 NF4 QLoRA][validation-qlora] | RTX PRO 5000；PyTorch 2.8/CUDA 12.8 | 10 個量化訓練案例 | **0.628%–1.732%** | **98.268%–99.372%** |
 
+這些數字需要配合測量方式理解：
+
+- Qwen 資料以 `torch.cuda.max_memory_allocated()` 為參考，不包含 CUDA context
+  與 allocator 已保留但尚未使用的 GPU 記憶體。
+- 受控 ATen 資料加入目前 GPU 與軟體堆疊的 backend 常駐 GPU 記憶體測量值，
+  不能將該值用於其他環境。
+- 區間表示所有案例中的最小與最大誤差，不是平均值。評估 OOM 風險時應特別注意
+  最大低估值。
+- `99.x%` 一致度不表示還有相同比例的可用 GPU 記憶體。容量規劃仍應加入與
+  工作負載對應的安全餘量或係數。
+
 這些數字來自固定工作負載，不能作為任意情境的通用準確率。模型、shape、
 attention backend、量化 kernel、allocator、PyTorch/CUDA 版本或 GPU 改變時，
 需要重新校準。表中連結指向固定版本的驗證快照，其中保留完整設定與實測位元組數。
+CI 也會檢查目前儲存庫中的
+[結構化證據摘要](https://github.com/FanBB2333/FakeGPU/blob/main/tests/data/memory_validation_evidence.json)
+與 README 是否一致。
 
 在真實 CUDA 主機上，可以重新執行專案維護的受控比較：
 
@@ -117,6 +135,20 @@ python3 scripts/validation/static_memory_validation.py \
   --markdown build/static-memory-validation.md \
   --max-underestimate-percent 5
 ```
+
+在無 GPU 主機上加入 `--static-only` 可以檢查估算流程，但不會產生實體 GPU
+準確性結果。對於自己的工作負載，可以對相容的預測報告與實測報告執行：
+
+```bash
+python3 -m fakegpu calibrate compare \
+  build/prediction.json \
+  build/observation.json \
+  --json build/calibration-comparison.json
+```
+
+比較報告包含各階段的有號誤差、絕對誤差、預測區間涵蓋情形，以及建議的 GPU
+記憶體安全餘量與係數。這些建議只適用於相同的工作負載簽章、shape、dtype、
+軟體堆疊與 GPU profile。
 
 ### 運作方式
 

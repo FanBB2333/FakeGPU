@@ -27,8 +27,8 @@
 
 1. [项目介绍](#项目介绍)
    - [FakeGPU 能回答哪些问题](#fakegpu-能回答哪些问题)
-   - [典型使用场景](#典型使用场景)
-   - [真实 GPU 显存估算验证](#真实-gpu-显存估算验证)
+   - [典型使用场景](#use-cases)
+   - [真实 GPU 显存估算验证](#memory-estimation-evidence)
    - [工作方式](#工作方式)
    - [主要技术](#主要技术)
 2. [快速开始](#快速开始)
@@ -75,6 +75,8 @@ FakeGPU 为开发、CI、兼容性检查和容量规划模拟面向 CUDA 的运�
 | Trace 中的计算、通信、等待和显存如何重叠？ | Trace 回放 | 否 |
 | 估算结果与真实 CUDA 运行结果相差多少？ | Passthrough 或 hybrid 校准 | 是 |
 
+<a id="use-cases"></a>
+
 ### 典型使用场景
 
 | 适用场景 | FakeGPU 提供的能力 | 建议入口 |
@@ -85,6 +87,8 @@ FakeGPU 为开发、CI、兼容性检查和容量规划模拟面向 CUDA 的运�
 | 检查不熟悉的 GPU 仓库或原生扩展 | 统计 GPU 入口、依赖、kernel 和不支持的 API | `analyze-repo`、`analyze-kernel`、`capabilities` |
 | 设计或排查分布式工作流 | 分析 collective 路由、链路竞争、rank 等待、显存时间线和 TCP payload | `simulate-topology`、`replay-trace`、`bandwidth` |
 | 将小规模真实 GPU 试验用于后续重复任务 | 生成预测值与实测值的对比报告，并按工作负载签名保存校准数据 | `calibrate`、`preflight --memory-calibration` |
+
+<a id="memory-estimation-evidence"></a>
 
 ### 真实 GPU 显存估算验证
 
@@ -104,9 +108,23 @@ FakeGPU 为开发、CI、兼容性检查和容量规划模拟面向 CUDA 的运�
 | [Qwen 0.8B/2B 全量与 LoRA SFT][validation-sft] | RTX PRO 5000；PyTorch 2.8/CUDA 12.8 | 10 个训练用例 | **0.102%–1.921%** | **98.079%–99.898%** |
 | [Qwen 0.8B/2B 原生 NF4 QLoRA][validation-qlora] | RTX PRO 5000；PyTorch 2.8/CUDA 12.8 | 10 个量化训练用例 | **0.628%–1.732%** | **98.268%–99.372%** |
 
+这些数字需要结合测量方式理解：
+
+- Qwen 数据以 `torch.cuda.max_memory_allocated()` 为参考，不包含 CUDA context
+  和 allocator 已预留但尚未使用的显存。
+- 受控 ATen 数据加入了当前 GPU 与软件栈的 backend 常驻显存测量值，不能将该值
+  用于其他环境。
+- 区间表示所有用例中的最小和最大误差，不是平均值。评估 OOM 风险时应重点关注
+  最大低估值。
+- `99.x%` 一致度不表示还有相同比例的可用显存。容量规划仍应加入与工作负载
+  对应的安全余量或系数。
+
 这些数字来自固定工作负载，不能作为任意场景的通用准确率。模型、shape、
 attention backend、量化 kernel、allocator、PyTorch/CUDA 版本或 GPU 发生变化时，
 需要重新校准。表中链接指向不可变的验证快照，其中保留了完整配置和实测字节数。
+CI 还会检查当前仓库中的
+[结构化证据摘要](https://github.com/FanBB2333/FakeGPU/blob/main/tests/data/memory_validation_evidence.json)
+与 README 是否一致。
 
 在真实 CUDA 主机上，可以重新执行项目维护的受控对比：
 
@@ -116,6 +134,20 @@ python3 scripts/validation/static_memory_validation.py \
   --markdown build/static-memory-validation.md \
   --max-underestimate-percent 5
 ```
+
+在无 GPU 主机上添加 `--static-only` 可以检查估算流程，但不会生成真实 GPU
+准确性结果。对于自己的工作负载，可以对兼容的预测报告和实测报告执行：
+
+```bash
+python3 -m fakegpu calibrate compare \
+  build/prediction.json \
+  build/observation.json \
+  --json build/calibration-comparison.json
+```
+
+对比报告包含各阶段的有符号误差、绝对误差、预测区间覆盖情况，以及建议的显存
+安全余量和系数。这些建议只适用于相同的工作负载签名、shape、dtype、软件栈和
+GPU profile。
 
 ### 工作方式
 
