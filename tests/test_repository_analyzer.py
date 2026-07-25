@@ -93,6 +93,54 @@ compiled = torch.compile(lambda value: value)
     } <= codes
 
 
+def test_repository_analyzer_respects_git_ignored_files(tmp_path: Path) -> None:
+    repository = tmp_path / "project"
+    _write_basic_repository(repository)
+    (repository / ".gitignore").write_text(
+        ".claude/\nbuild*/\n",
+        encoding="utf-8",
+    )
+    ignored_worktree = repository / ".claude" / "worktrees" / "stale"
+    ignored_worktree.mkdir(parents=True)
+    (ignored_worktree / "train.py").write_text(
+        "import torch\ncompiled = torch.compile(lambda value: value)\n",
+        encoding="utf-8",
+    )
+    ignored_build = repository / "build-cpu-sim"
+    ignored_build.mkdir()
+    (ignored_build / "extension.so").write_bytes(b"local build artifact")
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=repository,
+        check=True,
+    )
+
+    report = analyze_repository(repository)
+
+    assert report["entrypoints"] == ["train.py"]
+    assert report["inventory"]["binary_extensions"] == []
+    assert report["python"]["call_markers"].get("torch.compile", 0) == 0
+    assert report["readiness"]["verdict"] == "preflight_candidate"
+
+
+def test_repository_analyzer_ignores_common_build_directories_without_git(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "project"
+    _write_basic_repository(repository)
+    generated = repository / "build-debug"
+    generated.mkdir()
+    (generated / "stale.py").write_text(
+        "if __name__ == '__main__':\n    raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+
+    report = analyze_repository(repository)
+
+    assert report["entrypoints"] == ["train.py"]
+    assert report["inventory"]["python_file_count"] == 1
+
+
 def test_repository_analyzer_rejects_entrypoint_outside_root(
     tmp_path: Path,
 ) -> None:

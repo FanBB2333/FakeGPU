@@ -16,13 +16,18 @@ from .kernel_analysis import KernelAnalysisError, analyze_kernel_file
 SCHEMA_VERSION = "fakegpu.repository_analysis.v1"
 
 _IGNORED_DIRECTORIES = {
+    ".claude",
+    ".eggs",
     ".git",
     ".hg",
+    ".idea",
     ".mypy_cache",
+    ".nox",
     ".pytest_cache",
     ".ruff_cache",
     ".tox",
     ".venv",
+    ".vscode",
     "__pycache__",
     "build",
     "dist",
@@ -300,26 +305,79 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _iter_repository_files(root: Path) -> Iterable[Path]:
+    git_files = _git_visible_files(root)
+    if git_files is not None:
+        yield from git_files
+        return
+
     for current_root, directory_names, file_names in os.walk(root):
         directory_names[:] = sorted(
             name
             for name in directory_names
-            if name not in _IGNORED_DIRECTORIES and not name.startswith(".cache")
+            if not _ignore_directory_name(name)
         )
         current = Path(current_root)
         for name in sorted(file_names):
             path = current / name
-            try:
-                if path.is_symlink() or not path.is_file():
-                    continue
-                if path.stat().st_size > _TEXT_FILE_LIMIT and (
-                    path.suffix.lower()
-                    not in _BINARY_EXTENSION_SUFFIXES | _NATIVE_CUDA_SUFFIXES
-                ):
-                    continue
-            except OSError:
-                continue
-            yield path
+            if _is_scannable_file(path):
+                yield path
+
+
+def _git_visible_files(root: Path) -> list[Path] | None:
+    if not (root / ".git").exists():
+        return None
+    try:
+        import subprocess
+
+        completed = subprocess.run(
+            [
+                "git",
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
+            cwd=root,
+            capture_output=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    files: list[Path] = []
+    for encoded in completed.stdout.split(b"\0"):
+        if not encoded:
+            continue
+        relative = Path(os.fsdecode(encoded))
+        if relative.is_absolute() or ".." in relative.parts:
+            continue
+        path = root / relative
+        if _is_scannable_file(path):
+            files.append(path)
+    return sorted(files, key=lambda path: os.fspath(path.relative_to(root)))
+
+
+def _ignore_directory_name(name: str) -> bool:
+    return (
+        name in _IGNORED_DIRECTORIES
+        or name.startswith(".cache")
+        or name.startswith("build-")
+        or name.startswith("cmake-build-")
+    )
+
+
+def _is_scannable_file(path: Path) -> bool:
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        return not (
+            path.stat().st_size > _TEXT_FILE_LIMIT
+            and path.suffix.lower()
+            not in _BINARY_EXTENSION_SUFFIXES | _NATIVE_CUDA_SUFFIXES
+        )
+    except OSError:
+        return False
 
 
 def _read_text(path: Path) -> str | None:
