@@ -1,66 +1,77 @@
-# Build directories
-build/
-build_asan/
-build*/
-cmake-build-*/
-
-# Compiled shared libraries
-*.so
-*.so.*
-*.dylib
-*.dylib.*
-*.dll
-*.dll.*
-
-# Compiled object files
-*.o
-*.obj
-
-# Compiled executables
-verification/verify_preload
-research_poc/target
-research_poc/libintercept.dylib
-
-# Generated reports
-fake_gpu_report.json
-test/output/*_torchrun.log
-test/output/*_coordinator.log
-
-# Pytest-html test reports — live on the `reports` branch, not main.
-# (test-results/index.html is a hand-written entry page; keep it tracked.)
-test-results/**/report.html
-test-results/**/report-*.html
-
-# Python build / packaging
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.egg-info/
-dist/
-site/
-.pytest_cache/
-.venv/
-.venv*/
-
-# IDE / Editor
-.vscode/
+# Local tools and editor state
+.DS_Store
+.cache/
+.claude/
 .idea/
+.opencode/
+.vscode/
 *.swp
 *.swo
 *~
-.DS_Store
-.cache/
 
-# CMake generated
+# Python environments and caches
+.conda/
+.venv/
+.venv*/
+__pycache__/
+*.egg-info/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build and package output
+build*/
+cmake-build-*/
+dist/
+site/
 CMakeCache.txt
 CMakeFiles/
-cmake_install.cmake
 Makefile
+cmake_install.cmake
 compile_commands.json
+.ninja_deps
+.ninja_log
 
-# Local planning/spec artifacts
-docs/superpowers/plans/
-docs/superpowers/specs/
+# Compiled and binary artifacts
+*.a
+*.bin
+*.dll
+*.dylib
+*.dylib.*
+*.exe
+*.gif
+*.jpg
+*.jpeg
+*.o
+*.obj
+*.onnx
+*.pdf
+*.pkl
+*.png
+*.pt
+*.pth
+*.so
+*.so.*
+*.tar
+*.tar.gz
+*.whl
+*.zip
 
-.CLAUDE.md
+# Generated reports and test output
+*.log
+fake_gpu_report*.json
+preflight-report/
+reports/
+test-results/
+tests/output/
+
+# Local design and planning documents
+docs/
+README.*.md
+PROJECT_STRUCTURE.md
+TODO*.md
+design.md
+*-design.md
+*_design.md

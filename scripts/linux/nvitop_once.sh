@@ -71,7 +71,7 @@ EOF
   exit 1
 fi
 
-cmake -S . -B "$BUILD_DIR"
-cmake --build "$BUILD_DIR"
+BUILD_DIR="$BUILD_DIR" scripts/build.sh --release
 
-exec ./fgpu --build-dir "$BUILD_DIR" "$CONDA_PY" -m nvitop --once "$@"
+exec "$CONDA_PY" -m fakegpu --build-dir "$BUILD_DIR" \
+  "$CONDA_PY" -m nvitop --once "$@"
