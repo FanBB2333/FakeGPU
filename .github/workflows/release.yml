@@ -62,6 +62,13 @@ jobs:
           print(f"sdist: {dst}")
           PY
 
+      - name: Verify source distribution
+        run: >-
+          python -m pip wheel
+          --no-deps
+          --wheel-dir build/sdist-wheel-test
+          dist/*-python-sdist.tar.gz
+
       - name: Build wheel (manylinux x86_64)
         uses: pypa/cibuildwheel@v2.21.3
         with:
