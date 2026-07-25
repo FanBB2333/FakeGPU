@@ -29,6 +29,8 @@ distributed GPU workflows without a production GPU cluster.**
 
 1. [About the project](#about-the-project)
    - [What FakeGPU answers](#what-fakegpu-answers)
+   - [Typical use cases](#typical-use-cases)
+   - [Real-GPU memory-estimation evidence](#real-gpu-memory-estimation-evidence)
    - [How it works](#how-it-works)
    - [Built with](#built-with)
 2. [Getting started](#getting-started)
@@ -77,6 +79,51 @@ runs.
 | What does a distributed training configuration imply for rank-local memory? | Training planner | No |
 | Where do compute, communication, wait, and memory overlap in a trace? | Trace replay | No |
 | How does an estimate compare with an actual CUDA run? | Passthrough or hybrid calibration | Yes |
+
+### Typical use cases
+
+| When this is useful | What FakeGPU provides | Start with |
+|---|---|---|
+| Choosing a GPU before renting capacity or starting a long job | Profile-aware checkpoint, KV-cache, activation, optimizer, and workspace estimates | `estimate-llm`, `preflight` |
+| Developing CUDA-oriented PyTorch code on a laptop or CPU-only CI runner | CUDA-visible control-flow checks while maintained tensor operations execute on CPU | `fakegpu.init(...)`, `demo`, `validate` |
+| Comparing full fine-tuning, LoRA, QLoRA, checkpointing, offload, or sharding plans | Phase-aware and rank-local memory estimates before allocating a cluster | `plan-training`, Python memory estimator |
+| Reviewing an unfamiliar GPU repository or native extension | GPU entry-point, dependency, kernel, and unsupported-API inventory | `analyze-repo`, `analyze-kernel`, `capabilities` |
+| Designing or debugging a distributed workflow | Collective routing, link contention, rank waits, memory timelines, and TCP payload validation | `simulate-topology`, `replay-trace`, `bandwidth` |
+| Turning a small real-GPU trial into evidence for repeated runs | Prediction-versus-observation reports and signature-scoped calibration data | `calibrate`, `preflight --memory-calibration` |
+
+### Real-GPU memory-estimation evidence
+
+> [!NOTE]
+> In the recorded validation envelopes below, the stack-calibrated static
+> estimator stayed within **0.08%** on 26 controlled GPU observations and
+> within **1.921%** across ten Qwen full/LoRA SFT cases.
+
+Absolute percentage error is
+`|predicted - observed| / observed × 100%`. “Agreement” below is its
+complement, `100% - error`, shown only as a more intuitive reading of the same
+measurement.
+
+| Validated envelope | Real-GPU reference | Evidence | Absolute percentage error | Agreement |
+|---|---|---:|---:|---:|
+| [Controlled ATen MLP and Transformer grid with backend-resident calibration][validation-static] | RTX 3090 Ti and RTX PRO 5000; PyTorch/CUDA 2.12/13.0 and 2.9/12.8 | 13 workloads, 26 observations | **0.08% maximum** | **≥99.92%** |
+| [Qwen3-8B BF16 SDPA inference][validation-inference] | RTX PRO 5000; PyTorch 2.9.1/CUDA 12.8 | Model load and inference peak | 0.0129% load; **0.0672% peak** | 99.9871%; **99.9328%** |
+| [Qwen 0.8B/2B full and LoRA SFT][validation-sft] | RTX PRO 5000; PyTorch 2.8/CUDA 12.8 | 10 training cases | **0.102%–1.921%** | **98.079%–99.898%** |
+| [Qwen 0.8B/2B native NF4 QLoRA][validation-qlora] | RTX PRO 5000; PyTorch 2.8/CUDA 12.8 | 10 quantized training cases | **0.628%–1.732%** | **98.268%–99.372%** |
+
+These are fixed-workload measurements, not a universal accuracy claim.
+Different models, shapes, attention backends, quantization kernels, allocators,
+PyTorch/CUDA versions, or GPUs require a matching calibration. The links above
+point to the immutable validation snapshot containing the full configurations
+and measured byte counts.
+
+On a CUDA host, regenerate the maintained controlled comparison with:
+
+```bash
+python3 scripts/validation/static_memory_validation.py \
+  --output build/static-memory-validation.json \
+  --markdown build/static-memory-validation.md \
+  --max-underestimate-percent 5
+```
 
 ### How it works
 
@@ -435,3 +482,7 @@ Distributed under the MIT License. See [LICENSE](LICENSE) for details.
 [python-url]: https://www.python.org/
 [license-shield]: https://img.shields.io/github/license/FanBB2333/FakeGPU?style=for-the-badge
 [license-url]: LICENSE
+[validation-static]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/ai-researcher-preflight.md#4-static-aten-storage-liveness-validation
+[validation-inference]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-inference-estimation.md#maintained-qwen3-8b-result
+[validation-sft]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#rtx-pro-5000-matrix
+[validation-qlora]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#native-nf4-qlora-matrices

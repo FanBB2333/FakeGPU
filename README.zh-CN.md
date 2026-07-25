@@ -27,6 +27,8 @@
 
 1. [项目介绍](#项目介绍)
    - [FakeGPU 能回答哪些问题](#fakegpu-能回答哪些问题)
+   - [典型使用场景](#典型使用场景)
+   - [真实 GPU 显存估算验证](#真实-gpu-显存估算验证)
    - [工作方式](#工作方式)
    - [主要技术](#主要技术)
 2. [快速开始](#快速开始)
@@ -72,6 +74,48 @@ FakeGPU 为开发、CI、兼容性检查和容量规划模拟面向 CUDA 的运�
 | 分布式训练配置对应多少单 rank 显存？ | 训练规划器 | 否 |
 | Trace 中的计算、通信、等待和显存如何重叠？ | Trace 回放 | 否 |
 | 估算结果与真实 CUDA 运行结果相差多少？ | Passthrough 或 hybrid 校准 | 是 |
+
+### 典型使用场景
+
+| 适用场景 | FakeGPU 提供的能力 | 建议入口 |
+|---|---|---|
+| 在租用 GPU 或启动长时间任务前选择硬件 | 按 profile 估算 checkpoint、KV cache、activation、optimizer 和 workspace 显存 | `estimate-llm`、`preflight` |
+| 在笔记本电脑或无 GPU 的 CI 中开发面向 CUDA 的 PyTorch 代码 | 让程序看到 CUDA 设备，同时在 CPU 上执行已维护的 tensor 运算 | `fakegpu.init(...)`、`demo`、`validate` |
+| 比较全量微调、LoRA、QLoRA、checkpointing、offload 或分片方案 | 在申请集群前估算各阶段和单 rank 显存 | `plan-training`、Python 显存估算器 |
+| 检查不熟悉的 GPU 仓库或原生扩展 | 统计 GPU 入口、依赖、kernel 和不支持的 API | `analyze-repo`、`analyze-kernel`、`capabilities` |
+| 设计或排查分布式工作流 | 分析 collective 路由、链路竞争、rank 等待、显存时间线和 TCP payload | `simulate-topology`、`replay-trace`、`bandwidth` |
+| 将小规模真实 GPU 试验用于后续重复任务 | 生成预测值与实测值的对比报告，并按工作负载签名保存校准数据 | `calibrate`、`preflight --memory-calibration` |
+
+### 真实 GPU 显存估算验证
+
+> [!NOTE]
+> 在以下已记录的验证范围内，使用对应软件栈校准后的静态估算器在 26 个受控
+> GPU 观测上的误差不超过 **0.08%**；十个 Qwen 全量/LoRA SFT 用例的误差
+> 不超过 **1.921%**。
+
+绝对百分比误差按
+`|预测值 - 实测值| / 实测值 × 100%` 计算。表中的“一致度”等于
+`100% - 误差`，只是同一测量结果的直观表示。
+
+| 已验证范围 | 真实 GPU 参考环境 | 证据规模 | 绝对百分比误差 | 一致度 |
+|---|---|---:|---:|---:|
+| [包含 backend 常驻显存校准的受控 ATen MLP 与 Transformer 参数网格][validation-static] | RTX 3090 Ti 与 RTX PRO 5000；PyTorch/CUDA 2.12/13.0 和 2.9/12.8 | 13 个工作负载，26 个观测 | **最大 0.08%** | **≥99.92%** |
+| [Qwen3-8B BF16 SDPA 推理][validation-inference] | RTX PRO 5000；PyTorch 2.9.1/CUDA 12.8 | 模型加载与推理峰值 | 加载 0.0129%；**峰值 0.0672%** | 99.9871%；**99.9328%** |
+| [Qwen 0.8B/2B 全量与 LoRA SFT][validation-sft] | RTX PRO 5000；PyTorch 2.8/CUDA 12.8 | 10 个训练用例 | **0.102%–1.921%** | **98.079%–99.898%** |
+| [Qwen 0.8B/2B 原生 NF4 QLoRA][validation-qlora] | RTX PRO 5000；PyTorch 2.8/CUDA 12.8 | 10 个量化训练用例 | **0.628%–1.732%** | **98.268%–99.372%** |
+
+这些数字来自固定工作负载，不能作为任意场景的通用准确率。模型、shape、
+attention backend、量化 kernel、allocator、PyTorch/CUDA 版本或 GPU 发生变化时，
+需要重新校准。表中链接指向不可变的验证快照，其中保留了完整配置和实测字节数。
+
+在真实 CUDA 主机上，可以重新执行项目维护的受控对比：
+
+```bash
+python3 scripts/validation/static_memory_validation.py \
+  --output build/static-memory-validation.json \
+  --markdown build/static-memory-validation.md \
+  --max-underestimate-percent 5
+```
 
 ### 工作方式
 
@@ -417,3 +461,7 @@ FakeGPU/
 [python-url]: https://www.python.org/
 [license-shield]: https://img.shields.io/github/license/FanBB2333/FakeGPU?style=for-the-badge
 [license-url]: LICENSE
+[validation-static]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/ai-researcher-preflight.md#4-static-aten-storage-liveness-validation
+[validation-inference]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-inference-estimation.md#maintained-qwen3-8b-result
+[validation-sft]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#rtx-pro-5000-matrix
+[validation-qlora]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#native-nf4-qlora-matrices
