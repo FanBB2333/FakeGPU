@@ -256,6 +256,7 @@ weights.
 | `fakegpu calibrate` | Compare predicted and observed memory |
 | `fakegpu capabilities` | List or strictly audit native API classifications |
 | `fakegpu nvidia-smi` | Display virtual per-process GPU memory |
+| `fakegpu workspace-profiles` | Validate and inspect workspace estimation profiles |
 | `fakegpu validate` | Run a declarative JSON, TOML, or YAML validation matrix |
 | `fakegpu coordinator` | Manage the distributed simulation coordinator |
 | `fakegpu bandwidth` | Validate simulated TCP payloads and report throughput |

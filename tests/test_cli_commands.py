@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from fakegpu.__main__ import BUILTIN_COMMANDS
 from fakegpu.profile_catalog import (
     architecture_for_compute_capability,
     catalog_summary,
@@ -242,8 +244,16 @@ def test_fakecuda_profile_matrix() -> None:
 def test_top_level_help_names_builtin_commands() -> None:
     result = _run_fakegpu("--help")
     assert result.returncode == 0
-    assert "fakegpu demo" in result.stdout
-    assert "fakegpu doctor" in result.stdout
-    assert "fakegpu capabilities" in result.stdout
-    assert "fakegpu analyze-repo" in result.stdout
-    assert "fakegpu estimate-roofline" in result.stdout
+    for command in BUILTIN_COMMANDS:
+        assert f"fakegpu {command}" in result.stdout
+        command_result = _run_fakegpu(command, "--help")
+        assert command_result.returncode == 0, (
+            command,
+            command_result.stderr,
+        )
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    documented_commands = set(
+        re.findall(r"^\| `fakegpu ([a-z0-9-]+)` \|", readme, flags=re.MULTILINE)
+    )
+    assert documented_commands == set(BUILTIN_COMMANDS)
