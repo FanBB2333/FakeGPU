@@ -490,7 +490,7 @@ def test_readmes_report_llm_reliability_scope() -> None:
     )
     expected_terms = {
         "scripts/test.sh all",
-        "151",
+        "156",
         str(len(profiles)),
         str(compute_capability_count),
         str(len(capabilities["groups"])),
@@ -511,6 +511,9 @@ def test_readmes_report_llm_reliability_scope() -> None:
         "speculative decoding",
         "false-safe",
         "5%",
+        "calibrate verify",
+        "llm_validation.yaml",
+        "--kv-cache-strategy",
         "https://huggingface.co/docs/transformers/kv_cache",
         "https://docs.vllm.ai/en/stable/",
     }
