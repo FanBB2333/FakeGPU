@@ -180,6 +180,7 @@ FakeGPU 按工作负载和环境签名报告可靠性。`GPU-validated` 结果�
 | Python runtime、估算器、CLI、schema 和 README 契约 | 完整 `pytest` 测试集 | **165 个通过** |
 | 声明式验证矩阵 | 6 个 smoke 用例，加 8 个 LLM cache、训练规划和校准用例 | **14 个通过** |
 | 原生库拦截 | 构建、库边界、导出符号、preload、显存类型、coordinator 和不支持 API 策略 | **通过** |
+| FakeGPU-SMI 诊断 | 有上限的状态发布、拓扑/NVLink 视图、NVML peer/PCI 查询、健康字段和事件报告 | **通过** |
 | 原生能力清单 | 5 个能力组、26 个显式 API、24 个强制执行策略的 API | **通过** |
 | GPU profile 目录 | 82 个 profile，覆盖 15 种 compute capability | **通过** |
 | CPU 数值模拟 | GEMM、cuBLASLt、批量 GEMM、BLAS1/2 和 FP16，共 8 组测试 | **通过** |
@@ -537,7 +538,7 @@ scripts/test.sh all
 | 测试组 | 覆盖内容 |
 |---|---|
 | `python` | 项目维护的 Python 回归测试 |
-| `smoke` | 原生库加载、报告、能力检查和 coordinator |
+| `smoke` | 原生库加载、报告、能力检查、SMI 拓扑/健康状态和 coordinator |
 | `cpu` | CPU cuBLAS 模拟 |
 | `all` | 所有维护中的测试 |
 
