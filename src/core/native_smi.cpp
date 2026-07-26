@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -23,6 +24,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <tuple>
@@ -36,8 +38,18 @@ namespace {
 constexpr const char* kStateSchema = "fakegpu.smi_state.v2";
 constexpr double kDefaultIntervalMs = 250.0;
 constexpr double kMinimumIntervalMs = 50.0;
+constexpr std::size_t kDefaultDetailLimit = 64;
+constexpr std::size_t kMaximumDetailLimit = 1024;
+constexpr std::size_t kDefaultMaxStateBytes = 1024 * 1024;
+constexpr std::size_t kMinimumMaxStateBytes = 64 * 1024;
+constexpr std::size_t kMaximumMaxStateBytes = 64 * 1024 * 1024;
 
 std::atomic<GlobalState*> g_publisher_owner{nullptr};
+
+struct NativeSmiLimits {
+    std::size_t detail_entries = kDefaultDetailLimit;
+    std::size_t max_state_bytes = kDefaultMaxStateBytes;
+};
 
 uint64_t saturating_add(uint64_t left, uint64_t right) {
     const uint64_t limit = std::numeric_limits<uint64_t>::max();
@@ -103,6 +115,42 @@ std::chrono::milliseconds configured_interval() {
         static_cast<std::chrono::milliseconds::rep>(milliseconds));
 }
 
+std::size_t configured_size_limit(
+    const char* name,
+    std::size_t fallback,
+    std::size_t minimum,
+    std::size_t maximum) {
+    const char* value = std::getenv(name);
+    if (!value || !*value) {
+        return fallback;
+    }
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (errno != 0 || end == value || !end || *end != '\0') {
+        return fallback;
+    }
+    return static_cast<std::size_t>(
+        std::min<unsigned long long>(
+            maximum,
+            std::max<unsigned long long>(minimum, parsed)));
+}
+
+NativeSmiLimits configured_limits() {
+    NativeSmiLimits limits;
+    limits.detail_entries = configured_size_limit(
+        "FAKEGPU_SMI_DETAIL_LIMIT",
+        kDefaultDetailLimit,
+        0,
+        kMaximumDetailLimit);
+    limits.max_state_bytes = configured_size_limit(
+        "FAKEGPU_SMI_MAX_STATE_BYTES",
+        kDefaultMaxStateBytes,
+        kMinimumMaxStateBytes,
+        kMaximumMaxStateBytes);
+    return limits;
+}
+
 std::string hostname() {
     char buffer[256] = {};
     if (gethostname(buffer, sizeof(buffer) - 1) == 0 && buffer[0] != '\0') {
@@ -140,7 +188,7 @@ const char* platform_name() {
 #endif
 }
 
-void append_json_string(std::ostringstream& out, const std::string& value) {
+void append_json_string(std::ostringstream& out, std::string_view value) {
     out << '"';
     for (const unsigned char character : value) {
         switch (character) {
@@ -235,7 +283,8 @@ NativeActivity native_activity(const DeviceReportStats& device) {
 
 void append_kernel_counts(
     std::ostringstream& out,
-    const DeviceReportStats& device) {
+    const DeviceReportStats& device,
+    std::size_t detail_limit) {
     out << '{';
     std::vector<std::pair<std::string, uint64_t>> kernels(
         device.kernel_launches.begin(),
@@ -249,7 +298,8 @@ void append_kernel_counts(
             }
             return left.first < right.first;
         });
-    for (std::size_t index = 0; index < kernels.size(); ++index) {
+    const std::size_t retained = std::min(detail_limit, kernels.size());
+    for (std::size_t index = 0; index < retained; ++index) {
         if (index != 0) {
             out << ',';
         }
@@ -261,16 +311,28 @@ void append_kernel_counts(
 
 void append_unsupported_apis(
     std::ostringstream& out,
-    const DeviceReportStats& device) {
+    const DeviceReportStats& device,
+    std::size_t detail_limit) {
+    std::vector<
+        std::tuple<std::string, std::string, std::string, uint64_t>>
+        events = device.unsupported_api_events;
+    std::sort(
+        events.begin(),
+        events.end(),
+        [](const auto& left, const auto& right) {
+            if (std::get<3>(left) != std::get<3>(right)) {
+                return std::get<3>(left) > std::get<3>(right);
+            }
+            return std::get<0>(left) < std::get<0>(right);
+        });
     out << '[';
-    for (std::size_t index = 0;
-         index < device.unsupported_api_events.size();
-         ++index) {
+    const std::size_t retained = std::min(detail_limit, events.size());
+    for (std::size_t index = 0; index < retained; ++index) {
         if (index != 0) {
             out << ',';
         }
         const auto& [operation, behavior, policy, count] =
-            device.unsupported_api_events[index];
+            events[index];
         out << "{\"operation\":";
         append_json_string(out, operation);
         out << ",\"behavior\":";
@@ -284,7 +346,8 @@ void append_unsupported_apis(
 
 void append_device(
     std::ostringstream& out,
-    const DeviceReportStats& device) {
+    const DeviceReportStats& device,
+    std::size_t detail_limit) {
     const NativeActivity activity = native_activity(device);
     const uint64_t free_memory =
         device.total_memory > device.used_memory_current
@@ -385,10 +448,20 @@ void append_device(
         << activity.compatibility_events;
     out << ",\"unsupported_api_calls\":"
         << activity.unsupported_api_calls;
+    out << ",\"kernel_names_total\":"
+        << device.kernel_launches.size();
+    out << ",\"kernel_names_retained\":"
+        << std::min(detail_limit, device.kernel_launches.size());
+    out << ",\"unsupported_apis_total\":"
+        << device.unsupported_api_events.size();
+    out << ",\"unsupported_apis_retained\":"
+        << std::min(
+               detail_limit,
+               device.unsupported_api_events.size());
     out << ",\"kernels\":";
-    append_kernel_counts(out, device);
+    append_kernel_counts(out, device, detail_limit);
     out << ",\"unsupported_apis\":";
-    append_unsupported_apis(out, device);
+    append_unsupported_apis(out, device, detail_limit);
     out << '}';
     out << ",\"telemetry\":{"
         << "\"gpu_utilization_percent\":null,"
@@ -404,10 +477,12 @@ public:
     NativeSmiPublisher(
         GlobalState& state,
         std::filesystem::path path,
-        std::chrono::milliseconds interval)
+        std::chrono::milliseconds interval,
+        NativeSmiLimits limits)
         : state_(state),
           path_(std::move(path)),
           interval_(interval),
+          limits_(limits),
           hostname_(hostname()),
           process_name_(process_name()),
           profile_count_(builtin_profile_ids().size()) {
@@ -439,6 +514,43 @@ public:
     }
 
 private:
+    using SteadyClock = std::chrono::steady_clock;
+
+    static uint64_t elapsed_microseconds(
+        const SteadyClock::time_point& started) {
+        return static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                SteadyClock::now() - started)
+                .count());
+    }
+
+    void record_success(
+        const SteadyClock::time_point& started,
+        std::size_t serialized_bytes) {
+        ++attempted_writes_;
+        ++successful_writes_;
+        last_duration_us_ = elapsed_microseconds(started);
+        max_duration_us_ = std::max(
+            max_duration_us_,
+            last_duration_us_);
+        last_serialized_bytes_ = serialized_bytes;
+        last_error_code_ = "";
+    }
+
+    void record_failure(
+        const SteadyClock::time_point& started,
+        std::size_t serialized_bytes,
+        const char* error_code) noexcept {
+        ++attempted_writes_;
+        ++failed_writes_;
+        last_duration_us_ = elapsed_microseconds(started);
+        max_duration_us_ = std::max(
+            max_duration_us_,
+            last_duration_us_);
+        last_serialized_bytes_ = serialized_bytes;
+        last_error_code_ = error_code;
+    }
+
     void run() {
         std::unique_lock<std::mutex> lock(wait_mutex_);
         while (!wake_.wait_for(
@@ -452,6 +564,8 @@ private:
     }
 
     void write_state(bool running) noexcept {
+        const SteadyClock::time_point started = SteadyClock::now();
+        std::size_t serialized_bytes = 0;
         try {
             const std::vector<DeviceReportStats> devices =
                 state_.snapshot_device_report();
@@ -516,7 +630,23 @@ private:
             out << ",\"publisher\":{\"interval_seconds\":"
                 << interval_seconds;
             out << ",\"runtime_overhead_bytes\":0";
-            out << ",\"source\":\"native_monitor\"}";
+            out << ",\"source\":\"native_monitor\"";
+            out << ",\"health\":{\"attempted_writes\":"
+                << attempted_writes_ + 1;
+            out << ",\"successful_writes\":"
+                << successful_writes_ + 1;
+            out << ",\"failed_writes\":" << failed_writes_;
+            out << ",\"last_duration_us\":" << last_duration_us_;
+            out << ",\"max_duration_us\":" << max_duration_us_;
+            out << ",\"last_serialized_bytes\":"
+                << last_serialized_bytes_;
+            out << ",\"last_error\":";
+            append_json_string(out, last_error_code_);
+            out << '}';
+            out << ",\"limits\":{\"detail_entries\":"
+                << limits_.detail_entries;
+            out << ",\"max_state_bytes\":"
+                << limits_.max_state_bytes << "}}";
             out << ",\"running\":" << (running ? "true" : "false");
             out << ",\"tracking_confidence\":"
                 << "\"C2_native_allocation_lifetime\"";
@@ -543,9 +673,25 @@ private:
                 if (index != 0) {
                     out << ',';
                 }
-                append_device(out, devices[index]);
+                append_device(
+                    out,
+                    devices[index],
+                    limits_.detail_entries);
             }
             out << "]}\n";
+            const std::string payload = out.str();
+            serialized_bytes = payload.size();
+            if (serialized_bytes > limits_.max_state_bytes) {
+                record_failure(
+                    started,
+                    serialized_bytes,
+                    "state_size_limit_exceeded");
+                FGPU_LOG(
+                    "[NativeSMI] State size %zu exceeds limit %zu\n",
+                    serialized_bytes,
+                    limits_.max_state_bytes);
+                return;
+            }
 
             const std::filesystem::path parent = path_.parent_path();
             std::error_code error;
@@ -555,6 +701,10 @@ private:
                     FGPU_LOG(
                         "[NativeSMI] Failed to create state directory: %s\n",
                         error.message().c_str());
+                    record_failure(
+                        started,
+                        serialized_bytes,
+                        "create_state_directory_failed");
                     return;
                 }
             }
@@ -568,11 +718,17 @@ private:
                 std::ofstream stream(
                     temporary,
                     std::ios::binary | std::ios::trunc);
-                stream << out.str();
+                stream.write(
+                    payload.data(),
+                    static_cast<std::streamsize>(payload.size()));
                 stream.flush();
                 if (!stream.good()) {
                     stream.close();
                     std::filesystem::remove(temporary, error);
+                    record_failure(
+                        started,
+                        serialized_bytes,
+                        "write_temporary_state_failed");
                     return;
                 }
             }
@@ -587,18 +743,45 @@ private:
                     "[NativeSMI] Failed to replace state file: %s\n",
                     error.message().c_str());
                 std::filesystem::remove(temporary, error);
+                record_failure(
+                    started,
+                    serialized_bytes,
+                    "replace_state_file_failed");
+                return;
             }
+            record_success(started, serialized_bytes);
+        } catch (const std::exception& error) {
+            record_failure(
+                started,
+                serialized_bytes,
+                "publish_exception");
+            FGPU_LOG(
+                "[NativeSMI] Exception while publishing state: %s\n",
+                error.what());
         } catch (...) {
-            FGPU_LOG("[NativeSMI] Exception while publishing state\n");
+            record_failure(
+                started,
+                serialized_bytes,
+                "unknown_publish_exception");
+            FGPU_LOG(
+                "[NativeSMI] Unknown exception while publishing state\n");
         }
     }
 
     GlobalState& state_;
     std::filesystem::path path_;
     std::chrono::milliseconds interval_;
+    NativeSmiLimits limits_;
     std::string hostname_;
     std::string process_name_;
     std::size_t profile_count_;
+    uint64_t attempted_writes_ = 0;
+    uint64_t successful_writes_ = 0;
+    uint64_t failed_writes_ = 0;
+    uint64_t last_duration_us_ = 0;
+    uint64_t max_duration_us_ = 0;
+    std::size_t last_serialized_bytes_ = 0;
+    const char* last_error_code_ = "";
     std::atomic<bool> stopped_{false};
     std::mutex wait_mutex_;
     std::condition_variable wake_;
@@ -623,7 +806,8 @@ void* create_native_smi_publisher(GlobalState& state) {
         auto publisher = std::make_unique<NativeSmiPublisher>(
             state,
             path,
-            configured_interval());
+            configured_interval(),
+            configured_limits());
         publisher->start();
         g_publisher_owner.store(&state);
         if (std::atexit(stop_registered_publisher) != 0) {

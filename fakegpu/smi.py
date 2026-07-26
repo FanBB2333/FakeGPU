@@ -27,6 +27,11 @@ SUPPORTED_SCHEMA_VERSIONS = frozenset(
     {LEGACY_SCHEMA_VERSION, SCHEMA_VERSION}
 )
 DEFAULT_STALE_AFTER_SECONDS = 2.0
+DEFAULT_PUBLISHER_DETAIL_LIMIT = 64
+MAXIMUM_PUBLISHER_DETAIL_LIMIT = 1024
+DEFAULT_MAX_STATE_BYTES = 1024 * 1024
+MINIMUM_MAX_STATE_BYTES = 64 * 1024
+MAXIMUM_MAX_STATE_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +252,23 @@ def configured_state_path() -> Path | None:
     return None
 
 
+def _configured_size_limit(
+    name: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return min(maximum, max(minimum, parsed))
+
+
 class SmiStatePublisher:
     """Publish FakeCUDA process and device diagnostics for an external viewer."""
 
@@ -257,16 +279,51 @@ class SmiStatePublisher:
         *,
         interval_seconds: float = 0.25,
         runtime_overhead_bytes: int = 0,
+        detail_limit: int | None = None,
+        max_state_bytes: int | None = None,
     ):
         self.path = Path(path).expanduser().resolve()
         self.snapshot = snapshot
         self.interval_seconds = max(0.05, float(interval_seconds))
         self.runtime_overhead_bytes = max(0, int(runtime_overhead_bytes))
+        self.detail_limit = (
+            _configured_size_limit(
+                "FAKEGPU_SMI_DETAIL_LIMIT",
+                default=DEFAULT_PUBLISHER_DETAIL_LIMIT,
+                minimum=0,
+                maximum=MAXIMUM_PUBLISHER_DETAIL_LIMIT,
+            )
+            if detail_limit is None
+            else min(
+                MAXIMUM_PUBLISHER_DETAIL_LIMIT,
+                max(0, int(detail_limit)),
+            )
+        )
+        self.max_state_bytes = (
+            _configured_size_limit(
+                "FAKEGPU_SMI_MAX_STATE_BYTES",
+                default=DEFAULT_MAX_STATE_BYTES,
+                minimum=MINIMUM_MAX_STATE_BYTES,
+                maximum=MAXIMUM_MAX_STATE_BYTES,
+            )
+            if max_state_bytes is None
+            else min(
+                MAXIMUM_MAX_STATE_BYTES,
+                max(MINIMUM_MAX_STATE_BYTES, int(max_state_bytes)),
+            )
+        )
         self._software = _software_metadata()
         self._catalogs = _catalog_metadata()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._registered = False
+        self._attempted_writes = 0
+        self._successful_writes = 0
+        self._failed_writes = 0
+        self._last_duration_us = 0
+        self._max_duration_us = 0
+        self._last_serialized_bytes = 0
+        self._last_error = ""
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -295,6 +352,42 @@ class SmiStatePublisher:
             pass
 
     def publish_once(self, *, running: bool) -> dict[str, Any]:
+        started_ns = time.perf_counter_ns()
+        self._attempted_writes += 1
+        try:
+            state, serialized_bytes = self._publish_once(
+                running=running
+            )
+        except Exception as exc:
+            self._failed_writes += 1
+            self._last_duration_us = max(
+                0,
+                (time.perf_counter_ns() - started_ns) // 1000,
+            )
+            self._max_duration_us = max(
+                self._max_duration_us,
+                self._last_duration_us,
+            )
+            self._last_error = type(exc).__name__
+            raise
+        self._successful_writes += 1
+        self._last_duration_us = max(
+            0,
+            (time.perf_counter_ns() - started_ns) // 1000,
+        )
+        self._max_duration_us = max(
+            self._max_duration_us,
+            self._last_duration_us,
+        )
+        self._last_serialized_bytes = serialized_bytes
+        self._last_error = ""
+        return state
+
+    def _publish_once(
+        self,
+        *,
+        running: bool,
+    ) -> tuple[dict[str, Any], int]:
         raw = self.snapshot()
         hostname = socket.gethostname()
         devices: list[dict[str, Any]] = []
@@ -339,6 +432,13 @@ class SmiStatePublisher:
             headroom = (
                 max(0, total - reported_peak) if total else None
             )
+            largest_allocations = _mapping_list(
+                item.get("largest_allocations")
+            )
+            largest_allocations_total = len(largest_allocations)
+            largest_allocations = largest_allocations[
+                : self.detail_limit
+            ]
             devices.append(
                 {
                     "index": index,
@@ -404,8 +504,12 @@ class SmiStatePublisher:
                     "reserved_peak_by_stage": _integer_mapping(
                         item.get("reserved_peak_by_stage")
                     ),
-                    "largest_allocations": _mapping_list(
-                        item.get("largest_allocations")
+                    "largest_allocations": largest_allocations,
+                    "largest_allocations_total": (
+                        largest_allocations_total
+                    ),
+                    "largest_allocations_retained": len(
+                        largest_allocations
                     ),
                     "telemetry": {
                         "gpu_utilization_percent": None,
@@ -461,6 +565,24 @@ class SmiStatePublisher:
                 "runtime_overhead_bytes": (
                     self.runtime_overhead_bytes
                 ),
+                "source": "python_runtime",
+                "health": {
+                    "attempted_writes": self._attempted_writes,
+                    "successful_writes": (
+                        self._successful_writes + 1
+                    ),
+                    "failed_writes": self._failed_writes,
+                    "last_duration_us": self._last_duration_us,
+                    "max_duration_us": self._max_duration_us,
+                    "last_serialized_bytes": (
+                        self._last_serialized_bytes
+                    ),
+                    "last_error": self._last_error,
+                },
+                "limits": {
+                    "detail_entries": self.detail_limit,
+                    "max_state_bytes": self.max_state_bytes,
+                },
             },
             "running": bool(running),
             "tracking_confidence": raw.get(
@@ -477,8 +599,12 @@ class SmiStatePublisher:
             "dispatch_tracking": dispatch_tracking,
             "devices": devices,
         }
-        _atomic_write_json(self.path, state)
-        return state
+        serialized_bytes = _atomic_write_json(
+            self.path,
+            state,
+            max_bytes=self.max_state_bytes,
+        )
+        return state, serialized_bytes
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval_seconds):
@@ -1049,6 +1175,22 @@ def render_detail(
         software = item["software"]
         dispatch = item["dispatch_tracking"]
         publisher = item["publisher"]
+        publisher_health = (
+            dict(publisher.get("health") or {})
+            if isinstance(publisher.get("health"), Mapping)
+            else {}
+        )
+        publisher_limits = (
+            dict(publisher.get("limits") or {})
+            if isinstance(publisher.get("limits"), Mapping)
+            else {}
+        )
+        publisher_last_size = _format_bytes(
+            publisher_health.get("last_serialized_bytes")
+        )
+        publisher_max_size = _format_bytes(
+            publisher_limits.get("max_state_bytes")
+        )
         capability = fakegpu.get("native_capabilities") or {}
         profile_catalog = fakegpu.get("profile_catalog") or {}
         lines.extend(
@@ -1110,6 +1252,22 @@ def render_detail(
                     "runtime overhead"
                 ),
                 (
+                    "    Publisher health: "
+                    f"{publisher_health.get('successful_writes', 'N/A')} / "
+                    f"{publisher_health.get('attempted_writes', 'N/A')} "
+                    "writes, "
+                    f"{publisher_health.get('failed_writes', 'N/A')} "
+                    "failures, last "
+                    f"{publisher_health.get('last_duration_us', 'N/A')} us / "
+                    f"{publisher_last_size}"
+                ),
+                (
+                    "    Publisher limits: "
+                    f"{publisher_limits.get('detail_entries', 'N/A')} "
+                    "detail entries, "
+                    f"{publisher_max_size} state size"
+                ),
+                (
                     "    Catalogs: "
                     f"{profile_catalog.get('profile_count', 'N/A')} "
                     "profiles; native capabilities "
@@ -1120,6 +1278,11 @@ def render_detail(
                 ),
             ]
         )
+        if publisher_health.get("last_error"):
+            lines.append(
+                "    Publisher last error: "
+                f"{publisher_health['last_error']}"
+            )
         operators = dispatch.get("operators")
         if isinstance(operators, Mapping) and operators:
             ranked_operators = sorted(
@@ -2265,11 +2428,29 @@ def _format_byte_mapping(value: Mapping[str, Any]) -> str:
     )
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def _atomic_write_json(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    max_bytes: int,
+) -> int:
+    serialized = (
+        json.dumps(payload, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    if len(serialized) > max_bytes:
+        raise ValueError(
+            f"serialized state is {len(serialized)} bytes; "
+            f"limit is {max_bytes} bytes"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    try:
+        temporary.write_bytes(serialized)
+        os.replace(temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return len(serialized)
 
 
 def _process_name() -> str:

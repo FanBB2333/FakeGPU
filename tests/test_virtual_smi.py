@@ -64,6 +64,13 @@ def test_publisher_and_virtual_smi_include_process_memory(
     assert state["devices"][0]["telemetry"][
         "gpu_utilization_percent"
     ] is None
+    assert state["publisher"]["health"]["attempted_writes"] == 1
+    assert state["publisher"]["health"]["successful_writes"] == 1
+    assert state["publisher"]["health"]["failed_writes"] == 0
+    assert state["publisher"]["limits"]["detail_entries"] == 64
+    assert state["publisher"]["limits"]["max_state_bytes"] == 2**20
+    assert path.stat().st_size <= 2**20
+    assert not list(tmp_path.glob(".state.json.*.tmp"))
     assert state["stage"] == "forward"
     assert main(["--state", str(path)]) == 0
     output = capsys.readouterr().out
@@ -140,6 +147,8 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
     assert "memory enabled, dispatch enabled" in detail
     assert "7 calls" in detail
     assert "0.25s interval" in detail
+    assert "Publisher health: 1 / 1 writes, 0 failures" in detail
+    assert "64 detail entries, 1.0 MiB state size" in detail
 
     assert (
         main(
@@ -554,6 +563,52 @@ def test_publisher_uses_environment_stage_and_counts_overhead_without_total(
     assert state["stage"] == "optimizer_step"
     assert state["devices"][0]["reported_memory"] == 4 * 2**20
     assert state["devices"][0]["reported_peak_memory"] == 5 * 2**20
+
+
+def test_publisher_limits_details_and_preserves_last_valid_state(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "bounded-state.json"
+    snapshot = {
+        "devices": [
+            {
+                "index": 0,
+                "name": "Fake GPU",
+                "total_memory": 2**30,
+                "largest_allocations": [
+                    {"bytes": index + 1, "source": f"allocation-{index}"}
+                    for index in range(5)
+                ],
+            }
+        ]
+    }
+    publisher = SmiStatePublisher(
+        path,
+        lambda: snapshot,
+        detail_limit=2,
+        max_state_bytes=64 * 1024,
+    )
+
+    state = publisher.publish_once(running=True)
+    device = state["devices"][0]
+    assert len(device["largest_allocations"]) == 2
+    assert device["largest_allocations_total"] == 5
+    assert device["largest_allocations_retained"] == 2
+    previous = path.read_bytes()
+
+    snapshot["devices"][0]["name"] = "x" * (70 * 1024)
+    with pytest.raises(ValueError, match="serialized state"):
+        publisher.publish_once(running=True)
+    assert path.read_bytes() == previous
+    assert not list(tmp_path.glob(".bounded-state.json.*.tmp"))
+
+    snapshot["devices"][0]["name"] = "Fake GPU"
+    recovered = publisher.publish_once(running=True)
+    health = recovered["publisher"]["health"]
+    assert health["attempted_writes"] == 3
+    assert health["successful_writes"] == 2
+    assert health["failed_writes"] == 1
+    assert health["last_error"] == "ValueError"
 
 
 def test_fakecuda_runtime_publishes_profile_stage_and_peak(tmp_path: Path) -> None:
