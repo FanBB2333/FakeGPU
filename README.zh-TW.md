@@ -178,7 +178,7 @@ FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果�
 
 | 驗證層 | 已維護的檢查 | 結果 |
 |---|---|---|
-| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **159 個通過** |
+| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **160 個通過** |
 | 宣告式驗證矩陣 | 6 個 smoke 案例，加 8 個 LLM cache、訓練規劃與校準案例 | **14 個通過** |
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
 | 原生能力清單 | 5 個能力群組、26 個明確 API、24 個強制執行策略的 API | **通過** |
@@ -323,12 +323,17 @@ print(loss.item())
 
 ### 查看 FakeGPU 裝置與程序
 
-狀態發布功能需要明確啟用。請在工作負載呼叫 `fakegpu.init(...)` 前設定狀態目錄；
-`build/` 已被 Git 忽略：
+狀態發布功能需要明確啟用。請在工作負載呼叫 `fakegpu.init(...)` 或透過原生啟動器
+執行前設定狀態目錄；`build/` 已被 Git 忽略：
 
 ```bash
 export FAKEGPU_SMI_STATE_DIR=build/smi
+
+# Python FakeCUDA 工作負載。
 python3 your_script.py
+
+# 未修改的原生 CUDA/NVML 工作負載。
+python3 -m fakegpu --build-dir build ./your_native_workload
 ```
 
 在另一個終端中查看正在執行的工作負載：
@@ -343,7 +348,7 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi -q
 
 # 適合腳本處理的 GPU 與程序查詢。
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
-  --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model \
+  --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model,native.kernel_launches,native.gemm_calls,native.io_bytes \
   --format=csv
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --query-compute-apps=pid,process_name,gpu_uuid,used_gpu_memory,peak_gpu_memory,stage,status \
@@ -355,6 +360,10 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 記憶體分類、allocator 活動、dispatch 追蹤及各程序峰值。`-i` 可以依裝置索引、
 UUID、PCI Bus ID 或 profile ID 篩選；`--json` 會輸出完整的標準化資料。目前
 發布 state schema v2，同時仍可讀取 v1 狀態檔。
+
+原生攔截也會發布 allocation 生命週期、傳輸量、kernel launch、GEMM 呼叫與
+FLOP、相容性事件及 unsupported API 次數。程序執行時會定期更新狀態，結束時會
+將狀態標記為 exited。
 
 UUID 與 PCI Bus ID 是穩定的模擬識別。CPU runtime 無法觀測溫度、風扇轉速、
 即時功耗與硬體 GPU 使用率，因此這些欄位顯示為 `N/A`；profile 功耗與時脈會
@@ -579,7 +588,8 @@ FakeGPU/
 - [x] 儲存庫、kernel、拓撲與 trace 分析
 - [x] FakeGPU-SMI 裝置、runtime、allocator 與程序詳細查詢
 - [ ] 擴充可執行的原生 CUDA 運算與 cuBLAS 涵蓋範圍
-- [ ] 發布原生 runtime 狀態，並加入拓撲、MIG、NVLink 與故障檢視
+- [x] 透過 FakeGPU-SMI 發布原生 runtime 的即時狀態與活動
+- [ ] 加入拓撲、MIG、NVLink 與故障檢視
 - [ ] 將裝置與程序的歷史指標匯出至監控系統
 - [ ] 為長上下文與線上服務加入實體 GPU LLM 驗證
 - [ ] 在更多 GPU 與軟體堆疊上驗證分散式與 MoE 估算

@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -62,6 +65,96 @@ def _cu_get_ptr_attr(libcuda: ctypes.CDLL, ptr: int, attr: int, ctype: object) -
     return int(out.value)
 
 
+def _configured_smi_state_path() -> Path | None:
+    explicit = os.environ.get("FAKEGPU_SMI_STATE_PATH")
+    if explicit:
+        return Path(explicit)
+    directory = os.environ.get("FAKEGPU_SMI_STATE_DIR")
+    if directory:
+        return Path(directory) / f"{os.getpid()}.json"
+    return None
+
+
+def _validate_native_smi_state() -> None:
+    state_path = _configured_smi_state_path()
+    if state_path is None:
+        return
+
+    deadline = time.monotonic() + 3.0
+    state: dict = {}
+    while time.monotonic() < deadline:
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            time.sleep(0.05)
+            continue
+        devices = state.get("devices") or []
+        if (
+            state.get("running") is True
+            and devices
+            and int(devices[0].get("tracked_memory", 0)) >= 8192
+        ):
+            break
+        time.sleep(0.05)
+    else:
+        _die(f"native SMI state did not become current: {state_path}")
+
+    if state.get("schema_version") != "fakegpu.smi_state.v2":
+        _die(f"unexpected native SMI schema: {state.get('schema_version')}")
+    if state.get("runtime") != "native":
+        _die(f"unexpected native SMI runtime: {state.get('runtime')}")
+    fakegpu = state.get("fakegpu") or {}
+    if fakegpu.get("backend") != "native_interception":
+        _die(f"unexpected native SMI backend: {fakegpu.get('backend')}")
+    device = state["devices"][0]
+    if device.get("profile_id") != "a100":
+        _die(f"unexpected native SMI profile: {device.get('profile_id')}")
+    if int(device.get("allocation_count", 0)) < 2:
+        _die("native SMI did not publish allocation counters")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "fakegpu",
+            "nvidia-smi",
+            "--state",
+            str(state_path),
+            "--query-gpu",
+            (
+                "runtime,runtime.backend,profile.id,memory.tracked,"
+                "native.io_calls,native.kernel_launches,state.status"
+            ),
+            "--format",
+            "json",
+            "-i",
+            "0",
+        ],
+        text=True,
+        capture_output=True,
+        env=dict(os.environ),
+        timeout=10,
+    )
+    if completed.returncode != 0:
+        _die(
+            "native SMI query failed: "
+            f"rc={completed.returncode} stderr={completed.stderr}"
+        )
+    query = json.loads(completed.stdout)
+    records = query.get("records") or []
+    if len(records) != 1:
+        _die(f"native SMI query returned {len(records)} records")
+    record = records[0]
+    if (
+        record.get("runtime") != "native"
+        or record.get("runtime.backend") != "native_interception"
+        or record.get("profile.id") != "a100"
+        or "memory.tracked" not in record
+        or record.get("state.status") != "running"
+    ):
+        _die(f"native SMI query record mismatch: {record}")
+
+
 def main() -> int:
     libcuda = _load_libcuda()
 
@@ -110,6 +203,7 @@ def main() -> int:
             if ordinal != 0:
                 _die(f"{label} allocation device ordinal mismatch: expected 0 got {ordinal}")
 
+        _validate_native_smi_state()
         print("OK: pointer attribute memory types (device/managed/host) validated")
         return 0
     finally:
@@ -120,4 +214,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

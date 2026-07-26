@@ -115,6 +115,7 @@ public:
 };
 
 struct GpuProfile {
+    std::string id;
     std::string name;
     GpuArch architecture;
     int compute_major;

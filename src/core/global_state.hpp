@@ -19,11 +19,20 @@ struct HostIoStats {
 
 struct DeviceReportStats {
     int index = -1;
+    std::string profile_id;
     std::string name;
     std::string uuid;
+    std::string pci_bus_id;
     std::string architecture;
     int compute_major = 0;
     int compute_minor = 0;
+    int sm_count = 0;
+    int memory_bus_width_bits = 0;
+    int core_clock_mhz = 0;
+    int memory_clock_mhz = 0;
+    int l2_cache_bytes = 0;
+    unsigned int typical_power_usage_mw = 0;
+    unsigned int max_power_limit_mw = 0;
     std::vector<std::string> supported_types;
     uint64_t total_memory = 0;
     uint64_t used_memory_current = 0;
@@ -112,6 +121,10 @@ public:
     std::vector<DeviceReportStats> snapshot_device_report() const;
     HostIoStats snapshot_host_io() const;
 
+    // Native SMI state publishing (enabled by FAKEGPU_SMI_STATE_PATH/DIR).
+    void ensure_native_smi_publisher();
+    void stop_native_smi_publisher();
+
 private:
     GlobalState();
     ~GlobalState() = default;
@@ -170,6 +183,8 @@ private:
     std::vector<DeviceRuntimeStats> device_stats;
     HostIoStats host_io;
     mutable std::mutex mutex;
+    mutable std::mutex smi_mutex;
+    void* native_smi_publisher = nullptr;
 
     int current_device = 0;
 

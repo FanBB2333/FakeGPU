@@ -55,13 +55,22 @@ def main() -> int:
         )
 
         try:
-            deadline = time.time() + 1.0
-            while time.time() < deadline:
+            startup_timeout_seconds = 5.0
+            deadline = time.monotonic() + startup_timeout_seconds
+            while time.monotonic() < deadline:
                 if os.path.exists(socket_path):
                     break
+                if proc.poll() is not None:
+                    raise AssertionError(
+                        "coordinator exited before creating its socket "
+                        f"(code {proc.returncode})"
+                    )
                 time.sleep(0.05)
             if not os.path.exists(socket_path):
-                raise AssertionError("socket was not created within 1 second")
+                raise AssertionError(
+                    "socket was not created within "
+                    f"{startup_timeout_seconds:g} seconds"
+                )
 
             response = request(socket_path, "PING")
             if "OK" not in response or "status=ready" not in response or "version=1" not in response:

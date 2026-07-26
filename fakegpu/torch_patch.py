@@ -3795,6 +3795,7 @@ def patch(
         _memory_tracker, \
         _current_device
 
+    os.environ["FAKEGPU_RUNTIME"] = "fakecuda"
     import torch
     import torch.cuda
     import torch.cuda.memory as _memory

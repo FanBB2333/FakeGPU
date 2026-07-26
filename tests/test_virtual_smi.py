@@ -288,6 +288,131 @@ def test_virtual_smi_reads_legacy_state_schema(
     assert "python legacy.py" in output
 
 
+def test_virtual_smi_reports_native_runtime_activity(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "native.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "timestamp_ns": time.time_ns(),
+                "hostname": "native-host",
+                "pid": 77,
+                "process_name": "native-workload",
+                "runtime": "native",
+                "running": True,
+                "tracking_confidence": (
+                    "C2_native_allocation_lifetime"
+                ),
+                "stage": "native",
+                "allocator_model": (
+                    "direct_native_allocations.v1"
+                ),
+                "fakegpu": {
+                    "version": "1.5.5",
+                    "runtime": "native",
+                    "backend": "native_interception",
+                    "mode": "simulate",
+                    "memory_tracking_enabled": True,
+                },
+                "devices": [
+                    {
+                        "index": 0,
+                        "name": "Fake NVIDIA A100-SXM4-80GB",
+                        "profile_id": "a100",
+                        "profile": {
+                            "id": "a100",
+                            "architecture": "ampere",
+                            "compute_capability": "8.0",
+                        },
+                        "uuid": (
+                            "GPU-00000000-abcd-ef01-2345-"
+                            "6789abcdef00"
+                        ),
+                        "pci_bus_id": "00000000:01:00.0",
+                        "total_memory": 80 * 2**30,
+                        "tracked_memory": 64 * 2**20,
+                        "peak_tracked_memory": 96 * 2**20,
+                        "reserved_memory": 64 * 2**20,
+                        "peak_reserved_memory": 96 * 2**20,
+                        "reported_memory": 64 * 2**20,
+                        "reported_peak_memory": 96 * 2**20,
+                        "allocator_model": (
+                            "direct_native_allocations.v1"
+                        ),
+                        "allocation_count": 4,
+                        "free_count": 2,
+                        "native_activity": {
+                            "io_calls": 3,
+                            "io_bytes": 6 * 2**20,
+                            "kernel_launches": 2,
+                            "gemm_calls": 1,
+                            "gemm_flops": 4096,
+                            "compatibility_events": 1,
+                            "unsupported_api_calls": 2,
+                            "kernels": {"native_kernel": 2},
+                            "unsupported_apis": [
+                                {
+                                    "operation": "cudaLaunchKernel",
+                                    "behavior": "not_executed",
+                                    "policy": "warn",
+                                    "count": 2,
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["--state", str(path), "-q"]) == 0
+    detail = capsys.readouterr().out
+    assert "runtime native, backend native_interception" in detail
+    assert "Profile: a100 [reference]" in detail
+    assert "Memory profile: dedicated" in detail
+    assert "2 kernel launches, 1 GEMM calls / 4096 FLOP" in detail
+    assert "3 IO calls / 6.0 MiB" in detail
+    assert "native_kernel=2" in detail
+    assert "cudaLaunchKernel: 2 calls [not_executed, warn]" in detail
+    assert "native capabilities 5 groups / 26 APIs / 24" in detail
+
+    assert (
+        main(
+            [
+                "--state",
+                str(path),
+                "--query-gpu",
+                (
+                    "runtime,runtime.backend,native.io_calls,"
+                    "native.io_bytes,native.kernel_launches,"
+                    "native.gemm_calls,native.gemm_flops,"
+                    "native.unsupported_api_calls"
+                ),
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    query = json.loads(capsys.readouterr().out)
+    assert query["records"] == [
+        {
+            "runtime": "native",
+            "runtime.backend": "native_interception",
+            "native.io_calls": 3,
+            "native.io_bytes": 6,
+            "native.kernel_launches": 2,
+            "native.gemm_calls": 1,
+            "native.gemm_flops": 4096,
+            "native.unsupported_api_calls": 2,
+        }
+    ]
+
+
 def test_render_table_marks_exited_process() -> None:
     state = {
         "hostname": "host",

@@ -18,9 +18,86 @@ def _require(obj: dict, key: str, *, ctx: str) -> object:
     return obj[key]
 
 
+def _require_nonnegative_int(obj: dict, key: str, *, ctx: str) -> int:
+    value = _require(obj, key, ctx=ctx)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+    ):
+        _die(f"{ctx}.{key} must be a non-negative integer")
+    return value
+
+
+def _validate_native_smi_state(
+    path: Path,
+    *,
+    expected_activity: dict[str, int],
+) -> None:
+    if not path.is_file():
+        _die(f"native SMI state file not found: {path}")
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        _die(f"failed to read native SMI state {path}: {exc}")
+    if not isinstance(state, dict):
+        _die("native SMI state root must be a JSON object")
+    if state.get("schema_version") != "fakegpu.smi_state.v2":
+        _die(
+            "unexpected native SMI schema_version="
+            f"{state.get('schema_version')!r}"
+        )
+    if state.get("runtime") != "native":
+        _die(f"unexpected native SMI runtime={state.get('runtime')!r}")
+    if state.get("running") is not False:
+        _die("native SMI state must be marked exited after the workload")
+    fakegpu = state.get("fakegpu")
+    if (
+        not isinstance(fakegpu, dict)
+        or fakegpu.get("backend") != "native_interception"
+    ):
+        _die("native SMI state did not report native_interception")
+
+    devices = state.get("devices")
+    if not isinstance(devices, list) or not devices:
+        _die("native SMI devices must be a non-empty array")
+    observed_activity = dict.fromkeys(expected_activity, 0)
+    for index, device in enumerate(devices):
+        ctx = f"native_smi.devices[{index}]"
+        if not isinstance(device, dict):
+            _die(f"{ctx} must be an object")
+        activity = _require(device, "native_activity", ctx=ctx)
+        if not isinstance(activity, dict):
+            _die(f"{ctx}.native_activity must be an object")
+        for key in observed_activity:
+            observed_activity[key] += _require_nonnegative_int(
+                activity,
+                key,
+                ctx=f"{ctx}.native_activity",
+            )
+
+    mismatches = {
+        key: {
+            "report": expected_activity[key],
+            "smi": observed_activity[key],
+        }
+        for key in expected_activity
+        if observed_activity[key] != expected_activity[key]
+    }
+    if mismatches:
+        _die(
+            "native SMI activity does not match the report: "
+            f"{mismatches}"
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate FakeGPU JSON report schema/metrics")
     ap.add_argument("--path", default="fake_gpu_report.json", help="Path to fake_gpu_report.json")
+    ap.add_argument(
+        "--smi-state",
+        help="Validate exited native SMI state against the JSON report",
+    )
     ap.add_argument("--expect-io", action="store_true", help="Require non-zero device IO counters")
     ap.add_argument("--expect-flops", action="store_true", help="Require non-zero GEMM/Matmul FLOPs counters")
     ap.add_argument(
@@ -55,8 +132,11 @@ def main() -> int:
     if not isinstance(devices, list) or not devices:
         _die("devices must be a non-empty array")
 
+    total_io_calls = 0
     total_io_bytes = 0
+    total_gemm_calls = 0
     total_flops = 0
+    total_kernel_launches = 0
     saw_memory_peak = False
     unsupported_api_event_count = 0
 
@@ -82,7 +162,11 @@ def main() -> int:
             entry = _require(io, key, ctx=f"{ctx}.io")
             if not isinstance(entry, dict):
                 _die(f"{ctx}.io.{key} must be an object")
-            _require(entry, "calls", ctx=f"{ctx}.io.{key}")
+            total_io_calls += _require_nonnegative_int(
+                entry,
+                "calls",
+                ctx=f"{ctx}.io.{key}",
+            )
             _require(entry, "bytes", ctx=f"{ctx}.io.{key}")
         total_bytes = _require(io, "total_bytes", ctx=f"{ctx}.io")
         if not isinstance(total_bytes, int):
@@ -96,12 +180,25 @@ def main() -> int:
             entry = _require(compute, key, ctx=f"{ctx}.compute")
             if not isinstance(entry, dict):
                 _die(f"{ctx}.compute.{key} must be an object")
-            _require(entry, "calls", ctx=f"{ctx}.compute.{key}")
+            total_gemm_calls += _require_nonnegative_int(
+                entry,
+                "calls",
+                ctx=f"{ctx}.compute.{key}",
+            )
             _require(entry, "flops", ctx=f"{ctx}.compute.{key}")
         dev_flops = _require(compute, "total_flops", ctx=f"{ctx}.compute")
         if not isinstance(dev_flops, int):
             _die(f"{ctx}.compute.total_flops must be an integer")
         total_flops += dev_flops
+
+        kernel_launches = _require(dev, "kernel_launches", ctx=ctx)
+        if not isinstance(kernel_launches, dict):
+            _die(f"{ctx}.kernel_launches must be an object")
+        total_kernel_launches += _require_nonnegative_int(
+            kernel_launches,
+            "total",
+            ctx=f"{ctx}.kernel_launches",
+        )
 
         unsupported_events = dev.get("unsupported_api_events", [])
         if not isinstance(unsupported_events, list):
@@ -127,6 +224,18 @@ def main() -> int:
         _die("expected non-zero FLOPs counters but total_flops is 0")
     if args.expect_unsupported_api and unsupported_api_event_count <= 0:
         _die("expected an unsupported API event but none was reported")
+    if args.smi_state:
+        _validate_native_smi_state(
+            Path(args.smi_state),
+            expected_activity={
+                "io_calls": total_io_calls,
+                "io_bytes": total_io_bytes,
+                "kernel_launches": total_kernel_launches,
+                "gemm_calls": total_gemm_calls,
+                "gemm_flops": total_flops,
+                "unsupported_api_calls": unsupported_api_event_count,
+            },
+        )
 
     return 0
 

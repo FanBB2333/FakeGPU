@@ -1,6 +1,7 @@
 #include "global_state.hpp"
 #include "logging.hpp"
 #include "gpu_profile.hpp"
+#include "native_smi.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -147,23 +148,26 @@ GlobalState::GlobalState() {
 }
 
 void GlobalState::initialize() {
-    std::lock_guard<std::mutex> lock(mutex);
-    FGPU_LOG("[GlobalState-%p] initialize called. Current devices: %lu\n", this, devices.size());
-    if (initialized) return;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        FGPU_LOG("[GlobalState-%p] initialize called. Current devices: %lu\n", this, devices.size());
+        if (initialized) {
+            return;
+        }
 
-    // Pre-allocate to prevent reallocation during emplace_back
-    // This is critical because nvitop holds Device* pointers from nvmlDeviceGetHandleByIndex
-    // and vector reallocation would invalidate those pointers
-    std::vector<GpuProfile> profiles = build_default_profiles();
-    devices.reserve(profiles.size());
-    
-    // Create fake devices from the configured profiles
-    for (size_t i = 0; i < profiles.size(); ++i) {
-        devices.emplace_back(static_cast<int>(i), profiles[i]);
+        // Pre-allocate to prevent reallocation during emplace_back.
+        // nvitop holds Device* pointers returned by NVML.
+        std::vector<GpuProfile> profiles = build_default_profiles();
+        devices.reserve(profiles.size());
+
+        for (size_t i = 0; i < profiles.size(); ++i) {
+            devices.emplace_back(static_cast<int>(i), profiles[i]);
+        }
+        device_stats.resize(devices.size());
+        initialized = true;
+        FGPU_LOG("[GlobalState-%p] Valid devices count after init: %lu\n", this, devices.size());
     }
-    device_stats.resize(devices.size());
-    initialized = true;
-    FGPU_LOG("[GlobalState-%p] Valid devices count after init: %lu\n", this, devices.size());
+    ensure_native_smi_publisher();
 }
 
 int GlobalState::get_device_count() const {
@@ -465,11 +469,20 @@ std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
         const Device& dev = devices[i];
         DeviceReportStats entry;
         entry.index = dev.index;
+        entry.profile_id = dev.profile.id;
         entry.name = dev.name;
         entry.uuid = dev.uuid;
+        entry.pci_bus_id = dev.pci_bus_id;
         entry.architecture = to_string(dev.profile.architecture);
         entry.compute_major = dev.profile.compute_major;
         entry.compute_minor = dev.profile.compute_minor;
+        entry.sm_count = dev.profile.sm_count;
+        entry.memory_bus_width_bits = dev.profile.memory_bus_width_bits;
+        entry.core_clock_mhz = dev.profile.core_clock_mhz;
+        entry.memory_clock_mhz = dev.profile.memory_clock_mhz;
+        entry.l2_cache_bytes = dev.profile.l2_cache_bytes;
+        entry.typical_power_usage_mw = dev.profile.typical_power_usage_mw;
+        entry.max_power_limit_mw = dev.profile.max_power_limit_mw;
         for (const auto& dtype : dev.profile.supported_types) {
             entry.supported_types.push_back(to_string(dtype));
         }
@@ -528,6 +541,26 @@ std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
 HostIoStats GlobalState::snapshot_host_io() const {
     std::lock_guard<std::mutex> lock(mutex);
     return host_io;
+}
+
+void GlobalState::ensure_native_smi_publisher() {
+    std::lock_guard<std::mutex> lock(smi_mutex);
+    if (native_smi_publisher != nullptr) {
+        return;
+    }
+    native_smi_publisher = create_native_smi_publisher(*this);
+}
+
+void GlobalState::stop_native_smi_publisher() {
+    void* publisher = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(smi_mutex);
+        publisher = native_smi_publisher;
+        native_smi_publisher = nullptr;
+    }
+    if (publisher != nullptr) {
+        destroy_native_smi_publisher(publisher);
+    }
 }
 
 int GlobalState::resolve_device_for_ptr_nolock(const void* ptr, int fallback_device) const {

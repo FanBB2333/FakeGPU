@@ -490,7 +490,7 @@ def test_readmes_report_llm_reliability_scope() -> None:
     )
     expected_terms = {
         "scripts/test.sh all",
-        "159",
+        "160",
         str(len(profiles)),
         str(compute_capability_count),
         str(len(capabilities["groups"])),
@@ -527,6 +527,7 @@ def test_readmes_report_llm_reliability_scope() -> None:
         "FAKEGPU_SMI_STATE_DIR",
         "--query-gpu",
         "--query-compute-apps",
+        "native.kernel_launches",
     }
 
     for readme_path in README_PATHS:
