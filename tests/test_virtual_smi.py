@@ -14,6 +14,7 @@ from fakegpu.smi import (
     SCHEMA_VERSION,
     SmiStatePublisher,
     main,
+    render_health_events,
     render_nvlink_status,
     render_table,
     render_topology_matrix,
@@ -309,6 +310,130 @@ def test_virtual_smi_rejects_invalid_modeled_nvlink_config_safely(
         device["topology"]["nvlink"]["active_links"] == 0
         for device in state["devices"]
     )
+
+
+def test_virtual_smi_models_fault_health_events_and_queries(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "fault-events.json"
+    monkeypatch.setenv(
+        "FAKEGPU_FAULT_EVENTS",
+        (
+            "0:XID_79:critical;"
+            "1:nvlink_crc:error:3;"
+            "1:NVLINK_CRC:error:2"
+        ),
+    )
+    state = SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "name": f"Fake GPU {index}",
+                    "profile_id": "a100",
+                    "total_memory": 80 * 2**30,
+                }
+                for index in range(2)
+            ]
+        },
+    ).publish_once(running=True)
+
+    faults = state["faults"]
+    assert faults["schema_version"] == "fakegpu.fault_model.v1"
+    assert faults["source"] == "modeled_environment"
+    assert faults["valid"] is True
+    assert faults["status"] == "failed"
+    assert faults["max_severity"] == "critical"
+    assert faults["event_count"] == 6
+    assert faults["event_types_total"] == 2
+    assert state["devices"][0]["health"]["status"] == "failed"
+    assert state["devices"][0]["health"]["hardware_health"] == (
+        "unobserved"
+    )
+    assert state["devices"][1]["health"]["status"] == "degraded"
+    assert state["devices"][1]["health"]["events"][0]["count"] == 5
+
+    assert main(["events", "--state", str(path)]) == 0
+    rendered = capsys.readouterr().out
+    assert "Hardware health is unobserved" in rendered
+    assert "Reliability status: failed" in rendered
+    assert "| critical | modeled_fault |" in rendered
+    assert "XID_79" in rendered
+    assert "NVLINK_CRC" in rendered
+
+    assert (
+        main(
+            [
+                "--state",
+                str(path),
+                "--query-gpu",
+                (
+                    "index,health.status,health.hardware,"
+                    "health.max_severity,health.event_count,"
+                    "health.event_types"
+                ),
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    query = json.loads(capsys.readouterr().out)
+    assert query["records"][0] == {
+        "index": 0,
+        "health.status": "failed",
+        "health.hardware": "unobserved",
+        "health.max_severity": "critical",
+        "health.event_count": 1,
+        "health.event_types": 1,
+    }
+    assert query["records"][1]["health.status"] == "degraded"
+    assert query["records"][1]["health.event_count"] == 5
+
+    inventory = smi_module.build_inventory([state])
+    assert "XID_79" in render_health_events(inventory)
+
+
+def test_virtual_smi_rejects_invalid_fault_config_without_events(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "invalid-faults.json"
+    monkeypatch.setenv(
+        "FAKEGPU_FAULT_EVENTS",
+        "0:XID_79:panic",
+    )
+    state = SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {"index": 0, "total_memory": 2**30},
+                {"index": 1, "total_memory": 2**30},
+            ]
+        },
+    ).publish_once(running=True)
+
+    assert state["faults"]["configured"] is True
+    assert state["faults"]["valid"] is False
+    assert state["faults"]["events"] == []
+    assert state["faults"]["status"] == "configuration_error"
+    assert all(
+        device["health"]["status"] == "configuration_error"
+        and device["health"]["events"] == []
+        for device in state["devices"]
+    )
+
+    assert main(["events", "--state", str(path)]) == 0
+    rendered = capsys.readouterr().out
+    assert "FAULT_CONFIG" in rendered
+    assert "severity must be info, warning, error, or critical" in (
+        rendered
+    )
+    assert "XID_79" not in rendered
 
 
 def test_virtual_smi_process_query_filters_and_marks_stale_state(

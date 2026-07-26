@@ -178,7 +178,7 @@ FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果�
 
 | 驗證層 | 已維護的檢查 | 結果 |
 |---|---|---|
-| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **163 個通過** |
+| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **165 個通過** |
 | 宣告式驗證矩陣 | 6 個 smoke 案例，加 8 個 LLM cache、訓練規劃與校準案例 | **14 個通過** |
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
 | 原生能力清單 | 5 個能力群組、26 個明確 API、24 個強制執行策略的 API | **通過** |
@@ -350,6 +350,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi -q
 python3 -m fakegpu nvidia-smi topo -m --state-dir build/smi
 python3 -m fakegpu nvidia-smi nvlink -s --state-dir build/smi
 
+# 建模故障、相容性警告、發布失敗與過期狀態。
+python3 -m fakegpu nvidia-smi events --state-dir build/smi
+
 # 適合腳本處理的 GPU 與程序查詢。
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model,native.kernel_launches,native.gemm_calls,native.io_bytes \
@@ -378,9 +381,18 @@ NVLink 模型預設關閉。在工作負載啟動前設定
 的鏈路狀態、capability、遠端裝置類型與遠端 PCI 查詢共用同一模型。設定無效時，
 所有鏈路都會保持 inactive，狀態中會顯示設定錯誤。
 
+故障注入預設同樣關閉。設定格式為
+`FAKEGPU_FAULT_EVENTS="DEVICE:CODE:SEVERITY[:COUNT];..."`，例如
+`FAKEGPU_FAULT_EVENTS="0:XID_79:critical;1:NVLINK_CRC:error:3"`。CODE 僅作為
+標籤，嚴重度支援 `info`、`warning`、`error` 與 `critical`。`events` 檢視會
+彙整設定的故障事件、原生 unsupported API 呼叫、狀態發布失敗、過期狀態與模型
+設定錯誤。`health.*` 查詢欄位會顯示每個裝置的建模狀態、最高嚴重度、事件數，
+並明確標註硬體健康狀態無法觀測。輸入無效時不會啟用任何故障，只會回報設定錯誤。
+
 UUID 與 PCI Bus ID 是穩定的模擬識別。CPU runtime 無法觀測溫度、風扇轉速、
 即時功耗與硬體 GPU 使用率，因此這些欄位顯示為 `N/A`；profile 功耗與時脈會
-作為靜態規格分開顯示。拓撲關係與設定頻寬屬於建模輸入，不是硬體測量結果。
+作為靜態規格分開顯示。拓撲關係、設定頻寬、故障代碼與健康狀態屬於建模輸入，
+不是硬體測量結果，也不是觀測到的 ECC/Xid 資料。
 
 ### 攔截原生 CUDA 函式庫
 
@@ -469,7 +481,7 @@ dtype，可透過 `--kv-cache-residual-tokens` 調整。
 | `fakegpu replay-trace` | 彙整運算、通訊、等待與 GPU 記憶體時間軸 |
 | `fakegpu calibrate` | 比較 GPU 記憶體報告並執行可靠性門檻檢查 |
 | `fakegpu capabilities` | 列出或嚴格檢查原生 API 分類 |
-| `fakegpu nvidia-smi` | 查看裝置、profile、runtime 狀態、allocator GPU 記憶體、程序與建模拓撲 |
+| `fakegpu nvidia-smi` | 查看裝置、程序、建模拓撲、健康狀態與可靠性事件 |
 | `fakegpu workspace-profiles` | 驗證並查看 workspace 估算 profiles |
 | `fakegpu validate` | 執行 JSON、TOML 或 YAML 宣告式驗證矩陣 |
 | `fakegpu coordinator` | 管理分散式模擬 coordinator |
@@ -586,6 +598,8 @@ FakeGPU/
 - Roofline 輸出是分析區間，不是實測 kernel 延遲。
 - 分散式耗時包含 coordinator、記憶體複製、socket 與程序排程，不能作為 NCCL、
   NVLink 或 RDMA benchmark。
+- 建模故障事件僅用於檢查控制面報告，不會改變 CUDA 執行，也不代表 NVML ECC
+  計數、實際觀測到的 Xid 或硬體故障。
 - Hybrid 與 passthrough 模式需要相容的實體 CUDA 環境。
 - macOS System Integrity Protection 可能移除系統程式的 `DYLD_*` 環境變數。
   原生攔截建議使用 Homebrew、conda 或 pyenv Python。
@@ -603,7 +617,8 @@ FakeGPU/
 - [ ] 擴充可執行的原生 CUDA 運算與 cuBLAS 涵蓋範圍
 - [x] 透過 FakeGPU-SMI 發布原生 runtime 的即時狀態與活動
 - [x] 加入建模拓撲、NVLink 檢視與 NVML peer 查詢
-- [ ] 加入 MIG 與故障檢視
+- [x] 加入建模故障注入、健康狀態與可靠性事件檢視
+- [ ] 加入 MIG 檢視
 - [ ] 將裝置與程序的歷史指標匯出至監控系統
 - [ ] 為長上下文與線上服務加入實體 GPU LLM 驗證
 - [ ] 在更多 GPU 與軟體堆疊上驗證分散式與 MoE 估算

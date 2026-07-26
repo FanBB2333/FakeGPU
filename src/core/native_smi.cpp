@@ -486,11 +486,150 @@ void append_topology(
     out << "]}";
 }
 
+std::vector<const ModeledFaultEvent*> fault_events_for_device(
+    const ModeledFaultModel& model,
+    int device_index) {
+    std::vector<const ModeledFaultEvent*> events;
+    for (const auto& event : model.events) {
+        if (event.device_index == device_index) {
+            events.push_back(&event);
+        }
+    }
+    return events;
+}
+
+const char* fault_severity_name(int rank) {
+    if (rank >= 4) return "critical";
+    if (rank == 3) return "error";
+    if (rank == 2) return "warning";
+    if (rank == 1) return "info";
+    return "none";
+}
+
+const char* modeled_health_status(
+    const ModeledFaultModel& model,
+    int maximum_severity) {
+    if (!model.valid) return "configuration_error";
+    if (maximum_severity >= 4) return "failed";
+    if (maximum_severity >= 2) return "degraded";
+    if (maximum_severity == 1) return "modeled_event";
+    return "no_modeled_faults";
+}
+
+void append_fault_event(
+    std::ostringstream& out,
+    const ModeledFaultEvent& event,
+    const std::string& source) {
+    out << "{\"device_index\":" << event.device_index;
+    out << ",\"code\":";
+    append_json_string(out, event.code);
+    out << ",\"severity\":";
+    append_json_string(out, event.severity);
+    out << ",\"count\":" << event.count;
+    out << ",\"active\":true";
+    out << ",\"source\":";
+    append_json_string(out, source);
+    out << '}';
+}
+
+void append_fault_model(
+    std::ostringstream& out,
+    const ModeledFaultModel& model,
+    std::size_t detail_limit) {
+    uint64_t event_count = 0;
+    int maximum_severity = model.valid ? 0 : 3;
+    for (const auto& event : model.events) {
+        event_count = saturating_add(event_count, event.count);
+        maximum_severity = std::max(
+            maximum_severity,
+            modeled_fault_severity_rank(event.severity));
+    }
+    const std::size_t retained =
+        std::min(detail_limit, model.events.size());
+
+    out << ",\"faults\":{";
+    out << "\"schema_version\":\"fakegpu.fault_model.v1\"";
+    out << ",\"source\":";
+    append_json_string(out, model.source);
+    out << ",\"configured\":"
+        << (model.configured ? "true" : "false");
+    out << ",\"valid\":" << (model.valid ? "true" : "false");
+    out << ",\"error\":";
+    append_json_string(out, model.error);
+    out << ",\"hardware_health\":\"unobserved\"";
+    out << ",\"status\":";
+    append_json_string(
+        out,
+        modeled_health_status(model, maximum_severity));
+    out << ",\"max_severity\":";
+    append_json_string(
+        out,
+        fault_severity_name(maximum_severity));
+    out << ",\"event_count\":" << event_count;
+    out << ",\"event_types_total\":" << model.events.size();
+    out << ",\"event_types_retained\":" << retained;
+    out << ",\"events\":[";
+    for (std::size_t index = 0; index < retained; ++index) {
+        if (index != 0) {
+            out << ',';
+        }
+        append_fault_event(out, model.events[index], model.source);
+    }
+    out << "]}";
+}
+
+void append_device_health(
+    std::ostringstream& out,
+    const ModeledFaultModel& model,
+    int device_index,
+    std::size_t detail_limit) {
+    const auto events = fault_events_for_device(model, device_index);
+    uint64_t event_count = 0;
+    int maximum_severity = model.valid ? 0 : 3;
+    for (const ModeledFaultEvent* event : events) {
+        event_count = saturating_add(event_count, event->count);
+        maximum_severity = std::max(
+            maximum_severity,
+            modeled_fault_severity_rank(event->severity));
+    }
+    const std::size_t retained =
+        std::min(detail_limit, events.size());
+
+    out << ",\"health\":{\"source\":";
+    append_json_string(out, model.source);
+    out << ",\"configured\":"
+        << (model.configured ? "true" : "false");
+    out << ",\"valid\":" << (model.valid ? "true" : "false");
+    out << ",\"error\":";
+    append_json_string(out, model.error);
+    out << ",\"hardware_health\":\"unobserved\"";
+    out << ",\"status\":";
+    append_json_string(
+        out,
+        modeled_health_status(model, maximum_severity));
+    out << ",\"max_severity\":";
+    append_json_string(
+        out,
+        fault_severity_name(maximum_severity));
+    out << ",\"event_count\":" << event_count;
+    out << ",\"event_types_total\":" << events.size();
+    out << ",\"event_types_retained\":" << retained;
+    out << ",\"events\":[";
+    for (std::size_t index = 0; index < retained; ++index) {
+        if (index != 0) {
+            out << ',';
+        }
+        append_fault_event(out, *events[index], model.source);
+    }
+    out << "]}";
+}
+
 void append_device(
     std::ostringstream& out,
     const DeviceReportStats& device,
     const std::vector<DeviceReportStats>& devices,
     const ModeledDeviceTopology& topology,
+    const ModeledFaultModel& fault_model,
     std::size_t detail_limit) {
     const NativeActivity activity = native_activity(device);
     const uint64_t free_memory =
@@ -614,6 +753,11 @@ void append_device(
         << "\"power_usage_mw\":null,"
         << "\"source\":\"hardware_telemetry_unavailable\"}";
     append_device_topology(out, device, devices, topology);
+    append_device_health(
+        out,
+        fault_model,
+        device.index,
+        detail_limit);
     out << '}';
 }
 
@@ -716,6 +860,8 @@ private:
                 state_.snapshot_device_report();
             const ModeledDeviceTopology topology =
                 state_.snapshot_device_topology();
+            const ModeledFaultModel fault_model =
+                state_.snapshot_fault_model();
             const BackendConfig& config = BackendConfig::instance();
             const double interval_seconds =
                 static_cast<double>(interval_.count()) / 1000.0;
@@ -814,6 +960,10 @@ private:
                 << "\"inaccessible_outputs\":0,"
                 << "\"operators\":{}}";
             append_topology(out, devices, topology);
+            append_fault_model(
+                out,
+                fault_model,
+                limits_.detail_entries);
             out << ",\"devices\":[";
             for (std::size_t index = 0;
                  index < devices.size();
@@ -826,6 +976,7 @@ private:
                     devices[index],
                     devices,
                     topology,
+                    fault_model,
                     limits_.detail_entries);
             }
             out << "]}\n";

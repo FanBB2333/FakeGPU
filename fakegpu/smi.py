@@ -36,6 +36,15 @@ MAXIMUM_MAX_STATE_BYTES = 64 * 1024 * 1024
 DEFAULT_NVLINK_BANDWIDTH_GBPS = 900.0
 MAXIMUM_NVLINK_BANDWIDTH_GBPS = 1_000_000.0
 MAXIMUM_MODELED_NVLINKS_PER_DEVICE = 18
+MAXIMUM_MODELED_FAULT_TYPES = 128
+MAXIMUM_MODELED_FAULT_COUNT = 1_000_000_000
+FAULT_SEVERITY_RANK = {
+    "none": 0,
+    "info": 1,
+    "warning": 2,
+    "error": 3,
+    "critical": 4,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +78,11 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
         unit="Gbps",
         precision=1,
     ),
+    "health.status": QueryField("health.status"),
+    "health.hardware": QueryField("health.hardware_health"),
+    "health.max_severity": QueryField("health.max_severity"),
+    "health.event_count": QueryField("health.event_count"),
+    "health.event_types": QueryField("health.event_types_total"),
     "driver_version": QueryField("software.driver_version"),
     "cuda_version": QueryField("software.cuda_version"),
     "profile.id": QueryField("profile_id"),
@@ -477,6 +491,247 @@ def _modeled_device_topology(
     }
 
 
+def _modeled_fault_model(
+    devices: list[dict[str, Any]],
+    *,
+    detail_limit: int,
+) -> dict[str, Any]:
+    events_text = os.environ.get("FAKEGPU_FAULT_EVENTS")
+    configured = bool(events_text)
+    valid = True
+    error = ""
+    source = "modeled_none"
+    counts: dict[tuple[int, str, str], int] = {}
+    device_by_index = {
+        _nonnegative_int(device.get("index")): device
+        for device in devices
+    }
+
+    if configured:
+        source = "modeled_environment"
+        normalized_text = str(events_text).strip()
+        if (
+            not normalized_text
+            or normalized_text.startswith(";")
+            or normalized_text.endswith(";")
+        ):
+            valid = False
+            error = (
+                "FAKEGPU_FAULT_EVENTS contains an empty event"
+            )
+        else:
+            for event_index, event_text in enumerate(
+                normalized_text.split(";"),
+                start=1,
+            ):
+                fields = [
+                    field.strip() for field in event_text.split(":")
+                ]
+                prefix = (
+                    f"FAKEGPU_FAULT_EVENTS event {event_index}"
+                )
+                if (
+                    len(fields) not in {3, 4}
+                    or any(not field for field in fields)
+                ):
+                    valid = False
+                    error = (
+                        f"{prefix} must use "
+                        "DEVICE:CODE:SEVERITY[:COUNT]"
+                    )
+                    break
+                index_text = fields[0]
+                unsigned_index = (
+                    index_text[1:]
+                    if index_text.startswith("+")
+                    else index_text
+                )
+                if (
+                    not unsigned_index.isascii()
+                    or not unsigned_index.isdigit()
+                ):
+                    valid = False
+                else:
+                    device_index = int(index_text)
+                    valid = device_index in device_by_index
+                if not valid:
+                    error = (
+                        f"{prefix} contains an invalid device index"
+                    )
+                    break
+
+                code = fields[1].upper()
+                if (
+                    len(code) > 64
+                    or any(
+                        not character.isascii()
+                        or (
+                            not character.isalnum()
+                            and character not in "_.-"
+                        )
+                        for character in code
+                    )
+                ):
+                    valid = False
+                    error = f"{prefix} contains an invalid code"
+                    break
+
+                severity = fields[2].lower()
+                if FAULT_SEVERITY_RANK.get(severity, 0) == 0:
+                    valid = False
+                    error = (
+                        f"{prefix} severity must be info, warning, "
+                        "error, or critical"
+                    )
+                    break
+
+                count = 1
+                if len(fields) == 4:
+                    count_text = fields[3]
+                    unsigned_count = (
+                        count_text[1:]
+                        if count_text.startswith("+")
+                        else count_text
+                    )
+                    if (
+                        not unsigned_count.isascii()
+                        or not unsigned_count.isdigit()
+                    ):
+                        valid = False
+                    else:
+                        count = int(count_text)
+                        valid = (
+                            1
+                            <= count
+                            <= MAXIMUM_MODELED_FAULT_COUNT
+                        )
+                    if not valid:
+                        error = (
+                            f"{prefix} count must be between 1 and "
+                            "1000000000"
+                        )
+                        break
+
+                key = (device_index, code, severity)
+                counts[key] = min(
+                    MAXIMUM_MODELED_FAULT_COUNT,
+                    counts.get(key, 0) + count,
+                )
+                if len(counts) > MAXIMUM_MODELED_FAULT_TYPES:
+                    valid = False
+                    error = (
+                        "FAKEGPU_FAULT_EVENTS exceeds the "
+                        "128-event-type limit"
+                    )
+                    break
+
+    if configured and not valid:
+        source = "modeled_environment_invalid"
+        counts.clear()
+
+    events = [
+        {
+            "device_index": device_index,
+            "code": code,
+            "severity": severity,
+            "count": count,
+            "active": True,
+            "source": source,
+        }
+        for (device_index, code, severity), count in counts.items()
+    ]
+    events.sort(
+        key=lambda event: (
+            -FAULT_SEVERITY_RANK[event["severity"]],
+            event["device_index"],
+            event["code"],
+        )
+    )
+
+    for device_index, device in device_by_index.items():
+        device_events = [
+            event
+            for event in events
+            if event["device_index"] == device_index
+        ]
+        maximum_severity = (
+            "error"
+            if not valid
+            else _maximum_fault_severity(device_events)
+        )
+        retained = device_events[:detail_limit]
+        device["health"] = {
+            "source": source,
+            "configured": configured,
+            "valid": valid,
+            "error": error,
+            "hardware_health": "unobserved",
+            "status": _modeled_health_status(
+                valid=valid,
+                maximum_severity=maximum_severity,
+            ),
+            "max_severity": maximum_severity,
+            "event_count": sum(
+                int(event["count"]) for event in device_events
+            ),
+            "event_types_total": len(device_events),
+            "event_types_retained": len(retained),
+            "events": [dict(event) for event in retained],
+        }
+
+    maximum_severity = (
+        "error" if not valid else _maximum_fault_severity(events)
+    )
+    retained = events[:detail_limit]
+    return {
+        "schema_version": "fakegpu.fault_model.v1",
+        "source": source,
+        "configured": configured,
+        "valid": valid,
+        "error": error,
+        "hardware_health": "unobserved",
+        "status": _modeled_health_status(
+            valid=valid,
+            maximum_severity=maximum_severity,
+        ),
+        "max_severity": maximum_severity,
+        "event_count": sum(int(event["count"]) for event in events),
+        "event_types_total": len(events),
+        "event_types_retained": len(retained),
+        "events": [dict(event) for event in retained],
+    }
+
+
+def _maximum_fault_severity(
+    events: Sequence[Mapping[str, Any]],
+) -> str:
+    return max(
+        (
+            str(event.get("severity") or "none")
+            for event in events
+        ),
+        key=lambda severity: FAULT_SEVERITY_RANK.get(severity, 0),
+        default="none",
+    )
+
+
+def _modeled_health_status(
+    *,
+    valid: bool,
+    maximum_severity: str,
+) -> str:
+    if not valid:
+        return "configuration_error"
+    rank = FAULT_SEVERITY_RANK.get(maximum_severity, 0)
+    if rank >= 4:
+        return "failed"
+    if rank >= 2:
+        return "degraded"
+    if rank == 1:
+        return "modeled_event"
+    return "no_modeled_faults"
+
+
 class SmiStatePublisher:
     """Publish FakeCUDA process and device diagnostics for an external viewer."""
 
@@ -734,6 +989,10 @@ class SmiStatePublisher:
             else {}
         )
         topology = _modeled_device_topology(devices)
+        faults = _modeled_fault_model(
+            devices,
+            detail_limit=self.detail_limit,
+        )
         state = {
             "schema_version": SCHEMA_VERSION,
             "timestamp_ns": time.time_ns(),
@@ -807,6 +1066,7 @@ class SmiStatePublisher:
             ),
             "dispatch_tracking": dispatch_tracking,
             "topology": topology,
+            "faults": faults,
             "devices": devices,
         }
         serialized_bytes = _atomic_write_json(
@@ -835,10 +1095,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "view",
         nargs="?",
-        choices=("topo", "nvlink"),
+        choices=("topo", "nvlink", "events"),
         help=(
-            "Show an NVIDIA-style modeled topology matrix or NVLink "
-            "status view."
+            "Show an NVIDIA-style modeled topology matrix, NVLink "
+            "status, or health and reliability events."
         ),
     )
     parser.add_argument("--state", action="append", default=[])
@@ -957,7 +1217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         or args.query_compute_apps
     ):
         parser.error(
-            "topo and nvlink views cannot be combined with another "
+            "topo, nvlink, and events views cannot be combined with another "
             "output mode"
         )
     if args.format is not None and not (
@@ -1039,6 +1299,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(render_topology_matrix(inventory, errors=errors))
             elif args.view == "nvlink":
                 print(render_nvlink_status(inventory, errors=errors))
+            elif args.view == "events":
+                print(render_health_events(inventory, errors=errors))
             elif gpu_query_fields:
                 print(
                     render_query(
@@ -1561,6 +1823,225 @@ def render_nvlink_status(
     return "\n".join(lines)
 
 
+def render_health_events(
+    inventory: Mapping[str, Any],
+    *,
+    errors: Sequence[str] = (),
+) -> str:
+    records = _health_event_records(inventory)
+    maximum_severity = _maximum_fault_severity(records)
+    rank = FAULT_SEVERITY_RANK.get(maximum_severity, 0)
+    reliability_status = (
+        "failed"
+        if rank >= 4
+        else "degraded"
+        if rank >= 2
+        else "informational"
+        if rank == 1
+        else "no_events"
+    )
+    lines = [
+        "FakeGPU health and reliability events",
+        (
+            "Hardware health is unobserved; modeled faults and runtime "
+            "evidence are reported separately."
+        ),
+        (
+            f"Reliability status: {reliability_status} | "
+            f"maximum severity: {maximum_severity} | "
+            f"{len(records)} event types / "
+            f"{sum(_nonnegative_int(item.get('count')) for item in records)} "
+            "occurrences"
+        ),
+    ]
+    if records:
+        lines.extend(
+            [
+                "| Severity | Kind | Host | GPU | Code | Count | Source | Detail |",
+                "|---|---|---|---:|---|---:|---|---|",
+            ]
+        )
+        for record in records:
+            lines.append(
+                f"| {_table_cell(record['severity'])} | "
+                f"{_table_cell(record['kind'])} | "
+                f"{_table_cell(record['host'])} | "
+                f"{_table_cell(record['gpu'])} | "
+                f"{_table_cell(record['code'])} | "
+                f"{record['count']} | "
+                f"{_table_cell(record['source'])} | "
+                f"{_table_cell(record['detail'])} |"
+            )
+    else:
+        lines.append(
+            "No modeled fault or runtime reliability events found."
+        )
+    if any(
+        _nonnegative_int(device["health"].get("event_types_total"))
+        > _nonnegative_int(
+            device["health"].get("event_types_retained")
+        )
+        for device in inventory.get("devices") or []
+    ):
+        lines.append(
+            "Some modeled fault details were omitted by "
+            "FAKEGPU_SMI_DETAIL_LIMIT."
+        )
+    for error in errors:
+        lines.append(f"warning: {error}")
+    return "\n".join(lines)
+
+
+def _health_event_records(
+    inventory: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    configuration_keys: set[tuple[str, str, str]] = set()
+    for device in inventory.get("devices") or []:
+        host = str(device.get("host") or "localhost")
+        gpu = _nonnegative_int(device.get("index"))
+        health = device["health"]
+        if health.get("error"):
+            detail = str(health["error"])
+            key = (host, "FAULT_CONFIG", detail)
+            if key not in configuration_keys:
+                configuration_keys.add(key)
+                records.append(
+                    {
+                        "severity": "error",
+                        "kind": "configuration",
+                        "host": host,
+                        "gpu": "N/A",
+                        "code": "FAULT_CONFIG",
+                        "count": 1,
+                        "source": health.get("source")
+                        or "modeled_environment_invalid",
+                        "detail": detail,
+                    }
+                )
+        for event in health.get("events") or []:
+            records.append(
+                {
+                    "severity": str(
+                        event.get("severity") or "info"
+                    ),
+                    "kind": "modeled_fault",
+                    "host": host,
+                    "gpu": gpu,
+                    "code": str(event.get("code") or "UNKNOWN"),
+                    "count": _nonnegative_int(event.get("count")),
+                    "source": str(
+                        event.get("source") or health.get("source")
+                    ),
+                    "detail": (
+                        "configured through FAKEGPU_FAULT_EVENTS"
+                    ),
+                }
+            )
+        topology = device["topology"]
+        if topology.get("error"):
+            detail = str(topology["error"])
+            key = (host, "NVLINK_CONFIG", detail)
+            if key not in configuration_keys:
+                configuration_keys.add(key)
+                records.append(
+                    {
+                        "severity": "error",
+                        "kind": "configuration",
+                        "host": host,
+                        "gpu": "N/A",
+                        "code": "NVLINK_CONFIG",
+                        "count": 1,
+                        "source": topology.get("source")
+                        or "modeled_environment_invalid",
+                        "detail": detail,
+                    }
+                )
+        for event in device["native_activity"].get(
+            "unsupported_apis"
+        ) or []:
+            records.append(
+                {
+                    "severity": "warning",
+                    "kind": "compatibility",
+                    "host": host,
+                    "gpu": gpu,
+                    "code": str(
+                        event.get("operation") or "UNKNOWN_API"
+                    ),
+                    "count": _nonnegative_int(event.get("count")),
+                    "source": "native_activity",
+                    "detail": (
+                        f"{event.get('behavior') or 'unknown'}; "
+                        f"policy {event.get('policy') or 'unknown'}"
+                    ),
+                }
+            )
+    for runtime in inventory.get("runtimes") or []:
+        publisher = runtime.get("publisher") or {}
+        health = (
+            publisher.get("health") or {}
+            if isinstance(publisher, Mapping)
+            else {}
+        )
+        failures = _nonnegative_int(health.get("failed_writes"))
+        if failures:
+            records.append(
+                {
+                    "severity": "error",
+                    "kind": "publisher",
+                    "host": str(
+                        runtime.get("host") or "localhost"
+                    ),
+                    "gpu": "N/A",
+                    "code": str(
+                        health.get("last_error")
+                        or "PUBLISH_FAILURE"
+                    ),
+                    "count": failures,
+                    "source": str(
+                        publisher.get("source") or "publisher"
+                    ),
+                    "detail": (
+                        f"pid {runtime.get('pid', 0)}; "
+                        f"{health.get('successful_writes', 0)} "
+                        "successful writes"
+                    ),
+                }
+            )
+        if runtime.get("status") == "stale":
+            records.append(
+                {
+                    "severity": "warning",
+                    "kind": "state",
+                    "host": str(
+                        runtime.get("host") or "localhost"
+                    ),
+                    "gpu": "N/A",
+                    "code": "STALE_STATE",
+                    "count": 1,
+                    "source": "state_freshness",
+                    "detail": (
+                        f"pid {runtime.get('pid', 0)}; age "
+                        f"{_format_age(runtime.get('age_seconds'))}"
+                    ),
+                }
+            )
+    records.sort(
+        key=lambda record: (
+            -FAULT_SEVERITY_RANK.get(
+                str(record.get("severity") or "none"),
+                0,
+            ),
+            str(record.get("host") or ""),
+            str(record.get("gpu") or ""),
+            str(record.get("kind") or ""),
+            str(record.get("code") or ""),
+        )
+    )
+    return records
+
+
 def render_detail(
     inventory: Mapping[str, Any],
     *,
@@ -1714,6 +2195,7 @@ def render_detail(
         native_activity = item["native_activity"]
         topology = item["topology"]
         nvlink = topology["nvlink"]
+        health = item["health"]
         lines.extend(
             [
                 "",
@@ -1731,6 +2213,16 @@ def render_detail(
                     f"{nvlink.get('active_links', 0)} active NVLinks / "
                     f"{_format_gbps(nvlink.get('aggregate_bandwidth_gbps'))} "
                     "Gbps modeled aggregate"
+                ),
+                (
+                    "  Health model: "
+                    f"{health.get('status') or 'unknown'}, "
+                    "hardware "
+                    f"{health.get('hardware_health') or 'unobserved'}, "
+                    "maximum severity "
+                    f"{health.get('max_severity') or 'none'}, "
+                    f"{health.get('event_types_total', 0)} event types / "
+                    f"{health.get('event_count', 0)} occurrences"
                 ),
                 (
                     f"  Profile: {item['profile_id']} "
@@ -1814,6 +2306,20 @@ def render_detail(
                 ),
             ]
         )
+        if health.get("error"):
+            lines.append(
+                f"  Health configuration error: {health['error']}"
+            )
+        if health.get("events"):
+            lines.append("  Modeled fault events:")
+            for event in health["events"][:5]:
+                lines.append(
+                    "    - "
+                    f"[{event.get('severity') or 'info'}] "
+                    f"{event.get('code') or 'UNKNOWN'}: "
+                    f"{_nonnegative_int(event.get('count'))} "
+                    "occurrences"
+                )
         if (
             str(item["fakegpu"].get("runtime") or "") == "native"
             or _has_native_activity(native_activity)
@@ -1991,6 +2497,7 @@ def _empty_device_aggregate(
             "unsupported_apis": [],
         },
         "topology": dict(device["topology"]),
+        "health": dict(device["health"]),
         "telemetry": dict(device["telemetry"]),
         "fakegpu": dict(fakegpu),
         "software": dict(software),
@@ -2208,6 +2715,7 @@ def _normalize_device(
         "hardware_telemetry_unavailable",
     )
     topology = _normalize_device_topology(raw.get("topology"))
+    health = _normalize_device_health(raw.get("health"))
     return {
         "index": index,
         "name": str(raw.get("name") or "Fake NVIDIA GPU"),
@@ -2285,6 +2793,7 @@ def _normalize_device(
             raw.get("native_activity")
         ),
         "topology": topology,
+        "health": health,
         "telemetry": telemetry,
     }
 
@@ -2428,6 +2937,71 @@ def _mapping_list(value: Any) -> list[dict[str, Any]]:
     return [
         dict(item) for item in value if isinstance(item, Mapping)
     ]
+
+
+def _normalize_device_health(value: Any) -> dict[str, Any]:
+    raw = dict(value) if isinstance(value, Mapping) else {}
+    events = []
+    for item in _mapping_list(raw.get("events")):
+        severity = str(item.get("severity") or "none").lower()
+        if severity not in FAULT_SEVERITY_RANK:
+            severity = "none"
+        events.append(
+            {
+                "device_index": _nonnegative_int(
+                    item.get("device_index")
+                ),
+                "code": str(item.get("code") or "UNKNOWN"),
+                "severity": severity,
+                "count": min(
+                    MAXIMUM_MODELED_FAULT_COUNT,
+                    _nonnegative_int(item.get("count")),
+                ),
+                "active": bool(item.get("active", True)),
+                "source": str(
+                    item.get("source")
+                    or raw.get("source")
+                    or "modeled_none"
+                ),
+            }
+        )
+    maximum_severity = str(
+        raw.get("max_severity")
+        or _maximum_fault_severity(events)
+    ).lower()
+    if maximum_severity not in FAULT_SEVERITY_RANK:
+        maximum_severity = "none"
+    valid = bool(raw.get("valid", True))
+    return {
+        "source": str(raw.get("source") or "modeled_none"),
+        "configured": bool(raw.get("configured", False)),
+        "valid": valid,
+        "error": str(raw.get("error") or ""),
+        "hardware_health": str(
+            raw.get("hardware_health") or "unobserved"
+        ),
+        "status": str(
+            raw.get("status")
+            or _modeled_health_status(
+                valid=valid,
+                maximum_severity=maximum_severity,
+            )
+        ),
+        "max_severity": maximum_severity,
+        "event_count": _nonnegative_int(
+            raw.get("event_count"),
+            default=sum(int(event["count"]) for event in events),
+        ),
+        "event_types_total": _nonnegative_int(
+            raw.get("event_types_total"),
+            default=len(events),
+        ),
+        "event_types_retained": _nonnegative_int(
+            raw.get("event_types_retained"),
+            default=len(events),
+        ),
+        "events": events,
+    }
 
 
 def _normalize_device_topology(value: Any) -> dict[str, Any]:

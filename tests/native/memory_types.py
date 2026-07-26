@@ -176,6 +176,20 @@ def _validate_native_smi_state() -> None:
             or int(nvlink.get("active_links", 0)) != 1
         ):
             _die(f"native SMI topology mismatch: {topology}")
+    if os.environ.get("FAKEGPU_FAULT_EVENTS"):
+        faults = state.get("faults") or {}
+        health = device.get("health") or {}
+        if (
+            faults.get("source") != "modeled_environment"
+            or faults.get("valid") is not True
+            or faults.get("status") != "failed"
+            or int(faults.get("event_types_total", 0)) != 2
+            or int(faults.get("event_count", 0)) != 4
+            or health.get("status") != "failed"
+            or health.get("hardware_health") != "unobserved"
+            or health.get("max_severity") != "critical"
+        ):
+            _die(f"native SMI fault model mismatch: {faults}")
 
     completed = subprocess.run(
         [
@@ -189,7 +203,9 @@ def _validate_native_smi_state() -> None:
             (
                 "runtime,runtime.backend,profile.id,memory.tracked,"
                 "native.io_calls,native.kernel_launches,state.status,"
-                "topology.source,nvlink.active_links,nvlink.bandwidth"
+                "topology.source,nvlink.active_links,nvlink.bandwidth,"
+                "health.status,health.hardware,health.max_severity,"
+                "health.event_count"
             ),
             "--format",
             "json",
@@ -225,11 +241,24 @@ def _validate_native_smi_state() -> None:
                 or record.get("nvlink.active_links") != 1
             )
         )
+        or (
+            os.environ.get("FAKEGPU_FAULT_EVENTS")
+            and (
+                record.get("health.status") != "failed"
+                or record.get("health.hardware") != "unobserved"
+                or record.get("health.max_severity") != "critical"
+                or record.get("health.event_count") != 1
+            )
+        )
     ):
         _die(f"native SMI query record mismatch: {record}")
 
     if os.environ.get("FAKEGPU_NVLINK_GROUPS"):
-        for view in (("topo", "-m"), ("nvlink", "-s")):
+        for view in (
+            ("topo", "-m"),
+            ("nvlink", "-s"),
+            ("events",),
+        ):
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -254,6 +283,15 @@ def _validate_native_smi_state() -> None:
             if "modeled" not in completed.stdout:
                 _die(
                     f"native SMI {view[0]} view omitted model label"
+                )
+            if view[0] == "events" and (
+                "XID_79" not in completed.stdout
+                or "Hardware health is unobserved"
+                not in completed.stdout
+            ):
+                _die(
+                    "native SMI events view omitted configured "
+                    "fault evidence"
                 )
 
 

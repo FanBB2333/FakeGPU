@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <map>
 #include <set>
 #include <sstream>
+#include <tuple>
 #include <utility>
 
 namespace fake_gpu {
@@ -87,6 +90,74 @@ ModeledDeviceTopology invalid_topology(
     topology.error = std::move(error);
     topology.nvlink_peers.resize(device_count);
     return topology;
+}
+
+std::string lowercase_copy(std::string value) {
+    std::transform(
+        value.begin(),
+        value.end(),
+        value.begin(),
+        [](unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+    return value;
+}
+
+std::string uppercase_copy(std::string value) {
+    std::transform(
+        value.begin(),
+        value.end(),
+        value.begin(),
+        [](unsigned char character) {
+            return static_cast<char>(std::toupper(character));
+        });
+    return value;
+}
+
+bool valid_fault_code(const std::string& value) {
+    if (value.empty() || value.size() > 64) {
+        return false;
+    }
+    return std::all_of(
+        value.begin(),
+        value.end(),
+        [](unsigned char character) {
+            return std::isalnum(character) ||
+                character == '_' ||
+                character == '-' ||
+                character == '.';
+        });
+}
+
+bool parse_fault_count(const std::string& value, uint64_t& result) {
+    const std::string trimmed = trim_copy(value);
+    if (trimmed.empty()) {
+        return false;
+    }
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed =
+        std::strtoull(trimmed.c_str(), &end, 10);
+    if (
+        errno != 0 ||
+        end == trimmed.c_str() ||
+        !end ||
+        *end != '\0' ||
+        parsed == 0 ||
+        parsed > kMaximumModeledFaultCount) {
+        return false;
+    }
+    result = static_cast<uint64_t>(parsed);
+    return true;
+}
+
+ModeledFaultModel invalid_fault_model(std::string error) {
+    ModeledFaultModel model;
+    model.source = "modeled_environment_invalid";
+    model.configured = true;
+    model.valid = false;
+    model.error = std::move(error);
+    return model;
 }
 
 } // namespace
@@ -231,6 +302,142 @@ ModeledDeviceTopology build_modeled_device_topology(
         }
     }
     return topology;
+}
+
+int modeled_fault_severity_rank(const std::string& severity) {
+    if (severity == "critical") return 4;
+    if (severity == "error") return 3;
+    if (severity == "warning") return 2;
+    if (severity == "info") return 1;
+    return 0;
+}
+
+ModeledFaultModel build_modeled_fault_model(
+    std::size_t device_count) {
+    ModeledFaultModel model;
+    const char* configured_events = std::getenv(
+        "FAKEGPU_FAULT_EVENTS");
+    if (!configured_events || !*configured_events) {
+        return model;
+    }
+
+    const std::string events_text = trim_copy(configured_events);
+    if (
+        events_text.empty() ||
+        events_text.front() == ';' ||
+        events_text.back() == ';') {
+        return invalid_fault_model(
+            "FAKEGPU_FAULT_EVENTS contains an empty event");
+    }
+
+    model.source = "modeled_environment";
+    model.configured = true;
+    std::map<
+        std::tuple<int, std::string, std::string>,
+        uint64_t> counts;
+    std::istringstream events_stream(events_text);
+    std::string event_text;
+    std::size_t event_index = 0;
+    while (std::getline(events_stream, event_text, ';')) {
+        ++event_index;
+        event_text = trim_copy(event_text);
+        if (
+            event_text.empty() ||
+            event_text.front() == ':' ||
+            event_text.back() == ':') {
+            return invalid_fault_model(
+                "FAKEGPU_FAULT_EVENTS event " +
+                std::to_string(event_index) +
+                " must use DEVICE:CODE:SEVERITY[:COUNT]");
+        }
+
+        std::vector<std::string> fields;
+        std::istringstream field_stream(event_text);
+        std::string field;
+        while (std::getline(field_stream, field, ':')) {
+            fields.push_back(trim_copy(field));
+        }
+        if (fields.size() < 3 || fields.size() > 4) {
+            return invalid_fault_model(
+                "FAKEGPU_FAULT_EVENTS event " +
+                std::to_string(event_index) +
+                " must use DEVICE:CODE:SEVERITY[:COUNT]");
+        }
+
+        int device_index = -1;
+        if (!parse_device_index(
+                fields[0],
+                device_count,
+                device_index)) {
+            return invalid_fault_model(
+                "FAKEGPU_FAULT_EVENTS event " +
+                std::to_string(event_index) +
+                " contains an invalid device index");
+        }
+        const std::string code = uppercase_copy(fields[1]);
+        if (!valid_fault_code(code)) {
+            return invalid_fault_model(
+                "FAKEGPU_FAULT_EVENTS event " +
+                std::to_string(event_index) +
+                " contains an invalid code");
+        }
+        const std::string severity = lowercase_copy(fields[2]);
+        if (modeled_fault_severity_rank(severity) == 0) {
+            return invalid_fault_model(
+                "FAKEGPU_FAULT_EVENTS event " +
+                std::to_string(event_index) +
+                " severity must be info, warning, error, or critical");
+        }
+        uint64_t count = 1;
+        if (
+            fields.size() == 4 &&
+            !parse_fault_count(fields[3], count)) {
+            return invalid_fault_model(
+                "FAKEGPU_FAULT_EVENTS event " +
+                std::to_string(event_index) +
+                " count must be between 1 and 1000000000");
+        }
+
+        const auto key = std::make_tuple(
+            device_index,
+            code,
+            severity);
+        uint64_t& aggregate = counts[key];
+        aggregate = std::min<uint64_t>(
+            kMaximumModeledFaultCount,
+            aggregate >= kMaximumModeledFaultCount - count
+                ? kMaximumModeledFaultCount
+                : aggregate + count);
+        if (counts.size() > kMaximumModeledFaultTypes) {
+            return invalid_fault_model(
+                "FAKEGPU_FAULT_EVENTS exceeds the 128-event-type "
+                "limit");
+        }
+    }
+
+    for (const auto& [key, count] : counts) {
+        const auto& [device_index, code, severity] = key;
+        model.events.push_back(
+            {device_index, code, severity, count});
+    }
+    std::sort(
+        model.events.begin(),
+        model.events.end(),
+        [](const ModeledFaultEvent& left,
+           const ModeledFaultEvent& right) {
+            const int left_rank =
+                modeled_fault_severity_rank(left.severity);
+            const int right_rank =
+                modeled_fault_severity_rank(right.severity);
+            if (left_rank != right_rank) {
+                return left_rank > right_rank;
+            }
+            if (left.device_index != right.device_index) {
+                return left.device_index < right.device_index;
+            }
+            return left.code < right.code;
+        });
+    return model;
 }
 
 } // namespace fake_gpu
