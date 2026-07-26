@@ -37,6 +37,7 @@
    - [验证安装结果](#验证安装结果)
 3. [使用方式](#使用方式)
    - [使用 FakeCUDA 运行 PyTorch](#使用-fakecuda-运行-pytorch)
+   - [查看 FakeGPU 设备和进程](#查看-fakegpu-设备和进程)
    - [拦截原生 CUDA 库](#拦截原生-cuda-库)
    - [运行前检查显存](#运行前检查显存)
    - [分析仓库或模型](#分析仓库或模型)
@@ -176,7 +177,7 @@ FakeGPU 按工作负载和环境签名报告可靠性。`GPU-validated` 结果�
 
 | 验证层 | 已维护的检查 | 结果 |
 |---|---|---|
-| Python runtime、估算器、CLI、schema 和 README 契约 | 完整 `pytest` 测试集 | **156 个通过** |
+| Python runtime、估算器、CLI、schema 和 README 契约 | 完整 `pytest` 测试集 | **159 个通过** |
 | 声明式验证矩阵 | 6 个 smoke 用例，加 8 个 LLM cache、训练规划和校准用例 | **14 个通过** |
 | 原生库拦截 | 构建、库边界、导出符号、preload、显存类型、coordinator 和不支持 API 策略 | **通过** |
 | 原生能力清单 | 5 个能力组、26 个显式 API、24 个强制执行策略的 API | **通过** |
@@ -319,6 +320,45 @@ print(loss.item())
 已维护的运算在 CPU 上执行，设备放置、显存限制、训练控制流程和错误处理使用
 模拟的 CUDA 接口。
 
+### 查看 FakeGPU 设备和进程
+
+状态发布功能需要显式启用。请在工作负载调用 `fakegpu.init(...)` 前设置状态目录；
+`build/` 已被 Git 忽略：
+
+```bash
+export FAKEGPU_SMI_STATE_DIR=build/smi
+python3 your_script.py
+```
+
+在另一个终端中查看正在运行的工作负载：
+
+```bash
+# 紧凑的设备与进程表；添加 "-l 1" 可每秒刷新一次。
+python3 -m fakegpu nvidia-smi --state-dir build/smi
+
+# 设备列表，以及 runtime、profile 和 allocator 详细报告。
+python3 -m fakegpu nvidia-smi --state-dir build/smi -L
+python3 -m fakegpu nvidia-smi --state-dir build/smi -q
+
+# 适合脚本处理的 GPU 与进程查询。
+python3 -m fakegpu nvidia-smi --state-dir build/smi \
+  --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model \
+  --format=csv
+python3 -m fakegpu nvidia-smi --state-dir build/smi \
+  --query-compute-apps=pid,process_name,gpu_uuid,used_gpu_memory,peak_gpu_memory,stage,status \
+  --format=csv,noheader,nounits
+```
+
+详细报告包含 FakeGPU 版本、runtime backend 与策略、Python/PyTorch/CUDA 版本、
+状态更新时间、profile 目录和原生 API 覆盖情况、模拟设备标识、计算规格、显存
+分类、allocator 活动、dispatch 跟踪和各进程峰值。`-i` 可以按设备索引、UUID、
+PCI Bus ID 或 profile ID 筛选；`--json` 会输出完整的标准化数据。当前发布
+state schema v2，同时仍可读取 v1 状态文件。
+
+UUID 和 PCI Bus ID 是稳定的模拟标识。CPU runtime 无法观测温度、风扇转速、
+实时功耗和硬件 GPU 利用率，因此这些字段显示为 `N/A`；profile 功耗与时钟频率
+会作为静态规格单独展示。
+
 ### 拦截原生 CUDA 库
 
 构建原生库后，使用模块启动器为未修改的命令设置 `LD_PRELOAD` 或
@@ -405,7 +445,7 @@ dtype，可通过 `--kv-cache-residual-tokens` 调整。
 | `fakegpu replay-trace` | 汇总计算、通信、等待和显存时间线 |
 | `fakegpu calibrate` | 对比显存报告并执行可靠性门槛检查 |
 | `fakegpu capabilities` | 列出或严格检查原生 API 分类 |
-| `fakegpu nvidia-smi` | 显示虚拟进程显存 |
+| `fakegpu nvidia-smi` | 查看 FakeGPU 设备、profile、runtime 状态、allocator 显存和进程 |
 | `fakegpu workspace-profiles` | 验证并查看 workspace 估算 profiles |
 | `fakegpu validate` | 执行 JSON、TOML 或 YAML 声明式验证矩阵 |
 | `fakegpu coordinator` | 管理分布式模拟 coordinator |
@@ -535,7 +575,10 @@ FakeGPU/
 - [x] 可识别架构的 GPU profile 目录
 - [x] 运行时、静态、LLM 和分布式显存分析
 - [x] 仓库、kernel、拓扑和 trace 分析
+- [x] FakeGPU-SMI 设备、runtime、allocator 和进程详细查询
 - [ ] 扩展可执行的原生 CUDA 运算和 cuBLAS 覆盖范围
+- [ ] 发布原生 runtime 状态，并增加拓扑、MIG、NVLink 和故障视图
+- [ ] 将设备与进程的历史指标导出到监控系统
 - [ ] 为长上下文和在线服务添加真实 GPU LLM 验证
 - [ ] 在更多 GPU 和软件栈上验证分布式与 MoE 估算
 

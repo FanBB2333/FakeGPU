@@ -490,7 +490,7 @@ def test_readmes_report_llm_reliability_scope() -> None:
     )
     expected_terms = {
         "scripts/test.sh all",
-        "156",
+        "159",
         str(len(profiles)),
         str(compute_capability_count),
         str(len(capabilities["groups"])),
@@ -523,9 +523,16 @@ def test_readmes_report_llm_reliability_scope() -> None:
     assert len(capabilities["groups"]) == 5
     assert len(capabilities["apis"]) == 26
     assert policy_enforced_count == 24
+    smi_terms = {
+        "FAKEGPU_SMI_STATE_DIR",
+        "--query-gpu",
+        "--query-compute-apps",
+    }
 
     for readme_path in README_PATHS:
         readme = (ROOT / readme_path).read_text(encoding="utf-8")
         section = _anchored_readme_section(readme, "llm-reliability")
         for term in expected_terms:
             assert term in section, (readme_path, term)
+        for term in smi_terms:
+            assert term in readme, (readme_path, term)
