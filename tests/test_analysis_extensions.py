@@ -7,8 +7,10 @@ import pytest
 
 from fakegpu.calibration import (
     BUNDLE_SCHEMA_VERSION,
+    VERIFICATION_SCHEMA_VERSION,
     build_workload_calibration_bundle,
     compare_memory_reports,
+    verify_calibration_reports,
 )
 from fakegpu.kernel_analysis import analyze_ptx, estimate_occupancy
 from fakegpu.operator_profiles import (
@@ -174,6 +176,60 @@ def test_calibration_comparison_and_bundle() -> None:
     )
     assert bundle["schema_version"] == BUNDLE_SCHEMA_VERSION
     assert bundle["entries"][0]["id"] == "tiny-sft"
+
+    verification = verify_calibration_reports(
+        [report],
+        labels=["tiny-sft"],
+        max_underestimate_percent=10,
+        max_absolute_percentage_error_percent=10,
+        min_interval_coverage_percent=100,
+        capacity_bytes=2_100,
+        min_comparisons=2,
+    )
+    assert verification["schema_version"] == VERIFICATION_SCHEMA_VERSION
+    assert verification["status"] == "passed"
+    assert verification["metrics"][
+        "maximum_underestimate_percent"
+    ] == pytest.approx(10)
+    assert verification["metrics"]["false_safe_count"] == 0
+
+
+def test_calibration_verification_rejects_oom_risk_and_signature_drift() -> None:
+    report = compare_memory_reports(
+        {
+            "schema_version": "prediction.v1",
+            "inputs": {"batch_size": 1, "dtype": "bfloat16"},
+            "memory_timeline": {
+                "phases": [{"phase": "peak", "peak_bytes": 900}]
+            },
+        },
+        {
+            "schema_version": "observation.v1",
+            "inputs": {"batch_size": 2, "dtype": "bfloat16"},
+            "memory_timeline": {
+                "phases": [{"phase": "peak", "peak_bytes": 1_000}]
+            },
+        },
+    )
+
+    verification = verify_calibration_reports(
+        [report],
+        max_underestimate_percent=5,
+        max_absolute_percentage_error_percent=5,
+        min_interval_coverage_percent=90,
+        capacity_bytes=950,
+    )
+
+    assert verification["status"] == "failed"
+    assert verification["metrics"]["false_safe_count"] == 1
+    assert verification["metrics"]["dimension_mismatch_count"] == 1
+    assert {failure["gate"] for failure in verification["failures"]} == {
+        "matching_workload_dimensions",
+        "maximum_absolute_percentage_error_percent",
+        "maximum_false_safe_count",
+        "maximum_underestimate_percent",
+        "minimum_prediction_interval_coverage_percent",
+    }
 
 
 def test_published_memory_evidence_matches_calibration_math() -> None:

@@ -318,6 +318,31 @@ def test_calibrate_compare_cli_writes_error_and_safety_data(
         10 / 9
     )
 
+    verification_path = tmp_path / "verification.json"
+    result = _run_fakegpu(
+        "calibrate",
+        "verify",
+        str(output_path),
+        "--max-underestimate-percent",
+        "5",
+        "--capacity-bytes",
+        "950",
+        "--json",
+        str(verification_path),
+    )
+    assert result.returncode == 1, result.stderr
+    verification = json.loads(
+        verification_path.read_text(encoding="utf-8")
+    )
+    assert verification["status"] == "failed"
+    assert verification["metrics"]["false_safe_count"] == 1
+    assert {
+        failure["gate"] for failure in verification["failures"]
+    } == {
+        "maximum_false_safe_count",
+        "maximum_underestimate_percent",
+    }
+
 
 def test_top_level_help_names_builtin_commands() -> None:
     result = _run_fakegpu("--help")

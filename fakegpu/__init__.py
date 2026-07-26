@@ -20,6 +20,7 @@ from .calibration import (
     CalibrationError,
     build_workload_calibration_bundle,
     compare_memory_reports,
+    verify_calibration_reports,
 )
 from .flop_counter import MatmulFlopCounterMode
 from .kernel_analysis import (
@@ -116,4 +117,5 @@ __all__ = [
     "simulate_point_to_point",
     "stage",
     "workspace_profile_summary",
+    "verify_calibration_reports",
 ]

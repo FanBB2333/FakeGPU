@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 import time
 from collections.abc import Mapping, Sequence
@@ -13,6 +14,7 @@ from .structured_io import StructuredDataError, load_mapping, write_json
 
 COMPARISON_SCHEMA_VERSION = "fakegpu.calibration_comparison.v1"
 BUNDLE_SCHEMA_VERSION = "fakegpu.workload_calibration_bundle.v1"
+VERIFICATION_SCHEMA_VERSION = "fakegpu.calibration_verification.v1"
 
 
 class CalibrationError(ValueError):
@@ -90,6 +92,23 @@ def compare_memory_reports(
         for item in comparisons
         if item["absolute_percentage_error"] is not None
     ]
+    underestimates_percent = [
+        max(
+            0.0,
+            (
+                int(item["observed_bytes"]) - int(item["predicted_bytes"])
+            )
+            / int(item["observed_bytes"])
+            * 100,
+        )
+        for item in comparisons
+        if int(item["observed_bytes"]) > 0
+    ]
+    interval_results = [
+        bool(item["observation_within_prediction_interval"])
+        for item in comparisons
+        if item["observation_within_prediction_interval"] is not None
+    ]
     recommended_margin = max(0, max(-value for value in signed_errors))
     ratios = [
         observed_value / int(item["predicted_bytes"])
@@ -121,6 +140,28 @@ def compare_memory_reports(
             "mean_absolute_percentage_error": (
                 statistics.fmean(mape_values) if mape_values else None
             ),
+            "median_absolute_percentage_error_percent": (
+                statistics.median(mape_values) * 100
+                if mape_values
+                else None
+            ),
+            "p95_absolute_percentage_error_percent": (
+                _percentile(mape_values, 0.95) * 100
+                if mape_values
+                else None
+            ),
+            "max_absolute_percentage_error_percent": (
+                max(mape_values) * 100 if mape_values else None
+            ),
+            "max_underestimate_percent": max(
+                underestimates_percent,
+                default=0.0,
+            ),
+            "prediction_interval_coverage_percent": (
+                sum(interval_results) / len(interval_results) * 100
+                if interval_results
+                else None
+            ),
             "worst_phase": max(
                 comparisons,
                 key=lambda item: int(item["absolute_error_bytes"]),
@@ -147,6 +188,266 @@ def compare_memory_reports(
                 "dtype, shapes, and GPU profile."
             ),
         },
+    }
+
+
+def verify_calibration_reports(
+    reports: Sequence[Mapping[str, Any]],
+    *,
+    labels: Sequence[str] | None = None,
+    max_underestimate_percent: float = 5.0,
+    max_absolute_percentage_error_percent: float | None = None,
+    min_interval_coverage_percent: float | None = None,
+    capacity_bytes: int | None = None,
+    max_false_safe_count: int = 0,
+    min_comparisons: int = 1,
+    require_matching_dimensions: bool = True,
+) -> dict[str, Any]:
+    """Evaluate comparison reports against publication and OOM-risk gates."""
+
+    if not reports:
+        raise CalibrationError("at least one comparison report is required")
+    if labels is not None and len(labels) != len(reports):
+        raise CalibrationError("labels and reports must have the same length")
+    _validate_percentage(
+        "max_underestimate_percent",
+        max_underestimate_percent,
+    )
+    if max_absolute_percentage_error_percent is not None:
+        _validate_percentage(
+            "max_absolute_percentage_error_percent",
+            max_absolute_percentage_error_percent,
+        )
+    if min_interval_coverage_percent is not None:
+        _validate_percentage(
+            "min_interval_coverage_percent",
+            min_interval_coverage_percent,
+            bounded=True,
+        )
+    if (
+        capacity_bytes is not None
+        and (
+            not isinstance(capacity_bytes, int)
+            or isinstance(capacity_bytes, bool)
+            or capacity_bytes <= 0
+        )
+    ):
+        raise CalibrationError("capacity_bytes must be a positive integer")
+    if (
+        not isinstance(max_false_safe_count, int)
+        or isinstance(max_false_safe_count, bool)
+        or max_false_safe_count < 0
+    ):
+        raise CalibrationError(
+            "max_false_safe_count must be a non-negative integer"
+        )
+    if (
+        not isinstance(min_comparisons, int)
+        or isinstance(min_comparisons, bool)
+        or min_comparisons <= 0
+    ):
+        raise CalibrationError("min_comparisons must be a positive integer")
+
+    absolute_percentage_errors: list[float] = []
+    underestimates: list[float] = []
+    interval_results: list[bool] = []
+    false_safe_events: list[dict[str, Any]] = []
+    report_results: list[dict[str, Any]] = []
+    dimension_mismatch_count = 0
+
+    for index, report in enumerate(reports):
+        label = str(labels[index]) if labels is not None else f"report_{index}"
+        if report.get("schema_version") != COMPARISON_SCHEMA_VERSION:
+            raise CalibrationError(
+                f"{label}: expected schema_version "
+                f"{COMPARISON_SCHEMA_VERSION!r}"
+            )
+        raw_comparisons = report.get("comparisons")
+        if not isinstance(raw_comparisons, list) or not raw_comparisons:
+            raise CalibrationError(f"{label}: comparison report is empty")
+
+        dimension_mismatches = _dimension_mismatches(
+            report.get("dimensions")
+        )
+        dimension_mismatch_count += len(dimension_mismatches)
+        valid_comparison_count = 0
+        for item in raw_comparisons:
+            if not isinstance(item, Mapping):
+                raise CalibrationError(
+                    f"{label}: comparison entries must be objects"
+                )
+            predicted_bytes = _required_non_negative_integer(
+                item,
+                "predicted_bytes",
+                label=label,
+            )
+            observed_bytes = _required_non_negative_integer(
+                item,
+                "observed_bytes",
+                label=label,
+            )
+            valid_comparison_count += 1
+            if observed_bytes > 0:
+                absolute_percentage_errors.append(
+                    abs(predicted_bytes - observed_bytes)
+                    / observed_bytes
+                    * 100
+                )
+                underestimates.append(
+                    max(
+                        0.0,
+                        (observed_bytes - predicted_bytes)
+                        / observed_bytes
+                        * 100,
+                    )
+                )
+            within_interval = item.get(
+                "observation_within_prediction_interval"
+            )
+            if isinstance(within_interval, bool):
+                interval_results.append(within_interval)
+            if (
+                capacity_bytes is not None
+                and predicted_bytes <= capacity_bytes < observed_bytes
+            ):
+                false_safe_events.append(
+                    {
+                        "report": label,
+                        "phase": str(item.get("phase") or "unknown"),
+                        "predicted_bytes": predicted_bytes,
+                        "observed_bytes": observed_bytes,
+                        "capacity_bytes": capacity_bytes,
+                    }
+                )
+        report_results.append(
+            {
+                "id": label,
+                "workload": report.get("workload"),
+                "comparison_count": valid_comparison_count,
+                "dimension_mismatches": dimension_mismatches,
+            }
+        )
+
+    comparison_count = sum(
+        int(item["comparison_count"]) for item in report_results
+    )
+    max_underestimate = max(underestimates, default=0.0)
+    maximum_ape = max(absolute_percentage_errors, default=None)
+    interval_coverage = (
+        sum(interval_results) / len(interval_results) * 100
+        if interval_results
+        else None
+    )
+    failures: list[dict[str, Any]] = []
+    if comparison_count < min_comparisons:
+        failures.append(
+            {
+                "gate": "minimum_comparisons",
+                "actual": comparison_count,
+                "required": min_comparisons,
+            }
+        )
+    if max_underestimate > max_underestimate_percent:
+        failures.append(
+            {
+                "gate": "maximum_underestimate_percent",
+                "actual": max_underestimate,
+                "maximum": max_underestimate_percent,
+            }
+        )
+    if (
+        max_absolute_percentage_error_percent is not None
+        and maximum_ape is not None
+        and maximum_ape > max_absolute_percentage_error_percent
+    ):
+        failures.append(
+            {
+                "gate": "maximum_absolute_percentage_error_percent",
+                "actual": maximum_ape,
+                "maximum": max_absolute_percentage_error_percent,
+            }
+        )
+    if min_interval_coverage_percent is not None:
+        if interval_coverage is None:
+            failures.append(
+                {
+                    "gate": "minimum_prediction_interval_coverage_percent",
+                    "actual": None,
+                    "minimum": min_interval_coverage_percent,
+                    "reason": "no prediction intervals were reported",
+                }
+            )
+        elif interval_coverage < min_interval_coverage_percent:
+            failures.append(
+                {
+                    "gate": "minimum_prediction_interval_coverage_percent",
+                    "actual": interval_coverage,
+                    "minimum": min_interval_coverage_percent,
+                }
+            )
+    if (
+        capacity_bytes is not None
+        and len(false_safe_events) > max_false_safe_count
+    ):
+        failures.append(
+            {
+                "gate": "maximum_false_safe_count",
+                "actual": len(false_safe_events),
+                "maximum": max_false_safe_count,
+            }
+        )
+    if require_matching_dimensions and dimension_mismatch_count:
+        failures.append(
+            {
+                "gate": "matching_workload_dimensions",
+                "actual": dimension_mismatch_count,
+                "maximum": 0,
+            }
+        )
+
+    return {
+        "schema_version": VERIFICATION_SCHEMA_VERSION,
+        "status": "passed" if not failures else "failed",
+        "report_count": len(reports),
+        "comparison_count": comparison_count,
+        "thresholds": {
+            "max_underestimate_percent": max_underestimate_percent,
+            "max_absolute_percentage_error_percent": (
+                max_absolute_percentage_error_percent
+            ),
+            "min_interval_coverage_percent": (
+                min_interval_coverage_percent
+            ),
+            "capacity_bytes": capacity_bytes,
+            "max_false_safe_count": max_false_safe_count,
+            "min_comparisons": min_comparisons,
+            "require_matching_dimensions": require_matching_dimensions,
+        },
+        "metrics": {
+            "maximum_underestimate_percent": max_underestimate,
+            "median_absolute_percentage_error_percent": (
+                statistics.median(absolute_percentage_errors)
+                if absolute_percentage_errors
+                else None
+            ),
+            "p95_absolute_percentage_error_percent": (
+                _percentile(absolute_percentage_errors, 0.95)
+                if absolute_percentage_errors
+                else None
+            ),
+            "maximum_absolute_percentage_error_percent": maximum_ape,
+            "prediction_interval_count": len(interval_results),
+            "prediction_interval_coverage_percent": interval_coverage,
+            "false_safe_count": (
+                len(false_safe_events)
+                if capacity_bytes is not None
+                else None
+            ),
+            "dimension_mismatch_count": dimension_mismatch_count,
+        },
+        "false_safe_events": false_safe_events,
+        "reports": report_results,
+        "failures": failures,
     }
 
 
@@ -263,6 +564,47 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     bundle_parser.add_argument("reports", nargs="+")
     bundle_parser.add_argument("--output", required=True)
+
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Apply reliability and OOM-risk gates to comparison reports.",
+    )
+    verify_parser.add_argument("reports", nargs="+")
+    verify_parser.add_argument(
+        "--max-underestimate-percent",
+        type=float,
+        default=5.0,
+    )
+    verify_parser.add_argument(
+        "--max-absolute-percentage-error-percent",
+        type=float,
+    )
+    verify_parser.add_argument(
+        "--min-interval-coverage-percent",
+        type=float,
+    )
+    verify_parser.add_argument("--capacity-bytes", type=int)
+    verify_parser.add_argument(
+        "--max-false-safe-count",
+        type=int,
+        default=0,
+    )
+    verify_parser.add_argument(
+        "--min-comparisons",
+        type=int,
+        default=1,
+    )
+    verify_parser.add_argument(
+        "--allow-dimension-mismatch",
+        action="store_true",
+    )
+    verify_parser.add_argument(
+        "--json",
+        dest="json_path",
+        nargs="?",
+        const="-",
+        help="Write JSON to PATH, or stdout when PATH is omitted.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -284,6 +626,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 _print_comparison(report)
             return 0
+
+        if args.action == "verify":
+            paths = [
+                Path(value).expanduser().resolve()
+                for value in args.reports
+            ]
+            reports = [load_mapping(path) for path in paths]
+            report = verify_calibration_reports(
+                reports,
+                labels=[path.stem for path in paths],
+                max_underestimate_percent=args.max_underestimate_percent,
+                max_absolute_percentage_error_percent=(
+                    args.max_absolute_percentage_error_percent
+                ),
+                min_interval_coverage_percent=(
+                    args.min_interval_coverage_percent
+                ),
+                capacity_bytes=args.capacity_bytes,
+                max_false_safe_count=args.max_false_safe_count,
+                min_comparisons=args.min_comparisons,
+                require_matching_dimensions=(
+                    not args.allow_dimension_mismatch
+                ),
+            )
+            if args.json_path:
+                payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
+                if args.json_path == "-":
+                    print(payload, end="")
+                else:
+                    output = write_json(args.json_path, report)
+                    print(f"Calibration verification: {output}")
+            else:
+                _print_verification(report)
+            return 0 if report["status"] == "passed" else 1
 
         paths = [Path(value).expanduser().resolve() for value in args.reports]
         reports = [load_mapping(path) for path in paths]
@@ -723,6 +1099,90 @@ def _find_numeric_key(payload: Any, key: str) -> int | None:
     return None
 
 
+def _validate_percentage(
+    name: str,
+    value: float,
+    *,
+    bounded: bool = False,
+) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+        or (bounded and value > 100)
+    ):
+        suffix = " between 0 and 100" if bounded else " non-negative"
+        raise CalibrationError(f"{name} must be finite and{suffix}")
+
+
+def _required_non_negative_integer(
+    payload: Mapping[str, Any],
+    key: str,
+    *,
+    label: str,
+) -> int:
+    value = payload.get(key)
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+    ):
+        raise CalibrationError(
+            f"{label}: {key} must be a non-negative integer"
+        )
+    return value
+
+
+def _dimension_mismatches(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, Mapping):
+        return [
+            {
+                "dimension": "dimensions",
+                "prediction": None,
+                "observation": None,
+                "reason": "comparison report has no dimensions object",
+            }
+        ]
+    prediction = payload.get("prediction")
+    observation = payload.get("observation")
+    if not isinstance(prediction, Mapping) or not isinstance(
+        observation,
+        Mapping,
+    ):
+        return [
+            {
+                "dimension": "dimensions",
+                "prediction": None,
+                "observation": None,
+                "reason": "prediction and observation dimensions are required",
+            }
+        ]
+    return [
+        {
+            "dimension": key,
+            "prediction": prediction.get(key),
+            "observation": observation.get(key),
+        }
+        for key in sorted(set(prediction) | set(observation))
+        if prediction.get(key) != observation.get(key)
+    ]
+
+
+def _percentile(values: Sequence[float], quantile: float) -> float:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        raise ValueError("percentile requires at least one value")
+    position = (len(ordered) - 1) * quantile
+    lower_index = int(position)
+    upper_index = min(lower_index + 1, len(ordered) - 1)
+    fraction = position - lower_index
+    return (
+        ordered[lower_index] * (1 - fraction)
+        + ordered[upper_index] * fraction
+    )
+
+
 def _print_comparison(report: Mapping[str, Any]) -> None:
     summary = report["summary"]
     print("FakeGPU memory calibration comparison")
@@ -743,11 +1203,37 @@ def _print_comparison(report: Mapping[str, Any]) -> None:
     )
 
 
+def _print_verification(report: Mapping[str, Any]) -> None:
+    metrics = report["metrics"]
+    print(f"FakeGPU calibration verification: {report['status']}")
+    print(f"  comparisons: {report['comparison_count']}")
+    print(
+        "  maximum underestimate: "
+        f"{float(metrics['maximum_underestimate_percent']):.3f}%"
+    )
+    maximum_ape = metrics["maximum_absolute_percentage_error_percent"]
+    print(
+        f"  maximum absolute percentage error: {float(maximum_ape):.3f}%"
+        if maximum_ape is not None
+        else "  maximum absolute percentage error: n/a"
+    )
+    interval_coverage = metrics["prediction_interval_coverage_percent"]
+    print(
+        f"  prediction interval coverage: {float(interval_coverage):.3f}%"
+        if interval_coverage is not None
+        else "  prediction interval coverage: n/a"
+    )
+    for failure in report["failures"]:
+        print(f"  failed gate: {failure['gate']}")
+
+
 __all__ = [
     "BUNDLE_SCHEMA_VERSION",
     "COMPARISON_SCHEMA_VERSION",
+    "VERIFICATION_SCHEMA_VERSION",
     "CalibrationError",
     "build_workload_calibration_bundle",
     "compare_memory_reports",
     "main",
+    "verify_calibration_reports",
 ]
