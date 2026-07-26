@@ -20,6 +20,21 @@ CU_MEMORYTYPE_HOST = 1
 CU_MEMORYTYPE_DEVICE = 2
 CU_MEMORYTYPE_UNIFIED = 4
 
+NVML_SUCCESS = 0
+NVML_NVLINK_DEVICE_TYPE_GPU = 0
+
+
+class NvmlPciInfo(ctypes.Structure):
+    _fields_ = [
+        ("busIdLegacy", ctypes.c_char * 16),
+        ("domain", ctypes.c_uint),
+        ("bus", ctypes.c_uint),
+        ("device", ctypes.c_uint),
+        ("pciDeviceId", ctypes.c_uint),
+        ("pciSubSystemId", ctypes.c_uint),
+        ("busId", ctypes.c_char * 32),
+    ]
+
 
 def _die(msg: str) -> None:
     print(f"[test_memory_types] ERROR: {msg}", file=sys.stderr)
@@ -32,6 +47,14 @@ def _preload_env_var() -> str:
 
 def _libcuda_name() -> str:
     return "libcuda.dylib" if sys.platform == "darwin" else "libcuda.so.1"
+
+
+def _libnvidia_ml_name() -> str:
+    return (
+        "libnvidia-ml.dylib"
+        if sys.platform == "darwin"
+        else "libnvidia-ml.so.1"
+    )
 
 
 def _find_preloaded_path(libname: str) -> str | None:
@@ -47,6 +70,12 @@ def _find_preloaded_path(libname: str) -> str | None:
 
 def _load_libcuda() -> ctypes.CDLL:
     libname = _libcuda_name()
+    path = _find_preloaded_path(libname)
+    return ctypes.CDLL(path or libname, mode=ctypes.RTLD_GLOBAL)
+
+
+def _load_libnvidia_ml() -> ctypes.CDLL:
+    libname = _libnvidia_ml_name()
     path = _find_preloaded_path(libname)
     return ctypes.CDLL(path or libname, mode=ctypes.RTLD_GLOBAL)
 
@@ -136,6 +165,17 @@ def _validate_native_smi_state() -> None:
         _die(f"unexpected native SMI profile: {device.get('profile_id')}")
     if int(device.get("allocation_count", 0)) < 2:
         _die("native SMI did not publish allocation counters")
+    if os.environ.get("FAKEGPU_NVLINK_GROUPS"):
+        topology = state.get("topology") or {}
+        device_topology = device.get("topology") or {}
+        nvlink = device_topology.get("nvlink") or {}
+        if (
+            topology.get("source") != "modeled_environment"
+            or topology.get("valid") is not True
+            or int(topology.get("link_count", 0)) != 2
+            or int(nvlink.get("active_links", 0)) != 1
+        ):
+            _die(f"native SMI topology mismatch: {topology}")
 
     completed = subprocess.run(
         [
@@ -148,7 +188,8 @@ def _validate_native_smi_state() -> None:
             "--query-gpu",
             (
                 "runtime,runtime.backend,profile.id,memory.tracked,"
-                "native.io_calls,native.kernel_launches,state.status"
+                "native.io_calls,native.kernel_launches,state.status,"
+                "topology.source,nvlink.active_links,nvlink.bandwidth"
             ),
             "--format",
             "json",
@@ -176,8 +217,176 @@ def _validate_native_smi_state() -> None:
         or record.get("profile.id") != "a100"
         or "memory.tracked" not in record
         or record.get("state.status") != "running"
+        or (
+            os.environ.get("FAKEGPU_NVLINK_GROUPS")
+            and (
+                record.get("topology.source")
+                != "modeled_environment"
+                or record.get("nvlink.active_links") != 1
+            )
+        )
     ):
         _die(f"native SMI query record mismatch: {record}")
+
+    if os.environ.get("FAKEGPU_NVLINK_GROUPS"):
+        for view in (("topo", "-m"), ("nvlink", "-s")):
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "fakegpu",
+                    "nvidia-smi",
+                    *view,
+                    "--state",
+                    str(state_path),
+                ],
+                text=True,
+                capture_output=True,
+                env=dict(os.environ),
+                timeout=10,
+            )
+            if completed.returncode != 0:
+                _die(
+                    f"native SMI {view[0]} view failed: "
+                    f"rc={completed.returncode} "
+                    f"stderr={completed.stderr}"
+                )
+            if "modeled" not in completed.stdout:
+                _die(
+                    f"native SMI {view[0]} view omitted model label"
+                )
+
+
+def _validate_modeled_nvlink_nvml() -> None:
+    if not os.environ.get("FAKEGPU_NVLINK_GROUPS"):
+        return
+
+    nvml = _load_libnvidia_ml()
+    nvml.nvmlInit.argtypes = []
+    nvml.nvmlInit.restype = ctypes.c_int
+    nvml.nvmlShutdown.argtypes = []
+    nvml.nvmlShutdown.restype = ctypes.c_int
+    nvml.nvmlDeviceGetHandleByIndex.argtypes = [
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    nvml.nvmlDeviceGetHandleByIndex.restype = ctypes.c_int
+    nvml.nvmlDeviceGetNvLinkState.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    nvml.nvmlDeviceGetNvLinkState.restype = ctypes.c_int
+    nvml.nvmlDeviceGetNvLinkCapability.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    nvml.nvmlDeviceGetNvLinkCapability.restype = ctypes.c_int
+    nvml.nvmlDeviceGetNvLinkRemoteDeviceType.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    nvml.nvmlDeviceGetNvLinkRemoteDeviceType.restype = ctypes.c_int
+    nvml.nvmlDeviceGetNvLinkRemotePciInfo_v2.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.POINTER(NvmlPciInfo),
+    ]
+    nvml.nvmlDeviceGetNvLinkRemotePciInfo_v2.restype = ctypes.c_int
+
+    if int(nvml.nvmlInit()) != NVML_SUCCESS:
+        _die("nvmlInit failed during modeled NVLink validation")
+    try:
+        handle = ctypes.c_void_p()
+        if (
+            int(
+                nvml.nvmlDeviceGetHandleByIndex(
+                    ctypes.c_uint(0),
+                    ctypes.byref(handle),
+                )
+            )
+            != NVML_SUCCESS
+        ):
+            _die("NVML could not resolve GPU 0")
+
+        active = ctypes.c_uint()
+        if (
+            int(
+                nvml.nvmlDeviceGetNvLinkState(
+                    handle,
+                    ctypes.c_uint(0),
+                    ctypes.byref(active),
+                )
+            )
+            != NVML_SUCCESS
+            or int(active.value) != 1
+        ):
+            _die("modeled NVLink 0 is not active through NVML")
+
+        inactive = ctypes.c_uint(1)
+        if (
+            int(
+                nvml.nvmlDeviceGetNvLinkState(
+                    handle,
+                    ctypes.c_uint(1),
+                    ctypes.byref(inactive),
+                )
+            )
+            != NVML_SUCCESS
+            or int(inactive.value) != 0
+        ):
+            _die("unconfigured NVLink 1 is active through NVML")
+
+        capability = ctypes.c_uint()
+        if (
+            int(
+                nvml.nvmlDeviceGetNvLinkCapability(
+                    handle,
+                    ctypes.c_uint(0),
+                    ctypes.c_uint(0),
+                    ctypes.byref(capability),
+                )
+            )
+            != NVML_SUCCESS
+            or int(capability.value) != 1
+        ):
+            _die("modeled NVLink P2P capability is unavailable")
+
+        remote_type = ctypes.c_uint(0xFF)
+        if (
+            int(
+                nvml.nvmlDeviceGetNvLinkRemoteDeviceType(
+                    handle,
+                    ctypes.c_uint(0),
+                    ctypes.byref(remote_type),
+                )
+            )
+            != NVML_SUCCESS
+            or int(remote_type.value)
+            != NVML_NVLINK_DEVICE_TYPE_GPU
+        ):
+            _die("modeled NVLink remote endpoint is not a GPU")
+
+        remote_pci = NvmlPciInfo()
+        if (
+            int(
+                nvml.nvmlDeviceGetNvLinkRemotePciInfo_v2(
+                    handle,
+                    ctypes.c_uint(0),
+                    ctypes.byref(remote_pci),
+                )
+            )
+            != NVML_SUCCESS
+        ):
+            _die("modeled NVLink remote PCI query failed")
+        bus_id = bytes(remote_pci.busId).split(b"\0", 1)[0].decode()
+        if bus_id != "00000000:02:00.0":
+            _die(f"modeled NVLink remote PCI mismatch: {bus_id}")
+    finally:
+        nvml.nvmlShutdown()
 
 
 def main() -> int:
@@ -228,6 +437,7 @@ def main() -> int:
             if ordinal != 0:
                 _die(f"{label} allocation device ordinal mismatch: expected 0 got {ordinal}")
 
+        _validate_modeled_nvlink_nvml()
         _validate_native_smi_state()
         print("OK: pointer attribute memory types (device/managed/host) validated")
         return 0

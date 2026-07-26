@@ -178,7 +178,7 @@ FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果�
 
 | 驗證層 | 已維護的檢查 | 結果 |
 |---|---|---|
-| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **161 個通過** |
+| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **163 個通過** |
 | 宣告式驗證矩陣 | 6 個 smoke 案例，加 8 個 LLM cache、訓練規劃與校準案例 | **14 個通過** |
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
 | 原生能力清單 | 5 個能力群組、26 個明確 API、24 個強制執行策略的 API | **通過** |
@@ -346,6 +346,10 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi
 python3 -m fakegpu nvidia-smi --state-dir build/smi -L
 python3 -m fakegpu nvidia-smi --state-dir build/smi -q
 
+# 接近 NVIDIA 指令格式的建模拓撲與 NVLink 檢視。
+python3 -m fakegpu nvidia-smi topo -m --state-dir build/smi
+python3 -m fakegpu nvidia-smi nvlink -s --state-dir build/smi
+
 # 適合腳本處理的 GPU 與程序查詢。
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model,native.kernel_launches,native.gemm_calls,native.io_bytes \
@@ -367,9 +371,16 @@ FLOP、相容性事件及 unsupported API 次數。程序執行時會定期更�
 `FAKEGPU_SMI_MAX_STATE_BYTES` 用於限制單一狀態檔大小；`-q` 會顯示發布次數、
 失敗次數、耗時與序列化大小。
 
+NVLink 模型預設關閉。在工作負載啟動前設定
+`FAKEGPU_NVLINK_GROUPS="0,1;2,3"`，可為分號分隔的每組裝置建立全連接關係。
+`FAKEGPU_NVLINK_BANDWIDTH_GBPS` 是選用的頻寬參數，預設值為 `900`。狀態檔、
+`topo -m`、`nvlink -s`、`topology.*`/`nvlink.*` 查詢欄位，以及原生 NVML
+的鏈路狀態、capability、遠端裝置類型與遠端 PCI 查詢共用同一模型。設定無效時，
+所有鏈路都會保持 inactive，狀態中會顯示設定錯誤。
+
 UUID 與 PCI Bus ID 是穩定的模擬識別。CPU runtime 無法觀測溫度、風扇轉速、
 即時功耗與硬體 GPU 使用率，因此這些欄位顯示為 `N/A`；profile 功耗與時脈會
-作為靜態規格分開顯示。
+作為靜態規格分開顯示。拓撲關係與設定頻寬屬於建模輸入，不是硬體測量結果。
 
 ### 攔截原生 CUDA 函式庫
 
@@ -458,7 +469,7 @@ dtype，可透過 `--kv-cache-residual-tokens` 調整。
 | `fakegpu replay-trace` | 彙整運算、通訊、等待與 GPU 記憶體時間軸 |
 | `fakegpu calibrate` | 比較 GPU 記憶體報告並執行可靠性門檻檢查 |
 | `fakegpu capabilities` | 列出或嚴格檢查原生 API 分類 |
-| `fakegpu nvidia-smi` | 查看 FakeGPU 裝置、profile、runtime 狀態、allocator GPU 記憶體與程序 |
+| `fakegpu nvidia-smi` | 查看裝置、profile、runtime 狀態、allocator GPU 記憶體、程序與建模拓撲 |
 | `fakegpu workspace-profiles` | 驗證並查看 workspace 估算 profiles |
 | `fakegpu validate` | 執行 JSON、TOML 或 YAML 宣告式驗證矩陣 |
 | `fakegpu coordinator` | 管理分散式模擬 coordinator |
@@ -591,7 +602,8 @@ FakeGPU/
 - [x] FakeGPU-SMI 裝置、runtime、allocator 與程序詳細查詢
 - [ ] 擴充可執行的原生 CUDA 運算與 cuBLAS 涵蓋範圍
 - [x] 透過 FakeGPU-SMI 發布原生 runtime 的即時狀態與活動
-- [ ] 加入拓撲、MIG、NVLink 與故障檢視
+- [x] 加入建模拓撲、NVLink 檢視與 NVML peer 查詢
+- [ ] 加入 MIG 與故障檢視
 - [ ] 將裝置與程序的歷史指標匯出至監控系統
 - [ ] 為長上下文與線上服務加入實體 GPU LLM 驗證
 - [ ] 在更多 GPU 與軟體堆疊上驗證分散式與 MoE 估算

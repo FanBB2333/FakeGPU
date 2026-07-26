@@ -64,6 +64,8 @@ run_smoke() {
     FAKEGPU_SMI_STATE_DIR="$BUILD_DIR/smi-native" \
     FAKEGPU_SMI_DETAIL_LIMIT=1 \
     FAKEGPU_SMI_MAX_STATE_BYTES=65536 \
+    FAKEGPU_NVLINK_GROUPS="0,1;2,3" \
+    FAKEGPU_NVLINK_BANDWIDTH_GBPS=800 \
     run_fakegpu "$BUILD_DIR" "$PYTHON_BIN" tests/native/memory_types.py
   FAKEGPU_BUILD_DIR="$BUILD_DIR" \
     "$PYTHON_BIN" tests/native/coordinator_smoke.py

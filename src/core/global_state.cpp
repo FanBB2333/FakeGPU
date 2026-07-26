@@ -163,6 +163,7 @@ void GlobalState::initialize() {
         for (size_t i = 0; i < profiles.size(); ++i) {
             devices.emplace_back(static_cast<int>(i), profiles[i]);
         }
+        device_topology = build_modeled_device_topology(devices.size());
         device_stats.resize(devices.size());
         initialized = true;
         FGPU_LOG("[GlobalState-%p] Valid devices count after init: %lu\n", this, devices.size());
@@ -536,6 +537,11 @@ std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
     }
 
     return snapshot;
+}
+
+ModeledDeviceTopology GlobalState::snapshot_device_topology() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return device_topology;
 }
 
 HostIoStats GlobalState::snapshot_host_io() const {

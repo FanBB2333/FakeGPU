@@ -5,6 +5,7 @@ import atexit
 import csv
 import io
 import json
+import math
 import os
 import platform
 import socket
@@ -32,6 +33,9 @@ MAXIMUM_PUBLISHER_DETAIL_LIMIT = 1024
 DEFAULT_MAX_STATE_BYTES = 1024 * 1024
 MINIMUM_MAX_STATE_BYTES = 64 * 1024
 MAXIMUM_MAX_STATE_BYTES = 64 * 1024 * 1024
+DEFAULT_NVLINK_BANDWIDTH_GBPS = 900.0
+MAXIMUM_NVLINK_BANDWIDTH_GBPS = 1_000_000.0
+MAXIMUM_MODELED_NVLINKS_PER_DEVICE = 18
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +53,22 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
     "name": QueryField("name"),
     "uuid": QueryField("uuid"),
     "pci.bus_id": QueryField("pci_bus_id"),
+    "topology.source": QueryField("topology.source"),
+    "topology.numa_node": QueryField("topology.numa_node"),
+    "topology.pcie_generation": QueryField(
+        "topology.pcie_generation"
+    ),
+    "nvlink.active_links": QueryField(
+        "topology.nvlink.active_links"
+    ),
+    "nvlink.peer_count": QueryField(
+        "topology.nvlink.peer_count"
+    ),
+    "nvlink.bandwidth": QueryField(
+        "topology.nvlink.aggregate_bandwidth_gbps",
+        unit="Gbps",
+        precision=1,
+    ),
     "driver_version": QueryField("software.driver_version"),
     "cuda_version": QueryField("software.cuda_version"),
     "profile.id": QueryField("profile_id"),
@@ -267,6 +287,194 @@ def _configured_size_limit(
     except ValueError:
         return default
     return min(maximum, max(minimum, parsed))
+
+
+def _modeled_device_topology(
+    devices: list[dict[str, Any]],
+) -> dict[str, Any]:
+    groups_text = os.environ.get("FAKEGPU_NVLINK_GROUPS")
+    source = "modeled_none"
+    configured = bool(groups_text)
+    valid = True
+    error = ""
+    bandwidth_gbps = DEFAULT_NVLINK_BANDWIDTH_GBPS
+    pairs: set[tuple[int, int]] = set()
+    device_by_index = {
+        _nonnegative_int(device.get("index")): device
+        for device in devices
+    }
+
+    if configured:
+        source = "modeled_environment"
+        bandwidth_text = os.environ.get(
+            "FAKEGPU_NVLINK_BANDWIDTH_GBPS"
+        )
+        if bandwidth_text:
+            try:
+                bandwidth_gbps = float(bandwidth_text)
+            except ValueError:
+                valid = False
+            if not (
+                0 < bandwidth_gbps <= MAXIMUM_NVLINK_BANDWIDTH_GBPS
+            ):
+                valid = False
+            if not valid:
+                error = (
+                    "FAKEGPU_NVLINK_BANDWIDTH_GBPS must be a finite "
+                    "number greater than 0 and no greater than 1000000"
+                )
+
+    if configured and valid:
+        for group_index, group_text in enumerate(
+            str(groups_text).split(";"),
+            start=1,
+        ):
+            group_text = group_text.strip()
+            if not group_text:
+                valid = False
+                error = (
+                    "FAKEGPU_NVLINK_GROUPS contains an empty group"
+                )
+                break
+            members: list[int] = []
+            for member_text in group_text.split(","):
+                member_text = member_text.strip()
+                unsigned_text = (
+                    member_text[1:]
+                    if member_text.startswith("+")
+                    else member_text
+                )
+                if not unsigned_text.isdigit():
+                    valid = False
+                else:
+                    member = int(member_text)
+                    valid = member in device_by_index
+                if not valid:
+                    error = (
+                        f"FAKEGPU_NVLINK_GROUPS group {group_index} "
+                        "contains an invalid device index"
+                    )
+                    break
+                members.append(member)
+            if not valid:
+                break
+            members = sorted(set(members))
+            if len(members) < 2:
+                valid = False
+                error = (
+                    "each FAKEGPU_NVLINK_GROUPS group must contain at "
+                    "least two distinct device indices"
+                )
+                break
+            if (
+                len(members) - 1
+                > MAXIMUM_MODELED_NVLINKS_PER_DEVICE
+            ):
+                valid = False
+                error = (
+                    "an FAKEGPU_NVLINK_GROUPS group exceeds the "
+                    "18-link per-device limit"
+                )
+                break
+            for left_offset, left in enumerate(members):
+                for right in members[left_offset + 1 :]:
+                    pairs.add((left, right))
+        if valid and not pairs:
+            valid = False
+            error = (
+                "FAKEGPU_NVLINK_GROUPS did not define any links"
+            )
+
+    peers_by_index: dict[int, list[int]] = {
+        index: [] for index in device_by_index
+    }
+    if valid:
+        for left, right in sorted(pairs):
+            peers_by_index[left].append(right)
+            peers_by_index[right].append(left)
+        if any(
+            len(peers) > MAXIMUM_MODELED_NVLINKS_PER_DEVICE
+            for peers in peers_by_index.values()
+        ):
+            valid = False
+            error = (
+                "a device belongs to more than 18 modeled NVLink "
+                "peer relationships"
+            )
+            peers_by_index = {
+                index: [] for index in device_by_index
+            }
+
+    if configured and not valid:
+        source = "modeled_environment_invalid"
+        bandwidth_gbps = DEFAULT_NVLINK_BANDWIDTH_GBPS
+        pairs.clear()
+
+    for index, device in device_by_index.items():
+        peers = []
+        for link, peer_index in enumerate(
+            sorted(peers_by_index[index])
+        ):
+            remote = device_by_index[peer_index]
+            peers.append(
+                {
+                    "link": link,
+                    "index": peer_index,
+                    "uuid": str(remote.get("uuid") or "unknown"),
+                    "pci_bus_id": str(
+                        remote.get("pci_bus_id") or "unknown"
+                    ),
+                    "bandwidth_gbps": bandwidth_gbps,
+                    "active": True,
+                    "source": source,
+                }
+            )
+        device["topology"] = {
+            "source": source,
+            "configured": configured,
+            "valid": valid,
+            "error": error,
+            "numa_node": None,
+            "pcie_generation": None,
+            "nvlink": {
+                "active_links": len(peers),
+                "peer_count": len(peers),
+                "aggregate_bandwidth_gbps": (
+                    len(peers) * bandwidth_gbps
+                ),
+                "peers": peers,
+            },
+        }
+
+    links = []
+    if valid:
+        for left, right in sorted(pairs):
+            links.append(
+                {
+                    "source_index": left,
+                    "target_index": right,
+                    "source_uuid": str(
+                        device_by_index[left].get("uuid") or "unknown"
+                    ),
+                    "target_uuid": str(
+                        device_by_index[right].get("uuid") or "unknown"
+                    ),
+                    "kind": "NVLink",
+                    "active": True,
+                    "bandwidth_gbps": bandwidth_gbps,
+                    "source": source,
+                }
+            )
+    return {
+        "schema_version": "fakegpu.device_topology.v1",
+        "source": source,
+        "configured": configured,
+        "valid": valid,
+        "error": error,
+        "nvlink_bandwidth_gbps": bandwidth_gbps,
+        "link_count": len(links),
+        "links": links,
+    }
 
 
 class SmiStatePublisher:
@@ -525,6 +733,7 @@ class SmiStatePublisher:
             if isinstance(raw.get("dispatch_tracking"), Mapping)
             else {}
         )
+        topology = _modeled_device_topology(devices)
         state = {
             "schema_version": SCHEMA_VERSION,
             "timestamp_ns": time.time_ns(),
@@ -597,6 +806,7 @@ class SmiStatePublisher:
                 raw.get("allocator_model") or "unknown"
             ),
             "dispatch_tracking": dispatch_tracking,
+            "topology": topology,
             "devices": devices,
         }
         serialized_bytes = _atomic_write_json(
@@ -619,7 +829,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="fakegpu nvidia-smi",
         description=(
             "Inspect FakeCUDA devices, processes, profiles, memory, runtime "
-            "configuration, and simulated telemetry."
+            "configuration, modeled topology, and simulated telemetry."
+        ),
+    )
+    parser.add_argument(
+        "view",
+        nargs="?",
+        choices=("topo", "nvlink"),
+        help=(
+            "Show an NVIDIA-style modeled topology matrix or NVLink "
+            "status view."
         ),
     )
     parser.add_argument("--state", action="append", default=[])
@@ -652,6 +871,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--query-compute-apps",
         metavar="FIELDS",
         help="Query comma-separated process fields.",
+    )
+    parser.add_argument(
+        "-m",
+        "--matrix",
+        action="store_true",
+        help="Show the topology matrix; valid with the topo view.",
+    )
+    parser.add_argument(
+        "-s",
+        "--status",
+        action="store_true",
+        help="Show link status; valid with the nvlink view.",
     )
     parser.add_argument(
         "--format",
@@ -714,6 +945,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.count is not None and args.loop is None:
         parser.error("--count requires --loop")
+    if args.matrix and args.view != "topo":
+        parser.error("-m/--matrix requires the topo view")
+    if args.status and args.view != "nvlink":
+        parser.error("-s/--status requires the nvlink view")
+    if args.view and (
+        args.json
+        or args.list_gpus
+        or args.detail
+        or args.query_gpu
+        or args.query_compute_apps
+    ):
+        parser.error(
+            "topo and nvlink views cannot be combined with another "
+            "output mode"
+        )
     if args.format is not None and not (
         args.query_gpu or args.query_compute_apps
     ):
@@ -789,6 +1035,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(render_gpu_list(inventory, errors=errors))
             elif args.detail:
                 print(render_detail(inventory, errors=errors))
+            elif args.view == "topo":
+                print(render_topology_matrix(inventory, errors=errors))
+            elif args.view == "nvlink":
+                print(render_nvlink_status(inventory, errors=errors))
             elif gpu_query_fields:
                 print(
                     render_query(
@@ -1161,6 +1411,156 @@ def render_gpu_list(
     return "\n".join(lines)
 
 
+def render_topology_matrix(
+    inventory: Mapping[str, Any],
+    *,
+    errors: Sequence[str] = (),
+) -> str:
+    devices = list(inventory.get("devices") or [])
+    lines = ["FakeGPU modeled topology matrix"]
+    if not devices:
+        lines.append("No published FakeCUDA GPUs found.")
+    else:
+        devices_by_host: dict[str, list[Mapping[str, Any]]] = {}
+        for device in devices:
+            devices_by_host.setdefault(
+                str(device.get("host") or "localhost"),
+                [],
+            ).append(device)
+        for host, host_devices in sorted(devices_by_host.items()):
+            host_devices.sort(
+                key=lambda item: (
+                    _nonnegative_int(item.get("index")),
+                    str(item.get("uuid") or ""),
+                )
+            )
+            if len(devices_by_host) > 1 or lines[-1] != lines[0]:
+                lines.append("")
+            lines.append(f"Host: {host}")
+            labels = _topology_labels(host_devices)
+            rows = [
+                [
+                    "",
+                    *labels,
+                    "CPU Affinity",
+                    "NUMA Affinity",
+                ]
+            ]
+            for row_index, device in enumerate(host_devices):
+                topology = device["topology"]
+                rows.append(
+                    [
+                        labels[row_index],
+                        *[
+                            _topology_relation(device, target)
+                            for target in host_devices
+                        ],
+                        "N/A",
+                        _display_value(topology.get("numa_node")),
+                    ]
+                )
+            widths = [
+                max(len(str(row[column])) for row in rows)
+                for column in range(len(rows[0]))
+            ]
+            for row in rows:
+                lines.append(
+                    "  ".join(
+                        str(value).ljust(widths[column])
+                        for column, value in enumerate(row)
+                    ).rstrip()
+                )
+            source_values = sorted(
+                {
+                    str(
+                        device["topology"].get("source")
+                        or "modeled_none"
+                    )
+                    for device in host_devices
+                }
+            )
+            lines.append(
+                "Topology source: "
+                + ", ".join(source_values)
+                + " (modeled, not measured)"
+            )
+            config_errors = sorted(
+                {
+                    str(device["topology"].get("error") or "")
+                    for device in host_devices
+                    if device["topology"].get("error")
+                }
+            )
+            for config_error in config_errors:
+                lines.append(f"Configuration error: {config_error}")
+        lines.extend(
+            [
+                "",
+                "Legend:",
+                "  X    Self",
+                "  NV1  One active modeled NVLink peer relationship",
+                (
+                    "  PIX  Same host; PCIe hierarchy is not "
+                    "measured"
+                ),
+            ]
+        )
+    for error in errors:
+        lines.append(f"warning: {error}")
+    return "\n".join(lines)
+
+
+def render_nvlink_status(
+    inventory: Mapping[str, Any],
+    *,
+    errors: Sequence[str] = (),
+) -> str:
+    devices = list(inventory.get("devices") or [])
+    lines = [
+        "FakeGPU modeled NVLink status",
+        "Bandwidth values are configuration inputs, not measurements.",
+    ]
+    if not devices:
+        lines.append("No published FakeCUDA GPUs found.")
+    for device in devices:
+        topology = device["topology"]
+        nvlink = topology["nvlink"]
+        lines.append("")
+        lines.append(
+            f"GPU {device['index']} @ {device['host']}: "
+            f"{device['name']} ({device['uuid']})"
+        )
+        lines.append(
+            "  Source: "
+            f"{topology.get('source') or 'modeled_none'}"
+        )
+        if topology.get("error"):
+            lines.append(
+                f"  Configuration error: {topology['error']}"
+            )
+        active_peers = [
+            peer
+            for peer in nvlink.get("peers") or []
+            if peer.get("active")
+        ]
+        if not active_peers:
+            lines.append("  No active modeled NVLink peers.")
+            continue
+        for peer in sorted(
+            active_peers,
+            key=lambda item: _nonnegative_int(item.get("link")),
+        ):
+            lines.append(
+                f"  Link {peer['link']}: Active -> "
+                f"GPU {peer['index']} ({peer['uuid']}, "
+                f"{peer['pci_bus_id']}), "
+                f"{_format_gbps(peer.get('bandwidth_gbps'))} Gbps"
+            )
+    for error in errors:
+        lines.append(f"warning: {error}")
+    return "\n".join(lines)
+
+
 def render_detail(
     inventory: Mapping[str, Any],
     *,
@@ -1312,6 +1712,8 @@ def render_detail(
         allocator = item["allocator"]
         telemetry = item["telemetry"]
         native_activity = item["native_activity"]
+        topology = item["topology"]
+        nvlink = topology["nvlink"]
         lines.extend(
             [
                 "",
@@ -1319,6 +1721,17 @@ def render_detail(
                 f"  Product Name: {item['name']}",
                 f"  UUID: {item['uuid']} (synthetic)",
                 f"  PCI Bus ID: {item['pci_bus_id']} (synthetic)",
+                (
+                    "  Topology: "
+                    f"{topology.get('source') or 'modeled_none'}, "
+                    "NUMA "
+                    f"{_display_value(topology.get('numa_node'))}, "
+                    "PCIe generation "
+                    f"{_display_value(topology.get('pcie_generation'))}, "
+                    f"{nvlink.get('active_links', 0)} active NVLinks / "
+                    f"{_format_gbps(nvlink.get('aggregate_bandwidth_gbps'))} "
+                    "Gbps modeled aggregate"
+                ),
                 (
                     f"  Profile: {item['profile_id']} "
                     f"[{profile.get('profile_status') or 'unknown'}]"
@@ -1577,6 +1990,7 @@ def _empty_device_aggregate(
             "kernels": {},
             "unsupported_apis": [],
         },
+        "topology": dict(device["topology"]),
         "telemetry": dict(device["telemetry"]),
         "fakegpu": dict(fakegpu),
         "software": dict(software),
@@ -1793,6 +2207,7 @@ def _normalize_device(
         "source",
         "hardware_telemetry_unavailable",
     )
+    topology = _normalize_device_topology(raw.get("topology"))
     return {
         "index": index,
         "name": str(raw.get("name") or "Fake NVIDIA GPU"),
@@ -1869,6 +2284,7 @@ def _normalize_device(
         "native_activity": _normalize_native_activity(
             raw.get("native_activity")
         ),
+        "topology": topology,
         "telemetry": telemetry,
     }
 
@@ -2012,6 +2428,73 @@ def _mapping_list(value: Any) -> list[dict[str, Any]]:
     return [
         dict(item) for item in value if isinstance(item, Mapping)
     ]
+
+
+def _normalize_device_topology(value: Any) -> dict[str, Any]:
+    raw = dict(value) if isinstance(value, Mapping) else {}
+    nvlink_raw = (
+        dict(raw.get("nvlink") or {})
+        if isinstance(raw.get("nvlink"), Mapping)
+        else {}
+    )
+    peers = []
+    for item in _mapping_list(nvlink_raw.get("peers")):
+        try:
+            bandwidth = float(item.get("bandwidth_gbps", 0))
+        except (TypeError, ValueError):
+            bandwidth = 0.0
+        if not math.isfinite(bandwidth) or bandwidth < 0:
+            bandwidth = 0.0
+        peers.append(
+            {
+                "link": _nonnegative_int(item.get("link")),
+                "index": _nonnegative_int(item.get("index")),
+                "uuid": str(item.get("uuid") or "unknown"),
+                "pci_bus_id": str(
+                    item.get("pci_bus_id") or "unknown"
+                ),
+                "bandwidth_gbps": bandwidth,
+                "active": bool(item.get("active", True)),
+                "source": str(
+                    item.get("source")
+                    or raw.get("source")
+                    or "modeled_none"
+                ),
+            }
+        )
+    try:
+        aggregate_bandwidth = float(
+            nvlink_raw.get("aggregate_bandwidth_gbps", 0)
+        )
+    except (TypeError, ValueError):
+        aggregate_bandwidth = 0.0
+    if (
+        not math.isfinite(aggregate_bandwidth)
+        or aggregate_bandwidth < 0
+    ):
+        aggregate_bandwidth = 0.0
+    return {
+        "source": str(raw.get("source") or "modeled_none"),
+        "configured": bool(raw.get("configured", False)),
+        "valid": bool(raw.get("valid", True)),
+        "error": str(raw.get("error") or ""),
+        "numa_node": raw.get("numa_node"),
+        "pcie_generation": raw.get("pcie_generation"),
+        "nvlink": {
+            "active_links": _nonnegative_int(
+                nvlink_raw.get("active_links"),
+                default=sum(
+                    1 for peer in peers if peer["active"]
+                ),
+            ),
+            "peer_count": _nonnegative_int(
+                nvlink_raw.get("peer_count"),
+                default=len(peers),
+            ),
+            "aggregate_bandwidth_gbps": aggregate_bandwidth,
+            "peers": peers,
+        },
+    }
 
 
 def _normalize_native_activity(value: Any) -> dict[str, Any]:
@@ -2357,6 +2840,74 @@ def _format_age(value: Any) -> str:
     if value is None:
         return "N/A"
     return f"{float(value):.3f}s"
+
+
+def _topology_labels(
+    devices: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    totals: dict[int, int] = {}
+    for device in devices:
+        index = _nonnegative_int(device.get("index"))
+        totals[index] = totals.get(index, 0) + 1
+    offsets: dict[int, int] = {}
+    labels = []
+    for device in devices:
+        index = _nonnegative_int(device.get("index"))
+        offsets[index] = offsets.get(index, 0) + 1
+        label = f"GPU{index}"
+        if totals[index] > 1:
+            label += f"#{offsets[index]}"
+        labels.append(label)
+    return labels
+
+
+def _topology_relation(
+    source: Mapping[str, Any],
+    target: Mapping[str, Any],
+) -> str:
+    if source is target:
+        return "X"
+    target_uuid = str(target.get("uuid") or "")
+    target_index = _nonnegative_int(target.get("index"))
+    peers = (
+        source.get("topology", {})
+        .get("nvlink", {})
+        .get("peers", [])
+    )
+    for peer in peers:
+        if not isinstance(peer, Mapping) or not peer.get("active"):
+            continue
+        peer_uuid = str(peer.get("uuid") or "")
+        if (
+            peer_uuid
+            and peer_uuid != "unknown"
+            and peer_uuid == target_uuid
+        ):
+            return "NV1"
+        if (
+            peer_uuid in {"", "unknown"}
+            and _nonnegative_int(peer.get("index")) == target_index
+        ):
+            return "NV1"
+    if str(source.get("host") or "") == str(target.get("host") or ""):
+        return "PIX"
+    return "SYS"
+
+
+def _display_value(value: Any) -> str:
+    return "N/A" if value is None or value == "" else str(value)
+
+
+def _format_gbps(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        bandwidth = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if not math.isfinite(bandwidth) or bandwidth < 0:
+        return "N/A"
+    return f"{bandwidth:g}"
 
 
 def _format_timestamp_ns(value: int) -> str | None:
