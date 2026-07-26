@@ -9,6 +9,9 @@ from typing import Any
 
 
 SCHEMA_VERSION = "fakegpu.llm_inference_estimate.v1"
+KV_CACHE_STRATEGIES = frozenset(
+    {"dynamic", "static", "quantized", "paged"}
+)
 
 _DTYPE_BYTES = {
     "BOOL": 1,
@@ -37,6 +40,192 @@ _TORCH_DTYPE_TO_BYTES = {
     "float64": 8,
     "double": 8,
 }
+
+
+def estimate_kv_cache_memory(
+    *,
+    num_hidden_layers: int,
+    num_key_value_heads: int,
+    head_dim: int,
+    batch_size: int,
+    prompt_tokens: int,
+    generated_tokens: int = 1,
+    element_bytes: int = 2,
+    strategy: str = "dynamic",
+    quantized_bits: int = 4,
+    block_tokens: int = 16,
+    max_cache_tokens: int | None = None,
+    window_tokens: int | None = None,
+    use_cache: bool = True,
+) -> dict[str, Any]:
+    """Estimate allocated KV-cache storage for common serving strategies."""
+
+    positive_integers = {
+        "num_hidden_layers": num_hidden_layers,
+        "num_key_value_heads": num_key_value_heads,
+        "head_dim": head_dim,
+        "batch_size": batch_size,
+        "prompt_tokens": prompt_tokens,
+        "generated_tokens": generated_tokens,
+        "element_bytes": element_bytes,
+        "block_tokens": block_tokens,
+    }
+    for name, value in positive_integers.items():
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value <= 0
+        ):
+            raise ValueError(f"{name} must be a positive integer")
+    if not isinstance(use_cache, bool):
+        raise ValueError("use_cache must be a boolean")
+    if strategy not in KV_CACHE_STRATEGIES:
+        choices = ", ".join(sorted(KV_CACHE_STRATEGIES))
+        raise ValueError(
+            f"unsupported KV-cache strategy {strategy!r}; "
+            f"expected one of: {choices}"
+        )
+    if (
+        not isinstance(quantized_bits, int)
+        or isinstance(quantized_bits, bool)
+        or quantized_bits not in {2, 4, 8}
+    ):
+        raise ValueError("quantized_bits must be one of: 2, 4, 8")
+    for name, value in (
+        ("max_cache_tokens", max_cache_tokens),
+        ("window_tokens", window_tokens),
+    ):
+        if value is not None and (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value <= 0
+        ):
+            raise ValueError(f"{name} must be a positive integer")
+    if strategy != "static" and max_cache_tokens is not None:
+        raise ValueError(
+            "max_cache_tokens is only valid for the static KV-cache strategy"
+        )
+
+    final_logical_tokens = prompt_tokens + max(0, generated_tokens - 1)
+    storage_bits = (
+        quantized_bits if strategy == "quantized" else element_bytes * 8
+    )
+    static_capacity_tokens = None
+    if strategy == "static":
+        static_capacity_tokens = max_cache_tokens or final_logical_tokens
+        if window_tokens is not None:
+            static_capacity_tokens = min(
+                static_capacity_tokens,
+                window_tokens,
+            )
+        final_effective_tokens = _effective_context_tokens(
+            final_logical_tokens,
+            window_tokens=window_tokens,
+        )
+        if static_capacity_tokens < final_effective_tokens:
+            raise ValueError(
+                "max_cache_tokens must cover the requested generation "
+                "after applying window_tokens"
+            )
+
+    elements_per_token_per_sequence = (
+        2
+        * num_hidden_layers
+        * num_key_value_heads
+        * head_dim
+    )
+
+    def phase_allocation(logical_tokens: int) -> dict[str, Any]:
+        effective_tokens = (
+            _effective_context_tokens(
+                logical_tokens,
+                window_tokens=window_tokens,
+            )
+            if use_cache
+            else 0
+        )
+        if not use_cache:
+            allocated_tokens = 0
+        elif strategy == "static":
+            allocated_tokens = int(static_capacity_tokens or 0)
+        elif strategy == "paged":
+            allocated_tokens = (
+                math.ceil(effective_tokens / block_tokens) * block_tokens
+            )
+        else:
+            allocated_tokens = effective_tokens
+
+        base_dtype_bytes = _kv_storage_bytes(
+            elements_per_token_per_sequence,
+            batch_size=batch_size,
+            tokens=effective_tokens,
+            storage_bits=element_bytes * 8,
+        )
+        storage_bytes = _kv_storage_bytes(
+            elements_per_token_per_sequence,
+            batch_size=batch_size,
+            tokens=effective_tokens,
+            storage_bits=storage_bits,
+        )
+        allocated_bytes = _kv_storage_bytes(
+            elements_per_token_per_sequence,
+            batch_size=batch_size,
+            tokens=allocated_tokens,
+            storage_bits=storage_bits,
+        )
+        return {
+            "logical_tokens_per_sequence": logical_tokens,
+            "effective_tokens_per_sequence": effective_tokens,
+            "allocated_tokens_per_sequence": allocated_tokens,
+            "base_dtype_logical_bytes": base_dtype_bytes,
+            "storage_logical_bytes": storage_bytes,
+            "allocated_bytes": allocated_bytes,
+            "quantization_savings_bytes": (
+                base_dtype_bytes - storage_bytes
+            ),
+            "reservation_overhead_bytes": (
+                allocated_bytes - storage_bytes
+            ),
+            "allocation_utilization_percent": (
+                storage_bytes / allocated_bytes * 100
+                if allocated_bytes
+                else None
+            ),
+        }
+
+    return {
+        "enabled": use_cache,
+        "strategy": strategy,
+        "storage_bits_per_element": storage_bits,
+        "compute_element_bytes": element_bytes,
+        "batch_size": batch_size,
+        "elements_per_token_per_sequence": (
+            elements_per_token_per_sequence
+        ),
+        "bytes_per_token_per_sequence_at_compute_dtype": (
+            elements_per_token_per_sequence * element_bytes
+        ),
+        "block_tokens": block_tokens if strategy == "paged" else None,
+        "max_cache_tokens": (
+            static_capacity_tokens if strategy == "static" else None
+        ),
+        "window_tokens": window_tokens,
+        "prefill": phase_allocation(prompt_tokens),
+        "generation": phase_allocation(final_logical_tokens),
+        "formula": (
+            "ceil(2 * layers * batch * kv_heads * tokens * head_dim "
+            "* storage_bits / 8)"
+        ),
+        "modeled_overheads": [
+            "static_reservation"
+            if strategy == "static"
+            else "paged_block_rounding"
+            if strategy == "paged"
+            else "quantized_storage"
+            if strategy == "quantized"
+            else "exact_dynamic_growth"
+        ],
+    }
 
 
 def inspect_safetensors_checkpoint(model_dir: str | Path) -> dict[str, Any]:
@@ -124,6 +313,11 @@ def estimate_decoder_inference(
     expert_parallel_size: int = 1,
     target_profile: str | None = None,
     compute_acceleration_factor: float = 1.0,
+    kv_cache_strategy: str = "dynamic",
+    kv_cache_bits: int = 4,
+    kv_cache_block_tokens: int = 16,
+    kv_cache_max_tokens: int | None = None,
+    kv_cache_window_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Estimate decoder-only inference memory, communication, and FLOPs.
 
@@ -175,56 +369,62 @@ def estimate_decoder_inference(
     )
     parameter_bytes = base_parameter_bytes + adapter_parameter_bytes
 
+    kv_cache = estimate_kv_cache_memory(
+        num_hidden_layers=int(dimensions["num_hidden_layers"]),
+        num_key_value_heads=int(dimensions["num_key_value_heads"]),
+        head_dim=int(dimensions["head_dim"]),
+        batch_size=batch_size,
+        prompt_tokens=prompt_tokens,
+        generated_tokens=generated_tokens,
+        element_bytes=element_bytes,
+        strategy=kv_cache_strategy,
+        quantized_bits=kv_cache_bits,
+        block_tokens=kv_cache_block_tokens,
+        max_cache_tokens=kv_cache_max_tokens,
+        window_tokens=kv_cache_window_tokens,
+        use_cache=use_cache,
+    )
+    prefill_key_tokens = _effective_context_tokens(
+        prompt_tokens,
+        window_tokens=kv_cache_window_tokens,
+    )
     prefill_flops = _forward_matmul_flops(
         dimensions,
         batch_size=batch_size,
         query_tokens=prompt_tokens,
-        key_tokens=prompt_tokens,
+        key_tokens=prefill_key_tokens,
     )
     decode_steps: list[dict[str, int]] = []
     for step in range(max(0, generated_tokens - 1)):
-        key_tokens = prompt_tokens + step + 1
+        logical_key_tokens = prompt_tokens + step + 1
+        key_tokens = _effective_context_tokens(
+            logical_key_tokens,
+            window_tokens=kv_cache_window_tokens,
+        )
         flops = _forward_matmul_flops(
             dimensions,
             batch_size=batch_size,
             query_tokens=1,
             key_tokens=key_tokens,
         )
-        decode_steps.append(
-            {
-                "step": step + 1,
-                "query_tokens": 1,
-                "key_tokens": key_tokens,
-                "matmul_flops": flops,
-            }
-        )
+        decode_step = {
+            "step": step + 1,
+            "query_tokens": 1,
+            "key_tokens": key_tokens,
+            "matmul_flops": flops,
+        }
+        if logical_key_tokens != key_tokens:
+            decode_step["logical_key_tokens"] = logical_key_tokens
+        decode_steps.append(decode_step)
 
     cache_tokens_after_generation = prompt_tokens + max(0, generated_tokens - 1)
-    kv_cache_prefill = (
-        _kv_cache_bytes(
-            dimensions,
-            batch_size=batch_size,
-            tokens=prompt_tokens,
-            element_bytes=element_bytes,
-        )
-        if use_cache
-        else 0
-    )
-    kv_cache_final = (
-        _kv_cache_bytes(
-            dimensions,
-            batch_size=batch_size,
-            tokens=cache_tokens_after_generation,
-            element_bytes=element_bytes,
-        )
-        if use_cache
-        else 0
-    )
+    kv_cache_prefill = int(kv_cache["prefill"]["allocated_bytes"])
+    kv_cache_final = int(kv_cache["generation"]["allocated_bytes"])
     prefill_transient = _forward_transient_bytes(
         dimensions,
         batch_size=batch_size,
         query_tokens=prompt_tokens,
-        key_tokens=prompt_tokens,
+        key_tokens=prefill_key_tokens,
         element_bytes=element_bytes,
         attention_implementation=attention_implementation,
     )
@@ -232,7 +432,10 @@ def estimate_decoder_inference(
         dimensions,
         batch_size=batch_size,
         query_tokens=1,
-        key_tokens=cache_tokens_after_generation,
+        key_tokens=_effective_context_tokens(
+            cache_tokens_after_generation,
+            window_tokens=kv_cache_window_tokens,
+        ),
         element_bytes=element_bytes,
         attention_implementation=attention_implementation,
     )
@@ -294,6 +497,16 @@ def estimate_decoder_inference(
             else "backend_kernel_workspace"
         ),
         "quantized_kernel_workspace" if quantization["enabled"] else None,
+        (
+            "quantized_kv_cache_dequantization_workspace"
+            if use_cache and kv_cache_strategy == "quantized"
+            else None
+        ),
+        (
+            "paged_kv_cache_block_table_and_scheduler"
+            if use_cache and kv_cache_strategy == "paged"
+            else None
+        ),
         "adapter_kernel_fusion_and_merge_state" if adapters else None,
         "expert_load_imbalance" if model_kind == "mixture_of_experts" else None,
     ]
@@ -318,6 +531,19 @@ def estimate_decoder_inference(
             "expert_parallel_size": expert_parallel_size,
             "target_profile": target_profile,
             "compute_acceleration_factor": compute_acceleration_factor,
+            "kv_cache_strategy": kv_cache_strategy,
+            "kv_cache_bits": (
+                kv_cache_bits
+                if kv_cache_strategy == "quantized"
+                else None
+            ),
+            "kv_cache_block_tokens": (
+                kv_cache_block_tokens
+                if kv_cache_strategy == "paged"
+                else None
+            ),
+            "kv_cache_max_tokens": kv_cache["max_cache_tokens"],
+            "kv_cache_window_tokens": kv_cache_window_tokens,
         },
         "checkpoint": checkpoint,
         "weight_storage": {
@@ -328,6 +554,7 @@ def estimate_decoder_inference(
             "quantization": quantization,
             "adapters": adapters,
         },
+        "kv_cache": kv_cache,
         "memory": {
             "base_parameter_bytes": base_parameter_bytes,
             "adapter_parameter_bytes": adapter_parameter_bytes,
@@ -407,7 +634,8 @@ def estimate_decoder_inference(
         ],
         "notes": [
             "Checkpoint storage and parameter count come from safetensors headers without loading payloads.",
-            "KV-cache bytes use layer, KV-head, head-dimension, sequence, batch, and dtype dimensions.",
+            "KV-cache bytes use layer, KV-head, head-dimension, sequence, batch, storage bit width, and allocation-strategy dimensions.",
+            "Static reservation and paged block rounding are included; backend block-table and scheduler metadata remain implementation-specific.",
             "Quantized base-weight memory uses exact safetensors payload bytes, including scale and metadata tensors.",
             "Adapter runtime bytes use adapter parameter count and the selected compute dtype.",
             "FLOPs cover projection, attention matrix multiplication, active dense or routed experts, and LM-head matrix multiplication.",
@@ -664,22 +892,32 @@ def _forward_matmul_flops(
     )
 
 
-def _kv_cache_bytes(
-    dimensions: Mapping[str, Any],
+def _effective_context_tokens(
+    tokens: int,
+    *,
+    window_tokens: int | None,
+) -> int:
+    return (
+        min(tokens, window_tokens)
+        if window_tokens is not None
+        else tokens
+    )
+
+
+def _kv_storage_bytes(
+    elements_per_token_per_sequence: int,
     *,
     batch_size: int,
     tokens: int,
-    element_bytes: int,
+    storage_bits: int,
 ) -> int:
-    return (
-        2
-        * dimensions["num_hidden_layers"]
+    total_bits = (
+        elements_per_token_per_sequence
         * batch_size
-        * dimensions["num_key_value_heads"]
         * tokens
-        * dimensions["head_dim"]
-        * element_bytes
+        * storage_bits
     )
+    return (total_bits + 7) // 8
 
 
 def _forward_transient_bytes(

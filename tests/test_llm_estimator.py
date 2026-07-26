@@ -9,8 +9,10 @@ import pytest
 
 from fakegpu.llm_estimator import (
     estimate_decoder_inference,
+    estimate_kv_cache_memory,
     inspect_safetensors_checkpoint,
 )
+from fakegpu.llm_cli import main as llm_main
 
 
 def _write_safetensors(
@@ -98,6 +100,10 @@ def test_dense_decoder_memory_and_flops_are_shape_aware(tmp_path: Path) -> None:
     assert report["memory"]["parameter_bytes"] == 640
     assert report["memory"]["kv_cache_bytes_after_prefill"] == 128
     assert report["memory"]["kv_cache_bytes_after_generation"] == 160
+    assert report["kv_cache"]["strategy"] == "dynamic"
+    assert report["kv_cache"]["prefill"][
+        "allocation_utilization_percent"
+    ] == 100
     assert report["compute"]["prefill_flops"] == 12288
     assert report["compute"]["decode_steps"] == [
         {
@@ -119,6 +125,133 @@ def test_dense_decoder_memory_and_flops_are_shape_aware(tmp_path: Path) -> None:
     assert report["model"]["model_kind"] == "dense_decoder"
     assert report["communication"]["enabled"] is False
     assert report["memory_traffic"]["lower_bytes"] > 0
+
+
+def test_kv_cache_strategies_account_for_storage_and_reservation() -> None:
+    common = {
+        "num_hidden_layers": 2,
+        "num_key_value_heads": 1,
+        "head_dim": 4,
+        "batch_size": 1,
+        "prompt_tokens": 4,
+        "generated_tokens": 2,
+        "element_bytes": 2,
+    }
+
+    dynamic = estimate_kv_cache_memory(**common, strategy="dynamic")
+    static = estimate_kv_cache_memory(
+        **common,
+        strategy="static",
+        max_cache_tokens=16,
+    )
+    quantized = estimate_kv_cache_memory(
+        **common,
+        strategy="quantized",
+        quantized_bits=4,
+    )
+    paged = estimate_kv_cache_memory(
+        **common,
+        strategy="paged",
+        block_tokens=4,
+    )
+
+    assert dynamic["prefill"]["allocated_bytes"] == 128
+    assert dynamic["generation"]["allocated_bytes"] == 160
+    assert static["prefill"]["allocated_bytes"] == 512
+    assert static["generation"]["allocated_bytes"] == 512
+    assert static["prefill"]["reservation_overhead_bytes"] == 384
+    assert quantized["storage_bits_per_element"] == 4
+    assert quantized["prefill"]["allocated_bytes"] == 32
+    assert quantized["generation"]["quantization_savings_bytes"] == 120
+    assert paged["prefill"]["allocated_bytes"] == 128
+    assert paged["generation"]["allocated_bytes"] == 256
+    assert paged["generation"]["reservation_overhead_bytes"] == 96
+
+
+def test_sliding_window_caps_cache_memory_and_attention_context(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    report = estimate_decoder_inference(
+        model_dir,
+        prompt_tokens=8,
+        generated_tokens=4,
+        kv_cache_window_tokens=6,
+    )
+
+    assert report["memory"]["kv_cache_bytes_after_prefill"] == 192
+    assert report["memory"]["kv_cache_bytes_after_generation"] == 192
+    assert report["kv_cache"]["generation"][
+        "logical_tokens_per_sequence"
+    ] == 11
+    assert report["kv_cache"]["generation"][
+        "effective_tokens_per_sequence"
+    ] == 6
+    assert all(
+        step["key_tokens"] == 6
+        for step in report["compute"]["decode_steps"]
+    )
+
+
+def test_kv_cache_configuration_rejects_invalid_capacity() -> None:
+    with pytest.raises(ValueError, match="must cover"):
+        estimate_kv_cache_memory(
+            num_hidden_layers=2,
+            num_key_value_heads=1,
+            head_dim=4,
+            batch_size=1,
+            prompt_tokens=4,
+            generated_tokens=2,
+            strategy="static",
+            max_cache_tokens=4,
+        )
+
+    with pytest.raises(ValueError, match="quantized_bits"):
+        estimate_kv_cache_memory(
+            num_hidden_layers=2,
+            num_key_value_heads=1,
+            head_dim=4,
+            batch_size=1,
+            prompt_tokens=4,
+            quantized_bits=3,
+        )
+
+
+def test_llm_cli_exposes_paged_cache_controls(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    model_dir = tmp_path / "model"
+    output_path = tmp_path / "estimate.json"
+    _write_model(model_dir)
+
+    assert (
+        llm_main(
+            [
+                "--model-dir",
+                str(model_dir),
+                "--prompt-tokens",
+                "4",
+                "--generated-tokens",
+                "2",
+                "--kv-cache-strategy",
+                "paged",
+                "--kv-cache-block-tokens",
+                "4",
+                "--json",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["kv_cache"]["strategy"] == "paged"
+    assert report["kv_cache"]["generation"][
+        "allocated_tokens_per_sequence"
+    ] == 8
+    assert "KV cache: paged" in capsys.readouterr().out
 
 
 def test_moe_flops_memory_and_expert_parallel_traffic_are_modeled(

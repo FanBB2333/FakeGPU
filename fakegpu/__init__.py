@@ -41,7 +41,11 @@ from .performance_model import (
     profile_roofline,
 )
 from .repository_analyzer import RepositoryAnalysisError, analyze_repository
-from .llm_estimator import estimate_decoder_inference, inspect_safetensors_checkpoint
+from .llm_estimator import (
+    estimate_decoder_inference,
+    estimate_kv_cache_memory,
+    inspect_safetensors_checkpoint,
+)
 from .operator_profiles import (
     OperatorProfileError,
     evaluate_operator_profile,
@@ -91,6 +95,7 @@ __all__ = [
     "compare_memory_reports",
     "env",
     "estimate_decoder_inference",
+    "estimate_kv_cache_memory",
     "estimate_module_memory",
     "estimate_roofline",
     "estimate_training_plan",

@@ -38,6 +38,7 @@ def test_analysis_apis_are_exported_from_package() -> None:
 
     for name in (
         "compare_memory_reports",
+        "estimate_kv_cache_memory",
         "estimate_training_plan",
         "analyze_kernel_file",
         "replay_trace",
