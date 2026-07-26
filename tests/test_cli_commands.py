@@ -444,3 +444,60 @@ def test_readmes_match_memory_validation_evidence() -> None:
                 f"#{group['source_anchor']}"
             )
             assert source_url in readme, (readme_path, group["id"])
+
+
+def test_readmes_report_llm_reliability_scope() -> None:
+    profiles = load_profiles()
+    compute_capability_count = len(
+        {profile.compute_capability for profile in profiles.values()}
+    )
+    capabilities = json.loads(
+        (
+            ROOT
+            / "fakegpu"
+            / "data"
+            / "native_api_capabilities.json"
+        ).read_text(encoding="utf-8")
+    )
+    policy_enforced_count = sum(
+        bool(item.get("policy_enforced"))
+        for item in capabilities["apis"]
+    )
+    expected_terms = {
+        "scripts/test.sh all",
+        "151",
+        str(len(profiles)),
+        str(compute_capability_count),
+        str(len(capabilities["groups"])),
+        str(len(capabilities["apis"])),
+        str(policy_enforced_count),
+        "GPU-validated",
+        "CPU-validated",
+        "Modeled",
+        "Planned",
+        "Qwen3-8B",
+        "LoRA",
+        "QLoRA",
+        "FSDP/FSDP2",
+        "ZeRO",
+        "MoE",
+        "continuous batching",
+        "prefix caching",
+        "speculative decoding",
+        "false-safe",
+        "5%",
+        "https://huggingface.co/docs/transformers/kv_cache",
+        "https://docs.vllm.ai/en/stable/",
+    }
+
+    assert len(profiles) == 82
+    assert compute_capability_count == 15
+    assert len(capabilities["groups"]) == 5
+    assert len(capabilities["apis"]) == 26
+    assert policy_enforced_count == 24
+
+    for readme_path in README_PATHS:
+        readme = (ROOT / readme_path).read_text(encoding="utf-8")
+        section = _anchored_readme_section(readme, "llm-reliability")
+        for term in expected_terms:
+            assert term in section, (readme_path, term)

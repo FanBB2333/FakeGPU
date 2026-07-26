@@ -150,6 +150,69 @@ python3 -m fakegpu calibrate compare \
 記憶體安全餘量與係數。這些建議只適用於相同的工作負載簽章、shape、dtype、
 軟體堆疊與 GPU profile。
 
+<a id="llm-reliability"></a>
+
+### LLM 可靠性報告
+
+FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果只適用於記錄中的
+模型 revision、shape、dtype、attention backend、allocator、軟體堆疊與 GPU。
+`CPU-validated` 表示已維護的執行或分析行為在無實體 GPU 的環境中通過驗證。
+`Modeled` 表示已有分析模型，但沒有對應的實體 GPU 資料；`Planned` 表示尚未
+形成可公開聲明的準確率。
+
+#### 目前儲存庫驗證
+
+目前儲存庫狀態於 2026-07-26 在 macOS 26.5 arm64、Python 3.11.9 與 PyTorch
+2.9.1 CPU 環境中執行了 `scripts/test.sh all`：
+
+| 驗證層 | 已維護的檢查 | 結果 |
+|---|---|---|
+| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **151 個通過** |
+| 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
+| 原生能力清單 | 5 個能力群組、26 個明確 API、24 個強制執行策略的 API | **通過** |
+| GPU profile 目錄 | 82 個 profile，涵蓋 15 種 compute capability | **通過** |
+| CPU 數值模擬 | GEMM、cuBLASLt、批次 GEMM、BLAS1/2 與 FP16，共 8 組測試 | **通過** |
+| CUDA 版 PyTorch 原生矩陣乘法 | 需要含 CUDA 的 PyTorch | **目前 CPU-only 主機未執行** |
+
+GitHub CI 也會在 Python 3.10–3.12 上執行 Python 測試，並在 Linux 與 macOS
+上執行原生 smoke 與 CPU simulation。上文的實體 GPU 結果來自對應的固定版本
+驗證快照；本次檢查驗證了結構化證據與計算公式，沒有在目前 CPU-only 主機上
+重新測量。
+
+#### 已維護的 LLM 工作負載矩陣
+
+| 工作負載類型 | 已涵蓋變化 | 驗證依據 | 狀態 |
+|---|---|---|---|
+| 離線 decoder 推論 | Qwen3-8B、BF16、SDPA、模型載入、prefill 與 decode 峰值 | RTX PRO 5000 預測值與實測值 | `GPU-validated` |
+| 完整參數與 adapter SFT | Qwen 0.8B/2B 完整參數微調與 LoRA | 十個 RTX PRO 5000 訓練案例 | `GPU-validated` |
+| 量化 adapter SFT | Qwen 0.8B/2B 原生 NF4 QLoRA | 十個 RTX PRO 5000 訓練案例 | `GPU-validated` |
+| 通用 decoder 分析 | Dense/MoE 中繼資料、adapter、量化 checkpoint、eager/SDPA attention、KV cache 與 expert-parallel 通訊量 | 公式、fixture 與 CLI 迴歸測試 | `CPU-validated` + `Modeled` |
+| 分散式訓練規劃 | DeepSpeed、Accelerate、FSDP/FSDP2、分片、checkpointing 與 CPU/NVMe offload | 設定、位元組計算、拓撲與 trace 測試 | `CPU-validated` + `Modeled` |
+| 長上下文與線上服務 | Dynamic/static/quantized 或 paged KV cache、continuous batching、chunked prefill、prefix caching 與 speculative decoding | 尚無專案維護的實體 GPU 資料 | `Planned` |
+| 多 GPU LLM 執行 | TP、PP、CP、EP、MoE 負載不均衡，以及 FSDP/ZeRO 組合執行 | 目前只有分析拓撲與 coordinator 驗證 | `Modeled` |
+
+規劃中的 cache 與線上服務案例參考
+[Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache)
+與 [vLLM serving](https://docs.vllm.ai/en/stable/) 提供的工作負載形態。CPU
+FakeCUDA 不執行二進位 CUDA 擴充或任意 kernel；這類工作負載需要分析結果，並
+透過 passthrough 或 hybrid 模式取得實體 GPU 觀測值。
+
+後續新增或更新的公開驗證資料應包含：
+
+- 至少五次獨立執行，以及其中最大的觀測峰值；
+- 每個報告階段的預測位元組數與實測位元組數；
+- 將最大低估作為主要 OOM 風險指標；標記為 `GPU-validated` 時，建議不超過
+  5%；
+- 絕對百分比誤差的中位數、95 分位數與最大值；
+- 預測區間涵蓋率，以及 FakeGPU 判斷可執行但實際工作負載發生 OOM 的
+  false-safe 次數；
+- 模型 revision、完整指令、shape、dtype、backend、allocator 設定、GPU、
+  driver、CUDA、PyTorch 與框架版本。
+
+未達到上述目標的資料繼續標記為 `Modeled` 或 experimental，不作為已驗證
+準確率展示。「一致度」只作為輔助資訊，最大低估與 false-safe OOM 判斷更能反映
+容量規劃風險。
+
 ### 運作方式
 
 | 路徑 | 應用程式看到的內容 | 實際執行方式 |
@@ -449,7 +512,8 @@ FakeGPU/
 - [x] 執行階段、靜態、LLM 與分散式 GPU 記憶體分析
 - [x] 儲存庫、kernel、拓撲與 trace 分析
 - [ ] 擴充可執行的原生 CUDA 運算與 cuBLAS 涵蓋範圍
-- [ ] 為更多軟體堆疊與工作負載類型加入校準資料
+- [ ] 為長上下文與線上服務加入實體 GPU LLM 驗證
+- [ ] 在更多 GPU 與軟體堆疊上驗證分散式與 MoE 估算
 
 建議功能與已知限制請參閱
 [GitHub Issues](https://github.com/FanBB2333/FakeGPU/issues)。

@@ -158,6 +158,71 @@ and a recommended memory safety margin and factor. Apply those recommendations
 only to the same workload signature, shapes, dtype, software stack, and GPU
 profile.
 
+<a id="llm-reliability"></a>
+
+### LLM reliability report
+
+FakeGPU reports reliability per workload and environment signature. A
+`GPU-validated` result applies only to the recorded model revision, shapes,
+dtype, attention backend, allocator, software stack, and GPU. `CPU-validated`
+means that maintained execution or analysis behavior passed without a physical
+GPU. `Modeled` identifies analytical coverage without matching real-GPU
+evidence, while `Planned` is not yet a supported accuracy claim.
+
+#### Current repository verification
+
+This repository state was verified on 2026-07-26 with `scripts/test.sh all`
+on macOS 26.5 arm64, Python 3.11.9, and PyTorch 2.9.1 CPU:
+
+| Validation layer | Maintained check | Result |
+|---|---|---|
+| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **151 passed** |
+| Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
+| Native capability inventory | 5 groups, 26 explicit APIs, 24 policy-enforced APIs | **Passed** |
+| GPU profile catalog | 82 profiles across 15 compute capabilities | **Passed** |
+| CPU numerical simulation | GEMM, cuBLASLt, batched GEMM, BLAS1/2, and FP16: 8 maintained test groups | **Passed** |
+| CUDA-enabled PyTorch native matmul | Requires a CUDA build of PyTorch | **Not run on this CPU-only host** |
+
+GitHub CI separately runs the Python suite on Python 3.10–3.12 and the native
+smoke and CPU simulation suites on Linux and macOS. The real-GPU results above
+come from their linked immutable validation snapshots; they were checked
+against the structured evidence and formulas but were not regenerated on this
+CPU-only host.
+
+#### Maintained LLM workload matrix
+
+| Workload class | Covered variations | Evidence | Status |
+|---|---|---|---|
+| Offline decoder inference | Qwen3-8B, BF16, SDPA, model load, prefill, and decode peak | RTX PRO 5000 prediction-versus-observation data | `GPU-validated` |
+| Full and adapter SFT | Qwen 0.8B/2B full fine-tuning and LoRA | Ten RTX PRO 5000 training cases | `GPU-validated` |
+| Quantized adapter SFT | Qwen 0.8B/2B native NF4 QLoRA | Ten RTX PRO 5000 training cases | `GPU-validated` |
+| General decoder analysis | Dense and MoE metadata, adapters, quantized checkpoints, eager/SDPA attention, KV cache, and expert-parallel traffic | Formula, fixture, and CLI regression tests | `CPU-validated` + `Modeled` |
+| Distributed training plans | DeepSpeed, Accelerate, FSDP/FSDP2, sharding, checkpointing, and CPU/NVMe offload | Configuration, byte-accounting, topology, and trace tests | `CPU-validated` + `Modeled` |
+| Long-context and online serving | Dynamic/static/quantized or paged KV cache, continuous batching, chunked prefill, prefix caching, and speculative decoding | No maintained real-GPU evidence yet | `Planned` |
+| Multi-GPU LLM execution | TP, PP, CP, EP, MoE imbalance, and combined FSDP/ZeRO execution | Analytical topology and coordinator coverage only | `Modeled` |
+
+The planned cache and serving cases follow the workload shapes exposed by
+[Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache)
+and [vLLM serving](https://docs.vllm.ai/en/stable/). Binary CUDA extensions and
+arbitrary kernels remain outside CPU FakeCUDA execution; those workloads
+require analysis plus a passthrough or hybrid real-GPU observation.
+
+New or refreshed public validation rows should record:
+
+- at least five isolated observations and the maximum observed peak;
+- predicted and observed bytes for every reported phase;
+- maximum underprediction as the primary OOM-risk metric, with a publication
+  target of at most 5% for a `GPU-validated` row;
+- median, 95th-percentile, and maximum absolute percentage error;
+- prediction-interval coverage and the count of false-safe decisions, where
+  FakeGPU predicted a fit but the real workload reached OOM; and
+- the model revision, command, shapes, dtype, backend, allocator settings,
+  GPU, driver, CUDA, PyTorch, and framework versions.
+
+Rows that miss the target remain `Modeled` or are marked experimental instead
+of being presented as validated. Agreement percentages remain secondary to
+maximum underprediction and false-safe OOM decisions.
+
 ### How it works
 
 | Path | What the application sees | What actually runs |
@@ -466,7 +531,8 @@ environments, binary assets, and design drafts are excluded through
 - [x] Runtime, static, LLM, and distributed memory analysis
 - [x] Repository, kernel, topology, and trace analysis
 - [ ] Expand executable native CUDA operations and cuBLAS coverage
-- [ ] Add calibration evidence for more software stacks and workload classes
+- [ ] Add real-GPU LLM validation for long-context and online-serving workloads
+- [ ] Validate distributed and MoE estimates across more GPU and software stacks
 
 See the [open issues](https://github.com/FanBB2333/FakeGPU/issues) for proposed
 features and known limitations.
