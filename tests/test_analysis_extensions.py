@@ -129,6 +129,7 @@ def _topology_config() -> dict:
 def test_calibration_comparison_and_bundle() -> None:
     prediction = {
         "schema_version": "static_memory_estimate.v1",
+        "inputs": {"target_profile": "a100"},
         "memory_timeline": {
             "phases": [
                 {
@@ -147,6 +148,7 @@ def test_calibration_comparison_and_bundle() -> None:
     }
     observation = {
         "schema_version": "measurement.v1",
+        "profile": "a100",
         "memory_timeline": {
             "phases": [
                 {"phase": "forward", "peak_bytes": 1_000},
@@ -231,6 +233,30 @@ def test_calibration_verification_rejects_oom_risk_and_signature_drift() -> None
         "maximum_underestimate_percent",
         "minimum_prediction_interval_coverage_percent",
     }
+
+    zero_report = compare_memory_reports(
+        {
+            "schema_version": "prediction.v1",
+            "memory_timeline": {
+                "phases": [{"phase": "peak", "peak_bytes": 0}]
+            },
+        },
+        {
+            "schema_version": "observation.v1",
+            "memory_timeline": {
+                "phases": [{"phase": "peak", "peak_bytes": 0}]
+            },
+        },
+    )
+    zero_verification = verify_calibration_reports([zero_report])
+    assert zero_verification["status"] == "failed"
+    assert zero_verification["failures"] == [
+        {
+            "gate": "positive_observation_count",
+            "actual": 0,
+            "minimum": 1,
+        }
+    ]
 
 
 def test_published_memory_evidence_matches_calibration_math() -> None:

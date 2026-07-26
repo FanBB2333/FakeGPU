@@ -347,7 +347,15 @@ def verify_calibration_reports(
                 "required": min_comparisons,
             }
         )
-    if max_underestimate > max_underestimate_percent:
+    if not absolute_percentage_errors:
+        failures.append(
+            {
+                "gate": "positive_observation_count",
+                "actual": 0,
+                "minimum": 1,
+            }
+        )
+    elif max_underestimate > max_underestimate_percent:
         failures.append(
             {
                 "gate": "maximum_underestimate_percent",
@@ -424,6 +432,9 @@ def verify_calibration_reports(
             "require_matching_dimensions": require_matching_dimensions,
         },
         "metrics": {
+            "positive_observation_count": len(
+                absolute_percentage_errors
+            ),
             "maximum_underestimate_percent": max_underestimate,
             "median_absolute_percentage_error_percent": (
                 statistics.median(absolute_percentage_errors)
@@ -1039,7 +1050,12 @@ def _report_dimensions(report: Mapping[str, Any]) -> dict[str, Any]:
             "prompt_tokens",
         ):
             if key in source and source[key] is not None:
-                dimensions[key] = source[key]
+                normalized_key = (
+                    "gpu_profile"
+                    if key in {"profile", "target_profile"}
+                    else key
+                )
+                dimensions[normalized_key] = source[key]
     return dimensions
 
 
