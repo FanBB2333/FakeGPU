@@ -148,6 +148,7 @@ def test_kv_cache_strategies_account_for_storage_and_reservation() -> None:
         **common,
         strategy="quantized",
         quantized_bits=4,
+        quantized_residual_tokens=2,
     )
     paged = estimate_kv_cache_memory(
         **common,
@@ -161,8 +162,13 @@ def test_kv_cache_strategies_account_for_storage_and_reservation() -> None:
     assert static["generation"]["allocated_bytes"] == 512
     assert static["prefill"]["reservation_overhead_bytes"] == 384
     assert quantized["storage_bits_per_element"] == 4
-    assert quantized["prefill"]["allocated_bytes"] == 32
-    assert quantized["generation"]["quantization_savings_bytes"] == 120
+    assert quantized["prefill"]["allocated_bytes"] == 80
+    assert quantized["generation"]["allocated_bytes"] == 88
+    assert quantized["generation"][
+        "full_precision_residual_tokens_per_sequence"
+    ] == 2
+    assert quantized["generation"]["quantized_tokens_per_sequence"] == 3
+    assert quantized["generation"]["quantization_savings_bytes"] == 72
     assert paged["prefill"]["allocated_bytes"] == 128
     assert paged["generation"]["allocated_bytes"] == 256
     assert paged["generation"]["reservation_overhead_bytes"] == 96
@@ -215,6 +221,7 @@ def test_kv_cache_configuration_rejects_invalid_capacity() -> None:
             head_dim=4,
             batch_size=1,
             prompt_tokens=4,
+            strategy="quantized",
             quantized_bits=3,
         )
 
