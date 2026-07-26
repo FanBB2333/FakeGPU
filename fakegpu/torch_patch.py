@@ -1278,36 +1278,30 @@ def _smi_memory_snapshot() -> dict[str, Any]:
         return {
             "tracking_confidence": "C0_incomplete",
             "stage": os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown",
+            "runtime_backend": (
+                _patch_result.backend
+                if _patch_result is not None
+                else "unknown"
+            ),
+            "memory_tracking_enabled": False,
             "devices": [],
         }
-    devices = []
-    for index, profile in enumerate(_DEVICE_PROFILES):
-        if index >= len(tracker._total):
-            break
-        devices.append(
-            {
-                "index": index,
-                "name": str(profile.get("name", "")),
-                "profile_id": str(profile.get("profile_id", "")),
-                "total_memory": int(tracker._total[index]),
-                "current_memory": int(tracker._used[index]),
-                "peak_memory": int(tracker._peak[index]),
-                "current_reserved_memory": int(tracker._reserved[index]),
-                "peak_reserved_memory": int(tracker._reserved_peak[index]),
-                "inactive_split_bytes": int(tracker._inactive_split_bytes(index)),
-                "segment_count": len(tracker._segments[index]),
-            }
-        )
-    return {
-        "tracking_confidence": (
-            "C3_torch_dispatch_lifetime"
-            if _dispatch_tracking_stats.get("enabled")
-            else "C2_torch_tensor_lifetime"
-        ),
-        "stage": os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown",
-        "dispatch_tracking": _dispatch_tracking_snapshot(),
-        "devices": devices,
-    }
+    snapshot = tracker.snapshot(_DEVICE_PROFILES)
+    snapshot.update(
+        {
+            "stage": (
+                os.environ.get("FAKEGPU_PREFLIGHT_STAGE")
+                or "unknown"
+            ),
+            "runtime_backend": (
+                _patch_result.backend
+                if _patch_result is not None
+                else "unknown"
+            ),
+            "memory_tracking_enabled": bool(_MEMORY_TRACKING),
+        }
+    )
+    return snapshot
 
 
 def _refresh_smi_publisher() -> None:

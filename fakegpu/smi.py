@@ -2,17 +2,205 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import csv
+import io
 import json
 import os
+import platform
 import socket
 import sys
 import threading
 import time
+import uuid
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 
-SCHEMA_VERSION = "fakegpu.smi_state.v1"
+LEGACY_SCHEMA_VERSION = "fakegpu.smi_state.v1"
+SCHEMA_VERSION = "fakegpu.smi_state.v2"
+REPORT_SCHEMA_VERSION = "fakegpu.smi_report.v1"
+QUERY_SCHEMA_VERSION = "fakegpu.smi_query.v1"
+SUPPORTED_SCHEMA_VERSIONS = frozenset(
+    {LEGACY_SCHEMA_VERSION, SCHEMA_VERSION}
+)
+DEFAULT_STALE_AFTER_SECONDS = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class QueryField:
+    path: str
+    unit: str | None = None
+    divisor: float = 1.0
+    precision: int = 0
+
+
+GPU_QUERY_FIELDS: dict[str, QueryField] = {
+    "timestamp": QueryField("timestamp"),
+    "host": QueryField("host"),
+    "index": QueryField("index"),
+    "name": QueryField("name"),
+    "uuid": QueryField("uuid"),
+    "pci.bus_id": QueryField("pci_bus_id"),
+    "driver_version": QueryField("software.driver_version"),
+    "cuda_version": QueryField("software.cuda_version"),
+    "profile.id": QueryField("profile_id"),
+    "profile.status": QueryField("profile.profile_status"),
+    "architecture": QueryField("architecture"),
+    "compute_cap": QueryField("compute_capability"),
+    "compiler_target": QueryField("compiler_target"),
+    "memory.total": QueryField(
+        "memory.total_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "memory.used": QueryField(
+        "memory.used_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "memory.free": QueryField(
+        "memory.free_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "memory.tracked": QueryField(
+        "memory.tracked_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "memory.reserved": QueryField(
+        "memory.reserved_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "memory.peak": QueryField(
+        "memory.reported_peak_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "memory.inactive_split": QueryField(
+        "memory.inactive_split_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "memory.utilization": QueryField(
+        "memory.utilization_percent",
+        unit="%",
+        precision=3,
+    ),
+    "memory.headroom": QueryField(
+        "memory.headroom_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "utilization.gpu": QueryField(
+        "telemetry.gpu_utilization_percent",
+        unit="%",
+        precision=1,
+    ),
+    "temperature.gpu": QueryField(
+        "telemetry.temperature_c",
+        unit="C",
+        precision=1,
+    ),
+    "fan.speed": QueryField(
+        "telemetry.fan_speed_percent",
+        unit="%",
+        precision=1,
+    ),
+    "power.draw": QueryField(
+        "telemetry.power_usage_mw",
+        unit="W",
+        divisor=1000,
+        precision=1,
+    ),
+    "power.default_limit": QueryField(
+        "profile.typical_power_usage_mw",
+        unit="W",
+        divisor=1000,
+        precision=1,
+    ),
+    "power.max_limit": QueryField(
+        "profile.max_power_limit_mw",
+        unit="W",
+        divisor=1000,
+        precision=1,
+    ),
+    "sm_count": QueryField("profile.sm_count"),
+    "clocks.sm": QueryField("profile.core_clock_mhz", unit="MHz"),
+    "clocks.mem": QueryField(
+        "profile.memory_clock_mhz",
+        unit="MHz",
+    ),
+    "memory.bus_width": QueryField(
+        "profile.memory_bus_width_bits",
+        unit="bit",
+    ),
+    "memory.kind": QueryField("profile.memory_kind"),
+    "supported_types": QueryField("profile.supported_types"),
+    "allocator.model": QueryField("allocator.model"),
+    "allocator.segments": QueryField("allocator.segment_count"),
+    "processes": QueryField("process_count"),
+    "fakegpu.version": QueryField("fakegpu.version"),
+    "runtime": QueryField("fakegpu.runtime"),
+    "runtime.backend": QueryField("fakegpu.backend"),
+    "runtime.mode": QueryField("fakegpu.mode"),
+    "runtime.stage": QueryField("stages"),
+    "tracking.confidence": QueryField("tracking_confidence"),
+    "state.status": QueryField("state.status"),
+    "state.age": QueryField(
+        "state.max_age_seconds",
+        unit="s",
+        precision=3,
+    ),
+}
+
+PROCESS_QUERY_FIELDS: dict[str, QueryField] = {
+    "timestamp": QueryField("timestamp"),
+    "host": QueryField("host"),
+    "gpu_index": QueryField("gpu_index"),
+    "gpu_name": QueryField("gpu_name"),
+    "gpu_uuid": QueryField("gpu_uuid"),
+    "pci.bus_id": QueryField("pci_bus_id"),
+    "profile.id": QueryField("profile_id"),
+    "pid": QueryField("pid"),
+    "process_name": QueryField("process_name"),
+    "used_gpu_memory": QueryField(
+        "memory.used_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "peak_gpu_memory": QueryField(
+        "memory.reported_peak_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "tracked_gpu_memory": QueryField(
+        "memory.tracked_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "reserved_gpu_memory": QueryField(
+        "memory.reserved_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "stage": QueryField("stage"),
+    "status": QueryField("status"),
+    "state.age": QueryField(
+        "age_seconds",
+        unit="s",
+        precision=3,
+    ),
+    "tracking_confidence": QueryField("tracking_confidence"),
+    "allocator.model": QueryField("allocator_model"),
+    "dispatch.calls": QueryField("dispatch_tracking.operator_calls"),
+    "fakegpu.version": QueryField("fakegpu.version"),
+    "runtime.backend": QueryField("fakegpu.backend"),
+}
 
 
 def configured_state_path() -> Path | None:
@@ -26,7 +214,7 @@ def configured_state_path() -> Path | None:
 
 
 class SmiStatePublisher:
-    """Publish lightweight FakeCUDA process memory for an external viewer."""
+    """Publish FakeCUDA process and device diagnostics for an external viewer."""
 
     def __init__(
         self,
@@ -40,6 +228,8 @@ class SmiStatePublisher:
         self.snapshot = snapshot
         self.interval_seconds = max(0.05, float(interval_seconds))
         self.runtime_overhead_bytes = max(0, int(runtime_overhead_bytes))
+        self._software = _software_metadata()
+        self._catalogs = _catalog_metadata()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._registered = False
@@ -72,52 +262,172 @@ class SmiStatePublisher:
 
     def publish_once(self, *, running: bool) -> dict[str, Any]:
         raw = self.snapshot()
+        hostname = socket.gethostname()
         devices: list[dict[str, Any]] = []
         for item in raw.get("devices") or []:
-            current = int(item.get("current_memory", 0) or 0)
-            peak = max(current, int(item.get("peak_memory", current) or current))
+            if not isinstance(item, Mapping):
+                continue
+            current = _nonnegative_int(item.get("current_memory"))
+            peak = max(
+                current,
+                _nonnegative_int(
+                    item.get("peak_memory"),
+                    default=current,
+                ),
+            )
             reserved = max(
                 current,
-                int(item.get("current_reserved_memory", current) or current),
+                _nonnegative_int(
+                    item.get("current_reserved_memory"),
+                    default=current,
+                ),
             )
             reserved_peak = max(
                 reserved,
                 peak,
-                int(item.get("peak_reserved_memory", reserved) or reserved),
+                _nonnegative_int(
+                    item.get("peak_reserved_memory"),
+                    default=reserved,
+                ),
             )
-            total = int(item.get("total_memory", 0) or 0)
+            total = _nonnegative_int(item.get("total_memory"))
             reported = reserved + self.runtime_overhead_bytes
             reported_peak = reserved_peak + self.runtime_overhead_bytes
             if total:
                 reported = min(total, reported)
                 reported_peak = min(total, reported_peak)
+            index = _nonnegative_int(
+                item.get("index"),
+                default=len(devices),
+            )
+            profile = _profile_metadata(item)
+            free = max(0, total - reported) if total else None
+            headroom = (
+                max(0, total - reported_peak) if total else None
+            )
             devices.append(
                 {
-                    "index": int(item.get("index", len(devices))),
+                    "index": index,
                     "name": str(item.get("name", "Fake NVIDIA GPU")),
                     "profile_id": str(item.get("profile_id", "")),
+                    "profile": profile,
+                    "uuid": _synthetic_uuid(
+                        hostname,
+                        index,
+                        str(item.get("profile_id", "")),
+                    ),
+                    "pci_bus_id": _synthetic_pci_bus_id(index),
+                    "identity_source": "synthetic",
+                    "architecture": profile.get("architecture"),
+                    "compute_capability": profile.get(
+                        "compute_capability"
+                    ),
+                    "compiler_target": profile.get("compiler_target"),
                     "total_memory": total,
+                    "free_memory": free,
                     "tracked_memory": current,
                     "peak_tracked_memory": peak,
                     "reserved_memory": reserved,
                     "peak_reserved_memory": reserved_peak,
-                    "inactive_split_bytes": int(
-                        item.get("inactive_split_bytes", 0) or 0
+                    "inactive_split_bytes": _nonnegative_int(
+                        item.get("inactive_split_bytes")
                     ),
-                    "segment_count": int(item.get("segment_count", 0) or 0),
+                    "segment_count": _nonnegative_int(
+                        item.get("segment_count")
+                    ),
                     "reported_memory_source": "reserved",
                     "runtime_overhead_bytes": self.runtime_overhead_bytes,
                     "reported_memory": reported,
                     "reported_peak_memory": reported_peak,
+                    "memory_utilization_percent": (
+                        round(reported / total * 100, 3)
+                        if total
+                        else None
+                    ),
+                    "headroom_bytes": headroom,
+                    "headroom_percent": (
+                        round(headroom / total * 100, 3)
+                        if total and headroom is not None
+                        else None
+                    ),
+                    "allocation_count": _nonnegative_int(
+                        item.get("allocation_count")
+                    ),
+                    "free_count": _nonnegative_int(
+                        item.get("free_count")
+                    ),
+                    "allocator_model": str(
+                        item.get("allocator_model")
+                        or raw.get("allocator_model")
+                        or "unknown"
+                    ),
+                    "current_bytes_by_category": _integer_mapping(
+                        item.get("current_bytes_by_category")
+                    ),
+                    "peak_by_stage": _integer_mapping(
+                        item.get("peak_by_stage")
+                    ),
+                    "reserved_peak_by_stage": _integer_mapping(
+                        item.get("reserved_peak_by_stage")
+                    ),
+                    "largest_allocations": _mapping_list(
+                        item.get("largest_allocations")
+                    ),
+                    "telemetry": {
+                        "gpu_utilization_percent": None,
+                        "temperature_c": None,
+                        "fan_speed_percent": None,
+                        "power_usage_mw": None,
+                        "source": "hardware_telemetry_unavailable",
+                    },
                 }
             )
+        dispatch_tracking = (
+            dict(raw.get("dispatch_tracking") or {})
+            if isinstance(raw.get("dispatch_tracking"), Mapping)
+            else {}
+        )
         state = {
             "schema_version": SCHEMA_VERSION,
             "timestamp_ns": time.time_ns(),
-            "hostname": socket.gethostname(),
+            "hostname": hostname,
             "pid": os.getpid(),
             "process_name": _process_name(),
             "runtime": "fakecuda",
+            "fakegpu": {
+                "version": _fakegpu_version(),
+                "runtime": "fakecuda",
+                "backend": str(
+                    raw.get("runtime_backend") or "unknown"
+                ),
+                "mode": os.environ.get("FAKEGPU_MODE", "simulate"),
+                "oom_policy": os.environ.get(
+                    "FAKEGPU_OOM_POLICY",
+                    "default",
+                ),
+                "unsupported_api_policy": os.environ.get(
+                    "FAKEGPU_UNSUPPORTED_API",
+                    "default",
+                ),
+                "distributed_mode": os.environ.get(
+                    "FAKEGPU_DIST_MODE",
+                    "disabled",
+                ),
+                "memory_tracking_enabled": bool(
+                    raw.get("memory_tracking_enabled", True)
+                ),
+                "dispatch_memory_tracking_enabled": bool(
+                    dispatch_tracking.get("enabled", False)
+                ),
+                **self._catalogs,
+            },
+            "software": dict(self._software),
+            "publisher": {
+                "interval_seconds": self.interval_seconds,
+                "runtime_overhead_bytes": (
+                    self.runtime_overhead_bytes
+                ),
+            },
             "running": bool(running),
             "tracking_confidence": raw.get(
                 "tracking_confidence", "C2_torch_tensor_lifetime"
@@ -127,6 +437,10 @@ class SmiStatePublisher:
                 or os.environ.get("FAKEGPU_PREFLIGHT_STAGE")
                 or "unknown"
             ),
+            "allocator_model": str(
+                raw.get("allocator_model") or "unknown"
+            ),
+            "dispatch_tracking": dispatch_tracking,
             "devices": devices,
         }
         _atomic_write_json(self.path, state)
@@ -143,12 +457,81 @@ class SmiStatePublisher:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="fakegpu nvidia-smi",
-        description="Display FakeCUDA process memory published by the simulated runtime.",
+        description=(
+            "Inspect FakeCUDA devices, processes, profiles, memory, runtime "
+            "configuration, and simulated telemetry."
+        ),
     )
     parser.add_argument("--state", action="append", default=[])
     parser.add_argument("--state-dir")
     parser.add_argument("--include-exited", action="store_true")
-    parser.add_argument("--json", action="store_true")
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the complete state and normalized inventory as JSON.",
+    )
+    output_group.add_argument(
+        "-L",
+        "--list-gpus",
+        action="store_true",
+        help="List simulated GPUs with UUID, profile, and compute capability.",
+    )
+    output_group.add_argument(
+        "-q",
+        "--detail",
+        action="store_true",
+        help="Show detailed FakeGPU runtime, profile, allocator, and process data.",
+    )
+    output_group.add_argument(
+        "--query-gpu",
+        metavar="FIELDS",
+        help="Query comma-separated GPU fields.",
+    )
+    output_group.add_argument(
+        "--query-compute-apps",
+        metavar="FIELDS",
+        help="Query comma-separated process fields.",
+    )
+    parser.add_argument(
+        "--format",
+        default=None,
+        help=(
+            "Query output format: csv, csv,noheader, csv,nounits, or json."
+        ),
+    )
+    parser.add_argument(
+        "-i",
+        "--id",
+        action="append",
+        default=[],
+        metavar="ID",
+        help=(
+            "Select GPU index, UUID, PCI bus ID, or profile ID; "
+            "comma-separated values are accepted."
+        ),
+    )
+    parser.add_argument(
+        "--stale-after-seconds",
+        type=_positive_float,
+        default=DEFAULT_STALE_AFTER_SECONDS,
+        help="Mark running state files older than this threshold as stale.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"FakeGPU-SMI {_fakegpu_version()}",
+    )
+    parser.add_argument(
+        "--help-query-gpu",
+        action="store_true",
+        help="List supported --query-gpu fields and exit.",
+    )
+    parser.add_argument(
+        "--help-query-compute-apps",
+        action="store_true",
+        help="List supported --query-compute-apps fields and exit.",
+    )
     parser.add_argument(
         "-l",
         "--loop",
@@ -163,8 +546,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.help_query_gpu:
+        print(_render_query_help("gpu", GPU_QUERY_FIELDS))
+        return 0
+    if args.help_query_compute_apps:
+        print(_render_query_help("compute-apps", PROCESS_QUERY_FIELDS))
+        return 0
     if args.count is not None and args.loop is None:
         parser.error("--count requires --loop")
+    if args.format is not None and not (
+        args.query_gpu or args.query_compute_apps
+    ):
+        parser.error("--format requires --query-gpu or --query-compute-apps")
+    query_format = _parse_query_format(
+        args.format or "csv",
+        parser=parser,
+    )
+    gpu_query_fields = _parse_query_fields(
+        args.query_gpu,
+        available=GPU_QUERY_FIELDS,
+        parser=parser,
+    )
+    process_query_fields = _parse_query_fields(
+        args.query_compute_apps,
+        available=PROCESS_QUERY_FIELDS,
+        parser=parser,
+    )
+    selectors = _device_selectors(args.id)
 
     explicit_paths = [Path(value).expanduser().resolve() for value in args.state]
     state_dir_text = args.state_dir or os.environ.get("FAKEGPU_SMI_STATE_DIR")
@@ -194,20 +602,63 @@ def main(argv: Sequence[str] | None = None) -> int:
                 include_exited=bool(args.include_exited),
             )
             saw_states = saw_states or bool(states)
+            inventory = build_inventory(
+                states,
+                device_selectors=selectors,
+                stale_after_seconds=args.stale_after_seconds,
+            )
 
-            if refresh and not args.json:
+            if refresh and not args.json and query_format["kind"] != "json":
                 if sys.stdout.isatty():
                     sys.stdout.write("\x1b[2J\x1b[H")
                 else:
                     print()
             if args.json:
-                payload = {"states": states, "errors": errors}
+                payload = {
+                    "schema_version": REPORT_SCHEMA_VERSION,
+                    "generated_at_ns": time.time_ns(),
+                    "inventory": inventory,
+                    "states": states,
+                    "errors": errors,
+                }
                 if args.loop is None:
                     print(json.dumps(payload, indent=2, sort_keys=True))
                 else:
                     print(json.dumps(payload, sort_keys=True))
+            elif args.list_gpus:
+                print(render_gpu_list(inventory, errors=errors))
+            elif args.detail:
+                print(render_detail(inventory, errors=errors))
+            elif gpu_query_fields:
+                print(
+                    render_query(
+                        inventory["devices"],
+                        fields=gpu_query_fields,
+                        available=GPU_QUERY_FIELDS,
+                        query_kind="gpu",
+                        output_format=query_format,
+                    )
+                )
+            elif process_query_fields:
+                print(
+                    render_query(
+                        inventory["processes"],
+                        fields=process_query_fields,
+                        available=PROCESS_QUERY_FIELDS,
+                        query_kind="compute-apps",
+                        output_format=query_format,
+                    )
+                )
             else:
-                print(render_table(states, errors=errors))
+                print(
+                    render_table(
+                        states,
+                        errors=errors,
+                        device_selectors=selectors,
+                        stale_after_seconds=args.stale_after_seconds,
+                        inventory=inventory,
+                    )
+                )
             sys.stdout.flush()
 
             refresh += 1
@@ -247,8 +698,13 @@ def _load_states(
             state = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(state, dict):
                 raise ValueError("state root must be an object")
-            if state.get("schema_version") != SCHEMA_VERSION:
+            if state.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
                 raise ValueError("unsupported schema")
+            devices = state.get("devices")
+            if not isinstance(devices, list) or any(
+                not isinstance(item, Mapping) for item in devices
+            ):
+                raise ValueError("devices must be an array of objects")
             if include_exited or bool(state.get("running")):
                 states.append(state)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -256,119 +712,1352 @@ def _load_states(
     return states, errors
 
 
-def render_table(
-    states: Sequence[dict[str, Any]], *, errors: Sequence[str] = ()
-) -> str:
-    device_rows: dict[tuple[str, int], dict[str, Any]] = {}
+def build_inventory(
+    states: Sequence[Mapping[str, Any]],
+    *,
+    device_selectors: Sequence[str] = (),
+    stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
+    now_ns: int | None = None,
+) -> dict[str, Any]:
+    """Normalize and aggregate process state into device and runtime records."""
+
+    current_ns = int(now_ns if now_ns is not None else time.time_ns())
+    selectors = tuple(str(value).casefold() for value in device_selectors)
+    device_rows: dict[tuple[str, str], dict[str, Any]] = {}
     process_rows: list[dict[str, Any]] = []
+    runtime_rows: list[dict[str, Any]] = []
+
     for state in states:
-        host = str(state.get("hostname", "localhost"))
+        host = str(state.get("hostname") or "localhost")
+        pid = _nonnegative_int(state.get("pid"))
+        process_name = str(state.get("process_name") or "python")
         stage = str(state.get("stage") or "unknown")
-        confidence = str(state.get("tracking_confidence") or "unknown")
-        for device in state.get("devices") or []:
-            key = (host, int(device.get("index", 0)))
+        confidence = str(
+            state.get("tracking_confidence") or "unknown"
+        )
+        age_seconds = _state_age_seconds(state, now_ns=current_ns)
+        status = _state_status(
+            state,
+            age_seconds=age_seconds,
+            stale_after_seconds=stale_after_seconds,
+        )
+        fakegpu = _state_fakegpu_metadata(state)
+        software = _state_software_metadata(state)
+        dispatch_tracking = (
+            dict(state.get("dispatch_tracking") or {})
+            if isinstance(state.get("dispatch_tracking"), Mapping)
+            else {}
+        )
+        selected_device = False
+        timestamp_ns = _nonnegative_int(state.get("timestamp_ns"))
+        timestamp = _format_timestamp_ns(timestamp_ns)
+        raw_devices = state.get("devices") or []
+        for raw_device in raw_devices:
+            if not isinstance(raw_device, Mapping):
+                continue
+            device = _normalize_device(raw_device, host=host)
+            if selectors and not _matches_device(device, selectors):
+                continue
+            selected_device = True
+            process = {
+                "timestamp_ns": timestamp_ns,
+                "timestamp": timestamp,
+                "host": host,
+                "gpu_index": device["index"],
+                "gpu_name": device["name"],
+                "gpu_uuid": device["uuid"],
+                "pci_bus_id": device["pci_bus_id"],
+                "profile_id": device["profile_id"],
+                "pid": pid,
+                "process_name": process_name,
+                "stage": stage,
+                "status": status,
+                "age_seconds": age_seconds,
+                "running": bool(state.get("running")),
+                "tracking_confidence": confidence,
+                "allocator_model": device["allocator_model"],
+                "memory": dict(device["memory"]),
+                "fakegpu": dict(fakegpu),
+                "software": dict(software),
+                "dispatch_tracking": dispatch_tracking,
+            }
+            process_rows.append(process)
+
+            key = (host, str(device["uuid"]))
             aggregate = device_rows.setdefault(
                 key,
+                _empty_device_aggregate(
+                    host=host,
+                    device=device,
+                    fakegpu=fakegpu,
+                    software=software,
+                ),
+            )
+            aggregate["_names"].add(device["name"])
+            aggregate["_profile_ids"].add(device["profile_id"])
+            aggregate["_statuses"].add(status)
+            aggregate["_stages"].add(stage)
+            aggregate["_tracking"].add(confidence)
+            if age_seconds is not None:
+                aggregate["_ages"].append(age_seconds)
+            aggregate["timestamp_ns"] = max(
+                int(aggregate["timestamp_ns"]),
+                timestamp_ns,
+            )
+            aggregate["process_count"] += 1
+            if status == "stale":
+                aggregate["stale_process_count"] += 1
+            if status == "exited":
+                aggregate["exited_process_count"] += 1
+            _accumulate_memory(
+                aggregate["memory"],
+                device["memory"],
+            )
+            _accumulate_allocator(
+                aggregate["allocator"],
+                device,
+                pid=pid,
+                process_name=process_name,
+            )
+
+        if selected_device or (not selectors and not raw_devices):
+            runtime_rows.append(
                 {
-                    "names": set(),
-                    "profiles": set(),
-                    "total": 0,
-                    "used": 0,
-                },
-            )
-            aggregate["names"].add(str(device.get("name", "Fake NVIDIA GPU")))
-            profile_id = str(device.get("profile_id", "") or "unknown")
-            aggregate["profiles"].add(profile_id)
-            total = int(device.get("total_memory", 0) or 0)
-            aggregate["total"] = max(int(aggregate["total"]), total)
-            used = int(
-                device.get("reported_memory", device.get("tracked_memory", 0)) or 0
-            )
-            tracked = int(device.get("tracked_memory", 0) or 0)
-            peak_tracked = max(
-                tracked,
-                int(device.get("peak_tracked_memory", tracked) or tracked),
-            )
-            reserved = max(
-                tracked,
-                int(device.get("reserved_memory", tracked) or tracked),
-            )
-            peak_reserved = max(
-                reserved,
-                peak_tracked,
-                int(device.get("peak_reserved_memory", reserved) or reserved),
-            )
-            reported_peak = device.get("reported_peak_memory")
-            if reported_peak is None:
-                reported_peak = peak_reserved + int(
-                    device.get("runtime_overhead_bytes", 0) or 0
-                )
-                if total:
-                    reported_peak = min(total, reported_peak)
-            reported_peak = max(used, int(reported_peak or used))
-            aggregate["used"] += used
-            process_rows.append(
-                {
-                    "host": key[0],
-                    "gpu": key[1],
-                    "pid": int(state.get("pid", 0) or 0),
-                    "name": str(state.get("process_name", "python")),
-                    "profile": profile_id,
+                    "schema_version": state.get("schema_version"),
+                    "timestamp_ns": timestamp_ns,
+                    "timestamp": timestamp,
+                    "host": host,
+                    "pid": pid,
+                    "process_name": process_name,
                     "stage": stage,
-                    "confidence": confidence,
-                    "used": used,
-                    "peak": reported_peak,
-                    "tracked": tracked,
-                    "tracked_peak": peak_tracked,
-                    "reserved": reserved,
-                    "reserved_peak": peak_reserved,
-                    "running": bool(state.get("running")),
+                    "status": status,
+                    "age_seconds": age_seconds,
+                    "tracking_confidence": confidence,
+                    "allocator_model": str(
+                        state.get("allocator_model") or "unknown"
+                    ),
+                    "fakegpu": fakegpu,
+                    "software": software,
+                    "publisher": (
+                        dict(state.get("publisher") or {})
+                        if isinstance(
+                            state.get("publisher"),
+                            Mapping,
+                        )
+                        else {}
+                    ),
+                    "dispatch_tracking": dispatch_tracking,
                 }
             )
 
-    lines = ["FakeGPU-SMI (simulated CUDA memory)"]
-    if not device_rows:
+    devices = [
+        _finalize_device_aggregate(item)
+        for item in device_rows.values()
+    ]
+    devices.sort(
+        key=lambda item: (
+            str(item["host"]),
+            int(item["index"]),
+            str(item["uuid"]),
+        )
+    )
+    process_rows.sort(
+        key=lambda item: (
+            str(item["host"]),
+            int(item["gpu_index"]),
+            int(item["pid"]),
+        )
+    )
+    runtime_rows.sort(
+        key=lambda item: (str(item["host"]), int(item["pid"]))
+    )
+    return {
+        "device_count": len(devices),
+        "process_count": len(process_rows),
+        "runtime_count": len(runtime_rows),
+        "devices": devices,
+        "processes": process_rows,
+        "runtimes": runtime_rows,
+    }
+
+
+def render_table(
+    states: Sequence[dict[str, Any]],
+    *,
+    errors: Sequence[str] = (),
+    device_selectors: Sequence[str] = (),
+    stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
+    inventory: Mapping[str, Any] | None = None,
+) -> str:
+    if inventory is None:
+        inventory = build_inventory(
+            states,
+            device_selectors=device_selectors,
+            stale_after_seconds=stale_after_seconds,
+        )
+    versions = sorted(
+        {
+            str(item["fakegpu"].get("version") or "unknown")
+            for item in inventory["runtimes"]
+        }
+    )
+    cuda_versions = sorted(
+        {
+            str(item["software"].get("cuda_version") or "N/A")
+            for item in inventory["runtimes"]
+        }
+    )
+    lines = [
+        "FakeGPU-SMI (simulated CUDA telemetry)",
+        (
+            f"FakeGPU Version: {', '.join(versions) if versions else 'unknown'}"
+            f" | CUDA Version: "
+            f"{', '.join(cuda_versions) if cuda_versions else 'N/A'}"
+            " | Hardware-only telemetry: N/A"
+        ),
+    ]
+    if not inventory["devices"]:
         lines.append("No published FakeCUDA processes found.")
     else:
         lines.extend(
             [
                 "Devices:",
-                "| Host | GPU | Profile | Name | Current / Total |",
-                "|---|---:|---|---|---:|",
+                "| Host | GPU | Profile | CC | Name | UUID | Current / Total | Memory Util | Processes |",
+                "|---|---:|---|---|---|---|---:|---:|---:|",
             ]
         )
-        for (host, index), item in sorted(device_rows.items()):
-            names = ", ".join(sorted(item["names"]))
-            profiles = ", ".join(sorted(item["profiles"]))
+        for item in inventory["devices"]:
+            memory = item["memory"]
+            utilization = memory["utilization_percent"]
+            utilization_text = (
+                f"{utilization:.1f}%"
+                if utilization is not None
+                else "N/A"
+            )
             lines.append(
-                f"| {_table_cell(host)} | {index} | {_table_cell(profiles)} | "
-                f"{_table_cell(names)} | {_mib(item['used'])} MiB / "
-                f"{_mib(item['total'])} MiB |"
+                f"| {_table_cell(item['host'])} | {item['index']} | "
+                f"{_table_cell(item['profile_id'])} | "
+                f"{_table_cell(item['compute_capability'] or 'N/A')} | "
+                f"{_table_cell(item['name'])} | "
+                f"{_table_cell(item['uuid'])} | "
+                f"{_mib(memory['used_bytes'])} MiB / "
+                f"{_mib(memory['total_bytes'])} MiB | "
+                f"{utilization_text} | {item['process_count']} |"
             )
         lines.extend(
             [
                 "Processes:",
-                "| Host | GPU | Profile | PID | Process | Stage | Simulated current | Simulated peak | Allocated current | Allocated peak | Reserved current | Reserved peak | Confidence |",
-                "|---|---:|---|---:|---|---|---:|---:|---:|---:|---:|---:|---|",
+                "| Host | GPU | Profile | PID | Process | Stage | Simulated current | Simulated peak | Allocated current | Allocated peak | Reserved current | Reserved peak | Confidence | Status | Age |",
+                "|---|---:|---|---:|---|---|---:|---:|---:|---:|---:|---:|---|---|---:|",
             ]
         )
-        for item in sorted(
-            process_rows,
-            key=lambda row: (row["host"], row["gpu"], row["pid"]),
-        ):
-            suffix = "" if item["running"] else " (exited)"
+        for item in inventory["processes"]:
+            memory = item["memory"]
+            suffix = " (exited)" if item["status"] == "exited" else ""
             lines.append(
-                f"| {_table_cell(item['host'])} | {item['gpu']} | "
-                f"{_table_cell(item['profile'])} | {item['pid']} | "
-                f"{_table_cell(item['name'] + suffix)} | {_table_cell(item['stage'])} | "
-                f"{_mib(item['used'])} MiB | {_mib(item['peak'])} MiB | "
-                f"{_mib(item['tracked'])} MiB | {_mib(item['tracked_peak'])} MiB | "
-                f"{_mib(item['reserved'])} MiB | {_mib(item['reserved_peak'])} MiB | "
-                f"{_table_cell(item['confidence'])} |"
+                f"| {_table_cell(item['host'])} | "
+                f"{item['gpu_index']} | "
+                f"{_table_cell(item['profile_id'])} | {item['pid']} | "
+                f"{_table_cell(item['process_name'] + suffix)} | "
+                f"{_table_cell(item['stage'])} | "
+                f"{_mib(memory['used_bytes'])} MiB | "
+                f"{_mib(memory['reported_peak_bytes'])} MiB | "
+                f"{_mib(memory['tracked_bytes'])} MiB | "
+                f"{_mib(memory['tracked_peak_bytes'])} MiB | "
+                f"{_mib(memory['reserved_bytes'])} MiB | "
+                f"{_mib(memory['reserved_peak_bytes'])} MiB | "
+                f"{_table_cell(item['tracking_confidence'])} | "
+                f"{item['status']} | {_format_age(item['age_seconds'])} |"
             )
     for error in errors:
         lines.append(f"warning: {error}")
     return "\n".join(lines)
+
+
+def render_gpu_list(
+    inventory: Mapping[str, Any],
+    *,
+    errors: Sequence[str] = (),
+) -> str:
+    lines = []
+    for item in inventory.get("devices") or []:
+        lines.append(
+            f"GPU {item['index']} @ {item['host']}: {item['name']} "
+            f"(UUID: {item['uuid']}, Profile: {item['profile_id']}, "
+            f"CC: {item['compute_capability'] or 'N/A'}, "
+            f"PCI: {item['pci_bus_id']})"
+        )
+    if not lines:
+        lines.append("No published FakeCUDA GPUs found.")
+    for error in errors:
+        lines.append(f"warning: {error}")
+    return "\n".join(lines)
+
+
+def render_detail(
+    inventory: Mapping[str, Any],
+    *,
+    errors: Sequence[str] = (),
+) -> str:
+    lines = ["FakeGPU-SMI detailed report"]
+    runtimes = list(inventory.get("runtimes") or [])
+    if runtimes:
+        lines.append("Runtime processes:")
+    for item in runtimes:
+        fakegpu = item["fakegpu"]
+        software = item["software"]
+        dispatch = item["dispatch_tracking"]
+        publisher = item["publisher"]
+        capability = fakegpu.get("native_capabilities") or {}
+        profile_catalog = fakegpu.get("profile_catalog") or {}
+        lines.extend(
+            [
+                (
+                    f"  [{item['host']} pid={item['pid']}] "
+                    f"{item['process_name']}"
+                ),
+                (
+                    "    State: "
+                    f"{item['status']}, age "
+                    f"{_format_age(item['age_seconds'])}, "
+                    f"schema {item['schema_version'] or 'unknown'}"
+                ),
+                (
+                    "    FakeGPU: "
+                    f"{fakegpu.get('version') or 'unknown'}, "
+                    f"runtime {fakegpu.get('runtime') or 'unknown'}, "
+                    f"backend {fakegpu.get('backend') or 'unknown'}, "
+                    f"mode {fakegpu.get('mode') or 'unknown'}"
+                ),
+                (
+                    "    Policies: "
+                    f"OOM {fakegpu.get('oom_policy') or 'unknown'}, "
+                    "unsupported API "
+                    f"{fakegpu.get('unsupported_api_policy') or 'unknown'}, "
+                    "distributed "
+                    f"{fakegpu.get('distributed_mode') or 'unknown'}"
+                ),
+                (
+                    "    Software: "
+                    f"Python {software.get('python_version') or 'N/A'}, "
+                    f"PyTorch {software.get('torch_version') or 'N/A'}, "
+                    f"CUDA {software.get('cuda_version') or 'N/A'}, "
+                    f"driver {software.get('driver_version') or 'N/A'}, "
+                    f"platform {software.get('platform') or 'N/A'}"
+                ),
+                (
+                    "    Tracking: "
+                    f"{item['tracking_confidence']}, allocator "
+                    f"{item['allocator_model']}, "
+                    "memory "
+                    f"{_enabled_text(fakegpu.get('memory_tracking_enabled'))}, "
+                    "dispatch "
+                    f"{_enabled_text(dispatch.get('enabled'))}"
+                ),
+                (
+                    "    Dispatch: "
+                    f"{dispatch.get('operator_calls', 0)} calls, "
+                    f"{dispatch.get('output_tensors', 0)} outputs, "
+                    f"{dispatch.get('new_allocations', 0)} allocations, "
+                    f"{dispatch.get('alias_outputs', 0)} aliases, "
+                    f"{dispatch.get('inaccessible_outputs', 0)} inaccessible"
+                ),
+                (
+                    "    Publisher: "
+                    f"{publisher.get('interval_seconds', 'N/A')}s interval, "
+                    f"{_format_bytes(publisher.get('runtime_overhead_bytes'))} "
+                    "runtime overhead"
+                ),
+                (
+                    "    Catalogs: "
+                    f"{profile_catalog.get('profile_count', 'N/A')} "
+                    "profiles; native capabilities "
+                    f"{capability.get('group_count', 'N/A')} groups / "
+                    f"{capability.get('explicit_api_count', 'N/A')} APIs / "
+                    f"{capability.get('policy_enforced_api_count', 'N/A')} "
+                    "policy-enforced"
+                ),
+            ]
+        )
+        operators = dispatch.get("operators")
+        if isinstance(operators, Mapping) and operators:
+            ranked_operators = sorted(
+                operators.items(),
+                key=lambda entry: _nonnegative_int(
+                    entry[1].get("calls")
+                    if isinstance(entry[1], Mapping)
+                    else 0
+                ),
+                reverse=True,
+            )
+            lines.append("    Most-called operators:")
+            for operator, values in ranked_operators[:5]:
+                calls = (
+                    _nonnegative_int(values.get("calls"))
+                    if isinstance(values, Mapping)
+                    else 0
+                )
+                lines.append(f"      - {operator}: {calls} calls")
+
+    devices = list(inventory.get("devices") or [])
+    if not devices:
+        lines.append("No published FakeCUDA GPUs found.")
+    for item in devices:
+        profile = item["profile"]
+        memory = item["memory"]
+        allocator = item["allocator"]
+        telemetry = item["telemetry"]
+        lines.extend(
+            [
+                "",
+                f"GPU {item['index']} @ {item['host']}",
+                f"  Product Name: {item['name']}",
+                f"  UUID: {item['uuid']} (synthetic)",
+                f"  PCI Bus ID: {item['pci_bus_id']} (synthetic)",
+                (
+                    f"  Profile: {item['profile_id']} "
+                    f"[{profile.get('profile_status') or 'unknown'}]"
+                ),
+                (
+                    "  Architecture: "
+                    f"{item['architecture'] or 'N/A'}, "
+                    f"compute capability "
+                    f"{item['compute_capability'] or 'N/A'}, "
+                    f"target {item['compiler_target'] or 'N/A'}"
+                ),
+                (
+                    "  Compute resources: "
+                    f"{profile.get('sm_count', 'N/A')} SMs, "
+                    f"{profile.get('core_clock_mhz', 'N/A')} MHz core, "
+                    f"{profile.get('memory_clock_mhz', 'N/A')} MHz memory"
+                ),
+                (
+                    "  Memory profile: "
+                    f"{profile.get('memory_kind') or 'N/A'}, "
+                    f"{profile.get('memory_bus_width_bits', 'N/A')} bit bus, "
+                    f"L2 {_format_bytes(profile.get('l2_cache_bytes'))}"
+                ),
+                (
+                    "  Supported types: "
+                    f"{_format_list(profile.get('supported_types'))}"
+                ),
+                (
+                    "  Profile power: "
+                    f"{_format_watts(profile.get('typical_power_usage_mw'))} "
+                    "typical / "
+                    f"{_format_watts(profile.get('max_power_limit_mw'))} max"
+                ),
+                (
+                    "  Memory current: "
+                    f"{_format_bytes(memory['used_bytes'])} simulated, "
+                    f"{_format_bytes(memory['tracked_bytes'])} allocated, "
+                    f"{_format_bytes(memory['reserved_bytes'])} reserved, "
+                    f"{_format_bytes(memory['free_bytes'])} free"
+                ),
+                (
+                    "  Memory peaks: "
+                    f"{_format_bytes(memory['reported_peak_bytes'])} "
+                    "simulated, "
+                    f"{_format_bytes(memory['tracked_peak_bytes'])} "
+                    "allocated, "
+                    f"{_format_bytes(memory['reserved_peak_bytes'])} "
+                    "reserved"
+                ),
+                (
+                    "  Allocator: "
+                    f"{allocator['model']}, "
+                    f"{allocator['segment_count']} segments, "
+                    f"{_format_bytes(memory['inactive_split_bytes'])} "
+                    "inactive split, "
+                    f"{allocator['allocation_count']} allocations / "
+                    f"{allocator['free_count']} frees"
+                ),
+                (
+                    "  Memory categories: "
+                    f"{_format_byte_mapping(allocator['categories'])}"
+                ),
+                (
+                    "  Stage peaks: "
+                    f"{_format_byte_mapping(allocator['stage_peaks'])}"
+                ),
+                (
+                    "  Hardware telemetry: "
+                    f"GPU utilization "
+                    f"{_format_percent(telemetry.get('gpu_utilization_percent'))}, "
+                    f"temperature {_format_temperature(telemetry.get('temperature_c'))}, "
+                    f"fan {_format_percent(telemetry.get('fan_speed_percent'))}, "
+                    f"power {_format_watts(telemetry.get('power_usage_mw'))}"
+                ),
+                (
+                    "  Processes: "
+                    f"{item['process_count']} total, "
+                    f"{item['stale_process_count']} stale, "
+                    f"{item['exited_process_count']} exited"
+                ),
+            ]
+        )
+        allocations = allocator["largest_allocations"]
+        if allocations:
+            lines.append("  Largest allocations:")
+            for allocation in allocations[:5]:
+                lines.append(
+                    "    - "
+                    f"{_format_bytes(allocation.get('bytes'))} "
+                    f"[{allocation.get('category') or 'unknown'}] "
+                    f"pid={allocation.get('pid', 0)} "
+                    f"{allocation.get('source') or allocation.get('operator') or 'unknown'}"
+                )
+    for error in errors:
+        lines.append(f"warning: {error}")
+    return "\n".join(lines)
+
+
+def render_query(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    fields: Sequence[str],
+    available: Mapping[str, QueryField],
+    query_kind: str,
+    output_format: Mapping[str, Any],
+) -> str:
+    values = [
+        {
+            field: _query_value(record, available[field])
+            for field in fields
+        }
+        for record in records
+    ]
+    if output_format["kind"] == "json":
+        return json.dumps(
+            {
+                "schema_version": QUERY_SCHEMA_VERSION,
+                "query": query_kind,
+                "fields": list(fields),
+                "units": {
+                    field: available[field].unit for field in fields
+                },
+                "records": values,
+            },
+            sort_keys=True,
+        )
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    if not output_format["noheader"]:
+        writer.writerow(
+            [
+                _query_csv_header(field, available[field])
+                for field in fields
+            ]
+        )
+    for record in values:
+        writer.writerow(
+            [
+                _query_csv_value(
+                    record[field],
+                    unit=available[field].unit,
+                    nounits=bool(output_format["nounits"]),
+                )
+                for field in fields
+            ]
+        )
+    return buffer.getvalue().rstrip("\n")
+
+
+def _empty_device_aggregate(
+    *,
+    host: str,
+    device: Mapping[str, Any],
+    fakegpu: Mapping[str, Any],
+    software: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "timestamp_ns": 0,
+        "timestamp": None,
+        "host": host,
+        "index": int(device["index"]),
+        "name": str(device["name"]),
+        "profile_id": str(device["profile_id"]),
+        "profile": dict(device["profile"]),
+        "uuid": str(device["uuid"]),
+        "pci_bus_id": str(device["pci_bus_id"]),
+        "identity_source": str(device["identity_source"]),
+        "architecture": device.get("architecture"),
+        "compute_capability": device.get("compute_capability"),
+        "compiler_target": device.get("compiler_target"),
+        "process_count": 0,
+        "stale_process_count": 0,
+        "exited_process_count": 0,
+        "memory": {
+            "total_bytes": 0,
+            "used_bytes": 0,
+            "free_bytes": 0,
+            "reported_peak_bytes": 0,
+            "tracked_bytes": 0,
+            "tracked_peak_bytes": 0,
+            "reserved_bytes": 0,
+            "reserved_peak_bytes": 0,
+            "inactive_split_bytes": 0,
+            "utilization_percent": None,
+            "headroom_bytes": 0,
+            "headroom_percent": None,
+        },
+        "allocator": {
+            "model": "unknown",
+            "segment_count": 0,
+            "allocation_count": 0,
+            "free_count": 0,
+            "categories": {},
+            "stage_peaks": {},
+            "reserved_stage_peaks": {},
+            "largest_allocations": [],
+            "_models": set(),
+        },
+        "telemetry": dict(device["telemetry"]),
+        "fakegpu": dict(fakegpu),
+        "software": dict(software),
+        "tracking_confidence": "unknown",
+        "stages": "unknown",
+        "state": {
+            "status": "unknown",
+            "max_age_seconds": None,
+        },
+        "_names": set(),
+        "_profile_ids": set(),
+        "_statuses": set(),
+        "_stages": set(),
+        "_tracking": set(),
+        "_ages": [],
+    }
+
+
+def _accumulate_memory(
+    aggregate: dict[str, Any],
+    memory: Mapping[str, Any],
+) -> None:
+    aggregate["total_bytes"] = max(
+        int(aggregate["total_bytes"]),
+        int(memory["total_bytes"]),
+    )
+    for key in (
+        "used_bytes",
+        "reported_peak_bytes",
+        "tracked_bytes",
+        "tracked_peak_bytes",
+        "reserved_bytes",
+        "reserved_peak_bytes",
+        "inactive_split_bytes",
+    ):
+        aggregate[key] = int(aggregate[key]) + int(memory[key])
+
+
+def _accumulate_allocator(
+    aggregate: dict[str, Any],
+    device: Mapping[str, Any],
+    *,
+    pid: int,
+    process_name: str,
+) -> None:
+    aggregate["_models"].add(str(device["allocator_model"]))
+    aggregate["segment_count"] += int(device["segment_count"])
+    aggregate["allocation_count"] += int(device["allocation_count"])
+    aggregate["free_count"] += int(device["free_count"])
+    _sum_integer_mapping(
+        aggregate["categories"],
+        device["current_bytes_by_category"],
+    )
+    _sum_integer_mapping(
+        aggregate["stage_peaks"],
+        device["peak_by_stage"],
+    )
+    _sum_integer_mapping(
+        aggregate["reserved_stage_peaks"],
+        device["reserved_peak_by_stage"],
+    )
+    for raw in device["largest_allocations"]:
+        item = dict(raw)
+        item["pid"] = pid
+        item["process_name"] = process_name
+        aggregate["largest_allocations"].append(item)
+
+
+def _finalize_device_aggregate(item: dict[str, Any]) -> dict[str, Any]:
+    memory = item["memory"]
+    total = int(memory["total_bytes"])
+    used = int(memory["used_bytes"])
+    peak = int(memory["reported_peak_bytes"])
+    memory["free_bytes"] = max(0, total - used) if total else 0
+    memory["headroom_bytes"] = max(0, total - peak) if total else 0
+    memory["utilization_percent"] = (
+        round(used / total * 100, 3) if total else None
+    )
+    memory["headroom_percent"] = (
+        round(memory["headroom_bytes"] / total * 100, 3)
+        if total
+        else None
+    )
+    item["timestamp"] = _format_timestamp_ns(
+        _nonnegative_int(item["timestamp_ns"])
+    )
+
+    names = sorted(
+        value for value in item.pop("_names") if value
+    )
+    profiles = sorted(
+        value for value in item.pop("_profile_ids") if value
+    )
+    statuses = set(item.pop("_statuses"))
+    stages = sorted(value for value in item.pop("_stages") if value)
+    tracking = sorted(value for value in item.pop("_tracking") if value)
+    ages = list(item.pop("_ages"))
+    item["name"] = ", ".join(names) or "Fake NVIDIA GPU"
+    item["profile_id"] = ", ".join(profiles) or "unknown"
+    item["stages"] = ", ".join(stages) or "unknown"
+    item["tracking_confidence"] = (
+        ", ".join(tracking) or "unknown"
+    )
+    item["state"] = {
+        "status": _aggregate_status(statuses),
+        "max_age_seconds": max(ages) if ages else None,
+    }
+    allocator = item["allocator"]
+    models = sorted(
+        value for value in allocator.pop("_models") if value
+    )
+    allocator["model"] = ", ".join(models) or "unknown"
+    allocator["largest_allocations"].sort(
+        key=lambda value: _nonnegative_int(value.get("bytes")),
+        reverse=True,
+    )
+    allocator["largest_allocations"] = allocator[
+        "largest_allocations"
+    ][:10]
+    return item
+
+
+def _normalize_device(
+    raw: Mapping[str, Any],
+    *,
+    host: str,
+) -> dict[str, Any]:
+    index = _nonnegative_int(raw.get("index"))
+    profile_id = str(raw.get("profile_id") or "unknown")
+    profile = _profile_metadata(raw)
+    total = _nonnegative_int(raw.get("total_memory"))
+    tracked = _nonnegative_int(raw.get("tracked_memory"))
+    tracked_peak = max(
+        tracked,
+        _nonnegative_int(raw.get("peak_tracked_memory")),
+    )
+    reserved = max(
+        tracked,
+        _nonnegative_int(raw.get("reserved_memory"), default=tracked),
+    )
+    reserved_peak = max(
+        reserved,
+        tracked_peak,
+        _nonnegative_int(
+            raw.get("peak_reserved_memory"),
+            default=reserved,
+        ),
+    )
+    used = _nonnegative_int(
+        raw.get("reported_memory"),
+        default=tracked,
+    )
+    reported_peak = raw.get("reported_peak_memory")
+    if reported_peak is None:
+        reported_peak = reserved_peak + _nonnegative_int(
+            raw.get("runtime_overhead_bytes")
+        )
+    reported_peak = max(
+        used,
+        _nonnegative_int(reported_peak, default=used),
+    )
+    telemetry = (
+        dict(raw.get("telemetry") or {})
+        if isinstance(raw.get("telemetry"), Mapping)
+        else {}
+    )
+    telemetry.setdefault("gpu_utilization_percent", None)
+    telemetry.setdefault("temperature_c", None)
+    telemetry.setdefault("fan_speed_percent", None)
+    telemetry.setdefault("power_usage_mw", None)
+    telemetry.setdefault(
+        "source",
+        "hardware_telemetry_unavailable",
+    )
+    return {
+        "index": index,
+        "name": str(raw.get("name") or "Fake NVIDIA GPU"),
+        "profile_id": profile_id,
+        "profile": profile,
+        "uuid": str(
+            raw.get("uuid")
+            or _synthetic_uuid(host, index, profile_id)
+        ),
+        "pci_bus_id": str(
+            raw.get("pci_bus_id") or _synthetic_pci_bus_id(index)
+        ),
+        "identity_source": str(
+            raw.get("identity_source") or "synthetic"
+        ),
+        "architecture": (
+            raw.get("architecture") or profile.get("architecture")
+        ),
+        "compute_capability": (
+            raw.get("compute_capability")
+            or profile.get("compute_capability")
+        ),
+        "compiler_target": (
+            raw.get("compiler_target")
+            or profile.get("compiler_target")
+        ),
+        "memory": {
+            "total_bytes": total,
+            "used_bytes": used,
+            "free_bytes": (
+                max(0, total - used) if total else 0
+            ),
+            "reported_peak_bytes": reported_peak,
+            "tracked_bytes": tracked,
+            "tracked_peak_bytes": tracked_peak,
+            "reserved_bytes": reserved,
+            "reserved_peak_bytes": reserved_peak,
+            "inactive_split_bytes": _nonnegative_int(
+                raw.get("inactive_split_bytes")
+            ),
+            "utilization_percent": (
+                round(used / total * 100, 3) if total else None
+            ),
+            "headroom_bytes": (
+                max(0, total - reported_peak) if total else 0
+            ),
+            "headroom_percent": (
+                round(
+                    max(0, total - reported_peak) / total * 100,
+                    3,
+                )
+                if total
+                else None
+            ),
+        },
+        "allocator_model": str(
+            raw.get("allocator_model") or "unknown"
+        ),
+        "segment_count": _nonnegative_int(raw.get("segment_count")),
+        "allocation_count": _nonnegative_int(
+            raw.get("allocation_count")
+        ),
+        "free_count": _nonnegative_int(raw.get("free_count")),
+        "current_bytes_by_category": _integer_mapping(
+            raw.get("current_bytes_by_category")
+        ),
+        "peak_by_stage": _integer_mapping(raw.get("peak_by_stage")),
+        "reserved_peak_by_stage": _integer_mapping(
+            raw.get("reserved_peak_by_stage")
+        ),
+        "largest_allocations": _mapping_list(
+            raw.get("largest_allocations")
+        ),
+        "telemetry": telemetry,
+    }
+
+
+def _state_fakegpu_metadata(
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    raw = state.get("fakegpu")
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return {
+        "version": "unknown",
+        "runtime": str(state.get("runtime") or "fakecuda"),
+        "backend": "unknown",
+        "mode": "unknown",
+        "oom_policy": "unknown",
+        "unsupported_api_policy": "unknown",
+        "distributed_mode": "unknown",
+        "memory_tracking_enabled": True,
+        "dispatch_memory_tracking_enabled": False,
+        "profile_catalog": {},
+        "native_capabilities": {},
+    }
+
+
+def _state_software_metadata(
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    raw = state.get("software")
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return {
+        "python_version": None,
+        "python_implementation": None,
+        "python_executable": None,
+        "platform": None,
+        "torch_version": None,
+        "torch_cuda_build": None,
+        "cuda_version": None,
+        "cuda_version_source": None,
+        "driver_version": "simulated",
+    }
+
+
+def _state_age_seconds(
+    state: Mapping[str, Any],
+    *,
+    now_ns: int,
+) -> float | None:
+    timestamp = state.get("timestamp_ns")
+    if (
+        not isinstance(timestamp, int)
+        or isinstance(timestamp, bool)
+        or timestamp <= 0
+    ):
+        return None
+    return round(max(0, now_ns - timestamp) / 1e9, 6)
+
+
+def _state_status(
+    state: Mapping[str, Any],
+    *,
+    age_seconds: float | None,
+    stale_after_seconds: float,
+) -> str:
+    if not bool(state.get("running")):
+        return "exited"
+    if (
+        age_seconds is not None
+        and age_seconds > stale_after_seconds
+    ):
+        return "stale"
+    return "running"
+
+
+def _aggregate_status(statuses: set[str]) -> str:
+    if "running" in statuses:
+        return "running"
+    if "stale" in statuses:
+        return "stale"
+    if "exited" in statuses:
+        return "exited"
+    return "unknown"
+
+
+def _matches_device(
+    device: Mapping[str, Any],
+    selectors: Sequence[str],
+) -> bool:
+    candidates = {
+        str(device.get("index", "")).casefold(),
+        str(device.get("uuid", "")).casefold(),
+        str(device.get("pci_bus_id", "")).casefold(),
+        str(device.get("profile_id", "")).casefold(),
+    }
+    return any(selector in candidates for selector in selectors)
+
+
+def _device_selectors(values: Sequence[str]) -> tuple[str, ...]:
+    return tuple(
+        part.strip()
+        for value in values
+        for part in str(value).split(",")
+        if part.strip()
+    )
+
+
+def _sum_integer_mapping(
+    target: dict[str, int],
+    source: Mapping[str, Any],
+) -> None:
+    for key, value in source.items():
+        target[str(key)] = target.get(str(key), 0) + _nonnegative_int(
+            value
+        )
+
+
+def _integer_mapping(value: Any) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        str(key): _nonnegative_int(candidate)
+        for key, candidate in value.items()
+    }
+
+
+def _mapping_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        dict(item) for item in value if isinstance(item, Mapping)
+    ]
+
+
+def _nonnegative_int(value: Any, *, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_query_fields(
+    value: str | None,
+    *,
+    available: Mapping[str, QueryField],
+    parser: argparse.ArgumentParser,
+) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    fields = tuple(
+        item.strip() for item in value.split(",") if item.strip()
+    )
+    if not fields:
+        parser.error("query field list must not be empty")
+    unknown = [field for field in fields if field not in available]
+    if unknown:
+        parser.error(
+            "unsupported query field(s): "
+            + ", ".join(unknown)
+            + "; use the matching --help-query option"
+        )
+    return fields
+
+
+def _parse_query_format(
+    value: str,
+    *,
+    parser: argparse.ArgumentParser,
+) -> dict[str, Any]:
+    parts = tuple(
+        item.strip().lower()
+        for item in str(value).split(",")
+        if item.strip()
+    )
+    if parts == ("json",):
+        return {"kind": "json", "noheader": True, "nounits": True}
+    if not parts or parts[0] != "csv":
+        parser.error("--format must start with csv or equal json")
+    options = set(parts[1:])
+    unknown = options - {"noheader", "nounits"}
+    if unknown:
+        parser.error(
+            "unsupported --format option(s): "
+            + ", ".join(sorted(unknown))
+        )
+    return {
+        "kind": "csv",
+        "noheader": "noheader" in options,
+        "nounits": "nounits" in options,
+    }
+
+
+def _render_query_help(
+    query_kind: str,
+    fields: Mapping[str, QueryField],
+) -> str:
+    lines = [f"Supported {query_kind} query fields:"]
+    for name, spec in fields.items():
+        suffix = f" [{spec.unit}]" if spec.unit else ""
+        lines.append(f"  {name}{suffix}")
+    return "\n".join(lines)
+
+
+def _query_value(
+    record: Mapping[str, Any],
+    spec: QueryField,
+) -> Any:
+    value = _nested_value(record, spec.path)
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set)):
+        return ";".join(str(item) for item in value)
+    if isinstance(value, Mapping):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    if (
+        spec.divisor != 1.0
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ):
+        value = float(value) / spec.divisor
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ):
+        if spec.precision:
+            return round(float(value), spec.precision)
+        if isinstance(value, float):
+            return int(round(value))
+    return value
+
+
+def _nested_value(record: Mapping[str, Any], path: str) -> Any:
+    current: Any = record
+    for part in path.split("."):
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _query_csv_value(
+    value: Any,
+    *,
+    unit: str | None,
+    nounits: bool,
+) -> str:
+    if value is None:
+        return "N/A"
+    text = str(value)
+    if unit and not nounits:
+        text += f" {unit}"
+    return text
+
+
+def _query_csv_header(field: str, spec: QueryField) -> str:
+    if spec.unit:
+        return f"{field} [{spec.unit}]"
+    return field
+
+
+@lru_cache(maxsize=1)
+def _fakegpu_version() -> str:
+    from ._version import __version__
+
+    return __version__
+
+
+def _software_metadata() -> dict[str, Any]:
+    torch_module = sys.modules.get("torch")
+    torch_version = (
+        str(getattr(torch_module, "__version__", ""))
+        if torch_module is not None
+        else None
+    )
+    torch_version_object = (
+        getattr(torch_module, "version", None)
+        if torch_module is not None
+        else None
+    )
+    torch_cuda = (
+        getattr(torch_version_object, "cuda", None)
+        if torch_version_object is not None
+        else None
+    )
+    configured_cuda = os.environ.get("FAKEGPU_CUDA_VERSION")
+    cuda_version = str(configured_cuda or torch_cuda or "12.1")
+    cuda_source = (
+        "FAKEGPU_CUDA_VERSION"
+        if configured_cuda
+        else "torch.version.cuda"
+        if torch_cuda
+        else "fakecuda_default"
+    )
+    return {
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "python_executable": sys.executable,
+        "platform": platform.platform(),
+        "torch_version": torch_version,
+        "torch_cuda_build": (
+            str(torch_cuda) if torch_cuda is not None else None
+        ),
+        "cuda_version": cuda_version,
+        "cuda_version_source": cuda_source,
+        "driver_version": os.environ.get(
+            "FAKEGPU_DRIVER_VERSION",
+            "simulated",
+        ),
+    }
+
+
+@lru_cache(maxsize=1)
+def _catalog_metadata() -> dict[str, Any]:
+    profile_summary: dict[str, Any] = {}
+    capability_summary: dict[str, Any] = {}
+    try:
+        from .profile_catalog import catalog_summary
+
+        profile_summary = catalog_summary()
+    except (OSError, RuntimeError, ValueError):
+        profile_summary = {}
+    try:
+        from .capabilities import load_native_capabilities
+
+        catalog = load_native_capabilities()
+        apis = list(catalog.get("apis") or [])
+        groups = list(catalog.get("groups") or [])
+        classifications: dict[str, int] = {}
+        for api in apis:
+            if not isinstance(api, Mapping):
+                continue
+            classification = str(
+                api.get("classification") or "unknown"
+            )
+            classifications[classification] = (
+                classifications.get(classification, 0) + 1
+            )
+        capability_summary = {
+            "schema_version": catalog.get("schema_version"),
+            "group_count": len(groups),
+            "explicit_api_count": len(apis),
+            "policy_enforced_api_count": sum(
+                bool(api.get("policy_enforced"))
+                for api in apis
+                if isinstance(api, Mapping)
+            ),
+            "classifications": dict(sorted(classifications.items())),
+        }
+    except (OSError, RuntimeError, ValueError):
+        capability_summary = {}
+    return {
+        "profile_catalog": profile_summary,
+        "native_capabilities": capability_summary,
+    }
+
+
+@lru_cache(maxsize=256)
+def _catalog_profile_metadata(profile_id: str) -> dict[str, Any]:
+    from .profile_catalog import get_profile
+
+    return get_profile(profile_id).to_dict()
+
+
+def _profile_metadata(item: Mapping[str, Any]) -> dict[str, Any]:
+    raw_profile = item.get("profile")
+    if isinstance(raw_profile, Mapping):
+        return dict(raw_profile)
+    profile_id = str(item.get("profile_id") or "")
+    if profile_id:
+        try:
+            return dict(_catalog_profile_metadata(profile_id))
+        except (KeyError, OSError, RuntimeError, ValueError):
+            pass
+    major = item.get("compute_major")
+    minor = item.get("compute_minor")
+    capability = (
+        f"{int(major)}.{int(minor)}"
+        if isinstance(major, int)
+        and not isinstance(major, bool)
+        and isinstance(minor, int)
+        and not isinstance(minor, bool)
+        else None
+    )
+    return {
+        "id": profile_id or "unknown",
+        "name": str(item.get("name") or "Fake NVIDIA GPU"),
+        "profile_status": "unknown",
+        "architecture": item.get("architecture"),
+        "compute_capability": capability,
+        "compiler_target": (
+            f"sm_{int(major)}{int(minor)}"
+            if capability is not None
+            else None
+        ),
+        "memory_bytes": _nonnegative_int(item.get("total_memory")),
+        "memory_kind": "synthetic",
+        "sm_count": item.get("sm_count"),
+        "memory_bus_width_bits": item.get("memory_bus_width_bits"),
+        "core_clock_mhz": item.get("core_clock_mhz"),
+        "memory_clock_mhz": item.get("memory_clock_mhz"),
+        "l2_cache_bytes": item.get("l2_cache_bytes"),
+        "typical_power_usage_mw": item.get(
+            "typical_power_usage_mw"
+        ),
+        "max_power_limit_mw": item.get("max_power_limit_mw"),
+        "supported_types": list(item.get("supported_types") or []),
+    }
+
+
+def _synthetic_uuid(host: str, index: int, profile_id: str) -> str:
+    identity = uuid.uuid5(
+        uuid.NAMESPACE_DNS,
+        f"fakegpu:{host}:{index}:{profile_id}",
+    )
+    return f"GPU-{identity}"
+
+
+def _synthetic_pci_bus_id(index: int) -> str:
+    domain = max(0, int(index)) // 255
+    bus = max(0, int(index)) % 255 + 1
+    return f"{domain:08X}:{bus:02X}:00.0"
+
+
+def _format_age(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):.3f}s"
+
+
+def _format_timestamp_ns(value: int) -> str | None:
+    if value <= 0:
+        return None
+    try:
+        return time.strftime(
+            "%Y/%m/%d %H:%M:%S",
+            time.localtime(value / 1e9),
+        )
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _enabled_text(value: Any) -> str:
+    return "enabled" if bool(value) else "disabled"
+
+
+def _format_bytes(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    amount = float(_nonnegative_int(value))
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if amount < 1024 or unit == "TiB":
+            return f"{amount:.1f} {unit}"
+        amount /= 1024
+    return "N/A"
+
+
+def _format_watts(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value) / 1000:.1f} W"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def _format_percent(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):.1f}%"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def _format_temperature(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):.1f} C"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def _format_list(value: Any) -> str:
+    if not isinstance(value, (list, tuple, set)) or not value:
+        return "N/A"
+    return ", ".join(str(item) for item in value)
+
+
+def _format_byte_mapping(value: Mapping[str, Any]) -> str:
+    if not value:
+        return "none"
+    return ", ".join(
+        f"{key}={_format_bytes(candidate)}"
+        for key, candidate in sorted(value.items())
+    )
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

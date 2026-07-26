@@ -4,12 +4,18 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 import fakegpu.smi as smi_module
-from fakegpu.smi import SmiStatePublisher, main, render_table
+from fakegpu.smi import (
+    SCHEMA_VERSION,
+    SmiStatePublisher,
+    main,
+    render_table,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,8 +48,22 @@ def test_publisher_and_virtual_smi_include_process_memory(
         runtime_overhead_bytes=256 * 2**20,
     )
     state = publisher.publish_once(running=True)
+    assert state["schema_version"] == SCHEMA_VERSION
+    assert state["fakegpu"]["version"]
+    assert state["fakegpu"]["profile_catalog"]["profile_count"] == 82
+    assert (
+        state["fakegpu"]["native_capabilities"]["explicit_api_count"]
+        == 26
+    )
+    assert state["software"]["cuda_version"]
     assert state["devices"][0]["reported_memory"] == 3328 * 2**20
     assert state["devices"][0]["reported_peak_memory"] == 4352 * 2**20
+    assert state["devices"][0]["free_memory"] == 4864 * 2**20
+    assert state["devices"][0]["uuid"].startswith("GPU-")
+    assert state["devices"][0]["pci_bus_id"] == "00000000:01:00.0"
+    assert state["devices"][0]["telemetry"][
+        "gpu_utilization_percent"
+    ] is None
     assert state["stage"] == "forward"
     assert main(["--state", str(path)]) == 0
     output = capsys.readouterr().out
@@ -55,6 +75,217 @@ def test_publisher_and_virtual_smi_include_process_memory(
     assert "forward" in output
     assert "C2_torch_tensor_lifetime" in output
     assert "test" in output
+
+
+def test_virtual_smi_lists_details_and_queries_gpu_fields(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    publisher = SmiStatePublisher(
+        path,
+        lambda: {
+            "runtime_backend": "upstream",
+            "allocator_model": "cuda_caching_allocator.v1",
+            "dispatch_tracking": {
+                "enabled": True,
+                "operator_calls": 7,
+            },
+            "devices": [
+                {
+                    "index": 0,
+                    "name": "FakeGPU Test Profile 512MB",
+                    "profile_id": "test-512m",
+                    "total_memory": 512 * 2**20,
+                    "current_memory": 64 * 2**20,
+                    "peak_memory": 96 * 2**20,
+                    "current_reserved_memory": 80 * 2**20,
+                    "peak_reserved_memory": 112 * 2**20,
+                    "inactive_split_bytes": 16 * 2**20,
+                    "segment_count": 3,
+                    "allocation_count": 9,
+                    "free_count": 4,
+                    "current_bytes_by_category": {
+                        "activation": 64 * 2**20,
+                    },
+                    "peak_by_stage": {"forward": 96 * 2**20},
+                    "largest_allocations": [
+                        {
+                            "bytes": 32 * 2**20,
+                            "category": "activation",
+                            "source": "torch_dispatch",
+                        }
+                    ],
+                    "allocator_model": "cuda_caching_allocator.v1",
+                }
+            ],
+        },
+    )
+    publisher.publish_once(running=True)
+
+    assert main(["--state", str(path), "-L"]) == 0
+    listed = capsys.readouterr().out
+    assert "Profile: test-512m" in listed
+    assert "CC: 8.0" in listed
+    assert "PCI: 00000000:01:00.0" in listed
+
+    assert main(["--state", str(path), "-q"]) == 0
+    detail = capsys.readouterr().out
+    assert "FakeGPU-SMI detailed report" in detail
+    assert "Architecture: ampere, compute capability 8.0" in detail
+    assert "108 SMs" in detail
+    assert "native capabilities 5 groups / 26 APIs / 24" in detail
+    assert "activation=64.0 MiB" in detail
+    assert "GPU utilization N/A" in detail
+    assert "memory enabled, dispatch enabled" in detail
+    assert "7 calls" in detail
+    assert "0.25s interval" in detail
+
+    assert (
+        main(
+            [
+                "--state",
+                str(path),
+                "--query-gpu",
+                (
+                    "index,name,profile.id,compute_cap,memory.total,"
+                    "memory.used,utilization.gpu,fakegpu.version"
+                ),
+                "--format",
+                "csv,noheader,nounits",
+                "-i",
+                "test-512m",
+            ]
+        )
+        == 0
+    )
+    row = capsys.readouterr().out.strip()
+    assert row.startswith(
+        "0,FakeGPU Test Profile 512MB,test-512m,8.0,512,80,N/A,"
+    )
+
+    assert (
+        main(
+            [
+                "--state",
+                str(path),
+                "--query-gpu",
+                "timestamp,memory.total,temperature.gpu",
+                "--format",
+                "csv,nounits",
+            ]
+        )
+        == 0
+    )
+    query_lines = capsys.readouterr().out.splitlines()
+    assert query_lines[0] == (
+        "timestamp,memory.total [MiB],temperature.gpu [C]"
+    )
+    assert query_lines[1].split(",")[0]
+
+
+def test_virtual_smi_process_query_filters_and_marks_stale_state(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    state = SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": 0,
+                    "name": "Fake A100",
+                    "profile_id": "a100",
+                    "total_memory": 80 * 2**30,
+                    "current_memory": 2**30,
+                },
+                {
+                    "index": 1,
+                    "name": "Fake H100",
+                    "profile_id": "h100",
+                    "total_memory": 80 * 2**30,
+                    "current_memory": 2 * 2**30,
+                },
+            ]
+        },
+    ).publish_once(running=True)
+    state["timestamp_ns"] = time.time_ns() - 10 * 10**9
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "--state",
+                str(path),
+                "--query-compute-apps",
+                (
+                    "gpu_index,gpu_uuid,pid,process_name,"
+                    "used_gpu_memory,status,state.age"
+                ),
+                "--format",
+                "json",
+                "--stale-after-seconds",
+                "1",
+                "-i",
+                "1",
+            ]
+        )
+        == 0
+    )
+    query = json.loads(capsys.readouterr().out)
+    assert query["schema_version"] == "fakegpu.smi_query.v1"
+    assert len(query["records"]) == 1
+    record = query["records"][0]
+    assert record["gpu_index"] == 1
+    assert record["used_gpu_memory"] == 2048
+    assert record["status"] == "stale"
+    assert record["state.age"] >= 10
+
+    assert main(["--state", str(path), "--json", "-i", "0"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["schema_version"] == "fakegpu.smi_report.v1"
+    assert report["inventory"]["device_count"] == 1
+    assert report["inventory"]["devices"][0]["index"] == 0
+
+
+def test_virtual_smi_reads_legacy_state_schema(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "legacy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "fakegpu.smi_state.v1",
+                "timestamp_ns": time.time_ns(),
+                "hostname": "legacy-host",
+                "pid": 42,
+                "process_name": "python legacy.py",
+                "runtime": "fakecuda",
+                "running": True,
+                "tracking_confidence": "C2_torch_tensor_lifetime",
+                "stage": "forward",
+                "devices": [
+                    {
+                        "index": 0,
+                        "name": "Fake A100",
+                        "profile_id": "a100",
+                        "total_memory": 80 * 2**30,
+                        "tracked_memory": 2**30,
+                        "reported_memory": 2**30,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["--state", str(path), "-q"]) == 0
+    output = capsys.readouterr().out
+    assert "schema fakegpu.smi_state.v1" in output
+    assert "Architecture: ampere, compute capability 8.0" in output
+    assert "python legacy.py" in output
 
 
 def test_render_table_marks_exited_process() -> None:
@@ -97,6 +328,7 @@ def test_render_table_distinguishes_hosts_profiles_and_stages() -> None:
     for host, pid, profile, stage in (
         ("host-a", 10, "a100", "forward"),
         ("host-b", 20, "h100", "backward"),
+        ("host-a", 30, "h100", "decode"),
     ):
         states.append(
             {
@@ -123,9 +355,11 @@ def test_render_table_distinguishes_hosts_profiles_and_stages() -> None:
 
     rendered = render_table(states)
     assert "| host-a | 0 | a100 |" in rendered
+    assert "| host-a | 0 | h100 |" in rendered
     assert "| host-b | 0 | h100 |" in rendered
     assert "forward" in rendered
     assert "backward" in rendered
+    assert "decode" in rendered
     assert "2048 MiB" in rendered
 
 
@@ -231,9 +465,24 @@ def test_fakecuda_runtime_publishes_profile_stage_and_peak(tmp_path: Path) -> No
     )
     assert completed.returncode == 0, completed.stderr
     state = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert state["schema_version"] == SCHEMA_VERSION
     assert state["stage"] == "forward"
     assert state["tracking_confidence"] == "C3_torch_dispatch_lifetime"
+    assert state["fakegpu"]["backend"] == "upstream"
+    assert state["fakegpu"]["profile_catalog"]["profile_count"] == 82
+    assert (
+        state["fakegpu"]["native_capabilities"]["group_count"]
+        == 5
+    )
     assert state["devices"][0]["profile_id"] == "test-512m"
+    assert state["devices"][0]["profile"]["architecture"] == "ampere"
+    assert state["devices"][0]["profile"]["sm_count"] == 108
+    assert (
+        state["devices"][0]["allocator_model"]
+        == "cuda_caching_allocator.v1"
+    )
+    assert state["devices"][0]["allocation_count"] >= 1
+    assert state["devices"][0]["largest_allocations"]
     assert state["devices"][0]["tracked_memory"] >= 4 * 2**20
     assert state["devices"][0]["peak_tracked_memory"] >= 4 * 2**20
     assert state["devices"][0]["reported_peak_memory"] >= 4 * 2**20
@@ -241,6 +490,21 @@ def test_fakecuda_runtime_publishes_profile_stage_and_peak(tmp_path: Path) -> No
 
 def test_virtual_smi_count_requires_loop(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
+        main(["--version"])
+    assert exc_info.value.code == 0
+    assert "FakeGPU-SMI" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as exc_info:
         main(["--state", "state.json", "--count", "2"])
     assert exc_info.value.code == 2
     assert "--count requires --loop" in capsys.readouterr().err
+
+    assert main(["--help-query-gpu"]) == 0
+    query_help = capsys.readouterr().out
+    assert "memory.total [MiB]" in query_help
+    assert "fakegpu.version" in query_help
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--query-gpu", "unknown.field"])
+    assert exc_info.value.code == 2
+    assert "unsupported query field" in capsys.readouterr().err
