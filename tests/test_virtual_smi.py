@@ -14,7 +14,9 @@ from fakegpu.smi import (
     SCHEMA_VERSION,
     SmiStatePublisher,
     main,
+    render_nvlink_status,
     render_table,
+    render_topology_matrix,
 )
 
 
@@ -191,6 +193,122 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
         "timestamp,memory.total [MiB],temperature.gpu [C]"
     )
     assert query_lines[1].split(",")[0]
+
+
+def test_virtual_smi_models_topology_nvlink_views_and_queries(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "topology.json"
+    monkeypatch.setenv("FAKEGPU_NVLINK_GROUPS", "0,1;2,3")
+    monkeypatch.setenv("FAKEGPU_NVLINK_BANDWIDTH_GBPS", "800")
+    state = SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "name": f"Fake GPU {index}",
+                    "profile_id": "a100",
+                    "total_memory": 80 * 2**30,
+                }
+                for index in range(4)
+            ]
+        },
+    ).publish_once(running=True)
+
+    topology = state["topology"]
+    assert topology["schema_version"] == (
+        "fakegpu.device_topology.v1"
+    )
+    assert topology["source"] == "modeled_environment"
+    assert topology["valid"] is True
+    assert topology["link_count"] == 2
+    assert {
+        (link["source_index"], link["target_index"])
+        for link in topology["links"]
+    } == {(0, 1), (2, 3)}
+    assert state["devices"][0]["topology"]["nvlink"][
+        "active_links"
+    ] == 1
+    assert state["devices"][0]["topology"]["nvlink"]["peers"][0][
+        "pci_bus_id"
+    ] == "00000000:02:00.0"
+
+    assert main(["topo", "-m", "--state", str(path)]) == 0
+    matrix = capsys.readouterr().out
+    assert "FakeGPU modeled topology matrix" in matrix
+    assert "GPU0  X" in matrix
+    assert "NV1" in matrix
+    assert "modeled, not measured" in matrix
+
+    assert main(["nvlink", "-s", "--state", str(path)]) == 0
+    status = capsys.readouterr().out
+    assert "Bandwidth values are configuration inputs" in status
+    assert "Link 0: Active -> GPU 1" in status
+    assert "800 Gbps" in status
+
+    assert (
+        main(
+            [
+                "--state",
+                str(path),
+                "--query-gpu",
+                (
+                    "index,topology.source,nvlink.active_links,"
+                    "nvlink.peer_count,nvlink.bandwidth"
+                ),
+                "--format",
+                "json",
+                "-i",
+                "0",
+            ]
+        )
+        == 0
+    )
+    query = json.loads(capsys.readouterr().out)
+    assert query["records"] == [
+        {
+            "index": 0,
+            "topology.source": "modeled_environment",
+            "nvlink.active_links": 1,
+            "nvlink.peer_count": 1,
+            "nvlink.bandwidth": 800.0,
+        }
+    ]
+
+    inventory = smi_module.build_inventory([state])
+    assert "GPU0" in render_topology_matrix(inventory)
+    assert "Link 0: Active" in render_nvlink_status(inventory)
+
+
+def test_virtual_smi_rejects_invalid_modeled_nvlink_config_safely(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("FAKEGPU_NVLINK_GROUPS", "0,9")
+    state = SmiStatePublisher(
+        tmp_path / "invalid-topology.json",
+        lambda: {
+            "devices": [
+                {"index": 0, "total_memory": 2**30},
+                {"index": 1, "total_memory": 2**30},
+            ]
+        },
+    ).publish_once(running=True)
+
+    assert state["topology"]["configured"] is True
+    assert state["topology"]["valid"] is False
+    assert state["topology"]["source"] == (
+        "modeled_environment_invalid"
+    )
+    assert "invalid device index" in state["topology"]["error"]
+    assert state["topology"]["links"] == []
+    assert all(
+        device["topology"]["nvlink"]["active_links"] == 0
+        for device in state["devices"]
+    )
 
 
 def test_virtual_smi_process_query_filters_and_marks_stale_state(

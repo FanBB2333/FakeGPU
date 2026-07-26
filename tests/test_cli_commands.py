@@ -490,7 +490,7 @@ def test_readmes_report_llm_reliability_scope() -> None:
     )
     expected_terms = {
         "scripts/test.sh all",
-        "161",
+        "163",
         str(len(profiles)),
         str(compute_capability_count),
         str(len(capabilities["groups"])),

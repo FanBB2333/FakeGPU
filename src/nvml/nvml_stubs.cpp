@@ -88,6 +88,46 @@ static bool check_init() {
     return true; 
 }
 
+static bool modeled_nvlink_peer(
+    const Device* device,
+    unsigned int link,
+    ModeledNvLinkPeer& result) {
+    if (!device || device->index < 0) {
+        return false;
+    }
+    const ModeledDeviceTopology topology =
+        GlobalState::instance().snapshot_device_topology();
+    const std::size_t index = static_cast<std::size_t>(device->index);
+    if (index >= topology.nvlink_peers.size()) {
+        return false;
+    }
+    const auto& peers = topology.nvlink_peers[index];
+    if (link >= peers.size()) {
+        return false;
+    }
+    result = peers[link];
+    return true;
+}
+
+static void fill_pci_info(const Device& device, nvmlPciInfo_t& pci) {
+    memset(&pci, 0, sizeof(pci));
+    snprintf(
+        pci.busIdLegacy,
+        sizeof(pci.busIdLegacy),
+        "%s",
+        device.pci_bus_id.c_str());
+    snprintf(
+        pci.busId,
+        sizeof(pci.busId),
+        "%s",
+        device.pci_bus_id.c_str());
+    pci.domain = 0;
+    pci.bus = static_cast<unsigned int>(device.index + 1);
+    pci.device = 0;
+    pci.pciDeviceId = device.profile.pci_device_id;
+    pci.pciSubSystemId = device.profile.pci_device_id;
+}
+
 extern "C" {
 
 // Internal export table lookup used by newer nvidia-smi builds.
@@ -245,16 +285,7 @@ nvmlReturn_t nvmlDeviceGetConfComputeMemSizeInfo(nvmlDevice_t device, void *ccMe
 nvmlReturn_t nvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t *pci) {
     if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
-
-    // Fill in both busId fields
-    snprintf(pci->busIdLegacy, sizeof(pci->busIdLegacy), "%s", dev->pci_bus_id.c_str());
-    snprintf(pci->busId, sizeof(pci->busId), "%s", dev->pci_bus_id.c_str());
-    pci->domain = 0;
-    pci->bus = dev->index + 1;
-    pci->device = 0;
-    pci->pciDeviceId = dev->profile.pci_device_id;
-    pci->pciSubSystemId = dev->profile.pci_device_id;
-
+    fill_pci_info(*dev, *pci);
     return NVML_SUCCESS;
 }
 
@@ -962,13 +993,22 @@ nvmlReturn_t nvmlDeviceValidateInforom(nvmlDevice_t device) {
 // NVLink
 nvmlReturn_t nvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, unsigned int *isActive) {
     if (!device || !isActive) return NVML_ERROR_INVALID_ARGUMENT;
-    *isActive = 0;
+    ModeledNvLinkPeer peer;
+    *isActive = modeled_nvlink_peer(
+        reinterpret_cast<Device*>(device),
+        link,
+        peer) ? 1U : 0U;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link, unsigned int capability, unsigned int *capResult) {
     if (!device || !capResult) return NVML_ERROR_INVALID_ARGUMENT;
-    *capResult = 0;
+    (void)capability;
+    ModeledNvLinkPeer peer;
+    *capResult = modeled_nvlink_peer(
+        reinterpret_cast<Device*>(device),
+        link,
+        peer) ? 1U : 0U;
     return NVML_SUCCESS;
 }
 
@@ -977,10 +1017,13 @@ nvmlReturn_t nvmlDeviceGetNvLinkRemoteDeviceType(
     unsigned int link,
     nvmlIntNvLinkDeviceType_t *remoteDeviceType) {
     if (!device || !remoteDeviceType) return NVML_ERROR_INVALID_ARGUMENT;
-    (void)link;
-    // Profiles currently do not model a remote NVLink endpoint.  Exporting
-    // this query is still required by PyTorch's CUDA OOM diagnostics.
-    *remoteDeviceType = NVML_NVLINK_DEVICE_TYPE_UNKNOWN;
+    ModeledNvLinkPeer peer;
+    *remoteDeviceType = modeled_nvlink_peer(
+        reinterpret_cast<Device*>(device),
+        link,
+        peer)
+        ? NVML_NVLINK_DEVICE_TYPE_GPU
+        : NVML_NVLINK_DEVICE_TYPE_UNKNOWN;
     return NVML_SUCCESS;
 }
 
@@ -989,9 +1032,18 @@ nvmlReturn_t nvmlDeviceGetNvLinkRemotePciInfo_v2(
     unsigned int link,
     nvmlPciInfo_t *pci) {
     if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
-    (void)link;
-    memset(pci, 0, sizeof(*pci));
-    return NVML_ERROR_NOT_SUPPORTED;
+    ModeledNvLinkPeer peer;
+    if (!modeled_nvlink_peer(
+            reinterpret_cast<Device*>(device),
+            link,
+            peer)) {
+        memset(pci, 0, sizeof(*pci));
+        return NVML_ERROR_NOT_SUPPORTED;
+    }
+    Device& remote =
+        GlobalState::instance().get_device(peer.peer_index);
+    fill_pci_info(remote, *pci);
+    return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetGpuFabricInfoV(nvmlDevice_t device, void *gpuFabricInfo) {

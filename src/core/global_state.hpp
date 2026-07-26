@@ -119,6 +119,7 @@ public:
 
     // Snapshot for reporting (thread-safe)
     std::vector<DeviceReportStats> snapshot_device_report() const;
+    ModeledDeviceTopology snapshot_device_topology() const;
     HostIoStats snapshot_host_io() const;
 
     // Native SMI state publishing (enabled by FAKEGPU_SMI_STATE_PATH/DIR).
@@ -180,6 +181,7 @@ private:
 
     bool initialized = false;
     std::vector<Device> devices;
+    ModeledDeviceTopology device_topology;
     std::vector<DeviceRuntimeStats> device_stats;
     HostIoStats host_io;
     mutable std::mutex mutex;

@@ -189,7 +189,7 @@ and PyTorch 2.9.1 CPU:
 
 | Validation layer | Maintained check | Result |
 |---|---|---|
-| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **161 passed** |
+| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **163 passed** |
 | Declarative validation matrices | 6 smoke executions plus 8 LLM cache, training-plan, and calibration executions | **14 passed** |
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | Native capability inventory | 5 groups, 26 explicit APIs, 24 policy-enforced APIs | **Passed** |
@@ -364,6 +364,10 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi
 python3 -m fakegpu nvidia-smi --state-dir build/smi -L
 python3 -m fakegpu nvidia-smi --state-dir build/smi -q
 
+# NVIDIA-style modeled topology and NVLink views.
+python3 -m fakegpu nvidia-smi topo -m --state-dir build/smi
+python3 -m fakegpu nvidia-smi nvlink -s --state-dir build/smi
+
 # Script-friendly GPU and process queries.
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model,native.kernel_launches,native.gemm_calls,native.io_bytes \
@@ -388,10 +392,20 @@ when the process shuts down. `FAKEGPU_SMI_DETAIL_LIMIT` bounds retained detail
 entries and `FAKEGPU_SMI_MAX_STATE_BYTES` limits each state file; `-q` reports
 publisher write counts, failures, latency, and serialized size.
 
+NVLink modeling is disabled by default. Set
+`FAKEGPU_NVLINK_GROUPS="0,1;2,3"` before starting the workload to create
+full-mesh peer relationships inside each semicolon-separated group. The
+optional `FAKEGPU_NVLINK_BANDWIDTH_GBPS` value defaults to `900`. The same
+model drives state files, `topo -m`, `nvlink -s`, the
+`topology.*`/`nvlink.*` query fields, and native NVML link-state, capability,
+remote-device-type, and remote-PCI queries. Invalid groups leave every link
+inactive and publish a configuration error.
+
 UUIDs and PCI bus IDs are stable simulated identifiers. Temperature, fan
 speed, live power draw, and hardware GPU utilization remain `N/A` because the
 CPU-backed runtime cannot observe them; profile power and clock values are
-shown separately as static specifications.
+shown separately as static specifications. Topology labels and configured
+bandwidth are modeled inputs, not hardware measurements.
 
 ### Intercept native CUDA libraries
 
@@ -483,7 +497,7 @@ at the compute dtype by default; change it with
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
 | `fakegpu calibrate` | Compare memory reports and enforce reliability gates |
 | `fakegpu capabilities` | List or strictly audit native API classifications |
-| `fakegpu nvidia-smi` | Inspect FakeGPU devices, profiles, runtime state, allocator memory, and processes |
+| `fakegpu nvidia-smi` | Inspect devices, profiles, runtime state, allocator memory, processes, and modeled topology |
 | `fakegpu workspace-profiles` | Validate and inspect workspace estimation profiles |
 | `fakegpu validate` | Run a declarative JSON, TOML, or YAML validation matrix |
 | `fakegpu coordinator` | Manage the distributed simulation coordinator |
@@ -619,7 +633,8 @@ environments, binary assets, and design drafts are excluded through
 - [x] Detailed FakeGPU-SMI device, runtime, allocator, and process queries
 - [ ] Expand executable native CUDA operations and cuBLAS coverage
 - [x] Publish live native-runtime state and activity through FakeGPU-SMI
-- [ ] Add topology, MIG, NVLink, and fault views
+- [x] Add modeled topology and NVLink views with NVML peer queries
+- [ ] Add MIG and fault views
 - [ ] Export historical device and process metrics to monitoring systems
 - [ ] Add real-GPU LLM validation for long-context and online-serving workloads
 - [ ] Validate distributed and MoE estimates across more GPU and software stacks
