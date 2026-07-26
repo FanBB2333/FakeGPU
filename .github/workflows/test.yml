@@ -47,13 +47,17 @@ jobs:
           PYTHONPATH: .
         run: scripts/test.sh python
 
-      - name: Validate smoke manifest
+      - name: Validate manifests
         env:
           PYTHONPATH: .
         run: |
           python -m fakegpu validate \
             --manifest tests/data/validation_smoke.yaml \
             --report-dir build/validation-smoke \
+            --strict
+          python -m fakegpu validate \
+            --manifest tests/data/llm_validation.yaml \
+            --report-dir build/validation-llm \
             --strict
 
   native:

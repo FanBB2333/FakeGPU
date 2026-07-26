@@ -1,0 +1,118 @@
+schema_version: fakegpu.validation_manifest.v1
+
+defaults:
+  cwd: ../..
+  timeout_seconds: 60
+  env:
+    FAKEGPU_TERMINAL_REPORT: "0"
+  expect:
+    exit_code: 0
+
+cases:
+  - name: kv-cache-allocation
+    matrix:
+      strategy:
+        - dynamic
+        - static
+        - quantized
+        - paged
+    env:
+      OUT: "{report_dir}/kv-cache.json"
+      STRATEGY: "{strategy}"
+    command:
+      - "{python}"
+      - -c
+      - >-
+        import json,os,pathlib;
+        from fakegpu import estimate_kv_cache_memory;
+        strategy=os.environ["STRATEGY"];
+        options=dict(num_hidden_layers=32,num_key_value_heads=8,head_dim=128,batch_size=2,prompt_tokens=2048,generated_tokens=257,element_bytes=2,strategy=strategy,quantized_bits=4,block_tokens=16,max_cache_tokens=4096 if strategy=="static" else None);
+        report=estimate_kv_cache_memory(**options);
+        pathlib.Path(os.environ["OUT"]).write_text(json.dumps(report),encoding="utf-8");
+        print("kv-cache-ok")
+    expect:
+      stdout_contains: kv-cache-ok
+      files_exist: "{report_dir}/kv-cache.json"
+      json_checks:
+        - path: "{report_dir}/kv-cache.json"
+          pointer: /strategy
+          op: eq
+          value: "{strategy}"
+        - path: "{report_dir}/kv-cache.json"
+          pointer: /generation/allocated_bytes
+          op: gt
+          value: 0
+        - path: "{report_dir}/kv-cache.json"
+          pointer: /generation/allocation_utilization_percent
+          op: gt
+          value: 0
+
+  - name: distributed-training-plan
+    matrix:
+      strategy:
+        - replicated
+        - shard_grad_op
+        - full_shard
+    env:
+      OUT: "{report_dir}/training-plan.json"
+      STRATEGY: "{strategy}"
+    command:
+      - "{python}"
+      - -c
+      - >-
+        import json,os,pathlib;
+        from fakegpu import estimate_training_plan;
+        config=dict(sharding_strategy=os.environ["STRATEGY"],world_size=4,mixed_precision="bf16",activation_checkpointing=True);
+        report=estimate_training_plan(config,parameter_bytes=8_000_000_000,activation_bytes=2_000_000_000);
+        pathlib.Path(os.environ["OUT"]).write_text(json.dumps(report),encoding="utf-8");
+        print("training-plan-ok")
+    expect:
+      stdout_contains: training-plan-ok
+      files_exist: "{report_dir}/training-plan.json"
+      json_checks:
+        - path: "{report_dir}/training-plan.json"
+          pointer: /sharding/strategy
+          op: eq
+          value: "{strategy}"
+        - path: "{report_dir}/training-plan.json"
+          pointer: /inputs/world_size
+          op: eq
+          value: 4
+        - path: "{report_dir}/training-plan.json"
+          pointer: /estimated_rank_peak_bytes
+          op: gt
+          value: 0
+
+  - name: calibration-reliability
+    env:
+      OUT: "{report_dir}/calibration-verification.json"
+    command:
+      - "{python}"
+      - -c
+      - >-
+        import json,os,pathlib;
+        from fakegpu import compare_memory_reports,verify_calibration_reports;
+        prediction=dict(schema_version="validation_prediction.v1",inputs=dict(batch_size=1,dtype="bfloat16"),memory_timeline=dict(phases=[dict(phase="peak",peak_bytes=970,interval_bytes=dict(lower=950,expected=970,upper=1050))]));
+        observation=dict(schema_version="validation_observation.v1",inputs=dict(batch_size=1,dtype="bfloat16"),memory_timeline=dict(phases=[dict(phase="peak",peak_bytes=1000)]));
+        comparison=compare_memory_reports(prediction,observation,workload="llm-validation");
+        report=verify_calibration_reports([comparison],max_underestimate_percent=5,max_absolute_percentage_error_percent=5,min_interval_coverage_percent=100,capacity_bytes=1100);
+        pathlib.Path(os.environ["OUT"]).write_text(json.dumps(report),encoding="utf-8");
+        assert report["status"]=="passed";
+        print("calibration-ok")
+    expect:
+      stdout_contains: calibration-ok
+      files_exist: "{report_dir}/calibration-verification.json"
+      json_checks:
+        - path: "{report_dir}/calibration-verification.json"
+          pointer: /status
+          op: eq
+          value: passed
+        - path: "{report_dir}/calibration-verification.json"
+          pointer: /metrics/maximum_underestimate_percent
+          op: approx
+          value: 3
+          tolerance: 0.000001
+        - path: "{report_dir}/calibration-verification.json"
+          pointer: /metrics/false_safe_count
+          op: eq
+          value: 0
