@@ -8,6 +8,8 @@
 namespace fake_gpu {
 
 constexpr std::size_t kMaximumModeledNvLinksPerDevice = 18;
+constexpr std::size_t kMaximumModeledFaultTypes = 128;
+constexpr uint64_t kMaximumModeledFaultCount = 1'000'000'000;
 
 struct ModeledNvLinkPeer {
     unsigned int link = 0;
@@ -22,6 +24,21 @@ struct ModeledDeviceTopology {
     std::string error;
     double nvlink_bandwidth_gbps = 900.0;
     std::vector<std::vector<ModeledNvLinkPeer>> nvlink_peers;
+};
+
+struct ModeledFaultEvent {
+    int device_index = -1;
+    std::string code;
+    std::string severity;
+    uint64_t count = 0;
+};
+
+struct ModeledFaultModel {
+    std::string source = "modeled_none";
+    bool configured = false;
+    bool valid = true;
+    std::string error;
+    std::vector<ModeledFaultEvent> events;
 };
 
 struct Device {
@@ -39,5 +56,8 @@ struct Device {
 
 ModeledDeviceTopology build_modeled_device_topology(
     std::size_t device_count);
+ModeledFaultModel build_modeled_fault_model(
+    std::size_t device_count);
+int modeled_fault_severity_rank(const std::string& severity);
 
 } // namespace fake_gpu

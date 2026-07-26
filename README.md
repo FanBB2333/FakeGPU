@@ -189,7 +189,7 @@ and PyTorch 2.9.1 CPU:
 
 | Validation layer | Maintained check | Result |
 |---|---|---|
-| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **163 passed** |
+| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **165 passed** |
 | Declarative validation matrices | 6 smoke executions plus 8 LLM cache, training-plan, and calibration executions | **14 passed** |
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | Native capability inventory | 5 groups, 26 explicit APIs, 24 policy-enforced APIs | **Passed** |
@@ -368,6 +368,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi -q
 python3 -m fakegpu nvidia-smi topo -m --state-dir build/smi
 python3 -m fakegpu nvidia-smi nvlink -s --state-dir build/smi
 
+# Modeled faults, compatibility warnings, publisher failures, and stale state.
+python3 -m fakegpu nvidia-smi events --state-dir build/smi
+
 # Script-friendly GPU and process queries.
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model,native.kernel_launches,native.gemm_calls,native.io_bytes \
@@ -401,11 +404,22 @@ model drives state files, `topo -m`, `nvlink -s`, the
 remote-device-type, and remote-PCI queries. Invalid groups leave every link
 inactive and publish a configuration error.
 
+Fault injection is also disabled by default. Set entries using
+`FAKEGPU_FAULT_EVENTS="DEVICE:CODE:SEVERITY[:COUNT];..."`, for example
+`FAKEGPU_FAULT_EVENTS="0:XID_79:critical;1:NVLINK_CRC:error:3"`. Codes are
+labels; supported severities are `info`, `warning`, `error`, and `critical`.
+The `events` view combines configured fault events with unsupported native API
+calls, publisher failures, stale state, and model-configuration errors.
+`health.*` query fields expose each device's modeled status, maximum severity,
+event counts, and the fact that hardware health is unobserved. Invalid input
+activates no faults and is reported as a configuration error.
+
 UUIDs and PCI bus IDs are stable simulated identifiers. Temperature, fan
 speed, live power draw, and hardware GPU utilization remain `N/A` because the
 CPU-backed runtime cannot observe them; profile power and clock values are
 shown separately as static specifications. Topology labels and configured
-bandwidth are modeled inputs, not hardware measurements.
+bandwidth, fault codes, and health status are modeled inputs, not hardware
+measurements or observed ECC/Xid data.
 
 ### Intercept native CUDA libraries
 
@@ -497,7 +511,7 @@ at the compute dtype by default; change it with
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
 | `fakegpu calibrate` | Compare memory reports and enforce reliability gates |
 | `fakegpu capabilities` | List or strictly audit native API classifications |
-| `fakegpu nvidia-smi` | Inspect devices, profiles, runtime state, allocator memory, processes, and modeled topology |
+| `fakegpu nvidia-smi` | Inspect devices, processes, modeled topology, health status, and reliability events |
 | `fakegpu workspace-profiles` | Validate and inspect workspace estimation profiles |
 | `fakegpu validate` | Run a declarative JSON, TOML, or YAML validation matrix |
 | `fakegpu coordinator` | Manage the distributed simulation coordinator |
@@ -617,6 +631,9 @@ environments, binary assets, and design drafts are excluded through
 - Roofline output is an analytical interval, not measured kernel latency.
 - Distributed timing includes coordinator work, memory copies, sockets, and
   process scheduling; it is not an NCCL, NVLink, or RDMA benchmark.
+- Modeled fault events are report-only control-plane inputs. They do not alter
+  CUDA execution or represent NVML ECC counters, Xid observations, or hardware
+  failures.
 - Hybrid and passthrough modes require a compatible physical CUDA stack.
 - macOS System Integrity Protection can remove `DYLD_*` variables from system
   binaries. Prefer a Homebrew, conda, or pyenv Python for native interception.
@@ -634,7 +651,8 @@ environments, binary assets, and design drafts are excluded through
 - [ ] Expand executable native CUDA operations and cuBLAS coverage
 - [x] Publish live native-runtime state and activity through FakeGPU-SMI
 - [x] Add modeled topology and NVLink views with NVML peer queries
-- [ ] Add MIG and fault views
+- [x] Add modeled fault injection and health/reliability event views
+- [ ] Add a MIG view
 - [ ] Export historical device and process metrics to monitoring systems
 - [ ] Add real-GPU LLM validation for long-context and online-serving workloads
 - [ ] Validate distributed and MoE estimates across more GPU and software stacks
