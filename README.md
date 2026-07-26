@@ -189,7 +189,7 @@ and PyTorch 2.9.1 CPU:
 
 | Validation layer | Maintained check | Result |
 |---|---|---|
-| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **160 passed** |
+| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **161 passed** |
 | Declarative validation matrices | 6 smoke executions plus 8 LLM cache, training-plan, and calibration executions | **14 passed** |
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | Native capability inventory | 5 groups, 26 explicit APIs, 24 policy-enforced APIs | **Passed** |
@@ -384,7 +384,9 @@ remain readable.
 Native interception additionally publishes allocation lifetime, transfer
 volume, kernel launches, GEMM calls/FLOP, compatibility events, and unsupported
 API counts. State is refreshed while the process is running and marked exited
-when the process shuts down.
+when the process shuts down. `FAKEGPU_SMI_DETAIL_LIMIT` bounds retained detail
+entries and `FAKEGPU_SMI_MAX_STATE_BYTES` limits each state file; `-q` reports
+publisher write counts, failures, latency, and serialized size.
 
 UUIDs and PCI bus IDs are stable simulated identifiers. Temperature, fan
 speed, live power draw, and hardware GPU utilization remain `N/A` because the

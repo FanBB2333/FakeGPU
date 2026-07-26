@@ -106,6 +106,31 @@ def _validate_native_smi_state() -> None:
     fakegpu = state.get("fakegpu") or {}
     if fakegpu.get("backend") != "native_interception":
         _die(f"unexpected native SMI backend: {fakegpu.get('backend')}")
+    publisher = state.get("publisher") or {}
+    health = publisher.get("health") or {}
+    limits = publisher.get("limits") or {}
+    if int(health.get("attempted_writes", 0)) < 2:
+        _die(f"native SMI publisher attempts are incomplete: {health}")
+    if int(health.get("successful_writes", 0)) < 2:
+        _die(f"native SMI publisher successes are incomplete: {health}")
+    if int(health.get("failed_writes", -1)) != 0:
+        _die(f"native SMI publisher reported a failure: {health}")
+    if int(health.get("last_serialized_bytes", 0)) <= 0:
+        _die(f"native SMI publisher size metric is missing: {health}")
+    max_state_bytes = int(limits.get("max_state_bytes", 0))
+    if max_state_bytes <= 0 or state_path.stat().st_size > max_state_bytes:
+        _die(
+            "native SMI state exceeded its configured size: "
+            f"{state_path.stat().st_size} > {max_state_bytes}"
+        )
+    expected_detail_limit = int(
+        os.environ.get("FAKEGPU_SMI_DETAIL_LIMIT", "64")
+    )
+    if int(limits.get("detail_entries", -1)) != expected_detail_limit:
+        _die(f"native SMI detail limit mismatch: {limits}")
+    temporary_pattern = f".{state_path.name}.*.tmp"
+    if list(state_path.parent.glob(temporary_pattern)):
+        _die("native SMI left a temporary state file")
     device = state["devices"][0]
     if device.get("profile_id") != "a100":
         _die(f"unexpected native SMI profile: {device.get('profile_id')}")

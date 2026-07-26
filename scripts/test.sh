@@ -62,6 +62,8 @@ run_smoke() {
 
   FAKEGPU_REPORT_PATH="$BUILD_DIR/fake_gpu_report_memory_types.json" \
     FAKEGPU_SMI_STATE_DIR="$BUILD_DIR/smi-native" \
+    FAKEGPU_SMI_DETAIL_LIMIT=1 \
+    FAKEGPU_SMI_MAX_STATE_BYTES=65536 \
     run_fakegpu "$BUILD_DIR" "$PYTHON_BIN" tests/native/memory_types.py
   FAKEGPU_BUILD_DIR="$BUILD_DIR" \
     "$PYTHON_BIN" tests/native/coordinator_smoke.py

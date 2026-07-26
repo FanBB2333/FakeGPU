@@ -178,7 +178,7 @@ FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果�
 
 | 驗證層 | 已維護的檢查 | 結果 |
 |---|---|---|
-| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **160 個通過** |
+| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **161 個通過** |
 | 宣告式驗證矩陣 | 6 個 smoke 案例，加 8 個 LLM cache、訓練規劃與校準案例 | **14 個通過** |
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
 | 原生能力清單 | 5 個能力群組、26 個明確 API、24 個強制執行策略的 API | **通過** |
@@ -363,7 +363,9 @@ UUID、PCI Bus ID 或 profile ID 篩選；`--json` 會輸出完整的標準化�
 
 原生攔截也會發布 allocation 生命週期、傳輸量、kernel launch、GEMM 呼叫與
 FLOP、相容性事件及 unsupported API 次數。程序執行時會定期更新狀態，結束時會
-將狀態標記為 exited。
+將狀態標記為 exited。`FAKEGPU_SMI_DETAIL_LIMIT` 用於限制保留的明細數量，
+`FAKEGPU_SMI_MAX_STATE_BYTES` 用於限制單一狀態檔大小；`-q` 會顯示發布次數、
+失敗次數、耗時與序列化大小。
 
 UUID 與 PCI Bus ID 是穩定的模擬識別。CPU runtime 無法觀測溫度、風扇轉速、
 即時功耗與硬體 GPU 使用率，因此這些欄位顯示為 `N/A`；profile 功耗與時脈會
