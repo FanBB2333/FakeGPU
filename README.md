@@ -192,6 +192,7 @@ and PyTorch 2.9.1 CPU:
 | Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **165 passed** |
 | Declarative validation matrices | 6 smoke executions plus 8 LLM cache, training-plan, and calibration executions | **14 passed** |
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
+| FakeGPU-SMI diagnostics | Bounded publisher state, topology/NVLink views, NVML peer/PCI queries, health fields, and event reporting | **Passed** |
 | Native capability inventory | 5 groups, 26 explicit APIs, 24 policy-enforced APIs | **Passed** |
 | GPU profile catalog | 82 profiles across 15 compute capabilities | **Passed** |
 | CPU numerical simulation | GEMM, cuBLASLt, batched GEMM, BLAS1/2, and FP16: 8 maintained test groups | **Passed** |
@@ -570,7 +571,7 @@ scripts/test.sh all
 | Suite | Coverage |
 |---|---|
 | `python` | Maintained Python regression tests |
-| `smoke` | Native library loading, reports, capabilities, and coordinator |
+| `smoke` | Native loading, reports, capabilities, SMI topology/health, and coordinator |
 | `cpu` | CPU-backed cuBLAS simulation |
 | `all` | All maintained suites |
 
