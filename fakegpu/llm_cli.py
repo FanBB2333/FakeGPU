@@ -35,6 +35,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Storage bit width for the quantized KV-cache strategy.",
     )
     parser.add_argument(
+        "--kv-cache-residual-tokens",
+        type=int,
+        default=128,
+        help="Recent full-precision tokens retained by a quantized cache.",
+    )
+    parser.add_argument(
         "--kv-cache-block-tokens",
         type=int,
         default=16,
@@ -88,6 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             compute_acceleration_factor=args.compute_acceleration_factor,
             kv_cache_strategy=args.kv_cache_strategy,
             kv_cache_bits=args.kv_cache_bits,
+            kv_cache_residual_tokens=args.kv_cache_residual_tokens,
             kv_cache_block_tokens=args.kv_cache_block_tokens,
             kv_cache_max_tokens=args.kv_cache_max_tokens,
             kv_cache_window_tokens=args.kv_cache_window_tokens,

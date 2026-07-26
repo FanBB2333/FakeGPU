@@ -53,6 +53,7 @@ def estimate_kv_cache_memory(
     element_bytes: int = 2,
     strategy: str = "dynamic",
     quantized_bits: int = 4,
+    quantized_residual_tokens: int = 128,
     block_tokens: int = 16,
     max_cache_tokens: int | None = None,
     window_tokens: int | None = None,
@@ -91,6 +92,14 @@ def estimate_kv_cache_memory(
         or quantized_bits not in {2, 4, 8}
     ):
         raise ValueError("quantized_bits must be one of: 2, 4, 8")
+    if (
+        not isinstance(quantized_residual_tokens, int)
+        or isinstance(quantized_residual_tokens, bool)
+        or quantized_residual_tokens < 0
+    ):
+        raise ValueError(
+            "quantized_residual_tokens must be a non-negative integer"
+        )
     for name, value in (
         ("max_cache_tokens", max_cache_tokens),
         ("window_tokens", window_tokens),
@@ -161,22 +170,48 @@ def estimate_kv_cache_memory(
             tokens=effective_tokens,
             storage_bits=element_bytes * 8,
         )
+        full_precision_tokens = (
+            min(effective_tokens, quantized_residual_tokens)
+            if strategy == "quantized"
+            else effective_tokens
+        )
+        quantized_tokens = (
+            effective_tokens - full_precision_tokens
+            if strategy == "quantized"
+            else 0
+        )
         storage_bytes = _kv_storage_bytes(
             elements_per_token_per_sequence,
             batch_size=batch_size,
-            tokens=effective_tokens,
-            storage_bits=storage_bits,
-        )
-        allocated_bytes = _kv_storage_bytes(
+            tokens=full_precision_tokens,
+            storage_bits=element_bytes * 8,
+        ) + _kv_storage_bytes(
             elements_per_token_per_sequence,
             batch_size=batch_size,
-            tokens=allocated_tokens,
-            storage_bits=storage_bits,
+            tokens=quantized_tokens,
+            storage_bits=quantized_bits,
         )
+        if strategy == "quantized":
+            allocated_bytes = storage_bytes
+        else:
+            allocated_bytes = _kv_storage_bytes(
+                elements_per_token_per_sequence,
+                batch_size=batch_size,
+                tokens=allocated_tokens,
+                storage_bits=storage_bits,
+            )
         return {
             "logical_tokens_per_sequence": logical_tokens,
             "effective_tokens_per_sequence": effective_tokens,
             "allocated_tokens_per_sequence": allocated_tokens,
+            "full_precision_residual_tokens_per_sequence": (
+                full_precision_tokens
+                if strategy == "quantized"
+                else None
+            ),
+            "quantized_tokens_per_sequence": (
+                quantized_tokens if strategy == "quantized" else None
+            ),
             "base_dtype_logical_bytes": base_dtype_bytes,
             "storage_logical_bytes": storage_bytes,
             "allocated_bytes": allocated_bytes,
@@ -197,6 +232,11 @@ def estimate_kv_cache_memory(
         "enabled": use_cache,
         "strategy": strategy,
         "storage_bits_per_element": storage_bits,
+        "quantized_residual_tokens": (
+            quantized_residual_tokens
+            if strategy == "quantized"
+            else None
+        ),
         "compute_element_bytes": element_bytes,
         "batch_size": batch_size,
         "elements_per_token_per_sequence": (
@@ -213,8 +253,12 @@ def estimate_kv_cache_memory(
         "prefill": phase_allocation(prompt_tokens),
         "generation": phase_allocation(final_logical_tokens),
         "formula": (
-            "ceil(2 * layers * batch * kv_heads * tokens * head_dim "
-            "* storage_bits / 8)"
+            "full_precision_residual_bytes + quantized_history_bytes"
+            if strategy == "quantized"
+            else (
+                "ceil(2 * layers * batch * kv_heads * tokens * head_dim "
+                "* storage_bits / 8)"
+            )
         ),
         "modeled_overheads": [
             "static_reservation"
@@ -315,6 +359,7 @@ def estimate_decoder_inference(
     compute_acceleration_factor: float = 1.0,
     kv_cache_strategy: str = "dynamic",
     kv_cache_bits: int = 4,
+    kv_cache_residual_tokens: int = 128,
     kv_cache_block_tokens: int = 16,
     kv_cache_max_tokens: int | None = None,
     kv_cache_window_tokens: int | None = None,
@@ -379,6 +424,7 @@ def estimate_decoder_inference(
         element_bytes=element_bytes,
         strategy=kv_cache_strategy,
         quantized_bits=kv_cache_bits,
+        quantized_residual_tokens=kv_cache_residual_tokens,
         block_tokens=kv_cache_block_tokens,
         max_cache_tokens=kv_cache_max_tokens,
         window_tokens=kv_cache_window_tokens,
@@ -537,6 +583,11 @@ def estimate_decoder_inference(
                 if kv_cache_strategy == "quantized"
                 else None
             ),
+            "kv_cache_residual_tokens": (
+                kv_cache_residual_tokens
+                if kv_cache_strategy == "quantized"
+                else None
+            ),
             "kv_cache_block_tokens": (
                 kv_cache_block_tokens
                 if kv_cache_strategy == "paged"
@@ -635,6 +686,7 @@ def estimate_decoder_inference(
         "notes": [
             "Checkpoint storage and parameter count come from safetensors headers without loading payloads.",
             "KV-cache bytes use layer, KV-head, head-dimension, sequence, batch, storage bit width, and allocation-strategy dimensions.",
+            "Quantized KV cache keeps a configurable recent full-precision residual before accounting for older low-bit storage.",
             "Static reservation and paged block rounding are included; backend block-table and scheduler metadata remain implementation-specific.",
             "Quantized base-weight memory uses exact safetensors payload bytes, including scale and metadata tensors.",
             "Adapter runtime bytes use adapter parameter count and the selected compute dtype.",
