@@ -151,12 +151,23 @@ python3 -m fakegpu calibrate compare \
   build/prediction.json \
   build/observation.json \
   --json build/calibration-comparison.json
+
+python3 -m fakegpu calibrate verify \
+  build/calibration-comparison.json \
+  --max-underestimate-percent 5 \
+  --max-absolute-percentage-error-percent 5 \
+  --min-interval-coverage-percent 90 \
+  --capacity-bytes 25769803776 \
+  --json build/calibration-verification.json
 ```
 
 The comparison reports per-phase signed and absolute error, interval coverage,
-and a recommended memory safety margin and factor. Apply those recommendations
-only to the same workload signature, shapes, dtype, software stack, and GPU
-profile.
+and a recommended memory safety margin and factor. `calibrate verify` exits
+with status 1 when a configured gate fails. It checks maximum underestimation,
+median/p95/maximum absolute percentage error, prediction-interval coverage,
+false-safe fit decisions at the supplied capacity, and workload-dimension
+consistency. Apply results only to the same workload signature, shapes, dtype,
+software stack, and GPU profile.
 
 <a id="llm-reliability"></a>
 
@@ -172,11 +183,13 @@ evidence, while `Planned` is not yet a supported accuracy claim.
 #### Current repository verification
 
 This repository state was verified on 2026-07-26 with `scripts/test.sh all`
-on macOS 26.5 arm64, Python 3.11.9, and PyTorch 2.9.1 CPU:
+and both declarative validation manifests on macOS 26.5 arm64, Python 3.11.9,
+and PyTorch 2.9.1 CPU:
 
 | Validation layer | Maintained check | Result |
 |---|---|---|
-| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **151 passed** |
+| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **156 passed** |
+| Declarative validation matrices | 6 smoke executions plus 8 LLM cache, training-plan, and calibration executions | **14 passed** |
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | Native capability inventory | 5 groups, 26 explicit APIs, 24 policy-enforced APIs | **Passed** |
 | GPU profile catalog | 82 profiles across 15 compute capabilities | **Passed** |
@@ -198,12 +211,14 @@ CPU-only host.
 | Quantized adapter SFT | Qwen 0.8B/2B native NF4 QLoRA | Ten RTX PRO 5000 training cases | `GPU-validated` |
 | General decoder analysis | Dense and MoE metadata, adapters, quantized checkpoints, eager/SDPA attention, KV cache, and expert-parallel traffic | Formula, fixture, and CLI regression tests | `CPU-validated` + `Modeled` |
 | Distributed training plans | DeepSpeed, Accelerate, FSDP/FSDP2, sharding, checkpointing, and CPU/NVMe offload | Configuration, byte-accounting, topology, and trace tests | `CPU-validated` + `Modeled` |
-| Long-context and online serving | Dynamic/static/quantized or paged KV cache, continuous batching, chunked prefill, prefix caching, and speculative decoding | No maintained real-GPU evidence yet | `Planned` |
+| KV-cache allocation | Dynamic growth, static reservation, 2/4/8-bit quantized storage, paged block rounding, and sliding-window limits | Formula, API, `--kv-cache-strategy` CLI, and `tests/data/llm_validation.yaml` matrix tests | `CPU-validated` + `Modeled` |
+| Online serving scheduling | continuous batching, chunked prefill, prefix caching, and speculative decoding | No maintained real-GPU evidence yet | `Planned` |
 | Multi-GPU LLM execution | TP, PP, CP, EP, MoE imbalance, and combined FSDP/ZeRO execution | Analytical topology and coordinator coverage only | `Modeled` |
 
-The planned cache and serving cases follow the workload shapes exposed by
-[Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache)
-and [vLLM serving](https://docs.vllm.ai/en/stable/). Binary CUDA extensions and
+The cache formulas follow the workload shapes exposed by
+[Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache).
+Online serving schedules remain planned and follow
+[vLLM serving](https://docs.vllm.ai/en/stable/). Binary CUDA extensions and
 arbitrary kernels remain outside CPU FakeCUDA execution; those workloads
 require analysis plus a passthrough or hybrid real-GPU observation.
 
@@ -218,6 +233,9 @@ New or refreshed public validation rows should record:
   FakeGPU predicted a fit but the real workload reached OOM; and
 - the model revision, command, shapes, dtype, backend, allocator settings,
   GPU, driver, CUDA, PyTorch, and framework versions.
+
+Use `calibrate verify` to apply these limits to machine-readable comparison
+reports before publishing a result.
 
 Rows that miss the target remain `Modeled` or are marked experimental instead
 of being presented as validated. Agreement percentages remain secondary to
@@ -371,6 +389,8 @@ python3 -m fakegpu estimate-llm \
   --prompt-tokens 128 \
   --generated-tokens 32 \
   --dtype bfloat16 \
+  --kv-cache-strategy paged \
+  --kv-cache-block-tokens 16 \
   --target-profile a100 \
   --json build/llm-estimate.json
 
@@ -382,7 +402,12 @@ python3 -m fakegpu capabilities \
 ```
 
 The LLM estimator reads safetensors headers without materializing checkpoint
-weights.
+weights. Choose `dynamic`, `static`, `quantized`, or `paged` with
+`--kv-cache-strategy`; the JSON report separates logical storage,
+quantization savings, static reservation, paged-block overhead, and optional
+sliding-window limits. Quantized cache accounting retains 128 recent tokens
+at the compute dtype by default; change it with
+`--kv-cache-residual-tokens`.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -400,7 +425,7 @@ weights.
 | `fakegpu plan-training` | Normalize distributed training configs and estimate rank memory |
 | `fakegpu simulate-topology` | Model collective routes and link contention |
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
-| `fakegpu calibrate` | Compare predicted and observed memory |
+| `fakegpu calibrate` | Compare memory reports and enforce reliability gates |
 | `fakegpu capabilities` | List or strictly audit native API classifications |
 | `fakegpu nvidia-smi` | Display virtual per-process GPU memory |
 | `fakegpu workspace-profiles` | Validate and inspect workspace estimation profiles |
@@ -471,6 +496,11 @@ Run a declarative validation manifest directly when needed:
 python3 -m fakegpu validate \
   --manifest tests/data/validation_smoke.yaml \
   --report-dir build/validation-smoke \
+  --strict
+
+python3 -m fakegpu validate \
+  --manifest tests/data/llm_validation.yaml \
+  --report-dir build/validation-llm \
   --strict
 ```
 

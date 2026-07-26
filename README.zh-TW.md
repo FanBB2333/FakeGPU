@@ -144,11 +144,21 @@ python3 -m fakegpu calibrate compare \
   build/prediction.json \
   build/observation.json \
   --json build/calibration-comparison.json
+
+python3 -m fakegpu calibrate verify \
+  build/calibration-comparison.json \
+  --max-underestimate-percent 5 \
+  --max-absolute-percentage-error-percent 5 \
+  --min-interval-coverage-percent 90 \
+  --capacity-bytes 25769803776 \
+  --json build/calibration-verification.json
 ```
 
 比較報告包含各階段的有號誤差、絕對誤差、預測區間涵蓋情形，以及建議的 GPU
-記憶體安全餘量與係數。這些建議只適用於相同的工作負載簽章、shape、dtype、
-軟體堆疊與 GPU profile。
+記憶體安全餘量與係數。`calibrate verify` 會檢查最大低估、絕對百分比誤差的
+中位數/95 百分位數/最大值、預測區間涵蓋率、指定容量下的 false-safe 判斷，
+以及工作負載參數是否一致；任一門檻未通過時傳回狀態碼 1。結果只適用於相同的
+工作負載簽章、shape、dtype、軟體堆疊與 GPU profile。
 
 <a id="llm-reliability"></a>
 
@@ -163,11 +173,12 @@ FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果�
 #### 目前儲存庫驗證
 
 目前儲存庫狀態於 2026-07-26 在 macOS 26.5 arm64、Python 3.11.9 與 PyTorch
-2.9.1 CPU 環境中執行了 `scripts/test.sh all`：
+2.9.1 CPU 環境中執行了 `scripts/test.sh all` 與兩個宣告式驗證 manifest：
 
 | 驗證層 | 已維護的檢查 | 結果 |
 |---|---|---|
-| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **151 個通過** |
+| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **156 個通過** |
+| 宣告式驗證矩陣 | 6 個 smoke 案例，加 8 個 LLM cache、訓練規劃與校準案例 | **14 個通過** |
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
 | 原生能力清單 | 5 個能力群組、26 個明確 API、24 個強制執行策略的 API | **通過** |
 | GPU profile 目錄 | 82 個 profile，涵蓋 15 種 compute capability | **通過** |
@@ -188,14 +199,16 @@ GitHub CI 也會在 Python 3.10–3.12 上執行 Python 測試，並在 Linux �
 | 量化 adapter SFT | Qwen 0.8B/2B 原生 NF4 QLoRA | 十個 RTX PRO 5000 訓練案例 | `GPU-validated` |
 | 通用 decoder 分析 | Dense/MoE 中繼資料、adapter、量化 checkpoint、eager/SDPA attention、KV cache 與 expert-parallel 通訊量 | 公式、fixture 與 CLI 迴歸測試 | `CPU-validated` + `Modeled` |
 | 分散式訓練規劃 | DeepSpeed、Accelerate、FSDP/FSDP2、分片、checkpointing 與 CPU/NVMe offload | 設定、位元組計算、拓撲與 trace 測試 | `CPU-validated` + `Modeled` |
-| 長上下文與線上服務 | Dynamic/static/quantized 或 paged KV cache、continuous batching、chunked prefill、prefix caching 與 speculative decoding | 尚無專案維護的實體 GPU 資料 | `Planned` |
+| KV cache 配置 | Dynamic 增長、static 預留、2/4/8-bit quantized 儲存、paged block 取整與 sliding-window 上限 | 公式、API、`--kv-cache-strategy` CLI 與 `tests/data/llm_validation.yaml` 矩陣測試 | `CPU-validated` + `Modeled` |
+| 線上服務排程 | continuous batching、chunked prefill、prefix caching 與 speculative decoding | 尚無專案維護的實體 GPU 資料 | `Planned` |
 | 多 GPU LLM 執行 | TP、PP、CP、EP、MoE 負載不均衡，以及 FSDP/ZeRO 組合執行 | 目前只有分析拓撲與 coordinator 驗證 | `Modeled` |
 
-規劃中的 cache 與線上服務案例參考
+Cache 公式參考
 [Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache)
-與 [vLLM serving](https://docs.vllm.ai/en/stable/) 提供的工作負載形態。CPU
-FakeCUDA 不執行二進位 CUDA 擴充或任意 kernel；這類工作負載需要分析結果，並
-透過 passthrough 或 hybrid 模式取得實體 GPU 觀測值。
+提供的工作負載形態。線上服務排程仍處於規劃階段，參考
+[vLLM serving](https://docs.vllm.ai/en/stable/)。CPU FakeCUDA 不執行二進位
+CUDA 擴充或任意 kernel；這類工作負載需要分析結果，並透過 passthrough 或
+hybrid 模式取得實體 GPU 觀測值。
 
 後續新增或更新的公開驗證資料應包含：
 
@@ -208,6 +221,8 @@ FakeCUDA 不執行二進位 CUDA 擴充或任意 kernel；這類工作負載需�
   false-safe 次數；
 - 模型 revision、完整指令、shape、dtype、backend、allocator 設定、GPU、
   driver、CUDA、PyTorch 與框架版本。
+
+公開結果前可使用 `calibrate verify` 對機器可讀的比較報告執行這些門檻檢查。
 
 未達到上述目標的資料繼續標記為 `Modeled` 或 experimental，不作為已驗證
 準確率展示。「一致度」只作為輔助資訊，最大低估與 false-safe OOM 判斷更能反映
@@ -356,6 +371,8 @@ python3 -m fakegpu estimate-llm \
   --prompt-tokens 128 \
   --generated-tokens 32 \
   --dtype bfloat16 \
+  --kv-cache-strategy paged \
+  --kv-cache-block-tokens 16 \
   --target-profile a100 \
   --json build/llm-estimate.json
 
@@ -367,6 +384,10 @@ python3 -m fakegpu capabilities \
 ```
 
 LLM 估算器只會讀取 safetensors header，不會把 checkpoint 權重載入記憶體。
+`--kv-cache-strategy` 可選 `dynamic`、`static`、`quantized` 或 `paged`；
+JSON 報告會分別列出邏輯儲存量、量化節省量、static 預留、paged block 額外占用
+與可選的 sliding-window 上限。量化 cache 預設將最近 128 個 token 保留為計算
+dtype，可透過 `--kv-cache-residual-tokens` 調整。
 
 <p align="right">(<a href="#readme-top">返回頂端</a>)</p>
 
@@ -384,7 +405,7 @@ LLM 估算器只會讀取 safetensors header，不會把 checkpoint 權重載入
 | `fakegpu plan-training` | 統一分散式訓練設定並估算單 rank GPU 記憶體 |
 | `fakegpu simulate-topology` | 模擬 collective 路由與鏈路競爭 |
 | `fakegpu replay-trace` | 彙整運算、通訊、等待與 GPU 記憶體時間軸 |
-| `fakegpu calibrate` | 比較預測 GPU 記憶體與實測值 |
+| `fakegpu calibrate` | 比較 GPU 記憶體報告並執行可靠性門檻檢查 |
 | `fakegpu capabilities` | 列出或嚴格檢查原生 API 分類 |
 | `fakegpu nvidia-smi` | 顯示虛擬程序的 GPU 記憶體 |
 | `fakegpu workspace-profiles` | 驗證並查看 workspace 估算 profiles |
@@ -454,6 +475,11 @@ scripts/test.sh all
 python3 -m fakegpu validate \
   --manifest tests/data/validation_smoke.yaml \
   --report-dir build/validation-smoke \
+  --strict
+
+python3 -m fakegpu validate \
+  --manifest tests/data/llm_validation.yaml \
+  --report-dir build/validation-llm \
   --strict
 ```
 
