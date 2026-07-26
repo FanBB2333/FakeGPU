@@ -61,6 +61,7 @@ run_smoke() {
     --path "$BUILD_DIR/fake_gpu_report.json"
 
   FAKEGPU_REPORT_PATH="$BUILD_DIR/fake_gpu_report_memory_types.json" \
+    FAKEGPU_SMI_STATE_DIR="$BUILD_DIR/smi-native" \
     run_fakegpu "$BUILD_DIR" "$PYTHON_BIN" tests/native/memory_types.py
   FAKEGPU_BUILD_DIR="$BUILD_DIR" \
     "$PYTHON_BIN" tests/native/coordinator_smoke.py
@@ -76,13 +77,16 @@ run_cpu() {
   BUILD_DIR="$CPU_BUILD_DIR" "$SCRIPT_DIR/build.sh" --release
 
   local probe="$CPU_BUILD_DIR/cublas_cpu_sim"
+  local smi_state="$CPU_BUILD_DIR/fakegpu_smi_state.json"
   c++ -std=c++17 tests/native/cublas_cpu_sim.cpp -o "$probe" \
     -L "$CPU_BUILD_DIR" -lcublas -lcudart -lcuda -lnvidia-ml
 
   FAKEGPU_REPORT_PATH="$CPU_BUILD_DIR/fake_gpu_report.json" \
+    FAKEGPU_SMI_STATE_PATH="$smi_state" \
     run_fakegpu "$CPU_BUILD_DIR" "$probe"
   "$PYTHON_BIN" scripts/validation/check_report.py \
     --path "$CPU_BUILD_DIR/fake_gpu_report.json" \
+    --smi-state "$smi_state" \
     --expect-io \
     --expect-flops \
     --expect-unsupported-api

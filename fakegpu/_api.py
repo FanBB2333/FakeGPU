@@ -401,6 +401,8 @@ def _apply_config_env(
     device_count: int | None,
     devices: str | Sequence[str] | None,
 ) -> None:
+    env_map["FAKEGPU_RUNTIME"] = "native"
+
     if mode is not None:
         env_map["FAKEGPU_MODE"] = str(mode)
 

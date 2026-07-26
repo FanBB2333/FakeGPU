@@ -246,11 +246,14 @@ const ArchProfile* get_arch_profile(GpuArch arch) {
 
 GpuProfile build_profile_from_definition(const ProfileDefinition& def) {
     if (const ArchProfile* arch_profile = get_arch_profile(def.arch)) {
-        return arch_profile->build(def.params);
+        GpuProfile profile = arch_profile->build(def.params);
+        profile.id = def.id;
+        return profile;
     }
 
     // Fallback for unknown architecture identifiers
     GpuProfile profile;
+    profile.id = def.id;
     profile.name = def.params.name;
     profile.architecture = def.arch;
     profile.compute_major = def.params.compute_major > 0
@@ -431,9 +434,12 @@ GpuProfile build_profile_with_fallback(const std::string& id, GpuArch arch, cons
     std::optional<GpuProfile> yaml_profile = profile_from_yaml_id(id);
     if (yaml_profile.has_value()) return yaml_profile.value();
     if (const ArchProfile* builder = get_arch_profile(arch)) {
-        return builder->build(params);
+        GpuProfile profile = builder->build(params);
+        profile.id = id;
+        return profile;
     }
     ProfileDefinition fallback_def;
+    fallback_def.id = id;
     fallback_def.arch = arch;
     fallback_def.params = params;
     return build_profile_from_definition(fallback_def);

@@ -189,7 +189,7 @@ and PyTorch 2.9.1 CPU:
 
 | Validation layer | Maintained check | Result |
 |---|---|---|
-| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **159 passed** |
+| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **160 passed** |
 | Declarative validation matrices | 6 smoke executions plus 8 LLM cache, training-plan, and calibration executions | **14 passed** |
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | Native capability inventory | 5 groups, 26 explicit APIs, 24 policy-enforced APIs | **Passed** |
@@ -341,11 +341,17 @@ training control flow, and error handling use the simulated CUDA surface.
 ### Inspect FakeGPU devices and processes
 
 State publishing is opt-in. Set a state directory before the workload calls
-`fakegpu.init(...)`; `build/` is ignored by Git:
+`fakegpu.init(...)` or starts through the native launcher; `build/` is ignored
+by Git:
 
 ```bash
 export FAKEGPU_SMI_STATE_DIR=build/smi
+
+# Python FakeCUDA workload.
 python3 your_script.py
+
+# Unmodified native CUDA/NVML workload.
+python3 -m fakegpu --build-dir build ./your_native_workload
 ```
 
 From another terminal, inspect the running workload:
@@ -360,7 +366,7 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi -q
 
 # Script-friendly GPU and process queries.
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
-  --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model \
+  --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model,native.kernel_launches,native.gemm_calls,native.io_bytes \
   --format=csv
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --query-compute-apps=pid,process_name,gpu_uuid,used_gpu_memory,peak_gpu_memory,stage,status \
@@ -374,6 +380,11 @@ allocator activity, dispatch tracking, and per-process peaks. Use `-i` with an
 index, UUID, PCI bus ID, or profile ID to select devices; use `--json` for the
 complete normalized inventory. State schema v2 is emitted, while v1 files
 remain readable.
+
+Native interception additionally publishes allocation lifetime, transfer
+volume, kernel launches, GEMM calls/FLOP, compatibility events, and unsupported
+API counts. State is refreshed while the process is running and marked exited
+when the process shuts down.
 
 UUIDs and PCI bus IDs are stable simulated identifiers. Temperature, fan
 speed, live power draw, and hardware GPU utilization remain `N/A` because the
@@ -605,7 +616,8 @@ environments, binary assets, and design drafts are excluded through
 - [x] Repository, kernel, topology, and trace analysis
 - [x] Detailed FakeGPU-SMI device, runtime, allocator, and process queries
 - [ ] Expand executable native CUDA operations and cuBLAS coverage
-- [ ] Publish native-runtime state and add topology, MIG, NVLink, and fault views
+- [x] Publish live native-runtime state and activity through FakeGPU-SMI
+- [ ] Add topology, MIG, NVLink, and fault views
 - [ ] Export historical device and process metrics to monitoring systems
 - [ ] Add real-GPU LLM validation for long-context and online-serving workloads
 - [ ] Validate distributed and MoE estimates across more GPU and software stacks

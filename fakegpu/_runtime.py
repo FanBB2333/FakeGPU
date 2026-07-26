@@ -179,6 +179,7 @@ def _init_fakecuda_runtime(
     devices: str | Sequence[str] | None = None,
     force: bool = False,
 ) -> RuntimeInitResult:
+    os.environ["FAKEGPU_RUNTIME"] = "fakecuda"
     if profile is not None:
         os.environ["FAKEGPU_PROFILE"] = str(profile)
         if devices is None:

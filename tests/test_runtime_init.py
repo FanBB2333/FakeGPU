@@ -200,6 +200,7 @@ def test_unsupported_api_policy_environment() -> None:
         device_count=None,
         devices=None,
     )
+    assert env["FAKEGPU_RUNTIME"] == "native"
     assert env["FAKEGPU_UNSUPPORTED_API"] == "warn"
 
     try:

@@ -143,6 +143,23 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
     "supported_types": QueryField("profile.supported_types"),
     "allocator.model": QueryField("allocator.model"),
     "allocator.segments": QueryField("allocator.segment_count"),
+    "native.io_calls": QueryField("native_activity.io_calls"),
+    "native.io_bytes": QueryField(
+        "native_activity.io_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "native.kernel_launches": QueryField(
+        "native_activity.kernel_launches"
+    ),
+    "native.gemm_calls": QueryField("native_activity.gemm_calls"),
+    "native.gemm_flops": QueryField("native_activity.gemm_flops"),
+    "native.compatibility_events": QueryField(
+        "native_activity.compatibility_events"
+    ),
+    "native.unsupported_api_calls": QueryField(
+        "native_activity.unsupported_api_calls"
+    ),
     "processes": QueryField("process_count"),
     "fakegpu.version": QueryField("fakegpu.version"),
     "runtime": QueryField("fakegpu.runtime"),
@@ -198,6 +215,23 @@ PROCESS_QUERY_FIELDS: dict[str, QueryField] = {
     "tracking_confidence": QueryField("tracking_confidence"),
     "allocator.model": QueryField("allocator_model"),
     "dispatch.calls": QueryField("dispatch_tracking.operator_calls"),
+    "native.io_calls": QueryField("native_activity.io_calls"),
+    "native.io_bytes": QueryField(
+        "native_activity.io_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "native.kernel_launches": QueryField(
+        "native_activity.kernel_launches"
+    ),
+    "native.gemm_calls": QueryField("native_activity.gemm_calls"),
+    "native.gemm_flops": QueryField("native_activity.gemm_flops"),
+    "native.compatibility_events": QueryField(
+        "native_activity.compatibility_events"
+    ),
+    "native.unsupported_api_calls": QueryField(
+        "native_activity.unsupported_api_calls"
+    ),
     "fakegpu.version": QueryField("fakegpu.version"),
     "runtime.backend": QueryField("fakegpu.backend"),
 }
@@ -780,6 +814,7 @@ def build_inventory(
                 "fakegpu": dict(fakegpu),
                 "software": dict(software),
                 "dispatch_tracking": dispatch_tracking,
+                "native_activity": dict(device["native_activity"]),
             }
             process_rows.append(process)
 
@@ -816,6 +851,12 @@ def build_inventory(
             _accumulate_allocator(
                 aggregate["allocator"],
                 device,
+                pid=pid,
+                process_name=process_name,
+            )
+            _accumulate_native_activity(
+                aggregate["native_activity"],
+                device["native_activity"],
                 pid=pid,
                 process_name=process_name,
             )
@@ -1107,6 +1148,7 @@ def render_detail(
         memory = item["memory"]
         allocator = item["allocator"]
         telemetry = item["telemetry"]
+        native_activity = item["native_activity"]
         lines.extend(
             [
                 "",
@@ -1196,6 +1238,54 @@ def render_detail(
                 ),
             ]
         )
+        if (
+            str(item["fakegpu"].get("runtime") or "") == "native"
+            or _has_native_activity(native_activity)
+        ):
+            lines.extend(
+                [
+                    (
+                        "  Native activity: "
+                        f"{native_activity['kernel_launches']} kernel launches, "
+                        f"{native_activity['gemm_calls']} GEMM calls / "
+                        f"{native_activity['gemm_flops']} FLOP, "
+                        f"{native_activity['io_calls']} IO calls / "
+                        f"{_format_bytes(native_activity['io_bytes'])}"
+                    ),
+                    (
+                        "  Native compatibility: "
+                        f"{native_activity['compatibility_events']} events, "
+                        f"{native_activity['unsupported_api_calls']} "
+                        "unsupported API calls"
+                    ),
+                ]
+            )
+            kernels = native_activity["kernels"]
+            if kernels:
+                lines.append(
+                    "  Native kernels: "
+                    + ", ".join(
+                        f"{name}={count}"
+                        for name, count in sorted(
+                            kernels.items(),
+                            key=lambda entry: (
+                                -_nonnegative_int(entry[1]),
+                                str(entry[0]),
+                            ),
+                        )[:5]
+                    )
+                )
+            unsupported_apis = native_activity["unsupported_apis"]
+            if unsupported_apis:
+                lines.append("  Unsupported native APIs:")
+                for event in unsupported_apis[:5]:
+                    lines.append(
+                        "    - "
+                        f"{event.get('operation') or 'unknown'}: "
+                        f"{_nonnegative_int(event.get('count'))} calls "
+                        f"[{event.get('behavior') or 'unknown'}, "
+                        f"{event.get('policy') or 'unknown'}]"
+                    )
         allocations = allocator["largest_allocations"]
         if allocations:
             lines.append("  Largest allocations:")
@@ -1313,6 +1403,17 @@ def _empty_device_aggregate(
             "largest_allocations": [],
             "_models": set(),
         },
+        "native_activity": {
+            "io_calls": 0,
+            "io_bytes": 0,
+            "kernel_launches": 0,
+            "gemm_calls": 0,
+            "gemm_flops": 0,
+            "compatibility_events": 0,
+            "unsupported_api_calls": 0,
+            "kernels": {},
+            "unsupported_apis": [],
+        },
         "telemetry": dict(device["telemetry"]),
         "fakegpu": dict(fakegpu),
         "software": dict(software),
@@ -1381,6 +1482,38 @@ def _accumulate_allocator(
         aggregate["largest_allocations"].append(item)
 
 
+def _accumulate_native_activity(
+    aggregate: dict[str, Any],
+    activity: Mapping[str, Any],
+    *,
+    pid: int,
+    process_name: str,
+) -> None:
+    for key in (
+        "io_calls",
+        "io_bytes",
+        "kernel_launches",
+        "gemm_calls",
+        "gemm_flops",
+        "compatibility_events",
+        "unsupported_api_calls",
+    ):
+        aggregate[key] = _nonnegative_int(
+            aggregate.get(key)
+        ) + _nonnegative_int(activity.get(key))
+    _sum_integer_mapping(
+        aggregate["kernels"],
+        activity.get("kernels") or {},
+    )
+    for raw_event in activity.get("unsupported_apis") or []:
+        if not isinstance(raw_event, Mapping):
+            continue
+        event = dict(raw_event)
+        event["pid"] = pid
+        event["process_name"] = process_name
+        aggregate["unsupported_apis"].append(event)
+
+
 def _finalize_device_aggregate(item: dict[str, Any]) -> dict[str, Any]:
     memory = item["memory"]
     total = int(memory["total_bytes"])
@@ -1431,6 +1564,16 @@ def _finalize_device_aggregate(item: dict[str, Any]) -> dict[str, Any]:
     )
     allocator["largest_allocations"] = allocator[
         "largest_allocations"
+    ][:10]
+    native_activity = item["native_activity"]
+    native_activity["unsupported_apis"].sort(
+        key=lambda event: (
+            -_nonnegative_int(event.get("count")),
+            str(event.get("operation") or ""),
+        )
+    )
+    native_activity["unsupported_apis"] = native_activity[
+        "unsupported_apis"
     ][:10]
     return item
 
@@ -1560,6 +1703,9 @@ def _normalize_device(
         "largest_allocations": _mapping_list(
             raw.get("largest_allocations")
         ),
+        "native_activity": _normalize_native_activity(
+            raw.get("native_activity")
+        ),
         "telemetry": telemetry,
     }
 
@@ -1567,10 +1713,8 @@ def _normalize_device(
 def _state_fakegpu_metadata(
     state: Mapping[str, Any],
 ) -> dict[str, Any]:
-    raw = state.get("fakegpu")
-    if isinstance(raw, Mapping):
-        return dict(raw)
-    return {
+    catalogs = _catalog_metadata()
+    defaults = {
         "version": "unknown",
         "runtime": str(state.get("runtime") or "fakecuda"),
         "backend": "unknown",
@@ -1580,9 +1724,22 @@ def _state_fakegpu_metadata(
         "distributed_mode": "unknown",
         "memory_tracking_enabled": True,
         "dispatch_memory_tracking_enabled": False,
-        "profile_catalog": {},
-        "native_capabilities": {},
+        **catalogs,
     }
+    raw = state.get("fakegpu")
+    if isinstance(raw, Mapping):
+        result = dict(defaults)
+        result.update(raw)
+        for key in ("profile_catalog", "native_capabilities"):
+            default_catalog = defaults.get(key)
+            raw_catalog = raw.get(key)
+            if isinstance(default_catalog, Mapping):
+                merged_catalog = dict(default_catalog)
+                if isinstance(raw_catalog, Mapping):
+                    merged_catalog.update(raw_catalog)
+                result[key] = merged_catalog
+        return result
+    return defaults
 
 
 def _state_software_metadata(
@@ -1692,6 +1849,42 @@ def _mapping_list(value: Any) -> list[dict[str, Any]]:
     return [
         dict(item) for item in value if isinstance(item, Mapping)
     ]
+
+
+def _normalize_native_activity(value: Any) -> dict[str, Any]:
+    raw = dict(value) if isinstance(value, Mapping) else {}
+    result = {
+        key: _nonnegative_int(raw.get(key))
+        for key in (
+            "io_calls",
+            "io_bytes",
+            "kernel_launches",
+            "gemm_calls",
+            "gemm_flops",
+            "compatibility_events",
+            "unsupported_api_calls",
+        )
+    }
+    result["kernels"] = _integer_mapping(raw.get("kernels"))
+    result["unsupported_apis"] = _mapping_list(
+        raw.get("unsupported_apis")
+    )
+    return result
+
+
+def _has_native_activity(activity: Mapping[str, Any]) -> bool:
+    return any(
+        _nonnegative_int(activity.get(key))
+        for key in (
+            "io_calls",
+            "io_bytes",
+            "kernel_launches",
+            "gemm_calls",
+            "gemm_flops",
+            "compatibility_events",
+            "unsupported_api_calls",
+        )
+    )
 
 
 def _nonnegative_int(value: Any, *, default: int = 0) -> int:
@@ -1928,6 +2121,18 @@ def _catalog_profile_metadata(profile_id: str) -> dict[str, Any]:
 def _profile_metadata(item: Mapping[str, Any]) -> dict[str, Any]:
     raw_profile = item.get("profile")
     if isinstance(raw_profile, Mapping):
+        profile_id = str(
+            raw_profile.get("id")
+            or item.get("profile_id")
+            or ""
+        )
+        if profile_id:
+            try:
+                profile = dict(_catalog_profile_metadata(profile_id))
+                profile.update(raw_profile)
+                return profile
+            except (KeyError, OSError, RuntimeError, ValueError):
+                pass
         return dict(raw_profile)
     profile_id = str(item.get("profile_id") or "")
     if profile_id:
