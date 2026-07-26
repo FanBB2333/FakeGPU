@@ -22,6 +22,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--generated-tokens", type=int, default=1)
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument(
+        "--kv-cache-strategy",
+        choices=["dynamic", "static", "quantized", "paged"],
+        default="dynamic",
+    )
+    parser.add_argument(
+        "--kv-cache-bits",
+        type=int,
+        choices=[2, 4, 8],
+        default=4,
+        help="Storage bit width for the quantized KV-cache strategy.",
+    )
+    parser.add_argument(
+        "--kv-cache-block-tokens",
+        type=int,
+        default=16,
+        help="Allocation block size for the paged KV-cache strategy.",
+    )
+    parser.add_argument(
+        "--kv-cache-max-tokens",
+        type=int,
+        help="Per-sequence reservation for the static KV-cache strategy.",
+    )
+    parser.add_argument(
+        "--kv-cache-window-tokens",
+        type=int,
+        help="Optional sliding-window context limit.",
+    )
     parser.add_argument("--attention-implementation", choices=["eager", "sdpa"], default="eager")
     parser.add_argument("--runtime-overhead-bytes", type=int, default=0)
     parser.add_argument(
@@ -58,6 +86,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             expert_parallel_size=args.expert_parallel_size,
             target_profile=args.target_profile,
             compute_acceleration_factor=args.compute_acceleration_factor,
+            kv_cache_strategy=args.kv_cache_strategy,
+            kv_cache_bits=args.kv_cache_bits,
+            kv_cache_block_tokens=args.kv_cache_block_tokens,
+            kv_cache_max_tokens=args.kv_cache_max_tokens,
+            kv_cache_window_tokens=args.kv_cache_window_tokens,
         )
     except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
         parser.exit(2, f"fakegpu estimate-llm: {exc}\n")
@@ -76,6 +109,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"  checkpoint: {_format_bytes(checkpoint['checkpoint_bytes'])}")
     print(f"  tensor peak: {_format_bytes(memory['estimated_tensor_peak_bytes'])}")
     print(f"  process peak: {_format_bytes(memory['estimated_process_peak_bytes'])}")
+    print(
+        "  KV cache: "
+        f"{report['kv_cache']['strategy']} "
+        f"({_format_bytes(memory['kv_cache_bytes_after_generation'])})"
+    )
     print(f"  matrix FLOPs: {compute['total_flops']:,}")
     if report["communication"]["enabled"]:
         print(
