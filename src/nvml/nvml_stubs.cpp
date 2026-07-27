@@ -92,7 +92,10 @@ static bool modeled_nvlink_peer(
     const Device* device,
     unsigned int link,
     ModeledNvLinkPeer& result) {
-    if (!device || device->index < 0) {
+    if (
+        !device ||
+        device->is_mig_device ||
+        device->index < 0) {
         return false;
     }
     const ModeledDeviceTopology topology =
@@ -215,6 +218,12 @@ nvmlReturn_t nvmlDeviceGetAddressingMode(nvmlDevice_t device, nvmlDeviceAddressi
 nvmlReturn_t nvmlDeviceGetMemoryInfo(nvmlDevice_t device, nvmlMemory_t *memory) {
     if (!device || !memory) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
+    if (dev->is_mig_device) {
+        memory->total = dev->total_memory;
+        memory->used = dev->used_memory;
+        memory->free = memory->total - memory->used;
+        return NVML_SUCCESS;
+    }
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Hybrid && config.oom_policy() == OomPolicy::Clamp) {
@@ -242,6 +251,12 @@ nvmlReturn_t nvmlDeviceGetMemoryInfo_v2(nvmlDevice_t device, nvmlMemory_v2_t *me
     Device* dev = (Device*)device;
     memory->version = nvmlMemory_v2;
     memory->reserved = 0;
+    if (dev->is_mig_device) {
+        memory->total = dev->total_memory;
+        memory->used = dev->used_memory;
+        memory->free = memory->total - memory->used;
+        return NVML_SUCCESS;
+    }
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Hybrid && config.oom_policy() == OomPolicy::Clamp) {
@@ -331,7 +346,9 @@ nvmlReturn_t nvmlDeviceGetPciInfo_v3(nvmlDevice_t device, nvmlPciInfo_v3_t *pci)
 nvmlReturn_t nvmlDeviceGetTupleIndex(nvmlDevice_t device, unsigned int *tupleIndex) {
     if (!device || !tupleIndex) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
-    *tupleIndex = dev->index;
+    *tupleIndex = dev->is_mig_device
+        ? dev->mig_device_index
+        : static_cast<unsigned int>(dev->index);
     return NVML_SUCCESS;
 }
 
@@ -672,8 +689,15 @@ nvmlReturn_t nvmlDeviceGetTotalEccErrors(nvmlDevice_t device, unsigned int error
 
 nvmlReturn_t nvmlDeviceGetMigMode(nvmlDevice_t device, unsigned int *currentMode, unsigned int *pendingMode) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
-    if (currentMode) *currentMode = 0;  // MIG disabled
-    if (pendingMode) *pendingMode = 0;
+    Device* dev = (Device*)device;
+    const unsigned int enabled =
+        dev->is_mig_device ||
+        GlobalState::instance().get_mig_device_count(
+            dev->index) > 0
+        ? 1U
+        : 0U;
+    if (currentMode) *currentMode = enabled;
+    if (pendingMode) *pendingMode = enabled;
     return NVML_SUCCESS;
 }
 
@@ -1154,10 +1178,29 @@ nvmlReturn_t nvmlDeviceGetDisplayMode(nvmlDevice_t device, unsigned int *display
 // Handle by UUID and PCI Bus ID
 nvmlReturn_t nvmlDeviceGetHandleByUUID(const char *uuid, nvmlDevice_t *device) {
     if (!uuid || !device) return NVML_ERROR_INVALID_ARGUMENT;
-    // For simplicity, return device 0
-    Device& dev = GlobalState::instance().get_device(0);
-    *device = (nvmlDevice_t)&dev;
-    return NVML_SUCCESS;
+    GlobalState& state = GlobalState::instance();
+    const int count = state.get_device_count();
+    for (int index = 0; index < count; ++index) {
+        Device& parent = state.get_device(index);
+        if (parent.uuid == uuid) {
+            *device = (nvmlDevice_t)&parent;
+            return NVML_SUCCESS;
+        }
+        const unsigned int mig_count =
+            state.get_mig_device_count(index);
+        for (unsigned int mig_index = 0;
+             mig_index < mig_count;
+             ++mig_index) {
+            Device* mig_device =
+                state.get_mig_device(index, mig_index);
+            if (mig_device && mig_device->uuid == uuid) {
+                *device = (nvmlDevice_t)mig_device;
+                return NVML_SUCCESS;
+            }
+        }
+    }
+    *device = nullptr;
+    return NVML_ERROR_NOT_FOUND;
 }
 
 nvmlReturn_t nvmlDeviceGetHandleByPciBusId(const char *pciBusId, nvmlDevice_t *device) {
@@ -1213,12 +1256,37 @@ nvmlReturn_t nvmlDeviceGetAccountingPids(nvmlDevice_t device, unsigned int *coun
 // MIG-related functions
 nvmlReturn_t nvmlDeviceGetMaxMigDeviceCount(nvmlDevice_t device, unsigned int *count) {
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
-    *count = 0;
+    Device* dev = (Device*)device;
+    if (dev->is_mig_device) {
+        return NVML_ERROR_NOT_SUPPORTED;
+    }
+    *count = GlobalState::instance().get_mig_device_count(
+        dev->index);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetMigDeviceHandleByIndex(nvmlDevice_t device, unsigned int index, nvmlDevice_t *migDevice) {
-    return NVML_ERROR_NOT_SUPPORTED;
+    if (!device || !migDevice) return NVML_ERROR_INVALID_ARGUMENT;
+    Device* parent = (Device*)device;
+    if (parent->is_mig_device) {
+        return NVML_ERROR_NOT_SUPPORTED;
+    }
+    const unsigned int count =
+        GlobalState::instance().get_mig_device_count(
+            parent->index);
+    if (count == 0) {
+        *migDevice = nullptr;
+        return NVML_ERROR_NOT_SUPPORTED;
+    }
+    Device* result = GlobalState::instance().get_mig_device(
+        parent->index,
+        index);
+    if (!result) {
+        *migDevice = nullptr;
+        return NVML_ERROR_NOT_FOUND;
+    }
+    *migDevice = (nvmlDevice_t)result;
+    return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetGpuInstanceById(nvmlDevice_t device, unsigned int id, void *gpuInstance) {
@@ -1232,12 +1300,46 @@ nvmlReturn_t nvmlDeviceGetGpuInstances(nvmlDevice_t device, unsigned int profile
 
 nvmlReturn_t nvmlDeviceIsMigDeviceHandle(nvmlDevice_t device, unsigned int *isMigDevice) {
     if (!device || !isMigDevice) return NVML_ERROR_INVALID_ARGUMENT;
-    *isMigDevice = 0;  // Not a MIG device
+    Device* dev = (Device*)device;
+    *isMigDevice = dev->is_mig_device ? 1U : 0U;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetDeviceHandleFromMigDeviceHandle(nvmlDevice_t migDevice, nvmlDevice_t *device) {
-    return NVML_ERROR_NOT_SUPPORTED;
+    if (!migDevice || !device) return NVML_ERROR_INVALID_ARGUMENT;
+    Device* mig = (Device*)migDevice;
+    Device* parent =
+        GlobalState::instance().get_parent_device_for_mig(mig);
+    if (!parent) {
+        *device = nullptr;
+        return NVML_ERROR_NOT_SUPPORTED;
+    }
+    *device = (nvmlDevice_t)parent;
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetGpuInstanceId(
+    nvmlDevice_t device,
+    unsigned int *id) {
+    if (!device || !id) return NVML_ERROR_INVALID_ARGUMENT;
+    Device* dev = (Device*)device;
+    if (!dev->is_mig_device) {
+        return NVML_ERROR_NOT_SUPPORTED;
+    }
+    *id = dev->gpu_instance_id;
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetComputeInstanceId(
+    nvmlDevice_t device,
+    unsigned int *id) {
+    if (!device || !id) return NVML_ERROR_INVALID_ARGUMENT;
+    Device* dev = (Device*)device;
+    if (!dev->is_mig_device) {
+        return NVML_ERROR_NOT_SUPPORTED;
+    }
+    *id = dev->compute_instance_id;
+    return NVML_SUCCESS;
 }
 
 // Tuple index - used by nvitop for MIG devices

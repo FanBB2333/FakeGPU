@@ -38,6 +38,9 @@ MAXIMUM_NVLINK_BANDWIDTH_GBPS = 1_000_000.0
 MAXIMUM_MODELED_NVLINKS_PER_DEVICE = 18
 MAXIMUM_MODELED_FAULT_TYPES = 128
 MAXIMUM_MODELED_FAULT_COUNT = 1_000_000_000
+MAXIMUM_MODELED_MIG_INSTANCES_PER_DEVICE = 8
+MAXIMUM_MODELED_MIG_SLICES_PER_DEVICE = 8
+MAXIMUM_MODELED_MIG_PROFILE_LENGTH = 64
 FAULT_SEVERITY_RANK = {
     "none": 0,
     "info": 1,
@@ -83,6 +86,18 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
     "health.max_severity": QueryField("health.max_severity"),
     "health.event_count": QueryField("health.event_count"),
     "health.event_types": QueryField("health.event_types_total"),
+    "mig.mode": QueryField("mig.mode"),
+    "mig.instance_count": QueryField("mig.instance_count"),
+    "mig.allocated_memory": QueryField(
+        "mig.allocated_memory_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "mig.unallocated_memory": QueryField(
+        "mig.unallocated_memory_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
     "driver_version": QueryField("software.driver_version"),
     "cuda_version": QueryField("software.cuda_version"),
     "profile.id": QueryField("profile_id"),
@@ -702,6 +717,293 @@ def _modeled_fault_model(
     }
 
 
+def _modeled_mig_layout(
+    devices: list[dict[str, Any]],
+) -> dict[str, Any]:
+    layout_text = os.environ.get("FAKEGPU_MIG_LAYOUT")
+    configured = bool(layout_text)
+    valid = True
+    error = ""
+    source = "modeled_none"
+    device_by_index = {
+        _nonnegative_int(device.get("index")): device
+        for device in devices
+    }
+    instances_by_index: dict[int, list[dict[str, Any]]] = {
+        index: [] for index in device_by_index
+    }
+    allocated_memory = {
+        index: 0 for index in device_by_index
+    }
+    allocated_slices = {
+        index: 0 for index in device_by_index
+    }
+
+    if configured:
+        source = "modeled_environment"
+        normalized_text = str(layout_text).strip()
+        if (
+            not normalized_text
+            or normalized_text.startswith(";")
+            or normalized_text.endswith(";")
+        ):
+            valid = False
+            error = (
+                "FAKEGPU_MIG_LAYOUT contains an empty instance entry"
+            )
+        else:
+            for entry_index, entry_text in enumerate(
+                normalized_text.split(";"),
+                start=1,
+            ):
+                fields = [
+                    field.strip() for field in entry_text.split(":")
+                ]
+                prefix = f"FAKEGPU_MIG_LAYOUT entry {entry_index}"
+                if (
+                    len(fields) not in {3, 4}
+                    or any(not field for field in fields)
+                ):
+                    valid = False
+                    error = (
+                        f"{prefix} must use "
+                        "DEVICE:PROFILE:MEMORY_MIB[:COUNT]"
+                    )
+                    break
+
+                index_text = fields[0]
+                unsigned_index = (
+                    index_text[1:]
+                    if index_text.startswith("+")
+                    else index_text
+                )
+                if (
+                    not unsigned_index.isascii()
+                    or not unsigned_index.isdigit()
+                ):
+                    valid = False
+                else:
+                    device_index = int(index_text)
+                    valid = device_index in device_by_index
+                if not valid:
+                    error = (
+                        f"{prefix} contains an invalid device index"
+                    )
+                    break
+
+                profile = fields[1].lower()
+                separator = profile.find("g.")
+                profile_valid = (
+                    0 < len(profile)
+                    <= MAXIMUM_MODELED_MIG_PROFILE_LENGTH
+                    and all(
+                        character.isascii()
+                        and (
+                            character.isalnum()
+                            or character in "._-+"
+                        )
+                        for character in profile
+                    )
+                    and separator > 0
+                    and profile[:separator].isascii()
+                    and profile[:separator].isdigit()
+                )
+                slice_count = (
+                    int(profile[:separator])
+                    if profile_valid
+                    else 0
+                )
+                if not (
+                    profile_valid
+                    and 1
+                    <= slice_count
+                    <= MAXIMUM_MODELED_MIG_SLICES_PER_DEVICE
+                ):
+                    valid = False
+                    error = (
+                        f"{prefix} contains an invalid MIG profile; "
+                        "expected a name such as 1g.10gb"
+                    )
+                    break
+
+                memory_text = fields[2]
+                unsigned_memory = (
+                    memory_text[1:]
+                    if memory_text.startswith("+")
+                    else memory_text
+                )
+                if (
+                    not unsigned_memory.isascii()
+                    or not unsigned_memory.isdigit()
+                ):
+                    memory_mib = 0
+                else:
+                    memory_mib = int(memory_text)
+                parent = device_by_index[device_index]
+                parent_memory = _nonnegative_int(
+                    parent.get("total_memory")
+                )
+                memory_bytes = memory_mib * 2**20
+                if (
+                    memory_mib <= 0
+                    or memory_bytes > parent_memory
+                ):
+                    valid = False
+                    error = (
+                        f"{prefix} memory must be a positive MiB "
+                        "value no greater than the parent device memory"
+                    )
+                    break
+
+                count = 1
+                if len(fields) == 4:
+                    count_text = fields[3]
+                    unsigned_count = (
+                        count_text[1:]
+                        if count_text.startswith("+")
+                        else count_text
+                    )
+                    if (
+                        not unsigned_count.isascii()
+                        or not unsigned_count.isdigit()
+                    ):
+                        count = 0
+                    else:
+                        count = int(count_text)
+                if not (
+                    1
+                    <= count
+                    <= MAXIMUM_MODELED_MIG_INSTANCES_PER_DEVICE
+                ):
+                    valid = False
+                    error = f"{prefix} count must be between 1 and 8"
+                    break
+
+                current_instances = instances_by_index[device_index]
+                if (
+                    len(current_instances) + count
+                    > MAXIMUM_MODELED_MIG_INSTANCES_PER_DEVICE
+                ):
+                    valid = False
+                    error = (
+                        f"{prefix} exceeds the 8-instance "
+                        "per-device limit"
+                    )
+                    break
+                if (
+                    allocated_slices[device_index]
+                    + slice_count * count
+                    > MAXIMUM_MODELED_MIG_SLICES_PER_DEVICE
+                ):
+                    valid = False
+                    error = (
+                        f"{prefix} exceeds the 8-slice "
+                        "per-device limit"
+                    )
+                    break
+                if (
+                    allocated_memory[device_index]
+                    + memory_bytes * count
+                    > parent_memory
+                ):
+                    valid = False
+                    error = (
+                        f"{prefix} allocates more memory than the "
+                        "parent device"
+                    )
+                    break
+
+                for _ in range(count):
+                    instance_index = len(current_instances)
+                    current_instances.append(
+                        {
+                            "index": instance_index,
+                            "gpu_instance_id": instance_index,
+                            "compute_instance_id": instance_index,
+                            "profile": profile,
+                            "slice_count": slice_count,
+                            "uuid": _synthetic_mig_uuid(
+                                str(parent.get("uuid") or "unknown"),
+                                instance_index,
+                                instance_index,
+                            ),
+                            "parent_uuid": str(
+                                parent.get("uuid") or "unknown"
+                            ),
+                            "pci_bus_id": str(
+                                parent.get("pci_bus_id") or "unknown"
+                            ),
+                            "memory_total_bytes": memory_bytes,
+                            "memory_used_bytes": None,
+                            "memory_free_bytes": None,
+                            "memory_tracking": "unobserved",
+                            "source": source,
+                        }
+                    )
+                allocated_slices[device_index] += (
+                    slice_count * count
+                )
+                allocated_memory[device_index] += (
+                    memory_bytes * count
+                )
+
+    if configured and valid and not any(instances_by_index.values()):
+        valid = False
+        error = "FAKEGPU_MIG_LAYOUT did not define any MIG instances"
+
+    if configured and not valid:
+        source = "modeled_environment_invalid"
+        instances_by_index = {
+            index: [] for index in device_by_index
+        }
+        allocated_memory = {
+            index: 0 for index in device_by_index
+        }
+
+    enabled_device_count = 0
+    instance_count = 0
+    allocated_memory_total = 0
+    for index, device in device_by_index.items():
+        instances = instances_by_index[index]
+        if instances:
+            enabled_device_count += 1
+        instance_count += len(instances)
+        allocated = allocated_memory[index]
+        allocated_memory_total += allocated
+        total = _nonnegative_int(device.get("total_memory"))
+        device["mig"] = {
+            "source": source,
+            "configured": configured,
+            "valid": valid,
+            "error": error,
+            "mode": (
+                "configuration_error"
+                if not valid
+                else "enabled"
+                if instances
+                else "disabled"
+            ),
+            "max_instance_count": (
+                MAXIMUM_MODELED_MIG_INSTANCES_PER_DEVICE
+            ),
+            "instance_count": len(instances),
+            "allocated_memory_bytes": allocated,
+            "unallocated_memory_bytes": max(0, total - allocated),
+            "instances": instances,
+        }
+
+    return {
+        "schema_version": "fakegpu.mig_layout.v1",
+        "source": source,
+        "configured": configured,
+        "valid": valid,
+        "error": error,
+        "enabled_device_count": enabled_device_count,
+        "instance_count": instance_count,
+        "allocated_memory_bytes": allocated_memory_total,
+    }
+
+
 def _maximum_fault_severity(
     events: Sequence[Mapping[str, Any]],
 ) -> str:
@@ -993,6 +1295,7 @@ class SmiStatePublisher:
             devices,
             detail_limit=self.detail_limit,
         )
+        mig = _modeled_mig_layout(devices)
         state = {
             "schema_version": SCHEMA_VERSION,
             "timestamp_ns": time.time_ns(),
@@ -1067,6 +1370,7 @@ class SmiStatePublisher:
             "dispatch_tracking": dispatch_tracking,
             "topology": topology,
             "faults": faults,
+            "mig": mig,
             "devices": devices,
         }
         serialized_bytes = _atomic_write_json(
@@ -1095,10 +1399,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "view",
         nargs="?",
-        choices=("topo", "nvlink", "events"),
+        choices=("topo", "nvlink", "events", "mig"),
         help=(
             "Show an NVIDIA-style modeled topology matrix, NVLink "
-            "status, or health and reliability events."
+            "status, health events, or MIG instances."
         ),
     )
     parser.add_argument("--state", action="append", default=[])
@@ -1143,6 +1447,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--status",
         action="store_true",
         help="Show link status; valid with the nvlink view.",
+    )
+    mig_group = parser.add_mutually_exclusive_group()
+    mig_group.add_argument(
+        "-lgi",
+        "--list-gpu-instances",
+        action="store_true",
+        help="List modeled GPU instances; valid with the mig view.",
+    )
+    mig_group.add_argument(
+        "-lci",
+        "--list-compute-instances",
+        action="store_true",
+        help="List modeled compute instances; valid with the mig view.",
     )
     parser.add_argument(
         "--format",
@@ -1209,6 +1526,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("-m/--matrix requires the topo view")
     if args.status and args.view != "nvlink":
         parser.error("-s/--status requires the nvlink view")
+    if (
+        args.list_gpu_instances
+        or args.list_compute_instances
+    ) and args.view != "mig":
+        parser.error("-lgi/-lci require the mig view")
     if args.view and (
         args.json
         or args.list_gpus
@@ -1217,8 +1539,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         or args.query_compute_apps
     ):
         parser.error(
-            "topo, nvlink, and events views cannot be combined with another "
-            "output mode"
+            "topo, nvlink, events, and mig views cannot be combined "
+            "with another output mode"
         )
     if args.format is not None and not (
         args.query_gpu or args.query_compute_apps
@@ -1301,6 +1623,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(render_nvlink_status(inventory, errors=errors))
             elif args.view == "events":
                 print(render_health_events(inventory, errors=errors))
+            elif args.view == "mig":
+                print(
+                    render_mig_view(
+                        inventory,
+                        errors=errors,
+                        instance_kind=(
+                            "gpu"
+                            if args.list_gpu_instances
+                            else "compute"
+                            if args.list_compute_instances
+                            else "all"
+                        ),
+                    )
+                )
             elif gpu_query_fields:
                 print(
                     render_query(
@@ -1552,6 +1888,12 @@ def build_inventory(
     )
     return {
         "device_count": len(devices),
+        "mig_instance_count": sum(
+            _nonnegative_int(
+                device.get("mig", {}).get("instance_count")
+            )
+            for device in devices
+        ),
         "process_count": len(process_rows),
         "runtime_count": len(runtime_rows),
         "devices": devices,
@@ -1666,6 +2008,17 @@ def render_gpu_list(
             f"CC: {item['compute_capability'] or 'N/A'}, "
             f"PCI: {item['pci_bus_id']})"
         )
+        for instance in item.get("mig", {}).get("instances") or []:
+            lines.append(
+                "  MIG "
+                f"{instance['profile']} Device "
+                f"{instance['index']}: "
+                f"(UUID: {instance['uuid']}, "
+                f"GI: {instance['gpu_instance_id']}, "
+                f"CI: {instance['compute_instance_id']}, "
+                "Memory: "
+                f"{_format_bytes(instance['memory_total_bytes'])})"
+            )
     if not lines:
         lines.append("No published FakeCUDA GPUs found.")
     for error in errors:
@@ -1818,6 +2171,87 @@ def render_nvlink_status(
                 f"{peer['pci_bus_id']}), "
                 f"{_format_gbps(peer.get('bandwidth_gbps'))} Gbps"
             )
+    for error in errors:
+        lines.append(f"warning: {error}")
+    return "\n".join(lines)
+
+
+def render_mig_view(
+    inventory: Mapping[str, Any],
+    *,
+    errors: Sequence[str] = (),
+    instance_kind: str = "all",
+) -> str:
+    if instance_kind not in {"all", "gpu", "compute"}:
+        raise ValueError(
+            "instance_kind must be all, gpu, or compute"
+        )
+    devices = list(inventory.get("devices") or [])
+    lines = [
+        "FakeGPU modeled MIG instances",
+        (
+            "Instance capacity is configured; per-instance runtime "
+            "memory usage is unobserved."
+        ),
+    ]
+    if not devices:
+        lines.append("No published FakeCUDA GPUs found.")
+    for device in devices:
+        mig = device["mig"]
+        lines.extend(
+            [
+                "",
+                (
+                    f"GPU {device['index']} @ {device['host']}: "
+                    f"{device['name']} ({device['uuid']})"
+                ),
+                (
+                    "  MIG mode: "
+                    f"{str(mig.get('mode') or 'disabled').replace('_', ' ').title()} "
+                    f"({mig.get('source') or 'modeled_none'})"
+                ),
+                (
+                    "  Capacity: "
+                    f"{mig.get('instance_count', 0)} instances, "
+                    f"{_format_bytes(mig.get('allocated_memory_bytes'))} "
+                    "allocated / "
+                    f"{_format_bytes(mig.get('unallocated_memory_bytes'))} "
+                    "unallocated"
+                ),
+            ]
+        )
+        if mig.get("error"):
+            lines.append(
+                f"  Configuration error: {mig['error']}"
+            )
+        instances = list(mig.get("instances") or [])
+        if not instances:
+            lines.append("  No modeled MIG instances.")
+            continue
+        for instance in instances:
+            if instance_kind in {"all", "gpu"}:
+                lines.append(
+                    "  GPU instance "
+                    f"{instance['gpu_instance_id']}: "
+                    f"profile {instance['profile']}, "
+                    f"{instance['slice_count']} slice(s), "
+                    f"{_format_bytes(instance['memory_total_bytes'])}, "
+                    f"UUID {instance['uuid']}"
+                )
+            if instance_kind in {"all", "compute"}:
+                prefix = (
+                    "    "
+                    if instance_kind == "all"
+                    else "  "
+                )
+                lines.append(
+                    f"{prefix}Compute instance "
+                    f"{instance['compute_instance_id']} "
+                    f"(GI {instance['gpu_instance_id']}): "
+                    f"profile {instance['profile']}, "
+                    "memory tracking "
+                    f"{instance['memory_tracking']}"
+                )
     for error in errors:
         lines.append(f"warning: {error}")
     return "\n".join(lines)
@@ -2196,6 +2630,7 @@ def render_detail(
         topology = item["topology"]
         nvlink = topology["nvlink"]
         health = item["health"]
+        mig = item["mig"]
         lines.extend(
             [
                 "",
@@ -2223,6 +2658,15 @@ def render_detail(
                     f"{health.get('max_severity') or 'none'}, "
                     f"{health.get('event_types_total', 0)} event types / "
                     f"{health.get('event_count', 0)} occurrences"
+                ),
+                (
+                    "  MIG model: "
+                    f"{mig.get('mode') or 'disabled'}, "
+                    f"{mig.get('instance_count', 0)} instances, "
+                    f"{_format_bytes(mig.get('allocated_memory_bytes'))} "
+                    "allocated / "
+                    f"{_format_bytes(mig.get('unallocated_memory_bytes'))} "
+                    "unallocated"
                 ),
                 (
                     f"  Profile: {item['profile_id']} "
@@ -2319,6 +2763,21 @@ def render_detail(
                     f"{event.get('code') or 'UNKNOWN'}: "
                     f"{_nonnegative_int(event.get('count'))} "
                     "occurrences"
+                )
+        if mig.get("error"):
+            lines.append(
+                f"  MIG configuration error: {mig['error']}"
+            )
+        if mig.get("instances"):
+            lines.append("  Modeled MIG instances:")
+            for instance in mig["instances"]:
+                lines.append(
+                    "    - "
+                    f"GI {instance['gpu_instance_id']} / "
+                    f"CI {instance['compute_instance_id']}: "
+                    f"{instance['profile']}, "
+                    f"{_format_bytes(instance['memory_total_bytes'])}, "
+                    f"{instance['uuid']}"
                 )
         if (
             str(item["fakegpu"].get("runtime") or "") == "native"
@@ -2498,6 +2957,7 @@ def _empty_device_aggregate(
         },
         "topology": dict(device["topology"]),
         "health": dict(device["health"]),
+        "mig": dict(device["mig"]),
         "telemetry": dict(device["telemetry"]),
         "fakegpu": dict(fakegpu),
         "software": dict(software),
@@ -2716,6 +3176,10 @@ def _normalize_device(
     )
     topology = _normalize_device_topology(raw.get("topology"))
     health = _normalize_device_health(raw.get("health"))
+    mig = _normalize_device_mig(
+        raw.get("mig"),
+        total_memory=total,
+    )
     return {
         "index": index,
         "name": str(raw.get("name") or "Fake NVIDIA GPU"),
@@ -2794,6 +3258,7 @@ def _normalize_device(
         ),
         "topology": topology,
         "health": health,
+        "mig": mig,
         "telemetry": telemetry,
     }
 
@@ -2900,6 +3365,17 @@ def _matches_device(
         str(device.get("pci_bus_id", "")).casefold(),
         str(device.get("profile_id", "")).casefold(),
     }
+    mig = device.get("mig")
+    if isinstance(mig, Mapping):
+        for instance in mig.get("instances") or []:
+            if not isinstance(instance, Mapping):
+                continue
+            candidates.add(
+                str(instance.get("uuid", "")).casefold()
+            )
+            candidates.add(
+                str(instance.get("profile", "")).casefold()
+            )
     return any(selector in candidates for selector in selectors)
 
 
@@ -2937,6 +3413,112 @@ def _mapping_list(value: Any) -> list[dict[str, Any]]:
     return [
         dict(item) for item in value if isinstance(item, Mapping)
     ]
+
+
+def _normalize_device_mig(
+    value: Any,
+    *,
+    total_memory: int,
+) -> dict[str, Any]:
+    raw = dict(value) if isinstance(value, Mapping) else {}
+    instances = []
+    for item in _mapping_list(raw.get("instances")):
+        used = item.get("memory_used_bytes")
+        free = item.get("memory_free_bytes")
+        instances.append(
+            {
+                "index": _nonnegative_int(item.get("index")),
+                "gpu_instance_id": _nonnegative_int(
+                    item.get("gpu_instance_id")
+                ),
+                "compute_instance_id": _nonnegative_int(
+                    item.get("compute_instance_id")
+                ),
+                "profile": str(
+                    item.get("profile") or "unknown"
+                ),
+                "slice_count": _nonnegative_int(
+                    item.get("slice_count")
+                ),
+                "uuid": str(item.get("uuid") or "unknown"),
+                "parent_uuid": str(
+                    item.get("parent_uuid") or "unknown"
+                ),
+                "pci_bus_id": str(
+                    item.get("pci_bus_id") or "unknown"
+                ),
+                "memory_total_bytes": _nonnegative_int(
+                    item.get("memory_total_bytes")
+                ),
+                "memory_used_bytes": (
+                    None
+                    if used is None
+                    else _nonnegative_int(used)
+                ),
+                "memory_free_bytes": (
+                    None
+                    if free is None
+                    else _nonnegative_int(free)
+                ),
+                "memory_tracking": str(
+                    item.get("memory_tracking") or "unobserved"
+                ),
+                "source": str(
+                    item.get("source")
+                    or raw.get("source")
+                    or "modeled_none"
+                ),
+            }
+        )
+    instances.sort(
+        key=lambda item: (
+            int(item["gpu_instance_id"]),
+            int(item["compute_instance_id"]),
+            str(item["uuid"]),
+        )
+    )
+    allocated = _nonnegative_int(
+        raw.get("allocated_memory_bytes"),
+        default=sum(
+            int(instance["memory_total_bytes"])
+            for instance in instances
+        ),
+    )
+    valid = bool(raw.get("valid", True))
+    mode = str(raw.get("mode") or "")
+    if mode not in {
+        "enabled",
+        "disabled",
+        "configuration_error",
+    }:
+        mode = (
+            "configuration_error"
+            if not valid
+            else "enabled"
+            if instances
+            else "disabled"
+        )
+    return {
+        "source": str(raw.get("source") or "modeled_none"),
+        "configured": bool(raw.get("configured", False)),
+        "valid": valid,
+        "error": str(raw.get("error") or ""),
+        "mode": mode,
+        "max_instance_count": _nonnegative_int(
+            raw.get("max_instance_count"),
+            default=MAXIMUM_MODELED_MIG_INSTANCES_PER_DEVICE,
+        ),
+        "instance_count": _nonnegative_int(
+            raw.get("instance_count"),
+            default=len(instances),
+        ),
+        "allocated_memory_bytes": allocated,
+        "unallocated_memory_bytes": _nonnegative_int(
+            raw.get("unallocated_memory_bytes"),
+            default=max(0, total_memory - allocated),
+        ),
+        "instances": instances,
+    }
 
 
 def _normalize_device_health(value: Any) -> dict[str, Any]:
@@ -3402,6 +3984,21 @@ def _synthetic_uuid(host: str, index: int, profile_id: str) -> str:
         f"fakegpu:{host}:{index}:{profile_id}",
     )
     return f"GPU-{identity}"
+
+
+def _synthetic_mig_uuid(
+    parent_uuid: str,
+    gpu_instance_id: int,
+    compute_instance_id: int,
+) -> str:
+    suffix = (
+        parent_uuid[4:]
+        if parent_uuid.startswith("GPU-")
+        else parent_uuid
+    )
+    return (
+        f"MIG-{suffix}/{gpu_instance_id}/{compute_instance_id}"
+    )
 
 
 def _synthetic_pci_bus_id(index: int) -> str:

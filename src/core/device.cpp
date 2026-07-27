@@ -18,6 +18,8 @@ namespace {
 
 constexpr double kDefaultNvLinkBandwidthGbps = 900.0;
 constexpr double kMaximumNvLinkBandwidthGbps = 1'000'000.0;
+constexpr uint64_t kMebibyte = 1024ULL * 1024ULL;
+constexpr std::size_t kMaximumMigProfileLength = 64;
 
 std::string trim_copy(const std::string& value) {
     const std::size_t begin = value.find_first_not_of(" \t\r\n");
@@ -158,6 +160,89 @@ ModeledFaultModel invalid_fault_model(std::string error) {
     model.valid = false;
     model.error = std::move(error);
     return model;
+}
+
+ModeledMigLayout invalid_mig_layout(std::string error) {
+    ModeledMigLayout layout;
+    layout.source = "modeled_environment_invalid";
+    layout.configured = true;
+    layout.valid = false;
+    layout.error = std::move(error);
+    return layout;
+}
+
+bool parse_bounded_positive_integer(
+    const std::string& value,
+    uint64_t maximum,
+    uint64_t& result) {
+    const std::string trimmed = trim_copy(value);
+    if (trimmed.empty() || trimmed.front() == '-') {
+        return false;
+    }
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed =
+        std::strtoull(trimmed.c_str(), &end, 10);
+    if (
+        errno != 0 ||
+        end == trimmed.c_str() ||
+        !end ||
+        *end != '\0' ||
+        parsed == 0 ||
+        parsed > maximum) {
+        return false;
+    }
+    result = static_cast<uint64_t>(parsed);
+    return true;
+}
+
+bool parse_mig_profile(
+    const std::string& value,
+    std::string& profile,
+    unsigned int& slice_count) {
+    profile = lowercase_copy(trim_copy(value));
+    if (
+        profile.empty() ||
+        profile.size() > kMaximumMigProfileLength ||
+        !std::all_of(
+            profile.begin(),
+            profile.end(),
+            [](unsigned char character) {
+                return std::isalnum(character) ||
+                    character == '.' ||
+                    character == '_' ||
+                    character == '-' ||
+                    character == '+';
+            })) {
+        return false;
+    }
+    const std::size_t separator = profile.find("g.");
+    if (separator == std::string::npos || separator == 0) {
+        return false;
+    }
+    uint64_t parsed_slices = 0;
+    if (
+        !parse_bounded_positive_integer(
+            profile.substr(0, separator),
+            kMaximumModeledMigSlicesPerDevice,
+            parsed_slices)) {
+        return false;
+    }
+    slice_count = static_cast<unsigned int>(parsed_slices);
+    return true;
+}
+
+std::string modeled_mig_uuid(
+    const Device& parent,
+    unsigned int gpu_instance_id,
+    unsigned int compute_instance_id) {
+    const std::string parent_uuid =
+        parent.uuid.rfind("GPU-", 0) == 0
+        ? parent.uuid.substr(4)
+        : parent.uuid;
+    return "MIG-" + parent_uuid + "/" +
+        std::to_string(gpu_instance_id) + "/" +
+        std::to_string(compute_instance_id);
 }
 
 } // namespace
@@ -438,6 +523,180 @@ ModeledFaultModel build_modeled_fault_model(
             return left.code < right.code;
         });
     return model;
+}
+
+ModeledMigLayout build_modeled_mig_layout(
+    const std::vector<Device>& devices) {
+    ModeledMigLayout layout;
+    const char* configured_layout =
+        std::getenv("FAKEGPU_MIG_LAYOUT");
+    if (!configured_layout || !*configured_layout) {
+        return layout;
+    }
+
+    const std::string layout_text = trim_copy(configured_layout);
+    if (
+        layout_text.empty() ||
+        layout_text.front() == ';' ||
+        layout_text.back() == ';') {
+        return invalid_mig_layout(
+            "FAKEGPU_MIG_LAYOUT contains an empty instance entry");
+    }
+
+    layout.source = "modeled_environment";
+    layout.configured = true;
+    std::vector<uint64_t> allocated_memory(devices.size(), 0);
+    std::vector<std::size_t> allocated_slices(devices.size(), 0);
+    std::vector<unsigned int> instance_counts(devices.size(), 0);
+
+    std::istringstream entries(layout_text);
+    std::string entry_text;
+    std::size_t entry_index = 0;
+    while (std::getline(entries, entry_text, ';')) {
+        ++entry_index;
+        entry_text = trim_copy(entry_text);
+        const std::string prefix =
+            "FAKEGPU_MIG_LAYOUT entry " +
+            std::to_string(entry_index);
+        if (
+            entry_text.empty() ||
+            entry_text.front() == ':' ||
+            entry_text.back() == ':') {
+            return invalid_mig_layout(
+                prefix +
+                " must use DEVICE:PROFILE:MEMORY_MIB[:COUNT]");
+        }
+
+        std::vector<std::string> fields;
+        std::istringstream field_stream(entry_text);
+        std::string field;
+        while (std::getline(field_stream, field, ':')) {
+            fields.push_back(trim_copy(field));
+        }
+        if (
+            fields.size() < 3 ||
+            fields.size() > 4 ||
+            std::any_of(
+                fields.begin(),
+                fields.end(),
+                [](const std::string& value) {
+                    return value.empty();
+                })) {
+            return invalid_mig_layout(
+                prefix +
+                " must use DEVICE:PROFILE:MEMORY_MIB[:COUNT]");
+        }
+
+        int device_index = -1;
+        if (!parse_device_index(
+                fields[0],
+                devices.size(),
+                device_index)) {
+            return invalid_mig_layout(
+                prefix + " contains an invalid device index");
+        }
+
+        std::string profile;
+        unsigned int slice_count = 0;
+        if (!parse_mig_profile(
+                fields[1],
+                profile,
+                slice_count)) {
+            return invalid_mig_layout(
+                prefix +
+                " contains an invalid MIG profile; expected a name "
+                "such as 1g.10gb");
+        }
+
+        const Device& parent =
+            devices[static_cast<std::size_t>(device_index)];
+        const uint64_t maximum_mib =
+            parent.total_memory / kMebibyte;
+        uint64_t memory_mib = 0;
+        if (!parse_bounded_positive_integer(
+                fields[2],
+                maximum_mib,
+                memory_mib)) {
+            return invalid_mig_layout(
+                prefix +
+                " memory must be a positive MiB value no greater "
+                "than the parent device memory");
+        }
+        const uint64_t memory_bytes = memory_mib * kMebibyte;
+
+        uint64_t count = 1;
+        if (
+            fields.size() == 4 &&
+            !parse_bounded_positive_integer(
+                fields[3],
+                kMaximumModeledMigInstancesPerDevice,
+                count)) {
+            return invalid_mig_layout(
+                prefix + " count must be between 1 and 8");
+        }
+
+        const std::size_t parent_index =
+            static_cast<std::size_t>(device_index);
+        if (
+            count >
+            kMaximumModeledMigInstancesPerDevice -
+                instance_counts[parent_index]) {
+            return invalid_mig_layout(
+                prefix +
+                " exceeds the 8-instance per-device limit");
+        }
+        if (
+            slice_count >
+                kMaximumModeledMigSlicesPerDevice ||
+            count >
+                (
+                    kMaximumModeledMigSlicesPerDevice -
+                    allocated_slices[parent_index]
+                ) / slice_count) {
+            return invalid_mig_layout(
+                prefix +
+                " exceeds the 8-slice per-device limit");
+        }
+        if (
+            memory_bytes > parent.total_memory ||
+            count >
+                (
+                    parent.total_memory -
+                    allocated_memory[parent_index]
+                ) / memory_bytes) {
+            return invalid_mig_layout(
+                prefix +
+                " allocates more memory than the parent device");
+        }
+
+        for (uint64_t offset = 0; offset < count; ++offset) {
+            const unsigned int instance_index =
+                instance_counts[parent_index]++;
+            layout.instances.push_back(
+                {
+                    device_index,
+                    instance_index,
+                    instance_index,
+                    instance_index,
+                    slice_count,
+                    profile,
+                    modeled_mig_uuid(
+                        parent,
+                        instance_index,
+                        instance_index),
+                    memory_bytes,
+                });
+        }
+        allocated_slices[parent_index] +=
+            static_cast<std::size_t>(count) * slice_count;
+        allocated_memory[parent_index] += count * memory_bytes;
+    }
+
+    if (layout.instances.empty()) {
+        return invalid_mig_layout(
+            "FAKEGPU_MIG_LAYOUT did not define any MIG instances");
+    }
+    return layout;
 }
 
 } // namespace fake_gpu

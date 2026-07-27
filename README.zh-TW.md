@@ -181,7 +181,7 @@ FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果�
 | Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **165 個通過** |
 | 宣告式驗證矩陣 | 6 個 smoke 案例，加 8 個 LLM cache、訓練規劃與校準案例 | **14 個通過** |
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
-| FakeGPU-SMI 診斷 | 有上限的狀態發布、拓撲/NVLink 檢視、NVML peer/PCI 查詢、健康欄位與事件報告 | **通過** |
+| FakeGPU-SMI 診斷 | 有上限的狀態發布、拓撲/NVLink/MIG 檢視、NVML peer/MIG 查詢、健康欄位與事件報告 | **通過** |
 | 原生能力清單 | 5 個能力群組、26 個明確 API、24 個強制執行策略的 API | **通過** |
 | GPU profile 目錄 | 82 個 profile，涵蓋 15 種 compute capability | **通過** |
 | CPU 數值模擬 | GEMM、cuBLASLt、批次 GEMM、BLAS1/2 與 FP16，共 8 組測試 | **通過** |
@@ -354,6 +354,10 @@ python3 -m fakegpu nvidia-smi nvlink -s --state-dir build/smi
 # 建模故障、相容性警告、發布失敗與過期狀態。
 python3 -m fakegpu nvidia-smi events --state-dir build/smi
 
+# 建模 MIG GPU Instance 與 Compute Instance。
+python3 -m fakegpu nvidia-smi mig -lgi --state-dir build/smi
+python3 -m fakegpu nvidia-smi mig -lci --state-dir build/smi
+
 # 適合腳本處理的 GPU 與程序查詢。
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model,native.kernel_launches,native.gemm_calls,native.io_bytes \
@@ -381,6 +385,16 @@ NVLink 模型預設關閉。在工作負載啟動前設定
 `topo -m`、`nvlink -s`、`topology.*`/`nvlink.*` 查詢欄位，以及原生 NVML
 的鏈路狀態、capability、遠端裝置類型與遠端 PCI 查詢共用同一模型。設定無效時，
 所有鏈路都會保持 inactive，狀態中會顯示設定錯誤。
+
+MIG 模型預設關閉。請在工作負載啟動前使用
+`FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."` 設定實例，例如
+`FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`。每個建模 GPU
+Instance 對應一個 Compute Instance。狀態檔、`-L`、`-q`、`mig -lgi`、
+`mig -lci`、`mig.*` 查詢欄位，以及原生 NVML 的 MIG mode、handle、UUID、
+父裝置、實例 ID 與 GPU 記憶體容量查詢共用同一設定。單一裝置最多包含 8 個
+實例與 8 個 slice，實例 GPU 記憶體總量不能超過父裝置；無效設定不會建立部分
+實例。目前還無法將 runtime allocation 歸屬到特定 MIG 實例，因此狀態檔會將
+實例 used/free GPU 記憶體標示為 `unobserved`。
 
 故障注入預設同樣關閉。設定格式為
 `FAKEGPU_FAULT_EVENTS="DEVICE:CODE:SEVERITY[:COUNT];..."`，例如
@@ -482,7 +496,7 @@ dtype，可透過 `--kv-cache-residual-tokens` 調整。
 | `fakegpu replay-trace` | 彙整運算、通訊、等待與 GPU 記憶體時間軸 |
 | `fakegpu calibrate` | 比較 GPU 記憶體報告並執行可靠性門檻檢查 |
 | `fakegpu capabilities` | 列出或嚴格檢查原生 API 分類 |
-| `fakegpu nvidia-smi` | 查看裝置、程序、建模拓撲、健康狀態與可靠性事件 |
+| `fakegpu nvidia-smi` | 查看裝置、程序、建模拓撲/MIG、健康狀態與可靠性事件 |
 | `fakegpu workspace-profiles` | 驗證並查看 workspace 估算 profiles |
 | `fakegpu validate` | 執行 JSON、TOML 或 YAML 宣告式驗證矩陣 |
 | `fakegpu coordinator` | 管理分散式模擬 coordinator |
@@ -619,7 +633,7 @@ FakeGPU/
 - [x] 透過 FakeGPU-SMI 發布原生 runtime 的即時狀態與活動
 - [x] 加入建模拓撲、NVLink 檢視與 NVML peer 查詢
 - [x] 加入建模故障注入、健康狀態與可靠性事件檢視
-- [ ] 加入 MIG 檢視
+- [x] 加入建模 MIG 檢視與原生 NVML MIG handle 查詢
 - [ ] 將裝置與程序的歷史指標匯出至監控系統
 - [ ] 為長上下文與線上服務加入實體 GPU LLM 驗證
 - [ ] 在更多 GPU 與軟體堆疊上驗證分散式與 MoE 估算

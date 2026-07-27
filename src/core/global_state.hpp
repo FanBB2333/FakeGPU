@@ -121,7 +121,11 @@ public:
     std::vector<DeviceReportStats> snapshot_device_report() const;
     ModeledDeviceTopology snapshot_device_topology() const;
     ModeledFaultModel snapshot_fault_model() const;
+    ModeledMigLayout snapshot_mig_layout() const;
     HostIoStats snapshot_host_io() const;
+    unsigned int get_mig_device_count(int parent_device) const;
+    Device* get_mig_device(int parent_device, unsigned int index);
+    Device* get_parent_device_for_mig(Device* mig_device);
 
     // Native SMI state publishing (enabled by FAKEGPU_SMI_STATE_PATH/DIR).
     void ensure_native_smi_publisher();
@@ -182,8 +186,10 @@ private:
 
     bool initialized = false;
     std::vector<Device> devices;
+    std::vector<Device> mig_devices;
     ModeledDeviceTopology device_topology;
     ModeledFaultModel fault_model;
+    ModeledMigLayout mig_layout;
     std::vector<DeviceRuntimeStats> device_stats;
     HostIoStats host_io;
     mutable std::mutex mutex;
