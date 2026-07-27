@@ -22,6 +22,7 @@
 #include <locale>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -624,12 +625,136 @@ void append_device_health(
     out << "]}";
 }
 
+std::vector<const ModeledMigInstance*> mig_instances_for_device(
+    const ModeledMigLayout& layout,
+    int device_index) {
+    std::vector<const ModeledMigInstance*> instances;
+    for (const auto& instance : layout.instances) {
+        if (instance.parent_device_index == device_index) {
+            instances.push_back(&instance);
+        }
+    }
+    return instances;
+}
+
+void append_mig_instance(
+    std::ostringstream& out,
+    const ModeledMigInstance& instance,
+    const std::string& parent_uuid,
+    const std::string& parent_pci_bus_id,
+    const std::string& source) {
+    out << "{\"index\":" << instance.mig_device_index;
+    out << ",\"gpu_instance_id\":"
+        << instance.gpu_instance_id;
+    out << ",\"compute_instance_id\":"
+        << instance.compute_instance_id;
+    out << ",\"profile\":";
+    append_json_string(out, instance.profile);
+    out << ",\"slice_count\":" << instance.slice_count;
+    out << ",\"uuid\":";
+    append_json_string(out, instance.uuid);
+    out << ",\"parent_uuid\":";
+    append_json_string(out, parent_uuid);
+    out << ",\"pci_bus_id\":";
+    append_json_string(out, parent_pci_bus_id);
+    out << ",\"memory_total_bytes\":"
+        << instance.memory_bytes;
+    out << ",\"memory_used_bytes\":null";
+    out << ",\"memory_free_bytes\":null";
+    out << ",\"memory_tracking\":\"unobserved\"";
+    out << ",\"source\":";
+    append_json_string(out, source);
+    out << '}';
+}
+
+void append_device_mig(
+    std::ostringstream& out,
+    const DeviceReportStats& device,
+    const ModeledMigLayout& layout) {
+    const auto instances =
+        mig_instances_for_device(layout, device.index);
+    uint64_t allocated_memory = 0;
+    for (const ModeledMigInstance* instance : instances) {
+        allocated_memory = saturating_add(
+            allocated_memory,
+            instance->memory_bytes);
+    }
+    const uint64_t unallocated_memory =
+        device.total_memory > allocated_memory
+        ? device.total_memory - allocated_memory
+        : 0;
+    const char* mode =
+        !layout.valid
+        ? "configuration_error"
+        : instances.empty()
+        ? "disabled"
+        : "enabled";
+
+    out << ",\"mig\":{\"source\":";
+    append_json_string(out, layout.source);
+    out << ",\"configured\":"
+        << (layout.configured ? "true" : "false");
+    out << ",\"valid\":" << (layout.valid ? "true" : "false");
+    out << ",\"error\":";
+    append_json_string(out, layout.error);
+    out << ",\"mode\":";
+    append_json_string(out, mode);
+    out << ",\"max_instance_count\":"
+        << kMaximumModeledMigInstancesPerDevice;
+    out << ",\"instance_count\":" << instances.size();
+    out << ",\"allocated_memory_bytes\":" << allocated_memory;
+    out << ",\"unallocated_memory_bytes\":"
+        << unallocated_memory;
+    out << ",\"instances\":[";
+    for (std::size_t index = 0; index < instances.size(); ++index) {
+        if (index != 0) {
+            out << ',';
+        }
+        append_mig_instance(
+            out,
+            *instances[index],
+            device.uuid,
+            device.pci_bus_id,
+            layout.source);
+    }
+    out << "]}";
+}
+
+void append_mig_layout(
+    std::ostringstream& out,
+    const ModeledMigLayout& layout) {
+    std::set<int> enabled_devices;
+    uint64_t allocated_memory = 0;
+    for (const auto& instance : layout.instances) {
+        enabled_devices.insert(instance.parent_device_index);
+        allocated_memory = saturating_add(
+            allocated_memory,
+            instance.memory_bytes);
+    }
+    out << ",\"mig\":{";
+    out << "\"schema_version\":\"fakegpu.mig_layout.v1\"";
+    out << ",\"source\":";
+    append_json_string(out, layout.source);
+    out << ",\"configured\":"
+        << (layout.configured ? "true" : "false");
+    out << ",\"valid\":" << (layout.valid ? "true" : "false");
+    out << ",\"error\":";
+    append_json_string(out, layout.error);
+    out << ",\"enabled_device_count\":"
+        << enabled_devices.size();
+    out << ",\"instance_count\":" << layout.instances.size();
+    out << ",\"allocated_memory_bytes\":"
+        << allocated_memory;
+    out << '}';
+}
+
 void append_device(
     std::ostringstream& out,
     const DeviceReportStats& device,
     const std::vector<DeviceReportStats>& devices,
     const ModeledDeviceTopology& topology,
     const ModeledFaultModel& fault_model,
+    const ModeledMigLayout& mig_layout,
     std::size_t detail_limit) {
     const NativeActivity activity = native_activity(device);
     const uint64_t free_memory =
@@ -758,6 +883,7 @@ void append_device(
         fault_model,
         device.index,
         detail_limit);
+    append_device_mig(out, device, mig_layout);
     out << '}';
 }
 
@@ -862,6 +988,8 @@ private:
                 state_.snapshot_device_topology();
             const ModeledFaultModel fault_model =
                 state_.snapshot_fault_model();
+            const ModeledMigLayout mig_layout =
+                state_.snapshot_mig_layout();
             const BackendConfig& config = BackendConfig::instance();
             const double interval_seconds =
                 static_cast<double>(interval_.count()) / 1000.0;
@@ -964,6 +1092,7 @@ private:
                 out,
                 fault_model,
                 limits_.detail_entries);
+            append_mig_layout(out, mig_layout);
             out << ",\"devices\":[";
             for (std::size_t index = 0;
                  index < devices.size();
@@ -977,6 +1106,7 @@ private:
                     devices,
                     topology,
                     fault_model,
+                    mig_layout,
                     limits_.detail_entries);
             }
             out << "]}\n";

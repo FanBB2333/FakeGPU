@@ -180,7 +180,7 @@ FakeGPU 按工作负载和环境签名报告可靠性。`GPU-validated` 结果�
 | Python runtime、估算器、CLI、schema 和 README 契约 | 完整 `pytest` 测试集 | **165 个通过** |
 | 声明式验证矩阵 | 6 个 smoke 用例，加 8 个 LLM cache、训练规划和校准用例 | **14 个通过** |
 | 原生库拦截 | 构建、库边界、导出符号、preload、显存类型、coordinator 和不支持 API 策略 | **通过** |
-| FakeGPU-SMI 诊断 | 有上限的状态发布、拓扑/NVLink 视图、NVML peer/PCI 查询、健康字段和事件报告 | **通过** |
+| FakeGPU-SMI 诊断 | 有上限的状态发布、拓扑/NVLink/MIG 视图、NVML peer/MIG 查询、健康字段和事件报告 | **通过** |
 | 原生能力清单 | 5 个能力组、26 个显式 API、24 个强制执行策略的 API | **通过** |
 | GPU profile 目录 | 82 个 profile，覆盖 15 种 compute capability | **通过** |
 | CPU 数值模拟 | GEMM、cuBLASLt、批量 GEMM、BLAS1/2 和 FP16，共 8 组测试 | **通过** |
@@ -353,6 +353,10 @@ python3 -m fakegpu nvidia-smi nvlink -s --state-dir build/smi
 # 建模故障、兼容性警告、发布失败和过期状态。
 python3 -m fakegpu nvidia-smi events --state-dir build/smi
 
+# 建模 MIG GPU Instance 和 Compute Instance。
+python3 -m fakegpu nvidia-smi mig -lgi --state-dir build/smi
+python3 -m fakegpu nvidia-smi mig -lci --state-dir build/smi
+
 # 适合脚本处理的 GPU 与进程查询。
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model,native.kernel_launches,native.gemm_calls,native.io_bytes \
@@ -380,6 +384,16 @@ NVLink 模型默认关闭。在工作负载启动前设置
 `topo -m`、`nvlink -s`、`topology.*`/`nvlink.*` 查询字段，以及原生 NVML
 的链路状态、capability、远端设备类型和远端 PCI 查询共用同一模型。配置无效时，
 所有链路都会保持 inactive，状态中会给出配置错误。
+
+MIG 模型默认关闭。请在工作负载启动前使用
+`FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."` 配置实例，例如
+`FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`。每个建模 GPU
+Instance 对应一个 Compute Instance。状态文件、`-L`、`-q`、`mig -lgi`、
+`mig -lci`、`mig.*` 查询字段，以及原生 NVML 的 MIG mode、handle、UUID、
+父设备、实例 ID 和显存容量查询共用同一配置。单个设备最多包含 8 个实例和
+8 个 slice，实例显存总量不能超过父设备；无效配置不会生成部分实例。当前还不能
+将 runtime allocation 归属到具体 MIG 实例，因此状态文件会将实例 used/free
+显存标记为 `unobserved`。
 
 故障注入默认同样关闭。配置格式为
 `FAKEGPU_FAULT_EVENTS="DEVICE:CODE:SEVERITY[:COUNT];..."`，例如
@@ -480,7 +494,7 @@ dtype，可通过 `--kv-cache-residual-tokens` 调整。
 | `fakegpu replay-trace` | 汇总计算、通信、等待和显存时间线 |
 | `fakegpu calibrate` | 对比显存报告并执行可靠性门槛检查 |
 | `fakegpu capabilities` | 列出或严格检查原生 API 分类 |
-| `fakegpu nvidia-smi` | 查看设备、进程、建模拓扑、健康状态和可靠性事件 |
+| `fakegpu nvidia-smi` | 查看设备、进程、建模拓扑/MIG、健康状态和可靠性事件 |
 | `fakegpu workspace-profiles` | 验证并查看 workspace 估算 profiles |
 | `fakegpu validate` | 执行 JSON、TOML 或 YAML 声明式验证矩阵 |
 | `fakegpu coordinator` | 管理分布式模拟 coordinator |
@@ -617,7 +631,7 @@ FakeGPU/
 - [x] 通过 FakeGPU-SMI 发布原生 runtime 的实时状态和活动
 - [x] 增加建模拓扑、NVLink 视图和 NVML peer 查询
 - [x] 增加建模故障注入、健康状态和可靠性事件视图
-- [ ] 增加 MIG 视图
+- [x] 增加建模 MIG 视图和原生 NVML MIG handle 查询
 - [ ] 将设备与进程的历史指标导出到监控系统
 - [ ] 为长上下文和在线服务添加真实 GPU LLM 验证
 - [ ] 在更多 GPU 和软件栈上验证分布式与 MoE 估算

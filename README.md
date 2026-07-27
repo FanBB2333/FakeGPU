@@ -192,7 +192,7 @@ and PyTorch 2.9.1 CPU:
 | Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **165 passed** |
 | Declarative validation matrices | 6 smoke executions plus 8 LLM cache, training-plan, and calibration executions | **14 passed** |
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
-| FakeGPU-SMI diagnostics | Bounded publisher state, topology/NVLink views, NVML peer/PCI queries, health fields, and event reporting | **Passed** |
+| FakeGPU-SMI diagnostics | Bounded state, topology/NVLink/MIG views, NVML peer/MIG queries, health fields, and event reporting | **Passed** |
 | Native capability inventory | 5 groups, 26 explicit APIs, 24 policy-enforced APIs | **Passed** |
 | GPU profile catalog | 82 profiles across 15 compute capabilities | **Passed** |
 | CPU numerical simulation | GEMM, cuBLASLt, batched GEMM, BLAS1/2, and FP16: 8 maintained test groups | **Passed** |
@@ -372,6 +372,10 @@ python3 -m fakegpu nvidia-smi nvlink -s --state-dir build/smi
 # Modeled faults, compatibility warnings, publisher failures, and stale state.
 python3 -m fakegpu nvidia-smi events --state-dir build/smi
 
+# Modeled MIG GPU and compute instances.
+python3 -m fakegpu nvidia-smi mig -lgi --state-dir build/smi
+python3 -m fakegpu nvidia-smi mig -lci --state-dir build/smi
+
 # Script-friendly GPU and process queries.
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --query-gpu=index,name,uuid,pci.bus_id,profile.id,compute_cap,memory.total,memory.used,memory.free,allocator.model,native.kernel_launches,native.gemm_calls,native.io_bytes \
@@ -404,6 +408,17 @@ model drives state files, `topo -m`, `nvlink -s`, the
 `topology.*`/`nvlink.*` query fields, and native NVML link-state, capability,
 remote-device-type, and remote-PCI queries. Invalid groups leave every link
 inactive and publish a configuration error.
+
+MIG modeling is disabled by default. Configure instances before starting the
+workload with
+`FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."`, for example
+`FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`. Each modeled GPU
+instance owns one compute instance. The layout drives state files, `-L`, `-q`,
+`mig -lgi`, `mig -lci`, the `mig.*` query fields, and native NVML MIG mode,
+handle, UUID, parent, instance-ID, and memory-capacity queries. Layouts that
+exceed parent memory, eight slices, or eight instances per device are rejected
+without creating partial instances. Per-instance runtime allocation attribution
+is not implemented, so state files mark used/free instance memory unobserved.
 
 Fault injection is also disabled by default. Set entries using
 `FAKEGPU_FAULT_EVENTS="DEVICE:CODE:SEVERITY[:COUNT];..."`, for example
@@ -512,7 +527,7 @@ at the compute dtype by default; change it with
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
 | `fakegpu calibrate` | Compare memory reports and enforce reliability gates |
 | `fakegpu capabilities` | List or strictly audit native API classifications |
-| `fakegpu nvidia-smi` | Inspect devices, processes, modeled topology, health status, and reliability events |
+| `fakegpu nvidia-smi` | Inspect devices, processes, modeled topology/MIG, health status, and reliability events |
 | `fakegpu workspace-profiles` | Validate and inspect workspace estimation profiles |
 | `fakegpu validate` | Run a declarative JSON, TOML, or YAML validation matrix |
 | `fakegpu coordinator` | Manage the distributed simulation coordinator |
@@ -653,7 +668,7 @@ environments, binary assets, and design drafts are excluded through
 - [x] Publish live native-runtime state and activity through FakeGPU-SMI
 - [x] Add modeled topology and NVLink views with NVML peer queries
 - [x] Add modeled fault injection and health/reliability event views
-- [ ] Add a MIG view
+- [x] Add modeled MIG views and native NVML MIG handle queries
 - [ ] Export historical device and process metrics to monitoring systems
 - [ ] Add real-GPU LLM validation for long-context and online-serving workloads
 - [ ] Validate distributed and MoE estimates across more GPU and software stacks

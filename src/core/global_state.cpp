@@ -165,6 +165,30 @@ void GlobalState::initialize() {
         }
         device_topology = build_modeled_device_topology(devices.size());
         fault_model = build_modeled_fault_model(devices.size());
+        mig_layout = build_modeled_mig_layout(devices);
+        mig_devices.reserve(mig_layout.instances.size());
+        for (const auto& instance : mig_layout.instances) {
+            Device& parent = devices[
+                static_cast<std::size_t>(
+                    instance.parent_device_index)];
+            mig_devices.emplace_back(parent.index, parent.profile);
+            Device& mig_device = mig_devices.back();
+            mig_device.name =
+                parent.name + " MIG " + instance.profile;
+            mig_device.uuid = instance.uuid;
+            mig_device.total_memory = instance.memory_bytes;
+            mig_device.pci_bus_id = parent.pci_bus_id;
+            mig_device.is_mig_device = true;
+            mig_device.parent_device_index = parent.index;
+            mig_device.mig_device_index =
+                instance.mig_device_index;
+            mig_device.gpu_instance_id =
+                instance.gpu_instance_id;
+            mig_device.compute_instance_id =
+                instance.compute_instance_id;
+            mig_device.mig_slice_count = instance.slice_count;
+            mig_device.mig_profile = instance.profile;
+        }
         device_stats.resize(devices.size());
         initialized = true;
         FGPU_LOG("[GlobalState-%p] Valid devices count after init: %lu\n", this, devices.size());
@@ -548,6 +572,49 @@ ModeledDeviceTopology GlobalState::snapshot_device_topology() const {
 ModeledFaultModel GlobalState::snapshot_fault_model() const {
     std::lock_guard<std::mutex> lock(mutex);
     return fault_model;
+}
+
+ModeledMigLayout GlobalState::snapshot_mig_layout() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return mig_layout;
+}
+
+unsigned int GlobalState::get_mig_device_count(
+    int parent_device) const {
+    unsigned int count = 0;
+    for (const Device& device : mig_devices) {
+        if (device.parent_device_index == parent_device) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+Device* GlobalState::get_mig_device(
+    int parent_device,
+    unsigned int index) {
+    for (Device& device : mig_devices) {
+        if (
+            device.parent_device_index == parent_device &&
+            device.mig_device_index == index) {
+            return &device;
+        }
+    }
+    return nullptr;
+}
+
+Device* GlobalState::get_parent_device_for_mig(
+    Device* mig_device) {
+    if (!mig_device || !mig_device->is_mig_device) {
+        return nullptr;
+    }
+    const int parent_index = mig_device->parent_device_index;
+    if (
+        parent_index < 0 ||
+        parent_index >= static_cast<int>(devices.size())) {
+        return nullptr;
+    }
+    return &devices[static_cast<std::size_t>(parent_index)];
 }
 
 HostIoStats GlobalState::snapshot_host_io() const {

@@ -67,6 +67,7 @@ run_smoke() {
     FAKEGPU_NVLINK_GROUPS="0,1;2,3" \
     FAKEGPU_NVLINK_BANDWIDTH_GBPS=800 \
     FAKEGPU_FAULT_EVENTS="0:XID_79:critical;1:NVLINK_CRC:error:3" \
+    FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480" \
     run_fakegpu "$BUILD_DIR" "$PYTHON_BIN" tests/native/memory_types.py
   FAKEGPU_BUILD_DIR="$BUILD_DIR" \
     "$PYTHON_BIN" tests/native/coordinator_smoke.py

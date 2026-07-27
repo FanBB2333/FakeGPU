@@ -15,6 +15,7 @@ from fakegpu.smi import (
     SmiStatePublisher,
     main,
     render_health_events,
+    render_mig_view,
     render_nvlink_status,
     render_table,
     render_topology_matrix,
@@ -310,6 +311,137 @@ def test_virtual_smi_rejects_invalid_modeled_nvlink_config_safely(
         device["topology"]["nvlink"]["active_links"] == 0
         for device in state["devices"]
     )
+
+
+def test_virtual_smi_models_mig_instances_views_and_queries(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "mig-layout.json"
+    monkeypatch.setenv(
+        "FAKEGPU_MIG_LAYOUT",
+        "0:1g.10gb:10240:2;1:2g.20gb:20480",
+    )
+    state = SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "name": f"Fake GPU {index}",
+                    "profile_id": "a100",
+                    "total_memory": 80 * 2**30,
+                }
+                for index in range(2)
+            ]
+        },
+    ).publish_once(running=True)
+
+    layout = state["mig"]
+    assert layout["schema_version"] == "fakegpu.mig_layout.v1"
+    assert layout["source"] == "modeled_environment"
+    assert layout["valid"] is True
+    assert layout["enabled_device_count"] == 2
+    assert layout["instance_count"] == 3
+    assert layout["allocated_memory_bytes"] == 40 * 2**30
+
+    gpu0_mig = state["devices"][0]["mig"]
+    assert gpu0_mig["mode"] == "enabled"
+    assert gpu0_mig["instance_count"] == 2
+    assert gpu0_mig["allocated_memory_bytes"] == 20 * 2**30
+    assert gpu0_mig["unallocated_memory_bytes"] == 60 * 2**30
+    assert gpu0_mig["instances"][0]["profile"] == "1g.10gb"
+    assert gpu0_mig["instances"][0]["uuid"].startswith("MIG-")
+    assert gpu0_mig["instances"][0]["memory_used_bytes"] is None
+    assert gpu0_mig["instances"][1]["gpu_instance_id"] == 1
+
+    assert main(["mig", "-lgi", "--state", str(path)]) == 0
+    gpu_instances = capsys.readouterr().out
+    assert "FakeGPU modeled MIG instances" in gpu_instances
+    assert "GPU instance 0: profile 1g.10gb" in gpu_instances
+    assert "Compute instance" not in gpu_instances
+    assert "per-instance runtime memory usage is unobserved" in (
+        gpu_instances
+    )
+
+    assert main(["mig", "-lci", "--state", str(path)]) == 0
+    compute_instances = capsys.readouterr().out
+    assert "Compute instance 0 (GI 0)" in compute_instances
+    assert "memory tracking unobserved" in compute_instances
+
+    assert main(["--state", str(path), "-L"]) == 0
+    listed = capsys.readouterr().out
+    assert "MIG 1g.10gb Device 0" in listed
+    assert "GI: 0, CI: 0" in listed
+
+    assert (
+        main(
+            [
+                "--state",
+                str(path),
+                "--query-gpu",
+                (
+                    "index,mig.mode,mig.instance_count,"
+                    "mig.allocated_memory,mig.unallocated_memory"
+                ),
+                "--format",
+                "json",
+                "-i",
+                gpu0_mig["instances"][0]["uuid"],
+            ]
+        )
+        == 0
+    )
+    query = json.loads(capsys.readouterr().out)
+    assert query["records"] == [
+        {
+            "index": 0,
+            "mig.mode": "enabled",
+            "mig.instance_count": 2,
+            "mig.allocated_memory": 20480,
+            "mig.unallocated_memory": 61440,
+        }
+    ]
+
+    inventory = smi_module.build_inventory([state])
+    assert inventory["mig_instance_count"] == 3
+    assert "GPU instance 0" in render_mig_view(inventory)
+
+
+def test_virtual_smi_rejects_invalid_mig_layout_without_instances(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "FAKEGPU_MIG_LAYOUT",
+        "0:4g.40gb:40960:3",
+    )
+    state = SmiStatePublisher(
+        tmp_path / "invalid-mig-layout.json",
+        lambda: {
+            "devices": [
+                {
+                    "index": 0,
+                    "name": "Fake GPU 0",
+                    "profile_id": "a100",
+                    "total_memory": 80 * 2**30,
+                }
+            ]
+        },
+    ).publish_once(running=True)
+
+    assert state["mig"]["configured"] is True
+    assert state["mig"]["valid"] is False
+    assert state["mig"]["source"] == (
+        "modeled_environment_invalid"
+    )
+    assert state["mig"]["instance_count"] == 0
+    assert "8-slice per-device limit" in state["mig"]["error"]
+    device_mig = state["devices"][0]["mig"]
+    assert device_mig["mode"] == "configuration_error"
+    assert device_mig["instances"] == []
+    assert device_mig["allocated_memory_bytes"] == 0
 
 
 def test_virtual_smi_models_fault_health_events_and_queries(
