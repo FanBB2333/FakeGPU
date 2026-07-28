@@ -87,6 +87,41 @@ def test_checkpoint_headers_are_read_without_tensor_materialization(tmp_path: Pa
     assert report["dtype_bytes"] == {"BF16": 640}
 
 
+def test_checkpoint_inspection_can_select_an_explicit_file_family(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "variants"
+    model_dir.mkdir()
+    _write_safetensors(
+        model_dir,
+        filename="model.safetensors",
+        header={
+            "base.weight": {
+                "dtype": "BF16",
+                "shape": [2, 2],
+            }
+        },
+    )
+    _write_safetensors(
+        model_dir,
+        filename="model.fp16.safetensors",
+        header={
+            "variant.weight": {
+                "dtype": "F16",
+                "shape": [4, 4],
+            }
+        },
+    )
+
+    report = inspect_safetensors_checkpoint(
+        model_dir,
+        files=["model.fp16.safetensors"],
+    )
+    assert report["parameter_count"] == 16
+    assert report["checkpoint_bytes"] == 32
+    assert report["dtype_bytes"] == {"F16": 32}
+
+
 def test_dense_decoder_memory_and_flops_are_shape_aware(tmp_path: Path) -> None:
     model_dir = tmp_path / "model"
     _write_model(model_dir)

@@ -16,9 +16,13 @@ cases:
         - static
         - quantized
         - paged
+      prompt_tokens:
+        - 4096
+        - 32768
     env:
       OUT: "{report_dir}/kv-cache.json"
       STRATEGY: "{strategy}"
+      PROMPT_TOKENS: "{prompt_tokens}"
     command:
       - "{python}"
       - -c
@@ -26,7 +30,7 @@ cases:
         import json,os,pathlib;
         from fakegpu import estimate_kv_cache_memory;
         strategy=os.environ["STRATEGY"];
-        options=dict(num_hidden_layers=32,num_key_value_heads=8,head_dim=128,batch_size=2,prompt_tokens=2048,generated_tokens=257,element_bytes=2,strategy=strategy,quantized_bits=4,block_tokens=16,max_cache_tokens=4096 if strategy=="static" else None);
+        options=dict(num_hidden_layers=32,num_key_value_heads=8,head_dim=128,batch_size=1,prompt_tokens=int(os.environ["PROMPT_TOKENS"]),generated_tokens=257,element_bytes=2,strategy=strategy,quantized_bits=4,block_tokens=16,max_cache_tokens=65536 if strategy=="static" else None);
         report=estimate_kv_cache_memory(**options);
         pathlib.Path(os.environ["OUT"]).write_text(json.dumps(report),encoding="utf-8");
         print("kv-cache-ok")
@@ -38,6 +42,11 @@ cases:
           pointer: /strategy
           op: eq
           value: "{strategy}"
+        - path: "{report_dir}/kv-cache.json"
+          pointer: /prefill/logical_tokens_per_sequence
+          op: approx
+          value: "{prompt_tokens}"
+          tolerance: 0
         - path: "{report_dir}/kv-cache.json"
           pointer: /generation/allocated_bytes
           op: gt
@@ -63,7 +72,7 @@ cases:
         import json,os,pathlib;
         from fakegpu import estimate_training_plan;
         config=dict(sharding_strategy=os.environ["STRATEGY"],world_size=4,mixed_precision="bf16",activation_checkpointing=True);
-        report=estimate_training_plan(config,parameter_bytes=8_000_000_000,activation_bytes=2_000_000_000);
+        report=estimate_training_plan(config,parameter_bytes=16_000_000_000,activation_bytes=8_000_000_000);
         pathlib.Path(os.environ["OUT"]).write_text(json.dumps(report),encoding="utf-8");
         print("training-plan-ok")
     expect:
@@ -116,3 +125,93 @@ cases:
           pointer: /metrics/false_safe_count
           op: eq
           value: 0
+
+  - name: diffusion-generation
+    matrix:
+      model_profile:
+        - stable-diffusion-v1-5
+        - stable-diffusion-xl-base-1.0
+        - pixart-sigma-xl-2-1024-ms
+      offload:
+        - none
+        - model
+    command:
+      - "{python}"
+      - -m
+      - fakegpu
+      - estimate-diffusion
+      - --model-profile
+      - "{model_profile}"
+      - --offload
+      - "{offload}"
+      - --target-profile
+      - a100
+      - --json
+      - "{report_dir}/diffusion.json"
+    expect:
+      stdout_contains: "Diffusion estimate:"
+      files_exist: "{report_dir}/diffusion.json"
+      json_checks:
+        - path: "{report_dir}/diffusion.json"
+          pointer: /schema_version
+          op: eq
+          value: fakegpu.diffusion_generation_estimate.v1
+        - path: "{report_dir}/diffusion.json"
+          pointer: /model_profile/id
+          op: eq
+          value: "{model_profile}"
+        - path: "{report_dir}/diffusion.json"
+          pointer: /inputs/offload
+          op: eq
+          value: "{offload}"
+        - path: "{report_dir}/diffusion.json"
+          pointer: /memory_timeline/peak_bytes
+          op: gt
+          value: 0
+        - path: "{report_dir}/diffusion.json"
+          pointer: /fit/fits
+          op: eq
+          value: true
+        - path: "{report_dir}/diffusion.json"
+          pointer: /validation_status
+          op: eq
+          value: Modeled
+
+  - name: diffusion-shape-optimizations
+    matrix:
+      scenario:
+        - sdxl-batch4
+        - sdxl-batch4-vae-slicing
+        - sdxl-2048
+        - sdxl-2048-vae-tiling
+    env:
+      OUT: "{report_dir}/diffusion-shape.json"
+      SCENARIO: "{scenario}"
+    command:
+      - "{python}"
+      - -c
+      - >-
+        import json,os,pathlib;
+        from fakegpu import estimate_diffusion_generation;
+        scenario=os.environ["SCENARIO"];
+        options=dict(model_profile="stable-diffusion-xl-base-1.0",batch_size=4 if "batch4" in scenario else 1,height=2048 if "2048" in scenario else 1024,width=2048 if "2048" in scenario else 1024,vae_slicing="slicing" in scenario,vae_tiling="tiling" in scenario);
+        report=estimate_diffusion_generation(**options);
+        payload=dict(scenario=scenario,report=report);
+        pathlib.Path(os.environ["OUT"]).write_text(json.dumps(payload),encoding="utf-8");
+        print("diffusion-shape-ok")
+    expect:
+      stdout_contains: diffusion-shape-ok
+      files_exist: "{report_dir}/diffusion-shape.json"
+      json_checks:
+        - path: "{report_dir}/diffusion-shape.json"
+          pointer: /scenario
+          op: eq
+          value: "{scenario}"
+        - path: "{report_dir}/diffusion-shape.json"
+          pointer: /report/memory_timeline/peak_bytes
+          op: gt
+          value: 0
+        - path: "{report_dir}/diffusion-shape.json"
+          pointer: /report/validation_status
+          op: eq
+          value: Modeled

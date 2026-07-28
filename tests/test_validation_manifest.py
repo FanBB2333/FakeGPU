@@ -208,11 +208,13 @@ def test_checked_in_yaml_manifest_loads() -> None:
         "profile-doctor",
         "workspace-catalog",
     }
-    llm_manifest = load_validation_manifest(
-        root / "tests" / "data" / "llm_validation.yaml"
+    research_manifest = load_validation_manifest(
+        root / "tests" / "data" / "research_validation.yaml"
     )
-    assert {case["name"] for case in llm_manifest["cases"]} == {
+    assert {case["name"] for case in research_manifest["cases"]} == {
         "calibration-reliability",
+        "diffusion-generation",
+        "diffusion-shape-optimizations",
         "distributed-training-plan",
         "kv-cache-allocation",
     }
@@ -233,7 +235,7 @@ def test_validation_manifest_schema_accepts_example() -> None:
     )
     for manifest_name in (
         "validation_smoke.yaml",
-        "llm_validation.yaml",
+        "research_validation.yaml",
     ):
         manifest = yaml.safe_load(
             (root / "tests" / "data" / manifest_name).read_text(
