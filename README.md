@@ -31,6 +31,7 @@ distributed GPU workflows without a production GPU cluster.**
    - [What FakeGPU answers](#what-fakegpu-answers)
    - [Typical use cases](#use-cases)
    - [Real-GPU memory-estimation evidence](#memory-estimation-evidence)
+   - [Research workload reliability](#llm-reliability)
    - [How it works](#how-it-works)
    - [Built with](#built-with)
 2. [Getting started](#getting-started)
@@ -40,6 +41,7 @@ distributed GPU workflows without a production GPU cluster.**
 3. [Usage](#usage)
    - [Run PyTorch code on FakeCUDA](#run-pytorch-code-on-fakecuda)
    - [Inspect FakeGPU devices and processes](#inspect-fakegpu-devices-and-processes)
+   - [Export monitoring metrics](#export-monitoring-metrics)
    - [Intercept native CUDA libraries](#intercept-native-cuda-libraries)
    - [Check memory before a run](#check-memory-before-a-run)
    - [Analyze a repository or model](#analyze-a-repository-or-model)
@@ -76,6 +78,7 @@ runs.
 | Can an unmodified process load and call CUDA-family shared libraries? | Native interception | No |
 | Will a selected GPU profile fit a workload? | Preflight or static memory estimator | No |
 | How much checkpoint, KV-cache, adapter, or MoE memory should an LLM use? | LLM estimator | No |
+| How do resolution, batch size, CFG, VAE tiling, and offload affect diffusion generation memory? | Diffusion estimator | No |
 | Where are the GPU-only entry points and dependencies in a repository? | Repository analyzer | No |
 | What does a distributed training configuration imply for rank-local memory? | Training planner | No |
 | Where do compute, communication, wait, and memory overlap in a trace? | Trace replay | No |
@@ -90,8 +93,10 @@ runs.
 | Choosing a GPU before renting capacity or starting a long job | Profile-aware checkpoint, KV-cache, activation, optimizer, and workspace estimates | `estimate-llm`, `preflight` |
 | Developing CUDA-oriented PyTorch code on a laptop or CPU-only CI runner | CUDA-visible control-flow checks while maintained tensor operations execute on CPU | `fakegpu.init(...)`, `demo`, `validate` |
 | Comparing full fine-tuning, LoRA, QLoRA, checkpointing, offload, or sharding plans | Phase-aware and rank-local memory estimates before allocating a cluster | `plan-training`, Python memory estimator |
+| Comparing UNet and diffusion-transformer generation shapes and memory optimizations | Architecture-specific text encoder, denoising, and VAE-decode estimates from fixed profiles or a local pipeline | `estimate-diffusion`, `validate` |
 | Reviewing an unfamiliar GPU repository or native extension | GPU entry-point, dependency, kernel, and unsupported-API inventory | `analyze-repo`, `analyze-kernel`, `capabilities` |
 | Designing or debugging a distributed workflow | Collective routing, link contention, rank waits, memory timelines, and TCP payload validation | `simulate-topology`, `replay-trace`, `bandwidth` |
+| Observing simulated devices and processes in CI or a local lab | Bounded Prometheus metrics, exporter health, and short in-memory history | `nvidia-smi`, `metrics` |
 | Turning a small real-GPU trial into evidence for repeated runs | Prediction-versus-observation reports and signature-scoped calibration data | `calibrate`, `preflight --memory-calibration` |
 
 <a id="memory-estimation-evidence"></a>
@@ -172,7 +177,7 @@ software stack, and GPU profile.
 
 <a id="llm-reliability"></a>
 
-### LLM reliability report
+### Research workload reliability report
 
 FakeGPU reports reliability per workload and environment signature. A
 `GPU-validated` result applies only to the recorded model revision, shapes,
@@ -183,16 +188,17 @@ evidence, while `Planned` is not yet a supported accuracy claim.
 
 #### Current repository verification
 
-This repository state was verified on 2026-07-26 with `scripts/test.sh all`
+This repository state was verified on 2026-07-28 with `scripts/test.sh all`
 and both declarative validation manifests on macOS 26.5 arm64, Python 3.11.9,
 and PyTorch 2.9.1 CPU:
 
 | Validation layer | Maintained check | Result |
 |---|---|---|
-| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **165 passed** |
-| Declarative validation matrices | 6 smoke executions plus 8 LLM cache, training-plan, and calibration executions | **14 passed** |
+| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **183 passed** |
+| Declarative validation matrices | 6 smoke executions plus 22 research cache, training, calibration, and diffusion executions | **28 passed** |
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | FakeGPU-SMI diagnostics | Bounded state, topology/NVLink/MIG views, NVML peer/MIG queries, health fields, and event reporting | **Passed** |
+| Monitoring exporter | Prometheus/JSON snapshots, bounded history/cardinality, malformed-state degradation, and HTTP endpoints | **Passed** |
 | Native capability inventory | 5 groups, 26 explicit APIs, 24 policy-enforced APIs | **Passed** |
 | GPU profile catalog | 82 profiles across 15 compute capabilities | **Passed** |
 | CPU numerical simulation | GEMM, cuBLASLt, batched GEMM, BLAS1/2, and FP16: 8 maintained test groups | **Passed** |
@@ -204,7 +210,7 @@ come from their linked immutable validation snapshots; they were checked
 against the structured evidence and formulas but were not regenerated on this
 CPU-only host.
 
-#### Maintained LLM workload matrix
+#### Maintained research workload matrix
 
 | Workload class | Covered variations | Evidence | Status |
 |---|---|---|---|
@@ -213,9 +219,42 @@ CPU-only host.
 | Quantized adapter SFT | Qwen 0.8B/2B native NF4 QLoRA | Ten RTX PRO 5000 training cases | `GPU-validated` |
 | General decoder analysis | Dense and MoE metadata, adapters, quantized checkpoints, eager/SDPA attention, KV cache, and expert-parallel traffic | Formula, fixture, and CLI regression tests | `CPU-validated` + `Modeled` |
 | Distributed training plans | DeepSpeed, Accelerate, FSDP/FSDP2, sharding, checkpointing, and CPU/NVMe offload | Configuration, byte-accounting, topology, and trace tests | `CPU-validated` + `Modeled` |
-| KV-cache allocation | Dynamic growth, static reservation, 2/4/8-bit quantized storage, paged block rounding, and sliding-window limits | Formula, API, `--kv-cache-strategy` CLI, and `tests/data/llm_validation.yaml` matrix tests | `CPU-validated` + `Modeled` |
+| KV-cache allocation | Dynamic growth, static reservation, 2/4/8-bit quantized storage, paged block rounding, and sliding-window limits | Formula, API, `--kv-cache-strategy` CLI, and `tests/data/research_validation.yaml` matrix tests | `CPU-validated` + `Modeled` |
+| Diffusion image generation | Stable Diffusion v1.5, SDXL Base, and PixArt-Sigma; local UNets, cross-attention DiTs, and SD3/Flux-style joint-attention transformers; CFG, offload, attention/VAE slicing, and VAE tiling | Fixed-revision and local component headers, architecture configs, phase formulas, CLI/unit tests, and `tests/data/research_validation.yaml` | `CPU-validated` + `Modeled` |
 | Online serving scheduling | continuous batching, chunked prefill, prefix caching, and speculative decoding | No maintained real-GPU evidence yet | `Planned` |
 | Multi-GPU LLM execution | TP, PP, CP, EP, MoE imbalance, and combined FSDP/ZeRO execution | Analytical topology and coordinator coverage only | `Modeled` |
+| Diffusion training | Optimizer, gradient, activation, EMA, and parameter-efficient tuning | No dedicated estimator or real-GPU evidence yet | `Planned` |
+
+<a id="research-scenario-effects"></a>
+
+#### Architecture-aware estimate comparisons
+
+The previous “reproducible modeled effects” label only meant that fixed inputs
+produce the same formula result; it did not mean the estimate matched a real
+GPU observation. This section is now named “architecture-aware estimate
+comparisons” to make that distinction explicit. The examples are generated by
+checked-in formulas and verified by README contract tests. GiB values are
+binary units, and the results do not replace same-configuration GPU calibration.
+
+| Research scenario | Controlled comparison | Modeled effect | Validation |
+|---|---|---:|---|
+| LLM inference KV cache | 32-layer GQA, 8 KV heads, head dim 128, batch 1, BF16; context 4K → 32K | **0.50 → 4.00 GiB** (8× cache) | Exact byte formula |
+| LLM training | 8B BF16 parameters, AdamW, 4 GPUs, checkpointed activations; replicated → full shard | **104.31 → 26.54 GiB** per rank (−74.6%) | Training-plan phase model |
+| Stable Diffusion v1.5 generation | 512², batch 1, FP16, CFG; all weights resident → model offload | **2.30 → 1.65 GiB** (−28.1%) | Component + phase model |
+| SDXL batch generation | 1024², batch 4, FP16, CFG; regular VAE decode → VAE slicing | **11.49 → 7.74 GiB** (−32.7%) | Sequential VAE batch-shape model |
+| SDXL high-resolution generation | 2048², batch 1, FP16, CFG; full-frame VAE → 512² VAE tiles | **11.49 → 7.27 GiB** (−36.7%) | Sequential VAE tile-shape model |
+| PixArt-Sigma DiT generation | 1024², batch 1, FP16, CFG, model offload; eager → SDPA denoise phase | **2.32 → 1.28 GiB** (−44.7%) | Patch-token, cross-attention, and phase model |
+
+The diffusion profiles use component parameter counts from fixed revisions of
+[Stable Diffusion v1.5][diffusion-sd15] and
+[SDXL Base 1.0][diffusion-sdxl], and
+[PixArt-Sigma XL 2][diffusion-pixart]. Runtime context, allocator
+fragmentation, backend-private workspaces, and transfer overlap remain outside
+these numbers.
+Architecture-aware reports remain `Modeled` with
+`accuracy.status` set to `uncalibrated` until a matching observation exists.
+Local architecture inspection is exercised through
+`estimate-diffusion --model-dir`.
 
 The cache formulas follow the workload shapes exposed by
 [Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache).
@@ -437,6 +476,46 @@ shown separately as static specifications. Topology labels and configured
 bandwidth, fault codes, and health status are modeled inputs, not hardware
 measurements or observed ECC/Xid data.
 
+<a id="export-monitoring-metrics"></a>
+
+### Export monitoring metrics
+
+The normalized FakeGPU-SMI state can be exported without adding a monitoring
+dependency. A one-shot command emits Prometheus text by default or a normalized
+JSON snapshot:
+
+```bash
+python3 -m fakegpu metrics --state-dir build/smi
+python3 -m fakegpu metrics --state-dir build/smi --json
+```
+
+For local collection, start the bounded in-memory exporter:
+
+```bash
+python3 -m fakegpu metrics --state-dir build/smi --serve \
+  --host 127.0.0.1 --port 9400 --interval 1 \
+  --history-size 300 --max-process-series 128
+
+curl http://127.0.0.1:9400/metrics
+curl http://127.0.0.1:9400/healthz
+curl http://127.0.0.1:9400/api/v1/history
+```
+
+`/metrics` exposes the latest device, process, runtime, MIG, topology, health,
+and publisher values; `/healthz` reports source and scrape status;
+`/api/v1/history` returns normalized recent samples. Process series retain the
+highest-memory processes first and are limited to 128 by default and 256 at
+most; `--max-process-series 0` disables them. History keeps 300 samples by
+default and at most 1,440. Both limits are enforced in memory, and no monitoring
+history is written to disk or tracked by Git. Use Prometheus or another scraper
+for durable retention.
+
+The server listens only on `127.0.0.1` by default and has no authentication.
+Place it behind an authenticated proxy or network policy before binding a
+non-loopback address. Exported values preserve the same modeled-versus-observed
+semantics as FakeGPU-SMI; they do not turn unavailable hardware telemetry into
+measurements.
+
 ### Intercept native CUDA libraries
 
 Build the native libraries, then let the module launcher prepare
@@ -494,6 +573,23 @@ python3 -m fakegpu estimate-llm \
   --target-profile a100 \
   --json build/llm-estimate.json
 
+# Compare diffusion generation phases and memory optimizations.
+python3 -m fakegpu estimate-diffusion --list-profiles
+python3 -m fakegpu estimate-diffusion \
+  --model-profile stable-diffusion-xl-base-1.0 \
+  --height 1024 --width 1024 --batch-size 4 \
+  --attention-backend sdpa --vae-slicing \
+  --offload model --target-profile a100 \
+  --json build/diffusion-estimate.json
+
+# Inspect a local Diffusers pipeline without loading tensor payloads.
+python3 -m fakegpu estimate-diffusion \
+  --model-dir /models/pixart-or-flux \
+  --height 1024 --width 1024 --text-tokens 300 \
+  --dtype bfloat16 --attention-backend sdpa \
+  --offload model --target-profile a100 \
+  --json build/local-diffusion-estimate.json
+
 # Audit source and built native exports against the capability manifest.
 python3 -m fakegpu capabilities \
   --source-root . \
@@ -509,6 +605,27 @@ sliding-window limits. Quantized cache accounting retains 128 recent tokens
 at the compute dtype by default; change it with
 `--kv-cache-residual-tokens`.
 
+The diffusion estimator separates text encoding, repeated denoising, and VAE
+decode phases. With `--model-dir`, it reads only `model_index.json`, component
+`config.json` files, and selected safetensors headers. It does not import
+remote custom code or read tensor payloads. Checkpoint storage and runtime
+weight bytes at the requested dtype are reported separately.
+The built-in `pixart-sigma-xl-2-1024-ms` profile provides a fixed-revision
+transformer example alongside the two Stable Diffusion UNet profiles.
+
+UNets, cross-attention patch transformers (DiT/PixArt), and SD3/Flux-style
+joint-attention transformers use distinct activation formulas. Image-token
+counts include the VAE scale, patch size, and Flux latent packing; CFG doubles
+the denoiser batch only for architectures that use positive and negative
+branches. Use `--weight-variant fp16|bf16|fp32` when a local directory contains
+multiple checkpoint families.
+
+`--offload model`, `--attention-slicing`, `--vae-slicing`, and `--vae-tiling`
+expose common Diffusers memory trade-offs. Until a matching real-GPU comparison
+is supplied, the report remains `Modeled`, `accuracy.status` is
+`uncalibrated`, and no unsupported error percentage or prediction interval is
+emitted.
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Command reference
@@ -521,6 +638,7 @@ at the compute dtype by default; change it with
 | `fakegpu analyze-repo` | Inventory repository entry points and GPU-only risks |
 | `fakegpu analyze-kernel` | Inspect CUDA, PTX, and SASS resources and operations |
 | `fakegpu estimate-llm` | Estimate decoder memory, communication, and FLOPs |
+| `fakegpu estimate-diffusion` | Estimate diffusion text-encode, denoise, and VAE-decode memory phases |
 | `fakegpu estimate-roofline` | Produce a profile-aware analytical latency interval |
 | `fakegpu plan-training` | Normalize distributed training configs and estimate rank memory |
 | `fakegpu simulate-topology` | Model collective routes and link contention |
@@ -528,6 +646,7 @@ at the compute dtype by default; change it with
 | `fakegpu calibrate` | Compare memory reports and enforce reliability gates |
 | `fakegpu capabilities` | List or strictly audit native API classifications |
 | `fakegpu nvidia-smi` | Inspect devices, processes, modeled topology/MIG, health status, and reliability events |
+| `fakegpu metrics` | Export bounded Prometheus/JSON metrics and serve short in-memory history |
 | `fakegpu workspace-profiles` | Validate and inspect workspace estimation profiles |
 | `fakegpu validate` | Run a declarative JSON, TOML, or YAML validation matrix |
 | `fakegpu coordinator` | Manage the distributed simulation coordinator |
@@ -599,8 +718,8 @@ python3 -m fakegpu validate \
   --strict
 
 python3 -m fakegpu validate \
-  --manifest tests/data/llm_validation.yaml \
-  --report-dir build/validation-llm \
+  --manifest tests/data/research_validation.yaml \
+  --report-dir build/validation-research \
   --strict
 ```
 
@@ -644,6 +763,9 @@ environments, binary assets, and design drafts are excluded through
   runtime shape, or data-dependent branch.
 - Memory estimates can miss backend-private allocations, custom operators,
   allocator policies, and unmatched workspaces.
+- Diffusion profiles model fixed reference pipelines. Custom ControlNet,
+  IP-Adapter, LoRA, safety-checker, refiner, video, and DiT components require
+  additional component metadata and matching real-GPU validation.
 - Roofline output is an analytical interval, not measured kernel latency.
 - Distributed timing includes coordinator work, memory copies, sockets, and
   process scheduling; it is not an NCCL, NVLink, or RDMA benchmark.
@@ -662,6 +784,7 @@ environments, binary assets, and design drafts are excluded through
 - [x] Native CUDA, NVML, cuBLAS, and NCCL interception
 - [x] Architecture-aware GPU profile catalog
 - [x] Runtime, static, LLM, and distributed memory analysis
+- [x] Phase-aware Stable Diffusion v1.5 and SDXL generation memory estimation
 - [x] Repository, kernel, topology, and trace analysis
 - [x] Detailed FakeGPU-SMI device, runtime, allocator, and process queries
 - [ ] Expand executable native CUDA operations and cuBLAS coverage
@@ -669,8 +792,9 @@ environments, binary assets, and design drafts are excluded through
 - [x] Add modeled topology and NVLink views with NVML peer queries
 - [x] Add modeled fault injection and health/reliability event views
 - [x] Add modeled MIG views and native NVML MIG handle queries
-- [ ] Export historical device and process metrics to monitoring systems
+- [x] Export bounded device, process, and runtime metrics with in-memory history for Prometheus
 - [ ] Add real-GPU LLM validation for long-context and online-serving workloads
+- [ ] Add real-GPU diffusion validation plus training and DiT memory models
 - [ ] Validate distributed and MoE estimates across more GPU and software stacks
 
 See the [open issues](https://github.com/FanBB2333/FakeGPU/issues) for proposed
@@ -724,3 +848,6 @@ Distributed under the MIT License. See [LICENSE](LICENSE) for details.
 [validation-inference]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-inference-estimation.md#maintained-qwen3-8b-result
 [validation-sft]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#rtx-pro-5000-matrix
 [validation-qlora]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#native-nf4-qlora-matrices
+[diffusion-sd15]: https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/tree/451f4fe16113bff5a5d2269ed5ad43b0592e9a14
+[diffusion-sdxl]: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/tree/462165984030d82259a11f4367a4eed129e94a7b
+[diffusion-pixart]: https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/tree/e102b3591cc82e97071b8b4cb90d834d0c487207

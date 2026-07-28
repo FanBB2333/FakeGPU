@@ -1,0 +1,238 @@
+{
+  "schema_version": "fakegpu.diffusion_profiles.v1",
+  "profiles": {
+    "stable-diffusion-v1-5": {
+      "display_name": "Stable Diffusion v1.5",
+      "pipeline_class": "StableDiffusionPipeline",
+      "status": "reference",
+      "default_generation": {
+        "height": 512,
+        "width": 512,
+        "steps": 50,
+        "guidance_scale": 7.5
+      },
+      "latent": {
+        "scale_factor": 8,
+        "channels": 4
+      },
+      "conditioning": {
+        "parameter_count": 123060557,
+        "checkpoint_bytes": 246121114,
+        "checkpoint_dtype_bytes": {
+          "F16": 246121114
+        },
+        "max_tokens": 77,
+        "default_tokens": 77,
+        "width": 768,
+        "encoder_width": 768,
+        "layers": 12
+      },
+      "denoiser": {
+        "architecture": "unet",
+        "model_class": "UNet2DConditionModel",
+        "guidance_mode": "classifier_free",
+        "parameter_count": 859520964,
+        "checkpoint_bytes": 1719041928,
+        "checkpoint_dtype_bytes": {
+          "F16": 1719041928
+        },
+        "block_out_channels": [
+          320,
+          640,
+          1280,
+          1280
+        ],
+        "layers_per_block": 2,
+        "attention_heads": [
+          8,
+          8,
+          8,
+          0
+        ],
+        "transformer_layers_per_block": [
+          1,
+          1,
+          1,
+          0
+        ],
+        "cross_attention_dim": 768
+      },
+      "vae": {
+        "parameter_count": 83653863,
+        "checkpoint_bytes": 167307726,
+        "checkpoint_dtype_bytes": {
+          "F16": 167307726
+        },
+        "block_out_channels": [
+          128,
+          256,
+          512,
+          512
+        ],
+        "layers_per_block": 2
+      },
+      "source": {
+        "repository": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+        "revision": "451f4fe16113bff5a5d2269ed5ad43b0592e9a14",
+        "model_index": "model_index.json",
+        "configuration_files": [
+          "text_encoder/config.json",
+          "unet/config.json",
+          "vae/config.json"
+        ],
+        "parameter_source": "fp16 safetensors headers"
+      }
+    },
+    "stable-diffusion-xl-base-1.0": {
+      "display_name": "Stable Diffusion XL Base 1.0",
+      "pipeline_class": "StableDiffusionXLPipeline",
+      "status": "reference",
+      "default_generation": {
+        "height": 1024,
+        "width": 1024,
+        "steps": 50,
+        "guidance_scale": 5.0
+      },
+      "latent": {
+        "scale_factor": 8,
+        "channels": 4
+      },
+      "conditioning": {
+        "parameter_count": 817720320,
+        "checkpoint_bytes": 1635440640,
+        "checkpoint_dtype_bytes": {
+          "F16": 1635440640
+        },
+        "max_tokens": 77,
+        "default_tokens": 77,
+        "width": 2048,
+        "encoder_width": 1280,
+        "layers": 32
+      },
+      "denoiser": {
+        "architecture": "unet",
+        "model_class": "UNet2DConditionModel",
+        "guidance_mode": "classifier_free",
+        "parameter_count": 2567463684,
+        "checkpoint_bytes": 5134927368,
+        "checkpoint_dtype_bytes": {
+          "F16": 5134927368
+        },
+        "block_out_channels": [
+          320,
+          640,
+          1280
+        ],
+        "layers_per_block": 2,
+        "attention_heads": [
+          5,
+          10,
+          20
+        ],
+        "transformer_layers_per_block": [
+          1,
+          2,
+          10
+        ],
+        "cross_attention_dim": 2048
+      },
+      "vae": {
+        "parameter_count": 83653863,
+        "checkpoint_bytes": 167307726,
+        "checkpoint_dtype_bytes": {
+          "F16": 167307726
+        },
+        "block_out_channels": [
+          128,
+          256,
+          512,
+          512
+        ],
+        "layers_per_block": 2
+      },
+      "source": {
+        "repository": "stabilityai/stable-diffusion-xl-base-1.0",
+        "revision": "462165984030d82259a11f4367a4eed129e94a7b",
+        "model_index": "model_index.json",
+        "configuration_files": [
+          "text_encoder/config.json",
+          "text_encoder_2/config.json",
+          "unet/config.json",
+          "vae/config.json"
+        ],
+        "parameter_source": "fp16 safetensors headers"
+      }
+    },
+    "pixart-sigma-xl-2-1024-ms": {
+      "display_name": "PixArt Sigma XL 2 1024-MS",
+      "pipeline_class": "PixArtSigmaPipeline",
+      "status": "reference",
+      "default_generation": {
+        "height": 1024,
+        "width": 1024,
+        "steps": 20,
+        "guidance_scale": 4.5
+      },
+      "latent": {
+        "scale_factor": 8,
+        "channels": 4
+      },
+      "conditioning": {
+        "parameter_count": 4762310656,
+        "checkpoint_bytes": 19049242624,
+        "checkpoint_dtype_bytes": {
+          "F32": 19049242624
+        },
+        "max_tokens": 300,
+        "default_tokens": 300,
+        "width": 1152,
+        "encoder_width": 4096,
+        "layers": 24
+      },
+      "denoiser": {
+        "architecture": "transformer",
+        "model_class": "Transformer2DModel",
+        "attention_pattern": "cross",
+        "guidance_mode": "classifier_free",
+        "parameter_count": 610856096,
+        "checkpoint_bytes": 2443424384,
+        "checkpoint_dtype_bytes": {
+          "F32": 2443424384
+        },
+        "num_layers": 28,
+        "num_single_layers": 0,
+        "attention_heads": 16,
+        "attention_head_dim": 72,
+        "patch_size": 2,
+        "packing_factor": 1,
+        "mlp_ratio": 4.0,
+        "cross_attention_dim": 1152
+      },
+      "vae": {
+        "parameter_count": 83653863,
+        "checkpoint_bytes": 334615452,
+        "checkpoint_dtype_bytes": {
+          "F32": 334615452
+        },
+        "block_out_channels": [
+          128,
+          256,
+          512,
+          512
+        ],
+        "layers_per_block": 2
+      },
+      "source": {
+        "repository": "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS",
+        "revision": "e102b3591cc82e97071b8b4cb90d834d0c487207",
+        "model_index": "model_index.json",
+        "configuration_files": [
+          "text_encoder/config.json",
+          "transformer/config.json",
+          "vae/config.json"
+        ],
+        "parameter_source": "float32 safetensors headers"
+      }
+    }
+  }
+}

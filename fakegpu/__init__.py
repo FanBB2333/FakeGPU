@@ -22,6 +22,12 @@ from .calibration import (
     compare_memory_reports,
     verify_calibration_reports,
 )
+from .diffusion_estimator import (
+    DiffusionEstimateError,
+    estimate_diffusion_generation,
+    inspect_diffusion_pipeline,
+    load_diffusion_profiles,
+)
 from .flop_counter import MatmulFlopCounterMode
 from .kernel_analysis import (
     KernelAnalysisError,
@@ -72,6 +78,7 @@ from .validation import load_validation_manifest, run_validation_manifest
 
 __all__ = [
     "CalibrationError",
+    "DiffusionEstimateError",
     "KernelAnalysisError",
     "MatmulFlopCounterMode",
     "OperatorProfileError",
@@ -95,6 +102,7 @@ __all__ = [
     "compare_memory_reports",
     "env",
     "estimate_decoder_inference",
+    "estimate_diffusion_generation",
     "estimate_kv_cache_memory",
     "estimate_module_memory",
     "estimate_roofline",
@@ -103,10 +111,12 @@ __all__ = [
     "init",
     "init_privateuse1",
     "inspect_safetensors_checkpoint",
+    "inspect_diffusion_pipeline",
     "is_initialized",
     "library_dir",
     "load_native_capabilities",
     "load_operator_profiles",
+    "load_diffusion_profiles",
     "load_validation_manifest",
     "load_workspace_profiles",
     "match_operator_profile",

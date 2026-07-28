@@ -9,6 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from fakegpu import (
+    estimate_diffusion_generation,
+    estimate_kv_cache_memory,
+    estimate_training_plan,
+)
 from fakegpu.__main__ import BUILTIN_COMMANDS
 from fakegpu.profile_catalog import (
     architecture_for_compute_capability,
@@ -370,9 +375,11 @@ def test_top_level_help_names_builtin_commands() -> None:
 def test_readmes_document_supported_use_cases() -> None:
     use_case_commands = {
         "estimate-llm",
+        "estimate-diffusion",
         "preflight",
         "demo",
         "validate",
+        "metrics",
         "plan-training",
         "analyze-repo",
         "analyze-kernel",
@@ -396,7 +403,7 @@ def test_readmes_document_supported_use_cases() -> None:
         table_rows = [
             line for line in section.splitlines() if line.startswith("|")
         ]
-        assert len(table_rows) == 8, readme_path
+        assert len(table_rows) == 10, readme_path
         for command in use_case_commands:
             assert re.search(
                 rf"`{re.escape(command)}(?:`| )",
@@ -471,7 +478,7 @@ def test_readmes_match_memory_validation_evidence() -> None:
             assert source_url in readme, (readme_path, group["id"])
 
 
-def test_readmes_report_llm_reliability_scope() -> None:
+def test_readmes_report_research_reliability_scope() -> None:
     profiles = load_profiles()
     compute_capability_count = len(
         {profile.compute_capability for profile in profiles.values()}
@@ -490,7 +497,7 @@ def test_readmes_report_llm_reliability_scope() -> None:
     )
     expected_terms = {
         "scripts/test.sh all",
-        "165",
+        "183",
         str(len(profiles)),
         str(compute_capability_count),
         str(len(capabilities["groups"])),
@@ -512,8 +519,12 @@ def test_readmes_report_llm_reliability_scope() -> None:
         "false-safe",
         "5%",
         "calibrate verify",
-        "llm_validation.yaml",
+        "research_validation.yaml",
         "--kv-cache-strategy",
+        "--model-dir",
+        "PixArt-Sigma",
+        "Flux",
+        "uncalibrated",
         "https://huggingface.co/docs/transformers/kv_cache",
         "https://docs.vllm.ai/en/stable/",
     }
@@ -528,6 +539,11 @@ def test_readmes_report_llm_reliability_scope() -> None:
         "--query-gpu",
         "--query-compute-apps",
         "native.kernel_launches",
+        "fakegpu metrics",
+        "/metrics",
+        "/healthz",
+        "/api/v1/history",
+        "--max-process-series",
     }
 
     for readme_path in README_PATHS:
@@ -536,4 +552,131 @@ def test_readmes_report_llm_reliability_scope() -> None:
         for term in expected_terms:
             assert term in section, (readme_path, term)
         for term in smi_terms:
+            assert term in readme, (readme_path, term)
+
+
+def test_readmes_report_reproducible_research_scenario_effects() -> None:
+    kv_short = estimate_kv_cache_memory(
+        num_hidden_layers=32,
+        num_key_value_heads=8,
+        head_dim=128,
+        batch_size=1,
+        prompt_tokens=4096,
+        element_bytes=2,
+    )
+    kv_long = estimate_kv_cache_memory(
+        num_hidden_layers=32,
+        num_key_value_heads=8,
+        head_dim=128,
+        batch_size=1,
+        prompt_tokens=32768,
+        element_bytes=2,
+    )
+    replicated = estimate_training_plan(
+        {
+            "sharding_strategy": "replicated",
+            "world_size": 4,
+            "mixed_precision": "bf16",
+            "activation_checkpointing": True,
+        },
+        parameter_bytes=16_000_000_000,
+        activation_bytes=8_000_000_000,
+    )
+    full_shard = estimate_training_plan(
+        {
+            "sharding_strategy": "full_shard",
+            "world_size": 4,
+            "mixed_precision": "bf16",
+            "activation_checkpointing": True,
+        },
+        parameter_bytes=16_000_000_000,
+        activation_bytes=8_000_000_000,
+    )
+    sd15_resident = estimate_diffusion_generation(
+        "stable-diffusion-v1-5"
+    )
+    sd15_offload = estimate_diffusion_generation(
+        "stable-diffusion-v1-5",
+        offload="model",
+    )
+    sdxl_batch = estimate_diffusion_generation(
+        "stable-diffusion-xl-base-1.0",
+        batch_size=4,
+    )
+    sdxl_sliced = estimate_diffusion_generation(
+        "stable-diffusion-xl-base-1.0",
+        batch_size=4,
+        vae_slicing=True,
+    )
+    sdxl_large = estimate_diffusion_generation(
+        "stable-diffusion-xl-base-1.0",
+        height=2048,
+        width=2048,
+    )
+    sdxl_tiled = estimate_diffusion_generation(
+        "stable-diffusion-xl-base-1.0",
+        height=2048,
+        width=2048,
+        vae_tiling=True,
+    )
+    pixart_eager = estimate_diffusion_generation(
+        "pixart-sigma-xl-2-1024-ms",
+        attention_backend="eager",
+        offload="model",
+    )
+    pixart_sdpa = estimate_diffusion_generation(
+        "pixart-sigma-xl-2-1024-ms",
+        attention_backend="sdpa",
+        offload="model",
+    )
+
+    def phase_peak(report: dict, phase_name: str) -> int:
+        return next(
+            int(phase["peak_bytes"])
+            for phase in report["memory_timeline"]["phases"]
+            if phase["phase"] == phase_name
+        )
+
+    def gib(value: int) -> str:
+        return f"{value / 2**30:.2f}"
+
+    expected_effects = {
+        (
+            f"{gib(kv_short['prefill']['allocated_bytes'])} → "
+            f"{gib(kv_long['prefill']['allocated_bytes'])} GiB"
+        ),
+        (
+            f"{gib(replicated['estimated_rank_peak_bytes'])} → "
+            f"{gib(full_shard['estimated_rank_peak_bytes'])} GiB"
+        ),
+        (
+            f"{gib(sd15_resident['memory_timeline']['peak_bytes'])} → "
+            f"{gib(sd15_offload['memory_timeline']['peak_bytes'])} GiB"
+        ),
+        (
+            f"{gib(sdxl_batch['memory_timeline']['peak_bytes'])} → "
+            f"{gib(sdxl_sliced['memory_timeline']['peak_bytes'])} GiB"
+        ),
+        (
+            f"{gib(sdxl_large['memory_timeline']['peak_bytes'])} → "
+            f"{gib(sdxl_tiled['memory_timeline']['peak_bytes'])} GiB"
+        ),
+        (
+            f"{gib(phase_peak(pixart_eager, 'denoise'))} → "
+            f"{gib(phase_peak(pixart_sdpa, 'denoise'))} GiB"
+        ),
+    }
+    expected_terms = {
+        "estimate-diffusion",
+        "stable-diffusion-v1-5",
+        "stable-diffusion-xl-base-1.0",
+        "pixart-sigma-xl-2-1024-ms",
+        "research_validation.yaml",
+        "CPU-validated",
+        "Modeled",
+        *expected_effects,
+    }
+    for readme_path in README_PATHS:
+        readme = (ROOT / readme_path).read_text(encoding="utf-8")
+        for term in expected_terms:
             assert term in readme, (readme_path, term)

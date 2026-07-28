@@ -272,12 +272,32 @@ def estimate_kv_cache_memory(
     }
 
 
-def inspect_safetensors_checkpoint(model_dir: str | Path) -> dict[str, Any]:
+def inspect_safetensors_checkpoint(
+    model_dir: str | Path,
+    *,
+    files: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """Read safetensors headers without loading tensor payloads."""
 
     root = Path(model_dir).expanduser().resolve()
     index_path = root / "model.safetensors.index.json"
-    if index_path.is_file():
+    if files is not None:
+        shard_names = sorted({str(value) for value in files})
+        if not shard_names:
+            raise ValueError("files must contain at least one safetensors file")
+        for shard_name in shard_names:
+            candidate = Path(shard_name)
+            if candidate.is_absolute() or candidate.name != shard_name:
+                raise ValueError(
+                    "safetensors file names must be direct children "
+                    f"of {root}"
+                )
+            if candidate.suffix != ".safetensors":
+                raise ValueError(
+                    f"not a safetensors file: {shard_name}"
+                )
+        indexed_total = 0
+    elif index_path.is_file():
         index = json.loads(index_path.read_text(encoding="utf-8"))
         weight_map = index.get("weight_map")
         if not isinstance(weight_map, dict) or not weight_map:

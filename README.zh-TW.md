@@ -29,6 +29,7 @@
    - [FakeGPU 能回答哪些問題](#fakegpu-能回答哪些問題)
    - [典型使用情境](#use-cases)
    - [實體 GPU 記憶體估算驗證](#memory-estimation-evidence)
+   - [研究情境可靠性](#llm-reliability)
    - [運作方式](#運作方式)
    - [主要技術](#主要技術)
 2. [快速開始](#快速開始)
@@ -38,6 +39,7 @@
 3. [使用方式](#使用方式)
    - [使用 FakeCUDA 執行 PyTorch](#使用-fakecuda-執行-pytorch)
    - [查看 FakeGPU 裝置與程序](#查看-fakegpu-裝置與程序)
+   - [匯出監控指標](#export-monitoring-metrics)
    - [攔截原生 CUDA 函式庫](#攔截原生-cuda-函式庫)
    - [執行前檢查 GPU 記憶體](#執行前檢查-gpu-記憶體)
    - [分析儲存庫或模型](#分析儲存庫或模型)
@@ -72,6 +74,7 @@ FakeGPU 為開發、CI、相容性檢查與容量規劃模擬面向 CUDA 的執�
 | 未修改的程序能否載入並呼叫 CUDA 系列動態函式庫？ | 原生函式庫攔截 | 否 |
 | 某個工作負載能否放入選定的 GPU profile？ | Preflight 或靜態 GPU 記憶體估算器 | 否 |
 | LLM 的 checkpoint、KV cache、adapter 或 MoE 需要多少 GPU 記憶體？ | LLM 估算器 | 否 |
+| 解析度、batch、CFG、VAE tiling 與 offload 會如何影響 diffusion 生成所需的 GPU 記憶體？ | Diffusion 估算器 | 否 |
 | 儲存庫中有哪些僅支援 GPU 的入口與相依套件？ | 儲存庫分析器 | 否 |
 | 分散式訓練設定對應多少單 rank GPU 記憶體？ | 訓練規劃器 | 否 |
 | Trace 中的運算、通訊、等待與 GPU 記憶體如何重疊？ | Trace 重播 | 否 |
@@ -86,8 +89,10 @@ FakeGPU 為開發、CI、相容性檢查與容量規劃模擬面向 CUDA 的執�
 | 在租用 GPU 或啟動長時間工作前選擇硬體 | 依 profile 估算 checkpoint、KV cache、activation、optimizer 與 workspace 的 GPU 記憶體 | `estimate-llm`、`preflight` |
 | 在筆記型電腦或無 GPU 的 CI 中開發面向 CUDA 的 PyTorch 程式碼 | 讓程式看到 CUDA 裝置，同時在 CPU 上執行已維護的 tensor 運算 | `fakegpu.init(...)`、`demo`、`validate` |
 | 比較完整參數微調、LoRA、QLoRA、checkpointing、offload 或分片方案 | 在配置叢集前估算各階段與單 rank GPU 記憶體 | `plan-training`、Python GPU 記憶體估算器 |
+| 比較 UNet 與 diffusion Transformer 的生成 shape 和 GPU 記憶體最佳化選項 | 根據固定 profile 或本機 pipeline，依架構估算 text encoder、denoising 與 VAE decode 階段 | `estimate-diffusion`、`validate` |
 | 檢查不熟悉的 GPU 儲存庫或原生擴充 | 統計 GPU 入口、相依套件、kernel 與不支援的 API | `analyze-repo`、`analyze-kernel`、`capabilities` |
 | 設計或診斷分散式工作流程 | 分析 collective 路由、鏈路競爭、rank 等待、GPU 記憶體時間軸與 TCP payload | `simulate-topology`、`replay-trace`、`bandwidth` |
+| 在 CI 或本機實驗環境中觀察模擬裝置與程序 | 提供有數量上限的 Prometheus 指標、exporter 健康狀態與短期記憶體歷史 | `nvidia-smi`、`metrics` |
 | 將小規模實體 GPU 試驗用於後續重複工作 | 產生預測值與實測值的比較報告，並依工作負載簽章保存校準資料 | `calibrate`、`preflight --memory-calibration` |
 
 <a id="memory-estimation-evidence"></a>
@@ -163,7 +168,7 @@ python3 -m fakegpu calibrate verify \
 
 <a id="llm-reliability"></a>
 
-### LLM 可靠性報告
+### 研究情境可靠性報告
 
 FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果只適用於記錄中的
 模型 revision、shape、dtype、attention backend、allocator、軟體堆疊與 GPU。
@@ -173,15 +178,16 @@ FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果�
 
 #### 目前儲存庫驗證
 
-目前儲存庫狀態於 2026-07-26 在 macOS 26.5 arm64、Python 3.11.9 與 PyTorch
+目前儲存庫狀態於 2026-07-28 在 macOS 26.5 arm64、Python 3.11.9 與 PyTorch
 2.9.1 CPU 環境中執行了 `scripts/test.sh all` 與兩個宣告式驗證 manifest：
 
 | 驗證層 | 已維護的檢查 | 結果 |
 |---|---|---|
-| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **165 個通過** |
-| 宣告式驗證矩陣 | 6 個 smoke 案例，加 8 個 LLM cache、訓練規劃與校準案例 | **14 個通過** |
+| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **183 個通過** |
+| 宣告式驗證矩陣 | 6 個 smoke 案例，加 22 個 research cache、訓練、校準與 diffusion 案例 | **28 個通過** |
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
 | FakeGPU-SMI 診斷 | 有上限的狀態發布、拓撲/NVLink/MIG 檢視、NVML peer/MIG 查詢、健康欄位與事件報告 | **通過** |
+| 監控 exporter | Prometheus/JSON 快照、歷史與序列數量限制、異常狀態降級及 HTTP 介面 | **通過** |
 | 原生能力清單 | 5 個能力群組、26 個明確 API、24 個強制執行策略的 API | **通過** |
 | GPU profile 目錄 | 82 個 profile，涵蓋 15 種 compute capability | **通過** |
 | CPU 數值模擬 | GEMM、cuBLASLt、批次 GEMM、BLAS1/2 與 FP16，共 8 組測試 | **通過** |
@@ -192,7 +198,7 @@ GitHub CI 也會在 Python 3.10–3.12 上執行 Python 測試，並在 Linux �
 驗證快照；本次檢查驗證了結構化證據與計算公式，沒有在目前 CPU-only 主機上
 重新測量。
 
-#### 已維護的 LLM 工作負載矩陣
+#### 已維護的研究工作負載矩陣
 
 | 工作負載類型 | 已涵蓋變化 | 驗證依據 | 狀態 |
 |---|---|---|---|
@@ -201,9 +207,39 @@ GitHub CI 也會在 Python 3.10–3.12 上執行 Python 測試，並在 Linux �
 | 量化 adapter SFT | Qwen 0.8B/2B 原生 NF4 QLoRA | 十個 RTX PRO 5000 訓練案例 | `GPU-validated` |
 | 通用 decoder 分析 | Dense/MoE 中繼資料、adapter、量化 checkpoint、eager/SDPA attention、KV cache 與 expert-parallel 通訊量 | 公式、fixture 與 CLI 迴歸測試 | `CPU-validated` + `Modeled` |
 | 分散式訓練規劃 | DeepSpeed、Accelerate、FSDP/FSDP2、分片、checkpointing 與 CPU/NVMe offload | 設定、位元組計算、拓撲與 trace 測試 | `CPU-validated` + `Modeled` |
-| KV cache 配置 | Dynamic 增長、static 預留、2/4/8-bit quantized 儲存、paged block 取整與 sliding-window 上限 | 公式、API、`--kv-cache-strategy` CLI 與 `tests/data/llm_validation.yaml` 矩陣測試 | `CPU-validated` + `Modeled` |
+| KV cache 配置 | Dynamic 增長、static 預留、2/4/8-bit quantized 儲存、paged block 取整與 sliding-window 上限 | 公式、API、`--kv-cache-strategy` CLI 與 `tests/data/research_validation.yaml` 矩陣測試 | `CPU-validated` + `Modeled` |
+| Diffusion 圖像生成 | Stable Diffusion v1.5、SDXL Base 與 PixArt-Sigma；本機 UNet、交叉注意力 DiT、SD3/Flux 類聯合注意力 Transformer；CFG、offload、attention/VAE slicing 與 VAE tiling | 固定版本與本機元件 header、架構設定、階段公式、CLI/單元測試及 `tests/data/research_validation.yaml` | `CPU-validated` + `Modeled` |
 | 線上服務排程 | continuous batching、chunked prefill、prefix caching 與 speculative decoding | 尚無專案維護的實體 GPU 資料 | `Planned` |
 | 多 GPU LLM 執行 | TP、PP、CP、EP、MoE 負載不均衡，以及 FSDP/ZeRO 組合執行 | 目前只有分析拓撲與 coordinator 驗證 | `Modeled` |
+| Diffusion 訓練 | Optimizer、gradient、activation、EMA 與參數高效微調 | 尚無專用估算器或實體 GPU 資料 | `Planned` |
+
+<a id="research-scenario-effects"></a>
+
+#### 架構感知估算比較
+
+先前的「可重現的建模效果」只表示固定輸入能得到相同的公式結果，並不表示
+估算值已接近實體 GPU 觀測。為避免混淆，本節改為「架構感知估算比較」。
+下表由儲存庫中的公式產生，並由 README 契約測試檢查；GiB 使用二進位單位。
+它用於檢查架構、shape 與最佳化選項造成的變化，不能取代相同設定的實體 GPU
+校準。
+
+| Research 情境 | 對照條件 | 建模結果 | 驗證方式 |
+|---|---|---:|---|
+| LLM 推論 KV cache | 32 層 GQA、8 個 KV head、head dim 128、batch 1、BF16；context 4K → 32K | **0.50 → 4.00 GiB**（cache 增加 8 倍） | 精確位元組公式 |
+| LLM 訓練 | 8B BF16 參數、AdamW、4 張 GPU、activation checkpointing；replicated → full shard | **104.31 → 26.54 GiB**/rank（減少 74.6%） | 訓練階段模型 |
+| Stable Diffusion v1.5 生成 | 512²、batch 1、FP16、CFG；所有權重常駐 → model offload | **2.30 → 1.65 GiB**（減少 28.1%） | 元件與階段模型 |
+| SDXL 批次生成 | 1024²、batch 4、FP16、CFG；一般 VAE decode → VAE slicing | **11.49 → 7.74 GiB**（減少 32.7%） | 依序 VAE batch shape 模型 |
+| SDXL 高解析度生成 | 2048²、batch 1、FP16、CFG；完整影像 VAE → 512² VAE tile | **11.49 → 7.27 GiB**（減少 36.7%） | 依序 VAE tile shape 模型 |
+| PixArt-Sigma DiT 生成 | 1024²、batch 1、FP16、CFG、model offload；eager → SDPA 的 denoise 階段 | **2.32 → 1.28 GiB**（減少 44.7%） | patch token、交叉注意力與階段模型 |
+
+Diffusion profile 中的元件參數量來自
+[Stable Diffusion v1.5][diffusion-sd15] 與
+[SDXL Base 1.0][diffusion-sdxl]、[PixArt-Sigma XL 2][diffusion-pixart]
+的固定版本。上述數字不包含 runtime context、allocator 碎片、backend 私有
+workspace 與傳輸重疊。
+在取得匹配觀測值之前，架構感知報告保持為 `Modeled`，`accuracy.status`
+為 `uncalibrated`。
+本機架構檢查透過 `estimate-diffusion --model-dir` 使用。
 
 Cache 公式參考
 [Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache)
@@ -409,6 +445,41 @@ UUID 與 PCI Bus ID 是穩定的模擬識別。CPU runtime 無法觀測溫度、
 作為靜態規格分開顯示。拓撲關係、設定頻寬、故障代碼與健康狀態屬於建模輸入，
 不是硬體測量結果，也不是觀測到的 ECC/Xid 資料。
 
+<a id="export-monitoring-metrics"></a>
+
+### 匯出監控指標
+
+FakeGPU-SMI 的標準化狀態無需安裝監控相依套件即可匯出。單次指令預設輸出
+Prometheus 文字，也可以輸出標準化 JSON 快照：
+
+```bash
+python3 -m fakegpu metrics --state-dir build/smi
+python3 -m fakegpu metrics --state-dir build/smi --json
+```
+
+需要本機持續收集時，可啟動帶記憶體歷史上限的 exporter：
+
+```bash
+python3 -m fakegpu metrics --state-dir build/smi --serve \
+  --host 127.0.0.1 --port 9400 --interval 1 \
+  --history-size 300 --max-process-series 128
+
+curl http://127.0.0.1:9400/metrics
+curl http://127.0.0.1:9400/healthz
+curl http://127.0.0.1:9400/api/v1/history
+```
+
+`/metrics` 提供最新的裝置、程序、runtime、MIG、拓撲、健康狀態與發布器指標；
+`/healthz` 顯示資料來源與收集狀態；`/api/v1/history` 傳回近期的標準化樣本。
+程序序列優先保留 GPU 記憶體使用量最高的程序，預設上限為 128，最大為 256；
+`--max-process-series 0` 可以關閉程序序列。歷史預設保留 300 個樣本，最多
+1,440 個。這些限制都在記憶體中執行，監控歷史不會寫入磁碟，也不會由 Git
+管理。如需長期保留，請使用 Prometheus 或其他收集系統。
+
+服務預設只監聽 `127.0.0.1`，本身不提供身分驗證。繫結非本機位址前，應在前方
+設定帶身分驗證的 proxy 或網路存取策略。匯出的資料沿用 FakeGPU-SMI 對「建模值」
+和「觀測值」的區分，不會把無法取得的硬體遙測資料表示為真實測量結果。
+
 ### 攔截原生 CUDA 函式庫
 
 建置原生函式庫後，使用模組啟動器為未修改的指令設定 `LD_PRELOAD` 或
@@ -465,6 +536,23 @@ python3 -m fakegpu estimate-llm \
   --target-profile a100 \
   --json build/llm-estimate.json
 
+# 比較 diffusion 生成階段與 GPU 記憶體最佳化選項。
+python3 -m fakegpu estimate-diffusion --list-profiles
+python3 -m fakegpu estimate-diffusion \
+  --model-profile stable-diffusion-xl-base-1.0 \
+  --height 1024 --width 1024 --batch-size 4 \
+  --attention-backend sdpa --vae-slicing \
+  --offload model --target-profile a100 \
+  --json build/diffusion-estimate.json
+
+# 檢查本機 Diffusers pipeline，不載入 tensor payload。
+python3 -m fakegpu estimate-diffusion \
+  --model-dir /models/pixart-or-flux \
+  --height 1024 --width 1024 --text-tokens 300 \
+  --dtype bfloat16 --attention-backend sdpa \
+  --offload model --target-profile a100 \
+  --json build/local-diffusion-estimate.json
+
 # 根據能力 manifest 檢查原始碼與已建置原生函式庫的匯出符號。
 python3 -m fakegpu capabilities \
   --source-root . \
@@ -478,6 +566,24 @@ JSON 報告會分別列出邏輯儲存量、量化節省量、static 預留、pa
 與可選的 sliding-window 上限。量化 cache 預設將最近 128 個 token 保留為計算
 dtype，可透過 `--kv-cache-residual-tokens` 調整。
 
+Diffusion 估算器分別計算 text encoding、重複 denoising 與 VAE decode 階段。
+使用 `--model-dir` 時，它只讀取 `model_index.json`、元件 `config.json` 與選定
+safetensors 檔案的 header，不會匯入遠端自訂程式碼，也不會讀取 tensor payload。
+checkpoint 儲存位元組與指定 dtype 下的執行期權重位元組會分別列出。
+內建 `pixart-sigma-xl-2-1024-ms` profile 與兩個 Stable Diffusion UNet profile
+一同提供固定版本的 Transformer 範例。
+
+估算器會區分 UNet、含交叉注意力的 patch Transformer（DiT/PixArt），以及
+SD3/Flux 類聯合注意力 Transformer。圖像 token 數會結合 VAE 縮放、patch size
+與 Flux latent packing 計算；CFG 只在需要正負分支 batch 的架構上使 denoiser
+batch 加倍。當本機目錄包含多套權重時，可用
+`--weight-variant fp16|bf16|fp32` 指定要檢查的檔案族。
+
+`--offload model`、`--attention-slicing`、`--vae-slicing` 與
+`--vae-tiling` 對應 Diffusers 中常見的 GPU 記憶體選項。取得相同設定的實體
+GPU 比較資料前，報告狀態保持為 `Modeled`，`accuracy.status` 為
+`uncalibrated`，也不會產生缺乏觀測依據的誤差百分比或預測區間。
+
 <p align="right">(<a href="#readme-top">返回頂端</a>)</p>
 
 ## 指令參考
@@ -490,6 +596,7 @@ dtype，可透過 `--kv-cache-residual-tokens` 調整。
 | `fakegpu analyze-repo` | 統計儲存庫入口與僅支援 GPU 的風險 |
 | `fakegpu analyze-kernel` | 檢查 CUDA、PTX 與 SASS 資源及運算 |
 | `fakegpu estimate-llm` | 估算 decoder GPU 記憶體、通訊量與 FLOP |
+| `fakegpu estimate-diffusion` | 估算 diffusion 的 text encode、denoise 與 VAE decode 階段 GPU 記憶體 |
 | `fakegpu estimate-roofline` | 產生與 profile 相關的分析延遲區間 |
 | `fakegpu plan-training` | 統一分散式訓練設定並估算單 rank GPU 記憶體 |
 | `fakegpu simulate-topology` | 模擬 collective 路由與鏈路競爭 |
@@ -497,6 +604,7 @@ dtype，可透過 `--kv-cache-residual-tokens` 調整。
 | `fakegpu calibrate` | 比較 GPU 記憶體報告並執行可靠性門檻檢查 |
 | `fakegpu capabilities` | 列出或嚴格檢查原生 API 分類 |
 | `fakegpu nvidia-smi` | 查看裝置、程序、建模拓撲/MIG、健康狀態與可靠性事件 |
+| `fakegpu metrics` | 匯出有數量上限的 Prometheus/JSON 指標與短期記憶體歷史 |
 | `fakegpu workspace-profiles` | 驗證並查看 workspace 估算 profiles |
 | `fakegpu validate` | 執行 JSON、TOML 或 YAML 宣告式驗證矩陣 |
 | `fakegpu coordinator` | 管理分散式模擬 coordinator |
@@ -567,8 +675,8 @@ python3 -m fakegpu validate \
   --strict
 
 python3 -m fakegpu validate \
-  --manifest tests/data/llm_validation.yaml \
-  --report-dir build/validation-llm \
+  --manifest tests/data/research_validation.yaml \
+  --report-dir build/validation-research \
   --strict
 ```
 
@@ -610,6 +718,9 @@ FakeGPU/
   分支。
 - GPU 記憶體估算可能遺漏 backend 私有配置、自訂 operator、allocator 策略與未
   匹配的 workspace。
+- Diffusion profile 只描述固定的參考 pipeline。自訂 ControlNet、IP-Adapter、
+  LoRA、safety checker、refiner、影片與 DiT 元件需要額外的元件資料及對應的
+  實體 GPU 驗證。
 - Roofline 輸出是分析區間，不是實測 kernel 延遲。
 - 分散式耗時包含 coordinator、記憶體複製、socket 與程序排程，不能作為 NCCL、
   NVLink 或 RDMA benchmark。
@@ -627,6 +738,7 @@ FakeGPU/
 - [x] 原生 CUDA、NVML、cuBLAS 與 NCCL 攔截
 - [x] 可識別架構的 GPU profile 目錄
 - [x] 執行階段、靜態、LLM 與分散式 GPU 記憶體分析
+- [x] 分階段估算 Stable Diffusion v1.5 與 SDXL 生成所需的 GPU 記憶體
 - [x] 儲存庫、kernel、拓撲與 trace 分析
 - [x] FakeGPU-SMI 裝置、runtime、allocator 與程序詳細查詢
 - [ ] 擴充可執行的原生 CUDA 運算與 cuBLAS 涵蓋範圍
@@ -634,8 +746,9 @@ FakeGPU/
 - [x] 加入建模拓撲、NVLink 檢視與 NVML peer 查詢
 - [x] 加入建模故障注入、健康狀態與可靠性事件檢視
 - [x] 加入建模 MIG 檢視與原生 NVML MIG handle 查詢
-- [ ] 將裝置與程序的歷史指標匯出至監控系統
+- [x] 為裝置、程序與 runtime 匯出有數量上限的指標及 Prometheus 記憶體歷史
 - [ ] 為長上下文與線上服務加入實體 GPU LLM 驗證
+- [ ] 加入實體 GPU diffusion 驗證，以及訓練與 DiT GPU 記憶體模型
 - [ ] 在更多 GPU 與軟體堆疊上驗證分散式與 MoE 估算
 
 建議功能與已知限制請參閱
@@ -687,3 +800,6 @@ GPU 記憶體估算或相容性問題應附上完整指令、選定的 profile�
 [validation-inference]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-inference-estimation.md#maintained-qwen3-8b-result
 [validation-sft]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#rtx-pro-5000-matrix
 [validation-qlora]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#native-nf4-qlora-matrices
+[diffusion-sd15]: https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/tree/451f4fe16113bff5a5d2269ed5ad43b0592e9a14
+[diffusion-sdxl]: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/tree/462165984030d82259a11f4367a4eed129e94a7b
+[diffusion-pixart]: https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/tree/e102b3591cc82e97071b8b4cb90d834d0c487207
