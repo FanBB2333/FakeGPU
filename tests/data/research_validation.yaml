@@ -173,6 +173,45 @@ cases:
           op: gt
           value: 0
 
+  - name: heterogeneous-serving-request-set
+    matrix:
+      workload:
+        - chat
+        - rag
+    env:
+      OUT: "{report_dir}/heterogeneous-serving-request-set.json"
+      WORKLOAD: "{workload}"
+    command:
+      - "{python}"
+      - -c
+      - >-
+        import json,os,pathlib;
+        from fakegpu import estimate_serving_request_kv_pool;
+        scenarios=dict(chat=[dict(id="chat-a",prompt_tokens=4096,generated_tokens=257,prefix_group="system",shared_prefix_tokens=1024),dict(id="chat-b",prompt_tokens=8192,generated_tokens=513,prefix_group="system",shared_prefix_tokens=1024),dict(id="completion",prompt_tokens=2048,generated_tokens=1025)],rag=[dict(id="rag-a",prompt_tokens=6144,generated_tokens=257,prefix_group="retrieval",shared_prefix_tokens=1536),dict(id="rag-b",prompt_tokens=10240,generated_tokens=129,prefix_group="retrieval",shared_prefix_tokens=1536),dict(id="summary",prompt_tokens=3072,generated_tokens=513)]);
+        workload=os.environ["WORKLOAD"];
+        report=estimate_serving_request_kv_pool(scenarios[workload],num_hidden_layers=32,num_key_value_heads=8,head_dim=128,element_bytes=2,strategy="paged",block_tokens=16);
+        payload=dict(schema_version="fakegpu.heterogeneous_serving_validation.v1",validation_status="Modeled",workload=workload,kv_cache=report);
+        pathlib.Path(os.environ["OUT"]).write_text(json.dumps(payload),encoding="utf-8");
+        assert report["decode"]["prefix_cache_savings_bytes"]>0;
+        print("heterogeneous-serving-ok")
+    expect:
+      stdout_contains: heterogeneous-serving-ok
+      files_exist: "{report_dir}/heterogeneous-serving-request-set.json"
+      json_checks:
+        - path: "{report_dir}/heterogeneous-serving-request-set.json"
+          pointer: /validation_status
+          op: eq
+          value: Modeled
+        - path: "{report_dir}/heterogeneous-serving-request-set.json"
+          pointer: /kv_cache/request_count
+          op: approx
+          value: 3
+          tolerance: 0
+        - path: "{report_dir}/heterogeneous-serving-request-set.json"
+          pointer: /kv_cache/decode/prefix_cache_savings_bytes
+          op: gt
+          value: 0
+
   - name: diffusion-generation
     matrix:
       model_profile:

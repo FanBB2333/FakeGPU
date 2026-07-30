@@ -56,6 +56,9 @@ from .serving_plan import (
     ServingPlanError,
     estimate_serving_kv_pool,
     estimate_serving_plan,
+    estimate_serving_request_kv_pool,
+    estimate_serving_request_set,
+    load_serving_requests,
 )
 from .operator_profiles import (
     OperatorProfileError,
@@ -114,6 +117,8 @@ __all__ = [
     "estimate_roofline",
     "estimate_serving_kv_pool",
     "estimate_serving_plan",
+    "estimate_serving_request_kv_pool",
+    "estimate_serving_request_set",
     "estimate_training_plan",
     "evaluate_operator_profile",
     "init",
@@ -125,6 +130,7 @@ __all__ = [
     "load_native_capabilities",
     "load_operator_profiles",
     "load_diffusion_profiles",
+    "load_serving_requests",
     "load_validation_manifest",
     "load_workspace_profiles",
     "match_operator_profile",

@@ -216,6 +216,7 @@ def test_checked_in_yaml_manifest_loads() -> None:
         "diffusion-generation",
         "diffusion-shape-optimizations",
         "distributed-training-plan",
+        "heterogeneous-serving-request-set",
         "kv-cache-allocation",
         "online-serving-kv-pool",
     }

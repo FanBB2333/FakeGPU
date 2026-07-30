@@ -14,10 +14,15 @@ from fakegpu.llm_estimator import (
 )
 from fakegpu.llm_cli import main as llm_main
 from fakegpu.serving_plan import (
+    REQUEST_MANIFEST_SCHEMA_VERSION,
+    REQUEST_SET_SCHEMA_VERSION,
     SCHEMA_VERSION as SERVING_SCHEMA_VERSION,
     ServingPlanError,
     estimate_serving_kv_pool,
     estimate_serving_plan,
+    estimate_serving_request_kv_pool,
+    estimate_serving_request_set,
+    load_serving_requests,
     main as serving_main,
 )
 
@@ -641,3 +646,350 @@ def test_serving_cli_writes_a_machine_readable_plan(
     output = capsys.readouterr().out
     assert "FakeGPU LLM serving plan" in output
     assert "accuracy: uncalibrated" in output
+
+
+def test_serving_request_manifest_models_mixed_kv_segments(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "requests.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": REQUEST_MANIFEST_SCHEMA_VERSION,
+                "requests": [
+                    {
+                        "id": "chat-a",
+                        "prompt_tokens": 32,
+                        "generated_tokens": 5,
+                        "prefix_group": "system",
+                        "shared_prefix_tokens": 16,
+                    },
+                    {
+                        "id": "chat-b",
+                        "prompt_tokens": 48,
+                        "generated_tokens": 9,
+                        "prefix_group": "system",
+                        "shared_prefix_tokens": 16,
+                    },
+                    {
+                        "id": "completion",
+                        "prompt_tokens": 8,
+                        "generated_tokens": 2,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = load_serving_requests(manifest_path)
+    report = estimate_serving_request_kv_pool(
+        manifest["requests"],
+        num_hidden_layers=2,
+        num_key_value_heads=1,
+        head_dim=4,
+        element_bytes=2,
+        strategy="paged",
+        block_tokens=16,
+    )
+
+    assert manifest["source"] == str(manifest_path.resolve())
+    assert report["request_ids"] == [
+        "chat-a",
+        "chat-b",
+        "completion",
+    ]
+    assert report["prefill"]["allocated_bytes"] == 2560
+    assert report["prefill"]["without_prefix_cache_bytes"] == 3072
+    assert report["prefill"]["prefix_cache_savings_bytes"] == 512
+    assert report["prefill"][
+        "logical_prefix_sharing_savings_bytes"
+    ] == 512
+    assert report["prefill"]["quantization_savings_bytes"] == 0
+    assert report["decode"]["allocated_bytes"] == 3584
+    assert report["decode"]["prefix_cache_savings_bytes"] == 512
+    assert report["decode"]["prefix_groups"][0]["member_ids"] == [
+        "chat-a",
+        "chat-b",
+    ]
+
+    quantized_requests = [
+        {
+            "id": "short",
+            "prompt_tokens": 4,
+            "generated_tokens": 2,
+        },
+        {
+            "id": "long",
+            "prompt_tokens": 8,
+            "generated_tokens": 2,
+        },
+    ]
+    quantized = estimate_serving_request_kv_pool(
+        quantized_requests,
+        num_hidden_layers=2,
+        num_key_value_heads=1,
+        head_dim=4,
+        element_bytes=2,
+        strategy="quantized",
+        quantized_bits=4,
+        quantized_residual_tokens=2,
+    )
+    individual_quantized_bytes = sum(
+        estimate_kv_cache_memory(
+            num_hidden_layers=2,
+            num_key_value_heads=1,
+            head_dim=4,
+            batch_size=1,
+            prompt_tokens=request["prompt_tokens"],
+            generated_tokens=request["generated_tokens"],
+            element_bytes=2,
+            strategy="quantized",
+            quantized_bits=4,
+            quantized_residual_tokens=2,
+        )["generation"]["allocated_bytes"]
+        for request in quantized_requests
+    )
+    assert quantized["decode"]["allocated_bytes"] == (
+        individual_quantized_bytes
+    )
+    assert quantized["decode"]["quantization_savings_bytes"] > 0
+    assert quantized["quantized_residual_tokens"] == 2
+
+    static = estimate_serving_request_kv_pool(
+        quantized_requests,
+        num_hidden_layers=2,
+        num_key_value_heads=1,
+        head_dim=4,
+        element_bytes=2,
+        strategy="static",
+    )
+    assert static["max_cache_tokens"] is None
+    assert static["max_cache_tokens_by_request"] == {
+        "short": 5,
+        "long": 9,
+    }
+
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "fakegpu.serving_requests.v0",
+                "requests": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ServingPlanError, match="unsupported.*schema"):
+        load_serving_requests(manifest_path)
+
+
+def test_serving_request_manifest_rejects_ambiguous_groups() -> None:
+    common = {
+        "num_hidden_layers": 2,
+        "num_key_value_heads": 1,
+        "head_dim": 4,
+    }
+    with pytest.raises(ServingPlanError, match="duplicate"):
+        estimate_serving_request_kv_pool(
+            [
+                {
+                    "id": "same",
+                    "prompt_tokens": 16,
+                },
+                {
+                    "id": "same",
+                    "prompt_tokens": 32,
+                },
+            ],
+            **common,
+        )
+    with pytest.raises(ServingPlanError, match="one shared_prefix"):
+        estimate_serving_request_kv_pool(
+            [
+                {
+                    "id": "left",
+                    "prompt_tokens": 16,
+                    "prefix_group": "system",
+                    "shared_prefix_tokens": 8,
+                },
+                {
+                    "id": "right",
+                    "prompt_tokens": 32,
+                    "prefix_group": "system",
+                    "shared_prefix_tokens": 16,
+                },
+            ],
+            **common,
+        )
+    with pytest.raises(ServingPlanError, match="prefix-shareable"):
+        estimate_serving_request_kv_pool(
+            [
+                {
+                    "id": "left",
+                    "prompt_tokens": 16,
+                    "prefix_group": "system",
+                    "shared_prefix_tokens": 8,
+                },
+                {
+                    "id": "right",
+                    "prompt_tokens": 16,
+                    "prefix_group": "system",
+                    "shared_prefix_tokens": 8,
+                },
+            ],
+            strategy="quantized",
+            **common,
+        )
+
+
+def test_serving_request_set_admits_a_manifest_prefix(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    requests = [
+        {
+            "id": "chat-a",
+            "prompt_tokens": 64,
+            "generated_tokens": 17,
+            "prefix_group": "system",
+            "shared_prefix_tokens": 32,
+        },
+        {
+            "id": "chat-b",
+            "prompt_tokens": 96,
+            "generated_tokens": 9,
+            "prefix_group": "system",
+            "shared_prefix_tokens": 32,
+        },
+        {
+            "id": "completion",
+            "prompt_tokens": 128,
+            "generated_tokens": 33,
+        },
+    ]
+    prefix_plan = estimate_serving_request_set(
+        model_dir,
+        requests[:2],
+        max_batch_size=3,
+        prefill_chunk_tokens=16,
+        prefill_concurrency=2,
+    )
+    capacity_bytes = prefix_plan["memory_timeline"]["peak_bytes"]
+
+    report = estimate_serving_request_set(
+        model_dir,
+        requests,
+        max_batch_size=3,
+        prefill_chunk_tokens=16,
+        prefill_concurrency=2,
+        device_capacity_bytes=capacity_bytes,
+        memory_utilization=1,
+    )
+
+    assert report["schema_version"] == REQUEST_SET_SCHEMA_VERSION
+    assert report["inputs"]["mode"] == "heterogeneous_request_set"
+    assert report["accuracy"]["status"] == "uncalibrated"
+    assert report["scheduler"]["admissible_active_sequences"] == 2
+    assert report["scheduler"]["admitted_request_count"] == 2
+    assert report["scheduler"]["rejected_request_count"] == 1
+    assert report["scheduler"]["available_slots"] is None
+    assert report["scheduler"]["admitted_request_ids"] == [
+        "chat-a",
+        "chat-b",
+    ]
+    assert report["scheduler"]["rejected_request_ids"] == [
+        "completion"
+    ]
+    assert report["scheduler"]["requested_fits"] is False
+    shapes = report["optimizations"]["continuous_batching"][
+        "request_shapes"
+    ]
+    assert shapes["prompt_tokens"] == {
+        "minimum": 64,
+        "maximum": 128,
+        "total": 288,
+    }
+    assert report["optimizations"]["chunked_prefill"][
+        "effective_concurrency"
+    ] == 2
+    assert report["optimizations"]["chunked_prefill"][
+        "transient_savings_bytes"
+    ] > 0
+    assert report["optimizations"]["prefix_cache"]["group_count"] == 1
+
+
+def test_serving_cli_accepts_a_request_manifest(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    model_dir = tmp_path / "model"
+    manifest_path = tmp_path / "requests.json"
+    output_path = tmp_path / "mixed-serving.json"
+    _write_model(model_dir)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": REQUEST_MANIFEST_SCHEMA_VERSION,
+                "requests": [
+                    {
+                        "id": "short",
+                        "prompt_tokens": 16,
+                        "generated_tokens": 4,
+                    },
+                    {
+                        "id": "long",
+                        "prompt_tokens": 64,
+                        "generated_tokens": 16,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        serving_main(
+            [
+                "--model-dir",
+                str(model_dir),
+                "--requests",
+                str(manifest_path),
+                "--max-batch-size",
+                "8",
+                "--prefill-chunk-tokens",
+                "8",
+                "--prefill-concurrency",
+                "2",
+                "--device-memory-gib",
+                "1",
+                "--json",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["schema_version"] == REQUEST_SET_SCHEMA_VERSION
+    assert report["inputs"]["request_manifest"] == str(
+        manifest_path.resolve()
+    )
+    assert report["scheduler"]["requested_active_sequences"] == 2
+    assert report["scheduler"]["requested_fits"] is True
+    output = capsys.readouterr().out
+    assert "active sequences: 2" in output
+    assert "accuracy: uncalibrated" in output
+
+    with pytest.raises(SystemExit):
+        serving_main(
+            [
+                "--model-dir",
+                str(model_dir),
+                "--requests",
+                str(manifest_path),
+                "--prompt-tokens",
+                "16",
+            ]
+        )
+    assert "--requests cannot be combined" in capsys.readouterr().err
