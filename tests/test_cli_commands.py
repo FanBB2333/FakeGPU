@@ -13,6 +13,7 @@ from fakegpu import (
     estimate_diffusion_generation,
     estimate_kv_cache_memory,
     estimate_serving_kv_pool,
+    estimate_serving_request_kv_pool,
     estimate_training_plan,
 )
 from fakegpu.__main__ import BUILTIN_COMMANDS
@@ -499,7 +500,7 @@ def test_readmes_report_research_reliability_scope() -> None:
     )
     expected_terms = {
         "scripts/test.sh all",
-        "191",
+        "195",
         str(len(profiles)),
         str(compute_capability_count),
         str(len(capabilities["groups"])),
@@ -598,6 +599,54 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
         shared_prefix_tokens=1024,
         block_tokens=16,
     )
+    mixed_requests = [
+        {
+            "id": "chat-a",
+            "prompt_tokens": 4096,
+            "generated_tokens": 257,
+        },
+        {
+            "id": "chat-b",
+            "prompt_tokens": 8192,
+            "generated_tokens": 513,
+        },
+        {
+            "id": "completion",
+            "prompt_tokens": 2048,
+            "generated_tokens": 1025,
+        },
+    ]
+    mixed_unshared = estimate_serving_request_kv_pool(
+        mixed_requests,
+        num_hidden_layers=32,
+        num_key_value_heads=8,
+        head_dim=128,
+        element_bytes=2,
+        strategy="paged",
+        block_tokens=16,
+    )
+    mixed_shared = estimate_serving_request_kv_pool(
+        [
+            {
+                **request,
+                **(
+                    {
+                        "prefix_group": "system",
+                        "shared_prefix_tokens": 1024,
+                    }
+                    if request["id"].startswith("chat-")
+                    else {}
+                ),
+            }
+            for request in mixed_requests
+        ],
+        num_hidden_layers=32,
+        num_key_value_heads=8,
+        head_dim=128,
+        element_bytes=2,
+        strategy="paged",
+        block_tokens=16,
+    )
     replicated = estimate_training_plan(
         {
             "sharding_strategy": "replicated",
@@ -676,6 +725,10 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
             f"{gib(serving_shared['decode']['allocated_bytes'])} GiB"
         ),
         (
+            f"{gib(mixed_unshared['decode']['allocated_bytes'])} → "
+            f"{gib(mixed_shared['decode']['allocated_bytes'])} GiB"
+        ),
+        (
             f"{gib(replicated['estimated_rank_peak_bytes'])} → "
             f"{gib(full_shard['estimated_rank_peak_bytes'])} GiB"
         ),
@@ -699,6 +752,9 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
     expected_terms = {
         "estimate-diffusion",
         "plan-serving",
+        "fakegpu.serving_requests.v1",
+        "--requests",
+        "--prefill-concurrency",
         "stable-diffusion-v1-5",
         "stable-diffusion-xl-base-1.0",
         "pixart-sigma-xl-2-1024-ms",

@@ -74,7 +74,7 @@ FakeGPU 为开发、CI、兼容性检查和容量规划模拟面向 CUDA 的运�
 | 未修改的进程能否加载并调用 CUDA 系列动态库？ | 原生库拦截 | 否 |
 | 某个工作负载能否放入选定的 GPU profile？ | Preflight 或静态显存估算器 | 否 |
 | LLM 的 checkpoint、KV cache、adapter 或 MoE 需要多少显存？ | LLM 估算器 | 否 |
-| 给定显存预算可以容纳多少个同构在线 LLM 请求？ | Serving 规划器 | 否 |
+| 给定显存预算可以容纳哪些同构或混合长度的在线 LLM 请求？ | Serving 规划器 | 否 |
 | 分辨率、batch、CFG、VAE tiling 和 offload 会如何影响 diffusion 生成显存？ | Diffusion 估算器 | 否 |
 | 仓库中有哪些仅支持 GPU 的入口和依赖？ | 仓库分析器 | 否 |
 | 分布式训练配置对应多少单 rank 显存？ | 训练规划器 | 否 |
@@ -88,7 +88,7 @@ FakeGPU 为开发、CI、兼容性检查和容量规划模拟面向 CUDA 的运�
 | 适用场景 | FakeGPU 提供的能力 | 建议入口 |
 |---|---|---|
 | 在租用 GPU 或启动长时间任务前选择硬件 | 按 profile 估算 checkpoint、KV cache、activation、optimizer 和 workspace 显存 | `estimate-llm`、`preflight` |
-| 部署在线 LLM 服务前规划容量 | 估算 continuous batch 准入、chunked prefill 临时显存、共享 prefix KV block 和可用显存余量 | `plan-serving`、`validate` |
+| 部署 chat、RAG、completion 或 summarization 服务前规划容量 | 按请求估算 prompt/生成长度、continuous batch 准入、chunked prefill 临时显存、共享 prefix 分组和可用显存余量 | `plan-serving`、`validate` |
 | 在笔记本电脑或无 GPU 的 CI 中开发面向 CUDA 的 PyTorch 代码 | 让程序看到 CUDA 设备，同时在 CPU 上执行已维护的 tensor 运算 | `fakegpu.init(...)`、`demo`、`validate` |
 | 比较全量微调、LoRA、QLoRA、checkpointing、offload 或分片方案 | 在申请集群前估算各阶段和单 rank 显存 | `plan-training`、Python 显存估算器 |
 | 比较 UNet 与 diffusion Transformer 的生成 shape 和显存优化选项 | 根据固定 profile 或本地 pipeline，按架构估算 text encoder、denoising 和 VAE decode 阶段 | `estimate-diffusion`、`validate` |
@@ -180,13 +180,13 @@ FakeGPU 按工作负载和环境签名报告可靠性。`GPU-validated` 结果�
 
 #### 当前仓库验证
 
-当前仓库状态于 2026-07-30 在 macOS 26.5 arm64、Python 3.11.9 和 PyTorch
+当前仓库状态于 2026-07-31 在 macOS 26.5 arm64、Python 3.11.9 和 PyTorch
 2.9.1 CPU 环境中执行了 `scripts/test.sh all` 和两个声明式验证 manifest：
 
 | 验证层 | 已维护的检查 | 结果 |
 |---|---|---|
-| Python runtime、估算器、CLI、schema 和 README 契约 | 完整 `pytest` 测试集 | **191 个通过** |
-| 声明式验证矩阵 | 6 个 smoke 用例，加 26 个 research cache、serving、训练、校准和 diffusion 用例 | **32 个通过** |
+| Python runtime、估算器、CLI、schema 和 README 契约 | 完整 `pytest` 测试集 | **195 个通过** |
+| 声明式验证矩阵 | 6 个 smoke 用例，加 28 个 research cache、serving、训练、校准和 diffusion 用例 | **34 个通过** |
 | 原生库拦截 | 构建、库边界、导出符号、preload、显存类型、coordinator 和不支持 API 策略 | **通过** |
 | FakeGPU-SMI 诊断 | 有上限的状态发布、拓扑/NVLink/MIG 视图、NVML peer/MIG 查询、健康字段和事件报告 | **通过** |
 | 监控 exporter | Prometheus/JSON 快照、历史和序列数量限制、异常状态降级及 HTTP 接口 | **通过** |
@@ -210,7 +210,7 @@ GitHub CI 还会在 Python 3.10–3.12 上执行 Python 测试，并在 Linux �
 | 通用 decoder 分析 | Dense/MoE 元数据、adapter、量化 checkpoint、eager/SDPA attention、KV cache 和 expert-parallel 通信量 | 公式、fixture 和 CLI 回归测试 | `CPU-validated` + `Modeled` |
 | 分布式训练规划 | DeepSpeed、Accelerate、FSDP/FSDP2、分片、checkpointing 和 CPU/NVMe offload | 配置、字节计算、拓扑和 trace 测试 | `CPU-validated` + `Modeled` |
 | KV cache 分配 | Dynamic 增长、static 预留、2/4/8-bit quantized 存储、paged block 取整和 sliding-window 上限 | 公式、API、`--kv-cache-strategy` CLI 和 `tests/data/research_validation.yaml` 矩阵测试 | `CPU-validated` + `Modeled` |
-| 在线 serving 容量 | 同构 continuous batching、chunked prefill、prefix caching、paged KV block、profile 或显式容量，以及准入余量 | Checkpoint header、架构公式、`plan-serving`、单元测试和 `tests/data/research_validation.yaml` | `CPU-validated` + `Modeled` |
+| 在线 serving 容量 | 面向同构与混合长度请求集的 continuous batching、顺序准入、chunked prefill、分组 prefix caching、paged KV block、profile 或显式容量，以及准入余量 | Checkpoint header、架构公式、`plan-serving`、单元测试，以及 `tests/data/research_validation.yaml` 中的 chat/RAG 用例 | `CPU-validated` + `Modeled` |
 | Diffusion 图像生成 | Stable Diffusion v1.5、SDXL Base 和 PixArt-Sigma；本地 UNet、交叉注意力 DiT、SD3/Flux 类联合注意力 Transformer；CFG、offload、attention/VAE slicing 和 VAE tiling | 固定版本与本地组件 header、架构配置、阶段公式、CLI/单元测试和 `tests/data/research_validation.yaml` | `CPU-validated` + `Modeled` |
 | Speculative decoding | Draft 模型权重、draft KV cache、接受率和 target verification batch | 尚无专用估算器或项目维护的真实 GPU 数据 | `Planned` |
 | 多 GPU LLM 执行 | TP、PP、CP、EP、MoE 负载不均衡，以及 FSDP/ZeRO 组合执行 | 目前只有分析拓扑和 coordinator 验证 | `Modeled` |
@@ -229,6 +229,7 @@ GitHub CI 还会在 Python 3.10–3.12 上执行 Python 测试，并在 Linux �
 |---|---|---:|---|
 | LLM 推理 KV cache | 32 层 GQA、8 个 KV head、head dim 128、batch 1、BF16；context 4K → 32K | **0.50 → 4.00 GiB**（cache 增长 8 倍） | 精确字节公式 |
 | 在线 serving prefix cache | 同一 decoder、8 个活跃请求、4K prompt + 256 个生成 token、paged BF16 KV；独立 cache → 共享 1K prefix | **4.25 → 3.38 GiB**（减少 20.6%） | 共享/私有 paged block 公式 |
+| 混合 chat/completion serving | 同一 decoder；prompt 为 4K/8K/2K，生成长度为 256/512/1024；独立 KV → 两个 chat 请求共享 1K system prefix | **1.97 → 1.84 GiB** decode KV（减少 6.3%） | 异构请求集公式和 chat/RAG 矩阵 |
 | LLM 训练 | 8B BF16 参数、AdamW、4 张 GPU、activation checkpointing；replicated → full shard | **104.31 → 26.54 GiB**/rank（减少 74.6%） | 训练阶段模型 |
 | Stable Diffusion v1.5 生成 | 512²、batch 1、FP16、CFG；全部权重常驻 → model offload | **2.30 → 1.65 GiB**（减少 28.1%） | 组件与阶段模型 |
 | SDXL 批量生成 | 1024²、batch 4、FP16、CFG；普通 VAE decode → VAE slicing | **11.49 → 7.74 GiB**（减少 32.7%） | 顺序 VAE batch shape 模型 |
@@ -246,11 +247,12 @@ workspace 和传输重叠。
 
 Cache 公式参考
 [Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache)
-提供的工作负载形态。Serving 规划器只估算同构活跃请求的显存准入；请求到达
-分布、preemption、吞吐量、延迟和 speculative decoding 不在当前估算范围内。
-相关术语参考 [vLLM serving](https://docs.vllm.ai/en/stable/)。CPU FakeCUDA
-不执行二进制 CUDA 扩展或任意 kernel；这类工作负载需要分析结果，并通过
-passthrough 或 hybrid 模式取得真实 GPU 观测值。
+提供的工作负载形态。Serving 规划器支持同构 shape 和按清单排列的异构活跃
+请求集；请求到达分布、cache eviction、preemption、吞吐量、延迟和
+speculative decoding 不在当前估算范围内。相关术语参考
+[vLLM serving](https://docs.vllm.ai/en/stable/)。CPU FakeCUDA 不执行二进制
+CUDA 扩展或任意 kernel；这类工作负载需要分析结果，并通过 passthrough 或
+hybrid 模式取得真实 GPU 观测值。
 
 后续新增或更新的公开验证数据应包含：
 
@@ -549,10 +551,60 @@ runtime/scheduler 开销和设备可用余量。自定义容量可以用
 paged cache；paged 的共享与私有 segment 会分别按 block 取整。容量搜索不会
 超过 `--max-batch-size`。
 
-当前模型假设所有活跃请求的长度相同。请求到达时间、混合长度、cache eviction、
-preemption、tensor parallelism、speculative draft 模型、吞吐量和延迟会列入
-未建模项。取得同配置的在线服务观测前，`validation_status` 保持为 `Modeled`，
-`accuracy.status` 保持为 `uncalibrated`。
+对于长度不同的 chat、RAG、completion 或 summarization 请求，可提供一个按
+准入顺序排列的请求清单：
+
+```json
+{
+  "schema_version": "fakegpu.serving_requests.v1",
+  "requests": [
+    {
+      "id": "chat-a",
+      "prompt_tokens": 4096,
+      "generated_tokens": 256,
+      "prefix_group": "system-prompt",
+      "shared_prefix_tokens": 1024
+    },
+    {
+      "id": "chat-b",
+      "prompt_tokens": 8192,
+      "generated_tokens": 512,
+      "prefix_group": "system-prompt",
+      "shared_prefix_tokens": 1024
+    },
+    {
+      "id": "completion",
+      "prompt_tokens": 2048,
+      "generated_tokens": 1024
+    }
+  ]
+}
+```
+
+```bash
+python3 -m fakegpu plan-serving \
+  --model-dir /models/example \
+  --requests serving-requests.json \
+  --max-batch-size 64 \
+  --prefill-chunk-tokens 512 \
+  --prefill-concurrency 2 \
+  --kv-cache-strategy paged \
+  --target-profile a100 \
+  --memory-utilization 0.9 \
+  --json build/mixed-serving-plan.json
+```
+
+清单模式会分别计算每个请求，同名 prefix 分组只保存一次，并在不改变请求顺序的
+前提下接纳能够放入显存的最长清单前缀。报告包含已接纳和被拒绝的请求 ID、每个
+请求的临时显存、并发 prefill 中各组件的显存上界、分组 KV segment 和容量余量。
+同组请求必须使用相同且大于零的 `shared_prefix_tokens`；共享 prefix 只支持
+dynamic 或 paged KV 存储。命名分组视为已经命中并驻留在 cache 中；报告不预测
+cache 填充、命中概率或 eviction 行为。
+
+请求到达时间、cache eviction、preemption 或调度器重排、tensor parallelism、
+speculative draft 模型、吞吐量和延迟会列入未建模项。取得同配置的在线服务观测
+前，`validation_status` 保持为 `Modeled`，`accuracy.status` 保持为
+`uncalibrated`。
 
 ### 分析仓库或模型
 
@@ -632,7 +684,7 @@ SD3/Flux 类联合注意力 Transformer。图像 token 数会结合 VAE 缩放�
 | `fakegpu analyze-repo` | 统计仓库入口和仅支持 GPU 的风险 |
 | `fakegpu analyze-kernel` | 检查 CUDA、PTX 和 SASS 资源与运算 |
 | `fakegpu estimate-llm` | 估算 decoder 显存、通信量和 FLOP |
-| `fakegpu plan-serving` | 规划 continuous batch 显存准入、chunked prefill 和共享 prefix KV 存储 |
+| `fakegpu plan-serving` | 规划同构或混合请求准入、chunked prefill 和分组共享 prefix KV 存储 |
 | `fakegpu estimate-diffusion` | 估算 diffusion 的 text encode、denoise 和 VAE decode 阶段显存 |
 | `fakegpu estimate-roofline` | 生成与 profile 相关的分析延迟区间 |
 | `fakegpu plan-training` | 统一分布式训练配置并估算单 rank 显存 |
@@ -758,9 +810,9 @@ FakeGPU/
 - Diffusion profile 只描述固定的参考 pipeline。自定义 ControlNet、IP-Adapter、
   LoRA、safety checker、refiner、视频和 DiT 组件需要额外的组件数据及对应的
   真实 GPU 验证。
-- 在线 serving 规划采用同构活跃请求池，尚未建模请求到达、混合长度、cache
-  eviction、preemption、speculative decoding、tensor parallelism、吞吐量和
-  延迟。
+- 在线 serving 规划支持在清单中指定不同请求长度，但不估算请求到达分布、
+  cache eviction、preemption 或调度器重排、speculative decoding、tensor
+  parallelism、吞吐量和延迟。
 - Roofline 输出是分析区间，不是实测 kernel 延迟。
 - 分布式耗时包含 coordinator、内存复制、socket 和进程调度，不能作为 NCCL、
   NVLink 或 RDMA benchmark。
@@ -787,7 +839,7 @@ FakeGPU/
 - [x] 增加建模故障注入、健康状态和可靠性事件视图
 - [x] 增加建模 MIG 视图和原生 NVML MIG handle 查询
 - [x] 为设备、进程和 runtime 导出有数量上限的指标及 Prometheus 内存历史
-- [x] 增加 continuous batching、chunked prefill 和 prefix caching 的在线 serving 容量模型
+- [x] 增加 continuous batching、混合请求长度、chunked prefill 和分组 prefix caching 的在线 serving 容量模型
 - [ ] 为长上下文和在线服务添加真实 GPU LLM 验证
 - [ ] 添加真实 GPU diffusion 验证，以及训练和 DiT 显存模型
 - [ ] 在更多 GPU 和软件栈上验证分布式与 MoE 估算
