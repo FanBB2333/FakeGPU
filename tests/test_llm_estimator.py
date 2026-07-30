@@ -13,6 +13,13 @@ from fakegpu.llm_estimator import (
     inspect_safetensors_checkpoint,
 )
 from fakegpu.llm_cli import main as llm_main
+from fakegpu.serving_plan import (
+    SCHEMA_VERSION as SERVING_SCHEMA_VERSION,
+    ServingPlanError,
+    estimate_serving_kv_pool,
+    estimate_serving_plan,
+    main as serving_main,
+)
 
 
 def _write_safetensors(
@@ -409,3 +416,228 @@ def test_estimator_rejects_non_positive_shapes(tmp_path: Path, field: str) -> No
     kwargs[field] = 0
     with pytest.raises(ValueError):
         estimate_decoder_inference(model_dir, **kwargs)
+
+
+def test_serving_kv_pool_shares_prefix_across_active_sequences() -> None:
+    common = {
+        "num_hidden_layers": 32,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+        "active_sequences": 8,
+        "prompt_tokens": 4096,
+        "generated_tokens": 257,
+        "element_bytes": 2,
+        "strategy": "paged",
+        "block_tokens": 16,
+    }
+
+    baseline = estimate_serving_kv_pool(**common)
+    shared = estimate_serving_kv_pool(
+        **common,
+        shared_prefix_tokens=1024,
+    )
+
+    assert baseline["decode"]["allocated_bytes"] == 4_563_402_752
+    assert shared["decode"]["allocated_bytes"] == 3_623_878_656
+    assert shared["decode"]["prefix_cache_savings_bytes"] == 939_524_096
+    assert shared["decode"]["shared_segment"][
+        "allocated_tokens_per_sequence"
+    ] == 1024
+    assert shared["decode"]["private_segments"][
+        "sequence_count"
+    ] == 8
+    assert shared["decode"]["allocation_utilization_percent"] == 100
+
+
+def test_serving_prefix_segments_are_rounded_independently() -> None:
+    report = estimate_serving_kv_pool(
+        num_hidden_layers=2,
+        num_key_value_heads=1,
+        head_dim=4,
+        active_sequences=2,
+        prompt_tokens=17,
+        element_bytes=2,
+        strategy="paged",
+        shared_prefix_tokens=1,
+        block_tokens=16,
+    )
+
+    prefill = report["prefill"]
+    assert prefill["shared_segment"]["allocated_tokens_per_sequence"] == 16
+    assert prefill["private_segments"][
+        "allocated_tokens_per_sequence"
+    ] == 16
+    assert prefill["without_prefix_cache_bytes"] == 2048
+    assert prefill["allocated_bytes"] == 1536
+    assert prefill["reservation_overhead_bytes"] == 480
+
+
+def test_serving_prefix_cache_rejects_unsupported_storage() -> None:
+    common = {
+        "num_hidden_layers": 2,
+        "num_key_value_heads": 1,
+        "head_dim": 4,
+        "active_sequences": 2,
+        "prompt_tokens": 16,
+        "shared_prefix_tokens": 8,
+    }
+
+    with pytest.raises(ServingPlanError, match="prefix-shareable"):
+        estimate_serving_kv_pool(**common, strategy="quantized")
+    with pytest.raises(ServingPlanError, match="must not exceed"):
+        estimate_serving_kv_pool(
+            **{**common, "shared_prefix_tokens": 17},
+            strategy="paged",
+        )
+
+
+def test_serving_plan_models_chunked_prefill_and_prefix_hits(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    baseline = estimate_serving_plan(
+        model_dir,
+        active_sequences=8,
+        max_batch_size=64,
+        prompt_tokens=64,
+        generated_tokens=17,
+        device_capacity_bytes=2**20,
+    )
+    optimized = estimate_serving_plan(
+        model_dir,
+        active_sequences=8,
+        max_batch_size=64,
+        prompt_tokens=64,
+        generated_tokens=17,
+        prefill_chunk_tokens=16,
+        shared_prefix_tokens=32,
+        device_capacity_bytes=2**20,
+    )
+
+    assert optimized["schema_version"] == SERVING_SCHEMA_VERSION
+    assert optimized["validation_status"] == "Modeled"
+    assert optimized["accuracy"]["status"] == "uncalibrated"
+    assert optimized["optimizations"]["chunked_prefill"]["enabled"] is True
+    assert optimized["optimizations"]["chunked_prefill"][
+        "effective_query_tokens"
+    ] == 16
+    assert optimized["optimizations"]["prefix_cache"][
+        "prompt_token_hit_percent"
+    ] == 50
+    assert optimized["kv_cache"]["decode"][
+        "prefix_cache_savings_bytes"
+    ] > 0
+    assert optimized["memory_timeline"]["peak_bytes"] < baseline[
+        "memory_timeline"
+    ]["peak_bytes"]
+    assert optimized["scheduler"]["requested_fits"] is True
+    assert optimized["scheduler"]["admissible_active_sequences"] == 64
+
+
+def test_serving_plan_reports_memory_limited_admission(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=4,
+        max_batch_size=32,
+        prompt_tokens=64,
+        generated_tokens=17,
+        device_capacity_bytes=1024,
+        memory_utilization=1,
+    )
+
+    assert report["scheduler"]["memory_limited_active_sequences"] == 0
+    assert report["scheduler"]["admissible_active_sequences"] == 0
+    assert report["scheduler"]["requested_fits"] is False
+    assert report["scheduler"]["limiting_factor"] == "usable_device_memory"
+    assert report["memory_timeline"][
+        "usable_capacity_headroom_bytes"
+    ] < 0
+
+
+def test_serving_plan_can_report_memory_without_a_capacity(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=2,
+        max_batch_size=8,
+        prompt_tokens=16,
+    )
+
+    assert report["target"]["capacity_source"] == "unavailable"
+    assert report["scheduler"]["fits_memory"] is None
+    assert report["scheduler"]["requested_fits"] is None
+    assert report["scheduler"]["admissible_active_sequences"] is None
+
+
+def test_serving_plan_uses_profile_capacity(tmp_path: Path) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=2,
+        max_batch_size=8,
+        prompt_tokens=16,
+        target_profile="rtx2080ti",
+        memory_utilization=0.8,
+    )
+
+    profile = report["target"]["profile"]
+    assert profile["id"] == "rtx2080ti"
+    assert report["target"]["capacity_source"] == "gpu_profile"
+    assert report["target"]["usable_capacity_bytes"] == math.floor(
+        profile["memory_bytes"] * 0.8
+    )
+
+
+def test_serving_cli_writes_a_machine_readable_plan(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    model_dir = tmp_path / "model"
+    output_path = tmp_path / "serving.json"
+    _write_model(model_dir)
+
+    assert (
+        serving_main(
+            [
+                "--model-dir",
+                str(model_dir),
+                "--active-sequences",
+                "4",
+                "--max-batch-size",
+                "16",
+                "--prompt-tokens",
+                "64",
+                "--generated-tokens",
+                "17",
+                "--prefill-chunk-tokens",
+                "16",
+                "--shared-prefix-tokens",
+                "32",
+                "--device-memory-gib",
+                "1",
+                "--json",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["schema_version"] == SERVING_SCHEMA_VERSION
+    assert report["scheduler"]["requested_fits"] is True
+    output = capsys.readouterr().out
+    assert "FakeGPU LLM serving plan" in output
+    assert "accuracy: uncalibrated" in output

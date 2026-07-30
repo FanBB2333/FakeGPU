@@ -126,6 +126,53 @@ cases:
           op: eq
           value: 0
 
+  - name: online-serving-kv-pool
+    matrix:
+      active_sequences:
+        - 4
+        - 8
+      shared_prefix_tokens:
+        - 0
+        - 1024
+    env:
+      ACTIVE_SEQUENCES: "{active_sequences}"
+      OUT: "{report_dir}/serving-kv-pool.json"
+      SHARED_PREFIX_TOKENS: "{shared_prefix_tokens}"
+    command:
+      - "{python}"
+      - -c
+      - >-
+        import json,os,pathlib;
+        from fakegpu import estimate_serving_kv_pool;
+        active=int(os.environ["ACTIVE_SEQUENCES"]);
+        prefix=int(os.environ["SHARED_PREFIX_TOKENS"]);
+        report=estimate_serving_kv_pool(num_hidden_layers=32,num_key_value_heads=8,head_dim=128,active_sequences=active,prompt_tokens=4096,generated_tokens=257,element_bytes=2,strategy="paged",shared_prefix_tokens=prefix,block_tokens=16);
+        payload=dict(schema_version="fakegpu.serving_kv_pool_validation.v1",validation_status="Modeled",kv_cache=report);
+        pathlib.Path(os.environ["OUT"]).write_text(json.dumps(payload),encoding="utf-8");
+        print("serving-kv-pool-ok")
+    expect:
+      stdout_contains: serving-kv-pool-ok
+      files_exist: "{report_dir}/serving-kv-pool.json"
+      json_checks:
+        - path: "{report_dir}/serving-kv-pool.json"
+          pointer: /validation_status
+          op: eq
+          value: Modeled
+        - path: "{report_dir}/serving-kv-pool.json"
+          pointer: /kv_cache/active_sequences
+          op: approx
+          value: "{active_sequences}"
+          tolerance: 0
+        - path: "{report_dir}/serving-kv-pool.json"
+          pointer: /kv_cache/shared_prefix_tokens
+          op: approx
+          value: "{shared_prefix_tokens}"
+          tolerance: 0
+        - path: "{report_dir}/serving-kv-pool.json"
+          pointer: /kv_cache/decode/allocated_bytes
+          op: gt
+          value: 0
+
   - name: diffusion-generation
     matrix:
       model_profile:

@@ -52,6 +52,11 @@ from .llm_estimator import (
     estimate_kv_cache_memory,
     inspect_safetensors_checkpoint,
 )
+from .serving_plan import (
+    ServingPlanError,
+    estimate_serving_kv_pool,
+    estimate_serving_plan,
+)
 from .operator_profiles import (
     OperatorProfileError,
     evaluate_operator_profile,
@@ -85,6 +90,7 @@ __all__ = [
     "PerformanceModelError",
     "RepositoryAnalysisError",
     "RuntimeInitResult",
+    "ServingPlanError",
     "Topology",
     "TopologyError",
     "TraceReplayError",
@@ -106,6 +112,8 @@ __all__ = [
     "estimate_kv_cache_memory",
     "estimate_module_memory",
     "estimate_roofline",
+    "estimate_serving_kv_pool",
+    "estimate_serving_plan",
     "estimate_training_plan",
     "evaluate_operator_profile",
     "init",

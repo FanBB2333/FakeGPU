@@ -12,6 +12,7 @@ import pytest
 from fakegpu import (
     estimate_diffusion_generation,
     estimate_kv_cache_memory,
+    estimate_serving_kv_pool,
     estimate_training_plan,
 )
 from fakegpu.__main__ import BUILTIN_COMMANDS
@@ -380,6 +381,7 @@ def test_readmes_document_supported_use_cases() -> None:
         "demo",
         "validate",
         "metrics",
+        "plan-serving",
         "plan-training",
         "analyze-repo",
         "analyze-kernel",
@@ -403,7 +405,7 @@ def test_readmes_document_supported_use_cases() -> None:
         table_rows = [
             line for line in section.splitlines() if line.startswith("|")
         ]
-        assert len(table_rows) == 10, readme_path
+        assert len(table_rows) == 11, readme_path
         for command in use_case_commands:
             assert re.search(
                 rf"`{re.escape(command)}(?:`| )",
@@ -497,7 +499,7 @@ def test_readmes_report_research_reliability_scope() -> None:
     )
     expected_terms = {
         "scripts/test.sh all",
-        "183",
+        "191",
         str(len(profiles)),
         str(compute_capability_count),
         str(len(capabilities["groups"])),
@@ -514,6 +516,7 @@ def test_readmes_report_research_reliability_scope() -> None:
         "ZeRO",
         "MoE",
         "continuous batching",
+        "chunked prefill",
         "prefix caching",
         "speculative decoding",
         "false-safe",
@@ -571,6 +574,29 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
         batch_size=1,
         prompt_tokens=32768,
         element_bytes=2,
+    )
+    serving_unshared = estimate_serving_kv_pool(
+        num_hidden_layers=32,
+        num_key_value_heads=8,
+        head_dim=128,
+        active_sequences=8,
+        prompt_tokens=4096,
+        generated_tokens=257,
+        element_bytes=2,
+        strategy="paged",
+        block_tokens=16,
+    )
+    serving_shared = estimate_serving_kv_pool(
+        num_hidden_layers=32,
+        num_key_value_heads=8,
+        head_dim=128,
+        active_sequences=8,
+        prompt_tokens=4096,
+        generated_tokens=257,
+        element_bytes=2,
+        strategy="paged",
+        shared_prefix_tokens=1024,
+        block_tokens=16,
     )
     replicated = estimate_training_plan(
         {
@@ -646,6 +672,10 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
             f"{gib(kv_long['prefill']['allocated_bytes'])} GiB"
         ),
         (
+            f"{gib(serving_unshared['decode']['allocated_bytes'])} → "
+            f"{gib(serving_shared['decode']['allocated_bytes'])} GiB"
+        ),
+        (
             f"{gib(replicated['estimated_rank_peak_bytes'])} → "
             f"{gib(full_shard['estimated_rank_peak_bytes'])} GiB"
         ),
@@ -668,6 +698,7 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
     }
     expected_terms = {
         "estimate-diffusion",
+        "plan-serving",
         "stable-diffusion-v1-5",
         "stable-diffusion-xl-base-1.0",
         "pixart-sigma-xl-2-1024-ms",

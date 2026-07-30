@@ -16,6 +16,7 @@ _BUILTIN_HANDLERS = {
     "coordinator": (".distributed_cli", "coordinator_main"),
     "bandwidth": (".distributed_cli", "bandwidth_main"),
     "estimate-llm": (".llm_cli", "main"),
+    "plan-serving": (".serving_plan", "main"),
     "estimate-diffusion": (".diffusion_estimator", "main"),
     "estimate-roofline": (".performance_model", "main"),
     "analyze-repo": (".repository_analyzer", "main"),
