@@ -191,13 +191,13 @@ evidence, while `Planned` is not yet a supported accuracy claim.
 
 #### Current repository verification
 
-This repository state was verified on 2026-07-31 with `scripts/test.sh all`
+This repository state was verified on 2026-08-01 with `scripts/test.sh all`
 and both declarative validation manifests on macOS 26.5 arm64, Python 3.11.9,
 and PyTorch 2.9.1 CPU:
 
 | Validation layer | Maintained check | Result |
 |---|---|---|
-| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **195 passed** |
+| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **199 passed** |
 | Declarative validation matrices | 6 smoke executions plus 28 research cache, serving, training, calibration, and diffusion executions | **34 passed** |
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | FakeGPU-SMI diagnostics | Bounded state, topology/NVLink/MIG views, NVML peer/MIG queries, health fields, and event reporting | **Passed** |

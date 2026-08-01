@@ -181,12 +181,12 @@ FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果�
 
 #### 目前儲存庫驗證
 
-目前儲存庫狀態於 2026-07-31 在 macOS 26.5 arm64、Python 3.11.9 與 PyTorch
+目前儲存庫狀態於 2026-08-01 在 macOS 26.5 arm64、Python 3.11.9 與 PyTorch
 2.9.1 CPU 環境中執行了 `scripts/test.sh all` 與兩個宣告式驗證 manifest：
 
 | 驗證層 | 已維護的檢查 | 結果 |
 |---|---|---|
-| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **195 個通過** |
+| Python runtime、估算器、CLI、schema 與 README 契約 | 完整 `pytest` 測試集 | **199 個通過** |
 | 宣告式驗證矩陣 | 6 個 smoke 案例，加 28 個 research cache、serving、訓練、校準與 diffusion 案例 | **34 個通過** |
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
 | FakeGPU-SMI 診斷 | 有上限的狀態發布、拓撲/NVLink/MIG 檢視、NVML peer/MIG 查詢、健康欄位與事件報告 | **通過** |
