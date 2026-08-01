@@ -770,6 +770,40 @@ def test_serving_request_manifest_models_mixed_kv_segments(
         "long": 9,
     }
 
+    portable_expected = [
+        {
+            "id": "portable",
+            "prompt_tokens": 16,
+            "generated_tokens": 4,
+            "prefix_group": None,
+            "shared_prefix_tokens": 0,
+        }
+    ]
+    toml_path = tmp_path / "requests.toml"
+    toml_path.write_text(
+        'schema_version = "fakegpu.serving_requests.v1"\n\n'
+        "[[requests]]\n"
+        'id = "portable"\n'
+        "prompt_tokens = 16\n"
+        "generated_tokens = 4\n",
+        encoding="utf-8",
+    )
+    yaml_path = tmp_path / "requests.yaml"
+    yaml_path.write_text(
+        "schema_version: fakegpu.serving_requests.v1\n"
+        "requests:\n"
+        "  - id: portable\n"
+        "    prompt_tokens: 16\n"
+        "    generated_tokens: 4\n",
+        encoding="utf-8",
+    )
+    assert load_serving_requests(toml_path)["requests"] == (
+        portable_expected
+    )
+    assert load_serving_requests(yaml_path)["requests"] == (
+        portable_expected
+    )
+
     manifest_path.write_text(
         json.dumps(
             {
@@ -840,6 +874,170 @@ def test_serving_request_manifest_rejects_ambiguous_groups() -> None:
             strategy="quantized",
             **common,
         )
+
+
+def test_serving_request_kv_pool_matches_individual_cache_strategies() -> None:
+    requests = [
+        {
+            "id": "short",
+            "prompt_tokens": 17,
+            "generated_tokens": 3,
+        },
+        {
+            "id": "medium",
+            "prompt_tokens": 65,
+            "generated_tokens": 9,
+        },
+        {
+            "id": "long",
+            "prompt_tokens": 129,
+            "generated_tokens": 17,
+        },
+    ]
+    common = {
+        "num_hidden_layers": 4,
+        "num_key_value_heads": 2,
+        "head_dim": 16,
+        "element_bytes": 2,
+        "block_tokens": 16,
+        "quantized_bits": 4,
+        "quantized_residual_tokens": 8,
+    }
+
+    for strategy in ("dynamic", "paged", "quantized", "static"):
+        aggregate = estimate_serving_request_kv_pool(
+            requests,
+            strategy=strategy,
+            **common,
+        )
+        for output_phase, individual_phase in (
+            ("prefill", "prefill"),
+            ("decode", "generation"),
+        ):
+            individuals = [
+                estimate_kv_cache_memory(
+                    batch_size=1,
+                    prompt_tokens=request["prompt_tokens"],
+                    generated_tokens=request["generated_tokens"],
+                    strategy=strategy,
+                    **common,
+                )[individual_phase]
+                for request in requests
+            ]
+            assert aggregate[output_phase]["allocated_bytes"] == sum(
+                int(item["allocated_bytes"]) for item in individuals
+            )
+            assert aggregate[output_phase][
+                "storage_logical_bytes"
+            ] == sum(
+                int(item["storage_logical_bytes"])
+                for item in individuals
+            )
+
+
+def test_serving_request_prefix_groups_follow_sliding_window() -> None:
+    requests = [
+        {
+            "id": "short",
+            "prompt_tokens": 8,
+            "generated_tokens": 5,
+            "prefix_group": "system",
+            "shared_prefix_tokens": 4,
+        },
+        {
+            "id": "long",
+            "prompt_tokens": 20,
+            "generated_tokens": 9,
+            "prefix_group": "system",
+            "shared_prefix_tokens": 4,
+        },
+        {
+            "id": "completion",
+            "prompt_tokens": 13,
+            "generated_tokens": 3,
+        },
+    ]
+    expected = {
+        "dynamic": {
+            "prefill": 1184,
+            "decode": 1632,
+        },
+        "paged": {
+            "prefill": 1280,
+            "decode": 1664,
+        },
+    }
+
+    for strategy in ("dynamic", "paged"):
+        report = estimate_serving_request_kv_pool(
+            requests,
+            num_hidden_layers=2,
+            num_key_value_heads=1,
+            head_dim=4,
+            element_bytes=2,
+            strategy=strategy,
+            block_tokens=4,
+            window_tokens=24,
+        )
+        assert report["prefill"]["allocated_bytes"] == expected[
+            strategy
+        ]["prefill"]
+        assert report["decode"]["allocated_bytes"] == expected[
+            strategy
+        ]["decode"]
+        assert report["prefill"]["prefix_cache_savings_bytes"] == 128
+        assert report["decode"]["prefix_cache_savings_bytes"] == 0
+        assert report["prefill"]["requests"][1][
+            "retained_shared_prefix_tokens"
+        ] == 4
+        assert report["decode"]["requests"][1][
+            "retained_shared_prefix_tokens"
+        ] == 0
+
+
+def test_serving_request_kv_pool_scales_with_kv_head_architecture() -> None:
+    requests = [
+        {
+            "id": "chat-a",
+            "prompt_tokens": 4096,
+            "generated_tokens": 257,
+            "prefix_group": "system",
+            "shared_prefix_tokens": 1024,
+        },
+        {
+            "id": "chat-b",
+            "prompt_tokens": 8192,
+            "generated_tokens": 513,
+            "prefix_group": "system",
+            "shared_prefix_tokens": 1024,
+        },
+        {
+            "id": "rag",
+            "prompt_tokens": 12288,
+            "generated_tokens": 129,
+        },
+    ]
+    allocated_bytes = {}
+    for architecture, kv_heads in (
+        ("mha", 32),
+        ("gqa", 8),
+        ("mqa", 1),
+    ):
+        report = estimate_serving_request_kv_pool(
+            requests,
+            num_hidden_layers=32,
+            num_key_value_heads=kv_heads,
+            head_dim=128,
+            element_bytes=2,
+            strategy="paged",
+            block_tokens=16,
+        )
+        allocated_bytes[architecture] = report["decode"][
+            "allocated_bytes"
+        ]
+
+    assert allocated_bytes["mha"] == 4 * allocated_bytes["gqa"]
+    assert allocated_bytes["gqa"] == 8 * allocated_bytes["mqa"]
 
 
 def test_serving_request_set_admits_a_manifest_prefix(
@@ -917,6 +1115,81 @@ def test_serving_request_set_admits_a_manifest_prefix(
         "transient_savings_bytes"
     ] > 0
     assert report["optimizations"]["prefix_cache"]["group_count"] == 1
+
+
+def test_serving_request_set_handles_a_large_ordered_manifest(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    requests = []
+    for index in range(128):
+        request = {
+            "id": f"request-{index:03d}",
+            "prompt_tokens": (32, 64, 96, 128)[index % 4],
+            "generated_tokens": (5, 9, 17)[index % 3],
+        }
+        if index % 4 in (0, 1):
+            request.update(
+                prefix_group=f"system-{index // 4}",
+                shared_prefix_tokens=16,
+            )
+        requests.append(request)
+
+    prefix_plan = estimate_serving_request_set(
+        model_dir,
+        requests[:64],
+        max_batch_size=128,
+        prefill_chunk_tokens=16,
+        prefill_concurrency=8,
+    )
+    capacity_bytes = prefix_plan["memory_timeline"]["peak_bytes"]
+    memory_limited = estimate_serving_request_set(
+        model_dir,
+        requests,
+        max_batch_size=128,
+        prefill_chunk_tokens=16,
+        prefill_concurrency=8,
+        device_capacity_bytes=capacity_bytes,
+        memory_utilization=1,
+    )
+
+    assert memory_limited["scheduler"][
+        "admissible_active_sequences"
+    ] == 64
+    assert memory_limited["scheduler"]["admitted_request_ids"] == [
+        request["id"] for request in requests[:64]
+    ]
+    assert memory_limited["scheduler"]["rejected_request_ids"] == [
+        request["id"] for request in requests[64:]
+    ]
+    assert memory_limited["scheduler"]["limiting_factor"] == (
+        "usable_device_memory"
+    )
+    assert memory_limited["optimizations"]["chunked_prefill"][
+        "effective_concurrency"
+    ] == 8
+
+    batch_limited = estimate_serving_request_set(
+        model_dir,
+        requests,
+        max_batch_size=32,
+        prefill_chunk_tokens=16,
+        prefill_concurrency=8,
+        device_capacity_bytes=2**30,
+        memory_utilization=1,
+    )
+    assert batch_limited["scheduler"][
+        "admissible_active_sequences"
+    ] == 32
+    assert batch_limited["scheduler"]["fits_configured_limit"] is False
+    assert batch_limited["scheduler"]["fits_memory"] is True
+    assert batch_limited["scheduler"]["limiting_factor"] == (
+        "configured_max_batch_size"
+    )
+    assert batch_limited["scheduler"][
+        "configured_candidate_request_ids"
+    ] == [request["id"] for request in requests[:32]]
 
 
 def test_serving_cli_accepts_a_request_manifest(
