@@ -132,7 +132,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
             ],
         },
     )
-    publisher.publish_once(running=True)
+    state = publisher.publish_once(running=True)
 
     assert main(["--state", str(path), "-L"]) == 0
     listed = capsys.readouterr().out
@@ -195,6 +195,46 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
         "timestamp,memory.total [MiB],temperature.gpu [C]"
     )
     assert query_lines[1].split(",")[0]
+
+    assert (
+        main(
+            [
+                "--state",
+                str(path),
+                "--query-runtime",
+                (
+                    "pid,fakegpu.version,runtime.backend,runtime.mode,"
+                    "policy.oom,tracking.dispatch,catalog.profiles,"
+                    "catalog.native_apis,dispatch.calls,"
+                    "publisher.successful_writes,publisher.failed_writes,"
+                    "publisher.detail_limit,software.cuda,status"
+                ),
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    runtime_query = json.loads(capsys.readouterr().out)
+    assert runtime_query["query"] == "runtime"
+    assert runtime_query["records"] == [
+        {
+            "pid": os.getpid(),
+            "fakegpu.version": state["fakegpu"]["version"],
+            "runtime.backend": "upstream",
+            "runtime.mode": "simulate",
+            "policy.oom": "default",
+            "tracking.dispatch": True,
+            "catalog.profiles": 82,
+            "catalog.native_apis": 26,
+            "dispatch.calls": 7,
+            "publisher.successful_writes": 1,
+            "publisher.failed_writes": 0,
+            "publisher.detail_limit": 64,
+            "software.cuda": state["software"]["cuda_version"],
+            "status": "running",
+        }
+    ]
 
 
 def test_virtual_smi_models_topology_nvlink_views_and_queries(
@@ -1058,6 +1098,11 @@ def test_virtual_smi_count_requires_loop(capsys) -> None:
     query_help = capsys.readouterr().out
     assert "memory.total [MiB]" in query_help
     assert "fakegpu.version" in query_help
+
+    assert main(["--help-query-runtime"]) == 0
+    runtime_query_help = capsys.readouterr().out
+    assert "publisher.failed_writes" in runtime_query_help
+    assert "catalog.native_apis" in runtime_query_help
 
     with pytest.raises(SystemExit) as exc_info:
         main(["--query-gpu", "unknown.field"])

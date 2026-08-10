@@ -80,6 +80,7 @@ runs.
 | Will a selected GPU profile fit a workload? | Preflight or static memory estimator | No |
 | How much checkpoint, KV-cache, adapter, or MoE memory should an LLM use? | LLM estimator | No |
 | Which homogeneous or mixed-length online LLM requests fit under a memory budget? | Serving planner | No |
+| Does a target plus draft model for speculative decoding fit in memory? | Serving planner | No |
 | How do resolution, batch size, CFG, VAE tiling, and offload affect diffusion generation memory? | Diffusion estimator | No |
 | Where are the GPU-only entry points and dependencies in a repository? | Repository analyzer | No |
 | What does a distributed training configuration imply for rank-local memory? | Training planner | No |
@@ -93,7 +94,7 @@ runs.
 | When this is useful | What FakeGPU provides | Start with |
 |---|---|---|
 | Choosing a GPU before renting capacity or starting a long job | Profile-aware checkpoint, KV-cache, activation, optimizer, and workspace estimates | `estimate-llm`, `preflight` |
-| Sizing chat, RAG, completion, or summarization traffic before deployment | Per-request prompt/generation lengths, continuous-batch admission, chunked-prefill transients, shared-prefix KV groups, and explicit memory headroom | `plan-serving`, `validate` |
+| Sizing chat, RAG, completion, summarization, or draft-assisted traffic before deployment | Per-request prompt/generation lengths, continuous-batch admission, chunked-prefill transients, shared-prefix KV groups, speculative target/draft memory, and explicit memory headroom | `plan-serving`, `validate` |
 | Developing CUDA-oriented PyTorch code on a laptop or CPU-only CI runner | CUDA-visible control-flow checks while maintained tensor operations execute on CPU | `fakegpu.init(...)`, `demo`, `validate` |
 | Comparing full fine-tuning, LoRA, QLoRA, checkpointing, offload, or sharding plans | Phase-aware and rank-local memory estimates before allocating a cluster | `plan-training`, Python memory estimator |
 | Comparing UNet and diffusion-transformer generation shapes and memory optimizations | Architecture-specific text encoder, denoising, and VAE-decode estimates from fixed profiles or a local pipeline | `estimate-diffusion`, `validate` |
@@ -152,8 +153,147 @@ python3 scripts/validation/static_memory_validation.py \
 ```
 
 On a CPU-only host, add `--static-only`; this checks the estimation path but
-does not produce a real-GPU accuracy measurement. To compare compatible
-prediction and observation reports for your own workload:
+does not produce a real-GPU accuracy measurement. For a `plan-serving` report,
+normalize repeated real-GPU phase peaks before comparison:
+
+```bash
+python3 -m fakegpu calibrate observe-serving \
+  build/speculative-serving-plan.json \
+  --prefill-peak-bytes 24800000000,24900000000,25000000000 \
+  --prefill-peak-bytes 24950000000,25050000000 \
+  --decode-peak-bytes 25200000000,25300000000,25250000000 \
+  --decode-peak-bytes 25350000000,25400000000 \
+  --source torch.cuda.max_memory_reserved \
+  --strict \
+  --json build/serving-observation.json
+```
+
+The command retains every sample and uses the maximum for each phase. Five
+samples per phase are required by default; `--strict` returns status 1 when
+that minimum is not met. `ready_for_comparison` records sample sufficiency,
+not a `GPU-validated` claim. The plan must contain `--target-profile` so the
+observation keeps the same GPU identity.
+
+Automate the repeated executions with a framework-specific runner:
+
+```bash
+python3 -m fakegpu calibrate collect-serving \
+  build/speculative-serving-plan.json \
+  --repetitions 5 \
+  --timeout-seconds 900 \
+  --strict \
+  --json build/serving-observation.json \
+  -- python3 benchmark_serving.py
+```
+
+For a homogeneous, non-speculative Transformers workload, FakeGPU includes a
+runner, so no separate benchmark file is needed. The plan must describe the
+same execution semantics and use a dynamic KV cache:
+
+```bash
+python3 -m fakegpu plan-serving \
+  --model-dir /mnt/z/models/Qwen/Qwen3-0.6B \
+  --active-sequences 4 \
+  --max-batch-size 8 \
+  --prompt-tokens 2048 \
+  --generated-tokens 128 \
+  --dtype bfloat16 \
+  --attention-implementation sdpa \
+  --kv-cache-strategy dynamic \
+  --target-profile a100 \
+  --json build/transformers-serving-plan.json
+
+python3 -m fakegpu calibrate collect-serving \
+  build/transformers-serving-plan.json \
+  --repetitions 5 \
+  --timeout-seconds 900 \
+  --strict \
+  --json build/transformers-serving-observation.json \
+  -- python3 -m fakegpu calibrate sample-transformers
+```
+
+The model path keeps the Hugging Face `owner/repository` hierarchy. On hosts
+without `/mnt/z`, change only the models root and retain
+`Qwen/Qwen3-0.6B`.
+
+`sample-transformers` rechecks the local model configuration and Safetensors
+headers against the plan, then measures full prefill and token-at-a-time decode
+with the returned KV cache. Its default metric is
+`torch.cuda.max_memory_reserved`; use `--metric allocated` for tensor-only
+allocator peaks. It deliberately rejects mixed request sets, speculative
+decoding, paged or quantized caches, shared-prefix or chunked-prefill plans,
+quantized checkpoints, and adapters until those execution paths have matching
+measurement implementations. PyTorch and Transformers remain optional and
+must already be installed in the CUDA benchmark environment.
+
+vLLM or custom instrumentation that already has trustworthy phase peaks can
+use the protocol builder without recreating CUDA metadata:
+
+```bash
+python3 -m fakegpu calibrate emit-serving-sample \
+  build/vllm-serving-plan.json \
+  --prefill-peak-bytes 24900000000 \
+  --decode-peak-bytes 25300000000 \
+  --metric nvml.process_family_peak_bytes \
+  --framework vllm \
+  --framework-version 0.10.2
+```
+
+The same adapter is available as `fakegpu.build_cuda_serving_sample(...)` for
+use inside a Python benchmark. vLLM reserves engine and KV-cache memory from
+its configured GPU budget, while its cache-usage metric is a fraction of
+blocks rather than a process-memory byte peak. FakeGPU therefore requires the
+vLLM benchmark to provide real phase bytes instead of labeling cache usage as
+prefill or decode memory.
+
+The runner is invoked in a new process for every repetition and must emit one
+`fakegpu.serving_peak_sample.v1` JSON object. It may print the object as its
+last line or prefix a one-line object with `FAKEGPU_SERVING_SAMPLE=` when the
+framework also writes logs to stdout:
+
+```json
+{
+  "schema_version": "fakegpu.serving_peak_sample.v1",
+  "workload_signature": "<FAKEGPU_SERVING_WORKLOAD_SIGNATURE>",
+  "run_index": 1,
+  "metric": "torch.cuda.max_memory_reserved",
+  "phases": {
+    "prefill": {"peak_bytes": 24900000000},
+    "decode": {"peak_bytes": 25300000000}
+  },
+  "environment": {
+    "backend": "cuda",
+    "simulated": false,
+    "gpu_name": "NVIDIA A100-SXM4-80GB",
+    "gpu_uuid": "GPU-...",
+    "compute_capability": [8, 0],
+    "total_memory_bytes": 85899345920,
+    "software": {
+      "framework": "transformers",
+      "framework_version": "...",
+      "cuda_version": "...",
+      "torch_version": "..."
+    }
+  }
+}
+```
+
+FakeGPU supplies the plan path, workload signature, target profile, compute
+capability, run index, and run count through `FAKEGPU_SERVING_*` environment
+variables. The same protocol can wrap Transformers, vLLM, or a custom server
+without adding them as FakeGPU dependencies. The built-in Transformers runner
+and vLLM/custom protocol builder populate this contract automatically.
+Collection fails if the runner
+reports simulated CUDA, a target capacity outside a 2% profile tolerance, a
+different compute capability, inconsistent software metadata, a timeout, or a
+nonzero exit. The report retains the actual/profile capacity difference. Raw
+command arguments are not stored; the report retains only the executable name
+and a command fingerprint.
+`simulated: false` is still runner-supplied metadata rather than independent
+hardware attestation, so retained benchmark logs and calibration gates remain
+necessary for a `GPU-validated` claim.
+
+To compare compatible prediction and observation reports for any workload:
 
 ```bash
 python3 -m fakegpu calibrate compare \
@@ -188,17 +328,26 @@ dtype, attention backend, allocator, software stack, and GPU. `CPU-validated`
 means that maintained execution or analysis behavior passed without a physical
 GPU. `Modeled` identifies analytical coverage without matching real-GPU
 evidence, while `Planned` is not yet a supported accuracy claim.
+Serving plans expose a path-independent `workload_signature` so calibration
+evidence cannot silently cross serving configurations.
+Use `calibrate observe-serving` to retain repeated phase samples before
+comparison and reliability gates.
+Use `calibrate collect-serving` with the built-in `sample-transformers`
+runner, or with vLLM/custom measurements wrapped by
+`build_cuda_serving_sample`, when repeated real-CUDA evidence is needed.
 
 #### Current repository verification
 
-This repository state was verified on 2026-08-01 with `scripts/test.sh all`
-and both declarative validation manifests on macOS 26.5 arm64, Python 3.11.9,
-and PyTorch 2.9.1 CPU:
+This repository state was verified on 2026-08-05 with every suite from
+`scripts/test.sh` and both declarative validation manifests on macOS 26.5
+arm64, Python 3.11.9, and PyTorch 2.9.1 CPU. The Transformers sampling adapter
+was also exercised on an RTX PRO 5000 Blackwell with PyTorch 2.11.0+cu128 and
+Transformers 5.14.1:
 
 | Validation layer | Maintained check | Result |
 |---|---|---|
-| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **199 passed** |
-| Declarative validation matrices | 6 smoke executions plus 28 research cache, serving, training, calibration, and diffusion executions | **34 passed** |
+| Python runtime, estimators, CLIs, schemas, and README contracts | Complete `pytest` suite | **223 passed** |
+| Declarative validation matrices | 7 smoke executions plus 39 research architecture, cache, generic/vLLM serving, training, calibration, and diffusion executions | **46 passed** |
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | FakeGPU-SMI diagnostics | Bounded state, topology/NVLink/MIG views, NVML peer/MIG queries, health fields, and event reporting | **Passed** |
 | Monitoring exporter | Prometheus/JSON snapshots, bounded history/cardinality, malformed-state degradation, and HTTP endpoints | **Passed** |
@@ -206,12 +355,13 @@ and PyTorch 2.9.1 CPU:
 | GPU profile catalog | 82 profiles across 15 compute capabilities | **Passed** |
 | CPU numerical simulation | GEMM, cuBLASLt, batched GEMM, BLAS1/2, and FP16: 8 maintained test groups | **Passed** |
 | CUDA-enabled PyTorch native matmul | Requires a CUDA build of PyTorch | **Not run on this CPU-only host** |
+| Transformers real-CUDA serving sampler | Qwen/Qwen3-0.6B, BF16 SDPA, 2 × 128-token prefill + 8 generated tokens, 3 isolated samples per phase | **Passed; `ready_for_comparison`** |
 
 GitHub CI separately runs the Python suite on Python 3.10–3.12 and the native
-smoke and CPU simulation suites on Linux and macOS. The real-GPU results above
-come from their linked immutable validation snapshots; they were checked
-against the structured evidence and formulas but were not regenerated on this
-CPU-only host.
+smoke and CPU simulation suites on Linux and macOS. Published accuracy results
+above come from their linked immutable validation snapshots. The new
+Transformers sampler result validates repeated execution, CUDA identity, and
+report collection; without a comparison gate, it is not an accuracy claim.
 
 #### Maintained research workload matrix
 
@@ -220,12 +370,12 @@ CPU-only host.
 | Offline decoder inference | Qwen3-8B, BF16, SDPA, model load, prefill, and decode peak | RTX PRO 5000 prediction-versus-observation data | `GPU-validated` |
 | Full and adapter SFT | Qwen 0.8B/2B full fine-tuning and LoRA | Ten RTX PRO 5000 training cases | `GPU-validated` |
 | Quantized adapter SFT | Qwen 0.8B/2B native NF4 QLoRA | Ten RTX PRO 5000 training cases | `GPU-validated` |
-| General decoder analysis | Dense and MoE metadata, adapters, quantized checkpoints, eager/SDPA attention, KV cache, and expert-parallel traffic | Formula, fixture, and CLI regression tests | `CPU-validated` + `Modeled` |
+| General decoder analysis | Dense and MoE metadata; MHA, GQA, MQA, and compressed-latent MLA; adapters, quantized checkpoints, eager/SDPA attention, KV cache, and expert-parallel traffic | Formula, fixture, CLI regression tests, and the four-case architecture matrix | `CPU-validated` + `Modeled` |
 | Distributed training plans | DeepSpeed, Accelerate, FSDP/FSDP2, sharding, checkpointing, and CPU/NVMe offload | Configuration, byte-accounting, topology, and trace tests | `CPU-validated` + `Modeled` |
 | KV-cache allocation | Dynamic growth, static reservation, 2/4/8-bit quantized storage, paged block rounding, and sliding-window limits | Formula, API, `--kv-cache-strategy` CLI, and `tests/data/research_validation.yaml` matrix tests | `CPU-validated` + `Modeled` |
-| Online serving capacity | Homogeneous and mixed-length request sets under continuous batching, ordered admission, chunked prefill, grouped prefix caching, paged KV blocks, profile or explicit capacity, and admission headroom | Checkpoint headers, architecture formulas, `plan-serving`, unit tests, and chat/RAG cases in `tests/data/research_validation.yaml` | `CPU-validated` + `Modeled` |
-| Diffusion image generation | Stable Diffusion v1.5, SDXL Base, and PixArt-Sigma; local UNets, cross-attention DiTs, and SD3/Flux-style joint-attention transformers; CFG, offload, attention/VAE slicing, and VAE tiling | Fixed-revision and local component headers, architecture configs, phase formulas, CLI/unit tests, and `tests/data/research_validation.yaml` | `CPU-validated` + `Modeled` |
-| speculative decoding | Draft-model weights, draft KV cache, acceptance rate, and target verification batches | No dedicated estimator or maintained real-GPU evidence yet | `Planned` |
+| Online serving capacity | Homogeneous and mixed-length request sets under continuous batching, ordered admission, chunked prefill, grouped prefix caching, paged KV blocks, generic or vLLM runtime budgets, profile or explicit KV capacity, and admission headroom | Checkpoint headers, architecture and block-allocation formulas, `plan-serving --runtime vllm`, `--vllm-kv-cache-memory-bytes`, `--vllm-non-kv-cache-memory-bytes`, unit tests, and generic/vLLM chat/RAG cases in `tests/data/research_validation.yaml` | `CPU-validated` + `Modeled` |
+| Diffusion image generation | Stable Diffusion v1.5, SDXL Base, and PixArt-Sigma; local UNets, cross-attention DiTs, and SD3/Flux-style joint-attention transformers; CFG, offload, attention/VAE slicing, and VAE tiling | Fixed-revision and local component headers, architecture configs, phase formulas, CLI/unit tests, and a three-case local-architecture matrix in `tests/data/research_validation.yaml` | `CPU-validated` + `Modeled` |
+| speculative decoding | Independent autoregressive draft-model weights and KV cache, target lookahead KV, batched verification transients, optional fixed acceptance assumptions, and homogeneous/mixed request admission | Checkpoint headers, architecture formulas, `plan-serving --draft-model-dir`, `--speculative-tokens`, `--speculative-acceptance-rate`, and unit tests; no maintained real-GPU observation yet | `CPU-validated` + `Modeled` |
 | Multi-GPU LLM execution | TP, PP, CP, EP, MoE imbalance, and combined FSDP/ZeRO execution | Analytical topology and coordinator coverage only | `Modeled` |
 | Diffusion training | Optimizer, gradient, activation, EMA, and parameter-efficient tuning | No dedicated estimator or real-GPU evidence yet | `Planned` |
 
@@ -243,8 +393,10 @@ binary units, and the results do not replace same-configuration GPU calibration.
 | Research scenario | Controlled comparison | Modeled effect | Validation |
 |---|---|---:|---|
 | LLM inference KV cache | 32-layer GQA, 8 KV heads, head dim 128, batch 1, BF16; context 4K → 32K | **0.50 → 4.00 GiB** (8× cache) | Exact byte formula |
+| Attention cache architecture | 32 layers, 8 active sequences, 4K BF16 paged cache; standard head dim 128; MHA 32 KV heads / GQA 8 / MQA 1 / MLA latent 512 + RoPE 64 | **16.00 / 4.00 / 0.50 / 1.125 GiB** | Architecture-specific cache-layout formulas and four-case manifest |
 | Online serving prefix cache | Same decoder, 8 active sequences, 4K prompt + 256 generated tokens, paged BF16 KV; independent caches → one shared 1K prefix | **4.25 → 3.38 GiB** (−20.6%) | Shared/private paged-block formula |
 | Mixed chat/completion serving | Same decoder; prompts 4K/8K/2K and generation 256/512/1024; independent KV → two chat requests sharing a 1K system prefix | **1.97 → 1.84 GiB** decode KV (−6.3%) | Heterogeneous request-set formula and chat/RAG matrix |
+| Speculative target calls | 5 draft tokens per verification step and an independent 70% per-token acceptance assumption | **1.00 → 2.94** expected output tokens per target step; not a throughput claim | Geometric acceptance formula plus dual-model memory tests |
 | LLM training | 8B BF16 parameters, AdamW, 4 GPUs, checkpointed activations; replicated → full shard | **104.31 → 26.54 GiB** per rank (−74.6%) | Training-plan phase model |
 | Stable Diffusion v1.5 generation | 512², batch 1, FP16, CFG; all weights resident → model offload | **2.30 → 1.65 GiB** (−28.1%) | Component + phase model |
 | SDXL batch generation | 1024², batch 4, FP16, CFG; regular VAE decode → VAE slicing | **11.49 → 7.74 GiB** (−32.7%) | Sequential VAE batch-shape model |
@@ -265,9 +417,14 @@ Local architecture inspection is exercised through
 The cache formulas follow the workload shapes exposed by
 [Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache).
 The serving planner models homogeneous shapes and ordered heterogeneous active
-request sets. Request arrival distributions, cache eviction, preemption,
-throughput, latency, and speculative decoding remain outside the supported
-estimate. The workload terminology follows
+request sets. Its speculative mode follows the independent draft/target flow
+described by the
+[original speculative-decoding paper](https://arxiv.org/abs/2211.17192) and
+[Transformers assisted decoding](https://huggingface.co/docs/transformers/assisted_decoding): a smaller
+model proposes several tokens and the target verifies them in one forward
+pass. Request arrival distributions, cache eviction, preemption, adaptive
+draft length, KV rollback workspaces, and end-to-end throughput or latency
+remain outside the supported estimate. The workload terminology follows
 [vLLM serving](https://docs.vllm.ai/en/stable/). Binary CUDA extensions and
 arbitrary kernels remain outside CPU FakeCUDA execution; those workloads
 require analysis plus a passthrough or hybrid real-GPU observation.
@@ -431,6 +588,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --query-compute-apps=pid,process_name,gpu_uuid,used_gpu_memory,peak_gpu_memory,stage,status \
   --format=csv,noheader,nounits
+python3 -m fakegpu nvidia-smi --state-dir build/smi \
+  --query-runtime=pid,fakegpu.version,runtime.backend,runtime.mode,policy.oom,tracking.dispatch,catalog.profiles,catalog.native_apis,dispatch.calls,publisher.failed_writes,status \
+  --format=json
 ```
 
 The detailed report includes the FakeGPU version, runtime backend and policies,
@@ -440,6 +600,9 @@ allocator activity, dispatch tracking, and per-process peaks. Use `-i` with an
 index, UUID, PCI bus ID, or profile ID to select devices; use `--json` for the
 complete normalized inventory. State schema v2 is emitted, while v1 files
 remain readable.
+`--query-runtime` exposes the same runtime, policy, software, tracking,
+catalog, dispatch, and publisher-health details as script-friendly CSV or
+JSON. Use `--help-query-runtime` to list every supported field.
 
 Native interception additionally publishes allocation lifetime, transfer
 volume, kernel launches, GEMM calls/FLOP, compatibility events, and unsupported
@@ -593,6 +756,81 @@ Prefix sharing is supported for dynamic and paged caches; paged shared and
 private segments are rounded independently. Capacity search never exceeds
 `--max-batch-size`.
 
+#### Match vLLM runtime reservation
+
+vLLM preallocates a paged KV pool instead of growing only with the active
+requests. Select its memory policy when the deployment target is vLLM:
+
+```bash
+python3 -m fakegpu plan-serving \
+  --model-dir /mnt/z/models/Qwen/Qwen3-0.6B \
+  --active-sequences 16 \
+  --max-batch-size 64 \
+  --prompt-tokens 4096 \
+  --generated-tokens 256 \
+  --runtime vllm \
+  --kv-cache-strategy paged \
+  --kv-cache-block-tokens 16 \
+  --target-profile rtx-pro-5000-blackwell \
+  --memory-utilization 0.92 \
+  --json build/vllm-serving-plan.json
+```
+
+Automatic sizing follows the vLLM V1 policy: requested model-executor memory
+minus profiled non-KV memory, rounded down to whole cache blocks. The report
+keeps logical request KV demand separate from the reserved pool and exposes
+`num_gpu_blocks`, cache token capacity, block-rounding tail, initialization
+fit, and concurrency at `max_model_len`. If a matching vLLM startup profile is
+available, pass its weights + peak activations + non-torch + CUDA-graph total
+with `--vllm-non-kv-cache-memory-bytes`; this replaces FakeGPU's modeled
+non-KV value. `--vllm-kv-cache-memory-bytes` provides an exact per-GPU cache
+override and, like vLLM, ignores `--memory-utilization` for cache sizing.
+
+When `--memory-utilization` is omitted, vLLM mode uses `0.92`, matching the
+current [vLLM CacheConfig reference](https://docs.vllm.ai/en/latest/api/vllm/config/cache/).
+Specify the value explicitly for a version-locked report. The budget formula
+tracks vLLM's documented
+[GPU-worker profiling path](https://docs.vllm.ai/en/latest/api/vllm/v1/worker/gpu_worker/),
+but initial free memory, other processes, tensor/pipeline parallelism, hybrid
+cache groups, allocator fragmentation, and version-specific kernels still
+need same-stack observation. The research manifest checks both automatic and
+explicit-cache modes. Speculative decoding currently remains available only
+with the generic runtime model; vLLM-specific speculative schedulers and
+cache managers are not represented yet.
+
+Add an independent autoregressive draft checkpoint to estimate speculative
+decoding memory:
+
+```bash
+python3 -m fakegpu plan-serving \
+  --model-dir /models/target \
+  --draft-model-dir /models/draft \
+  --active-sequences 8 \
+  --max-batch-size 32 \
+  --prompt-tokens 4096 \
+  --generated-tokens 256 \
+  --speculative-tokens 5 \
+  --speculative-acceptance-rate 0.7 \
+  --kv-cache-strategy paged \
+  --target-profile a100 \
+  --json build/speculative-serving-plan.json
+```
+
+The report keeps target and draft weights plus both KV caches resident, adds
+conservative lookahead slots, and compares target verification with draft
+proposal transients. The acceptance assumption reports expected output tokens
+per target call; it does not change the memory peak or claim an end-to-end
+speedup. Equal vocabulary sizes are required, while tokenizer identity remains
+unverified because checkpoint headers cannot prove token-ID equivalence.
+
+Every homogeneous or mixed-request serving report also emits a path-independent
+`workload_signature`. It covers target/draft architecture and weight storage,
+request shapes, KV/prefill settings, and speculative configuration while
+excluding absolute model paths and device capacity. Put the same field in a
+measurement report before using `calibrate verify`; the calibration gate
+compares the signature and checks `target.profile` as a separate dimension, so
+evidence from a different proposal length or GPU profile is rejected.
+
 For chat, RAG, completion, or summarization traffic with different lengths,
 provide an ordered request manifest:
 
@@ -646,7 +884,8 @@ KV storage. Named groups are treated as resident cache hits; cache population,
 lookup probability, and eviction behavior are not predicted.
 
 Arrival timing, cache eviction, preemption/reordering, tensor parallelism,
-speculative draft models, throughput, and latency are listed as unmodeled.
+adaptive speculative scheduling, KV rollback workspaces, throughput, and
+latency are listed as unmodeled.
 Until a matching online-serving observation is supplied, `validation_status`
 remains `Modeled` and `accuracy.status` remains `uncalibrated`.
 
@@ -699,6 +938,11 @@ quantization savings, static reservation, paged-block overhead, and optional
 sliding-window limits. Quantized cache accounting retains 128 recent tokens
 at the compute dtype by default; change it with
 `--kv-cache-residual-tokens`.
+MHA, GQA, and MQA use separate key/value storage. When the model config
+contains `kv_lora_rank`, `qk_nope_head_dim`, `qk_rope_head_dim`, and
+`v_head_dim`, the estimator identifies MLA and uses its compressed KV latent
+plus decoupled RoPE component for cache bytes. MLA backend workspaces and
+projection absorption remain runtime-specific and require calibration.
 
 The diffusion estimator separates text encoding, repeated denoising, and VAE
 decode phases. With `--model-dir`, it reads only `model_index.json`, component
@@ -739,7 +983,7 @@ emitted.
 | `fakegpu plan-training` | Normalize distributed training configs and estimate rank memory |
 | `fakegpu simulate-topology` | Model collective routes and link contention |
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
-| `fakegpu calibrate` | Compare memory reports and enforce reliability gates |
+| `fakegpu calibrate` | Build serving observations, compare memory reports, and enforce reliability gates |
 | `fakegpu capabilities` | List or strictly audit native API classifications |
 | `fakegpu nvidia-smi` | Inspect devices, processes, modeled topology/MIG, health status, and reliability events |
 | `fakegpu metrics` | Export bounded Prometheus/JSON metrics and serve short in-memory history |
@@ -862,9 +1106,11 @@ environments, binary assets, and design drafts are excluded through
 - Diffusion profiles model fixed reference pipelines. Custom ControlNet,
   IP-Adapter, LoRA, safety-checker, refiner, video, and DiT components require
   additional component metadata and matching real-GPU validation.
-- Online-serving plans accept explicit mixed lengths but do not model request
-  arrival distributions, cache eviction, preemption or scheduler reordering,
-  speculative decoding, tensor-parallel execution, throughput, or latency.
+- Online-serving plans accept explicit mixed lengths and independent
+  autoregressive draft models. They do not model request arrival distributions,
+  cache eviction, preemption or scheduler reordering, self-speculative/Medusa/
+  EAGLE variants, tokenizer remapping, tensor-parallel execution, throughput,
+  or latency.
 - Roofline output is an analytical interval, not measured kernel latency.
 - Distributed timing includes coordinator work, memory copies, sockets, and
   process scheduling; it is not an NCCL, NVLink, or RDMA benchmark.
@@ -893,6 +1139,7 @@ environments, binary assets, and design drafts are excluded through
 - [x] Add modeled MIG views and native NVML MIG handle queries
 - [x] Export bounded device, process, and runtime metrics with in-memory history for Prometheus
 - [x] Add modeled online-serving plans for continuous batching, mixed request lengths, chunked prefill, and grouped prefix caching
+- [x] Add modeled draft-model speculative-decoding memory and admission plans
 - [ ] Add real-GPU LLM validation for long-context and online-serving workloads
 - [ ] Add real-GPU diffusion validation plus training and DiT memory models
 - [ ] Validate distributed and MoE estimates across more GPU and software stacks

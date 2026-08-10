@@ -58,6 +58,8 @@ def estimate_kv_cache_memory(
     max_cache_tokens: int | None = None,
     window_tokens: int | None = None,
     use_cache: bool = True,
+    elements_per_token_per_layer: int | None = None,
+    cache_layout: str = "separate_key_value",
 ) -> dict[str, Any]:
     """Estimate allocated KV-cache storage for common serving strategies."""
 
@@ -80,6 +82,16 @@ def estimate_kv_cache_memory(
             raise ValueError(f"{name} must be a positive integer")
     if not isinstance(use_cache, bool):
         raise ValueError("use_cache must be a boolean")
+    if elements_per_token_per_layer is not None and (
+        not isinstance(elements_per_token_per_layer, int)
+        or isinstance(elements_per_token_per_layer, bool)
+        or elements_per_token_per_layer <= 0
+    ):
+        raise ValueError(
+            "elements_per_token_per_layer must be a positive integer"
+        )
+    if not isinstance(cache_layout, str) or not cache_layout.strip():
+        raise ValueError("cache_layout must be a non-empty string")
     if strategy not in KV_CACHE_STRATEGIES:
         choices = ", ".join(sorted(KV_CACHE_STRATEGIES))
         raise ValueError(
@@ -137,11 +149,13 @@ def estimate_kv_cache_memory(
                 "after applying window_tokens"
             )
 
+    resolved_elements_per_token_per_layer = (
+        2 * num_key_value_heads * head_dim
+        if elements_per_token_per_layer is None
+        else elements_per_token_per_layer
+    )
     elements_per_token_per_sequence = (
-        2
-        * num_hidden_layers
-        * num_key_value_heads
-        * head_dim
+        num_hidden_layers * resolved_elements_per_token_per_layer
     )
 
     def phase_allocation(logical_tokens: int) -> dict[str, Any]:
@@ -239,6 +253,10 @@ def estimate_kv_cache_memory(
         ),
         "compute_element_bytes": element_bytes,
         "batch_size": batch_size,
+        "cache_layout": cache_layout.strip(),
+        "elements_per_token_per_layer": (
+            resolved_elements_per_token_per_layer
+        ),
         "elements_per_token_per_sequence": (
             elements_per_token_per_sequence
         ),
@@ -256,7 +274,7 @@ def estimate_kv_cache_memory(
             "full_precision_residual_bytes + quantized_history_bytes"
             if strategy == "quantized"
             else (
-                "ceil(2 * layers * batch * kv_heads * tokens * head_dim "
+                "ceil(layers * batch * tokens * cache_elements_per_layer "
                 "* storage_bits / 8)"
             )
         ),
@@ -449,6 +467,10 @@ def estimate_decoder_inference(
         max_cache_tokens=kv_cache_max_tokens,
         window_tokens=kv_cache_window_tokens,
         use_cache=use_cache,
+        elements_per_token_per_layer=int(
+            dimensions["kv_cache_elements_per_token_per_layer"]
+        ),
+        cache_layout=str(dimensions["kv_cache_layout"]),
     )
     prefill_key_tokens = _effective_context_tokens(
         prompt_tokens,
@@ -554,6 +576,7 @@ def estimate_decoder_inference(
         )
 
     model_kind = str(dimensions["model_kind"])
+    attention_kind = str(dimensions["attention_kind"])
     unmodeled_components = [
         "cuda_context_and_loaded_modules",
         "caching_allocator_fragmentation",
@@ -575,6 +598,11 @@ def estimate_decoder_inference(
         ),
         "adapter_kernel_fusion_and_merge_state" if adapters else None,
         "expert_load_imbalance" if model_kind == "mixture_of_experts" else None,
+        (
+            "mla_backend_projection_absorption_and_workspace"
+            if attention_kind == "multi_head_latent"
+            else None
+        ),
     ]
     return {
         "schema_version": SCHEMA_VERSION,
@@ -697,7 +725,12 @@ def estimate_decoder_inference(
         "performance": performance,
         "tracking_confidence": (
             "L3_checkpoint_aware_decoder_shape_model"
-            if quantization["enabled"] or adapters or model_kind == "mixture_of_experts"
+            if (
+                quantization["enabled"]
+                or adapters
+                or model_kind == "mixture_of_experts"
+                or attention_kind == "multi_head_latent"
+            )
             else "L2_dense_decoder_shape_model"
         ),
         "unmodeled_components": [
@@ -705,7 +738,12 @@ def estimate_decoder_inference(
         ],
         "notes": [
             "Checkpoint storage and parameter count come from safetensors headers without loading payloads.",
-            "KV-cache bytes use layer, KV-head, head-dimension, sequence, batch, storage bit width, and allocation-strategy dimensions.",
+            "KV-cache bytes use the architecture-specific per-layer cache layout, sequence, batch, storage bit width, and allocation-strategy dimensions.",
+            (
+                "MLA cache storage keeps one compressed KV latent plus the decoupled RoPE key component per layer and token; backend-specific absorbed projections remain unmodeled."
+                if attention_kind == "multi_head_latent"
+                else "Standard attention cache storage keeps separate key and value tensors per KV head."
+            ),
             "Quantized KV cache keeps a configurable recent full-precision residual before accounting for older low-bit storage.",
             "Static reservation and paged block rounding are included; backend block-table and scheduler metadata remain implementation-specific.",
             "Quantized base-weight memory uses exact safetensors payload bytes, including scale and metadata tensors.",
@@ -756,13 +794,71 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
         )
     hidden_size = int(required["hidden_size"])
     attention_heads = int(required["num_attention_heads"])
-    if hidden_size % attention_heads and "head_dim" not in config:
-        raise ValueError(
-            "hidden_size must be divisible by num_attention_heads when "
-            "head_dim is not configured"
+    mla_keys = (
+        "kv_lora_rank",
+        "qk_nope_head_dim",
+        "qk_rope_head_dim",
+        "v_head_dim",
+    )
+    has_mla_configuration = any(
+        config.get(key) is not None for key in mla_keys
+    )
+    if has_mla_configuration:
+        mla_values = {
+            key: _first_positive_integer(config, (key,))
+            for key in mla_keys
+        }
+        missing_mla = [
+            key for key, value in mla_values.items() if value <= 0
+        ]
+        if missing_mla:
+            raise ValueError(
+                "multi-head latent attention requires positive: "
+                + ", ".join(missing_mla)
+            )
+        kv_lora_rank = mla_values["kv_lora_rank"]
+        qk_nope_head_dim = mla_values["qk_nope_head_dim"]
+        qk_rope_head_dim = mla_values["qk_rope_head_dim"]
+        v_head_dim = mla_values["v_head_dim"]
+        q_lora_rank = _first_positive_integer(
+            config,
+            ("q_lora_rank",),
+        ) or None
+        head_dim = qk_nope_head_dim + qk_rope_head_dim
+        kv_heads = 1
+        attention_kind = "multi_head_latent"
+        kv_cache_layout = "compressed_latent_and_rope"
+        kv_cache_elements_per_token_per_layer = (
+            kv_lora_rank + qk_rope_head_dim
         )
-    head_dim = int(config.get("head_dim") or (hidden_size // attention_heads))
-    kv_heads = int(config.get("num_key_value_heads") or attention_heads)
+    else:
+        if hidden_size % attention_heads and "head_dim" not in config:
+            raise ValueError(
+                "hidden_size must be divisible by num_attention_heads when "
+                "head_dim is not configured"
+            )
+        head_dim = int(
+            config.get("head_dim") or (hidden_size // attention_heads)
+        )
+        kv_heads = int(
+            config.get("num_key_value_heads") or attention_heads
+        )
+        kv_lora_rank = 0
+        q_lora_rank = None
+        qk_nope_head_dim = head_dim
+        qk_rope_head_dim = 0
+        v_head_dim = head_dim
+        attention_kind = (
+            "multi_head"
+            if kv_heads == attention_heads
+            else "multi_query"
+            if kv_heads == 1
+            else "grouped_query"
+        )
+        kv_cache_layout = "separate_key_value"
+        kv_cache_elements_per_token_per_layer = (
+            2 * kv_heads * head_dim
+        )
     if head_dim <= 0:
         raise ValueError("head_dim must be greater than zero")
     if kv_heads <= 0 or kv_heads > attention_heads:
@@ -821,6 +917,16 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
         "num_attention_heads": attention_heads,
         "num_key_value_heads": kv_heads,
         "head_dim": head_dim,
+        "attention_kind": attention_kind,
+        "kv_cache_layout": kv_cache_layout,
+        "kv_cache_elements_per_token_per_layer": (
+            kv_cache_elements_per_token_per_layer
+        ),
+        "q_lora_rank": q_lora_rank,
+        "kv_lora_rank": kv_lora_rank,
+        "qk_nope_head_dim": qk_nope_head_dim,
+        "qk_rope_head_dim": qk_rope_head_dim,
+        "v_head_dim": v_head_dim,
         "intermediate_size": int(required["intermediate_size"]),
         "vocab_size": int(required["vocab_size"]),
         "model_kind": (
@@ -905,18 +1011,71 @@ def _forward_matmul_flops(
     kv_width = dimensions["num_key_value_heads"] * dimensions["head_dim"]
     intermediate = dimensions["intermediate_size"]
     vocab = dimensions["vocab_size"]
-    attention_projection_per_layer = (
-        4 * batch_size * query_tokens * hidden * hidden
-        + 4 * batch_size * query_tokens * hidden * kv_width
-    )
-    attention_per_layer = (
-        4
-        * batch_size
-        * heads
-        * query_tokens
-        * key_tokens
-        * dimensions["head_dim"]
-    )
+    token_count = batch_size * query_tokens
+    if dimensions["attention_kind"] == "multi_head_latent":
+        qk_head_dim = dimensions["head_dim"]
+        q_lora_rank = dimensions["q_lora_rank"]
+        kv_lora_rank = dimensions["kv_lora_rank"]
+        q_projection = (
+            2 * token_count * hidden * heads * qk_head_dim
+            if q_lora_rank is None
+            else (
+                2 * token_count * hidden * q_lora_rank
+                + 2 * token_count * q_lora_rank * heads * qk_head_dim
+            )
+        )
+        kv_a_projection = (
+            2
+            * token_count
+            * hidden
+            * (
+                kv_lora_rank + dimensions["qk_rope_head_dim"]
+            )
+        )
+        kv_b_projection = (
+            2
+            * token_count
+            * kv_lora_rank
+            * heads
+            * (
+                dimensions["qk_nope_head_dim"]
+                + dimensions["v_head_dim"]
+            )
+        )
+        output_projection = (
+            2
+            * token_count
+            * heads
+            * dimensions["v_head_dim"]
+            * hidden
+        )
+        attention_projection_per_layer = (
+            q_projection
+            + kv_a_projection
+            + kv_b_projection
+            + output_projection
+        )
+        attention_per_layer = (
+            2
+            * batch_size
+            * heads
+            * query_tokens
+            * key_tokens
+            * (qk_head_dim + dimensions["v_head_dim"])
+        )
+    else:
+        attention_projection_per_layer = (
+            4 * token_count * hidden * hidden
+            + 4 * token_count * hidden * kv_width
+        )
+        attention_per_layer = (
+            4
+            * batch_size
+            * heads
+            * query_tokens
+            * key_tokens
+            * dimensions["head_dim"]
+        )
     attention_flops = dimensions["num_hidden_layers"] * (
         attention_projection_per_layer + attention_per_layer
     )
@@ -1003,15 +1162,28 @@ def _forward_transient_bytes(
 ) -> dict[str, int]:
     hidden = dimensions["hidden_size"]
     heads = dimensions["num_attention_heads"]
-    kv_heads = dimensions["num_key_value_heads"]
     head_dim = dimensions["head_dim"]
     intermediate = dimensions["intermediate_size"]
     vocab = dimensions["vocab_size"]
     hidden_bytes = batch_size * query_tokens * hidden * element_bytes
     q_bytes = batch_size * query_tokens * heads * head_dim * element_bytes
-    kv_bytes = 2 * batch_size * key_tokens * kv_heads * head_dim * element_bytes
+    kv_bytes = (
+        batch_size
+        * key_tokens
+        * dimensions["kv_cache_elements_per_token_per_layer"]
+        * element_bytes
+    )
+    attention_output_bytes = (
+        batch_size
+        * query_tokens
+        * heads
+        * dimensions["v_head_dim"]
+        * element_bytes
+    )
     score_bytes = batch_size * heads * query_tokens * key_tokens * element_bytes
-    attention_bytes = hidden_bytes + q_bytes + kv_bytes + hidden_bytes
+    attention_bytes = (
+        hidden_bytes + q_bytes + kv_bytes + attention_output_bytes
+    )
     if attention_implementation == "eager":
         attention_bytes += 2 * score_bytes
     dense_mlp_bytes = (

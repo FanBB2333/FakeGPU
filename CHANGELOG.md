@@ -39,6 +39,34 @@
 - MoE active-expert FLOPs, expert-parallel traffic, quantized safetensors
   storage, PEFT adapter storage, and optional profile roofline output in
   `fakegpu estimate-llm`.
+- Draft-model speculative-decoding memory planning in `fakegpu plan-serving`,
+  including simultaneous target/draft weights and KV caches, conservative
+  lookahead slots, verification transients, acceptance assumptions, and
+  homogeneous or mixed-request admission.
+- Path-independent serving workload signatures for exact-scope calibration,
+  with separate GPU-profile dimensions and rejection of speculative-config
+  drift.
+- `fakegpu calibrate observe-serving` for aggregating repeated prefill/decode
+  peaks into signature- and profile-scoped observation reports with explicit
+  sample-sufficiency status.
+- `fakegpu calibrate collect-serving` for repeated external runner execution,
+  a versioned peak-sample protocol, physical-CUDA metadata checks, environment
+  consistency, a reported 2% profile-capacity tolerance, timeouts, and
+  command-argument-safe observation reports.
+- `fakegpu calibrate sample-transformers` for checkpoint-verified homogeneous
+  prefill/decode measurements with dynamic KV caches and lazy optional
+  framework imports.
+- `fakegpu calibrate emit-serving-sample` and
+  `build_cuda_serving_sample()` for adding validated CUDA, PyTorch, and
+  framework identity to phase peaks produced by vLLM or custom runners.
+- Runtime-aware vLLM serving budgets with automatic or explicit paged-KV
+  reservation, whole-block capacity, initialization fit, and scheduler
+  admission against the reserved pool.
+- Automatic MLA recognition from decoder configuration, with compressed
+  latent-plus-RoPE KV-cache storage and MLA-specific attention transient and
+  matrix-operation formulas.
+- Scriptable FakeGPU-SMI runtime queries for runtime policy, software,
+  tracking, catalog, dispatch, and bounded publisher-health fields.
 
 ### Changed
 
@@ -66,7 +94,14 @@
 
 ### Validation
 
-- Full local suite: 438 passed and 1 skipped.
+- Current maintained local verification: 223 Python tests, 7 smoke-manifest
+  executions, 39 research-manifest executions, native smoke checks, and all
+  8 CPU numerical groups passed; CUDA-enabled PyTorch matmul was unavailable
+  on the CPU-only host.
+- The built-in Transformers serving sampler completed three isolated prefill
+  and decode samples for Qwen/Qwen3-0.6B on an RTX PRO 5000 Blackwell with
+  PyTorch 2.11.0+cu128 and Transformers 5.14.1; the report reached
+  `ready_for_comparison` without claiming a prediction-accuracy result.
 - CI-equivalent PyTorch 2.13, Transformers 5.14, Accelerate 1.14, and PEFT
   0.19 environment: 418 passed and 10 optional skips; the maintained CPU
   matrix passed 133 tests and all six declarative validation cases.

@@ -206,6 +206,7 @@ def test_checked_in_yaml_manifest_loads() -> None:
     assert {case["name"] for case in smoke_manifest["cases"]} == {
         "allocator-api",
         "profile-doctor",
+        "runtime-query",
         "workspace-catalog",
     }
     research_manifest = load_validation_manifest(
@@ -214,11 +215,15 @@ def test_checked_in_yaml_manifest_loads() -> None:
     assert {case["name"] for case in research_manifest["cases"]} == {
         "calibration-reliability",
         "diffusion-generation",
+        "diffusion-local-architecture",
         "diffusion-shape-optimizations",
         "distributed-training-plan",
         "heterogeneous-serving-request-set",
         "kv-cache-allocation",
+        "llm-attention-architecture",
         "online-serving-kv-pool",
+        "speculative-serving-calibration",
+        "vllm-runtime-budget",
     }
 
 

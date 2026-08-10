@@ -18,8 +18,13 @@ from .capabilities import (
 )
 from .calibration import (
     CalibrationError,
+    SERVING_SAMPLE_SCHEMA_VERSION,
+    build_cuda_serving_sample,
+    build_serving_memory_observation,
     build_workload_calibration_bundle,
+    collect_serving_memory_observation,
     compare_memory_reports,
+    measure_transformers_serving_sample,
     verify_calibration_reports,
 )
 from .diffusion_estimator import (
@@ -93,6 +98,7 @@ __all__ = [
     "PerformanceModelError",
     "RepositoryAnalysisError",
     "RuntimeInitResult",
+    "SERVING_SAMPLE_SCHEMA_VERSION",
     "ServingPlanError",
     "Topology",
     "TopologyError",
@@ -107,7 +113,10 @@ __all__ = [
     "analyze_sass",
     "audit_native_capability_sources",
     "audit_native_exports",
+    "build_cuda_serving_sample",
+    "build_serving_memory_observation",
     "build_workload_calibration_bundle",
+    "collect_serving_memory_observation",
     "compare_memory_reports",
     "env",
     "estimate_decoder_inference",
@@ -134,6 +143,7 @@ __all__ = [
     "load_validation_manifest",
     "load_workspace_profiles",
     "match_operator_profile",
+    "measure_transformers_serving_sample",
     "native_capability_report",
     "normalize_training_config",
     "patch_torch",

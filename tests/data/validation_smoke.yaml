@@ -61,3 +61,28 @@ cases:
     expect:
       stdout_contains:
         - '"schema_version": "fakegpu.workspace_profiles.v1"'
+
+  - name: runtime-query
+    env:
+      STATE: "{report_dir}/runtime-state.json"
+    command:
+      - "{python}"
+      - -c
+      - >-
+        import os,pathlib;
+        from fakegpu.smi import SmiStatePublisher,main;
+        path=pathlib.Path(os.environ["STATE"]);
+        snapshot=lambda:dict(runtime_backend="upstream",dispatch_tracking=dict(enabled=True,operator_calls=3),devices=[dict(index=0,name="FakeGPU Validation",profile_id="test-512m",total_memory=512*2**20,current_memory=64*2**20)]);
+        SmiStatePublisher(path,snapshot).publish_once(running=True);
+        raise SystemExit(main(["--state",str(path),"--query-runtime","fakegpu.version,runtime.backend,tracking.dispatch,catalog.profiles,catalog.native_apis,dispatch.calls,publisher.successful_writes,status","--format","json"]))
+    expect:
+      stdout_contains:
+        - '"query": "runtime"'
+        - '"runtime.backend": "upstream"'
+        - '"tracking.dispatch": true'
+        - '"catalog.profiles": 82'
+        - '"catalog.native_apis": 26'
+        - '"dispatch.calls": 3'
+        - '"publisher.successful_writes": 1'
+        - '"status": "running"'
+      files_exist: "{report_dir}/runtime-state.json"
