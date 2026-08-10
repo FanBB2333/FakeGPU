@@ -13,7 +13,8 @@ class StructuredDataError(ValueError):
 def load_mapping(path: str | Path) -> dict[str, Any]:
     """Load one JSON, TOML, or YAML mapping.
 
-    YAML support is optional so the core package remains dependency-free.
+    YAML support is optional. Python 3.10 uses the ``tomli`` compatibility
+    dependency for TOML; Python 3.11 and newer use the standard library.
     """
 
     resolved = Path(path).expanduser().resolve()
@@ -24,7 +25,10 @@ def load_mapping(path: str | Path) -> dict[str, Any]:
         if suffix == ".json":
             payload = json.loads(resolved.read_text(encoding="utf-8"))
         elif suffix == ".toml":
-            import tomllib
+            try:
+                import tomllib
+            except ModuleNotFoundError:  # pragma: no cover - Python 3.10 only
+                import tomli as tomllib
 
             payload = tomllib.loads(resolved.read_text(encoding="utf-8"))
         elif suffix in {".yaml", ".yml"}:

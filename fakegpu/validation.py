@@ -625,10 +625,13 @@ def _read_structured_file(path: Path) -> Any:
     if suffix == ".toml":
         try:
             import tomllib
-        except ImportError as exc:  # pragma: no cover - Python >=3.11 locally
-            raise ValidationManifestError(
-                "TOML manifests require Python 3.11 or tomli"
-            ) from exc
+        except ModuleNotFoundError:  # pragma: no cover - Python 3.10 only
+            try:
+                import tomli as tomllib
+            except ModuleNotFoundError as exc:
+                raise ValidationManifestError(
+                    "TOML manifests on Python 3.10 require tomli"
+                ) from exc
         try:
             return tomllib.loads(text)
         except tomllib.TOMLDecodeError as exc:
