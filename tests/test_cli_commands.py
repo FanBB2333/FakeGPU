@@ -351,6 +351,297 @@ def test_calibrate_compare_cli_writes_error_and_safety_data(
     }
 
 
+def test_calibrate_observe_serving_cli_tracks_sample_sufficiency(
+    tmp_path: Path,
+) -> None:
+    plan_path = tmp_path / "serving-plan.json"
+    observation_path = tmp_path / "serving-observation.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "fakegpu.llm_serving_plan.v1",
+                "method": "test_serving_model",
+                "workload_signature": (
+                    "fakegpu.serving_workload.v1:sha256:" + "b" * 64
+                ),
+                "inputs": {
+                    "dtype": "bfloat16",
+                    "prompt_tokens": 4096,
+                },
+                "target": {
+                    "profile": {
+                        "id": "a100",
+                        "compute_capability": "8.0",
+                    }
+                },
+                "memory_timeline": {
+                    "phases": [
+                        {"phase": "prefill", "peak_bytes": 1_000},
+                        {"phase": "decode", "peak_bytes": 1_200},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_fakegpu(
+        "calibrate",
+        "observe-serving",
+        str(plan_path),
+        "--prefill-peak-bytes",
+        "1_000,1_010,1_020",
+        "--prefill-peak-bytes",
+        "1_030,1_040",
+        "--decode-peak-bytes",
+        "1_200,1_210,1_220,1_230,1_240",
+        "--source",
+        "torch.cuda.max_memory_reserved",
+        "--strict",
+        "--json",
+        str(observation_path),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Serving observation:" in result.stdout
+    observation = json.loads(
+        observation_path.read_text(encoding="utf-8")
+    )
+    assert observation["evidence_status"] == "ready_for_comparison"
+    assert observation["measurement"]["phase_sample_counts"] == {
+        "prefill": 5,
+        "decode": 5,
+    }
+    assert observation["memory_timeline"]["peak_bytes"] == 1_240
+
+    insufficient_path = tmp_path / "insufficient-observation.json"
+    result = _run_fakegpu(
+        "calibrate",
+        "observe-serving",
+        str(plan_path),
+        "--prefill-peak-bytes",
+        "1000",
+        "--decode-peak-bytes",
+        "1200",
+        "--strict",
+        "--json",
+        str(insufficient_path),
+    )
+    assert result.returncode == 1, result.stderr
+    insufficient = json.loads(
+        insufficient_path.read_text(encoding="utf-8")
+    )
+    assert insufficient["evidence_status"] == "insufficient_samples"
+    assert insufficient["measurement"]["insufficient_phases"] == [
+        "prefill",
+        "decode",
+    ]
+
+    result = _run_fakegpu(
+        "calibrate",
+        "observe-serving",
+        str(plan_path),
+        "--prefill-peak-bytes",
+        "invalid",
+        "--decode-peak-bytes",
+        "1200",
+    )
+    assert result.returncode == 2
+    assert "prefill peak sample must be an integer" in result.stderr
+
+
+def test_calibrate_collect_serving_cli_runs_json_sample_protocol(
+    tmp_path: Path,
+) -> None:
+    memory_bytes = 80 * 2**30
+    signature = "fakegpu.serving_workload.v1:sha256:" + "d" * 64
+    plan_path = tmp_path / "serving-plan.json"
+    observation_path = tmp_path / "collected-observation.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "fakegpu.llm_serving_plan.v1",
+                "method": "test_serving_model",
+                "workload_signature": signature,
+                "inputs": {
+                    "dtype": "bfloat16",
+                    "prompt_tokens": 4096,
+                },
+                "target": {
+                    "profile": {
+                        "id": "a100",
+                        "compute_capability": "8.0",
+                        "memory_bytes": memory_bytes,
+                    }
+                },
+                "memory_timeline": {
+                    "phases": [
+                        {"phase": "prefill", "peak_bytes": 1_000},
+                        {"phase": "decode", "peak_bytes": 1_200},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner_code = "\n".join(
+        (
+            "import json, os",
+            "index = int(os.environ['FAKEGPU_SERVING_RUN_INDEX'])",
+            "payload = {",
+            "  'schema_version': os.environ['FAKEGPU_SERVING_SAMPLE_SCHEMA'],",
+            "  'workload_signature': os.environ['FAKEGPU_SERVING_WORKLOAD_SIGNATURE'],",
+            "  'run_index': index,",
+            "  'metric': 'torch.cuda.max_memory_reserved',",
+            "  'phases': {",
+            "    'prefill': {'peak_bytes': 1000 + index},",
+            "    'decode': {'peak_bytes': 1200 + index},",
+            "  },",
+            "  'environment': {",
+            "    'backend': 'cuda', 'simulated': False,",
+            "    'gpu_name': 'NVIDIA A100-SXM4-80GB',",
+            "    'gpu_uuid': 'GPU-cli-test',",
+            "    'compute_capability': [8, 0],",
+            f"    'total_memory_bytes': {memory_bytes},",
+            "    'software': {",
+            "      'framework': 'vllm',",
+            "      'framework_version': '0.10.0',",
+            "      'cuda_version': '12.8',",
+            "    },",
+            "  },",
+            "}",
+            "print('runner log')",
+            "print('FAKEGPU_SERVING_SAMPLE=' + json.dumps(payload))",
+        )
+    )
+
+    result = _run_fakegpu(
+        "calibrate",
+        "collect-serving",
+        str(plan_path),
+        "--repetitions",
+        "3",
+        "--minimum-samples-per-phase",
+        "3",
+        "--timeout-seconds",
+        "10",
+        "--strict",
+        "--json",
+        str(observation_path),
+        "--",
+        sys.executable,
+        "-c",
+        runner_code,
+    )
+    assert result.returncode == 0, result.stderr
+    observation = json.loads(
+        observation_path.read_text(encoding="utf-8")
+    )
+    assert observation["evidence_status"] == "ready_for_comparison"
+    assert observation["memory_timeline"]["peak_bytes"] == 1_203
+    assert observation["measurement"]["phase_sample_counts"] == {
+        "prefill": 3,
+        "decode": 3,
+    }
+    assert observation["measurement"]["environment"]["software"][
+        "framework"
+    ] == "vllm"
+    assert observation["measurement"]["runner"]["successful_runs"] == 3
+    assert runner_code not in json.dumps(observation)
+
+    failed = _run_fakegpu(
+        "calibrate",
+        "collect-serving",
+        str(plan_path),
+        "--repetitions",
+        "1",
+        "--minimum-samples-per-phase",
+        "1",
+        "--",
+        sys.executable,
+        "-c",
+        "raise SystemExit(7)",
+    )
+    assert failed.returncode == 2
+    assert "failed on repetition 1 with status 7" in failed.stderr
+
+
+def test_calibrate_framework_sample_commands_reject_invalid_inputs(
+    tmp_path: Path,
+) -> None:
+    plan_path = tmp_path / "serving-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "fakegpu.llm_serving_plan.v1",
+                "method": "test_serving_model",
+                "workload_signature": (
+                    "fakegpu.serving_workload.v1:sha256:" + "f" * 64
+                ),
+                "inputs": {
+                    "dtype": "bfloat16",
+                    "active_sequences": 1,
+                    "prompt_tokens": 8,
+                    "generated_tokens": 2,
+                    "kv_cache_strategy": "paged",
+                    "speculative_decoding": {"enabled": False},
+                },
+                "target": {
+                    "profile": {
+                        "id": "a100",
+                        "compute_capability": "8.0",
+                        "memory_bytes": 80 * 2**30,
+                    }
+                },
+                "memory_timeline": {
+                    "phases": [
+                        {"phase": "prefill", "peak_bytes": 1_000},
+                        {"phase": "decode", "peak_bytes": 1_200},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_fakegpu(
+        "calibrate",
+        "sample-transformers",
+        str(plan_path),
+    )
+    assert result.returncode == 2
+    assert "requires --kv-cache-strategy dynamic" in result.stderr
+
+    runtime_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    runtime_plan["inputs"]["kv_cache_strategy"] = "dynamic"
+    runtime_plan["inputs"]["runtime"] = "vllm"
+    plan_path.write_text(json.dumps(runtime_plan), encoding="utf-8")
+    result = _run_fakegpu(
+        "calibrate",
+        "sample-transformers",
+        str(plan_path),
+    )
+    assert result.returncode == 2
+    assert "requires a generic serving runtime plan" in result.stderr
+
+    result = _run_fakegpu(
+        "calibrate",
+        "emit-serving-sample",
+        str(plan_path),
+        "--prefill-peak-bytes",
+        "-1",
+        "--decode-peak-bytes",
+        "1200",
+        "--metric",
+        "nvml.process_family_peak_bytes",
+        "--framework",
+        "vllm",
+        "--framework-version",
+        "0.10.2",
+    )
+    assert result.returncode == 2
+    assert "prefill peak must be a positive integer" in result.stderr
+
+
 def test_top_level_help_names_builtin_commands() -> None:
     result = _run_fakegpu("--help")
     assert result.returncode == 0
@@ -499,8 +790,8 @@ def test_readmes_report_research_reliability_scope() -> None:
         for item in capabilities["apis"]
     )
     expected_terms = {
-        "scripts/test.sh all",
-        "199",
+        "scripts/test.sh",
+        "223",
         str(len(profiles)),
         str(compute_capability_count),
         str(len(capabilities["groups"])),
@@ -520,16 +811,28 @@ def test_readmes_report_research_reliability_scope() -> None:
         "chunked prefill",
         "prefix caching",
         "speculative decoding",
+        "--draft-model-dir",
+        "--speculative-tokens",
+        "--speculative-acceptance-rate",
+        "workload_signature",
+        "observe-serving",
+        "collect-serving",
+        "2.94",
         "false-safe",
         "5%",
         "calibrate verify",
         "research_validation.yaml",
         "--kv-cache-strategy",
+        "--runtime",
+        "--vllm-kv-cache-memory-bytes",
+        "--vllm-non-kv-cache-memory-bytes",
         "--model-dir",
         "PixArt-Sigma",
         "Flux",
         "uncalibrated",
         "https://huggingface.co/docs/transformers/kv_cache",
+        "https://huggingface.co/docs/transformers/assisted_decoding",
+        "https://arxiv.org/abs/2211.17192",
         "https://docs.vllm.ai/en/stable/",
     }
 
@@ -542,6 +845,7 @@ def test_readmes_report_research_reliability_scope() -> None:
         "FAKEGPU_SMI_STATE_DIR",
         "--query-gpu",
         "--query-compute-apps",
+        "--query-runtime",
         "native.kernel_launches",
         "fakegpu metrics",
         "/metrics",
@@ -576,6 +880,30 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
         prompt_tokens=32768,
         element_bytes=2,
     )
+    attention_cache_architectures = [
+        estimate_kv_cache_memory(
+            num_hidden_layers=32,
+            num_key_value_heads=kv_heads,
+            head_dim=128,
+            batch_size=8,
+            prompt_tokens=4096,
+            element_bytes=2,
+            strategy="paged",
+            block_tokens=16,
+            elements_per_token_per_layer=elements_per_layer,
+            cache_layout=(
+                "compressed_latent_and_rope"
+                if elements_per_layer is not None
+                else "separate_key_value"
+            ),
+        )
+        for kv_heads, elements_per_layer in (
+            (32, None),
+            (8, None),
+            (1, None),
+            (1, 576),
+        )
+    ]
     serving_unshared = estimate_serving_kv_pool(
         num_hidden_layers=32,
         num_key_value_heads=8,
@@ -719,6 +1047,12 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
         (
             f"{gib(kv_short['prefill']['allocated_bytes'])} → "
             f"{gib(kv_long['prefill']['allocated_bytes'])} GiB"
+        ),
+        (
+            f"{gib(attention_cache_architectures[0]['prefill']['allocated_bytes'])} / "
+            f"{gib(attention_cache_architectures[1]['prefill']['allocated_bytes'])} / "
+            f"{gib(attention_cache_architectures[2]['prefill']['allocated_bytes'])} / "
+            f"{attention_cache_architectures[3]['prefill']['allocated_bytes'] / 2**30:.3f} GiB"
         ),
         (
             f"{gib(serving_unshared['decode']['allocated_bytes'])} → "

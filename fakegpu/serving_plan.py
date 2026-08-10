@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
@@ -20,7 +21,12 @@ from .structured_io import load_mapping
 SCHEMA_VERSION = "fakegpu.llm_serving_plan.v1"
 REQUEST_SET_SCHEMA_VERSION = "fakegpu.llm_serving_request_set_plan.v1"
 REQUEST_MANIFEST_SCHEMA_VERSION = "fakegpu.serving_requests.v1"
+WORKLOAD_SIGNATURE_SCHEMA_VERSION = "fakegpu.serving_workload.v1"
 _PREFIX_CACHE_STRATEGIES = frozenset({"dynamic", "paged"})
+SERVING_RUNTIMES = frozenset({"generic", "vllm"})
+DEFAULT_MEMORY_UTILIZATION = 0.9
+VLLM_DEFAULT_GPU_MEMORY_UTILIZATION = 0.92
+DEFAULT_SPECULATIVE_TOKENS = 5
 
 
 class ServingPlanError(ValueError):
@@ -43,6 +49,8 @@ def estimate_serving_kv_pool(
     block_tokens: int = 16,
     max_cache_tokens: int | None = None,
     window_tokens: int | None = None,
+    elements_per_token_per_layer: int | None = None,
+    cache_layout: str = "separate_key_value",
 ) -> dict[str, Any]:
     """Estimate a homogeneous online-serving KV pool.
 
@@ -86,6 +94,8 @@ def estimate_serving_kv_pool(
         block_tokens=block_tokens,
         max_cache_tokens=max_cache_tokens,
         window_tokens=window_tokens,
+        elements_per_token_per_layer=elements_per_token_per_layer,
+        cache_layout=cache_layout,
     )
     bytes_per_token_per_sequence = int(
         baseline["bytes_per_token_per_sequence_at_compute_dtype"]
@@ -189,6 +199,10 @@ def estimate_serving_kv_pool(
     return {
         "strategy": strategy,
         "active_sequences": active_sequences,
+        "cache_layout": baseline["cache_layout"],
+        "elements_per_token_per_layer": baseline[
+            "elements_per_token_per_layer"
+        ],
         "bytes_per_token_per_sequence_at_compute_dtype": (
             bytes_per_token_per_sequence
         ),
@@ -245,6 +259,8 @@ def estimate_serving_request_kv_pool(
     block_tokens: int = 16,
     max_cache_tokens: int | None = None,
     window_tokens: int | None = None,
+    elements_per_token_per_layer: int | None = None,
+    cache_layout: str = "separate_key_value",
 ) -> dict[str, Any]:
     """Estimate KV storage for an ordered heterogeneous request set."""
 
@@ -281,6 +297,10 @@ def estimate_serving_request_kv_pool(
             block_tokens=block_tokens,
             max_cache_tokens=max_cache_tokens,
             window_tokens=window_tokens,
+            elements_per_token_per_layer=(
+                elements_per_token_per_layer
+            ),
+            cache_layout=cache_layout,
         )
     first_baseline = baselines[normalized[0]["id"]]
     bytes_per_token = int(
@@ -475,6 +495,10 @@ def estimate_serving_request_kv_pool(
         "strategy": strategy,
         "request_count": len(normalized),
         "request_ids": [request["id"] for request in normalized],
+        "cache_layout": first_baseline["cache_layout"],
+        "elements_per_token_per_layer": first_baseline[
+            "elements_per_token_per_layer"
+        ],
         "bytes_per_token_per_sequence_at_compute_dtype": (
             bytes_per_token
         ),
@@ -530,9 +554,16 @@ def estimate_serving_plan(
     runtime_overhead_bytes: int = 0,
     scheduler_overhead_bytes_per_sequence: int = 0,
     adapter_dirs: Sequence[str | Path] | None = None,
+    draft_model_dir: str | Path | None = None,
+    draft_dtype: str = "auto",
+    speculative_tokens: int = DEFAULT_SPECULATIVE_TOKENS,
+    speculative_acceptance_rate: float | None = None,
     target_profile: str | None = None,
     device_capacity_bytes: int | None = None,
-    memory_utilization: float = 0.9,
+    memory_utilization: float | None = None,
+    runtime: str = "generic",
+    vllm_kv_cache_memory_bytes: int | None = None,
+    vllm_non_kv_cache_memory_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Plan memory admission for a homogeneous continuous-batching pool."""
 
@@ -559,20 +590,25 @@ def estimate_serving_plan(
         raise ServingPlanError(
             "attention_implementation must be 'eager' or 'sdpa'"
         )
-    if (
-        not isinstance(memory_utilization, (int, float))
-        or isinstance(memory_utilization, bool)
-        or not math.isfinite(float(memory_utilization))
-        or not 0 < float(memory_utilization) <= 1
-    ):
-        raise ServingPlanError(
-            "memory_utilization must be finite and in the interval (0, 1]"
-        )
+    runtime, memory_utilization = _serving_runtime_configuration(
+        runtime=runtime,
+        memory_utilization=memory_utilization,
+        kv_cache_strategy=kv_cache_strategy,
+        draft_model_dir=draft_model_dir,
+        vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
+        vllm_non_kv_cache_memory_bytes=(
+            vllm_non_kv_cache_memory_bytes
+        ),
+    )
     if device_capacity_bytes is not None:
         _positive_integer(
             device_capacity_bytes,
             "device_capacity_bytes",
         )
+    _validate_speculative_inputs(
+        speculative_tokens=speculative_tokens,
+        acceptance_rate=speculative_acceptance_rate,
+    )
 
     target = None
     profile_capacity_bytes = None
@@ -615,6 +651,16 @@ def estimate_serving_plan(
     dimensions = dict(base["model"])
     element_bytes = int(base["inputs"]["element_bytes"])
     parameter_bytes = int(base["memory"]["parameter_bytes"])
+    speculative = _load_speculative_draft(
+        draft_model_dir=draft_model_dir,
+        draft_dtype=draft_dtype,
+        prompt_tokens=prompt_tokens,
+        attention_implementation=attention_implementation,
+        target_dimensions=dimensions,
+        target_parameter_bytes=parameter_bytes,
+        speculative_tokens=speculative_tokens,
+        acceptance_rate=speculative_acceptance_rate,
+    )
 
     def batch_memory(sequence_count: int) -> dict[str, Any]:
         return _serving_batch_memory(
@@ -637,22 +683,66 @@ def estimate_serving_plan(
             scheduler_overhead_bytes_per_sequence=(
                 scheduler_overhead_bytes_per_sequence
             ),
+            speculative=speculative,
         )
 
     requested = batch_memory(active_sequences)
-    usable_capacity_bytes = (
-        math.floor(
-            int(selected_capacity_bytes) * float(memory_utilization)
+    runtime_report = None
+    if runtime == "vllm":
+        runtime_report = _build_vllm_runtime_report(
+            requested_memory=requested,
+            profiled_memory=batch_memory(max_batch_size),
+            selected_capacity_bytes=selected_capacity_bytes,
+            gpu_memory_utilization=memory_utilization,
+            kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
+            non_kv_cache_memory_bytes=(
+                vllm_non_kv_cache_memory_bytes
+            ),
+            max_model_len_tokens=prompt_tokens + generated_tokens,
+            profiled_sequence_count=max_batch_size,
+            profile_scope="configured_max_batch_size",
         )
-        if selected_capacity_bytes is not None
-        else None
-    )
-    memory_limited_sequences = None
-    if usable_capacity_bytes is not None:
-        memory_limited_sequences = _maximum_fitting_sequences(
-            max_batch_size=max_batch_size,
-            usable_capacity_bytes=usable_capacity_bytes,
-            batch_memory=batch_memory,
+        requested_for_report = _apply_vllm_kv_reservation(
+            requested,
+            runtime_report,
+        )
+        usable_capacity_bytes = runtime_report["memory"][
+            "memory_limit_bytes"
+        ]
+        kv_cache_capacity_bytes = runtime_report["kv_cache"][
+            "allocatable_bytes"
+        ]
+        if kv_cache_capacity_bytes is None:
+            memory_limited_sequences = None
+        elif runtime_report["memory"]["initialization_fits"] is False:
+            memory_limited_sequences = 0
+        else:
+            memory_limited_sequences = _maximum_fitting_vllm_kv_count(
+                max_count=max_batch_size,
+                kv_cache_capacity_bytes=int(kv_cache_capacity_bytes),
+                memory_for_count=batch_memory,
+            )
+        fits_memory = runtime_report["requested_fits_memory"]
+    else:
+        requested_for_report = requested
+        usable_capacity_bytes = (
+            math.floor(
+                int(selected_capacity_bytes) * memory_utilization
+            )
+            if selected_capacity_bytes is not None
+            else None
+        )
+        memory_limited_sequences = None
+        if usable_capacity_bytes is not None:
+            memory_limited_sequences = _maximum_fitting_sequences(
+                max_batch_size=max_batch_size,
+                usable_capacity_bytes=usable_capacity_bytes,
+                batch_memory=batch_memory,
+            )
+        fits_memory = (
+            int(requested["peak_bytes"]) <= usable_capacity_bytes
+            if usable_capacity_bytes is not None
+            else None
         )
     admissible_sequences = (
         min(max_batch_size, memory_limited_sequences)
@@ -660,11 +750,6 @@ def estimate_serving_plan(
         else None
     )
     fits_configured_limit = active_sequences <= max_batch_size
-    fits_memory = (
-        int(requested["peak_bytes"]) <= usable_capacity_bytes
-        if usable_capacity_bytes is not None
-        else None
-    )
     requested_fits = (
         fits_configured_limit and fits_memory
         if fits_memory is not None
@@ -679,6 +764,17 @@ def estimate_serving_plan(
     )
     if not fits_configured_limit:
         limiting_factor = "configured_max_batch_size"
+    elif runtime == "vllm" and runtime_report is not None:
+        if runtime_report["memory"]["initialization_fits"] is False:
+            limiting_factor = "vllm_model_executor_budget"
+        elif fits_memory is False:
+            limiting_factor = "vllm_kv_cache_capacity"
+        elif fits_memory is None:
+            limiting_factor = "device_capacity_unavailable"
+        elif admissible_sequences == max_batch_size:
+            limiting_factor = "configured_max_batch_size"
+        else:
+            limiting_factor = "vllm_kv_cache_capacity"
     elif fits_memory is False:
         limiting_factor = "usable_device_memory"
     elif fits_memory is None:
@@ -688,10 +784,87 @@ def estimate_serving_plan(
     else:
         limiting_factor = "usable_device_memory"
 
+    input_report = {
+        "active_sequences": active_sequences,
+        "max_batch_size": max_batch_size,
+        "prompt_tokens": prompt_tokens,
+        "generated_tokens": generated_tokens,
+        "dtype": base["inputs"]["dtype"],
+        "element_bytes": element_bytes,
+        "attention_implementation": attention_implementation,
+        "prefill_chunk_tokens": prefill_chunk_tokens,
+        "shared_prefix_tokens": shared_prefix_tokens,
+        "kv_cache_strategy": kv_cache_strategy,
+        "kv_cache_bits": (
+            kv_cache_bits if kv_cache_strategy == "quantized" else None
+        ),
+        "kv_cache_residual_tokens": (
+            kv_cache_residual_tokens
+            if kv_cache_strategy == "quantized"
+            else None
+        ),
+        "kv_cache_block_tokens": (
+            kv_cache_block_tokens if kv_cache_strategy == "paged" else None
+        ),
+        "kv_cache_max_tokens": kv_cache_max_tokens,
+        "kv_cache_window_tokens": kv_cache_window_tokens,
+        "runtime": runtime,
+        "vllm": (
+            {
+                "gpu_memory_utilization": memory_utilization,
+                "kv_cache_memory_bytes": (
+                    vllm_kv_cache_memory_bytes
+                ),
+                "non_kv_cache_memory_bytes": (
+                    vllm_non_kv_cache_memory_bytes
+                ),
+            }
+            if runtime == "vllm"
+            else None
+        ),
+        "runtime_overhead_bytes": runtime_overhead_bytes,
+        "scheduler_overhead_bytes_per_sequence": (
+            scheduler_overhead_bytes_per_sequence
+        ),
+        "speculative_decoding": _speculative_input_report(
+            speculative=speculative,
+            speculative_tokens=speculative_tokens,
+            acceptance_rate=speculative_acceptance_rate,
+        ),
+    }
+    workload_signature = _serving_workload_signature(
+        report_schema_version=SCHEMA_VERSION,
+        model=dimensions,
+        checkpoint=base["checkpoint"],
+        weight_storage=base["weight_storage"],
+        inputs=input_report,
+        speculative=speculative,
+    )
+    kv_cache_report = dict(requested["kv_cache"])
+    if runtime_report is not None:
+        kv_cache_report["runtime_reservation"] = dict(
+            runtime_report["kv_cache"]
+        )
+    runtime_output = (
+        runtime_report
+        if runtime_report is not None
+        else {
+            "engine": "generic",
+            "method": "logical_kv_growth_memory_model",
+        }
+    )
+
     return {
         "schema_version": SCHEMA_VERSION,
+        "workload_signature": workload_signature,
         "method": (
             "safetensors_headers_plus_decoder_shape_and_serving_pool_model"
+            + (
+                "_with_draft_model_speculative_decoding"
+                if speculative is not None
+                else ""
+            )
+            + ("_with_vllm_runtime_budget" if runtime == "vllm" else "")
         ),
         "validation_status": "Modeled",
         "accuracy": {
@@ -705,39 +878,8 @@ def estimate_serving_plan(
         "model": dimensions,
         "checkpoint": base["checkpoint"],
         "weight_storage": base["weight_storage"],
-        "inputs": {
-            "active_sequences": active_sequences,
-            "max_batch_size": max_batch_size,
-            "prompt_tokens": prompt_tokens,
-            "generated_tokens": generated_tokens,
-            "dtype": base["inputs"]["dtype"],
-            "element_bytes": element_bytes,
-            "attention_implementation": attention_implementation,
-            "prefill_chunk_tokens": prefill_chunk_tokens,
-            "shared_prefix_tokens": shared_prefix_tokens,
-            "kv_cache_strategy": kv_cache_strategy,
-            "kv_cache_bits": (
-                kv_cache_bits
-                if kv_cache_strategy == "quantized"
-                else None
-            ),
-            "kv_cache_residual_tokens": (
-                kv_cache_residual_tokens
-                if kv_cache_strategy == "quantized"
-                else None
-            ),
-            "kv_cache_block_tokens": (
-                kv_cache_block_tokens
-                if kv_cache_strategy == "paged"
-                else None
-            ),
-            "kv_cache_max_tokens": kv_cache_max_tokens,
-            "kv_cache_window_tokens": kv_cache_window_tokens,
-            "runtime_overhead_bytes": runtime_overhead_bytes,
-            "scheduler_overhead_bytes_per_sequence": (
-                scheduler_overhead_bytes_per_sequence
-            ),
-        },
+        "inputs": input_report,
+        "runtime": runtime_output,
         "target": {
             "profile": target,
             "capacity_source": capacity_source,
@@ -759,17 +901,27 @@ def estimate_serving_plan(
             "requested_fits": requested_fits,
             "limiting_factor": limiting_factor,
         },
-        "kv_cache": requested["kv_cache"],
+        "kv_cache": kv_cache_report,
+        "speculative_decoding": requested["speculative_decoding"],
         "optimizations": requested["optimizations"],
-        "memory": requested["memory"],
+        "memory": requested_for_report["memory"],
         "memory_timeline": {
             "unit": "bytes",
-            "source": "decoder_shape_and_serving_pool_model",
-            "phases": requested["phases"],
-            "peak_bytes": requested["peak_bytes"],
-            "peak_phase": requested["peak_phase"],
+            "source": (
+                "decoder_shape_and_serving_pool_model"
+                + (
+                    "_with_draft_model_speculative_decoding"
+                    if speculative is not None
+                    else ""
+                )
+                + ("_with_vllm_runtime_budget" if runtime == "vllm" else "")
+            ),
+            "phases": requested_for_report["phases"],
+            "peak_bytes": requested_for_report["peak_bytes"],
+            "peak_phase": requested_for_report["peak_phase"],
             "usable_capacity_headroom_bytes": (
-                usable_capacity_bytes - int(requested["peak_bytes"])
+                usable_capacity_bytes
+                - int(requested_for_report["peak_bytes"])
                 if usable_capacity_bytes is not None
                 else None
             ),
@@ -783,7 +935,17 @@ def estimate_serving_plan(
             "paged_cache_block_table_metadata",
             "prefix_cache_lookup_eviction_and_copy_cost",
             "network_and_tokenization_buffers",
-            "speculative_draft_model_weights_and_kv_cache",
+            *(
+                [
+                    "speculative_acceptance_distribution_and_dynamic_"
+                    "draft_length",
+                    "speculative_kv_rollback_and_scheduler_workspace",
+                    "target_draft_kernel_latency_and_overlap",
+                    "draft_target_tokenizer_identity",
+                ]
+                if speculative is not None
+                else ["speculative_draft_model_weights_and_kv_cache"]
+            ),
             "tensor_parallel_communication_and_rank_imbalance",
         ],
         "notes": [
@@ -802,6 +964,30 @@ def estimate_serving_plan(
             (
                 "Admission uses the configured memory-utilization fraction "
                 "and does not predict latency, throughput, or queue time."
+            ),
+            *(
+                [
+                    (
+                        "vLLM mode profiles non-KV memory at the configured "
+                        "maximum batch size, reserves the remaining executor "
+                        "budget as whole paged-cache blocks, and admits by "
+                        "logical KV demand."
+                    )
+                ]
+                if runtime == "vllm"
+                else []
+            ),
+            *(
+                [
+                    (
+                        "Speculative decoding keeps target and draft weights "
+                        "and KV caches resident; a supplied acceptance "
+                        "assumption affects expected target calls but not "
+                        "the conservative memory peak."
+                    )
+                ]
+                if speculative is not None
+                else []
             ),
         ],
     }
@@ -825,9 +1011,16 @@ def estimate_serving_request_set(
     runtime_overhead_bytes: int = 0,
     scheduler_overhead_bytes_per_sequence: int = 0,
     adapter_dirs: Sequence[str | Path] | None = None,
+    draft_model_dir: str | Path | None = None,
+    draft_dtype: str = "auto",
+    speculative_tokens: int = DEFAULT_SPECULATIVE_TOKENS,
+    speculative_acceptance_rate: float | None = None,
     target_profile: str | None = None,
     device_capacity_bytes: int | None = None,
-    memory_utilization: float = 0.9,
+    memory_utilization: float | None = None,
+    runtime: str = "generic",
+    vllm_kv_cache_memory_bytes: int | None = None,
+    vllm_non_kv_cache_memory_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Plan ordered admission for a heterogeneous serving request set."""
 
@@ -848,20 +1041,25 @@ def estimate_serving_request_set(
         raise ServingPlanError(
             "attention_implementation must be 'eager' or 'sdpa'"
         )
-    if (
-        not isinstance(memory_utilization, (int, float))
-        or isinstance(memory_utilization, bool)
-        or not math.isfinite(float(memory_utilization))
-        or not 0 < float(memory_utilization) <= 1
-    ):
-        raise ServingPlanError(
-            "memory_utilization must be finite and in the interval (0, 1]"
-        )
+    runtime, memory_utilization = _serving_runtime_configuration(
+        runtime=runtime,
+        memory_utilization=memory_utilization,
+        kv_cache_strategy=kv_cache_strategy,
+        draft_model_dir=draft_model_dir,
+        vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
+        vllm_non_kv_cache_memory_bytes=(
+            vllm_non_kv_cache_memory_bytes
+        ),
+    )
     if device_capacity_bytes is not None:
         _positive_integer(
             device_capacity_bytes,
             "device_capacity_bytes",
         )
+    _validate_speculative_inputs(
+        speculative_tokens=speculative_tokens,
+        acceptance_rate=speculative_acceptance_rate,
+    )
 
     target = None
     profile_capacity_bytes = None
@@ -906,6 +1104,18 @@ def estimate_serving_request_set(
     dimensions = dict(base["model"])
     element_bytes = int(base["inputs"]["element_bytes"])
     parameter_bytes = int(base["memory"]["parameter_bytes"])
+    speculative = _load_speculative_draft(
+        draft_model_dir=draft_model_dir,
+        draft_dtype=draft_dtype,
+        prompt_tokens=max(
+            request["prompt_tokens"] for request in normalized
+        ),
+        attention_implementation=attention_implementation,
+        target_dimensions=dimensions,
+        target_parameter_bytes=parameter_bytes,
+        speculative_tokens=speculative_tokens,
+        acceptance_rate=speculative_acceptance_rate,
+    )
 
     memory_by_request_count: dict[int, dict[str, Any]] = {}
 
@@ -931,34 +1141,78 @@ def estimate_serving_request_set(
             scheduler_overhead_bytes_per_sequence=(
                 scheduler_overhead_bytes_per_sequence
             ),
+            speculative=speculative,
         )
         memory_by_request_count[request_count] = result
         return result
 
     requested_count = len(normalized)
     requested = request_memory(requested_count)
-    usable_capacity_bytes = (
-        math.floor(
-            int(selected_capacity_bytes) * float(memory_utilization)
-        )
-        if selected_capacity_bytes is not None
-        else None
-    )
     candidate_count = min(max_batch_size, requested_count)
-    memory_limited_count = None
-    if usable_capacity_bytes is not None:
-        memory_limited_count = _maximum_fitting_request_prefix(
-            max_request_count=candidate_count,
-            usable_capacity_bytes=usable_capacity_bytes,
-            request_memory=request_memory,
+    runtime_report = None
+    if runtime == "vllm":
+        candidate_requests = normalized[:candidate_count]
+        runtime_report = _build_vllm_runtime_report(
+            requested_memory=requested,
+            profiled_memory=request_memory(candidate_count),
+            selected_capacity_bytes=selected_capacity_bytes,
+            gpu_memory_utilization=memory_utilization,
+            kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
+            non_kv_cache_memory_bytes=(
+                vllm_non_kv_cache_memory_bytes
+            ),
+            max_model_len_tokens=max(
+                int(request["prompt_tokens"])
+                + int(request["generated_tokens"])
+                for request in candidate_requests
+            ),
+            profiled_sequence_count=candidate_count,
+            profile_scope="configured_request_manifest_prefix",
+        )
+        requested_for_report = _apply_vllm_kv_reservation(
+            requested,
+            runtime_report,
+        )
+        usable_capacity_bytes = runtime_report["memory"][
+            "memory_limit_bytes"
+        ]
+        kv_cache_capacity_bytes = runtime_report["kv_cache"][
+            "allocatable_bytes"
+        ]
+        if kv_cache_capacity_bytes is None:
+            memory_limited_count = None
+        elif runtime_report["memory"]["initialization_fits"] is False:
+            memory_limited_count = 0
+        else:
+            memory_limited_count = _maximum_fitting_vllm_kv_count(
+                max_count=candidate_count,
+                kv_cache_capacity_bytes=int(kv_cache_capacity_bytes),
+                memory_for_count=request_memory,
+            )
+        fits_memory = runtime_report["requested_fits_memory"]
+    else:
+        requested_for_report = requested
+        usable_capacity_bytes = (
+            math.floor(
+                int(selected_capacity_bytes) * memory_utilization
+            )
+            if selected_capacity_bytes is not None
+            else None
+        )
+        memory_limited_count = None
+        if usable_capacity_bytes is not None:
+            memory_limited_count = _maximum_fitting_request_prefix(
+                max_request_count=candidate_count,
+                usable_capacity_bytes=usable_capacity_bytes,
+                request_memory=request_memory,
+            )
+        fits_memory = (
+            int(requested["peak_bytes"]) <= usable_capacity_bytes
+            if usable_capacity_bytes is not None
+            else None
         )
     admissible_count = memory_limited_count
     fits_configured_limit = requested_count <= max_batch_size
-    fits_memory = (
-        int(requested["peak_bytes"]) <= usable_capacity_bytes
-        if usable_capacity_bytes is not None
-        else None
-    )
     requested_fits = (
         fits_configured_limit and fits_memory
         if fits_memory is not None
@@ -968,6 +1222,17 @@ def estimate_serving_request_set(
     )
     if not fits_configured_limit:
         limiting_factor = "configured_max_batch_size"
+    elif runtime == "vllm" and runtime_report is not None:
+        if runtime_report["memory"]["initialization_fits"] is False:
+            limiting_factor = "vllm_model_executor_budget"
+        elif fits_memory is False:
+            limiting_factor = "vllm_kv_cache_capacity"
+        elif fits_memory is None:
+            limiting_factor = "device_capacity_unavailable"
+        elif admissible_count == candidate_count:
+            limiting_factor = "request_manifest_exhausted"
+        else:
+            limiting_factor = "vllm_kv_cache_capacity"
     elif fits_memory is False:
         limiting_factor = "usable_device_memory"
     elif fits_memory is None:
@@ -994,11 +1259,88 @@ def estimate_serving_request_set(
         else None
     )
 
+    input_report = {
+        "mode": "heterogeneous_request_set",
+        "requests": normalized,
+        "active_sequences": requested_count,
+        "max_batch_size": max_batch_size,
+        "dtype": base["inputs"]["dtype"],
+        "element_bytes": element_bytes,
+        "attention_implementation": attention_implementation,
+        "prefill_chunk_tokens": prefill_chunk_tokens,
+        "prefill_concurrency": prefill_concurrency,
+        "kv_cache_strategy": kv_cache_strategy,
+        "kv_cache_bits": (
+            kv_cache_bits if kv_cache_strategy == "quantized" else None
+        ),
+        "kv_cache_residual_tokens": (
+            kv_cache_residual_tokens
+            if kv_cache_strategy == "quantized"
+            else None
+        ),
+        "kv_cache_block_tokens": (
+            kv_cache_block_tokens if kv_cache_strategy == "paged" else None
+        ),
+        "kv_cache_max_tokens": kv_cache_max_tokens,
+        "kv_cache_window_tokens": kv_cache_window_tokens,
+        "runtime": runtime,
+        "vllm": (
+            {
+                "gpu_memory_utilization": memory_utilization,
+                "kv_cache_memory_bytes": (
+                    vllm_kv_cache_memory_bytes
+                ),
+                "non_kv_cache_memory_bytes": (
+                    vllm_non_kv_cache_memory_bytes
+                ),
+            }
+            if runtime == "vllm"
+            else None
+        ),
+        "runtime_overhead_bytes": runtime_overhead_bytes,
+        "scheduler_overhead_bytes_per_sequence": (
+            scheduler_overhead_bytes_per_sequence
+        ),
+        "speculative_decoding": _speculative_input_report(
+            speculative=speculative,
+            speculative_tokens=speculative_tokens,
+            acceptance_rate=speculative_acceptance_rate,
+        ),
+    }
+    workload_signature = _serving_workload_signature(
+        report_schema_version=REQUEST_SET_SCHEMA_VERSION,
+        model=dimensions,
+        checkpoint=base["checkpoint"],
+        weight_storage=base["weight_storage"],
+        inputs=input_report,
+        speculative=speculative,
+    )
+    kv_cache_report = dict(requested["kv_cache"])
+    if runtime_report is not None:
+        kv_cache_report["runtime_reservation"] = dict(
+            runtime_report["kv_cache"]
+        )
+    runtime_output = (
+        runtime_report
+        if runtime_report is not None
+        else {
+            "engine": "generic",
+            "method": "logical_kv_growth_memory_model",
+        }
+    )
+
     return {
         "schema_version": REQUEST_SET_SCHEMA_VERSION,
+        "workload_signature": workload_signature,
         "method": (
             "safetensors_headers_plus_decoder_shape_and_heterogeneous_"
             "serving_request_model"
+            + (
+                "_with_draft_model_speculative_decoding"
+                if speculative is not None
+                else ""
+            )
+            + ("_with_vllm_runtime_budget" if runtime == "vllm" else "")
         ),
         "validation_status": "Modeled",
         "accuracy": {
@@ -1013,39 +1355,8 @@ def estimate_serving_request_set(
         "model": dimensions,
         "checkpoint": base["checkpoint"],
         "weight_storage": base["weight_storage"],
-        "inputs": {
-            "mode": "heterogeneous_request_set",
-            "requests": normalized,
-            "active_sequences": requested_count,
-            "max_batch_size": max_batch_size,
-            "dtype": base["inputs"]["dtype"],
-            "element_bytes": element_bytes,
-            "attention_implementation": attention_implementation,
-            "prefill_chunk_tokens": prefill_chunk_tokens,
-            "prefill_concurrency": prefill_concurrency,
-            "kv_cache_strategy": kv_cache_strategy,
-            "kv_cache_bits": (
-                kv_cache_bits
-                if kv_cache_strategy == "quantized"
-                else None
-            ),
-            "kv_cache_residual_tokens": (
-                kv_cache_residual_tokens
-                if kv_cache_strategy == "quantized"
-                else None
-            ),
-            "kv_cache_block_tokens": (
-                kv_cache_block_tokens
-                if kv_cache_strategy == "paged"
-                else None
-            ),
-            "kv_cache_max_tokens": kv_cache_max_tokens,
-            "kv_cache_window_tokens": kv_cache_window_tokens,
-            "runtime_overhead_bytes": runtime_overhead_bytes,
-            "scheduler_overhead_bytes_per_sequence": (
-                scheduler_overhead_bytes_per_sequence
-            ),
-        },
+        "inputs": input_report,
+        "runtime": runtime_output,
         "target": {
             "profile": target,
             "capacity_source": capacity_source,
@@ -1088,19 +1399,27 @@ def estimate_serving_request_set(
             "requested_fits": requested_fits,
             "limiting_factor": limiting_factor,
         },
-        "kv_cache": requested["kv_cache"],
+        "kv_cache": kv_cache_report,
+        "speculative_decoding": requested["speculative_decoding"],
         "optimizations": requested["optimizations"],
-        "memory": requested["memory"],
+        "memory": requested_for_report["memory"],
         "memory_timeline": {
             "unit": "bytes",
             "source": (
                 "decoder_shape_and_heterogeneous_serving_request_model"
+                + (
+                    "_with_draft_model_speculative_decoding"
+                    if speculative is not None
+                    else ""
+                )
+                + ("_with_vllm_runtime_budget" if runtime == "vllm" else "")
             ),
-            "phases": requested["phases"],
-            "peak_bytes": requested["peak_bytes"],
-            "peak_phase": requested["peak_phase"],
+            "phases": requested_for_report["phases"],
+            "peak_bytes": requested_for_report["peak_bytes"],
+            "peak_phase": requested_for_report["peak_phase"],
             "usable_capacity_headroom_bytes": (
-                usable_capacity_bytes - int(requested["peak_bytes"])
+                usable_capacity_bytes
+                - int(requested_for_report["peak_bytes"])
                 if usable_capacity_bytes is not None
                 else None
             ),
@@ -1114,7 +1433,17 @@ def estimate_serving_request_set(
             "paged_cache_block_table_metadata",
             "prefix_cache_lookup_eviction_and_copy_cost",
             "network_and_tokenization_buffers",
-            "speculative_draft_model_weights_and_kv_cache",
+            *(
+                [
+                    "speculative_acceptance_distribution_and_dynamic_"
+                    "draft_length",
+                    "speculative_kv_rollback_and_scheduler_workspace",
+                    "target_draft_kernel_latency_and_overlap",
+                    "draft_target_tokenizer_identity",
+                ]
+                if speculative is not None
+                else ["speculative_draft_model_weights_and_kv_cache"]
+            ),
             "tensor_parallel_communication_and_rank_imbalance",
         ],
         "notes": [
@@ -1138,7 +1467,431 @@ def estimate_serving_request_set(
                 "Capacity admission does not predict latency, throughput, "
                 "queue time, or cache hit probability."
             ),
+            *(
+                [
+                    (
+                        "vLLM mode profiles the configured manifest prefix, "
+                        "reserves the resulting paged KV pool, and admits the "
+                        "longest request prefix whose logical cache demand "
+                        "fits that pool."
+                    )
+                ]
+                if runtime == "vllm"
+                else []
+            ),
+            *(
+                [
+                    (
+                        "Speculative decoding applies one draft configuration "
+                        "to every request while retaining each request's "
+                        "effective generation-length bound."
+                    )
+                ]
+                if speculative is not None
+                else []
+            ),
         ],
+    }
+
+
+def _speculative_input_report(
+    *,
+    speculative: Mapping[str, Any] | None,
+    speculative_tokens: int,
+    acceptance_rate: float | None,
+) -> dict[str, Any]:
+    return {
+        "enabled": speculative is not None,
+        "draft_model_dir": (
+            speculative["model_dir"]
+            if speculative is not None
+            else None
+        ),
+        "draft_dtype": (
+            speculative["dtype"] if speculative is not None else None
+        ),
+        "proposal_tokens_per_step": (
+            speculative_tokens if speculative is not None else None
+        ),
+        "acceptance_rate": (
+            float(acceptance_rate)
+            if speculative is not None and acceptance_rate is not None
+            else None
+        ),
+    }
+
+
+def _serving_workload_signature(
+    *,
+    report_schema_version: str,
+    model: Mapping[str, Any],
+    checkpoint: Mapping[str, Any],
+    weight_storage: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    speculative: Mapping[str, Any] | None,
+) -> str:
+    portable_inputs = dict(inputs)
+    speculative_inputs = portable_inputs.get("speculative_decoding")
+    if isinstance(speculative_inputs, Mapping):
+        portable_speculative_inputs = dict(speculative_inputs)
+        portable_speculative_inputs.pop("draft_model_dir", None)
+        portable_inputs["speculative_decoding"] = (
+            portable_speculative_inputs
+        )
+
+    draft_identity = None
+    if speculative is not None:
+        draft_identity = {
+            "model": _portable_model_identity(speculative["model"]),
+            "checkpoint": dict(speculative["checkpoint"]),
+            "weight_storage": _portable_weight_storage(
+                speculative["weight_storage"]
+            ),
+        }
+    identity = {
+        "signature_schema_version": WORKLOAD_SIGNATURE_SCHEMA_VERSION,
+        "report_schema_version": report_schema_version,
+        "target": {
+            "model": _portable_model_identity(model),
+            "checkpoint": dict(checkpoint),
+            "weight_storage": _portable_weight_storage(weight_storage),
+        },
+        "inputs": portable_inputs,
+        "draft": draft_identity,
+    }
+    canonical = json.dumps(
+        identity,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    digest = hashlib.sha256(canonical).hexdigest()
+    return (
+        f"{WORKLOAD_SIGNATURE_SCHEMA_VERSION}:sha256:{digest}"
+    )
+
+
+def _portable_model_identity(model: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in model.items()
+        if key != "path"
+    }
+
+
+def _portable_weight_storage(
+    weight_storage: Mapping[str, Any],
+) -> dict[str, Any]:
+    portable = {
+        key: value
+        for key, value in weight_storage.items()
+        if key != "adapters"
+    }
+    adapters = weight_storage.get("adapters")
+    if isinstance(adapters, list):
+        portable["adapters"] = [
+            {
+                key: value
+                for key, value in adapter.items()
+                if key != "path"
+            }
+            for adapter in adapters
+            if isinstance(adapter, Mapping)
+        ]
+    return portable
+
+
+def _validate_speculative_inputs(
+    *,
+    speculative_tokens: int,
+    acceptance_rate: float | None,
+) -> None:
+    _positive_integer(speculative_tokens, "speculative_tokens")
+    if acceptance_rate is None:
+        return
+    if (
+        not isinstance(acceptance_rate, (int, float))
+        or isinstance(acceptance_rate, bool)
+        or not math.isfinite(float(acceptance_rate))
+        or not 0 <= float(acceptance_rate) <= 1
+    ):
+        raise ServingPlanError(
+            "speculative_acceptance_rate must be finite and in the "
+            "interval [0, 1]"
+        )
+
+
+def _serving_runtime_configuration(
+    *,
+    runtime: str,
+    memory_utilization: float | None,
+    kv_cache_strategy: str,
+    draft_model_dir: str | Path | None,
+    vllm_kv_cache_memory_bytes: int | None,
+    vllm_non_kv_cache_memory_bytes: int | None,
+) -> tuple[str, float]:
+    normalized_runtime = str(runtime).strip().lower()
+    if normalized_runtime not in SERVING_RUNTIMES:
+        choices = ", ".join(sorted(SERVING_RUNTIMES))
+        raise ServingPlanError(
+            f"runtime must be one of: {choices}"
+        )
+    resolved_utilization = (
+        VLLM_DEFAULT_GPU_MEMORY_UTILIZATION
+        if memory_utilization is None and normalized_runtime == "vllm"
+        else DEFAULT_MEMORY_UTILIZATION
+        if memory_utilization is None
+        else memory_utilization
+    )
+    if (
+        not isinstance(resolved_utilization, (int, float))
+        or isinstance(resolved_utilization, bool)
+        or not math.isfinite(float(resolved_utilization))
+        or not 0 < float(resolved_utilization) <= 1
+    ):
+        raise ServingPlanError(
+            "memory_utilization must be finite and in the interval (0, 1]"
+        )
+
+    vllm_values = {
+        "vllm_kv_cache_memory_bytes": vllm_kv_cache_memory_bytes,
+        "vllm_non_kv_cache_memory_bytes": (
+            vllm_non_kv_cache_memory_bytes
+        ),
+    }
+    if normalized_runtime != "vllm":
+        configured = [
+            name for name, value in vllm_values.items() if value is not None
+        ]
+        if configured:
+            raise ServingPlanError(
+                ", ".join(configured) + " require runtime='vllm'"
+            )
+        return normalized_runtime, float(resolved_utilization)
+
+    if kv_cache_strategy != "paged":
+        raise ServingPlanError(
+            "runtime='vllm' requires kv_cache_strategy='paged'"
+        )
+    if draft_model_dir is not None:
+        raise ServingPlanError(
+            "runtime='vllm' does not yet model speculative decoding"
+        )
+    if vllm_kv_cache_memory_bytes is not None:
+        _positive_integer(
+            vllm_kv_cache_memory_bytes,
+            "vllm_kv_cache_memory_bytes",
+        )
+    if vllm_non_kv_cache_memory_bytes is not None:
+        _nonnegative_integer(
+            vllm_non_kv_cache_memory_bytes,
+            "vllm_non_kv_cache_memory_bytes",
+        )
+    return normalized_runtime, float(resolved_utilization)
+
+
+def _load_speculative_draft(
+    *,
+    draft_model_dir: str | Path | None,
+    draft_dtype: str,
+    prompt_tokens: int,
+    attention_implementation: str,
+    target_dimensions: Mapping[str, Any],
+    target_parameter_bytes: int,
+    speculative_tokens: int,
+    acceptance_rate: float | None,
+) -> dict[str, Any] | None:
+    if draft_model_dir is None:
+        return None
+    draft = estimate_decoder_inference(
+        draft_model_dir,
+        batch_size=1,
+        prompt_tokens=prompt_tokens,
+        generated_tokens=1,
+        dtype=draft_dtype,
+        use_cache=False,
+        attention_implementation=attention_implementation,
+        runtime_overhead_bytes=0,
+    )
+    dimensions = dict(draft["model"])
+    target_vocab_size = int(target_dimensions["vocab_size"])
+    draft_vocab_size = int(dimensions["vocab_size"])
+    if target_vocab_size != draft_vocab_size:
+        raise ServingPlanError(
+            "draft and target vocab_size must match for shared-tokenizer "
+            "speculative decoding"
+        )
+    parameter_bytes = int(draft["memory"]["parameter_bytes"])
+    return {
+        "model_dir": str(Path(draft_model_dir).expanduser().resolve()),
+        "model": dimensions,
+        "checkpoint": draft["checkpoint"],
+        "weight_storage": draft["weight_storage"],
+        "dtype": draft["inputs"]["dtype"],
+        "element_bytes": int(draft["inputs"]["element_bytes"]),
+        "parameter_bytes": parameter_bytes,
+        "target_parameter_bytes": target_parameter_bytes,
+        "weight_bytes_ratio_to_target": (
+            parameter_bytes / target_parameter_bytes
+            if target_parameter_bytes
+            else None
+        ),
+        "speculative_tokens": speculative_tokens,
+        "acceptance_rate": (
+            float(acceptance_rate)
+            if acceptance_rate is not None
+            else None
+        ),
+    }
+
+
+def _speculative_acceptance_metrics(
+    proposal_tokens: int,
+    acceptance_rate: float,
+) -> dict[str, Any]:
+    expected_accepted = sum(
+        acceptance_rate**position
+        for position in range(1, proposal_tokens + 1)
+    )
+    expected_output = 1.0 + expected_accepted
+    return {
+        "assumption": "independent_constant_per_token_acceptance",
+        "rate": acceptance_rate,
+        "proposal_tokens_per_step": proposal_tokens,
+        "probability_all_draft_tokens_accepted": (
+            acceptance_rate**proposal_tokens
+        ),
+        "expected_accepted_draft_tokens_per_step": expected_accepted,
+        "expected_output_tokens_per_target_step": expected_output,
+        "analytical_target_forward_reduction_factor": expected_output,
+        "interpretation": (
+            "target_forward_calls_only_not_end_to_end_speedup"
+        ),
+    }
+
+
+def _select_larger_transient(
+    target: Mapping[str, Any],
+    draft: Mapping[str, Any],
+) -> dict[str, Any]:
+    if int(target["peak_bytes"]) >= int(draft["peak_bytes"]):
+        return {**target, "source": "target"}
+    return {**draft, "source": "draft"}
+
+
+def _speculative_report(
+    *,
+    speculative: Mapping[str, Any] | None,
+    effective_proposal_tokens: Mapping[str, int],
+    target_kv_cache: Mapping[str, Any] | None,
+    draft_kv_cache: Mapping[str, Any] | None,
+    target_prefill_transient: Mapping[str, Any] | None,
+    draft_prefill_transient: Mapping[str, Any] | None,
+    target_verification_transient: Mapping[str, Any] | None,
+    draft_proposal_transient: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if speculative is None:
+        return {"enabled": False}
+    if (
+        target_kv_cache is None
+        or draft_kv_cache is None
+        or target_prefill_transient is None
+        or draft_prefill_transient is None
+        or target_verification_transient is None
+        or draft_proposal_transient is None
+    ):
+        raise ServingPlanError(
+            "incomplete speculative decoding memory components"
+        )
+    effective_values = list(effective_proposal_tokens.values())
+    configured_tokens = int(speculative["speculative_tokens"])
+    target_parameter_bytes = int(speculative["target_parameter_bytes"])
+    draft_parameter_bytes = int(speculative["parameter_bytes"])
+    acceptance_rate = speculative["acceptance_rate"]
+    acceptance = (
+        {
+            "status": "assumed",
+            **_speculative_acceptance_metrics(
+                max(effective_values),
+                float(acceptance_rate),
+            ),
+        }
+        if acceptance_rate is not None
+        else {
+            "status": "not_provided",
+            "assumption": None,
+            "rate": None,
+            "proposal_tokens_per_step": max(effective_values),
+            "probability_all_draft_tokens_accepted": None,
+            "expected_accepted_draft_tokens_per_step": None,
+            "expected_output_tokens_per_target_step": None,
+            "analytical_target_forward_reduction_factor": None,
+            "interpretation": (
+                "acceptance_observation_required_for_target_call_estimate"
+            ),
+        }
+    )
+    return {
+        "enabled": True,
+        "method": "independent_autoregressive_draft_model",
+        "proposal_tokens_per_step": configured_tokens,
+        "effective_proposal_tokens": {
+            "minimum": min(effective_values),
+            "maximum": max(effective_values),
+            "by_request": dict(effective_proposal_tokens),
+        },
+        "acceptance": acceptance,
+        "compatibility": {
+            "vocabulary_size_matches": True,
+            "tokenizer_identity": "unverified",
+            "tokenizer_mode": "shared_tokenizer_required",
+            "draft_weight_bytes_smaller_than_target": (
+                draft_parameter_bytes < target_parameter_bytes
+            ),
+        },
+        "target": {
+            "parameter_bytes": target_parameter_bytes,
+            "verification_query_tokens": max(effective_values),
+            "kv_cache": target_kv_cache,
+            "prefill_transient": target_prefill_transient,
+            "verification_transient": target_verification_transient,
+        },
+        "draft": {
+            "model_dir": speculative["model_dir"],
+            "model": speculative["model"],
+            "checkpoint": speculative["checkpoint"],
+            "weight_storage": speculative["weight_storage"],
+            "dtype": speculative["dtype"],
+            "parameter_bytes": draft_parameter_bytes,
+            "weight_bytes_ratio_to_target": speculative[
+                "weight_bytes_ratio_to_target"
+            ],
+            "proposal_query_tokens": 1,
+            "kv_cache": draft_kv_cache,
+            "prefill_transient": draft_prefill_transient,
+            "proposal_transient": draft_proposal_transient,
+        },
+        "memory": {
+            "combined_parameter_bytes": (
+                target_parameter_bytes + draft_parameter_bytes
+            ),
+            "additional_parameter_bytes": draft_parameter_bytes,
+            "combined_prefill_kv_cache_bytes": (
+                int(target_kv_cache["prefill"]["allocated_bytes"])
+                + int(draft_kv_cache["prefill"]["allocated_bytes"])
+            ),
+            "combined_decode_kv_cache_bytes": (
+                int(target_kv_cache["decode"]["allocated_bytes"])
+                + int(draft_kv_cache["decode"]["allocated_bytes"])
+            ),
+            "acceptance_rate_changes_peak_bytes": False,
+        },
+        "performance_status": (
+            "analytical_target_call_reduction_only"
+            if acceptance_rate is not None
+            else "not_estimated_acceptance_not_provided"
+        ),
     }
 
 
@@ -1206,6 +1959,58 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         help="PEFT/LoRA adapter directory; may be repeated.",
     )
+    parser.add_argument(
+        "--runtime",
+        choices=sorted(SERVING_RUNTIMES),
+        default="generic",
+        help=(
+            "Serving memory policy. vllm models executor budgeting and "
+            "preallocated paged KV cache."
+        ),
+    )
+    parser.add_argument(
+        "--vllm-kv-cache-memory-bytes",
+        type=int,
+        help=(
+            "Explicit per-GPU vLLM KV cache size; overrides utilization-"
+            "based automatic sizing."
+        ),
+    )
+    parser.add_argument(
+        "--vllm-non-kv-cache-memory-bytes",
+        type=int,
+        help=(
+            "Measured vLLM profile result for weights, peak activations, "
+            "non-torch allocations, and CUDA graphs."
+        ),
+    )
+    parser.add_argument(
+        "--draft-model-dir",
+        help=(
+            "Smaller decoder checkpoint for draft-model speculative "
+            "decoding."
+        ),
+    )
+    parser.add_argument(
+        "--draft-dtype",
+        help="Draft-model compute dtype (default: auto).",
+    )
+    parser.add_argument(
+        "--speculative-tokens",
+        type=int,
+        help=(
+            "Draft proposal length per target verification step "
+            f"(default: {DEFAULT_SPECULATIVE_TOKENS})."
+        ),
+    )
+    parser.add_argument(
+        "--speculative-acceptance-rate",
+        type=float,
+        help=(
+            "Optional measured or assumed per-token draft acceptance in "
+            "[0, 1]."
+        ),
+    )
     capacity_group = parser.add_mutually_exclusive_group()
     capacity_group.add_argument("--target-profile")
     capacity_group.add_argument(
@@ -1213,7 +2018,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         help="Explicit device memory capacity in binary GiB.",
     )
-    parser.add_argument("--memory-utilization", type=float, default=0.9)
+    parser.add_argument(
+        "--memory-utilization",
+        type=float,
+        help=(
+            "Device budget fraction (default: 0.9 for generic, 0.92 for "
+            "vllm)."
+        ),
+    )
     parser.add_argument("--json", dest="json_path")
     args = parser.parse_args(argv)
 
@@ -1261,6 +2073,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--prefill-concurrency is available only with --requests"
             )
 
+    speculative_flags = {
+        "--draft-dtype": args.draft_dtype,
+        "--speculative-tokens": args.speculative_tokens,
+        "--speculative-acceptance-rate": (
+            args.speculative_acceptance_rate
+        ),
+    }
+    if args.draft_model_dir is None:
+        configured_speculative_flags = [
+            flag
+            for flag, value in speculative_flags.items()
+            if value is not None
+        ]
+        if configured_speculative_flags:
+            parser.error(
+                ", ".join(configured_speculative_flags)
+                + " require --draft-model-dir"
+            )
+    speculative_tokens = (
+        DEFAULT_SPECULATIVE_TOKENS
+        if args.speculative_tokens is None
+        else args.speculative_tokens
+    )
+    speculative_acceptance_rate = args.speculative_acceptance_rate
+
     try:
         if args.requests:
             request_manifest = load_serving_requests(args.requests)
@@ -1289,9 +2126,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.scheduler_overhead_bytes_per_sequence
                 ),
                 adapter_dirs=args.adapter_dir,
+                draft_model_dir=args.draft_model_dir,
+                draft_dtype=args.draft_dtype or "auto",
+                speculative_tokens=speculative_tokens,
+                speculative_acceptance_rate=(
+                    speculative_acceptance_rate
+                ),
                 target_profile=args.target_profile,
                 device_capacity_bytes=device_capacity_bytes,
                 memory_utilization=args.memory_utilization,
+                runtime=args.runtime,
+                vllm_kv_cache_memory_bytes=(
+                    args.vllm_kv_cache_memory_bytes
+                ),
+                vllm_non_kv_cache_memory_bytes=(
+                    args.vllm_non_kv_cache_memory_bytes
+                ),
             )
             report["inputs"]["request_manifest"] = (
                 request_manifest["source"]
@@ -1332,9 +2182,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.scheduler_overhead_bytes_per_sequence
                 ),
                 adapter_dirs=args.adapter_dir,
+                draft_model_dir=args.draft_model_dir,
+                draft_dtype=args.draft_dtype or "auto",
+                speculative_tokens=speculative_tokens,
+                speculative_acceptance_rate=(
+                    speculative_acceptance_rate
+                ),
                 target_profile=args.target_profile,
                 device_capacity_bytes=device_capacity_bytes,
                 memory_utilization=args.memory_utilization,
+                runtime=args.runtime,
+                vllm_kv_cache_memory_bytes=(
+                    args.vllm_kv_cache_memory_bytes
+                ),
+                vllm_non_kv_cache_memory_bytes=(
+                    args.vllm_non_kv_cache_memory_bytes
+                ),
             )
     except (
         FileNotFoundError,
@@ -1367,6 +2230,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{report['kv_cache']['strategy']} "
         f"({_format_bytes(report['kv_cache']['decode']['allocated_bytes'])})"
     )
+    runtime_report = report["runtime"]
+    if runtime_report["engine"] == "vllm":
+        runtime_kv_cache = runtime_report["kv_cache"]
+        if runtime_kv_cache["allocatable_bytes"] is None:
+            print("  vLLM reserved KV cache: device capacity unavailable")
+        else:
+            print(
+                "  vLLM reserved KV cache: "
+                f"{_format_bytes(runtime_kv_cache['allocatable_bytes'])} "
+                f"({runtime_kv_cache['num_gpu_blocks']} blocks)"
+            )
+    speculative_report = report["speculative_decoding"]
+    if speculative_report["enabled"]:
+        print(
+            "  speculative draft: "
+            f"{_format_bytes(speculative_report['draft']['parameter_bytes'])}, "
+            f"{speculative_report['proposal_tokens_per_step']} tokens"
+        )
+        expected_tokens = speculative_report["acceptance"][
+            "expected_output_tokens_per_target_step"
+        ]
+        if expected_tokens is None:
+            print("  expected tokens per target step: acceptance unavailable")
+        else:
+            print(
+                "  expected tokens per target step: "
+                f"{expected_tokens:.3f}"
+            )
     if scheduler["admissible_active_sequences"] is None:
         print("  admission: device capacity unavailable")
     else:
@@ -1401,14 +2292,23 @@ def _serving_batch_memory(
     kv_cache_window_tokens: int | None,
     runtime_overhead_bytes: int,
     scheduler_overhead_bytes_per_sequence: int,
+    speculative: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    effective_speculative_tokens = (
+        min(int(speculative["speculative_tokens"]), generated_tokens)
+        if speculative is not None
+        else 0
+    )
+    cache_generation_tokens = (
+        generated_tokens + effective_speculative_tokens
+    )
     kv_cache = estimate_serving_kv_pool(
         num_hidden_layers=int(dimensions["num_hidden_layers"]),
         num_key_value_heads=int(dimensions["num_key_value_heads"]),
         head_dim=int(dimensions["head_dim"]),
         active_sequences=active_sequences,
         prompt_tokens=prompt_tokens,
-        generated_tokens=generated_tokens,
+        generated_tokens=cache_generation_tokens,
         element_bytes=element_bytes,
         strategy=kv_cache_strategy,
         shared_prefix_tokens=shared_prefix_tokens,
@@ -1417,7 +2317,43 @@ def _serving_batch_memory(
         block_tokens=kv_cache_block_tokens,
         max_cache_tokens=kv_cache_max_tokens,
         window_tokens=kv_cache_window_tokens,
+        elements_per_token_per_layer=int(
+            dimensions["kv_cache_elements_per_token_per_layer"]
+        ),
+        cache_layout=str(dimensions["kv_cache_layout"]),
     )
+    draft_kv_cache = None
+    draft_dimensions = None
+    draft_element_bytes = None
+    if speculative is not None:
+        draft_dimensions = dict(speculative["model"])
+        draft_element_bytes = int(speculative["element_bytes"])
+        draft_kv_cache = estimate_serving_kv_pool(
+            num_hidden_layers=int(
+                draft_dimensions["num_hidden_layers"]
+            ),
+            num_key_value_heads=int(
+                draft_dimensions["num_key_value_heads"]
+            ),
+            head_dim=int(draft_dimensions["head_dim"]),
+            active_sequences=active_sequences,
+            prompt_tokens=prompt_tokens,
+            generated_tokens=cache_generation_tokens,
+            element_bytes=draft_element_bytes,
+            strategy=kv_cache_strategy,
+            shared_prefix_tokens=shared_prefix_tokens,
+            quantized_bits=kv_cache_bits,
+            quantized_residual_tokens=kv_cache_residual_tokens,
+            block_tokens=kv_cache_block_tokens,
+            max_cache_tokens=kv_cache_max_tokens,
+            window_tokens=kv_cache_window_tokens,
+            elements_per_token_per_layer=int(
+                draft_dimensions[
+                    "kv_cache_elements_per_token_per_layer"
+                ]
+            ),
+            cache_layout=str(draft_dimensions["kv_cache_layout"]),
+        )
     uncached_prompt_tokens = prompt_tokens - shared_prefix_tokens
     effective_chunk_tokens = (
         min(prefill_chunk_tokens, uncached_prompt_tokens)
@@ -1429,10 +2365,12 @@ def _serving_batch_memory(
         window_tokens=kv_cache_window_tokens,
     )
     decode_key_tokens = _effective_tokens(
-        prompt_tokens + max(0, generated_tokens - 1),
+        prompt_tokens
+        + max(0, generated_tokens - 1)
+        + effective_speculative_tokens,
         window_tokens=kv_cache_window_tokens,
     )
-    prefill_transient = _transient_bytes(
+    target_prefill_transient = _transient_bytes(
         dimensions,
         batch_size=active_sequences,
         query_tokens=effective_chunk_tokens,
@@ -1448,14 +2386,67 @@ def _serving_batch_memory(
         element_bytes=element_bytes,
         attention_implementation=attention_implementation,
     )
-    decode_transient = _transient_bytes(
-        dimensions,
-        batch_size=active_sequences,
-        query_tokens=1,
-        key_tokens=decode_key_tokens,
-        element_bytes=element_bytes,
-        attention_implementation=attention_implementation,
-    )
+    draft_prefill_transient = None
+    draft_unchunked_prefill_transient = None
+    target_verification_transient = None
+    draft_proposal_transient = None
+    if speculative is not None:
+        assert draft_dimensions is not None
+        assert draft_element_bytes is not None
+        draft_prefill_transient = _transient_bytes(
+            draft_dimensions,
+            batch_size=active_sequences,
+            query_tokens=effective_chunk_tokens,
+            key_tokens=prefill_key_tokens,
+            element_bytes=draft_element_bytes,
+            attention_implementation=attention_implementation,
+        )
+        draft_unchunked_prefill_transient = _transient_bytes(
+            draft_dimensions,
+            batch_size=active_sequences,
+            query_tokens=uncached_prompt_tokens,
+            key_tokens=prefill_key_tokens,
+            element_bytes=draft_element_bytes,
+            attention_implementation=attention_implementation,
+        )
+        prefill_transient = _select_larger_transient(
+            target_prefill_transient,
+            draft_prefill_transient,
+        )
+        unchunked_prefill_transient = _select_larger_transient(
+            unchunked_prefill_transient,
+            draft_unchunked_prefill_transient,
+        )
+        target_verification_transient = _transient_bytes(
+            dimensions,
+            batch_size=active_sequences,
+            query_tokens=effective_speculative_tokens,
+            key_tokens=decode_key_tokens,
+            element_bytes=element_bytes,
+            attention_implementation=attention_implementation,
+        )
+        draft_proposal_transient = _transient_bytes(
+            draft_dimensions,
+            batch_size=active_sequences,
+            query_tokens=1,
+            key_tokens=decode_key_tokens,
+            element_bytes=draft_element_bytes,
+            attention_implementation=attention_implementation,
+        )
+        decode_transient = _select_larger_transient(
+            target_verification_transient,
+            draft_proposal_transient,
+        )
+    else:
+        prefill_transient = target_prefill_transient
+        decode_transient = _transient_bytes(
+            dimensions,
+            batch_size=active_sequences,
+            query_tokens=1,
+            key_tokens=decode_key_tokens,
+            element_bytes=element_bytes,
+            attention_implementation=attention_implementation,
+        )
     scheduler_overhead_bytes = (
         scheduler_overhead_bytes_per_sequence * active_sequences
     )
@@ -1465,17 +2456,49 @@ def _serving_batch_memory(
     prefill_input_bytes = (
         active_sequences * effective_chunk_tokens * 8
     )
-    decode_input_bytes = active_sequences * 8
+    decode_input_bytes = (
+        active_sequences
+        * (effective_speculative_tokens or 1)
+        * 8
+    )
+    draft_parameter_bytes = (
+        int(speculative["parameter_bytes"])
+        if speculative is not None
+        else 0
+    )
+    combined_parameter_bytes = parameter_bytes + draft_parameter_bytes
+    draft_prefill_kv_bytes = (
+        int(draft_kv_cache["prefill"]["allocated_bytes"])
+        if draft_kv_cache is not None
+        else 0
+    )
+    draft_decode_kv_bytes = (
+        int(draft_kv_cache["decode"]["allocated_bytes"])
+        if draft_kv_cache is not None
+        else 0
+    )
+    target_prefill_kv_bytes = int(
+        kv_cache["prefill"]["allocated_bytes"]
+    )
+    target_decode_kv_bytes = int(
+        kv_cache["decode"]["allocated_bytes"]
+    )
+    combined_prefill_kv_bytes = (
+        target_prefill_kv_bytes + draft_prefill_kv_bytes
+    )
+    combined_decode_kv_bytes = (
+        target_decode_kv_bytes + draft_decode_kv_bytes
+    )
     prefill_peak = (
-        parameter_bytes
-        + int(kv_cache["prefill"]["allocated_bytes"])
+        combined_parameter_bytes
+        + combined_prefill_kv_bytes
         + int(prefill_transient["peak_bytes"])
         + prefill_input_bytes
         + fixed_overhead_bytes
     )
     decode_peak = (
-        parameter_bytes
-        + int(kv_cache["decode"]["allocated_bytes"])
+        combined_parameter_bytes
+        + combined_decode_kv_bytes
         + int(decode_transient["peak_bytes"])
         + decode_input_bytes
         + fixed_overhead_bytes
@@ -1485,11 +2508,13 @@ def _serving_batch_memory(
             "phase": "prefill",
             "peak_bytes": prefill_peak,
             "components": {
-                "parameters": parameter_bytes,
+                "parameters": combined_parameter_bytes,
+                "target_parameters": parameter_bytes,
+                "draft_parameters": draft_parameter_bytes,
                 "inputs": prefill_input_bytes,
-                "kv_cache": int(
-                    kv_cache["prefill"]["allocated_bytes"]
-                ),
+                "kv_cache": combined_prefill_kv_bytes,
+                "target_kv_cache": target_prefill_kv_bytes,
+                "draft_kv_cache": draft_prefill_kv_bytes,
                 "transient": int(prefill_transient["peak_bytes"]),
                 "runtime_overhead": runtime_overhead_bytes,
                 "scheduler_overhead": scheduler_overhead_bytes,
@@ -1499,11 +2524,13 @@ def _serving_batch_memory(
             "phase": "decode",
             "peak_bytes": decode_peak,
             "components": {
-                "parameters": parameter_bytes,
+                "parameters": combined_parameter_bytes,
+                "target_parameters": parameter_bytes,
+                "draft_parameters": draft_parameter_bytes,
                 "inputs": decode_input_bytes,
-                "kv_cache": int(
-                    kv_cache["decode"]["allocated_bytes"]
-                ),
+                "kv_cache": combined_decode_kv_bytes,
+                "target_kv_cache": target_decode_kv_bytes,
+                "draft_kv_cache": draft_decode_kv_bytes,
                 "transient": int(decode_transient["peak_bytes"]),
                 "runtime_overhead": runtime_overhead_bytes,
                 "scheduler_overhead": scheduler_overhead_bytes,
@@ -1511,8 +2538,29 @@ def _serving_batch_memory(
         },
     ]
     peak_phase = "prefill" if prefill_peak >= decode_peak else "decode"
+    speculative_report = _speculative_report(
+        speculative=speculative,
+        effective_proposal_tokens=(
+            {"homogeneous_pool": effective_speculative_tokens}
+            if speculative is not None
+            else {}
+        ),
+        target_kv_cache=kv_cache if speculative is not None else None,
+        draft_kv_cache=draft_kv_cache,
+        target_prefill_transient=(
+            target_prefill_transient
+            if speculative is not None
+            else None
+        ),
+        draft_prefill_transient=draft_prefill_transient,
+        target_verification_transient=(
+            target_verification_transient
+        ),
+        draft_proposal_transient=draft_proposal_transient,
+    )
     return {
         "kv_cache": kv_cache,
+        "speculative_decoding": speculative_report,
         "optimizations": {
             "continuous_batching": {
                 "active_sequences": active_sequences,
@@ -1552,11 +2600,19 @@ def _serving_batch_memory(
             },
         },
         "memory": {
-            "parameter_bytes": parameter_bytes,
+            "parameter_bytes": combined_parameter_bytes,
+            "target_parameter_bytes": parameter_bytes,
+            "draft_parameter_bytes": draft_parameter_bytes,
             "runtime_overhead_bytes": runtime_overhead_bytes,
             "scheduler_overhead_bytes": scheduler_overhead_bytes,
             "prefill_transient": prefill_transient,
             "decode_transient": decode_transient,
+            "target_prefill_transient": target_prefill_transient,
+            "draft_prefill_transient": draft_prefill_transient,
+            "target_verification_transient": (
+                target_verification_transient
+            ),
+            "draft_proposal_transient": draft_proposal_transient,
             "estimated_prefill_peak_bytes": prefill_peak,
             "estimated_decode_peak_bytes": decode_peak,
             "estimated_process_peak_bytes": max(
@@ -1587,10 +2643,32 @@ def _serving_request_set_memory(
     kv_cache_window_tokens: int | None,
     runtime_overhead_bytes: int,
     scheduler_overhead_bytes_per_sequence: int,
+    speculative: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     normalized = _normalize_serving_requests(requests)
+    effective_proposal_tokens = {
+        str(request["id"]): min(
+            int(speculative["speculative_tokens"]),
+            int(request["generated_tokens"]),
+        )
+        for request in normalized
+    } if speculative is not None else {}
+    cache_requests = (
+        [
+            {
+                **request,
+                "generated_tokens": (
+                    int(request["generated_tokens"])
+                    + effective_proposal_tokens[str(request["id"])]
+                ),
+            }
+            for request in normalized
+        ]
+        if speculative is not None
+        else normalized
+    )
     kv_cache = estimate_serving_request_kv_pool(
-        normalized,
+        cache_requests,
         num_hidden_layers=int(dimensions["num_hidden_layers"]),
         num_key_value_heads=int(dimensions["num_key_value_heads"]),
         head_dim=int(dimensions["head_dim"]),
@@ -1601,10 +2679,48 @@ def _serving_request_set_memory(
         block_tokens=kv_cache_block_tokens,
         max_cache_tokens=kv_cache_max_tokens,
         window_tokens=kv_cache_window_tokens,
+        elements_per_token_per_layer=int(
+            dimensions["kv_cache_elements_per_token_per_layer"]
+        ),
+        cache_layout=str(dimensions["kv_cache_layout"]),
     )
+    draft_kv_cache = None
+    draft_dimensions = None
+    draft_element_bytes = None
+    if speculative is not None:
+        draft_dimensions = dict(speculative["model"])
+        draft_element_bytes = int(speculative["element_bytes"])
+        draft_kv_cache = estimate_serving_request_kv_pool(
+            cache_requests,
+            num_hidden_layers=int(
+                draft_dimensions["num_hidden_layers"]
+            ),
+            num_key_value_heads=int(
+                draft_dimensions["num_key_value_heads"]
+            ),
+            head_dim=int(draft_dimensions["head_dim"]),
+            element_bytes=draft_element_bytes,
+            strategy=kv_cache_strategy,
+            quantized_bits=kv_cache_bits,
+            quantized_residual_tokens=kv_cache_residual_tokens,
+            block_tokens=kv_cache_block_tokens,
+            max_cache_tokens=kv_cache_max_tokens,
+            window_tokens=kv_cache_window_tokens,
+            elements_per_token_per_layer=int(
+                draft_dimensions[
+                    "kv_cache_elements_per_token_per_layer"
+                ]
+            ),
+            cache_layout=str(draft_dimensions["kv_cache_layout"]),
+        )
 
     request_details: list[dict[str, Any]] = []
     for request in normalized:
+        request_id = str(request["id"])
+        request_speculative_tokens = effective_proposal_tokens.get(
+            request_id,
+            0,
+        )
         uncached_prompt_tokens = (
             request["prompt_tokens"]
             - request["shared_prefix_tokens"]
@@ -1620,69 +2736,129 @@ def _serving_request_set_memory(
         )
         decode_key_tokens = _effective_tokens(
             request["prompt_tokens"]
-            + max(0, request["generated_tokens"] - 1),
+            + max(0, request["generated_tokens"] - 1)
+            + request_speculative_tokens,
             window_tokens=kv_cache_window_tokens,
         )
-        request_details.append(
-            {
-                **request,
-                "uncached_prompt_tokens": uncached_prompt_tokens,
-                "effective_prefill_query_tokens": (
-                    effective_chunk_tokens
-                ),
-                "prefill_key_tokens": prefill_key_tokens,
-                "decode_key_tokens": decode_key_tokens,
-                "prefill_transient": _transient_bytes(
-                    dimensions,
+        detail = {
+            **request,
+            "effective_speculative_tokens": request_speculative_tokens,
+            "uncached_prompt_tokens": uncached_prompt_tokens,
+            "effective_prefill_query_tokens": effective_chunk_tokens,
+            "prefill_key_tokens": prefill_key_tokens,
+            "decode_key_tokens": decode_key_tokens,
+            "target_prefill_transient": _transient_bytes(
+                dimensions,
+                batch_size=1,
+                query_tokens=effective_chunk_tokens,
+                key_tokens=prefill_key_tokens,
+                element_bytes=element_bytes,
+                attention_implementation=attention_implementation,
+            ),
+            "target_unchunked_prefill_transient": _transient_bytes(
+                dimensions,
+                batch_size=1,
+                query_tokens=uncached_prompt_tokens,
+                key_tokens=prefill_key_tokens,
+                element_bytes=element_bytes,
+                attention_implementation=attention_implementation,
+            ),
+            "target_decode_transient": _transient_bytes(
+                dimensions,
+                batch_size=1,
+                query_tokens=(request_speculative_tokens or 1),
+                key_tokens=decode_key_tokens,
+                element_bytes=element_bytes,
+                attention_implementation=attention_implementation,
+            ),
+        }
+        if speculative is not None:
+            assert draft_dimensions is not None
+            assert draft_element_bytes is not None
+            detail.update(
+                draft_prefill_transient=_transient_bytes(
+                    draft_dimensions,
                     batch_size=1,
                     query_tokens=effective_chunk_tokens,
                     key_tokens=prefill_key_tokens,
-                    element_bytes=element_bytes,
-                    attention_implementation=(
-                        attention_implementation
-                    ),
+                    element_bytes=draft_element_bytes,
+                    attention_implementation=attention_implementation,
                 ),
-                "unchunked_prefill_transient": _transient_bytes(
-                    dimensions,
+                draft_unchunked_prefill_transient=_transient_bytes(
+                    draft_dimensions,
                     batch_size=1,
                     query_tokens=uncached_prompt_tokens,
                     key_tokens=prefill_key_tokens,
-                    element_bytes=element_bytes,
-                    attention_implementation=(
-                        attention_implementation
-                    ),
+                    element_bytes=draft_element_bytes,
+                    attention_implementation=attention_implementation,
                 ),
-                "decode_transient": _transient_bytes(
-                    dimensions,
+                draft_proposal_transient=_transient_bytes(
+                    draft_dimensions,
                     batch_size=1,
                     query_tokens=1,
                     key_tokens=decode_key_tokens,
-                    element_bytes=element_bytes,
-                    attention_implementation=(
-                        attention_implementation
-                    ),
+                    element_bytes=draft_element_bytes,
+                    attention_implementation=attention_implementation,
                 ),
-            }
-        )
+            )
+        request_details.append(detail)
 
     effective_prefill_concurrency = min(
         prefill_concurrency,
         len(normalized),
     )
-    prefill_transient = _worst_concurrent_transient(
+    target_prefill_transient = _worst_concurrent_transient(
         request_details,
-        field="prefill_transient",
+        field="target_prefill_transient",
         concurrency=effective_prefill_concurrency,
     )
-    unchunked_prefill_transient = _worst_concurrent_transient(
+    target_unchunked_prefill_transient = _worst_concurrent_transient(
         request_details,
-        field="unchunked_prefill_transient",
+        field="target_unchunked_prefill_transient",
         concurrency=effective_prefill_concurrency,
     )
-    decode_transient = _sum_request_transients(
+    target_decode_transient = _sum_request_transients(
         request_details,
-        field="decode_transient",
+        field="target_decode_transient",
     )
+    draft_prefill_transient = None
+    draft_unchunked_prefill_transient = None
+    draft_proposal_transient = None
+    if speculative is not None:
+        draft_prefill_transient = _worst_concurrent_transient(
+            request_details,
+            field="draft_prefill_transient",
+            concurrency=effective_prefill_concurrency,
+        )
+        draft_unchunked_prefill_transient = (
+            _worst_concurrent_transient(
+                request_details,
+                field="draft_unchunked_prefill_transient",
+                concurrency=effective_prefill_concurrency,
+            )
+        )
+        draft_proposal_transient = _sum_request_transients(
+            request_details,
+            field="draft_proposal_transient",
+        )
+        prefill_transient = _select_larger_transient(
+            target_prefill_transient,
+            draft_prefill_transient,
+        )
+        unchunked_prefill_transient = _select_larger_transient(
+            target_unchunked_prefill_transient,
+            draft_unchunked_prefill_transient,
+        )
+        decode_transient = _select_larger_transient(
+            target_decode_transient,
+            draft_proposal_transient,
+        )
+    else:
+        prefill_transient = target_prefill_transient
+        unchunked_prefill_transient = (
+            target_unchunked_prefill_transient
+        )
+        decode_transient = target_decode_transient
 
     prefill_input_requests = sorted(
         request_details,
@@ -1695,23 +2871,54 @@ def _serving_request_set_memory(
         int(request["effective_prefill_query_tokens"]) * 8
         for request in prefill_input_requests
     )
-    decode_input_bytes = len(normalized) * 8
+    decode_input_bytes = sum(
+        effective_proposal_tokens.get(str(request["id"]), 1)
+        for request in normalized
+    ) * 8
     scheduler_overhead_bytes = (
         scheduler_overhead_bytes_per_sequence * len(normalized)
     )
     fixed_overhead_bytes = (
         runtime_overhead_bytes + scheduler_overhead_bytes
     )
+    draft_parameter_bytes = (
+        int(speculative["parameter_bytes"])
+        if speculative is not None
+        else 0
+    )
+    combined_parameter_bytes = parameter_bytes + draft_parameter_bytes
+    target_prefill_kv_bytes = int(
+        kv_cache["prefill"]["allocated_bytes"]
+    )
+    target_decode_kv_bytes = int(
+        kv_cache["decode"]["allocated_bytes"]
+    )
+    draft_prefill_kv_bytes = (
+        int(draft_kv_cache["prefill"]["allocated_bytes"])
+        if draft_kv_cache is not None
+        else 0
+    )
+    draft_decode_kv_bytes = (
+        int(draft_kv_cache["decode"]["allocated_bytes"])
+        if draft_kv_cache is not None
+        else 0
+    )
+    combined_prefill_kv_bytes = (
+        target_prefill_kv_bytes + draft_prefill_kv_bytes
+    )
+    combined_decode_kv_bytes = (
+        target_decode_kv_bytes + draft_decode_kv_bytes
+    )
     prefill_peak = (
-        parameter_bytes
-        + int(kv_cache["prefill"]["allocated_bytes"])
+        combined_parameter_bytes
+        + combined_prefill_kv_bytes
         + int(prefill_transient["peak_bytes"])
         + prefill_input_bytes
         + fixed_overhead_bytes
     )
     decode_peak = (
-        parameter_bytes
-        + int(kv_cache["decode"]["allocated_bytes"])
+        combined_parameter_bytes
+        + combined_decode_kv_bytes
         + int(decode_transient["peak_bytes"])
         + decode_input_bytes
         + fixed_overhead_bytes
@@ -1721,11 +2928,13 @@ def _serving_request_set_memory(
             "phase": "prefill",
             "peak_bytes": prefill_peak,
             "components": {
-                "parameters": parameter_bytes,
+                "parameters": combined_parameter_bytes,
+                "target_parameters": parameter_bytes,
+                "draft_parameters": draft_parameter_bytes,
                 "inputs": prefill_input_bytes,
-                "kv_cache": int(
-                    kv_cache["prefill"]["allocated_bytes"]
-                ),
+                "kv_cache": combined_prefill_kv_bytes,
+                "target_kv_cache": target_prefill_kv_bytes,
+                "draft_kv_cache": draft_prefill_kv_bytes,
                 "transient": int(prefill_transient["peak_bytes"]),
                 "runtime_overhead": runtime_overhead_bytes,
                 "scheduler_overhead": scheduler_overhead_bytes,
@@ -1735,11 +2944,13 @@ def _serving_request_set_memory(
             "phase": "decode",
             "peak_bytes": decode_peak,
             "components": {
-                "parameters": parameter_bytes,
+                "parameters": combined_parameter_bytes,
+                "target_parameters": parameter_bytes,
+                "draft_parameters": draft_parameter_bytes,
                 "inputs": decode_input_bytes,
-                "kv_cache": int(
-                    kv_cache["decode"]["allocated_bytes"]
-                ),
+                "kv_cache": combined_decode_kv_bytes,
+                "target_kv_cache": target_decode_kv_bytes,
+                "draft_kv_cache": draft_decode_kv_bytes,
                 "transient": int(decode_transient["peak_bytes"]),
                 "runtime_overhead": runtime_overhead_bytes,
                 "scheduler_overhead": scheduler_overhead_bytes,
@@ -1764,8 +2975,27 @@ def _serving_request_set_memory(
         for request in request_details
     )
     peak_phase = "prefill" if prefill_peak >= decode_peak else "decode"
+    speculative_report = _speculative_report(
+        speculative=speculative,
+        effective_proposal_tokens=effective_proposal_tokens,
+        target_kv_cache=kv_cache if speculative is not None else None,
+        draft_kv_cache=draft_kv_cache,
+        target_prefill_transient=(
+            target_prefill_transient
+            if speculative is not None
+            else None
+        ),
+        draft_prefill_transient=draft_prefill_transient,
+        target_verification_transient=(
+            target_decode_transient
+            if speculative is not None
+            else None
+        ),
+        draft_proposal_transient=draft_proposal_transient,
+    )
     return {
         "kv_cache": kv_cache,
+        "speculative_decoding": speculative_report,
         "optimizations": {
             "continuous_batching": {
                 "active_sequences": len(normalized),
@@ -1824,11 +3054,21 @@ def _serving_request_set_memory(
             },
         },
         "memory": {
-            "parameter_bytes": parameter_bytes,
+            "parameter_bytes": combined_parameter_bytes,
+            "target_parameter_bytes": parameter_bytes,
+            "draft_parameter_bytes": draft_parameter_bytes,
             "runtime_overhead_bytes": runtime_overhead_bytes,
             "scheduler_overhead_bytes": scheduler_overhead_bytes,
             "prefill_transient": prefill_transient,
             "decode_transient": decode_transient,
+            "target_prefill_transient": target_prefill_transient,
+            "draft_prefill_transient": draft_prefill_transient,
+            "target_verification_transient": (
+                target_decode_transient
+                if speculative is not None
+                else None
+            ),
+            "draft_proposal_transient": draft_proposal_transient,
             "request_details": request_details,
             "estimated_prefill_peak_bytes": prefill_peak,
             "estimated_decode_peak_bytes": decode_peak,
@@ -1879,6 +3119,310 @@ def _maximum_fitting_request_prefix(
         else:
             high = midpoint - 1
     return low
+
+
+def _maximum_fitting_vllm_kv_count(
+    *,
+    max_count: int,
+    kv_cache_capacity_bytes: int,
+    memory_for_count: Any,
+) -> int:
+    low = 0
+    high = max_count
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if _logical_kv_peak_bytes(memory_for_count(midpoint)) <= (
+            kv_cache_capacity_bytes
+        ):
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return low
+
+
+def _logical_kv_peak_bytes(memory: Mapping[str, Any]) -> int:
+    return max(
+        int(phase["components"]["kv_cache"])
+        for phase in memory["phases"]
+    )
+
+
+def _non_kv_phase_bytes(
+    memory: Mapping[str, Any],
+) -> dict[str, int]:
+    phase_bytes: dict[str, int] = {}
+    for phase in memory["phases"]:
+        phase_name = str(phase["phase"])
+        peak_bytes = int(phase["peak_bytes"])
+        kv_cache_bytes = int(phase["components"]["kv_cache"])
+        non_kv_bytes = peak_bytes - kv_cache_bytes
+        if non_kv_bytes < 0:
+            raise ServingPlanError(
+                f"{phase_name} peak is smaller than its KV cache"
+            )
+        phase_bytes[phase_name] = non_kv_bytes
+    return phase_bytes
+
+
+def _build_vllm_runtime_report(
+    *,
+    requested_memory: Mapping[str, Any],
+    profiled_memory: Mapping[str, Any],
+    selected_capacity_bytes: int | None,
+    gpu_memory_utilization: float,
+    kv_cache_memory_bytes: int | None,
+    non_kv_cache_memory_bytes: int | None,
+    max_model_len_tokens: int,
+    profiled_sequence_count: int,
+    profile_scope: str,
+) -> dict[str, Any]:
+    kv_cache = requested_memory["kv_cache"]
+    block_tokens = int(kv_cache["block_tokens"])
+    bytes_per_token = int(
+        kv_cache["bytes_per_token_per_sequence_at_compute_dtype"]
+    )
+    block_bytes = block_tokens * bytes_per_token
+    modeled_non_kv_phases = _non_kv_phase_bytes(profiled_memory)
+    modeled_non_kv_peak = max(modeled_non_kv_phases.values())
+    selected_non_kv_peak = (
+        modeled_non_kv_peak
+        if non_kv_cache_memory_bytes is None
+        else int(non_kv_cache_memory_bytes)
+    )
+    non_kv_source = (
+        "fakegpu_profile_shape_model"
+        if non_kv_cache_memory_bytes is None
+        else "user_supplied_vllm_profile_result"
+    )
+    requested_executor_memory = (
+        math.ceil(
+            int(selected_capacity_bytes) * gpu_memory_utilization
+        )
+        if selected_capacity_bytes is not None
+        else None
+    )
+    explicit_kv_cache = kv_cache_memory_bytes is not None
+    if explicit_kv_cache:
+        available_before_rounding = int(kv_cache_memory_bytes)
+        kv_cache_source = "kv_cache_memory_bytes_override"
+        memory_limit_bytes = selected_capacity_bytes
+    elif requested_executor_memory is not None:
+        available_before_rounding = max(
+            0,
+            requested_executor_memory - selected_non_kv_peak,
+        )
+        kv_cache_source = (
+            "gpu_memory_utilization_minus_profiled_non_kv_memory"
+        )
+        memory_limit_bytes = requested_executor_memory
+    else:
+        available_before_rounding = None
+        kv_cache_source = "device_capacity_unavailable"
+        memory_limit_bytes = None
+
+    num_gpu_blocks = (
+        available_before_rounding // block_bytes
+        if available_before_rounding is not None
+        else None
+    )
+    allocatable_kv_cache_bytes = (
+        num_gpu_blocks * block_bytes
+        if num_gpu_blocks is not None
+        else None
+    )
+    block_rounding_tail_bytes = (
+        available_before_rounding - allocatable_kv_cache_bytes
+        if available_before_rounding is not None
+        and allocatable_kv_cache_bytes is not None
+        else None
+    )
+    kv_cache_size_tokens = (
+        num_gpu_blocks * block_tokens
+        if num_gpu_blocks is not None
+        else None
+    )
+    logical_requested_kv_cache_bytes = _logical_kv_peak_bytes(
+        requested_memory
+    )
+    requested_kv_cache_fits = (
+        logical_requested_kv_cache_bytes
+        <= allocatable_kv_cache_bytes
+        if allocatable_kv_cache_bytes is not None
+        else None
+    )
+    initialization_required_bytes = (
+        selected_non_kv_peak + allocatable_kv_cache_bytes
+        if allocatable_kv_cache_bytes is not None
+        else None
+    )
+    if memory_limit_bytes is None:
+        initialization_fits = None
+    elif not explicit_kv_cache and (
+        selected_non_kv_peak > memory_limit_bytes
+    ):
+        initialization_fits = False
+    else:
+        initialization_fits = (
+            initialization_required_bytes <= memory_limit_bytes
+            if initialization_required_bytes is not None
+            else None
+        )
+    if requested_kv_cache_fits is False or initialization_fits is False:
+        requested_fits_memory = False
+    elif requested_kv_cache_fits is True and initialization_fits is True:
+        requested_fits_memory = True
+    else:
+        requested_fits_memory = None
+
+    return {
+        "schema_version": "fakegpu.vllm_runtime_memory.v1",
+        "engine": "vllm",
+        "method": "vllm_v1_profiled_non_kv_memory_budget_model",
+        "configuration": {
+            "gpu_memory_utilization": gpu_memory_utilization,
+            "gpu_memory_utilization_default": (
+                VLLM_DEFAULT_GPU_MEMORY_UTILIZATION
+            ),
+            "gpu_memory_utilization_ignored": explicit_kv_cache,
+            "kv_cache_memory_bytes": kv_cache_memory_bytes,
+            "block_tokens": block_tokens,
+            "max_model_len_tokens": max_model_len_tokens,
+            "profiled_sequence_count": profiled_sequence_count,
+            "profile_scope": profile_scope,
+        },
+        "memory": {
+            "device_capacity_bytes": selected_capacity_bytes,
+            "requested_model_executor_memory_bytes": (
+                requested_executor_memory
+            ),
+            "memory_limit_bytes": memory_limit_bytes,
+            "modeled_non_kv_cache_memory_bytes": (
+                modeled_non_kv_peak
+            ),
+            "modeled_non_kv_phase_bytes": modeled_non_kv_phases,
+            "non_kv_cache_memory_bytes": selected_non_kv_peak,
+            "non_kv_cache_memory_source": non_kv_source,
+            "initialization_required_bytes": (
+                initialization_required_bytes
+            ),
+            "initialization_fits": initialization_fits,
+        },
+        "kv_cache": {
+            "source": kv_cache_source,
+            "bytes_per_token": bytes_per_token,
+            "block_bytes": block_bytes,
+            "available_before_block_rounding_bytes": (
+                available_before_rounding
+            ),
+            "allocatable_bytes": allocatable_kv_cache_bytes,
+            "block_rounding_tail_bytes": block_rounding_tail_bytes,
+            "num_gpu_blocks": num_gpu_blocks,
+            "size_tokens": kv_cache_size_tokens,
+            "max_model_len_concurrency": (
+                kv_cache_size_tokens / max_model_len_tokens
+                if kv_cache_size_tokens is not None
+                else None
+            ),
+            "logical_requested_peak_bytes": (
+                logical_requested_kv_cache_bytes
+            ),
+            "logical_requested_fits": requested_kv_cache_fits,
+            "headroom_bytes": (
+                allocatable_kv_cache_bytes
+                - logical_requested_kv_cache_bytes
+                if allocatable_kv_cache_bytes is not None
+                else None
+            ),
+        },
+        "requested_fits_memory": requested_fits_memory,
+        "notes": [
+            (
+                "Automatic mode follows vLLM V1's requested-memory minus "
+                "profiled non-KV memory policy, then rounds down to whole "
+                "paged-cache blocks."
+            ),
+            (
+                "kv_cache_memory_bytes overrides utilization-based KV "
+                "sizing, matching vLLM configuration semantics."
+            ),
+            (
+                "A supplied non-KV value should come from the matching vLLM "
+                "startup profile and include weights, activations, non-torch "
+                "allocations, and CUDA graph memory."
+            ),
+        ],
+    }
+
+
+def _apply_vllm_kv_reservation(
+    memory: Mapping[str, Any],
+    runtime_report: Mapping[str, Any],
+) -> dict[str, Any]:
+    allocatable_bytes = runtime_report["kv_cache"]["allocatable_bytes"]
+    if allocatable_bytes is None:
+        return dict(memory)
+    reserved_kv_cache_bytes = int(allocatable_bytes)
+    phases = []
+    for phase in memory["phases"]:
+        components = dict(phase["components"])
+        logical_kv_cache_bytes = int(components["kv_cache"])
+        logical_target_kv_cache_bytes = int(
+            components["target_kv_cache"]
+        )
+        components.update(
+            {
+                "logical_kv_cache": logical_kv_cache_bytes,
+                "logical_target_kv_cache": (
+                    logical_target_kv_cache_bytes
+                ),
+                "kv_cache": reserved_kv_cache_bytes,
+                "target_kv_cache": reserved_kv_cache_bytes,
+                "vllm_reserved_kv_cache": reserved_kv_cache_bytes,
+            }
+        )
+        phase_peak = (
+            int(phase["peak_bytes"])
+            - logical_kv_cache_bytes
+            + reserved_kv_cache_bytes
+        )
+        phases.append(
+            {
+                **phase,
+                "peak_bytes": phase_peak,
+                "components": components,
+            }
+        )
+    peak_phase_report = max(
+        phases,
+        key=lambda item: int(item["peak_bytes"]),
+    )
+    memory_report = dict(memory["memory"])
+    memory_report.update(
+        {
+            "logical_estimated_prefill_peak_bytes": memory_report[
+                "estimated_prefill_peak_bytes"
+            ],
+            "logical_estimated_decode_peak_bytes": memory_report[
+                "estimated_decode_peak_bytes"
+            ],
+            "logical_estimated_process_peak_bytes": memory_report[
+                "estimated_process_peak_bytes"
+            ],
+            "vllm_reserved_kv_cache_bytes": reserved_kv_cache_bytes,
+            "estimated_prefill_peak_bytes": phases[0]["peak_bytes"],
+            "estimated_decode_peak_bytes": phases[1]["peak_bytes"],
+            "estimated_process_peak_bytes": peak_phase_report[
+                "peak_bytes"
+            ],
+        }
+    )
+    return {
+        **memory,
+        "memory": memory_report,
+        "phases": phases,
+        "peak_bytes": int(peak_phase_report["peak_bytes"]),
+        "peak_phase": str(peak_phase_report["phase"]),
+    }
 
 
 _TRANSIENT_COMPONENTS = (

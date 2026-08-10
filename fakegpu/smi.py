@@ -290,6 +290,118 @@ PROCESS_QUERY_FIELDS: dict[str, QueryField] = {
     "runtime.backend": QueryField("fakegpu.backend"),
 }
 
+RUNTIME_QUERY_FIELDS: dict[str, QueryField] = {
+    "timestamp": QueryField("timestamp"),
+    "host": QueryField("host"),
+    "pid": QueryField("pid"),
+    "process_name": QueryField("process_name"),
+    "stage": QueryField("stage"),
+    "status": QueryField("status"),
+    "state.age": QueryField(
+        "age_seconds",
+        unit="s",
+        precision=3,
+    ),
+    "tracking.confidence": QueryField("tracking_confidence"),
+    "allocator.model": QueryField("allocator_model"),
+    "fakegpu.version": QueryField("fakegpu.version"),
+    "runtime": QueryField("fakegpu.runtime"),
+    "runtime.backend": QueryField("fakegpu.backend"),
+    "runtime.mode": QueryField("fakegpu.mode"),
+    "policy.oom": QueryField("fakegpu.oom_policy"),
+    "policy.unsupported_api": QueryField(
+        "fakegpu.unsupported_api_policy"
+    ),
+    "distributed.mode": QueryField("fakegpu.distributed_mode"),
+    "tracking.memory": QueryField(
+        "fakegpu.memory_tracking_enabled"
+    ),
+    "tracking.dispatch": QueryField(
+        "fakegpu.dispatch_memory_tracking_enabled"
+    ),
+    "catalog.profiles": QueryField(
+        "fakegpu.profile_catalog.profile_count"
+    ),
+    "catalog.native_groups": QueryField(
+        "fakegpu.native_capabilities.group_count"
+    ),
+    "catalog.native_apis": QueryField(
+        "fakegpu.native_capabilities.explicit_api_count"
+    ),
+    "catalog.policy_apis": QueryField(
+        "fakegpu.native_capabilities.policy_enforced_api_count"
+    ),
+    "software.python": QueryField("software.python_version"),
+    "software.python_implementation": QueryField(
+        "software.python_implementation"
+    ),
+    "software.pytorch": QueryField("software.torch_version"),
+    "software.cuda": QueryField("software.cuda_version"),
+    "software.cuda_source": QueryField(
+        "software.cuda_version_source"
+    ),
+    "software.driver": QueryField("software.driver_version"),
+    "software.platform": QueryField("software.platform"),
+    "dispatch.calls": QueryField("dispatch_tracking.operator_calls"),
+    "dispatch.outputs": QueryField(
+        "dispatch_tracking.output_tensors"
+    ),
+    "dispatch.allocations": QueryField(
+        "dispatch_tracking.new_allocations"
+    ),
+    "dispatch.aliases": QueryField(
+        "dispatch_tracking.alias_outputs"
+    ),
+    "dispatch.inaccessible": QueryField(
+        "dispatch_tracking.inaccessible_outputs"
+    ),
+    "publisher.interval": QueryField(
+        "publisher.interval_seconds",
+        unit="s",
+        precision=3,
+    ),
+    "publisher.runtime_overhead": QueryField(
+        "publisher.runtime_overhead_bytes",
+        unit="MiB",
+        divisor=2**20,
+    ),
+    "publisher.attempted_writes": QueryField(
+        "publisher.health.attempted_writes"
+    ),
+    "publisher.successful_writes": QueryField(
+        "publisher.health.successful_writes"
+    ),
+    "publisher.failed_writes": QueryField(
+        "publisher.health.failed_writes"
+    ),
+    "publisher.last_duration": QueryField(
+        "publisher.health.last_duration_us",
+        unit="us",
+    ),
+    "publisher.max_duration": QueryField(
+        "publisher.health.max_duration_us",
+        unit="us",
+    ),
+    "publisher.state_size": QueryField(
+        "publisher.health.last_serialized_bytes",
+        unit="KiB",
+        divisor=2**10,
+        precision=3,
+    ),
+    "publisher.last_error": QueryField(
+        "publisher.health.last_error"
+    ),
+    "publisher.detail_limit": QueryField(
+        "publisher.limits.detail_entries"
+    ),
+    "publisher.state_size_limit": QueryField(
+        "publisher.limits.max_state_bytes",
+        unit="KiB",
+        divisor=2**10,
+        precision=3,
+    ),
+}
+
 
 def configured_state_path() -> Path | None:
     explicit = os.environ.get("FAKEGPU_SMI_STATE_PATH")
@@ -1436,6 +1548,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="FIELDS",
         help="Query comma-separated process fields.",
     )
+    output_group.add_argument(
+        "--query-runtime",
+        metavar="FIELDS",
+        help="Query comma-separated FakeGPU runtime and publisher fields.",
+    )
     parser.add_argument(
         "-m",
         "--matrix",
@@ -1501,6 +1618,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="List supported --query-compute-apps fields and exit.",
     )
     parser.add_argument(
+        "--help-query-runtime",
+        action="store_true",
+        help="List supported --query-runtime fields and exit.",
+    )
+    parser.add_argument(
         "-l",
         "--loop",
         type=_positive_float,
@@ -1520,6 +1642,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.help_query_compute_apps:
         print(_render_query_help("compute-apps", PROCESS_QUERY_FIELDS))
         return 0
+    if args.help_query_runtime:
+        print(_render_query_help("runtime", RUNTIME_QUERY_FIELDS))
+        return 0
     if args.count is not None and args.loop is None:
         parser.error("--count requires --loop")
     if args.matrix and args.view != "topo":
@@ -1537,15 +1662,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         or args.detail
         or args.query_gpu
         or args.query_compute_apps
+        or args.query_runtime
     ):
         parser.error(
             "topo, nvlink, events, and mig views cannot be combined "
             "with another output mode"
         )
     if args.format is not None and not (
-        args.query_gpu or args.query_compute_apps
+        args.query_gpu or args.query_compute_apps or args.query_runtime
     ):
-        parser.error("--format requires --query-gpu or --query-compute-apps")
+        parser.error(
+            "--format requires --query-gpu, --query-compute-apps, "
+            "or --query-runtime"
+        )
     query_format = _parse_query_format(
         args.format or "csv",
         parser=parser,
@@ -1558,6 +1687,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     process_query_fields = _parse_query_fields(
         args.query_compute_apps,
         available=PROCESS_QUERY_FIELDS,
+        parser=parser,
+    )
+    runtime_query_fields = _parse_query_fields(
+        args.query_runtime,
+        available=RUNTIME_QUERY_FIELDS,
         parser=parser,
     )
     selectors = _device_selectors(args.id)
@@ -1654,6 +1788,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                         fields=process_query_fields,
                         available=PROCESS_QUERY_FIELDS,
                         query_kind="compute-apps",
+                        output_format=query_format,
+                    )
+                )
+            elif runtime_query_fields:
+                print(
+                    render_query(
+                        inventory["runtimes"],
+                        fields=runtime_query_fields,
+                        available=RUNTIME_QUERY_FIELDS,
+                        query_kind="runtime",
                         output_format=query_format,
                     )
                 )

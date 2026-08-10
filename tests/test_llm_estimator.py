@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from fakegpu.calibration import (
+    compare_memory_reports,
+    verify_calibration_reports,
+)
 from fakegpu.llm_estimator import (
     estimate_decoder_inference,
     estimate_kv_cache_memory,
@@ -72,14 +76,16 @@ def _write_model(
     }
     config.update(config_overrides or {})
     (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    hidden_size = int(config["hidden_size"])
+    vocab_size = int(config["vocab_size"])
     header = {
         "model.embed.weight": {
             "dtype": checkpoint_dtype,
-            "shape": [32, 8],
+            "shape": [vocab_size, hidden_size],
         },
         "model.proj.weight": {
             "dtype": checkpoint_dtype,
-            "shape": [8, 8],
+            "shape": [hidden_size, hidden_size],
         },
     }
     _write_safetensors(
@@ -172,6 +178,111 @@ def test_dense_decoder_memory_and_flops_are_shape_aware(tmp_path: Path) -> None:
     assert report["model"]["model_kind"] == "dense_decoder"
     assert report["communication"]["enabled"] is False
     assert report["memory_traffic"]["lower_bytes"] > 0
+
+
+def test_mla_uses_compressed_latent_cache_and_architecture_flops(
+    tmp_path: Path,
+) -> None:
+    mla_dir = tmp_path / "mla"
+    standard_dir = tmp_path / "standard"
+    common_config = {
+        "hidden_size": 16,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 4,
+        "intermediate_size": 32,
+        "vocab_size": 64,
+    }
+    _write_model(
+        mla_dir,
+        config_overrides={
+            **common_config,
+            "q_lora_rank": 8,
+            "kv_lora_rank": 6,
+            "qk_nope_head_dim": 4,
+            "qk_rope_head_dim": 2,
+            "v_head_dim": 4,
+        },
+    )
+    _write_model(
+        standard_dir,
+        config_overrides={
+            **common_config,
+            "num_key_value_heads": 4,
+            "head_dim": 6,
+        },
+    )
+
+    mla = estimate_decoder_inference(
+        mla_dir,
+        batch_size=2,
+        prompt_tokens=4,
+        generated_tokens=2,
+        attention_implementation="sdpa",
+    )
+    standard = estimate_decoder_inference(
+        standard_dir,
+        batch_size=2,
+        prompt_tokens=4,
+        generated_tokens=2,
+        attention_implementation="sdpa",
+    )
+
+    assert mla["model"]["attention_kind"] == "multi_head_latent"
+    assert mla["model"]["kv_cache_layout"] == (
+        "compressed_latent_and_rope"
+    )
+    assert mla["model"]["head_dim"] == 6
+    assert mla["model"]["kv_cache_elements_per_token_per_layer"] == 8
+    assert mla["kv_cache"]["elements_per_token_per_layer"] == 8
+    assert mla["kv_cache"]["prefill"]["allocated_bytes"] == 256
+    assert standard["kv_cache"]["prefill"]["allocated_bytes"] == 1536
+    assert mla["compute"]["prefill_flops"] > 0
+    assert mla["compute"]["prefill_flops"] != standard["compute"][
+        "prefill_flops"
+    ]
+    assert (
+        mla["memory"]["prefill_transient"]["attention_bytes"]
+        < standard["memory"]["prefill_transient"]["attention_bytes"]
+    )
+    assert "mla_backend_projection_absorption_and_workspace" in mla[
+        "unmodeled_components"
+    ]
+
+    serving = estimate_serving_plan(
+        mla_dir,
+        active_sequences=2,
+        max_batch_size=8,
+        prompt_tokens=4,
+        generated_tokens=2,
+        kv_cache_strategy="paged",
+        kv_cache_block_tokens=4,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        memory_utilization=1,
+    )
+    assert serving["kv_cache"]["cache_layout"] == (
+        "compressed_latent_and_rope"
+    )
+    assert serving["runtime"]["kv_cache"]["block_bytes"] == 128
+
+
+def test_mla_requires_a_complete_positive_cache_configuration(
+    tmp_path: Path,
+) -> None:
+    incomplete_dir = tmp_path / "incomplete-mla"
+    _write_model(
+        incomplete_dir,
+        config_overrides={"kv_lora_rank": 512},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="multi-head latent attention requires positive",
+    ):
+        estimate_decoder_inference(
+            incomplete_dir,
+            prompt_tokens=4,
+        )
 
 
 def test_kv_cache_strategies_account_for_storage_and_reservation() -> None:
@@ -646,6 +757,826 @@ def test_serving_cli_writes_a_machine_readable_plan(
     output = capsys.readouterr().out
     assert "FakeGPU LLM serving plan" in output
     assert "accuracy: uncalibrated" in output
+
+
+def test_vllm_runtime_models_executor_budget_and_reserved_kv_blocks(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    capacity_bytes = 2**20
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=2,
+        max_batch_size=8,
+        prompt_tokens=64,
+        generated_tokens=17,
+        runtime="vllm",
+        device_capacity_bytes=capacity_bytes,
+        memory_utilization=0.75,
+    )
+
+    runtime = report["runtime"]
+    runtime_memory = runtime["memory"]
+    runtime_cache = runtime["kv_cache"]
+    requested_memory = math.ceil(capacity_bytes * 0.75)
+    available = (
+        requested_memory
+        - runtime_memory["non_kv_cache_memory_bytes"]
+    )
+    expected_blocks = available // runtime_cache["block_bytes"]
+    expected_cache_bytes = expected_blocks * runtime_cache["block_bytes"]
+
+    assert runtime["engine"] == "vllm"
+    assert report["inputs"]["runtime"] == "vllm"
+    assert report["target"]["usable_capacity_bytes"] == requested_memory
+    assert runtime_memory[
+        "requested_model_executor_memory_bytes"
+    ] == requested_memory
+    assert runtime_memory["non_kv_cache_memory_source"] == (
+        "fakegpu_profile_shape_model"
+    )
+    assert runtime_cache["num_gpu_blocks"] == expected_blocks
+    assert runtime_cache["allocatable_bytes"] == expected_cache_bytes
+    assert runtime_cache["size_tokens"] == expected_blocks * 16
+    assert runtime_cache["logical_requested_fits"] is True
+    assert report["scheduler"]["requested_fits"] is True
+    for phase in report["memory_timeline"]["phases"]:
+        components = phase["components"]
+        assert components["kv_cache"] == expected_cache_bytes
+        assert components["vllm_reserved_kv_cache"] == expected_cache_bytes
+        assert components["logical_kv_cache"] < expected_cache_bytes
+
+
+def test_vllm_runtime_uses_current_default_and_explicit_profile_inputs(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    block_bytes = 16 * 32
+    configured_cache_bytes = 20 * block_bytes + 7
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=4,
+        prompt_tokens=16,
+        generated_tokens=4,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=configured_cache_bytes,
+        vllm_non_kv_cache_memory_bytes=100_000,
+    )
+
+    runtime = report["runtime"]
+    runtime_cache = runtime["kv_cache"]
+    assert report["target"]["memory_utilization"] == pytest.approx(0.92)
+    assert runtime["configuration"][
+        "gpu_memory_utilization_ignored"
+    ] is True
+    assert runtime["memory"]["non_kv_cache_memory_source"] == (
+        "user_supplied_vllm_profile_result"
+    )
+    assert runtime["memory"]["non_kv_cache_memory_bytes"] == 100_000
+    assert runtime_cache["source"] == "kv_cache_memory_bytes_override"
+    assert runtime_cache["num_gpu_blocks"] == 20
+    assert runtime_cache["allocatable_bytes"] == 20 * block_bytes
+    assert runtime_cache["block_rounding_tail_bytes"] == 7
+
+
+def test_vllm_runtime_admission_is_limited_by_reserved_kv_pool(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    common = {
+        "max_batch_size": 8,
+        "prompt_tokens": 64,
+        "generated_tokens": 17,
+    }
+    two_sequences = estimate_serving_plan(
+        model_dir,
+        active_sequences=2,
+        **common,
+    )
+    cache_bytes = max(
+        phase["components"]["kv_cache"]
+        for phase in two_sequences["memory_timeline"]["phases"]
+    )
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=4,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=cache_bytes,
+        vllm_non_kv_cache_memory_bytes=0,
+        **common,
+    )
+
+    assert report["scheduler"]["memory_limited_active_sequences"] == 2
+    assert report["scheduler"]["admissible_active_sequences"] == 2
+    assert report["scheduler"]["fits_memory"] is False
+    assert report["scheduler"]["requested_fits"] is False
+    assert report["scheduler"]["limiting_factor"] == (
+        "vllm_kv_cache_capacity"
+    )
+
+
+def test_vllm_runtime_supports_ordered_request_prefix_admission(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    requests = [
+        {"id": "a", "prompt_tokens": 32, "generated_tokens": 8},
+        {"id": "b", "prompt_tokens": 64, "generated_tokens": 8},
+        {"id": "c", "prompt_tokens": 96, "generated_tokens": 8},
+    ]
+    prefix = estimate_serving_request_set(
+        model_dir,
+        requests[:2],
+        max_batch_size=3,
+    )
+    cache_bytes = max(
+        phase["components"]["kv_cache"]
+        for phase in prefix["memory_timeline"]["phases"]
+    )
+
+    report = estimate_serving_request_set(
+        model_dir,
+        requests,
+        max_batch_size=3,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=cache_bytes,
+        vllm_non_kv_cache_memory_bytes=0,
+    )
+
+    assert report["runtime"]["configuration"]["profile_scope"] == (
+        "configured_request_manifest_prefix"
+    )
+    assert report["scheduler"]["admitted_request_ids"] == ["a", "b"]
+    assert report["scheduler"]["rejected_request_ids"] == ["c"]
+    assert report["scheduler"]["limiting_factor"] == (
+        "vllm_kv_cache_capacity"
+    )
+
+
+def test_vllm_runtime_rejects_unsupported_or_misplaced_options(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    draft_dir = tmp_path / "draft"
+    _write_model(model_dir)
+    _write_model(draft_dir)
+    common = {
+        "active_sequences": 1,
+        "max_batch_size": 4,
+        "prompt_tokens": 16,
+    }
+
+    with pytest.raises(ServingPlanError, match="requires kv_cache_strategy"):
+        estimate_serving_plan(
+            model_dir,
+            **common,
+            runtime="vllm",
+            kv_cache_strategy="dynamic",
+        )
+    with pytest.raises(ServingPlanError, match="require runtime='vllm'"):
+        estimate_serving_plan(
+            model_dir,
+            **common,
+            vllm_kv_cache_memory_bytes=1024,
+        )
+    with pytest.raises(ServingPlanError, match="speculative decoding"):
+        estimate_serving_plan(
+            model_dir,
+            **common,
+            runtime="vllm",
+            draft_model_dir=draft_dir,
+        )
+
+
+def test_vllm_runtime_cli_reports_reserved_cache(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    model_dir = tmp_path / "model"
+    output_path = tmp_path / "vllm-serving.json"
+    _write_model(model_dir)
+
+    assert (
+        serving_main(
+            [
+                "--model-dir",
+                str(model_dir),
+                "--active-sequences",
+                "2",
+                "--max-batch-size",
+                "8",
+                "--prompt-tokens",
+                "64",
+                "--runtime",
+                "vllm",
+                "--device-memory-gib",
+                "1",
+                "--json",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["runtime"]["engine"] == "vllm"
+    assert report["runtime"]["kv_cache"]["allocatable_bytes"] > 0
+    output = capsys.readouterr().out
+    assert "vLLM reserved KV cache" in output
+
+
+def test_speculative_serving_models_dual_weights_caches_and_verification(
+    tmp_path: Path,
+) -> None:
+    target_dir = tmp_path / "target"
+    draft_dir = tmp_path / "draft"
+    _write_model(target_dir)
+    _write_model(
+        draft_dir,
+        config_overrides={
+            "hidden_size": 4,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "num_key_value_heads": 1,
+            "head_dim": 4,
+            "intermediate_size": 8,
+        },
+    )
+    common = {
+        "active_sequences": 4,
+        "max_batch_size": 16,
+        "prompt_tokens": 64,
+        "generated_tokens": 8,
+        "kv_cache_strategy": "dynamic",
+    }
+    baseline = estimate_serving_plan(target_dir, **common)
+    baseline_capacity = baseline["memory_timeline"]["peak_bytes"]
+    report = estimate_serving_plan(
+        target_dir,
+        **common,
+        draft_model_dir=draft_dir,
+        speculative_tokens=4,
+        speculative_acceptance_rate=0.5,
+        device_capacity_bytes=baseline_capacity,
+        memory_utilization=1,
+    )
+
+    speculative = report["speculative_decoding"]
+    assert report["method"].endswith(
+        "_with_draft_model_speculative_decoding"
+    )
+    assert report["memory_timeline"]["source"].endswith(
+        "_with_draft_model_speculative_decoding"
+    )
+    assert speculative["enabled"] is True
+    assert speculative["proposal_tokens_per_step"] == 4
+    assert speculative["effective_proposal_tokens"] == {
+        "minimum": 4,
+        "maximum": 4,
+        "by_request": {"homogeneous_pool": 4},
+    }
+    assert speculative["acceptance"][
+        "expected_accepted_draft_tokens_per_step"
+    ] == pytest.approx(0.9375)
+    assert speculative["acceptance"][
+        "expected_output_tokens_per_target_step"
+    ] == pytest.approx(1.9375)
+    assert speculative["performance_status"] == (
+        "analytical_target_call_reduction_only"
+    )
+    assert speculative["compatibility"]["vocabulary_size_matches"] is True
+    assert speculative["compatibility"]["tokenizer_identity"] == (
+        "unverified"
+    )
+    assert speculative["compatibility"][
+        "draft_weight_bytes_smaller_than_target"
+    ] is True
+    assert speculative["target"]["parameter_bytes"] == 640
+    assert speculative["draft"]["parameter_bytes"] == 288
+    assert speculative["memory"]["combined_parameter_bytes"] == 928
+    assert speculative["target"]["verification_query_tokens"] == 4
+    assert speculative["target"]["kv_cache"]["decode"][
+        "allocated_bytes"
+    ] == 9_600
+    assert speculative["draft"]["kv_cache"]["decode"][
+        "allocated_bytes"
+    ] == 4_800
+    assert speculative["memory"][
+        "combined_decode_kv_cache_bytes"
+    ] == 14_400
+    assert report["memory"]["parameter_bytes"] == 928
+    assert report["memory_timeline"]["peak_bytes"] > baseline_capacity
+    assert report["scheduler"]["requested_fits"] is False
+    assert (
+        "speculative_draft_model_weights_and_kv_cache"
+        not in report["unmodeled_components"]
+    )
+
+    rejected = estimate_serving_plan(
+        target_dir,
+        **common,
+        draft_model_dir=draft_dir,
+        speculative_tokens=4,
+        speculative_acceptance_rate=0,
+    )
+    accepted = estimate_serving_plan(
+        target_dir,
+        **common,
+        draft_model_dir=draft_dir,
+        speculative_tokens=4,
+        speculative_acceptance_rate=1,
+    )
+    assert rejected["memory_timeline"]["peak_bytes"] == accepted[
+        "memory_timeline"
+    ]["peak_bytes"]
+    assert rejected["speculative_decoding"]["acceptance"][
+        "expected_output_tokens_per_target_step"
+    ] == 1
+    assert accepted["speculative_decoding"]["acceptance"][
+        "expected_output_tokens_per_target_step"
+    ] == 5
+
+    readme_example = estimate_serving_plan(
+        target_dir,
+        **common,
+        draft_model_dir=draft_dir,
+        speculative_tokens=5,
+        speculative_acceptance_rate=0.7,
+    )
+    assert round(
+        readme_example["speculative_decoding"]["acceptance"][
+            "expected_output_tokens_per_target_step"
+        ],
+        2,
+    ) == 2.94
+
+
+def test_speculative_serving_signature_is_path_stable_and_calibration_scoped(
+    tmp_path: Path,
+) -> None:
+    target_left = tmp_path / "target-left"
+    target_right = tmp_path / "target-right"
+    draft_left = tmp_path / "draft-left"
+    draft_right = tmp_path / "draft-right"
+    _write_model(target_left)
+    _write_model(target_right)
+    draft_config = {
+        "hidden_size": 4,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 1,
+        "num_key_value_heads": 1,
+        "head_dim": 4,
+        "intermediate_size": 8,
+    }
+    _write_model(draft_left, config_overrides=draft_config)
+    _write_model(draft_right, config_overrides=draft_config)
+    common = {
+        "active_sequences": 2,
+        "max_batch_size": 8,
+        "prompt_tokens": 64,
+        "generated_tokens": 16,
+        "kv_cache_strategy": "paged",
+        "draft_dtype": "bfloat16",
+        "speculative_tokens": 3,
+        "speculative_acceptance_rate": 0.5,
+        "memory_utilization": 1,
+    }
+    left = estimate_serving_plan(
+        target_left,
+        draft_model_dir=draft_left,
+        target_profile="a100",
+        device_capacity_bytes=2**30,
+        **common,
+    )
+    relocated = estimate_serving_plan(
+        target_right,
+        draft_model_dir=draft_right,
+        target_profile="a100",
+        device_capacity_bytes=2**31,
+        **common,
+    )
+
+    signature = left["workload_signature"]
+    assert signature.startswith(
+        "fakegpu.serving_workload.v1:sha256:"
+    )
+    assert len(signature.rsplit(":", 1)[-1]) == 64
+    assert relocated["workload_signature"] == signature
+
+    changed = estimate_serving_plan(
+        target_left,
+        draft_model_dir=draft_left,
+        target_profile="a100",
+        device_capacity_bytes=2**30,
+        **{**common, "speculative_tokens": 4},
+    )
+    assert changed["workload_signature"] != signature
+
+    def observation(plan: dict[str, object]) -> dict[str, object]:
+        inputs = plan["inputs"]
+        timeline = plan["memory_timeline"]
+        target = plan["target"]
+        assert isinstance(inputs, dict)
+        assert isinstance(timeline, dict)
+        assert isinstance(target, dict)
+        profile = target["profile"]
+        assert isinstance(profile, dict)
+        return {
+            "schema_version": "serving_observation.v1",
+            "workload_signature": plan["workload_signature"],
+            "profile": profile["id"],
+            "compute_capability": profile["compute_capability"],
+            "inputs": {
+                "dtype": inputs["dtype"],
+                "prompt_tokens": inputs["prompt_tokens"],
+            },
+            "memory_timeline": {
+                "phases": [
+                    {
+                        "phase": phase["phase"],
+                        "peak_bytes": phase["peak_bytes"],
+                    }
+                    for phase in timeline["phases"]
+                ]
+            },
+        }
+
+    matching = compare_memory_reports(
+        left,
+        observation(left),
+        workload="speculative-serving",
+    )
+    matching_gate = verify_calibration_reports(
+        [matching],
+        max_underestimate_percent=0,
+        max_absolute_percentage_error_percent=0,
+    )
+    assert matching_gate["status"] == "passed"
+    assert matching_gate["metrics"]["dimension_mismatch_count"] == 0
+    assert matching["dimensions"]["prediction"]["gpu_profile"] == (
+        "a100"
+    )
+
+    drifted = compare_memory_reports(
+        left,
+        observation(changed),
+        workload="speculative-serving",
+    )
+    drifted_gate = verify_calibration_reports(
+        [drifted],
+        max_underestimate_percent=100,
+    )
+    assert drifted_gate["status"] == "failed"
+    assert drifted_gate["metrics"]["dimension_mismatch_count"] == 1
+    assert drifted_gate["failures"] == [
+        {
+            "gate": "matching_workload_dimensions",
+            "actual": 1,
+            "maximum": 0,
+        }
+    ]
+
+    gpu_drift_observation = observation(left)
+    gpu_drift_observation["profile"] = "h100"
+    gpu_drifted = compare_memory_reports(
+        left,
+        gpu_drift_observation,
+        workload="speculative-serving",
+    )
+    gpu_drifted_gate = verify_calibration_reports(
+        [gpu_drifted],
+        max_underestimate_percent=0,
+    )
+    assert gpu_drifted_gate["status"] == "failed"
+    assert gpu_drifted_gate["metrics"]["dimension_mismatch_count"] == 1
+    assert gpu_drifted["dimensions"]["observation"]["gpu_profile"] == (
+        "h100"
+    )
+
+
+def test_speculative_serving_rejects_invalid_or_incompatible_drafts(
+    tmp_path: Path,
+) -> None:
+    target_dir = tmp_path / "target"
+    draft_dir = tmp_path / "draft"
+    incompatible_dir = tmp_path / "incompatible"
+    _write_model(target_dir)
+    _write_model(draft_dir)
+    _write_model(
+        incompatible_dir,
+        config_overrides={"vocab_size": 64},
+    )
+    common = {
+        "active_sequences": 1,
+        "max_batch_size": 4,
+        "prompt_tokens": 16,
+    }
+
+    with pytest.raises(ServingPlanError, match="vocab_size must match"):
+        estimate_serving_plan(
+            target_dir,
+            **common,
+            draft_model_dir=incompatible_dir,
+        )
+    with pytest.raises(ServingPlanError, match="positive integer"):
+        estimate_serving_plan(
+            target_dir,
+            **common,
+            draft_model_dir=draft_dir,
+            speculative_tokens=0,
+        )
+    with pytest.raises(ServingPlanError, match=r"interval \[0, 1\]"):
+        estimate_serving_plan(
+            target_dir,
+            **common,
+            draft_model_dir=draft_dir,
+            speculative_acceptance_rate=1.01,
+        )
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    ["dynamic", "paged", "quantized", "static"],
+)
+def test_speculative_serving_supports_each_kv_cache_strategy(
+    tmp_path: Path,
+    strategy: str,
+) -> None:
+    target_dir = tmp_path / "target"
+    draft_dir = tmp_path / "draft"
+    _write_model(target_dir)
+    _write_model(
+        draft_dir,
+        config_overrides={
+            "hidden_size": 4,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "num_key_value_heads": 1,
+            "head_dim": 4,
+            "intermediate_size": 8,
+        },
+    )
+
+    report = estimate_serving_plan(
+        target_dir,
+        active_sequences=2,
+        max_batch_size=8,
+        prompt_tokens=16,
+        generated_tokens=8,
+        kv_cache_strategy=strategy,
+        kv_cache_bits=4,
+        kv_cache_residual_tokens=4,
+        kv_cache_block_tokens=8,
+        kv_cache_max_tokens=32 if strategy == "static" else None,
+        kv_cache_window_tokens=24,
+        draft_model_dir=draft_dir,
+        speculative_tokens=3,
+    )
+
+    speculative = report["speculative_decoding"]
+    assert speculative["acceptance"]["status"] == "not_provided"
+    assert speculative["acceptance"][
+        "expected_output_tokens_per_target_step"
+    ] is None
+    assert speculative["performance_status"] == (
+        "not_estimated_acceptance_not_provided"
+    )
+    target_cache = speculative["target"]["kv_cache"]
+    draft_cache = speculative["draft"]["kv_cache"]
+    assert target_cache["strategy"] == strategy
+    assert draft_cache["strategy"] == strategy
+    assert target_cache["decode"]["effective_tokens_per_sequence"] == 24
+    assert draft_cache["decode"]["effective_tokens_per_sequence"] == 24
+    assert speculative["memory"]["combined_decode_kv_cache_bytes"] == (
+        target_cache["decode"]["allocated_bytes"]
+        + draft_cache["decode"]["allocated_bytes"]
+    )
+    assert report["memory"]["estimated_process_peak_bytes"] == report[
+        "memory_timeline"
+    ]["peak_bytes"]
+    if strategy == "quantized":
+        assert target_cache["storage_bits_per_element"] == 4
+        assert draft_cache["storage_bits_per_element"] == 4
+        assert target_cache["decode"]["allocated_bytes"] < (
+            target_cache[
+                "bytes_per_token_per_sequence_at_compute_dtype"
+            ]
+            * 2
+            * 24
+        )
+        assert draft_cache["decode"]["allocated_bytes"] < (
+            draft_cache[
+                "bytes_per_token_per_sequence_at_compute_dtype"
+            ]
+            * 2
+            * 24
+        )
+    if strategy == "static":
+        assert target_cache["decode"]["allocated_bytes"] == target_cache[
+            "prefill"
+        ]["allocated_bytes"]
+        assert draft_cache["decode"]["allocated_bytes"] == draft_cache[
+            "prefill"
+        ]["allocated_bytes"]
+
+
+def test_speculative_serving_handles_heterogeneous_generation_bounds(
+    tmp_path: Path,
+) -> None:
+    target_dir = tmp_path / "target"
+    draft_dir = tmp_path / "draft"
+    _write_model(target_dir)
+    _write_model(
+        draft_dir,
+        config_overrides={
+            "hidden_size": 4,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "num_key_value_heads": 1,
+            "head_dim": 4,
+            "intermediate_size": 8,
+        },
+    )
+    requests = [
+        {
+            "id": "short-chat",
+            "prompt_tokens": 32,
+            "generated_tokens": 2,
+            "prefix_group": "system",
+            "shared_prefix_tokens": 16,
+        },
+        {
+            "id": "long-chat",
+            "prompt_tokens": 64,
+            "generated_tokens": 8,
+            "prefix_group": "system",
+            "shared_prefix_tokens": 16,
+        },
+        {
+            "id": "completion",
+            "prompt_tokens": 16,
+            "generated_tokens": 4,
+        },
+    ]
+
+    report = estimate_serving_request_set(
+        target_dir,
+        requests,
+        max_batch_size=8,
+        prefill_chunk_tokens=8,
+        prefill_concurrency=2,
+        kv_cache_strategy="dynamic",
+        draft_model_dir=draft_dir,
+        speculative_tokens=4,
+        speculative_acceptance_rate=0.75,
+        device_capacity_bytes=2**20,
+        memory_utilization=1,
+    )
+    reordered = estimate_serving_request_set(
+        target_dir,
+        list(reversed(requests)),
+        max_batch_size=8,
+        prefill_chunk_tokens=8,
+        prefill_concurrency=2,
+        kv_cache_strategy="dynamic",
+        draft_model_dir=draft_dir,
+        speculative_tokens=4,
+        speculative_acceptance_rate=0.75,
+        device_capacity_bytes=2**20,
+        memory_utilization=1,
+    )
+
+    speculative = report["speculative_decoding"]
+    assert report["workload_signature"].startswith(
+        "fakegpu.serving_workload.v1:sha256:"
+    )
+    assert reordered["workload_signature"] != report[
+        "workload_signature"
+    ]
+    assert speculative["effective_proposal_tokens"] == {
+        "minimum": 2,
+        "maximum": 4,
+        "by_request": {
+            "short-chat": 2,
+            "long-chat": 4,
+            "completion": 4,
+        },
+    }
+    assert speculative["target"]["verification_query_tokens"] == 4
+    assert speculative["memory"]["combined_decode_kv_cache_bytes"] == (
+        speculative["target"]["kv_cache"]["decode"][
+            "allocated_bytes"
+        ]
+        + speculative["draft"]["kv_cache"]["decode"][
+            "allocated_bytes"
+        ]
+    )
+    assert speculative["target"]["kv_cache"]["decode"][
+        "prefix_cache_savings_bytes"
+    ] > 0
+    assert speculative["draft"]["kv_cache"]["decode"][
+        "prefix_cache_savings_bytes"
+    ] > 0
+    assert report["scheduler"]["requested_fits"] is True
+    assert report["memory"]["draft_parameter_bytes"] == 288
+    request_details = report["memory"]["request_details"]
+    assert [
+        detail["effective_speculative_tokens"]
+        for detail in request_details
+    ] == [2, 4, 4]
+
+
+def test_serving_cli_exposes_speculative_memory_without_claiming_speedup(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target_dir = tmp_path / "target"
+    draft_dir = tmp_path / "draft"
+    output_path = tmp_path / "speculative-serving.json"
+    _write_model(target_dir)
+    _write_model(draft_dir)
+
+    assert (
+        serving_main(
+            [
+                "--model-dir",
+                str(target_dir),
+                "--draft-model-dir",
+                str(draft_dir),
+                "--active-sequences",
+                "2",
+                "--max-batch-size",
+                "8",
+                "--prompt-tokens",
+                "32",
+                "--generated-tokens",
+                "8",
+                "--speculative-tokens",
+                "3",
+                "--speculative-acceptance-rate",
+                "0.5",
+                "--device-memory-gib",
+                "1",
+                "--json",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["speculative_decoding"]["enabled"] is True
+    assert report["speculative_decoding"]["performance_status"] == (
+        "analytical_target_call_reduction_only"
+    )
+    output = capsys.readouterr().out
+    assert "speculative draft:" in output
+    assert "expected tokens per target step: 1.875" in output
+
+    assert (
+        serving_main(
+            [
+                "--model-dir",
+                str(target_dir),
+                "--draft-model-dir",
+                str(draft_dir),
+                "--active-sequences",
+                "1",
+                "--prompt-tokens",
+                "16",
+            ]
+        )
+        == 0
+    )
+    assert (
+        "expected tokens per target step: acceptance unavailable"
+        in capsys.readouterr().out
+    )
+
+    with pytest.raises(SystemExit):
+        serving_main(
+            [
+                "--model-dir",
+                str(target_dir),
+                "--active-sequences",
+                "1",
+                "--prompt-tokens",
+                "16",
+                "--speculative-tokens",
+                "3",
+            ]
+        )
+    assert "require --draft-model-dir" in capsys.readouterr().err
 
 
 def test_serving_request_manifest_models_mixed_kv_segments(
