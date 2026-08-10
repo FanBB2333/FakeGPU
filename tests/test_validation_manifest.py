@@ -122,15 +122,16 @@ def test_validation_manifest_skip_is_optional_or_strict(tmp_path: Path) -> None:
 
 
 def test_validation_manifest_records_expectation_failure(tmp_path: Path) -> None:
-    manifest = _write_manifest(
-        tmp_path / "manifest.json",
-        [
-            {
-                "name": "failure",
-                "command": [sys.executable, "-c", "print('actual')"],
-                "expect": {"stdout_contains": "expected"},
-            }
-        ],
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        f'schema_version = "{MANIFEST_SCHEMA_VERSION}"\n\n'
+        "[[cases]]\n"
+        'name = "failure"\n'
+        f"command = [{json.dumps(sys.executable)}, \"-c\", "
+        '"print(\'actual\')"]\n\n'
+        "[cases.expect]\n"
+        'stdout_contains = "expected"\n',
+        encoding="utf-8",
     )
     code, report = run_validation_manifest(
         manifest,
