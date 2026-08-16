@@ -18,6 +18,14 @@
 
 **验证矩阵**：每阶段本地全量 `pytest`（222 passed）+ ruff；`scripts/test.sh smoke` 完整通过（含 native C++ 重建，覆盖 `native_smi.cpp` 改动）；CI 同款 manifest 校验（7+39 cases）通过；远端真机单测——**406**（Python 3.12 + torch 2.9.1+cu128，`~/refactor-test/FakeGPU`）与 **gem12**（torch 2.12.1+cu130）均 221 passed + 1 skipped（skip 为 CPU-only 构建专属测试，预期）。
 
+**2026-08-17 第二批落地**：§8 第 3 步（公共设施）剩余项之一完成。
+
+| Commit | 阶段 | 内容 |
+|---|---|---|
+| （待提交） | §3.3 | 新增 `_api._FakeGpuRuntimeConfig`（frozen dataclass，10 个 FAKEGPU_* 配置字段）收敛 `_api.py`/`_runtime.py` 内部转发；`init()`/`env()`/`run()` 三个公开入口的关键字签名保持逐字不变（外部调用方零感知），仅内部把 10 个散装 kwarg 换成一个 `config` 对象；新增 `_build_env()` 消除 `run()`→`env()` 的整段 10-kwarg 转发；`_apply_env_inplace`/`_apply_config_env_inplace`/`_apply_config_env`/`_runtime._init_native_runtime` 四处签名同步收敛。净减约 **77 行**（220 处/− 变化集中在 `_api.py`），行为不变 |
+
+验证：本地全量 `pytest`（222 passed，与改动前一致）+ ruff clean；CI 同款 manifest 校验（7+39 cases）通过；`scripts/test.sh smoke`（含 native 重建）通过；额外手工冒烟——`fakegpu.env()`/`fakegpu.init(runtime="native")`/`fakegpu.run()` 三个公开入口直接调用验证派生的 `FAKEGPU_*` 环境变量、`device_count` 校验报错、子进程环境注入均与改动前一致。**本轮未做远端 406/gem12 真机复测**（改动只涉及 Python 层环境变量拼装，不涉及 native 库加载语义或 GPU 数值路径，本地 + CI 等价验证已覆盖；如需更保守的确认可后续补一次远端跑）。
+
 **复核后有意不改的条目**（与文档原建议不同处）：
 - `_aggregate_report` 的 error 分支（§1.5/2.3）：rc=0 但报告为 error 的边缘情况下可达，保留。
 - `_stage.py` 重复 env 赋值（§2.2）：嵌套 stage 退出时有恢复语义，保留。
@@ -299,7 +307,7 @@ ruff（F401/F811/F841）检查是干净的——没有未使用的 import / 变�
 
 1. ~~决策项~~ → 剩余待拍板：`privateuse1/`、`audit_native_exports`、`MatmulFlopCounterMode`、`schemas/*.json`、legacy schema（见"实施进度"一节的待决策清单）。
 2. ~~纯删除（§1 + §2.2）~~ ✅ 已完成（`e451bd2`/`bc77d9f`/`6b00725`/`432c21c`）。
-3. **公共设施（剩余，中风险）**：`FakeGpuConfig` dataclass 收敛 `_api.py`/`_runtime.py` 的 8 处 10 参数签名（约 −200 行转发）；CLI 注册器 + 共享 flag 工厂 + 统一 `--json`/退出码约定（注意 `llm_cli` 与 `serving_plan` 同名 flag 默认值不同，统一时需显式保留差异）。`--json` 输出块已由 `emit_json` 收敛（`f6891c8`）。
+3. **公共设施（剩余，中风险）**：~~`FakeGpuConfig` dataclass 收敛 `_api.py`/`_runtime.py` 的 8 处 10 参数签名~~ ✅ 已完成（`_FakeGpuRuntimeConfig`，2026-08-17，−77 行）。剩余：CLI 注册器 + 共享 flag 工厂 + 统一 `--json`/退出码约定（注意 `llm_cli` 与 `serving_plan` 同名 flag 默认值不同，统一时需显式保留差异）。`--json` 输出块已由 `emit_json` 收敛（`f6891c8`）。
 4. **大合并**：`serving_plan` 双路径合一（§3.2，全仓杠杆最大单项，约 1,760 行）——**先决条件**：给 `estimate_serving_plan` 与 `estimate_serving_request_set` 补 golden-output 测试，锁住两条路径的输出差异后再抽 `_build_serving_report`；`_patched_dist_init/destroy` 对 `_upstream` 的复刻清理（仅状态读取方式不同，合并时逐字段比对）。
 5. **机械拆分（§4.2）**：`torch_patch`（−1,200 后约 3,100 行，`_allocator.py` 一刀约 810 行最干净）、`smi.py`（拆出 metrics 真正需要的 inventory/归一化层，消除 `metrics.py` import `smi` 私有函数）、`calibration.py`、`serving_plan.py`、`diffusion_estimator.py`。只做移动与 import 调整，旧模块 re-export 保持兼容。
 6. **兜底收敛与性能（剩余）**：§2.3 逐个评估（`workspace_profiles` 的 import 失败退化、`smi.py` publisher 主循环裸捕、`calibration` 第四层 sample fallback 等——行为敏感，建议转 warning 而非静默）；§5.1 allocator `snapshot()` 增量汇总与 `_allocate_allocator_block` 索引化（需 benchmark）；§5.4 metrics 深拷贝三处、`decode_steps` 聚合 + 开关（报告 shape 变化需过消费者）。
