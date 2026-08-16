@@ -102,6 +102,22 @@ class InitResult:
     handles: Mapping[str, ctypes.CDLL]
 
 
+@dataclass(frozen=True)
+class _FakeGpuRuntimeConfig:
+    """The subset of `init()`/`env()`/`run()` keyword arguments that map to FAKEGPU_* environment variables."""
+
+    mode: str | None = None
+    oom_policy: str | None = None
+    unsupported_api: str | None = None
+    dist_mode: str | None = None
+    cluster_config: str | os.PathLike[str] | None = None
+    coordinator_addr: str | None = None
+    coordinator_transport: str | None = None
+    profile: str | None = None
+    device_count: int | None = None
+    devices: str | Sequence[str] | None = None
+
+
 def init(
     *,
     build_dir: str | os.PathLike[str] | None = None,
@@ -136,33 +152,22 @@ def init(
             return InitResult(lib_dir=_loaded_dir or library_dir(build_dir=build_dir, lib_dir=lib_dir), handles=dict(_handles))
 
         resolved_dir = library_dir(build_dir=build_dir, lib_dir=lib_dir)
+        config = _FakeGpuRuntimeConfig(
+            mode=mode,
+            oom_policy=oom_policy,
+            unsupported_api=unsupported_api,
+            dist_mode=dist_mode,
+            cluster_config=cluster_config,
+            coordinator_addr=coordinator_addr,
+            coordinator_transport=coordinator_transport,
+            profile=profile,
+            device_count=device_count,
+            devices=devices,
+        )
         if update_env:
-            _apply_env_inplace(
-                resolved_dir,
-                mode=mode,
-                oom_policy=oom_policy,
-                unsupported_api=unsupported_api,
-                dist_mode=dist_mode,
-                cluster_config=cluster_config,
-                coordinator_addr=coordinator_addr,
-                coordinator_transport=coordinator_transport,
-                profile=profile,
-                device_count=device_count,
-                devices=devices,
-            )
+            _apply_env_inplace(resolved_dir, config)
         else:
-            _apply_config_env_inplace(
-                mode=mode,
-                oom_policy=oom_policy,
-                unsupported_api=unsupported_api,
-                dist_mode=dist_mode,
-                cluster_config=cluster_config,
-                coordinator_addr=coordinator_addr,
-                coordinator_transport=coordinator_transport,
-                profile=profile,
-                device_count=device_count,
-                devices=devices,
-            )
+            _apply_config_env_inplace(config)
 
         dlopen_mode = ctypes.RTLD_GLOBAL
         if hasattr(os, "RTLD_NOW"):
@@ -212,10 +217,7 @@ def env(
     Useful for subprocesses and the ``python -m fakegpu`` command.
     """
 
-    resolved_dir = library_dir(build_dir=build_dir, lib_dir=lib_dir)
-    env_map = dict(os.environ) if base_env is None else dict(base_env)
-    _apply_config_env(
-        env_map,
+    config = _FakeGpuRuntimeConfig(
         mode=mode,
         oom_policy=oom_policy,
         unsupported_api=unsupported_api,
@@ -227,6 +229,19 @@ def env(
         device_count=device_count,
         devices=devices,
     )
+    return _build_env(config, build_dir=build_dir, lib_dir=lib_dir, base_env=base_env)
+
+
+def _build_env(
+    config: _FakeGpuRuntimeConfig,
+    *,
+    build_dir: str | os.PathLike[str] | None = None,
+    lib_dir: str | os.PathLike[str] | None = None,
+    base_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    resolved_dir = library_dir(build_dir=build_dir, lib_dir=lib_dir)
+    env_map = dict(os.environ) if base_env is None else dict(base_env)
+    _apply_config_env(env_map, config)
     _apply_env(env_map, resolved_dir)
     return env_map
 
@@ -254,24 +269,23 @@ def run(
     if cmd:
         _warn_if_macos_injection_may_be_blocked(cmd[0])
 
+    config = _FakeGpuRuntimeConfig(
+        mode=mode,
+        oom_policy=oom_policy,
+        unsupported_api=unsupported_api,
+        dist_mode=dist_mode,
+        cluster_config=cluster_config,
+        coordinator_addr=coordinator_addr,
+        coordinator_transport=coordinator_transport,
+        profile=profile,
+        device_count=device_count,
+        devices=devices,
+    )
     completed = subprocess.run(
         list(cmd),
         check=check,
         text=True,
-        env=env(
-            build_dir=build_dir,
-            lib_dir=lib_dir,
-            mode=mode,
-            oom_policy=oom_policy,
-            unsupported_api=unsupported_api,
-            dist_mode=dist_mode,
-            cluster_config=cluster_config,
-            coordinator_addr=coordinator_addr,
-            coordinator_transport=coordinator_transport,
-            profile=profile,
-            device_count=device_count,
-            devices=devices,
-        ),
+        env=_build_env(config, build_dir=build_dir, lib_dir=lib_dir),
         **kwargs,
     )
     return completed
@@ -327,121 +341,59 @@ def _preload_libs_for_mode(mode: str | None) -> tuple[str, ...]:
     return _PRELOAD_LIBS
 
 
-def _apply_env_inplace(
-    resolved_dir: Path,
-    *,
-    mode: str | None,
-    oom_policy: str | None,
-    unsupported_api: str | None,
-    dist_mode: str | None,
-    cluster_config: str | os.PathLike[str] | None,
-    coordinator_addr: str | None,
-    coordinator_transport: str | None,
-    profile: str | None,
-    device_count: int | None,
-    devices: str | Sequence[str] | None,
-) -> None:
-    updated = env(
-        lib_dir=resolved_dir,
-        mode=mode,
-        oom_policy=oom_policy,
-        unsupported_api=unsupported_api,
-        dist_mode=dist_mode,
-        cluster_config=cluster_config,
-        coordinator_addr=coordinator_addr,
-        coordinator_transport=coordinator_transport,
-        profile=profile,
-        device_count=device_count,
-        devices=devices,
-        base_env=os.environ,  # type: ignore[arg-type]
-    )
+def _apply_env_inplace(resolved_dir: Path, config: _FakeGpuRuntimeConfig) -> None:
+    updated = _build_env(config, lib_dir=resolved_dir, base_env=os.environ)  # type: ignore[arg-type]
     os.environ.update(updated)
 
-def _apply_config_env_inplace(
-    *,
-    mode: str | None,
-    oom_policy: str | None,
-    unsupported_api: str | None,
-    dist_mode: str | None,
-    cluster_config: str | os.PathLike[str] | None,
-    coordinator_addr: str | None,
-    coordinator_transport: str | None,
-    profile: str | None,
-    device_count: int | None,
-    devices: str | Sequence[str] | None,
-) -> None:
+
+def _apply_config_env_inplace(config: _FakeGpuRuntimeConfig) -> None:
     updated = dict(os.environ)
-    _apply_config_env(
-        updated,
-        mode=mode,
-        oom_policy=oom_policy,
-        unsupported_api=unsupported_api,
-        dist_mode=dist_mode,
-        cluster_config=cluster_config,
-        coordinator_addr=coordinator_addr,
-        coordinator_transport=coordinator_transport,
-        profile=profile,
-        device_count=device_count,
-        devices=devices,
-    )
+    _apply_config_env(updated, config)
     os.environ.update(updated)
 
 
-def _apply_config_env(
-    env_map: dict[str, str],
-    *,
-    mode: str | None,
-    oom_policy: str | None,
-    unsupported_api: str | None,
-    dist_mode: str | None,
-    cluster_config: str | os.PathLike[str] | None,
-    coordinator_addr: str | None,
-    coordinator_transport: str | None,
-    profile: str | None,
-    device_count: int | None,
-    devices: str | Sequence[str] | None,
-) -> None:
+def _apply_config_env(env_map: dict[str, str], config: _FakeGpuRuntimeConfig) -> None:
     env_map["FAKEGPU_RUNTIME"] = "native"
 
-    if mode is not None:
-        env_map["FAKEGPU_MODE"] = str(mode)
+    if config.mode is not None:
+        env_map["FAKEGPU_MODE"] = str(config.mode)
 
-    if oom_policy is not None:
-        env_map["FAKEGPU_OOM_POLICY"] = str(oom_policy)
+    if config.oom_policy is not None:
+        env_map["FAKEGPU_OOM_POLICY"] = str(config.oom_policy)
 
-    if unsupported_api is not None:
-        policy = str(unsupported_api).strip().lower()
+    if config.unsupported_api is not None:
+        policy = str(config.unsupported_api).strip().lower()
         if policy not in {"allow", "warn", "error"}:
             raise ValueError(
                 "unsupported_api must be one of: 'allow', 'warn', 'error'"
             )
         env_map["FAKEGPU_UNSUPPORTED_API"] = policy
 
-    if dist_mode is not None:
-        env_map["FAKEGPU_DIST_MODE"] = str(dist_mode)
+    if config.dist_mode is not None:
+        env_map["FAKEGPU_DIST_MODE"] = str(config.dist_mode)
 
-    if cluster_config is not None:
-        env_map["FAKEGPU_CLUSTER_CONFIG"] = os.fspath(cluster_config)
+    if config.cluster_config is not None:
+        env_map["FAKEGPU_CLUSTER_CONFIG"] = os.fspath(config.cluster_config)
 
-    if coordinator_addr is not None:
-        env_map["FAKEGPU_COORDINATOR_ADDR"] = str(coordinator_addr)
+    if config.coordinator_addr is not None:
+        env_map["FAKEGPU_COORDINATOR_ADDR"] = str(config.coordinator_addr)
 
-    if coordinator_transport is not None:
-        env_map["FAKEGPU_COORDINATOR_TRANSPORT"] = str(coordinator_transport)
+    if config.coordinator_transport is not None:
+        env_map["FAKEGPU_COORDINATOR_TRANSPORT"] = str(config.coordinator_transport)
 
-    if device_count is not None:
-        if int(device_count) <= 0:
+    if config.device_count is not None:
+        if int(config.device_count) <= 0:
             raise ValueError("device_count must be > 0")
-        env_map["FAKEGPU_DEVICE_COUNT"] = str(int(device_count))
+        env_map["FAKEGPU_DEVICE_COUNT"] = str(int(config.device_count))
 
-    if profile is not None:
-        env_map["FAKEGPU_PROFILE"] = str(profile)
+    if config.profile is not None:
+        env_map["FAKEGPU_PROFILE"] = str(config.profile)
 
-    if devices is not None:
-        if isinstance(devices, str):
-            spec = devices
+    if config.devices is not None:
+        if isinstance(config.devices, str):
+            spec = config.devices
         else:
-            spec = ",".join(devices)
+            spec = ",".join(config.devices)
         env_map["FAKEGPU_PROFILES"] = spec
 
 
