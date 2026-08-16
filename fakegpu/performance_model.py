@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 from .profile_catalog import get_profile
+from .structured_io import emit_json
 
 
 SCHEMA_VERSION = "fakegpu.roofline_estimate.v1"
@@ -251,13 +250,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.exit(2, f"fakegpu estimate-roofline: {exc}\n")
 
     if args.json_path:
-        payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
-        if args.json_path == "-":
-            print(payload, end="")
-        else:
-            output = Path(args.json_path).expanduser().resolve()
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(payload, encoding="utf-8")
+        output = emit_json(args.json_path, report)
+        if output is not None:
             print(f"Roofline estimate: {output}")
     else:
         interval = report["latency_interval_seconds"]

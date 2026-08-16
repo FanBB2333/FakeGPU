@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .structured_io import load_mapping, write_json
+from .structured_io import emit_json, load_mapping, write_json
 
 
 COMPARISON_SCHEMA_VERSION = "fakegpu.calibration_comparison.v1"
@@ -1385,15 +1385,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 source=args.source,
             )
             if args.json_path:
-                payload = json.dumps(
-                    report,
-                    indent=2,
-                    sort_keys=True,
-                ) + "\n"
-                if args.json_path == "-":
-                    print(payload, end="")
-                else:
-                    output = write_json(args.json_path, report)
+                output = emit_json(args.json_path, report)
+                if output is not None:
                     print(f"Serving observation: {output}")
             else:
                 _print_serving_observation(report)
@@ -1424,15 +1417,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 source=args.source,
             )
             if args.json_path:
-                payload = json.dumps(
-                    report,
-                    indent=2,
-                    sort_keys=True,
-                ) + "\n"
-                if args.json_path == "-":
-                    print(payload, end="")
-                else:
-                    output = write_json(args.json_path, report)
+                output = emit_json(args.json_path, report)
+                if output is not None:
                     print(f"Serving observation: {output}")
             else:
                 _print_serving_observation(report)
@@ -1452,11 +1438,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 workload=args.workload,
             )
             if args.json_path:
-                payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
-                if args.json_path == "-":
-                    print(payload, end="")
-                else:
-                    output = write_json(args.json_path, report)
+                output = emit_json(args.json_path, report)
+                if output is not None:
                     print(f"Calibration comparison: {output}")
             else:
                 _print_comparison(report)
@@ -1486,11 +1469,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
             if args.json_path:
-                payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
-                if args.json_path == "-":
-                    print(payload, end="")
-                else:
-                    output = write_json(args.json_path, report)
+                output = emit_json(args.json_path, report)
+                if output is not None:
                     print(f"Calibration verification: {output}")
             else:
                 _print_verification(report)

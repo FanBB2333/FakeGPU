@@ -9,9 +9,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .llm_estimator import _DTYPE_BYTES as _SAFETENSORS_DTYPE_BYTES
 from .llm_estimator import inspect_safetensors_checkpoint
 from .profile_catalog import get_profile
-from .structured_io import write_json
+from .structured_io import emit_json
 
 
 SCHEMA_VERSION = "fakegpu.diffusion_generation_estimate.v1"
@@ -28,23 +29,6 @@ SUPPORTED_DENOISER_ARCHITECTURES = {"unet", "transformer"}
 
 _CHECKPOINT_VARIANTS = {"bf16", "fp16", "fp32"}
 _SHARD_SUFFIX = re.compile(r"-\d{5}-of-\d{5}$")
-_SAFETENSORS_DTYPE_BYTES = {
-    "BOOL": 1,
-    "U8": 1,
-    "I8": 1,
-    "F8_E4M3": 1,
-    "F8_E5M2": 1,
-    "I16": 2,
-    "U16": 2,
-    "F16": 2,
-    "BF16": 2,
-    "I32": 4,
-    "U32": 4,
-    "F32": 4,
-    "I64": 8,
-    "U64": 8,
-    "F64": 8,
-}
 _FLOAT_SAFETENSORS_DTYPES = {
     "F8_E4M3",
     "F8_E5M2",
@@ -927,11 +911,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             target_profile=args.target_profile,
         )
         if args.json_path:
-            payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
-            if args.json_path == "-":
-                print(payload, end="")
-            else:
-                output = write_json(args.json_path, report)
+            output = emit_json(args.json_path, report)
+            if output is not None:
                 print(f"Diffusion estimate: {output}")
         else:
             _print_report(report)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -9,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .profile_catalog import get_profile
-from .structured_io import write_json
+from .structured_io import emit_json
 
 
 SCHEMA_VERSION = "fakegpu.kernel_static_analysis.v1"
@@ -339,11 +338,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             threads_per_block=args.threads_per_block,
         )
         if args.json_path:
-            payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
-            if args.json_path == "-":
-                print(payload, end="")
-            else:
-                output = write_json(args.json_path, report)
+            output = emit_json(args.json_path, report)
+            if output is not None:
                 print(f"Kernel analysis: {output}")
         else:
             _print_report(report)
