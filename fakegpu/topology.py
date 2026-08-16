@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .structured_io import StructuredDataError, load_mapping, write_json
+from .structured_io import load_mapping, write_json
 
 
 SCHEMA_VERSION = "fakegpu.topology_simulation.v1"
@@ -481,12 +481,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_report(report)
         return 0
     except (
-        FileNotFoundError,
-        OSError,
-        StructuredDataError,
-        TopologyError,
-        ValueError,
-    ) as exc:
+            OSError,
+            ValueError,
+           ) as exc:
         parser.exit(2, f"fakegpu simulate-topology: {exc}\n")
 
 

@@ -99,7 +99,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             kv_cache_max_tokens=args.kv_cache_max_tokens,
             kv_cache_window_tokens=args.kv_cache_window_tokens,
         )
-    except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         parser.exit(2, f"fakegpu estimate-llm: {exc}\n")
 
     if args.json_path:

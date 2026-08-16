@@ -2200,11 +2200,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
     except (
-        FileNotFoundError,
-        OSError,
-        ValueError,
-        json.JSONDecodeError,
-    ) as exc:
+            OSError,
+            ValueError,
+           ) as exc:
         parser.exit(2, f"fakegpu plan-serving: {exc}\n")
 
     if args.json_path:

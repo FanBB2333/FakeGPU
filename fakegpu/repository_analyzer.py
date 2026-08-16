@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .kernel_analysis import KernelAnalysisError, analyze_kernel_file
+from .kernel_analysis import analyze_kernel_file
 
 
 SCHEMA_VERSION = "fakegpu.repository_analysis.v1"
@@ -281,7 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         report = analyze_repository(args.path, entrypoints=args.entry)
-    except (OSError, RepositoryAnalysisError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         parser.exit(2, f"fakegpu analyze-repo: {exc}\n")
 
     if args.json_path:
@@ -742,7 +742,7 @@ def _kernel_analyses(
             continue
         try:
             report = analyze_kernel_file(file)
-        except (FileNotFoundError, KernelAnalysisError, OSError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             analyses.append(
                 {
                     "path": str(file.relative_to(root)),

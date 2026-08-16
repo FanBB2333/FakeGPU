@@ -44,7 +44,7 @@ def load_mapping(path: str | Path) -> dict[str, Any]:
             raise StructuredDataError(
                 f"unsupported structured data suffix {suffix!r}: {resolved}"
             )
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+    except (OSError, UnicodeError, ValueError) as exc:
         if isinstance(exc, StructuredDataError):
             raise
         raise StructuredDataError(f"cannot parse {resolved}: {exc}") from exc

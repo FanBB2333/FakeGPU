@@ -247,7 +247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             launch_count=args.launch_count,
             compute_acceleration_factor=args.compute_acceleration_factor,
         )
-    except (OSError, PerformanceModelError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         parser.exit(2, f"fakegpu estimate-roofline: {exc}\n")
 
     if args.json_path:

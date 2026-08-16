@@ -348,7 +348,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             _print_report(report)
         return 0
-    except (FileNotFoundError, KernelAnalysisError, OSError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         parser.exit(2, f"fakegpu analyze-kernel: {exc}\n")
 
 

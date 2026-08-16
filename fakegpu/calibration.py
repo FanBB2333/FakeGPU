@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .structured_io import StructuredDataError, load_mapping, write_json
+from .structured_io import load_mapping, write_json
 
 
 COMPARISON_SCHEMA_VERSION = "fakegpu.calibration_comparison.v1"
@@ -1506,12 +1506,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Calibration bundle: {output}")
         return 0
     except (
-        CalibrationError,
-        FileNotFoundError,
-        OSError,
-        StructuredDataError,
-        ValueError,
-    ) as exc:
+            OSError,
+            ValueError,
+           ) as exc:
         parser.exit(2, f"fakegpu calibrate: {exc}\n")
 
 

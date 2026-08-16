@@ -1310,9 +1310,10 @@ def _register_tensor_for_memory_tracking(
             nbytes = int(storage.nbytes())
         else:
             storage, dp, nbytes = storage_info
-    except (NotImplementedError, RuntimeError):
-        return False
     except Exception:
+        # Inaccessible storage (vmap batched tensors, meta tensors, some
+        # subclasses): nothing distinct to track, so skip without suppressing
+        # errors raised later by the actual tracker (notably OOM).
         return False
 
     if dp == 0 or nbytes == 0:
@@ -1400,14 +1401,11 @@ def _capture_allocation_stack_trace() -> list[dict[str, Any]]:
 
 
 def _is_internal_allocation_frame(filename: str) -> bool:
-    try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.abspath(filename)
-        return path == os.path.abspath(__file__) or path.startswith(
-            current_dir + os.sep
-        )
-    except Exception:
-        return False
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.abspath(filename)
+    return path == os.path.abspath(__file__) or path.startswith(
+        current_dir + os.sep
+    )
 
 
 def _truthy_env(name: str) -> bool:
@@ -1423,15 +1421,12 @@ def _safe_tensor_shape(tensor: Any) -> list[int] | None:
 
 
 def _infer_tensor_memory_category(tensor: Any, raw: Any) -> str:
-    try:
-        import torch
+    import torch
 
-        if isinstance(tensor, torch.nn.Parameter) or isinstance(
-            raw, torch.nn.Parameter
-        ):
-            return "parameter"
-    except Exception:
-        pass
+    if isinstance(tensor, torch.nn.Parameter) or isinstance(
+        raw, torch.nn.Parameter
+    ):
+        return "parameter"
 
     try:
         if getattr(raw, "grad_fn", None) is not None:
@@ -1474,10 +1469,7 @@ def _mark_tensor_memory_category(tensor: Any, category: str) -> None:
 
 
 def _iter_tensors(value: Any):
-    try:
-        import torch
-    except Exception:
-        return
+    import torch
 
     if isinstance(value, torch.Tensor):
         yield value
@@ -1541,9 +1533,6 @@ def _install_upstream_dispatch_memory_tracking(
                     if data_ptr == 0 or nbytes == 0:
                         inaccessible_outputs += 1
                         continue
-                except (NotImplementedError, RuntimeError):
-                    inaccessible_outputs += 1
-                    continue
                 except Exception:
                     inaccessible_outputs += 1
                     continue
@@ -1630,9 +1619,9 @@ def _pack_autograd_saved_tensor(tensor: Any) -> Any:
     tracker = _memory_tracker
     if tracker is None or not _MEMORY_TRACKING:
         return tensor
-    try:
-        import torch
+    import torch
 
+    try:
         if not isinstance(tensor, torch.Tensor):
             return tensor
         if _is_fake_tensor(tensor):
@@ -1954,8 +1943,6 @@ def _install_compile_compat_shim(torch_mod: Any) -> None:
     """Install a no-op torch.compile compatibility shim on crash-prone minors."""
     global _orig_torch_compile
 
-    if not hasattr(torch_mod, "compile"):
-        return
     if _torch_minor_version(torch_mod) < (2, 8):
         return
 
@@ -1973,7 +1960,7 @@ def _install_compile_compat_shim(torch_mod: Any) -> None:
 
     torch_mod.compile = _fakegpu_compile
     compiler_mod = getattr(torch_mod, "compiler", None)
-    if compiler_mod is not None and hasattr(compiler_mod, "compile"):
+    if compiler_mod is not None:
         compiler_mod.compile = _fakegpu_compile
 
 
@@ -2678,7 +2665,7 @@ def _patch_fsdp_runtime_compat(fake_tensor_cls: type | None) -> None:
 
 def _install_fakegpu_autocast(torch_mod: Any) -> None:
     _strict_compat = os.environ.get("FAKEGPU_STRICT_COMPAT", "1") != "0"
-    if not (_strict_compat and hasattr(torch_mod.amp, "autocast")):
+    if not _strict_compat:
         return
 
     _OrigAutocast = torch_mod.amp.autocast

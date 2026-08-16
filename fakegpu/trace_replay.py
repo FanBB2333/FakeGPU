@@ -9,13 +9,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .operator_profiles import (
-    OperatorProfileError,
     evaluate_operator_profile,
     load_operator_profiles,
     match_operator_profile,
 )
-from .structured_io import StructuredDataError, load_mapping, write_json
-from .topology import Topology, TopologyError, simulate_point_to_point
+from .structured_io import load_mapping, write_json
+from .topology import Topology, simulate_point_to_point
 
 
 SCHEMA_VERSION = "fakegpu.trace_replay.v1"
@@ -178,14 +177,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_report(report)
         return 0
     except (
-        FileNotFoundError,
-        OSError,
-        OperatorProfileError,
-        StructuredDataError,
-        TopologyError,
-        TraceReplayError,
-        ValueError,
-    ) as exc:
+            OSError,
+            ValueError,
+           ) as exc:
         parser.exit(2, f"fakegpu replay-trace: {exc}\n")
 
 

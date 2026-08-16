@@ -1820,7 +1820,7 @@ def _load_states(
                 raise ValueError("devices must be an array of objects")
             if include_exited or bool(state.get("running")):
                 states.append(state)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError) as exc:
             errors.append(f"{path}: {exc}")
     return states, errors
 

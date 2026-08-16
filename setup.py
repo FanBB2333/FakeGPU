@@ -8,11 +8,7 @@ from pathlib import Path
 
 from setuptools import Distribution, setup
 from setuptools.command.build_py import build_py as _build_py
-
-try:
-    from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
-except Exception:  # pragma: no cover - wheel may be absent in some build contexts
-    _bdist_wheel = None
+from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 
 _ROOT = Path(__file__).resolve().parent
@@ -111,23 +107,19 @@ class BinaryDistribution(Distribution):
         return True
 
 
-if _bdist_wheel is not None:
+class bdist_wheel(_bdist_wheel):
+    def finalize_options(self) -> None:
+        super().finalize_options()
+        # We ship ELF .so files as package data; the wheel is not "pure".
+        self.root_is_pure = False
 
-    class bdist_wheel(_bdist_wheel):
-        def finalize_options(self) -> None:
-            super().finalize_options()
-            # We ship ELF .so files as package data; the wheel is not "pure".
-            self.root_is_pure = False
-
-        def get_tag(self) -> tuple[str, str, str]:
-            _python, _abi, plat = super().get_tag()
-            # The Python wrapper is pure; only the platform tag matters.
-            return ("py3", "none", plat)
+    def get_tag(self) -> tuple[str, str, str]:
+        _python, _abi, plat = super().get_tag()
+        # The Python wrapper is pure; only the platform tag matters.
+        return ("py3", "none", plat)
 
 
-    cmdclass = {"build_py": build_py, "bdist_wheel": bdist_wheel}
-else:
-    cmdclass = {"build_py": build_py}
+cmdclass = {"build_py": build_py, "bdist_wheel": bdist_wheel}
 
 
 setup(cmdclass=cmdclass, distclass=BinaryDistribution)

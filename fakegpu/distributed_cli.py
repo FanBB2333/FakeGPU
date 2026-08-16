@@ -339,11 +339,10 @@ def coordinator_main(argv: Sequence[str] | None = None) -> int:
             env,
         )
     except (
-        argparse.ArgumentTypeError,
-        FileNotFoundError,
-        OSError,
-        ValueError,
-    ) as exc:
+            argparse.ArgumentTypeError,
+            OSError,
+            ValueError,
+           ) as exc:
         parser.exit(1, f"fakegpu coordinator: {exc}\n")
     return 0
 
@@ -866,11 +865,10 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
         _print_bandwidth_summary(report)
         return 0
     except (
-        argparse.ArgumentTypeError,
-        FileNotFoundError,
-        OSError,
-        RuntimeError,
-        ValueError,
-    ) as exc:
+            argparse.ArgumentTypeError,
+            OSError,
+            RuntimeError,
+            ValueError,
+           ) as exc:
         parser.exit(1, f"fakegpu bandwidth: {exc}\n")
     return 1
