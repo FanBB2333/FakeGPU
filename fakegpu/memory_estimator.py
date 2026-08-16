@@ -9,6 +9,7 @@ from os import PathLike
 from typing import Any
 
 from .workspace_profiles import (
+    load_workspace_profiles,
     match_workspace_profile,
     workspace_profile_summary,
 )
@@ -1030,6 +1031,8 @@ def _estimate_backend_workspace(
     unprofiled_attention_operators: dict[str, int] = {}
     unprofiled_workspace_candidates: dict[str, int] = {}
     unprofiled_workspace_calls: list[dict[str, Any]] = []
+    # Load the catalog once for the whole graph instead of per node.
+    workspace_catalog = load_workspace_profiles(workspace_profile_paths)
 
     for node in graph_module.graph.nodes:
         if node.op not in {"call_function", "call_method", "call_module"}:
@@ -1040,7 +1043,7 @@ def _estimate_backend_workspace(
             target,
             target_device=target_device,
             target_profile=target_profile,
-            workspace_profile_paths=workspace_profile_paths,
+            workspace_profiles=workspace_catalog,
         )
         if profile is not None:
             profile.setdefault("lower_bytes", int(profile.get("bytes", 0) or 0))
@@ -1195,14 +1198,14 @@ def _backend_workspace_profile(
     *,
     target_device: Any,
     target_profile: str | None = None,
-    workspace_profile_paths: Sequence[str | PathLike[str]] | None = None,
+    workspace_profiles: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     external = match_workspace_profile(
         node,
         target,
         target_device=target_device,
         target_profile=target_profile,
-        profile_paths=workspace_profile_paths,
+        profiles=workspace_profiles,
     )
     if external is not None:
         return external
