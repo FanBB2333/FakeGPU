@@ -82,8 +82,15 @@ def match_workspace_profile(
     target_device: Any,
     target_profile: str | GpuProfile | None = None,
     profile_paths: Sequence[str | os.PathLike[str]] | None = None,
+    profiles: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Return the highest-priority matching empirical workspace profile."""
+    """Return the highest-priority matching empirical workspace profile.
+
+    ``profiles`` accepts an already-loaded catalog so callers that match
+    many nodes can load the catalog once instead of per node.
+    """
+    if profiles is None:
+        profiles = load_workspace_profiles(profile_paths)
 
     device_type = str(
         getattr(target_device, "type", str(target_device).split(":", 1)[0])
@@ -103,7 +110,7 @@ def match_workspace_profile(
     }
 
     matches: list[dict[str, Any]] = []
-    for profile in load_workspace_profiles(profile_paths):
+    for profile in profiles:
         if not _profile_matches(profile, signature):
             continue
         workspace_bytes, calculation = _workspace_bytes(
@@ -368,15 +375,20 @@ def _resolve_gpu_profile(
         ) from exc
 
 
-def _software_stack(profile: GpuProfile | None) -> dict[str, Any]:
+@lru_cache(maxsize=1)
+def _torch_runtime_versions() -> tuple[str, str]:
     try:
         import torch
 
-        torch_version = str(torch.__version__)
-        cuda_version = str(torch.version.cuda or "")
-    except Exception:
-        torch_version = ""
-        cuda_version = ""
+        return str(torch.__version__), str(torch.version.cuda or "")
+    except ImportError:
+        # torch is optional: an empty stack marker keeps matching honest
+        # instead of guessing a version.
+        return "", ""
+
+
+def _software_stack(profile: GpuProfile | None) -> dict[str, Any]:
+    torch_version, cuda_version = _torch_runtime_versions()
     return {
         "profile_id": profile.id if profile is not None else None,
         "architecture": profile.architecture if profile is not None else None,
