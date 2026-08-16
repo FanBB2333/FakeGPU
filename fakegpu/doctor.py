@@ -82,7 +82,7 @@ def _collect(profile_id: str) -> dict[str, Any]:
 
         native_dir = library_dir()
         checks.append(_check("pass", "native libraries", str(native_dir)))
-    except (FileNotFoundError, OSError) as exc:
+    except (OSError) as exc:
         first_line = str(exc).splitlines()[0]
         checks.append(
             _check(

@@ -261,7 +261,7 @@ def inspect_diffusion_pipeline(
                     component["directory"],
                     files=selected_files,
                 )
-            except (FileNotFoundError, OSError, ValueError) as exc:
+            except (OSError, ValueError) as exc:
                 raise DiffusionEstimateError(
                     f"cannot inspect {component_name!r}: {exc}"
                 ) from exc
@@ -936,7 +936,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             _print_report(report)
         return 0
-    except (DiffusionEstimateError, OSError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         parser.exit(2, f"fakegpu estimate-diffusion: {exc}\n")
 
 

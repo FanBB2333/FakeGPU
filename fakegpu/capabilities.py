@@ -363,11 +363,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             build_dir=args.build_dir,
         )
     except (
-        CapabilityCatalogError,
-        FileNotFoundError,
-        OSError,
-        RuntimeError,
-    ) as exc:
+            CapabilityCatalogError,
+            OSError,
+            RuntimeError,
+           ) as exc:
         parser.exit(2, f"fakegpu capabilities: {exc}\n")
 
     report["apis"] = [
