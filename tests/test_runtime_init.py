@@ -68,21 +68,14 @@ sys.path.insert(0, str(root))
 
 import fakegpu
 
-with patch("fakegpu._runtime._detect_custom_torch_fakegpu_available", return_value=True), \\
-     patch("fakegpu._runtime._init_fakecuda_runtime", return_value={{"route": "fakecuda"}}) as fake_init, \\
+# "auto" always resolves to fakecuda: the vendored upstream backend ships with
+# the package, so no probing is needed.
+with patch("fakegpu._runtime._init_fakecuda_runtime", return_value={{"route": "fakecuda"}}) as fake_init, \\
      patch("fakegpu._runtime._init_native_runtime", return_value={{"route": "native"}}) as native_init:
     auto_result = fakegpu.init(runtime="auto")
     assert auto_result["route"] == "fakecuda"
     fake_init.assert_called_once()
     native_init.assert_not_called()
-
-with patch("fakegpu._runtime._detect_custom_torch_fakegpu_available", return_value=False), \\
-     patch("fakegpu._runtime._init_fakecuda_runtime", return_value={{"route": "fakecuda"}}) as fake_init, \\
-     patch("fakegpu._runtime._init_native_runtime", return_value={{"route": "native"}}) as native_init:
-    auto_result = fakegpu.init(runtime="auto")
-    assert auto_result["route"] == "native"
-    native_init.assert_called_once()
-    fake_init.assert_not_called()
 
 with patch("fakegpu._runtime._init_native_runtime", return_value={{"route": "native"}}) as native_init:
     native_result = fakegpu.init(runtime="native")
@@ -144,28 +137,6 @@ optimizer.step()
 print("torch accelerator compatibility passed")
 """
     _assert_ok(_run(code), "torch accelerator compatibility")
-
-
-def test_editable_custom_torch_detection() -> None:
-    code = f"""
-from pathlib import Path
-import sys
-from unittest.mock import patch
-
-root = Path({str(ROOT)!r})
-sys.path.insert(0, str(root))
-
-from fakegpu import _runtime
-
-with patch.dict(sys.modules, {{}}, clear=False):
-    sys.modules.pop("torch.fakegpu", None)
-    with patch("fakegpu._runtime.importlib.util.find_spec", return_value=object()), \\
-         patch.object(sys, "path", [""]):
-        assert _runtime._detect_custom_torch_fakegpu_available() is True
-
-print("editable custom torch detection passed")
-"""
-    _assert_ok(_run(code), "editable custom torch detection")
 
 
 def test_native_mode_preload_boundaries() -> None:

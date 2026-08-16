@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import importlib.util
 import os
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal, Sequence
 
 from ._api import InitResult as NativeInitResult
@@ -56,7 +53,9 @@ def init(
 
     selected_runtime = runtime_norm
     if selected_runtime == "auto":
-        selected_runtime = "fakecuda" if _detect_custom_torch_fakegpu_available() else "native"
+        # The vendored fakegpu._upstream backend ships with this package, so
+        # the fakecuda runtime is always available and "auto" resolves to it.
+        selected_runtime = "fakecuda"
 
     if selected_runtime == "native":
         return _init_native_runtime(
@@ -103,37 +102,6 @@ def init_privateuse1() -> None:
     from .privateuse1 import init_privateuse1 as _init_privateuse1
 
     _init_privateuse1()
-
-
-def _detect_custom_torch_fakegpu_available() -> bool:
-    if "torch.fakegpu" in sys.modules:
-        return True
-
-    try:
-        if importlib.util.find_spec("torch.fakegpu") is not None:
-            return True
-    except Exception:
-        # Editable installs can expose torch.fakegpu via an import hook instead of
-        # a plain sys.path entry. If importlib probing fails because of a shadowed
-        # torch module or partial install, fall back to the path scan below.
-        pass
-
-    for entry in sys.path:
-        search_root = Path(entry or os.getcwd())
-        torch_dir = search_root / "torch"
-        if (torch_dir / "fakegpu.py").is_file():
-            return True
-        if (torch_dir / "fakegpu" / "__init__.py").is_file():
-            return True
-
-    # Check for vendored upstream (_upstream.py ships with fakegpu itself)
-    try:
-        if importlib.util.find_spec("fakegpu._upstream") is not None:
-            return True
-    except Exception:
-        pass
-
-    return False
 
 
 def _init_native_runtime(
