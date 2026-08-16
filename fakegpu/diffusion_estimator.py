@@ -1416,12 +1416,6 @@ def _runtime_checkpoint_bytes(
 def _pipeline_defaults(pipeline_class: str) -> dict[str, Any]:
     if pipeline_class in _PIPELINE_DEFAULTS:
         return copy.deepcopy(_PIPELINE_DEFAULTS[pipeline_class])
-    if pipeline_class.startswith("StableDiffusion"):
-        return {
-            "steps": 50,
-            "guidance_scale": 7.5,
-            "text_tokens": 77,
-        }
     return {
         "steps": 50,
         "guidance_scale": 7.5,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -95,7 +95,6 @@ def estimate_roofline(
     memory_bytes: int,
     launch_count: int = 1,
     compute_acceleration_factor: float = 1.0,
-    efficiency: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Estimate an analytical latency interval from a GPU profile.
 
@@ -134,7 +133,7 @@ def estimate_roofline(
             "compute_acceleration_factor must be finite and positive"
         )
 
-    assumptions = _efficiency_assumptions(efficiency)
+    assumptions = EFFICIENCY_ASSUMPTIONS
     hardware = profile_roofline(profile_id)
     compute_ceiling = (
         hardware["scalar_fp32_peak_flops_per_second"]
@@ -275,62 +274,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _efficiency_assumptions(
-    override: Mapping[str, float] | None,
-) -> dict[str, dict[str, float]]:
-    assumptions = {
-        "optimistic": {
-            "compute_efficiency": 0.85,
-            "memory_efficiency": 0.85,
-            "launch_overhead_microseconds": 2.0,
-        },
-        "expected": {
-            "compute_efficiency": 0.55,
-            "memory_efficiency": 0.65,
-            "launch_overhead_microseconds": 8.0,
-        },
-        "conservative": {
-            "compute_efficiency": 0.20,
-            "memory_efficiency": 0.35,
-            "launch_overhead_microseconds": 25.0,
-        },
-    }
-    if override is None:
-        return assumptions
-    unknown = sorted(set(override) - {"compute", "memory", "launch_us"})
-    if unknown:
-        raise PerformanceModelError(
-            "unknown efficiency overrides: " + ", ".join(unknown)
-        )
-    expected = assumptions["expected"]
-    for key, destination in (
-        ("compute", "compute_efficiency"),
-        ("memory", "memory_efficiency"),
-        ("launch_us", "launch_overhead_microseconds"),
-    ):
-        if key not in override:
-            continue
-        value = float(override[key])
-        if not math.isfinite(value) or value <= 0:
-            raise PerformanceModelError(
-                f"efficiency override {key!r} must be finite and positive"
-            )
-        if key != "launch_us" and value > 1:
-            raise PerformanceModelError(
-                f"efficiency override {key!r} must not exceed one"
-            )
-        lower_limit, upper_limit = {
-            "compute": (0.20, 0.85),
-            "memory": (0.35, 0.85),
-            "launch_us": (2.0, 25.0),
-        }[key]
-        if not lower_limit <= value <= upper_limit:
-            raise PerformanceModelError(
-                f"efficiency override {key!r} must be between "
-                f"{lower_limit} and {upper_limit} to preserve the interval"
-            )
-        expected[destination] = value
-    return assumptions
+EFFICIENCY_ASSUMPTIONS = {
+    "optimistic": {
+        "compute_efficiency": 0.85,
+        "memory_efficiency": 0.85,
+        "launch_overhead_microseconds": 2.0,
+    },
+    "expected": {
+        "compute_efficiency": 0.55,
+        "memory_efficiency": 0.65,
+        "launch_overhead_microseconds": 8.0,
+    },
+    "conservative": {
+        "compute_efficiency": 0.20,
+        "memory_efficiency": 0.35,
+        "launch_overhead_microseconds": 25.0,
+    },
+}
 
 
 __all__ = [

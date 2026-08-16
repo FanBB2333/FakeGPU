@@ -147,9 +147,7 @@ def analyze_ptx(text: str) -> dict[str, Any]:
         )
         pending_instruction = ""
         opcode = statement.split(None, 1)[0].rstrip(";")
-        if opcode in {"bra", "ret", "exit", "call", "bar", "membar"} or re.match(
-            r"[A-Za-z]", opcode
-        ):
+        if re.match(r"[A-Za-z]", opcode):
             instruction_counts[opcode] += 1
             instruction_class = _ptx_instruction_class(opcode)
             classes[instruction_class] += 1
@@ -284,7 +282,6 @@ def estimate_occupancy(
         blocks_by_shared,
     )
     active_threads = resident_blocks * threads_per_block
-    limiting = []
     constraints = {
         "architectural_block_limit": profile.max_blocks_per_multiprocessor,
         "threads": blocks_by_threads,

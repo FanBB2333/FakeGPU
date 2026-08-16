@@ -66,10 +66,6 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
     "uuid": QueryField("uuid"),
     "pci.bus_id": QueryField("pci_bus_id"),
     "topology.source": QueryField("topology.source"),
-    "topology.numa_node": QueryField("topology.numa_node"),
-    "topology.pcie_generation": QueryField(
-        "topology.pcie_generation"
-    ),
     "nvlink.active_links": QueryField(
         "topology.nvlink.active_links"
     ),
@@ -149,27 +145,6 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
         "memory.headroom_bytes",
         unit="MiB",
         divisor=2**20,
-    ),
-    "utilization.gpu": QueryField(
-        "telemetry.gpu_utilization_percent",
-        unit="%",
-        precision=1,
-    ),
-    "temperature.gpu": QueryField(
-        "telemetry.temperature_c",
-        unit="C",
-        precision=1,
-    ),
-    "fan.speed": QueryField(
-        "telemetry.fan_speed_percent",
-        unit="%",
-        precision=1,
-    ),
-    "power.draw": QueryField(
-        "telemetry.power_usage_mw",
-        unit="W",
-        divisor=1000,
-        precision=1,
     ),
     "power.default_limit": QueryField(
         "profile.typical_power_usage_mw",
@@ -575,8 +550,6 @@ def _modeled_device_topology(
             "configured": configured,
             "valid": valid,
             "error": error,
-            "numa_node": None,
-            "pcie_generation": None,
             "nvlink": {
                 "active_links": len(peers),
                 "peer_count": len(peers),
@@ -1350,11 +1323,6 @@ class SmiStatePublisher:
                     "runtime_overhead_bytes": self.runtime_overhead_bytes,
                     "reported_memory": reported,
                     "reported_peak_memory": reported_peak,
-                    "memory_utilization_percent": (
-                        round(reported / total * 100, 3)
-                        if total
-                        else None
-                    ),
                     "headroom_bytes": headroom,
                     "headroom_percent": (
                         round(headroom / total * 100, 3)
@@ -1388,13 +1356,6 @@ class SmiStatePublisher:
                     "largest_allocations_retained": len(
                         largest_allocations
                     ),
-                    "telemetry": {
-                        "gpu_utilization_percent": None,
-                        "temperature_c": None,
-                        "fan_speed_percent": None,
-                        "power_usage_mw": None,
-                        "source": "hardware_telemetry_unavailable",
-                    },
                 }
             )
         dispatch_tracking = (
@@ -1505,7 +1466,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="fakegpu nvidia-smi",
         description=(
             "Inspect FakeCUDA devices, processes, profiles, memory, runtime "
-            "configuration, modeled topology, and simulated telemetry."
+            "configuration, and modeled topology."
         ),
     )
     parser.add_argument(
@@ -2201,12 +2162,9 @@ def render_topology_matrix(
                 [
                     "",
                     *labels,
-                    "CPU Affinity",
-                    "NUMA Affinity",
                 ]
             ]
             for row_index, device in enumerate(host_devices):
-                topology = device["topology"]
                 rows.append(
                     [
                         labels[row_index],
@@ -2214,8 +2172,6 @@ def render_topology_matrix(
                             _topology_relation(device, target)
                             for target in host_devices
                         ],
-                        "N/A",
-                        _display_value(topology.get("numa_node")),
                     ]
                 )
             widths = [
@@ -2769,7 +2725,6 @@ def render_detail(
         profile = item["profile"]
         memory = item["memory"]
         allocator = item["allocator"]
-        telemetry = item["telemetry"]
         native_activity = item["native_activity"]
         topology = item["topology"]
         nvlink = topology["nvlink"]
@@ -2785,10 +2740,6 @@ def render_detail(
                 (
                     "  Topology: "
                     f"{topology.get('source') or 'modeled_none'}, "
-                    "NUMA "
-                    f"{_display_value(topology.get('numa_node'))}, "
-                    "PCIe generation "
-                    f"{_display_value(topology.get('pcie_generation'))}, "
                     f"{nvlink.get('active_links', 0)} active NVLinks / "
                     f"{_format_gbps(nvlink.get('aggregate_bandwidth_gbps'))} "
                     "Gbps modeled aggregate"
@@ -2877,14 +2828,6 @@ def render_detail(
                 (
                     "  Stage peaks: "
                     f"{_format_byte_mapping(allocator['stage_peaks'])}"
-                ),
-                (
-                    "  Hardware telemetry: "
-                    f"GPU utilization "
-                    f"{_format_percent(telemetry.get('gpu_utilization_percent'))}, "
-                    f"temperature {_format_temperature(telemetry.get('temperature_c'))}, "
-                    f"fan {_format_percent(telemetry.get('fan_speed_percent'))}, "
-                    f"power {_format_watts(telemetry.get('power_usage_mw'))}"
                 ),
                 (
                     "  Processes: "
@@ -3084,7 +3027,6 @@ def _empty_device_aggregate(
             "free_count": 0,
             "categories": {},
             "stage_peaks": {},
-            "reserved_stage_peaks": {},
             "largest_allocations": [],
             "_models": set(),
         },
@@ -3102,7 +3044,6 @@ def _empty_device_aggregate(
         "topology": dict(device["topology"]),
         "health": dict(device["health"]),
         "mig": dict(device["mig"]),
-        "telemetry": dict(device["telemetry"]),
         "fakegpu": dict(fakegpu),
         "software": dict(software),
         "tracking_confidence": "unknown",
@@ -3158,10 +3099,6 @@ def _accumulate_allocator(
     _sum_integer_mapping(
         aggregate["stage_peaks"],
         device["peak_by_stage"],
-    )
-    _sum_integer_mapping(
-        aggregate["reserved_stage_peaks"],
-        device["reserved_peak_by_stage"],
     )
     for raw in device["largest_allocations"]:
         item = dict(raw)
@@ -3305,19 +3242,6 @@ def _normalize_device(
         used,
         _nonnegative_int(reported_peak, default=used),
     )
-    telemetry = (
-        dict(raw.get("telemetry") or {})
-        if isinstance(raw.get("telemetry"), Mapping)
-        else {}
-    )
-    telemetry.setdefault("gpu_utilization_percent", None)
-    telemetry.setdefault("temperature_c", None)
-    telemetry.setdefault("fan_speed_percent", None)
-    telemetry.setdefault("power_usage_mw", None)
-    telemetry.setdefault(
-        "source",
-        "hardware_telemetry_unavailable",
-    )
     topology = _normalize_device_topology(raw.get("topology"))
     health = _normalize_device_health(raw.get("health"))
     mig = _normalize_device_mig(
@@ -3403,7 +3327,6 @@ def _normalize_device(
         "topology": topology,
         "health": health,
         "mig": mig,
-        "telemetry": telemetry,
     }
 
 
@@ -3778,8 +3701,6 @@ def _normalize_device_topology(value: Any) -> dict[str, Any]:
         "configured": bool(raw.get("configured", False)),
         "valid": bool(raw.get("valid", True)),
         "error": str(raw.get("error") or ""),
-        "numa_node": raw.get("numa_node"),
-        "pcie_generation": raw.get("pcie_generation"),
         "nvlink": {
             "active_links": _nonnegative_int(
                 nvlink_raw.get("active_links"),
@@ -4257,24 +4178,6 @@ def _format_watts(value: Any) -> str:
         return "N/A"
     try:
         return f"{float(value) / 1000:.1f} W"
-    except (TypeError, ValueError):
-        return "N/A"
-
-
-def _format_percent(value: Any) -> str:
-    if value is None:
-        return "N/A"
-    try:
-        return f"{float(value):.1f}%"
-    except (TypeError, ValueError):
-        return "N/A"
-
-
-def _format_temperature(value: Any) -> str:
-    if value is None:
-        return "N/A"
-    try:
-        return f"{float(value):.1f} C"
     except (TypeError, ValueError):
         return "N/A"
 

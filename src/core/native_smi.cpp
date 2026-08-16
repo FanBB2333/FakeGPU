@@ -389,8 +389,6 @@ void append_device_topology(
     out << ",\"valid\":" << (topology.valid ? "true" : "false");
     out << ",\"error\":";
     append_json_string(out, topology.error);
-    out << ",\"numa_node\":null";
-    out << ",\"pcie_generation\":null";
     out << ",\"nvlink\":{\"active_links\":" << peers.size();
     out << ",\"peer_count\":" << peers.size();
     out << ",\"aggregate_bandwidth_gbps\":"
@@ -871,12 +869,6 @@ void append_device(
     out << ",\"unsupported_apis\":";
     append_unsupported_apis(out, device, detail_limit);
     out << '}';
-    out << ",\"telemetry\":{"
-        << "\"gpu_utilization_percent\":null,"
-        << "\"temperature_c\":null,"
-        << "\"fan_speed_percent\":null,"
-        << "\"power_usage_mw\":null,"
-        << "\"source\":\"hardware_telemetry_unavailable\"}";
     append_device_topology(out, device, devices, topology);
     append_device_health(
         out,
