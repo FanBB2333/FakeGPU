@@ -22,9 +22,9 @@
 
 | Commit | 阶段 | 内容 |
 |---|---|---|
-| （待提交） | §3.3 | 新增 `_api._FakeGpuRuntimeConfig`（frozen dataclass，10 个 FAKEGPU_* 配置字段）收敛 `_api.py`/`_runtime.py` 内部转发；`init()`/`env()`/`run()` 三个公开入口的关键字签名保持逐字不变（外部调用方零感知），仅内部把 10 个散装 kwarg 换成一个 `config` 对象；新增 `_build_env()` 消除 `run()`→`env()` 的整段 10-kwarg 转发；`_apply_env_inplace`/`_apply_config_env_inplace`/`_apply_config_env`/`_runtime._init_native_runtime` 四处签名同步收敛。净减约 **77 行**（220 处/− 变化集中在 `_api.py`），行为不变 |
+| `a9da7f8` | §3.3 | 新增 `_api._FakeGpuRuntimeConfig`（frozen dataclass，10 个 FAKEGPU_* 配置字段）收敛 `_api.py`/`_runtime.py` 内部转发；`init()`/`env()`/`run()` 三个公开入口的关键字签名保持逐字不变（外部调用方零感知），仅内部把 10 个散装 kwarg 换成一个 `config` 对象；新增 `_build_env()` 消除 `run()`→`env()` 的整段 10-kwarg 转发；`_apply_env_inplace`/`_apply_config_env_inplace`/`_apply_config_env`/`_runtime._init_native_runtime` 四处签名同步收敛。净减约 **77 行**（220 处/− 变化集中在 `_api.py`），行为不变 |
 
-验证：本地全量 `pytest`（222 passed，与改动前一致）+ ruff clean；CI 同款 manifest 校验（7+39 cases）通过；`scripts/test.sh smoke`（含 native 重建）通过；额外手工冒烟——`fakegpu.env()`/`fakegpu.init(runtime="native")`/`fakegpu.run()` 三个公开入口直接调用验证派生的 `FAKEGPU_*` 环境变量、`device_count` 校验报错、子进程环境注入均与改动前一致。**本轮未做远端 406/gem12 真机复测**（改动只涉及 Python 层环境变量拼装，不涉及 native 库加载语义或 GPU 数值路径，本地 + CI 等价验证已覆盖；如需更保守的确认可后续补一次远端跑）。
+验证：本地全量 `pytest`（222 passed，与改动前一致）+ ruff clean；CI 同款 manifest 校验（7+39 cases）通过；`scripts/test.sh smoke`（含 native 重建）通过；额外手工冒烟——`fakegpu.env()`/`fakegpu.init(runtime="native")`/`fakegpu.run()` 三个公开入口直接调用验证派生的 `FAKEGPU_*` 环境变量、`device_count` 校验报错、子进程环境注入均与改动前一致。远端 406/gem12 真机复测见第一批的验证矩阵说明；`f6891c8`（emit_json，改动了 CLI `--json` 输出代码路径）与 `a9da7f8` 已于 2026-08-17 在两台机器上复跑通过（各 221 passed + 1 skipped）。
 
 **复核后有意不改的条目**（与文档原建议不同处）：
 - `_aggregate_report` 的 error 分支（§1.5/2.3）：rc=0 但报告为 error 的边缘情况下可达，保留。
