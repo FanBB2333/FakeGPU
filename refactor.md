@@ -3,6 +3,34 @@
 > 基于对全仓库的静态扫描（2026-08-16，main @ 20a95f7）。本文档只列问题与方向，不包含具体改动；所有条目在动手前应先在当前代码上复核 file:line 是否仍然成立。
 > **约束：重构后功能保持不变。** 文末单独列出了扫描中顺带发现的疑似 bug——它们的修复会改变行为，应与重构分开提交。
 
+## 实施进度（滚动更新）
+
+**2026-08-16 第一批落地**：§8 建议顺序中的第 2 步（纯删除）全部完成，第 3 步（公共设施）完成两项，第 6 步（性能）完成两项。净删约 **2,500 行**（+250/−2,700 量级），功能不变。
+
+| Commit | 阶段 | 内容 |
+|---|---|---|
+| `e451bd2` | §1.1 | 删除 torch_patch standalone 不可达路径（约 50 个定义、~1,200 行）；`_activate_upstream` 改为显式 raise；`_runtime` 恒真探测简化；顺带删除与 upstream 逐字相同的 no-op 补丁 |
+| `bc77d9f` | §1.2 | 删除零消费者的 `fsdp_memory.py`（970 行；可从 git 历史恢复） |
+| `6b00725` | §1.3–1.7 | 恒 None 遥测链整链删除（含 `native_smi.cpp`）；死状态字段（`memory_utilization_percent`、`reserved_stage_peaks`）；死 env 导出与 `efficiency` 死参数；各处局部死分支；`_preflight_bootstrap` 冗余兜底 |
+| `432c21c` | §2.2 | 同体重复 except、不可能失败的 try、恒真 hasattr、setup.py 死 wheel 兜底、17 处"子类⊂基类"冗余异常项 |
+| `91243b8` | §5.2 | workspace catalog 每 FX 节点重载 → 每图一次；torch 版本串 lru_cache |
+| `f6891c8` | §3.4+§5.4 | `structured_io.emit_json` 收敛 8 处 print-or-write `--json` 块并消除双重序列化；dtype 表与 `_iter_tensor_leaves` 各去重一份 |
+
+**验证矩阵**：每阶段本地全量 `pytest`（222 passed）+ ruff；`scripts/test.sh smoke` 完整通过（含 native C++ 重建，覆盖 `native_smi.cpp` 改动）；CI 同款 manifest 校验（7+39 cases）通过；远端真机单测——**406**（Python 3.12 + torch 2.9.1+cu128，`~/refactor-test/FakeGPU`）与 **gem12**（torch 2.12.1+cu130）均 221 passed + 1 skipped（skip 为 CPU-only 构建专属测试，预期）。
+
+**复核后有意不改的条目**（与文档原建议不同处）：
+- `_aggregate_report` 的 error 分支（§1.5/2.3）：rc=0 但报告为 error 的边缘情况下可达，保留。
+- `_stage.py` 重复 env 赋值（§2.2）：嵌套 stage 退出时有恢复语义，保留。
+- `_format_bytes` 11 份（§3.4）：实测 6 份实现 5 种输出格式（负数/None/整除格式化各不同），全量合并会改 CLI 输出，仅 demo/doctor 两份本来相同，不值得为此建共享模块。**放弃**。
+- `_percentile` 2 份（§3.4）：calibration 是线性插值、bandwidth_worker 是就近排名，**不同算法**，不可合并。
+- `_ceil_div` 3 份（§3.4）：单行惯用式，零漂移风险，合并收益不抵跨模块依赖，保留。
+- `--include-exited`（smi/metrics）、`distributed_cli` 的 `--markdown-report` 等：有真实工作路径，属缺测试而非死代码，保留。
+- smi 发布的 state JSON 不再含恒 null 的 `telemetry.*`、`topology.numa_node/pcie_generation` 键：死数据移除，`typical_power_usage_mw` 等真实值字段保留。
+
+**待决策项**（需要项目层面拍板，未动）：`privateuse1/`（866 行）、`capabilities.audit_native_exports`（约 150 行）、`flop_counter.MatmulFlopCounterMode`（88 行，公开导出）、`schemas/*.schema.json`（三个孤立 schema）、legacy schema 支持是否还需要（`test_virtual_smi.py` 是唯一消费者）。
+
+---
+
 ## 0. 规模总览
 
 | 部分 | 规模 |
@@ -265,14 +293,16 @@ ruff（F401/F811/F841）检查是干净的——没有未使用的 import / 变�
 
 ---
 
-## 8. 建议实施顺序
+## 8. 实施顺序与后续计划
 
-1. **决策项**（需要项目层面拍板，不动代码）：`fsdp_memory.py`、`privateuse1/`、`torch_patch` standalone 路径、`audit_native_exports`、legacy schema 的去留；"公开 API 面"的统一口径。
-2. **纯删除**（低风险，逐项小 commit）：§1 中已确认无消费者的死代码、死 flag、死字段、死分支；§2.2 的不可能条件 guard 与冗余异常元组。每删一处跑全量 `pytest`。
-3. **公共设施**（中风险）：`FakeGpuConfig` dataclass；`_common`/`structured_io` 收编 §3.4 的 helper；CLI 注册器与统一 `--json`/退出码。行为兼容点（如报错文案、退出码）逐一比对。
-4. **大合并**：`serving_plan` 双路径合一（先给两条路径补齐 golden-output 测试再合并）；`torch_patch` 对 `_upstream` 的复刻清理。
-5. **机械拆分**：§4.2 的模块拆分，只做移动与 import 调整，公开 import 路径用旧模块 re-export 保持兼容。
-6. **兜底收敛与性能**：§2.3 的宽捕获收窄（行为敏感，逐个评估要不要转为 warning/报错）；§5 的热路径优化（每项以 benchmark 或既有测试确认无回归）。
-7. **bug 修复**（§7）与上述完全分开走 `fix:` commit。
+原建议顺序中，第 1 步的决策项已部分拍板（`fsdp_memory.py`、standalone 路径已删），第 2 步已全部完成，第 3、6 步各完成一部分。剩余工作按以下优先级推进：
 
-以上第 2–5 步合计预计削减 4,000–5,000 行 Python（另有 C++ 侧与 CMake 的少量收敛），且全部可在"功能不变"约束内完成。
+1. ~~决策项~~ → 剩余待拍板：`privateuse1/`、`audit_native_exports`、`MatmulFlopCounterMode`、`schemas/*.json`、legacy schema（见"实施进度"一节的待决策清单）。
+2. ~~纯删除（§1 + §2.2）~~ ✅ 已完成（`e451bd2`/`bc77d9f`/`6b00725`/`432c21c`）。
+3. **公共设施（剩余，中风险）**：`FakeGpuConfig` dataclass 收敛 `_api.py`/`_runtime.py` 的 8 处 10 参数签名（约 −200 行转发）；CLI 注册器 + 共享 flag 工厂 + 统一 `--json`/退出码约定（注意 `llm_cli` 与 `serving_plan` 同名 flag 默认值不同，统一时需显式保留差异）。`--json` 输出块已由 `emit_json` 收敛（`f6891c8`）。
+4. **大合并**：`serving_plan` 双路径合一（§3.2，全仓杠杆最大单项，约 1,760 行）——**先决条件**：给 `estimate_serving_plan` 与 `estimate_serving_request_set` 补 golden-output 测试，锁住两条路径的输出差异后再抽 `_build_serving_report`；`_patched_dist_init/destroy` 对 `_upstream` 的复刻清理（仅状态读取方式不同，合并时逐字段比对）。
+5. **机械拆分（§4.2）**：`torch_patch`（−1,200 后约 3,100 行，`_allocator.py` 一刀约 810 行最干净）、`smi.py`（拆出 metrics 真正需要的 inventory/归一化层，消除 `metrics.py` import `smi` 私有函数）、`calibration.py`、`serving_plan.py`、`diffusion_estimator.py`。只做移动与 import 调整，旧模块 re-export 保持兼容。
+6. **兜底收敛与性能（剩余）**：§2.3 逐个评估（`workspace_profiles` 的 import 失败退化、`smi.py` publisher 主循环裸捕、`calibration` 第四层 sample fallback 等——行为敏感，建议转 warning 而非静默）；§5.1 allocator `snapshot()` 增量汇总与 `_allocate_allocator_block` 索引化（需 benchmark）；§5.4 metrics 深拷贝三处、`decode_steps` 聚合 + 开关（报告 shape 变化需过消费者）。
+7. **bug 修复（§7，与重构完全分开走 `fix:` commit）**：12 项均未动；其中 #8（conditioning width 静默取 1）与 #11（`_process_name` 泄露 argv）建议优先。
+
+原第 2–5 步预计的 4,000–5,000 行削减目标，目前已完成约 2,500 行；剩余大头集中在第 4 步（serving_plan 合并，约 −400 行净减 + 消除最大维护面）与第 5 步拆分（不减行数但改善结构）。
