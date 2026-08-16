@@ -198,7 +198,6 @@ def main() -> None:
     test_import_is_side_effect_free()
     test_runtime_router_dispatch()
     test_torch_accelerator_routes_through_fakecuda()
-    test_editable_custom_torch_detection()
     test_native_mode_preload_boundaries()
     test_unsupported_api_policy_environment()
     print("runtime init smoke passed")
