@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Literal, Sequence
 
 from ._api import InitResult as NativeInitResult
+from ._api import _FakeGpuRuntimeConfig
 from ._api import init as _native_init
 from ._api import is_initialized as _native_is_initialized
 
@@ -58,9 +59,7 @@ def init(
         selected_runtime = "fakecuda"
 
     if selected_runtime == "native":
-        return _init_native_runtime(
-            build_dir=build_dir,
-            lib_dir=lib_dir,
+        config = _FakeGpuRuntimeConfig(
             mode=mode,
             oom_policy=oom_policy,
             unsupported_api=unsupported_api,
@@ -71,6 +70,11 @@ def init(
             profile=profile,
             device_count=device_count,
             devices=devices,
+        )
+        return _init_native_runtime(
+            config,
+            build_dir=build_dir,
+            lib_dir=lib_dir,
             update_env=update_env,
             force=force,
         )
@@ -105,35 +109,26 @@ def init_privateuse1() -> None:
 
 
 def _init_native_runtime(
+    config: _FakeGpuRuntimeConfig,
     *,
     build_dir: str | os.PathLike[str] | None = None,
     lib_dir: str | os.PathLike[str] | None = None,
-    mode: str | None = None,
-    oom_policy: str | None = None,
-    unsupported_api: str | None = None,
-    dist_mode: str | None = None,
-    cluster_config: str | os.PathLike[str] | None = None,
-    coordinator_addr: str | None = None,
-    coordinator_transport: str | None = None,
-    profile: str | None = None,
-    device_count: int | None = None,
-    devices: str | Sequence[str] | None = None,
     update_env: bool = True,
     force: bool = False,
 ) -> RuntimeInitResult:
     native_result = _native_init(
         build_dir=build_dir,
         lib_dir=lib_dir,
-        mode=mode,
-        oom_policy=oom_policy,
-        unsupported_api=unsupported_api,
-        dist_mode=dist_mode,
-        cluster_config=cluster_config,
-        coordinator_addr=coordinator_addr,
-        coordinator_transport=coordinator_transport,
-        profile=profile,
-        device_count=device_count,
-        devices=devices,
+        mode=config.mode,
+        oom_policy=config.oom_policy,
+        unsupported_api=config.unsupported_api,
+        dist_mode=config.dist_mode,
+        cluster_config=config.cluster_config,
+        coordinator_addr=config.coordinator_addr,
+        coordinator_transport=config.coordinator_transport,
+        profile=config.profile,
+        device_count=config.device_count,
+        devices=config.devices,
         update_env=update_env,
         force=force,
     )

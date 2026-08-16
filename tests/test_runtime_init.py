@@ -155,39 +155,15 @@ def test_native_mode_preload_boundaries() -> None:
 
 
 def test_unsupported_api_policy_environment() -> None:
-    from fakegpu._api import _apply_config_env
+    from fakegpu._api import _apply_config_env, _FakeGpuRuntimeConfig
 
     env: dict[str, str] = {}
-    _apply_config_env(
-        env,
-        mode=None,
-        oom_policy=None,
-        unsupported_api=" WARN ",
-        dist_mode=None,
-        cluster_config=None,
-        coordinator_addr=None,
-        coordinator_transport=None,
-        profile=None,
-        device_count=None,
-        devices=None,
-    )
+    _apply_config_env(env, _FakeGpuRuntimeConfig(unsupported_api=" WARN "))
     assert env["FAKEGPU_RUNTIME"] == "native"
     assert env["FAKEGPU_UNSUPPORTED_API"] == "warn"
 
     try:
-        _apply_config_env(
-            {},
-            mode=None,
-            oom_policy=None,
-            unsupported_api="ignore",
-            dist_mode=None,
-            cluster_config=None,
-            coordinator_addr=None,
-            coordinator_transport=None,
-            profile=None,
-            device_count=None,
-            devices=None,
-        )
+        _apply_config_env({}, _FakeGpuRuntimeConfig(unsupported_api="ignore"))
     except ValueError:
         pass
     else:
