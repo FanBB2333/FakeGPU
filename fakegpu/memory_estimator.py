@@ -9,6 +9,7 @@ from os import PathLike
 from typing import Any
 
 from .workspace_profiles import (
+    _iter_tensor_leaves,
     load_workspace_profiles,
     match_workspace_profile,
     workspace_profile_summary,
@@ -1771,22 +1772,6 @@ def _trace_with_fake_device(
         return make_fx(function, tracing_mode="real")(*fake_inputs)
 
 
-def _iter_tensor_leaves(value: Any):
-    try:
-        import torch
-    except Exception:
-        return
-
-    if isinstance(value, torch.Tensor):
-        yield value
-        return
-    if isinstance(value, Mapping):
-        for item in value.values():
-            yield from _iter_tensor_leaves(item)
-        return
-    if isinstance(value, (tuple, list)):
-        for item in value:
-            yield from _iter_tensor_leaves(item)
 
 
 def _iter_node_references(value: Any, node_type: type[Any]):

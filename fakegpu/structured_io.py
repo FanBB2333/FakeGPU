@@ -65,4 +65,22 @@ def write_json(path: str | Path, payload: Mapping[str, Any]) -> Path:
     return resolved
 
 
-__all__ = ["StructuredDataError", "load_mapping", "write_json"]
+def emit_json(target: str | Path, payload: Mapping[str, Any]) -> Path | None:
+    """Serialize ``payload`` exactly once for CLI ``--json`` output.
+
+    ``"-"`` prints the document to stdout; anything else writes it through
+    :func:`write_json`.  Returns the resolved output path, or ``None`` when
+    the document went to stdout.
+    """
+    if str(target) == "-":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return None
+    return write_json(target, payload)
+
+
+__all__ = [
+    "StructuredDataError",
+    "emit_json",
+    "load_mapping",
+    "write_json",
+]

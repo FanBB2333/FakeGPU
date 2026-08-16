@@ -10,6 +10,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .structured_io import emit_json
+
 
 SCHEMA_VERSION = "fakegpu.native_api_capabilities.v1"
 
@@ -386,13 +388,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     ]
     if args.json_path:
-        payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
-        if args.json_path == "-":
-            print(payload, end="")
-        else:
-            output = Path(args.json_path).expanduser().resolve()
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(payload, encoding="utf-8")
+        output = emit_json(args.json_path, report)
+        if output is not None:
             print(f"Native capability report: {output}")
     else:
         _print_capability_report(report)

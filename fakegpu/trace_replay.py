@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import re
 from collections import defaultdict
@@ -13,7 +12,7 @@ from .operator_profiles import (
     load_operator_profiles,
     match_operator_profile,
 )
-from .structured_io import load_mapping, write_json
+from .structured_io import emit_json, load_mapping
 from .topology import Topology, simulate_point_to_point
 
 
@@ -167,11 +166,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             operator_profiles=profiles,
         )
         if args.json_path:
-            payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
-            if args.json_path == "-":
-                print(payload, end="")
-            else:
-                output = write_json(args.json_path, report)
+            output = emit_json(args.json_path, report)
+            if output is not None:
                 print(f"Trace replay: {output}")
         else:
             _print_report(report)
