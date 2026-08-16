@@ -13,10 +13,8 @@ It uses a **two-layer architecture**:
    per-device memory tracking with OOM simulation, autocast dtype validation,
    cross-device operation guards, and terminal summary reporting.
 
-When the upstream FakeCudaTensor is not available (neither as an installed
-``torch.fakegpu`` module nor as the vendored ``fakegpu._upstream``), a
-standalone fallback path patches ``torch.cuda`` directly but cannot make
-``tensor.device`` report ``cuda``.
+The base layer is always available because ``fakegpu._upstream`` ships with
+this package; ``patch()`` raises if it cannot be activated.
 
 .. _pytorch-fakegpu: https://github.com/FanBB2333/pytorch-fakegpu
 
@@ -190,8 +188,6 @@ _DEVICE_NAME = _resolve_device_name()
 _COMPUTE_MAJOR, _COMPUTE_MINOR = _resolve_compute_capability()
 _TOTAL_MEMORY = _resolve_total_memory()
 
-_current_device: int = 0
-
 
 def _refresh_runtime_profile_state(
     *, num_devices: int | None = None, device_name: str | None = None
@@ -226,14 +222,10 @@ def _refresh_runtime_profile_state(
 
 
 # ---------------------------------------------------------------------------
-# Device registry: tracks which fake CUDA device each tensor lives on.
-# Key = storage data_ptr (stable across views/slices)
-# Value = logical device index
+# Cross-device guards
 # ---------------------------------------------------------------------------
 
 _CROSS_DEVICE_CHECK = os.environ.get("FAKEGPU_CROSS_DEVICE_CHECK", "1") != "0"
-
-_device_registry: dict[int, int] = {}
 
 
 def _is_fake_tensor(tensor: Any) -> bool:
@@ -244,47 +236,15 @@ def _is_fake_tensor(tensor: Any) -> bool:
     )
 
 
-def _register_tensor_device(tensor: Any, device_index: int) -> None:
-    """Register a tensor's storage in the device registry and memory tracker."""
-    if _is_fake_tensor(tensor):
-        return
-    try:
-        dp = tensor.untyped_storage().data_ptr()
-        if dp != 0:
-            _device_registry[dp] = device_index
-            _register_tensor_for_memory_tracking(tensor, device_index)
-    except (MemoryError, RuntimeError):
-        raise  # Re-raise OOM and related errors
-    except Exception:
-        pass
-
-
-def _get_tensor_device(tensor: Any) -> int | None:
-    """Look up the fake CUDA device index for a tensor, or None if untracked."""
-    if _is_fake_tensor(tensor):
-        return None
-    try:
-        dp = tensor.untyped_storage().data_ptr()
-        return _device_registry.get(dp)
-    except Exception:
-        return None
-
-
 def _check_same_device(*tensors: Any) -> None:
     """Raise RuntimeError if tensors span multiple fake CUDA devices."""
     if not _CROSS_DEVICE_CHECK:
         return
-    import torch
 
     first_dev: int | None = None
     for t in tensors:
-        if not isinstance(t, torch.Tensor):
-            continue
-        # Upstream FakeCudaTensor: has device_index attribute
+        # FakeCudaTensor carries its device index as an attribute.
         dev = getattr(t, "device_index", None)
-        if dev is None:
-            # Standalone fallback: use device registry
-            dev = _get_tensor_device(t)
         if dev is None:
             continue  # untracked tensor (e.g. pure CPU) — skip
         if first_dev is None:
@@ -350,24 +310,6 @@ def _wrap_tensor_binary_op(orig_fn: Any, dunder_name: str) -> Any:
         return orig_fn(self, other)
 
     return wrapper
-
-
-def _extract_cuda_device_index(device: Any) -> int | None:
-    """Extract CUDA device index from a device-like argument, or None if not CUDA."""
-    import torch
-
-    if isinstance(device, int):
-        return device
-    if isinstance(device, str):
-        try:
-            device = torch.device(device)
-        except Exception:
-            return None
-    if isinstance(device, torch.device) and device.type == "cuda":
-        return device.index if device.index is not None else _current_device
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Memory tracking: per-device memory accounting.
 # ---------------------------------------------------------------------------
@@ -1341,7 +1283,6 @@ def _set_tracked_data_ptr(tensor: Any, data_ptr: int) -> None:
 def _release_tracked_storage(data_ptr: int) -> None:
     if _memory_tracker is not None:
         _memory_tracker.release(data_ptr)
-    _device_registry.pop(data_ptr, None)
 
 
 def _register_tensor_for_memory_tracking(
@@ -1682,12 +1623,7 @@ _saved_tensors_hooks_cm: Any = None
 
 
 def _active_fake_device_index() -> int:
-    try:
-        if _upstream_mod is not None:
-            return int(getattr(_upstream_mod, "_CURRENT_DEVICE", 0))
-    except Exception:
-        pass
-    return int(_current_device)
+    return int(_upstream_mod._CURRENT_DEVICE)
 
 
 def _pack_autograd_saved_tensor(tensor: Any) -> Any:
@@ -1711,7 +1647,7 @@ def _pack_autograd_saved_tensor(tensor: Any) -> Any:
         nbytes = int(storage.nbytes())
         if raw_data_ptr == 0 or nbytes == 0:
             return tensor
-        device_index = _device_registry.get(raw_data_ptr, _active_fake_device_index())
+        device_index = _active_fake_device_index()
         if device_index < 0 or device_index >= len(tracker._total):
             return tensor
         metadata = {
@@ -1977,43 +1913,11 @@ class PatchResult:
 # ---------------------------------------------------------------------------
 # Device helpers
 # ---------------------------------------------------------------------------
-
-
-def _normalize_device(device: Any) -> Any:
-    """Redirect ``cuda`` devices to ``cpu``, raising for invalid ordinals."""
-    import torch
-
-    if device is None:
-        return device
-    if isinstance(device, int):
-        # bare int in a context expecting a CUDA ordinal → validate then cpu
-        if device >= _NUM_DEVICES:
-            raise RuntimeError(
-                f"CUDA error: invalid device ordinal "
-                f"(requested cuda:{device}, available: {_NUM_DEVICES})"
-            )
-        return torch.device("cpu")
-    if isinstance(device, str):
-        device = torch.device(device)
-    if isinstance(device, torch.device) and device.type == "cuda":
-        idx = device.index if device.index is not None else _current_device
-        if idx >= _NUM_DEVICES:
-            raise RuntimeError(
-                f"CUDA error: invalid device ordinal "
-                f"(requested cuda:{idx}, available: {_NUM_DEVICES})"
-            )
-        return torch.device("cpu")
-    return device
-
-
 def _normalize_device_index(device: Any) -> int:
     import torch
 
     def _get_current() -> int:
-        # In upstream mode, delegate to upstream's _CURRENT_DEVICE
-        if _upstream_mod is not None:
-            return _upstream_mod._CURRENT_DEVICE
-        return _current_device
+        return _upstream_mod._CURRENT_DEVICE
 
     if device is None:
         return _get_current()
@@ -2026,85 +1930,8 @@ def _normalize_device_index(device: Any) -> int:
     return _get_current()
 
 
-def _device_kwarg_wrapper(fn: Any) -> Any:
-    """Wrap a callable so that its ``device`` keyword is redirected."""
-
-    @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        target_dev: int | None = None
-        if "device" in kwargs and kwargs["device"] is not None:
-            target_dev = _extract_cuda_device_index(kwargs["device"])
-            kwargs["device"] = _normalize_device(kwargs["device"])
-        result = fn(*args, **kwargs)
-        if target_dev is not None:
-            _register_tensor_device(result, target_dev)
-        return result
-
-    return wrapper
-
-
-# ---------------------------------------------------------------------------
-# Tensor.to / Tensor.cuda wrappers
-# ---------------------------------------------------------------------------
-
-_orig_tensor_to: Any = None
-_orig_tensor_cuda: Any = None
 _orig_tensor_pin_memory: Any = None
 _orig_torch_compile: Any = None
-
-
-def _patched_tensor_to(self: Any, *args: Any, **kwargs: Any) -> Any:
-    import torch
-
-    # Extract target CUDA device index before normalization
-    target_dev: int | None = None
-    if "device" in kwargs:
-        target_dev = _extract_cuda_device_index(kwargs["device"])
-        kwargs["device"] = _normalize_device(kwargs["device"])
-
-    if args:
-        first = args[0]
-        if isinstance(first, str):
-            if target_dev is None:
-                target_dev = _extract_cuda_device_index(first)
-            args = (_normalize_device(first),) + args[1:]
-        elif isinstance(first, torch.device) and first.type == "cuda":
-            if target_dev is None:
-                target_dev = _extract_cuda_device_index(first)
-            args = (torch.device("cpu"),) + args[1:]
-        elif (
-            isinstance(first, int)
-            and len(args) >= 2
-            and isinstance(args[1], torch.dtype)
-        ):
-            if target_dev is None:
-                target_dev = first
-            args = (torch.device("cpu"),) + args[1:]
-
-    result = _orig_tensor_to(self, *args, **kwargs)
-    if target_dev is not None:
-        _register_tensor_device(result, target_dev)
-    return result
-
-
-def _patched_tensor_cuda(
-    self: Any,
-    device: Any = None,
-    non_blocking: bool = False,
-    memory_format: Any = None,
-) -> Any:
-    import torch
-
-    target_dev = (
-        _extract_cuda_device_index(device) if device is not None else _current_device
-    )
-    if memory_format is not None and memory_format is not torch.preserve_format:
-        result = self.contiguous(memory_format=memory_format)
-    else:
-        result = self
-    if target_dev is not None:
-        _register_tensor_device(result, target_dev)
-    return result
 
 
 def _patched_tensor_pin_memory(self: Any, device: Any = None) -> Any:
@@ -2151,120 +1978,8 @@ def _install_compile_compat_shim(torch_mod: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Module.to / Module.cuda wrappers
-# ---------------------------------------------------------------------------
-
-_orig_module_to: Any = None
-
-
-def _patched_module_to(self: Any, *args: Any, **kwargs: Any) -> Any:
-    import torch
-
-    target_dev: int | None = None
-
-    if "device" in kwargs:
-        target_dev = _extract_cuda_device_index(kwargs["device"])
-        kwargs["device"] = _normalize_device(kwargs["device"])
-
-    if args:
-        first = args[0]
-        if isinstance(first, str):
-            target_dev = (
-                _extract_cuda_device_index(first) if target_dev is None else target_dev
-            )
-            args = (_normalize_device(first),) + args[1:]
-        elif isinstance(first, torch.device) and first.type == "cuda":
-            target_dev = (
-                _extract_cuda_device_index(first) if target_dev is None else target_dev
-            )
-            args = (torch.device("cpu"),) + args[1:]
-
-    result = _orig_module_to(self, *args, **kwargs)
-
-    # Register all parameters/buffers in the device registry
-    if target_dev is not None:
-        for param in result.parameters():
-            _register_tensor_device(param.data, target_dev)
-            _mark_tensor_memory_category(param.data, "parameter")
-        for buf in result.buffers():
-            _register_tensor_device(buf, target_dev)
-            _mark_tensor_memory_category(buf, "buffer")
-
-    return result
-
-
-def _patched_module_cuda(self: Any, device: Any = None) -> Any:
-    # Module is already on CPU; no transfer needed.
-    _mark_module_memory_categories(self)
-    return self
-
-
-# ---------------------------------------------------------------------------
 # Fake CUDA Stream / Event
 # ---------------------------------------------------------------------------
-
-
-class _FakeStream:
-    """Minimal stub for ``torch.cuda.Stream``."""
-
-    def __init__(self, device: Any = None, priority: int = 0, **kwargs: Any):
-        self.device_index = _normalize_device_index(device)
-        self.cuda_stream = 0
-
-    def synchronize(self) -> None:
-        pass
-
-    def wait_stream(self, stream: Any) -> None:
-        pass
-
-    def wait_event(self, event: Any) -> None:
-        pass
-
-    def record_event(self, event: Any = None) -> Any:
-        if event is None:
-            event = _FakeEvent()
-        return event
-
-    def query(self) -> bool:
-        return True
-
-    def is_capturing(self) -> bool:
-        return False
-
-    def __enter__(self) -> "_FakeStream":
-        return self
-
-    def __exit__(self, *args: Any) -> None:
-        pass
-
-
-class _FakeEvent:
-    """Minimal stub for ``torch.cuda.Event``."""
-
-    def __init__(
-        self,
-        enable_timing: bool = False,
-        blocking: bool = False,
-        interprocess: bool = False,
-    ):
-        self._time: float = 0.0
-
-    def record(self, stream: Any = None) -> None:
-        pass
-
-    def synchronize(self) -> None:
-        pass
-
-    def wait(self, stream: Any = None) -> None:
-        pass
-
-    def query(self) -> bool:
-        return True
-
-    def elapsed_time(self, other: "_FakeEvent") -> float:
-        return 0.0
-
-
 def _install_torch_accelerator_compat(torch_mod: Any) -> None:
     """Route the generic accelerator API through FakeGPU's CUDA surface.
 
@@ -2349,162 +2064,8 @@ class _FakeDeviceProperties:
 # ---------------------------------------------------------------------------
 # torch.cuda module‑level stubs
 # ---------------------------------------------------------------------------
-
-
-def _stub_is_available() -> bool:
-    return True
-
-
 def _stub_is_bf16_supported(device: Any = None) -> bool:
     return _COMPUTE_MAJOR >= 8
-
-
-def _stub_device_count() -> int:
-    return _NUM_DEVICES
-
-
-def _stub_current_device() -> int:
-    return _current_device
-
-
-def _stub_set_device(device: Any) -> None:
-    global _current_device
-    import torch
-
-    if isinstance(device, torch.device):
-        idx = device.index or 0
-    elif isinstance(device, str):
-        idx = torch.device(device).index or 0
-    elif isinstance(device, int):
-        idx = device
-    else:
-        idx = 0
-
-    if idx < 0 or idx >= _NUM_DEVICES:
-        raise RuntimeError(
-            f"CUDA error: invalid device ordinal "
-            f"(requested {idx}, available: {_NUM_DEVICES})"
-        )
-    _current_device = idx
-
-
-def _stub_exchange_device(device: int) -> int:
-    """Swap the current device and return the previous one.
-
-    This is the internal helper behind ``torch.cuda.device()`` context
-    manager.  A negative *device* index is treated as a no-op.
-    """
-    global _current_device
-    prev = _current_device
-    if isinstance(device, int) and device >= 0:
-        if device >= _NUM_DEVICES:
-            raise RuntimeError(
-                f"CUDA error: invalid device ordinal "
-                f"(requested {device}, available: {_NUM_DEVICES})"
-            )
-        _current_device = device
-    return prev
-
-
-def _stub_maybe_exchange_device(device: int) -> int:
-    """Like :func:`_stub_exchange_device` but only acts when *device* >= 0."""
-    return _stub_exchange_device(device)
-
-
-def _stub_get_device_name(device: Any = None) -> str:
-    return _DEVICE_NAME
-
-
-def _stub_get_device_capability(device: Any = None) -> tuple[int, int]:
-    return (_COMPUTE_MAJOR, _COMPUTE_MINOR)
-
-
-def _stub_get_device_properties(device: Any = None) -> _FakeDeviceProperties:
-    idx = 0
-    if device is not None:
-        import torch
-
-        if isinstance(device, torch.device):
-            idx = device.index or 0
-        elif isinstance(device, int):
-            idx = device
-    if idx < 0 or idx >= _NUM_DEVICES:
-        raise RuntimeError(
-            f"CUDA error: invalid device ordinal "
-            f"(requested {idx}, available: {_NUM_DEVICES})"
-        )
-    return _FakeDeviceProperties(idx)
-
-
-def _stub_get_arch_list() -> list[str]:
-    return ["sm_70", "sm_75", "sm_80", "sm_86", "sm_90"]
-
-
-def _stub_mem_get_info(device: Any = None) -> tuple[int, int]:
-    if _memory_tracker is not None:
-        return _memory_tracker.mem_get_info(_normalize_device_index(device))
-    return (_TOTAL_MEMORY, _TOTAL_MEMORY)
-
-
-def _stub_synchronize(device: Any = None) -> None:
-    pass
-
-
-def _stub_empty_cache() -> None:
-    if _memory_tracker is not None:
-        _memory_tracker.empty_cache()
-
-
-def _stub_memory_allocated(device: Any = None) -> int:
-    if _memory_tracker is not None:
-        return _memory_tracker.memory_allocated(_normalize_device_index(device))
-    return 0
-
-
-def _stub_memory_reserved(device: Any = None) -> int:
-    if _memory_tracker is not None:
-        return _memory_tracker.memory_reserved(_normalize_device_index(device))
-    return 0
-
-
-def _stub_max_memory_allocated(device: Any = None) -> int:
-    if _memory_tracker is not None:
-        return _memory_tracker.max_memory_allocated(_normalize_device_index(device))
-    return 0
-
-
-def _stub_max_memory_reserved(device: Any = None) -> int:
-    if _memory_tracker is not None:
-        return _memory_tracker.max_memory_reserved(_normalize_device_index(device))
-    return 0
-
-
-def _stub_memory_cached(device: Any = None) -> int:
-    return _stub_memory_reserved(device)
-
-
-def _stub_max_memory_cached(device: Any = None) -> int:
-    return _stub_max_memory_reserved(device)
-
-
-def _stub_reset_peak_memory_stats(device: Any = None) -> None:
-    if _memory_tracker is not None:
-        _memory_tracker.reset_peak(_normalize_device_index(device))
-
-
-def _stub_reset_max_memory_allocated(device: Any = None) -> None:
-    _stub_reset_peak_memory_stats(device)
-
-
-def _stub_reset_max_memory_cached(device: Any = None) -> None:
-    _stub_reset_peak_memory_stats(device)
-
-
-def _stub_reset_accumulated_memory_stats(device: Any = None) -> None:
-    if _memory_tracker is not None:
-        _memory_tracker.reset_accumulated(_normalize_device_index(device))
-
-
 def _build_memory_stats_dict(
     current: int,
     peak: int,
@@ -2584,51 +2145,6 @@ def _build_memory_stats_dict(
         "num_alloc_retries": int(num_alloc_retries),
         "num_ooms": int(num_ooms),
     }
-
-
-def _stub_memory_stats(device: Any = None) -> dict[str, Any]:
-    if _memory_tracker is not None:
-        idx = _normalize_device_index(device)
-        return _memory_tracker.memory_stats(idx)
-    return _build_memory_stats_dict(0, 0)
-
-
-def _stub_memory_summary(device: Any = None, abbreviated: bool = False) -> str:
-    return "FakeGPU: no real CUDA memory to report.\n"
-
-
-def _stub_memory_snapshot() -> list[Any]:
-    if _memory_tracker is not None:
-        return _memory_tracker.allocator_snapshot()
-    return []
-
-
-def _stub_manual_seed(seed: int) -> None:
-    import torch
-
-    torch.random.default_generator.manual_seed(int(seed))
-
-
-def _stub_manual_seed_all(seed: int) -> None:
-    _stub_manual_seed(seed)
-
-
-def _stub_seed() -> int:
-    import torch
-
-    return int(torch.random.default_generator.seed())
-
-
-def _stub_seed_all() -> None:
-    _stub_seed()
-
-
-def _stub_initial_seed() -> int:
-    import torch
-
-    return int(torch.random.default_generator.initial_seed())
-
-
 def _cpu_rng_state():
     import torch
 
@@ -2659,121 +2175,14 @@ def _stub_set_rng_state_all(new_states: Any) -> None:
     states = list(new_states)
     if not states:
         return
-    index = _current_device if _current_device < len(states) else 0
+    current = _upstream_mod._CURRENT_DEVICE
+    index = current if current < len(states) else 0
     _set_cpu_rng_state(states[index])
-
-
-def _stub_is_initialized() -> bool:
-    return True
-
-
-def _stub_lazy_init() -> None:
-    pass
-
-
-def _stub_init() -> None:
-    pass
-
-
-def _stub_ipc_collect() -> None:
-    pass
-
-
-def _stub_can_device_access_peer(device: int, peer_device: int) -> bool:
-    return True
-
-
-def _stub_get_gencode_flags() -> str:
-    return ""
-
-
-def _stub_cudart() -> Any:
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Wrap non-default-stream context manager
-# ---------------------------------------------------------------------------
-
-
-class _FakeStreamCtx:
-    """Replacement for ``torch.cuda.stream(s)``."""
-
-    def __init__(self, stream: Any) -> None:
-        pass
-
-    def __enter__(self) -> "_FakeStreamCtx":
-        return self
-
-    def __exit__(self, *args: Any) -> None:
-        pass
-
-
-class _FakeCudaGenerator:
-    """CPU-backed stand-in for ``torch.cuda.default_generators`` entries."""
-
-    def __init__(self, index: int):
-        self.index = index
-
-    def get_state(self):
-        return _cpu_rng_state()
-
-    def set_state(self, new_state: Any) -> None:
-        _set_cpu_rng_state(new_state)
-
-    def manual_seed(self, seed: int):
-        _stub_manual_seed(seed)
-        return self
-
-    def seed(self) -> int:
-        return _stub_seed()
-
-    def initial_seed(self) -> int:
-        return _stub_initial_seed()
-
-
-def _make_default_generators() -> tuple[_FakeCudaGenerator, ...]:
-    return tuple(_FakeCudaGenerator(i) for i in range(_NUM_DEVICES))
 
 
 # ---------------------------------------------------------------------------
 # Shared compatibility helpers
 # ---------------------------------------------------------------------------
-
-
-def _install_legacy_cuda_types(torch: Any, *, device: str) -> None:
-    """Install ``torch.cuda.FloatTensor``-style factories."""
-
-    _LEGACY_TYPES = {
-        "FloatTensor": torch.float32,
-        "DoubleTensor": torch.float64,
-        "HalfTensor": torch.float16,
-        "BFloat16Tensor": torch.bfloat16,
-        "IntTensor": torch.int32,
-        "LongTensor": torch.int64,
-        "ShortTensor": torch.int16,
-        "ByteTensor": torch.uint8,
-        "CharTensor": torch.int8,
-        "BoolTensor": torch.bool,
-    }
-
-    def _make_legacy_factory(dtype: Any) -> type:
-        _dtype = dtype
-
-        class _LegacyCudaTensor:
-            def __new__(cls, *args: Any, **kwargs: Any) -> Any:
-                kwargs = dict(kwargs)
-                kwargs["device"] = device
-                if args and not isinstance(args[0], int):
-                    return torch.tensor(args[0], dtype=_dtype, **kwargs)
-                return torch.empty(*args, dtype=_dtype, **kwargs)
-
-        return _LegacyCudaTensor
-
-    for tname, dt in _LEGACY_TYPES.items():
-        setattr(torch.cuda, tname, _make_legacy_factory(dt))
-
-
 def _reported_cuda_version(torch_mod: Any) -> str:
     configured_cuda_version = os.environ.get("FAKEGPU_CUDA_VERSION", "").strip()
     installed_cuda_version = getattr(torch_mod.version, "cuda", None)
@@ -3036,33 +2445,6 @@ def _patch_upstream_fakecuda_tensor_compat(upstream: Any, torch_mod: Any) -> Non
     fake_tensor_cls.record_stream = lambda self, stream: None
     fake_tensor_cls.is_cpu = property(lambda self: False)
     fake_tensor_cls._fakegpu_set_patched = True
-
-
-def _patch_upstream_collective_tensor_compat(upstream: Any) -> None:
-    if getattr(upstream, "_fakegpu_collective_tensor_patched", False):
-        return
-
-    def _patched_copy_collective_tensor(destination: Any, source: Any) -> None:
-        dst = upstream.unwrap_tensor(destination)
-        src = upstream.unwrap_tensor(source)
-        if dst.numel() == src.numel():
-            dst.copy_(src.reshape_as(dst))
-            return
-        if dst.numel() < src.numel():
-            dst.copy_(src.reshape(-1)[: dst.numel()].reshape_as(dst))
-            return
-
-        flat_dst = dst.reshape(-1)
-        flat_src = src.reshape(-1)
-        src_numel = flat_src.numel()
-        for offset in range(0, flat_dst.numel(), src_numel):
-            end = min(offset + src_numel, flat_dst.numel())
-            flat_dst[offset:end].copy_(flat_src[: end - offset])
-
-    upstream._copy_collective_tensor = _patched_copy_collective_tensor
-    upstream._fakegpu_collective_tensor_patched = True
-
-
 def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
     if getattr(upstream, "_fakegpu_all_gather_object_patched", False):
         return
@@ -3333,30 +2715,27 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
 def _activate_upstream(num_devices: int, device_name: str) -> Any:
     """Load and enable the upstream FakeCudaTensor backend.
 
-    Tries the installed ``torch.fakegpu`` module first, then falls back to the
-    vendored ``fakegpu._upstream``.  Returns the activated module on success,
-    or *None* when neither source is available.
+    Prefers an installed ``torch.fakegpu`` module (custom PyTorch build) and
+    falls back to the vendored ``fakegpu._upstream`` that ships with this
+    package.  Raises when neither can be activated: the vendored module is
+    always present in a healthy install, so a failure means the installation
+    is broken and must not be silently degraded.
     """
     global _upstream_mod
-    upstream = None
 
-    # 1. Prefer an installed torch.fakegpu (custom PyTorch build)
+    # 1. Prefer an installed torch.fakegpu (custom PyTorch build).  Only an
+    # ImportError means "not installed"; anything else is a broken build and
+    # must surface instead of silently falling back to the vendored module.
     try:
         upstream = importlib.import_module("torch.fakegpu")
-    except Exception:
-        pass
-
-    # 2. Fall back to vendored upstream
-    if upstream is None:
-        try:
-            from . import _upstream
-
-            upstream = _upstream
-        except Exception:
-            return None
+    except ImportError:
+        from . import _upstream as upstream
 
     if not hasattr(upstream, "enable"):
-        return None
+        raise RuntimeError(
+            "fakegpu.torch_patch: upstream backend has no enable() function: "
+            f"{upstream!r}"
+        )
 
     orig_dist_init = None
     orig_dist_destroy = None
@@ -3369,10 +2748,8 @@ def _activate_upstream(num_devices: int, device_name: str) -> Any:
         pass
 
     # Configure device count and name before enable()
-    if hasattr(upstream, "_NUM_DEVICES"):
-        upstream._NUM_DEVICES = num_devices
-    if hasattr(upstream, "_DEVICE_NAME"):
-        upstream._DEVICE_NAME = device_name
+    upstream._NUM_DEVICES = num_devices
+    upstream._DEVICE_NAME = device_name
 
     os.environ["TORCH_FAKEGPU_DEVICE_COUNT"] = str(num_devices)
     os.environ["TORCH_FAKEGPU_DEVICE_NAME"] = device_name
@@ -3493,7 +2870,6 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     _install_upstream_dispatch_memory_tracking(upstream, torch_mod)
     _install_upstream_memory_category_hooks(upstream, torch_mod)
     _patch_upstream_fakecuda_tensor_compat(upstream, torch_mod)
-    _patch_upstream_collective_tensor_compat(upstream)
     _patch_upstream_all_gather_object(upstream, torch_mod)
     _patch_upstream_process_group_compat(upstream, torch_mod)
     _install_torch_accelerator_compat(torch_mod)
@@ -3783,8 +3159,7 @@ def patch(
     Returns
     -------
     PatchResult
-        Describes whether the installed custom torch backend was used or the
-        standalone CPU-backed fallback was activated.
+        Describes the activated upstream FakeCudaTensor backend.
     """
 
     global \
@@ -3792,38 +3167,26 @@ def patch(
         _NUM_DEVICES, \
         _DEVICE_NAME, \
         _patch_result, \
-        _memory_tracker, \
-        _current_device
+        _memory_tracker
 
     os.environ["FAKEGPU_RUNTIME"] = "fakecuda"
     import torch
     import torch.cuda
-    import torch.cuda.memory as _memory
-    import torch.nn
 
     _refresh_runtime_profile_state(num_devices=num_devices, device_name=device_name)
 
     if _patched:
-        if _upstream_mod is not None:
-            if hasattr(_upstream_mod, "_NUM_DEVICES"):
-                _upstream_mod._NUM_DEVICES = _NUM_DEVICES
-            if hasattr(_upstream_mod, "_DEVICE_NAME"):
-                _upstream_mod._DEVICE_NAME = _DEVICE_NAME
-            if getattr(_upstream_mod, "_CURRENT_DEVICE", 0) >= _NUM_DEVICES:
-                _upstream_mod._CURRENT_DEVICE = 0
-        if _current_device >= _NUM_DEVICES:
-            _current_device = 0
+        _upstream_mod._NUM_DEVICES = _NUM_DEVICES
+        _upstream_mod._DEVICE_NAME = _DEVICE_NAME
+        if getattr(_upstream_mod, "_CURRENT_DEVICE", 0) >= _NUM_DEVICES:
+            _upstream_mod._CURRENT_DEVICE = 0
         torch.cuda._cached_device_count = _NUM_DEVICES
         if _MEMORY_TRACKING:
             _memory_tracker = _DeviceMemoryTracker(
                 [profile["total_memory"] for profile in _DEVICE_PROFILES]
             )
         _reset_dispatch_tracking_stats(
-            enabled=bool(
-                _upstream_mod is not None
-                and _MEMORY_TRACKING
-                and _DISPATCH_MEMORY_TRACKING
-            )
+            enabled=bool(_MEMORY_TRACKING and _DISPATCH_MEMORY_TRACKING)
         )
         _refresh_smi_publisher()
         _patch_transformers_utils()
@@ -3835,510 +3198,23 @@ def patch(
         )
         return _patch_result
 
-    # --- Upstream path: FakeCudaTensor (vendored or installed) ---
     upstream = _activate_upstream(_NUM_DEVICES, _DEVICE_NAME)
-    if upstream is not None:
-        _apply_enhancements_over_upstream(upstream, torch)
-        _refresh_smi_publisher()
-        _patched = True
-        _patch_result = PatchResult(
-            backend="upstream",
-            num_devices=_NUM_DEVICES,
-            device_name=_DEVICE_NAME,
-        )
-        warnings.warn(
-            "fakegpu.torch_patch: enabled upstream FakeCudaTensor backend with "
-            "FakeGPU enhancements (memory tracking, GPU profiles, cross-device "
-            "validation).",
-            stacklevel=2,
-        )
-        return _patch_result
-
-    # ---- torch.cuda module functions ----
-    torch.cuda._fakegpu_simulated = True
-    torch.cuda.is_available = _stub_is_available
-    torch.cuda.device_count = _stub_device_count
-    torch.cuda.current_device = _stub_current_device
-    torch.cuda.set_device = _stub_set_device
-    torch.cuda.get_device_name = _stub_get_device_name
-    torch.cuda.get_device_capability = _stub_get_device_capability
-    torch.cuda.get_device_properties = _stub_get_device_properties
-    torch.cuda.get_arch_list = _stub_get_arch_list
-    torch.cuda.mem_get_info = _stub_mem_get_info
-    torch.cuda.synchronize = _stub_synchronize
-    torch.cuda.empty_cache = _stub_empty_cache
-    torch.cuda.memory_allocated = _stub_memory_allocated
-    torch.cuda.memory_reserved = _stub_memory_reserved
-    torch.cuda.max_memory_allocated = _stub_max_memory_allocated
-    torch.cuda.max_memory_reserved = _stub_max_memory_reserved
-    torch.cuda.memory_cached = _stub_memory_cached
-    torch.cuda.max_memory_cached = _stub_max_memory_cached
-    torch.cuda.reset_peak_memory_stats = _stub_reset_peak_memory_stats
-    torch.cuda.reset_max_memory_allocated = _stub_reset_max_memory_allocated
-    torch.cuda.reset_max_memory_cached = _stub_reset_max_memory_cached
-    torch.cuda.reset_accumulated_memory_stats = _stub_reset_accumulated_memory_stats
-    torch.cuda.memory_stats = _stub_memory_stats
-    torch.cuda.memory_summary = _stub_memory_summary
-    torch.cuda.memory_snapshot = _stub_memory_snapshot
-    torch.cuda.manual_seed = _stub_manual_seed
-    torch.cuda.manual_seed_all = _stub_manual_seed_all
-    torch.cuda.seed = _stub_seed
-    torch.cuda.seed_all = _stub_seed_all
-    torch.cuda.initial_seed = _stub_initial_seed
-    torch.cuda.get_rng_state = _stub_get_rng_state
-    torch.cuda.get_rng_state_all = _stub_get_rng_state_all
-    torch.cuda.set_rng_state = _stub_set_rng_state
-    torch.cuda.set_rng_state_all = _stub_set_rng_state_all
-    torch.cuda.ipc_collect = _stub_ipc_collect
-    torch.cuda.can_device_access_peer = _stub_can_device_access_peer
-    torch.cuda.get_gencode_flags = _stub_get_gencode_flags
-    torch.cuda.default_generators = _make_default_generators()
-    _patch_hf_cuda_surface(torch)
-
-    # ---- Initialize memory tracker ----
-    if _MEMORY_TRACKING:
-        per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
-        _memory_tracker = _DeviceMemoryTracker(per_device_bytes)
-
-    # ---- Register atexit terminal summary ----
-    atexit.register(_dump_terminal_summary)
-
-    # Override memory stubs to use tracker
-    if _memory_tracker is not None:
-
-        def _active_tracker():
-            if _memory_tracker is None:
-                raise RuntimeError("FakeGPU memory tracking is not initialized")
-            return _memory_tracker
-
-        def _tracked_memory_allocated(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().memory_allocated(idx)
-
-        def _tracked_max_memory_allocated(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().max_memory_allocated(idx)
-
-        def _tracked_memory_reserved(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().memory_reserved(idx)
-
-        def _tracked_max_memory_reserved(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().max_memory_reserved(idx)
-
-        def _tracked_mem_get_info(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().mem_get_info(idx)
-
-        def _tracked_empty_cache():
-            _active_tracker().empty_cache()
-
-        def _tracked_reset_peak_memory_stats(device=None):
-            idx = _normalize_device_index(device)
-            _active_tracker().reset_peak(idx)
-
-        def _tracked_reset_accumulated_memory_stats(device=None):
-            idx = _normalize_device_index(device)
-            _active_tracker().reset_accumulated(idx)
-
-        def _tracked_memory_stats(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().memory_stats(idx)
-
-        def _tracked_memory_snapshot():
-            return _active_tracker().allocator_snapshot()
-
-        torch.cuda.empty_cache = _tracked_empty_cache
-        torch.cuda.memory_allocated = _tracked_memory_allocated
-        torch.cuda.max_memory_allocated = _tracked_max_memory_allocated
-        torch.cuda.memory_reserved = _tracked_memory_reserved
-        torch.cuda.max_memory_reserved = _tracked_max_memory_reserved
-        torch.cuda.memory_cached = _tracked_memory_reserved
-        torch.cuda.max_memory_cached = _tracked_max_memory_reserved
-        torch.cuda.mem_get_info = _tracked_mem_get_info
-        torch.cuda.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
-        torch.cuda.reset_max_memory_allocated = _tracked_reset_peak_memory_stats
-        torch.cuda.reset_max_memory_cached = _tracked_reset_peak_memory_stats
-        torch.cuda.reset_accumulated_memory_stats = (
-            _tracked_reset_accumulated_memory_stats
-        )
-        torch.cuda.memory_stats = _tracked_memory_stats
-        torch.cuda.memory_snapshot = _tracked_memory_snapshot
-        _memory.empty_cache = _tracked_empty_cache
-        _memory.memory_stats = _tracked_memory_stats
-        _memory.memory_allocated = _tracked_memory_allocated
-        _memory.max_memory_allocated = _tracked_max_memory_allocated
-        _memory.memory_reserved = _tracked_memory_reserved
-        _memory.max_memory_reserved = _tracked_max_memory_reserved
-        _memory.memory_cached = _tracked_memory_reserved
-        _memory.max_memory_cached = _tracked_max_memory_reserved
-        _memory.mem_get_info = _tracked_mem_get_info
-        _memory.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
-        _memory.reset_max_memory_allocated = _tracked_reset_peak_memory_stats
-        _memory.reset_max_memory_cached = _tracked_reset_peak_memory_stats
-        _memory.reset_accumulated_memory_stats = _tracked_reset_accumulated_memory_stats
-        _memory.memory_snapshot = _tracked_memory_snapshot
-
-    # Internal helpers PyTorch relies on
-    torch.cuda._is_compiled = lambda: True
-    torch.cuda._lazy_init = _stub_lazy_init
-    torch.cuda.is_initialized = _stub_is_initialized
-    torch.cuda.init = _stub_init
-    torch.cuda._initialized = True
-    torch.cuda._cached_device_count = _NUM_DEVICES
-
-    # ---- Patch internal helpers that check for CUDA compilation ----
-    torch.cuda._exchange_device = _stub_exchange_device
-    torch.cuda._get_device = _stub_current_device
-    if hasattr(torch.cuda, "_maybe_exchange_device"):
-        torch.cuda._maybe_exchange_device = _stub_maybe_exchange_device
-
-    # ---- Patch torch.load to validate + normalize map_location ----
-    _orig_torch_load = torch.load
-
-    def _patched_torch_load(*args, **kwargs):
-        # Extract map_location from kwargs or positional args
-        ml = kwargs.get("map_location", None)
-        if ml is None and len(args) >= 2:
-            ml = args[1]
-
-        # Validate CUDA device index in map_location
-        if ml is not None:
-            if isinstance(ml, str):
-                try:
-                    dev = torch.device(ml)
-                    if dev.type == "cuda":
-                        idx = dev.index if dev.index is not None else _current_device
-                        if idx >= _NUM_DEVICES:
-                            raise RuntimeError(
-                                f"CUDA error: invalid device ordinal "
-                                f"(map_location={ml}, available: {_NUM_DEVICES})"
-                            )
-                except RuntimeError:
-                    raise
-                except Exception:
-                    pass
-            elif isinstance(ml, torch.device) and ml.type == "cuda":
-                idx = ml.index if ml.index is not None else _current_device
-                if idx >= _NUM_DEVICES:
-                    raise RuntimeError(
-                        f"CUDA error: invalid device ordinal "
-                        f"(map_location={ml}, available: {_NUM_DEVICES})"
-                    )
-
-        # Normalize device in map_location
-        if "map_location" in kwargs:
-            ml_val = kwargs["map_location"]
-            if isinstance(ml_val, (str, torch.device)):
-                kwargs["map_location"] = _normalize_device(ml_val)
-        elif len(args) >= 2:
-            ml_val = args[1]
-            if isinstance(ml_val, (str, torch.device)):
-                args = (args[0], _normalize_device(ml_val)) + args[2:]
-
-        return _orig_torch_load(*args, **kwargs)
-
-    torch.load = _patched_torch_load
-
-    # ---- torch._C stubs for internal imports ----
-    # Several PyTorch subsystems (torch._dynamo, torch._inductor, torch.cuda.graphs)
-    # do top-level ``from torch._C import _cuda_*`` which fails on CPU-only builds.
-    _c_stubs = {
-        "_cuda_getCurrentRawStream": lambda device_index=0: 0,
-        "_cuda_isCurrentStreamCapturing": lambda: False,
-        "_cuda_getDeviceCount": lambda: _NUM_DEVICES,
-        "_cuda_getDevice": lambda: _current_device,
-        "_cuda_setDevice": lambda device: None,
-        "_cuda_init": lambda: None,
-        "_cuda_emptyCache": lambda: None,
-        "_cuda_resetPeakMemoryStats": lambda device: None,
-        "_cuda_memoryStats": lambda device: {},
-        "_cuda_memorySnapshot": lambda: [],
-    }
-    for attr, stub in _c_stubs.items():
-        setattr(torch._C, attr, stub)
-
-    # Ensure torch._C._get_accelerator returns "cuda" so that torch.device(0)
-    # resolves to cuda:0 rather than mps:0 (on macOS) or xpu:0, etc.
-    # FSDP and other distributed modules rely on this for device_id resolution.
-    torch._C._get_accelerator = lambda: torch.device("cuda")
-
-    # ---- Fix stale module-level bindings from 'from torch._C import _cuda_*' ----
-    # On CPU-only builds, these are dummy classes that raise RuntimeError.
-    # The modules are already imported by the time patch() runs, so we must
-    # patch the local bindings directly.
-    import torch.cuda.graphs as _graphs
-
-    if hasattr(_graphs, "_cuda_isCurrentStreamCapturing"):
-        _graphs._cuda_isCurrentStreamCapturing = _c_stubs[
-            "_cuda_isCurrentStreamCapturing"
-        ]
-
-    import torch.cuda.random as _random
-
-    _mem_stubs = {
-        "_cuda_CUDAAllocator": lambda: None,
-        "_cuda_beginAllocateCurrentThreadToPool": lambda *a: None,
-        "_cuda_beginAllocateToPool": lambda *a: None,
-        "_cuda_endAllocateToPool": lambda *a: None,
-        "_cuda_releasePool": lambda *a: None,
-    }
-    for attr, stub in _mem_stubs.items():
-        if hasattr(_memory, attr):
-            setattr(_memory, attr, stub)
-        if not hasattr(torch._C, attr):
-            setattr(torch._C, attr, stub)
-
-    _random.manual_seed = _stub_manual_seed
-    _random.manual_seed_all = _stub_manual_seed_all
-    _random.seed = _stub_seed
-    _random.seed_all = _stub_seed_all
-    _random.initial_seed = _stub_initial_seed
-    _random.get_rng_state = _stub_get_rng_state
-    _random.get_rng_state_all = _stub_get_rng_state_all
-    _random.set_rng_state = _stub_set_rng_state
-    _random.set_rng_state_all = _stub_set_rng_state_all
-
-    # Fake CUDAGraph class if missing
-    if not hasattr(torch._C, "_CUDAGraph"):
-
-        class _FakeCUDAGraph:
-            def __init__(self):
-                pass
-
-            def capture_begin(self, *a, **kw):
-                pass
-
-            def capture_end(self):
-                pass
-
-            def replay(self):
-                pass
-
-            def reset(self):
-                pass
-
-            def pool(self):
-                return 0
-
-        torch._C._CUDAGraph = _FakeCUDAGraph  # type: ignore[attr-defined]
-
-    if not hasattr(torch._C, "_graph_pool_handle"):
-        torch._C._graph_pool_handle = lambda: 0  # type: ignore[attr-defined]
-
-    # Safe stubs that should avoid AttributeError if code touches them
-    if hasattr(torch.cuda, "is_bf16_supported"):
-        torch.cuda.is_bf16_supported = _stub_is_bf16_supported
-
-    # ---- Stream / Event ----
-    torch.cuda.Stream = _FakeStream  # type: ignore[misc]
-    torch.cuda.Event = _FakeEvent  # type: ignore[misc]
-    torch.cuda.stream = _FakeStreamCtx  # type: ignore[misc]
-    torch.cuda.current_stream = lambda device=None: _FakeStream(device=device)
-    torch.cuda.default_stream = lambda device=None: _FakeStream(device=device)
-    torch.cuda.set_stream = lambda stream: _stub_set_device(
-        getattr(stream, "device_index", 0)
-    )
-    _install_torch_accelerator_compat(torch)
-
-    # ---- Tensor.to / Tensor.cuda ----
-    global _orig_tensor_to, _orig_tensor_cuda
-    _orig_tensor_to = torch.Tensor.to
-    _orig_tensor_cuda = torch.Tensor.cuda
-    _orig_tensor_pin_memory = torch.Tensor.pin_memory
-    torch.Tensor.to = _patched_tensor_to  # type: ignore[assignment]
-    torch.Tensor.cuda = _patched_tensor_cuda  # type: ignore[assignment]
-    torch.Tensor.pin_memory = _patched_tensor_pin_memory  # type: ignore[assignment]
-    _install_compile_compat_shim(torch)
-
-    # ---- Propagate device registry through clone/contiguous/detach ----
-    _orig_tensor_clone = torch.Tensor.clone
-
-    def _patched_tensor_clone(self, *args, **kwargs):
-        result = _orig_tensor_clone(self, *args, **kwargs)
-        dev = _get_tensor_device(self)
-        if dev is not None:
-            _register_tensor_device(result, dev)
-        return result
-
-    torch.Tensor.clone = _patched_tensor_clone
-
-    _orig_tensor_contiguous = torch.Tensor.contiguous
-
-    def _patched_tensor_contiguous(self, *args, **kwargs):
-        result = _orig_tensor_contiguous(self, *args, **kwargs)
-        dev = _get_tensor_device(self)
-        if dev is not None:
-            _register_tensor_device(result, dev)
-        return result
-
-    torch.Tensor.contiguous = _patched_tensor_contiguous
-
-    # detach() is a method in PyTorch 2.x, not a property
-    _orig_tensor_detach_fn = torch.Tensor.detach
-
-    def _patched_tensor_detach(self):
-        result = _orig_tensor_detach_fn(self)
-        dev = _get_tensor_device(self)
-        if dev is not None:
-            _register_tensor_device(result, dev)
-        return result
-
-    torch.Tensor.detach = _patched_tensor_detach
-
-    # ---- Cross-device validation patches ----
-    if _CROSS_DEVICE_CHECK:
-        import torch.nn.functional as F
-
-        # Multi-input torch functions
-        _MULTI_TENSOR_OPS = [
-            "matmul",
-            "mm",
-            "bmm",
-            "cat",
-            "stack",
-            "where",
-            "addmm",
-            "addcmul",
-            "addcdiv",
-        ]
-        for op_name in _MULTI_TENSOR_OPS:
-            orig = getattr(torch, op_name, None)
-            if orig is not None:
-                setattr(torch, op_name, _wrap_multi_tensor_op(orig))
-
-        # Loss functions
-        _LOSS_OPS = ["cross_entropy", "mse_loss", "nll_loss", "binary_cross_entropy"]
-        for op_name in _LOSS_OPS:
-            orig = getattr(F, op_name, None)
-            if orig is not None:
-                setattr(F, op_name, _wrap_multi_tensor_op(orig))
-
-        # Also wrap F.linear for model forward cross-device checks
-        _FUNCTIONAL_OPS = [
-            "linear",
-            "conv1d",
-            "conv2d",
-            "conv3d",
-            "embedding",
-            "batch_norm",
-            "layer_norm",
-        ]
-        for op_name in _FUNCTIONAL_OPS:
-            orig = getattr(F, op_name, None)
-            if orig is not None:
-                setattr(F, op_name, _wrap_multi_tensor_op(orig))
-
-        # Tensor binary dunder methods
-        _BINARY_DUNDERS = [
-            "__add__",
-            "__radd__",
-            "__sub__",
-            "__rsub__",
-            "__mul__",
-            "__rmul__",
-            "__truediv__",
-            "__rtruediv__",
-            "__matmul__",
-            "__rmatmul__",
-        ]
-        for dunder in _BINARY_DUNDERS:
-            orig = getattr(torch.Tensor, dunder, None)
-            if orig is not None:
-                setattr(torch.Tensor, dunder, _wrap_tensor_binary_op(orig, dunder))
-
-    # ---- Module.to / Module.cuda ----
-    global _orig_module_to
-    _orig_module_to = torch.nn.Module.to
-    torch.nn.Module.to = _patched_module_to  # type: ignore[assignment]
-    torch.nn.Module.cuda = _patched_module_cuda  # type: ignore[assignment]
-
-    # ---- Tensor creation functions (redirect device='cuda' → 'cpu') ----
-    _FACTORY_NAMES = [
-        "tensor",
-        "as_tensor",
-        "zeros",
-        "ones",
-        "empty",
-        "full",
-        "rand",
-        "randn",
-        "randint",
-        "arange",
-        "linspace",
-        "logspace",
-        "eye",
-        "zeros_like",
-        "ones_like",
-        "empty_like",
-        "full_like",
-        "rand_like",
-        "randn_like",
-        "randint_like",
-        "scalar_tensor",
-        "sparse_coo_tensor",
-    ]
-    for name in _FACTORY_NAMES:
-        orig = getattr(torch, name, None)
-        if orig is not None:
-            setattr(torch, name, _device_kwarg_wrapper(orig))
-
-    # ---- torch.cuda.FloatTensor and friends (legacy) ----
-    # Code like ``torch.cuda.FloatTensor(3, 4)`` should produce a CPU tensor.
-    _install_legacy_cuda_types(torch, device="cpu")
-
-    # ---- GradScaler passthrough ----
-    try:
-        from torch.amp import GradScaler as _RealGradScaler
-
-        class _FakeGradScaler(_RealGradScaler):
-            def __init__(self, *args: Any, **kwargs: Any):
-                kwargs.setdefault("enabled", False)
-                super().__init__(*args, **kwargs)
-
-        torch.cuda.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
-        torch.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
-    except Exception:
-        pass
-
-    # ---- Autocast dtype validation (defense-in-depth) ----
-    _install_fakegpu_autocast(torch)
-    _install_optimizer_state_category_patch(torch)
-
-    # ---- Patch torch.device to allow 'cuda' construction ----
-    # torch.device('cuda') already works; no patch needed.
-
-    # ---- NCCL stubs ----
-    try:
-        import torch.distributed as dist
-
-        if hasattr(dist, "is_nccl_available"):
-            dist.is_nccl_available = lambda: True
-    except Exception:
-        pass
-    _patch_cuda_rng_surface(torch)
-    _patch_nccl_surface(torch)
-    _patch_dist_group_fallback(torch)
-    _patch_fsdp_device_handling()
-    _patch_transformers_utils()
-    _patch_accelerate_utils()
-
+    _apply_enhancements_over_upstream(upstream, torch)
     _refresh_smi_publisher()
-
     _patched = True
     _patch_result = PatchResult(
-        backend="standalone",
+        backend="upstream",
         num_devices=_NUM_DEVICES,
         device_name=_DEVICE_NAME,
     )
-
     warnings.warn(
-        "fakegpu.torch_patch: CUDA operations are transparently redirected to CPU. "
-        "Tensor.device will report 'cpu'. Computations are real but run on the CPU backend.",
+        "fakegpu.torch_patch: enabled upstream FakeCudaTensor backend with "
+        "FakeGPU enhancements (memory tracking, GPU profiles, cross-device "
+        "validation).",
         stacklevel=2,
     )
     return _patch_result
+
 
 
 def is_patched() -> bool:
