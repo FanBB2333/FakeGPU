@@ -111,51 +111,20 @@ def _snapshot_fakecuda() -> dict[str, Any]:
 
     try:
         snapshot = tp.memory_snapshot()
-        devices = snapshot.get("devices")
-        if isinstance(devices, list):
-            return {
-                **dict(snapshot),
-                "devices": [
-                    dict(device)
-                    for device in devices
-                    if isinstance(device, dict)
-                ],
-            }
     except Exception:
-        pass
+        return {"tracking_confidence": "C0_incomplete", "devices": []}
 
-    tracker = getattr(tp, "_memory_tracker", None)
-    profiles = list(getattr(tp, "_DEVICE_PROFILES", []))
-    devices: list[dict[str, Any]] = []
-    for index, profile in enumerate(profiles):
-        total_memory = int(profile.get("total_memory", 0))
-        current_memory = 0
-        peak_memory = 0
-        allocation_count = 0
-        if tracker is not None:
-            current_memory = int(tracker.memory_allocated(index))
-            peak_memory = int(tracker.max_memory_allocated(index))
-            alloc_calls = getattr(tracker, "_alloc_calls", [])
-            if index < len(alloc_calls):
-                allocation_count = int(alloc_calls[index])
-
-        devices.append(
-            {
-                "index": index,
-                "name": str(profile.get("name", "")),
-                "profile_id": str(profile.get("profile_id", "")),
-                "total_memory": total_memory,
-                "current_memory": current_memory,
-                "peak_memory": peak_memory,
-                "allocation_count": allocation_count,
-            }
-        )
-    return {
-        "tracking_confidence": (
-            "C2_torch_tensor_lifetime" if devices else "C0_incomplete"
-        ),
-        "devices": devices,
-    }
+    devices = snapshot.get("devices")
+    if isinstance(devices, list):
+        return {
+            **dict(snapshot),
+            "devices": [
+                dict(device)
+                for device in devices
+                if isinstance(device, dict)
+            ],
+        }
+    return {"tracking_confidence": "C0_incomplete", "devices": []}
 
 
 def _system_exit_code(exc: SystemExit) -> int:

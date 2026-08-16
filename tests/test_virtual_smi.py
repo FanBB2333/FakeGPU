@@ -65,9 +65,6 @@ def test_publisher_and_virtual_smi_include_process_memory(
     assert state["devices"][0]["free_memory"] == 4864 * 2**20
     assert state["devices"][0]["uuid"].startswith("GPU-")
     assert state["devices"][0]["pci_bus_id"] == "00000000:01:00.0"
-    assert state["devices"][0]["telemetry"][
-        "gpu_utilization_percent"
-    ] is None
     assert state["publisher"]["health"]["attempted_writes"] == 1
     assert state["publisher"]["health"]["successful_writes"] == 1
     assert state["publisher"]["health"]["failed_writes"] == 0
@@ -147,7 +144,6 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
     assert "108 SMs" in detail
     assert "native capabilities 5 groups / 26 APIs / 24" in detail
     assert "activation=64.0 MiB" in detail
-    assert "GPU utilization N/A" in detail
     assert "memory enabled, dispatch enabled" in detail
     assert "7 calls" in detail
     assert "0.25s interval" in detail
@@ -162,7 +158,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
                 "--query-gpu",
                 (
                     "index,name,profile.id,compute_cap,memory.total,"
-                    "memory.used,utilization.gpu,fakegpu.version"
+                    "memory.used,fakegpu.version"
                 ),
                 "--format",
                 "csv,noheader,nounits",
@@ -174,7 +170,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
     )
     row = capsys.readouterr().out.strip()
     assert row.startswith(
-        "0,FakeGPU Test Profile 512MB,test-512m,8.0,512,80,N/A,"
+        "0,FakeGPU Test Profile 512MB,test-512m,8.0,512,80,"
     )
 
     assert (
@@ -183,7 +179,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
                 "--state",
                 str(path),
                 "--query-gpu",
-                "timestamp,memory.total,temperature.gpu",
+                "timestamp,memory.total",
                 "--format",
                 "csv,nounits",
             ]
@@ -191,9 +187,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
         == 0
     )
     query_lines = capsys.readouterr().out.splitlines()
-    assert query_lines[0] == (
-        "timestamp,memory.total [MiB],temperature.gpu [C]"
-    )
+    assert query_lines[0] == "timestamp,memory.total [MiB]"
     assert query_lines[1].split(",")[0]
 
     assert (

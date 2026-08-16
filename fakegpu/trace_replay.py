@@ -449,8 +449,6 @@ def _apply_profiles(
                     modeled_totals[field] += evaluated[field]
             if event["duration_us"] <= 0 and "latency_us" in evaluated:
                 event["duration_us"] = float(evaluated["latency_us"])
-            if int(event.get("bytes", 0) or 0) <= 0 and "memory_bytes" in evaluated:
-                event["memory_bytes"] = int(evaluated["memory_bytes"])
         output.append(event)
     return output, {
         "catalog_profile_count": len(profiles),
@@ -473,22 +471,21 @@ def _remove_fusion_double_counts(
         )
     output = []
     for raw in events:
-        event = dict(raw)
-        fusion_id = event.get("fusion_id")
+        fusion_id = raw.get("fusion_id")
         if (
             fusion_id is not None
             and str(fusion_id) in fused_ids
-            and str(event["name"]) in fused_ids[str(fusion_id)]
+            and str(raw["name"]) in fused_ids[str(fusion_id)]
         ):
-            profile = event.get("operator_profile")
+            # The event's output is already accounted for by the fused
+            # operator profile covering it — drop it from the aggregate.
+            profile = raw.get("operator_profile")
             if not (
                 isinstance(profile, Mapping)
                 and profile.get("fused_operators")
             ):
-                event["excluded_from_aggregate"] = True
-                event["exclusion_reason"] = "covered_by_fused_operator_profile"
-        if not event.get("excluded_from_aggregate"):
-            output.append(event)
+                continue
+        output.append(dict(raw))
     return output
 
 

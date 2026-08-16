@@ -636,11 +636,8 @@ def _build_child_env(ns: argparse.Namespace, paths: PreflightPaths) -> dict[str,
     base["FAKEGPU_CLUSTER_REPORT_PATH"] = str(paths.cluster_report)
     base["FAKEGPU_PREFLIGHT_CHILD_REPORT"] = str(paths.child_report)
     base["FAKEGPU_PREFLIGHT_STAGE_LOG"] = str(paths.stage_log)
-    base["FAKEGPU_PREFLIGHT_TARGET_STAGE"] = str(ns.stage)
     if ns.allocation_stacks:
         base["FAKEGPU_ALLOCATION_STACKS"] = "1"
-    if ns.steps is not None:
-        base["FAKEGPU_PREFLIGHT_STEPS"] = str(int(ns.steps))
     effective_device_count = ns.device_count
     if effective_device_count is None and ns.devices:
         effective_device_count = _infer_device_count_from_devices(str(ns.devices))
@@ -836,21 +833,12 @@ def _normalize_devices(raw_report: dict[str, Any] | None, raw_report_kind: str |
 def _resolve_memory_safety_factor(ns: argparse.Namespace) -> float:
     raw_value = ns.memory_safety_factor
     if raw_value is None:
-        env_value = os.environ.get("FAKEGPU_PREFLIGHT_MEMORY_SAFETY_FACTOR")
-        if env_value:
-            try:
-                raw_value = float(env_value)
-            except ValueError:
-                raw_value = 1.0
-    if raw_value is None:
         return 1.0
     return max(1.0, float(raw_value))
 
 
 def _resolve_memory_safety_margin(ns: argparse.Namespace) -> int:
     raw_value = ns.memory_safety_margin
-    if raw_value is None:
-        raw_value = os.environ.get("FAKEGPU_PREFLIGHT_MEMORY_SAFETY_MARGIN")
     if raw_value is None or str(raw_value).strip() == "":
         return 0
     return max(0, _parse_byte_quantity(str(raw_value)))
