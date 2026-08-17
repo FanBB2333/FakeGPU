@@ -434,9 +434,16 @@ def _run_workers(
     failures: list[str] = []
     reports: list[dict[str, Any]] = []
     try:
+        # All worker processes were already started concurrently above, so
+        # bound the total wait by one shared deadline instead of granting
+        # each rank its own full process_timeout budget in turn: N slow
+        # ranks would otherwise serialize into N * process_timeout of wall
+        # clock even though they are running in parallel.
+        deadline = time.monotonic() + process_timeout
         for rank, report_path, process in processes:
+            remaining = max(0.0, deadline - time.monotonic())
             try:
-                stdout, stderr = process.communicate(timeout=process_timeout)
+                stdout, stderr = process.communicate(timeout=remaining)
             except subprocess.TimeoutExpired:
                 process.kill()
                 stdout, stderr = process.communicate(timeout=5)
@@ -444,6 +451,10 @@ def _run_workers(
                     f"rank {rank} exceeded {process_timeout:.1f}s\n"
                     f"stdout:\n{stdout}\nstderr:\n{stderr}"
                 )
+                if report_path.is_file():
+                    reports.append(
+                        json.loads(report_path.read_text(encoding="utf-8"))
+                    )
                 continue
             if report_path.is_file():
                 reports.append(json.loads(report_path.read_text(encoding="utf-8")))
