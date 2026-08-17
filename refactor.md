@@ -26,6 +26,25 @@
 
 验证：本地全量 `pytest`（222 passed，与改动前一致）+ ruff clean；CI 同款 manifest 校验（7+39 cases）通过；`scripts/test.sh smoke`（含 native 重建）通过；额外手工冒烟——`fakegpu.env()`/`fakegpu.init(runtime="native")`/`fakegpu.run()` 三个公开入口直接调用验证派生的 `FAKEGPU_*` 环境变量、`device_count` 校验报错、子进程环境注入均与改动前一致。远端 406/gem12 真机复测见第一批的验证矩阵说明；`f6891c8`（emit_json，改动了 CLI `--json` 输出代码路径）与 `a9da7f8` 已于 2026-08-17 在两台机器上复跑通过（各 221 passed + 1 skipped）。
 
+**2026-08-17 §7 bug 批量修复**：12 项中 10 项确认为真实缺陷并修复（各一个 `fix:` commit），1 项（#6）在修复过程中发现是**未完成且有 bug 的半成品**（假设了 catalog schema 里不存在的 `"group"` 字段，`native_capability_report()` 一调用就 `KeyError`）——已改正为正确实现；1 项（#12）复核后判定**不是 bug，未改**。
+
+| Commit | Bug # | 内容 |
+|---|---|---|
+| `1a7a337` | #1 | rank 正则去掉多余转义，ShardMetadata placement 重写恢复生效 |
+| `3ab2fb8` | #2 | 释放回调改为绑定分配时的 tracker 实例（storage finalizer + saved-tensor 两处），二次 `patch()` 后不再向新 tracker 误释放 |
+| `14a9f5f` | #3 | `successful_writes` 改为写入前预增、失败回滚，去掉序列化里的 `+1` 特例 |
+| `d519e97` | #4/#5 | `_evaluate_json_check` 捕获元组补 `IndexError`；`finished_at_ns`/`duration_seconds` 改为同一时钟读数 |
+| `2f483f5` | #6 | 过滤下沉到 `native_capability_report()`，在算 summary **之前**过滤 apis（并修正了 WIP 里假设不存在的 `"group"` 关联字段导致的 KeyError）；`group_count` 保持目录级、不随 API 过滤变化（匹配既有测试 `== 5`） |
+| `6a87c50` | #7 | 超时 rank 仍读取已写出的诊断 JSON；顺序 join 改为共享 deadline，避免 N 个慢 rank 把超时叠加放大 |
+| `a270e59` | #8 | 文本编码器均未暴露宽度且 denoiser 也未声明时改为 raise（而非静默取 1）；真正无文本编码器角色的管线不受影响 |
+| `19e1999` | #9 | `_bool_value` 只保留已通过测试验证的 `"auto"`（DeepSpeed 真实哨兵值，**不是 bug，保留**）；仅对词表外的未知字符串收紧为 raise，不再默认 True |
+| `97dc3f6` | #10 | `assert` 改为显式 `if...raise`，避免 `python -O` 下失效 |
+| `4a3ae3b` | #11 | `_process_name` 只取入口脚本 basename，不再拼接可能含路径/密钥的后续 argv |
+
+**#12 复核结论（未改）**：`_validate_collector_environment_contract` 只在校验的 `FAKEGPU_SERVING_*` 环境变量已设置时才比对，起初怀疑"未设置应报错"。但 `build_cuda_serving_sample` 是文档化的公开 API（README "The same adapter is available as `fakegpu.build_cuda_serving_sample(...)` for use inside a Python benchmark"），供 vLLM/自定义 runner **在 FakeGPU 自身采集子进程之外直接调用**；`tests/test_analysis_extensions.py:757` 就是在这些环境变量全部未设置的情况下调用并断言成功。若改成"未设置即报错"会直接打破这个文档化用例和对应测试。当前"仅在存在时比对"是该函数**双重用途设计下的正确行为**，不是缺陷，保留不动。
+
+验证：本轮改动后本地全量 `pytest`（222 passed）+ ruff clean + CI 同款 manifest 校验（7+39 cases）通过；`_process_name`/`native_capability_report` 过滤逻辑另有手工冒烟验证。**本轮未做远端 406/gem12 复测**——多数改动是纯逻辑修正（正则、计数器时序、assert→raise、字符串校验）或范围明确的行为收紧，本地+CI 已提供等价确认；如需更保险可再补一次远端跑。
+
 **复核后有意不改的条目**（与文档原建议不同处）：
 - `_aggregate_report` 的 error 分支（§1.5/2.3）：rc=0 但报告为 error 的边缘情况下可达，保留。
 - `_stage.py` 重复 env 赋值（§2.2）：嵌套 stage 退出时有恢复语义，保留。
@@ -284,20 +303,20 @@ ruff（F401/F811/F841）检查是干净的——没有未使用的 import / 变�
 
 ## 7. 扫描中顺带发现的疑似 bug（与重构分开处理）
 
-这些修复会**改变行为**，不应混入"功能不变"的重构 commit；建议先逐一确认、单独提交：
+这些修复会**改变行为**，不应混入"功能不变"的重构 commit；已逐一确认、单独提交（状态见下，详见"实施进度"2026-08-17 §7 批量修复一节）：
 
-1. `torch_patch.py:3088`：`re.sub(r"rank:\\d+/", ...)` 在 raw string 里 `\\d` 是字面反斜杠+d，替换恒为 no-op——ShardMetadata placement 重写从未生效。
-2. `torch_patch.py:3817-3820`：重复调用 `patch()` 时新建 `_DeviceMemoryTracker`，但旧 tracker 注册的 `weakref.finalize` 仍会对新 tracker 调 `release()`，二次 `init()` 后内存记账漂移。
-3. `smi.py:1453-1456`：`successful_writes` 在写入**之前**+1 序列化进状态，写失败时计数超前。
-4. `validation.py:539` 捕获元组缺 `IndexError`，而 `_json_pointer:583` 对 list 索引越界正是抛它——错一个 pointer 会让整次验证崩溃而非记为 case 失败。
-5. `validation.py:163-164`：`finished_at_ns` 与 `duration_seconds` 来自两次独立取时钟，报告内部自相矛盾。
-6. `capabilities.py:373-388`：`--library`/`--classification` 过滤发生在 summary 计算之后，打印的汇总与表格互相矛盾。
-7. `distributed_cli.py:448`：rank 超时后 `continue` 发生在读取 report 之前，超时 rank 的诊断 JSON 被丢弃；`:438` 顺序 join 使 N 个慢 rank 串行放大超时。
-8. `diffusion_estimator.py:1106-1107`：text encoder 均未暴露 hidden_size 时 conditioning width 静默取 1，产出接近 0 的错误估算而非报错（扫描发现的**最高风险静默兜底**）。
-9. `training_plan.py:695-696, 730`：`_positive_int("auto")` 静默返回 1、`_bool_value("maybe")` 返回 True——确认是否有意。
-10. `calibration.py:713-714`：用 `assert` 做控制流，`python -O` 下消失后 `None` 会被嵌进 observation。
-11. `smi.py:4322-4325`：`_process_name` 拼接 `sys.argv[:3]` 写入状态文件与 Prometheus label，可能泄露命令行中的路径/敏感参数，且是无界 label 基数来源。
-12. `calibration.py:2250-2272`：`_validate_collector_environment_contract` 只在 env var 已设置时比对，独立运行时六项检查全部静默通过，名不副实。
+1. ✅ 已修复（`1a7a337`）`torch_patch.py:3088`：`re.sub(r"rank:\\d+/", ...)` 在 raw string 里 `\\d` 是字面反斜杠+d，替换恒为 no-op——ShardMetadata placement 重写从未生效。
+2. ✅ 已修复（`3ab2fb8`）`torch_patch.py:3817-3820`：重复调用 `patch()` 时新建 `_DeviceMemoryTracker`，但旧 tracker 注册的 `weakref.finalize` 仍会对新 tracker 调 `release()`，二次 `init()` 后内存记账漂移。
+3. ✅ 已修复（`14a9f5f`）`smi.py:1453-1456`：`successful_writes` 在写入**之前**+1 序列化进状态，写失败时计数超前。
+4. ✅ 已修复（`d519e97`）`validation.py:539` 捕获元组缺 `IndexError`，而 `_json_pointer:583` 对 list 索引越界正是抛它——错一个 pointer 会让整次验证崩溃而非记为 case 失败。
+5. ✅ 已修复（`d519e97`）`validation.py:163-164`：`finished_at_ns` 与 `duration_seconds` 来自两次独立取时钟，报告内部自相矛盾。
+6. ✅ 已修复（`2f483f5`）`capabilities.py:373-388`：`--library`/`--classification` 过滤发生在 summary 计算之后，打印的汇总与表格互相矛盾。**注**：中途一版未完成的修复曾假设 `apis`/`groups` 间存在实际不存在的 `"group"` 关联字段，会导致 `KeyError`——已改正为正确实现，过滤下沉到 `native_capability_report()` 内部、summary 计算之前。
+7. ✅ 已修复（`6a87c50`）`distributed_cli.py:448`：rank 超时后 `continue` 发生在读取 report 之前，超时 rank 的诊断 JSON 被丢弃；`:438` 顺序 join 使 N 个慢 rank 串行放大超时。
+8. ✅ 已修复（`a270e59`）`diffusion_estimator.py:1106-1107`：text encoder 均未暴露 hidden_size 时 conditioning width 静默取 1，产出接近 0 的错误估算而非报错（扫描发现的**最高风险静默兜底**）。
+9. ✅ 已修复（`19e1999`）`training_plan.py:695-696, 730`：`_positive_int("auto")` 确认是 DeepSpeed 真实哨兵值且有测试覆盖，**保留不改**；`_bool_value` 对词表外未知字符串默认 True 才是真问题，已改为 raise。
+10. ✅ 已修复（`97dc3f6`）`calibration.py:713-714`：用 `assert` 做控制流，`python -O` 下消失后 `None` 会被嵌进 observation。
+11. ✅ 已修复（`4a3ae3b`）`smi.py:4322-4325`：`_process_name` 拼接 `sys.argv[:3]` 写入状态文件与 Prometheus label，可能泄露命令行中的路径/敏感参数，且是无界 label 基数来源。
+12. ⛔ **复核后判定不是 bug，未改**。`calibration.py:2250-2272`：`_validate_collector_environment_contract` 只在 env var 已设置时比对。起初怀疑应改成"未设置即报错"，但 `build_cuda_serving_sample` 是文档化公开 API，供 vLLM/自定义 runner 在 FakeGPU 采集子进程之外直接调用（README 明确写了这个用法），`tests/test_analysis_extensions.py:757` 就是在这些变量全部未设置时调用并断言成功——"未设置即报错"会打破这个文档化用例。当前行为是该函数双重用途设计下的正确实现。
 
 ---
 
@@ -311,6 +330,6 @@ ruff（F401/F811/F841）检查是干净的——没有未使用的 import / 变�
 4. **大合并**：`serving_plan` 双路径合一（§3.2，全仓杠杆最大单项，约 1,760 行）——**先决条件**：给 `estimate_serving_plan` 与 `estimate_serving_request_set` 补 golden-output 测试，锁住两条路径的输出差异后再抽 `_build_serving_report`；`_patched_dist_init/destroy` 对 `_upstream` 的复刻清理（仅状态读取方式不同，合并时逐字段比对）。
 5. **机械拆分（§4.2）**：`torch_patch`（−1,200 后约 3,100 行，`_allocator.py` 一刀约 810 行最干净）、`smi.py`（拆出 metrics 真正需要的 inventory/归一化层，消除 `metrics.py` import `smi` 私有函数）、`calibration.py`、`serving_plan.py`、`diffusion_estimator.py`。只做移动与 import 调整，旧模块 re-export 保持兼容。
 6. **兜底收敛与性能（剩余）**：§2.3 逐个评估（`workspace_profiles` 的 import 失败退化、`smi.py` publisher 主循环裸捕、`calibration` 第四层 sample fallback 等——行为敏感，建议转 warning 而非静默）；§5.1 allocator `snapshot()` 增量汇总与 `_allocate_allocator_block` 索引化（需 benchmark）；§5.4 metrics 深拷贝三处、`decode_steps` 聚合 + 开关（报告 shape 变化需过消费者）。
-7. **bug 修复（§7，与重构完全分开走 `fix:` commit）**：12 项均未动；其中 #8（conditioning width 静默取 1）与 #11（`_process_name` 泄露 argv）建议优先。
+7. ~~**bug 修复（§7，与重构完全分开走 `fix:` commit）**~~ ✅ 已完成（2026-08-17）：12 项中 10 项修复、1 项（#6）修复过程中改正了一处 WIP 引入的 KeyError、1 项（#12）复核后判定不是 bug，保留不动。详见"实施进度"与 §7 逐项状态。
 
-原第 2–5 步预计的 4,000–5,000 行削减目标，目前已完成约 2,500 行；剩余大头集中在第 4 步（serving_plan 合并，约 −400 行净减 + 消除最大维护面）与第 5 步拆分（不减行数但改善结构）。
+原第 2–5 步预计的 4,000–5,000 行削减目标，目前已完成约 2,500 行；剩余大头集中在第 4 步（serving_plan 合并，约 −400 行净减 + 消除最大维护面）与第 5 步拆分（不减行数但改善结构）。§7 的 bug 修复批次已收尾，后续如无新发现不再单独安排。
