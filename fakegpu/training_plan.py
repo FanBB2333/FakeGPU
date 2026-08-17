@@ -719,11 +719,15 @@ def _bool_value(value: Any) -> bool:
         return value
     if value is None:
         return False
-    normalized = str(value).strip().lower()
-    if normalized in {"", "0", "false", "no", "none", "off"}:
-        return False
-    if normalized in {"1", "true", "yes", "on", "auto"}:
-        return True
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"", "0", "false", "no", "none", "off"}:
+            return False
+        if normalized in {"1", "true", "yes", "on", "auto"}:
+            return True
+        raise TrainingPlanError(
+            f"expected a boolean (or 'auto'), got {value!r}"
+        )
     return bool(value)
 
 
