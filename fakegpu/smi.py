@@ -1204,11 +1204,15 @@ class SmiStatePublisher:
     def publish_once(self, *, running: bool) -> dict[str, Any]:
         started_ns = time.perf_counter_ns()
         self._attempted_writes += 1
+        # Count this write optimistically so the state being published can
+        # report it; roll back if the write fails.
+        self._successful_writes += 1
         try:
             state, serialized_bytes = self._publish_once(
                 running=running
             )
         except Exception as exc:
+            self._successful_writes -= 1
             self._failed_writes += 1
             self._last_duration_us = max(
                 0,
@@ -1220,7 +1224,6 @@ class SmiStatePublisher:
             )
             self._last_error = type(exc).__name__
             raise
-        self._successful_writes += 1
         self._last_duration_us = max(
             0,
             (time.perf_counter_ns() - started_ns) // 1000,
@@ -1412,9 +1415,7 @@ class SmiStatePublisher:
                 "source": "python_runtime",
                 "health": {
                     "attempted_writes": self._attempted_writes,
-                    "successful_writes": (
-                        self._successful_writes + 1
-                    ),
+                    "successful_writes": self._successful_writes,
                     "failed_writes": self._failed_writes,
                     "last_duration_us": self._last_duration_us,
                     "max_duration_us": self._max_duration_us,
