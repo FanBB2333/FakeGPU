@@ -4224,9 +4224,13 @@ def _atomic_write_json(
 
 
 def _process_name() -> str:
-    if not sys.argv:
+    # Only the entry script's basename, never the rest of argv: later
+    # arguments may carry filesystem paths or secrets, and joining them
+    # into a published state file (and a Prometheus label value) would
+    # leak them and create unbounded label cardinality.
+    if not sys.argv or not sys.argv[0]:
         return "python"
-    return " ".join(sys.argv[:3])
+    return os.path.basename(sys.argv[0])
 
 
 def _mib(value: int) -> int:
