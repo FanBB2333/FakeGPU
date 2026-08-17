@@ -1084,6 +1084,14 @@ def _local_profile(
         ),
     )
     if conditioning_width is None:
+        if role_names["conditioning"] and not text_widths:
+            raise DiffusionEstimateError(
+                "could not determine the conditioning width: none of the "
+                "pipeline's text encoder config(s) declare hidden_size, "
+                "d_model, or projection_dim, and the denoiser config does "
+                "not declare joint_attention_dim/cross_attention_dim/"
+                "caption_projection_dim/encoder_hid_dim"
+            )
         conditioning_width = max(text_widths, default=1)
     encoder_width = max(text_widths, default=conditioning_width)
     encoder_layers = max(text_layers, default=1)
