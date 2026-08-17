@@ -710,8 +710,14 @@ def collect_serving_memory_observation(
             }
         )
 
-    assert reported_metric is not None
-    assert common_environment is not None
+    if reported_metric is None or common_environment is None:
+        # Unreachable in practice: repetitions > 0 is validated above and
+        # the first loop iteration always sets both before any use. Guard
+        # explicitly rather than with assert, which python -O strips,
+        # so a future change to the loop can't silently embed None here.
+        raise RuntimeError(
+            "serving runner produced no successful repetitions"
+        )
     observation = build_serving_memory_observation(
         plan,
         phase_samples=phase_samples,
