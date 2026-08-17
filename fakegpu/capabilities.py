@@ -125,19 +125,39 @@ def native_capability_report(
     catalog_path: str | Path | None = None,
     source_root: str | Path | None = None,
     build_dir: str | Path | None = None,
+    library: str | None = None,
+    classification: str | None = None,
+    api: str | None = None,
 ) -> dict[str, Any]:
     catalog = load_native_capabilities(catalog_path)
-    apis = list(catalog["apis"])
+    apis = [
+        entry
+        for entry in catalog["apis"]
+        if (
+            library is None
+            or str(entry["library"]) == str(library)
+        )
+        and (
+            classification is None
+            or str(entry["classification"]) == str(classification)
+        )
+        and (
+            api is None
+            or str(api).lower() in str(entry["api"]).lower()
+        )
+    ]
     groups = list(catalog["groups"])
     classifications: dict[str, int] = {}
     libraries: dict[str, int] = {}
-    for api in apis:
-        classification = str(api["classification"])
-        library = str(api["library"])
-        classifications[classification] = (
-            classifications.get(classification, 0) + 1
+    for entry in apis:
+        classification_name = str(entry["classification"])
+        library_name = str(entry["library"])
+        classifications[classification_name] = (
+            classifications.get(classification_name, 0) + 1
         )
-        libraries[library] = libraries.get(library, 0) + 1
+        libraries[library_name] = (
+            libraries.get(library_name, 0) + 1
+        )
 
     source_audit = (
         audit_native_capability_sources(source_root, catalog=catalog)
@@ -156,7 +176,7 @@ def native_capability_report(
             "group_count": len(groups),
             "explicit_api_count": len(apis),
             "policy_enforced_api_count": sum(
-                bool(api["policy_enforced"]) for api in apis
+                bool(entry["policy_enforced"]) for entry in apis
             ),
             "classifications": dict(sorted(classifications.items())),
             "libraries": dict(sorted(libraries.items())),
@@ -363,6 +383,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             catalog_path=args.catalog,
             source_root=args.source_root,
             build_dir=args.build_dir,
+            library=args.library,
+            classification=args.classification,
+            api=args.api,
         )
     except (
             CapabilityCatalogError,
@@ -371,22 +394,6 @@ def main(argv: Sequence[str] | None = None) -> int:
            ) as exc:
         parser.exit(2, f"fakegpu capabilities: {exc}\n")
 
-    report["apis"] = [
-        api
-        for api in report["apis"]
-        if (
-            args.library is None
-            or str(api["library"]) == str(args.library)
-        )
-        and (
-            args.classification is None
-            or str(api["classification"]) == str(args.classification)
-        )
-        and (
-            args.api is None
-            or str(args.api).lower() in str(api["api"]).lower()
-        )
-    ]
     if args.json_path:
         output = emit_json(args.json_path, report)
         if output is not None:
