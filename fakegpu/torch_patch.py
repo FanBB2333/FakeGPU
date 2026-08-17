@@ -1280,11 +1280,6 @@ def _set_tracked_data_ptr(tensor: Any, data_ptr: int) -> None:
         pass
 
 
-def _release_tracked_storage(data_ptr: int) -> None:
-    if _memory_tracker is not None:
-        _memory_tracker.release(data_ptr)
-
-
 def _register_tensor_for_memory_tracking(
     tensor: Any,
     device_index: int,
@@ -1336,9 +1331,11 @@ def _register_tensor_for_memory_tracking(
 
         # Set up weakref callback to release memory when tensor is GC'd.
         # We weakref the storage, not the tensor, because multiple tensor
-        # views can share one storage.
+        # views can share one storage.  The callback is bound to the tracker
+        # that owns this allocation: a later patch() call installs a fresh
+        # _DeviceMemoryTracker, and stale finalizers must not release into it.
         # Only add weakref if not already tracked (avoid double-counting)
-        weakref.finalize(storage, _release_tracked_storage, int(dp))
+        weakref.finalize(storage, _memory_tracker.release, int(dp))
         return True
     except (MemoryError, RuntimeError):
         raise  # Preserve simulated OOM and other tracker errors.
@@ -1599,13 +1596,24 @@ def memory_snapshot() -> dict[str, Any]:
 
 
 class _TrackedSavedTensor:
-    """Small holder used by autograd saved_tensors_hooks."""
+    """Small holder used by autograd saved_tensors_hooks.
 
-    __slots__ = ("tensor", "raw_data_ptr", "__weakref__")
+    Carries the bound release callback of the tracker that allocated the
+    saved-tensor bookkeeping, so releasing after a re-patch() never hits a
+    replacement tracker.
+    """
 
-    def __init__(self, tensor: Any, raw_data_ptr: int | None) -> None:
+    __slots__ = ("tensor", "raw_data_ptr", "_release", "__weakref__")
+
+    def __init__(
+        self,
+        tensor: Any,
+        raw_data_ptr: int | None,
+        release: Any,
+    ) -> None:
         self.tensor = tensor
         self.raw_data_ptr = raw_data_ptr
+        self._release = release
 
 
 _saved_tensors_hooks_cm: Any = None
@@ -1652,8 +1660,12 @@ def _pack_autograd_saved_tensor(tensor: Any) -> Any:
         )
         if synthetic_ptr is None:
             return tensor
-        holder = _TrackedSavedTensor(tensor, raw_data_ptr)
-        weakref.finalize(holder, _release_autograd_saved_tensor, raw_data_ptr)
+        holder = _TrackedSavedTensor(
+            tensor,
+            raw_data_ptr,
+            tracker.release_saved_tensor,
+        )
+        weakref.finalize(holder, holder._release, raw_data_ptr)
         return holder
     except (MemoryError, RuntimeError):
         raise
@@ -1665,16 +1677,10 @@ def _unpack_autograd_saved_tensor(value: Any) -> Any:
     if isinstance(value, _TrackedSavedTensor):
         raw_data_ptr = value.raw_data_ptr
         if raw_data_ptr is not None:
-            _release_autograd_saved_tensor(raw_data_ptr)
+            value._release(int(raw_data_ptr))
             value.raw_data_ptr = None
         return value.tensor
     return value
-
-
-def _release_autograd_saved_tensor(raw_data_ptr: int) -> None:
-    tracker = _memory_tracker
-    if tracker is not None:
-        tracker.release_saved_tensor(int(raw_data_ptr))
 
 
 def _install_autograd_saved_tensor_tracking(torch_mod: Any) -> None:
