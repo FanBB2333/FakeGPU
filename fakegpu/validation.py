@@ -152,6 +152,7 @@ def run_validation_manifest(
     for result in results:
         counts[result["status"]] += 1
     success = counts["failed"] == 0 and (not strict or counts["skipped"] == 0)
+    finished_ns = time.time_ns()
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": "passed" if success else "failed",
@@ -160,8 +161,8 @@ def run_validation_manifest(
         "strict": bool(strict),
         "dry_run": bool(dry_run),
         "started_at_ns": started_ns,
-        "finished_at_ns": time.time_ns(),
-        "duration_seconds": round((time.time_ns() - started_ns) / 1e9, 6),
+        "finished_at_ns": finished_ns,
+        "duration_seconds": round((finished_ns - started_ns) / 1e9, 6),
         "host": {
             "hostname": socket.gethostname(),
             "platform": sys.platform,
@@ -536,7 +537,13 @@ def _expectation_failures(
         for index, check in enumerate(checks):
             try:
                 _evaluate_json_check(check, cwd=cwd)
-            except (OSError, ValueError, TypeError, KeyError) as exc:
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+                IndexError,
+            ) as exc:
                 failures.append(f"json_checks[{index}]: {exc}")
     return failures
 
