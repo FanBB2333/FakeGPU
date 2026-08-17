@@ -2454,7 +2454,7 @@ def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
             if shard_offsets:
                 shard_offsets[0] = int(obj.shard_sizes[0]) * rank
             placement = re.sub(
-                r"rank:\\d+/", f"rank:{rank}/", str(obj.placement), count=1
+                r"rank:\d+/", f"rank:{rank}/", str(obj.placement), count=1
             )
             return dataclasses.replace(
                 obj,
