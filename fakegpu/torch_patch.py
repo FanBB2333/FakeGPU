@@ -2607,68 +2607,6 @@ def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
     upstream._fakegpu_all_gather_object_patched = True
 
 
-def _patch_upstream_process_group_compat(upstream: Any, torch_mod: Any) -> None:
-    if getattr(upstream, "_fakegpu_process_group_patched", False):
-        return
-
-    orig_dist_init = getattr(upstream, "_fakegpu_orig_dist_init", None)
-    orig_dist_destroy = getattr(upstream, "_fakegpu_orig_dist_destroy", None)
-
-    def _patched_dist_init_process_group(
-        backend: str | None = None,
-        init_method: Any = None,
-        timeout: Any = None,
-        world_size: int = -1,
-        rank: int = -1,
-        store: Any = None,
-        group_name: str = "",
-        pg_options: Any = None,
-        device_id: Any = None,
-    ) -> None:
-        upstream._DIST_INITIALIZED = True
-        upstream._DIST_BACKEND = "nccl" if backend is None else str(backend)
-        upstream._DIST_WORLD_SIZE = 1 if world_size in (-1, None) else int(world_size)
-        upstream._DIST_RANK = 0 if rank in (-1, None) else int(rank)
-
-        if orig_dist_init is not None:
-            env_set: list[str] = []
-            if "MASTER_ADDR" not in os.environ:
-                os.environ["MASTER_ADDR"] = "localhost"
-                env_set.append("MASTER_ADDR")
-            if "MASTER_PORT" not in os.environ:
-                os.environ["MASTER_PORT"] = "29500"
-                env_set.append("MASTER_PORT")
-            try:
-                orig_dist_init(
-                    backend="fake",
-                    rank=upstream._DIST_RANK,
-                    world_size=upstream._DIST_WORLD_SIZE,
-                )
-            except Exception:
-                pass
-            finally:
-                for key in env_set:
-                    os.environ.pop(key, None)
-        return None
-
-    def _patched_dist_destroy_process_group(group: Any = None) -> None:
-        if orig_dist_destroy is not None:
-            try:
-                orig_dist_destroy(group)
-            except Exception:
-                pass
-        upstream._DIST_INITIALIZED = False
-        upstream._DIST_WORLD_SIZE = 1
-        upstream._DIST_RANK = 0
-        return None
-
-    upstream._dist_init_process_group = _patched_dist_init_process_group
-    upstream._dist_destroy_process_group = _patched_dist_destroy_process_group
-    torch_mod.distributed.init_process_group = _patched_dist_init_process_group
-    torch_mod.distributed.destroy_process_group = _patched_dist_destroy_process_group
-    upstream._fakegpu_process_group_patched = True
-
-
 def _patch_fsdp_device_handling() -> None:
     """Patch FSDP internal device resolution for FakeGPU compatibility.
 
@@ -2837,16 +2775,6 @@ def _activate_upstream(num_devices: int, device_name: str) -> Any:
             f"{upstream!r}"
         )
 
-    orig_dist_init = None
-    orig_dist_destroy = None
-    try:
-        import torch.distributed as _dist
-
-        orig_dist_init = _dist.init_process_group
-        orig_dist_destroy = _dist.destroy_process_group
-    except Exception:
-        pass
-
     # Configure device count and name before enable()
     upstream._NUM_DEVICES = num_devices
     upstream._DEVICE_NAME = device_name
@@ -2855,8 +2783,6 @@ def _activate_upstream(num_devices: int, device_name: str) -> Any:
     os.environ["TORCH_FAKEGPU_DEVICE_NAME"] = device_name
 
     upstream.enable()
-    upstream._fakegpu_orig_dist_init = orig_dist_init
-    upstream._fakegpu_orig_dist_destroy = orig_dist_destroy
     _upstream_mod = upstream
     return upstream
 
@@ -2971,7 +2897,6 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     _install_upstream_memory_category_hooks(upstream, torch_mod)
     _patch_upstream_fakecuda_tensor_compat(upstream, torch_mod)
     _patch_upstream_all_gather_object(upstream, torch_mod)
-    _patch_upstream_process_group_compat(upstream, torch_mod)
     _install_torch_accelerator_compat(torch_mod)
 
     def _dynamo_friendly_tree_map(fn, obj):
