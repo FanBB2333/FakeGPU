@@ -124,6 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
 def run_preflight(ns: argparse.Namespace, command: Sequence[str]) -> int:
     paths = _make_paths(Path(ns.report_dir))
     paths.report_dir.mkdir(parents=True, exist_ok=True)
+    _clear_runtime_artifacts(paths)
 
     start = time.monotonic()
     warnings: list[str] = []
@@ -643,6 +644,19 @@ def _make_paths(report_dir: Path) -> PreflightPaths:
         child_report=resolved / "fakegpu_child_report.json",
         stage_log=resolved / "preflight_stage.jsonl",
     )
+
+
+def _clear_runtime_artifacts(paths: PreflightPaths) -> None:
+    for path in (
+        paths.runtime_report,
+        paths.cluster_report,
+        paths.child_report,
+        paths.stage_log,
+    ):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
 
 
 def _build_child_env(ns: argparse.Namespace, paths: PreflightPaths) -> dict[str, str]:

@@ -1039,6 +1039,28 @@ def test_training_plan_handles_accelerate_fsdp_and_auto_deepspeed_values() -> No
     assert deepspeed["reduce_bucket_bytes"] == 0
 
 
+@pytest.mark.parametrize(
+    ("backward_prefetch", "expected"),
+    [
+        ("NO_PREFETCH", False),
+        ("BACKWARD_PRE", True),
+        ("BACKWARD_POST", True),
+    ],
+)
+def test_training_plan_normalizes_fsdp_backward_prefetch_enum(
+    backward_prefetch: str,
+    expected: bool,
+) -> None:
+    normalized = normalize_training_config(
+        {
+            "distributed_type": "FSDP",
+            "fsdp_config": {"backward_prefetch": backward_prefetch},
+        }
+    )
+
+    assert normalized["overlap_communication"] is expected
+
+
 def test_hierarchical_topology_routes_across_racks_and_reports_links() -> None:
     topology = Topology.from_mapping(_topology_config())
     report = simulate_collective(
