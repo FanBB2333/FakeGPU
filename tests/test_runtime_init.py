@@ -169,6 +169,33 @@ def test_unsupported_api_policy_environment() -> None:
         raise AssertionError("invalid unsupported API policy should raise ValueError")
 
 
+def test_fakecuda_runtime_options_are_exported() -> None:
+    code = f"""
+from pathlib import Path
+import os
+import sys
+
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root))
+
+import fakegpu
+
+fakegpu.init(
+    runtime="fakecuda",
+    mode="hybrid",
+    oom_policy="managed",
+    unsupported_api="error",
+    dist_mode="simulate",
+)
+assert os.environ["FAKEGPU_MODE"] == "hybrid"
+assert os.environ["FAKEGPU_OOM_POLICY"] == "managed"
+assert os.environ["FAKEGPU_UNSUPPORTED_API"] == "error"
+assert os.environ["FAKEGPU_DIST_MODE"] == "simulate"
+print("fakecuda runtime options passed")
+"""
+    _assert_ok(_run(code), "fakecuda runtime options")
+
+
 def main() -> None:
     test_import_is_side_effect_free()
     test_runtime_router_dispatch()
