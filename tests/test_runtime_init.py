@@ -51,7 +51,6 @@ import fakegpu
 
 assert callable(fakegpu.init)
 assert callable(fakegpu.patch_torch)
-assert callable(fakegpu.init_privateuse1)
 print("side-effect-free import passed")
 """
     _assert_ok(_run(code), "side-effect-free import")

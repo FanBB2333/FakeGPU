@@ -4,7 +4,6 @@ from ._api import env, library_dir, run
 from ._runtime import (
     RuntimeInitResult,
     init,
-    init_privateuse1,
     is_initialized,
     patch_torch,
 )
@@ -131,7 +130,6 @@ __all__ = [
     "estimate_training_plan",
     "evaluate_operator_profile",
     "init",
-    "init_privateuse1",
     "inspect_safetensors_checkpoint",
     "inspect_diffusion_pipeline",
     "is_initialized",
