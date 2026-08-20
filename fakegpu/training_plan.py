@@ -5,6 +5,11 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from ._cli import (
+    add_json_path_argument,
+    command_prog,
+    usage_error,
+)
 from .structured_io import emit_json, load_mapping
 
 
@@ -374,7 +379,7 @@ def estimate_training_plan(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu plan-training",
+        prog=command_prog(__name__),
         description=(
             "Normalize DeepSpeed/Accelerate/FSDP configuration and estimate "
             "rank-local memory phases."
@@ -395,13 +400,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="adamw",
     )
     parser.add_argument("--parameter-element-bytes", type=int, default=2)
-    parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
+    add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
         raw = load_mapping(args.config)
@@ -428,7 +427,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             OSError,
             ValueError,
            ) as exc:
-        parser.exit(2, f"fakegpu plan-training: {exc}\n")
+        usage_error(parser, exc)
 
 
 def _detect_framework(config: Mapping[str, Any]) -> str:

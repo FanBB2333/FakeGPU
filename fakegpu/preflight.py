@@ -14,6 +14,10 @@ from typing import Any, Sequence
 
 from ._api import env as fakegpu_env
 from ._api import _warn_if_macos_injection_may_be_blocked
+from ._cli import (
+    add_strict_argument,
+    command_prog,
+)
 from ._version import __version__
 
 
@@ -49,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="fakegpu preflight",
+        prog=command_prog(__name__),
         description="Run an AI workload preflight and write fit/OOM reports.",
     )
     parser.add_argument(
@@ -68,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--steps", type=int, default=None, help="Target number of steps for n_steps preflights.")
     parser.add_argument("--report-dir", default="preflight-report", help="Directory for preflight outputs.")
-    parser.add_argument("--strict", action="store_true", help="Treat incomplete tracking as a failing result.")
+    add_strict_argument(parser, help="Treat incomplete tracking as a failing result.")
     parser.add_argument(
         "--unsupported-api",
         choices=["allow", "warn", "error"],

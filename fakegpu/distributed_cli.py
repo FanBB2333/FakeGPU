@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ._api import library_dir
+from ._cli import (
+    add_json_path_argument,
+    command_prog,
+    usage_error,
+)
+from .structured_io import emit_json
 
 
 _SIZE_PATTERN = re.compile(r"^([0-9]+)([kmgt]?i?b)?$", re.IGNORECASE)
@@ -257,7 +263,7 @@ def _coordinator_env(
 
 def coordinator_main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu coordinator",
+        prog=command_prog(__name__, "coordinator_main"),
         description="Serve the FakeGPU distributed coordinator on a TCP endpoint.",
     )
     actions = parser.add_mutually_exclusive_group(required=True)
@@ -343,7 +349,7 @@ def coordinator_main(argv: Sequence[str] | None = None) -> int:
             OSError,
             ValueError,
            ) as exc:
-        parser.exit(1, f"fakegpu coordinator: {exc}\n")
+        usage_error(parser, exc)
     return 0
 
 
@@ -602,7 +608,7 @@ def _print_bandwidth_summary(report: dict[str, Any]) -> None:
 
 def bandwidth_main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu bandwidth",
+        prog=command_prog(__name__, "bandwidth_main"),
         description=(
             "Measure end-to-end FakeGPU collective throughput over TCP. "
             "Use --listen for a self-contained local multi-node simulation, "
@@ -656,7 +662,10 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
         default=50.0,
         help="Modeled latency written to an auto-generated local topology.",
     )
-    parser.add_argument("--json", type=Path, help="Write the benchmark report as JSON.")
+    add_json_path_argument(
+        parser,
+        help="Write the benchmark report to PATH, or stdout when omitted.",
+    )
     parser.add_argument("--build-dir")
     parser.add_argument("--lib-dir")
     args = parser.parse_args(argv)
@@ -867,12 +876,8 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
                     cluster_report=None,
                 )
 
-        if args.json is not None:
-            args.json.parent.mkdir(parents=True, exist_ok=True)
-            args.json.write_text(
-                json.dumps(report, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+        if args.json_path:
+            emit_json(args.json_path, report)
         _print_bandwidth_summary(report)
         return 0
     except (
@@ -881,5 +886,4 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
             RuntimeError,
             ValueError,
            ) as exc:
-        parser.exit(1, f"fakegpu bandwidth: {exc}\n")
-    return 1
+        usage_error(parser, exc)

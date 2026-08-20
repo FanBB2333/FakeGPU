@@ -11,6 +11,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ._cli import (
+    add_json_path_argument,
+    add_strict_argument,
+    command_prog,
+    usage_error,
+)
 from .kernel_analysis import analyze_kernel_file
 from .structured_io import StructuredDataError, emit_json, load_mapping
 
@@ -256,7 +262,7 @@ def analyze_repository(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu analyze-repo",
+        prog=command_prog(__name__),
         description=(
             "Inspect a repository for FakeGPU readiness, acceleration "
             "dependencies, entrypoints, and required validation."
@@ -269,16 +275,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         help="Repository-relative Python entrypoint; may be repeated.",
     )
-    parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
-    parser.add_argument(
-        "--strict",
-        action="store_true",
+    add_json_path_argument(parser)
+    add_strict_argument(
+        parser,
         help=(
             "Return exit code 2 for repositories that require real GPU/hybrid "
             "execution or have incomplete static analysis."
@@ -289,7 +288,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         report = analyze_repository(args.path, entrypoints=args.entry)
     except (OSError, ValueError) as exc:
-        parser.exit(2, f"fakegpu analyze-repo: {exc}\n")
+        usage_error(parser, exc)
 
     if args.json_path:
         output = emit_json(args.json_path, report)

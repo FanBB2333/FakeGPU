@@ -8,6 +8,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ._cli import (
+    add_json_flag_argument,
+    add_strict_argument,
+    command_prog,
+)
 from ._version import __version__
 from .profile_catalog import (
     ProfileCatalogError,
@@ -204,7 +209,7 @@ def _print_plain(payload: dict[str, Any], *, list_profiles: bool) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu doctor",
+        prog=command_prog(__name__),
         description="Inspect FakeGPU profiles, native libraries, and PyTorch availability.",
     )
     parser.add_argument(
@@ -220,10 +225,9 @@ def main(argv: list[str] | None = None) -> int:
             "and compute capability."
         ),
     )
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
-    parser.add_argument(
-        "--strict",
-        action="store_true",
+    add_json_flag_argument(parser, help="Emit machine-readable JSON.")
+    add_strict_argument(
+        parser,
         help="Return non-zero for warnings as well as failures.",
     )
     args = parser.parse_args(argv)

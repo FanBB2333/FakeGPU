@@ -9,6 +9,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ._cli import (
+    add_json_path_argument,
+    command_prog,
+    usage_error,
+)
 from .llm_estimator import (
     KV_CACHE_STRATEGIES,
     _forward_transient_bytes,
@@ -1869,7 +1874,7 @@ def _speculative_report(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu plan-serving",
+        prog=command_prog(__name__),
         description=(
             "Estimate online LLM serving memory and continuous-batching "
             "admission without loading checkpoint tensors."
@@ -1998,7 +2003,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "vllm)."
         ),
     )
-    parser.add_argument("--json", dest="json_path")
+    add_json_path_argument(parser)
     args = parser.parse_args(argv)
 
     device_capacity_bytes = None
@@ -2175,7 +2180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             OSError,
             ValueError,
            ) as exc:
-        parser.exit(2, f"fakegpu plan-serving: {exc}\n")
+        usage_error(parser, exc)
 
     if args.json_path:
         output = emit_json(args.json_path, report)

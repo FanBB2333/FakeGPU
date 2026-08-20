@@ -13,6 +13,12 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ._cli import (
+    add_json_path_argument,
+    add_strict_argument,
+    command_prog,
+    usage_error,
+)
 from .structured_io import emit_json, load_mapping, write_json
 
 
@@ -1109,7 +1115,7 @@ def build_workload_calibration_bundle(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu calibrate",
+        prog=command_prog(__name__),
         description=(
             "Collect serving observations, compare memory predictions, "
             "or bundle calibration evidence."
@@ -1124,13 +1130,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     compare_parser.add_argument("prediction")
     compare_parser.add_argument("observation")
     compare_parser.add_argument("--workload")
-    compare_parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
+    add_json_path_argument(compare_parser)
 
     observe_parser = subparsers.add_parser(
         "observe-serving",
@@ -1169,18 +1169,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="real_cuda_process_peak",
         help="Measurement source recorded in the observation report.",
     )
-    observe_parser.add_argument(
-        "--strict",
-        action="store_true",
+    add_strict_argument(
+        observe_parser,
         help="Return status 1 when either phase has too few samples.",
     )
-    observe_parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
+    add_json_path_argument(observe_parser)
 
     sample_transformers_parser = subparsers.add_parser(
         "sample-transformers",
@@ -1265,18 +1258,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "the observation source field."
         ),
     )
-    collect_parser.add_argument(
-        "--strict",
-        action="store_true",
+    add_strict_argument(
+        collect_parser,
         help="Return status 1 when either phase has too few samples.",
     )
-    collect_parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
+    add_json_path_argument(collect_parser)
     collect_parser.add_argument(
         "command",
         nargs="+",
@@ -1323,13 +1309,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--allow-dimension-mismatch",
         action="store_true",
     )
-    verify_parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
+    add_json_path_argument(verify_parser)
     args = parser.parse_args(argv)
 
     try:
@@ -1495,7 +1475,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             OSError,
             ValueError,
            ) as exc:
-        parser.exit(2, f"fakegpu calibrate: {exc}\n")
+        usage_error(parser, exc)
 
 
 def _memory_points(

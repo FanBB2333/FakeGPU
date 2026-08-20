@@ -5,6 +5,11 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
+from ._cli import (
+    add_json_path_argument,
+    command_prog,
+    usage_error,
+)
 from .profile_catalog import get_profile
 from .structured_io import emit_json
 
@@ -214,7 +219,7 @@ def estimate_roofline(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu estimate-roofline",
+        prog=command_prog(__name__),
         description=(
             "Estimate a profile-aware analytical latency interval from FLOPs, "
             "memory traffic, and launch count."
@@ -230,13 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=1.0,
         help="Explicit matrix/tensor throughput factor over scalar FP32.",
     )
-    parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
+    add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
         report = estimate_roofline(
@@ -247,7 +246,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             compute_acceleration_factor=args.compute_acceleration_factor,
         )
     except (OSError, ValueError) as exc:
-        parser.exit(2, f"fakegpu estimate-roofline: {exc}\n")
+        usage_error(parser, exc)
 
     if args.json_path:
         output = emit_json(args.json_path, report)

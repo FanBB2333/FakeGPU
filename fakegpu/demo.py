@@ -7,6 +7,10 @@ import sys
 import time
 from typing import Any
 
+from ._cli import (
+    add_json_flag_argument,
+    command_prog,
+)
 from .profile_catalog import ProfileCatalogError, get_profile, validate_catalog
 
 
@@ -53,7 +57,7 @@ def _error(message: str, *, as_json: bool) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu demo",
+        prog=command_prog(__name__),
         description="Run a tiny CPU-backed PyTorch training step through FakeGPU.",
     )
     parser.add_argument(
@@ -73,11 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         default=2,
         help="Number of tiny optimizer steps to execute (default: 2).",
     )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit machine-readable JSON.",
-    )
+    add_json_flag_argument(parser, help="Emit machine-readable JSON.")
     args = parser.parse_args(argv)
 
     if args.device_count <= 0:

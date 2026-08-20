@@ -10,6 +10,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ._cli import (
+    add_json_path_argument,
+    command_prog,
+    usage_error,
+)
 from .structured_io import emit_json, load_mapping
 
 
@@ -412,7 +417,7 @@ def simulate_point_to_point(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu simulate-topology",
+        prog=command_prog(__name__),
         description=(
             "Simulate routed communication across racks, switches, multi-NIC "
             "hosts, NVLink domains, ECMP paths, and contended links."
@@ -433,13 +438,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--src-rank", type=int)
     parser.add_argument("--dst-rank", type=int)
     parser.add_argument("--bytes", type=int)
-    parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
+    add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
         topology = Topology.from_mapping(load_mapping(args.config))
@@ -480,7 +479,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             OSError,
             ValueError,
            ) as exc:
-        parser.exit(2, f"fakegpu simulate-topology: {exc}\n")
+        usage_error(parser, exc)
 
 
 def _simulate_flows(
