@@ -2328,6 +2328,156 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+@dataclass(frozen=True, slots=True)
+class _ServingMemoryBreakdown:
+    """Phase peaks and the memory section both pool models report."""
+
+    prefill_peak: int
+    decode_peak: int
+    peak_phase: str
+    phases: list[dict[str, Any]]
+    memory: dict[str, Any]
+
+    @property
+    def peak_bytes(self) -> int:
+        return max(self.prefill_peak, self.decode_peak)
+
+
+def _serving_memory_breakdown(
+    *,
+    kv_cache: Mapping[str, Any],
+    draft_kv_cache: Mapping[str, Any] | None,
+    speculative: Mapping[str, Any] | None,
+    parameter_bytes: int,
+    sequence_count: int,
+    runtime_overhead_bytes: int,
+    scheduler_overhead_bytes_per_sequence: int,
+    prefill_input_bytes: int,
+    decode_input_bytes: int,
+    prefill_transient: Mapping[str, Any],
+    decode_transient: Mapping[str, Any],
+    target_prefill_transient: Mapping[str, Any] | None,
+    draft_prefill_transient: Mapping[str, Any] | None,
+    target_verification_transient: Mapping[str, Any] | None,
+    draft_proposal_transient: Mapping[str, Any] | None,
+    memory_extra: Mapping[str, Any] | None = None,
+) -> _ServingMemoryBreakdown:
+    """Add up one phase peak per phase from the resident and transient parts.
+
+    Both pool models resolve their own KV pool, transients, and input bytes;
+    from there the residency arithmetic and the reported breakdown are the
+    same, so only memory_extra (the per-request details of the
+    heterogeneous model) differs in the result.
+    """
+
+    scheduler_overhead_bytes = (
+        scheduler_overhead_bytes_per_sequence * sequence_count
+    )
+    fixed_overhead_bytes = (
+        runtime_overhead_bytes + scheduler_overhead_bytes
+    )
+    draft_parameter_bytes = (
+        int(speculative["parameter_bytes"])
+        if speculative is not None
+        else 0
+    )
+    combined_parameter_bytes = parameter_bytes + draft_parameter_bytes
+    target_prefill_kv_bytes = int(kv_cache["prefill"]["allocated_bytes"])
+    target_decode_kv_bytes = int(kv_cache["decode"]["allocated_bytes"])
+    draft_prefill_kv_bytes = (
+        int(draft_kv_cache["prefill"]["allocated_bytes"])
+        if draft_kv_cache is not None
+        else 0
+    )
+    draft_decode_kv_bytes = (
+        int(draft_kv_cache["decode"]["allocated_bytes"])
+        if draft_kv_cache is not None
+        else 0
+    )
+    combined_prefill_kv_bytes = (
+        target_prefill_kv_bytes + draft_prefill_kv_bytes
+    )
+    combined_decode_kv_bytes = (
+        target_decode_kv_bytes + draft_decode_kv_bytes
+    )
+    prefill_peak = (
+        combined_parameter_bytes
+        + combined_prefill_kv_bytes
+        + int(prefill_transient["peak_bytes"])
+        + prefill_input_bytes
+        + fixed_overhead_bytes
+    )
+    decode_peak = (
+        combined_parameter_bytes
+        + combined_decode_kv_bytes
+        + int(decode_transient["peak_bytes"])
+        + decode_input_bytes
+        + fixed_overhead_bytes
+    )
+    phases = [
+        {
+            "phase": "prefill",
+            "peak_bytes": prefill_peak,
+            "components": {
+                "parameters": combined_parameter_bytes,
+                "target_parameters": parameter_bytes,
+                "draft_parameters": draft_parameter_bytes,
+                "inputs": prefill_input_bytes,
+                "kv_cache": combined_prefill_kv_bytes,
+                "target_kv_cache": target_prefill_kv_bytes,
+                "draft_kv_cache": draft_prefill_kv_bytes,
+                "transient": int(prefill_transient["peak_bytes"]),
+                "runtime_overhead": runtime_overhead_bytes,
+                "scheduler_overhead": scheduler_overhead_bytes,
+            },
+        },
+        {
+            "phase": "decode",
+            "peak_bytes": decode_peak,
+            "components": {
+                "parameters": combined_parameter_bytes,
+                "target_parameters": parameter_bytes,
+                "draft_parameters": draft_parameter_bytes,
+                "inputs": decode_input_bytes,
+                "kv_cache": combined_decode_kv_bytes,
+                "target_kv_cache": target_decode_kv_bytes,
+                "draft_kv_cache": draft_decode_kv_bytes,
+                "transient": int(decode_transient["peak_bytes"]),
+                "runtime_overhead": runtime_overhead_bytes,
+                "scheduler_overhead": scheduler_overhead_bytes,
+            },
+        },
+    ]
+    return _ServingMemoryBreakdown(
+        prefill_peak=prefill_peak,
+        decode_peak=decode_peak,
+        peak_phase=(
+            "prefill" if prefill_peak >= decode_peak else "decode"
+        ),
+        phases=phases,
+        memory={
+            "parameter_bytes": combined_parameter_bytes,
+            "target_parameter_bytes": parameter_bytes,
+            "draft_parameter_bytes": draft_parameter_bytes,
+            "runtime_overhead_bytes": runtime_overhead_bytes,
+            "scheduler_overhead_bytes": scheduler_overhead_bytes,
+            "prefill_transient": prefill_transient,
+            "decode_transient": decode_transient,
+            "target_prefill_transient": target_prefill_transient,
+            "draft_prefill_transient": draft_prefill_transient,
+            "target_verification_transient": target_verification_transient,
+            "draft_proposal_transient": draft_proposal_transient,
+            **(memory_extra or {}),
+            "estimated_prefill_peak_bytes": prefill_peak,
+            "estimated_decode_peak_bytes": decode_peak,
+            "estimated_process_peak_bytes": max(
+                prefill_peak,
+                decode_peak,
+            ),
+        },
+    )
+
+
 def _serving_batch_memory(
     *,
     dimensions: Mapping[str, Any],
@@ -2506,97 +2656,27 @@ def _serving_batch_memory(
             element_bytes=element_bytes,
             attention_implementation=attention_implementation,
         )
-    scheduler_overhead_bytes = (
-        scheduler_overhead_bytes_per_sequence * active_sequences
+    breakdown = _serving_memory_breakdown(
+        kv_cache=kv_cache,
+        draft_kv_cache=draft_kv_cache,
+        speculative=speculative,
+        parameter_bytes=parameter_bytes,
+        sequence_count=active_sequences,
+        runtime_overhead_bytes=runtime_overhead_bytes,
+        scheduler_overhead_bytes_per_sequence=(
+            scheduler_overhead_bytes_per_sequence
+        ),
+        prefill_input_bytes=active_sequences * effective_chunk_tokens * 8,
+        decode_input_bytes=(
+            active_sequences * (effective_speculative_tokens or 1) * 8
+        ),
+        prefill_transient=prefill_transient,
+        decode_transient=decode_transient,
+        target_prefill_transient=target_prefill_transient,
+        draft_prefill_transient=draft_prefill_transient,
+        target_verification_transient=target_verification_transient,
+        draft_proposal_transient=draft_proposal_transient,
     )
-    fixed_overhead_bytes = (
-        runtime_overhead_bytes + scheduler_overhead_bytes
-    )
-    prefill_input_bytes = (
-        active_sequences * effective_chunk_tokens * 8
-    )
-    decode_input_bytes = (
-        active_sequences
-        * (effective_speculative_tokens or 1)
-        * 8
-    )
-    draft_parameter_bytes = (
-        int(speculative["parameter_bytes"])
-        if speculative is not None
-        else 0
-    )
-    combined_parameter_bytes = parameter_bytes + draft_parameter_bytes
-    draft_prefill_kv_bytes = (
-        int(draft_kv_cache["prefill"]["allocated_bytes"])
-        if draft_kv_cache is not None
-        else 0
-    )
-    draft_decode_kv_bytes = (
-        int(draft_kv_cache["decode"]["allocated_bytes"])
-        if draft_kv_cache is not None
-        else 0
-    )
-    target_prefill_kv_bytes = int(
-        kv_cache["prefill"]["allocated_bytes"]
-    )
-    target_decode_kv_bytes = int(
-        kv_cache["decode"]["allocated_bytes"]
-    )
-    combined_prefill_kv_bytes = (
-        target_prefill_kv_bytes + draft_prefill_kv_bytes
-    )
-    combined_decode_kv_bytes = (
-        target_decode_kv_bytes + draft_decode_kv_bytes
-    )
-    prefill_peak = (
-        combined_parameter_bytes
-        + combined_prefill_kv_bytes
-        + int(prefill_transient["peak_bytes"])
-        + prefill_input_bytes
-        + fixed_overhead_bytes
-    )
-    decode_peak = (
-        combined_parameter_bytes
-        + combined_decode_kv_bytes
-        + int(decode_transient["peak_bytes"])
-        + decode_input_bytes
-        + fixed_overhead_bytes
-    )
-    phases = [
-        {
-            "phase": "prefill",
-            "peak_bytes": prefill_peak,
-            "components": {
-                "parameters": combined_parameter_bytes,
-                "target_parameters": parameter_bytes,
-                "draft_parameters": draft_parameter_bytes,
-                "inputs": prefill_input_bytes,
-                "kv_cache": combined_prefill_kv_bytes,
-                "target_kv_cache": target_prefill_kv_bytes,
-                "draft_kv_cache": draft_prefill_kv_bytes,
-                "transient": int(prefill_transient["peak_bytes"]),
-                "runtime_overhead": runtime_overhead_bytes,
-                "scheduler_overhead": scheduler_overhead_bytes,
-            },
-        },
-        {
-            "phase": "decode",
-            "peak_bytes": decode_peak,
-            "components": {
-                "parameters": combined_parameter_bytes,
-                "target_parameters": parameter_bytes,
-                "draft_parameters": draft_parameter_bytes,
-                "inputs": decode_input_bytes,
-                "kv_cache": combined_decode_kv_bytes,
-                "target_kv_cache": target_decode_kv_bytes,
-                "draft_kv_cache": draft_decode_kv_bytes,
-                "transient": int(decode_transient["peak_bytes"]),
-                "runtime_overhead": runtime_overhead_bytes,
-                "scheduler_overhead": scheduler_overhead_bytes,
-            },
-        },
-    ]
-    peak_phase = "prefill" if prefill_peak >= decode_peak else "decode"
     speculative_report = _speculative_report(
         speculative=speculative,
         effective_proposal_tokens=(
@@ -2658,30 +2738,10 @@ def _serving_batch_memory(
                 ),
             },
         },
-        "memory": {
-            "parameter_bytes": combined_parameter_bytes,
-            "target_parameter_bytes": parameter_bytes,
-            "draft_parameter_bytes": draft_parameter_bytes,
-            "runtime_overhead_bytes": runtime_overhead_bytes,
-            "scheduler_overhead_bytes": scheduler_overhead_bytes,
-            "prefill_transient": prefill_transient,
-            "decode_transient": decode_transient,
-            "target_prefill_transient": target_prefill_transient,
-            "draft_prefill_transient": draft_prefill_transient,
-            "target_verification_transient": (
-                target_verification_transient
-            ),
-            "draft_proposal_transient": draft_proposal_transient,
-            "estimated_prefill_peak_bytes": prefill_peak,
-            "estimated_decode_peak_bytes": decode_peak,
-            "estimated_process_peak_bytes": max(
-                prefill_peak,
-                decode_peak,
-            ),
-        },
-        "phases": phases,
-        "peak_bytes": max(prefill_peak, decode_peak),
-        "peak_phase": peak_phase,
+        "memory": breakdown.memory,
+        "phases": breakdown.phases,
+        "peak_bytes": breakdown.peak_bytes,
+        "peak_phase": breakdown.peak_phase,
     }
 
 
@@ -2934,88 +2994,28 @@ def _serving_request_set_memory(
         effective_proposal_tokens.get(str(request["id"]), 1)
         for request in normalized
     ) * 8
-    scheduler_overhead_bytes = (
-        scheduler_overhead_bytes_per_sequence * len(normalized)
+    breakdown = _serving_memory_breakdown(
+        kv_cache=kv_cache,
+        draft_kv_cache=draft_kv_cache,
+        speculative=speculative,
+        parameter_bytes=parameter_bytes,
+        sequence_count=len(normalized),
+        runtime_overhead_bytes=runtime_overhead_bytes,
+        scheduler_overhead_bytes_per_sequence=(
+            scheduler_overhead_bytes_per_sequence
+        ),
+        prefill_input_bytes=prefill_input_bytes,
+        decode_input_bytes=decode_input_bytes,
+        prefill_transient=prefill_transient,
+        decode_transient=decode_transient,
+        target_prefill_transient=target_prefill_transient,
+        draft_prefill_transient=draft_prefill_transient,
+        target_verification_transient=(
+            target_decode_transient if speculative is not None else None
+        ),
+        draft_proposal_transient=draft_proposal_transient,
+        memory_extra={"request_details": request_details},
     )
-    fixed_overhead_bytes = (
-        runtime_overhead_bytes + scheduler_overhead_bytes
-    )
-    draft_parameter_bytes = (
-        int(speculative["parameter_bytes"])
-        if speculative is not None
-        else 0
-    )
-    combined_parameter_bytes = parameter_bytes + draft_parameter_bytes
-    target_prefill_kv_bytes = int(
-        kv_cache["prefill"]["allocated_bytes"]
-    )
-    target_decode_kv_bytes = int(
-        kv_cache["decode"]["allocated_bytes"]
-    )
-    draft_prefill_kv_bytes = (
-        int(draft_kv_cache["prefill"]["allocated_bytes"])
-        if draft_kv_cache is not None
-        else 0
-    )
-    draft_decode_kv_bytes = (
-        int(draft_kv_cache["decode"]["allocated_bytes"])
-        if draft_kv_cache is not None
-        else 0
-    )
-    combined_prefill_kv_bytes = (
-        target_prefill_kv_bytes + draft_prefill_kv_bytes
-    )
-    combined_decode_kv_bytes = (
-        target_decode_kv_bytes + draft_decode_kv_bytes
-    )
-    prefill_peak = (
-        combined_parameter_bytes
-        + combined_prefill_kv_bytes
-        + int(prefill_transient["peak_bytes"])
-        + prefill_input_bytes
-        + fixed_overhead_bytes
-    )
-    decode_peak = (
-        combined_parameter_bytes
-        + combined_decode_kv_bytes
-        + int(decode_transient["peak_bytes"])
-        + decode_input_bytes
-        + fixed_overhead_bytes
-    )
-    phases = [
-        {
-            "phase": "prefill",
-            "peak_bytes": prefill_peak,
-            "components": {
-                "parameters": combined_parameter_bytes,
-                "target_parameters": parameter_bytes,
-                "draft_parameters": draft_parameter_bytes,
-                "inputs": prefill_input_bytes,
-                "kv_cache": combined_prefill_kv_bytes,
-                "target_kv_cache": target_prefill_kv_bytes,
-                "draft_kv_cache": draft_prefill_kv_bytes,
-                "transient": int(prefill_transient["peak_bytes"]),
-                "runtime_overhead": runtime_overhead_bytes,
-                "scheduler_overhead": scheduler_overhead_bytes,
-            },
-        },
-        {
-            "phase": "decode",
-            "peak_bytes": decode_peak,
-            "components": {
-                "parameters": combined_parameter_bytes,
-                "target_parameters": parameter_bytes,
-                "draft_parameters": draft_parameter_bytes,
-                "inputs": decode_input_bytes,
-                "kv_cache": combined_decode_kv_bytes,
-                "target_kv_cache": target_decode_kv_bytes,
-                "draft_kv_cache": draft_decode_kv_bytes,
-                "transient": int(decode_transient["peak_bytes"]),
-                "runtime_overhead": runtime_overhead_bytes,
-                "scheduler_overhead": scheduler_overhead_bytes,
-            },
-        },
-    ]
     prompt_lengths = [
         int(request["prompt_tokens"]) for request in normalized
     ]
@@ -3033,7 +3033,6 @@ def _serving_request_set_memory(
         < int(request["uncached_prompt_tokens"])
         for request in request_details
     )
-    peak_phase = "prefill" if prefill_peak >= decode_peak else "decode"
     speculative_report = _speculative_report(
         speculative=speculative,
         effective_proposal_tokens=effective_proposal_tokens,
@@ -3112,33 +3111,10 @@ def _serving_request_set_memory(
                 ),
             },
         },
-        "memory": {
-            "parameter_bytes": combined_parameter_bytes,
-            "target_parameter_bytes": parameter_bytes,
-            "draft_parameter_bytes": draft_parameter_bytes,
-            "runtime_overhead_bytes": runtime_overhead_bytes,
-            "scheduler_overhead_bytes": scheduler_overhead_bytes,
-            "prefill_transient": prefill_transient,
-            "decode_transient": decode_transient,
-            "target_prefill_transient": target_prefill_transient,
-            "draft_prefill_transient": draft_prefill_transient,
-            "target_verification_transient": (
-                target_decode_transient
-                if speculative is not None
-                else None
-            ),
-            "draft_proposal_transient": draft_proposal_transient,
-            "request_details": request_details,
-            "estimated_prefill_peak_bytes": prefill_peak,
-            "estimated_decode_peak_bytes": decode_peak,
-            "estimated_process_peak_bytes": max(
-                prefill_peak,
-                decode_peak,
-            ),
-        },
-        "phases": phases,
-        "peak_bytes": max(prefill_peak, decode_peak),
-        "peak_phase": peak_phase,
+        "memory": breakdown.memory,
+        "phases": breakdown.phases,
+        "peak_bytes": breakdown.peak_bytes,
+        "peak_phase": breakdown.peak_phase,
     }
 
 
