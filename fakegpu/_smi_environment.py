@@ -126,7 +126,10 @@ def _modeled_device_topology(
                     if member_text.startswith("+")
                     else member_text
                 )
-                if not unsigned_text.isdigit():
+                if (
+                    not unsigned_text.isascii()
+                    or not unsigned_text.isdigit()
+                ):
                     valid = False
                 else:
                     member = int(member_text)
