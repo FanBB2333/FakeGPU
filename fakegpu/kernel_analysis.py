@@ -186,6 +186,9 @@ def analyze_sass(text: str) -> dict[str, Any]:
     estimated_flops = 0
     for raw_line in cleaned.splitlines():
         line = raw_line.strip()
+        if re.match(r"^(?:Function|Header|Code|Section)\s*:", line, re.IGNORECASE):
+            continue
+        line = re.sub(r"^@!?[A-Z][A-Z0-9]*\s+", "", line)
         match = re.search(
             r"(?:/\*[0-9A-Fa-f]+\*/\s*)?([A-Z][A-Z0-9_.]+)"
             r"(?:\s|;|$)",
