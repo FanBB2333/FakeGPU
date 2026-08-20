@@ -343,7 +343,13 @@ def _preload_libs_for_mode(mode: str | None) -> tuple[str, ...]:
 
 def _apply_env_inplace(resolved_dir: Path, config: _FakeGpuRuntimeConfig) -> None:
     updated = _build_env(config, lib_dir=resolved_dir, base_env=os.environ)  # type: ignore[arg-type]
+    library_path_keys = {_LIBRARY_PATH_VAR}
     os.environ.update(updated)
+    for key in library_path_keys:
+        if key in updated:
+            os.environ[key] = updated[key]
+        else:
+            os.environ.pop(key, None)
 
 
 def _apply_config_env_inplace(config: _FakeGpuRuntimeConfig) -> None:
