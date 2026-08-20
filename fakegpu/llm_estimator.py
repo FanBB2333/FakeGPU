@@ -401,6 +401,7 @@ def estimate_decoder_inference(
     kv_cache_block_tokens: int = 16,
     kv_cache_max_tokens: int | None = None,
     kv_cache_window_tokens: int | None = None,
+    include_decode_steps: bool = True,
 ) -> dict[str, Any]:
     """Estimate decoder-only inference memory, communication, and FLOPs.
 
@@ -414,6 +415,8 @@ def estimate_decoder_inference(
         raise ValueError("prompt_tokens must be greater than zero")
     if generated_tokens <= 0:
         raise ValueError("generated_tokens must be greater than zero")
+    if not isinstance(include_decode_steps, bool):
+        raise ValueError("include_decode_steps must be a boolean")
     if runtime_overhead_bytes < 0:
         raise ValueError("runtime_overhead_bytes must be non-negative")
     if expert_parallel_size <= 0:
@@ -482,28 +485,86 @@ def estimate_decoder_inference(
         query_tokens=prompt_tokens,
         key_tokens=prefill_key_tokens,
     )
+    decode_step_count = max(0, generated_tokens - 1)
     decode_steps: list[dict[str, int]] = []
-    for step in range(max(0, generated_tokens - 1)):
-        logical_key_tokens = prompt_tokens + step + 1
-        key_tokens = _effective_context_tokens(
-            logical_key_tokens,
-            window_tokens=kv_cache_window_tokens,
-        )
-        flops = _forward_matmul_flops(
+    if include_decode_steps:
+        for step in range(decode_step_count):
+            logical_key_tokens = prompt_tokens + step + 1
+            key_tokens = _effective_context_tokens(
+                logical_key_tokens,
+                window_tokens=kv_cache_window_tokens,
+            )
+            flops = _forward_matmul_flops(
+                dimensions,
+                batch_size=batch_size,
+                query_tokens=1,
+                key_tokens=key_tokens,
+            )
+            decode_step = {
+                "step": step + 1,
+                "query_tokens": 1,
+                "key_tokens": key_tokens,
+                "matmul_flops": flops,
+            }
+            if logical_key_tokens != key_tokens:
+                decode_step["logical_key_tokens"] = logical_key_tokens
+            decode_steps.append(decode_step)
+
+    decode_key_token_sum = _sum_decode_context_tokens(
+        prompt_tokens,
+        decode_step_count,
+        window_tokens=kv_cache_window_tokens,
+    )
+    decode_flops_at_zero_key = _forward_matmul_flops(
+        dimensions,
+        batch_size=batch_size,
+        query_tokens=1,
+        key_tokens=0,
+    )
+    decode_flops_per_key_token = (
+        _forward_matmul_flops(
             dimensions,
             batch_size=batch_size,
             query_tokens=1,
-            key_tokens=key_tokens,
+            key_tokens=1,
         )
-        decode_step = {
-            "step": step + 1,
-            "query_tokens": 1,
-            "key_tokens": key_tokens,
-            "matmul_flops": flops,
+        - decode_flops_at_zero_key
+    )
+    total_decode_flops = (
+        decode_step_count * decode_flops_at_zero_key
+        + decode_key_token_sum * decode_flops_per_key_token
+    )
+    decode_step_summary = None
+    if not include_decode_steps:
+        first_logical_key_tokens = (
+            prompt_tokens + 1 if decode_step_count else None
+        )
+        last_logical_key_tokens = (
+            prompt_tokens + decode_step_count
+            if decode_step_count
+            else None
+        )
+        decode_step_summary = {
+            "count": decode_step_count,
+            "first_key_tokens": (
+                _effective_context_tokens(
+                    first_logical_key_tokens,
+                    window_tokens=kv_cache_window_tokens,
+                )
+                if first_logical_key_tokens is not None
+                else None
+            ),
+            "last_key_tokens": (
+                _effective_context_tokens(
+                    last_logical_key_tokens,
+                    window_tokens=kv_cache_window_tokens,
+                )
+                if last_logical_key_tokens is not None
+                else None
+            ),
+            "key_tokens_sum": decode_key_token_sum,
+            "matmul_flops": total_decode_flops,
         }
-        if logical_key_tokens != key_tokens:
-            decode_step["logical_key_tokens"] = logical_key_tokens
-        decode_steps.append(decode_step)
 
     cache_tokens_after_generation = prompt_tokens + max(0, generated_tokens - 1)
     kv_cache_prefill = int(kv_cache["prefill"]["allocated_bytes"])
@@ -542,13 +603,12 @@ def estimate_decoder_inference(
     )
     tensor_peak = max(prefill_peak, decode_peak)
 
-    total_decode_flops = sum(step["matmul_flops"] for step in decode_steps)
     total_flops = prefill_flops + total_decode_flops
     communication = _expert_parallel_communication(
         dimensions,
         batch_size=batch_size,
         prompt_tokens=prompt_tokens,
-        decode_forward_steps=len(decode_steps),
+        decode_forward_steps=decode_step_count,
         element_bytes=element_bytes,
         expert_parallel_size=expert_parallel_size,
     )
@@ -558,7 +618,7 @@ def estimate_decoder_inference(
         final_cache_bytes=kv_cache_final,
         prefill_transient=prefill_transient,
         decode_transient=decode_transient,
-        decode_forward_steps=len(decode_steps),
+        decode_forward_steps=decode_step_count,
     )
     performance = None
     if target_profile:
@@ -570,7 +630,7 @@ def estimate_decoder_inference(
             memory_bytes=memory_traffic["expected_bytes"],
             launch_count=_estimated_matmul_launches(
                 dimensions,
-                forward_steps=1 + len(decode_steps),
+                forward_steps=1 + decode_step_count,
             ),
             compute_acceleration_factor=compute_acceleration_factor,
         )
@@ -604,7 +664,20 @@ def estimate_decoder_inference(
             else None
         ),
     ]
-    return {
+    compute_report: dict[str, Any] = {
+        "metric": "matrix_multiply_flops",
+        "convention": "one multiply-add is two FLOPs",
+        "prefill_flops": prefill_flops,
+        "decode_steps": decode_steps,
+        "decode_flops_total": total_decode_flops,
+        "total_flops": total_flops,
+        "model_kind": model_kind,
+    }
+    if not include_decode_steps:
+        compute_report["decode_steps_included"] = False
+        compute_report["decode_step_summary"] = decode_step_summary
+
+    report = {
         "schema_version": SCHEMA_VERSION,
         "method": "safetensors_headers_plus_decoder_shape_and_roofline_model",
         "model": {
@@ -617,7 +690,7 @@ def estimate_decoder_inference(
             "batch_size": batch_size,
             "prompt_tokens": prompt_tokens,
             "generated_tokens": generated_tokens,
-            "decode_forward_steps": len(decode_steps),
+            "decode_forward_steps": decode_step_count,
             "use_cache": use_cache,
             "attention_implementation": attention_implementation,
             "dtype": selected_dtype,
@@ -711,15 +784,7 @@ def estimate_decoder_inference(
                 "runtime_overhead_calibrated": runtime_overhead_bytes > 0,
             },
         },
-        "compute": {
-            "metric": "matrix_multiply_flops",
-            "convention": "one multiply-add is two FLOPs",
-            "prefill_flops": prefill_flops,
-            "decode_steps": decode_steps,
-            "decode_flops_total": total_decode_flops,
-            "total_flops": total_flops,
-            "model_kind": model_kind,
-        },
+        "compute": compute_report,
         "communication": communication,
         "memory_traffic": memory_traffic,
         "performance": performance,
@@ -754,6 +819,9 @@ def estimate_decoder_inference(
             "Expert-parallel traffic assumes a uniform token distribution; hot experts can increase per-rank peaks.",
         ],
     }
+    if not include_decode_steps:
+        report["inputs"]["include_decode_steps"] = False
+    return report
 
 
 def _read_safetensors_header(path: Path) -> dict[str, Any]:
@@ -1133,6 +1201,26 @@ def _effective_context_tokens(
         if window_tokens is not None
         else tokens
     )
+
+
+def _sum_decode_context_tokens(
+    prompt_tokens: int,
+    decode_step_count: int,
+    *,
+    window_tokens: int | None,
+) -> int:
+    """Sum effective KV context lengths without materializing each step."""
+
+    count = max(0, int(decode_step_count))
+    if count == 0:
+        return 0
+    first = int(prompt_tokens) + 1
+    if window_tokens is None:
+        return count * first + count * (count - 1) // 2
+    window = int(window_tokens)
+    uncapped = min(count, max(0, window - first + 1))
+    uncapped_sum = uncapped * first + uncapped * (uncapped - 1) // 2
+    return uncapped_sum + (count - uncapped) * window
 
 
 def _kv_storage_bytes(

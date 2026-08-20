@@ -4,6 +4,10 @@
 
 ### Added
 
+- `fakegpu estimate-llm --exclude-decode-steps` (and the
+  `include_decode_steps=False` argument on `estimate_decoder_inference`)
+  to summarize decode FLOPs in closed form instead of embedding one
+  record per generated token.
 - `fakegpu calibrate` for phase-aware prediction/measurement error analysis,
   safety recommendations, and reusable exact-scope calibration bundles.
 - `fakegpu plan-training` for DeepSpeed, Accelerate, FSDP, and FSDP2 config

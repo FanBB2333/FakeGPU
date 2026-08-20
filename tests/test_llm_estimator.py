@@ -180,6 +180,40 @@ def test_dense_decoder_memory_and_flops_are_shape_aware(tmp_path: Path) -> None:
     assert report["memory_traffic"]["lower_bytes"] > 0
 
 
+def test_decode_step_aggregation_preserves_flops_without_per_token_records(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    expanded = estimate_decoder_inference(
+        model_dir,
+        prompt_tokens=8,
+        generated_tokens=20,
+        kv_cache_window_tokens=12,
+    )
+    aggregated = estimate_decoder_inference(
+        model_dir,
+        prompt_tokens=8,
+        generated_tokens=20,
+        kv_cache_window_tokens=12,
+        include_decode_steps=False,
+    )
+
+    assert expanded["compute"]["decode_flops_total"] == aggregated[
+        "compute"
+    ]["decode_flops_total"]
+    assert aggregated["compute"]["decode_steps"] == []
+    assert aggregated["compute"]["decode_steps_included"] is False
+    assert aggregated["compute"]["decode_step_summary"] == {
+        "count": 19,
+        "first_key_tokens": 9,
+        "last_key_tokens": 12,
+        "key_tokens_sum": 222,
+        "matmul_flops": expanded["compute"]["decode_flops_total"],
+    }
+    assert aggregated["inputs"]["include_decode_steps"] is False
+
+
 def test_mla_uses_compressed_latent_cache_and_architecture_flops(
     tmp_path: Path,
 ) -> None:
