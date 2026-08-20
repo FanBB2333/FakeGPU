@@ -1251,6 +1251,59 @@ def test_trace_replay_reports_overlap_pairs_memory_and_recovery() -> None:
     assert len(report["events"]) == 5
 
 
+def test_trace_replay_deduplicates_fused_operator_profile_summary() -> None:
+    report = replay_trace(
+        {
+            "traceEvents": [
+                {
+                    "ph": "X",
+                    "name": "fused_attention",
+                    "cat": "compute",
+                    "pid": 0,
+                    "ts": 0,
+                    "dur": 10,
+                    "args": {
+                        "fusion_id": "f0",
+                        "shape": [2, 8],
+                        "dtype": "bf16",
+                    },
+                },
+                {
+                    "ph": "X",
+                    "name": "softmax",
+                    "cat": "compute",
+                    "pid": 0,
+                    "ts": 1,
+                    "dur": 2,
+                    "args": {
+                        "fusion_id": "f0",
+                        "shape": [2, 8],
+                        "dtype": "bf16",
+                    },
+                },
+            ]
+        },
+        operator_profiles=[
+            {
+                "id": "fused-attention",
+                "match": {"operator": "fused_attention", "dtype": "bf16"},
+                "model": {"workspace_bytes": 256, "flops_per_element": 4},
+                "fused_operators": ["softmax"],
+            },
+            {
+                "id": "softmax",
+                "match": {"operator": "softmax", "dtype": "bf16"},
+                "model": {"workspace_bytes": 32, "flops_per_element": 2},
+            },
+        ],
+    )
+
+    summary = report["operator_profile_summary"]
+    assert summary["matched_event_count"] == 1
+    assert summary["matched_profiles"] == {"fused-attention": 1}
+    assert summary["modeled_totals"]["workspace_bytes"] == 256
+
+
 def test_trace_replay_resilience_uses_token_boundaries() -> None:
     events = [
         {"name": "aten::split", "start_us": 0, "rank": 0},
