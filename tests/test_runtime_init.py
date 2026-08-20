@@ -203,6 +203,10 @@ def test_inplace_hybrid_env_removes_stale_library_path(monkeypatch) -> None:
         _apply_env_inplace,
     )
 
+    # _apply_env_inplace mutates these keys directly; register their original
+    # values with monkeypatch so this process-level test cannot leak state.
+    monkeypatch.setenv("FAKEGPU_RUNTIME", "native")
+    monkeypatch.setenv("FAKEGPU_MODE", "simulate")
     monkeypatch.setenv(_LIBRARY_PATH_VAR, str(ROOT / "build"))
     _apply_env_inplace(
         ROOT / "build",
