@@ -32,7 +32,7 @@ from fakegpu.operator_profiles import (
 )
 from fakegpu.repository_analyzer import analyze_repository
 from fakegpu.topology import Topology, simulate_collective
-from fakegpu.trace_replay import replay_trace
+from fakegpu.trace_replay import _resilience_summary, replay_trace
 from fakegpu.training_plan import (
     estimate_training_plan,
     normalize_training_config,
@@ -1214,6 +1214,20 @@ def test_trace_replay_reports_overlap_pairs_memory_and_recovery() -> None:
     assert report["operator_profile_summary"]["matched_event_count"] == 1
     assert report["resilience"]["elastic_restart_observed"] is True
     assert len(report["events"]) == 5
+
+
+def test_trace_replay_resilience_uses_token_boundaries() -> None:
+    events = [
+        {"name": "aten::split", "start_us": 0, "rank": 0},
+        {"name": "init_weights", "start_us": 1, "rank": 0},
+        {"name": "atexit", "start_us": 2, "rank": 0},
+        {"name": "destroy_process_group", "start_us": 3, "rank": 0},
+    ]
+
+    summary = _resilience_summary(events)
+
+    assert summary["failure_count"] == 0
+    assert summary["communicator_change_count"] == 1
 
 
 def test_trace_replay_accepts_native_cluster_timeline_shape() -> None:

@@ -617,11 +617,24 @@ def _resilience_summary(
     events: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     patterns = {
-        "failure": re.compile(r"fail|abort|exit|timeout", re.IGNORECASE),
-        "retry": re.compile(r"retry|requeue", re.IGNORECASE),
-        "restart": re.compile(r"restart|recover|rejoin", re.IGNORECASE),
+        "failure": re.compile(
+            r"(?<![A-Za-z0-9:])(?:fail(?:ure|ed)?|abort|exit|timeout)"
+            r"(?![A-Za-z0-9])",
+            re.IGNORECASE,
+        ),
+        "retry": re.compile(
+            r"(?<![A-Za-z0-9:])(?:retry|requeue)(?![A-Za-z0-9])",
+            re.IGNORECASE,
+        ),
+        "restart": re.compile(
+            r"(?<![A-Za-z0-9:])(?:restart|recover|rejoin)(?![A-Za-z0-9])",
+            re.IGNORECASE,
+        ),
         "communicator_change": re.compile(
-            r"communicator|shrink|split|destroy|init",
+            r"(?<![A-Za-z0-9:])(?:communicator|shrink|split|destroy)"
+            r"(?![A-Za-z0-9])"
+            r"|(?<![A-Za-z0-9:])(?:init(?!_)|init_(?:communicator|process_group))"
+            r"(?![A-Za-z0-9])",
             re.IGNORECASE,
         ),
     }
