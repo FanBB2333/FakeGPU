@@ -31,7 +31,7 @@ from fakegpu.operator_profiles import (
     match_operator_profile,
 )
 from fakegpu.repository_analyzer import analyze_repository
-from fakegpu.topology import Topology, simulate_collective
+from fakegpu.topology import Topology, TopologyError, simulate_collective
 from fakegpu.trace_replay import _resilience_summary, replay_trace
 from fakegpu.training_plan import (
     estimate_training_plan,
@@ -1124,6 +1124,41 @@ def test_hierarchical_topology_routes_across_racks_and_reports_links() -> None:
         for transfer in report["transfers"]
     )
     assert report["summary"]["critical_links"]
+
+
+def test_topology_keeps_parallel_links_distinct_and_rejects_duplicate_nics() -> None:
+    config = {
+        "nodes": [
+            {"id": "node0", "nics": [{"id": "nic0", "switch": "leaf0"}]},
+            {"id": "node1", "nics": [{"id": "nic1", "switch": "leaf1"}]},
+        ],
+        "links": [
+            {"src": "leaf0", "dst": "leaf1", "bandwidth_gbps": 100},
+            {"src": "leaf0", "dst": "leaf1", "bandwidth_gbps": 200},
+        ],
+        "ranks": [
+            {"rank": 0, "node": "node0"},
+            {"rank": 1, "node": "node1"},
+        ],
+    }
+
+    topology = Topology.from_mapping(config)
+    fabric_ids = [
+        link.id
+        for link in topology.links
+        if link.src == "leaf0" and link.dst == "leaf1"
+    ]
+    assert fabric_ids == ["leaf0->leaf1", "leaf0->leaf1#2"]
+
+    duplicate_nic_config = {
+        **config,
+        "nodes": [
+            {"id": "node0", "nics": [{"id": "shared", "switch": "leaf0"}]},
+            {"id": "node1", "nics": [{"id": "shared", "switch": "leaf1"}]},
+        ],
+    }
+    with pytest.raises(TopologyError, match="duplicate NIC id"):
+        Topology.from_mapping(duplicate_nic_config)
 
 
 def test_trace_replay_reports_overlap_pairs_memory_and_recovery() -> None:

@@ -33,15 +33,22 @@ class Link:
     latency_us: float
     scope: str
     bidirectional: bool = True
+    link_id: str | None = None
 
     @property
     def id(self) -> str:
-        return f"{self.src}->{self.dst}"
+        return self.link_id or f"{self.src}->{self.dst}"
 
     def transfer_time_us(self, payload_bytes: int) -> float:
         return self.latency_us + payload_bytes * 8 / (
             self.bandwidth_gbps * 1_000
         )
+
+
+def _reverse_link_id(link: Link) -> str:
+    base = f"{link.src}->{link.dst}"
+    suffix = link.id[len(base) :] if link.id.startswith(base) else ""
+    return f"{link.dst}->{link.src}{suffix}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +74,27 @@ class Topology:
             raise TopologyError("topology must contain at least one link")
         if not ranks:
             raise TopologyError("topology must contain at least one rank")
-        self.links = list(links)
+        link_counts: dict[str, int] = defaultdict(int)
+        normalized_links: list[Link] = []
+        for link in links:
+            base_id = link.id
+            count = link_counts[base_id]
+            link_counts[base_id] += 1
+            normalized_id = (
+                base_id if count == 0 else f"{base_id}#{count + 1}"
+            )
+            normalized_links.append(
+                Link(
+                    src=link.src,
+                    dst=link.dst,
+                    bandwidth_gbps=link.bandwidth_gbps,
+                    latency_us=link.latency_us,
+                    scope=link.scope,
+                    bidirectional=link.bidirectional,
+                    link_id=normalized_id,
+                )
+            )
+        self.links = normalized_links
         self.ranks = {
             int(rank): tuple(sorted(set(endpoints)))
             for rank, endpoints in ranks.items()
@@ -90,6 +117,7 @@ class Topology:
                     latency_us=link.latency_us,
                     scope=link.scope,
                     bidirectional=True,
+                    link_id=_reverse_link_id(link),
                 )
                 self._adjacency[link.dst].append((link.src, reverse))
         for edges in self._adjacency.values():
@@ -107,6 +135,7 @@ class Topology:
         links: list[Link] = []
         node_racks: dict[str, str] = {}
         node_nics: dict[str, list[str]] = defaultdict(list)
+        seen_nic_ids: set[str] = set()
         for item in nodes_raw:
             if not isinstance(item, Mapping):
                 raise TopologyError("each node must be an object")
@@ -119,6 +148,9 @@ class Topology:
                 if not isinstance(nic_raw, Mapping):
                     raise TopologyError(f"node {node_id!r} has an invalid NIC")
                 nic_id = str(nic_raw.get("id") or f"{node_id}.nic{nic_index}")
+                if nic_id in seen_nic_ids:
+                    raise TopologyError(f"duplicate NIC id {nic_id!r}")
+                seen_nic_ids.add(nic_id)
                 switch = str(nic_raw.get("switch") or "")
                 if not switch:
                     raise TopologyError(f"NIC {nic_id!r} has no switch")
