@@ -19,7 +19,7 @@ from ._cli import (
     add_json_flag_argument,
     command_prog,
 )
-from .smi import (
+from ._smi_state import (
     DEFAULT_STALE_AFTER_SECONDS,
     _discover_state_paths,
     _load_states,
