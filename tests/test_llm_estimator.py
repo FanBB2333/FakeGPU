@@ -181,6 +181,42 @@ def test_dense_decoder_memory_and_flops_are_shape_aware(tmp_path: Path) -> None:
     assert report["memory_traffic"]["lower_bytes"] > 0
 
 
+def test_decoder_without_kv_cache_recomputes_full_decode_context(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    uncached = estimate_decoder_inference(
+        model_dir,
+        prompt_tokens=4,
+        generated_tokens=3,
+        use_cache=False,
+    )
+    cached = estimate_decoder_inference(
+        model_dir,
+        prompt_tokens=4,
+        generated_tokens=3,
+        use_cache=True,
+    )
+
+    assert uncached["kv_cache"]["enabled"] is False
+    assert uncached["memory"]["kv_cache_bytes_after_generation"] == 0
+    assert [
+        (step["query_tokens"], step["key_tokens"])
+        for step in uncached["compute"]["decode_steps"]
+    ] == [(5, 5), (6, 6)]
+    assert uncached["memory"]["decode_input_bytes"] == 48
+    assert uncached["memory_timeline"]["phases"][1]["components"][
+        "inputs"
+    ] == 48
+    assert uncached["compute"]["decode_flops_total"] > cached[
+        "compute"
+    ]["decode_flops_total"]
+    assert uncached["memory"]["decode_transient"]["peak_bytes"] > cached[
+        "memory"
+    ]["decode_transient"]["peak_bytes"]
+
+
 def test_decode_step_aggregation_preserves_flops_without_per_token_records(
     tmp_path: Path,
 ) -> None:
