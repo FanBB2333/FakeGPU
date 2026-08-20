@@ -375,6 +375,36 @@ def test_local_unet_pipeline_is_inspected_from_json_and_headers(
     )
 
 
+def test_local_profile_validation_allows_missing_size_and_conditioning(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "local-unet-no-text"
+    _write_pipeline(model_dir, transformer=False)
+    model_index = json.loads(
+        (model_dir / "model_index.json").read_text(encoding="utf-8")
+    )
+    model_index.pop("text_encoder")
+    (model_dir / "model_index.json").write_text(
+        json.dumps(model_index),
+        encoding="utf-8",
+    )
+    denoiser_config_path = model_dir / "unet" / "config.json"
+    denoiser_config = json.loads(
+        denoiser_config_path.read_text(encoding="utf-8")
+    )
+    denoiser_config.pop("sample_size")
+    denoiser_config_path.write_text(
+        json.dumps(denoiser_config),
+        encoding="utf-8",
+    )
+
+    inspection = inspect_diffusion_pipeline(model_dir)
+
+    assert inspection["profile"]["status"] == "local-inspected"
+    assert inspection["profile"]["default_generation"]["height"] is None
+    assert inspection["profile"]["conditioning"]["parameter_count"] == 0
+
+
 def test_local_patch_and_joint_transformers_use_distinct_shapes(
     tmp_path: Path,
 ) -> None:
