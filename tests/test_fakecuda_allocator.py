@@ -1,19 +1,56 @@
 from __future__ import annotations
 
 import json
+import gc
 import os
 import subprocess
 import sys
 import textwrap
+import weakref
 from pathlib import Path
 
 import pytest
 
-from fakegpu.torch_patch import _DeviceMemoryTracker
+from fakegpu.torch_patch import (
+    _DeviceMemoryTracker,
+    _TrackedSavedTensor,
+    _unpack_autograd_saved_tensor,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MIB = 1024**2
+
+
+def test_saved_tensor_unpack_detaches_stale_finalizer() -> None:
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    raw_data_ptr = 1234
+    tracker.allocate_saved_tensor(
+        raw_data_ptr=raw_data_ptr,
+        nbytes=1_000,
+        device=0,
+    )
+    holder = _TrackedSavedTensor(
+        object(),
+        raw_data_ptr,
+        tracker.release_saved_tensor,
+    )
+    holder._finalizer = weakref.finalize(
+        holder,
+        holder._release,
+        raw_data_ptr,
+    )
+
+    _unpack_autograd_saved_tensor(holder)
+    tracker.allocate_saved_tensor(
+        raw_data_ptr=raw_data_ptr,
+        nbytes=1_000,
+        device=0,
+    )
+    del holder
+    gc.collect()
+
+    assert tracker.memory_allocated(0) == 1_000
 
 
 def test_small_allocations_share_and_release_cached_segment() -> None:
