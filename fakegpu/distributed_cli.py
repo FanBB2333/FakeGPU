@@ -568,7 +568,9 @@ def _format_bytes(size: int) -> str:
 
 
 def _print_bandwidth_summary(report: dict[str, Any]) -> None:
-    print("FakeGPU TCP bandwidth benchmark: PASS")
+    status = str(report.get("status") or "error").lower()
+    label = "PASS" if status == "success" else "FAIL"
+    print(f"FakeGPU TCP bandwidth benchmark: {label}")
     print(f"  endpoint: {report['endpoint']}")
     if report.get("listen_endpoint"):
         print(f"  listen: {report['listen_endpoint']}")
