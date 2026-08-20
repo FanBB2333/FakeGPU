@@ -720,9 +720,18 @@ def _local_profile(
     }
 
 
+def _validate_local_profile(
+    profile_id: str,
+    profile: Mapping[str, Any],
+) -> None:
+    _validate_profile(profile_id, profile, allow_local=True)
+
+
 def _validate_profile(
     profile_id: str,
     profile: Mapping[str, Any],
+    *,
+    allow_local: bool = False,
 ) -> None:
     for key in (
         "display_name",
@@ -739,7 +748,10 @@ def _validate_profile(
             raise DiffusionEstimateError(
                 f"diffusion profile {profile_id!r} is missing {key!r}"
             )
-    if profile["status"] not in {"reference", "synthetic"}:
+    allowed_statuses = {"reference", "synthetic"}
+    if allow_local:
+        allowed_statuses.add("local-inspected")
+    if profile["status"] not in allowed_statuses:
         raise DiffusionEstimateError(
             f"diffusion profile {profile_id!r} has invalid status"
         )
@@ -766,7 +778,19 @@ def _validate_profile(
         ("vae.layers_per_block", vae.get("layers_per_block")),
     ):
         try:
-            _positive_integer(value, name)
+            if (
+                allow_local
+                and name in {
+                    "default_generation.height",
+                    "default_generation.width",
+                }
+                and value is None
+            ):
+                continue
+            if allow_local and name == "conditioning.parameter_count":
+                _nonnegative_integer(value, name)
+            else:
+                _positive_integer(value, name)
         except DiffusionEstimateError as exc:
             raise DiffusionEstimateError(
                 f"diffusion profile {profile_id!r}: {exc}"
@@ -859,8 +883,12 @@ def _validate_profile(
     )
     scale = int(latent["scale_factor"])
     if (
-        int(defaults["height"]) % scale != 0
-        or int(defaults["width"]) % scale != 0
+        defaults.get("height") is not None
+        and defaults.get("width") is not None
+        and (
+            int(defaults["height"]) % scale != 0
+            or int(defaults["width"]) % scale != 0
+        )
     ):
         raise DiffusionEstimateError(
             f"diffusion profile {profile_id!r}: default dimensions "
@@ -1062,6 +1090,7 @@ def inspect_diffusion_pipeline(
         components=components,
         role_names=role_names,
     )
+    _validate_local_profile(root.name, profile)
     return {
         "schema_version": INSPECTION_SCHEMA_VERSION,
         "model_dir": str(root),
