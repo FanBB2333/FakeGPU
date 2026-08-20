@@ -76,6 +76,9 @@
   documentation to describe the implemented behavior and remaining limits.
 - Expanded the public analysis API with repository, native-capability, and
   profile-roofline reports.
+- Removed the PrivateUse1 backend prototype (`fakegpu/privateuse1/`) and its
+  `fakegpu.init_privateuse1()` export; it depended on private
+  `torch._C._acc` APIs that no supported PyTorch release provides.
 
 ### Fixed
 

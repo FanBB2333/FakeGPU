@@ -102,12 +102,6 @@ def patch_torch(*, num_devices: int | None = None, device_name: str | None = Non
     return patch(num_devices=num_devices, device_name=device_name)
 
 
-def init_privateuse1() -> None:
-    from .privateuse1 import init_privateuse1 as _init_privateuse1
-
-    _init_privateuse1()
-
-
 def _init_native_runtime(
     config: _FakeGpuRuntimeConfig,
     *,
