@@ -1008,6 +1008,8 @@ def test_training_plan_normalizes_deepspeed_zero3_offload() -> None:
     assert report["rank_local_storage"]["optimizer_state_bytes"] == 0
     assert report["cpu_offload"]["optimizer_and_master_parameter_bytes"] == 4_000
     assert report["communication"]["gradient_accumulation_steps"] == 8
+    assert report["communication"]["reduce_bucket_bytes"] == 400
+    assert report["communication"]["allgather_bucket_bytes"] == 600
     assert len(report["memory_timeline"]["phases"]) == 4
 
 
@@ -1048,7 +1050,38 @@ def test_training_plan_handles_accelerate_fsdp_and_auto_deepspeed_values() -> No
     )
     assert deepspeed["zero_stage"] == 3
     assert deepspeed["optimizer_offload_device"] == "cpu"
-    assert deepspeed["reduce_bucket_bytes"] == 0
+    assert deepspeed["reduce_bucket_elements"] == 0
+
+
+def test_training_plan_converts_deepspeed_bucket_elements_to_bytes() -> None:
+    normalized = normalize_training_config(
+        {
+            "bf16": {"enabled": True},
+            "zero_optimization": {
+                "stage": 3,
+                "reduce_bucket_size": 500_000_000,
+                "allgather_bucket_size": 250_000_000,
+                "stage3_prefetch_bucket_size": 125_000_000,
+            },
+        }
+    )
+
+    report = estimate_training_plan(
+        normalized,
+        parameter_bytes=2_000_000_000,
+        activation_bytes=1_000,
+        parameter_element_bytes=2,
+    )
+
+    assert normalized["reduce_bucket_elements"] == 500_000_000
+    assert report["communication"] == {
+        "reduce_bucket_bytes": 1_000_000_000,
+        "allgather_bucket_bytes": 500_000_000,
+        "stage3_prefetch_bucket_bytes": 250_000_000,
+        "overlap_communication": False,
+        "gradient_accumulation_steps": 1,
+    }
+    assert report["rank_local_storage"]["communication_workspace_bytes"] == 1_000_000_000
 
 
 @pytest.mark.parametrize(

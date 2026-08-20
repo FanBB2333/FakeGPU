@@ -184,9 +184,25 @@ def estimate_training_plan(
         0 if offload_optimizer else rank_master_parameter_bytes
     )
 
-    reduce_bucket = int(normalized.get("reduce_bucket_bytes", 0) or 0)
-    allgather_bucket = int(normalized.get("allgather_bucket_bytes", 0) or 0)
-    if reduce_bucket < 0 or allgather_bucket < 0:
+    reduce_bucket = _communication_bucket_bytes(
+        normalized,
+        bytes_key="reduce_bucket_bytes",
+        elements_key="reduce_bucket_elements",
+        parameter_element_bytes=parameter_element_bytes,
+    )
+    allgather_bucket = _communication_bucket_bytes(
+        normalized,
+        bytes_key="allgather_bucket_bytes",
+        elements_key="allgather_bucket_elements",
+        parameter_element_bytes=parameter_element_bytes,
+    )
+    stage3_prefetch_bucket = _communication_bucket_bytes(
+        normalized,
+        bytes_key="stage3_prefetch_bucket_bytes",
+        elements_key="stage3_prefetch_bucket_elements",
+        parameter_element_bytes=parameter_element_bytes,
+    )
+    if min(reduce_bucket, allgather_bucket, stage3_prefetch_bucket) < 0:
         raise TrainingPlanError("communication bucket sizes must be non-negative")
     default_bucket = min(
         parameter_bytes,
@@ -196,7 +212,11 @@ def estimate_training_plan(
         reduce_bucket = default_bucket
     if (full_shard or zero_stage >= 3) and allgather_bucket == 0:
         allgather_bucket = default_bucket
-    communication_workspace_bytes = max(reduce_bucket, allgather_bucket)
+    communication_workspace_bytes = max(
+        reduce_bucket,
+        allgather_bucket,
+        stage3_prefetch_bucket,
+    )
 
     gathered_parameter_window = (
         min(
@@ -354,6 +374,7 @@ def estimate_training_plan(
         "communication": {
             "reduce_bucket_bytes": reduce_bucket,
             "allgather_bucket_bytes": allgather_bucket,
+            "stage3_prefetch_bucket_bytes": stage3_prefetch_bucket,
             "overlap_communication": bool(
                 normalized.get("overlap_communication", False)
             ),
@@ -492,15 +513,15 @@ def _normalize_deepspeed(config: Mapping[str, Any]) -> dict[str, Any]:
         "contiguous_gradients": _bool_value(
             zero_config.get("contiguous_gradients", False)
         ),
-        "reduce_bucket_bytes": _int_or_default(
+        "reduce_bucket_elements": _int_or_default(
             zero_config.get("reduce_bucket_size"),
             0,
         ),
-        "allgather_bucket_bytes": _int_or_default(
+        "allgather_bucket_elements": _int_or_default(
             zero_config.get("allgather_bucket_size"),
             0,
         ),
-        "stage3_prefetch_bucket_bytes": _int_or_default(
+        "stage3_prefetch_bucket_elements": _int_or_default(
             zero_config.get("stage3_prefetch_bucket_size"),
             0,
         ),
@@ -711,6 +732,19 @@ def _int_or_default(value: Any, default: int) -> int:
     if parsed < 0:
         raise TrainingPlanError("memory bucket size must be non-negative")
     return parsed
+
+
+def _communication_bucket_bytes(
+    normalized: Mapping[str, Any],
+    *,
+    bytes_key: str,
+    elements_key: str,
+    parameter_element_bytes: int,
+) -> int:
+    elements = normalized.get(elements_key)
+    if elements is not None:
+        return int(elements) * parameter_element_bytes
+    return int(normalized.get(bytes_key, 0) or 0)
 
 
 def _bool_value(value: Any) -> bool:
