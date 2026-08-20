@@ -66,6 +66,37 @@
 
 验证：本地全量 `pytest`（233 passed，含 3 个新增测试）+ ruff clean；CI 同款 manifest 校验（7+39 cases）通过。**本轮尚未跑 `scripts/test.sh smoke`/`cpu` 与远端 406/gem12 复测**——改动集中在 Python 侧 CLI 与纯逻辑路径，未触碰 `src/`；如需最终确认可按 §3 建议补一次。
 
+**2026-08-20 第四批落地**：§8 第 4 步（大合并）与第 5 步（机械拆分）完成主体。
+
+| Commit | 阶段 | 内容 |
+|---|---|---|
+| `5d71400` | §3.2 上半 | 两条 serving 主路径共享容量解析、vLLM/通用准入分支、limiting_factor 阶梯与 inputs 回显（`_ServingCapacity`/`_ServingAdmission` 等 4 个 helper） |
+| `242aa02` | §3.2 下半 | `_serving_batch_memory` 与 `_serving_request_set_memory` 共享驻留量与相位峰值计算（`_serving_memory_breakdown`） |
+| `c6a1866` | §3.1 | 删除 torch_patch 对 `_upstream` process-group 补丁的逐字复刻；先补了该生命周期此前**完全缺失**的测试 |
+| `f2f0039` | §4.2 | `torch_patch` → `_allocator.py`（990 行） |
+| `9f632c4` | §4.2 | `smi` → `_smi_environment.py` + `_smi_state.py`；`metrics` 改为从 `_smi_state` 取 inventory，不再 import smi 私有函数 |
+| `cd57d21` | §4.2 | `calibration` → `_calibration_protocol.py` + `_calibration_cuda.py`；顺带把懒加载的 `llm_estimator` import 提到模块级（复核确认根本不存在循环 import） |
+| `eaef076` | §4.2 | `serving_plan` → `_serving_types/_serving_kv/_serving_vllm/_serving_speculative`，并补 `__all__` 明确公开面 |
+| `f8510a4` | §4.2 | `diffusion_estimator` → `_diffusion_types.py` + `_diffusion_pipeline.py` + `_diffusion_activation.py` |
+| `2ebb7bc` | §4.2 | `smi` → `_smi_query.py` + `_smi_render.py` |
+| `f52e6bd` | §4.2 | `torch_patch` → `_profiles.py` + `_cross_device.py` |
+
+四个超大文件的规模变化：`smi.py` 4353→957、`torch_patch.py` 4346→2073、`serving_plan.py` 3722→2501、`calibration.py` 2873→1871、`diffusion_estimator.py` 2327→779。全包最大文件从 4353 行降到 2501 行。
+
+**§3.2 合并的实际结果与文档预期不同**：文档估计"约 −400 行净减"，实际两个 commit 合计**净增 17 行**（planner 主体 −218、memory 函数 −24，共享 helper +300 左右）。原因是真正逐字相同的片段与模式特有片段交错，抽出来的每个 helper 都要写一份显式关键字签名，签名开销吃掉了去重收益。**去重本身是达成的**（准入逻辑、limiting_factor、inputs 回显、相位峰值各只剩一份），但不要指望它减行。两个入口没有进一步合并成单个函数体——那会把重复换成一个贯穿全函数的 mode 标志，不是改善。
+
+**等价性验证**：§3.2 两个 commit 各跑了一轮 2,734 例全报告比对（两条路径 × generic/vLLM × 容量扫描 × 三种 KV 策略 × utilization × speculative × profile + 10 个非法输入），与合并前实现**逐字节一致**，覆盖全部 6 种 limiting_factor 分支。
+
+**拆分中发现与文档不符处**：
+- `_PROFILE_SUPPORTED_TYPES`（§1.7 列为"从未读取"）实际被 `tests/test_cli_commands.py:196` 读取，**不是死代码**，已随 `_profiles.py` 保留。
+- `calibration` 里 `llm_estimator` 的函数级懒加载（§4.2 说是"为躲循环 import"）实际上没有循环可躲——`llm_estimator` 不 import 包内任何模块，纯粹是位置放错。
+- `torch_patch` 的 `_NUM_DEVICES`/`_DEVICE_PROFILES`/`_DEVICE_NAME`/`_TOTAL_MEMORY` 是 `_refresh_runtime_profile_state` 会重新绑定的可变模块状态，**不能**随 profile 解析函数一起搬走（搬走后 from-import 拿到的是旧值副本，刷新不可见），已刻意留在 `torch_patch`。
+- 移动私有函数会让 monkeypatch 目标失效：`tests/test_analysis_extensions.py` 对 `_transformers_serving_workload` 的 patch 已改指新模块（继续 patch 旧名字不会报错，只会静默失去拦截）。
+
+验证：本地全量 `pytest`（234 passed）+ ruff clean + CI 同款 manifest 校验（7+39 cases）+ `scripts/test.sh smoke`（含 native 重建）+ `scripts/test.sh cpu` 全部通过。**远端 406/gem12 尚未复测**。
+
+**§4/§5 剩余未做**：`preflight.py`（1362 行，四个关注点未分离）；`calibration` 的比较/验证/bundle 与 CLI 未再分；`serving_plan` 的两个 pool model（约 1,100 行）与 CLI 未再分；`smi`/各 CLI 的 `main` 仍是大函数（§4.1 的超大函数清单只处理了其中一部分）；`torch_patch` 的 `_reporting.py`/`_ecosystem_compat.py` 两刀未做。§3.6 遗留：`llm_cli` 与 `serving_plan` 约 12 个同名 flag 默认值不同，本轮只统一了声明方式。另注意 `diffusion_estimator` 的 `_local_profile` 产物绕过 `_validate_profile` 的漂移风险（§4.2 提到）现在两者同在 `_diffusion_pipeline.py`，修它会改变行为，属独立事项。
+
 **复核后有意不改的条目**（与文档原建议不同处）：
 - `_aggregate_report` 的 error 分支（§1.5/2.3）：rc=0 但报告为 error 的边缘情况下可达，保留。
 - `_stage.py` 重复 env 赋值（§2.2）：嵌套 stage 退出时有恢复语义，保留。
@@ -348,8 +379,8 @@ ruff（F401/F811/F841）检查是干净的——没有未使用的 import / 变�
 1. ~~决策项~~ ✅ 已完成（2026-08-20）：`privateuse1/` 删除（`f35018d`），其余四项拍板保留并补覆盖，逐项理由见"实施进度"。
 2. ~~纯删除（§1 + §2.2）~~ ✅ 已完成（`e451bd2`/`bc77d9f`/`6b00725`/`432c21c`）。
 3. **公共设施（剩余，中风险）**：~~`FakeGpuConfig` dataclass 收敛 `_api.py`/`_runtime.py` 的 8 处 10 参数签名~~ ✅ 已完成（`_FakeGpuRuntimeConfig`，2026-08-17，−77 行）。~~CLI 注册器 + 共享 flag 工厂 + 统一 `--json`/退出码约定~~ ✅ 已完成（`c660cdb`，2026-08-20）。`--json` 输出块已由 `emit_json` 收敛（`f6891c8`）。**剩余**：`llm_cli` 与 `serving_plan` 约 12 个同名 flag 默认值不同（`dynamic/eager` vs `paged/sdpa`），本轮只统一了声明方式，默认值差异原样保留，需单独确认哪些属于有意为之。
-4. **大合并**：`serving_plan` 双路径合一（§3.2，全仓杠杆最大单项，约 1,760 行）——**先决条件**：给 `estimate_serving_plan` 与 `estimate_serving_request_set` 补 golden-output 测试，锁住两条路径的输出差异后再抽 `_build_serving_report`；`_patched_dist_init/destroy` 对 `_upstream` 的复刻清理（仅状态读取方式不同，合并时逐字段比对）。
-5. **机械拆分（§4.2）**：`torch_patch`（−1,200 后约 3,100 行，`_allocator.py` 一刀约 810 行最干净）、`smi.py`（拆出 metrics 真正需要的 inventory/归一化层，消除 `metrics.py` import `smi` 私有函数）、`calibration.py`、`serving_plan.py`、`diffusion_estimator.py`。只做移动与 import 调整，旧模块 re-export 保持兼容。
+4. ~~**大合并**~~ ✅ 已完成（`5d71400`/`242aa02`/`c6a1866`，2026-08-20）：golden 测试先行，再抽共享 helper；`_patched_dist_init/destroy` 复刻已整体删除。净减行数未达预期，原因见"实施进度"第四批。
+5. **机械拆分（§4.2）**：主体已完成（2026-08-20，9 个新模块，全部只做移动 + 旧模块 re-export）。剩余项见"实施进度"第四批末尾——`preflight.py`、各 CLI 的 `main`、`torch_patch` 的 `_reporting`/`_ecosystem_compat`、`serving_plan` 的两个 pool model。
 6. **兜底收敛与性能（剩余）**：§2.3 逐个评估（`workspace_profiles` 的 import 失败退化、`smi.py` publisher 主循环裸捕、`calibration` 第四层 sample fallback 等——行为敏感，建议转 warning 而非静默）；§5.1 allocator `snapshot()` 增量汇总与 `_allocate_allocator_block` 索引化（需 benchmark）；§5.4 metrics 深拷贝三处、`decode_steps` 聚合 + 开关（报告 shape 变化需过消费者）。
 7. ~~**bug 修复（§7，与重构完全分开走 `fix:` commit）**~~ ✅ 已完成（2026-08-17）：12 项中 10 项修复、1 项（#6）修复过程中改正了一处 WIP 引入的 KeyError、1 项（#12）复核后判定不是 bug，保留不动。详见"实施进度"与 §7 逐项状态。
 
