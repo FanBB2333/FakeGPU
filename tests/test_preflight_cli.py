@@ -495,3 +495,52 @@ def test_preflight_strict_treats_skipped_child_output_as_failure(tmp_path: Path)
     assert any("skipped" in warning.lower() for warning in report["warnings"])
     assert report["errors"][0]["type"] == "SkippedTest"
     assert "strict" in report["errors"][0]["message"].lower()
+
+
+def test_preflight_does_not_reuse_stale_runtime_reports(tmp_path: Path) -> None:
+    report_dir = tmp_path / "preflight-reused"
+    report_dir.mkdir()
+    stale_report = {
+        "tracking_confidence": "C3_torch_dispatch_lifetime",
+        "devices": [
+            {
+                "index": 0,
+                "name": "stale-device",
+                "total_memory": 1024,
+                "peak_memory": 512,
+            }
+        ],
+    }
+    for filename in (
+        "fakegpu_runtime_report.json",
+        "fakegpu_cluster_report.json",
+        "fakegpu_child_report.json",
+    ):
+        (report_dir / filename).write_text(
+            json.dumps(stale_report),
+            encoding="utf-8",
+        )
+    (report_dir / "preflight_stage.jsonl").write_text(
+        '{"stage":"stale-stage"}\n',
+        encoding="utf-8",
+    )
+
+    completed = _run_preflight(
+        ["/usr/bin/true"],
+        report_dir=report_dir,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(
+        (report_dir / "preflight_report.json").read_text(encoding="utf-8")
+    )
+    assert report["status"] == "WARN_INCOMPLETE_TRACKING"
+    assert report["tracking_confidence"] == "C0_incomplete"
+    assert report["devices"] == []
+    assert report["stage"] == "forward"
+    assert report["raw_reports"] == {
+        "runtime": None,
+        "cluster": None,
+        "fakecuda_child": None,
+        "stage_log": None,
+    }

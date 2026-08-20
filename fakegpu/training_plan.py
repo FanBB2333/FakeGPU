@@ -626,8 +626,12 @@ def _normalize_fsdp(
         ),
         "activation_checkpointing": checkpointing,
         "overlap_communication": _bool_value(
-            config.get("backward_prefetch")
-            or config.get("fsdp_backward_prefetch")
+            _fsdp_backward_prefetch_value(
+                config.get(
+                    "backward_prefetch",
+                    config.get("fsdp_backward_prefetch"),
+                )
+            )
         ),
         "reduce_bucket_bytes": _int_or_default(
             config.get("reduce_bucket_bytes"),
@@ -724,6 +728,16 @@ def _bool_value(value: Any) -> bool:
             f"expected a boolean (or 'auto'), got {value!r}"
         )
     return bool(value)
+
+
+def _fsdp_backward_prefetch_value(value: Any) -> bool:
+    if isinstance(value, str):
+        normalized = value.strip().upper()
+        if normalized == "NO_PREFETCH":
+            return False
+        if normalized in {"BACKWARD_PRE", "BACKWARD_POST"}:
+            return True
+    return _bool_value(value)
 
 
 def _ceil_div(value: int, divisor: int) -> int:
