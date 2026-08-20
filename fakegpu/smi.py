@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import uuid
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
@@ -1174,6 +1175,7 @@ class SmiStatePublisher:
         self._max_duration_us = 0
         self._last_serialized_bytes = 0
         self._last_error = ""
+        self._warned_publish_error: tuple[str, str] | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -1198,8 +1200,8 @@ class SmiStatePublisher:
         self._thread = None
         try:
             self.publish_once(running=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._warn_publish_failure(exc, context="final state publish")
 
     def publish_once(self, *, running: bool) -> dict[str, Any]:
         started_ns = time.perf_counter_ns()
@@ -1234,7 +1236,25 @@ class SmiStatePublisher:
         )
         self._last_serialized_bytes = serialized_bytes
         self._last_error = ""
+        self._warned_publish_error = None
         return state
+
+    def _warn_publish_failure(
+        self,
+        exc: Exception,
+        *,
+        context: str,
+    ) -> None:
+        signature = (type(exc).__name__, str(exc))
+        if signature == self._warned_publish_error:
+            return
+        self._warned_publish_error = signature
+        warnings.warn(
+            f"FakeGPU SMI {context} failed for {self.path}: "
+            f"{type(exc).__name__}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     def _publish_once(
         self,
@@ -1458,7 +1478,11 @@ class SmiStatePublisher:
         while not self._stop.wait(self.interval_seconds):
             try:
                 self.publish_once(running=True)
-            except Exception:
+            except Exception as exc:
+                self._warn_publish_failure(
+                    exc,
+                    context="background state publish",
+                )
                 continue
 
 
@@ -3942,7 +3966,12 @@ def _catalog_metadata() -> dict[str, Any]:
         from .profile_catalog import catalog_summary
 
         profile_summary = catalog_summary()
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError) as exc:
+        warnings.warn(
+            f"FakeGPU SMI could not load profile catalog metadata: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         profile_summary = {}
     try:
         from .capabilities import load_native_capabilities
@@ -3971,7 +4000,12 @@ def _catalog_metadata() -> dict[str, Any]:
             ),
             "classifications": dict(sorted(classifications.items())),
         }
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError) as exc:
+        warnings.warn(
+            f"FakeGPU SMI could not load native capability metadata: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         capability_summary = {}
     return {
         "profile_catalog": profile_summary,

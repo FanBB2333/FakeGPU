@@ -21,6 +21,7 @@ from fakegpu.calibration import (
     collect_serving_memory_observation,
     compare_memory_reports,
     measure_transformers_serving_sample,
+    _parse_serving_runner_sample,
     verify_calibration_reports,
 )
 from fakegpu.kernel_analysis import analyze_ptx, estimate_occupancy
@@ -566,6 +567,16 @@ def test_serving_collector_repeats_runner_and_checks_environment(
             minimum_samples_per_phase=1,
             timeout_seconds=0.01,
         )
+
+
+def test_serving_sample_parser_does_not_treat_log_json_as_sample() -> None:
+    stdout = 'framework log\n{"level": "info", "message": "ready"}\n'
+
+    with pytest.raises(
+        CalibrationError,
+        match="did not emit a 'fakegpu.serving_peak_sample.v1' JSON object",
+    ):
+        _parse_serving_runner_sample(stdout, run_index=2)
 
 
 def test_transformers_runner_measures_phases_and_builds_vllm_sample(

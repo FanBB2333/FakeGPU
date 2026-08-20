@@ -28,7 +28,6 @@ def default_capability_catalog_path() -> Path:
     )
 
 
-@lru_cache(maxsize=4)
 def load_native_capabilities(
     path: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -37,6 +36,14 @@ def load_native_capabilities(
         if path is not None
         else default_capability_catalog_path()
     )
+    return _load_native_capabilities_cached(str(resolved))
+
+
+@lru_cache(maxsize=4)
+def _load_native_capabilities_cached(
+    resolved_path: str,
+) -> dict[str, Any]:
+    resolved = Path(resolved_path)
     try:
         payload = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:

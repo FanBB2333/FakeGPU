@@ -4,14 +4,13 @@ import argparse
 import hashlib
 import heapq
 import itertools
-import json
 import math
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .structured_io import load_mapping, write_json
+from .structured_io import emit_json, load_mapping
 
 
 SCHEMA_VERSION = "fakegpu.topology_simulation.v1"
@@ -471,11 +470,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 algorithm=args.algorithm,
             )
         if args.json_path:
-            payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
-            if args.json_path == "-":
-                print(payload, end="")
-            else:
-                output = write_json(args.json_path, report)
+            output = emit_json(args.json_path, report)
+            if output is not None:
                 print(f"Topology simulation: {output}")
         else:
             _print_report(report)
@@ -523,6 +519,7 @@ def _simulate_flows(
     for round_index in sorted(rounds):
         routed = []
         round_link_bytes: dict[str, int] = defaultdict(int)
+        round_link_flow_counts: dict[str, int] = defaultdict(int)
         link_objects: dict[str, Link] = {}
         for flow_index, flow in enumerate(rounds[round_index]):
             path = topology.route(
@@ -537,6 +534,7 @@ def _simulate_flows(
             routed.append((flow, path, ideal_time))
             for link in path:
                 round_link_bytes[link.id] += flow.payload_bytes
+                round_link_flow_counts[link.id] += 1
                 link_objects[link.id] = link
 
         link_service_times = {
@@ -554,12 +552,7 @@ def _simulate_flows(
                 "contended_links": sorted(
                     link_id
                     for link_id, payload in round_link_bytes.items()
-                    if sum(
-                        1
-                        for _flow, path, _ideal in routed
-                        if any(link.id == link_id for link in path)
-                    )
-                    > 1
+                    if round_link_flow_counts[link_id] > 1
                     and payload > 0
                 ),
             }

@@ -215,6 +215,8 @@ def test_metrics_collector_and_cli_export_state_directory(
     assert degraded["source_state_count"] == 2
     assert degraded["error_count"] == 1
     assert len(collector.history) == 1
+    degraded["error_count"] = 99
+    assert collector.history.snapshots()[0]["error_count"] == 1
 
 
 def test_metrics_http_endpoints_expose_latest_and_bounded_history(
@@ -239,7 +241,9 @@ def test_metrics_http_endpoints_expose_latest_and_bounded_history(
         application,
     )
     application.start()
-    application.refresh()
+    refreshed = application.refresh()
+    refreshed["device_count"] = 99
+    assert application.snapshot()["device_count"] == 1
     thread = threading.Thread(
         target=server.serve_forever,
         kwargs={"poll_interval": 0.05},

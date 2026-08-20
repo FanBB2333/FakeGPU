@@ -1020,6 +1020,28 @@ def test_publisher_limits_details_and_preserves_last_valid_state(
     assert health["last_error"] == "ValueError"
 
 
+def test_publisher_background_failure_warns_once(tmp_path: Path) -> None:
+    publisher = SmiStatePublisher(tmp_path / "state.json", _snapshot)
+
+    class StopAfterTwoFailures:
+        calls = 0
+
+        def wait(self, _timeout: float) -> bool:
+            self.calls += 1
+            return self.calls > 2
+
+    def fail_publish(*, running: bool) -> dict:
+        assert running is True
+        raise OSError("disk full")
+
+    publisher._stop = StopAfterTwoFailures()  # type: ignore[assignment]
+    publisher.publish_once = fail_publish  # type: ignore[method-assign]
+    with pytest.warns(RuntimeWarning, match="background state publish") as caught:
+        publisher._run()
+
+    assert len(caught) == 1
+
+
 def test_fakecuda_runtime_publishes_profile_stage_and_peak(tmp_path: Path) -> None:
     state_path = tmp_path / "runtime-state.json"
     env = dict(os.environ)
