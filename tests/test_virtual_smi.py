@@ -347,6 +347,27 @@ def test_virtual_smi_rejects_invalid_modeled_nvlink_config_safely(
     )
 
 
+def test_virtual_smi_rejects_non_ascii_nvlink_device_indices(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("FAKEGPU_NVLINK_GROUPS", "0,²")
+    state = SmiStatePublisher(
+        tmp_path / "invalid-non-ascii-topology.json",
+        lambda: {
+            "devices": [
+                {"index": 0, "total_memory": 2**30},
+                {"index": 1, "total_memory": 2**30},
+            ]
+        },
+    ).publish_once(running=True)
+
+    assert state["topology"]["configured"] is True
+    assert state["topology"]["valid"] is False
+    assert "invalid device index" in state["topology"]["error"]
+    assert state["topology"]["links"] == []
+
+
 def test_virtual_smi_models_mig_instances_views_and_queries(
     tmp_path: Path,
     capsys,
