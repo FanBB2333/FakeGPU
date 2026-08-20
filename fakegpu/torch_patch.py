@@ -607,7 +607,13 @@ class _TrackedSavedTensor:
     replacement tracker.
     """
 
-    __slots__ = ("tensor", "raw_data_ptr", "_release", "__weakref__")
+    __slots__ = (
+        "tensor",
+        "raw_data_ptr",
+        "_release",
+        "_finalizer",
+        "__weakref__",
+    )
 
     def __init__(
         self,
@@ -618,6 +624,7 @@ class _TrackedSavedTensor:
         self.tensor = tensor
         self.raw_data_ptr = raw_data_ptr
         self._release = release
+        self._finalizer: weakref.finalize | None = None
 
 
 _saved_tensors_hooks_cm: Any = None
@@ -669,7 +676,11 @@ def _pack_autograd_saved_tensor(tensor: Any) -> Any:
             raw_data_ptr,
             tracker.release_saved_tensor,
         )
-        weakref.finalize(holder, holder._release, raw_data_ptr)
+        holder._finalizer = weakref.finalize(
+            holder,
+            holder._release,
+            raw_data_ptr,
+        )
         return holder
     except (MemoryError, RuntimeError):
         raise
@@ -680,6 +691,9 @@ def _pack_autograd_saved_tensor(tensor: Any) -> Any:
 def _unpack_autograd_saved_tensor(value: Any) -> Any:
     if isinstance(value, _TrackedSavedTensor):
         raw_data_ptr = value.raw_data_ptr
+        if value._finalizer is not None:
+            value._finalizer.detach()
+            value._finalizer = None
         if raw_data_ptr is not None:
             value._release(int(raw_data_ptr))
             value.raw_data_ptr = None
