@@ -713,7 +713,7 @@ def test_transformers_runner_measures_phases_and_builds_vllm_sample(
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
     monkeypatch.setattr(
-        "fakegpu.calibration._transformers_serving_workload",
+        "fakegpu._calibration_cuda._transformers_serving_workload",
         lambda supplied_plan, *, model_dir: {
             "model_dir": tmp_path,
             "active_sequences": 2,
