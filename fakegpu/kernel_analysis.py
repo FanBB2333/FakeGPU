@@ -7,6 +7,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ._cli import (
+    add_json_path_argument,
+    command_prog,
+    usage_error,
+)
 from .profile_catalog import get_profile
 from .structured_io import emit_json
 
@@ -314,7 +319,7 @@ def estimate_occupancy(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu analyze-kernel",
+        prog=command_prog(__name__),
         description=(
             "Statically inspect PTX, SASS text, or CUDA source for instructions, "
             "FLOPs, registers, shared memory, and occupancy ceilings."
@@ -323,13 +328,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("path")
     parser.add_argument("--profile")
     parser.add_argument("--threads-per-block", type=int, default=256)
-    parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
+    add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
         report = analyze_kernel_file(
@@ -345,7 +344,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_report(report)
         return 0
     except (OSError, ValueError) as exc:
-        parser.exit(2, f"fakegpu analyze-kernel: {exc}\n")
+        usage_error(parser, exc)
 
 
 def _strip_comments(

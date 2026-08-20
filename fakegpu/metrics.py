@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from ._cli import (
+    add_json_flag_argument,
+    command_prog,
+)
 from .smi import (
     DEFAULT_STALE_AFTER_SECONDS,
     _discover_state_paths,
@@ -827,7 +831,7 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu metrics",
+        prog=command_prog(__name__),
         description=(
             "Export bounded FakeGPU device, process, runtime, MIG, "
             "topology, and health metrics."
@@ -861,11 +865,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{MAXIMUM_HISTORY_SIZE})."
         ),
     )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit one normalized snapshot as JSON.",
-    )
+    add_json_flag_argument(parser, help="Emit one normalized snapshot as JSON.")
     parser.add_argument(
         "--serve",
         action="store_true",

@@ -20,6 +20,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from ._cli import (
+    add_json_flag_argument,
+    command_prog,
+)
+
 
 LEGACY_SCHEMA_VERSION = "fakegpu.smi_state.v1"
 SCHEMA_VERSION = "fakegpu.smi_state.v2"
@@ -1488,7 +1493,7 @@ class SmiStatePublisher:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu nvidia-smi",
+        prog=command_prog(__name__),
         description=(
             "Inspect FakeCUDA devices, processes, profiles, memory, runtime "
             "configuration, and modeled topology."
@@ -1507,9 +1512,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--state-dir")
     parser.add_argument("--include-exited", action="store_true")
     output_group = parser.add_mutually_exclusive_group()
-    output_group.add_argument(
-        "--json",
-        action="store_true",
+    add_json_flag_argument(
+        output_group,
         help="Emit the complete state and normalized inventory as JSON.",
     )
     output_group.add_argument(

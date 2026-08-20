@@ -5,6 +5,11 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from ._cli import (
+    add_json_flag_argument,
+    command_prog,
+    usage_error,
+)
 from .workspace_profiles import (
     WorkspaceProfileError,
     load_workspace_profiles,
@@ -14,7 +19,7 @@ from .workspace_profiles import (
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu workspace-profiles",
+        prog=command_prog(__name__),
         description="Validate and inspect static backend-workspace profile catalogs.",
     )
     parser.add_argument(
@@ -23,9 +28,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         help="Additional JSON/YAML catalog; may be repeated.",
     )
-    parser.add_argument(
-        "--json",
-        action="store_true",
+    add_json_flag_argument(
+        parser,
         help="Emit the validated catalog summary as JSON.",
     )
     args = parser.parse_args(argv)
@@ -34,7 +38,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         profiles = load_workspace_profiles(paths)
         summary = workspace_profile_summary(paths)
     except WorkspaceProfileError as exc:
-        parser.exit(2, f"error: {exc}\n")
+        usage_error(parser, exc)
 
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))

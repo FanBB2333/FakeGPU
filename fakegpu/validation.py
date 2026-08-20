@@ -16,6 +16,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ._cli import (
+    add_json_flag_argument,
+    add_strict_argument,
+    command_prog,
+    usage_error,
+)
+
 
 MANIFEST_SCHEMA_VERSION = "fakegpu.validation_manifest.v1"
 REPORT_SCHEMA_VERSION = "fakegpu.validation_report.v1"
@@ -226,7 +233,7 @@ def render_validation_markdown(report: Mapping[str, Any]) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu validate",
+        prog=command_prog(__name__),
         description="Execute a declarative FakeGPU validation matrix.",
     )
     parser.add_argument("--manifest", required=True)
@@ -237,18 +244,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         help="Run one named case; may be repeated.",
     )
-    parser.add_argument(
-        "--strict",
-        action="store_true",
+    add_strict_argument(
+        parser,
         help="Treat skipped prerequisites as a failed validation.",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Print the complete report to stdout.",
-    )
+    add_json_flag_argument(parser, help="Print the complete report to stdout.")
     args = parser.parse_args(argv)
     try:
         code, report = run_validation_manifest(
@@ -260,7 +262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             fail_fast=args.fail_fast,
         )
     except ValidationManifestError as exc:
-        parser.exit(2, f"error: {exc}\n")
+        usage_error(parser, exc)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:

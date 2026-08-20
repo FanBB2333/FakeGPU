@@ -9,6 +9,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ._cli import (
+    add_json_path_argument,
+    command_prog,
+    usage_error,
+)
 from .llm_estimator import _DTYPE_BYTES as _SAFETENSORS_DTYPE_BYTES
 from .llm_estimator import inspect_safetensors_checkpoint
 from .profile_catalog import get_profile
@@ -794,7 +799,7 @@ def estimate_diffusion_generation(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu estimate-diffusion",
+        prog=command_prog(__name__),
         description=(
             "Estimate architecture-aware, phase-specific memory for "
             "Diffusers generation pipelines."
@@ -867,13 +872,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=0,
     )
     parser.add_argument("--target-profile")
-    parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
+    add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
         profiles = load_diffusion_profiles()
@@ -918,7 +917,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_report(report)
         return 0
     except (OSError, ValueError) as exc:
-        parser.exit(2, f"fakegpu estimate-diffusion: {exc}\n")
+        usage_error(parser, exc)
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

@@ -642,16 +642,44 @@ def test_calibrate_framework_sample_commands_reject_invalid_inputs(
     assert "prefill peak must be a positive integer" in result.stderr
 
 
-def test_top_level_help_names_builtin_commands() -> None:
+@pytest.fixture(scope="module")
+def command_help_texts() -> dict[str, str]:
+    """``fakegpu <command> --help`` for every command in the registry."""
+
+    texts: dict[str, str] = {}
+    for command in BUILTIN_COMMANDS:
+        result = _run_fakegpu(command, "--help")
+        assert result.returncode == 0, (command, result.stderr)
+        texts[command] = result.stdout
+    return texts
+
+
+def _option_signatures(help_text: str, option: str) -> set[str]:
+    """Return how ``option`` is spelled in an argparse options section."""
+
+    signatures = set()
+    for line in help_text.splitlines():
+        stripped = line.strip()
+        if not re.match(rf"{re.escape(option)}(?![\w-])", stripped):
+            continue
+        signatures.add(re.split(r"\s{2,}", stripped, maxsplit=1)[0])
+    return signatures
+
+
+def _subcommand_names(help_text: str) -> list[str]:
+    match = re.search(r"^\s+\{([a-z0-9,-]+)\}\s*$", help_text, flags=re.MULTILINE)
+    return match.group(1).split(",") if match else []
+
+
+def test_top_level_help_names_builtin_commands(
+    command_help_texts: dict[str, str],
+) -> None:
     result = _run_fakegpu("--help")
     assert result.returncode == 0
-    for command in BUILTIN_COMMANDS:
+    for command, help_text in command_help_texts.items():
         assert f"fakegpu {command}" in result.stdout
-        command_result = _run_fakegpu(command, "--help")
-        assert command_result.returncode == 0, (
-            command,
-            command_result.stderr,
-        )
+        # The registry, not a hand-copied prog= string, names the command.
+        assert help_text.startswith(f"usage: fakegpu {command}"), command
 
     for readme_path in README_PATHS:
         readme = (ROOT / readme_path).read_text(encoding="utf-8")
@@ -663,6 +691,34 @@ def test_top_level_help_names_builtin_commands() -> None:
             )
         )
         assert documented_commands == set(BUILTIN_COMMANDS), readme_path
+
+
+def test_commands_share_json_and_strict_flag_spellings(
+    command_help_texts: dict[str, str],
+) -> None:
+    """Every command spells the shared flags one of the sanctioned ways.
+
+    ``--json`` is either a report path option (``--json [JSON_PATH]``, where
+    an omitted path means stdout) or the boolean switch used by commands whose
+    entire output is the JSON document. ``--strict`` is always a boolean.
+    """
+
+    scopes: list[tuple[str, str]] = []
+    for command, help_text in command_help_texts.items():
+        scopes.append((command, help_text))
+        for subcommand in _subcommand_names(help_text):
+            result = _run_fakegpu(command, subcommand, "--help")
+            assert result.returncode == 0, (command, subcommand, result.stderr)
+            scopes.append((f"{command} {subcommand}", result.stdout))
+
+    json_spellings: set[str] = set()
+    for scope, help_text in scopes:
+        signatures = _option_signatures(help_text, "--json")
+        assert signatures <= {"--json", "--json [JSON_PATH]"}, (scope, signatures)
+        json_spellings |= signatures
+        assert _option_signatures(help_text, "--strict") <= {"--strict"}, scope
+
+    assert json_spellings == {"--json", "--json [JSON_PATH]"}
 
 
 def test_readmes_document_supported_use_cases() -> None:

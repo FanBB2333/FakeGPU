@@ -83,6 +83,13 @@
 - Removed the PrivateUse1 backend prototype (`fakegpu/privateuse1/`) and its
   `fakegpu.init_privateuse1()` export; it depended on private
   `torch._C._acc` APIs that no supported PyTorch release provides.
+- Aligned the command-line conventions across every `fakegpu` command:
+  `plan-serving`, `estimate-llm`, and `bandwidth` accept `--json` without a
+  path (the report goes to stdout) like the other report commands,
+  `bandwidth --json` writes through the shared JSON writer, `coordinator`
+  and `bandwidth` report unusable arguments with exit code 2 like every
+  other command instead of 1, and `validate` and `workspace-profiles`
+  prefix input errors with the command name.
 
 ### Fixed
 

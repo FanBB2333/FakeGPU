@@ -10,6 +10,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from ._cli import (
+    add_json_path_argument,
+    add_strict_argument,
+    command_prog,
+    usage_error,
+)
 from .structured_io import emit_json
 
 
@@ -359,7 +365,7 @@ def audit_native_exports(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu capabilities",
+        prog=command_prog(__name__),
         description=(
             "List native API behavior classifications and audit source/build "
             "coverage."
@@ -371,16 +377,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--library")
     parser.add_argument("--classification")
     parser.add_argument("--api")
-    parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
-    parser.add_argument(
-        "--strict",
-        action="store_true",
+    add_json_path_argument(parser)
+    add_strict_argument(
+        parser,
         help="Return exit code 2 when a requested source/export audit fails.",
     )
     args = parser.parse_args(argv)
@@ -399,7 +398,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             OSError,
             RuntimeError,
            ) as exc:
-        parser.exit(2, f"fakegpu capabilities: {exc}\n")
+        usage_error(parser, exc)
 
     if args.json_path:
         output = emit_json(args.json_path, report)

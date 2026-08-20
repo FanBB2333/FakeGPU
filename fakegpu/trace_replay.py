@@ -7,6 +7,11 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from ._cli import (
+    add_json_path_argument,
+    command_prog,
+    usage_error,
+)
 from .operator_profiles import (
     evaluate_operator_profile,
     load_operator_profiles,
@@ -132,7 +137,7 @@ def replay_trace(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu replay-trace",
+        prog=command_prog(__name__),
         description=(
             "Replay PyTorch Profiler, NCCL-style, or FakeGPU communication "
             "events and report compute/communication overlap, waits, rank "
@@ -147,13 +152,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         help="JSON/YAML operator profile catalog; may be repeated.",
     )
-    parser.add_argument(
-        "--json",
-        dest="json_path",
-        nargs="?",
-        const="-",
-        help="Write JSON to PATH, or stdout when PATH is omitted.",
-    )
+    add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
         trace = load_mapping(args.trace)
@@ -179,7 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             OSError,
             ValueError,
            ) as exc:
-        parser.exit(2, f"fakegpu replay-trace: {exc}\n")
+        usage_error(parser, exc)
 
 
 def _normalize_trace(trace: Mapping[str, Any]) -> list[dict[str, Any]]:

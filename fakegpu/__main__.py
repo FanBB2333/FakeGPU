@@ -1,46 +1,18 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import os
 import sys
 
 from ._api import env as fakegpu_env
 from ._api import _warn_if_macos_injection_may_be_blocked
-
-
-_BUILTIN_HANDLERS = {
-    "demo": (".demo", "main"),
-    "doctor": (".doctor", "main"),
-    "preflight": (".preflight", "main"),
-    "coordinator": (".distributed_cli", "coordinator_main"),
-    "bandwidth": (".distributed_cli", "bandwidth_main"),
-    "estimate-llm": (".llm_cli", "main"),
-    "plan-serving": (".serving_plan", "main"),
-    "estimate-diffusion": (".diffusion_estimator", "main"),
-    "estimate-roofline": (".performance_model", "main"),
-    "analyze-repo": (".repository_analyzer", "main"),
-    "analyze-kernel": (".kernel_analysis", "main"),
-    "calibrate": (".calibration", "main"),
-    "plan-training": (".training_plan", "main"),
-    "simulate-topology": (".topology", "main"),
-    "replay-trace": (".trace_replay", "main"),
-    "nvidia-smi": (".smi", "main"),
-    "metrics": (".metrics", "main"),
-    "workspace-profiles": (".workspace_cli", "main"),
-    "validate": (".validation", "main"),
-    "capabilities": (".capabilities", "main"),
-}
-BUILTIN_COMMANDS = tuple(_BUILTIN_HANDLERS)
+from ._cli import BUILTIN_COMMANDS, load_builtin_handler
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    handler_reference = _BUILTIN_HANDLERS.get(argv[0]) if argv else None
-    if handler_reference is not None:
-        module_name, function_name = handler_reference
-        module = importlib.import_module(module_name, package=__package__)
-        handler = getattr(module, function_name)
+    handler = load_builtin_handler(argv[0]) if argv else None
+    if handler is not None:
         return handler(argv[1:])
 
     parser = argparse.ArgumentParser(

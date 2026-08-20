@@ -12,6 +12,7 @@ from fakegpu.calibration import (
     verify_calibration_reports,
 )
 from fakegpu.llm_estimator import (
+    SCHEMA_VERSION as LLM_SCHEMA_VERSION,
     estimate_decoder_inference,
     estimate_kv_cache_memory,
     inspect_safetensors_checkpoint,
@@ -523,6 +524,34 @@ def test_llm_cli_exposes_paged_cache_controls(
         "allocated_tokens_per_sequence"
     ] == 8
     assert "KV cache: paged" in capsys.readouterr().out
+
+
+def test_llm_cli_json_without_a_path_writes_the_report_to_stdout(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    assert (
+        llm_main(
+            [
+                "--model-dir",
+                str(model_dir),
+                "--prompt-tokens",
+                "4",
+                "--generated-tokens",
+                "2",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    report, end = json.JSONDecoder().raw_decode(stdout)
+    assert report["schema_version"] == LLM_SCHEMA_VERSION
+    assert "FakeGPU LLM inference estimate" in stdout[end:]
 
 
 def test_moe_flops_memory_and_expert_parallel_traffic_are_modeled(

@@ -3,13 +3,18 @@ from __future__ import annotations
 import argparse
 from typing import Sequence
 
+from ._cli import (
+    add_json_path_argument,
+    command_prog,
+    usage_error,
+)
 from .llm_estimator import estimate_decoder_inference
 from .structured_io import emit_json
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fakegpu estimate-llm",
+        prog=command_prog(__name__),
         description=(
             "Estimate decoder inference memory, matrix FLOPs, communication, "
             "and optional profile-aware latency without loading weights."
@@ -79,7 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=1.0,
         help="Explicit matrix/tensor throughput factor over scalar FP32.",
     )
-    parser.add_argument("--json", dest="json_path")
+    add_json_path_argument(parser)
     args = parser.parse_args(argv)
 
     try:
@@ -105,7 +110,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             kv_cache_window_tokens=args.kv_cache_window_tokens,
         )
     except (OSError, ValueError) as exc:
-        parser.exit(2, f"fakegpu estimate-llm: {exc}\n")
+        usage_error(parser, exc)
 
     if args.json_path:
         output = emit_json(args.json_path, report)
