@@ -39,7 +39,14 @@ def load_mapping(path: str | Path) -> dict[str, Any]:
                     "YAML input requires PyYAML; install fakegpu[validation] "
                     "or provide JSON/TOML"
                 ) from exc
-            payload = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+            try:
+                payload = yaml.safe_load(
+                    resolved.read_text(encoding="utf-8")
+                )
+            except yaml.YAMLError as exc:
+                raise StructuredDataError(
+                    f"cannot parse {resolved}: {exc}"
+                ) from exc
         else:
             raise StructuredDataError(
                 f"unsupported structured data suffix {suffix!r}: {resolved}"
