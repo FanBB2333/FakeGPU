@@ -1106,6 +1106,53 @@ def test_training_plan_normalizes_fsdp_backward_prefetch_enum(
     assert normalized["overlap_communication"] is expected
 
 
+def test_training_plan_scopes_hybrid_shard_to_local_group() -> None:
+    normalized = normalize_training_config(
+        {
+            "distributed_type": "FSDP",
+            "num_processes": 8,
+            "fsdp_config": {
+                "fsdp_sharding_strategy": "HYBRID_SHARD",
+                "shard_group_size": 4,
+            },
+        }
+    )
+    report = estimate_training_plan(
+        normalized,
+        parameter_bytes=8_000,
+        activation_bytes=0,
+        optimizer="adamw",
+    )
+
+    assert normalized["shard_group_size"] == 4
+    assert report["sharding"]["shard_group_size"] == 4
+    assert report["rank_local_storage"]["parameter_bytes"] == 2_000
+    assert report["rank_local_storage"]["gradient_bytes"] == 2_000
+    assert report["rank_local_storage"]["optimizer_state_bytes"] == 4_000
+
+
+def test_training_plan_maps_hybrid_shard_zero2_to_shard_grad_op() -> None:
+    normalized = normalize_training_config(
+        {
+            "distributed_type": "FSDP",
+            "num_processes": 8,
+            "fsdp_config": {
+                "fsdp_sharding_strategy": "_HYBRID_SHARD_ZERO2",
+            },
+        }
+    )
+    report = estimate_training_plan(
+        normalized,
+        parameter_bytes=8_000,
+        activation_bytes=0,
+    )
+
+    assert normalized["sharding_strategy"] == "shard_grad_op"
+    assert report["sharding"]["parameters_sharded"] is False
+    assert report["rank_local_storage"]["parameter_bytes"] == 8_000
+    assert report["rank_local_storage"]["gradient_bytes"] == 1_000
+
+
 def test_hierarchical_topology_routes_across_racks_and_reports_links() -> None:
     topology = Topology.from_mapping(_topology_config())
     report = simulate_collective(

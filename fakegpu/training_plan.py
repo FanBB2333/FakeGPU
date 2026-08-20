@@ -93,6 +93,20 @@ def estimate_training_plan(
     strategy = str(normalized.get("sharding_strategy") or "replicated")
     zero_stage = int(normalized.get("zero_stage", 0) or 0)
     full_shard = strategy in {"full_shard", "hybrid_shard"} or zero_stage >= 3
+    if strategy == "hybrid_shard":
+        shard_group_size = _positive_int(
+            normalized.get("shard_group_size", 1),
+            "shard_group_size",
+        )
+        if shard_group_size > ranks:
+            raise TrainingPlanError(
+                "shard_group_size cannot exceed world_size"
+            )
+    else:
+        shard_group_size = ranks
+    shard_factor = (
+        shard_group_size if strategy == "hybrid_shard" else ranks
+    )
     shard_gradients = (
         full_shard or strategy == "shard_grad_op" or zero_stage >= 2
     )
@@ -101,11 +115,15 @@ def estimate_training_plan(
     )
 
     rank_parameter_storage_bytes = (
-        _ceil_div(parameter_bytes, ranks) if full_shard else parameter_bytes
+        _ceil_div(parameter_bytes, shard_factor)
+        if full_shard
+        else parameter_bytes
     )
     gradient_bytes = parameter_bytes
     gpu_gradient_bytes = (
-        _ceil_div(gradient_bytes, ranks) if shard_gradients else gradient_bytes
+        _ceil_div(gradient_bytes, shard_factor)
+        if shard_gradients
+        else gradient_bytes
     )
     if optimizer in {"adam", "adamw"}:
         optimizer_state_bytes = parameter_bytes * 2
@@ -114,7 +132,7 @@ def estimate_training_plan(
     else:
         optimizer_state_bytes = 0
     rank_optimizer_state_bytes = (
-        _ceil_div(optimizer_state_bytes, ranks)
+        _ceil_div(optimizer_state_bytes, shard_factor)
         if shard_optimizer
         else optimizer_state_bytes
     )
@@ -127,7 +145,7 @@ def estimate_training_plan(
         else 0
     )
     rank_master_parameter_bytes = (
-        _ceil_div(master_parameter_bytes, ranks)
+        _ceil_div(master_parameter_bytes, shard_factor)
         if shard_optimizer
         else master_parameter_bytes
     )
@@ -330,6 +348,7 @@ def estimate_training_plan(
         "sharding": {
             "strategy": strategy,
             "zero_stage": zero_stage,
+            "shard_group_size": shard_group_size,
             "parameters_sharded": full_shard,
             "gradients_sharded": shard_gradients,
             "optimizer_state_sharded": shard_optimizer,
@@ -560,6 +579,9 @@ def _normalize_accelerate(config: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(nested, Mapping):
             nested = {}
         merged = dict(nested)
+        for key in ("shard_group_size", "fsdp_shard_group_size"):
+            if key in config:
+                merged.setdefault(key, config[key])
         merged.setdefault("world_size", world_size)
         normalized = _normalize_fsdp(
             merged,
@@ -606,7 +628,7 @@ def _normalize_fsdp(
         "4": "hybrid_shard",
         "HYBRID_SHARD": "hybrid_shard",
         "5": "hybrid_shard",
-        "_HYBRID_SHARD_ZERO2": "hybrid_shard",
+        "_HYBRID_SHARD_ZERO2": "shard_grad_op",
     }.get(raw_strategy)
     if strategy is None:
         raise TrainingPlanError(
@@ -625,14 +647,26 @@ def _normalize_fsdp(
         config.get("activation_checkpointing")
         or config.get("fsdp_activation_checkpointing")
     )
+    world_size = _positive_int(
+        config.get("world_size", config.get("num_processes", 1)),
+        "world_size",
+    )
+    default_shard_group_size = 1 if strategy == "hybrid_shard" else world_size
+    shard_group_size = _positive_int(
+        config.get(
+            "shard_group_size",
+            config.get("fsdp_shard_group_size", default_shard_group_size),
+        ),
+        "shard_group_size",
+    )
+    if shard_group_size > world_size:
+        raise TrainingPlanError("shard_group_size cannot exceed world_size")
     return {
         "framework": framework,
-        "world_size": _positive_int(
-            config.get("world_size", config.get("num_processes", 1)),
-            "world_size",
-        ),
+        "world_size": world_size,
         "zero_stage": 0,
         "sharding_strategy": strategy,
+        "shard_group_size": shard_group_size,
         "parameter_offload_device": "cpu" if offload_params else "none",
         "optimizer_offload_device": "none",
         "mixed_precision": _normalize_precision(
