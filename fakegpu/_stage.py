@@ -18,6 +18,8 @@ def stage(name: str) -> Iterator[None]:
     """
 
     stage_name = str(name)
+    had_previous_stage = "FAKEGPU_PREFLIGHT_STAGE" in os.environ
+    previous_stage = os.environ.get("FAKEGPU_PREFLIGHT_STAGE")
     os.environ["FAKEGPU_PREFLIGHT_STAGE"] = stage_name
     _append_stage_event(stage_name, "enter")
     try:
@@ -29,6 +31,11 @@ def stage(name: str) -> Iterator[None]:
     else:
         os.environ["FAKEGPU_PREFLIGHT_STAGE"] = stage_name
         _append_stage_event(stage_name, "exit")
+    finally:
+        if had_previous_stage:
+            os.environ["FAKEGPU_PREFLIGHT_STAGE"] = str(previous_stage)
+        else:
+            os.environ.pop("FAKEGPU_PREFLIGHT_STAGE", None)
 
 
 def _append_stage_event(
