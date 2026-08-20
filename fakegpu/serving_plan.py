@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -592,56 +593,21 @@ def estimate_serving_plan(
         raise ServingPlanError(
             "shared_prefix_tokens must not exceed prompt_tokens"
         )
-    if attention_implementation not in {"eager", "sdpa"}:
-        raise ServingPlanError(
-            "attention_implementation must be 'eager' or 'sdpa'"
-        )
-    runtime, memory_utilization = _serving_runtime_configuration(
+    capacity = _resolve_serving_capacity(
+        attention_implementation=attention_implementation,
+        kv_cache_strategy=kv_cache_strategy,
         runtime=runtime,
         memory_utilization=memory_utilization,
-        kv_cache_strategy=kv_cache_strategy,
         draft_model_dir=draft_model_dir,
         vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
-        vllm_non_kv_cache_memory_bytes=(
-            vllm_non_kv_cache_memory_bytes
-        ),
-    )
-    if device_capacity_bytes is not None:
-        _positive_integer(
-            device_capacity_bytes,
-            "device_capacity_bytes",
-        )
-    _validate_speculative_inputs(
+        vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+        device_capacity_bytes=device_capacity_bytes,
         speculative_tokens=speculative_tokens,
-        acceptance_rate=speculative_acceptance_rate,
+        speculative_acceptance_rate=speculative_acceptance_rate,
+        target_profile=target_profile,
     )
-
-    target = None
-    profile_capacity_bytes = None
-    if target_profile:
-        profile = get_profile(target_profile)
-        profile_capacity_bytes = profile.memory_bytes
-        target = {
-            "id": profile.id,
-            "name": profile.name,
-            "architecture": profile.architecture,
-            "compute_capability": profile.compute_capability_text,
-            "memory_bytes": profile.memory_bytes,
-            "memory_kind": profile.memory_kind,
-            "profile_status": profile.profile_status,
-        }
-    selected_capacity_bytes = (
-        device_capacity_bytes
-        if device_capacity_bytes is not None
-        else profile_capacity_bytes
-    )
-    capacity_source = (
-        "explicit_device_capacity"
-        if device_capacity_bytes is not None
-        else "gpu_profile"
-        if profile_capacity_bytes is not None
-        else "unavailable"
-    )
+    runtime = capacity.runtime
+    memory_utilization = capacity.memory_utilization
 
     base = estimate_decoder_inference(
         model_dir,
@@ -700,151 +666,78 @@ def estimate_serving_plan(
         return result
 
     requested = batch_memory(active_sequences)
-    runtime_report = None
-    if runtime == "vllm":
-        runtime_report = _build_vllm_runtime_report(
-            requested_memory=requested,
-            profiled_memory=batch_memory(max_batch_size),
-            selected_capacity_bytes=selected_capacity_bytes,
-            gpu_memory_utilization=memory_utilization,
-            kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
-            non_kv_cache_memory_bytes=(
-                vllm_non_kv_cache_memory_bytes
-            ),
-            max_model_len_tokens=prompt_tokens + generated_tokens,
-            profiled_sequence_count=max_batch_size,
-            profile_scope="configured_max_batch_size",
-        )
-        requested_for_report = _apply_vllm_kv_reservation(
-            requested,
-            runtime_report,
-        )
-        usable_capacity_bytes = runtime_report["memory"][
-            "memory_limit_bytes"
-        ]
-        kv_cache_capacity_bytes = runtime_report["kv_cache"][
-            "allocatable_bytes"
-        ]
-        if kv_cache_capacity_bytes is None:
-            memory_limited_sequences = None
-        elif runtime_report["memory"]["initialization_fits"] is False:
-            memory_limited_sequences = 0
-        else:
-            memory_limited_sequences = _maximum_fitting_vllm_kv_count(
-                max_count=max_batch_size,
-                kv_cache_capacity_bytes=int(kv_cache_capacity_bytes),
-                memory_for_count=batch_memory,
-            )
-        fits_memory = runtime_report["requested_fits_memory"]
-    else:
-        requested_for_report = requested
-        usable_capacity_bytes = (
-            math.floor(
-                int(selected_capacity_bytes) * memory_utilization
-            )
-            if selected_capacity_bytes is not None
-            else None
-        )
-        memory_limited_sequences = None
-        if usable_capacity_bytes is not None:
-            memory_limited_sequences = _maximum_fitting_sequences(
-                max_batch_size=max_batch_size,
-                usable_capacity_bytes=usable_capacity_bytes,
-                batch_memory=batch_memory,
-            )
-        fits_memory = (
-            int(requested["peak_bytes"]) <= usable_capacity_bytes
-            if usable_capacity_bytes is not None
-            else None
-        )
+    admission = _serving_admission(
+        runtime=runtime,
+        requested=requested,
+        memory_for_count=batch_memory,
+        candidate_count=max_batch_size,
+        selected_capacity_bytes=capacity.selected_capacity_bytes,
+        memory_utilization=memory_utilization,
+        vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
+        vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+        max_model_len_tokens=prompt_tokens + generated_tokens,
+        profile_scope="configured_max_batch_size",
+    )
+    runtime_report = admission.runtime_report
+    requested_for_report = admission.requested_for_report
+    usable_capacity_bytes = admission.usable_capacity_bytes
+    memory_limited_sequences = admission.memory_limited_count
+    fits_memory = admission.fits_memory
     admissible_sequences = (
         min(max_batch_size, memory_limited_sequences)
         if memory_limited_sequences is not None
         else None
     )
     fits_configured_limit = active_sequences <= max_batch_size
-    requested_fits = (
-        fits_configured_limit and fits_memory
-        if fits_memory is not None
-        else False
-        if not fits_configured_limit
-        else None
+    requested_fits = _requested_fits(
+        fits_configured_limit=fits_configured_limit,
+        fits_memory=fits_memory,
     )
     available_slots = (
         max(0, admissible_sequences - active_sequences)
         if admissible_sequences is not None
         else None
     )
-    if not fits_configured_limit:
-        limiting_factor = "configured_max_batch_size"
-    elif runtime == "vllm" and runtime_report is not None:
-        if runtime_report["memory"]["initialization_fits"] is False:
-            limiting_factor = "vllm_model_executor_budget"
-        elif fits_memory is False:
-            limiting_factor = "vllm_kv_cache_capacity"
-        elif fits_memory is None:
-            limiting_factor = "device_capacity_unavailable"
-        elif admissible_sequences == max_batch_size:
-            limiting_factor = "configured_max_batch_size"
-        else:
-            limiting_factor = "vllm_kv_cache_capacity"
-    elif fits_memory is False:
-        limiting_factor = "usable_device_memory"
-    elif fits_memory is None:
-        limiting_factor = "device_capacity_unavailable"
-    elif admissible_sequences == max_batch_size:
-        limiting_factor = "configured_max_batch_size"
-    else:
-        limiting_factor = "usable_device_memory"
+    limiting_factor = _serving_limiting_factor(
+        fits_configured_limit=fits_configured_limit,
+        runtime=runtime,
+        runtime_report=runtime_report,
+        fits_memory=fits_memory,
+        admissible_count=admissible_sequences,
+        candidate_count=max_batch_size,
+        exhausted_factor="configured_max_batch_size",
+    )
 
-    input_report = {
-        "active_sequences": active_sequences,
-        "max_batch_size": max_batch_size,
-        "prompt_tokens": prompt_tokens,
-        "generated_tokens": generated_tokens,
-        "dtype": base["inputs"]["dtype"],
-        "element_bytes": element_bytes,
-        "attention_implementation": attention_implementation,
-        "prefill_chunk_tokens": prefill_chunk_tokens,
-        "shared_prefix_tokens": shared_prefix_tokens,
-        "kv_cache_strategy": kv_cache_strategy,
-        "kv_cache_bits": (
-            kv_cache_bits if kv_cache_strategy == "quantized" else None
-        ),
-        "kv_cache_residual_tokens": (
-            kv_cache_residual_tokens
-            if kv_cache_strategy == "quantized"
-            else None
-        ),
-        "kv_cache_block_tokens": (
-            kv_cache_block_tokens if kv_cache_strategy == "paged" else None
-        ),
-        "kv_cache_max_tokens": kv_cache_max_tokens,
-        "kv_cache_window_tokens": kv_cache_window_tokens,
-        "runtime": runtime,
-        "vllm": (
-            {
-                "gpu_memory_utilization": memory_utilization,
-                "kv_cache_memory_bytes": (
-                    vllm_kv_cache_memory_bytes
-                ),
-                "non_kv_cache_memory_bytes": (
-                    vllm_non_kv_cache_memory_bytes
-                ),
-            }
-            if runtime == "vllm"
-            else None
-        ),
-        "runtime_overhead_bytes": runtime_overhead_bytes,
-        "scheduler_overhead_bytes_per_sequence": (
+    input_report = _serving_input_report(
+        mode_inputs={
+            "prompt_tokens": prompt_tokens,
+            "generated_tokens": generated_tokens,
+            "shared_prefix_tokens": shared_prefix_tokens,
+        },
+        active_sequences=active_sequences,
+        max_batch_size=max_batch_size,
+        dtype=base["inputs"]["dtype"],
+        element_bytes=element_bytes,
+        attention_implementation=attention_implementation,
+        prefill_chunk_tokens=prefill_chunk_tokens,
+        kv_cache_strategy=kv_cache_strategy,
+        kv_cache_bits=kv_cache_bits,
+        kv_cache_residual_tokens=kv_cache_residual_tokens,
+        kv_cache_block_tokens=kv_cache_block_tokens,
+        kv_cache_max_tokens=kv_cache_max_tokens,
+        kv_cache_window_tokens=kv_cache_window_tokens,
+        runtime=runtime,
+        memory_utilization=memory_utilization,
+        vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
+        vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+        runtime_overhead_bytes=runtime_overhead_bytes,
+        scheduler_overhead_bytes_per_sequence=(
             scheduler_overhead_bytes_per_sequence
         ),
-        "speculative_decoding": _speculative_input_report(
-            speculative=speculative,
-            speculative_tokens=speculative_tokens,
-            acceptance_rate=speculative_acceptance_rate,
-        ),
-    }
+        speculative=speculative,
+        speculative_tokens=speculative_tokens,
+        speculative_acceptance_rate=speculative_acceptance_rate,
+    )
     workload_signature = _serving_workload_signature(
         report_schema_version=SCHEMA_VERSION,
         model=dimensions,
@@ -869,9 +762,9 @@ def estimate_serving_plan(
         inputs=input_report,
         runtime=runtime,
         runtime_report=runtime_report,
-        target_profile=target,
-        capacity_source=capacity_source,
-        selected_capacity_bytes=selected_capacity_bytes,
+        target_profile=capacity.target,
+        capacity_source=capacity.capacity_source,
+        selected_capacity_bytes=capacity.selected_capacity_bytes,
         memory_utilization=memory_utilization,
         usable_capacity_bytes=usable_capacity_bytes,
         scheduler={
@@ -970,56 +863,21 @@ def estimate_serving_request_set(
             prefill_chunk_tokens,
             "prefill_chunk_tokens",
         )
-    if attention_implementation not in {"eager", "sdpa"}:
-        raise ServingPlanError(
-            "attention_implementation must be 'eager' or 'sdpa'"
-        )
-    runtime, memory_utilization = _serving_runtime_configuration(
+    capacity = _resolve_serving_capacity(
+        attention_implementation=attention_implementation,
+        kv_cache_strategy=kv_cache_strategy,
         runtime=runtime,
         memory_utilization=memory_utilization,
-        kv_cache_strategy=kv_cache_strategy,
         draft_model_dir=draft_model_dir,
         vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
-        vllm_non_kv_cache_memory_bytes=(
-            vllm_non_kv_cache_memory_bytes
-        ),
-    )
-    if device_capacity_bytes is not None:
-        _positive_integer(
-            device_capacity_bytes,
-            "device_capacity_bytes",
-        )
-    _validate_speculative_inputs(
+        vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+        device_capacity_bytes=device_capacity_bytes,
         speculative_tokens=speculative_tokens,
-        acceptance_rate=speculative_acceptance_rate,
+        speculative_acceptance_rate=speculative_acceptance_rate,
+        target_profile=target_profile,
     )
-
-    target = None
-    profile_capacity_bytes = None
-    if target_profile:
-        profile = get_profile(target_profile)
-        profile_capacity_bytes = profile.memory_bytes
-        target = {
-            "id": profile.id,
-            "name": profile.name,
-            "architecture": profile.architecture,
-            "compute_capability": profile.compute_capability_text,
-            "memory_bytes": profile.memory_bytes,
-            "memory_kind": profile.memory_kind,
-            "profile_status": profile.profile_status,
-        }
-    selected_capacity_bytes = (
-        device_capacity_bytes
-        if device_capacity_bytes is not None
-        else profile_capacity_bytes
-    )
-    capacity_source = (
-        "explicit_device_capacity"
-        if device_capacity_bytes is not None
-        else "gpu_profile"
-        if profile_capacity_bytes is not None
-        else "unavailable"
-    )
+    runtime = capacity.runtime
+    memory_utilization = capacity.memory_utilization
 
     base = estimate_decoder_inference(
         model_dir,
@@ -1082,98 +940,41 @@ def estimate_serving_request_set(
     requested_count = len(normalized)
     requested = request_memory(requested_count)
     candidate_count = min(max_batch_size, requested_count)
-    runtime_report = None
-    if runtime == "vllm":
-        candidate_requests = normalized[:candidate_count]
-        runtime_report = _build_vllm_runtime_report(
-            requested_memory=requested,
-            profiled_memory=request_memory(candidate_count),
-            selected_capacity_bytes=selected_capacity_bytes,
-            gpu_memory_utilization=memory_utilization,
-            kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
-            non_kv_cache_memory_bytes=(
-                vllm_non_kv_cache_memory_bytes
-            ),
-            max_model_len_tokens=max(
-                int(request["prompt_tokens"])
-                + int(request["generated_tokens"])
-                for request in candidate_requests
-            ),
-            profiled_sequence_count=candidate_count,
-            profile_scope="configured_request_manifest_prefix",
-        )
-        requested_for_report = _apply_vllm_kv_reservation(
-            requested,
-            runtime_report,
-        )
-        usable_capacity_bytes = runtime_report["memory"][
-            "memory_limit_bytes"
-        ]
-        kv_cache_capacity_bytes = runtime_report["kv_cache"][
-            "allocatable_bytes"
-        ]
-        if kv_cache_capacity_bytes is None:
-            memory_limited_count = None
-        elif runtime_report["memory"]["initialization_fits"] is False:
-            memory_limited_count = 0
-        else:
-            memory_limited_count = _maximum_fitting_vllm_kv_count(
-                max_count=candidate_count,
-                kv_cache_capacity_bytes=int(kv_cache_capacity_bytes),
-                memory_for_count=request_memory,
-            )
-        fits_memory = runtime_report["requested_fits_memory"]
-    else:
-        requested_for_report = requested
-        usable_capacity_bytes = (
-            math.floor(
-                int(selected_capacity_bytes) * memory_utilization
-            )
-            if selected_capacity_bytes is not None
-            else None
-        )
-        memory_limited_count = None
-        if usable_capacity_bytes is not None:
-            memory_limited_count = _maximum_fitting_request_prefix(
-                max_request_count=candidate_count,
-                usable_capacity_bytes=usable_capacity_bytes,
-                request_memory=request_memory,
-            )
-        fits_memory = (
-            int(requested["peak_bytes"]) <= usable_capacity_bytes
-            if usable_capacity_bytes is not None
-            else None
-        )
+    admission = _serving_admission(
+        runtime=runtime,
+        requested=requested,
+        memory_for_count=request_memory,
+        candidate_count=candidate_count,
+        selected_capacity_bytes=capacity.selected_capacity_bytes,
+        memory_utilization=memory_utilization,
+        vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
+        vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+        max_model_len_tokens=max(
+            int(request["prompt_tokens"]) + int(request["generated_tokens"])
+            for request in normalized[:candidate_count]
+        ),
+        profile_scope="configured_request_manifest_prefix",
+    )
+    runtime_report = admission.runtime_report
+    requested_for_report = admission.requested_for_report
+    usable_capacity_bytes = admission.usable_capacity_bytes
+    memory_limited_count = admission.memory_limited_count
+    fits_memory = admission.fits_memory
     admissible_count = memory_limited_count
     fits_configured_limit = requested_count <= max_batch_size
-    requested_fits = (
-        fits_configured_limit and fits_memory
-        if fits_memory is not None
-        else False
-        if not fits_configured_limit
-        else None
+    requested_fits = _requested_fits(
+        fits_configured_limit=fits_configured_limit,
+        fits_memory=fits_memory,
     )
-    if not fits_configured_limit:
-        limiting_factor = "configured_max_batch_size"
-    elif runtime == "vllm" and runtime_report is not None:
-        if runtime_report["memory"]["initialization_fits"] is False:
-            limiting_factor = "vllm_model_executor_budget"
-        elif fits_memory is False:
-            limiting_factor = "vllm_kv_cache_capacity"
-        elif fits_memory is None:
-            limiting_factor = "device_capacity_unavailable"
-        elif admissible_count == candidate_count:
-            limiting_factor = "request_manifest_exhausted"
-        else:
-            limiting_factor = "vllm_kv_cache_capacity"
-    elif fits_memory is False:
-        limiting_factor = "usable_device_memory"
-    elif fits_memory is None:
-        limiting_factor = "device_capacity_unavailable"
-    elif admissible_count == candidate_count:
-        limiting_factor = "request_manifest_exhausted"
-    else:
-        limiting_factor = "usable_device_memory"
+    limiting_factor = _serving_limiting_factor(
+        fits_configured_limit=fits_configured_limit,
+        runtime=runtime,
+        runtime_report=runtime_report,
+        fits_memory=fits_memory,
+        admissible_count=admissible_count,
+        candidate_count=candidate_count,
+        exhausted_factor="request_manifest_exhausted",
+    )
 
     admitted_request_ids = (
         [
@@ -1192,54 +993,36 @@ def estimate_serving_request_set(
         else None
     )
 
-    input_report = {
-        "mode": "heterogeneous_request_set",
-        "requests": normalized,
-        "active_sequences": requested_count,
-        "max_batch_size": max_batch_size,
-        "dtype": base["inputs"]["dtype"],
-        "element_bytes": element_bytes,
-        "attention_implementation": attention_implementation,
-        "prefill_chunk_tokens": prefill_chunk_tokens,
-        "prefill_concurrency": prefill_concurrency,
-        "kv_cache_strategy": kv_cache_strategy,
-        "kv_cache_bits": (
-            kv_cache_bits if kv_cache_strategy == "quantized" else None
-        ),
-        "kv_cache_residual_tokens": (
-            kv_cache_residual_tokens
-            if kv_cache_strategy == "quantized"
-            else None
-        ),
-        "kv_cache_block_tokens": (
-            kv_cache_block_tokens if kv_cache_strategy == "paged" else None
-        ),
-        "kv_cache_max_tokens": kv_cache_max_tokens,
-        "kv_cache_window_tokens": kv_cache_window_tokens,
-        "runtime": runtime,
-        "vllm": (
-            {
-                "gpu_memory_utilization": memory_utilization,
-                "kv_cache_memory_bytes": (
-                    vllm_kv_cache_memory_bytes
-                ),
-                "non_kv_cache_memory_bytes": (
-                    vllm_non_kv_cache_memory_bytes
-                ),
-            }
-            if runtime == "vllm"
-            else None
-        ),
-        "runtime_overhead_bytes": runtime_overhead_bytes,
-        "scheduler_overhead_bytes_per_sequence": (
+    input_report = _serving_input_report(
+        mode_inputs={
+            "mode": "heterogeneous_request_set",
+            "requests": normalized,
+            "prefill_concurrency": prefill_concurrency,
+        },
+        active_sequences=requested_count,
+        max_batch_size=max_batch_size,
+        dtype=base["inputs"]["dtype"],
+        element_bytes=element_bytes,
+        attention_implementation=attention_implementation,
+        prefill_chunk_tokens=prefill_chunk_tokens,
+        kv_cache_strategy=kv_cache_strategy,
+        kv_cache_bits=kv_cache_bits,
+        kv_cache_residual_tokens=kv_cache_residual_tokens,
+        kv_cache_block_tokens=kv_cache_block_tokens,
+        kv_cache_max_tokens=kv_cache_max_tokens,
+        kv_cache_window_tokens=kv_cache_window_tokens,
+        runtime=runtime,
+        memory_utilization=memory_utilization,
+        vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
+        vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+        runtime_overhead_bytes=runtime_overhead_bytes,
+        scheduler_overhead_bytes_per_sequence=(
             scheduler_overhead_bytes_per_sequence
         ),
-        "speculative_decoding": _speculative_input_report(
-            speculative=speculative,
-            speculative_tokens=speculative_tokens,
-            acceptance_rate=speculative_acceptance_rate,
-        ),
-    }
+        speculative=speculative,
+        speculative_tokens=speculative_tokens,
+        speculative_acceptance_rate=speculative_acceptance_rate,
+    )
     workload_signature = _serving_workload_signature(
         report_schema_version=REQUEST_SET_SCHEMA_VERSION,
         model=dimensions,
@@ -1268,9 +1051,9 @@ def estimate_serving_request_set(
         inputs=input_report,
         runtime=runtime,
         runtime_report=runtime_report,
-        target_profile=target,
-        capacity_source=capacity_source,
-        selected_capacity_bytes=selected_capacity_bytes,
+        target_profile=capacity.target,
+        capacity_source=capacity.capacity_source,
+        selected_capacity_bytes=capacity.selected_capacity_bytes,
         memory_utilization=memory_utilization,
         usable_capacity_bytes=usable_capacity_bytes,
         scheduler={
@@ -1468,6 +1251,307 @@ def _build_serving_report(
         },
         "unmodeled_components": unmodeled_components,
         "notes": report_notes,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class _ServingCapacity:
+    """Runtime selection and device capacity shared by both planners."""
+
+    runtime: str
+    memory_utilization: float
+    target: dict[str, Any] | None
+    selected_capacity_bytes: int | None
+    capacity_source: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ServingAdmission:
+    """How much of the requested workload the device budget admits."""
+
+    runtime_report: dict[str, Any] | None
+    requested_for_report: Mapping[str, Any]
+    usable_capacity_bytes: int | None
+    memory_limited_count: int | None
+    fits_memory: bool | None
+
+
+def _resolve_serving_capacity(
+    *,
+    attention_implementation: str,
+    kv_cache_strategy: str,
+    runtime: str,
+    memory_utilization: float | None,
+    draft_model_dir: str | Path | None,
+    vllm_kv_cache_memory_bytes: int | None,
+    vllm_non_kv_cache_memory_bytes: int | None,
+    device_capacity_bytes: int | None,
+    speculative_tokens: int,
+    speculative_acceptance_rate: float | None,
+    target_profile: str | None,
+) -> _ServingCapacity:
+    """Validate the inputs both planners share and resolve the capacity."""
+
+    if attention_implementation not in {"eager", "sdpa"}:
+        raise ServingPlanError(
+            "attention_implementation must be 'eager' or 'sdpa'"
+        )
+    runtime, memory_utilization = _serving_runtime_configuration(
+        runtime=runtime,
+        memory_utilization=memory_utilization,
+        kv_cache_strategy=kv_cache_strategy,
+        draft_model_dir=draft_model_dir,
+        vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
+        vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+    )
+    if device_capacity_bytes is not None:
+        _positive_integer(
+            device_capacity_bytes,
+            "device_capacity_bytes",
+        )
+    _validate_speculative_inputs(
+        speculative_tokens=speculative_tokens,
+        acceptance_rate=speculative_acceptance_rate,
+    )
+
+    target = None
+    profile_capacity_bytes = None
+    if target_profile:
+        profile = get_profile(target_profile)
+        profile_capacity_bytes = profile.memory_bytes
+        target = {
+            "id": profile.id,
+            "name": profile.name,
+            "architecture": profile.architecture,
+            "compute_capability": profile.compute_capability_text,
+            "memory_bytes": profile.memory_bytes,
+            "memory_kind": profile.memory_kind,
+            "profile_status": profile.profile_status,
+        }
+    return _ServingCapacity(
+        runtime=runtime,
+        memory_utilization=memory_utilization,
+        target=target,
+        selected_capacity_bytes=(
+            device_capacity_bytes
+            if device_capacity_bytes is not None
+            else profile_capacity_bytes
+        ),
+        capacity_source=(
+            "explicit_device_capacity"
+            if device_capacity_bytes is not None
+            else "gpu_profile"
+            if profile_capacity_bytes is not None
+            else "unavailable"
+        ),
+    )
+
+
+def _serving_admission(
+    *,
+    runtime: str,
+    requested: Mapping[str, Any],
+    memory_for_count: Any,
+    candidate_count: int,
+    selected_capacity_bytes: int | None,
+    memory_utilization: float,
+    vllm_kv_cache_memory_bytes: int | None,
+    vllm_non_kv_cache_memory_bytes: int | None,
+    max_model_len_tokens: int,
+    profile_scope: str,
+) -> _ServingAdmission:
+    """Admit as many of the first ``candidate_count`` sequences as fit.
+
+    ``memory_for_count`` reports the pool memory for a sequence or request
+    count; the homogeneous and heterogeneous planners differ only in what
+    that callable measures.
+    """
+
+    if runtime == "vllm":
+        runtime_report = _build_vllm_runtime_report(
+            requested_memory=requested,
+            profiled_memory=memory_for_count(candidate_count),
+            selected_capacity_bytes=selected_capacity_bytes,
+            gpu_memory_utilization=memory_utilization,
+            kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
+            non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+            max_model_len_tokens=max_model_len_tokens,
+            profiled_sequence_count=candidate_count,
+            profile_scope=profile_scope,
+        )
+        kv_cache_capacity_bytes = runtime_report["kv_cache"][
+            "allocatable_bytes"
+        ]
+        if kv_cache_capacity_bytes is None:
+            memory_limited_count = None
+        elif runtime_report["memory"]["initialization_fits"] is False:
+            memory_limited_count = 0
+        else:
+            memory_limited_count = _maximum_fitting(
+                max_count=candidate_count,
+                usable_capacity_bytes=int(kv_cache_capacity_bytes),
+                memory_for_count=memory_for_count,
+                metric=None,
+                value_fn=_logical_kv_peak_bytes,
+            )
+        return _ServingAdmission(
+            runtime_report=runtime_report,
+            requested_for_report=_apply_vllm_kv_reservation(
+                requested,
+                runtime_report,
+            ),
+            usable_capacity_bytes=runtime_report["memory"][
+                "memory_limit_bytes"
+            ],
+            memory_limited_count=memory_limited_count,
+            fits_memory=runtime_report["requested_fits_memory"],
+        )
+
+    usable_capacity_bytes = (
+        math.floor(int(selected_capacity_bytes) * memory_utilization)
+        if selected_capacity_bytes is not None
+        else None
+    )
+    if usable_capacity_bytes is None:
+        return _ServingAdmission(
+            runtime_report=None,
+            requested_for_report=requested,
+            usable_capacity_bytes=None,
+            memory_limited_count=None,
+            fits_memory=None,
+        )
+    return _ServingAdmission(
+        runtime_report=None,
+        requested_for_report=requested,
+        usable_capacity_bytes=usable_capacity_bytes,
+        memory_limited_count=_maximum_fitting(
+            max_count=candidate_count,
+            usable_capacity_bytes=usable_capacity_bytes,
+            memory_for_count=memory_for_count,
+            metric="peak_bytes",
+        ),
+        fits_memory=int(requested["peak_bytes"]) <= usable_capacity_bytes,
+    )
+
+
+def _requested_fits(
+    *,
+    fits_configured_limit: bool,
+    fits_memory: bool | None,
+) -> bool | None:
+    if fits_memory is not None:
+        return fits_configured_limit and fits_memory
+    return False if not fits_configured_limit else None
+
+
+def _serving_limiting_factor(
+    *,
+    fits_configured_limit: bool,
+    runtime: str,
+    runtime_report: Mapping[str, Any] | None,
+    fits_memory: bool | None,
+    admissible_count: int | None,
+    candidate_count: int,
+    exhausted_factor: str,
+) -> str:
+    """Name the constraint that bounds admission.
+
+    ``exhausted_factor`` is what limits a plan that already admits every
+    candidate: the configured batch size for a homogeneous pool, the end of
+    the manifest for a request set.
+    """
+
+    if not fits_configured_limit:
+        return "configured_max_batch_size"
+    if runtime == "vllm" and runtime_report is not None:
+        if runtime_report["memory"]["initialization_fits"] is False:
+            return "vllm_model_executor_budget"
+        if fits_memory is False:
+            return "vllm_kv_cache_capacity"
+        if fits_memory is None:
+            return "device_capacity_unavailable"
+        if admissible_count == candidate_count:
+            return exhausted_factor
+        return "vllm_kv_cache_capacity"
+    if fits_memory is False:
+        return "usable_device_memory"
+    if fits_memory is None:
+        return "device_capacity_unavailable"
+    if admissible_count == candidate_count:
+        return exhausted_factor
+    return "usable_device_memory"
+
+
+def _serving_input_report(
+    *,
+    mode_inputs: Mapping[str, Any],
+    active_sequences: int,
+    max_batch_size: int,
+    dtype: str,
+    element_bytes: int,
+    attention_implementation: str,
+    prefill_chunk_tokens: int | None,
+    kv_cache_strategy: str,
+    kv_cache_bits: int,
+    kv_cache_residual_tokens: int,
+    kv_cache_block_tokens: int,
+    kv_cache_max_tokens: int | None,
+    kv_cache_window_tokens: int | None,
+    runtime: str,
+    memory_utilization: float,
+    vllm_kv_cache_memory_bytes: int | None,
+    vllm_non_kv_cache_memory_bytes: int | None,
+    runtime_overhead_bytes: int,
+    scheduler_overhead_bytes_per_sequence: int,
+    speculative: Mapping[str, Any] | None,
+    speculative_tokens: int,
+    speculative_acceptance_rate: float | None,
+) -> dict[str, Any]:
+    """Echo the inputs both planners report, plus the mode-specific ones."""
+
+    return {
+        **mode_inputs,
+        "active_sequences": active_sequences,
+        "max_batch_size": max_batch_size,
+        "dtype": dtype,
+        "element_bytes": element_bytes,
+        "attention_implementation": attention_implementation,
+        "prefill_chunk_tokens": prefill_chunk_tokens,
+        "kv_cache_strategy": kv_cache_strategy,
+        "kv_cache_bits": (
+            kv_cache_bits if kv_cache_strategy == "quantized" else None
+        ),
+        "kv_cache_residual_tokens": (
+            kv_cache_residual_tokens
+            if kv_cache_strategy == "quantized"
+            else None
+        ),
+        "kv_cache_block_tokens": (
+            kv_cache_block_tokens if kv_cache_strategy == "paged" else None
+        ),
+        "kv_cache_max_tokens": kv_cache_max_tokens,
+        "kv_cache_window_tokens": kv_cache_window_tokens,
+        "runtime": runtime,
+        "vllm": (
+            {
+                "gpu_memory_utilization": memory_utilization,
+                "kv_cache_memory_bytes": vllm_kv_cache_memory_bytes,
+                "non_kv_cache_memory_bytes": (
+                    vllm_non_kv_cache_memory_bytes
+                ),
+            }
+            if runtime == "vllm"
+            else None
+        ),
+        "runtime_overhead_bytes": runtime_overhead_bytes,
+        "scheduler_overhead_bytes_per_sequence": (
+            scheduler_overhead_bytes_per_sequence
+        ),
+        "speculative_decoding": _speculative_input_report(
+            speculative=speculative,
+            speculative_tokens=speculative_tokens,
+            acceptance_rate=speculative_acceptance_rate,
+        ),
     }
 
 
@@ -3056,49 +3140,6 @@ def _serving_request_set_memory(
         "peak_bytes": max(prefill_peak, decode_peak),
         "peak_phase": peak_phase,
     }
-
-
-def _maximum_fitting_sequences(
-    *,
-    max_batch_size: int,
-    usable_capacity_bytes: int,
-    batch_memory: Any,
-) -> int:
-    return _maximum_fitting(
-        max_count=max_batch_size,
-        usable_capacity_bytes=usable_capacity_bytes,
-        memory_for_count=batch_memory,
-        metric="peak_bytes",
-    )
-
-
-def _maximum_fitting_request_prefix(
-    *,
-    max_request_count: int,
-    usable_capacity_bytes: int,
-    request_memory: Any,
-) -> int:
-    return _maximum_fitting(
-        max_count=max_request_count,
-        usable_capacity_bytes=usable_capacity_bytes,
-        memory_for_count=request_memory,
-        metric="peak_bytes",
-    )
-
-
-def _maximum_fitting_vllm_kv_count(
-    *,
-    max_count: int,
-    kv_cache_capacity_bytes: int,
-    memory_for_count: Any,
-) -> int:
-    return _maximum_fitting(
-        max_count=max_count,
-        usable_capacity_bytes=kv_cache_capacity_bytes,
-        memory_for_count=memory_for_count,
-        metric=None,
-        value_fn=_logical_kv_peak_bytes,
-    )
 
 
 def _maximum_fitting(
