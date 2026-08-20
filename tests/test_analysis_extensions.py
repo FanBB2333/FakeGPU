@@ -24,7 +24,7 @@ from fakegpu.calibration import (
     _parse_serving_runner_sample,
     verify_calibration_reports,
 )
-from fakegpu.kernel_analysis import analyze_ptx, estimate_occupancy
+from fakegpu.kernel_analysis import analyze_ptx, analyze_sass, estimate_occupancy
 from fakegpu.operator_profiles import (
     evaluate_operator_profile,
     load_operator_profiles,
@@ -1363,6 +1363,21 @@ def test_ptx_static_analysis_and_profile_occupancy() -> None:
     assert analysis["instruction_classes"]["tensor_core"] == 1
     assert analysis["recognized_flops_per_static_issue"] >= 4_096
     assert 0 < occupancy["occupancy_upper_bound"] <= 1
+
+
+def test_sass_analysis_strips_predicates_before_opcode_matching() -> None:
+    analysis = analyze_sass(
+        """
+Function : kernel
+@P0 FADD R0, R1, R2;
+@!P1 FFMA R3, R4, R5, R6;
+"""
+    )
+
+    assert analysis["instruction_counts"] == {"FADD": 1, "FFMA": 1}
+    assert "P0" not in analysis["instruction_counts"]
+    assert "Function" not in analysis["instruction_counts"]
+    assert analysis["recognized_flops_per_static_issue"] == 3
 
 
 def test_repository_analyzer_detects_aliases_decorators_and_build_files(
