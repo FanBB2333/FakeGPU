@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import atexit
 import json
+import math
 import os
 import platform
 import socket
 import sys
+import tempfile
 import threading
 import time
 import warnings
@@ -915,12 +917,21 @@ def _atomic_write_json(
             f"limit is {max_bytes} bytes"
         )
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary: Path | None = None
     try:
-        temporary.write_bytes(serialized)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(serialized)
         os.replace(temporary, path)
     except Exception:
-        temporary.unlink(missing_ok=True)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
         raise
     return len(serialized)
 
@@ -940,8 +951,10 @@ def _positive_float(value: str) -> float:
         parsed = float(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("expected a number") from exc
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("value must be greater than zero")
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError(
+            "expected a finite number greater than zero"
+        )
     return parsed
 
 
