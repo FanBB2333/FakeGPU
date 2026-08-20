@@ -50,6 +50,25 @@ def _run_preflight(
     )
 
 
+def test_preflight_module_has_cli_entrypoint() -> None:
+    env = dict(os.environ)
+    pythonpath = str(ROOT)
+    if env.get("PYTHONPATH"):
+        pythonpath = pythonpath + os.pathsep + env["PYTHONPATH"]
+    env["PYTHONPATH"] = pythonpath
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "fakegpu.preflight", "--help"],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode == 0
+    assert "Run an AI workload preflight" in completed.stdout
+
+
 def test_oom_detection_does_not_match_bloom_model_names() -> None:
     from fakegpu.preflight import _looks_like_oom
 

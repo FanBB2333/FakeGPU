@@ -53,7 +53,11 @@ def main(argv: list[str] | None = None) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog=command_prog(__name__),
+        prog=(
+            "fakegpu preflight"
+            if __name__ == "__main__"
+            else command_prog(__name__)
+        ),
         description="Run an AI workload preflight and write fit/OOM reports.",
     )
     parser.add_argument(
@@ -1374,3 +1378,7 @@ def _fmt_bytes(value: int) -> str:
     if b >= 1024:
         return f"{sign}{b / 1024:.2f} KiB"
     return f"{sign}{b} B"
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
