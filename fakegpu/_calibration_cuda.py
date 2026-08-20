@@ -40,12 +40,23 @@ def _load_optional_module(name: str, *, purpose: str) -> Any:
         ) from exc
 
 
-def _reject_simulated_cuda_environment() -> None:
+def _reject_simulated_cuda_environment(torch_module: Any | None = None) -> None:
     fakegpu_mode = os.environ.get("FAKEGPU_MODE", "").strip().lower()
     if fakegpu_mode and fakegpu_mode != "passthrough":
         raise CalibrationError(
             "serving samples require real CUDA; FAKEGPU_MODE must be unset "
             "or 'passthrough'"
+        )
+    fakegpu_runtime = os.environ.get("FAKEGPU_RUNTIME", "").strip().lower()
+    if fakegpu_runtime == "fakecuda":
+        raise CalibrationError(
+            "serving samples require real CUDA; FAKEGPU_RUNTIME must not be "
+            "'fakecuda'"
+        )
+    cuda = getattr(torch_module, "cuda", None)
+    if bool(getattr(cuda, "_fakegpu_simulated", False)):
+        raise CalibrationError(
+            "serving samples require real CUDA; torch.cuda is simulated"
         )
 
 
@@ -62,7 +73,7 @@ def _real_cuda_environment(
             "building a CUDA serving sample requires an available real "
             "CUDA device"
         )
-    _reject_simulated_cuda_environment()
+    _reject_simulated_cuda_environment(torch_module)
     cuda_version = str(getattr(torch_module.version, "cuda", "") or "")
     if not cuda_version:
         raise CalibrationError("PyTorch does not report a CUDA runtime version")
@@ -427,7 +438,7 @@ def measure_transformers_serving_sample(
             "Transformers serving measurement requires an available real "
             "CUDA device"
         )
-    _reject_simulated_cuda_environment()
+    _reject_simulated_cuda_environment(torch_module)
     device_index = int(cuda.current_device())
     cuda.set_device(device_index)
     device = f"cuda:{device_index}"

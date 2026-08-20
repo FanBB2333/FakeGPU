@@ -765,6 +765,18 @@ def test_transformers_runner_measures_phases_and_builds_vllm_sample(
     assert FakeFactory.load_kwargs["local_files_only"] is True
     assert FakeFactory.load_kwargs["use_safetensors"] is True
 
+    FakeCuda._fakegpu_simulated = True
+    with pytest.raises(CalibrationError, match="simulated"):
+        build_cuda_serving_sample(
+            plan,
+            phase_peaks={"prefill": 2_000, "decode": 2_400},
+            metric="nvml.process_family_peak_bytes",
+            framework="vllm",
+            framework_version="0.10.2",
+            run_index=5,
+        )
+    del FakeCuda._fakegpu_simulated
+
     vllm_sample = build_cuda_serving_sample(
         plan,
         phase_peaks={"prefill": 2_000, "decode": 2_400},
