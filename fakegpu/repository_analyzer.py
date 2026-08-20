@@ -871,36 +871,27 @@ def _build_findings(
                 detail,
                 [framework],
             )
-    if any(
-        marker.startswith("torch.utils.cpp_extension")
+    extension_build_markers = {
+        marker
         for marker in call_markers
-    ) or any(
-        marker in build_system_markers
-        for marker in (
+        if marker.startswith("torch.utils.cpp_extension")
+    } | {
+        marker
+        for marker in build_system_markers
+        if marker
+        in {
             "setuptools_cuda_extension",
             "runtime_cpp_extension",
             "cmake_cuda_language",
             "nvcc_compilation",
-        )
-    ):
+        }
+    }
+    if extension_build_markers:
         add(
             "runtime_cuda_extension_build",
             "requires_real_gpu_or_hybrid",
             "The repository builds or configures a CUDA extension.",
-            sorted(
-                set(call_markers)
-                | {
-                    marker
-                    for marker in build_system_markers
-                    if marker
-                    in {
-                        "setuptools_cuda_extension",
-                        "runtime_cpp_extension",
-                        "cmake_cuda_language",
-                        "nvcc_compilation",
-                    }
-                }
-            ),
+            sorted(extension_build_markers),
         )
     generated_markers = sorted(
         marker

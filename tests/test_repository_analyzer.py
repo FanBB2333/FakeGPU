@@ -94,6 +94,35 @@ compiled = torch.compile(lambda value: value)
     } <= codes
 
 
+def test_repository_analyzer_limits_extension_finding_evidence(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "project"
+    _write_basic_repository(repository)
+    (repository / "train.py").write_text(
+        """
+import torch
+
+torch.utils.cpp_extension.load("demo", sources=[])
+torch.compile(lambda value: value)
+torch.ones(2).cuda()
+""".strip(),
+        encoding="utf-8",
+    )
+
+    report = analyze_repository(repository, entrypoints=["train.py"])
+    finding = next(
+        item
+        for item in report["findings"]
+        if item["code"] == "runtime_cuda_extension_build"
+    )
+
+    assert finding["evidence"] == [
+        "runtime_cpp_extension",
+        "torch.utils.cpp_extension.load",
+    ]
+
+
 def test_repository_analyzer_respects_git_ignored_files(tmp_path: Path) -> None:
     repository = tmp_path / "project"
     _write_basic_repository(repository)
