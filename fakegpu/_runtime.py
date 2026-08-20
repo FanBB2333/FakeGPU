@@ -83,6 +83,11 @@ def init(
         device_count=device_count,
         profile=profile,
         devices=devices,
+        mode=mode,
+        oom_policy=oom_policy,
+        unsupported_api=unsupported_api,
+        dist_mode=dist_mode,
+        update_env=update_env,
         force=force,
     )
 
@@ -134,8 +139,26 @@ def _init_fakecuda_runtime(
     device_count: int | None = None,
     profile: str | None = None,
     devices: str | Sequence[str] | None = None,
+    mode: str | None = None,
+    oom_policy: str | None = None,
+    unsupported_api: str | None = None,
+    dist_mode: str | None = None,
+    update_env: bool = True,
     force: bool = False,
 ) -> RuntimeInitResult:
+    config = _FakeGpuRuntimeConfig(
+        mode=mode,
+        oom_policy=oom_policy,
+        unsupported_api=unsupported_api,
+        dist_mode=dist_mode,
+    )
+    configured_env = dict(os.environ)
+    from ._api import _apply_config_env
+
+    _apply_config_env(configured_env, config)
+    configured_env["FAKEGPU_RUNTIME"] = "fakecuda"
+    if update_env:
+        os.environ.update(configured_env)
     os.environ["FAKEGPU_RUNTIME"] = "fakecuda"
     if profile is not None:
         os.environ["FAKEGPU_PROFILE"] = str(profile)
