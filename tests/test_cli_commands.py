@@ -184,16 +184,18 @@ def test_profile_catalog_matches_nvidia_snapshot() -> None:
 
 
 def test_torch_patch_registries_are_generated_from_yaml() -> None:
-    from fakegpu import torch_patch
+    from fakegpu import _profiles, torch_patch
 
     profiles = load_profiles()
-    assert set(torch_patch._PROFILE_CC) == set(profiles)
+    assert set(_profiles._PROFILE_CC) == set(profiles)
     for profile_id, profile in profiles.items():
-        assert torch_patch._PROFILE_CC[profile_id] == profile.compute_capability
-        assert torch_patch._PROFILE_NAMES[profile_id] == profile.torch_name
-        assert torch_patch._PROFILE_TOTAL_MEMORY[profile_id] == profile.memory_bytes
+        assert _profiles._PROFILE_CC[profile_id] == profile.compute_capability
+        assert _profiles._PROFILE_NAMES[profile_id] == profile.torch_name
         assert (
-            torch_patch._PROFILE_SUPPORTED_TYPES[profile_id]
+            _profiles._PROFILE_TOTAL_MEMORY[profile_id] == profile.memory_bytes
+        )
+        assert (
+            _profiles._PROFILE_SUPPORTED_TYPES[profile_id]
             == profile.supported_types
         )
         assert (
