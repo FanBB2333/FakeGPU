@@ -173,3 +173,79 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
         payload["released"]["reserved_after_empty"]
         <= payload["released"]["reserved_before_empty"]
     )
+
+
+def test_fakecuda_patches_the_distributed_process_group_lifecycle() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", profile="test-512m", device_count=1)
+
+        import torch.distributed as dist
+
+        before = dist.is_initialized()
+        dist.init_process_group(backend="nccl", world_size=4, rank=2)
+        during = {
+            "initialized": dist.is_initialized(),
+            "backend": dist.get_backend(),
+            "world_size": dist.get_world_size(),
+            "rank": dist.get_rank(),
+        }
+        dist.destroy_process_group()
+        after = {
+            "initialized": dist.is_initialized(),
+            "world_size": dist.get_world_size(),
+            "rank": dist.get_rank(),
+        }
+
+        dist.init_process_group()
+        defaulted = {
+            "backend": dist.get_backend(),
+            "world_size": dist.get_world_size(),
+            "rank": dist.get_rank(),
+        }
+        dist.destroy_process_group()
+
+        print(json.dumps({
+            "before": before,
+            "during": during,
+            "after": after,
+            "defaulted": defaulted,
+        }, sort_keys=True))
+        """
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert payload["before"] is False
+    assert payload["during"] == {
+        "initialized": True,
+        "backend": "nccl",
+        "world_size": 4,
+        "rank": 2,
+    }
+    assert payload["after"] == {
+        "initialized": False,
+        "world_size": 1,
+        "rank": 0,
+    }
+    # An argument-free call keeps the NCCL-shaped single-rank default.
+    assert payload["defaulted"] == {
+        "backend": "nccl",
+        "world_size": 1,
+        "rank": 0,
+    }
