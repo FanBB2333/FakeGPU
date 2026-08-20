@@ -92,9 +92,13 @@ def _wrap_tensor_binary_op(
     def wrapper(self: Any, other: Any) -> Any:
         if isinstance(other, torch_mod.Tensor):
             _check_same_device(self, other)
-        torch_op = _BINARY_DUNDER_TORCH_OPS.get(dunder_name)
-        if torch_op is not None:
-            return torch_op(torch_mod, self, other)
+            result = orig_fn(self, other)
+            if result is not NotImplemented:
+                return result
+            torch_op = _BINARY_DUNDER_TORCH_OPS.get(dunder_name)
+            if torch_op is not None:
+                return torch_op(torch_mod, self, other)
+            return result
         return orig_fn(self, other)
 
     return wrapper
