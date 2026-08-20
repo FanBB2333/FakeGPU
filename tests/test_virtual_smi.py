@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -366,6 +367,12 @@ def test_virtual_smi_rejects_non_ascii_nvlink_device_indices(
     assert state["topology"]["valid"] is False
     assert "invalid device index" in state["topology"]["error"]
     assert state["topology"]["links"] == []
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_virtual_smi_positive_float_rejects_non_finite_values(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        smi_module._positive_float(value)
 
 
 def test_virtual_smi_models_mig_instances_views_and_queries(
