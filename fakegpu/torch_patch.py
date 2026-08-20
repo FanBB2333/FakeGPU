@@ -56,7 +56,19 @@ from ._allocator import (
     _record_dispatch_tracking,
     _reset_dispatch_tracking_stats,
 )
-from .profile_catalog import architecture_for_compute_capability, load_profiles
+from ._cross_device import (
+    _CROSS_DEVICE_CHECK,
+    _is_fake_tensor,
+    _wrap_multi_tensor_op,
+    _wrap_tensor_binary_op,
+)
+from ._profiles import (
+    _resolve_compute_capability,
+    _resolve_device_name,
+    _resolve_per_device_profiles,
+    _resolve_total_memory,
+)
+from .profile_catalog import architecture_for_compute_capability
 
 _patched = False
 _patch_result: "PatchResult | None" = None
@@ -65,125 +77,6 @@ _upstream_mod: Any = None  # Set when upstream FakeCudaTensor backend is active
 # ---------------------------------------------------------------------------
 # Configuration – mirrors the active FakeGPU profile when available.
 # ---------------------------------------------------------------------------
-
-_PROFILE_CATALOG = load_profiles()
-_PROFILE_CC: dict[str, tuple[int, int]] = {
-    profile_id: profile.compute_capability
-    for profile_id, profile in _PROFILE_CATALOG.items()
-}
-_PROFILE_NAMES: dict[str, str] = {
-    profile_id: profile.torch_name for profile_id, profile in _PROFILE_CATALOG.items()
-}
-_PROFILE_TOTAL_MEMORY: dict[str, int] = {
-    profile_id: profile.memory_bytes for profile_id, profile in _PROFILE_CATALOG.items()
-}
-_PROFILE_SUPPORTED_TYPES: dict[str, tuple[str, ...]] = {
-    profile_id: profile.supported_types
-    for profile_id, profile in _PROFILE_CATALOG.items()
-}
-
-
-def _resolve_profile_id() -> str | None:
-    profiles_env = os.environ.get("FAKEGPU_PROFILES", "")
-    if profiles_env:
-        first_spec = profiles_env.split(",")[0].strip()
-        return first_spec.split(":")[0].strip().lower()
-
-    profile_env = os.environ.get("FAKEGPU_PROFILE", "")
-    if profile_env:
-        return profile_env.strip().lower()
-
-    device_name = os.environ.get("FAKEGPU_DEVICE_NAME", "").strip().lower()
-    if device_name:
-        reverse_names = {value.lower(): key for key, value in _PROFILE_NAMES.items()}
-        return reverse_names.get(device_name)
-
-    return None
-
-
-def _resolve_compute_capability() -> tuple[int, int]:
-    profile_id = _resolve_profile_id()
-    if profile_id and profile_id in _PROFILE_CC:
-        return _PROFILE_CC[profile_id]
-    return (8, 0)
-
-
-def _resolve_device_name() -> str:
-    name = os.environ.get("FAKEGPU_DEVICE_NAME", "")
-    if name:
-        return name
-    profile_id = _resolve_profile_id()
-    if profile_id:
-        return _PROFILE_NAMES.get(profile_id, "NVIDIA A100-SXM4-80GB")
-    return "NVIDIA A100-SXM4-80GB"
-
-
-def _resolve_total_memory() -> int:
-    profile_id = _resolve_profile_id()
-    if profile_id:
-        return _PROFILE_TOTAL_MEMORY.get(profile_id, 80 * 1024**3)
-    return 80 * 1024**3
-
-
-def _resolve_per_device_profiles(
-    num_devices: int | None = None,
-) -> list[dict[str, Any]]:
-    """Resolve per-device profile info from FAKEGPU_PROFILES.
-
-    Returns a list of dicts, one per device, each with keys:
-      'profile_id', 'name', 'total_memory', 'compute_major', 'compute_minor'
-    """
-    profiles_env = os.environ.get("FAKEGPU_PROFILES", "")
-    target_count = int(
-        num_devices
-        if num_devices is not None
-        else os.environ.get("FAKEGPU_DEVICE_COUNT", "8")
-    )
-    result: list[dict[str, Any]] = []
-
-    if profiles_env:
-        for spec in profiles_env.split(","):
-            spec = spec.strip()
-            if not spec:
-                continue
-            parts = spec.split(":")
-            pid = parts[0].strip().lower()
-            count = (
-                int(parts[1]) if len(parts) > 1 and parts[1].strip().isdigit() else 1
-            )
-            for _ in range(count):
-                cc = _PROFILE_CC.get(pid, (8, 0))
-                result.append(
-                    {
-                        "profile_id": pid,
-                        "name": _PROFILE_NAMES.get(pid, "NVIDIA A100-SXM4-80GB"),
-                        "total_memory": _PROFILE_TOTAL_MEMORY.get(pid, 80 * 1024**3),
-                        "compute_major": cc[0],
-                        "compute_minor": cc[1],
-                    }
-                )
-
-    if not result:
-        # Uniform config: all devices share the same profile
-        pid = _resolve_profile_id() or "a100"
-        cc = _PROFILE_CC.get(pid, (8, 0))
-        entry = {
-            "profile_id": pid,
-            "name": _PROFILE_NAMES.get(pid, "NVIDIA A100-SXM4-80GB"),
-            "total_memory": _PROFILE_TOTAL_MEMORY.get(pid, 80 * 1024**3),
-            "compute_major": cc[0],
-            "compute_minor": cc[1],
-        }
-        for _ in range(target_count):
-            result.append(dict(entry))
-
-    if len(result) != target_count and len(result) > 0:
-        while len(result) < target_count:
-            result.append(dict(result[-1]))
-        result = result[:target_count]
-
-    return result
-
 
 _NUM_DEVICES = int(os.environ.get("FAKEGPU_DEVICE_COUNT", "8"))
 _DEVICE_PROFILES: list[dict[str, Any]] = _resolve_per_device_profiles(_NUM_DEVICES)
@@ -229,91 +122,6 @@ def _refresh_runtime_profile_state(
 # Cross-device guards
 # ---------------------------------------------------------------------------
 
-_CROSS_DEVICE_CHECK = os.environ.get("FAKEGPU_CROSS_DEVICE_CHECK", "1") != "0"
-
-
-def _is_fake_tensor(tensor: Any) -> bool:
-    """Return whether a tensor is owned by PyTorch FakeTensorMode."""
-    return getattr(tensor, "fake_mode", None) is not None or (
-        type(tensor).__module__ == "torch._subclasses.fake_tensor"
-        and type(tensor).__name__ == "FakeTensor"
-    )
-
-
-def _check_same_device(*tensors: Any) -> None:
-    """Raise RuntimeError if tensors span multiple fake CUDA devices."""
-    if not _CROSS_DEVICE_CHECK:
-        return
-
-    first_dev: int | None = None
-    for t in tensors:
-        # FakeCudaTensor carries its device index as an attribute.
-        dev = getattr(t, "device_index", None)
-        if dev is None:
-            continue  # untracked tensor (e.g. pure CPU) — skip
-        if first_dev is None:
-            first_dev = dev
-        elif dev != first_dev:
-            raise RuntimeError(
-                f"Expected all tensors to be on the same device, "
-                f"but found at least two devices, cuda:{first_dev} and cuda:{dev}!"
-            )
-
-
-def _wrap_multi_tensor_op(orig_fn: Any, torch_mod: Any) -> Any:
-    """Wrap a torch function to check device consistency of tensor args."""
-
-    @functools.wraps(orig_fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        tensors = []
-        for a in args:
-            if isinstance(a, torch_mod.Tensor):
-                tensors.append(a)
-            elif isinstance(a, (list, tuple)):
-                for item in a:
-                    if isinstance(item, torch_mod.Tensor):
-                        tensors.append(item)
-        for v in kwargs.values():
-            if isinstance(v, torch_mod.Tensor):
-                tensors.append(v)
-        if len(tensors) >= 2:
-            _check_same_device(*tensors)
-        return orig_fn(*args, **kwargs)
-
-    return wrapper
-
-
-_BINARY_DUNDER_TORCH_OPS: dict[str, Any] = {
-    "__add__": lambda torch_mod, self, other: torch_mod.add(self, other),
-    "__radd__": lambda torch_mod, self, other: torch_mod.add(other, self),
-    "__sub__": lambda torch_mod, self, other: torch_mod.sub(self, other),
-    "__rsub__": lambda torch_mod, self, other: torch_mod.sub(other, self),
-    "__mul__": lambda torch_mod, self, other: torch_mod.mul(self, other),
-    "__rmul__": lambda torch_mod, self, other: torch_mod.mul(other, self),
-    "__truediv__": lambda torch_mod, self, other: torch_mod.true_divide(self, other),
-    "__rtruediv__": lambda torch_mod, self, other: torch_mod.true_divide(other, self),
-    "__matmul__": lambda torch_mod, self, other: torch_mod.matmul(self, other),
-    "__rmatmul__": lambda torch_mod, self, other: torch_mod.matmul(other, self),
-}
-
-
-def _wrap_tensor_binary_op(
-    orig_fn: Any,
-    dunder_name: str,
-    torch_mod: Any,
-) -> Any:
-    """Wrap a Tensor binary method to check cross-device with torch-friendly calls."""
-
-    @functools.wraps(orig_fn)
-    def wrapper(self: Any, other: Any) -> Any:
-        if isinstance(other, torch_mod.Tensor):
-            _check_same_device(self, other)
-        torch_op = _BINARY_DUNDER_TORCH_OPS.get(dunder_name)
-        if torch_op is not None:
-            return torch_op(torch_mod, self, other)
-        return orig_fn(self, other)
-
-    return wrapper
 # ---------------------------------------------------------------------------
 # Memory tracking: per-device memory accounting.
 # ---------------------------------------------------------------------------
