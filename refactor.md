@@ -45,6 +45,27 @@
 
 验证：本轮改动后本地全量 `pytest`（222 passed）+ ruff clean + CI 同款 manifest 校验（7+39 cases）通过；`_process_name`/`native_capability_report` 过滤逻辑另有手工冒烟验证。**本轮未做远端 406/gem12 复测**——多数改动是纯逻辑修正（正则、计数器时序、assert→raise、字符串校验）或范围明确的行为收紧，本地+CI 已提供等价确认；如需更保险可再补一次远端跑。
 
+**2026-08-20 第三批落地**：§8 第 1 步（待决策项）全部拍板，第 3 步（公共设施）收尾，第 6 步（兜底收敛与性能）剩余项完成。
+
+| Commit | 阶段 | 内容 |
+|---|---|---|
+| `f35018d` | §1.6 / 待决策 | 删除 `privateuse1/`（866 行）与 `init_privateuse1` 导出；其余四项拍板为**保留**并补上缺失覆盖 |
+| `9a4d327` | §2.3 + §5 | 静默兜底收窄（SMI publisher/catalog、workspace_profiles、repository_analyzer、calibration sample 定位改为 warning 或 raise）；allocator 分类记账与自由块索引、metrics 深拷贝、trace_replay 按 rank 建索引、topology 链路计数、preflight 复用子进程输出与预编译正则、repository_analyzer 单遍解析、catalog 缓存键归一化 |
+| `672695c` | §5.4 | `decode_steps` 闭式聚合 + `--exclude-decode-steps` / `include_decode_steps=False`（默认行为与报告 shape 不变） |
+| `c660cdb` | §3.6 | `_cli.py` 承载命令注册表、共享 flag 工厂与 `--json`/`--strict`/退出码约定；21 个命令模块的 `prog=` 改为从注册表派生，4 种 `--json` 拼法收敛为 2 种 |
+
+**待决策项的拍板结论**（原文档列的 5 项，逐项复核仓库证据后）：
+
+- `privateuse1/`：**删除**。它经私有 `torch._C._acc` API 注册设备模块，而支持窗口内（torch 2.6–2.13）没有任何版本提供该 API——`init_privateuse1()` 在任何已安装环境里都跑不起来，仓库内也无其他调用路径；原测试只断言导出可调用，从未执行。可从 `c31fee1` 恢复。
+- `MatmulFlopCounterMode`：**保留**。实测可用（`aten::mm` 计数正确），是文档化公开导出，缺的只是覆盖——已补执行级测试。
+- `capabilities.audit_native_exports`：**保留**。`fakegpu capabilities --build-dir` 是真实可达路径。
+- `schemas/*.schema.json`：**保留**。复核时三个 schema 均已有契约或测试用途，删除会破坏现有功能（与 2026-08-16 扫描时的"完全孤立"结论不同）。
+- legacy SMI schema：**保留**。v1 兼容读取仍有价值，`test_virtual_smi.py` 是其现行消费者。
+
+**§3.6 中有意保留的差异**：`--json` 的两种形态（可选路径 vs 布尔开关）不合并——布尔那组命令的全部输出就是 JSON 文档本身，改成可选路径会让紧跟的位置参数被 argparse 吞掉；`--strict` 的退出码各命令不同（1/2/3），都写在各自 `--help` 里，统一会破坏已声明的行为，只把声明方式收敛到一处。`capabilities --strict` 的 2 与"用法错误"的 2 重合，是既有取值，未动。
+
+验证：本地全量 `pytest`（233 passed，含 3 个新增测试）+ ruff clean；CI 同款 manifest 校验（7+39 cases）通过。**本轮尚未跑 `scripts/test.sh smoke`/`cpu` 与远端 406/gem12 复测**——改动集中在 Python 侧 CLI 与纯逻辑路径，未触碰 `src/`；如需最终确认可按 §3 建议补一次。
+
 **复核后有意不改的条目**（与文档原建议不同处）：
 - `_aggregate_report` 的 error 分支（§1.5/2.3）：rc=0 但报告为 error 的边缘情况下可达，保留。
 - `_stage.py` 重复 env 赋值（§2.2）：嵌套 stage 退出时有恢复语义，保留。
@@ -54,7 +75,7 @@
 - `--include-exited`（smi/metrics）、`distributed_cli` 的 `--markdown-report` 等：有真实工作路径，属缺测试而非死代码，保留。
 - smi 发布的 state JSON 不再含恒 null 的 `telemetry.*`、`topology.numa_node/pcie_generation` 键：死数据移除，`typical_power_usage_mw` 等真实值字段保留。
 
-**待决策项**（需要项目层面拍板，未动）：`privateuse1/`（866 行）、`capabilities.audit_native_exports`（约 150 行）、`flop_counter.MatmulFlopCounterMode`（88 行，公开导出）、`schemas/*.schema.json`（三个孤立 schema）、legacy schema 支持是否还需要（`test_virtual_smi.py` 是唯一消费者）。
+**待决策项**：已于 2026-08-20 全部拍板，结论见上方第三批落地一节（删 1 留 4）。
 
 ---
 
@@ -324,9 +345,9 @@ ruff（F401/F811/F841）检查是干净的——没有未使用的 import / 变�
 
 原建议顺序中，第 1 步的决策项已部分拍板（`fsdp_memory.py`、standalone 路径已删），第 2 步已全部完成，第 3、6 步各完成一部分。剩余工作按以下优先级推进：
 
-1. ~~决策项~~ → 剩余待拍板：`privateuse1/`、`audit_native_exports`、`MatmulFlopCounterMode`、`schemas/*.json`、legacy schema（见"实施进度"一节的待决策清单）。
+1. ~~决策项~~ ✅ 已完成（2026-08-20）：`privateuse1/` 删除（`f35018d`），其余四项拍板保留并补覆盖，逐项理由见"实施进度"。
 2. ~~纯删除（§1 + §2.2）~~ ✅ 已完成（`e451bd2`/`bc77d9f`/`6b00725`/`432c21c`）。
-3. **公共设施（剩余，中风险）**：~~`FakeGpuConfig` dataclass 收敛 `_api.py`/`_runtime.py` 的 8 处 10 参数签名~~ ✅ 已完成（`_FakeGpuRuntimeConfig`，2026-08-17，−77 行）。剩余：CLI 注册器 + 共享 flag 工厂 + 统一 `--json`/退出码约定（注意 `llm_cli` 与 `serving_plan` 同名 flag 默认值不同，统一时需显式保留差异）。`--json` 输出块已由 `emit_json` 收敛（`f6891c8`）。
+3. **公共设施（剩余，中风险）**：~~`FakeGpuConfig` dataclass 收敛 `_api.py`/`_runtime.py` 的 8 处 10 参数签名~~ ✅ 已完成（`_FakeGpuRuntimeConfig`，2026-08-17，−77 行）。~~CLI 注册器 + 共享 flag 工厂 + 统一 `--json`/退出码约定~~ ✅ 已完成（`c660cdb`，2026-08-20）。`--json` 输出块已由 `emit_json` 收敛（`f6891c8`）。**剩余**：`llm_cli` 与 `serving_plan` 约 12 个同名 flag 默认值不同（`dynamic/eager` vs `paged/sdpa`），本轮只统一了声明方式，默认值差异原样保留，需单独确认哪些属于有意为之。
 4. **大合并**：`serving_plan` 双路径合一（§3.2，全仓杠杆最大单项，约 1,760 行）——**先决条件**：给 `estimate_serving_plan` 与 `estimate_serving_request_set` 补 golden-output 测试，锁住两条路径的输出差异后再抽 `_build_serving_report`；`_patched_dist_init/destroy` 对 `_upstream` 的复刻清理（仅状态读取方式不同，合并时逐字段比对）。
 5. **机械拆分（§4.2）**：`torch_patch`（−1,200 后约 3,100 行，`_allocator.py` 一刀约 810 行最干净）、`smi.py`（拆出 metrics 真正需要的 inventory/归一化层，消除 `metrics.py` import `smi` 私有函数）、`calibration.py`、`serving_plan.py`、`diffusion_estimator.py`。只做移动与 import 调整，旧模块 re-export 保持兼容。
 6. **兜底收敛与性能（剩余）**：§2.3 逐个评估（`workspace_profiles` 的 import 失败退化、`smi.py` publisher 主循环裸捕、`calibration` 第四层 sample fallback 等——行为敏感，建议转 warning 而非静默）；§5.1 allocator `snapshot()` 增量汇总与 `_allocate_allocator_block` 索引化（需 benchmark）；§5.4 metrics 深拷贝三处、`decode_steps` 聚合 + 开关（报告 shape 变化需过消费者）。
