@@ -196,6 +196,22 @@ print("fakecuda runtime options passed")
     _assert_ok(_run(code), "fakecuda runtime options")
 
 
+def test_inplace_hybrid_env_removes_stale_library_path(monkeypatch) -> None:
+    from fakegpu._api import (
+        _LIBRARY_PATH_VAR,
+        _FakeGpuRuntimeConfig,
+        _apply_env_inplace,
+    )
+
+    monkeypatch.setenv(_LIBRARY_PATH_VAR, str(ROOT / "build"))
+    _apply_env_inplace(
+        ROOT / "build",
+        _FakeGpuRuntimeConfig(mode="hybrid"),
+    )
+
+    assert _LIBRARY_PATH_VAR not in os.environ
+
+
 def main() -> None:
     test_import_is_side_effect_free()
     test_runtime_router_dispatch()
