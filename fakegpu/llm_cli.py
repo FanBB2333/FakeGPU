@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import json
-from pathlib import Path
 from typing import Sequence
 
 from .llm_estimator import estimate_decoder_inference
+from .structured_io import emit_json
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -20,6 +19,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--prompt-tokens", type=int, required=True)
     parser.add_argument("--generated-tokens", type=int, default=1)
+    parser.add_argument(
+        "--exclude-decode-steps",
+        action="store_true",
+        help="Aggregate decode FLOPs without embedding one record per token.",
+    )
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument(
@@ -84,6 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch_size=args.batch_size,
             prompt_tokens=args.prompt_tokens,
             generated_tokens=args.generated_tokens,
+            include_decode_steps=not args.exclude_decode_steps,
             dtype=args.dtype,
             use_cache=not args.no_cache,
             attention_implementation=args.attention_implementation,
@@ -103,10 +108,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.exit(2, f"fakegpu estimate-llm: {exc}\n")
 
     if args.json_path:
-        path = Path(args.json_path).expanduser().resolve()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        print(f"LLM estimate: {path}")
+        output = emit_json(args.json_path, report)
+        if output is not None:
+            print(f"LLM estimate: {output}")
 
     memory = report["memory"]
     compute = report["compute"]
