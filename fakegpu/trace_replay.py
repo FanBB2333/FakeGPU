@@ -39,8 +39,9 @@ def replay_trace(
     events = _normalize_trace(trace)
     if not events:
         raise TraceReplayError("trace contains no complete replayable events")
-    enriched, profile_summary = _apply_profiles(events, operator_profiles)
+    enriched, _ = _apply_profiles(events, operator_profiles)
     events = _remove_fusion_double_counts(enriched)
+    profile_summary = _profile_summary(events, len(operator_profiles))
     topology_cache: dict[tuple[int, int, int], Mapping[str, Any]] = {}
     if topology is not None:
         for event in events:
@@ -409,14 +410,6 @@ def _apply_profiles(
     profiles: Sequence[Mapping[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     output = []
-    matched_counts: dict[str, int] = defaultdict(int)
-    modeled_totals = {
-        "workspace_bytes": 0,
-        "flops": 0,
-        "memory_bytes": 0,
-        "latency_us": 0.0,
-        "launch_count": 0,
-    }
     for raw in events:
         event = dict(raw)
         profile = match_operator_profile(
@@ -435,15 +428,34 @@ def _apply_profiles(
                 numel = math.prod(event["shape"])
             evaluated = evaluate_operator_profile(profile, numel=numel)
             event["operator_profile"] = evaluated
-            matched_counts[str(evaluated["profile_id"])] += 1
-            for field in modeled_totals:
-                if field in evaluated:
-                    modeled_totals[field] += evaluated[field]
             if event["duration_us"] <= 0 and "latency_us" in evaluated:
                 event["duration_us"] = float(evaluated["latency_us"])
         output.append(event)
-    return output, {
-        "catalog_profile_count": len(profiles),
+    return output, {}
+
+
+def _profile_summary(
+    events: Sequence[Mapping[str, Any]],
+    catalog_profile_count: int,
+) -> dict[str, Any]:
+    matched_counts: dict[str, int] = defaultdict(int)
+    modeled_totals = {
+        "workspace_bytes": 0,
+        "flops": 0,
+        "memory_bytes": 0,
+        "latency_us": 0.0,
+        "launch_count": 0,
+    }
+    for event in events:
+        profile = event.get("operator_profile")
+        if not isinstance(profile, Mapping):
+            continue
+        matched_counts[str(profile["profile_id"])] += 1
+        for field in modeled_totals:
+            if field in profile:
+                modeled_totals[field] += profile[field]
+    return {
+        "catalog_profile_count": catalog_profile_count,
         "matched_event_count": sum(matched_counts.values()),
         "matched_profiles": dict(sorted(matched_counts.items())),
         "modeled_totals": modeled_totals,
