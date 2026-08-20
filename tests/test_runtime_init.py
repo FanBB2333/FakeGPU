@@ -197,6 +197,8 @@ print("fakecuda runtime options passed")
 
 
 def test_inplace_hybrid_env_removes_stale_library_path(monkeypatch) -> None:
+    import fakegpu._api as api
+
     from fakegpu._api import (
         _LIBRARY_PATH_VAR,
         _FakeGpuRuntimeConfig,
@@ -208,6 +210,13 @@ def test_inplace_hybrid_env_removes_stale_library_path(monkeypatch) -> None:
     monkeypatch.setenv("FAKEGPU_RUNTIME", "native")
     monkeypatch.setenv("FAKEGPU_MODE", "simulate")
     monkeypatch.setenv(_LIBRARY_PATH_VAR, str(ROOT / "build"))
+    monkeypatch.setattr(
+        api,
+        "library_dir",
+        lambda *, build_dir=None, lib_dir=None: Path(
+            lib_dir or build_dir or ROOT / "build"
+        ),
+    )
     _apply_env_inplace(
         ROOT / "build",
         _FakeGpuRuntimeConfig(mode="hybrid"),
