@@ -30,12 +30,27 @@ def main(argv: list[str] | None = None) -> int:
         if exit_code != 0:
             exception = exc
         raise
+    except KeyboardInterrupt as exc:
+        exception = exc
+        exit_code = 130
+        raise
     except BaseException as exc:
         exception = exc
         exit_code = 1
         raise
     finally:
-        _write_child_report(init_result=init_result, exception=exception, exit_code=exit_code)
+        try:
+            _write_child_report(
+                init_result=init_result,
+                exception=exception,
+                exit_code=exit_code,
+            )
+        except OSError as report_error:
+            print(
+                "fakegpu preflight bootstrap: could not write child report: "
+                f"{report_error}",
+                file=sys.stderr,
+            )
 
     return exit_code
 
