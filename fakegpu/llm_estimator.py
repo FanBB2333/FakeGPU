@@ -487,22 +487,27 @@ def estimate_decoder_inference(
     )
     decode_step_count = max(0, generated_tokens - 1)
     decode_steps: list[dict[str, int]] = []
-    if include_decode_steps:
-        for step in range(decode_step_count):
-            logical_key_tokens = prompt_tokens + step + 1
-            key_tokens = _effective_context_tokens(
-                logical_key_tokens,
-                window_tokens=kv_cache_window_tokens,
-            )
-            flops = _forward_matmul_flops(
-                dimensions,
-                batch_size=batch_size,
-                query_tokens=1,
-                key_tokens=key_tokens,
-            )
+    decode_step_specs: list[tuple[int, int, int, int]] = []
+    for step in range(decode_step_count):
+        logical_key_tokens = prompt_tokens + step + 1
+        key_tokens = _effective_context_tokens(
+            logical_key_tokens,
+            window_tokens=kv_cache_window_tokens,
+        )
+        query_tokens = key_tokens if not use_cache else 1
+        flops = _forward_matmul_flops(
+            dimensions,
+            batch_size=batch_size,
+            query_tokens=query_tokens,
+            key_tokens=key_tokens,
+        )
+        decode_step_specs.append(
+            (logical_key_tokens, key_tokens, query_tokens, flops)
+        )
+        if include_decode_steps:
             decode_step = {
                 "step": step + 1,
-                "query_tokens": 1,
+                "query_tokens": query_tokens,
                 "key_tokens": key_tokens,
                 "matmul_flops": flops,
             }
@@ -510,30 +515,37 @@ def estimate_decoder_inference(
                 decode_step["logical_key_tokens"] = logical_key_tokens
             decode_steps.append(decode_step)
 
-    decode_key_token_sum = _sum_decode_context_tokens(
-        prompt_tokens,
-        decode_step_count,
-        window_tokens=kv_cache_window_tokens,
+    decode_key_token_sum = (
+        sum(spec[1] for spec in decode_step_specs)
+        if not use_cache
+        else _sum_decode_context_tokens(
+            prompt_tokens,
+            decode_step_count,
+            window_tokens=kv_cache_window_tokens,
+        )
     )
-    decode_flops_at_zero_key = _forward_matmul_flops(
-        dimensions,
-        batch_size=batch_size,
-        query_tokens=1,
-        key_tokens=0,
-    )
-    decode_flops_per_key_token = (
-        _forward_matmul_flops(
+    if use_cache:
+        decode_flops_at_zero_key = _forward_matmul_flops(
             dimensions,
             batch_size=batch_size,
             query_tokens=1,
-            key_tokens=1,
+            key_tokens=0,
         )
-        - decode_flops_at_zero_key
-    )
-    total_decode_flops = (
-        decode_step_count * decode_flops_at_zero_key
-        + decode_key_token_sum * decode_flops_per_key_token
-    )
+        decode_flops_per_key_token = (
+            _forward_matmul_flops(
+                dimensions,
+                batch_size=batch_size,
+                query_tokens=1,
+                key_tokens=1,
+            )
+            - decode_flops_at_zero_key
+        )
+        total_decode_flops = (
+            decode_step_count * decode_flops_at_zero_key
+            + decode_key_token_sum * decode_flops_per_key_token
+        )
+    else:
+        total_decode_flops = sum(spec[3] for spec in decode_step_specs)
     decode_step_summary = None
     if not include_decode_steps:
         first_logical_key_tokens = (
@@ -580,7 +592,14 @@ def estimate_decoder_inference(
     decode_transient = _forward_transient_bytes(
         dimensions,
         batch_size=batch_size,
-        query_tokens=1,
+        query_tokens=(
+            _effective_context_tokens(
+                cache_tokens_after_generation,
+                window_tokens=kv_cache_window_tokens,
+            )
+            if not use_cache
+            else 1
+        ),
         key_tokens=_effective_context_tokens(
             cache_tokens_after_generation,
             window_tokens=kv_cache_window_tokens,
@@ -588,6 +607,41 @@ def estimate_decoder_inference(
         element_bytes=element_bytes,
         attention_implementation=attention_implementation,
     )
+    decode_input_tokens = (
+        _effective_context_tokens(
+            cache_tokens_after_generation,
+            window_tokens=kv_cache_window_tokens,
+        )
+        if not use_cache
+        else 1
+    )
+    decode_input_bytes = batch_size * decode_input_tokens * 8
+    decode_transient_total = None
+    if not use_cache:
+        totals = {
+            key: 0
+            for key in (
+                "attention_bytes",
+                "mlp_bytes",
+                "dense_mlp_bytes",
+                "routed_mlp_bytes",
+                "router_bytes",
+                "logits_bytes",
+                "peak_bytes",
+            )
+        }
+        for _, key_tokens, query_tokens, _ in decode_step_specs:
+            transient = _forward_transient_bytes(
+                dimensions,
+                batch_size=batch_size,
+                query_tokens=query_tokens,
+                key_tokens=key_tokens,
+                element_bytes=element_bytes,
+                attention_implementation=attention_implementation,
+            )
+            for key, value in transient.items():
+                totals[key] += value
+        decode_transient_total = totals
     input_bytes = batch_size * prompt_tokens * 8
     prefill_peak = (
         parameter_bytes
@@ -597,7 +651,7 @@ def estimate_decoder_inference(
     )
     decode_peak = (
         parameter_bytes
-        + 8 * batch_size
+        + decode_input_bytes
         + kv_cache_final
         + decode_transient["peak_bytes"]
     )
@@ -619,6 +673,7 @@ def estimate_decoder_inference(
         prefill_transient=prefill_transient,
         decode_transient=decode_transient,
         decode_forward_steps=decode_step_count,
+        decode_transient_total=decode_transient_total,
     )
     performance = None
     if target_profile:
@@ -732,6 +787,7 @@ def estimate_decoder_inference(
             "adapter_parameter_bytes": adapter_parameter_bytes,
             "parameter_bytes": parameter_bytes,
             "input_bytes": input_bytes,
+            "decode_input_bytes": decode_input_bytes,
             "kv_cache_bytes_after_prefill": kv_cache_prefill,
             "kv_cache_bytes_after_generation": kv_cache_final,
             "prefill_transient": prefill_transient,
@@ -766,7 +822,7 @@ def estimate_decoder_inference(
                     "process_peak_bytes": decode_peak + runtime_overhead_bytes,
                     "components": {
                         "parameters": parameter_bytes,
-                        "inputs": 8 * batch_size,
+                        "inputs": decode_input_bytes,
                         "kv_cache": kv_cache_final,
                         "transient": decode_transient["peak_bytes"],
                         "runtime_overhead": runtime_overhead_bytes,
@@ -1486,25 +1542,38 @@ def _inference_memory_traffic(
     prefill_transient: Mapping[str, int],
     decode_transient: Mapping[str, int],
     decode_forward_steps: int,
+    decode_transient_total: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     forward_steps = 1 + decode_forward_steps
     weight_reads = parameter_bytes * forward_steps
     kv_traffic = prefill_cache_bytes + final_cache_bytes * decode_forward_steps
+    decode_transient_peak_sum = (
+        int(decode_transient_total["peak_bytes"])
+        if decode_transient_total is not None
+        else int(decode_transient["peak_bytes"]) * decode_forward_steps
+    )
     transient_peak_sum = int(prefill_transient["peak_bytes"]) + (
-        int(decode_transient["peak_bytes"]) * decode_forward_steps
+        decode_transient_peak_sum
     )
     lower = weight_reads + kv_traffic
+    decode_component_sum = (
+        {
+            key: int(decode_transient_total[key])
+            for key in ("attention_bytes", "mlp_bytes", "logits_bytes")
+        }
+        if decode_transient_total is not None
+        else {
+            key: int(decode_transient[key]) * decode_forward_steps
+            for key in ("attention_bytes", "mlp_bytes", "logits_bytes")
+        }
+    )
     expected = lower + 2 * transient_peak_sum
     upper = lower + 4 * (
         sum(
             int(prefill_transient[key])
             for key in ("attention_bytes", "mlp_bytes", "logits_bytes")
         )
-        + decode_forward_steps
-        * sum(
-            int(decode_transient[key])
-            for key in ("attention_bytes", "mlp_bytes", "logits_bytes")
-        )
+        + sum(decode_component_sum.values())
     )
     return {
         "lower_bytes": lower,
