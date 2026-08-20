@@ -218,6 +218,13 @@ def get_profile(
 
 
 def official_compute_capabilities() -> dict[str, str]:
+    """Return an isolated copy of the cached NVIDIA model snapshot."""
+
+    return dict(_official_compute_capabilities_cached())
+
+
+@lru_cache(maxsize=1)
+def _official_compute_capabilities_cached() -> tuple[tuple[str, str], ...]:
     path = Path(__file__).resolve().parent / "data" / "nvidia_compute_capabilities.json"
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -227,7 +234,7 @@ def official_compute_capabilities() -> dict[str, str]:
     models = payload.get("models")
     if not isinstance(models, dict):
         raise ProfileCatalogError(f"invalid NVIDIA compute-capability snapshot: {path}")
-    return {str(name): str(cc) for name, cc in models.items()}
+    return tuple((str(name), str(cc)) for name, cc in models.items())
 
 
 def validate_catalog(

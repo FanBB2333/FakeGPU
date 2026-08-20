@@ -560,6 +560,12 @@ class MetricsHistory:
         with self._lock:
             self._samples.append(copy.deepcopy(dict(snapshot)))
 
+    def _append_owned(self, snapshot: dict[str, Any]) -> None:
+        """Retain a snapshot whose ownership has transferred to history."""
+
+        with self._lock:
+            self._samples.append(snapshot)
+
     def snapshots(self) -> list[dict[str, Any]]:
         with self._lock:
             return copy.deepcopy(list(self._samples))
@@ -610,6 +616,9 @@ class MetricsCollector:
         self._lock = threading.Lock()
 
     def collect_once(self) -> dict[str, Any]:
+        return copy.deepcopy(self._collect_once_owned())
+
+    def _collect_once_owned(self) -> dict[str, Any]:
         with self._lock:
             generated_at_ns = time.time_ns()
             paths = _discover_state_paths(
@@ -641,7 +650,7 @@ class MetricsCollector:
                 source_state_count=len(states),
                 max_process_series=self.max_process_series,
             )
-            self.history.append(snapshot)
+            self.history._append_owned(snapshot)
             return snapshot
 
 
@@ -667,10 +676,13 @@ class MetricsApplication:
         self._thread: threading.Thread | None = None
 
     def refresh(self) -> dict[str, Any]:
-        snapshot = self.collector.collect_once()
+        return copy.deepcopy(self._refresh_owned())
+
+    def _refresh_owned(self) -> dict[str, Any]:
+        snapshot = self.collector._collect_once_owned()
         with self._latest_lock:
             self._latest = snapshot
-        return copy.deepcopy(snapshot)
+        return snapshot
 
     def snapshot(self) -> dict[str, Any]:
         with self._latest_lock:
@@ -685,7 +697,7 @@ class MetricsApplication:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
-        self.refresh()
+        self._refresh_owned()
         self._thread = threading.Thread(
             target=self._collect_loop,
             name="fakegpu-metrics-collector",
@@ -737,7 +749,7 @@ class MetricsApplication:
 
     def _collect_loop(self) -> None:
         while not self._stop.wait(self.interval_seconds):
-            self.refresh()
+            self._refresh_owned()
 
 
 class MetricsHttpServer(ThreadingHTTPServer):

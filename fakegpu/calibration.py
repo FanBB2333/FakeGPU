@@ -2528,7 +2528,6 @@ def _parse_serving_runner_sample(
     if isinstance(payload, Mapping):
         return payload
 
-    fallback: Mapping[str, Any] | None = None
     for line in reversed(lines):
         try:
             candidate = json.loads(line)
@@ -2538,13 +2537,10 @@ def _parse_serving_runner_sample(
             continue
         if candidate.get("schema_version") == SERVING_SAMPLE_SCHEMA_VERSION:
             return candidate
-        if fallback is None:
-            fallback = candidate
-    if fallback is not None:
-        return fallback
     raise CalibrationError(
-        f"serving runner repetition {run_index} did not emit a JSON object; "
-        f"use the {_SERVING_SAMPLE_MARKER!r} prefix when stdout has logs"
+        f"serving runner repetition {run_index} did not emit a "
+        f"{SERVING_SAMPLE_SCHEMA_VERSION!r} JSON object; use the "
+        f"{_SERVING_SAMPLE_MARKER!r} prefix when stdout has logs"
     )
 
 

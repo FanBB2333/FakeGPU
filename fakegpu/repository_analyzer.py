@@ -4,13 +4,15 @@ import argparse
 import ast
 import os
 import re
+import subprocess
+import warnings
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from .kernel_analysis import analyze_kernel_file
-from .structured_io import emit_json
+from .structured_io import StructuredDataError, emit_json, load_mapping
 
 
 SCHEMA_VERSION = "fakegpu.repository_analysis.v1"
@@ -86,6 +88,7 @@ def analyze_repository(
         raise RepositoryAnalysisError(f"repository directory not found: {root}")
 
     files = list(_iter_repository_files(root))
+    pyproject = _load_pyproject(root / "pyproject.toml")
     suffix_counts = Counter(
         (file.suffix.lower() or "<none>") for file in files
     )
@@ -125,7 +128,11 @@ def analyze_repository(
         if file.name.lower() in _ENTRYPOINT_FILENAMES or _has_main_guard(tree):
             discovered_entrypoints.add(relative)
 
-    dependency_names = _dependency_names(root, files)
+    dependency_names = _dependency_names(
+        root,
+        files,
+        pyproject=pyproject,
+    )
     imported_frameworks = {
         framework
         for import_name, framework in _FRAMEWORK_IMPORTS.items()
@@ -141,7 +148,7 @@ def analyze_repository(
     frameworks = sorted(imported_frameworks | dependency_frameworks)
 
     configured_entrypoints = _validate_entrypoints(root, entrypoints or ())
-    discovered_entrypoints.update(_pyproject_entrypoints(root))
+    discovered_entrypoints.update(_pyproject_entrypoints(pyproject))
     selected_entrypoints = (
         configured_entrypoints
         if configured_entrypoints
@@ -322,8 +329,6 @@ def _git_visible_files(root: Path) -> list[Path] | None:
     if not (root / ".git").exists():
         return None
     try:
-        import subprocess
-
         completed = subprocess.run(
             [
                 "git",
@@ -337,7 +342,13 @@ def _git_visible_files(root: Path) -> list[Path] | None:
             capture_output=True,
             check=True,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        warnings.warn(
+            f"git ls-files failed for {root}; falling back to a filesystem "
+            f"scan with different ignore semantics: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return None
 
     files: list[Path] = []
@@ -510,14 +521,19 @@ def _has_main_guard(tree: ast.AST) -> bool:
             continue
         try:
             rendered = ast.unparse(node.test)
-        except Exception:
+        except (AttributeError, ValueError):
             continue
         if "__name__" in rendered and "__main__" in rendered:
             return True
     return False
 
 
-def _dependency_names(root: Path, files: Sequence[Path]) -> set[str]:
+def _dependency_names(
+    root: Path,
+    files: Sequence[Path],
+    *,
+    pyproject: Mapping[str, Any] | None = None,
+) -> set[str]:
     names: set[str] = set()
     for file in files:
         relative = file.relative_to(root)
@@ -533,7 +549,11 @@ def _dependency_names(root: Path, files: Sequence[Path]) -> set[str]:
                     if dependency:
                         names.add(dependency)
         elif relative == Path("pyproject.toml"):
-            names.update(_pyproject_dependencies(file))
+            names.update(
+                _pyproject_dependencies(
+                    pyproject if pyproject is not None else _load_pyproject(file)
+                )
+            )
         elif lower_name in {"environment.yml", "environment.yaml"}:
             text = _read_text(file)
             if text:
@@ -550,22 +570,54 @@ def _requirement_name(line: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _pyproject_dependencies(path: Path) -> set[str]:
+def _load_pyproject(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
     try:
-        import tomllib
+        return load_mapping(path)
+    except (OSError, StructuredDataError) as exc:
+        raise RepositoryAnalysisError(
+            f"cannot analyze invalid pyproject.toml: {exc}"
+        ) from exc
 
-        payload = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (ImportError, OSError, ValueError):
-        return set()
-    project = payload.get("project")
+
+def _pyproject_project(
+    payload: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    if payload is None or "project" not in payload:
+        return None
+    project = payload["project"]
     if not isinstance(project, Mapping):
+        raise RepositoryAnalysisError(
+            "pyproject.toml [project] must be a table"
+        )
+    return project
+
+
+def _pyproject_dependencies(
+    payload: Mapping[str, Any] | None,
+) -> set[str]:
+    project = _pyproject_project(payload)
+    if project is None:
         return set()
-    values: list[Any] = list(project.get("dependencies") or [])
+    dependencies = project.get("dependencies") or []
+    if not isinstance(dependencies, list):
+        raise RepositoryAnalysisError(
+            "pyproject.toml project.dependencies must be a list"
+        )
+    values: list[Any] = list(dependencies)
     optional = project.get("optional-dependencies")
+    if optional is not None and not isinstance(optional, Mapping):
+        raise RepositoryAnalysisError(
+            "pyproject.toml project.optional-dependencies must be a table"
+        )
     if isinstance(optional, Mapping):
         for dependencies in optional.values():
-            if isinstance(dependencies, list):
-                values.extend(dependencies)
+            if not isinstance(dependencies, list):
+                raise RepositoryAnalysisError(
+                    "pyproject.toml optional dependency groups must be lists"
+                )
+            values.extend(dependencies)
     return {
         name
         for value in values
@@ -588,19 +640,19 @@ def _normalize_dependency_name(value: str) -> str:
     return value.lower().replace("_", "-").replace(".", "-")
 
 
-def _pyproject_entrypoints(root: Path) -> set[str]:
-    path = root / "pyproject.toml"
-    if not path.is_file():
+def _pyproject_entrypoints(
+    payload: Mapping[str, Any] | None,
+) -> set[str]:
+    project = _pyproject_project(payload)
+    if project is None:
         return set()
-    try:
-        import tomllib
-
-        payload = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (ImportError, OSError, ValueError):
+    scripts = project.get("scripts")
+    if scripts is None:
         return set()
-    scripts = (payload.get("project") or {}).get("scripts")
     if not isinstance(scripts, Mapping):
-        return set()
+        raise RepositoryAnalysisError(
+            "pyproject.toml project.scripts must be a table"
+        )
     return {f"module:{value}" for value in scripts.values() if isinstance(value, str)}
 
 

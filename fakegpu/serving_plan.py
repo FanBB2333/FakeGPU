@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import heapq
 import hashlib
 import json
 import math
@@ -15,7 +16,7 @@ from .llm_estimator import (
     estimate_kv_cache_memory,
 )
 from .profile_catalog import get_profile
-from .structured_io import load_mapping
+from .structured_io import emit_json, load_mapping
 
 
 SCHEMA_VERSION = "fakegpu.llm_serving_plan.v1"
@@ -662,8 +663,13 @@ def estimate_serving_plan(
         acceptance_rate=speculative_acceptance_rate,
     )
 
+    batch_memory_cache: dict[int, dict[str, Any]] = {}
+
     def batch_memory(sequence_count: int) -> dict[str, Any]:
-        return _serving_batch_memory(
+        cached = batch_memory_cache.get(int(sequence_count))
+        if cached is not None:
+            return cached
+        result = _serving_batch_memory(
             dimensions=dimensions,
             parameter_bytes=parameter_bytes,
             active_sequences=sequence_count,
@@ -685,6 +691,8 @@ def estimate_serving_plan(
             ),
             speculative=speculative,
         )
+        batch_memory_cache[int(sequence_count)] = result
+        return result
 
     requested = batch_memory(active_sequences)
     runtime_report = None
@@ -840,54 +848,28 @@ def estimate_serving_plan(
         inputs=input_report,
         speculative=speculative,
     )
-    kv_cache_report = dict(requested["kv_cache"])
-    if runtime_report is not None:
-        kv_cache_report["runtime_reservation"] = dict(
-            runtime_report["kv_cache"]
-        )
-    runtime_output = (
-        runtime_report
-        if runtime_report is not None
-        else {
-            "engine": "generic",
-            "method": "logical_kv_growth_memory_model",
-        }
-    )
-
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "workload_signature": workload_signature,
-        "method": (
+    return _build_serving_report(
+        schema_version=SCHEMA_VERSION,
+        workload_signature=workload_signature,
+        method_base=(
             "safetensors_headers_plus_decoder_shape_and_serving_pool_model"
-            + (
-                "_with_draft_model_speculative_decoding"
-                if speculative is not None
-                else ""
-            )
-            + ("_with_vllm_runtime_budget" if runtime == "vllm" else "")
         ),
-        "validation_status": "Modeled",
-        "accuracy": {
-            "status": "uncalibrated",
-            "prediction_interval_bytes": None,
-            "error_percent": None,
-            "reason": (
-                "No matching online-serving GPU observation was supplied."
-            ),
-        },
-        "model": dimensions,
-        "checkpoint": base["checkpoint"],
-        "weight_storage": base["weight_storage"],
-        "inputs": input_report,
-        "runtime": runtime_output,
-        "target": {
-            "profile": target,
-            "capacity_source": capacity_source,
-            "device_capacity_bytes": selected_capacity_bytes,
-            "memory_utilization": float(memory_utilization),
-            "usable_capacity_bytes": usable_capacity_bytes,
-        },
-        "scheduler": {
+        timeline_source_base="decoder_shape_and_serving_pool_model",
+        accuracy_reason=(
+            "No matching online-serving GPU observation was supplied."
+        ),
+        model=dimensions,
+        checkpoint=base["checkpoint"],
+        weight_storage=base["weight_storage"],
+        inputs=input_report,
+        runtime=runtime,
+        runtime_report=runtime_report,
+        target_profile=target,
+        capacity_source=capacity_source,
+        selected_capacity_bytes=selected_capacity_bytes,
+        memory_utilization=memory_utilization,
+        usable_capacity_bytes=usable_capacity_bytes,
+        scheduler={
             "policy": "continuous_batching",
             "requested_active_sequences": active_sequences,
             "configured_max_batch_size": max_batch_size,
@@ -901,54 +883,14 @@ def estimate_serving_plan(
             "requested_fits": requested_fits,
             "limiting_factor": limiting_factor,
         },
-        "kv_cache": kv_cache_report,
-        "speculative_decoding": requested["speculative_decoding"],
-        "optimizations": requested["optimizations"],
-        "memory": requested_for_report["memory"],
-        "memory_timeline": {
-            "unit": "bytes",
-            "source": (
-                "decoder_shape_and_serving_pool_model"
-                + (
-                    "_with_draft_model_speculative_decoding"
-                    if speculative is not None
-                    else ""
-                )
-                + ("_with_vllm_runtime_budget" if runtime == "vllm" else "")
-            ),
-            "phases": requested_for_report["phases"],
-            "peak_bytes": requested_for_report["peak_bytes"],
-            "peak_phase": requested_for_report["peak_phase"],
-            "usable_capacity_headroom_bytes": (
-                usable_capacity_bytes
-                - int(requested_for_report["peak_bytes"])
-                if usable_capacity_bytes is not None
-                else None
-            ),
-        },
-        "unmodeled_components": [
-            "cuda_context_and_loaded_modules",
-            "caching_allocator_fragmentation",
-            "backend_kernel_and_attention_workspaces",
+        requested=requested,
+        requested_for_report=requested_for_report,
+        speculative=speculative,
+        mode_unmodeled_components=[
             "request_length_distribution_and_batch_turnover",
             "scheduler_queueing_and_preemption",
-            "paged_cache_block_table_metadata",
-            "prefix_cache_lookup_eviction_and_copy_cost",
-            "network_and_tokenization_buffers",
-            *(
-                [
-                    "speculative_acceptance_distribution_and_dynamic_"
-                    "draft_length",
-                    "speculative_kv_rollback_and_scheduler_workspace",
-                    "target_draft_kernel_latency_and_overlap",
-                    "draft_target_tokenizer_identity",
-                ]
-                if speculative is not None
-                else ["speculative_draft_model_weights_and_kv_cache"]
-            ),
-            "tensor_parallel_communication_and_rank_imbalance",
         ],
-        "notes": [
+        notes=[
             (
                 "The active pool is homogeneous: every sequence uses the "
                 "same prompt and generation lengths."
@@ -965,32 +907,18 @@ def estimate_serving_plan(
                 "Admission uses the configured memory-utilization fraction "
                 "and does not predict latency, throughput, or queue time."
             ),
-            *(
-                [
-                    (
-                        "vLLM mode profiles non-KV memory at the configured "
-                        "maximum batch size, reserves the remaining executor "
-                        "budget as whole paged-cache blocks, and admits by "
-                        "logical KV demand."
-                    )
-                ]
-                if runtime == "vllm"
-                else []
-            ),
-            *(
-                [
-                    (
-                        "Speculative decoding keeps target and draft weights "
-                        "and KV caches resident; a supplied acceptance "
-                        "assumption affects expected target calls but not "
-                        "the conservative memory peak."
-                    )
-                ]
-                if speculative is not None
-                else []
-            ),
         ],
-    }
+        vllm_note=(
+            "vLLM mode profiles non-KV memory at the configured maximum "
+            "batch size, reserves the remaining executor budget as whole "
+            "paged-cache blocks, and admits by logical KV demand."
+        ),
+        speculative_note=(
+            "Speculative decoding keeps target and draft weights and KV "
+            "caches resident; a supplied acceptance assumption affects "
+            "expected target calls but not the conservative memory peak."
+        ),
+    )
 
 
 def estimate_serving_request_set(
@@ -1315,56 +1243,32 @@ def estimate_serving_request_set(
         inputs=input_report,
         speculative=speculative,
     )
-    kv_cache_report = dict(requested["kv_cache"])
-    if runtime_report is not None:
-        kv_cache_report["runtime_reservation"] = dict(
-            runtime_report["kv_cache"]
-        )
-    runtime_output = (
-        runtime_report
-        if runtime_report is not None
-        else {
-            "engine": "generic",
-            "method": "logical_kv_growth_memory_model",
-        }
-    )
-
-    return {
-        "schema_version": REQUEST_SET_SCHEMA_VERSION,
-        "workload_signature": workload_signature,
-        "method": (
+    return _build_serving_report(
+        schema_version=REQUEST_SET_SCHEMA_VERSION,
+        workload_signature=workload_signature,
+        method_base=(
             "safetensors_headers_plus_decoder_shape_and_heterogeneous_"
             "serving_request_model"
-            + (
-                "_with_draft_model_speculative_decoding"
-                if speculative is not None
-                else ""
-            )
-            + ("_with_vllm_runtime_budget" if runtime == "vllm" else "")
         ),
-        "validation_status": "Modeled",
-        "accuracy": {
-            "status": "uncalibrated",
-            "prediction_interval_bytes": None,
-            "error_percent": None,
-            "reason": (
-                "No matching heterogeneous online-serving GPU "
-                "observation was supplied."
-            ),
-        },
-        "model": dimensions,
-        "checkpoint": base["checkpoint"],
-        "weight_storage": base["weight_storage"],
-        "inputs": input_report,
-        "runtime": runtime_output,
-        "target": {
-            "profile": target,
-            "capacity_source": capacity_source,
-            "device_capacity_bytes": selected_capacity_bytes,
-            "memory_utilization": float(memory_utilization),
-            "usable_capacity_bytes": usable_capacity_bytes,
-        },
-        "scheduler": {
+        timeline_source_base=(
+            "decoder_shape_and_heterogeneous_serving_request_model"
+        ),
+        accuracy_reason=(
+            "No matching heterogeneous online-serving GPU observation "
+            "was supplied."
+        ),
+        model=dimensions,
+        checkpoint=base["checkpoint"],
+        weight_storage=base["weight_storage"],
+        inputs=input_report,
+        runtime=runtime,
+        runtime_report=runtime_report,
+        target_profile=target,
+        capacity_source=capacity_source,
+        selected_capacity_bytes=selected_capacity_bytes,
+        memory_utilization=memory_utilization,
+        usable_capacity_bytes=usable_capacity_bytes,
+        scheduler={
             "policy": "continuous_batching",
             "admission_order": "request_manifest_order",
             "admission_scope": "request_manifest_only",
@@ -1399,54 +1303,14 @@ def estimate_serving_request_set(
             "requested_fits": requested_fits,
             "limiting_factor": limiting_factor,
         },
-        "kv_cache": kv_cache_report,
-        "speculative_decoding": requested["speculative_decoding"],
-        "optimizations": requested["optimizations"],
-        "memory": requested_for_report["memory"],
-        "memory_timeline": {
-            "unit": "bytes",
-            "source": (
-                "decoder_shape_and_heterogeneous_serving_request_model"
-                + (
-                    "_with_draft_model_speculative_decoding"
-                    if speculative is not None
-                    else ""
-                )
-                + ("_with_vllm_runtime_budget" if runtime == "vllm" else "")
-            ),
-            "phases": requested_for_report["phases"],
-            "peak_bytes": requested_for_report["peak_bytes"],
-            "peak_phase": requested_for_report["peak_phase"],
-            "usable_capacity_headroom_bytes": (
-                usable_capacity_bytes
-                - int(requested_for_report["peak_bytes"])
-                if usable_capacity_bytes is not None
-                else None
-            ),
-        },
-        "unmodeled_components": [
-            "cuda_context_and_loaded_modules",
-            "caching_allocator_fragmentation",
-            "backend_kernel_and_attention_workspaces",
+        requested=requested,
+        requested_for_report=requested_for_report,
+        speculative=speculative,
+        mode_unmodeled_components=[
             "request_arrival_timing_and_batch_turnover",
             "scheduler_queueing_preemption_and_reordering",
-            "paged_cache_block_table_metadata",
-            "prefix_cache_lookup_eviction_and_copy_cost",
-            "network_and_tokenization_buffers",
-            *(
-                [
-                    "speculative_acceptance_distribution_and_dynamic_"
-                    "draft_length",
-                    "speculative_kv_rollback_and_scheduler_workspace",
-                    "target_draft_kernel_latency_and_overlap",
-                    "draft_target_tokenizer_identity",
-                ]
-                if speculative is not None
-                else ["speculative_draft_model_weights_and_kv_cache"]
-            ),
-            "tensor_parallel_communication_and_rank_imbalance",
         ],
-        "notes": [
+        notes=[
             (
                 "Each request keeps its own prompt and generation lengths; "
                 "shared KV storage is limited to matching prefix groups."
@@ -1467,30 +1331,138 @@ def estimate_serving_request_set(
                 "Capacity admission does not predict latency, throughput, "
                 "queue time, or cache hit probability."
             ),
-            *(
-                [
-                    (
-                        "vLLM mode profiles the configured manifest prefix, "
-                        "reserves the resulting paged KV pool, and admits the "
-                        "longest request prefix whose logical cache demand "
-                        "fits that pool."
-                    )
-                ]
-                if runtime == "vllm"
-                else []
-            ),
-            *(
-                [
-                    (
-                        "Speculative decoding applies one draft configuration "
-                        "to every request while retaining each request's "
-                        "effective generation-length bound."
-                    )
-                ]
-                if speculative is not None
-                else []
-            ),
         ],
+        vllm_note=(
+            "vLLM mode profiles the configured manifest prefix, reserves "
+            "the resulting paged KV pool, and admits the longest request "
+            "prefix whose logical cache demand fits that pool."
+        ),
+        speculative_note=(
+            "Speculative decoding applies one draft configuration to every "
+            "request while retaining each request's effective "
+            "generation-length bound."
+        ),
+    )
+
+
+def _build_serving_report(
+    *,
+    schema_version: str,
+    workload_signature: str,
+    method_base: str,
+    timeline_source_base: str,
+    accuracy_reason: str,
+    model: Mapping[str, Any],
+    checkpoint: Mapping[str, Any],
+    weight_storage: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    runtime: str,
+    runtime_report: Mapping[str, Any] | None,
+    target_profile: Mapping[str, Any] | None,
+    capacity_source: str,
+    selected_capacity_bytes: int | None,
+    memory_utilization: float,
+    usable_capacity_bytes: int | None,
+    scheduler: Mapping[str, Any],
+    requested: Mapping[str, Any],
+    requested_for_report: Mapping[str, Any],
+    speculative: Mapping[str, Any] | None,
+    mode_unmodeled_components: Sequence[str],
+    notes: Sequence[str],
+    vllm_note: str,
+    speculative_note: str,
+) -> dict[str, Any]:
+    """Build the shared report envelope for both serving-plan modes."""
+    speculative_suffix = (
+        "_with_draft_model_speculative_decoding"
+        if speculative is not None
+        else ""
+    )
+    runtime_suffix = (
+        "_with_vllm_runtime_budget" if runtime == "vllm" else ""
+    )
+    kv_cache_report = dict(requested["kv_cache"])
+    if runtime_report is not None:
+        kv_cache_report["runtime_reservation"] = dict(
+            runtime_report["kv_cache"]
+        )
+    runtime_output = (
+        runtime_report
+        if runtime_report is not None
+        else {
+            "engine": "generic",
+            "method": "logical_kv_growth_memory_model",
+        }
+    )
+    unmodeled_components = [
+        "cuda_context_and_loaded_modules",
+        "caching_allocator_fragmentation",
+        "backend_kernel_and_attention_workspaces",
+        *mode_unmodeled_components,
+        "paged_cache_block_table_metadata",
+        "prefix_cache_lookup_eviction_and_copy_cost",
+        "network_and_tokenization_buffers",
+        *(
+            [
+                "speculative_acceptance_distribution_and_dynamic_draft_length",
+                "speculative_kv_rollback_and_scheduler_workspace",
+                "target_draft_kernel_latency_and_overlap",
+                "draft_target_tokenizer_identity",
+            ]
+            if speculative is not None
+            else ["speculative_draft_model_weights_and_kv_cache"]
+        ),
+        "tensor_parallel_communication_and_rank_imbalance",
+    ]
+    report_notes = list(notes)
+    if runtime == "vllm":
+        report_notes.append(vllm_note)
+    if speculative is not None:
+        report_notes.append(speculative_note)
+
+    return {
+        "schema_version": schema_version,
+        "workload_signature": workload_signature,
+        "method": method_base + speculative_suffix + runtime_suffix,
+        "validation_status": "Modeled",
+        "accuracy": {
+            "status": "uncalibrated",
+            "prediction_interval_bytes": None,
+            "error_percent": None,
+            "reason": accuracy_reason,
+        },
+        "model": model,
+        "checkpoint": checkpoint,
+        "weight_storage": weight_storage,
+        "inputs": inputs,
+        "runtime": runtime_output,
+        "target": {
+            "profile": target_profile,
+            "capacity_source": capacity_source,
+            "device_capacity_bytes": selected_capacity_bytes,
+            "memory_utilization": float(memory_utilization),
+            "usable_capacity_bytes": usable_capacity_bytes,
+        },
+        "scheduler": dict(scheduler),
+        "kv_cache": kv_cache_report,
+        "speculative_decoding": requested["speculative_decoding"],
+        "optimizations": requested["optimizations"],
+        "memory": requested_for_report["memory"],
+        "memory_timeline": {
+            "unit": "bytes",
+            "source": timeline_source_base + speculative_suffix + runtime_suffix,
+            "phases": requested_for_report["phases"],
+            "peak_bytes": requested_for_report["peak_bytes"],
+            "peak_phase": requested_for_report["peak_phase"],
+            "usable_capacity_headroom_bytes": (
+                usable_capacity_bytes
+                - int(requested_for_report["peak_bytes"])
+                if usable_capacity_bytes is not None
+                else None
+            ),
+        },
+        "unmodeled_components": unmodeled_components,
+        "notes": report_notes,
     }
 
 
@@ -2206,13 +2178,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.exit(2, f"fakegpu plan-serving: {exc}\n")
 
     if args.json_path:
-        path = Path(args.json_path).expanduser().resolve()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(report, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        print(f"Serving plan: {path}")
+        output = emit_json(args.json_path, report)
+        if output is not None:
+            print(f"Serving plan: {output}")
 
     scheduler = report["scheduler"]
     timeline = report["memory_timeline"]
@@ -2376,13 +2344,17 @@ def _serving_batch_memory(
         element_bytes=element_bytes,
         attention_implementation=attention_implementation,
     )
-    unchunked_prefill_transient = _transient_bytes(
-        dimensions,
-        batch_size=active_sequences,
-        query_tokens=uncached_prompt_tokens,
-        key_tokens=prefill_key_tokens,
-        element_bytes=element_bytes,
-        attention_implementation=attention_implementation,
+    unchunked_prefill_transient = (
+        target_prefill_transient
+        if prefill_chunk_tokens is None
+        else _transient_bytes(
+            dimensions,
+            batch_size=active_sequences,
+            query_tokens=uncached_prompt_tokens,
+            key_tokens=prefill_key_tokens,
+            element_bytes=element_bytes,
+            attention_implementation=attention_implementation,
+        )
     )
     draft_prefill_transient = None
     draft_unchunked_prefill_transient = None
@@ -3087,17 +3059,12 @@ def _maximum_fitting_sequences(
     usable_capacity_bytes: int,
     batch_memory: Any,
 ) -> int:
-    low = 0
-    high = max_batch_size
-    while low < high:
-        midpoint = (low + high + 1) // 2
-        if int(batch_memory(midpoint)["peak_bytes"]) <= (
-            usable_capacity_bytes
-        ):
-            low = midpoint
-        else:
-            high = midpoint - 1
-    return low
+    return _maximum_fitting(
+        max_count=max_batch_size,
+        usable_capacity_bytes=usable_capacity_bytes,
+        memory_for_count=batch_memory,
+        metric="peak_bytes",
+    )
 
 
 def _maximum_fitting_request_prefix(
@@ -3106,17 +3073,12 @@ def _maximum_fitting_request_prefix(
     usable_capacity_bytes: int,
     request_memory: Any,
 ) -> int:
-    low = 0
-    high = max_request_count
-    while low < high:
-        midpoint = (low + high + 1) // 2
-        if int(request_memory(midpoint)["peak_bytes"]) <= (
-            usable_capacity_bytes
-        ):
-            low = midpoint
-        else:
-            high = midpoint - 1
-    return low
+    return _maximum_fitting(
+        max_count=max_request_count,
+        usable_capacity_bytes=usable_capacity_bytes,
+        memory_for_count=request_memory,
+        metric="peak_bytes",
+    )
 
 
 def _maximum_fitting_vllm_kv_count(
@@ -3125,12 +3087,36 @@ def _maximum_fitting_vllm_kv_count(
     kv_cache_capacity_bytes: int,
     memory_for_count: Any,
 ) -> int:
+    return _maximum_fitting(
+        max_count=max_count,
+        usable_capacity_bytes=kv_cache_capacity_bytes,
+        memory_for_count=memory_for_count,
+        metric=None,
+        value_fn=_logical_kv_peak_bytes,
+    )
+
+
+def _maximum_fitting(
+    *,
+    max_count: int,
+    usable_capacity_bytes: int,
+    memory_for_count: Any,
+    metric: str | None,
+    value_fn: Any | None = None,
+) -> int:
+    """Return the largest monotonically fitting count via one binary search."""
+    if value_fn is None:
+        if metric is None:  # pragma: no cover - internal misuse guard
+            raise ValueError("metric or value_fn is required")
+
+        def value_fn(memory: Mapping[str, Any]) -> int:
+            return int(memory[metric])
     low = 0
-    high = max_count
+    high = int(max_count)
     while low < high:
         midpoint = (low + high + 1) // 2
-        if _logical_kv_peak_bytes(memory_for_count(midpoint)) <= (
-            kv_cache_capacity_bytes
+        if int(value_fn(memory_for_count(midpoint))) <= int(
+            usable_capacity_bytes
         ):
             low = midpoint
         else:
@@ -3442,13 +3428,11 @@ def _worst_concurrent_transient(
     totals: dict[str, int] = {}
     contributors: dict[str, list[str]] = {}
     for component in _TRANSIENT_COMPONENTS:
-        ranked = sorted(
+        ranked = heapq.nlargest(
+            concurrency,
             requests,
-            key=lambda request: int(
-                request[field][component]
-            ),
-            reverse=True,
-        )[:concurrency]
+            key=lambda request: int(request[field][component]),
+        )
         totals[component] = sum(
             int(request[field][component]) for request in ranked
         )

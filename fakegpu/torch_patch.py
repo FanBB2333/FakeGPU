@@ -48,6 +48,7 @@ import traceback
 import types
 import weakref
 import warnings
+from bisect import bisect_left, insort
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -256,23 +257,21 @@ def _check_same_device(*tensors: Any) -> None:
             )
 
 
-def _wrap_multi_tensor_op(orig_fn: Any) -> Any:
+def _wrap_multi_tensor_op(orig_fn: Any, torch_mod: Any) -> Any:
     """Wrap a torch function to check device consistency of tensor args."""
 
     @functools.wraps(orig_fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        import torch
-
         tensors = []
         for a in args:
-            if isinstance(a, torch.Tensor):
+            if isinstance(a, torch_mod.Tensor):
                 tensors.append(a)
             elif isinstance(a, (list, tuple)):
                 for item in a:
-                    if isinstance(item, torch.Tensor):
+                    if isinstance(item, torch_mod.Tensor):
                         tensors.append(item)
         for v in kwargs.values():
-            if isinstance(v, torch.Tensor):
+            if isinstance(v, torch_mod.Tensor):
                 tensors.append(v)
         if len(tensors) >= 2:
             _check_same_device(*tensors)
@@ -295,18 +294,20 @@ _BINARY_DUNDER_TORCH_OPS: dict[str, Any] = {
 }
 
 
-def _wrap_tensor_binary_op(orig_fn: Any, dunder_name: str) -> Any:
+def _wrap_tensor_binary_op(
+    orig_fn: Any,
+    dunder_name: str,
+    torch_mod: Any,
+) -> Any:
     """Wrap a Tensor binary method to check cross-device with torch-friendly calls."""
 
     @functools.wraps(orig_fn)
     def wrapper(self: Any, other: Any) -> Any:
-        import torch
-
-        if isinstance(other, torch.Tensor):
+        if isinstance(other, torch_mod.Tensor):
             _check_same_device(self, other)
         torch_op = _BINARY_DUNDER_TORCH_OPS.get(dunder_name)
         if torch_op is not None:
-            return torch_op(torch, self, other)
+            return torch_op(torch_mod, self, other)
         return orig_fn(self, other)
 
     return wrapper
@@ -441,12 +442,25 @@ class _DeviceMemoryTracker:
         self._largest_allocations: list[list[dict[str, Any]]] = [
             [] for _ in per_device_bytes
         ]
+        self._current_bytes_by_category: list[dict[str, int]] = [
+            {} for _ in per_device_bytes
+        ]
         # data_ptr -> allocation record
         self._allocs: dict[int, dict[str, Any]] = {}
         # Each segment contains ordered blocks with ``offset``, ``size``, and
         # an optional active ``data_ptr``. This is sufficient to model best-fit
         # reuse, splitting, coalescing, fragmentation, and empty_cache().
         self._segments: list[list[dict[str, Any]]] = [[] for _ in per_device_bytes]
+        self._segments_by_id: dict[int, dict[str, Any]] = {}
+        self._free_block_sizes: list[list[int]] = [
+            [] for _ in per_device_bytes
+        ]
+        self._free_block_keys: list[
+            dict[int, list[tuple[int, int]]]
+        ] = [{} for _ in per_device_bytes]
+        self._free_blocks_by_key: dict[
+            tuple[int, int], dict[str, Any]
+        ] = {}
         self._allocation_blocks: dict[int, tuple[int, int]] = {}
         self._next_segment_id = 1
         if caching_allocator is None:
@@ -466,8 +480,6 @@ class _DeviceMemoryTracker:
         metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Register allocation. Raise OutOfMemoryError if exceeds limit."""
-        import torch
-
         with self._lock:
             if device < 0 or device >= len(self._total):
                 return False
@@ -492,6 +504,8 @@ class _DeviceMemoryTracker:
             if block is None:
                 self._num_ooms[device] += 1
                 free = max(0, self._total[device] - self._reserved[device])
+                import torch
+
                 raise torch.cuda.OutOfMemoryError(
                     f"CUDA out of memory. Tried to allocate "
                     f"{nbytes / 2**20:.2f} MiB. "
@@ -516,6 +530,9 @@ class _DeviceMemoryTracker:
                 "segment_id": int(block["segment_id"]),
                 **meta,
             }
+            category = str(meta.get("category") or "unknown")
+            categories = self._current_bytes_by_category[device]
+            categories[category] = categories.get(category, 0) + nbytes
             self._used[device] += nbytes
             self._active[device] += block_size
             self._allocation_current[device] += 1
@@ -546,6 +563,13 @@ class _DeviceMemoryTracker:
         if rec:
             dev = int(rec.get("device", 0))
             nbytes = int(rec.get("bytes", 0))
+            category = str(rec.get("category") or "unknown")
+            categories = self._current_bytes_by_category[dev]
+            remaining = max(0, categories.get(category, 0) - nbytes)
+            if remaining:
+                categories[category] = remaining
+            else:
+                categories.pop(category, None)
             self._used[dev] = max(0, self._used[dev] - nbytes)
             self._active[dev] = max(
                 0,
@@ -710,20 +734,35 @@ class _DeviceMemoryTracker:
         with self._lock:
             if device < 0 or device >= len(self._used):
                 return {}
-            totals: dict[str, int] = {}
-            for record in self._allocs.values():
-                if int(record.get("device", -1)) != device:
-                    continue
-                category = str(record.get("category") or "unknown")
-                totals[category] = totals.get(category, 0) + int(record.get("bytes", 0))
-            return totals
+            return dict(self._current_bytes_by_category[device])
 
     def mark_category(self, data_ptr: int, category: str) -> None:
         with self._lock:
             record = self._allocs.get(data_ptr)
             if record is not None:
-                record["category"] = category
                 device = int(record.get("device", -1))
+                normalized_category = str(category or "unknown")
+                previous_category = str(
+                    record.get("category") or "unknown"
+                )
+                if (
+                    0 <= device < len(self._current_bytes_by_category)
+                    and normalized_category != previous_category
+                ):
+                    categories = self._current_bytes_by_category[device]
+                    nbytes = int(record.get("bytes", 0))
+                    remaining = max(
+                        0,
+                        categories.get(previous_category, 0) - nbytes,
+                    )
+                    if remaining:
+                        categories[previous_category] = remaining
+                    else:
+                        categories.pop(previous_category, None)
+                    categories[normalized_category] = (
+                        categories.get(normalized_category, 0) + nbytes
+                    )
+                record["category"] = category
                 if 0 <= device < len(self._largest_allocations):
                     for item in self._largest_allocations[device]:
                         if int(item.get("_data_ptr", -1)) == data_ptr:
@@ -875,18 +914,8 @@ class _DeviceMemoryTracker:
         block_size: int,
         device: int,
     ) -> dict[str, Any] | None:
-        best: tuple[int, int, int] | None = None
-        for segment_index, segment in enumerate(self._segments[device]):
-            for block_index, block in enumerate(segment["blocks"]):
-                if block.get("data_ptr") is not None:
-                    continue
-                size = int(block["size"])
-                if size < block_size:
-                    continue
-                candidate = (size, segment_index, block_index)
-                if best is None or candidate < best:
-                    best = candidate
-        if best is None:
+        selected = self._take_free_allocator_block(device, block_size)
+        if selected is None:
             segment_size, segment_type = _allocator_segment_size(block_size)
             segment_size = max(
                 block_size,
@@ -911,14 +940,19 @@ class _DeviceMemoryTracker:
             }
             self._next_segment_id += 1
             self._segments[device].append(segment)
+            self._segments_by_id[int(segment["id"])] = segment
             self._reserved[device] += segment_size
             self._reserved_bytes_total[device] += segment_size
-            best = (segment_size, len(self._segments[device]) - 1, 0)
+            block = segment["blocks"][0]
+        else:
+            segment, block = selected
 
-        _, segment_index, block_index = best
-        segment = self._segments[device][segment_index]
+        block_index = next(
+            index
+            for index, candidate in enumerate(segment["blocks"])
+            if candidate is block
+        )
         inactive_before = _segment_inactive_split_bytes(segment)
-        block = segment["blocks"][block_index]
         remainder = int(block["size"]) - block_size
         allocated = {
             "offset": int(block["offset"]),
@@ -928,14 +962,15 @@ class _DeviceMemoryTracker:
         }
         replacement = [allocated]
         if remainder > 0:
-            replacement.append(
-                {
-                    "offset": int(block["offset"]) + block_size,
-                    "size": remainder,
-                    "data_ptr": None,
-                }
-            )
+            free_block = {
+                "offset": int(block["offset"]) + block_size,
+                "size": remainder,
+                "data_ptr": None,
+            }
+            replacement.append(free_block)
         segment["blocks"][block_index : block_index + 1] = replacement
+        if remainder > 0:
+            self._register_free_allocator_block(segment, free_block)
         segment["active_count"] = int(segment.get("active_count", 0)) + 1
         segment["free_bytes"] = max(
             0,
@@ -955,35 +990,40 @@ class _DeviceMemoryTracker:
         if location is None:
             return
         _, segment_id = location
-        for segment in self._segments[device]:
-            if int(segment["id"]) != segment_id:
-                continue
-            inactive_before = _segment_inactive_split_bytes(segment)
-            for block in segment["blocks"]:
-                if block.get("data_ptr") == data_ptr:
-                    segment["active_count"] = max(
-                        0,
-                        int(segment.get("active_count", 1)) - 1,
-                    )
-                    segment["free_bytes"] = min(
-                        int(segment["size"]),
-                        int(segment.get("free_bytes", 0)) + int(block["size"]),
-                    )
-                    block["data_ptr"] = None
-                    block.pop("segment_id", None)
-                    break
-            segment["blocks"] = _coalesce_allocator_blocks(segment["blocks"])
-            self._inactive_split[device] = max(
-                0,
-                self._inactive_split[device]
-                + _segment_inactive_split_bytes(segment)
-                - inactive_before,
-            )
-            if not self._caching_allocator and all(
-                block.get("data_ptr") is None for block in segment["blocks"]
-            ):
-                self._remove_segment(device, segment_id)
+        segment = self._segments_by_id.get(segment_id)
+        if segment is None or int(segment.get("device", -1)) != device:
             return
+        inactive_before = _segment_inactive_split_bytes(segment)
+        for free_block in segment["blocks"]:
+            if free_block.get("data_ptr") is None:
+                self._unregister_free_allocator_block(segment, free_block)
+        for block in segment["blocks"]:
+            if block.get("data_ptr") == data_ptr:
+                segment["active_count"] = max(
+                    0,
+                    int(segment.get("active_count", 1)) - 1,
+                )
+                segment["free_bytes"] = min(
+                    int(segment["size"]),
+                    int(segment.get("free_bytes", 0)) + int(block["size"]),
+                )
+                block["data_ptr"] = None
+                block.pop("segment_id", None)
+                break
+        segment["blocks"] = _coalesce_allocator_blocks(segment["blocks"])
+        for free_block in segment["blocks"]:
+            if free_block.get("data_ptr") is None:
+                self._register_free_allocator_block(segment, free_block)
+        self._inactive_split[device] = max(
+            0,
+            self._inactive_split[device]
+            + _segment_inactive_split_bytes(segment)
+            - inactive_before,
+        )
+        if not self._caching_allocator and all(
+            block.get("data_ptr") is None for block in segment["blocks"]
+        ):
+            self._remove_segment(device, segment_id)
 
     def _release_empty_segments(self, device: int) -> int:
         released = 0
@@ -991,6 +1031,9 @@ class _DeviceMemoryTracker:
         for segment in self._segments[device]:
             if all(block.get("data_ptr") is None for block in segment["blocks"]):
                 released += int(segment["size"])
+                for block in segment["blocks"]:
+                    self._unregister_free_allocator_block(segment, block)
+                self._segments_by_id.pop(int(segment["id"]), None)
             else:
                 retained.append(segment)
         if released:
@@ -1005,12 +1048,76 @@ class _DeviceMemoryTracker:
         for segment in self._segments[device]:
             if int(segment["id"]) == segment_id:
                 released += int(segment["size"])
+                for block in segment["blocks"]:
+                    if block.get("data_ptr") is None:
+                        self._unregister_free_allocator_block(segment, block)
+                self._segments_by_id.pop(segment_id, None)
             else:
                 retained.append(segment)
         self._segments[device] = retained
         if released:
             self._reserved[device] = max(0, self._reserved[device] - released)
             self._released_reserved_bytes_total[device] += released
+
+    def _register_free_allocator_block(
+        self,
+        segment: dict[str, Any],
+        block: dict[str, Any],
+    ) -> None:
+        device = int(segment["device"])
+        size = int(block["size"])
+        key = (int(segment["id"]), int(block["offset"]))
+        size_buckets = self._free_block_keys[device]
+        bucket = size_buckets.get(size)
+        if bucket is None:
+            bucket = []
+            size_buckets[size] = bucket
+            insort(self._free_block_sizes[device], size)
+        insort(bucket, key)
+        self._free_blocks_by_key[key] = block
+
+    def _unregister_free_allocator_block(
+        self,
+        segment: dict[str, Any],
+        block: dict[str, Any],
+    ) -> None:
+        device = int(segment["device"])
+        size = int(block["size"])
+        key = (int(segment["id"]), int(block["offset"]))
+        self._free_blocks_by_key.pop(key, None)
+        size_buckets = self._free_block_keys[device]
+        bucket = size_buckets.get(size)
+        if not bucket:
+            return
+        key_index = bisect_left(bucket, key)
+        if key_index < len(bucket) and bucket[key_index] == key:
+            bucket.pop(key_index)
+        if bucket:
+            return
+        size_buckets.pop(size, None)
+        sizes = self._free_block_sizes[device]
+        size_index = bisect_left(sizes, size)
+        if size_index < len(sizes) and sizes[size_index] == size:
+            sizes.pop(size_index)
+
+    def _take_free_allocator_block(
+        self,
+        device: int,
+        minimum_size: int,
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        sizes = self._free_block_sizes[device]
+        size_index = bisect_left(sizes, minimum_size)
+        if size_index >= len(sizes):
+            return None
+        size = sizes[size_index]
+        bucket = self._free_block_keys[device][size]
+        key = bucket.pop(0)
+        if not bucket:
+            self._free_block_keys[device].pop(size, None)
+            sizes.pop(size_index)
+        block = self._free_blocks_by_key.pop(key)
+        segment = self._segments_by_id[key[0]]
+        return segment, block
 
     def _active_block_bytes(self, device: int) -> int:
         return self._active[device]
@@ -3065,13 +3172,17 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         for op_name in _MULTI_TENSOR_OPS:
             orig = getattr(torch_mod, op_name, None)
             if orig is not None:
-                setattr(torch_mod, op_name, _wrap_multi_tensor_op(orig))
+                setattr(
+                    torch_mod,
+                    op_name,
+                    _wrap_multi_tensor_op(orig, torch_mod),
+                )
 
         _LOSS_OPS = ["cross_entropy", "mse_loss", "nll_loss", "binary_cross_entropy"]
         for op_name in _LOSS_OPS:
             orig = getattr(F, op_name, None)
             if orig is not None:
-                setattr(F, op_name, _wrap_multi_tensor_op(orig))
+                setattr(F, op_name, _wrap_multi_tensor_op(orig, torch_mod))
 
         _FUNCTIONAL_OPS = [
             "linear",
@@ -3085,7 +3196,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         for op_name in _FUNCTIONAL_OPS:
             orig = getattr(F, op_name, None)
             if orig is not None:
-                setattr(F, op_name, _wrap_multi_tensor_op(orig))
+                setattr(F, op_name, _wrap_multi_tensor_op(orig, torch_mod))
 
         _BINARY_DUNDERS = [
             "__add__",
@@ -3102,7 +3213,11 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         for dunder in _BINARY_DUNDERS:
             orig = getattr(torch_mod.Tensor, dunder, None)
             if orig is not None:
-                setattr(torch_mod.Tensor, dunder, _wrap_tensor_binary_op(orig, dunder))
+                setattr(
+                    torch_mod.Tensor,
+                    dunder,
+                    _wrap_tensor_binary_op(orig, dunder, torch_mod),
+                )
 
     # ---- 7. RNG state functions (not provided by upstream) ----
     torch.cuda.get_rng_state = _stub_get_rng_state

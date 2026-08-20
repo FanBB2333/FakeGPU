@@ -285,6 +285,78 @@ def test_mla_requires_a_complete_positive_cache_configuration(
         )
 
 
+def test_serving_plan_report_envelopes_have_golden_contract(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    homogeneous = estimate_serving_plan(
+        model_dir,
+        active_sequences=2,
+        max_batch_size=4,
+        prompt_tokens=8,
+        generated_tokens=3,
+        device_capacity_bytes=2**20,
+        memory_utilization=1,
+    )
+    heterogeneous = estimate_serving_request_set(
+        model_dir,
+        [
+            {"id": "a", "prompt_tokens": 8, "generated_tokens": 3},
+            {"id": "b", "prompt_tokens": 8, "generated_tokens": 3},
+        ],
+        max_batch_size=4,
+        device_capacity_bytes=2**20,
+        memory_utilization=1,
+    )
+
+    assert {
+        "schema_version": homogeneous["schema_version"],
+        "method": homogeneous["method"],
+        "peak_bytes": homogeneous["memory_timeline"]["peak_bytes"],
+        "peak_phase": homogeneous["memory_timeline"]["peak_phase"],
+        "requested_fits": homogeneous["scheduler"]["requested_fits"],
+        "limiting_factor": homogeneous["scheduler"]["limiting_factor"],
+        "kv_decode_bytes": homogeneous["kv_cache"]["decode"][
+            "allocated_bytes"
+        ],
+    } == {
+        "schema_version": "fakegpu.llm_serving_plan.v1",
+        "method": (
+            "safetensors_headers_plus_decoder_shape_and_serving_pool_model"
+        ),
+        "peak_bytes": 4096,
+        "peak_phase": "prefill",
+        "requested_fits": True,
+        "limiting_factor": "configured_max_batch_size",
+        "kv_decode_bytes": 1024,
+    }
+    assert {
+        "schema_version": heterogeneous["schema_version"],
+        "method": heterogeneous["method"],
+        "peak_bytes": heterogeneous["memory_timeline"]["peak_bytes"],
+        "peak_phase": heterogeneous["memory_timeline"]["peak_phase"],
+        "requested_fits": heterogeneous["scheduler"]["requested_fits"],
+        "limiting_factor": heterogeneous["scheduler"]["limiting_factor"],
+        "admitted_ids": heterogeneous["scheduler"]["admitted_request_ids"],
+        "kv_decode_bytes": heterogeneous["kv_cache"]["decode"][
+            "private_allocated_bytes"
+        ],
+    } == {
+        "schema_version": "fakegpu.llm_serving_request_set_plan.v1",
+        "method": (
+            "safetensors_headers_plus_decoder_shape_and_"
+            "heterogeneous_serving_request_model"
+        ),
+        "peak_bytes": 2880,
+        "peak_phase": "prefill",
+        "requested_fits": True,
+        "limiting_factor": "request_manifest_exhausted",
+        "admitted_ids": ["a", "b"],
+        "kv_decode_bytes": 1024,
+    }
+
+
 def test_kv_cache_strategies_account_for_storage_and_reservation() -> None:
     common = {
         "num_hidden_layers": 2,

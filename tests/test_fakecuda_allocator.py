@@ -90,6 +90,25 @@ def test_allocator_oom_reports_reserved_state_and_counter() -> None:
     assert stats["allocated_bytes.all.current"] == 2 * MIB
 
 
+def test_allocator_category_totals_follow_allocate_reclassify_and_release() -> None:
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+
+    tracker.allocate(1, 1_000, 0, metadata={"category": "activation"})
+    tracker.allocate(2, 2_000, 0, metadata={"category": "parameter"})
+    assert tracker.current_bytes_by_category(0) == {
+        "activation": 1_000,
+        "parameter": 2_000,
+    }
+
+    tracker.mark_category(1, "parameter")
+    assert tracker.current_bytes_by_category(0) == {"parameter": 3_000}
+
+    tracker.release(2)
+    assert tracker.current_bytes_by_category(0) == {"parameter": 1_000}
+    tracker.release(1)
+    assert tracker.current_bytes_by_category(0) == {}
+
+
 def test_fakecuda_memory_api_exposes_allocator_state() -> None:
     code = textwrap.dedent(
         """

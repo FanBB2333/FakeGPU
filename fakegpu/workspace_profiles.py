@@ -5,12 +5,13 @@ import json
 import math
 import os
 import re
+import warnings
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .profile_catalog import GpuProfile, get_profile
+from .profile_catalog import GpuProfile, ProfileCatalogError, get_profile
 
 
 SCHEMA_VERSION = "fakegpu.workspace_profiles.v1"
@@ -369,7 +370,7 @@ def _resolve_gpu_profile(
         return None
     try:
         return get_profile(profile_id)
-    except Exception as exc:
+    except ProfileCatalogError as exc:
         raise WorkspaceProfileError(
             f"unknown target GPU profile {profile_id!r}"
         ) from exc
@@ -382,8 +383,13 @@ def _torch_runtime_versions() -> tuple[str, str]:
 
         return str(torch.__version__), str(torch.version.cuda or "")
     except ImportError:
-        # torch is optional: an empty stack marker keeps matching honest
-        # instead of guessing a version.
+        warnings.warn(
+            "PyTorch is unavailable; workspace profiles constrained by "
+            "torch_versions or cuda_versions cannot match",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        # An empty stack marker keeps matching honest instead of guessing.
         return "", ""
 
 
@@ -645,18 +651,22 @@ def _node_value_tensors(value: Any) -> list[Any]:
 def _iter_tensor_leaves(value: Any):
     try:
         import torch
-    except Exception:
+    except ImportError:
         return
+    yield from _iter_tensor_leaves_with_torch(value, torch)
+
+
+def _iter_tensor_leaves_with_torch(value: Any, torch: Any):
     if isinstance(value, torch.Tensor):
         yield value
         return
     if isinstance(value, Mapping):
         for item in value.values():
-            yield from _iter_tensor_leaves(item)
+            yield from _iter_tensor_leaves_with_torch(item, torch)
         return
     if isinstance(value, (tuple, list)):
         for item in value:
-            yield from _iter_tensor_leaves(item)
+            yield from _iter_tensor_leaves_with_torch(item, torch)
 
 
 def _shape_list(tensor: Any) -> list[int]:

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .structured_io import load_mapping, write_json
+from .structured_io import emit_json, load_mapping
 
 
 SCHEMA_VERSION = "fakegpu.training_plan.v1"
@@ -419,11 +418,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             parameter_element_bytes=args.parameter_element_bytes,
         )
         if args.json_path:
-            payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
-            if args.json_path == "-":
-                print(payload, end="")
-            else:
-                output = write_json(args.json_path, report)
+            output = emit_json(args.json_path, report)
+            if output is not None:
                 print(f"Training plan: {output}")
         else:
             _print_report(report)

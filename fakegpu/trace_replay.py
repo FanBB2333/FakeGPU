@@ -67,9 +67,12 @@ def replay_trace(
                 if event["duration_us"] <= 0:
                     event["duration_us"] = predicted
 
-    ranks = sorted({int(event["rank"]) for event in events})
+    events_by_rank: dict[int, list[Mapping[str, Any]]] = defaultdict(list)
+    for event in events:
+        events_by_rank[int(event["rank"])].append(event)
+    ranks = sorted(events_by_rank)
     rank_summaries = [
-        _rank_summary(rank, [event for event in events if event["rank"] == rank])
+        _rank_summary(rank, events_by_rank[rank])
         for rank in ranks
     ]
     pairs = _pair_summary(events)

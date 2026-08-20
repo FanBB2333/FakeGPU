@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import fakegpu.repository_analyzer as repository_analyzer_module
 from fakegpu.repository_analyzer import (
     RepositoryAnalysisError,
     analyze_repository,
@@ -139,6 +140,39 @@ def test_repository_analyzer_ignores_common_build_directories_without_git(
 
     assert report["entrypoints"] == ["train.py"]
     assert report["inventory"]["python_file_count"] == 1
+
+
+def test_repository_analyzer_rejects_invalid_pyproject(tmp_path: Path) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    (repository / "pyproject.toml").write_text(
+        "[project\nname = 'broken'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RepositoryAnalysisError,
+        match="cannot analyze invalid pyproject.toml",
+    ):
+        analyze_repository(repository)
+
+
+def test_repository_analyzer_warns_when_git_inventory_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "project"
+    _write_basic_repository(repository)
+    (repository / ".git").mkdir()
+
+    def fail_git(*args: object, **kwargs: object) -> object:
+        raise OSError("git unavailable")
+
+    monkeypatch.setattr(repository_analyzer_module.subprocess, "run", fail_git)
+    with pytest.warns(RuntimeWarning, match="different ignore semantics"):
+        report = analyze_repository(repository)
+
+    assert report["entrypoints"] == ["train.py"]
 
 
 def test_repository_analyzer_rejects_entrypoint_outside_root(

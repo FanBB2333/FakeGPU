@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from fakegpu.capabilities import (
+    _load_native_capabilities_cached,
     audit_native_capability_sources,
     load_native_capabilities,
     main,
@@ -25,6 +26,19 @@ def test_capability_catalog_classifies_high_risk_native_apis() -> None:
     assert entries["nvmlDeviceGetAccountingMode"]["classification"] == (
         "synthetic_telemetry"
     )
+
+
+def test_capability_catalog_cache_normalizes_path_argument_types() -> None:
+    catalog_path = ROOT / "fakegpu" / "data" / "native_api_capabilities.json"
+    _load_native_capabilities_cached.cache_clear()
+    try:
+        load_native_capabilities(str(catalog_path))
+        load_native_capabilities(catalog_path)
+        info = _load_native_capabilities_cached.cache_info()
+        assert info.misses == 1
+        assert info.hits == 1
+    finally:
+        _load_native_capabilities_cached.cache_clear()
 
 
 def test_native_source_stubs_and_policy_calls_are_classified() -> None:

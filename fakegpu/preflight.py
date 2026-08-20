@@ -175,8 +175,20 @@ def build_report(
     warnings: list[str],
     duration_seconds: float,
 ) -> dict[str, Any]:
-    stdout = paths.stdout_log.read_text(encoding="utf-8") if paths.stdout_log.exists() else ""
-    stderr = paths.stderr_log.read_text(encoding="utf-8") if paths.stderr_log.exists() else ""
+    if completed is not None:
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
+    else:
+        stdout = (
+            paths.stdout_log.read_text(encoding="utf-8")
+            if paths.stdout_log.exists()
+            else ""
+        )
+        stderr = (
+            paths.stderr_log.read_text(encoding="utf-8")
+            if paths.stderr_log.exists()
+            else ""
+        )
     raw_report, raw_report_kind = _load_raw_runtime_report(paths)
     devices, tracking_confidence = _normalize_devices(raw_report, raw_report_kind)
     memory_safety_factor = _resolve_memory_safety_factor(ns)
@@ -1208,16 +1220,19 @@ def _looks_like_oom(stdout: str, stderr: str, raw_report: dict[str, Any] | None)
     return False
 
 
-def _contains_oom_marker(text: str) -> bool:
-    return any(
-        re.search(pattern, text, flags=re.IGNORECASE)
-        for pattern in (
-            r"\bout\s+of\s+memory\b",
-            r"\b(?:cuda)?outofmemory(?:error)?\b",
-            r"\bcuda\s+oom\b",
-            r"\boom\b",
-        )
+_OOM_MARKERS = tuple(
+    re.compile(pattern, flags=re.IGNORECASE)
+    for pattern in (
+        r"\bout\s+of\s+memory\b",
+        r"\b(?:cuda)?outofmemory(?:error)?\b",
+        r"\bcuda\s+oom\b",
+        r"\boom\b",
     )
+)
+
+
+def _contains_oom_marker(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _OOM_MARKERS)
 
 
 def _looks_like_skip(stdout: str, stderr: str) -> bool:
