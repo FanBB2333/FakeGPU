@@ -916,6 +916,12 @@ def build_workload_calibration_bundle(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    return _dispatch(args, parser)
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=command_prog(__name__),
         description=(
@@ -1112,8 +1118,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
     )
     add_json_path_argument(verify_parser)
-    args = parser.parse_args(argv)
 
+    return parser
+
+
+def _dispatch(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> int:
     try:
         if args.action == "sample-transformers":
             plan_path = _serving_sample_plan_path(args.plan)
@@ -1278,7 +1290,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             ValueError,
            ) as exc:
         usage_error(parser, exc)
-
 
 def _memory_points(
     report: Mapping[str, Any],
