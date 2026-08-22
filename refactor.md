@@ -101,7 +101,7 @@
 |---|---|---|
 | `b1916fe` | §4.2 | 将 Accelerate、distributed、FSDP 兼容补丁移到 `_ecosystem_compat.py`；将架构名、字节格式化和终端内存报告移到 `_torch_reporting.py`。`torch_patch.py` 从 2,087 行降至 1,753 行；原模块保留 `_patch_*`、`_arch_name`、`_fmt_bytes`、`_dump_terminal_summary` 兼容入口，参数、异常和报告文本不变。 |
 
-验证：本地全量 `pytest`（262 passed）+ `ruff` clean + `scripts/test.sh smoke` + `scripts/test.sh cpu` 全部通过；抽出的 6 个兼容函数与拆分前 AST 源码逐字一致。406 节点当前空闲，gem12 有占用，远端验证待提交后按 nvidb 队列执行。
+验证：本地全量 `pytest`（262 passed）+ `ruff` clean + `scripts/test.sh smoke` + `scripts/test.sh cpu` 全部通过；抽出的 6 个兼容函数与拆分前 AST 源码逐字一致。推送 `00a6c4d` 后按 nvidb 队列复测：406（job 1486，RTX PRO 5000 72GB，torch 2.8.0+cu128）真实 CUDA/FakeGPU 集成探针通过；gem12（job 1485，RTX 3090 Ti，torch 2.12.1+cu130）全量 `pytest` 为 **261 passed + 1 skipped**，随后 patch probe 通过。406 环境没有 pytest，因此采用同一 CUDA/torch 环境的集成探针，未改动远端环境。
 
 **§4/§5 剩余未做**：`preflight.py`（1362 行，四个关注点未分离）；`calibration` 的比较/验证/bundle 与 CLI 未再分；`serving_plan` 的两个 pool model（约 1,100 行）与 CLI 未再分；`smi`/各 CLI 的 `main` 仍是大函数（§4.1 的超大函数清单只处理了其中一部分）。§3.6 遗留：`llm_cli` 与 `serving_plan` 约 12 个同名 flag 默认值不同，本轮只统一了声明方式。另注意 `diffusion_estimator` 的 `_local_profile` 产物绕过 `_validate_profile` 的漂移风险（§4.2 提到）现在两者同在 `_diffusion_pipeline.py`，修它会改变行为，属独立事项。
 
