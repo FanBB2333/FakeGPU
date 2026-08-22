@@ -830,6 +830,12 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    return _run(args, parser)
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=command_prog(__name__),
         description=(
@@ -888,7 +894,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_COLLECTION_INTERVAL_SECONDS,
         help="Collection interval in seconds for --serve.",
     )
-    args = parser.parse_args(argv)
+
+    return parser
+
+
+def _run(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> int:
     if args.serve and args.json:
         parser.error("--json cannot be combined with --serve")
 
@@ -977,7 +990,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         server.server_close()
         application.stop()
     return 0
-
 
 def _device_record(item: Mapping[str, Any]) -> dict[str, Any]:
     memory = _mapping(item.get("memory"))
