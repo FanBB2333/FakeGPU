@@ -95,7 +95,15 @@
 
 验证：本地全量 `pytest`（234 passed）+ ruff clean + CI 同款 manifest 校验（7+39 cases）+ `scripts/test.sh smoke`（含 native 重建）+ `scripts/test.sh cpu` 全部通过。**远端 406/gem12 尚未复测**。
 
-**§4/§5 剩余未做**：`preflight.py`（1362 行，四个关注点未分离）；`calibration` 的比较/验证/bundle 与 CLI 未再分；`serving_plan` 的两个 pool model（约 1,100 行）与 CLI 未再分；`smi`/各 CLI 的 `main` 仍是大函数（§4.1 的超大函数清单只处理了其中一部分）；`torch_patch` 的 `_reporting.py`/`_ecosystem_compat.py` 两刀未做。§3.6 遗留：`llm_cli` 与 `serving_plan` 约 12 个同名 flag 默认值不同，本轮只统一了声明方式。另注意 `diffusion_estimator` 的 `_local_profile` 产物绕过 `_validate_profile` 的漂移风险（§4.2 提到）现在两者同在 `_diffusion_pipeline.py`，修它会改变行为，属独立事项。
+**2026-08-22 第五批落地**：继续完成 §4.2 的 `torch_patch` 机械拆分，保持旧私有导入路径可用。
+
+| Commit | 阶段 | 内容 |
+|---|---|---|
+| `b1916fe` | §4.2 | 将 Accelerate、distributed、FSDP 兼容补丁移到 `_ecosystem_compat.py`；将架构名、字节格式化和终端内存报告移到 `_torch_reporting.py`。`torch_patch.py` 从 2,087 行降至 1,753 行；原模块保留 `_patch_*`、`_arch_name`、`_fmt_bytes`、`_dump_terminal_summary` 兼容入口，参数、异常和报告文本不变。 |
+
+验证：本地全量 `pytest`（262 passed）+ `ruff` clean + `scripts/test.sh smoke` + `scripts/test.sh cpu` 全部通过；抽出的 6 个兼容函数与拆分前 AST 源码逐字一致。406 节点当前空闲，gem12 有占用，远端验证待提交后按 nvidb 队列执行。
+
+**§4/§5 剩余未做**：`preflight.py`（1362 行，四个关注点未分离）；`calibration` 的比较/验证/bundle 与 CLI 未再分；`serving_plan` 的两个 pool model（约 1,100 行）与 CLI 未再分；`smi`/各 CLI 的 `main` 仍是大函数（§4.1 的超大函数清单只处理了其中一部分）。§3.6 遗留：`llm_cli` 与 `serving_plan` 约 12 个同名 flag 默认值不同，本轮只统一了声明方式。另注意 `diffusion_estimator` 的 `_local_profile` 产物绕过 `_validate_profile` 的漂移风险（§4.2 提到）现在两者同在 `_diffusion_pipeline.py`，修它会改变行为，属独立事项。
 
 **复核后有意不改的条目**（与文档原建议不同处）：
 - `_aggregate_report` 的 error 分支（§1.5/2.3）：rc=0 但报告为 error 的边缘情况下可达，保留。
