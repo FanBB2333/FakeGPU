@@ -77,7 +77,7 @@ cases:
         selected=settings[scenario];
         output=pathlib.Path(os.environ["OUT"]);
         model=output.parent/"model";
-        model.mkdir();
+        model.mkdir(exist_ok=True);
         config=dict(architectures=["ValidationForCausalLM"],model_type="validation",torch_dtype="bfloat16",hidden_size=128,num_hidden_layers=4,num_attention_heads=8,intermediate_size=256,vocab_size=64);
         config.update(selected["config"]);
         (model/"config.json").write_text(json.dumps(config),encoding="utf-8");
@@ -196,8 +196,8 @@ cases:
         root=pathlib.Path(os.environ["OUT"]).parent;
         target=root/"target";
         draft=root/"draft";
-        target.mkdir();
-        draft.mkdir();
+        target.mkdir(exist_ok=True);
+        draft.mkdir(exist_ok=True);
         target_config=dict(architectures=["ValidationTargetForCausalLM"],model_type="validation-target",torch_dtype="bfloat16",hidden_size=8,num_hidden_layers=2,num_attention_heads=2,num_key_value_heads=1,head_dim=4,intermediate_size=16,vocab_size=32);
         draft_config=dict(architectures=["ValidationDraftForCausalLM"],model_type="validation-draft",torch_dtype="bfloat16",hidden_size=4,num_hidden_layers=1,num_attention_heads=1,num_key_value_heads=1,head_dim=4,intermediate_size=8,vocab_size=32);
         (target/"config.json").write_text(json.dumps(target_config),encoding="utf-8");
@@ -362,7 +362,7 @@ cases:
         from fakegpu import estimate_serving_plan;
         output=pathlib.Path(os.environ["OUT"]);
         model=output.parent/"model";
-        model.mkdir();
+        model.mkdir(exist_ok=True);
         config=dict(architectures=["ValidationForCausalLM"],model_type="validation",torch_dtype="bfloat16",hidden_size=8,num_hidden_layers=2,num_attention_heads=2,num_key_value_heads=1,head_dim=4,intermediate_size=16,vocab_size=32);
         (model/"config.json").write_text(json.dumps(config),encoding="utf-8");
         header=dict([("model.embed.weight",dict(dtype="BF16",shape=[32,8],data_offsets=[0,512]))]);
@@ -476,7 +476,7 @@ cases:
         scenario = os.environ["SCENARIO"]
         output = pathlib.Path(os.environ["OUT"])
         model = output.parent / "pipeline"
-        model.mkdir()
+        model.mkdir(exist_ok=True)
         if scenario == "unet":
             pipeline_class = "StableDiffusionPipeline"
             denoiser_name = "unet"
@@ -558,7 +558,7 @@ cases:
         component_configs[denoiser_name] = denoiser_config
         for name, config in component_configs.items():
             component = model / name
-            component.mkdir()
+            component.mkdir(exist_ok=True)
             (component / "config.json").write_text(
                 json.dumps(config), encoding="utf-8"
             )

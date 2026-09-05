@@ -198,6 +198,26 @@ def test_validation_cli_json_output(tmp_path: Path, capsys) -> None:
     assert payload["status"] == "passed"
 
 
+@pytest.mark.parametrize("case", [
+    "llm-attention-architecture",
+    "speculative-serving-calibration",
+    "vllm-runtime-budget",
+    "diffusion-local-architecture",
+])
+def test_research_fixtures_can_reuse_report_directory(tmp_path: Path, case: str) -> None:
+    pytest.importorskip("yaml")
+    root = Path(__file__).resolve().parents[1]
+    manifest = root / "tests" / "data" / "research_validation.yaml"
+    for _ in range(2):
+        code, report = run_validation_manifest(
+            manifest, report_dir=tmp_path / "report", selected_cases=[case], strict=True,
+        )
+        failures = [(item["id"], item["failures"]) for item in report["executions"]]
+        assert code == 0, failures
+        assert report["counts"]["passed"] > 0
+        assert report["counts"]["failed"] == 0
+
+
 def test_checked_in_yaml_manifest_loads() -> None:
     pytest.importorskip("yaml")
     root = Path(__file__).resolve().parents[1]

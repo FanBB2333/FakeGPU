@@ -93,6 +93,8 @@
 
 ### Fixed
 
+- Allow the research validation manifest to rerun in the same report directory
+  by reusing its fixture directories while rewriting model inputs and reports.
 - Enforce the native unsupported-API policy across 78 cuBLAS arithmetic entry
   points, including synthetic outputs, GEMM/Lt fallback configurations, and
   skipped CPU computation. Strict mode rejects these paths before output writes;
