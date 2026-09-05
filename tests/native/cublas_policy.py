@@ -32,16 +32,16 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
     handle = P()
     assert bind("cublasCreate_v2", [P])(ct.byref(handle)) == 0
 
-    def check(name, types, args, outputs, *, fallback=True, value=None, call_handle=None):
+    def check(name, types, args, outputs, *, fallback=True, value=None, call_handle=None, reject=False):
         func = bind(name, [P, *types])
         snapshots = [bytes(output) for output in outputs]
-        expected = 15 if strict and fallback else 0  # CUBLAS_STATUS_NOT_SUPPORTED
+        expected = 15 if reject or (strict and fallback) else 0  # CUBLAS_STATUS_NOT_SUPPORTED
         for _ in range(2):
             for output, snapshot in zip(outputs, snapshots):
                 ct.memmove(output, snapshot, len(snapshot))
             status = func(handle if call_handle is None else call_handle, *args)
             assert status == expected, (name, status, expected)
-            if strict and fallback:
+            if reject or (strict and fallback):
                 assert [bytes(output) for output in outputs] == snapshots, name
             if not fallback and value is not None:
                 assert outputs[0][0] == value, (name, outputs[0][0], value)
@@ -121,7 +121,9 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
 
     for prefix, scalar in (("S", ct.c_float), ("D", ct.c_double), ("H", ct.c_uint16)):
         half = prefix == "H"
-        a, b, c = (scalar * 1)(0x4000 if half else 2), (scalar * 1)(0x4200 if half else 3), (scalar * 1)(123)
+        a, b = (scalar * 1)(0x4000 if half else 2), (scalar * 1)(0x4200 if half else 3)
+        # beta=0 must not read the previous C, including its NaN payload.
+        c = (scalar * 1)(0x7e00 if half else float("nan"))
         alpha, beta = (scalar * 1)(0x3c00 if half else 1), (scalar * 1)(0)
         base = "cublas" + prefix + "gemm"
         value = 0x4600 if half else 6
@@ -134,7 +136,7 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
             check(base + "Batched", [Int] * 5 + [P, P, Int, P, Int, P, P, Int, Int],
                   [0, 0, 1, 1, 1, alpha, aa, 1, bb, 1, beta, cc, 1, 1], [c], fallback=skip_gemm, value=6)
 
-    a, b, c = (ct.c_float * 1)(2), (ct.c_float * 1)(3), (ct.c_float * 1)(123)
+    a, b, c = (ct.c_float * 1)(2), (ct.c_float * 1)(3), (ct.c_float * 1)(float("nan"))
     alpha, beta = (ct.c_float * 1)(1), (ct.c_float * 1)(0)
     aa, bb, cc = ((P * 1)(ct.addressof(buf)) for buf in (a, b, c))
     for dtype in (0, 3):  # CUDA_R_32F executes; CUDA_R_8I has no CPU implementation.
@@ -152,6 +154,10 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
               [0, 0, 1, 1, 1, alpha, a, dtype, 1, 1, b, dtype, 1, 1, beta, c, dtype, 1, 1, 1, 68, -1],
               [c], fallback=fallback, value=6)
 
+    c[0], beta[0] = float("inf"), -0.0
+    check("cublasSgemm_v2", [Int] * 5 + [P, P, Int, P, Int, P, P, Int],
+          [0, 0, 1, 1, 1, alpha, a, 1, b, 1, beta, c, 1], [c], fallback=skip_gemm, value=6)
+    c[0], beta[0] = 123, 0.0
     lt_handle, descriptor, layout = P(), P(), P()
     assert bind("cublasLtCreate", [P])(ct.byref(lt_handle)) == 0
     assert bind("cublasLtMatmulDescCreate", [P, Int, Int])(ct.byref(descriptor), 68, 0) == 0
@@ -159,10 +165,10 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
         ct.byref(layout), 0, 1, 1, 1,
     ) == 0
 
-    def lt_check(fallback):
+    def lt_check(fallback, *, reject=False):
         check("cublasLtMatmul", [P] * 13 + [ct.c_size_t, P],
               [descriptor, alpha, a, layout, b, layout, beta, c, layout, c, layout, None, None, 0, None],
-              [c], fallback=fallback, value=6, call_handle=lt_handle)
+              [c], fallback=fallback, value=6, call_handle=lt_handle, reject=reject)
 
     lt_check(skip_gemm)
     if os.environ["FAKEGPU_CPU_GEMM_MODE"] == "auto":
@@ -189,6 +195,15 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
         lt_check(True)
         value.value = 0
         assert setter(obj, attr, ct.byref(value), ct.sizeof(value)) == 0
+    # cuBLASLt only supports TRANSC=N, regardless of fallback policy or build.
+    setter = bind("cublasLtMatmulDescSetAttribute", [P, Int, P, ct.c_size_t])
+    for transc in (1, 2, 99):
+        value = Int(transc)
+        assert setter(descriptor, 5, ct.byref(value), ct.sizeof(value)) == 0
+        lt_check(True, reject=True)
+    value = Int(0)
+    assert setter(descriptor, 5, ct.byref(value), ct.sizeof(value)) == 0
+    lt_check(skip_gemm)
     assert bind("cublasLtMatrixLayoutDestroy", [P])(layout) == 0
     assert bind("cublasLtMatmulDescDestroy", [P])(descriptor) == 0
     assert bind("cublasLtDestroy", [P])(lt_handle) == 0

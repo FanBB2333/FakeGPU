@@ -427,7 +427,7 @@ cublasStatus_t gemm_col_major(
                 acc += read_elem(A, Atype, a_idx) * read_elem(B, Btype, b_idx);
             }
             const size_t c_idx = static_cast<size_t>(row) + static_cast<size_t>(col) * static_cast<size_t>(ldc);
-            const double c_prev = read_elem(C, Ctype, c_idx);
+            const double c_prev = (beta == 0.0) ? 0.0 : read_elem(C, Ctype, c_idx);
             const double out = alpha * acc + beta * c_prev;
             write_elem(C, Ctype, c_idx, out);
         }
@@ -3262,6 +3262,12 @@ cublasStatus_t cublasLtMatmul(
         if (compat != CUBLAS_STATUS_SUCCESS) {
             return compat;
         }
+    }
+
+    // cuBLASLt only supports the identity transform of C, even in permissive mode.
+    if (desc.transc != CUBLAS_OP_N) {
+        fake_gpu::record_unsupported_api("cublasLtMatmul", "unsupported_transc");
+        return CUBLAS_STATUS_NOT_SUPPORTED;
     }
 
 #if !FAKEGPU_CPU_SIMULATION

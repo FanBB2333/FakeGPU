@@ -93,6 +93,10 @@
 
 ### Fixed
 
+- Avoid reading old GEMM output when beta is zero, so NaN/Inf in C cannot
+  contaminate the result. Reject non-identity cuBLASLt TRANSC settings before
+  output writes in every policy and build mode; only TRANSC=N is supported by
+  the cuBLASLt contract. Add native numerical and output-preservation regressions.
 - Allow the research validation manifest to rerun in the same report directory
   by reusing its fixture directories while rewriting model inputs and reports.
 - Enforce the native unsupported-API policy across 78 cuBLAS arithmetic entry
