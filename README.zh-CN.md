@@ -329,7 +329,7 @@ manifest。Transformers 采样适配器还在 Blackwell GPU、PyTorch
 | 原生库拦截 | 构建、库边界、导出符号、preload、显存类型、coordinator 和不支持 API 策略 | **通过** |
 | FakeGPU-SMI 诊断 | 有上限的状态发布、拓扑/NVLink/MIG 视图、NVML peer/MIG 查询、健康字段和事件报告 | **通过** |
 | 监控 exporter | Prometheus/JSON 快照、历史和序列数量限制、异常状态降级及 HTTP 接口 | **通过** |
-| 原生能力清单 | 5 个能力组、26 个显式 API、24 个强制执行策略的 API | **通过** |
+| 原生能力清单（2026-09-05 更新） | 5 个能力组、104 个显式 API、102 个强制执行策略的 API | **通过** |
 | GPU profile 目录 | 82 个 profile，覆盖 15 种 compute capability | **通过** |
 | CPU 数值模拟 | GEMM、cuBLASLt、批量 GEMM、BLAS1/2 和 FP16，共 8 组测试 | **通过** |
 | CUDA 版 PyTorch 原生矩阵乘法 | 需要带 CUDA 的 PyTorch | **当前 CPU-only 主机未执行** |
@@ -1032,6 +1032,11 @@ FakeGPU/
   分支。
 - 显存估算可能遗漏 backend 私有分配、自定义 operator、allocator 策略和未匹配的
   workspace。
+- cuBLAS 未实现的算法、GEMM/Lt 不支持的 dtype、布局和指针模式，以及禁用或
+  跳过 CPU 计算的分支，均受 `FAKEGPU_UNSUPPORTED_API` 控制。`warn` 会记录并
+  警告；`error` 在写入模拟输出或成功元数据前返回 `CUBLAS_STATUS_NOT_SUPPORTED`。
+  严格模式下，已支持的 CPU 运算仍正常执行，但不能据此认为任意 CUDA kernel
+  都能执行。
 - Diffusion profile 只描述固定的参考 pipeline。自定义 ControlNet、IP-Adapter、
   LoRA、safety checker、refiner、视频和 DiT 组件需要额外的组件数据及对应的
   真实 GPU 验证。

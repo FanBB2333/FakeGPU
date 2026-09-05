@@ -87,3 +87,8 @@ jobs:
 
       - name: CPU simulation test
         run: scripts/test.sh cpu
+
+      - name: cuBLAS policy without CPU execution
+        run: |
+          scripts/build.sh --build-dir build-no-cpu --no-cpu-simulation
+          python tests/native/cublas_policy.py --build-dir build-no-cpu --no-cpu-simulation

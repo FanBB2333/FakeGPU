@@ -81,7 +81,7 @@ cases:
         - '"runtime.backend": "upstream"'
         - '"tracking.dispatch": true'
         - '"catalog.profiles": 82'
-        - '"catalog.native_apis": 26'
+        - '"catalog.native_apis": 104'
         - '"dispatch.calls": 3'
         - '"publisher.successful_writes": 1'
         - '"status": "running"'

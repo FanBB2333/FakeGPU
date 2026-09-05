@@ -897,8 +897,8 @@ def test_readmes_report_research_reliability_scope() -> None:
     assert len(profiles) == 82
     assert compute_capability_count == 15
     assert len(capabilities["groups"]) == 5
-    assert len(capabilities["apis"]) == 26
-    assert policy_enforced_count == 24
+    assert len(capabilities["apis"]) == 104
+    assert policy_enforced_count == 102
     smi_terms = {
         "FAKEGPU_SMI_STATE_DIR",
         "--query-gpu",

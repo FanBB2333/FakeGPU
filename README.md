@@ -351,7 +351,7 @@ Transformers 5.14.1:
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | FakeGPU-SMI diagnostics | Bounded state, topology/NVLink/MIG views, NVML peer/MIG queries, health fields, and event reporting | **Passed** |
 | Monitoring exporter | Prometheus/JSON snapshots, bounded history/cardinality, malformed-state degradation, and HTTP endpoints | **Passed** |
-| Native capability inventory | 5 groups, 26 explicit APIs, 24 policy-enforced APIs | **Passed** |
+| Native capability inventory (updated 2026-09-05) | 5 groups, 104 explicit APIs, 102 policy-enforced APIs | **Passed** |
 | GPU profile catalog | 82 profiles across 15 compute capabilities | **Passed** |
 | CPU numerical simulation | GEMM, cuBLASLt, batched GEMM, BLAS1/2, and FP16: 8 maintained test groups | **Passed** |
 | CUDA-enabled PyTorch native matmul | Requires a CUDA build of PyTorch | **Not run on this CPU-only host** |
@@ -1110,6 +1110,13 @@ environments, binary assets, and design drafts are excluded through
   runtime shape, or data-dependent branch.
 - Memory estimates can miss backend-private allocations, custom operators,
   allocator policies, and unmatched workspaces.
+- Native cuBLAS algorithms without numeric implementations, unsupported GEMM/Lt
+  dtypes, layouts or pointer modes, and disabled or skipped CPU computation follow
+  `FAKEGPU_UNSUPPORTED_API`.
+  `warn` records and warns about each fallback; `error` returns
+  `CUBLAS_STATUS_NOT_SUPPORTED` before writing synthetic output or success metadata.
+  Supported CPU calculations still execute in strict mode; this does not turn
+  arbitrary CUDA kernels into executable implementations.
 - For models declaring a vision encoder, `estimate-llm` and `plan-serving`
   include checkpoint weights but leave vision/projector activations and FLOPs
   unmodeled. Both JSON and terminal reports flag this incomplete coverage.

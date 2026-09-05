@@ -58,7 +58,7 @@ def test_publisher_and_virtual_smi_include_process_memory(
     assert state["fakegpu"]["profile_catalog"]["profile_count"] == 82
     assert (
         state["fakegpu"]["native_capabilities"]["explicit_api_count"]
-        == 26
+        == 104
     )
     assert state["software"]["cuda_version"]
     assert state["devices"][0]["reported_memory"] == 3328 * 2**20
@@ -143,7 +143,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
     assert "FakeGPU-SMI detailed report" in detail
     assert "Architecture: ampere, compute capability 8.0" in detail
     assert "108 SMs" in detail
-    assert "native capabilities 5 groups / 26 APIs / 24" in detail
+    assert "native capabilities 5 groups / 104 APIs / 102" in detail
     assert "activation=64.0 MiB" in detail
     assert "memory enabled, dispatch enabled" in detail
     assert "7 calls" in detail
@@ -221,7 +221,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
             "policy.oom": "default",
             "tracking.dispatch": True,
             "catalog.profiles": 82,
-            "catalog.native_apis": 26,
+            "catalog.native_apis": 104,
             "dispatch.calls": 7,
             "publisher.successful_writes": 1,
             "publisher.failed_writes": 0,
@@ -824,7 +824,7 @@ def test_virtual_smi_reports_native_runtime_activity(
     assert "3 IO calls / 6.0 MiB" in detail
     assert "native_kernel=2" in detail
     assert "cudaLaunchKernel: 2 calls [not_executed, warn]" in detail
-    assert "native capabilities 5 groups / 26 APIs / 24" in detail
+    assert "native capabilities 5 groups / 104 APIs / 102" in detail
 
     assert (
         main(

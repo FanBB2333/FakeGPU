@@ -47,6 +47,8 @@ run_smoke() {
     --strict
   "$PYTHON_BIN" tests/native/unsupported_api_policy.py \
     --build-dir "$BUILD_DIR"
+  "$PYTHON_BIN" tests/native/cublas_policy.py \
+    --build-dir "$BUILD_DIR"
 
   local preload_probe="$BUILD_DIR/verify_preload"
   if [[ "$(uname -s)" == "Darwin" ]]; then

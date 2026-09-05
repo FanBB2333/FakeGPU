@@ -219,6 +219,552 @@
       "classification": "synthetic_telemetry",
       "simulate_behavior": "No accounting PIDs are reported.",
       "policy_enforced": false
+    },
+    {
+      "api": "cublasIsamax_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasIdamax_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasIsamin_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasIdamin_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSasum_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDasum_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSaxpy_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDaxpy_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasScopy_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDcopy_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSdot_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDdot_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSnrm2_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDnrm2_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSscal_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDscal_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSgemv_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDgemv_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSger_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDger_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSgemm_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDgemm_v2",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasHgemm",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSgemmStridedBatched",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDgemmStridedBatched",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasHgemmStridedBatched",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSgemmBatched",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDgemmBatched",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasGemmEx",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasGemmStridedBatchedEx",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasGemmBatchedEx",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasStrsm_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDtrsm_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasStrsmBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDtrsmBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSsymm_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDsymm_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSsyrk_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDsyrk_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSsyr2k_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDsyr2k_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSsyrkx",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDsyrkx",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasStrmm_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDtrmm_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCdotu_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCdotc_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Synthetic complex dot products obey the unsupported-API policy; error mode preserves the output buffer.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZdotu_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZdotc_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Synthetic complex dot products obey the unsupported-API policy; error mode preserves the output buffer.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDotEx",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCgemv_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZgemv_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCgemm_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZgemm_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCgemmStridedBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZgemmStridedBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCtrsm_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZtrsm_v2",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCtrsmBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZtrsmBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSgetrfBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDgetrfBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCgetrfBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZgetrfBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSgetrsBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDgetrsBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCgetrsBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZgetrsBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSgeqrfBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDgeqrfBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCgeqrfBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZgeqrfBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSgelsBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasDgelsBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasCgelsBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasZgelsBatched",
+      "library": "cublas",
+      "classification": "not_executed",
+      "simulate_behavior": "No numeric algorithm is executed. Compatibility output (synthetic values or success metadata) obeys the unsupported-API policy; error mode preserves output buffers.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasSgemmEx",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cublasLtMatmul",
+      "library": "cublas",
+      "classification": "mixed_numeric_and_compatibility",
+      "simulate_behavior": "Supported CPU paths execute numerically; unsupported layouts, data types, pointer modes, disabled CPU execution, and skipped computation obey the unsupported-API policy.",
+      "policy_enforced": true
     }
   ]
 }

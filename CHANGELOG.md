@@ -93,6 +93,11 @@
 
 ### Fixed
 
+- Enforce the native unsupported-API policy across 78 cuBLAS arithmetic entry
+  points, including synthetic outputs, GEMM/Lt fallback configurations, and
+  skipped CPU computation. Strict mode rejects these paths before output writes;
+  reports and the capability catalog now expose them. Add compiled-library
+  policy tests for CPU-enabled and CPU-disabled builds.
 - Read nested `text_config` decoder dimensions and current `dtype` metadata,
   and warn in LLM/serving JSON and terminal reports when vision/projector
   activations and FLOPs are unmodeled, including speculative draft models.

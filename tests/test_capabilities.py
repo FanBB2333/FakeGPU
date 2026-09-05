@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from fakegpu.capabilities import (
     _load_native_capabilities_cached,
     audit_native_capability_sources,
@@ -39,6 +41,27 @@ def test_capability_catalog_cache_normalizes_path_argument_types() -> None:
         assert info.hits == 1
     finally:
         _load_native_capabilities_cached.cache_clear()
+
+
+@pytest.mark.parametrize("api", [
+    "cublasStrsm_v2", "cublasDsymm_v2", "cublasCdotc_v2", "cublasZdotc_v2",
+    "cublasSgetrfBatched", "cublasCgetrsBatched", "cublasZgeqrfBatched", "cublasDgelsBatched",
+])
+def test_cublas_synthetic_algorithms_are_explicitly_classified(api: str) -> None:
+    report = native_capability_report(library="cublas", classification="not_executed")
+    entries = {entry["api"]: entry for entry in report["apis"]}
+    assert entries[api]["policy_enforced"] is True
+
+
+@pytest.mark.parametrize("api", [
+    "cublasSdot_v2", "cublasHgemm", "cublasSgemm_v2", "cublasGemmEx",
+    "cublasGemmStridedBatchedEx", "cublasGemmBatchedEx", "cublasLtMatmul",
+])
+def test_cublas_numeric_paths_only_apply_policy_to_fallbacks(api: str) -> None:
+    report = native_capability_report(library="cublas")
+    entries = {entry["api"]: entry for entry in report["apis"]}
+    assert entries[api]["classification"] == "mixed_numeric_and_compatibility"
+    assert entries[api]["policy_enforced"] is True
 
 
 def test_native_source_stubs_and_policy_calls_are_classified() -> None:
