@@ -402,11 +402,14 @@ def estimate_decoder_inference(
     kv_cache_max_tokens: int | None = None,
     kv_cache_window_tokens: int | None = None,
     include_decode_steps: bool = True,
+    logits_to_keep: int = 0,
 ) -> dict[str, Any]:
     """Estimate decoder-only inference memory, communication, and FLOPs.
 
     The checkpoint is inspected through safetensors headers only. No model
     tensors are materialized and no CUDA context is created.
+    logits_to_keep=0 projects every query token; a positive value projects
+    only that many trailing tokens, as in last-token-only generation.
     """
 
     if batch_size <= 0:
@@ -417,6 +420,12 @@ def estimate_decoder_inference(
         raise ValueError("generated_tokens must be greater than zero")
     if not isinstance(include_decode_steps, bool):
         raise ValueError("include_decode_steps must be a boolean")
+    if (
+        not isinstance(logits_to_keep, int)
+        or isinstance(logits_to_keep, bool)
+        or logits_to_keep < 0
+    ):
+        raise ValueError("logits_to_keep must be a non-negative integer")
     if runtime_overhead_bytes < 0:
         raise ValueError("runtime_overhead_bytes must be non-negative")
     if expert_parallel_size <= 0:
@@ -484,6 +493,7 @@ def estimate_decoder_inference(
         batch_size=batch_size,
         query_tokens=prompt_tokens,
         key_tokens=prefill_key_tokens,
+        logits_to_keep=logits_to_keep,
     )
     decode_step_count = max(0, generated_tokens - 1)
     decode_steps: list[dict[str, int]] = []
@@ -500,6 +510,7 @@ def estimate_decoder_inference(
             batch_size=batch_size,
             query_tokens=query_tokens,
             key_tokens=key_tokens,
+            logits_to_keep=logits_to_keep,
         )
         decode_step_specs.append(
             (logical_key_tokens, key_tokens, query_tokens, flops)
@@ -588,6 +599,7 @@ def estimate_decoder_inference(
         key_tokens=prefill_key_tokens,
         element_bytes=element_bytes,
         attention_implementation=attention_implementation,
+        logits_to_keep=logits_to_keep,
     )
     decode_transient = _forward_transient_bytes(
         dimensions,
@@ -606,6 +618,7 @@ def estimate_decoder_inference(
         ),
         element_bytes=element_bytes,
         attention_implementation=attention_implementation,
+        logits_to_keep=logits_to_keep,
     )
     decode_input_tokens = (
         _effective_context_tokens(
@@ -638,6 +651,7 @@ def estimate_decoder_inference(
                 key_tokens=key_tokens,
                 element_bytes=element_bytes,
                 attention_implementation=attention_implementation,
+                logits_to_keep=logits_to_keep,
             )
             for key, value in transient.items():
                 totals[key] += value
@@ -747,6 +761,7 @@ def estimate_decoder_inference(
             "generated_tokens": generated_tokens,
             "decode_forward_steps": decode_step_count,
             "use_cache": use_cache,
+            "logits_to_keep": logits_to_keep,
             "attention_implementation": attention_implementation,
             "dtype": selected_dtype,
             "element_bytes": element_bytes,
@@ -870,6 +885,7 @@ def estimate_decoder_inference(
             "Quantized base-weight memory uses exact safetensors payload bytes, including scale and metadata tensors.",
             "Adapter runtime bytes use adapter parameter count and the selected compute dtype.",
             "FLOPs cover projection, attention matrix multiplication, active dense or routed experts, and LM-head matrix multiplication.",
+            "LM-head FLOPs and logits storage use logits_to_keep trailing tokens per forward (0 means all); Transformer layers still process all query tokens.",
             "Elementwise normalization, activation, softmax, rotary embedding, and sampling operations are not included in matrix FLOPs.",
             "The eager-attention transient estimate is conservative; SDPA workspace remains backend-specific.",
             "Expert-parallel traffic assumes a uniform token distribution; hot experts can increase per-rank peaks.",
@@ -1129,6 +1145,7 @@ def _forward_matmul_flops(
     batch_size: int,
     query_tokens: int,
     key_tokens: int,
+    logits_to_keep: int = 0,
 ) -> int:
     hidden = dimensions["hidden_size"]
     heads = dimensions["num_attention_heads"]
@@ -1236,7 +1253,8 @@ def _forward_matmul_flops(
         * hidden
         * dimensions["num_routed_experts"]
     )
-    lm_head = 2 * batch_size * query_tokens * hidden * vocab
+    logits_tokens = min(query_tokens, logits_to_keep) if logits_to_keep else query_tokens
+    lm_head = 2 * batch_size * logits_tokens * hidden * vocab
     return (
         attention_flops
         + dense_mlp_flops
@@ -1303,6 +1321,7 @@ def _forward_transient_bytes(
     key_tokens: int,
     element_bytes: int,
     attention_implementation: str,
+    logits_to_keep: int = 0,
 ) -> dict[str, int]:
     hidden = dimensions["hidden_size"]
     heads = dimensions["num_attention_heads"]
@@ -1365,7 +1384,8 @@ def _forward_transient_bytes(
         )
         routed_mlp_bytes += router_bytes
     mlp_bytes = max(dense_mlp_bytes, routed_mlp_bytes)
-    logits_bytes = hidden_bytes + batch_size * query_tokens * vocab * element_bytes
+    logits_tokens = min(query_tokens, logits_to_keep) if logits_to_keep else query_tokens
+    logits_bytes = hidden_bytes + batch_size * logits_tokens * vocab * element_bytes
     return {
         "attention_bytes": attention_bytes,
         "mlp_bytes": mlp_bytes,

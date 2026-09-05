@@ -907,6 +907,13 @@ python3 -m fakegpu estimate-llm \
   --target-profile a100 \
   --json build/llm-estimate.json
 
+# Match a generation runtime that projects only the last token to logits.
+python3 -m fakegpu estimate-llm \
+  --model-dir /models/example --prompt-tokens 128 --generated-tokens 32 \
+  --logits-to-keep 1 --json build/last-token-estimate.json
+# The default, --logits-to-keep 0, projects all tokens. Use the runtime's
+# actual setting: this changes LM-head FLOPs and memory, not layer token counts.
+
 # Compare diffusion generation phases and memory optimizations.
 python3 -m fakegpu estimate-diffusion --list-profiles
 python3 -m fakegpu estimate-diffusion \

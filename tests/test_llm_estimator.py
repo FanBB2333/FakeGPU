@@ -181,6 +181,84 @@ def test_dense_decoder_memory_and_flops_are_shape_aware(tmp_path: Path) -> None:
     assert report["memory_traffic"]["lower_bytes"] > 0
 
 
+@pytest.mark.parametrize("use_cache", [True, False])
+def test_trailing_logits_preserve_forward_work_and_reduce_projection(
+    tmp_path: Path, use_cache: bool,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir, config_overrides={"vocab_size": 1024})
+    common = dict(batch_size=2, prompt_tokens=4, generated_tokens=4, use_cache=use_cache)
+    full = estimate_decoder_inference(model_dir, **common)
+    trailing = estimate_decoder_inference(model_dir, logits_to_keep=2, **common)
+    aggregated = estimate_decoder_inference(
+        model_dir, logits_to_keep=2, include_decode_steps=False, **common,
+    )
+
+    assert full["compute"]["prefill_flops"] - trailing["compute"]["prefill_flops"] == (
+        2 * 2 * (4 - 2) * 8 * 1024
+    )
+    assert trailing["memory"]["prefill_transient"]["logits_bytes"] == (
+        2 * 4 * 8 * 2 + 2 * 2 * 1024 * 2
+    )
+    assert trailing["memory"]["estimated_tensor_peak_bytes"] < full["memory"]["estimated_tensor_peak_bytes"]
+    assert trailing["memory_traffic"]["expected_bytes"] < full["memory_traffic"]["expected_bytes"]
+    for phase in ("prefill_transient", "decode_transient"):
+        for component in ("attention_bytes", "mlp_bytes"):
+            assert trailing["memory"][phase][component] == full["memory"][phase][component]
+    for full_step, step in zip(full["compute"]["decode_steps"], trailing["compute"]["decode_steps"]):
+        queries = step["query_tokens"]
+        assert queries == full_step["query_tokens"]
+        assert full_step["matmul_flops"] - step["matmul_flops"] == (
+            2 * 2 * max(0, queries - 2) * 8 * 1024
+        )
+    assert trailing["kv_cache"] == full["kv_cache"]
+    assert aggregated["compute"]["total_flops"] == trailing["compute"]["total_flops"]
+    assert aggregated["memory_traffic"] == trailing["memory_traffic"]
+
+
+def test_c11_qwen2vl_last_token_logits_match_recorded_matrix_work(tmp_path: Path) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    # Only dimensions are needed to reproduce job 1723's decoder computation.
+    config = {
+        "hidden_size": 1536, "num_hidden_layers": 28,
+        "num_attention_heads": 12, "num_key_value_heads": 2,
+        "intermediate_size": 8960, "vocab_size": 151936,
+        "torch_dtype": "bfloat16",
+    }
+    (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    common = dict(prompt_tokens=296, generated_tokens=14, attention_implementation="sdpa")
+    full = estimate_decoder_inference(model_dir, **common)
+    trailing = estimate_decoder_inference(model_dir, logits_to_keep=1, **common)
+    assert full["compute"]["total_flops"] == 969_676_283_904
+    # Profiler mm/addmm + analytical dense-equivalent QK/AV. Excludes RoPE bmm.
+    assert trailing["compute"]["total_flops"] == 816_235_413_504 + 15_750_389_760
+    assert trailing["compute"]["decode_flops_total"] == full["compute"]["decode_flops_total"]
+
+
+@pytest.mark.parametrize("value", [-1, True, 1.5, "1", None])
+def test_logits_to_keep_rejects_invalid_values(tmp_path: Path, value: object) -> None:
+    with pytest.raises(ValueError, match="logits_to_keep must be a non-negative integer"):
+        estimate_decoder_inference(tmp_path, prompt_tokens=4, logits_to_keep=value)
+
+
+def test_llm_cli_limits_logits_and_clamps_to_query_length(tmp_path: Path) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    output = tmp_path / "estimate.json"
+    assert llm_main([
+        "--model-dir", str(model_dir), "--prompt-tokens", "4",
+        "--logits-to-keep", "1", "--json", str(output),
+    ]) == 0
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["inputs"]["logits_to_keep"] == 1
+    assert report["compute"]["prefill_flops"] == 12288 - 2 * 3 * 8 * 32
+    full = estimate_decoder_inference(model_dir, prompt_tokens=4)
+    clamped = estimate_decoder_inference(model_dir, prompt_tokens=4, logits_to_keep=100)
+    assert clamped["compute"] == full["compute"]
+    assert clamped["memory"] == full["memory"]
+
+
 def test_decoder_without_kv_cache_recomputes_full_decode_context(
     tmp_path: Path,
 ) -> None:

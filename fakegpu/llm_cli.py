@@ -25,6 +25,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--prompt-tokens", type=int, required=True)
     parser.add_argument("--generated-tokens", type=int, default=1)
     parser.add_argument(
+        "--logits-to-keep",
+        type=int,
+        default=0,
+        help="Tokens projected to vocabulary logits per forward: 0 means all (default); 1 models last-token-only generation.",
+    )
+    parser.add_argument(
         "--exclude-decode-steps",
         action="store_true",
         help="Aggregate decode FLOPs without embedding one record per token.",
@@ -93,6 +99,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch_size=args.batch_size,
             prompt_tokens=args.prompt_tokens,
             generated_tokens=args.generated_tokens,
+            logits_to_keep=args.logits_to_keep,
             include_decode_steps=not args.exclude_decode_steps,
             dtype=args.dtype,
             use_cache=not args.no_cache,

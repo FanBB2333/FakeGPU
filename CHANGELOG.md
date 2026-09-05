@@ -93,6 +93,10 @@
 
 ### Fixed
 
+- Decoder inference can model last-token-only vocabulary projection with
+  `estimate-llm --logits-to-keep 1` (Python: `logits_to_keep=1`), including
+  FLOPs, logits memory, and traffic in cached and uncached generation.
+  The default of zero retains the conservative all-token projection.
 - Unified native runtime statistics across the CUDA Runtime, Driver, cuBLAS,
   and NVML compatibility libraries so one library cannot overwrite a report
   with an empty or partial DSO-local snapshot.
