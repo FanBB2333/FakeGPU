@@ -9,6 +9,16 @@ from typing import Any
 
 
 SCHEMA_VERSION = "fakegpu.llm_inference_estimate.v1"
+VISION_UNMODELED_COMPONENTS = (
+    "vision_encoder_activations",
+    "vision_encoder_flops",
+    "multimodal_projector_activations_and_flops",
+)
+VISION_ESTIMATE_WARNING = (
+    "Vision encoder and multimodal projector activations and FLOPs are not modeled. "
+    "Checkpoint weights are included, but transient memory and compute cover only "
+    "the decoder; fit/admission and latency estimates require multimodal validation."
+)
 KV_CACHE_STRATEGIES = frozenset(
     {"dynamic", "static", "quantized", "paged"}
 )
@@ -445,9 +455,25 @@ def estimate_decoder_inference(
     if not config_path.is_file():
         raise FileNotFoundError(f"model config not found: {config_path}")
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError("model config must be an object")
+    decoder_config = config.get("text_config", config)
+    if not isinstance(decoder_config, dict):
+        raise ValueError("text_config must be an object")
     checkpoint = inspect_safetensors_checkpoint(root)
-    dimensions = _decoder_dimensions(config)
-    selected_dtype = _normalize_dtype(dtype, config=config)
+    dimensions = _decoder_dimensions(decoder_config)
+    has_vision_encoder = any(
+        config.get(key) is not None
+        for key in ("vision_config", "vision_tower", "mm_vision_tower")
+    )
+    if has_vision_encoder:
+        dimensions["has_vision_encoder"] = True
+    dtype_config = (
+        decoder_config
+        if any(decoder_config.get(key) is not None for key in ("dtype", "torch_dtype"))
+        else config
+    )
+    selected_dtype = _normalize_dtype(dtype, config=dtype_config)
     element_bytes = _TORCH_DTYPE_TO_BYTES[selected_dtype]
     quantization = _quantization_summary(config, checkpoint)
     base_parameter_bytes = (
@@ -709,6 +735,7 @@ def estimate_decoder_inference(
     unmodeled_components = [
         "cuda_context_and_loaded_modules",
         "caching_allocator_fragmentation",
+        *(VISION_UNMODELED_COMPONENTS if has_vision_encoder else ()),
         (
             "backend_fused_attention_workspace"
             if attention_implementation == "sdpa"
@@ -893,6 +920,8 @@ def estimate_decoder_inference(
     }
     if not include_decode_steps:
         report["inputs"]["include_decode_steps"] = False
+    if has_vision_encoder:
+        report["notes"].append(VISION_ESTIMATE_WARNING)
     return report
 
 
@@ -1129,7 +1158,11 @@ def _moe_layer_count(
 
 
 def _normalize_dtype(dtype: str, *, config: dict[str, Any]) -> str:
-    value = str(config.get("torch_dtype", "float32")) if dtype == "auto" else str(dtype)
+    value = (
+        str(config.get("dtype") or config.get("torch_dtype") or "float32")
+        if dtype == "auto"
+        else str(dtype)
+    )
     value = value.lower().replace("torch.", "")
     aliases = {"fp16": "float16", "bf16": "bfloat16", "fp32": "float32", "fp64": "float64"}
     value = aliases.get(value, value)

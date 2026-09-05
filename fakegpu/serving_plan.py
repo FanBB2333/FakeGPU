@@ -48,6 +48,8 @@ from ._serving_vllm import (
 )
 from .llm_estimator import (
     KV_CACHE_STRATEGIES,
+    VISION_ESTIMATE_WARNING,
+    VISION_UNMODELED_COMPONENTS,
     estimate_decoder_inference,
 )
 from .profile_catalog import get_profile
@@ -734,6 +736,14 @@ def _build_serving_report(
         "tensor_parallel_communication_and_rank_imbalance",
     ]
     report_notes = list(notes)
+    if model.get("has_vision_encoder"):
+        unmodeled_components.extend(VISION_UNMODELED_COMPONENTS)
+        report_notes.append(VISION_ESTIMATE_WARNING)
+    if speculative is not None and speculative["model"].get("has_vision_encoder"):
+        unmodeled_components.extend(
+            f"draft_{component}" for component in VISION_UNMODELED_COMPONENTS
+        )
+        report_notes.append(f"Draft model: {VISION_ESTIMATE_WARNING}")
     if runtime == "vllm":
         report_notes.append(vllm_note)
     if speculative is not None:
@@ -1554,6 +1564,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     scheduler = report["scheduler"]
     timeline = report["memory_timeline"]
     print("FakeGPU LLM serving plan")
+    if "vision_encoder_activations" in report["unmodeled_components"]:
+        print(f"  warning: {VISION_ESTIMATE_WARNING}")
+    if "draft_vision_encoder_activations" in report["unmodeled_components"]:
+        print(f"  warning: draft model: {VISION_ESTIMATE_WARNING}")
     print(
         "  active sequences: "
         f"{scheduler['requested_active_sequences']}"

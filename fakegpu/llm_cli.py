@@ -8,7 +8,7 @@ from ._cli import (
     command_prog,
     usage_error,
 )
-from .llm_estimator import estimate_decoder_inference
+from .llm_estimator import VISION_ESTIMATE_WARNING, estimate_decoder_inference
 from .structured_io import emit_json
 
 
@@ -128,6 +128,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     compute = report["compute"]
     checkpoint = report["checkpoint"]
     print("FakeGPU LLM inference estimate")
+    if report["model"].get("has_vision_encoder"):
+        print(f"  warning: {VISION_ESTIMATE_WARNING}")
     print(f"  parameters: {checkpoint['parameter_count']:,}")
     print(f"  checkpoint: {_format_bytes(checkpoint['checkpoint_bytes'])}")
     print(f"  tensor peak: {_format_bytes(memory['estimated_tensor_peak_bytes'])}")

@@ -259,6 +259,89 @@ def test_llm_cli_limits_logits_and_clamps_to_query_length(tmp_path: Path) -> Non
     assert clamped["memory"] == full["memory"]
 
 
+def test_nested_text_config_uses_decoder_dimensions_and_dtype(tmp_path: Path) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    original = estimate_decoder_inference(model_dir, prompt_tokens=4)
+    config_path = model_dir / "config.json"
+    text_config = json.loads(config_path.read_text(encoding="utf-8"))
+    text_config["dtype"] = text_config.pop("torch_dtype")
+    config_path.write_text(json.dumps({
+        "model_type": "qwen2_vl",
+        "architectures": ["Qwen2VLForConditionalGeneration"],
+        "text_config": text_config,
+        "hidden_size": 1024,
+        "torch_dtype": "float32",
+        "vision_config": {"hidden_size": 1024},
+    }), encoding="utf-8")
+    report = estimate_decoder_inference(model_dir, prompt_tokens=4)
+    assert report["model"]["hidden_size"] == 8
+    assert report["model"]["model_type"] == "qwen2_vl"
+    assert report["inputs"]["dtype"] == "bfloat16"
+    assert report["memory"] == original["memory"]
+    assert report["compute"] == original["compute"]
+    assert report["model"]["has_vision_encoder"] is True
+    assert "vision_encoder_activations" in report["unmodeled_components"]
+    assert "vision_encoder_flops" in report["unmodeled_components"]
+    assert "multimodal_projector_activations_and_flops" in report["unmodeled_components"]
+    assert any("cover only the decoder" in note for note in report["notes"])
+    assert "vision_encoder_flops" not in original["unmodeled_components"]
+
+
+@pytest.mark.parametrize("config", [[], {"text_config": []}, {"text_config": None}])
+def test_malformed_nested_decoder_config_raises_value_error(tmp_path: Path, config: object) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(ValueError, match="must be an object"):
+        estimate_decoder_inference(model_dir, prompt_tokens=4)
+
+
+@pytest.mark.parametrize("heterogeneous", [False, True])
+@pytest.mark.parametrize("vision_role", ["target", "draft"])
+def test_serving_propagates_multimodal_coverage(
+    tmp_path: Path, heterogeneous: bool, vision_role: str,
+) -> None:
+    target = tmp_path / "target"
+    draft = tmp_path / "draft"
+    _write_model(target)
+    _write_model(draft)
+    common = dict(max_batch_size=2, draft_model_dir=draft, device_capacity_bytes=2**20)
+
+    def plan():
+        if heterogeneous:
+            return estimate_serving_request_set(
+                target, [{"id": "a", "prompt_tokens": 4, "generated_tokens": 3}], **common,
+            )
+        return estimate_serving_plan(target, active_sequences=1, prompt_tokens=4, **common)
+
+    before = plan()
+    selected = target if vision_role == "target" else draft
+    path = selected / "config.json"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    config["vision_config"] = {}
+    path.write_text(json.dumps(config), encoding="utf-8")
+    after = plan()
+    prefix = "" if vision_role == "target" else "draft_"
+    assert prefix + "vision_encoder_activations" in after["unmodeled_components"]
+    assert prefix + "vision_encoder_flops" in after["unmodeled_components"]
+    assert after["workload_signature"] != before["workload_signature"]
+    assert after["memory"] == before["memory"]
+    assert any("multimodal validation" in note for note in after["notes"])
+
+
+def test_multimodal_cli_reports_incomplete_coverage(tmp_path: Path, capsys) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir, config_overrides={"mm_vision_tower": "owner/vision-model"})
+    assert llm_main(["--model-dir", str(model_dir), "--prompt-tokens", "4"]) == 0
+    assert "warning: Vision encoder" in capsys.readouterr().out
+    assert serving_main([
+        "--model-dir", str(model_dir), "--prompt-tokens", "4",
+        "--active-sequences", "1", "--max-batch-size", "2",
+    ]) == 0
+    assert "warning: Vision encoder" in capsys.readouterr().out
+
+
 def test_decoder_without_kv_cache_recomputes_full_decode_context(
     tmp_path: Path,
 ) -> None:

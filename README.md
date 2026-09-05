@@ -1110,6 +1110,11 @@ environments, binary assets, and design drafts are excluded through
   runtime shape, or data-dependent branch.
 - Memory estimates can miss backend-private allocations, custom operators,
   allocator policies, and unmatched workspaces.
+- For models declaring a vision encoder, `estimate-llm` and `plan-serving`
+  include checkpoint weights but leave vision/projector activations and FLOPs
+  unmodeled. Both JSON and terminal reports flag this incomplete coverage.
+  Decoder token counts must already include the visual tokens inserted by the
+  processor; validate full multimodal memory before using a fit/admission result.
 - Diffusion profiles model fixed reference pipelines. Custom ControlNet,
   IP-Adapter, LoRA, safety-checker, refiner, video, and DiT components require
   additional component metadata and matching real-GPU validation.

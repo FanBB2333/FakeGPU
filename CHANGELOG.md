@@ -93,6 +93,9 @@
 
 ### Fixed
 
+- Read nested `text_config` decoder dimensions and current `dtype` metadata,
+  and warn in LLM/serving JSON and terminal reports when vision/projector
+  activations and FLOPs are unmodeled, including speculative draft models.
 - Decoder inference can model last-token-only vocabulary projection with
   `estimate-llm --logits-to-keep 1` (Python: `logits_to_keep=1`), including
   FLOPs, logits memory, and traffic in cached and uncached generation.
