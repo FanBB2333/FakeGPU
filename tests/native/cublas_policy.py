@@ -156,6 +156,32 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
               [0, 0, 1, 1, 1, alpha, a, dtype, 1, 1, b, dtype, 1, 1, beta, c, dtype, 1, 1, 1, 68, -1],
               [c], fallback=fallback, value=6)
 
+    # Scale storage follows computeType, not the matrix/output dtype.
+    for compute_type, dtype in ((64, 2), (65, 2), (68, 2), (70, 1), (71, 1),
+                                (2, 2), (0, 0), (1, 1), (999, 0)):
+        matrix_scalar = {0: ct.c_float, 1: ct.c_double, 2: ct.c_uint16}[dtype]
+        ma, mb, mc = ((matrix_scalar * 1)(v) for v in (
+            (0x4000, 0x4200, 0x4400) if dtype == 2 else (2, 3, 4)
+        ))
+        if compute_type in (2, 64, 65):
+            # Adjacent poison bytes make an erroneous float32 read deterministic.
+            sa, sb = (ct.c_uint16 * 2)(0x3e00, 0x7fc0), (ct.c_uint16 * 2)(0xb800, 0x7fc0)
+        else:
+            scale_scalar = ct.c_double if dtype == 1 else ct.c_float
+            sa, sb = (scale_scalar * 1)(1.5), (scale_scalar * 1)(-0.5)
+        pa, pb, pc = ((P * 1)(ct.addressof(buf)) for buf in (ma, mb, mc))
+        fallback = skip_gemm or compute_type == 999
+        expected = 0x4700 if dtype == 2 else 7
+        check("cublasGemmEx", [Int] * 5 + [P, P, Int, Int, P, Int, Int, P, P, Int, Int, Int, Int],
+              [0, 0, 1, 1, 1, sa, ma, dtype, 1, mb, dtype, 1, sb, mc, dtype, 1, compute_type, -1],
+              [mc], fallback=fallback, value=expected, unchanged=compute_type == 999)
+        check("cublasGemmBatchedEx", [Int] * 5 + [P, P, Int, Int, P, Int, Int, P, P, Int, Int, Int, Int, Int],
+              [0, 0, 1, 1, 1, sa, pa, dtype, 1, pb, dtype, 1, sb, pc, dtype, 1, 1, compute_type, -1],
+              [mc], fallback=fallback, value=expected, unchanged=compute_type == 999)
+        check("cublasGemmStridedBatchedEx", [Int] * 5 + [P, P, Int, Int, L, P, Int, Int, L, P, P, Int, Int, L, Int, Int, Int],
+              [0, 0, 1, 1, 1, sa, ma, dtype, 1, 1, mb, dtype, 1, 1, sb, mc, dtype, 1, 1, 1, compute_type, -1],
+              [mc], fallback=fallback, value=expected, unchanged=compute_type == 999)
+
     c[0], beta[0] = float("inf"), -0.0
     check("cublasSgemm_v2", [Int] * 5 + [P, P, Int, P, Int, P, P, Int],
           [0, 0, 1, 1, 1, alpha, a, 1, b, 1, beta, c, 1], [c], fallback=skip_gemm, value=6)

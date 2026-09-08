@@ -345,6 +345,28 @@ double read_scalar_typed(const void* ptr, int dataType) {
     }
 }
 
+int gemm_scale_type(int computeType) {
+    switch (computeType) {
+        case 2:  // Legacy CUDA_R_16F compute type.
+        case CUBLAS_COMPUTE_16F:
+        case CUBLAS_COMPUTE_16F_PEDANTIC:
+            return 2;  // CUDA_R_16F
+        case 1:  // Legacy CUDA_R_64F compute type.
+        case CUBLAS_COMPUTE_64F:
+        case CUBLAS_COMPUTE_64F_PEDANTIC:
+            return 1;  // CUDA_R_64F
+        case 0:  // Legacy CUDA_R_32F compute type.
+        case CUBLAS_COMPUTE_32F:
+        case CUBLAS_COMPUTE_32F_PEDANTIC:
+        case CUBLAS_COMPUTE_32F_FAST_16F:
+        case CUBLAS_COMPUTE_32F_FAST_16BF:
+        case CUBLAS_COMPUTE_32F_FAST_TF32:
+            return 0;  // CUDA_R_32F
+        default:
+            return -1;
+    }
+}
+
 double read_elem(const void* base, int dataType, size_t idx) {
     const char* p = reinterpret_cast<const char*>(base) + idx * getDataTypeSize(dataType);
     return read_scalar_typed(p, dataType);
@@ -1791,20 +1813,15 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
         return CUBLAS_STATUS_SUCCESS;
     }
 
-    // Interpret alpha/beta using computeType (best-effort).
-    double a = 0.0;
-    double b = 0.0;
-    switch (computeType) {
-        case CUBLAS_COMPUTE_64F:
-        case CUBLAS_COMPUTE_64F_PEDANTIC:
-            a = *reinterpret_cast<const double*>(alpha);
-            b = *reinterpret_cast<const double*>(beta);
-            break;
-        default:
-            a = *reinterpret_cast<const float*>(alpha);
-            b = *reinterpret_cast<const float*>(beta);
-            break;
+    const int scale_type = gemm_scale_type(computeType);
+    if (scale_type < 0) {
+        if (fake_gpu::record_unsupported_api("cublasGemmEx", "unsupported_compute_type")) {
+            return CUBLAS_STATUS_NOT_SUPPORTED;
+        }
+        return CUBLAS_STATUS_SUCCESS;
     }
+    const double a = read_scalar_typed(alpha, scale_type);
+    const double b = read_scalar_typed(beta, scale_type);
 
     const int a_rows = (transa == CUBLAS_OP_N) ? m : k;
     const int a_cols = (transa == CUBLAS_OP_N) ? k : m;
@@ -1875,19 +1892,15 @@ cublasStatus_t cublasGemmStridedBatchedEx(cublasHandle_t handle, cublasOperation
     const size_t b_elem_size = getDataTypeSize(Btype);
     const size_t c_elem_size = getDataTypeSize(Ctype);
 
-    double a = 0.0;
-    double b = 0.0;
-    switch (computeType) {
-        case CUBLAS_COMPUTE_64F:
-        case CUBLAS_COMPUTE_64F_PEDANTIC:
-            a = *reinterpret_cast<const double*>(alpha);
-            b = *reinterpret_cast<const double*>(beta);
-            break;
-        default:
-            a = *reinterpret_cast<const float*>(alpha);
-            b = *reinterpret_cast<const float*>(beta);
-            break;
+    const int scale_type = gemm_scale_type(computeType);
+    if (scale_type < 0) {
+        if (fake_gpu::record_unsupported_api("cublasGemmStridedBatchedEx", "unsupported_compute_type")) {
+            return CUBLAS_STATUS_NOT_SUPPORTED;
+        }
+        return CUBLAS_STATUS_SUCCESS;
     }
+    const double a = read_scalar_typed(alpha, scale_type);
+    const double b = read_scalar_typed(beta, scale_type);
 
     for (int batch = 0; batch < batchCount; ++batch) {
         const void* Ab = reinterpret_cast<const char*>(A) + static_cast<long long>(batch) * strideA * static_cast<long long>(a_elem_size);
@@ -1937,19 +1950,15 @@ cublasStatus_t cublasGemmBatchedEx(cublasHandle_t handle, cublasOperation_t tran
         }
         return CUBLAS_STATUS_SUCCESS;
     }
-    double a = 0.0;
-    double b = 0.0;
-    switch (computeType) {
-        case CUBLAS_COMPUTE_64F:
-        case CUBLAS_COMPUTE_64F_PEDANTIC:
-            a = *reinterpret_cast<const double*>(alpha);
-            b = *reinterpret_cast<const double*>(beta);
-            break;
-        default:
-            a = *reinterpret_cast<const float*>(alpha);
-            b = *reinterpret_cast<const float*>(beta);
-            break;
+    const int scale_type = gemm_scale_type(computeType);
+    if (scale_type < 0) {
+        if (fake_gpu::record_unsupported_api("cublasGemmBatchedEx", "unsupported_compute_type")) {
+            return CUBLAS_STATUS_NOT_SUPPORTED;
+        }
+        return CUBLAS_STATUS_SUCCESS;
     }
+    const double a = read_scalar_typed(alpha, scale_type);
+    const double b = read_scalar_typed(beta, scale_type);
 
     for (int batch = 0; batch < batchCount; ++batch) {
         const void* Ab = Aarray[batch];

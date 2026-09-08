@@ -93,6 +93,10 @@
 
 ### Fixed
 
+- Read GemmEx alpha/beta in the scalar storage type selected by computeType,
+  including FP16 and legacy real-valued compute enums, across ordinary and both
+  batched entry points. Unknown compute types now obey the unsupported-API
+  policy without reading scalars or modifying output.
 - Route unimplemented cuBLASLt auxiliary/gradient epilogues and unknown epilogue
   combinations through the unsupported-API policy instead of partially executing
   them as ordinary activations. Preserve output buffers on these paths and test

@@ -420,21 +420,21 @@
       "api": "cublasGemmEx",
       "library": "cublas",
       "classification": "mixed_numeric_and_compatibility",
-      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "simulate_behavior": "Supported CPU paths read real-valued alpha/beta according to computeType and execute numerically; unsupported data or compute types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy. Unknown compute types skip computation without writing output.",
       "policy_enforced": true
     },
     {
       "api": "cublasGemmStridedBatchedEx",
       "library": "cublas",
       "classification": "mixed_numeric_and_compatibility",
-      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "simulate_behavior": "Supported CPU paths read real-valued alpha/beta according to computeType and execute numerically; unsupported data or compute types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy. Unknown compute types skip computation without writing output.",
       "policy_enforced": true
     },
     {
       "api": "cublasGemmBatchedEx",
       "library": "cublas",
       "classification": "mixed_numeric_and_compatibility",
-      "simulate_behavior": "Supported CPU paths execute numerically; synthetic output, unsupported data types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy.",
+      "simulate_behavior": "Supported CPU paths read real-valued alpha/beta according to computeType and execute numerically; unsupported data or compute types, disabled CPU execution, and skipped GEMM computation obey the unsupported-API policy. Unknown compute types skip computation without writing output.",
       "policy_enforced": true
     },
     {
