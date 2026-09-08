@@ -763,7 +763,7 @@
       "api": "cublasLtMatmul",
       "library": "cublas",
       "classification": "mixed_numeric_and_compatibility",
-      "simulate_behavior": "Supported CPU paths execute numerically; unsupported layouts, data types, pointer modes, disabled CPU execution, and skipped computation obey the unsupported-API policy. Non-identity C transforms are always rejected without writing output, matching the cuBLASLt TRANSC restriction.",
+      "simulate_behavior": "Supported CPU paths execute numerically; unsupported layouts, data types, pointer modes, epilogues, disabled CPU execution, and skipped computation obey the unsupported-API policy. CPU epilogues support DEFAULT, RELU, BIAS, RELU_BIAS, GELU, and GELU_BIAS; other values skip computation without writing output. Non-identity C transforms are always rejected without writing output, matching the cuBLASLt TRANSC restriction.",
       "policy_enforced": true
     }
   ]

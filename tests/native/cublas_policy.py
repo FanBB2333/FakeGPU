@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ctypes as ct
 import json
+import math
 import os
 import subprocess
 import sys
@@ -32,7 +33,8 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
     handle = P()
     assert bind("cublasCreate_v2", [P])(ct.byref(handle)) == 0
 
-    def check(name, types, args, outputs, *, fallback=True, value=None, call_handle=None, reject=False):
+    def check(name, types, args, outputs, *, fallback=True, value=None, call_handle=None, reject=False,
+              unchanged=False):
         func = bind(name, [P, *types])
         snapshots = [bytes(output) for output in outputs]
         expected = 15 if reject or (strict and fallback) else 0  # CUBLAS_STATUS_NOT_SUPPORTED
@@ -41,7 +43,7 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
                 ct.memmove(output, snapshot, len(snapshot))
             status = func(handle if call_handle is None else call_handle, *args)
             assert status == expected, (name, status, expected)
-            if reject or (strict and fallback):
+            if unchanged or reject or (strict and fallback):
                 assert [bytes(output) for output in outputs] == snapshots, name
             if not fallback and value is not None:
                 assert outputs[0][0] == value, (name, outputs[0][0], value)
@@ -165,10 +167,11 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
         ct.byref(layout), 0, 1, 1, 1,
     ) == 0
 
-    def lt_check(fallback, *, reject=False):
+    def lt_check(fallback, *, reject=False, value=6, unchanged=False, extra_outputs=()):
         check("cublasLtMatmul", [P] * 13 + [ct.c_size_t, P],
               [descriptor, alpha, a, layout, b, layout, beta, c, layout, c, layout, None, None, 0, None],
-              [c], fallback=fallback, value=6, call_handle=lt_handle, reject=reject)
+              [c, *extra_outputs], fallback=fallback, value=value, call_handle=lt_handle,
+              reject=reject, unchanged=unchanged)
 
     lt_check(skip_gemm)
     if os.environ["FAKEGPU_CPU_GEMM_MODE"] == "auto":
@@ -203,6 +206,30 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
         lt_check(True, reject=True)
     value = Int(0)
     assert setter(descriptor, 5, ct.byref(value), ct.sizeof(value)) == 0
+    lt_check(skip_gemm)
+
+    bias = (ct.c_float * 1)(-2)
+    bias_pointer = P(ct.addressof(bias))
+    assert setter(descriptor, 8, ct.byref(bias_pointer), ct.sizeof(bias_pointer)) == 0
+    # Auxiliary outputs and activation/bias gradients are not implemented.
+    # Invalid combinations of otherwise known bits must not run either.
+    for epilogue in (130, 134, 160, 164, 136, 152, 192, 208, 256, 512, 0, 3, 34, 999):
+        value = Int(epilogue)
+        assert setter(descriptor, 7, ct.byref(value), ct.sizeof(value)) == 0
+        lt_check(True, unchanged=True, extra_outputs=(bias,))
+
+    def gelu(x):
+        return ct.c_float(0.5 * x * (1 + math.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * x**3)))).value
+
+    a[0], b[0] = 1, 1
+    for epilogue, expected in ((1, 1), (2, 1), (4, -1), (6, 0), (32, gelu(1)), (36, gelu(-1))):
+        value = Int(epilogue)
+        assert setter(descriptor, 7, ct.byref(value), ct.sizeof(value)) == 0
+        lt_check(skip_gemm, value=expected)
+        assert bias[0] == -2
+    a[0], b[0] = 2, 3
+    value = Int(1)
+    assert setter(descriptor, 7, ct.byref(value), ct.sizeof(value)) == 0
     lt_check(skip_gemm)
     assert bind("cublasLtMatrixLayoutDestroy", [P])(layout) == 0
     assert bind("cublasLtMatmulDescDestroy", [P])(descriptor) == 0

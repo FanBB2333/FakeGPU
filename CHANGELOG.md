@@ -93,6 +93,11 @@
 
 ### Fixed
 
+- Route unimplemented cuBLASLt auxiliary/gradient epilogues and unknown epilogue
+  combinations through the unsupported-API policy instead of partially executing
+  them as ordinary activations. Preserve output buffers on these paths and test
+  that all six implemented epilogues still compute under strict policy. Match
+  cuBLASLt's documented tanh GELU approximation instead of using erf-based GELU.
 - Avoid reading old GEMM output when beta is zero, so NaN/Inf in C cannot
   contaminate the result. Reject non-identity cuBLASLt TRANSC settings before
   output writes in every policy and build mode; only TRANSC=N is supported by

@@ -436,8 +436,9 @@ cublasStatus_t gemm_col_major(
 }
 
 double gelu(double x) {
-    // Exact GELU (erf-based) to prioritize correctness over speed.
-    return 0.5 * x * (1.0 + std::erf(x / std::sqrt(2.0)));
+    // cuBLASLt specifies the tanh approximation, not the erf-based GELU.
+    constexpr double sqrt_two_over_pi = 0.7978845608028654;
+    return 0.5 * x * (1.0 + std::tanh(sqrt_two_over_pi * (x + 0.044715 * x * x * x)));
 }
 
 bool is_supported_gemm_datatype(int dataType) {
@@ -3302,6 +3303,23 @@ cublasStatus_t cublasLtMatmul(
         }
         FGPU_LOG("[FakeCUBLASLt] cublasLtMatmul unsupported pointerMode=%d; skipping cpu compute\n", desc.pointerMode);
         return CUBLAS_STATUS_SUCCESS;
+    }
+
+    // Epilogues are enum values, not arbitrary combinations of activation bits.
+    switch (desc.epilogue) {
+        case kLtEpilogueDefault:
+        case kLtEpilogueRelu:
+        case kLtEpilogueBias:
+        case kLtEpilogueRelu | kLtEpilogueBias:
+        case kLtEpilogueGelu:
+        case kLtEpilogueGelu | kLtEpilogueBias:
+            break;
+        default:
+            if (fake_gpu::record_unsupported_api("cublasLtMatmul", "unsupported_epilogue")) {
+                return CUBLAS_STATUS_NOT_SUPPORTED;
+            }
+            FGPU_LOG("[FakeCUBLASLt] cublasLtMatmul unsupported epilogue=%u; skipping cpu compute\n", desc.epilogue);
+            return CUBLAS_STATUS_SUCCESS;
     }
 
     const double a = read_scalar_typed(alpha, desc.scaleType);
