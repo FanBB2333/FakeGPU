@@ -1024,6 +1024,18 @@ python -m fakegpu validate-finetune-windows --event-context \
   --holdout-run holdout.json --json event-window-validation.json
 ```
 
+增加 `--epoch-context` 可同時匹配每個 microbatch 在 epoch 內的實際位置，區分
+包含新一輪取數或 worker 啟動的同形視窗。它使用完整有序、從 1 開始的 microstep
+位置，不綁定絕對 epoch 編號。報告必須有 epoch 中繼資料；仍排除 warmup 和組合首次
+出現，並要求足夠的獨立樣本。無週期事件時可單獨使用，有週期事件時與
+`--event-context` 一起使用：
+
+```bash
+python -m fakegpu validate-finetune-windows --event-context --epoch-context \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json epoch-window-validation.json
+```
+
 支援標準梯度檢查點。LLaMA-Factory 使用 `disable_gradient_checkpointing: false`，
 並透過 `use_reentrant_gc: true` 或 `false` 選擇實作；Axolotl 使用
 `gradient_checkpointing: true` 與 `gradient_checkpointing_kwargs: {use_reentrant: true}`

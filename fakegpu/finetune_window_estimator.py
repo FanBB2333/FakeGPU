@@ -90,7 +90,26 @@ def _window_contexts(observation: Mapping[str, Any]):
         }
 
 
-def _samples(run: Mapping[str, Any], *, event_context: bool = False) -> dict[str, Any]:
+def _epoch_window_context(update: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep every recorded position, including resets at observed epoch changes.
+
+    The shared batch validator already checks one-based, contiguous metadata.
+    This opt-in window mode additionally requires that optional metadata.
+    """
+    batches = update["batches"]
+    if any(
+        "epoch_index" not in batch or "epoch_microstep" not in batch
+        for batch in batches
+    ):
+        raise FinetuneEstimateError(
+            "epoch-conditioned windows require recorded epoch metadata for every batch"
+        )
+    return {"batch_microsteps": [batch["epoch_microstep"] for batch in batches]}
+
+
+def _samples(
+    run: Mapping[str, Any], *, event_context: bool = False, epoch_context: bool = False
+) -> dict[str, Any]:
     config, observation, _, _, schedule = validate_native_run(
         run, require_fixed_shape=False
     )
@@ -136,9 +155,13 @@ def _samples(run: Mapping[str, Any], *, event_context: bool = False) -> dict[str
                 "window calibration requires known binary masks and integer labels"
             )
         context = next(contexts) if event_context else None
-        key = _canonical(
-            {"batches": batches, "context": context} if event_context else batches
-        )
+        epoch = _epoch_window_context(update) if epoch_context else None
+        descriptor = {"batches": batches} if event_context or epoch_context else batches
+        if event_context:
+            descriptor["context"] = context
+        if epoch_context:
+            descriptor["epoch_context"] = epoch
+        key = _canonical(descriptor)
         first = key not in seen
         seen.add(key)
         warmup_count += update["warmup"]
@@ -164,12 +187,16 @@ def _samples(run: Mapping[str, Any], *, event_context: bool = False) -> dict[str
                 and boundary["optimizer_updates_since_boundary"] == 0
                 for boundary in context.values()
             )
+        if epoch_context:
+            trace[-1]["epoch_context"] = epoch
         if first or update["warmup"]:
             excluded_count += 1
             continue
         group = groups.setdefault(key, {"batches": batches, "updates": []})
         if event_context:
             group["context"] = context
+        if epoch_context:
+            group["epoch_context"] = epoch
         group["updates"].append(
             {"optimizer_step": update["optimizer_step"], "seconds": update["seconds"]}
         )
@@ -210,6 +237,7 @@ def estimate_finetuning_windows(
     target_run: Mapping[str, Any],
     *,
     event_context: bool = False,
+    epoch_context: bool = False,
 ) -> dict[str, Any]:
     """Predict steady windows in an independent, already recorded target trace.
 
@@ -220,11 +248,18 @@ def estimate_finetuning_windows(
     containing evaluation and checkpoint calls, with elapsed optimizer updates.
     First occurrences then refer to each combined batch/context descriptor.
     Event durations are not part of the predicted optimizer-window time.
+    ``epoch_context=True`` also matches every batch's recorded position within
+    its epoch, independently of the absolute epoch number. Recorded position
+    resets within a window remain part of the descriptor.
+    Either context option makes first-occurrence exclusion apply to the complete
+    selected descriptor; periodic events still require ``event_context=True``.
     Report identity and content checks detect duplicate evidence; they cannot
     authenticate a JSON report or prove how a process was launched.
     """
     if not isinstance(event_context, bool):
         raise FinetuneEstimateError("event_context must be boolean")
+    if not isinstance(epoch_context, bool):
+        raise FinetuneEstimateError("epoch_context must be boolean")
     if (
         not isinstance(calibration_runs, Sequence)
         or isinstance(calibration_runs, (str, bytes))
@@ -232,9 +267,12 @@ def estimate_finetuning_windows(
     ):
         raise FinetuneEstimateError("window calibration requires at least two runs")
     calibrations = [
-        _samples(run, event_context=event_context) for run in calibration_runs
+        _samples(run, event_context=event_context, epoch_context=epoch_context)
+        for run in calibration_runs
     ]
-    target = _samples(target_run, event_context=event_context)
+    target = _samples(
+        target_run, event_context=event_context, epoch_context=epoch_context
+    )
     runs = [*calibrations, target]
     if len({run["identity"]["uuid"] for run in runs}) != len(runs):
         raise FinetuneEstimateError("calibration and target require distinct run UUIDs")
@@ -309,6 +347,8 @@ def estimate_finetuning_windows(
         )
         if event_context:
             groups[-1]["context"] = deepcopy(target_group["context"])
+        if epoch_context:
+            groups[-1]["epoch_context"] = deepcopy(target_group["epoch_context"])
     if missing:
         raise FinetuneEstimateError(
             "insufficient independent window coverage: " + "; ".join(missing)
@@ -384,5 +424,20 @@ def estimate_finetuning_windows(
                 "Event context retains the latest complete ordered boundary containing each event kind and the number of optimizer updates since it; it does not prove that older events, cache state or system load have no remaining effect.",
                 "Context-conditioned samples validate recorded window timing; they do not isolate a causal event overhead or predict event durations, combined pipeline wall time, or future schedules.",
             ]
+        )
+    if epoch_context:
+        result["scope"] = (
+            "recorded_event_epoch_conditioned_optimizer_window_replay"
+            if event_context
+            else "recorded_epoch_conditioned_optimizer_window_replay"
+        )
+        if not event_context:
+            del result["sampling_policy"]["exclude_first_window_occurrence"]
+        result["sampling_policy"].update(
+            epoch_context="recorded_epoch_microsteps_per_batch",
+            exclude_first_context_window_occurrence=True,
+        )
+        result["limitations"].append(
+            "Epoch context uses each batch's recorded one-based microstep within its epoch; it does not include absolute epoch number or infer future epoch boundaries. Matching positions does not establish the cause of timing differences or control sampler, cache and system state."
         )
     return result

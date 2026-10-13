@@ -34,7 +34,7 @@ def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def _reference_windows(run):
+def _reference_windows(run, *, epoch_context=False):
     """Replay observed preceding IDs; preserve full same-step event boundaries."""
     root_events = {
         event["event_id"]: event
@@ -69,19 +69,24 @@ def _reference_windows(run):
             }
             for kind, boundary in latest.items()
         }
-        key = _canonical(
-            {
-                "batches": [
-                    {
-                        name: value
-                        for name, value in batch.items()
-                        if name not in {"epoch_index", "epoch_microstep"}
-                    }
-                    for batch in update["batches"]
-                ],
-                "context": context,
+        key_data = {
+            "batches": [
+                {
+                    name: value
+                    for name, value in batch.items()
+                    if name not in {"epoch_index", "epoch_microstep"}
+                }
+                for batch in update["batches"]
+            ],
+            "context": context,
+        }
+        if epoch_context:
+            key_data["epoch_context"] = {
+                "batch_microsteps": [
+                    batch["epoch_microstep"] for batch in update["batches"]
+                ]
             }
-        )
+        key = _canonical(key_data)
         first = key not in seen
         seen.add(key)
         trace.append(
@@ -96,18 +101,22 @@ def _reference_windows(run):
                 ),
             }
         )
+        if epoch_context:
+            trace[-1]["epoch_context"] = key_data["epoch_context"]
     return trace
 
 
-def _reference_comparison(calibrations, target, projection, *, calibration_steps):
+def _reference_comparison(
+    calibrations, target, projection, *, calibration_steps, epoch_context=False
+):
     samples = []
     for calibration in calibrations:
         groups = defaultdict(list)
-        for row in _reference_windows(calibration):
+        for row in _reference_windows(calibration, epoch_context=epoch_context):
             if row["eligible"]:
                 groups[row["key"]].append(row["seconds"])
         samples.append(groups)
-    target_trace = _reference_windows(target)
+    target_trace = _reference_windows(target, epoch_context=epoch_context)
     projected_trace = {
         row["optimizer_step"]: row for row in projection["target_updates"]
     }
@@ -124,6 +133,10 @@ def _reference_comparison(calibrations, target, projection, *, calibration_steps
         ):
             raise ValueError(
                 "production event-window context differs from independent reference"
+            )
+        if epoch_context and projected["epoch_context"] != row["epoch_context"]:
+            raise ValueError(
+                "production event-window epoch position differs from independent reference"
             )
         if not row["eligible"]:
             continue
@@ -166,7 +179,7 @@ def _reference_comparison(calibrations, target, projection, *, calibration_steps
             "absolute_percentage_error": abs(predicted - actual) / actual * 100,
         }
 
-    return {
+    result = {
         "whole_trace": comparison(retained),
         "longer_holdout_suffix": comparison(
             [row for row in retained if row["optimizer_step"] > calibration_steps]
@@ -187,6 +200,43 @@ def _reference_comparison(calibrations, target, projection, *, calibration_steps
             len(groups[row["key"]]) for groups in samples for row in retained
         ),
     }
+    if epoch_context:
+        positions = defaultdict(set)
+        for row in retained:
+            context = json.loads(row["key"])["context"]
+            positions[_canonical(context)].add(
+                tuple(row["epoch_context"]["batch_microsteps"])
+            )
+        result["epoch_start"] = comparison(
+            [
+                row
+                for row in retained
+                if row["epoch_context"]["batch_microsteps"][0] == 1
+            ]
+        )
+        result["later_full_windows"] = comparison(
+            [
+                row
+                for row in retained
+                if len(row["epoch_context"]["batch_microsteps"]) > 1
+                and row["epoch_context"]["batch_microsteps"][0] > 1
+            ]
+        )
+        result["epoch_tail"] = comparison(
+            [
+                row
+                for row in retained
+                if len(row["epoch_context"]["batch_microsteps"]) == 1
+            ]
+        )
+        result["event_context_epoch_positions"] = [
+            {
+                "context": json.loads(context),
+                "batch_microsteps": [list(value) for value in sorted(values)],
+            }
+            for context, values in sorted(positions.items())
+        ]
+    return result
 
 
 def main(argv=None):
@@ -204,9 +254,16 @@ def main(argv=None):
     parser.add_argument("--gpu-index", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=float, default=1800)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument(
+        "--epoch-context",
+        action="store_true",
+        help="Match the recorded microstep position of every batch within its epoch.",
+    )
     args = parser.parse_args(argv)
     command = []
     for name, value in vars(args).items():
+        if name == "epoch_context":
+            continue
         if name == "prepare_only":
             if value:
                 command.append("--prepare-only")
@@ -221,7 +278,7 @@ def main(argv=None):
         "schema_version": "fakegpu.finetune_event_window_matrix.v1",
         "framework": args.framework,
         "status": "prepared" if args.prepare_only else "running",
-        "sampling_plan": vars(args),
+        "sampling_plan": dict(vars(args)),
         "event_matrix_summary": str(directory / "summary.json"),
         "matrix_source_sha256": source_hash,
         "holdout_comparisons": {},
@@ -232,6 +289,8 @@ def main(argv=None):
             "Update and event comparisons are reported separately; no total wall-time or VRAM forecast is claimed.",
         ],
     }
+    if not args.epoch_context:
+        summary["sampling_plan"].pop("epoch_context")
     try:
         if result:
             raise ValueError(
@@ -252,9 +311,10 @@ def main(argv=None):
             calibrations = [reports[f"calibration-{index}"] for index in (1, 2)]
             for name in ("holdout-1", "holdout-2"):
                 target = reports[name]
-                projection = estimate_finetuning_windows(
-                    calibrations, target, event_context=True
-                )
+                mode = {"event_context": True}
+                if args.epoch_context:
+                    mode["epoch_context"] = True
+                projection = estimate_finetuning_windows(calibrations, target, **mode)
                 summary["holdout_comparisons"][name] = {
                     "estimate": projection,
                     "independent_reference": _reference_comparison(
@@ -262,6 +322,7 @@ def main(argv=None):
                         target,
                         projection,
                         calibration_steps=args.calibration_steps,
+                        epoch_context=args.epoch_context,
                     ),
                 }
             summary["status"] = "completed"

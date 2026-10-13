@@ -260,3 +260,83 @@ def test_independent_event_reference_rejects_estimator_drift(field):
         matrix._reference_comparison(
             [_checkpoint_report(1), _checkpoint_report(3)], target, projection
         )
+
+
+@pytest.mark.parametrize("interval", [0, -1, True, 0.25, 2.0, None])
+def test_template_rejects_nonpositive_or_noninteger_intervals(interval):
+    config = {
+        "eval_strategy": "steps",
+        "save_strategy": "steps",
+        "eval_steps": interval,
+        "save_steps": 4,
+        "save_total_limit": 100,
+        "save_only_model": False,
+        "do_eval": True,
+    }
+    with pytest.raises(ValueError, match="positive integer"):
+        matrix._validate_template(config, "llamafactory")
+
+
+def _schedule_report(eval_steps, save_steps):
+    calls = matrix._expected_calls(
+        "llamafactory",
+        9,
+        strategy="steps",
+        updates_per_epoch=3,
+        eval_steps=eval_steps,
+        save_steps=save_steps,
+    )
+    return {
+        "schema_version": "fakegpu.finetune_run.v1",
+        "training_config": {
+            "num_samples": 13,
+            "micro_batch_size": 3,
+            "gradient_accumulation_steps": 2,
+        },
+        "native_config": {"eval_steps": eval_steps, "save_steps": save_steps},
+        "workload": {"optimizer_steps": 9},
+        "schedule": {
+            "eval_strategy": "steps",
+            "save_strategy": "steps",
+            "requested_eval_steps": eval_steps,
+            "resolved_eval_steps": eval_steps,
+            "requested_save_steps": save_steps,
+            "resolved_save_steps": save_steps,
+        },
+        "observation": {
+            "phase_events": [
+                dict(call, parent_event_id=None, status="succeeded") for call in calls
+            ]
+        },
+    }
+
+
+@pytest.mark.parametrize("intervals", [(2, 4), (4, 6), (3, 7)])
+def test_actual_integer_schedule_drives_call_reference(tmp_path, intervals):
+    report = _schedule_report(*intervals)
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    _, calls = matrix._read_report(path, "llamafactory", 9, "steps")
+    assert [
+        call["optimizer_step"]
+        for call in calls
+        if call["operation"] == "_save_checkpoint"
+    ] == list(range(intervals[1], 10, intervals[1])) + [9]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "requested_eval_steps",
+        "resolved_eval_steps",
+        "requested_save_steps",
+        "resolved_save_steps",
+    ],
+)
+def test_native_schedule_drift_is_not_reinterpreted_as_another_fixture(tmp_path, field):
+    report = _schedule_report(2, 4)
+    report["schedule"][field] += 1
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="requested/resolved"):
+        matrix._read_report(path, "llamafactory", 9, "steps")

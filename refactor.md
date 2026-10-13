@@ -1,7 +1,52 @@
 # FakeGPU 重构分析报告
 
-> 最新功能与验证结果见下方 **2026-10-13 / 周期事件后的训练窗口校准**；前一阶段见 **原生评估与 checkpoint 事件成本**、**动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新功能与验证结果见下方 **2026-10-13 / epoch 位置与事件上下文联合校准**；前一阶段见 **周期事件后的训练窗口校准**、**原生评估与 checkpoint 事件成本**、**动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-13 / epoch 位置与事件上下文联合校准
+
+接续 `98ccfceb`，处理上一阶段事件周期与 epoch 位置固定对应的问题。`estimate_finetuning_windows()` 增加显式 `epoch_context=True`，CLI 对应 `validate-finetune-windows --epoch-context`；周期事件运行可同时指定 `--event-context --epoch-context`。新选项复用已有观测与校验，不改变训练 observer 或采集协议。
+
+- 完整有序 batch 描述之外，分组保留每个 microbatch 从 1 开始的 `epoch_microstep` 数组，区分 `[1, 2]` 与 `[3, 4]`。绝对 epoch 编号不参与分组；窗口内实际发生的 epoch 重置也保留，例如 `[3, 1]`，不推断未来边界。
+- epoch 元数据的类型、连续性和重置仍由共享 batch validator 检查；新模式只补充必需字段检查。缺少位置或独立校准覆盖会明确拒绝，不回退到仅按 batch 预测。warmup、所选完整组合的首次出现及每进程最少两个样本规则保持不变。
+- 默认模式与原有 event-only 模式保留原键和完整输出。CLI 共用参数解析，原生验收矩阵从配置及实际 Trainer 参数读取正整数 eval/save 间隔，交叉核对 requested/resolved 值，不再把上一轮的 4/6 写死在验收逻辑里。
+
+本机源码审计确认：Axolotl 当前实际参数为 `dataloader_num_workers=1`、`persistent_workers=False`、`prefetch_factor=256`；Factory 为 0 workers。对应 Transformers/Accelerate 路径在新 epoch 重新建立迭代器，首次取数发生在首个 update 的观测区间内。这解释了为什么相同 batch 描述仍需区分 epoch 位置，但不是对 worker 启动耗时的独立测量。源码片段、版本和 SHA 保存在本轮证据中；没有改动框架源码、模型或 worker 配置。
+
+正式方案沿用 13 条训练记录、8 条评估记录及上轮模型/优化器设置，保持每 epoch 3 次 update，将 eval/save 改为每 2/4 步。事件周期 4 与 epoch 长度 3 互质，组合周期为 12；相同事件背景可以落在 epoch 的不同位置。25 行候选仅做 CPU 预处理，正式方案在 GPU 计时前按覆盖周期和运行成本选定。
+
+### 独立 GPU 验证
+
+训练设置为 Qwen3.5-0.8B text LoRA / Blackwell GPU / cap 256 / microbatch 3 / accumulation 2 / eval batch 2 / SDPA / seed 42 / 无 GC 或 packing。Factory 0.9.5 使用 Transformers 5.6.0，Axolotl 0.18.0 使用 5.14.1；两框架原生模板和 DeltaNet 内核仍不同，不作同内核速度比较。
+
+每框架两次 68-update calibration、两次 89-update holdout，warmup 为 4 updates，共 **8 个独立 CUDA 进程，无失败或筛选重跑**。继承现有编译/文件缓存，没有受控冷启动结论。每份 calibration 实际消费 114 microsteps / 298 条序列，holdout 为 149 / 389，包含不完整的最后 epoch；最终补触发 eval/save 与完整可恢复 checkpoint 均按实际调用核对。
+
+两个框架均有 **12 个组合，每份 calibration 每组 4 个有效样本**。每份 holdout 排除前 20 个 update（含 4 个 warmup），剩余 69 个窗口；三种 epoch 位置各 23 个，35 个紧接事件。超过校准长度的 steps 69–89 为 21 个窗口，三种位置各 7 个，其中 11 个紧接事件。四种稳定事件上下文实际覆盖所有三种位置；同 batch、同事件背景的 `[1, 2]` 与 `[3, 4]` 不再混合为一个组。
+
+下表为两份 holdout 中的最大 APE。epoch 首窗口、后续完整窗口与尾窗口仅指本次 `[2, 2, 1]` 累积 fixture，不能把单 microbatch 窗口在一般配置中自动解释为 epoch 尾部。
+
+| 框架 | 全部 69 个窗口 | epoch 首窗口 | 后续完整窗口 | 尾窗口 | 后段 21 个窗口 | 单个组合 |
+|---|---:|---:|---:|---:|---:|---:|
+| LLaMA-Factory | 1.716% | 1.577% | 1.591% | 2.250% | 1.991% | 3.176% |
+| Axolotl | 2.597% | 3.902% | 1.588% | 2.759% | 2.501% | 7.292% |
+
+受控诊断固定**相同的校准与目标有效窗口**及进程等权聚合，只移除 epoch 分组条件：Ax 首窗口误差为 16.54%–18.60%，后续完整窗口为 19.93%–21.96%；加入位置后分别为 1.48%–3.90% 与 0.08%–1.59%。总误差却仅由 2.62% / 1.36% 变为 2.60% / 1.34%，说明总量会掩盖分项抵消。该诊断使用新组合的统一排除规则，不冒充首次排除规则不同的旧 API 输出。**Factory 的位置影响很小，没有两个框架普遍显著改善的结论**；全部正负分项均保留。
+
+四模型诊断同时保留仅 batch、batch＋epoch、batch＋事件和完整组合。Ax 仅加 epoch 已解释主要位置差异；加入事件后，同一组 12 类窗口中的最大误差由 8.23% / 9.83% 降到 4.78% / 7.29%。但完整组合的紧接事件窗口误差比仅事件模式更大：1.37% / 0.75% 变为 1.90% / 1.28%，第一份 holdout 的后段紧接事件也从 0.17% 变为 1.53%。更细分组没有保证每个子集都改善，不能据此给出普遍精度保证或因果解释。
+
+独立审计从实际 Arrow 重算训练统计、epoch/tail、所有评估的实际输入 SHA、labels 和 padding，全部一致。160 份周期或终点 checkpoint 与 8 份最终 adapter 均为 24 个张量、319,488 个参数，值有限且 12 个 LoRA B 张量非零；checkpoint step/epoch 与 optimizer、scheduler、RNG、TrainerState 齐全。12 项事件后的 metadata 改写（8 个 README、4 个 Ax debug.log）明确单列，保存时清单不视为永久不变。训练账本不含 token ID，不能据此证明逐条 sampler 身份。
+
+纯数据审计独立重建四份 holdout 的组合键、排除规则、进程均值和逐窗口预测，全部匹配；**46 个采集、验收及相关测试文件**从 GPU 运行前冻结到独立审计保持一致。原始报告、配置、日志、checkpoint、审计脚本与 wheel 保存在 `/tmp/fakegpu-epoch-context-20261013/`，正式 GPU 数据位于其 `period4/` 下。路径替换后的 [`finetune_epoch_window_validation_evidence.json`](tests/data/finetune_epoch_window_validation_evidence.json) 仅供审阅，不能用作校准输入。
+
+最终全仓回归 **1139 passed / 1 skipped，71.94 秒**，Ruff 与 `git diff --check` 通过。wheel 独立安装后的 **76 个 Python 模块**与源码逐字节一致，`python -S` 下新组合模式的四份窗口预测及四份事件预测均与原生矩阵一致，旧 QLoRA 报告仍可推算 128 microsteps / 64 updates。相对 `98ccfceb`，44 份历史定长报告的 132 个投影、4 个动态窗口、4 个事件成本及 4 个原有 event-only 窗口预测，完整字典与序列化字节均完全一致。
+
+本轮仍仅预测实际 trace 中有独立覆盖的稳态窗口，不识别事件或 worker 启动的因果成本，不预测未来 sampler、完整 pipeline 或动态 VRAM。
+
+### 后续推进顺序
+
+1. **完整时间账本**：先在已记录的独立 trace 上核对互不重叠的 setup、训练窗口、根事件、其余 Trainer 开销和 finalization。当前 update 只有 raw/net/metadata 汇总，没有与 phase events 同源的起止坐标；最小下一步是记录这些坐标及 runner/Trainer 边界，独立验证区间无重叠和时间守恒，嵌套事件不重复累计。保留间隙的 raw wall，不把全局 instrumentation 或 setup 内的 checkpoint hash 时间重复相加或扣除。当前 runner 结束坐标在原生调用及 GPU 同步之后，报告构造和 CLI 写盘在外，必须明确计时范围。首次窗口及首次事件后的恢复另建独立进程样本，不能拿稳态均值代替。
+2. **未来工作量与完整预算**：先支持有明确计数语义的单卡、无 packing 文本训练，按实际框架调度核对 epochs/max_steps、累积尾部、最后一步补触发及训练前后事件。把预测的次数与上述独立成本结合，再用更长 holdout 验证完整 wall time；任意 sampler 或未覆盖工作量仍需独立支持证据。
+3. **显存和范围扩展**：动态 VRAM 独立验证 allocated/reserved 峰值与 OOM 边界，随后推进 packing 语义、更多模型/GPU，以及原始 R24–R26。窗口 timing 结果不用于推导动态显存，也不代表完整 toolkit 已完成。
 
 ## 2026-10-13 / 周期事件后的训练窗口校准
 

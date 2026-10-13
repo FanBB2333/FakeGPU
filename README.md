@@ -1127,6 +1127,20 @@ python -m fakegpu validate-finetune-windows --event-context \
   --holdout-run holdout.json --json event-window-validation.json
 ```
 
+Add `--epoch-context` to match the recorded position of every microbatch within
+its epoch as well. This distinguishes otherwise identical windows that include
+epoch-start data loading or worker startup. It uses the complete ordered,
+one-based microstep positions, without binding the absolute epoch number.
+Epoch metadata is required; warmup, first-combination exclusion and independent
+sample requirements still apply. Use this flag on its own for runs without
+periodic events, or combine it with `--event-context`:
+
+```bash
+python -m fakegpu validate-finetune-windows --event-context --epoch-context \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json epoch-window-validation.json
+```
+
 Standard gradient checkpointing is supported. LLaMA-Factory uses
 `disable_gradient_checkpointing: false` with `use_reentrant_gc: true` or `false`;
 Axolotl uses `gradient_checkpointing: true` with

@@ -333,7 +333,7 @@ def run_main(argv: Sequence[str] | None = None) -> int:
 
 
 def _validation_main(
-    argv, *, entrypoint, description, estimate, allow_event_context=False
+    argv, *, entrypoint, description, estimate, allow_window_context=False
 ):
     parser = argparse.ArgumentParser(
         prog=command_prog(__name__, entrypoint), description=description
@@ -346,18 +346,23 @@ def _validation_main(
         "--holdout-run", required=True,
         help="Independent native run JSON to predict and compare.",
     )
-    if allow_event_context:
+    if allow_window_context:
         parser.add_argument(
             "--event-context", action="store_true",
             help="Match steady windows using their recorded evaluation/checkpoint history.",
         )
+        parser.add_argument(
+            "--epoch-context", action="store_true",
+            help="Also match each consumed batch's recorded position within its epoch.",
+        )
     add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
-        options = (
-            {"event_context": True}
-            if allow_event_context and args.event_context else {}
-        )
+        options = {
+            field: True
+            for field in ("event_context", "epoch_context")
+            if allow_window_context and getattr(args, field)
+        }
         report = estimate(
             [load_mapping(path) for path in args.calibration_run],
             load_mapping(args.holdout_run),
@@ -376,7 +381,7 @@ def windows_main(argv: Sequence[str] | None = None) -> int:
         argv, entrypoint="windows_main",
         description="Validate dynamic accumulation-window timing against an independent recorded native run.",
         estimate=estimate_finetuning_windows,
-        allow_event_context=True,
+        allow_window_context=True,
     )
 
 

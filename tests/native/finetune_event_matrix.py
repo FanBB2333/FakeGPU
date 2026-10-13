@@ -317,10 +317,11 @@ def _validate_template(raw: dict[str, Any], framework: str) -> str:
         raise ValueError(
             "matrix requires matching explicit step/epoch eval/save strategies"
         )
-    if strategy == "steps" and (
-        raw.get("eval_steps") != 4 or raw.get("save_steps") != 6
+    if strategy == "steps" and any(
+        type(raw.get(field)) is not int or raw[field] < 1
+        for field in ("eval_steps", "save_steps")
     ):
-        raise ValueError("step matrix requires eval_steps=4 and save_steps=6")
+        raise ValueError("step matrix requires positive integer eval/save intervals")
     if strategy == "epoch" and (raw.get("eval_steps") or raw.get("save_steps")):
         raise ValueError("epoch matrix must omit step intervals")
     if raw.get("save_total_limit") != 100 or raw.get("save_only_model") is not False:
@@ -350,12 +351,37 @@ def _read_report(
     if report["workload"]["optimizer_steps"] != steps:
         raise ValueError("native optimizer steps differ from requested run length")
     cfg = report["training_config"]
+    schedule = report["schedule"]
+    if any(schedule[field] != strategy for field in ("eval_strategy", "save_strategy")):
+        raise ValueError("native event strategies differ from the source configuration")
+    intervals = {}
+    if strategy == "steps":
+        for field in ("eval_steps", "save_steps"):
+            configured = report["native_config"][field]
+            requested, resolved = (
+                schedule[f"requested_{field}"],
+                schedule[f"resolved_{field}"],
+            )
+            if any(
+                type(value) is not int or value < 1
+                for value in (configured, requested, resolved)
+            ):
+                raise ValueError("native event intervals must remain positive integers")
+            if configured != requested or requested != resolved:
+                raise ValueError(
+                    "native requested/resolved event intervals differ from configuration"
+                )
+            intervals[field] = resolved
     updates_per_epoch = math.ceil(
         math.ceil(cfg["num_samples"] / cfg["micro_batch_size"])
         / cfg["gradient_accumulation_steps"]
     )
     expected = _expected_calls(
-        framework, steps, strategy=strategy, updates_per_epoch=updates_per_epoch
+        framework,
+        steps,
+        strategy=strategy,
+        updates_per_epoch=updates_per_epoch,
+        **intervals,
     )
     _check_calls(report, expected)
     return report, expected
