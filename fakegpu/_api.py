@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -324,7 +325,11 @@ def _fallback_name(libname: str) -> str:
     return libname
 
 
-def _preload_libs_for_mode(mode: str | None) -> tuple[str, ...]:
+def _preload_libs_for_mode(
+    mode: str | None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
     # Mode-specific preloading:
     # - simulate: preload all FakeGPU libs (full stubs)
     # - hybrid: interpose the CUDA Driver + NVML/NCCL, while keeping the real
@@ -335,7 +340,14 @@ def _preload_libs_for_mode(mode: str | None) -> tuple[str, ...]:
     #   runtime/cuBLAS initialization path.
     mode_norm = (mode or "simulate").strip().lower()
     if mode_norm == "hybrid":
-        return tuple(lib for lib in _PRELOAD_LIBS if "cublas" not in lib and "cudart" not in lib)
+        environment = os.environ if environ is None else environ
+        excluded = ("cublas", "cudart")
+        if "CUDA_VISIBLE_DEVICES" in environment:
+            # The mask names physical GPUs. PyTorch applies it to NVML's raw
+            # inventory, so a modeled inventory would filter those IDs twice
+            # (or fail UUID lookup). Keep real NVML for masked hybrid runs.
+            excluded += ("nvidia-ml",)
+        return tuple(lib for lib in _PRELOAD_LIBS if not any(name in lib for name in excluded))
     if mode_norm == "passthrough":
         return ()
     return _PRELOAD_LIBS
@@ -343,13 +355,9 @@ def _preload_libs_for_mode(mode: str | None) -> tuple[str, ...]:
 
 def _apply_env_inplace(resolved_dir: Path, config: _FakeGpuRuntimeConfig) -> None:
     updated = _build_env(config, lib_dir=resolved_dir, base_env=os.environ)  # type: ignore[arg-type]
-    library_path_keys = {_LIBRARY_PATH_VAR}
     os.environ.update(updated)
-    for key in library_path_keys:
-        if key in updated:
-            os.environ[key] = updated[key]
-        else:
-            os.environ.pop(key, None)
+    if _LIBRARY_PATH_VAR not in updated:
+        os.environ.pop(_LIBRARY_PATH_VAR, None)
 
 
 def _apply_config_env_inplace(config: _FakeGpuRuntimeConfig) -> None:
@@ -422,9 +430,23 @@ def _apply_env(env_map: dict[str, str], resolved_dir: Path) -> None:
         else:
             env_map.pop(_LIBRARY_PATH_VAR, None)
 
-    preload_paths = [str(resolved_dir / name) for name in _preload_libs_for_mode(env_map.get("FAKEGPU_MODE"))]
+    preload_paths = [
+        str(resolved_dir / name)
+        for name in _preload_libs_for_mode(env_map.get("FAKEGPU_MODE"), environ=env_map)
+    ]
     existing_preload = env_map.get(_PRELOAD_VAR, "")
-    env_map[_PRELOAD_VAR] = ":".join(preload_paths + ([existing_preload] if existing_preload else []))
+    previous_paths = (
+        existing_preload.split(":")
+        if _is_macos()
+        else re.split(r"[:\s]+", existing_preload)
+    )
+    fakegpu_paths = {
+        str(resolved_dir / name)
+        for lib in _PRELOAD_LIBS
+        for name in (lib, _fallback_name(lib))
+    }
+    retained_paths = [path for path in previous_paths if path and path not in fakegpu_paths]
+    env_map[_PRELOAD_VAR] = ":".join(preload_paths + retained_paths)
 
 
 def _prepend_path(prefix: str, existing: str) -> str:

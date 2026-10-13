@@ -142,7 +142,7 @@ def test_native_mode_preload_boundaries() -> None:
     from fakegpu._api import _preload_libs_for_mode
 
     simulate = _preload_libs_for_mode("simulate")
-    hybrid = _preload_libs_for_mode("hybrid")
+    hybrid = _preload_libs_for_mode("hybrid", environ={})
     passthrough = _preload_libs_for_mode("passthrough")
 
     assert any("cudart" in lib for lib in simulate)

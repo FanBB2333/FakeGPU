@@ -74,6 +74,61 @@ def test_preload_boundaries_survive_config_refactor(native_directory: Path, mode
     assert (_api._LIBRARY_PATH_VAR in environment) == (mode == "simulate")
 
 
+@pytest.mark.parametrize("visible_devices", ["1", "1,0", "GPU-test-uuid", ""])
+def test_masked_hybrid_uses_physical_nvml_enumeration(native_directory: Path, visible_devices: str) -> None:
+    environment = _api.env(
+        lib_dir=native_directory,
+        base_env={"CUDA_VISIBLE_DEVICES": visible_devices},
+        mode="hybrid",
+    )
+    preload = environment[_api._PRELOAD_VAR]
+    assert "libcuda" in preload
+    assert "libnccl" in preload
+    assert "nvidia-ml" not in preload
+    assert environment["CUDA_VISIBLE_DEVICES"] == visible_devices
+
+
+def test_child_preload_uses_its_own_visibility_environment(native_directory: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    environment = _api.env(lib_dir=native_directory, base_env={}, mode="hybrid")
+    assert "nvidia-ml" in environment[_api._PRELOAD_VAR]
+
+
+def test_repeated_mode_changes_remove_stale_fakegpu_preloads(native_directory: Path) -> None:
+    environment = {_api._PRELOAD_VAR: "/other/profiler.so", "CUDA_VISIBLE_DEVICES": "1"}
+    for mode in ("simulate", "simulate", "hybrid", "passthrough", "simulate"):
+        environment = _api.env(lib_dir=native_directory, base_env=environment, mode=mode)
+        entries = environment[_api._PRELOAD_VAR].split(":")
+        assert entries.count("/other/profiler.so") == 1
+        assert len(entries) == len(set(entries))
+        assert ("cudart" in environment[_api._PRELOAD_VAR]) == (mode == "simulate")
+        assert ("nvidia-ml" in environment[_api._PRELOAD_VAR]) == (mode == "simulate")
+        if mode == "passthrough":
+            assert entries == ["/other/profiler.so"]
+
+
+def test_mode_switch_removes_unversioned_preloads(native_directory: Path) -> None:
+    old_paths = [str(native_directory / _api._fallback_name(lib)) for lib in _api._PRELOAD_LIBS]
+    for separator in (":", " " if not _api._is_macos() else ":"):
+        environment = _api.env(
+            lib_dir=native_directory,
+            base_env={_api._PRELOAD_VAR: separator.join(["/other/profiler.so", *old_paths])},
+            mode="passthrough",
+        )
+        assert environment[_api._PRELOAD_VAR] == "/other/profiler.so"
+
+
+def test_native_init_honors_physical_visibility(native_directory: Path, monkeypatch) -> None:
+    monkeypatch.setattr(_api, "_initialized", False)
+    monkeypatch.setattr(_api, "_loaded_dir", None)
+    monkeypatch.setattr(_api, "_handles", {})
+    monkeypatch.setattr(_api.ctypes, "CDLL", Mock(return_value=object()))
+    monkeypatch.setattr(_api.os, "environ", {"CUDA_VISIBLE_DEVICES": "1"})
+    result = _api.init(lib_dir=native_directory, mode="hybrid")
+    assert all("nvidia-ml" not in name for name in result.handles)
+    assert "nvidia-ml" not in os.environ[_api._PRELOAD_VAR]
+
+
 @pytest.mark.parametrize("device_count", [0, -1])
 def test_invalid_device_count(native_directory: Path, device_count: int) -> None:
     with pytest.raises(ValueError, match="device_count must be > 0"):

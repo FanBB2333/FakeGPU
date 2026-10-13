@@ -71,6 +71,13 @@ Physical GPUs are optional for the simulation and analysis paths. A compatible
 physical CUDA stack is required only for passthrough, hybrid, and calibration
 runs.
 
+In native hybrid mode, `CUDA_VISIBLE_DEVICES` selects physical GPUs by index or
+UUID. When this variable is present, FakeGPU keeps physical NVML discovery so
+frameworks can resolve that selection correctly; without it, hybrid mode keeps
+the modeled NVML inventory. The CUDA runtime and cuBLAS remain native in both
+cases. Rebuilding a child environment with `fakegpu.env()` removes stale
+FakeGPU preloads from the selected library directory when changing modes.
+
 ### What FakeGPU answers
 
 | Question | Recommended path | Physical GPU |
