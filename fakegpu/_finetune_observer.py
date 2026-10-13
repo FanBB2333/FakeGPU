@@ -9,10 +9,13 @@ import math
 import time
 
 from ._finetune_batches import describe_batch
+from ._finetune_event_observer import NativeEventObserver
 
 
 class NativeTrainerObserver:
-    def __init__(self, torch, *, warmup_steps, on_trainer, on_train_begin):
+    def __init__(
+        self, torch, *, warmup_steps, on_trainer, on_train_begin, run_started=None
+    ):
         self.torch = torch
         self.warmup_steps = warmup_steps
         self.on_trainer = on_trainer
@@ -30,7 +33,11 @@ class NativeTrainerObserver:
         self.during_train_phases = Counter()
         self.during_train_events = Counter()
         self._restores = []
-        self._phase_depth = 0
+        self.event_observer = NativeEventObserver(
+            self, time.perf_counter() if run_started is None else run_started
+        )
+        self.phase_events = self.event_observer.ledger
+        self._preceding_event_ids = []
         self._inside_train = False
         self._update_started = None
         self._update_microsteps = self._update_samples = 0
@@ -42,6 +49,10 @@ class NativeTrainerObserver:
         self._before_weights = {}
         self.parameter_changes = None
         self.peak_allocated = self.peak_reserved = 0
+
+    @property
+    def event_instrumentation_seconds(self):
+        return self.event_observer.instrumentation_seconds
 
     def record_peaks(self):
         # Native memory trackers may reset allocator peaks between phases.
@@ -66,34 +77,6 @@ class NativeTrainerObserver:
                 delattr(obj, name)
         self._restores.clear()
 
-    def _phase_wrapper(self, obj, name, phase):
-        original = getattr(obj, name, None)
-        if original is None:
-            return
-
-        def measured(*args, **kwargs):
-            outer = self._phase_depth == 0
-            if outer:
-                self.torch.cuda.synchronize()
-                self.record_peaks()
-                started = time.perf_counter()
-            self._phase_depth += 1
-            try:
-                return original(*args, **kwargs)
-            finally:
-                self._phase_depth -= 1
-                if outer:
-                    self.torch.cuda.synchronize()
-                    self.record_peaks()
-                    elapsed = time.perf_counter() - started
-                    self.phases[phase] += elapsed
-                    self.events[phase] += 1
-                    if self._inside_train:
-                        self.during_train_phases[phase] += elapsed
-                        self.during_train_events[phase] += 1
-
-        self._replace(obj, name, measured)
-
     def attach(self, trainer, callback_base):
         if self.trainer is not None:
             raise RuntimeError(
@@ -117,6 +100,7 @@ class NativeTrainerObserver:
                     "previous optimizer update has no matching step-end event"
                 )
             self.torch.cuda.synchronize()
+            self._preceding_event_ids = self.event_observer.take_preceding_events()
             self._update_started = time.perf_counter()
             return batch_samples(*args, **kwargs)
 
@@ -152,15 +136,7 @@ class NativeTrainerObserver:
 
         self._replace(trainer, "get_batch_samples", measured_batches)
         self._replace(trainer, "training_step", measured_step)
-        for name, phase in (
-            ("evaluate", "evaluation"),
-            ("predict", "evaluation"),
-            ("save_model", "checkpoint"),
-            ("_save_checkpoint", "checkpoint"),
-        ):
-            self._phase_wrapper(trainer, name, phase)
-        # Axolotl's final save calls the model directly, outside Trainer.train.
-        self._phase_wrapper(trainer.model, "save_pretrained", "checkpoint")
+        self.event_observer.attach(trainer)
         observer = self
 
         class TimingCallback(callback_base):
@@ -238,6 +214,7 @@ class NativeTrainerObserver:
         self.updates.append(
             {
                 "optimizer_step": step,
+                "preceding_event_ids": self._preceding_event_ids,
                 "seconds": elapsed,
                 "wall_seconds": wall_seconds,
                 "batch_instrumentation_seconds": self._update_batch_seconds,

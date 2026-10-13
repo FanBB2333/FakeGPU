@@ -1083,6 +1083,30 @@ python -m fakegpu validate-finetune-windows \
 ```
 
 
+`observation.phase_events` records the actual evaluation and save call tree,
+including training-start evaluation, periodic checkpoints, and final framework
+calls. Only root intervals enter phase totals. The ledger separates raw wall time
+from event metadata collection and records actual evaluation batch/content
+fingerprints and files present after saves. A file inventory is not a measurement
+of disk writes or durability. `preceding_event_ids` links an update to events
+that occurred after the previous update.
+
+`validate-finetune-events` compares evaluation and save subtotals against an
+independent recorded run. At least two calibration runs are required; initial,
+first, repeated and final events remain separate, and repeated groups need two
+samples per calibration run. Matching workloads use equally weighted process
+means; missing coverage is rejected. The first version requires unpacked dense
+text models, loss-only evaluation without custom metrics, and local
+model/adapter or resumable checkpoint saves.
+It does not predict future event counts or total pipeline time: saves can alter
+the allocator/cache state of subsequent training windows.
+
+```bash
+python -m fakegpu validate-finetune-events \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json event-validation.json
+```
+
 Standard gradient checkpointing is supported. LLaMA-Factory uses
 `disable_gradient_checkpointing: false` with `use_reentrant_gc: true` or `false`;
 Axolotl uses `gradient_checkpointing: true` with
@@ -1244,6 +1268,7 @@ maintained in [`refactor.md`](refactor.md).
 | `fakegpu profile-finetune-data` | Scan local JSONL data for token lengths, truncation, padding, and processed sequence counts |
 | `fakegpu run-finetune` | Run native LLaMA-Factory/Axolotl training and record data, CUDA timing, memory, and final saving |
 | `fakegpu validate-finetune-windows` | Validate dynamic window timing using independent calibration and holdout runs |
+| `fakegpu validate-finetune-events` | Validate evaluation and checkpoint costs from independent native event records |
 | `fakegpu simulate-topology` | Model collective routes and link contention |
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
 | `fakegpu calibrate` | Build serving observations, compare memory reports, and enforce reliability gates |

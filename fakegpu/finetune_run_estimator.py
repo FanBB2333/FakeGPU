@@ -7,6 +7,7 @@ import math
 from typing import Any
 
 from ._finetune_batches import validate_batch_profile
+from ._finetune_events import validate_event_profile
 from ._finetune_model import native_config_signature, native_execution_signature
 from .finetune_data_report import apply_dataset_report
 from .finetune_estimator import (
@@ -86,6 +87,7 @@ def validate_native_run(
         raise FinetuneEstimateError("native run requires its native CUDA observation")
     try:
         validate_batch_profile(observation)
+        validate_event_profile(observation, timing=run["timing"])
     except ValueError as exc:
         raise FinetuneEstimateError(str(exc)) from exc
     dataset_digest = run["dataset"].get("provenance", {}).get("content_sha256")

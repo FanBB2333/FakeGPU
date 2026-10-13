@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from ._calibration_cuda import _reject_simulated_cuda_environment
 from ._finetune_batches import summarize_batch_updates, validate_batch_profile
+from ._finetune_events import summarize_phase_events, validate_event_profile
 from ._finetune_model import (
     actual_training_config as _actual_training_config,
     native_config_signature as _execution_signature,
@@ -209,6 +210,7 @@ def run_finetuning(
         config["software_versions"] = native_training_versions(framework)
         config["native_execution_signature"] = _execution_signature(raw)
         config["batch_observation_version"] = "fakegpu.finetune_batches.v1"
+        config["event_observation_version"] = "fakegpu.finetune_events.v1"
         state = {}
 
         def inspect_trainer(trainer):
@@ -238,6 +240,7 @@ def run_finetuning(
             warmup_steps=warmup_steps,
             on_trainer=inspect_trainer,
             on_train_begin=inspect_started_trainer,
+            run_started=started,
         )
         with (
             capture_native_trainer(Trainer, TrainerCallback, observer),
@@ -293,6 +296,7 @@ def run_finetuning(
             "trainer_other_seconds": max(0.0, training_loop - sampled_updates),
             "instrumentation_seconds": observer.instrumentation_seconds,
             "batch_instrumentation_seconds": observer.batch_instrumentation_seconds,
+            "event_instrumentation_seconds": observer.event_instrumentation_seconds,
             "checkpoint_hash_seconds": hash_seconds,
             "warmup_training_seconds": sum(
                 update["seconds"] for update in observer.updates if update["warmup"]
@@ -357,6 +361,8 @@ def run_finetuning(
             },
             "updates": observer.updates,
             "batch_profile": summarize_batch_updates(observer.updates),
+            "phase_events": observer.phase_events,
+            "event_profile": summarize_phase_events(observer.phase_events),
             "limitations": [
                 "Update timing includes accumulation-window prefetch and forward/backward/optimizer work; evaluation and checkpoint events are timed separately.",
                 "Allocator peaks include initialization, training and final saves; they are not total device usage.",
@@ -366,14 +372,30 @@ def run_finetuning(
                 "Batch metadata collection synchronizes each microstep; its measured cost is excluded from update samples and included in total wall time.",
                 "Timing groups describe complete ordered accumulation windows, not separate per-shape kernel timings or memory peaks.",
                 "Token counts require a binary two-dimensional attention mask. Position-ID resets do not establish original packed-example boundaries.",
+                "Phase event timings synchronize CUDA and count only root intervals in phase totals; nested calls remain in the event ledger.",
+                "Event metadata costs remain in raw wall time and are excluded from net event seconds. Save manifests describe present files, not physical disk writes or durability.",
             ],
         }
         validate_batch_profile(observation)
+        validate_event_profile(observation, timing=timing)
         args = observer.trainer.args
         schedule = {
             key: getattr(getattr(args, key, "no"), "value", getattr(args, key, "no"))
             for key in ("eval_strategy", "save_strategy")
         }
+        schedule.update(
+            requested_eval_steps=args.eval_steps,
+            requested_save_steps=args.save_steps,
+            resolved_eval_steps=observer.trainer.state.eval_steps,
+            resolved_save_steps=observer.trainer.state.save_steps,
+            eval_on_start=args.eval_on_start,
+            eval_delay=args.eval_delay,
+            save_only_model=args.save_only_model,
+            save_total_limit=args.save_total_limit,
+            load_best_model_at_end=args.load_best_model_at_end,
+            max_steps=observer.trainer.state.max_steps,
+            num_train_epochs=args.num_train_epochs,
+        )
         return {
             "schema_version": "fakegpu.finetune_run.v1",
             "run_identity": run_identity,

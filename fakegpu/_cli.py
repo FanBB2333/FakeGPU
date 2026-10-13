@@ -69,6 +69,7 @@ BUILTIN_COMMANDS: dict[str, CommandSpec] = {
     "profile-finetune-data": CommandSpec(".finetune_data_cli", "main"),
     "run-finetune": CommandSpec(".finetune_cli", "run_main"),
     "validate-finetune-windows": CommandSpec(".finetune_cli", "windows_main"),
+    "validate-finetune-events": CommandSpec(".finetune_cli", "events_main"),
     "simulate-topology": CommandSpec(".topology", "main"),
     "replay-trace": CommandSpec(".trace_replay", "main"),
     "nvidia-smi": CommandSpec(".smi", "main"),

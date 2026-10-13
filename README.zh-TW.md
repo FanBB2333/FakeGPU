@@ -988,6 +988,26 @@ python -m fakegpu validate-finetune-windows \
 ```
 
 
+`observation.phase_events` 記錄實際評估/儲存呼叫樹，包括訓練開始評估、週期
+checkpoint 和框架最終呼叫；階段總量只累計根事件。帳本區分原始牆鐘時間與
+事件統計開銷，記錄真實評估 batch/內容指紋和儲存後存在的檔案。檔案清單不代表
+實際磁碟寫入量或持久化完成時間。update 的 `preceding_event_ids` 指向上次更新
+之後發生的事件。
+
+`validate-finetune-events` 用獨立訓練報告驗證評估/儲存子總時間。至少提供兩份
+校準報告；開始、首次、重複和最終事件分別匹配，重複事件在每份校準報告中至少
+需要兩個樣本。程序均值等權聚合，缺少覆蓋直接拒絕。首版限無 packing 的 dense
+文字模型，支援 loss-only 且無自訂 metrics 的評估，以及本地模型/adapter 或
+完整可恢復 checkpoint 儲存。
+它不推斷未來事件次數或完整流程時間：儲存可能改變後續訓練的 allocator/cache
+狀態。
+
+```bash
+python -m fakegpu validate-finetune-events \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json event-validation.json
+```
+
 支援標準梯度檢查點。LLaMA-Factory 使用 `disable_gradient_checkpointing: false`，
 並透過 `use_reentrant_gc: true` 或 `false` 選擇實作；Axolotl 使用
 `gradient_checkpointing: true` 與 `gradient_checkpointing_kwargs: {use_reentrant: true}`
@@ -1122,6 +1142,7 @@ Blackwell GPU 上全量、LoRA、bitsandbytes QLoRA 的獨立校準與複測，�
 | `fakegpu profile-finetune-data` | 完整掃描本機 JSONL 的 token 長度、截斷、padding 與處理後序列數 |
 | `fakegpu run-finetune` | 執行 LLaMA-Factory/Axolotl 原生訓練並記錄資料、CUDA 時間、記憶體及最終儲存 |
 | `fakegpu validate-finetune-windows` | 使用獨立校準與 holdout 訓練驗證動態視窗耗時 |
+| `fakegpu validate-finetune-events` | 使用獨立原生事件記錄驗證評估與 checkpoint 成本 |
 | `fakegpu simulate-topology` | 模擬 collective 路由與鏈路競爭 |
 | `fakegpu replay-trace` | 彙整運算、通訊、等待與 GPU 記憶體時間軸 |
 | `fakegpu calibrate` | 整理 serving 觀測、比較 GPU 記憶體報告並執行可靠性門檻檢查 |

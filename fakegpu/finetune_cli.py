@@ -332,15 +332,12 @@ def run_main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def windows_main(argv: Sequence[str] | None = None) -> int:
+def _validation_main(argv, *, entrypoint, description, estimate):
     parser = argparse.ArgumentParser(
-        prog=command_prog(__name__, "windows_main"),
-        description="Validate dynamic accumulation-window timing against an independent recorded native run.",
+        prog=command_prog(__name__, entrypoint), description=description
     )
     parser.add_argument(
-        "--calibration-run",
-        action="append",
-        required=True,
+        "--calibration-run", action="append", required=True,
         help="Native run JSON; repeat for at least two independent calibration processes.",
     )
     parser.add_argument(
@@ -350,9 +347,7 @@ def windows_main(argv: Sequence[str] | None = None) -> int:
     add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
-        from .finetune_window_estimator import estimate_finetuning_windows
-
-        report = estimate_finetuning_windows(
+        report = estimate(
             [load_mapping(path) for path in args.calibration_run],
             load_mapping(args.holdout_run),
         )
@@ -360,3 +355,23 @@ def windows_main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError, TypeError) as exc:
         usage_error(parser, exc)
     return 0
+
+
+def windows_main(argv: Sequence[str] | None = None) -> int:
+    from .finetune_window_estimator import estimate_finetuning_windows
+
+    return _validation_main(
+        argv, entrypoint="windows_main",
+        description="Validate dynamic accumulation-window timing against an independent recorded native run.",
+        estimate=estimate_finetuning_windows,
+    )
+
+
+def events_main(argv: Sequence[str] | None = None) -> int:
+    from .finetune_event_estimator import estimate_finetuning_events
+
+    return _validation_main(
+        argv, entrypoint="events_main",
+        description="Validate native evaluation and save costs against independent recorded events.",
+        estimate=estimate_finetuning_events,
+    )

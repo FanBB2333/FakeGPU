@@ -1,7 +1,42 @@
 # FakeGPU 重构分析报告
 
-> 最新功能与验证结果见下方 **2026-10-13 / 动态窗口独立校准验证**；前一阶段见 **真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新功能与验证结果见下方 **2026-10-13 / 原生评估与 checkpoint 事件成本**；前一阶段见 **动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-13 / 原生评估与 checkpoint 事件成本
+
+接续 `f84d2615`，实现上一阶段提出的周期事件账本与独立成本验证。新增 `estimate_finetuning_events()` 和第 26 项 CLI `validate-finetune-events`；它预测已记录 holdout trace 中的评估/保存子总时间，尚不推断未来调度或完整训练时间。
+
+- `_finetune_event_observer.py` 接管原来 observer 内的阶段包装，记录真实 `evaluate` / `predict` / `_save_checkpoint` / `save_model` / `save_pretrained` 调用树。保留父子关系、step/epoch、训练内外边界、成功状态、同步 wall time 和统计开销。同一步的独立调用分别保留，阶段总量只累计根事件。
+- 评估记录实际处理数据的有序行指纹、成功消费的 batch 描述及输入内容 SHA，不保存 token 内容。任意自定义或有随机变换的数据集不额外遍历，无法安全识别时保持 unknown。保存记录调用结束后实际存在的文件及大小；这些值不是本次写入量、物理 I/O 流量或持久化完成时间。
+- update 的 `preceding_event_ids` 关联两次更新之间的训练内事件，供后续检查保存对 allocator/cache 和下一次训练更新的影响。新协议纳入校准签名，旧报告缺少该可选协议时保留原有行为；账本、汇总、前继关系与阶段计时交叉验证。
+- 初始、首次、重复和最终事件分别匹配。每组须在至少两个独立 calibration 中覆盖；重复事件在每个 calibration 中至少两个样本，进程均值等权聚合。holdout 秒数仅用于比较，不参与拟合。首版限无 packing 的 dense 文本模型、loss-only 且无自定义 metrics/生成的评估，以及已知文件布局的本地保存。
+- 原生执行报告同时记录实际 Trainer 调度参数及解析后的步数。动态窗口与事件验证 CLI 共用参数解析、输入加载和输出逻辑；生产账本校验只有一份，验收工具另行重算事件触发和均值。
+
+### 验收与后续范围
+
+真实 CPU Trainer 在 Transformers **4.57.3、5.6.0、5.14.1** 三个版本验证评估调用、模型实际消费输入、checkpoint 文件、前继关系及 hook 恢复。7 updates 的保存步骤均为 `[3, 6, 7]`；5.x 额外包含最后一步补触发评估，独立的训练后评估仍保留。
+
+本轮真实 CUDA 验收使用 **Blackwell GPU / Qwen3.5-0.8B text / LoRA / cap 256 / microbatch 3 / accumulation 2 / eval batch 2 / SDPA / seed 42 / 无 GC 或 packing**。同一份合成数据为 13 条训练记录、8 条评估记录；Factory 与 Axolotl 的实际模板不同。周期 checkpoint 保存 optimizer、scheduler、RNG 与 TrainerState，最终 adapter 保存独立统计，配置保留全部 checkpoint。
+
+两个框架各执行一份 14-update epoch 调度 smoke，保存步骤为 `[3, 6, 9, 12, 14]`，验证不完整的最后 epoch。正式 steps 调度为每 4 步评估、每 6 步保存，各两份 20-update calibration、两份 29-update holdout。框架最后一步的补触发、Axolotl 的训练前评估、Factory 的训练后再次评估/保存均按实际调用核对。
+
+共 **10 个独立 CUDA 进程**，无失败重跑或结果筛选；继承已有编译及文件缓存，没有受控冷启动的结论。每份正式 calibration 实际消费 34 microsteps / 90 条序列，holdout 为 49 microsteps / 129 条序列；每份 holdout 为 15 个根事件、6 类成本组，全部独立覆盖。下表报告两个 holdout 中的最大 APE：
+
+| 框架 | 事件合计 | 评估子总时间 | 保存子总时间 | 单个事件组 |
+|---|---:|---:|---:|---:|
+| LLaMA-Factory 0.9.5 / TF 5.6.0 | 3.161% | 4.041% | 1.688% | 9.101% |
+| Axolotl 0.18.0 / TF 5.14.1 | 0.858% | 1.691% | 1.314% | 3.106% |
+
+Factory 最大单组误差出现在训练后的最终评估（实测 0.507 秒）；Ax 最大单组为最终 adapter 保存（实测 0.014 秒）。保留逐组结果，避免合计值抵消高估与低估。数字仅对应本次模型、数据、软件和 GPU 上的事件净时间，并非两个框架的同内核速度对比或准确率保证。
+
+独立 CPU 审核从实际 Arrow 缓存重建所有评估输入、padding、labels 与 SHA；每次均消费 8 条评估记录，Factory 为 520 非 padding tokens / 296 有效 labels，Ax 为 776 / 288。46 份周期 checkpoint 与 10 份最终 adapter 均检查通过：每份 24 个张量、319,488 参数，所有值有限且 12 个 LoRA B 张量非零。周期 checkpoint 的文件大小、TrainerState step/epoch 以及 optimizer/scheduler/RNG 文件均匹配；最终 README/model card 和日志有 15 处在事件结束后被框架继续修改，归档明确保留快照与最终大小，不声称最终目录永久等于事件快照。
+
+所有 21 个采集/验收源码文件在 10 次 GPU 运行至最终审计期间保持相同。原始配置、报告、日志、checkpoint 与安装包在 `/tmp/fakegpu-events-20261013/`；路径替换后的审阅归档为 [`finetune_event_validation_evidence.json`](tests/data/finetune_event_validation_evidence.json)，不能用作校准输入。
+
+最终全仓回归 **1083 passed / 1 skipped，69.48 秒**；Ruff 与 `git diff --check` 通过。wheel 独立安装后的 **75 个 Python 模块**与源码逐字节一致，`python -S` 下四份新 CLI 预测与原始矩阵完全一致，旧 QLoRA 报告仍可推算 128 microsteps / 64 updates。另将 `f84d2615` 导出到独立目录比较：**44 份旧定长报告的 132 个投影（38 LoRA / 6 QLoRA）及 4 个动态窗口结果，完整字典和序列化字节均完全一致**。
+
+整体 pipeline 估算仍不开放周期事件：事件本身的成本不能证明保存后的训练状态已恢复。下一步先按 `preceding_event_ids` 对保存/评估后第一个完整累积窗口做独立校准，再验证 sampler 与未来调度产生的次数和尾部，最后组合 setup、warmup、训练、事件和 finalization 的完整时间预算。packing 仍按下节已发现的隔离边界独立推进；本轮没有解除其 gate，也没有从事件耗时推导动态 VRAM。
 
 ## 2026-10-13 / 动态窗口独立校准验证
 

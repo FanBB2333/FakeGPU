@@ -102,6 +102,7 @@ def finetune_workload_signature(
         "actual_quantized_storage",
         "gradient_checkpointing_kwargs",
         "batch_observation_version",
+        "event_observation_version",
     ):
         if key in training_config:
             fields[key] = training_config[key]
@@ -1120,9 +1121,11 @@ def _validate_observation(
             )
         if source == "fakegpu.native_framework_cuda_run":
             from ._finetune_batches import validate_batch_profile
+            from ._finetune_events import validate_event_profile
 
             try:
                 validate_batch_profile(observation)
+                validate_event_profile(observation)
             except ValueError as exc:
                 raise FinetuneEstimateError(str(exc)) from exc
             framework = observation.get("native_framework")

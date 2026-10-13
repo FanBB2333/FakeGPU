@@ -50,6 +50,7 @@ from .finetune_data import (
 )
 from .finetune_run_estimator import estimate_finetuning_run
 from .finetune_window_estimator import estimate_finetuning_windows
+from .finetune_event_estimator import estimate_finetuning_events
 from .finetune_runner import run_finetuning
 from .kernel_analysis import (
     KernelAnalysisError,
@@ -144,6 +145,7 @@ __all__ = [
     "estimate_finetuning",
     "estimate_finetuning_run",
     "estimate_finetuning_windows",
+    "estimate_finetuning_events",
     "estimate_kv_cache_memory",
     "estimate_module_memory",
     "estimate_roofline",
