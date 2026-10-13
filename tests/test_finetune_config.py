@@ -295,8 +295,18 @@ def test_huggingface_bitsandbytes_defaults_differ_from_framework_qlora_defaults(
         factory["double_quantization"],
         factory["quantization_compute_dtype"],
         factory["quantization_storage"],
-    ) == ("nf4", True, "bf16", "uint8")
+    ) == ("nf4", True, "bf16", "bf16")
     assert axolotl["quantization_storage"] == "bf16"
+
+
+@pytest.mark.parametrize("dtype", ["fp32", "fp16", "bf16"])
+def test_factory_quantized_storage_defaults_to_compute_dtype(dtype) -> None:
+    options = {dtype: True} if dtype != "fp32" else {}
+    result = normalize_finetune_config(
+        hf_config(finetuning_type="lora", quantization_bit=4, **options)
+    )
+    assert result["quantization_compute_dtype"] == dtype
+    assert result["quantization_storage"] == dtype
 
 
 def test_explicit_quantization_settings_preserved_and_owned() -> None:

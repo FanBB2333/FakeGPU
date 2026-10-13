@@ -719,11 +719,8 @@ def _quantization_options(
         if raw_compute is not None
         else ("fp32" if source == "huggingface" else dtype)
     )
-    storage = (
-        raw_storage
-        if raw_storage is not None
-        else ("bf16" if source == "axolotl" else "uint8")
-    )
+    default_storage = {"llamafactory": dtype, "axolotl": "bf16"}.get(source, "uint8")
+    storage = raw_storage if raw_storage is not None else default_storage
     if storage != "uint8":
         storage = _dtype(storage)
     return {
