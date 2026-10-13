@@ -116,6 +116,16 @@ def _validate_native_measurements(
 ) -> None:
     """Reconcile redundant counters before treating a run as timing evidence."""
     workload, observation = run["workload"], run["observation"]
+    # The runner records the effective Trainer schedule as well as the summary.
+    # Legacy reports may lack these optional arguments; when present they must agree.
+    model = observation.get("observed_model")
+    arguments = model.get("training_arguments") if isinstance(model, Mapping) else None
+    if isinstance(arguments, Mapping):
+        for field in ("eval_strategy", "save_strategy"):
+            if field in arguments and run["schedule"].get(field) != arguments[field]:
+                raise FinetuneEstimateError(
+                    "native schedule differs from recorded training arguments"
+                )
     if workload != observation.get("workload"):
         raise FinetuneEstimateError(
             "native run workload differs from observation.workload"
