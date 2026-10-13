@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+from importlib import metadata
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -268,6 +271,168 @@ def measured_runtime(monkeypatch, tmp_path):
     transformers.TrainingArguments = SimpleNamespace
     monkeypatch.setitem(sys.modules, "transformers", transformers)
     return state
+
+
+@pytest.mark.parametrize(
+    "targets,expected",
+    [
+        (["all-linear"], "all-linear"),
+        (["q_proj", "v_proj"], ["q_proj", "v_proj"]),
+    ],
+)
+def test_probe_restores_peft_all_linear_shorthand(
+    tmp_path, monkeypatch, measured_runtime, targets, expected
+):
+    adapters = []
+    peft = ModuleType("peft")
+    peft.LoraConfig = lambda **kwargs: SimpleNamespace(**kwargs)
+
+    def apply_adapter(model, config):
+        adapters.append(config)
+        return model
+
+    peft.get_peft_model = apply_adapter
+    peft.prepare_model_for_kbit_training = lambda model, **kwargs: model
+    monkeypatch.setitem(sys.modules, "peft", peft)
+    training = _training() | {
+        "method": "lora",
+        "lora_rank": 8,
+        "lora_target_modules": targets,
+    }
+    finetune_probe.measure_finetuning(
+        _model_config(),
+        training,
+        model_dir=tmp_path,
+        profile_id="a100",
+        warmup_steps=1,
+        measure_steps=2,
+    )
+    assert len(adapters) == 1
+    assert adapters[0].target_modules == expected
+
+
+@pytest.mark.parametrize(
+    "explicit_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
+)
+def test_probe_qlora_uses_the_same_checkpoint_mode_during_preparation_and_training(
+    tmp_path, monkeypatch, measured_runtime, explicit_kwargs
+):
+    preparation = []
+    peft = ModuleType("peft")
+    peft.LoraConfig = lambda **kwargs: SimpleNamespace(**kwargs)
+    peft.get_peft_model = lambda model, config: model
+
+    def prepare(model, **kwargs):
+        preparation.append(kwargs)
+        return model
+
+    peft.prepare_model_for_kbit_training = prepare
+    monkeypatch.setitem(sys.modules, "peft", peft)
+    transformers = sys.modules["transformers"]
+    transformers.BitsAndBytesConfig = SimpleNamespace
+    load_model = transformers.AutoModelForCausalLM.from_pretrained
+
+    def load_quantized_model(*args, **kwargs):
+        model = load_model(*args, **kwargs)
+        model.num_parameters = lambda: sum(p.numel() for p in model.parameters())
+        return model
+
+    transformers.AutoModelForCausalLM.from_pretrained = load_quantized_model
+    versions = finetune_probe.installed_training_versions() | {
+        "peft": "test",
+        "bitsandbytes": "test",
+    }
+    monkeypatch.setattr(finetune_probe, "installed_training_versions", lambda: versions)
+    training = _training() | {
+        "method": "qlora",
+        "lora_rank": 8,
+        "lora_target_modules": ["q_proj"],
+        "gradient_checkpointing": True,
+    }
+    if explicit_kwargs is not None:
+        training["gradient_checkpointing_kwargs"] = explicit_kwargs
+    finetune_probe.measure_finetuning(
+        _model_config(),
+        training,
+        model_dir=tmp_path,
+        profile_id="a100",
+        warmup_steps=1,
+        measure_steps=2,
+    )
+    expected = (
+        explicit_kwargs if explicit_kwargs is not None else {"use_reentrant": False}
+    )
+    assert preparation == [
+        {
+            "use_gradient_checkpointing": True,
+            "gradient_checkpointing_kwargs": expected,
+        }
+    ]
+    assert measured_runtime.trainer.args.gradient_checkpointing_kwargs == expected
+
+
+def test_real_peft_non_reentrant_preparation_avoids_input_gradient_hook(tmp_path):
+    for dependency in ("torch", "transformers", "peft"):
+        try:
+            metadata.version(dependency)
+        except metadata.PackageNotFoundError:
+            pytest.skip(f"optional CPU PEFT regression requires {dependency}")
+    # Keep the actual optional stack separate from the deterministic Trainer
+    # double. The marker exercises PEFT preparation only, not GPU quantization.
+    code = """
+import torch
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+class Model(torch.nn.Module):
+    is_loaded_in_4bit = True
+
+    def __init__(self):
+        super().__init__()
+        self.embedding = torch.nn.Embedding(8, 4)
+
+    def get_input_embeddings(self):
+        return self.embedding
+
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+        self.checkpointing_kwargs = gradient_checkpointing_kwargs
+
+for use_reentrant in (False, True):
+    model = prepare_model_for_kbit_training(
+        Model(),
+        use_gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
+    )
+    assert model.checkpointing_kwargs == {"use_reentrant": use_reentrant}
+    assert len(model.embedding._forward_hooks) == int(use_reentrant)
+    assert model.embedding(torch.tensor([1])).requires_grad is use_reentrant
+
+model = get_peft_model(
+    torch.nn.Sequential(torch.nn.Linear(4, 4)),
+    LoraConfig(r=2, target_modules="all-linear"),
+)
+assert any("lora_A" in name for name, _ in model.named_parameters())
+try:
+    get_peft_model(
+        torch.nn.Sequential(torch.nn.Linear(4, 4)),
+        LoraConfig(r=2, target_modules=["all-linear"]),
+    )
+except ValueError as error:
+    assert "not found" in str(error)
+else:
+    raise AssertionError("PEFT unexpectedly treats a list as the all-linear shorthand")
+"""
+    env = dict(
+        os.environ, CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1"
+    )
+    env["TRITON_CACHE_DIR"] = str(tmp_path / "triton")
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_probe_observation_includes_prefetch_and_accumulated_optimizer_work(

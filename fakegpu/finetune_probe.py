@@ -220,7 +220,9 @@ def measure_finetuning(
 
         if config["method"] == "qlora":
             model = prepare_model_for_kbit_training(
-                model, use_gradient_checkpointing=config["gradient_checkpointing"]
+                model,
+                use_gradient_checkpointing=config["gradient_checkpointing"],
+                gradient_checkpointing_kwargs=checkpointing_kwargs,
             )
         model = get_peft_model(
             model,
@@ -228,7 +230,11 @@ def measure_finetuning(
                 task_type="CAUSAL_LM",
                 r=config["lora_rank"],
                 lora_alpha=config["lora_alpha"],
-                target_modules=config["lora_target_modules"],
+                target_modules=(
+                    "all-linear"
+                    if config["lora_target_modules"] == ["all-linear"]
+                    else config["lora_target_modules"]
+                ),
                 lora_dropout=config["lora_dropout"],
                 bias=config["lora_bias"],
             ),
