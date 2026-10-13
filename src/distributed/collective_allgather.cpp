@@ -9,28 +9,16 @@
 
 namespace fake_gpu::distributed {
 
-namespace {
-
-CollectiveExecutionResult make_error(std::string code, std::string detail) {
-    CollectiveExecutionResult result;
-    result.ok = false;
-    result.error_code = std::move(code);
-    result.error_detail = std::move(detail);
-    return result;
-}
-
-}  // namespace
-
 CollectiveExecutionResult execute_allgather(
     const CollectiveExecutionRequest& request,
     const std::vector<CollectiveExecutionParticipant>& participants) {
     CollectiveSlicePlan plan;
     std::string error;
     if (!build_even_slice_plan(request, participants.size(), plan, error)) {
-        return make_error("invalid_slice_plan", error);
+        return collective_error("invalid_slice_plan", error);
     }
     if (request.bytes != plan.total_bytes) {
-        return make_error("invalid_collective_size", "allgather bytes do not match world_size * count * dtype_size");
+        return collective_error("invalid_collective_size", "allgather bytes do not match world_size * count * dtype_size");
     }
 
     std::vector<unsigned char> gathered(plan.total_bytes, 0);
@@ -38,7 +26,7 @@ CollectiveExecutionResult execute_allgather(
     for (std::size_t index = 0; index < participants.size(); ++index) {
         const CollectiveExecutionParticipant& participant = participants[index];
         if (participant.bytes != request.bytes) {
-            return make_error(
+            return collective_error(
                 "staging_size_mismatch",
                 "participant rank " + std::to_string(participant.rank) +
                     " reported bytes=" + std::to_string(participant.bytes) +
@@ -59,7 +47,7 @@ CollectiveExecutionResult execute_allgather(
                 participant.payload,
                 buffer,
                 error)) {
-            return make_error("staging_open_failed", error);
+            return collective_error("staging_open_failed", error);
         }
         std::memcpy(
             gathered.data() + plan.byte_offset_for_rank(participant.rank),
@@ -81,7 +69,7 @@ CollectiveExecutionResult execute_allgather(
                 gathered.size(),
                 result.output_payloads[participant.rank],
                 error)) {
-            return make_error("staging_open_failed", error);
+            return collective_error("staging_open_failed", error);
         }
     }
 

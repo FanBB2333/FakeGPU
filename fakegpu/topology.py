@@ -551,6 +551,7 @@ def _simulate_flows(
         routed = []
         round_link_bytes: dict[str, int] = defaultdict(int)
         round_link_flow_counts: dict[str, int] = defaultdict(int)
+        round_link_max_payload: dict[str, int] = defaultdict(int)
         link_objects: dict[str, Link] = {}
         for flow_index, flow in enumerate(rounds[round_index]):
             path = topology.route(
@@ -566,6 +567,9 @@ def _simulate_flows(
             for link in path:
                 round_link_bytes[link.id] += flow.payload_bytes
                 round_link_flow_counts[link.id] += 1
+                round_link_max_payload[link.id] = max(
+                    round_link_max_payload[link.id], flow.payload_bytes
+                )
                 link_objects[link.id] = link
 
         link_service_times = {
@@ -677,11 +681,7 @@ def _simulate_flows(
             stats["active_rounds"] += 1
             stats["service_time_us"] += link_service_times[link_id]
             ideal_single = link.transfer_time_us(
-                max(
-                    flow.payload_bytes
-                    for flow, path, _ideal in routed
-                    if any(candidate.id == link_id for candidate in path)
-                )
+                round_link_max_payload[link_id]
             )
             stats["contention_penalty_us"] += max(
                 0.0,

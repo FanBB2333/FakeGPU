@@ -149,6 +149,30 @@ def test_metrics_history_is_bounded_and_returns_copies() -> None:
     assert history.snapshots()[0]["generated_at_ns"] == 2
 
 
+def test_metrics_public_snapshots_and_history_are_isolated(tmp_path: Path) -> None:
+    path = tmp_path / "worker.json"
+    _published_state(path, pid=17, process_name="worker", used_bytes=1024)
+    application = MetricsApplication(MetricsCollector(state_dir=tmp_path))
+    refreshed = application.refresh()
+    expected = application.snapshot()
+    refreshed["devices"][0]["memory"]["used_bytes"] = -1
+    copied = application.snapshot()
+    copied["processes"].clear()
+    history = application.history_payload()
+    history["samples"][0]["devices"].clear()
+    health = application.health_payload()
+    health["device_count"] = -1
+    assert application.snapshot() == expected
+    assert application.history_payload()["samples"] == [expected]
+
+    _published_state(path, pid=17, process_name="worker", used_bytes=2048)
+    application.refresh()
+    samples = application.history_payload()["samples"]
+    assert samples[0] == expected
+    assert samples[1]["devices"][0]["memory"]["used_bytes"] == 2048
+    assert application.health_payload()["device_count"] == 1
+
+
 def test_metrics_collector_and_cli_export_state_directory(
     tmp_path: Path,
     capsys,

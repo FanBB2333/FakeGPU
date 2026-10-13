@@ -1,11 +1,3 @@
-add_library(fake_gpu_cuda_runtime OBJECT
-    cuda_stubs.cpp
-)
-
-target_include_directories(fake_gpu_cuda_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(fake_gpu_cuda_runtime PRIVATE ../core)
-set_property(TARGET fake_gpu_cuda_runtime PROPERTY POSITION_INDEPENDENT_CODE ON)
-
 # Keep CUDA Driver and Runtime symbols in separate object libraries.  In
 # passthrough/hybrid mode libcuda is preloaded while the real libcudart stays in
 # use.  Exporting cudaMalloc/cudaLaunchKernel from libcuda would otherwise

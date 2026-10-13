@@ -161,7 +161,7 @@ fakegpu_link_common_system_libs(fake_cuda)
 
 # CUDA Runtime Library (libcudart.so.12)
 # This library intercepts CUDA Runtime API calls and uses fake_cuda Driver API internally
-# We only include Driver API stubs, not Runtime API stubs from cuda_stubs.cpp
+# Keep the Runtime implementation here, separate from libcuda's exports.
 add_library(fake_cudart SHARED
     $<TARGET_OBJECTS:fake_gpu_cudart>
     $<TARGET_OBJECTS:fake_gpu_cuda_driver>

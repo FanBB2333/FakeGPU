@@ -117,11 +117,11 @@ def _refresh_runtime_profile_state(
 
     if _DEVICE_PROFILES:
         first = _DEVICE_PROFILES[0]
-        _COMPUTE_MAJOR = int(first.get("compute_major", 8))
-        _COMPUTE_MINOR = int(first.get("compute_minor", 0))
-        _TOTAL_MEMORY = int(first.get("total_memory", 80 * 1024**3))
+        _COMPUTE_MAJOR = first["compute_major"]
+        _COMPUTE_MINOR = first["compute_minor"]
+        _TOTAL_MEMORY = first["total_memory"]
         if device_name is None:
-            _DEVICE_NAME = str(first.get("name", _resolve_device_name()))
+            _DEVICE_NAME = first["name"]
         else:
             _DEVICE_NAME = device_name
     elif device_name is not None:
@@ -701,38 +701,20 @@ def _suspend_autograd_saved_tensor_tracking():
 
 
 def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> None:
-    try:
-        module_cls = torch_mod.nn.Module
-    except Exception:
-        module_cls = None
-    if module_cls is not None:
-        original_module_cuda = getattr(module_cls, "cuda", None)
-        if callable(original_module_cuda) and not getattr(
-            original_module_cuda, "_fakegpu_category_patch", False
-        ):
+    module_cls = torch_mod.nn.Module
+    for name in ("cuda", "to"):
+        original = getattr(module_cls, name)
+        if not callable(original) or getattr(original, "_fakegpu_category_patch", False):
+            continue
 
-            @functools.wraps(original_module_cuda)
-            def _tracked_module_cuda(self, *args, **kwargs):
-                result = original_module_cuda(self, *args, **kwargs)
-                _mark_module_memory_categories(result)
-                return result
+        @functools.wraps(original)
+        def _tracked_module_transfer(self, *args, __original=original, **kwargs):
+            result = __original(self, *args, **kwargs)
+            _mark_module_memory_categories(result)
+            return result
 
-            _tracked_module_cuda._fakegpu_category_patch = True  # type: ignore[attr-defined]
-            module_cls.cuda = _tracked_module_cuda
-
-        original_module_to = getattr(module_cls, "to", None)
-        if callable(original_module_to) and not getattr(
-            original_module_to, "_fakegpu_category_patch", False
-        ):
-
-            @functools.wraps(original_module_to)
-            def _tracked_module_to(self, *args, **kwargs):
-                result = original_module_to(self, *args, **kwargs)
-                _mark_module_memory_categories(result)
-                return result
-
-            _tracked_module_to._fakegpu_category_patch = True  # type: ignore[attr-defined]
-            module_cls.to = _tracked_module_to
+        _tracked_module_transfer._fakegpu_category_patch = True  # type: ignore[attr-defined]
+        setattr(module_cls, name, _tracked_module_transfer)
 
     original_register_parameter = getattr(upstream, "register_parameter", None)
     if callable(original_register_parameter) and not getattr(
@@ -802,10 +784,7 @@ def _mark_registered_parameter_grads(upstream: Any) -> None:
 
 
 def _install_optimizer_state_category_patch(torch_mod: Any) -> None:
-    try:
-        optim_mod = torch_mod.optim
-    except Exception:
-        return
+    optim_mod = torch_mod.optim
 
     class_names = (
         "Optimizer",
@@ -1520,49 +1499,29 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         def _tracked_memory_snapshot():
             return _active_tracker().allocator_snapshot()
 
-        torch.cuda.empty_cache = _tracked_empty_cache
-        torch.cuda.memory_allocated = _tracked_memory_allocated
-        torch.cuda.max_memory_allocated = _tracked_max_memory_allocated
-        torch.cuda.memory_reserved = _tracked_memory_reserved
-        torch.cuda.max_memory_reserved = _tracked_max_memory_reserved
-        torch.cuda.memory_cached = _tracked_memory_reserved
-        torch.cuda.max_memory_cached = _tracked_max_memory_reserved
-        torch.cuda.mem_get_info = _tracked_mem_get_info
-        torch.cuda.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
-        torch.cuda.reset_max_memory_allocated = _tracked_reset_peak_memory_stats
-        torch.cuda.reset_max_memory_cached = _tracked_reset_peak_memory_stats
-        torch.cuda.reset_accumulated_memory_stats = (
-            _tracked_reset_accumulated_memory_stats
-        )
-        torch.cuda.memory_stats = _tracked_memory_stats
-        torch.cuda.memory_snapshot = _tracked_memory_snapshot
-
-        # Also patch torch.cuda.memory submodule
-        try:
-            import torch.cuda.memory as _memory_mod
-
-            _memory_mod.empty_cache = _tracked_empty_cache
-            _memory_mod.memory_allocated = _tracked_memory_allocated
-            _memory_mod.max_memory_allocated = _tracked_max_memory_allocated
-            _memory_mod.memory_reserved = _tracked_memory_reserved
-            _memory_mod.max_memory_reserved = _tracked_max_memory_reserved
-            _memory_mod.memory_cached = _tracked_memory_reserved
-            _memory_mod.max_memory_cached = _tracked_max_memory_reserved
-            _memory_mod.mem_get_info = _tracked_mem_get_info
-            _memory_mod.reset_peak_memory_stats = _tracked_reset_peak_memory_stats
-            _memory_mod.reset_max_memory_allocated = _tracked_reset_peak_memory_stats
-            _memory_mod.reset_max_memory_cached = _tracked_reset_peak_memory_stats
-            _memory_mod.reset_accumulated_memory_stats = (
-                _tracked_reset_accumulated_memory_stats
-            )
-            _memory_mod.memory_stats = _tracked_memory_stats
-            _memory_mod.memory_snapshot = _tracked_memory_snapshot
-        except Exception:
-            pass
+        # Both public namespaces must expose the same tracker and aliases.
+        memory_api = {
+            "empty_cache": _tracked_empty_cache,
+            "memory_allocated": _tracked_memory_allocated,
+            "max_memory_allocated": _tracked_max_memory_allocated,
+            "memory_reserved": _tracked_memory_reserved,
+            "max_memory_reserved": _tracked_max_memory_reserved,
+            "memory_cached": _tracked_memory_reserved,
+            "max_memory_cached": _tracked_max_memory_reserved,
+            "mem_get_info": _tracked_mem_get_info,
+            "reset_peak_memory_stats": _tracked_reset_peak_memory_stats,
+            "reset_max_memory_allocated": _tracked_reset_peak_memory_stats,
+            "reset_max_memory_cached": _tracked_reset_peak_memory_stats,
+            "reset_accumulated_memory_stats": _tracked_reset_accumulated_memory_stats,
+            "memory_stats": _tracked_memory_stats,
+            "memory_snapshot": _tracked_memory_snapshot,
+        }
+        for namespace in (torch.cuda, torch.cuda.memory):
+            for name, function in memory_api.items():
+                setattr(namespace, name, function)
 
     # ---- 5. Autocast / GradScaler ----
     _install_fakegpu_autocast(torch_mod)
-    _install_optimizer_state_category_patch(torch_mod)
 
     try:
         from torch.amp import GradScaler as _RealGradScaler

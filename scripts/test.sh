@@ -50,6 +50,12 @@ run_smoke() {
   "$PYTHON_BIN" tests/native/cublas_policy.py \
     --build-dir "$BUILD_DIR"
 
+  local collective_probe="$BUILD_DIR/collective_executor"
+  c++ -std=c++17 tests/native/collective_executor.cpp -o "$collective_probe" \
+    -I src/distributed -L "$BUILD_DIR" -lnvidia-ml
+  FAKEGPU_REPORT_PATH="$BUILD_DIR/collective_executor_report.json" \
+    run_fakegpu "$BUILD_DIR" "$collective_probe"
+
   local preload_probe="$BUILD_DIR/verify_preload"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     cc tests/native/verify_preload.c -o "$preload_probe"

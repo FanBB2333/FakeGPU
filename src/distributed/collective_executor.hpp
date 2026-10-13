@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace fake_gpu::distributed {
@@ -74,6 +75,13 @@ struct CollectiveExecutionResult {
     std::string error_detail;
     std::unordered_map<int, std::vector<char>> output_payloads;
 };
+
+inline CollectiveExecutionResult collective_error(std::string code, std::string detail) {
+    CollectiveExecutionResult result;
+    result.error_code = std::move(code);
+    result.error_detail = std::move(detail);
+    return result;
+}
 
 inline const char* collective_type_name(CollectiveType type) {
     switch (type) {

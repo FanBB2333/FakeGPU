@@ -572,7 +572,10 @@ class MetricsHistory:
 
     def snapshots(self) -> list[dict[str, Any]]:
         with self._lock:
-            return copy.deepcopy(list(self._samples))
+            samples = list(self._samples)
+        # Owned snapshots are never mutated after publication. Copying outside
+        # the lock lets collection continue while a history response is built.
+        return copy.deepcopy(samples)
 
     def __len__(self) -> int:
         with self._lock:
@@ -689,13 +692,13 @@ class MetricsApplication:
         return snapshot
 
     def snapshot(self) -> dict[str, Any]:
+        return copy.deepcopy(self._snapshot_owned())
+
+    def _snapshot_owned(self) -> dict[str, Any]:
+        """Borrow the published snapshot for internal read-only rendering."""
         with self._latest_lock:
-            latest = (
-                copy.deepcopy(self._latest)
-                if self._latest is not None
-                else None
-            )
-        return latest if latest is not None else self.refresh()
+            latest = self._latest
+        return latest if latest is not None else self._refresh_owned()
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -726,7 +729,7 @@ class MetricsApplication:
         }
 
     def health_payload(self) -> dict[str, Any]:
-        snapshot = self.snapshot()
+        snapshot = self._snapshot_owned()
         status = (
             "ok"
             if snapshot.get("scrape_success")
@@ -775,7 +778,7 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
         if path == "/metrics":
-            snapshot = self.server.application.snapshot()
+            snapshot = self.server.application._snapshot_owned()
             payload = render_prometheus(
                 snapshot,
                 history_sample_count=len(

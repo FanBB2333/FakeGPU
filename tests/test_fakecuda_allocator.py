@@ -160,6 +160,15 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
 
         import torch
 
+        for name in (
+            "empty_cache", "memory_allocated", "max_memory_allocated",
+            "memory_reserved", "max_memory_reserved", "memory_cached",
+            "max_memory_cached", "mem_get_info", "reset_peak_memory_stats",
+            "reset_max_memory_allocated", "reset_max_memory_cached",
+            "reset_accumulated_memory_stats", "memory_stats", "memory_snapshot",
+        ):
+            assert getattr(torch.cuda, name) is getattr(torch.cuda.memory, name), name
+
         baseline_allocated = torch.cuda.memory_allocated()
         baseline_reserved = torch.cuda.memory_reserved()
         tensor = torch.empty(1000, device="cuda", dtype=torch.float32)
@@ -176,7 +185,7 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
             "allocated": torch.cuda.memory_allocated(),
             "reserved_before_empty": torch.cuda.memory_reserved(),
         }
-        torch.cuda.empty_cache()
+        torch.cuda.memory.empty_cache()
         released["reserved_after_empty"] = torch.cuda.memory_reserved()
         print(json.dumps({
             "baseline_allocated": baseline_allocated,

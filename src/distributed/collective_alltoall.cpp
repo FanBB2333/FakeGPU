@@ -11,21 +11,13 @@ namespace fake_gpu::distributed {
 
 namespace {
 
-CollectiveExecutionResult make_error(std::string code, std::string detail) {
-    CollectiveExecutionResult result;
-    result.ok = false;
-    result.error_code = std::move(code);
-    result.error_detail = std::move(detail);
-    return result;
-}
-
 CollectiveExecutionResult execute_variable_alltoall(
     const CollectiveExecutionRequest& request,
     const std::vector<CollectiveExecutionParticipant>& participants) {
     const std::size_t world_size = participants.size();
     const std::size_t dtype_size = collective_data_type_size(request.dtype);
     if (world_size == 0 || dtype_size == 0) {
-        return make_error("invalid_split_plan", "invalid all-to-all world size or dtype");
+        return collective_error("invalid_split_plan", "invalid all-to-all world size or dtype");
     }
 
     std::vector<std::vector<char>> inputs(world_size);
@@ -35,7 +27,7 @@ CollectiveExecutionResult execute_variable_alltoall(
             static_cast<std::size_t>(participant.rank) >= world_size ||
             participant.input_splits.size() != world_size ||
             participant.output_splits.size() != world_size) {
-            return make_error(
+            return collective_error(
                 "invalid_split_plan",
                 "all-to-all participant split vectors must match world_size");
         }
@@ -54,7 +46,7 @@ CollectiveExecutionResult execute_variable_alltoall(
                 participant.payload,
                 inputs[static_cast<std::size_t>(participant.rank)],
                 error)) {
-            return make_error("staging_open_failed", error);
+            return collective_error("staging_open_failed", error);
         }
     }
 
@@ -73,7 +65,7 @@ CollectiveExecutionResult execute_variable_alltoall(
             const std::size_t receiver_count =
                 receiver.output_splits[static_cast<std::size_t>(sender.rank)];
             if (sender_count != receiver_count) {
-                return make_error(
+                return collective_error(
                     "invalid_split_plan",
                     "all-to-all sender and receiver split sizes disagree");
             }
@@ -113,7 +105,7 @@ CollectiveExecutionResult execute_variable_alltoall(
                     participant.output_bytes,
                     result.output_payloads[participant.rank],
                     error)) {
-                return make_error("staging_open_failed", error);
+                return collective_error("staging_open_failed", error);
             }
             continue;
         }
@@ -134,7 +126,7 @@ CollectiveExecutionResult execute_variable_alltoall(
                 participant.bytes,
                 result.output_payloads[participant.rank],
                 error)) {
-            return make_error("staging_open_failed", error);
+            return collective_error("staging_open_failed", error);
         }
     }
     return result;
@@ -151,10 +143,10 @@ CollectiveExecutionResult execute_alltoall(
     CollectiveSlicePlan plan;
     std::string error;
     if (!build_even_slice_plan(request, participants.size(), plan, error)) {
-        return make_error("invalid_slice_plan", error);
+        return collective_error("invalid_slice_plan", error);
     }
     if (request.bytes != plan.total_bytes) {
-        return make_error(
+        return collective_error(
             "invalid_collective_size",
             "alltoall bytes=" + std::to_string(request.bytes) +
                 " do not match expected=" + std::to_string(plan.total_bytes) +
@@ -169,7 +161,7 @@ CollectiveExecutionResult execute_alltoall(
 
     for (const CollectiveExecutionParticipant& participant : participants) {
         if (participant.bytes != request.bytes) {
-            return make_error(
+            return collective_error(
                 "staging_size_mismatch",
                 "participant rank " + std::to_string(participant.rank) +
                     " reported bytes=" + std::to_string(participant.bytes) +
@@ -190,7 +182,7 @@ CollectiveExecutionResult execute_alltoall(
                 participant.payload,
                 buffer,
                 error)) {
-            return make_error("staging_open_failed", error);
+            return collective_error("staging_open_failed", error);
         }
         buffers.push_back(std::move(buffer));
     }
@@ -224,7 +216,7 @@ CollectiveExecutionResult execute_alltoall(
                 plan.total_bytes,
                 result.output_payloads[participant.rank],
                 error)) {
-            return make_error("staging_open_failed", error);
+            return collective_error("staging_open_failed", error);
         }
     }
 

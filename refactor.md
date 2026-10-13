@@ -1,7 +1,85 @@
 # FakeGPU 重构分析报告
 
-> 基于对全仓库的静态扫描（2026-08-16，main @ 20a95f7）。本文档只列问题与方向，不包含具体改动；所有条目在动手前应先在当前代码上复核 file:line 是否仍然成立。
-> **约束：重构后功能保持不变。** 文末单独列出了扫描中顺带发现的疑似 bug——它们的修复会改变行为，应与重构分开提交。
+> 最新检查与实施结果见下方 **2026-10-13 / 406**。后面的 2026-08 历史记录保留问题背景，其行号、规模和待办状态不能直接代表当前代码。
+> **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-13 / 406：完成度、逐部件检查与实施结果
+
+### 基线选择
+
+在 `/home/l1ght/repos/fakeGPU` 执行 `git pull --ff-only origin main` 后确认分叉：本地独有 `8b7a7ec3`，远端独有 107 个提交，远端顶端为 `3ba1dcaf`。本地提交是较早的快照合入，远端已经有模块拆分、功能扩展和后续 CUDA/cuBLAS 修复，因此以 `origin/main` 为基线更合理。
+
+先创建 `backup/406-main-before-refactor-20261013` 保存本地原始提交，再 rebase。冲突处保留远端已经演进的实现，本地独有且仍适用的运行时配置回归测试迁移到 `tests/test_runtime_config.py`，形成 `e6f15727`。没有把旧快照覆盖回新代码，也没有推送远端。旧目录下本机已有的 Shakespeare 数据保留在原处，不纳入提交。
+
+### 项目完成度
+
+**现有项目已具备可用的研发预检、模拟显存/OOM、容量规划和分析工具链。** Python 运行时、原生库、命令行、报告、校验清单以及源码包到 wheel 的安装链路均有可运行实现和测试。当前有 82 个 GPU profile、15 种计算能力、20 个 CLI 命令。
+
+尚不能据此认定为完整的 CUDA 替代实现，或对任意模型、硬件与分布式部署给出精确数值和性能保证。项目没有统一的需求验收总表，因此不把测试通过率当作“完成百分比”。以下按实际能力、代码边界和本轮证据评估。
+
+| 部件与主要代码 | 当前完成情况、检查结论及本轮处理 |
+|---|---|
+| 公开 API / 运行时：`_api.py`、`_runtime.py`、`__init__.py` | `init/env/run`、native/FakeCUDA 选择、配置转发和环境注入链路可用。检查模式间库边界，修复物理 GPU 掩码导致 hybrid 枚举失败，以及重复构造环境时遗留旧 preload 的问题；公开函数参数保持兼容。 |
+| PyTorch 模拟：`_upstream.py`、`torch_patch.py`、`_ecosystem_compat.py`、`_cross_device.py`、`_torch_reporting.py` | 具备 CPU 支撑的 FakeCUDA、设备迁移、autograd/optimizer 分类、distributed/FSDP 兼容与报告。合并重复迁移钩子和 CUDA memory API 安装表，删除对保证存在的框架模块的静默兜底；保留 storage 访问、可选优化器及框架差异的必要保护。 |
+| 显存与 profile：`_allocator.py`、`_profiles.py`、`profile_catalog.py`、`_stage.py` | 分配、缓存、峰值、释放、OOM、stage 与混合设备配置均有实现。统一 profile 元数据构造；保持未知 profile 的既有默认值、补齐/截断和独立设备字典语义；82 个 profile 全部验证。 |
+| 原生公共层：`src/core/`、`src/monitor/` | 全局状态、profile、监控、真实库加载及 hybrid 显存管理仍是活跃路径。删除未参与构建、无人使用的 `dl_intercept.cpp` 原型；保留真正被 driver/runtime 使用的加载与转发逻辑。 |
+| CUDA Driver / Runtime：`src/cuda/` | 分配、复制、设备查询及 native 转发链路可用；通用模拟 kernel launch 仍不能等同于实际执行任意 CUDA kernel。删除无消费者的旧 dispatch 头和未链接进产物的旧 runtime 对象目标及配套源码，保留实际 `cudart_stubs.cpp` 实现。 |
+| cuBLAS：`src/cublas/` | 维护范围内有 CPU 数值执行、精度/compute type 与 Lt epilogue 策略；unsupported API 有明确策略。沿用远端最新修复，不把有语义差异的路径机械合并；8 个 C++ 数值用例及 PyTorch matmul 校验通过。 |
+| NCCL / collective：`src/nccl/`、`src/distributed/collective_*`、buffer/staging | 有 collective 数值执行、归约和两种缓冲传输；高级设备/RMA API 仍有不支持项。抽取 5 处相同错误构造，broadcast 复用根缓冲，ReduceScatter 直接写归约结果切片；新增两种传输的数值与错误验证。 |
+| 协调器 / 传输：`cluster_*`、`communicator.*`、`transport_*`、`topology_model.*` | 本地共享内存与 TCP 协调可运行，报告与超时诊断路径保留。本机两个逻辑节点的 TCP payload 校验通过；没有把它当成真实跨主机/NVLink/RDMA 性能验证。 |
+| NVML / SMI：`src/nvml/`、`native_smi.*`、`smi.py`、`_smi_*` | 模型设备、进程、显存、拓扑、MIG 和故障视图有实现。保留旧 state schema 读取和可选字段的兼容语义；smoke 验证原生 state 与内存类型等报告。模拟字段不能替代物理设备遥测。 |
+| Metrics：`metrics.py` | Prometheus、健康状态、有界历史与 HTTP 服务可用。内部只读渲染复用已发布快照，深拷贝移出 history 锁；公开快照/历史仍返回独立副本，新增嵌套修改隔离回归。 |
+| 静态显存 / workspace / calibration：`memory_estimator.py`、`operator_profiles.py`、`workspace_*`、`calibration.py`、`_calibration_*` | 具备算子/工作区估计、签名约束的校准与比较流程。保留对未知算子、外部样本和缺失元数据的诊断；估计适用性依赖已覆盖的算子和匹配的软件/工作负载，不能从一张卡的小模型验证外推到全部模型。 |
+| LLM / serving：`llm_estimator.py`、`llm_cli.py`、`serving_plan.py`、`_serving_*` | 权重、KV、prefill/decode、混合请求、prefix cache、draft speculative 等容量模型已有完整报告路径。远端已有共享容量/准入逻辑，未重新并成充满 mode 分支的巨函数；仍缺广泛的真实长上下文与在线调度验证。 |
+| diffusion / training：`diffusion_estimator.py`、`_diffusion_*`、`training_plan.py` | 固定/本地 diffusion 元数据与训练配置的阶段、rank 显存估算可用。保持模型类型和缺失组件元数据的显式报错；自定义 pipeline、DiT/训练覆盖与更多 MoE/分布式配置仍需扩展和真机验证。 |
+| 仓库 / kernel / 性能分析：`repository_analyzer.py`、`kernel_analysis.py`、`performance_model.py`、`flop_counter.py` | 静态入口扫描、kernel/API 清单、FLOP 与 roofline 分析可用。分析结果存在模型假设和未知项，保留这些边界，未用静默默认值掩盖无法分析的内容。 |
+| topology / trace：`topology.py`、`trace_replay.py` | 路由、collective 流量、拥塞与时间线报告可用。路由时累计链路最大 payload，消除每条链路反复扫描全部 flow；36 份完整报告与修改前一致，包括 ECMP/算法与消息规模组合。 |
+| preflight / CLI / validation：`preflight.py`、`_preflight_*`、`_cli.py`、`validation.py`、`structured_io.py` | 子进程预检、报告聚合、CLI 注册和严格清单校验可用。保留不同命令已经公开的输出/退出码约定与真实可达的错误分支；7 个 smoke + 39 个 research case 全部成功且无跳过。 |
+| 构建 / 发布 / CI：CMake、`setup.py`、`scripts/`、`.github/workflows/` | 原生 Release 构建、Python/native 测试入口和 wheel 打包链完整。删除无用构建目标，把 collective 回归加入 smoke；从 sdist 重建 wheel 后独立导入、发现内置库并初始化成功。本轮实跑 Linux/Python 3.12，未声称跑过全部 CI 平台。 |
+
+### 本轮修改及保留边界
+
+- 删除 4 个无有效消费者的原生文件，共 **1,351 行**：`cuda_mode_dispatch.hpp`、`cuda_stubs.cpp`、`cuda_defs.hpp`、`dl_intercept.cpp`。删除对应无用/注释构建项。实际产物的 820 个 CUDA/cuBLAS/NVML/NCCL C 导出保持一致。
+- 收敛 profile 解析、PyTorch 迁移与 memory API 钩子、collective 错误构造。减少无意义默认值、重复安装、缓冲复制、metrics 深拷贝和 topology 重复扫描。
+- 不以“减少 except”为目的移除真实边界保护：可选框架能力、外部 state/schema、不可访问 storage、未知模型/算子及 unsupported API 仍需要兼容或明确报错。
+- 基线中已有多轮重构成果；历史报告列出的很多问题已经解决。本轮没有按旧行号重复修复，也没有为了减文件长度而继续拆分已有稳定模块。
+
+测试中复现并修复的两个 bug：
+
+1. **hybrid + `CUDA_VISIBLE_DEVICES` 枚举错误。** 指定物理 GPU 1 时，PyTorch 会把物理编号再次应用到 FakeGPU 的单设备 NVML 清单，得到 `device_count() == 0`，随后 `get_device_name(0)` 失败。现在只在有物理可见性掩码的 hybrid 环境中保留真实 NVML；未设置掩码时维持模型 NVML。子进程按自己的环境作决定，覆盖数字、UUID 和空掩码。
+2. **模式切换残留 preload。** 对已有环境反复调用 `env()`，从 simulate 切到 hybrid/passthrough 后仍可能加载旧的 fake cudart/cuBLAS，重复调用还会累加路径。现在移除当前库目录的有/无版本号 FakeGPU preload，再加入所选模式需要的库，保留其他库及其顺序；Linux 同时支持空白与冒号分隔。此修复针对子进程环境构造，不承诺卸载当前进程已经加载的库。
+
+### 验证证据与复现
+
+环境：406，Linux，Python **3.12.12**，PyTorch **2.9.1+cu128**；真实计算使用物理 GPU 1 **Blackwell GPU**，驱动 **580.178.04**。构建目录为 `build-refactor-20261013`，本轮日志/JSON 在 `/tmp/fakegpu-refactor-20261013/`（临时本机产物，不作为仓库资产提交）。
+
+| 验证 | 结果 |
+|---|---|
+| rebase 后修改前 Python 基线 | 308 passed、1 skipped |
+| 最终完整 Python 回归 | **323 passed、1 skipped**；跳过项专用于 CPU-only torch，本机安装的是 CUDA torch |
+| 两处 bug 的新增回归 | 修复前出现失败，修复后通过；涵盖掩码、子进程环境、native init 与重复模式切换 |
+| 修改前后完整报告对比 | topology 36 组、profile 配置 30 组，共 66 组完全一致 |
+| Native Release + smoke | 库边界、104 项 capability 清单、unsupported/cuBLAS 策略、内存类型、coordinator、82 profile / 15 CC 矩阵通过 |
+| 新增 collective C++ 回归 | SocketPayload / SharedMemory 共 **28 个数值用例 + 28 个非法大小用例**通过；覆盖 6 种 collective 及 5 种归约运算 |
+| Native CPU simulation | 8 个 cuBLAS C++ 用例通过；CUDA torch 的模拟 matmul 与 CPU 结果相符 |
+| 严格 validation manifests | smoke **7/7**、research **39/39**，无失败、无跳过 |
+| 本机 TCP payload 集成 | 2 个逻辑节点，每节点 1 rank，64 KiB，1 次预热 + 3 次迭代通过 |
+| 真实 GPU：real / passthrough / hybrid | MLP + AdamW 3 步训练的 loss、参数 SHA256 与 PyTorch 峰值显存一致；峰值 **18,323,968 bytes**；物理编号和 GPU UUID 选择均通过 |
+| 源码包与 wheel | sdist → wheel 编译成功；从解包后的 wheel 独立导入，82 profile、内置原生库发现、masked hybrid 环境和 native 初始化通过 |
+| 静态检查 | Ruff、`git diff --check`、shell 语法通过；修改模块的公开顶层函数签名与基线一致 |
+
+主要可复现入口（先激活有 PyTorch/pytest 的 Python 环境）：
+
+```bash
+FAKEGPU_TERMINAL_REPORT=0 scripts/test.sh python
+BUILD_DIR="$PWD/build-refactor-20261013" FAKEGPU_TERMINAL_REPORT=0 scripts/test.sh smoke
+CPU_BUILD_DIR="$PWD/build-refactor-20261013" FAKEGPU_TERMINAL_REPORT=0 scripts/test.sh cpu
+python -m fakegpu validate --manifest tests/data/validation_smoke.yaml --report-dir /tmp/fakegpu-validation-smoke --strict
+python -m fakegpu validate --manifest tests/data/research_validation.yaml --report-dir /tmp/fakegpu-validation-research --strict
+python tests/native/hybrid_visibility.py --build-dir build-refactor-20261013 --device 1
+```
+
+`hybrid_visibility.py` 要求真实 CUDA 设备，失败会报错，不通过跳过来伪装成功。本轮结果支持上述已测路径的行为保持与缺陷修复；仍未覆盖 macOS 实机、其他 PyTorch 版本、真正跨主机集群和大规模真实模型。README Roadmap 中的原生算子扩展、在线 serving/长上下文、diffusion 与多栈分布式验证仍属于后续工作。
 
 ## 实施进度（滚动更新）
 

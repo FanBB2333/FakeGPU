@@ -82,6 +82,17 @@ def _resolve_total_memory() -> int:
     return 80 * 1024**3
 
 
+def _profile_entry(profile_id: str) -> dict[str, Any]:
+    major, minor = _PROFILE_CC.get(profile_id, (8, 0))
+    return {
+        "profile_id": profile_id,
+        "name": _PROFILE_NAMES.get(profile_id, "NVIDIA A100-SXM4-80GB"),
+        "total_memory": _PROFILE_TOTAL_MEMORY.get(profile_id, 80 * 1024**3),
+        "compute_major": major,
+        "compute_minor": minor,
+    }
+
+
 def _resolve_per_device_profiles(
     num_devices: int | None = None,
 ) -> list[dict[str, Any]]:
@@ -108,35 +119,13 @@ def _resolve_per_device_profiles(
             count = (
                 int(parts[1]) if len(parts) > 1 and parts[1].strip().isdigit() else 1
             )
-            for _ in range(count):
-                cc = _PROFILE_CC.get(pid, (8, 0))
-                result.append(
-                    {
-                        "profile_id": pid,
-                        "name": _PROFILE_NAMES.get(pid, "NVIDIA A100-SXM4-80GB"),
-                        "total_memory": _PROFILE_TOTAL_MEMORY.get(pid, 80 * 1024**3),
-                        "compute_major": cc[0],
-                        "compute_minor": cc[1],
-                    }
-                )
+            entry = _profile_entry(pid)
+            result.extend(dict(entry) for _ in range(count))
 
     if not result:
         # Uniform config: all devices share the same profile
-        pid = _resolve_profile_id() or "a100"
-        cc = _PROFILE_CC.get(pid, (8, 0))
-        entry = {
-            "profile_id": pid,
-            "name": _PROFILE_NAMES.get(pid, "NVIDIA A100-SXM4-80GB"),
-            "total_memory": _PROFILE_TOTAL_MEMORY.get(pid, 80 * 1024**3),
-            "compute_major": cc[0],
-            "compute_minor": cc[1],
-        }
-        for _ in range(target_count):
-            result.append(dict(entry))
+        entry = _profile_entry(_resolve_profile_id() or "a100")
+        return [dict(entry) for _ in range(target_count)]
 
-    if len(result) != target_count and len(result) > 0:
-        while len(result) < target_count:
-            result.append(dict(result[-1]))
-        result = result[:target_count]
-
-    return result
+    result.extend(dict(result[-1]) for _ in range(target_count - len(result)))
+    return result[:target_count]
