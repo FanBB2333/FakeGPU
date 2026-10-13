@@ -1,0 +1,1856 @@
+{
+"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
+  "schema_version": "fakegpu.finetune_batch_validation_evidence.v1",
+  "date": "2026-10-13",
+  "baseline_revision": "4b677929",
+  "archive_reusable_as_run_report": false,
+  "archive_transformations": [
+    "Local checkpoint and validation-root paths replaced with display placeholders.",
+    "Only batch-accounting evidence retained; original reports and logs stay in the local validation directory."
+  ],
+  "source_file_sha256": {
+    "fakegpu/_calibration_cuda.py": "455d665cd77bd52320161e8b7bc7fa0ae74112b3933fff5f3a6ce5385945aaac",
+    "fakegpu/_finetune_batches.py": "3561b9ea3fb4473cae2b5f6cf4d36c4055689e54904ac2c2b3100a515e5faf56",
+    "fakegpu/_finetune_model.py": "23a4f7d9907fca1e7de618e3a9dc3908ec56e1a120e39f0628cd58148f820ba3",
+    "fakegpu/_finetune_observer.py": "8b481ac787ecb01628592fbdf40017d6fd6c2525a992737f6ce6328501d1f5cf",
+    "fakegpu/_local_checkpoint.py": "4e1b60fb03bc8a7cab2c13d70ad439afd8c4363e10d7a3ec2deddc76685e29a8",
+    "fakegpu/finetune_cli.py": "6308edbd38b98bd925f218e9fe35f359b36156ad548bb36799384d0dfcc72630",
+    "fakegpu/finetune_config.py": "382311acf677fd864ea22660067efae7ea72695ea8d6e9d136ddac28e0665054",
+    "fakegpu/finetune_data.py": "12a3604e2b678c3e4bcba3db824d205825cd1201108df9118093b59736f76bda",
+    "fakegpu/finetune_data_cli.py": "10148bdc79427e74724ab242a8d9c5f7e0f18d0417c5d3358e928279ba1891d6",
+    "fakegpu/finetune_data_report.py": "92b9677c107f1cdf43b471664150d913465089da3a8d8d06cf34a4db264b6c1d",
+    "fakegpu/finetune_estimator.py": "8ea9b5c0950f0eadbd4230846a5f4502b34e5da051afc02fd280c893a6ebb3bf",
+    "fakegpu/finetune_probe.py": "507a86d26d612e3e0aa68778b6b1b4388d4b143d55725717d0186f001a1f4783",
+    "fakegpu/finetune_run_estimator.py": "38ba22cc4bc2f40f3a09e92bbf10451a76479b70147cecd70704ab6810437a51",
+    "fakegpu/finetune_runner.py": "6d5a95d8508217039c8441a4731cc9821cd138fe226f4565c4571e4c5d9c8874"
+  },
+  "fixture": {
+    "raw_records": 13,
+    "epochs": 2,
+    "micro_batch_size": 3,
+    "gradient_accumulation_steps": 2,
+    "sequence_length_cap": 512,
+    "warmup_updates": 1,
+    "packing": false,
+    "raw_jsonl_sha256": "f361696b006d5a9e1f16c12b6336b7d614ccec88dd5344998e16d866ef33871f",
+    "generation": "For i=0..12: instruction=\"What is {i} + 2? Explain.\", input=\"Use whole numbers.\", output=(\"Adding {i} and 2 gives {i+2}. \" repeated 1+2*i times).strip(); JSONL records use sorted keys.",
+    "runtime_cache_state": "Existing shared framework/kernel caches; no controlled cold/warm cache claim."
+  },
+  "cpu_trainer_checks": [
+    {
+      "torch": "2.9.1+cu128",
+      "transformers": "4.57.3",
+      "raw_report_sha256": "f5b4e0686f620b2bcbc3818ed2c0cc857fd6fddacb5b3f493fa51b88d1fa37c4",
+      "cases": [
+        {
+          "max_steps": -1,
+          "optimizer_steps": 6,
+          "microsteps": 10,
+          "samples": 26,
+          "collated_batches": 10,
+          "expected_nonpadding_tokens": 208,
+          "expected_supervised_tokens": 184,
+          "expected_causal_supervised_tokens": 174
+        },
+        {
+          "max_steps": 4,
+          "optimizer_steps": 4,
+          "microsteps": 7,
+          "samples": 19,
+          "collated_batches": 8,
+          "expected_nonpadding_tokens": 151,
+          "expected_supervised_tokens": 131,
+          "expected_causal_supervised_tokens": 126
+        }
+      ]
+    },
+    {
+      "torch": "2.9.1+cu128",
+      "transformers": "5.6.0",
+      "raw_report_sha256": "ad6bc6f68a7947a31e4b52595991caac1a7edb916a8e405fd06c794f402b603c",
+      "cases": [
+        {
+          "max_steps": -1,
+          "optimizer_steps": 6,
+          "microsteps": 10,
+          "samples": 26,
+          "collated_batches": 10,
+          "expected_nonpadding_tokens": 208,
+          "expected_supervised_tokens": 184,
+          "expected_causal_supervised_tokens": 174
+        },
+        {
+          "max_steps": 4,
+          "optimizer_steps": 4,
+          "microsteps": 7,
+          "samples": 19,
+          "collated_batches": 8,
+          "expected_nonpadding_tokens": 151,
+          "expected_supervised_tokens": 131,
+          "expected_causal_supervised_tokens": 126
+        }
+      ]
+    },
+    {
+      "torch": "2.11.0+cu128",
+      "transformers": "5.14.1",
+      "raw_report_sha256": "bf43c93828f41a177bee3d531ecf135247bb5f460e0987c1d9a493533d3b7caf",
+      "cases": [
+        {
+          "max_steps": -1,
+          "optimizer_steps": 6,
+          "microsteps": 10,
+          "samples": 26,
+          "collated_batches": 10,
+          "expected_nonpadding_tokens": 208,
+          "expected_supervised_tokens": 184,
+          "expected_causal_supervised_tokens": 174
+        },
+        {
+          "max_steps": 4,
+          "optimizer_steps": 4,
+          "microsteps": 7,
+          "samples": 19,
+          "collated_batches": 8,
+          "expected_nonpadding_tokens": 151,
+          "expected_supervised_tokens": 131,
+          "expected_causal_supervised_tokens": 126
+        }
+      ]
+    }
+  ],
+  "native_runs": [
+    {
+      "framework": "llamafactory",
+      "raw_report_sha256": "071b55d8ce8f673266659a216fd51fdd359661911ac47bfb2db8b71ed3a771f6",
+      "raw_log_sha256": "cbb11556cae263cf6a9f66010a2b8e15c8d19e4f0657c51203aad9c51537a0a4",
+      "config_sha256": "acf0db5cfde6f2227ce3ea8ed924827b2bec00a085a6e800e156fb1b1ddba058",
+      "native_config": {
+        "bf16": true,
+        "cutoff_len": 512,
+        "dataloader_num_workers": 0,
+        "dataloader_pin_memory": true,
+        "dataset": "synthetic_arithmetic",
+        "dataset_dir": "VALIDATION_ROOT/data",
+        "disable_gradient_checkpointing": true,
+        "disable_tqdm": true,
+        "do_train": true,
+        "enable_liger_kernel": false,
+        "finetuning_type": "lora",
+        "flash_attn": "sdpa",
+        "gradient_accumulation_steps": 2,
+        "gradient_checkpointing": false,
+        "learning_rate": 2e-05,
+        "logging_steps": 1,
+        "lora_alpha": 16,
+        "lora_dropout": 0.0,
+        "lora_rank": 8,
+        "lora_target": "q_proj,v_proj",
+        "lr_scheduler_type": "constant",
+        "max_steps": -1,
+        "model_name_or_path": "LOCAL_QWEN35_TEXT_CHECKPOINT",
+        "num_train_epochs": 2,
+        "optim": "adamw_torch",
+        "output_dir": "VALIDATION_ROOT/llamafactory/model",
+        "overwrite_cache": true,
+        "packing": false,
+        "per_device_train_batch_size": 3,
+        "preprocessing_num_workers": 1,
+        "report_to": "none",
+        "save_strategy": "no",
+        "seed": 42,
+        "stage": "sft",
+        "template": "qwen3_nothink",
+        "tf32": false,
+        "train_on_prompt": false,
+        "trust_remote_code": false,
+        "use_kv_cache": false,
+        "use_v1_kernels": false,
+        "warmup_steps": 0
+      },
+      "software_versions": {
+        "accelerate": "1.11.0",
+        "bitsandbytes": "0.50.2",
+        "causal-conv1d": "not-installed",
+        "datasets": "4.0.0",
+        "flash-attn": "not-installed",
+        "flash-linear-attention": "not-installed",
+        "llamafactory": "0.9.5",
+        "peft": "0.18.1",
+        "torch": "2.9.1",
+        "transformers": "5.6.0",
+        "triton": "3.5.1",
+        "trl": "0.24.0"
+      },
+      "hardware": {
+        "compute_capability": "12.0",
+        "cuda_version": "12.8",
+        "name": "Blackwell GPU",
+        "total_memory_bytes": 76366020608
+      },
+      "checkpoint_identity": {
+        "algorithm": "sha256_content_manifest_v1",
+        "files": [
+          {
+            "name": "model.safetensors",
+            "sha256": "a8503e51cb22c2f89f525fef0ce1c50e1925364f4bcc75956bd3df6ab0d127ca",
+            "size_bytes": 1504827608
+          }
+        ],
+        "format": "safetensors",
+        "model_dir": "LOCAL_QWEN35_TEXT_CHECKPOINT",
+        "selection": "model.safetensors",
+        "sha256": "9878b901b2e2eb6f012c1437def53222bb0e25884233ee588e778cc8c242014d",
+        "total_bytes_read": 1504827608
+      },
+      "dataset": {
+        "lengths": {
+          "effective": {
+            "count": 13,
+            "max": 326,
+            "mean": 168.6153846153846,
+            "min": 35,
+            "p50": 155,
+            "p90": 302,
+            "p95": 326,
+            "p99": 326,
+            "percentile_method": "nearest_rank",
+            "total": 2192
+          },
+          "raw": {
+            "count": 13,
+            "max": 326,
+            "mean": 168.6153846153846,
+            "min": 35,
+            "p50": 155,
+            "p90": 302,
+            "p95": 326,
+            "p99": 326,
+            "percentile_method": "nearest_rank",
+            "total": 2192
+          },
+          "stored_input": {
+            "count": 13,
+            "max": 326,
+            "mean": 168.6153846153846,
+            "min": 35,
+            "p50": 155,
+            "p90": 302,
+            "p95": 326,
+            "p99": 326,
+            "percentile_method": "nearest_rank",
+            "total": 2192
+          }
+        },
+        "limitations": [
+          "Padding budgets every output sequence to sequence_length; dynamic batch padding, shuffling and distributed sampling are not modeled.",
+          "No filtering, train/validation splitting, resampling or framework preprocessing is performed.",
+          "The exact count describes the supplied processed rows; source-framework execution and training-split provenance are not verified.",
+          "input_ids are used as supplied; their original tokenizer and template cannot be inferred.",
+          "Supervised tokens count nonignored labels at nonpadding positions before any causal loss shift."
+        ],
+        "native_training_split_verified": true,
+        "packing": {
+          "drop_remainder": false,
+          "separator_token_id": null,
+          "strategy": "none"
+        },
+        "padding": {
+          "assumption": "fixed_sequence_length",
+          "nonpadding_tokens": 2192,
+          "padded_tokens": 6656,
+          "padding_fraction": 0.6706730769230769,
+          "padding_tokens": 4464,
+          "source_padding_tokens": 0
+        },
+        "processed": true,
+        "provenance": {
+          "content_hash_format": "canonical_json_rows_v1",
+          "content_sha256": "90d2a495c1b320dab79f2a0cca0879629be1744ddc13c8f3facb4813c3da1ca8",
+          "files": [],
+          "full_scan": true,
+          "source": "native_in_memory",
+          "tokenization": {
+            "add_generation_prompt": null,
+            "add_special_tokens": null,
+            "messages_field": "messages",
+            "text_field": "text",
+            "truncation_side": null
+          },
+          "tokenizer": null
+        },
+        "record_format": "input_ids",
+        "schema_version": "fakegpu.finetune_data.v1",
+        "source_framework": "llamafactory",
+        "source_records": 13,
+        "tokens": {
+          "attention_mask_records": 13,
+          "dropped_remainder_tokens": 0,
+          "labeled_records": 13,
+          "raw_tokens": 2192,
+          "retained_tokens": 2192,
+          "separator_tokens": 0,
+          "supervised_tokens": 1890,
+          "truncated_records": 0,
+          "truncated_tokens": 0
+        },
+        "training_inputs": {
+          "count_basis": "provided_processed_sequences",
+          "exact_effective_count": true,
+          "num_samples": 13,
+          "sequence_length": 512
+        }
+      },
+      "workload": {
+        "fixed_shape": false,
+        "kind": "native_framework_processed_text",
+        "measured_microsteps": 8,
+        "measured_optimizer_steps": 5,
+        "microsteps": 10,
+        "optimizer_steps": 6,
+        "samples": 26,
+        "sequence_length": 512,
+        "sha256": "90d2a495c1b320dab79f2a0cca0879629be1744ddc13c8f3facb4813c3da1ca8",
+        "shape_counts": [
+          {
+            "microsteps": 1,
+            "shape": [
+              1,
+              40
+            ]
+          },
+          {
+            "microsteps": 1,
+            "shape": [
+              1,
+              240
+            ]
+          },
+          {
+            "microsteps": 1,
+            "shape": [
+              3,
+              136
+            ]
+          },
+          {
+            "microsteps": 2,
+            "shape": [
+              3,
+              176
+            ]
+          },
+          {
+            "microsteps": 1,
+            "shape": [
+              3,
+              240
+            ]
+          },
+          {
+            "microsteps": 2,
+            "shape": [
+              3,
+              280
+            ]
+          },
+          {
+            "microsteps": 2,
+            "shape": [
+              3,
+              328
+            ]
+          }
+        ],
+        "warmup_microsteps": 2,
+        "warmup_optimizer_steps": 1
+      },
+      "batch_totals": {
+        "causal_supervised_tokens": 3780,
+        "measured_microsteps": 8,
+        "measured_optimizer_steps": 5,
+        "microsteps": 10,
+        "nonpadding_tokens": 4384,
+        "optimizer_steps": 6,
+        "padding_tokens": 1728,
+        "samples": 26,
+        "supervised_tokens": 3780,
+        "token_slots": 6112,
+        "warmup_microsteps": 2,
+        "warmup_optimizer_steps": 1
+      },
+      "batch_coverage": {
+        "causal_supervised_microsteps": 10,
+        "nonpadding_microsteps": 10,
+        "padding_microsteps": 10,
+        "position_reset_microsteps": 0,
+        "supervised_microsteps": 10
+      },
+      "window_groups": [
+        {
+          "warmup_updates": 1,
+          "measured_updates": 0,
+          "optimizer_update_seconds": [],
+          "seconds": null,
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              3,
+              328
+            ],
+            [
+              3,
+              176
+            ]
+          ]
+        },
+        {
+          "warmup_updates": 0,
+          "measured_updates": 1,
+          "optimizer_update_seconds": [
+            0.8784951395355165
+          ],
+          "seconds": {
+            "max": 0.8784951395355165,
+            "median": 0.8784951395355165,
+            "min": 0.8784951395355165
+          },
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              3,
+              240
+            ],
+            [
+              3,
+              280
+            ]
+          ]
+        },
+        {
+          "warmup_updates": 0,
+          "measured_updates": 1,
+          "optimizer_update_seconds": [
+            0.3543692980892956
+          ],
+          "seconds": {
+            "max": 0.3543692980892956,
+            "median": 0.3543692980892956,
+            "min": 0.3543692980892956
+          },
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              1,
+              40
+            ]
+          ]
+        },
+        {
+          "warmup_updates": 0,
+          "measured_updates": 1,
+          "optimizer_update_seconds": [
+            0.8653168459422886
+          ],
+          "seconds": {
+            "max": 0.8653168459422886,
+            "median": 0.8653168459422886,
+            "min": 0.8653168459422886
+          },
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              3,
+              176
+            ],
+            [
+              3,
+              280
+            ]
+          ]
+        },
+        {
+          "warmup_updates": 0,
+          "measured_updates": 1,
+          "optimizer_update_seconds": [
+            0.9095648918300867
+          ],
+          "seconds": {
+            "max": 0.9095648918300867,
+            "median": 0.9095648918300867,
+            "min": 0.9095648918300867
+          },
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              3,
+              136
+            ],
+            [
+              3,
+              328
+            ]
+          ]
+        },
+        {
+          "warmup_updates": 0,
+          "measured_updates": 1,
+          "optimizer_update_seconds": [
+            0.433129892218858
+          ],
+          "seconds": {
+            "max": 0.433129892218858,
+            "median": 0.433129892218858,
+            "min": 0.433129892218858
+          },
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              1,
+              240
+            ]
+          ]
+        }
+      ],
+      "updates": [
+        {
+          "batch_instrumentation_seconds": 0.0005837096832692623,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 692,
+              "epoch_index": 1,
+              "epoch_microstep": 1,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 763,
+              "padding_tokens": 221,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                112,
+                302,
+                278
+              ],
+              "row_nonpadding_tokens": [
+                135,
+                326,
+                302
+              ],
+              "row_supervised_tokens": [
+                112,
+                302,
+                278
+              ],
+              "shape": [
+                3,
+                328
+              ],
+              "supervised_tokens": 692,
+              "token_slots": 984
+            },
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 276,
+              "epoch_index": 1,
+              "epoch_microstep": 2,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 345,
+              "padding_tokens": 183,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                152,
+                92,
+                32
+              ],
+              "row_nonpadding_tokens": [
+                175,
+                115,
+                55
+              ],
+              "row_supervised_tokens": [
+                152,
+                92,
+                32
+              ],
+              "shape": [
+                3,
+                176
+              ],
+              "supervised_tokens": 276,
+              "token_slots": 528
+            }
+          ],
+          "losses": [
+            0.13813669979572296,
+            0.12526148557662964
+          ],
+          "microsteps": 2,
+          "optimizer_step": 1,
+          "samples": 6,
+          "seconds": 1.5293479412794113,
+          "wall_seconds": 1.5299316509626806,
+          "warmup": true
+        },
+        {
+          "batch_instrumentation_seconds": 0.0005315504968166351,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 452,
+              "epoch_index": 1,
+              "epoch_microstep": 3,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 521,
+              "padding_tokens": 199,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                52,
+                211,
+                189
+              ],
+              "row_nonpadding_tokens": [
+                75,
+                234,
+                212
+              ],
+              "row_supervised_tokens": [
+                52,
+                211,
+                189
+              ],
+              "shape": [
+                3,
+                240
+              ],
+              "supervised_tokens": 452,
+              "token_slots": 720
+            },
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 458,
+              "epoch_index": 1,
+              "epoch_microstep": 4,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 528,
+              "padding_tokens": 312,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                254,
+                132,
+                72
+              ],
+              "row_nonpadding_tokens": [
+                278,
+                155,
+                95
+              ],
+              "row_supervised_tokens": [
+                254,
+                132,
+                72
+              ],
+              "shape": [
+                3,
+                280
+              ],
+              "supervised_tokens": 458,
+              "token_slots": 840
+            }
+          ],
+          "losses": [
+            0.14371401071548462,
+            0.14058800041675568
+          ],
+          "microsteps": 2,
+          "optimizer_step": 2,
+          "samples": 6,
+          "seconds": 0.8784951395355165,
+          "wall_seconds": 0.8790266900323331,
+          "warmup": false
+        },
+        {
+          "batch_instrumentation_seconds": 8.55899415910244e-05,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 12,
+              "epoch_index": 1,
+              "epoch_microstep": 5,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 35,
+              "padding_tokens": 5,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                12
+              ],
+              "row_nonpadding_tokens": [
+                35
+              ],
+              "row_supervised_tokens": [
+                12
+              ],
+              "shape": [
+                1,
+                40
+              ],
+              "supervised_tokens": 12,
+              "token_slots": 40
+            }
+          ],
+          "losses": [
+            1.9643263816833496
+          ],
+          "microsteps": 1,
+          "optimizer_step": 3,
+          "samples": 1,
+          "seconds": 0.3543692980892956,
+          "wall_seconds": 0.35445488803088665,
+          "warmup": false
+        },
+        {
+          "batch_instrumentation_seconds": 0.0004972410388290882,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 276,
+              "epoch_index": 2,
+              "epoch_microstep": 1,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 345,
+              "padding_tokens": 183,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                92,
+                32,
+                152
+              ],
+              "row_nonpadding_tokens": [
+                115,
+                55,
+                175
+              ],
+              "row_supervised_tokens": [
+                92,
+                32,
+                152
+              ],
+              "shape": [
+                3,
+                176
+              ],
+              "supervised_tokens": 276,
+              "token_slots": 528
+            },
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 495,
+              "epoch_index": 2,
+              "epoch_microstep": 2,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 565,
+              "padding_tokens": 275,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                254,
+                189,
+                52
+              ],
+              "row_nonpadding_tokens": [
+                278,
+                212,
+                75
+              ],
+              "row_supervised_tokens": [
+                254,
+                189,
+                52
+              ],
+              "shape": [
+                3,
+                280
+              ],
+              "supervised_tokens": 495,
+              "token_slots": 840
+            }
+          ],
+          "losses": [
+            0.1571555882692337,
+            0.16832095384597778
+          ],
+          "microsteps": 2,
+          "optimizer_step": 4,
+          "samples": 6,
+          "seconds": 0.8653168459422886,
+          "wall_seconds": 0.8658140869811177,
+          "warmup": false
+        },
+        {
+          "batch_instrumentation_seconds": 0.0004992014728486538,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 196,
+              "epoch_index": 2,
+              "epoch_microstep": 3,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 265,
+              "padding_tokens": 143,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                12,
+                72,
+                112
+              ],
+              "row_nonpadding_tokens": [
+                35,
+                95,
+                135
+              ],
+              "row_supervised_tokens": [
+                12,
+                72,
+                112
+              ],
+              "shape": [
+                3,
+                136
+              ],
+              "supervised_tokens": 196,
+              "token_slots": 408
+            },
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 712,
+              "epoch_index": 2,
+              "epoch_microstep": 4,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 783,
+              "padding_tokens": 201,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                302,
+                278,
+                132
+              ],
+              "row_nonpadding_tokens": [
+                326,
+                302,
+                155
+              ],
+              "row_supervised_tokens": [
+                302,
+                278,
+                132
+              ],
+              "shape": [
+                3,
+                328
+              ],
+              "supervised_tokens": 712,
+              "token_slots": 984
+            }
+          ],
+          "losses": [
+            0.11564332246780396,
+            0.14552660286426544
+          ],
+          "microsteps": 2,
+          "optimizer_step": 5,
+          "samples": 6,
+          "seconds": 0.9095648918300867,
+          "wall_seconds": 0.9100640933029354,
+          "warmup": false
+        },
+        {
+          "batch_instrumentation_seconds": 0.00013628974556922913,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 211,
+              "epoch_index": 2,
+              "epoch_microstep": 5,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 234,
+              "padding_tokens": 6,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                211
+              ],
+              "row_nonpadding_tokens": [
+                234
+              ],
+              "row_supervised_tokens": [
+                211
+              ],
+              "shape": [
+                1,
+                240
+              ],
+              "supervised_tokens": 211,
+              "token_slots": 240
+            }
+          ],
+          "losses": [
+            0.21213072538375854
+          ],
+          "microsteps": 1,
+          "optimizer_step": 6,
+          "samples": 1,
+          "seconds": 0.433129892218858,
+          "wall_seconds": 0.43326618196442723,
+          "warmup": false
+        }
+      ],
+      "timing": {
+        "batch_instrumentation_seconds": 0.002333582378923893,
+        "checkpoint_hash_seconds": 0.8253155122511089,
+        "checkpoint_seconds": 0.14514614501968026,
+        "during_training_checkpoint_seconds": 0,
+        "during_training_evaluation_seconds": 0,
+        "during_training_eventcounts": {
+          "checkpoint": 0,
+          "evaluation": 0
+        },
+        "evaluation_seconds": 0,
+        "eventcounts": {
+          "checkpoint": 1,
+          "evaluation": 0
+        },
+        "finalization_seconds": 0.15341285709291697,
+        "instrumentation_seconds": 0.013781417161226273,
+        "optimizer_update_sample_seconds": 4.970224008895457,
+        "setup_seconds": 11.051038817036897,
+        "total_wall_seconds": 16.422175185754895,
+        "trainer_other_seconds": 0.2474995027296245,
+        "trainer_wall_seconds": 5.217723511625081,
+        "training_loop_seconds": 5.217723511625081,
+        "warmup_training_seconds": 1.5293479412794113
+      },
+      "training_loss": 0.5518006185690562,
+      "parameter_changes": {
+        "changed_sampled_tensors": 24,
+        "has_changed_trainable_parameters": true,
+        "method": "sha256_of_up_to_32_evenly_spaced_values_per_trainable_tensor",
+        "sampled_tensors": 24
+      },
+      "saved_adapter": {
+        "sha256": "75aabe6f67b5becb2c13f3eade7c04bebb31ec49f3180c0a864ffbb5efe71eae",
+        "parameter_count": 319488,
+        "tensor_count": 24,
+        "all_finite": true,
+        "nonzero_lora_B": true
+      },
+      "independent_verification": {
+        "processed_arrow_content_hash_matches": true,
+        "per_epoch_token_and_label_row_multisets_match_arrow": true,
+        "timing_arrays_recomputed": true,
+        "dynamic_extrapolation_rejected": true
+      }
+    },
+    {
+      "framework": "axolotl",
+      "raw_report_sha256": "f33334c16a377b450ee497ef3c3b612ee7a3feb306ba5c0941ed801d5222712f",
+      "raw_log_sha256": "58b8c79123cc2bab8e3248d21da6672b513ef38c8c177abd382f98ed59ab0ed2",
+      "config_sha256": "62f5e7c26a8d6e5cf061e0323d77e480f94a601ddce02882465f33f58e6b7d4a",
+      "native_config": {
+        "adapter": "lora",
+        "attn_implementation": "sdpa",
+        "base_model": "LOCAL_QWEN35_TEXT_CHECKPOINT",
+        "bf16": true,
+        "dataset_num_proc": 1,
+        "dataset_prepared_path": "VALIDATION_ROOT/axolotl-prepared",
+        "datasets": [
+          {
+            "ds_type": "json",
+            "path": "VALIDATION_ROOT/data/train.jsonl",
+            "type": "alpaca"
+          }
+        ],
+        "eval_strategy": "no",
+        "excess_length_strategy": "truncate",
+        "fp16": false,
+        "fused_attn_kernel": false,
+        "gradient_accumulation_steps": 2,
+        "gradient_checkpointing": false,
+        "learning_rate": 2e-05,
+        "load_in_4bit": false,
+        "load_in_8bit": false,
+        "logging_steps": 1,
+        "lora_alpha": 16,
+        "lora_dropout": 0.0,
+        "lora_embedding_kernel": false,
+        "lora_mlp_kernel": false,
+        "lora_o_kernel": false,
+        "lora_qkv_kernel": false,
+        "lora_r": 8,
+        "lora_target_modules": [
+          "q_proj",
+          "v_proj"
+        ],
+        "lr_scheduler": "constant",
+        "max_grad_norm": 1.0,
+        "max_steps": -1,
+        "micro_batch_size": 3,
+        "model_type": "AutoModelForCausalLM",
+        "num_epochs": 2,
+        "optimizer": "adamw_torch",
+        "output_dir": "VALIDATION_ROOT/axolotl/model",
+        "pad_to_sequence_len": false,
+        "sample_packing": false,
+        "save_strategy": "no",
+        "seed": 42,
+        "sequence_len": 512,
+        "strict": true,
+        "tf32": false,
+        "tokenizer_type": "AutoTokenizer",
+        "torch_compile": false,
+        "train_on_inputs": false,
+        "trust_remote_code": false,
+        "val_set_size": 0.0,
+        "wandb_project": null,
+        "warmup_steps": 0,
+        "weight_decay": 0.0
+      },
+      "software_versions": {
+        "accelerate": "1.13.0",
+        "axolotl": "0.18.0",
+        "bitsandbytes": "0.49.1",
+        "causal-conv1d": "not-installed",
+        "datasets": "4.8.4",
+        "flash-attn": "not-installed",
+        "flash-linear-attention": "0.4.1",
+        "peft": "0.19.1",
+        "torch": "2.11.0+cu128",
+        "transformers": "5.14.1",
+        "triton": "3.6.0",
+        "trl": "1.8.0"
+      },
+      "hardware": {
+        "compute_capability": "12.0",
+        "cuda_version": "12.8",
+        "name": "Blackwell GPU",
+        "total_memory_bytes": 76366020608
+      },
+      "checkpoint_identity": {
+        "algorithm": "sha256_content_manifest_v1",
+        "files": [
+          {
+            "name": "model.safetensors",
+            "sha256": "a8503e51cb22c2f89f525fef0ce1c50e1925364f4bcc75956bd3df6ab0d127ca",
+            "size_bytes": 1504827608
+          }
+        ],
+        "format": "safetensors",
+        "model_dir": "LOCAL_QWEN35_TEXT_CHECKPOINT",
+        "selection": "model.safetensors",
+        "sha256": "9878b901b2e2eb6f012c1437def53222bb0e25884233ee588e778cc8c242014d",
+        "total_bytes_read": 1504827608
+      },
+      "dataset": {
+        "lengths": {
+          "effective": {
+            "count": 13,
+            "max": 358,
+            "mean": 200.6153846153846,
+            "min": 67,
+            "p50": 187,
+            "p90": 334,
+            "p95": 358,
+            "p99": 358,
+            "percentile_method": "nearest_rank",
+            "total": 2608
+          },
+          "raw": {
+            "count": 13,
+            "max": 358,
+            "mean": 200.6153846153846,
+            "min": 67,
+            "p50": 187,
+            "p90": 334,
+            "p95": 358,
+            "p99": 358,
+            "percentile_method": "nearest_rank",
+            "total": 2608
+          },
+          "stored_input": {
+            "count": 13,
+            "max": 358,
+            "mean": 200.6153846153846,
+            "min": 67,
+            "p50": 187,
+            "p90": 334,
+            "p95": 358,
+            "p99": 358,
+            "percentile_method": "nearest_rank",
+            "total": 2608
+          }
+        },
+        "limitations": [
+          "Padding budgets every output sequence to sequence_length; dynamic batch padding, shuffling and distributed sampling are not modeled.",
+          "No filtering, train/validation splitting, resampling or framework preprocessing is performed.",
+          "The exact count describes the supplied processed rows; source-framework execution and training-split provenance are not verified.",
+          "input_ids are used as supplied; their original tokenizer and template cannot be inferred.",
+          "Supervised tokens count nonignored labels at nonpadding positions before any causal loss shift."
+        ],
+        "native_training_split_verified": true,
+        "packing": {
+          "drop_remainder": false,
+          "separator_token_id": null,
+          "strategy": "none"
+        },
+        "padding": {
+          "assumption": "fixed_sequence_length",
+          "nonpadding_tokens": 2608,
+          "padded_tokens": 6656,
+          "padding_fraction": 0.6081730769230769,
+          "padding_tokens": 4048,
+          "source_padding_tokens": 0
+        },
+        "processed": true,
+        "provenance": {
+          "content_hash_format": "canonical_json_rows_v1",
+          "content_sha256": "6807abc4f909e0eb88e14eab06e738b649ad2ec0186b14e261886255863dffbd",
+          "files": [],
+          "full_scan": true,
+          "source": "native_in_memory",
+          "tokenization": {
+            "add_generation_prompt": null,
+            "add_special_tokens": null,
+            "messages_field": "messages",
+            "text_field": "text",
+            "truncation_side": null
+          },
+          "tokenizer": null
+        },
+        "record_format": "input_ids",
+        "schema_version": "fakegpu.finetune_data.v1",
+        "source_framework": "axolotl",
+        "source_records": 13,
+        "tokens": {
+          "attention_mask_records": 13,
+          "dropped_remainder_tokens": 0,
+          "labeled_records": 13,
+          "raw_tokens": 2608,
+          "retained_tokens": 2608,
+          "separator_tokens": 0,
+          "supervised_tokens": 1877,
+          "truncated_records": 0,
+          "truncated_tokens": 0
+        },
+        "training_inputs": {
+          "count_basis": "provided_processed_sequences",
+          "exact_effective_count": true,
+          "num_samples": 13,
+          "sequence_length": 512
+        }
+      },
+      "workload": {
+        "fixed_shape": false,
+        "kind": "native_framework_processed_text",
+        "measured_microsteps": 8,
+        "measured_optimizer_steps": 5,
+        "microsteps": 10,
+        "optimizer_steps": 6,
+        "samples": 26,
+        "sequence_length": 512,
+        "sha256": "6807abc4f909e0eb88e14eab06e738b649ad2ec0186b14e261886255863dffbd",
+        "shape_counts": [
+          {
+            "microsteps": 1,
+            "shape": [
+              1,
+              67
+            ]
+          },
+          {
+            "microsteps": 1,
+            "shape": [
+              1,
+              147
+            ]
+          },
+          {
+            "microsteps": 1,
+            "shape": [
+              3,
+              207
+            ]
+          },
+          {
+            "microsteps": 2,
+            "shape": [
+              3,
+              244
+            ]
+          },
+          {
+            "microsteps": 1,
+            "shape": [
+              3,
+              310
+            ]
+          },
+          {
+            "microsteps": 2,
+            "shape": [
+              3,
+              334
+            ]
+          },
+          {
+            "microsteps": 2,
+            "shape": [
+              3,
+              358
+            ]
+          }
+        ],
+        "warmup_microsteps": 2,
+        "warmup_optimizer_steps": 1
+      },
+      "batch_totals": {
+        "causal_supervised_tokens": 3754,
+        "measured_microsteps": 8,
+        "measured_optimizer_steps": 5,
+        "microsteps": 10,
+        "nonpadding_tokens": 5216,
+        "optimizer_steps": 6,
+        "padding_tokens": 2165,
+        "samples": 26,
+        "supervised_tokens": 3754,
+        "token_slots": 7381,
+        "warmup_microsteps": 2,
+        "warmup_optimizer_steps": 1
+      },
+      "batch_coverage": {
+        "causal_supervised_microsteps": 10,
+        "nonpadding_microsteps": 10,
+        "padding_microsteps": 10,
+        "position_reset_microsteps": 0,
+        "supervised_microsteps": 10
+      },
+      "window_groups": [
+        {
+          "warmup_updates": 1,
+          "measured_updates": 0,
+          "optimizer_update_seconds": [],
+          "seconds": null,
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              3,
+              244
+            ],
+            [
+              3,
+              358
+            ]
+          ]
+        },
+        {
+          "warmup_updates": 0,
+          "measured_updates": 1,
+          "optimizer_update_seconds": [
+            19.34721439005807
+          ],
+          "seconds": {
+            "max": 19.34721439005807,
+            "median": 19.34721439005807,
+            "min": 19.34721439005807
+          },
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              3,
+              207
+            ],
+            [
+              3,
+              334
+            ]
+          ]
+        },
+        {
+          "warmup_updates": 0,
+          "measured_updates": 1,
+          "optimizer_update_seconds": [
+            0.15021647373214364
+          ],
+          "seconds": {
+            "max": 0.15021647373214364,
+            "median": 0.15021647373214364,
+            "min": 0.15021647373214364
+          },
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              1,
+              67
+            ]
+          ]
+        },
+        {
+          "warmup_updates": 0,
+          "measured_updates": 1,
+          "optimizer_update_seconds": [
+            0.2747346148826182
+          ],
+          "seconds": {
+            "max": 0.2747346148826182,
+            "median": 0.2747346148826182,
+            "min": 0.2747346148826182
+          },
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              3,
+              358
+            ],
+            [
+              3,
+              334
+            ]
+          ]
+        },
+        {
+          "warmup_updates": 0,
+          "measured_updates": 1,
+          "optimizer_update_seconds": [
+            0.17474045883864164
+          ],
+          "seconds": {
+            "max": 0.17474045883864164,
+            "median": 0.17474045883864164,
+            "min": 0.17474045883864164
+          },
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              3,
+              310
+            ],
+            [
+              3,
+              244
+            ]
+          ]
+        },
+        {
+          "warmup_updates": 0,
+          "measured_updates": 1,
+          "optimizer_update_seconds": [
+            19.24213459715247
+          ],
+          "seconds": {
+            "max": 19.24213459715247,
+            "median": 19.24213459715247,
+            "min": 19.24213459715247
+          },
+          "sufficient": false,
+          "batch_shapes": [
+            [
+              1,
+              147
+            ]
+          ]
+        }
+      ],
+      "updates": [
+        {
+          "batch_instrumentation_seconds": 0.0007617915980517864,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 290,
+              "epoch_index": 1,
+              "epoch_microstep": 1,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 458,
+              "padding_tokens": 274,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                71,
+                188,
+                31
+              ],
+              "row_nonpadding_tokens": [
+                127,
+                244,
+                87
+              ],
+              "row_supervised_tokens": [
+                71,
+                188,
+                31
+              ],
+              "shape": [
+                3,
+                244
+              ],
+              "supervised_tokens": 290,
+              "token_slots": 732
+            },
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 622,
+              "epoch_index": 1,
+              "epoch_microstep": 2,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 791,
+              "padding_tokens": 283,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                111,
+                210,
+                301
+              ],
+              "row_nonpadding_tokens": [
+                167,
+                266,
+                358
+              ],
+              "row_supervised_tokens": [
+                111,
+                210,
+                301
+              ],
+              "shape": [
+                3,
+                358
+              ],
+              "supervised_tokens": 622,
+              "token_slots": 1074
+            }
+          ],
+          "losses": [
+            0.17668233811855316,
+            0.09335401654243469
+          ],
+          "microsteps": 2,
+          "optimizer_step": 1,
+          "samples": 6,
+          "seconds": 40.76885292958468,
+          "wall_seconds": 40.769614721182734,
+          "warmup": true
+        },
+        {
+          "batch_instrumentation_seconds": 0.0005537308752536774,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 293,
+              "epoch_index": 1,
+              "epoch_microstep": 3,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 461,
+              "padding_tokens": 160,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                151,
+                91,
+                51
+              ],
+              "row_nonpadding_tokens": [
+                207,
+                147,
+                107
+              ],
+              "row_supervised_tokens": [
+                151,
+                91,
+                51
+              ],
+              "shape": [
+                3,
+                207
+              ],
+              "supervised_tokens": 293,
+              "token_slots": 621
+            },
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 661,
+              "epoch_index": 1,
+              "epoch_microstep": 4,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 831,
+              "padding_tokens": 171,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                277,
+                131,
+                253
+              ],
+              "row_nonpadding_tokens": [
+                334,
+                187,
+                310
+              ],
+              "row_supervised_tokens": [
+                277,
+                131,
+                253
+              ],
+              "shape": [
+                3,
+                334
+              ],
+              "supervised_tokens": 661,
+              "token_slots": 1002
+            }
+          ],
+          "losses": [
+            0.18343126773834229,
+            0.08817926794290543
+          ],
+          "microsteps": 2,
+          "optimizer_step": 2,
+          "samples": 6,
+          "seconds": 19.34721439005807,
+          "wall_seconds": 19.347768120933324,
+          "warmup": false
+        },
+        {
+          "batch_instrumentation_seconds": 0.00022076116874814034,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 11,
+              "epoch_index": 1,
+              "epoch_microstep": 5,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 67,
+              "padding_tokens": 0,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                11
+              ],
+              "row_nonpadding_tokens": [
+                67
+              ],
+              "row_supervised_tokens": [
+                11
+              ],
+              "shape": [
+                1,
+                67
+              ],
+              "supervised_tokens": 11,
+              "token_slots": 67
+            }
+          ],
+          "losses": [
+            2.1523993015289307
+          ],
+          "microsteps": 1,
+          "optimizer_step": 3,
+          "samples": 1,
+          "seconds": 0.15021647373214364,
+          "wall_seconds": 0.15043723490089178,
+          "warmup": false
+        },
+        {
+          "batch_instrumentation_seconds": 0.0012132017873227596,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 622,
+              "epoch_index": 2,
+              "epoch_microstep": 1,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 791,
+              "padding_tokens": 283,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                210,
+                301,
+                111
+              ],
+              "row_nonpadding_tokens": [
+                266,
+                358,
+                167
+              ],
+              "row_supervised_tokens": [
+                210,
+                301,
+                111
+              ],
+              "shape": [
+                3,
+                358
+              ],
+              "supervised_tokens": 622,
+              "token_slots": 1074
+            },
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 479,
+              "epoch_index": 2,
+              "epoch_microstep": 2,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 648,
+              "padding_tokens": 354,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                277,
+                51,
+                151
+              ],
+              "row_nonpadding_tokens": [
+                334,
+                107,
+                207
+              ],
+              "row_supervised_tokens": [
+                277,
+                51,
+                151
+              ],
+              "shape": [
+                3,
+                334
+              ],
+              "supervised_tokens": 479,
+              "token_slots": 1002
+            }
+          ],
+          "losses": [
+            0.09260851889848709,
+            0.1154446229338646
+          ],
+          "microsteps": 2,
+          "optimizer_step": 4,
+          "samples": 6,
+          "seconds": 0.2747346148826182,
+          "wall_seconds": 0.27594781666994095,
+          "warmup": false
+        },
+        {
+          "batch_instrumentation_seconds": 0.000565750990062952,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 335,
+              "epoch_index": 2,
+              "epoch_microstep": 3,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 504,
+              "padding_tokens": 426,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                11,
+                253,
+                71
+              ],
+              "row_nonpadding_tokens": [
+                67,
+                310,
+                127
+              ],
+              "row_supervised_tokens": [
+                11,
+                253,
+                71
+              ],
+              "shape": [
+                3,
+                310
+              ],
+              "supervised_tokens": 335,
+              "token_slots": 930
+            },
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 350,
+              "epoch_index": 2,
+              "epoch_microstep": 4,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 518,
+              "padding_tokens": 214,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                188,
+                31,
+                131
+              ],
+              "row_nonpadding_tokens": [
+                244,
+                87,
+                187
+              ],
+              "row_supervised_tokens": [
+                188,
+                31,
+                131
+              ],
+              "shape": [
+                3,
+                244
+              ],
+              "supervised_tokens": 350,
+              "token_slots": 732
+            }
+          ],
+          "losses": [
+            0.14429309964179993,
+            0.149295374751091
+          ],
+          "microsteps": 2,
+          "optimizer_step": 5,
+          "samples": 6,
+          "seconds": 0.17474045883864164,
+          "wall_seconds": 0.1753062098287046,
+          "warmup": false
+        },
+        {
+          "batch_instrumentation_seconds": 0.00021051988005638123,
+          "batches": [
+            {
+              "attention_mask_kind": "binary_2d",
+              "causal_supervised_tokens": 91,
+              "epoch_index": 2,
+              "epoch_microstep": 5,
+              "labels_kind": "integer_2d",
+              "labels_present": true,
+              "nonpadding_tokens": 147,
+              "padding_tokens": 0,
+              "position_ids_kind": "missing",
+              "position_reset_offsets": null,
+              "row_causal_supervised_tokens": [
+                91
+              ],
+              "row_nonpadding_tokens": [
+                147
+              ],
+              "row_supervised_tokens": [
+                91
+              ],
+              "shape": [
+                1,
+                147
+              ],
+              "supervised_tokens": 91,
+              "token_slots": 147
+            }
+          ],
+          "losses": [
+            0.3882957696914673
+          ],
+          "microsteps": 1,
+          "optimizer_step": 6,
+          "samples": 1,
+          "seconds": 19.24213459715247,
+          "wall_seconds": 19.242345117032528,
+          "warmup": false
+        }
+      ],
+      "timing": {
+        "batch_instrumentation_seconds": 0.003525756299495697,
+        "checkpoint_hash_seconds": 0.82516019186005,
+        "checkpoint_seconds": 0.015051147900521755,
+        "during_training_checkpoint_seconds": 0,
+        "during_training_evaluation_seconds": 0,
+        "during_training_eventcounts": {
+          "checkpoint": 0,
+          "evaluation": 0
+        },
+        "evaluation_seconds": 0,
+        "eventcounts": {
+          "checkpoint": 1,
+          "evaluation": 0
+        },
+        "finalization_seconds": 0.4804911883547902,
+        "instrumentation_seconds": 0.014487814158201218,
+        "optimizer_update_sample_seconds": 79.95789346424863,
+        "setup_seconds": 17.354179222602397,
+        "total_wall_seconds": 98.03074803994969,
+        "trainer_other_seconds": 0.2381841647438705,
+        "trainer_wall_seconds": 80.1960776289925,
+        "training_loop_seconds": 80.1960776289925,
+        "warmup_training_seconds": 40.76885292958468
+      },
+      "training_loss": 0.5973305900891622,
+      "parameter_changes": {
+        "changed_sampled_tensors": 24,
+        "has_changed_trainable_parameters": true,
+        "method": "sha256_of_up_to_32_evenly_spaced_values_per_trainable_tensor",
+        "sampled_tensors": 24
+      },
+      "saved_adapter": {
+        "sha256": "701f97cd46b442693a2a76f429bf96250bc32fd79fa27eb7bcd79d647af01249",
+        "parameter_count": 319488,
+        "tensor_count": 24,
+        "all_finite": true,
+        "nonzero_lora_B": true
+      },
+      "independent_verification": {
+        "processed_arrow_content_hash_matches": true,
+        "per_epoch_token_and_label_row_multisets_match_arrow": true,
+        "timing_arrays_recomputed": true,
+        "dynamic_extrapolation_rejected": true
+      }
+    }
+  ],
+  "validation": {
+    "python_regression": {
+      "passed": 943,
+      "skipped": 1,
+      "seconds": 63.8,
+      "log_sha256": "4bd442db315d48a6c067a72e530e7c53a14873b77cc7c7131d54cf07f56138d2"
+    },
+    "ruff": "passed",
+    "installed_wheel": {
+      "python_modules_identical": 71,
+      "new_native_reports_validated": 2,
+      "legacy_qlora_reports_reused": 2,
+      "no_site_packages": true
+    },
+    "independent_audit": "Passed: frozen sources, distinct successful processes, actual Arrow row hashes/counts, per-epoch consumed row accounting, update timing, window grouping, and all saved adapter values."
+  },
+  "limitations": [
+    "One native run per framework verifies batch observation and bookkeeping, not timing prediction accuracy.",
+    "Every measured accumulation-window group lacks a second steady sample; all sufficient flags are false.",
+    "Axolotl includes long measured updates after the excluded first update; these remain recorded and are not certified steady kernel timings.",
+    "Position IDs were not exposed in these native training_step inputs; position-reset coverage is zero.",
+    "Native packing and dynamic-shape extrapolation remain unsupported.",
+    "Allocator peaks are global to each run and are not attributed to individual shapes."
+  ]
+}

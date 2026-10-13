@@ -18,6 +18,7 @@ import time
 from typing import Any
 
 from ._calibration_cuda import _reject_simulated_cuda_environment
+from ._finetune_batches import summarize_batch_updates, validate_batch_profile
 from ._finetune_model import actual_training_config as _actual_training_config
 from ._finetune_observer import NativeTrainerObserver, capture_native_trainer
 from ._local_checkpoint import bind_local_checkpoint
@@ -229,6 +230,7 @@ def run_finetuning(
         hash_seconds = time.perf_counter() - hash_started
         config["software_versions"] = native_training_versions(framework)
         config["native_execution_signature"] = _execution_signature(raw)
+        config["batch_observation_version"] = "fakegpu.finetune_batches.v1"
         state = {}
 
         def inspect_trainer(trainer):
@@ -312,6 +314,7 @@ def run_finetuning(
             "optimizer_update_sample_seconds": sampled_updates,
             "trainer_other_seconds": max(0.0, training_loop - sampled_updates),
             "instrumentation_seconds": observer.instrumentation_seconds,
+            "batch_instrumentation_seconds": observer.batch_instrumentation_seconds,
             "checkpoint_hash_seconds": hash_seconds,
             "warmup_training_seconds": sum(
                 update["seconds"] for update in observer.updates if update["warmup"]
@@ -375,14 +378,19 @@ def run_finetuning(
                 "fixed_shape": fixed_shape,
             },
             "updates": observer.updates,
+            "batch_profile": summarize_batch_updates(observer.updates),
             "limitations": [
                 "Update timing includes accumulation-window prefetch and forward/backward/optimizer work; evaluation and checkpoint events are timed separately.",
                 "Allocator peaks include initialization, training and final saves; they are not total device usage.",
                 "Wall time includes observer instrumentation and checkpoint hashing, reported separately.",
                 "Changed weights are verified using sampled values per trainable tensor, not an exhaustive tensor comparison.",
                 "Dynamic batch shapes are recorded but are unsuitable for fixed-shape timing extrapolation.",
+                "Batch metadata collection synchronizes each microstep; its measured cost is excluded from update samples and included in total wall time.",
+                "Timing groups describe complete ordered accumulation windows, not separate per-shape kernel timings or memory peaks.",
+                "Token counts require a binary two-dimensional attention mask. Position-ID resets do not establish original packed-example boundaries.",
             ],
         }
+        validate_batch_profile(observation)
         args = observer.trainer.args
         schedule = {
             key: getattr(getattr(args, key, "no"), "value", getattr(args, key, "no"))

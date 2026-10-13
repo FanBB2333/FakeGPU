@@ -9,6 +9,8 @@ import hashlib
 import math
 import time
 
+from ._finetune_batches import describe_batch
+
 
 class NativeTrainerObserver:
     def __init__(self, torch, *, warmup_steps, on_trainer, on_train_begin):
@@ -22,6 +24,7 @@ class NativeTrainerObserver:
         self.shapes = Counter()
         self.microsteps = self.samples = 0
         self.instrumentation_seconds = 0.0
+        self.batch_instrumentation_seconds = 0.0
         self.trainer_started = self.trainer_finished = None
         self.phases = Counter()
         self.events = Counter()
@@ -32,6 +35,10 @@ class NativeTrainerObserver:
         self._inside_train = False
         self._update_started = None
         self._update_microsteps = self._update_samples = 0
+        self._update_batches = []
+        self._update_batch_seconds = 0.0
+        self._epoch_index = 0
+        self._epoch_microstep = 0
         self._losses = []
         self._before_weights = {}
         self.parameter_changes = None
@@ -125,8 +132,23 @@ class NativeTrainerObserver:
                 raise RuntimeError(
                     "native runner requires nonempty two-dimensional text batches"
                 )
-            self.shapes[shape] += 1
+            # Wait for preceding training work before starting the metadata timer:
+            # a host copy must not subtract unfinished GPU compute from the sample.
+            self.torch.cuda.synchronize()
+            metadata_started = time.perf_counter()
+            batch = describe_batch(inputs)
+            self.torch.cuda.synchronize()
+            metadata_seconds = time.perf_counter() - metadata_started
+            self.instrumentation_seconds += metadata_seconds
+            self.batch_instrumentation_seconds += metadata_seconds
+            self._update_batch_seconds += metadata_seconds
             result = training_step(*args, **kwargs)
+            # Only training_step calls that returned successfully count as consumed.
+            self._epoch_microstep += 1
+            batch["epoch_index"] = self._epoch_index or 1
+            batch["epoch_microstep"] = self._epoch_microstep
+            self._update_batches.append(batch)
+            self.shapes[shape] += 1
             self._losses.append(result.detach())
             self.microsteps += 1
             self.samples += shape[0]
@@ -148,6 +170,10 @@ class NativeTrainerObserver:
         observer = self
 
         class TimingCallback(callback_base):
+            def on_epoch_begin(self, args, state, control, **kwargs):
+                observer._epoch_index += 1
+                observer._epoch_microstep = 0
+
             def on_train_begin(self, args, state, control, **kwargs):
                 if state.global_step:
                     raise ValueError(
@@ -199,7 +225,8 @@ class NativeTrainerObserver:
 
     def _finish_update(self, step):
         self.torch.cuda.synchronize()
-        elapsed = time.perf_counter() - self._update_started
+        wall_seconds = time.perf_counter() - self._update_started
+        elapsed = wall_seconds - self._update_batch_seconds
         self.record_peaks()
         if self._update_microsteps < 1 or step != len(self.updates) + 1:
             raise RuntimeError(
@@ -218,14 +245,19 @@ class NativeTrainerObserver:
             {
                 "optimizer_step": step,
                 "seconds": elapsed,
+                "wall_seconds": wall_seconds,
+                "batch_instrumentation_seconds": self._update_batch_seconds,
                 "microsteps": self._update_microsteps,
                 "samples": self._update_samples,
+                "batches": self._update_batches,
                 "losses": losses,
                 "warmup": step <= self.warmup_steps,
             }
         )
         self._update_started = None
         self._update_microsteps = self._update_samples = 0
+        self._update_batches = []
+        self._update_batch_seconds = 0.0
         self._losses = []
 
 

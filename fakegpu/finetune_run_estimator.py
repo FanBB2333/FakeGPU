@@ -6,6 +6,7 @@ from collections.abc import Mapping
 import math
 from typing import Any
 
+from ._finetune_batches import validate_batch_profile
 from .finetune_data_report import apply_dataset_report
 from .finetune_estimator import FinetuneEstimateError, estimate_finetuning
 
@@ -51,6 +52,10 @@ def estimate_finetuning_run(
     observation = run["observation"]
     if observation.get("source") != "fakegpu.native_framework_cuda_run":
         raise FinetuneEstimateError("native run requires its native CUDA observation")
+    try:
+        validate_batch_profile(observation)
+    except ValueError as exc:
+        raise FinetuneEstimateError(str(exc)) from exc
     dataset_digest = run["dataset"].get("provenance", {}).get("content_sha256")
     if not dataset_digest or dataset_digest != config.get("data_signature"):
         raise FinetuneEstimateError(

@@ -1,7 +1,38 @@
 # FakeGPU 重构分析报告
 
-> 最新功能与验证结果见下方 **2026-10-13 / 原生 QLoRA 与更多训练形状**；前一阶段见 **原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新功能与验证结果见下方 **2026-10-13 / 真实 batch 观测与校验**；前一阶段见 **原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-13 / 真实 batch 观测与校验
+
+继续前一阶段接续计划的第一项，先完成动态 batch 校准所需的实际工作量观测。接续时工作区干净，`4b677929` 已提交；基线完整回归 **861 passed / 1 skipped**，最终 QLoRA 证据的 15 个源码哈希全部匹配。下面是本轮新增功能的独立验证，不能将历史 GPU 校准精度迁移到新的采样协议。
+
+- `observation.updates[].batches` 只记录成功返回的真实 `training_step`，保留形状、从 1 开始的 epoch/microstep 位置、token 槽位、非 padding tokens 和有效 labels。因果 labels 按常规 `labels[:, 1:]` 定义单独计数；不复制或保存 token ID 内容。
+- `_finetune_batches.py` 生成 `fakegpu.finetune_batches.v1` 汇总，并按完整、有序的梯度累积窗口分组耗时。混合形状、不同 padding/监督计数及不完整窗口分别保留；不把一次 update 的秒数分摊为各 shape 的实测耗时，也不把全局 allocator 峰值分给各 shape。至少两个非 warmup 样本才标记该组 `sufficient`，这不是准确率或置信区间。
+- 缺失、非二值或 4D attention mask 的 token 数保持未知，并报告 coverage；position IDs 的零位置只记录可观察重置，不能认定为原始 packed 样本边界。原生 packing 与动态形状外推仍有明确 gate，未在本轮解除。
+- 每个 microstep 在统计计时前先等待前序 CUDA 工作，避免将真实训练等待误扣成 metadata 成本。统计开销另列并从 update 样本扣除，原始 wall time 保留该开销。新增可选签名字段 `batch_observation_version` 区分这种同步采样；旧报告不增加新字段，仍可复用。
+- 两个估算 API 都检查 ledger、profile、workload、独立耗时数组与签名的一致性。新版本报告删除统计字段不能静默降级；旧版无统计字段的报告保持兼容。三语 README 同步说明观测口径与限制。
+
+### 本轮验收
+
+完整维护回归 **943 passed / 1 skipped，63.80 秒**；Ruff 全仓与 `git diff --check` 通过。独立安装 wheel 的 **71 个 Python 文件**与源码逐字节一致；`python -S` 下可访问 CLI、核验新报告，并复用两个框架上一阶段的 QLoRA 报告推算 **128 microsteps / 64 updates**。
+
+真实 CPU Trainer 在 Transformers **4.57.3、5.6.0、5.14.1** 三个版本通过。13 条变长样本、microbatch 3、accumulation 2、两个 epochs 得到 **10 microsteps / 6 updates / 26 条消费序列**。`max_steps=4` 时 collator 已预取 8 个 batch，但模型只消费 7 个，ledger 仅记录这 7 个，得到 **19 条序列**。测试另检查左右 padding、有效及 causal labels、未知 mask、epoch 尾部、异步 GPU 等待计时和 hook 恢复。
+
+物理 **Blackwell GPU / Qwen3.5-0.8B text / LoRA / cap 512 / SDPA / 无 packing 或 GC**，两个框架各运行一次两 epoch。使用同一份 13 条变长合成 Alpaca 数据、microbatch 3、accumulation 2、seed 42，关闭 prompt 监督。每个 epoch 的 batch 行数为 `[3, 3, 3, 3, 1]`，累积窗口为 `[2, 2, 1]`。
+
+| 框架 | 实际 microsteps / updates / 序列 | 非 padding tokens | padding 槽位 | 有效 labels | 形状 / 窗口组 |
+|---|---:|---:|---:|---:|---:|
+| LLaMA-Factory 0.9.5 / Transformers 5.6.0 | 10 / 6 / 26 | 4,384 | 1,728 | 3,780 | 7 / 6 |
+| Axolotl 0.18.0 / Transformers 5.14.1 | 10 / 6 / 26 | 5,216 | 2,165 | 3,754 | 7 / 6 |
+
+独立审核直接读取两框架实际生成的 Arrow 缓存，重算有序行 SHA、tokens、labels，并逐 epoch 比较消费记录，全部一致；14 个执行源码哈希在两次运行期间保持不变。两份最终 adapter 均含 24 个张量、319,488 个参数，全部有限且 LoRA B 非零。原始报告、配置、日志和安装包保存在 `/tmp/fakegpu-batch-observation-20261013/`，仓库审阅归档为 [`finetune_batch_validation_evidence.json`](tests/data/finetune_batch_validation_evidence.json)。归档替换主机路径且仅保留观测证据，不能作为 `--run-report` 输入。
+
+两次运行均没有包含两个稳态样本的相同窗口组，`sufficient` 全部为 false。Axolotl 在排除首 update 后仍有约 19 秒的样本，原值完整保留；本轮没有控制初始 kernel/cache 状态，不将它们当作已稳定的 shape 校准。实际 native 输入未暴露 position IDs，因此对应 coverage 为零。此次验收证明记录和计数正确，不提供动态耗时误差数字或长期显存保证。
+
+### 接续工作
+
+为同一完整窗口增加独立重复观测与 holdout，确认 shape/cache 覆盖后再实现动态外推；缺少覆盖时继续拒绝。原生 packing 还需要逐框架验证真实子序列边界及模型 attention 的隔离语义，不能仅凭 mask 或 position reset 开放。之后继续周期 evaluation/checkpoint 成本模型与原始 R24–R26 路线。
 
 ## 2026-10-13 / 原生 QLoRA 与更多训练形状
 

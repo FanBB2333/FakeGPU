@@ -101,6 +101,7 @@ def finetune_workload_signature(
         "actual_model_signature",
         "actual_quantized_storage",
         "gradient_checkpointing_kwargs",
+        "batch_observation_version",
     ):
         if key in training_config:
             fields[key] = training_config[key]
@@ -1115,6 +1116,12 @@ def _validate_observation(
                 "the Hugging Face probe cannot calibrate another framework"
             )
         if source == "fakegpu.native_framework_cuda_run":
+            from ._finetune_batches import validate_batch_profile
+
+            try:
+                validate_batch_profile(observation)
+            except ValueError as exc:
+                raise FinetuneEstimateError(str(exc)) from exc
             framework = observation.get("native_framework")
             if framework not in {
                 "llamafactory",

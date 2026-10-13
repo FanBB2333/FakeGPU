@@ -957,6 +957,15 @@ bitsandbytes 4-bit QLoRA。输入应为
 最终模型保存。Warmup 不计入稳态步骤样本，但保留在总墙钟时间中；该命令会执行
 原生配置要求的训练。
 
+`observation.updates[].batches` 记录每个实际训练 microbatch 的形状、从 1 开始的
+epoch 位置、token 槽位、非 padding tokens，以及常规因果移位前后的有效 labels。
+`observation.batch_profile` 核对总数，并按完整且有序的梯度累积窗口分组耗时；混合
+形状与不完整窗口分别保留。每组至少有两个稳态 update 才标记 `sufficient`，这仅
+表示样本数量充足，不代表精度认证。缺失或非二值 attention mask 的 token 数保持未知，
+position IDs 的重置也不代表原始 packed 样本边界。统计开销单独记录并从 update
+耗时中扣除，总墙钟时间仍包含该开销；同步观测使用独立校准身份。动态形状外推与
+原生 packing 仍未支持。
+
 支持标准梯度检查点。LLaMA-Factory 使用 `disable_gradient_checkpointing: false`，
 并通过 `use_reentrant_gc: true` 或 `false` 选择实现；Axolotl 使用
 `gradient_checkpointing: true` 与 `gradient_checkpointing_kwargs: {use_reentrant: true}`

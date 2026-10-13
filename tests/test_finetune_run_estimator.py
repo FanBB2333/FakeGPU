@@ -202,6 +202,58 @@ def test_old_probe_signature_does_not_gain_optional_native_fields(native_run):
     )
     assert "data_signature" not in signature
     assert "native_execution_signature" not in signature
+    assert "batch_observation_version" not in signature
+
+
+def _attach_batch_evidence(run):
+    from types import SimpleNamespace
+
+    from fakegpu._finetune_batches import describe_batch, summarize_batch_updates
+
+    run["training_config"]["batch_observation_version"] = "fakegpu.finetune_batches.v1"
+    observation = run["observation"]
+    observation["signature"] = finetune_workload_signature(
+        run["model_config"], run["training_config"], profile_id="a100"
+    )
+    descriptor = describe_batch({"input_ids": SimpleNamespace(shape=(1, 4))})
+    for update in observation["updates"]:
+        update["batches"] = [deepcopy(descriptor) for _ in range(update["microsteps"])]
+    observation["batch_profile"] = summarize_batch_updates(observation["updates"])
+
+
+def test_batch_observation_signature_preserves_legacy_and_new_run_reuse(native_run):
+    legacy = estimate_finetuning_run(native_run, epochs=3, max_steps=-1)
+    old_signature = deepcopy(native_run["observation"]["signature"])
+    _attach_batch_evidence(native_run)
+    result = estimate_finetuning_run(native_run, epochs=3, max_steps=-1)
+    assert result["timing"] == legacy["timing"]
+    assert old_signature != native_run["observation"]["signature"]
+    assert result["signature"]["batch_observation_version"] == "fakegpu.finetune_batches.v1"
+
+
+@pytest.mark.parametrize("direct_observation", [False, True])
+@pytest.mark.parametrize("mutation", ["token_count", "remove_evidence", "sample_seconds"])
+def test_public_estimators_validate_batch_evidence(native_run, direct_observation, mutation):
+    from fakegpu.finetune_estimator import FinetuneEstimateError, estimate_finetuning
+
+    _attach_batch_evidence(native_run)
+    observation = native_run["observation"]
+    if mutation == "token_count":
+        observation["updates"][0]["batches"][0]["token_slots"] += 1
+    elif mutation == "remove_evidence":
+        observation.pop("batch_profile")
+        for update in observation["updates"]:
+            update.pop("batches")
+    else:
+        observation["seconds_per_microstep"][0] *= 2
+    with pytest.raises(FinetuneEstimateError, match="native batch"):
+        if direct_observation:
+            estimate_finetuning(
+                native_run["model_config"], native_run["training_config"],
+                profile_id="a100", observation=observation,
+            )
+        else:
+            estimate_finetuning_run(native_run)
 
 
 def _set_workload(run, field, value):

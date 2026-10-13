@@ -234,6 +234,7 @@ def _instrumented_fixture(monkeypatch, *, fail=False, nonfinite=False, remainder
             return SimpleNamespace(training_loss=1.0)
 
     trainer = Trainer()
+    trainer.test_clock = clock
     observer = NativeTrainerObserver(
         torch, warmup_steps=2, on_trainer=lambda _: None, on_train_begin=lambda _: None
     )
@@ -286,6 +287,68 @@ def test_duplicate_native_train_call_cannot_mix_observations(monkeypatch):
         trainer.train()
         with pytest.raises(RuntimeError, match="exactly one"):
             trainer.train()
+
+
+def test_batch_metadata_cost_is_separate_from_optimizer_timing(monkeypatch):
+    import fakegpu._finetune_observer as module
+
+    base, trainer, observer = _instrumented_fixture(monkeypatch)
+    original = module.describe_batch
+
+    def slow_metadata(inputs):
+        trainer.test_clock.advance(0.5)
+        return original(inputs)
+
+    monkeypatch.setattr(module, "describe_batch", slow_metadata)
+    with capture_native_trainer(base, Callback, observer):
+        trainer.train()
+    assert [update["seconds"] for update in observer.updates] == [9] * 4
+    assert [update["wall_seconds"] for update in observer.updates] == [10] * 4
+    assert [update["batch_instrumentation_seconds"] for update in observer.updates] == [1] * 4
+    assert observer.batch_instrumentation_seconds == 4
+    assert observer.instrumentation_seconds == 4
+    assert [len(update["batches"]) for update in observer.updates] == [2] * 4
+
+
+def test_metadata_timer_does_not_subtract_preceding_async_gpu_work(monkeypatch):
+    import fakegpu._finetune_observer as module
+
+    base, trainer, observer = _instrumented_fixture(monkeypatch)
+    pending_gpu_seconds = 0.0
+    original = module.describe_batch
+
+    def asynchronous_step(*_args):
+        nonlocal pending_gpu_seconds
+        # Training returns before its GPU work completes, as real CUDA does.
+        pending_gpu_seconds += 3.0
+        return Scalar(1.0)
+
+    def synchronize():
+        nonlocal pending_gpu_seconds
+        trainer.test_clock.advance(pending_gpu_seconds)
+        pending_gpu_seconds = 0.0
+
+    def metadata_with_host_copy(inputs):
+        # Copying metadata to the host also waits for unfinished GPU work. If
+        # the observer starts timing before its preceding synchronization,
+        # this wait would wrongly become deductible instrumentation overhead.
+        synchronize()
+        trainer.test_clock.advance(0.5)
+        return original(inputs)
+
+    trainer.training_step = asynchronous_step
+    observer.torch.cuda.synchronize = synchronize
+    monkeypatch.setattr(module, "describe_batch", metadata_with_host_copy)
+    with capture_native_trainer(base, Callback, observer):
+        trainer.train()
+    # Two queued 3-second microsteps, 2-second prefetch and 1-second optimizer
+    # remain in the sample; only two 0.5-second metadata copies are removed.
+    assert [update["seconds"] for update in observer.updates] == [9.0] * 4
+    assert [update["wall_seconds"] for update in observer.updates] == [10.0] * 4
+    assert [
+        update["batch_instrumentation_seconds"] for update in observer.updates
+    ] == [1.0] * 4
+    assert pending_gpu_seconds == 0.0
 
 
 def test_memory_tracker_reset_before_trainer_capture_preserves_loading_peak(

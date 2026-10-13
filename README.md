@@ -1052,6 +1052,18 @@ optimizer updates, allocator peaks, evaluation/checkpoint events, and final
 saving. Warmup is excluded from steady step samples but remains in total wall
 time. This command performs the training requested by the native config.
 
+Each `observation.updates[].batches` entry records a consumed microbatch's shape,
+one-based epoch position, token slots, nonpadding tokens, and supervised labels
+before and after the usual causal shift. `observation.batch_profile` reconciles
+these counts and groups timings by the complete ordered accumulation window;
+mixed shapes and partial windows keep separate groups. A group needs two steady
+updates before `sufficient` is true; this is sample availability, not an accuracy
+certificate. Missing or nonbinary attention masks leave token counts unknown.
+Position-ID resets do not identify original packed examples. Collection overhead
+is reported separately and excluded from update samples, while total wall time
+includes it. These synchronized observations have a separate calibration identity.
+Dynamic-shape extrapolation and native packing remain unsupported.
+
 Standard gradient checkpointing is supported. LLaMA-Factory uses
 `disable_gradient_checkpointing: false` with `use_reentrant_gc: true` or `false`;
 Axolotl uses `gradient_checkpointing: true` with
