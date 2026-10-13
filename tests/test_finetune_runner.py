@@ -42,6 +42,9 @@ def _config(tmp_path, **changes):
         ({"world_size": 2}, "one GPU"),
         ({"train_from_scratch": True}, "train_from_scratch"),
         ({"reinit_weights": True}, "reinit_weights"),
+        ({"unfrozen_parameters": ["model.layers.0"]}, "unfrozen_parameters"),
+        ({"pure_bf16": True}, "pure_bf16"),
+        ({"export_quantization_bit": 4}, "export_quantization_bit"),
         (
             {"overrides_of_model_kwargs": {"use_safetensors": False}},
             "overrides_of_model_kwargs",
