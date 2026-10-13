@@ -332,7 +332,9 @@ def run_main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _validation_main(argv, *, entrypoint, description, estimate):
+def _validation_main(
+    argv, *, entrypoint, description, estimate, allow_event_context=False
+):
     parser = argparse.ArgumentParser(
         prog=command_prog(__name__, entrypoint), description=description
     )
@@ -344,12 +346,22 @@ def _validation_main(argv, *, entrypoint, description, estimate):
         "--holdout-run", required=True,
         help="Independent native run JSON to predict and compare.",
     )
+    if allow_event_context:
+        parser.add_argument(
+            "--event-context", action="store_true",
+            help="Match steady windows using their recorded evaluation/checkpoint history.",
+        )
     add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
+        options = (
+            {"event_context": True}
+            if allow_event_context and args.event_context else {}
+        )
         report = estimate(
             [load_mapping(path) for path in args.calibration_run],
             load_mapping(args.holdout_run),
+            **options,
         )
         emit_json(args.json_path or "-", report)
     except (OSError, ValueError, TypeError) as exc:
@@ -364,6 +376,7 @@ def windows_main(argv: Sequence[str] | None = None) -> int:
         argv, entrypoint="windows_main",
         description="Validate dynamic accumulation-window timing against an independent recorded native run.",
         estimate=estimate_finetuning_windows,
+        allow_event_context=True,
     )
 
 

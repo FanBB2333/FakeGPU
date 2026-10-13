@@ -974,7 +974,8 @@ position IDs 的重置也不代表原始 packed 样本边界。统计开销单�
 只预测 holdout 已记录的稳态窗口；holdout 耗时仅用于算误差，不参与校准。
 该命令校验历史证据，不加载当前权重，也不认证当前环境。它不推断未来 shuffle
 顺序、warmup、总墙钟时间或动态 VRAM；窗口统计相同不表示完整输入等价。
-周期 evaluation/save 调度、原生 packing 与 MoE 窗口校准仍未支持。
+周期 evaluation/save 调度需要下方显式的事件上下文模式；原生 packing 与 MoE
+窗口校准仍未支持。
 ```bash
 python -m fakegpu validate-finetune-windows \
   --calibration-run calibration-1.json --calibration-run calibration-2.json \
@@ -1000,6 +1001,21 @@ checkpoint 和框架最终调用；阶段总量只累计根事件。账本区分
 python -m fakegpu validate-finetune-events \
   --calibration-run calibration-1.json --calibration-run calibration-2.json \
   --holdout-run holdout.json --json event-validation.json
+```
+
+`validate-finetune-windows --event-context` 还会匹配训练窗口之前的实际事件历史。
+它分别保留最近的评估和 checkpoint 边界，包括有序调用、工作量、首次/重复阶段，
+以及各边界之后已完成的 optimizer updates。新的评估不会抹去之前保存的上下文。
+报告必须包含事件账本且实际硬件一致；事件支持范围与 `validate-finetune-events` 相同。
+
+剔除全局 warmup 和每个“窗口＋上下文”组合的首次出现后，每份校准报告仍须有
+至少两个样本。这验证周期事件后重复出现的窗口，不预测第一次保存的恢复耗时，
+也不证明更早历史已无影响或完整训练时间可预测。评估/保存本身的耗时仍单独统计。
+
+```bash
+python -m fakegpu validate-finetune-windows --event-context \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json event-window-validation.json
 ```
 
 支持标准梯度检查点。LLaMA-Factory 使用 `disable_gradient_checkpointing: false`，

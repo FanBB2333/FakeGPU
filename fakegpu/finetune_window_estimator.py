@@ -16,6 +16,8 @@ from typing import Any
 from uuid import UUID
 
 from ._finetune_batches import _descriptor
+from ._finetune_event_context import describe_root_events
+from ._finetune_events import SCHEMA_VERSION as EVENT_SCHEMA
 from .finetune_estimator import FinetuneEstimateError
 from .finetune_run_estimator import validate_native_run
 
@@ -59,7 +61,36 @@ def _run_identity(run: Mapping[str, Any]) -> dict[str, Any]:
     return deepcopy(dict(identity))
 
 
-def _samples(run: Mapping[str, Any]) -> dict[str, Any]:
+def _window_contexts(observation: Mapping[str, Any]):
+    """Carry the latest event boundary for each kind into subsequent updates."""
+    roots = {
+        event["event_id"]: event
+        for event in describe_root_events(observation["phase_events"])
+    }
+    latest = {"evaluation": None, "checkpoint": None}
+    for update in observation["updates"]:
+        preceding = [roots[event_id] for event_id in update["preceding_event_ids"]]
+        if preceding:
+            boundary = {
+                "step": preceding[0]["optimizer_step"],
+                "events": [event["descriptor"] for event in preceding],
+            }
+            for event in preceding:
+                latest[event["descriptor"]["kind"]] = boundary
+        yield {
+            kind: None
+            if boundary is None
+            else {
+                "events": boundary["events"],
+                "optimizer_updates_since_boundary": update["optimizer_step"]
+                - boundary["step"]
+                - 1,
+            }
+            for kind, boundary in latest.items()
+        }
+
+
+def _samples(run: Mapping[str, Any], *, event_context: bool = False) -> dict[str, Any]:
     config, observation, _, _, schedule = validate_native_run(
         run, require_fixed_shape=False
     )
@@ -69,7 +100,13 @@ def _samples(run: Mapping[str, Any]) -> dict[str, Any]:
         )
     if config.get("packing") is not False:
         raise FinetuneEstimateError("window calibration does not support packing")
-    if any(schedule.get(field) != "no" for field in ("eval_strategy", "save_strategy")):
+    if event_context and config.get("event_observation_version") != EVENT_SCHEMA:
+        raise FinetuneEstimateError(
+            "event-conditioned windows require the event observation protocol"
+        )
+    if not event_context and any(
+        schedule.get(field) != "no" for field in ("eval_strategy", "save_strategy")
+    ):
         raise FinetuneEstimateError(
             "window calibration does not support periodic evaluation or checkpointing; "
             "their effects on subsequent window state are not modeled"
@@ -86,6 +123,7 @@ def _samples(run: Mapping[str, Any]) -> dict[str, Any]:
     seen = set()
     groups = {}
     trace = []
+    contexts = _window_contexts(observation) if event_context else None
     warmup_count = first_count = excluded_count = 0
     for update in observation["updates"]:
         batches = [_descriptor(batch) for batch in update["batches"]]
@@ -97,7 +135,10 @@ def _samples(run: Mapping[str, Any]) -> dict[str, Any]:
             raise FinetuneEstimateError(
                 "window calibration requires known binary masks and integer labels"
             )
-        key = _canonical(batches)
+        context = next(contexts) if event_context else None
+        key = _canonical(
+            {"batches": batches, "context": context} if event_context else batches
+        )
         first = key not in seen
         seen.add(key)
         warmup_count += update["warmup"]
@@ -117,14 +158,22 @@ def _samples(run: Mapping[str, Any]) -> dict[str, Any]:
                 "excluded_reasons": excluded_reasons,
             }
         )
+        if event_context:
+            trace[-1]["immediately_after_event"] = any(
+                boundary is not None
+                and boundary["optimizer_updates_since_boundary"] == 0
+                for boundary in context.values()
+            )
         if first or update["warmup"]:
             excluded_count += 1
             continue
         group = groups.setdefault(key, {"batches": batches, "updates": []})
+        if event_context:
+            group["context"] = context
         group["updates"].append(
             {"optimizer_step": update["optimizer_step"], "seconds": update["seconds"]}
         )
-    return {
+    result = {
         "identity": identity,
         "signature": observation["signature"],
         # Excluding the top-level identity also catches a copied timing record
@@ -142,6 +191,9 @@ def _samples(run: Mapping[str, Any]) -> dict[str, Any]:
             "eligible_updates": len(observation["updates"]) - excluded_count,
         },
     }
+    if event_context:
+        result["hardware"] = observation["hardware"]
+    return result
 
 
 def _comparison(predicted: float, actual: float) -> dict[str, float]:
@@ -154,24 +206,35 @@ def _comparison(predicted: float, actual: float) -> dict[str, float]:
 
 
 def estimate_finetuning_windows(
-    calibration_runs: Sequence[Mapping[str, Any]], target_run: Mapping[str, Any]
+    calibration_runs: Sequence[Mapping[str, Any]],
+    target_run: Mapping[str, Any],
+    *,
+    event_context: bool = False,
 ) -> dict[str, Any]:
     """Predict steady windows in an independent, already recorded target trace.
 
     Each target window needs at least two eligible samples in every calibration
     run, with at least two calibration runs. Global warmup and each window's first
     occurrence are excluded in every run. Process means receive equal weight.
+    With ``event_context=True``, windows also match the latest complete boundary
+    containing evaluation and checkpoint calls, with elapsed optimizer updates.
+    First occurrences then refer to each combined batch/context descriptor.
+    Event durations are not part of the predicted optimizer-window time.
     Report identity and content checks detect duplicate evidence; they cannot
     authenticate a JSON report or prove how a process was launched.
     """
+    if not isinstance(event_context, bool):
+        raise FinetuneEstimateError("event_context must be boolean")
     if (
         not isinstance(calibration_runs, Sequence)
         or isinstance(calibration_runs, (str, bytes))
         or len(calibration_runs) < _MINIMUM_RUNS
     ):
         raise FinetuneEstimateError("window calibration requires at least two runs")
-    calibrations = [_samples(run) for run in calibration_runs]
-    target = _samples(target_run)
+    calibrations = [
+        _samples(run, event_context=event_context) for run in calibration_runs
+    ]
+    target = _samples(target_run, event_context=event_context)
     runs = [*calibrations, target]
     if len({run["identity"]["uuid"] for run in runs}) != len(runs):
         raise FinetuneEstimateError("calibration and target require distinct run UUIDs")
@@ -182,6 +245,12 @@ def estimate_finetuning_windows(
     if any(run["signature"] != target["signature"] for run in calibrations):
         raise FinetuneEstimateError(
             "window calibration signatures must match target model, data and execution"
+        )
+    if event_context and any(
+        run["hardware"] != target["hardware"] for run in calibrations
+    ):
+        raise FinetuneEstimateError(
+            "event-conditioned windows require matching recorded hardware"
         )
     if not target["groups"]:
         raise FinetuneEstimateError("target has no eligible steady windows")
@@ -238,6 +307,8 @@ def estimate_finetuning_windows(
                 "comparison": _comparison(seconds["expected"] * count, actual),
             }
         )
+        if event_context:
+            groups[-1]["context"] = deepcopy(target_group["context"])
     if missing:
         raise FinetuneEstimateError(
             "insufficient independent window coverage: " + "; ".join(missing)
@@ -257,7 +328,7 @@ def estimate_finetuning_windows(
         }
         for update in target["trace"]
     ]
-    return {
+    result = {
         "schema_version": SCHEMA_VERSION,
         "scope": "recorded_steady_optimizer_window_replay",
         "signature": deepcopy(target["signature"]),
@@ -301,3 +372,17 @@ def estimate_finetuning_windows(
             "UUIDs and content hashes detect duplicate records, but do not authenticate reports or independently prove process isolation.",
         ],
     }
+    if event_context:
+        result["scope"] = "recorded_event_conditioned_optimizer_window_replay"
+        del result["sampling_policy"]["exclude_first_window_occurrence"]
+        result["sampling_policy"].update(
+            event_context="latest_complete_boundary_per_event_kind",
+            exclude_first_context_window_occurrence=True,
+        )
+        result["limitations"].extend(
+            [
+                "Event context retains the latest complete ordered boundary containing each event kind and the number of optimizer updates since it; it does not prove that older events, cache state or system load have no remaining effect.",
+                "Context-conditioned samples validate recorded window timing; they do not isolate a causal event overhead or predict event durations, combined pipeline wall time, or future schedules.",
+            ]
+        )
+    return result

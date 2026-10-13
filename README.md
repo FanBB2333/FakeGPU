@@ -1075,7 +1075,8 @@ are used for error measurement, never calibration. This is historical evidence
 validation: it neither loads current weights nor attests the current environment.
 It does not infer future shuffle order, warmup, total wall time or dynamic VRAM;
 window statistics are not complete input equivalence. Periodic evaluation/save
-schedules, native packing and MoE window calibration remain unsupported.
+schedules require the explicit event-context mode below. Native packing and MoE
+window calibration remain unsupported.
 ```bash
 python -m fakegpu validate-finetune-windows \
   --calibration-run calibration-1.json --calibration-run calibration-2.json \
@@ -1105,6 +1106,25 @@ the allocator/cache state of subsequent training windows.
 python -m fakegpu validate-finetune-events \
   --calibration-run calibration-1.json --calibration-run calibration-2.json \
   --holdout-run holdout.json --json event-validation.json
+```
+
+`validate-finetune-windows --event-context` also matches the recorded history
+before each training window. It retains the latest evaluation and checkpoint
+boundaries separately, including ordered calls, their workloads and phases, and
+the number of optimizer updates since each boundary. An evaluation cannot erase
+the context of an earlier save. Reports need the event ledger and matching actual
+hardware; event support has the same limits as `validate-finetune-events`.
+
+Global warmup and each window/context combination's first occurrence are excluded.
+Every retained combination still needs two samples per calibration run. This
+validates recurring windows following periodic events; it does not predict the
+first save's recovery, establish that older history has no effect, or predict
+complete training time. Evaluation/save durations remain separate subtotals.
+
+```bash
+python -m fakegpu validate-finetune-windows --event-context \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json event-window-validation.json
 ```
 
 Standard gradient checkpointing is supported. LLaMA-Factory uses

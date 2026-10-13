@@ -6,11 +6,10 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 import hashlib
 import json
-import re
 import statistics
 from typing import Any
 
-from ._finetune_batches import _descriptor
+from ._finetune_event_context import describe_root_events
 from ._finetune_events import SCHEMA_VERSION as EVENT_SCHEMA
 from .finetune_estimator import FinetuneEstimateError
 from .finetune_run_estimator import validate_native_run
@@ -25,79 +24,6 @@ def _canonical(value: Any) -> str:
 
 def _digest(value: Any) -> str:
     return hashlib.sha256(_canonical(value).encode()).hexdigest()
-
-
-def _workload_key(event: Mapping[str, Any]) -> dict[str, Any]:
-    workload = event["workload"]
-    if event["kind"] == "evaluation":
-        if (
-            workload["dataset"]["status"] != "known"
-            or workload.get("consumed_content_status") != "known"
-            or workload.get("unobserved_batches", 0)
-            or not workload["batches"]
-        ):
-            raise FinetuneEstimateError(
-                "event calibration requires known evaluation data and consumed batches"
-            )
-        batches = [_descriptor(batch) for batch in workload["batches"]]
-        if any(
-            batch["attention_mask_kind"] != "binary_2d"
-            or batch["labels_kind"] != "integer_2d"
-            for batch in batches
-        ):
-            raise FinetuneEstimateError(
-                "event calibration requires known evaluation masks and labels"
-            )
-        if workload.get("predict_with_generate") is not False:
-            raise FinetuneEstimateError(
-                "event calibration currently requires nongenerative evaluation"
-            )
-        if workload["compute_metrics"] or any(
-            value is not True for value in workload["prediction_loss_only"]
-        ):
-            raise FinetuneEstimateError(
-                "event calibration requires loss-only evaluation without custom metrics"
-            )
-        return {
-            "dataset": {
-                field: workload["dataset"][field]
-                for field in ("content_sha256", "num_samples")
-            },
-            "batches": batches,
-            "consumed_content_sha256": workload["consumed_content_sha256"],
-            **{
-                field: workload[field]
-                for field in (
-                    "prediction_loss_only",
-                    "predict_with_generate",
-                    "compute_metrics",
-                    "eval_batch_size",
-                    "dataloader_drop_last",
-                )
-            },
-        }
-    if workload["artifact_kind"] == "unknown" or workload["files_status"] != "known":
-        raise FinetuneEstimateError(
-            "event calibration requires a known checkpoint inventory"
-        )
-    if not workload["files"]:
-        raise FinetuneEstimateError(
-            "event calibration requires nonempty checkpoint files"
-        )
-    if workload["save_only_model"] is None:
-        raise FinetuneEstimateError(
-            "event calibration requires the save_only_model policy"
-        )
-    return {
-        "save_only_model": workload["save_only_model"],
-        "artifact_kind": workload["artifact_kind"],
-        # Step names and volatile JSON lengths change without changing save semantics.
-        # Files are evidence of the resulting inventory, never a proxy for I/O traffic.
-        "file_layout": sorted(
-            re.sub(r"(^|/)checkpoint-\d+(/|$)", r"\1checkpoint-N\2", file["path"])
-            for file in workload["files"]
-        ),
-    }
 
 
 def _samples(run: Mapping[str, Any]) -> dict[str, Any]:
@@ -122,47 +48,12 @@ def _samples(run: Mapping[str, Any]) -> dict[str, Any]:
         raise FinetuneEstimateError(
             "event calibration currently requires a dense model"
         )
-    if any(event["status"] != "succeeded" for event in observation["phase_events"]):
-        raise FinetuneEstimateError("event calibration requires successful event calls")
     identity = _run_identity(run)
     groups = {}
-    seen = set()
     trace = []
-    for event in observation["phase_events"]:
-        if event["parent_event_id"] is not None:
-            continue
-        workload = _workload_key(event)
-        # Preserve the observed subtree's operation structure. Nested saves remain
-        # part of their enclosing checkpoint, never separately added to its cost.
-        descendants = {event["event_id"]: 0}
-        subtree = []
-        for child in observation["phase_events"]:
-            if child["parent_event_id"] in descendants:
-                descendants[child["event_id"]] = len(descendants)
-                subtree.append(
-                    {
-                        "kind": child["kind"],
-                        "operation": child["operation"],
-                        "parent_operation_index": descendants[child["parent_event_id"]],
-                    }
-                )
-        descriptor = {
-            "kind": event["kind"],
-            "operation": event["operation"],
-            "inside_train": event["inside_train"],
-            "workload": workload,
-            "nested_operations": subtree,
-        }
-        base_key = _canonical(descriptor)
-        if event["optimizer_step"] == 0:
-            phase = "initial"
-        elif not event["inside_train"]:
-            phase = "final"
-        else:
-            phase = "repeated" if base_key in seen else "first"
-        if phase in {"first", "repeated"}:
-            seen.add(base_key)
-        descriptor["phase"] = phase
+    for described in describe_root_events(observation["phase_events"]):
+        event = observation["phase_events"][described["event_id"] - 1]
+        descriptor = described["descriptor"]
         key = _canonical(descriptor)
         group = groups.setdefault(key, {"descriptor": descriptor, "events": []})
         if event["seconds"] <= 0:
@@ -178,7 +69,7 @@ def _samples(run: Mapping[str, Any]) -> dict[str, Any]:
                 "optimizer_step": event["optimizer_step"],
                 "event_group_id": hashlib.sha256(key.encode()).hexdigest(),
                 "observed_seconds": event["seconds"],
-                "phase": phase,
+                "phase": descriptor["phase"],
             }
         )
     if not groups:
