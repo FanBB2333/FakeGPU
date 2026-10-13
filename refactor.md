@@ -1,7 +1,56 @@
 # FakeGPU 重构分析报告
 
-> 最新功能与验证结果见下方 **2026-10-13 / 真实 batch 观测与校验**；前一阶段见 **原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新功能与验证结果见下方 **2026-10-13 / 动态窗口独立校准验证**；前一阶段见 **真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-13 / 动态窗口独立校准验证
+
+接续另一会话已提交的 `5c49621f`。新增 `estimate_finetuning_windows()` 与第 25 项 CLI `validate-finetune-windows`，将实际 batch 统计推进到独立进程的耗时预测验证。该入口比较已记录的 holdout trace；既有 `estimate_finetuning()` / `estimate-finetune --run-report` 的定长外推范围保持不变。
+
+- 校准与 holdout 必须匹配模型、checkpoint 内容、GPU、软件、数据、原生配置和实际执行后端；对完整有序累积窗口的统计进行匹配。窗口描述保留逐行 token/labels 计数及尾窗口，不能用相同最大 shape 或全局 token 比例替代未覆盖窗口。
+- 每份报告排除全局 warmup 与每类窗口的首次出现；每类待预测窗口在至少两个独立校准报告中分别具有至少两个剩余样本。先求各进程的窗口均值，再等权聚合；holdout 秒数仅计算误差，不参与拟合。报告保留逐 update 的预测、排除原因、逐组误差和总误差，缺少覆盖直接拒绝。
+- 新 native run 记录 UUID、PID 与 UTC 开始时间；重复 UUID 或重复观测内容不能充当独立证据。矩阵交叉核对实际启动 PID 和时间。这些字段用于发现意外重复，不能认证人工编辑的 JSON。
+- 将 native 配置及后端签名计算移为共用函数，并抽出定长/动态共有的报告校验。删除 normalizer 后重复的 method 集合检查；observer 复用 `describe_batch()` 验证，保留错误类型、失败时不消费 batch 和 hook 恢复。没有删除训练后实际模型/量化检查，它们用于发现框架改变请求设置的情况。
+- 兼容性审核对 **44 份**历史原生报告逐项比较，外推结果与 `5c49621f` 完全一致（38 LoRA / 6 QLoRA）。41 份还通过新后端重建；早期缺少 kernel metadata 的报告保留旧签名校验。新版 batch 协议缺后端字段、配置被改而签名未更新等情况均拒绝。
+
+经额外复现，原有定长 pipeline 估算会信任外层 `schedule`：若它被改为 `no`，即使实际 Trainer 参数保留周期 eval/save，仍可能错误开放整体时间外推。**`bb0a08a6` 单独修复**这一问题，交叉核对已记录的实际调度；四个回归覆盖 eval/save 的 steps/epoch，旧版缺可选参数的报告保持兼容。新窗口入口还明确拒绝周期事件，因为其对后续 allocator/cache 状态的影响尚未校准。
+
+### 验收范围
+
+实测为 **Blackwell GPU / Qwen3.5-0.8B text / LoRA / cap 512 / microbatch 2 / accumulation 2 / seed 42 / SDPA / 无 GC、packing 或周期 evaluation/save**。同一份 5 条合成 Alpaca 数据包含四条短记录与一条长记录。Factory 预处理后长度 58/178，实际 batch pad 到 64/184；Ax 为 90/210。每个 epoch 消费 batch 行数 `[2, 2, 1]`，累积窗口为 `[2, 1]`。
+
+两个框架各两次独立 calibration（24 epochs / 72 microsteps / 48 updates / 120 条消费序列），各两次独立 holdout（40 epochs / 120 microsteps / 80 updates / 200 条消费序列）。另外各一份 primer 单独归档，不参与校准。共 **8 个正式 CUDA 进程 + 2 个 primer**，无失败或重跑选优。继承已有编译/文件缓存，未清空或控制全局缓存，因此不称为受控冷启动测试。
+
+每份 calibration 的七类完整窗口，在剔除全局前两次 update 与每类首次出现后，样本数排序为 `[2, 2, 4, 5, 5, 6, 17]`；全部 holdout 有效窗口均覆盖。各 holdout 额外执行 epochs 25–40，其真实 sampler 描述流与 calibration 前缀不同；这不证明出现了新 shape 或独立新数据。表中逐组误差也保留，避免仅看聚合时间掩盖偏差。
+
+| 框架 | holdout 窗口总时间最大 APE | epochs 25–40 最大 APE | 单个窗口组总时间最大 APE | 实测 allocated / reserved（GiB） |
+|---|---:|---:|---:|---:|
+| LLaMA-Factory 0.9.5 / TF 5.6.0 | 1.118% | 0.901% | 2.335% | 4.166 / 4.365 |
+| Axolotl 0.18.0 / TF 5.14.1 | 1.610% | 0.425% | 4.270% | 3.310 / 3.686 |
+
+allocator 峰值在各框架四次正式运行中相同，只作为观测记录，没有从窗口 timing 推导 VRAM。两框架的模板与 DeltaNet 内核不同，这不是同内核框架速度对比。原始配置、JSON、日志、adapter 与安装包保存在 `/tmp/fakegpu-dynamic-20261013/`；路径替换后的审阅归档为 [`finetune_window_validation_evidence.json`](tests/data/finetune_window_validation_evidence.json)，不能当作校准输入。
+
+独立 CPU 审核直接读取实际 Arrow 缓存，重算有序行 SHA、逐 epoch tokens/labels/padding 以及原生随机采样顺序；10 份 run 全部匹配。10 份最终 adapter 均为 24 个张量、319,488 个参数，所有值有限，12 个 LoRA B 张量均非零；PID、UUID 和运行时间逐项交叉核对。
+
+采集期间冻结的 17 个执行/验收文件全部匹配。采集后只收紧两个纯校验入口：窗口估算器拒绝周期事件，原生报告校验器核对实际调度。训练采集代码没有变化；最终重新校验全部原始报告，四份 holdout 的完整预测字典均与采集版逐字段相同。归档分别保留 `collection_source_file_sha256` 与 `validation_source_file_sha256`，不将旧哈希冒充最终源码。
+
+最终完整回归 **999 passed / 1 skipped，64.28 秒**；Ruff 全仓与 `git diff --check` 通过。最终 wheel 独立安装后 **72 个 Python 模块**与源码逐字节一致；`python -S` 下两个框架的窗口 CLI 结果与矩阵完全一致，并可复用上一阶段 QLoRA 报告推算 **128 microsteps / 64 updates**。
+
+独立动态验证只覆盖 holdout 中符合采样规则的 update 总耗时，不将其称为任意动态数据的训练总时间预测。它不推断未来 sampler 顺序，也不预测 warmup、周期事件、整体 wall time 或动态显存。相同统计不保证完整输入或 mask 布局相同；第一类窗口排除也不证明缓存状态已受控。首版限无 packing 的 dense 模型。
+
+### packing 审计与下一步
+
+当前本地框架版本存在需要先解决的语义边界，不能仅凭训练成功、有限 loss 或 position reset 开放 packing：
+
+- Factory 普通 SFT packing 是 `greedy_knapsack`（`data/processor/supervised.py:186`），逐子样本重置 position IDs，但补齐位置的 attention mask 仍为 1。普通 packing 允许跨样本注意力；mask-active 槽位不能解释为原始非 padding 文本量，position reset 次数也不能当原样本数。可先为这个明确语义建立独立计数及验收。
+- Factory neat packing 把 segment mask 转为 4D（`data/collator.py:524`）；当前 Transformers 5.6.0 的 Qwen3.5 线性层没有相应子序列卷积/递归状态重置路径。full-attention 的分块 mask 不足以证明整个 hybrid 模型隔离。
+- Axolotl 的当前 export 模型类型是 `qwen3_5_text`，而 packing patch 选择器仅匹配 `qwen3_5`（`loaders/patch_manager.py:487`）；该 patch 的 `layer_type` 与当前 Transformers 5.14.1 的 `block_type` 还不兼容。SDPA packing 路径移除 attention mask，未为 linear/conv 提供所需边界参数。后续应先验证“只改变前一个 packed 样本，后一个样本 logits 不变”的隔离条件，再扩大支持。
+
+周期事件成本的下一步先收集逐事件账本，而不是使用当前总秒数直接外推：记录真实入口、父子调用、step/epoch、训练内外边界、同步 wall time、eval 数据工作量与保存类型；嵌套 `_save_checkpoint → save_model → save_pretrained` 只累计外层区间，同 step 的独立调用不能去重。首次/重复评估、完整可恢复 checkpoint、最终 adapter 保存应分别校准。
+
+当前两套 Transformers 在最后一步补触发 steps eval/save，比例步长按 `ceil(max_steps × ratio)` 解析，提前结束的部分 epoch 也触发 epoch-end；Factory 还可能在训练末尾额外 evaluate/save。Ax checkpoint 返回前 `gc.collect()` 和 `torch.cuda.empty_cache()` 会改变后续训练状态，必须单独观测保存后的第一个窗口。最小验收可采用 Qwen3.5 LoRA / 128 tokens：两个框架各两次 20-update 校准、一次 29-update holdout（eval 每 4 步、save 每 6 步），再用带尾 batch 的 epoch 调度验收末尾事件；核对真实 checkpoint 目录、TrainerState 与时间守恒。先交付评估/保存子总时间误差，再决定是否已足够支持完整 pipeline 预测。
+
+以上为本机已安装版本的源码审计，路径相对各自框架包；没有修改框架原始仓库。下一阶段依次补原生 packing 语义、周期 evaluation/checkpoint 的事件账本和成本验证，再推进不同数据/模型/GPU 与原始 R24–R26。当前阶段仍不等同于完整 research toolkit 路线完成。
 
 ## 2026-10-13 / 真实 batch 观测与校验
 

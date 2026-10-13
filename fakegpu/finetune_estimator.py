@@ -1027,7 +1027,10 @@ def _training_flops(
 
 
 def _validate_observation(
-    observation: Mapping[str, Any], signature: Mapping[str, Any]
+    observation: Mapping[str, Any],
+    signature: Mapping[str, Any],
+    *,
+    require_fixed_shape: bool = True,
 ) -> dict[str, Any]:
     if observation.get("schema_version") != OBSERVATION_SCHEMA_VERSION:
         raise FinetuneEstimateError("unsupported fine-tuning observation schema")
@@ -1142,7 +1145,7 @@ def _validate_observation(
                 raise FinetuneEstimateError(
                     "native processed data must match the calibration signature"
                 )
-            if workload.get("fixed_shape") is not True:
+            if require_fixed_shape and workload.get("fixed_shape") is not True:
                 raise FinetuneEstimateError(
                     "native calibration requires fixed full batches at sequence_length"
                 )

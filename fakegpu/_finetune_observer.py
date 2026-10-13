@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping
 from contextlib import contextmanager
 import hashlib
 import math
@@ -123,25 +122,20 @@ class NativeTrainerObserver:
 
         def measured_step(*args, **kwargs):
             inputs = kwargs.get("inputs", args[1] if len(args) > 1 else None)
-            if not isinstance(inputs, Mapping) or "input_ids" not in inputs:
-                raise RuntimeError(
-                    "native runner requires text input_ids in every microbatch"
-                )
-            shape = tuple(int(size) for size in inputs["input_ids"].shape)
-            if len(shape) != 2 or min(shape) < 1:
-                raise RuntimeError(
-                    "native runner requires nonempty two-dimensional text batches"
-                )
             # Wait for preceding training work before starting the metadata timer:
             # a host copy must not subtract unfinished GPU compute from the sample.
             self.torch.cuda.synchronize()
             metadata_started = time.perf_counter()
-            batch = describe_batch(inputs)
+            try:
+                batch = describe_batch(inputs)
+            except ValueError as exc:
+                raise RuntimeError(f"invalid native text microbatch: {exc}") from exc
             self.torch.cuda.synchronize()
             metadata_seconds = time.perf_counter() - metadata_started
             self.instrumentation_seconds += metadata_seconds
             self.batch_instrumentation_seconds += metadata_seconds
             self._update_batch_seconds += metadata_seconds
+            shape = tuple(batch["shape"])
             result = training_step(*args, **kwargs)
             # Only training_step calls that returned successfully count as consumed.
             self._epoch_microstep += 1

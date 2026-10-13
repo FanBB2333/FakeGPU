@@ -330,3 +330,33 @@ def run_main(argv: Sequence[str] | None = None) -> int:
         usage_error(parser, exc)
     print(f"Native fine-tuning run written to {Path(args.output).resolve()}")
     return 0
+
+
+def windows_main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog=command_prog(__name__, "windows_main"),
+        description="Validate dynamic accumulation-window timing against an independent recorded native run.",
+    )
+    parser.add_argument(
+        "--calibration-run",
+        action="append",
+        required=True,
+        help="Native run JSON; repeat for at least two independent calibration processes.",
+    )
+    parser.add_argument(
+        "--holdout-run", required=True,
+        help="Independent native run JSON to predict and compare.",
+    )
+    add_json_path_argument(parser)
+    args = parser.parse_args(argv)
+    try:
+        from .finetune_window_estimator import estimate_finetuning_windows
+
+        report = estimate_finetuning_windows(
+            [load_mapping(path) for path in args.calibration_run],
+            load_mapping(args.holdout_run),
+        )
+        emit_json(args.json_path or "-", report)
+    except (OSError, ValueError, TypeError) as exc:
+        usage_error(parser, exc)
+    return 0

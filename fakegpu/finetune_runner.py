@@ -7,7 +7,7 @@ framework until run_finetuning has validated the requested local configuration.
 from __future__ import annotations
 
 from contextlib import contextmanager
-import hashlib
+from datetime import datetime, timezone
 import importlib.metadata
 import json
 import math
@@ -16,10 +16,14 @@ from pathlib import Path
 import threading
 import time
 from typing import Any
+from uuid import uuid4
 
 from ._calibration_cuda import _reject_simulated_cuda_environment
 from ._finetune_batches import summarize_batch_updates, validate_batch_profile
-from ._finetune_model import actual_training_config as _actual_training_config
+from ._finetune_model import (
+    actual_training_config as _actual_training_config,
+    native_config_signature as _execution_signature,
+)
 from ._finetune_observer import NativeTrainerObserver, capture_native_trainer
 from ._local_checkpoint import bind_local_checkpoint
 from .finetune_config import normalize_finetune_config
@@ -57,8 +61,6 @@ def _prepare_config(path: Path, framework: str, warmup_steps: int):
         raise ValueError("warmup_steps must be an integer >= 1")
     raw = load_mapping(path)
     config = normalize_finetune_config(raw, framework=framework, base_dir=path.parent)
-    if config["method"] not in {"full", "lora", "qlora"}:
-        raise ValueError("native runner supports full, LoRA, or bitsandbytes QLoRA")
     if config["quantization_bits"] not in {None, 4}:
         raise ValueError("native runner supports only 4-bit bitsandbytes quantization")
     if config["packing"] or raw.get("neat_packing"):
@@ -133,35 +135,6 @@ def _prepare_config(path: Path, framework: str, warmup_steps: int):
     return raw, config, model_config, model_dir
 
 
-def _execution_signature(raw: dict[str, Any]) -> str:
-    # Changing run duration or artifact locations does not change a microstep.
-    excluded = {
-        "output_dir",
-        "logging_dir",
-        "max_steps",
-        "num_epochs",
-        "num_train_epochs",
-        "epochs",
-        "save_steps",
-        "eval_steps",
-        "logging_steps",
-        "save_strategy",
-        "eval_strategy",
-        "evaluation_strategy",
-        "save_total_limit",
-        "dataset_prepared_path",
-        "cache_dir",
-        "tokenized_path",
-        "overwrite_cache",
-        "overwrite_output_dir",
-        "run_name",
-    }
-    payload = {key: value for key, value in raw.items() if key not in excluded}
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-
-
 @contextmanager
 def _native_directory(path: Path):
     previous = Path.cwd()
@@ -195,6 +168,11 @@ def run_finetuning(
     from steady timing samples, independently of the native LR warmup setting.
     """
     started = time.perf_counter()
+    run_identity = {
+        "uuid": str(uuid4()),
+        "pid": os.getpid(),
+        "started_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
     path = Path(config_path).expanduser().resolve()
     raw, config, model_config, model_dir = _prepare_config(
         path, framework, warmup_steps
@@ -398,6 +376,7 @@ def run_finetuning(
         }
         return {
             "schema_version": "fakegpu.finetune_run.v1",
+            "run_identity": run_identity,
             "profile_id": profile_id,
             "framework": framework,
             "model_config": model_config,

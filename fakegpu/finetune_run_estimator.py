@@ -7,8 +7,14 @@ import math
 from typing import Any
 
 from ._finetune_batches import validate_batch_profile
+from ._finetune_model import native_config_signature, native_execution_signature
 from .finetune_data_report import apply_dataset_report
-from .finetune_estimator import FinetuneEstimateError, estimate_finetuning
+from .finetune_estimator import (
+    FinetuneEstimateError,
+    _validate_observation,
+    estimate_finetuning,
+    finetune_workload_signature,
+)
 
 
 def estimate_finetuning_run(
@@ -25,6 +31,32 @@ def estimate_finetuning_run(
     This pure API checks report consistency; the CLI additionally rehashes local
     weights and verifies the current software environment before reuse.
     """
+    config, observation, _, _, _ = validate_native_run(run)
+    if max_steps is not None:
+        config["max_steps"] = None if max_steps == -1 else max_steps
+    report = estimate_finetuning(
+        run["model_config"],
+        config,
+        profile_id=profile_id or run.get("profile_id"),
+        num_samples=num_samples,
+        epochs=epochs,
+        observation=observation,
+    )
+    report["dataset"] = run["dataset"]
+    report["limitations"].extend(config.get("dataset_limitations", []))
+    report["native_run"] = {
+        "framework": run["framework"],
+        "observed_timing": run["timing"],
+        "observed_workload": run["workload"],
+    }
+    report["timing"]["native_pipeline"] = _pipeline_projection(run, report)
+    return report
+
+
+def validate_native_run(
+    run: Mapping[str, Any], *, require_fixed_shape: bool = True
+) -> tuple[dict[str, Any], Mapping, Mapping, Mapping, Mapping]:
+    """Reconcile native evidence; dynamic validation requires the actual batch ledger."""
     if (
         not isinstance(run, Mapping)
         or run.get("schema_version") != "fakegpu.finetune_run.v1"
@@ -61,31 +93,48 @@ def estimate_finetuning_run(
         raise FinetuneEstimateError(
             "native run dataset identity differs from its training configuration"
         )
-    if run["workload"].get("fixed_shape") is not True:
+    if require_fixed_shape and run["workload"].get("fixed_shape") is not True:
         raise FinetuneEstimateError(
             "native extrapolation currently requires fixed full batches at sequence_length; "
             "dynamic shapes remain available in the measured run report"
         )
-    _validate_native_measurements(run, config)
-    if max_steps is not None:
-        config["max_steps"] = None if max_steps == -1 else max_steps
-    report = estimate_finetuning(
-        run["model_config"],
-        config,
-        profile_id=profile_id or run.get("profile_id"),
-        num_samples=num_samples,
-        epochs=epochs,
-        observation=observation,
+    if (
+        not require_fixed_shape
+        and config.get("batch_observation_version") != "fakegpu.finetune_batches.v1"
+    ):
+        raise FinetuneEstimateError(
+            "dynamic validation requires the native batch observation protocol"
+        )
+    _validate_native_measurements(run, config, require_fixed_shape=require_fixed_shape)
+    signature = finetune_workload_signature(
+        run["model_config"], config, profile_id=run.get("profile_id")
     )
-    report["dataset"] = run["dataset"]
-    report["limitations"].extend(config.get("dataset_limitations", []))
-    report["native_run"] = {
-        "framework": framework,
-        "observed_timing": run["timing"],
-        "observed_workload": run["workload"],
-    }
-    report["timing"]["native_pipeline"] = _pipeline_projection(run, report)
-    return report
+    _validate_observation(observation, signature, require_fixed_shape=require_fixed_shape)
+    observed_model = observation.get("observed_model")
+    # Early v1 runs predate kernel implementation recording. Preserve their
+    # existing signature checks; the batch protocol requires the complete backend.
+    has_backend = (
+        isinstance(observed_model, Mapping) and "kernel_implementations" in observed_model
+    )
+    if "native_config" in run and ("batch_observation_version" in config or has_backend):
+        raw = run["native_config"]
+        if not isinstance(raw, Mapping) or not isinstance(observed_model, Mapping):
+            raise FinetuneEstimateError(
+                "native execution identity requires native_config and observed_model"
+            )
+        try:
+            execution = native_execution_signature(
+                native_config_signature(raw), observed_model
+            )
+        except KeyError as exc:
+            raise FinetuneEstimateError(
+                f"native observed_model lacks backend field {exc}"
+            ) from exc
+        if execution != config.get("native_execution_signature"):
+            raise FinetuneEstimateError(
+                "native execution signature differs from recorded configuration and backend"
+            )
+    return config, observation, run["workload"], run["timing"], run["schedule"]
 
 
 def _nonnegative(value: Any, field: str) -> float:
@@ -112,7 +161,10 @@ def _matching_seconds(value: Any, expected: float, field: str) -> None:
 
 
 def _validate_native_measurements(
-    run: Mapping[str, Any], config: Mapping[str, Any]
+    run: Mapping[str, Any],
+    config: Mapping[str, Any],
+    *,
+    require_fixed_shape: bool = True,
 ) -> None:
     """Reconcile redundant counters before treating a run as timing evidence."""
     workload, observation = run["workload"], run["observation"]
@@ -200,7 +252,7 @@ def _validate_native_measurements(
             )
         # A partial accumulation window is legal, including during warmup. The
         # fixed-shape calibration requirement applies to each microbatch only.
-        if update_samples != batch * update_microsteps:
+        if require_fixed_shape and update_samples != batch * update_microsteps:
             raise FinetuneEstimateError(
                 "native fixed-shape update.samples must match its full microbatches"
             )
@@ -269,6 +321,12 @@ def _validate_native_measurements(
         )
         if dimensions in seen_shapes:
             raise FinetuneEstimateError("native shape_counts contains duplicate shapes")
+        if not require_fixed_shape and (
+            dimensions[0] > batch or dimensions[1] > sequence
+        ):
+            raise FinetuneEstimateError(
+                "native recorded batch shape exceeds the configured batch or sequence length"
+            )
         seen_shapes.add(dimensions)
         count = _positive_integer(entry.get("microsteps"), "shape microsteps")
         shape_microsteps += count
@@ -277,7 +335,7 @@ def _validate_native_measurements(
         raise FinetuneEstimateError(
             "native shape_counts totals disagree with recorded updates"
         )
-    if seen_shapes != {(batch, sequence)}:
+    if require_fixed_shape and seen_shapes != {(batch, sequence)}:
         raise FinetuneEstimateError(
             "native fixed_shape flag disagrees with recorded batch shapes"
         )

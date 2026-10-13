@@ -963,8 +963,24 @@ epoch 位置、token 槽位、非 padding tokens，以及常规因果移位前�
 形状与不完整窗口分别保留。每组至少有两个稳态 update 才标记 `sufficient`，这仅
 表示样本数量充足，不代表精度认证。缺失或非二值 attention mask 的 token 数保持未知，
 position IDs 的重置也不代表原始 packed 样本边界。统计开销单独记录并从 update
-耗时中扣除，总墙钟时间仍包含该开销；同步观测使用独立校准身份。动态形状外推与
-原生 packing 仍未支持。
+耗时中扣除，总墙钟时间仍包含该开销；同步观测使用独立校准身份。
+
+`validate-finetune-windows` 使用独立训练报告验证动态窗口耗时预测。至少提供两份
+模型、数据、软件及原生执行设置相同的独立校准报告；每个完整有序窗口，在每份
+校准报告中剔除全局 warmup 和该窗口首次出现后，仍须有两个样本。各进程均值
+等权聚合，缺少覆盖的窗口直接拒绝。新报告记录 run UUID、PID 与 UTC 开始时间，
+用于发现意外重复采样。
+
+只预测 holdout 已记录的稳态窗口；holdout 耗时仅用于算误差，不参与校准。
+该命令校验历史证据，不加载当前权重，也不认证当前环境。它不推断未来 shuffle
+顺序、warmup、总墙钟时间或动态 VRAM；窗口统计相同不表示完整输入等价。
+周期 evaluation/save 调度、原生 packing 与 MoE 窗口校准仍未支持。
+```bash
+python -m fakegpu validate-finetune-windows \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json window-validation.json
+```
+
 
 支持标准梯度检查点。LLaMA-Factory 使用 `disable_gradient_checkpointing: false`，
 并通过 `use_reentrant_gc: true` 或 `false` 选择实现；Axolotl 使用
@@ -1099,6 +1115,7 @@ Blackwell GPU 上全量、LoRA、bitsandbytes QLoRA 的独立校准与复测，�
 | `fakegpu probe-finetune` | 在真实 CUDA 显卡上采集固定形状 Hugging Face Trainer 时间与显存 |
 | `fakegpu profile-finetune-data` | 全量扫描本地 JSONL 的 token 长度、截断、padding 与处理后序列数 |
 | `fakegpu run-finetune` | 执行 LLaMA-Factory/Axolotl 原生训练并记录数据、CUDA 时间、显存及最终保存 |
+| `fakegpu validate-finetune-windows` | 使用独立校准与 holdout 训练验证动态窗口耗时 |
 | `fakegpu simulate-topology` | 模拟 collective 路由和链路竞争 |
 | `fakegpu replay-trace` | 汇总计算、通信、等待和显存时间线 |
 | `fakegpu calibrate` | 整理 serving 观测、对比显存报告并执行可靠性门槛检查 |

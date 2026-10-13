@@ -18,6 +18,50 @@ _DTYPES = {"torch.float32": "fp32", "torch.float16": "fp16", "torch.bfloat16": "
 _STORAGE_DTYPES = {**_DTYPES, "torch.uint8": "uint8"}
 
 
+def native_config_signature(raw):
+    """Hash native execution options, excluding duration and artifact locations."""
+    # Changing run duration or artifact locations does not change a microstep.
+    excluded = {
+        "output_dir",
+        "logging_dir",
+        "max_steps",
+        "num_epochs",
+        "num_train_epochs",
+        "epochs",
+        "save_steps",
+        "eval_steps",
+        "logging_steps",
+        "save_strategy",
+        "eval_strategy",
+        "evaluation_strategy",
+        "save_total_limit",
+        "dataset_prepared_path",
+        "cache_dir",
+        "tokenized_path",
+        "overwrite_cache",
+        "overwrite_output_dir",
+        "run_name",
+    }
+    payload = {key: value for key, value in raw.items() if key not in excluded}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def native_execution_signature(config_signature, observed_model):
+    """Bind native configuration to the actual collator, kernels and TF32 modes."""
+    backend = {
+        key: observed_model[key]
+        for key in (
+            "kernel_implementations", "collator_class", "tf32_matmul", "tf32_cudnn"
+        )
+    }
+    payload = {"native_config_signature": config_signature, "backend": backend}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def _bnb_type(value, name):
     """Recognize loaded bnb classes, including subclasses, without importing bnb."""
     return any(
@@ -440,16 +484,9 @@ def actual_training_config(trainer, normalized):
         "tf32_matmul": result["tf32"],
         "tf32_cudnn": bool(torch.backends.cudnn.allow_tf32),
     }
-    result["native_execution_signature"] = hashlib.sha256(
-        json.dumps(
-            {
-                "native_config_signature": normalized["native_execution_signature"],
-                "backend": native_backend,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-    ).hexdigest()
+    result["native_execution_signature"] = native_execution_signature(
+        normalized["native_execution_signature"], native_backend
+    )
     details = {
         "model_class": type(model).__module__ + "." + type(model).__name__,
         "trainer_class": type(trainer).__module__ + "." + type(trainer).__name__,

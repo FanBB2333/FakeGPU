@@ -231,6 +231,55 @@ def test_batch_observation_signature_preserves_legacy_and_new_run_reuse(native_r
     assert result["signature"]["batch_observation_version"] == "fakegpu.finetune_batches.v1"
 
 
+def test_legacy_run_without_kernel_metadata_keeps_fixed_projection(native_run):
+    expected = estimate_finetuning_run(native_run, epochs=3, max_steps=-1)
+    # Early native reports recorded a collator but no kernels or TF32 backend.
+    native_run["native_config"] = {"seed": 42}
+    native_run["observation"]["observed_model"] = {
+        "collator_class": "fixture.TextCollator"
+    }
+    assert estimate_finetuning_run(native_run, epochs=3, max_steps=-1) == expected
+
+
+def _attach_native_backend(run):
+    from fakegpu._finetune_model import (
+        native_config_signature,
+        native_execution_signature,
+    )
+
+    run["native_config"] = {"seed": 42}
+    observed = {
+        "kernel_implementations": {},
+        "collator_class": "fixture.TextCollator",
+        "tf32_matmul": False,
+        "tf32_cudnn": True,
+    }
+    run["observation"]["observed_model"] = observed
+    run["training_config"]["native_execution_signature"] = native_execution_signature(
+        native_config_signature(run["native_config"]), observed
+    )
+    _attach_batch_evidence(run)
+
+
+@pytest.mark.parametrize(
+    "field", ["kernel_implementations", "collator_class", "tf32_matmul", "tf32_cudnn"]
+)
+def test_batch_protocol_cannot_use_legacy_missing_backend_exception(native_run, field):
+    _attach_native_backend(native_run)
+    estimate_finetuning_run(native_run)
+    native_run["observation"]["observed_model"].pop(field)
+    with pytest.raises(ValueError, match=f"lacks backend field '{field}'"):
+        estimate_finetuning_run(native_run)
+
+
+def test_native_config_must_reproduce_recorded_execution_signature(native_run):
+    _attach_native_backend(native_run)
+    estimate_finetuning_run(native_run)
+    native_run["native_config"]["seed"] = 100
+    with pytest.raises(ValueError, match="execution signature differs"):
+        estimate_finetuning_run(native_run)
+
+
 @pytest.mark.parametrize("direct_observation", [False, True])
 @pytest.mark.parametrize("mutation", ["token_count", "remove_evidence", "sample_seconds"])
 def test_public_estimators_validate_batch_evidence(native_run, direct_observation, mutation):

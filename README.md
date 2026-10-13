@@ -1062,7 +1062,26 @@ certificate. Missing or nonbinary attention masks leave token counts unknown.
 Position-ID resets do not identify original packed examples. Collection overhead
 is reported separately and excluded from update samples, while total wall time
 includes it. These synchronized observations have a separate calibration identity.
-Dynamic-shape extrapolation and native packing remain unsupported.
+`validate-finetune-windows` compares timing predictions against a separately
+recorded dynamic run. It requires at least two independent calibration reports
+from the same model, data, software and native execution settings. Each complete,
+ordered window must have two retained observations in every calibration run,
+after excluding global warmup and each window's first occurrence. Process means
+receive equal weight; uncovered windows are rejected. New reports include a run
+UUID, PID and UTC start time to catch accidental duplicate sampling.
+
+The comparison predicts only the holdout's recorded steady windows. Its timings
+are used for error measurement, never calibration. This is historical evidence
+validation: it neither loads current weights nor attests the current environment.
+It does not infer future shuffle order, warmup, total wall time or dynamic VRAM;
+window statistics are not complete input equivalence. Periodic evaluation/save
+schedules, native packing and MoE window calibration remain unsupported.
+```bash
+python -m fakegpu validate-finetune-windows \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json window-validation.json
+```
+
 
 Standard gradient checkpointing is supported. LLaMA-Factory uses
 `disable_gradient_checkpointing: false` with `use_reentrant_gc: true` or `false`;
@@ -1224,6 +1243,7 @@ maintained in [`refactor.md`](refactor.md).
 | `fakegpu probe-finetune` | Collect fixed-shape Hugging Face Trainer timing and memory on a physical CUDA GPU |
 | `fakegpu profile-finetune-data` | Scan local JSONL data for token lengths, truncation, padding, and processed sequence counts |
 | `fakegpu run-finetune` | Run native LLaMA-Factory/Axolotl training and record data, CUDA timing, memory, and final saving |
+| `fakegpu validate-finetune-windows` | Validate dynamic window timing using independent calibration and holdout runs |
 | `fakegpu simulate-topology` | Model collective routes and link contention |
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
 | `fakegpu calibrate` | Build serving observations, compare memory reports, and enforce reliability gates |

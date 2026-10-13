@@ -49,6 +49,7 @@ from .finetune_data import (
     profile_tokenized_records,
 )
 from .finetune_run_estimator import estimate_finetuning_run
+from .finetune_window_estimator import estimate_finetuning_windows
 from .finetune_runner import run_finetuning
 from .kernel_analysis import (
     KernelAnalysisError,
@@ -142,6 +143,7 @@ __all__ = [
     "estimate_diffusion_generation",
     "estimate_finetuning",
     "estimate_finetuning_run",
+    "estimate_finetuning_windows",
     "estimate_kv_cache_memory",
     "estimate_module_memory",
     "estimate_roofline",
