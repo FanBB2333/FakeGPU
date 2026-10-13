@@ -6,7 +6,6 @@ framework until run_finetuning has validated the requested local configuration.
 
 from __future__ import annotations
 
-from collections import Counter
 from contextlib import contextmanager
 import hashlib
 import importlib.metadata
@@ -19,6 +18,7 @@ import time
 from typing import Any
 
 from ._calibration_cuda import _reject_simulated_cuda_environment
+from ._finetune_model import actual_training_config as _actual_training_config
 from ._finetune_observer import NativeTrainerObserver, capture_native_trainer
 from ._local_checkpoint import bind_local_checkpoint
 from .finetune_config import normalize_finetune_config
@@ -30,7 +30,6 @@ from .structured_io import load_mapping
 
 
 _RUN_LOCK = threading.Lock()
-_DTYPES = {"torch.float32": "fp32", "torch.float16": "fp16", "torch.bfloat16": "bf16"}
 
 
 def native_training_versions(framework: str) -> dict[str, str]:
@@ -56,17 +55,11 @@ def _prepare_config(path: Path, framework: str, warmup_steps: int):
     ):
         raise ValueError("warmup_steps must be an integer >= 1")
     raw = load_mapping(path)
-    normalization_input = dict(raw)
-    if raw.get("disable_gradient_checkpointing") is True:
-        # This native option has no effect when checkpointing is disabled.
-        normalization_input.pop("use_reentrant_gc", None)
-    config = normalize_finetune_config(
-        normalization_input, framework=framework, base_dir=path.parent
-    )
-    if config["method"] not in {"full", "lora"}:
-        raise ValueError(
-            "native runner currently supports full tuning and unquantized LoRA"
-        )
+    config = normalize_finetune_config(raw, framework=framework, base_dir=path.parent)
+    if config["method"] not in {"full", "lora", "qlora"}:
+        raise ValueError("native runner supports full, LoRA, or bitsandbytes QLoRA")
+    if config["quantization_bits"] not in {None, 4}:
+        raise ValueError("native runner supports only 4-bit bitsandbytes quantization")
     if config["packing"] or raw.get("neat_packing"):
         raise ValueError("native runner requires unpacked text data")
     distributed = config["distributed_config"]
@@ -191,164 +184,6 @@ def _invoke_native(framework, config_path, raw):
         do_train(load_cfg(str(config_path)), TrainerCliArgs())
 
 
-def _actual_training_config(trainer, normalized):
-    import torch
-
-    args, model = trainer.args, trainer.model
-    if (
-        args.world_size != 1
-        or getattr(trainer, "is_deepspeed_enabled", False)
-        or getattr(trainer, "is_fsdp_enabled", False)
-    ):
-        raise ValueError("actual Trainer enabled unsupported distributed training")
-    parameters = list(model.named_parameters())
-    if any(parameter.device.type != "cuda" for _, parameter in parameters):
-        raise ValueError(
-            "actual model parameters must all reside on the selected CUDA GPU"
-        )
-    if getattr(model, "is_quantized", False):
-        raise ValueError("actual model is quantized")
-    dtype_counts = Counter()
-    trainable_dtypes = Counter()
-    frozen_dtypes = Counter()
-    for _, parameter in parameters:
-        dtype_counts[str(parameter.dtype)] += parameter.numel()
-        (trainable_dtypes if parameter.requires_grad else frozen_dtypes)[
-            str(parameter.dtype)
-        ] += parameter.numel()
-    base_dtypes = frozen_dtypes or dtype_counts
-    storage_dtype = max(base_dtypes, key=base_dtypes.get)
-    if storage_dtype not in _DTYPES:
-        raise ValueError("actual base parameters have an unsupported storage dtype")
-    result = dict(normalized)
-    result.update(
-        {
-            "parameter_dtype": _DTYPES[storage_dtype],
-            "dtype": "bf16" if args.bf16 else "fp16" if args.fp16 else "fp32",
-            "micro_batch_size": args.per_device_train_batch_size,
-            "gradient_accumulation_steps": args.gradient_accumulation_steps,
-            "epochs": args.num_train_epochs,
-            "max_steps": args.max_steps if args.max_steps > 0 else None,
-            "world_size": args.world_size,
-            "tf32": bool(torch.backends.cuda.matmul.allow_tf32),
-            "gradient_checkpointing": bool(
-                getattr(model, "is_gradient_checkpointing", False)
-            ),
-            "optimizer": getattr(args.optim, "value", args.optim),
-            "learning_rate": args.learning_rate,
-            "lr_scheduler_type": getattr(
-                args.lr_scheduler_type, "value", args.lr_scheduler_type
-            ),
-            "warmup_steps": args.warmup_steps,
-            "warmup_ratio": args.warmup_ratio,
-            "weight_decay": args.weight_decay,
-            "max_grad_norm": args.max_grad_norm,
-            "dataloader_drop_last": args.dataloader_drop_last,
-            "trainable_parameter_count": sum(trainable_dtypes.values()),
-        }
-    )
-    total = sum(dtype_counts.values())
-    result["parameter_count"] = (
-        total - result["trainable_parameter_count"]
-        if result["method"] == "lora"
-        else total
-    )
-    result["distributed_config"] = dict(
-        result["distributed_config"],
-        activation_checkpointing=result["gradient_checkpointing"],
-    )
-    if result["method"] == "lora":
-        adapters = getattr(model, "peft_config", {})
-        if len(adapters) != 1:
-            raise ValueError("actual LoRA model must contain exactly one adapter")
-        adapter = next(iter(adapters.values()))
-        result.update(
-            {
-                "lora_rank": adapter.r,
-                "lora_alpha": adapter.lora_alpha,
-                "lora_dropout": adapter.lora_dropout,
-                "lora_bias": adapter.bias,
-            }
-        )
-        targets = adapter.target_modules
-        result["lora_target_modules"] = (
-            [targets] if isinstance(targets, str) else sorted(targets)
-        )
-    attention = getattr(model.config, "_attn_implementation", None)
-    if attention not in {"eager", "sdpa"}:
-        raise ValueError(f"actual attention backend {attention!r} is unsupported")
-    result["attention_implementation"] = attention
-    result["execution_backend"] = "native_framework_trainer"
-    result["assumptions"] = [
-        "Configuration values are reconciled with the actual native Trainer and model."
-    ]
-    kernel_choices = {}
-    for name in (
-        "causal_conv1d_fn",
-        "causal_conv1d_update",
-        "chunk_gated_delta_rule",
-        "fused_recurrent_gated_delta_rule",
-    ):
-        choices = set()
-        for module in model.modules():
-            if hasattr(module, name):
-                implementation = getattr(module, name)
-                choices.add(
-                    None
-                    if implementation is None
-                    else (
-                        getattr(
-                            implementation,
-                            "__module__",
-                            type(implementation).__module__,
-                        )
-                        + "."
-                        + getattr(
-                            implementation,
-                            "__qualname__",
-                            type(implementation).__qualname__,
-                        )
-                    )
-                )
-        if choices:
-            kernel_choices[name] = sorted(choices, key=str)
-    native_backend = {
-        "kernel_implementations": kernel_choices,
-        "collator_class": type(trainer.data_collator).__module__
-        + "."
-        + type(trainer.data_collator).__name__,
-        "tf32_matmul": result["tf32"],
-        "tf32_cudnn": bool(torch.backends.cudnn.allow_tf32),
-    }
-    result["native_execution_signature"] = hashlib.sha256(
-        json.dumps(
-            {
-                "native_config_signature": normalized["native_execution_signature"],
-                "backend": native_backend,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-    ).hexdigest()
-    details = {
-        "model_class": type(model).__module__ + "." + type(model).__name__,
-        "trainer_class": type(trainer).__module__ + "." + type(trainer).__name__,
-        "collator_class": type(trainer.data_collator).__module__
-        + "."
-        + type(trainer.data_collator).__name__,
-        "parameter_count": result["parameter_count"],
-        "total_parameter_count": total,
-        "trainable_parameter_count": result["trainable_parameter_count"],
-        "parameter_dtype_counts": dict(dtype_counts),
-        "trainable_dtype_counts": dict(trainable_dtypes),
-        "gradient_checkpointing": result["gradient_checkpointing"],
-        "attention_implementation": attention,
-        "training_arguments": args.to_dict(),
-        **native_backend,
-    }
-    return result, details
-
-
 def run_finetuning(
     config_path: str | Path, *, framework: str, profile_id: str, warmup_steps: int = 2
 ) -> dict[str, Any]:
@@ -435,6 +270,12 @@ def run_finetuning(
         if observer.trainer is None or observer.outcome is None:
             raise RuntimeError(
                 "native framework did not complete an observed Trainer.train call"
+            )
+        if config["method"] == "qlora":
+            # Linear4bit can select its effective compute dtype on first forward.
+            # Reconcile after execution rather than recording only its load-time default.
+            state["config"], state["model"] = _actual_training_config(
+                observer.trainer, config
             )
         measured = [update for update in observer.updates if not update["warmup"]]
         if len(measured) < 2 or not math.isfinite(

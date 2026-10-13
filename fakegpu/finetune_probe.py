@@ -138,7 +138,9 @@ def measure_finetuning(
         )
     if config["dtype"] == "bf16" and not torch.cuda.is_bf16_supported():
         raise ValueError("bf16 was requested but is unsupported by this CUDA device")
-    if config.get("gradient_checkpointing") and config["method"] != "full":
+    if config.get("gradient_checkpointing_kwargs"):
+        checkpointing_kwargs = dict(config["gradient_checkpointing_kwargs"])
+    elif config.get("gradient_checkpointing") and config["method"] != "full":
         checkpointing_kwargs = {"use_reentrant": False}
     else:
         checkpointing_kwargs = None

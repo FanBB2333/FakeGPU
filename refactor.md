@@ -1,7 +1,53 @@
 # FakeGPU 重构分析报告
 
-> 最新功能与验证结果见下方 **2026-10-13 / 原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新功能与验证结果见下方 **2026-10-13 / 原生 QLoRA 与更多训练形状**；前一阶段见 **原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-13 / 原生 QLoRA 与更多训练形状
+
+继续完成 P3 的单 GPU 原生微调扩展，同时把真实模型检查从执行器拆为独立的 `_finetune_model.py`。原先的 128-token LoRA 报告保持可由 Python API 复用；只有实际出现的新量化信息或 checkpoint 参数才增加签名字段。
+
+| 交付项 | 实际行为 |
+|---|---|
+| 原生 4-bit QLoRA | LLaMA-Factory / Axolotl 从本地未量化纯文本权重加载 bitsandbytes NF4/FP4；检查真实模型方法、单 LoRA adapter、参数更新和最终保存。本轮真机验证 NF4，不代表 FP4 精度已验收。 |
+| 参数与显存检查 | 从 `quant_state.shape` 计算逻辑参数，而不是把压缩张量的 `numel()` 当原模型数量；分别记录 packed weights、按 CUDA storage 去重的量化元数据、非量化冻结权重及其真实 dtype。估算器直接采用已检查的权重字节预算，激活/workspace 仍需要校准。 |
+| 标准 checkpointing | HF/Axolotl 接受布尔 `gradient_checkpointing_kwargs.use_reentrant`；Factory 使用原生 `use_reentrant_gc`。从加载模型的实际 checkpoint 函数读取最终模式，并绑定校准签名；自定义 checkpoint 实现仍不支持。 |
+| 校准身份 | 加入实际量化布局、存储和 GC 参数。bitsandbytes 首次 forward 可能改变有效 compute dtype，因此在训练完成后再次核对；不会仅记录加载时的请求值。 |
+| 验收工具 | matrix 沿用配置中的 sequence length、microbatch、accumulation 与 seed；支持显式校准/warmup 步数，使用生产 API 检查真实 microsteps 和样本数。数据生成器支持只加载 tokenizer 生成长数据，默认 128-token 数据内容保持不变。 |
+| 示例与文档 | 三语 README 同步；增加 Factory/Axolotl 原生 QLoRA 示例。原始日志、配置、报告与独立复核结果归档，不将历史验证冒充当前源码验收。 |
+
+### 经确认的问题与独立修复
+
+- `6b6a3934`：Factory 的实际 4-bit 存储类型随 compute dtype，修正此前默认按 uint8 处理的配置。
+- `30b72935`：真机测试发现 Factory 要求 `quantization_method: bnb`；写为 `bitsandbytes` 会被其加载分支静默忽略。实际模型检查成功拦截了未量化模型，未生成错误校准报告；现提前拒绝错误拼写，示例已修正。失败配置和日志摘要保留在本轮证据中。
+- `68107588`：提前拒绝会改变尚未建模参数策略的 `unfrozen_parameters`、`pure_bf16` 与 `export_quantization_bit`，避免把解冻基座当作 adapter、按 FP32 预算 BF16 adapter 或进入另一种量化流程。实际 LoRA 检查同时确保基座冻结、A/B adapter 可训练。
+
+### 最终验证与实测边界
+
+最终完整回归 **861 passed / 1 skipped，59.18 秒**；Ruff 全仓通过。wheel 独立安装的 **70 个 Python 模块**与工作树逐文件一致，`python -S` 下无需训练依赖即可访问 CLI。安装包复用真实 QLoRA 报告推算 **64 条序列 × 2 epochs = 128 microsteps / 64 updates**，并使用实测量化权重预算。上一阶段 Factory/Axolotl 的原始 LoRA 报告也通过当前 Python API 外推检查。
+
+实测为 **Blackwell GPU / Qwen3.5-0.8B text backbone / 64 条合成 Alpaca 数据 / accumulation 2 / seed 42 / SDPA / 无 packing / 无周期性 eval 或 checkpoint / 最终 adapter 保存**。GC 场景使用 `use_reentrant=true`；QLoRA 为 NF4、double quantization、BF16 compute/storage 与 FP32 adapter。框架版本沿用上一阶段，Factory 环境新增 bitsandbytes **0.50.2**，Axolotl 使用 **0.49.1**；两者依旧分别使用 Torch 与 FLA DeltaNet 路径，不能将其速度差归结为单纯的框架差异。
+
+修复后冻结 **15 个执行/验收源码文件**，重新运行 **6 组、18 个独立 CUDA 训练进程**。每组 1 次 6-update 校准、2 次各 16-update holdout，每次排除前 2 updates 后比较稳态耗时。每个 holdout 为 32 microsteps：batch 2 使用 64 条数据，batch 1 使用 32 条数据；这不是长时间收敛验收。各组在正式校准前已有独立短跑，保留了共享编译/文件缓存；没有清空全局缓存，不能称为受控冷启动测试。
+
+| 框架 / 场景 | 最大稳态 update 时间 APE | 最大整体 wall time APE | allocated / reserved 峰值范围（GiB） |
+|---|---:|---:|---:|
+| LLaMA-Factory / LoRA / 512 / batch 2 / 无 GC | 3.904% | 1.823% | 9.012 / 9.525 |
+| LLaMA-Factory / LoRA / 1024 / batch 1 / GC | 0.369% | 0.326% | 9.607 / 10.160 |
+| LLaMA-Factory / NF4 QLoRA / 512 / batch 1 / GC | 1.925% | 1.366% | 4.375 / 4.664 |
+| Axolotl / LoRA / 512 / batch 2 / 无 GC | 3.476% | 0.563% | 6.002 / 6.525 |
+| Axolotl / LoRA / 1024 / batch 1 / GC | 2.705% | 0.086% | 4.316 / 4.850 |
+| Axolotl / NF4 QLoRA / 512 / batch 1 / GC | 0.250% | 0.133% | 2.192 / 2.480 |
+
+表中峰值范围包括各组 calibration 和两次 holdout。独立核验逐项重算时间及显存误差、检查进程 PID、实际 shape/GC/量化签名、有限 loss 和落盘 adapter 的有限值/非零 LoRA B。原始报告与额外预热记录见 [`finetune_extended_validation_evidence.json`](tests/data/finetune_extended_validation_evidence.json)；该归档替换了主机路径，只用于审阅，原始本地报告才可作为 `--run-report` 输入。工作目录为 `/tmp/fakegpu-phase3/`，此前部分成功测试和失败测试也完整保留。
+
+解析显存仍包含未完全覆盖的激活与 kernel workspace，短跑校准不证明其他模型、显卡、shape 或长训练零误差。整体耗时仍依赖相同 dataset/cache 状态；之前的首次编译外推失败证据继续保留，不因本轮先预热后的结果而删除。
+
+### 接续设计与验收顺序
+
+1. **原生 packing 与动态 batch**：从实际 sampler/collator 记录每个 batch 的序列数、有效 tokens、padding、labels 与边界；按 shape 分组校准。验收数据包含不同长度及 epoch 尾部，确保最终 microsteps 与真实 Trainer 一致，不能将通用拼接行数直接作为框架 packed 序列数。
+2. **完整流程成本**：为周期性 evaluation/checkpoint 建立事件次数与阶段成本模型；分别收集首次运行和缓存后重复观测。无法确认 cache 状态时保留单独场景，不用一次固定成本代表所有运行。
+3. **精度与范围扩展**：增加更长 holdout、独立数据集、OOM/低估边界与其他 GPU；再依照 R24–R26 推进 serving、diffusion 与多卡/多机。当前单 GPU 微调交付不代表这些原始路线全部完成。
 
 ## 2026-10-13 / 原生框架与真实数据闭环
 
@@ -93,7 +139,7 @@ P3 首批原生文本 SFT 流程交付后，优先扩展较长序列、microbatc
 
 例如对同 shape 的 **1,024 条处理后序列 × 3 epochs**，计划给出 3,072 microsteps、1,536 optimizer updates，校准后 training-loop 期望约 **22.94 / 19.66 / 21.76 分钟**（Full / LoRA / QLoRA）。这些数字是短跑外推，**本轮未完整执行这三个各处理 3,072 条序列的训练任务**。每个进程中的计时点不是独立进程观测；新增 5 次独立 holdout 提供了更充分的同配置重复证据，仍未覆盖长时间 allocator 漂移、完整数据流水线、OOM 边界或跨模型/硬件精度，不作普适认证。
 
-仓库中保存的数据源为 [`tests/data/finetune_validation_evidence.json`](tests/data/finetune_validation_evidence.json)，包含 **18 份观测**、每种方法 5 份 holdout 比较及最坏误差、软件版本、checkpoint 内容身份、执行代码 SHA256 和已知限制；`source_file_sha256` 已与当前源码逐项核对一致。为便于分发，其中的本地模型路径已改为显示名称，**该文件用于记录证据，不能直接作为 `--observation` 校准输入**；可复用的原始 observation、日志与配置保存在 `/tmp/fakegpu-research-20261013/qwen35-final/`。复现入口如下，应在具有上述可选依赖的 CUDA Python 环境执行：
+仓库中保存的数据源为 [`tests/data/finetune_validation_evidence.json`](tests/data/finetune_validation_evidence.json)，包含 **18 份观测**、每种方法 5 份 holdout 比较及最坏误差、软件版本、checkpoint 内容身份、执行代码 SHA256 和已知限制；`source_file_sha256` 已与该次验收时的源码逐项核对一致。为便于分发，其中的本地模型路径已改为显示名称，**该文件用于记录证据，不能直接作为 `--observation` 校准输入**；可复用的原始 observation、日志与配置保存在 `/tmp/fakegpu-research-20261013/qwen35-final/`。复现入口如下，应在具有上述可选依赖的 CUDA Python 环境执行：
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 python tests/native/finetune_matrix.py \

@@ -89,6 +89,32 @@ def test_multimodal_checkpoint_requires_explicit_export(tmp_path):
         _prepare_config(path, "llamafactory", 2)
 
 
+def test_native_four_bit_qlora_preflight_uses_unquantized_source_checkpoint(tmp_path):
+    path = _config(tmp_path, quantization_bit=4, quantization_type="nf4")
+    _, config, _, _ = _prepare_config(path, "llamafactory", 2)
+    assert config["method"] == "qlora"
+    assert config["quantization_bits"] == 4
+
+
+def test_native_eight_bit_training_rejected_before_framework_import(tmp_path):
+    with pytest.raises(ValueError, match="4-bit"):
+        _prepare_config(_config(tmp_path, quantization_bit=8), "llamafactory", 2)
+
+
+def test_prequantized_source_checkpoint_rejected_before_framework_import(tmp_path):
+    path = _config(tmp_path, quantization_bit=4)
+    (tmp_path / "model/config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "llama",
+                "quantization_config": {"quant_method": "bitsandbytes"},
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="unquantized checkpoint"):
+        _prepare_config(path, "llamafactory", 2)
+
+
 def test_native_identity_distinguishes_preprocessing_but_not_duration():
     base = {
         "template": "qwen3_nothink",

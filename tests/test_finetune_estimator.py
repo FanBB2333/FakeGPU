@@ -625,3 +625,91 @@ def test_optimizer_step_counts_against_huggingface_trainer(tmp_path) -> None:
     report = json.loads((tmp_path / "trainer-counts.json").read_text())
     assert len(report["cases"]) == 12
     assert report["transformers"] == versions["transformers"]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("actual_model_signature", "a" * 64),
+        ("gradient_checkpointing_kwargs", {"use_reentrant": False}),
+    ],
+)
+def test_native_execution_details_bind_calibration_without_changing_old_signatures(
+    field, value
+):
+    config = _lora()
+    before = finetune_workload_signature(_model(), config, profile_id="a100")
+    assert field not in before
+    after = finetune_workload_signature(
+        _model(), config | {field: value}, profile_id="a100"
+    )
+    assert after[field] == value
+    assert {key: item for key, item in after.items() if key != field} == before
+
+
+def _native_qlora_storage_config():
+    config = _lora()
+    config.update(
+        method="qlora",
+        quantization_bits=4,
+        quantization_type="nf4",
+        quantization_storage="bf16",
+        quantization_compute_dtype="bf16",
+        double_quantization=True,
+        parameter_count=1_000_000,
+        actual_model_signature="a" * 64,
+        actual_quantized_storage={
+            "quantized_parameters": 800_000,
+            "packed_weight_bytes": 400_000,
+            "metadata_bytes": 14_000,
+            "unquantized_weight_bytes": 400_000,
+        },
+    )
+    return config
+
+
+def test_native_qlora_uses_inspected_mixed_precision_weights_and_quantized_subset():
+    report = _estimate(_native_qlora_storage_config())
+    memory = report["memory"]
+    assert memory["base_weight_bytes"] == 814_000
+    assert memory["quantized_parameters"] == 800_000
+    assert memory["quantization_metadata_bytes"] == 14_000
+    assert (
+        memory["quantization"]["basis"]
+        == "inspected_native_bitsandbytes_tensor_storage"
+    )
+    assert (
+        report["signature"]["actual_quantized_storage"]["unquantized_weight_bytes"]
+        == 400_000
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("quantized_parameters", 1_000_001),
+        ("quantized_parameters", 0),
+        ("packed_weight_bytes", 1),
+        ("metadata_bytes", -1),
+        ("metadata_bytes", True),
+        ("metadata_bytes", 1.5),
+        ("unquantized_weight_bytes", 800_001),
+        ("unquantized_weight_bytes", 399_999),
+    ],
+)
+def test_invalid_native_quantized_inventory_is_rejected(field, value):
+    config = _native_qlora_storage_config()
+    config["actual_quantized_storage"][field] = value
+    with pytest.raises(FinetuneEstimateError, match="actual_quantized_storage"):
+        _estimate(config)
+
+
+def test_native_quantized_inventory_must_bind_a_model_and_complete_schema():
+    config = _native_qlora_storage_config()
+    del config["actual_model_signature"]
+    with pytest.raises(FinetuneEstimateError, match="actual_model_signature"):
+        _estimate(config)
+    config = _native_qlora_storage_config()
+    del config["actual_quantized_storage"]["metadata_bytes"]
+    with pytest.raises(FinetuneEstimateError, match="invalid fields"):
+        _estimate(config)

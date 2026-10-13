@@ -95,7 +95,13 @@ def finetune_workload_signature(
     fields = {key: training_config.get(key) for key in keys}
     # Native runners bind preprocessing and framework-specific execution choices.
     # Keep absent fields absent so existing v1 fixed-shape probe records still match.
-    for key in ("data_signature", "native_execution_signature"):
+    for key in (
+        "data_signature",
+        "native_execution_signature",
+        "actual_model_signature",
+        "actual_quantized_storage",
+        "gradient_checkpointing_kwargs",
+    ):
         if key in training_config:
             fields[key] = training_config[key]
     fields["sequence_length"] = (
@@ -215,7 +221,7 @@ def estimate_finetuning(
         )
     if config["method"] == "qlora":
         limitations.append(
-            "QLoRA budgets 4-bit linear weights in the configured storage dtype, 64-value scale blocks, optional 256-scale double quantization, and FP32 unquantized tensors as in PEFT k-bit preparation; dequantization/fusion performance is analytical."
+            "QLoRA uses inspected packed weights, quantization metadata and unquantized tensor bytes when provided by a native run; otherwise it budgets default bitsandbytes blocks and FP32 unquantized tensors as in PEFT k-bit preparation. Dequantization/fusion performance remains analytical."
         )
     if config.get("lora_dropout"):
         limitations.append(
@@ -687,6 +693,42 @@ def _quantized_storage(
     }
 
 
+def _observed_quantized_storage(
+    config: Mapping[str, Any], total_parameters: int
+) -> dict[str, int] | None:
+    storage = config.get("actual_quantized_storage")
+    if storage is None:
+        return None
+    fields = {
+        "quantized_parameters",
+        "packed_weight_bytes",
+        "metadata_bytes",
+        "unquantized_weight_bytes",
+    }
+    if not isinstance(storage, Mapping) or set(storage) != fields:
+        raise FinetuneEstimateError("actual_quantized_storage has invalid fields")
+    if not config.get("actual_model_signature"):
+        raise FinetuneEstimateError(
+            "actual_quantized_storage requires actual_model_signature"
+        )
+    for key, value in storage.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise FinetuneEstimateError(
+                f"actual_quantized_storage.{key} must be a nonnegative integer"
+            )
+    count = storage["quantized_parameters"]
+    dense = total_parameters - count
+    if count <= 0 or dense < 0 or storage["packed_weight_bytes"] < math.ceil(count / 2):
+        raise FinetuneEstimateError(
+            "actual_quantized_storage disagrees with logical parameter counts"
+        )
+    if not dense * 2 <= storage["unquantized_weight_bytes"] <= dense * 4:
+        raise FinetuneEstimateError(
+            "actual_quantized_storage has inconsistent unquantized weight bytes"
+        )
+    return dict(storage)
+
+
 def _memory(
     model: Mapping[str, Any],
     config: Mapping[str, Any],
@@ -773,17 +815,33 @@ def _memory(
             raise FinetuneEstimateError(
                 "MoE QLoRA requires inspecting which fused expert tensors are actually quantized"
             )
-        quantized = sum(i * o * count for _, i, o, count in model["linear_modules"])
-        if quantized > model["total_parameters"]:
-            raise FinetuneEstimateError(
-                "parameter_count must describe logical parameters before 4-bit packing"
-            )
-        quantization = _quantized_storage(model["linear_modules"], config)
+        observed_storage = _observed_quantized_storage(
+            config, model["total_parameters"]
+        )
+        if observed_storage is not None:
+            quantized = observed_storage["quantized_parameters"]
+            quantization = {
+                **observed_storage,
+                "type": config["quantization_type"],
+                "storage_dtype": config["quantization_storage"],
+                "compute_dtype": config["quantization_compute_dtype"],
+                "double_quantization": config["double_quantization"],
+                "basis": "inspected_native_bitsandbytes_tensor_storage",
+            }
+            unquantized_bytes = observed_storage["unquantized_weight_bytes"]
+        else:
+            quantized = sum(i * o * count for _, i, o, count in model["linear_modules"])
+            if quantized > model["total_parameters"]:
+                raise FinetuneEstimateError(
+                    "parameter_count must describe logical parameters before 4-bit packing"
+                )
+            quantization = _quantized_storage(model["linear_modules"], config)
+            unquantized_bytes = (model["total_parameters"] - quantized) * 4
         quantization_metadata = quantization["metadata_bytes"]
         base_bytes = (
             quantization["packed_weight_bytes"]
             + quantization_metadata
-            + (model["total_parameters"] - quantized) * 4
+            + unquantized_bytes
         )
     else:
         base_bytes = model["total_parameters"] * parameter_element

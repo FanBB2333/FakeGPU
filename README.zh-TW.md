@@ -956,11 +956,18 @@ python -m fakegpu estimate-finetune \
 通用串接情境代替。
 
 `run-finetune` 在一張實體 CUDA 顯示卡上呼叫已安裝的 LLaMA-Factory 或 Axolotl
-原生流程，支援本機文字 checkpoint、無 packing 的全量微調與 LoRA。輸入應為
+原生流程，支援本機未量化文字 checkpoint、無 packing 的全量微調、LoRA 與
+bitsandbytes 4-bit QLoRA。輸入應為
 包含資料與輸出路徑的完整原生設定，相對路徑以設定檔目錄解析。報告記錄原生
 前處理、有效訓練資料、實際 batch、optimizer 更新、allocator 峰值、評估/儲存事件與
 最終模型儲存。Warmup 不計入穩態步驟樣本，但保留在總牆鐘時間中；此指令會執行
 原生設定要求的訓練。
+
+支援標準梯度檢查點。LLaMA-Factory 使用 `disable_gradient_checkpointing: false`，
+並透過 `use_reentrant_gc: true` 或 `false` 選擇實作；Axolotl 使用
+`gradient_checkpointing: true` 與 `gradient_checkpointing_kwargs: {use_reentrant: true}`
+（也可將 `use_reentrant` 設為 `false`）。程式從載入後的模型核驗實際檢查點與量化設定，並納入校準身分；
+變更這些設定後需要重新校準。
 
 原生文字訓練需要文字 checkpoint，估算器的 `--text-only` 不會為原生訓練轉換原始
 多模態權重。對於本機 Qwen3.5，先在 CPU 上匯出並驗證獨立文字 checkpoint，
@@ -996,14 +1003,51 @@ LLaMA-Factory 使用 `--framework llamafactory` 與
 儲存開銷。改變 `--num-samples` 僅提供訓練迴圈情境，不外推未測量的資料準備與
 載入時間。這些情境不是信賴區間，也不包含 Python 程序啟動或下載。
 
+512-token NF4 QLoRA 與梯度檢查點範例見
+[`llamafactory-native-qlora.yaml`](examples/finetuning/llamafactory-native-qlora.yaml) 與
+[`axolotl-native-qlora.yaml`](examples/finetuning/axolotl-native-qlora.yaml)。兩者啟用
+double quantization 與 BF16 compute/storage，需要在對應框架環境安裝 bitsandbytes。
+使用已匯出的 tokenizer 產生較長資料，無須再次匯出模型：
+
+```bash
+python tests/native/prepare_finetune_fixture.py \
+  --model /tmp/fakegpu-finetune/qwen35-text --dataset-only \
+  --dataset-dir /tmp/fakegpu-finetune/data-long \
+  --sequence-length 1024 --num-samples 64
+```
+
+fixture 參數指定並檢查原始資料的最小長度；框架隨後依設定截斷至 512 或 1024
+tokens，執行報告記錄實際採用的序列與 batch。
+
 獨立校準與複測程序可透過
 [`tests/native/finetune_framework_matrix.py`](tests/native/finetune_framework_matrix.py) 執行。
+矩陣沿用原生設定的序列長度、microbatch、梯度累積與 seed；可分別指定校準與複測步數：
+
+```bash
+python tests/native/finetune_framework_matrix.py \
+  --framework axolotl --config examples/finetuning/axolotl-native-qlora.yaml \
+  --python /path/to/axolotl/venv/bin/python \
+  --output-dir /tmp/fakegpu-finetune/axolotl-qlora-matrix \
+  --gpu-index 1 --calibration-steps 6 --warmup-steps 2 \
+  --holdout-runs 2 --holdout-steps 16
+```
+
+步數包含 warmup。預設仍為 6 次校準更新、2 次 warmup，以及三次各 32 次更新的複測。
+每次訓練使用獨立輸出目錄；矩陣保留原 seed，複製設定前解析本機相對路徑。
+時間預測呼叫正式估算器，並使用實際 microstep 計數，包含 epoch 尾端不完整的累積視窗。
+
 [原生框架驗證歸檔](tests/data/finetune_framework_validation_evidence.json) 保留了
-Qwen3.5-0.8B LoRA 在 Blackwell GPU 上的兩框架結果，各含三次獨立完整 epoch 複測。
+先前 128-token Qwen3.5-0.8B LoRA 在 Blackwell GPU 上的兩框架結果，各含三次獨立完整 epoch 複測。
 整體時間最大誤差為 Factory **3.931%**、已有編譯快取的 Axolotl **1.125%**。
 歸檔也保留首次執行校準外推至後續快取程序時 **364.885%** 的誤差：首次 update 耗時
 **66.542 秒**。目前不會自動核驗 cache/JIT 狀態；模型與軟體簽名相同不能保證這部分
 固定開銷可重用。精確設定、版本、GPU 記憶體結果及未涵蓋範圍見 [`refactor.md`](refactor.md)。
+
+[擴充驗證歸檔](tests/data/finetune_extended_validation_evidence.json) 涵蓋兩框架的六組
+設定，包括 512/1024 tokens、batch 1/2、梯度檢查點與原生 NF4 QLoRA。每組包含
+一次 6-update 校準與兩次獨立 16-update 複測，每個程序前 2 次更新為 warmup，
+共 18 個測量程序。各組均先短跑預熱，並保留共享快取。精確結果與設定適用範圍
+見 [`refactor.md`](refactor.md)。
 
 有實體顯示卡時，可在**同一 Python 環境**先取樣，再推估資料量與 epochs：
 
@@ -1202,7 +1246,7 @@ FakeGPU/
 - [x] FakeGPU-SMI 裝置、runtime、allocator 與程序詳細查詢
 - [ ] 擴充可執行的原生 CUDA 運算與 cuBLAS 涵蓋範圍
 - [x] 支援三類框架的單卡微調預估與相同設定 Hugging Face Trainer 實體 GPU 取樣
-- [x] 完整資料掃描與 LLaMA-Factory/Axolotl 單卡文字全量微調、LoRA 原生執行報告
+- [x] 完整資料掃描與 LLaMA-Factory/Axolotl 單卡文字全量微調、LoRA、4-bit QLoRA 原生執行報告
 - [ ] 使用各自實際執行入口驗證 LLaMA-Factory 與 Axolotl
 - [x] 透過 FakeGPU-SMI 發布原生 runtime 的即時狀態與活動
 - [x] 加入建模拓撲、NVLink 檢視與 NVML peer 查詢

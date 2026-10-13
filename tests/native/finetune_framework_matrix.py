@@ -6,8 +6,9 @@ Example:
         --python /tmp/axolotl/venv/bin/python --output-dir /tmp/axolotl-matrix
 
 Requires an installed native framework, local model and dataset, and physical GPU.
-Calibration uses six optimizer updates; holdouts default to 32 total updates each.
-The first two updates in every process are warmup, included in native wall time.
+Calibration defaults to six optimizer updates; holdouts default to 32 each.
+The first two updates are warmup by default, included in native wall time.
+Sequence length, batch size, accumulation and seed come from the source config.
 No training starts when this module is imported.
 """
 
@@ -56,14 +57,34 @@ def _comparison(predicted: float, actual: float) -> dict[str, float]:
     }
 
 
-def _read_report(path: Path, steps: int) -> dict[str, Any]:
+def _validate_workload(report: dict[str, Any], steps: int) -> dict[str, Any]:
+    from fakegpu.finetune_run_estimator import estimate_finetuning_run
+
+    estimate = estimate_finetuning_run(report, max_steps=steps)
+    for measured, projected in (
+        ("optimizer_steps", "optimizer_steps"),
+        ("microsteps", "microsteps"),
+        ("samples", "processed_samples"),
+    ):
+        if report["workload"][measured] != estimate["workload"][projected]:
+            raise ValueError(
+                f"native {measured} differs from the configured training workload"
+            )
+    return estimate
+
+
+def _read_report(
+    path: Path, steps: int, warmup_steps: int = WARMUP_STEPS
+) -> dict[str, Any]:
     report = json.loads(path.read_text())
     if report.get("schema_version") != "fakegpu.finetune_run.v1":
         raise ValueError(f"{path}: unexpected native run schema")
     observation = report["observation"]
     updates = observation["optimizer_update_seconds"]
-    if len(updates) != steps - WARMUP_STEPS:
+    if len(updates) != steps - warmup_steps:
         raise ValueError(f"{path}: incorrect number of measured optimizer updates")
+    if report["workload"]["warmup_optimizer_steps"] != warmup_steps:
+        raise ValueError(f"{path}: incorrect number of warmup optimizer updates")
     for value in updates:
         _number(value, "optimizer_update_seconds", positive=True)
     _number(report["timing"]["total_wall_seconds"], "total_wall_seconds", positive=True)
@@ -76,7 +97,84 @@ def _read_report(path: Path, steps: int) -> dict[str, Any]:
         "finalization_seconds",
     ):
         _number(report["timing"][key], key)
+    _validate_workload(report, steps)
     return report
+
+
+def _relocate_config(
+    raw: dict[str, Any], source: Path, framework: str
+) -> dict[str, Any]:
+    """Keep local paths relative to their original config, preserving Hub IDs."""
+    config = copy.deepcopy(raw)
+    base = source.parent
+
+    def local_path(value: Any, *, always_local: bool = False) -> Any:
+        if not isinstance(value, str) or not value or "://" in value:
+            return value
+        path = Path(value).expanduser()
+        candidate = path if path.is_absolute() else base / path
+        if always_local or value.startswith((".", "~", "/")) or candidate.exists():
+            return str(candidate.resolve())
+        return value
+
+    for field in (
+        "model_name_or_path",
+        "base_model",
+        "base_model_config",
+        "tokenizer_config",
+    ):
+        if field in config:
+            config[field] = local_path(config[field])
+    for field in (
+        "cache_dir",
+        "tokenized_path",
+        "dataset_prepared_path",
+        "logging_dir",
+    ):
+        if field in config:
+            config[field] = local_path(config[field], always_local=True)
+    if framework == "llamafactory":
+        config["dataset_dir"] = local_path(
+            config.get("dataset_dir", "data"), always_local=True
+        )
+        if "media_dir" in config:
+            config["media_dir"] = local_path(config["media_dir"], always_local=True)
+    for field in ("datasets", "test_datasets", "pretraining_dataset"):
+        entries = config.get(field, [])
+        if not isinstance(entries, list):
+            continue
+        for dataset in entries:
+            if not isinstance(dataset, dict):
+                continue
+            original_path = dataset.get("path")
+            resolved_path = local_path(original_path)
+            if "path" in dataset:
+                dataset["path"] = resolved_path
+            # A Hub dataset's data_files are repository paths, not local paths.
+            local_files = isinstance(original_path, str) and original_path in {
+                "json",
+                "csv",
+                "text",
+                "parquet",
+                "arrow",
+            }
+            local_files = local_files or resolved_path != original_path
+            if isinstance(resolved_path, str):
+                local_files = local_files or Path(resolved_path).is_absolute()
+            if local_files and "data_files" in dataset:
+                files = dataset["data_files"]
+                dataset["data_files"] = (
+                    [local_path(item, always_local=True) for item in files]
+                    if isinstance(files, list)
+                    else local_path(files, always_local=True)
+                )
+            if "chat_template_jinja" in dataset:
+                template = dataset["chat_template_jinja"]
+                if isinstance(template, str) and not any(
+                    marker in template for marker in ("{{", "{%", "{#", "\n")
+                ):
+                    dataset["chat_template_jinja"] = local_path(template)
+    return config
 
 
 def _run(
@@ -130,6 +228,12 @@ def _summarize(
     )
     held_mean = statistics.mean(holdout["observation"]["optimizer_update_seconds"])
     estimate = estimate_finetuning_run(calibration, max_steps=holdout_steps)
+    for measured, projected in (
+        ("microsteps", "microsteps"),
+        ("samples", "processed_samples"),
+    ):
+        if holdout["workload"][measured] != estimate["workload"][projected]:
+            raise ValueError(f"holdout {measured} differs from the projected workload")
     pipeline = estimate["timing"]["native_pipeline"]
     if not pipeline["available"]:
         raise ValueError(
@@ -139,6 +243,15 @@ def _summarize(
     predicted = pipeline["seconds"]["expected"]
     return {
         "optimizer_update_seconds": _comparison(mean_update, held_mean),
+        "seconds_per_microstep": _comparison(
+            estimate["timing"]["seconds_per_microstep"]["expected"],
+            statistics.mean(holdout["observation"]["seconds_per_microstep"]),
+        ),
+        "steady_training_seconds": _comparison(
+            estimate["timing"]["seconds_per_microstep"]["expected"]
+            * holdout["workload"]["measured_microsteps"],
+            sum(holdout["observation"]["optimizer_update_seconds"]),
+        ),
         "native_pipeline_seconds": _comparison(
             predicted, held_timing["total_wall_seconds"]
         ),
@@ -147,6 +260,15 @@ def _summarize(
         "calibration_checkpoint_seconds": cal_timing["checkpoint_seconds"],
         "calibration_finalization_seconds": cal_timing["finalization_seconds"],
         "holdout_timing": held_timing,
+        "holdout_workload": {
+            key: holdout["workload"][key]
+            for key in (
+                "optimizer_steps",
+                "microsteps",
+                "samples",
+                "measured_microsteps",
+            )
+        },
     }
 
 
@@ -170,11 +292,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--profile", default="rtx-pro-5000-blackwell")
     parser.add_argument("--holdout-runs", type=int, default=3)
+    parser.add_argument("--calibration-steps", type=int, default=CALIBRATION_STEPS)
+    parser.add_argument("--warmup-steps", type=int, default=WARMUP_STEPS)
     parser.add_argument(
         "--holdout-steps",
         type=int,
         default=32,
-        help="Total optimizer updates per holdout, including two warmup updates.",
+        help="Total optimizer updates per holdout, including warmup updates.",
     )
     parser.add_argument(
         "--gpu-index",
@@ -184,8 +308,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--timeout-seconds", type=float, default=1800)
     args = parser.parse_args(argv)
-    if args.holdout_runs < 1 or args.holdout_steps <= WARMUP_STEPS + 1:
-        parser.error("require --holdout-runs >= 1 and --holdout-steps >= 4")
+    if args.holdout_runs < 1 or args.warmup_steps < 1:
+        parser.error("require --holdout-runs >= 1 and --warmup-steps >= 1")
+    if min(args.calibration_steps, args.holdout_steps) < args.warmup_steps + 2:
+        parser.error(
+            "calibration and holdout each need at least two measured updates after warmup"
+        )
     if args.gpu_index < 0:
         parser.error("--gpu-index must be nonnegative")
     if not math.isfinite(args.timeout_seconds) or args.timeout_seconds <= 0:
@@ -201,17 +329,18 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     shape_fields = (
-        (("sequence_len", 128), ("micro_batch_size", 1))
+        ("sequence_len", "micro_batch_size")
         if args.framework == "axolotl"
-        else (("cutoff_len", 128), ("per_device_train_batch_size", 1))
+        else ("cutoff_len", "per_device_train_batch_size")
     )
-    for key, expected in (*shape_fields, ("gradient_accumulation_steps", 2)):
-        if isinstance(raw_config.get(key), bool) or raw_config.get(key) != expected:
-            parser.error(
-                f"matrix requires {key}={expected}; got {raw_config.get(key)!r}"
-            )
+    for key in (*shape_fields, "gradient_accumulation_steps"):
+        value = raw_config.get(key)
+        minimum = 2 if key == shape_fields[0] else 1
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            parser.error(f"matrix requires integer {key} >= {minimum}; got {value!r}")
     if raw_config.get("resume_from_checkpoint"):
         parser.error("matrix requires fresh training without resume_from_checkpoint")
+    relocated_config = _relocate_config(raw_config, source, args.framework)
     if directory.exists() and (not directory.is_dir() or any(directory.iterdir())):
         parser.error("--output-dir must be new or empty; prior evidence is preserved")
     directory.mkdir(parents=True, exist_ok=True)
@@ -234,12 +363,12 @@ def main(argv: list[str] | None = None) -> int:
         "python": args.python,
         "cuda_visible_devices": str(args.gpu_index),
         "sampling_plan": {
-            "calibration_optimizer_steps": CALIBRATION_STEPS,
-            "warmup_optimizer_steps_per_run": WARMUP_STEPS,
+            "calibration_optimizer_steps": args.calibration_steps,
+            "warmup_optimizer_steps_per_run": args.warmup_steps,
             "holdout_runs": args.holdout_runs,
             "holdout_optimizer_steps_per_run": args.holdout_steps,
         },
-        "prediction_formula": "calibration native wall + (holdout steps - calibration steps) * calibration steady mean optimizer-update seconds",
+        "prediction_formula": "estimate_finetuning_run: calibration fixed-cost residual + target actual microsteps * calibration steady mean seconds per microstep",
         "accuracy_gate": "report_only_no_universal_threshold",
         "runs": {},
         "holdout_comparisons": {},
@@ -249,13 +378,14 @@ def main(argv: list[str] | None = None) -> int:
             "Framework-specific tokenization and optional kernels can differ; matching sequence lengths do not establish identical workloads across frameworks.",
             "Native wall time includes setup, training and final saving; child startup and report serialization are recorded separately as process wall time.",
             "These runs measure throughput on the supplied fixture, not training convergence or model quality.",
+            "Optimizer updates can contain partial accumulation windows; per-microstep comparisons and production workload counts retain those windows.",
         ],
     }
     summary_path = directory / "summary.json"
     _write_json(directory / "source-config.json", raw_config)
     _write_json(summary_path, summary)
     calibration = None
-    plan = [("calibration", CALIBRATION_STEPS)] + [
+    plan = [("calibration", args.calibration_steps)] + [
         (f"holdout-{index + 1}", args.holdout_steps)
         for index in range(args.holdout_runs)
     ]
@@ -263,11 +393,10 @@ def main(argv: list[str] | None = None) -> int:
         for role, steps in plan:
             run_dir = directory / role
             run_dir.mkdir()
-            config = copy.deepcopy(raw_config)
+            config = copy.deepcopy(relocated_config)
             config.update(
                 output_dir=str(run_dir / "model"),
                 max_steps=steps,
-                seed=42,
                 save_strategy="no",
                 eval_strategy="no",
             )
@@ -285,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--profile",
                 args.profile,
                 "--warmup-steps",
-                str(WARMUP_STEPS),
+                str(args.warmup_steps),
                 "--output",
                 str(report_path),
             ]
@@ -306,7 +435,7 @@ def main(argv: list[str] | None = None) -> int:
                 environment=environment,
                 timeout=args.timeout_seconds,
             )
-            report = _read_report(report_path, steps)
+            report = _read_report(report_path, steps, args.warmup_steps)
             summary["runs"][role].update(status="completed", **execution)
             if calibration is None:
                 calibration = report
@@ -334,7 +463,12 @@ def main(argv: list[str] | None = None) -> int:
             value[metric]["absolute_percentage_error"]
             for value in summary["holdout_comparisons"].values()
         )
-        for metric in ("optimizer_update_seconds", "native_pipeline_seconds")
+        for metric in (
+            "optimizer_update_seconds",
+            "seconds_per_microstep",
+            "steady_training_seconds",
+            "native_pipeline_seconds",
+        )
     }
     summary["status"] = "completed"
     _write_json(summary_path, summary)

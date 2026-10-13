@@ -285,6 +285,7 @@ def normalize_finetune_config(
         "lora_target_modules": targets,
         **adapter_options,
         "gradient_checkpointing": distributed["activation_checkpointing"],
+        **_checkpoint_options(values, source, distributed["activation_checkpointing"]),
         "quantization_bits": quantization,
         **quantization_options,
         "optimizer": optimizer,
@@ -878,6 +879,34 @@ def _adapter(
     return method, rank, targets
 
 
+def _checkpoint_options(
+    values: Mapping[str, Any], source: str, enabled: bool
+) -> dict[str, Any]:
+    options = values.get("gradient_checkpointing_kwargs")
+    alias = values.get("use_reentrant_gc")
+    if options is not None:
+        if not isinstance(options, Mapping) or set(options) - {"use_reentrant"}:
+            raise FinetuneConfigError(
+                "gradient_checkpointing_kwargs supports only use_reentrant"
+            )
+        if source == "llamafactory" and options:
+            raise FinetuneConfigError(
+                "LLaMA-Factory controls checkpointing with use_reentrant_gc; "
+                "set that option instead of gradient_checkpointing_kwargs"
+            )
+    if alias is not None and source != "llamafactory":
+        raise FinetuneConfigError("use_reentrant_gc is a LLaMA-Factory option")
+    value = alias if alias is not None else (options or {}).get("use_reentrant")
+    if value is None:
+        if options and "use_reentrant" in options:
+            raise FinetuneConfigError("use_reentrant must be a boolean")
+        return {}
+    value = _boolean(value, "use_reentrant")
+    return (
+        {"gradient_checkpointing_kwargs": {"use_reentrant": value}} if enabled else {}
+    )
+
+
 def _check_strategies(values: Mapping[str, Any], peft: Mapping[str, Any]) -> None:
     if values.get("stage", "sft") not in {"sft", "pt"}:
         raise FinetuneConfigError("only sft and pt training stages are supported")
@@ -885,11 +914,6 @@ def _check_strategies(values: Mapping[str, Any], peft: Mapping[str, Any]) -> Non
         raise FinetuneConfigError(
             "device_map is not supported; this estimator requires one GPU without model-level placement or offload"
         )
-    for key in ("gradient_checkpointing_kwargs", "use_reentrant_gc"):
-        if values.get(key) is not None:
-            raise FinetuneConfigError(
-                f"{key} is not supported; custom checkpoint implementations require their own measurement runner"
-            )
     for key in (
         "rl",
         "trl",

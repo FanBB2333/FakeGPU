@@ -619,19 +619,57 @@ def test_empty_peft_configuration_does_not_silently_select_full_tuning(key) -> N
         normalize_finetune_config(hf_config(method="full", **{key: {}}))
 
 
+@pytest.mark.parametrize("use_reentrant", [True, False])
+@pytest.mark.parametrize("framework", ["huggingface", "llamafactory", "axolotl"])
+def test_standard_checkpoint_modes_are_preserved(framework, use_reentrant) -> None:
+    options = (
+        {"use_reentrant_gc": use_reentrant}
+        if framework == "llamafactory"
+        else {"gradient_checkpointing_kwargs": {"use_reentrant": use_reentrant}}
+    )
+    result = normalize_finetune_config(
+        hf_config(gradient_checkpointing=True, bf16=True, **options),
+        framework=framework,
+    )
+    assert result["gradient_checkpointing_kwargs"] == {"use_reentrant": use_reentrant}
+
+
+@pytest.mark.parametrize("options", [{}, {"use_reentrant": False}])
+def test_inactive_checkpoint_options_do_not_change_execution_signature(options) -> None:
+    result = normalize_finetune_config(
+        hf_config(gradient_checkpointing=False, gradient_checkpointing_kwargs=options)
+    )
+    assert "gradient_checkpointing_kwargs" not in result
+
+
 @pytest.mark.parametrize(
-    "changes",
+    "options",
     [
-        {"gradient_checkpointing_kwargs": {"use_reentrant": True}},
-        {"gradient_checkpointing_kwargs": {"use_reentrant": False}},
-        {"gradient_checkpointing_kwargs": {}},
-        {"use_reentrant_gc": True},
-        {"use_reentrant_gc": False},
+        [],
+        "auto",
+        {"context_fn": "custom"},
+        {"use_reentrant": None},
+        {"use_reentrant": "false"},
+        {"use_reentrant": 1},
     ],
 )
-def test_custom_checkpoint_implementations_are_explicitly_unsupported(changes) -> None:
-    with pytest.raises(FinetuneConfigError, match="custom checkpoint implementations"):
-        normalize_finetune_config(hf_config(gradient_checkpointing=True, **changes))
+def test_invalid_checkpoint_implementations_are_rejected(options) -> None:
+    with pytest.raises(FinetuneConfigError, match="use_reentrant"):
+        normalize_finetune_config(
+            hf_config(
+                gradient_checkpointing=True, gradient_checkpointing_kwargs=options
+            )
+        )
+
+
+def test_factory_checkpoint_control_uses_its_native_flag() -> None:
+    with pytest.raises(FinetuneConfigError, match="instead of"):
+        normalize_finetune_config(
+            hf_config(gradient_checkpointing_kwargs={"use_reentrant": False}),
+            framework="llamafactory",
+        )
+    with pytest.raises(FinetuneConfigError, match="LLaMA-Factory option"):
+        normalize_finetune_config(hf_config(use_reentrant_gc=False))
 
 
 @pytest.mark.parametrize(

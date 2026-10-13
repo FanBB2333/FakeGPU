@@ -1044,13 +1044,21 @@ Packed training requires final processed sequence counts, rather than a raw-row
 or generic concatenation scenario.
 
 `run-finetune` invokes the installed LLaMA-Factory or Axolotl native pipeline on
-one physical CUDA GPU. It supports full fine-tuning and LoRA with a local text
-checkpoint and unpacked data. Use a complete native config, including dataset
+one physical CUDA GPU. It supports full fine-tuning, LoRA, and bitsandbytes 4-bit
+QLoRA with a local unquantized text checkpoint and unpacked data. Use a complete native config, including dataset
 and output paths; relative paths resolve from the config directory. The report
 records native preprocessing, the effective training dataset, actual batches,
 optimizer updates, allocator peaks, evaluation/checkpoint events, and final
 saving. Warmup is excluded from steady step samples but remains in total wall
 time. This command performs the training requested by the native config.
+
+Standard gradient checkpointing is supported. LLaMA-Factory uses
+`disable_gradient_checkpointing: false` with `use_reentrant_gc: true` or `false`;
+Axolotl uses `gradient_checkpointing: true` with
+`gradient_checkpointing_kwargs: {use_reentrant: true}` (or set `use_reentrant`
+to `false`). Effective
+checkpointing and quantization settings are read from the loaded model and
+included in calibration identity. Changing them requires a new calibration.
 
 Native text runs require a text checkpoint; `--text-only` on an estimator does
 not convert the original multimodal weights for a native run. For local Qwen3.5,
@@ -1093,10 +1101,46 @@ provides a training-loop scenario; its unmeasured preprocessing and loading cost
 are not projected. These scenarios are not confidence intervals and exclude
 Python process startup and downloads.
 
+For a 512-token NF4 QLoRA run with checkpointing, use
+[`llamafactory-native-qlora.yaml`](examples/finetuning/llamafactory-native-qlora.yaml)
+or [`axolotl-native-qlora.yaml`](examples/finetuning/axolotl-native-qlora.yaml).
+These examples enable double quantization and BF16 compute/storage, and require
+bitsandbytes in the selected framework environment. Create their longer dataset
+from the exported tokenizer without exporting the model again:
+
+```bash
+python tests/native/prepare_finetune_fixture.py \
+  --model /tmp/fakegpu-finetune/qwen35-text --dataset-only \
+  --dataset-dir /tmp/fakegpu-finetune/data-long \
+  --sequence-length 1024 --num-samples 64
+```
+
+The requested fixture length is a lower bound checked before native
+preprocessing. Each framework applies its configured 512- or 1024-token cutoff;
+the run report records the sequences and batches actually used.
+
 Independent calibration and holdout processes can be collected with
 [`tests/native/finetune_framework_matrix.py`](tests/native/finetune_framework_matrix.py).
+The matrix takes sequence length, microbatch size, accumulation, and seed from
+the native config. Calibration and holdout lengths are independently selectable:
+
+```bash
+python tests/native/finetune_framework_matrix.py \
+  --framework axolotl --config examples/finetuning/axolotl-native-qlora.yaml \
+  --python /path/to/axolotl/venv/bin/python \
+  --output-dir /tmp/fakegpu-finetune/axolotl-qlora-matrix \
+  --gpu-index 1 --calibration-steps 6 --warmup-steps 2 \
+  --holdout-runs 2 --holdout-steps 16
+```
+
+Step counts include warmup. Defaults remain 6 calibration updates, 2 warmup
+updates, and three 32-update holdouts. Every run uses a fresh output directory;
+the matrix preserves the source seed and resolves local paths before copying
+the config. Predictions use the production estimator and actual microstep
+counts, including partial accumulation windows at epoch boundaries.
+
 The [native validation archive](tests/data/finetune_framework_validation_evidence.json)
-retains Qwen3.5-0.8B LoRA runs for both frameworks on Blackwell GPU, including
+retains the earlier 128-token Qwen3.5-0.8B LoRA runs for both frameworks on Blackwell GPU, including
 three independent one-epoch holdouts each. Maximum native wall-time errors were
 3.931% for Factory and 1.125% for the cached Axolotl repeat. It also retains a
 364.885% error when Axolotl's first-use calibration was applied to subsequent
@@ -1104,6 +1148,14 @@ cached runs: the first update took 66.542 seconds. Cache/JIT state is not
 automatically fingerprinted; a matching model/software signature alone cannot
 make those fixed costs reusable. See [`refactor.md`](refactor.md) for the exact
 workload, versions, memory results, and remaining coverage.
+
+The [extended validation archive](tests/data/finetune_extended_validation_evidence.json)
+covers six configurations across both frameworks at 512/1024 tokens and batch
+sizes 1/2, including gradient checkpointing and native NF4 QLoRA. Each has one
+6-update calibration and two independent 16-update holdouts, with 2 warmup
+updates per process: 18 measured processes in total. Every configuration had a
+short priming run first, and shared caches were retained. Exact results and
+configuration boundaries are recorded in [`refactor.md`](refactor.md).
 
 For a measured estimate, run a short real-GPU probe and reuse its observation
 in the **same Python environment**, with the same model, GPU, precision, adapter,
@@ -1321,7 +1373,7 @@ environments, binary assets, and design drafts are excluded through
 - [x] Architecture-aware GPU profile catalog
 - [x] Runtime, static, LLM, and distributed memory analysis
 - [x] Framework-aware single-GPU fine-tuning estimates and matching Hugging Face Trainer probes
-- [x] Full dataset scans and native LLaMA-Factory/Axolotl run reports for single-GPU text full fine-tuning and LoRA
+- [x] Full dataset scans and native LLaMA-Factory/Axolotl run reports for single-GPU text full fine-tuning, LoRA, and 4-bit QLoRA
 - [x] Phase-aware Stable Diffusion v1.5 and SDXL generation memory estimation
 - [x] Repository, kernel, topology, and trace analysis
 - [x] Detailed FakeGPU-SMI device, runtime, allocator, and process queries

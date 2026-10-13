@@ -18,6 +18,7 @@ import gc
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 from pathlib import Path
 
@@ -35,7 +36,89 @@ def _verify_loading(info: dict, stage: str) -> dict[str, list]:
     return {key: [] for key in keys}
 
 
-def prepare(model_dir: Path, output_dir: Path, dataset_dir: Path) -> dict:
+def _dataset_parameters(sequence_length: int, num_samples: int) -> None:
+    for name, value, minimum in (
+        ("sequence_length", sequence_length, 2),
+        ("num_samples", num_samples, 1),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError(f"{name} must be an integer >= {minimum}")
+
+
+def _check_dataset_directory(dataset_dir: Path) -> None:
+    if any(
+        (dataset_dir / name).exists() for name in ("train.jsonl", "dataset_info.json")
+    ):
+        raise ValueError("dataset files already exist; choose a new dataset_dir")
+
+
+def prepare_training_dataset(
+    tokenizer, dataset_dir: Path, *, sequence_length: int = 128, num_samples: int = 64
+) -> dict:
+    """Write reproducible long Alpaca rows without exporting the model again.
+
+    The default 128-token scenario retains the original 64 records byte for byte.
+    Longer scenarios increase answer repetition; token lengths are checked using
+    the supplied tokenizer before any dataset files are created.
+    """
+    _dataset_parameters(sequence_length, num_samples)
+    dataset_dir = dataset_dir.resolve()
+    _check_dataset_directory(dataset_dir)
+    repetitions = 48 * math.ceil(sequence_length / 128)
+    records = []
+    for index in range(num_samples):
+        left, right = index % 13, index % 7
+        records.append(
+            {
+                "instruction": f"What is {left} + {right}? Explain the arithmetic.",
+                "input": "Use whole numbers.",
+                "output": (
+                    f"Adding {left} and {right} gives {left + right}. " * repetitions
+                ).strip(),
+            }
+        )
+    lengths = [
+        len(tokenizer.encode("\n".join(record.values()), add_special_tokens=False))
+        for record in records
+    ]
+    if min(lengths) <= sequence_length:
+        raise RuntimeError("all synthetic samples must exceed the training cutoff")
+    serialized = "".join(
+        json.dumps(record, sort_keys=True) + "\n" for record in records
+    )
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    (dataset_dir / "train.jsonl").write_text(serialized)
+    _write_json(
+        dataset_dir / "dataset_info.json",
+        {
+            "synthetic_arithmetic": {
+                "file_name": "train.jsonl",
+                "formatting": "alpaca",
+                "columns": {
+                    "prompt": "instruction",
+                    "query": "input",
+                    "response": "output",
+                },
+            }
+        },
+    )
+    return {
+        "dataset_file": str(dataset_dir / "train.jsonl"),
+        "dataset_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
+        "dataset_samples": len(records),
+        "raw_concatenated_token_length_min": min(lengths),
+        "raw_concatenated_token_length_max": max(lengths),
+    }
+
+
+def prepare(
+    model_dir: Path,
+    output_dir: Path,
+    dataset_dir: Path,
+    *,
+    sequence_length: int = 128,
+    num_samples: int = 64,
+) -> dict:
     # Set this before importing Torch so this script cannot initialize a GPU.
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     import torch
@@ -50,11 +133,8 @@ def prepare(model_dir: Path, output_dir: Path, dataset_dir: Path) -> dict:
         raise ValueError("output_dir must be absent or empty")
     if dataset_dir == model_dir or model_dir in dataset_dir.parents:
         raise ValueError("dataset_dir must be outside the original checkpoint")
-    dataset_dir.mkdir(parents=True, exist_ok=True)
-    if any(
-        (dataset_dir / name).exists() for name in ("train.jsonl", "dataset_info.json")
-    ):
-        raise ValueError("dataset files already exist; choose a new dataset_dir")
+    _dataset_parameters(sequence_length, num_samples)
+    _check_dataset_directory(dataset_dir)
     torch.set_num_threads(4)
     original = json.loads((model_dir / "config.json").read_text())
     if original.get("model_type") != "qwen3_5" or not original.get("text_config"):
@@ -121,41 +201,8 @@ def prepare(model_dir: Path, output_dir: Path, dataset_dir: Path) -> dict:
     if torch.cuda.is_initialized():
         raise RuntimeError("fixture preparation unexpectedly initialized CUDA")
 
-    records = []
-    for index in range(64):
-        left, right = index % 13, index % 7
-        records.append(
-            {
-                "instruction": f"What is {left} + {right}? Explain the arithmetic.",
-                "input": "Use whole numbers.",
-                "output": (
-                    f"Adding {left} and {right} gives {left + right}. " * 48
-                ).strip(),
-            }
-        )
-    lengths = [
-        len(tokenizer.encode("\n".join(record.values()), add_special_tokens=False))
-        for record in records
-    ]
-    if min(lengths) <= 128:
-        raise RuntimeError("all synthetic samples must exceed the training cutoff")
-    serialized = "".join(
-        json.dumps(record, sort_keys=True) + "\n" for record in records
-    )
-    (dataset_dir / "train.jsonl").write_text(serialized)
-    _write_json(
-        dataset_dir / "dataset_info.json",
-        {
-            "synthetic_arithmetic": {
-                "file_name": "train.jsonl",
-                "formatting": "alpaca",
-                "columns": {
-                    "prompt": "instruction",
-                    "query": "input",
-                    "response": "output",
-                },
-            }
-        },
+    dataset = prepare_training_dataset(
+        tokenizer, dataset_dir, sequence_length=sequence_length, num_samples=num_samples
     )
     manifest = {
         "source_model_dir": str(model_dir),
@@ -170,11 +217,7 @@ def prepare(model_dir: Path, output_dir: Path, dataset_dir: Path) -> dict:
         "verification_logits_shape": list(exported_logits.shape),
         "verification_logits_exact_match": True,
         "cuda_initialized": torch.cuda.is_initialized(),
-        "dataset_file": str(dataset_dir / "train.jsonl"),
-        "dataset_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
-        "dataset_samples": len(records),
-        "raw_concatenated_token_length_min": min(lengths),
-        "raw_concatenated_token_length_max": max(lengths),
+        **dataset,
         "software_versions": {
             package: importlib.metadata.version(package)
             for package in ("torch", "transformers", "safetensors", "tokenizers")
@@ -184,13 +227,54 @@ def prepare(model_dir: Path, output_dir: Path, dataset_dir: Path) -> dict:
     return manifest
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--dataset-dir", type=Path, required=True)
-    args = parser.parse_args()
-    print(json.dumps(prepare(args.model, args.output_dir, args.dataset_dir), indent=2))
+    parser.add_argument("--sequence-length", type=int, default=128)
+    parser.add_argument("--num-samples", type=int, default=64)
+    parser.add_argument(
+        "--dataset-only",
+        action="store_true",
+        help="Load the local tokenizer and create data without exporting a checkpoint.",
+    )
+    args = parser.parse_args(argv)
+    try:
+        _dataset_parameters(args.sequence_length, args.num_samples)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.dataset_only:
+        if args.output_dir is not None:
+            parser.error("--output-dir is only used when exporting a checkpoint")
+        model_dir = args.model.expanduser().resolve()
+        dataset_dir = args.dataset_dir.expanduser().resolve()
+        if dataset_dir == model_dir or model_dir in dataset_dir.parents:
+            parser.error("dataset-dir must be outside the original checkpoint")
+        _check_dataset_directory(dataset_dir)
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_dir, local_files_only=True, trust_remote_code=False
+        )
+        result = prepare_training_dataset(
+            tokenizer,
+            dataset_dir,
+            sequence_length=args.sequence_length,
+            num_samples=args.num_samples,
+        )
+    else:
+        if args.output_dir is None:
+            parser.error("--output-dir is required when exporting a checkpoint")
+        result = prepare(
+            args.model,
+            args.output_dir,
+            args.dataset_dir,
+            sequence_length=args.sequence_length,
+            num_samples=args.num_samples,
+        )
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

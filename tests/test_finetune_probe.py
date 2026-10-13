@@ -610,3 +610,27 @@ def test_checkpoint_identity_requires_weights_and_reads_bin_without_deserializat
     # Deliberately not a pickle: fingerprinting must never execute/deserialise it.
     (tmp_path / "pytorch_model.bin").write_bytes(b"not a pickle")
     assert local_checkpoint_identity(tmp_path)["format"] == "pytorch_bin"
+
+
+@pytest.mark.parametrize("use_reentrant", [True, False])
+def test_probe_passes_explicit_checkpoint_mode(
+    tmp_path, measured_runtime, use_reentrant
+):
+    training = _training() | {
+        "gradient_checkpointing": True,
+        "gradient_checkpointing_kwargs": {"use_reentrant": use_reentrant},
+    }
+    report = finetune_probe.measure_finetuning(
+        _model_config(),
+        training,
+        model_dir=tmp_path,
+        profile_id="a100",
+        warmup_steps=1,
+        measure_steps=2,
+    )
+    assert measured_runtime.trainer.args.gradient_checkpointing_kwargs == {
+        "use_reentrant": use_reentrant
+    }
+    assert report["signature"]["gradient_checkpointing_kwargs"] == {
+        "use_reentrant": use_reentrant
+    }
