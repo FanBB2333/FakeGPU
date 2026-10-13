@@ -101,7 +101,7 @@ def normalize_finetune_config(
             "Parameter storage defaults to FP32; mixed precision controls computation. "
             "Set torch_dtype/parameter_dtype to match checkpoint loading for tighter estimates."
         )
-    quantization = _quantization(values)
+    quantization = _quantization(values, source)
     method, rank, targets = _adapter(values, peft, source, quantization)
     adapter_options = _adapter_options(values, peft, source, rank, assumptions)
     quantization_options = _quantization_options(values, source, quantization, dtype)
@@ -586,7 +586,7 @@ def _attention(values: Mapping[str, Any]) -> str:
     return selected[0] if selected else "auto"
 
 
-def _quantization(values: Mapping[str, Any]) -> int | None:
+def _quantization(values: Mapping[str, Any], source: str) -> int | None:
     quant = _quantization_mapping(values)
     bits = _optional_integer(
         _alias(values, "quantization_bits", "quantization_bit"), "quantization_bits"
@@ -613,6 +613,15 @@ def _quantization(values: Mapping[str, Any]) -> int | None:
     bits = flags[0] if flags else bits
     if bits not in {None, 4, 8}:
         raise FinetuneConfigError("quantization_bits must be 4 or 8")
+    if (
+        bits is not None
+        and source == "llamafactory"
+        and values.get("quantization_method") not in (None, "bnb")
+    ):
+        raise FinetuneConfigError(
+            "LLaMA-Factory requires quantization_method=bnb; other spellings "
+            "do not activate its bitsandbytes loader"
+        )
     method = _alias(
         {
             "outer": values.get("quantization_method"),

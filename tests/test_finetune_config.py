@@ -309,6 +309,20 @@ def test_factory_quantized_storage_defaults_to_compute_dtype(dtype) -> None:
     assert result["quantization_storage"] == dtype
 
 
+@pytest.mark.parametrize("method", [None, "bnb", "bitsandbytes", "hqq", {}, []])
+def test_factory_quantization_method_matches_native_loader(method) -> None:
+    config = hf_config(finetuning_type="lora", quantization_bit=4)
+    if method is not None:
+        config["quantization_method"] = method
+    if method not in (None, "bnb"):
+        with pytest.raises(
+            FinetuneConfigError, match="requires quantization_method=bnb"
+        ):
+            normalize_finetune_config(config)
+    else:
+        assert normalize_finetune_config(config)["method"] == "qlora"
+
+
 def test_explicit_quantization_settings_preserved_and_owned() -> None:
     quant = {
         "load_in_4bit": True,
