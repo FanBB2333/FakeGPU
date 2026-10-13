@@ -15,10 +15,22 @@ from .finetune_estimator import estimate_finetuning
 from .structured_io import emit_json, load_mapping
 
 
-def _input_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--config", required=True, help="Framework JSON/YAML/TOML configuration."
+def _input_arguments(
+    parser: argparse.ArgumentParser, *, native_report: bool = False
+) -> None:
+    inputs = (
+        parser.add_mutually_exclusive_group(required=True) if native_report else parser
     )
+    inputs.add_argument(
+        "--config",
+        required=not native_report,
+        help="Framework JSON/YAML/TOML configuration.",
+    )
+    if native_report:
+        inputs.add_argument(
+            "--run-report",
+            help="Measured native framework run JSON; verifies local weights and software before reuse.",
+        )
     parser.add_argument(
         "--framework",
         default="auto",
@@ -30,7 +42,7 @@ def _input_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--profile",
-        required=True,
+        required=not native_report,
         help="Target GPU profile ID from the supported catalog.",
     )
     parser.add_argument(
@@ -72,7 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog=command_prog(__name__),
         description="Estimate fine-tuning optimizer steps, total training time, and peak VRAM.",
     )
-    _input_arguments(parser)
+    _input_arguments(parser, native_report=True)
     parser.add_argument(
         "--num-samples",
         type=int,
@@ -82,11 +94,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--epochs", type=float, help="Training epochs, unless max_steps overrides them."
     )
     parser.add_argument(
-        "--max-steps", type=int, help="Override the number of optimizer updates."
+        "--max-steps",
+        type=int,
+        help="Override optimizer updates; -1 removes the step limit and uses epochs.",
     )
     parser.add_argument(
         "--observation",
         help="Matching real-GPU probe JSON for calibrated extrapolation.",
+    )
+    parser.add_argument(
+        "--dataset-report",
+        help="Full-scan profile-finetune-data JSON; supplies processed counts and sequence length.",
     )
     parser.add_argument(
         "--compute-acceleration-factor",
@@ -97,9 +115,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
+        if args.run_report:
+            report = _estimate_native_report(args)
+            if args.json_path is not None:
+                emit_json(args.json_path, report)
+            else:
+                _print_report(report)
+            return 0
+        if not args.profile:
+            raise ValueError("--profile is required with --config")
         model, training, model_dir = _load_inputs(args)
+        dataset = load_mapping(args.dataset_report) if args.dataset_report else None
+        if dataset is not None:
+            from .finetune_data_report import apply_dataset_report
+
+            training = apply_dataset_report(
+                training,
+                dataset,
+                num_samples=args.num_samples,
+                sequence_length=args.sequence_length,
+            )
         if args.max_steps is not None:
-            training["max_steps"] = args.max_steps
+            training["max_steps"] = None if args.max_steps == -1 else args.max_steps
         observation = load_mapping(args.observation) if args.observation else None
         if observation is not None:
             from .finetune_probe import installed_training_versions
@@ -120,6 +157,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if observation is not None:
             report["checkpoint_identity"] = checkpoint_identity
             report["checkpoint_hash_seconds"] = checkpoint_hash_seconds
+        if dataset is not None:
+            report["dataset"] = dataset
+            report["limitations"].extend(training["dataset_limitations"])
     except (OSError, ValueError, TypeError) as exc:
         usage_error(parser, exc)
     if args.json_path is not None:
@@ -127,6 +167,50 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         _print_report(report)
     return 0
+
+
+def _estimate_native_report(args: argparse.Namespace) -> dict[str, Any]:
+    from .finetune_run_estimator import estimate_finetuning_run
+    from .finetune_runner import native_training_versions
+
+    if any(
+        (
+            args.model,
+            args.text_only,
+            args.sequence_length is not None,
+            args.observation,
+            args.dataset_report,
+            args.framework != "auto",
+            args.compute_acceleration_factor != 1.0,
+        )
+    ):
+        raise ValueError(
+            "--run-report uses its recorded model, framework, data and execution shape; only profile, samples, epochs and max-steps may be overridden"
+        )
+    run = load_mapping(args.run_report)
+    if run.get("schema_version") != "fakegpu.finetune_run.v1":
+        raise ValueError("unsupported native fine-tuning run schema")
+    training = run.get("training_config")
+    if not isinstance(training, dict) or not training.get("model_name_or_path"):
+        raise ValueError("native run requires a local model in training_config")
+    model_dir = Path(training["model_name_or_path"])
+    hash_started = time.perf_counter()
+    training, identity = bind_local_checkpoint(training, model_dir)
+    hash_seconds = time.perf_counter() - hash_started
+    training["software_versions"] = native_training_versions(run.get("framework"))
+    run["training_config"] = training
+    # A changed config.json also invalidates reuse, even when weights match.
+    run["model_config"] = load_mapping(model_dir / "config.json")
+    report = estimate_finetuning_run(
+        run,
+        profile_id=args.profile,
+        num_samples=args.num_samples,
+        epochs=args.epochs,
+        max_steps=args.max_steps,
+    )
+    report["checkpoint_identity"] = identity
+    report["checkpoint_hash_seconds"] = hash_seconds
+    return report
 
 
 def _print_report(report: dict[str, Any]) -> None:
@@ -155,6 +239,16 @@ def _print_report(report: dict[str, Any]) -> None:
     print(
         "Scope: training loop; download, tokenization, loading, evaluation and checkpoint I/O are excluded."
     )
+    pipeline = timing.get("native_pipeline")
+    if pipeline is not None:
+        if pipeline["available"]:
+            print(
+                f"Native pipeline scenario: {pipeline['seconds']['expected'] / 3600:.3f} hours (same dataset and cache state; measured setup and final save included)"
+            )
+        else:
+            print(
+                "Native pipeline scenario unavailable: " + " ".join(pipeline["reasons"])
+            )
     for limitation in report["limitations"]:
         print(f"  - {limitation}")
 
@@ -197,4 +291,42 @@ def probe_main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError, TypeError, ImportError, RuntimeError) as exc:
         usage_error(parser, exc)
     print(f"Fine-tuning observation written to {Path(args.output).resolve()}")
+    return 0
+
+
+def run_main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog=command_prog(__name__, "run_main"),
+        description="Run native LLaMA-Factory or Axolotl training and record data, timing and CUDA memory.",
+    )
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="Native framework config; relative paths resolve from its directory.",
+    )
+    parser.add_argument(
+        "--framework", required=True, choices=("llamafactory", "axolotl")
+    )
+    parser.add_argument("--profile", required=True)
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=2,
+        help="Initial optimizer updates excluded from steady timing.",
+    )
+    parser.add_argument("--output", required=True, help="Run report JSON path.")
+    args = parser.parse_args(argv)
+    try:
+        from .finetune_runner import run_finetuning
+
+        report = run_finetuning(
+            args.config,
+            framework=args.framework,
+            profile_id=args.profile,
+            warmup_steps=args.warmup_steps,
+        )
+        emit_json(args.output, report)
+    except (OSError, ValueError, TypeError, ImportError, RuntimeError) as exc:
+        usage_error(parser, exc)
+    print(f"Native fine-tuning run written to {Path(args.output).resolve()}")
     return 0

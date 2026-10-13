@@ -125,6 +125,53 @@ def test_cli_max_steps_overrides_epochs(training_case, capsys) -> None:
     assert report["workload"]["microsteps"] == 6
 
 
+def test_cli_can_clear_probe_step_limit_for_epoch_projection(
+    training_case, capsys
+) -> None:
+    config, _, training = training_case
+    training["max_steps"] = 3
+    config.write_text(json.dumps(training))
+    report = _report(config, capsys, "--max-steps", "-1", "--epochs", "2")
+    assert report["workload"]["stop_rule"] == "epochs"
+    assert report["workload"]["optimizer_steps"] == 50
+
+
+def test_cli_measured_dataset_overrides_placeholder_count(
+    training_case, capsys, tmp_path
+):
+    from fakegpu.finetune_data import profile_tokenized_records
+
+    config, _, _ = training_case
+    dataset = profile_tokenized_records(
+        [{"input_ids": list(range(32))}] * 12,
+        sequence_length=32,
+    )
+    path = tmp_path / "dataset.json"
+    path.write_text(json.dumps(dataset))
+    report = _report(config, capsys, "--dataset-report", str(path), "--epochs", "2")
+    assert report["workload"]["num_samples"] == 12
+    assert report["workload"]["optimizer_steps"] == 6
+    assert report["dataset"] == dataset
+    assert any(
+        "replaces configured num_samples=100" in s for s in report["limitations"]
+    )
+    with pytest.raises(SystemExit) as caught:
+        main(
+            [
+                "--config",
+                str(config),
+                "--profile",
+                "a100",
+                "--dataset-report",
+                str(path),
+                "--num-samples",
+                "99",
+            ]
+        )
+    assert caught.value.code == 2
+    assert "conflicts with dataset report" in capsys.readouterr().err
+
+
 def test_cli_json_artifact_is_parseable(training_case, tmp_path, capsys) -> None:
     config, _, _ = training_case
     output = tmp_path / "reports" / "estimate.json"
@@ -142,7 +189,7 @@ def test_cli_json_artifact_is_parseable(training_case, tmp_path, capsys) -> None
         (["--epochs", "nan"], "epochs"),
         (["--epochs", "-1"], "epochs"),
         (["--sequence-length", "0"], "sequence_length"),
-        (["--max-steps", "-1"], "max_steps"),
+        (["--max-steps", "-2"], "max_steps"),
         (["--profile", "not-a-real-gpu"], "profile"),
         (["--model", "/does-not-exist/config.json"], "local model"),
     ],

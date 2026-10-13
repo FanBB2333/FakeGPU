@@ -43,6 +43,13 @@ from .finetune_estimator import (
     estimate_finetuning,
     finetune_workload_signature,
 )
+from .finetune_data import (
+    FinetuneDataError,
+    profile_finetune_dataset,
+    profile_tokenized_records,
+)
+from .finetune_run_estimator import estimate_finetuning_run
+from .finetune_runner import run_finetuning
 from .kernel_analysis import (
     KernelAnalysisError,
     analyze_kernel_file,
@@ -102,6 +109,7 @@ __all__ = [
     "CalibrationError",
     "DiffusionEstimateError",
     "FinetuneConfigError",
+    "FinetuneDataError",
     "FinetuneEstimateError",
     "KernelAnalysisError",
     "MatmulFlopCounterMode",
@@ -133,6 +141,7 @@ __all__ = [
     "estimate_decoder_inference",
     "estimate_diffusion_generation",
     "estimate_finetuning",
+    "estimate_finetuning_run",
     "estimate_kv_cache_memory",
     "estimate_module_memory",
     "estimate_roofline",
@@ -162,9 +171,12 @@ __all__ = [
     "normalize_finetune_config",
     "patch_torch",
     "profile_roofline",
+    "profile_finetune_dataset",
+    "profile_tokenized_records",
     "replay_trace",
     "require_workspace_coverage",
     "run",
+    "run_finetuning",
     "run_validation_manifest",
     "simulate_collective",
     "simulate_point_to_point",

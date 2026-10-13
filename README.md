@@ -993,7 +993,8 @@ activations, workspace, and the total **training-loop** time for a sample count
 and epochs. `max_steps` takes precedence over epochs. Samples mean processed
 training sequences after filtering, splitting, and packing; sequence length
 includes template tokens and padding. An equal number of raw documents is not
-an equal amount of training work.
+an equal amount of training work. Pass `--max-steps -1` to clear a configured
+step limit and estimate the requested epochs.
 
 ```bash
 python -m fakegpu estimate-finetune \
@@ -1003,10 +1004,10 @@ python -m fakegpu estimate-finetune \
   --sequence-length 128 --json estimate.json
 ```
 
-Equivalent config examples are provided in
+Estimation config examples are provided in
 [`examples/finetuning/`](examples/finetuning/) for all three frameworks.
 Configuration adaptation is covered by CPU tests; it does not imply that
-every framework runtime has been benchmarked. Distributed/offloaded execution,
+every framework/runtime combination has been benchmarked. Distributed/offloaded execution,
 unsupported optimizer variants, and unresolved adapter targets produce explicit
 errors. `plan-training` remains the distributed memory-planning entry point.
 
@@ -1014,6 +1015,95 @@ Qwen3.5's linear/full attention layers are counted separately. Chunked DeltaNet
 backward workspaces, optional fast kernels, and MoE dispatch remain partial
 analytical coverage; an uncalibrated report cannot certify OOM safety.
 `--text-only` explicitly selects the text backbone of a multimodal checkpoint.
+
+`profile-finetune-data` scans every row of local JSONL files and records a content
+fingerprint, token lengths, truncation, padding, and processed sequence counts.
+Raw `text` or `messages` rows use a local tokenizer; their counts describe the
+selected preprocessing scenario. Generic `--packing concatenate` is a token
+budget scenario and does not reproduce a framework's packing algorithm. For
+counts from an actual training split, export its final `input_ids` rows and use
+`--processed`; this preserves row boundaries and rejects rows exceeding the cap.
+Optional `attention_mask` and `labels` retain padding and supervision accounting.
+
+```bash
+python -m fakegpu profile-finetune-data \
+  --data /path/to/processed-train.jsonl --format input_ids --processed \
+  --sequence-length 128 --json dataset.json
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --dataset-report dataset.json \
+  --epochs 3 --max-steps -1 --json estimate.json
+```
+
+`--dataset-report` binds counts and the sequence cap together. It replaces an
+estimated config sample count, rejects conflicting explicit overrides, and
+requires the report cap to match the training config. A `--source-framework`
+label records provenance only; it does not attest that the framework ran.
+Packed training requires final processed sequence counts, rather than a raw-row
+or generic concatenation scenario.
+
+`run-finetune` invokes the installed LLaMA-Factory or Axolotl native pipeline on
+one physical CUDA GPU. It supports full fine-tuning and LoRA with a local text
+checkpoint and unpacked data. Use a complete native config, including dataset
+and output paths; relative paths resolve from the config directory. The report
+records native preprocessing, the effective training dataset, actual batches,
+optimizer updates, allocator peaks, evaluation/checkpoint events, and final
+saving. Warmup is excluded from steady step samples but remains in total wall
+time. This command performs the training requested by the native config.
+
+Native text runs require a text checkpoint; `--text-only` on an estimator does
+not convert the original multimodal weights for a native run. For local Qwen3.5,
+first export and verify a separate text checkpoint on CPU and create synthetic
+Alpaca data for framework integration checks:
+
+```bash
+python tests/native/prepare_finetune_fixture.py \
+  --model /path/to/Qwen3.5-0.8B \
+  --output-dir /tmp/fakegpu-finetune/qwen35-text \
+  --dataset-dir /tmp/fakegpu-finetune/data
+```
+
+Use a Transformers environment supporting `Qwen3_5ForCausalLM` for export.
+The native examples target LLaMA-Factory 0.9.5 with Transformers 5.6.0, and
+Axolotl 0.18.0 with Transformers 5.14.1. Install the selected framework and its
+compatible CUDA PyTorch, PEFT, and dataset dependencies in its own environment.
+The configs use the paths above and require a new or empty output directory;
+choose a new `output_dir` before repeating a run. Axolotl's prepared-data cache
+is retained separately at `/tmp/fakegpu-finetune/axolotl-prepared`.
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-finetune \
+  --config examples/finetuning/axolotl-native-lora.yaml --framework axolotl \
+  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --output run.json
+python -m fakegpu estimate-finetune \
+  --run-report run.json --epochs 3 --max-steps -1 --json estimate.json
+```
+
+For LLaMA-Factory, use `--framework llamafactory` with
+[`llamafactory-native-lora.yaml`](examples/finetuning/llamafactory-native-lora.yaml). Reuse
+`--run-report` in the same Python environment: the CLI checks the current local
+weights, model config, and software identity against the recorded execution.
+The effective dataset fingerprint and measured shapes remain bound to the
+report; the GPU profile defaults to the report's profile. Extrapolation currently
+requires fixed full batches. The native pipeline total reuses one measured
+setup/warmup/final-save cost only for the same dataset and local cache state,
+with no periodic evaluation or checkpoint schedule. A different `--num-samples`
+provides a training-loop scenario; its unmeasured preprocessing and loading costs
+are not projected. These scenarios are not confidence intervals and exclude
+Python process startup and downloads.
+
+Independent calibration and holdout processes can be collected with
+[`tests/native/finetune_framework_matrix.py`](tests/native/finetune_framework_matrix.py).
+The [native validation archive](tests/data/finetune_framework_validation_evidence.json)
+retains Qwen3.5-0.8B LoRA runs for both frameworks on Blackwell GPU, including
+three independent one-epoch holdouts each. Maximum native wall-time errors were
+3.931% for Factory and 1.125% for the cached Axolotl repeat. It also retains a
+364.885% error when Axolotl's first-use calibration was applied to subsequent
+cached runs: the first update took 66.542 seconds. Cache/JIT state is not
+automatically fingerprinted; a matching model/software signature alone cannot
+make those fixed costs reusable. See [`refactor.md`](refactor.md) for the exact
+workload, versions, memory results, and remaining coverage.
 
 For a measured estimate, run a short real-GPU probe and reuse its observation
 in the **same Python environment**, with the same model, GPU, precision, adapter,
@@ -1068,6 +1158,8 @@ maintained in [`refactor.md`](refactor.md).
 | `fakegpu plan-training` | Normalize distributed training configs and estimate rank memory |
 | `fakegpu estimate-finetune` | Estimate single-GPU full/LoRA/QLoRA training steps, time, and VRAM from framework configs |
 | `fakegpu probe-finetune` | Collect fixed-shape Hugging Face Trainer timing and memory on a physical CUDA GPU |
+| `fakegpu profile-finetune-data` | Scan local JSONL data for token lengths, truncation, padding, and processed sequence counts |
+| `fakegpu run-finetune` | Run native LLaMA-Factory/Axolotl training and record data, CUDA timing, memory, and final saving |
 | `fakegpu simulate-topology` | Model collective routes and link contention |
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
 | `fakegpu calibrate` | Build serving observations, compare memory reports, and enforce reliability gates |
@@ -1229,6 +1321,7 @@ environments, binary assets, and design drafts are excluded through
 - [x] Architecture-aware GPU profile catalog
 - [x] Runtime, static, LLM, and distributed memory analysis
 - [x] Framework-aware single-GPU fine-tuning estimates and matching Hugging Face Trainer probes
+- [x] Full dataset scans and native LLaMA-Factory/Axolotl run reports for single-GPU text full fine-tuning and LoRA
 - [x] Phase-aware Stable Diffusion v1.5 and SDXL generation memory estimation
 - [x] Repository, kernel, topology, and trace analysis
 - [x] Detailed FakeGPU-SMI device, runtime, allocator, and process queries

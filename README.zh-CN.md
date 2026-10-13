@@ -909,6 +909,7 @@ LLaMA-Factory 和 Axolotl 配置，无需加载模型权重或导入训练框架
 激活与工作区显存，以及给定数据规模和 epochs 的**训练循环总耗时**。
 `max_steps` 优先于 epochs。样本数指过滤、切分及 packing 后的训练序列数；
 序列长度包括模板 token 与 padding，不能直接把原始文档行数当作 packed 序列数。
+可用 `--max-steps -1` 清除配置中的步数限制，按指定 epochs 估算。
 
 ```bash
 python -m fakegpu estimate-finetune \
@@ -918,12 +919,85 @@ python -m fakegpu estimate-finetune \
   --sequence-length 128 --json estimate.json
 ```
 
-三类框架示例见 [`examples/finetuning/`](examples/finetuning/)。配置适配经过 CPU
-测试，不代表三种框架的实际执行都已有真机数据。分布式/offload、尚未覆盖的
+三类框架的估算示例见 [`examples/finetuning/`](examples/finetuning/)。配置适配经过 CPU
+测试，不代表所有框架与运行环境组合都已完成真机基准测试。分布式/offload、尚未覆盖的
 优化器或 adapter 策略会明确报错；分布式显存规划继续使用 `plan-training`。
 Qwen3.5 的线性与完整 attention 分层计算，DeltaNet backward workspace、可选
 快速内核和 MoE dispatch 仍属部分解析覆盖，未校准结果不能保证不会 OOM。
 `--text-only` 显式选择多模态 checkpoint 的文本骨干。
+
+`profile-finetune-data` 全量扫描本地 JSONL 的每条记录，统计内容摘要、token 长度、
+截断、padding 与处理后的序列数。原始 `text` 或 `messages` 使用本地 tokenizer，
+计数表示所选预处理情景；通用 `--packing concatenate` 只估算拼接后的 token 预算，
+不复现框架的 packing 算法。要使用实际训练集计数，应导出最终 `input_ids` 并加上
+`--processed`；此模式保留序列边界，拒绝超过长度上限的记录。可选的
+`attention_mask` 和 `labels` 用于统计 padding 与监督 token。
+
+```bash
+python -m fakegpu profile-finetune-data \
+  --data /path/to/processed-train.jsonl --format input_ids --processed \
+  --sequence-length 128 --json dataset.json
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --dataset-report dataset.json \
+  --epochs 3 --max-steps -1 --json estimate.json
+```
+
+`--dataset-report` 同时绑定样本数和序列上限，替换配置中的预估样本数，并拒绝冲突的
+显式覆盖；报告长度上限必须与训练配置一致。`--source-framework` 仅记录来源标签，
+不能证明框架已执行。Packed 训练需要最终处理后的序列计数，不能使用原始行数或
+通用拼接情景代替。
+
+`run-finetune` 在一张物理 CUDA 显卡上调用已安装的 LLaMA-Factory 或 Axolotl
+原生流水线，支持本地文本 checkpoint、无 packing 的全量微调与 LoRA。输入应为
+包含数据和输出路径的完整原生配置，相对路径以配置文件目录解析。报告记录原生
+预处理、有效训练数据、实际 batch、优化器更新、allocator 峰值、评估/保存事件与
+最终模型保存。Warmup 不计入稳态步骤样本，但保留在总墙钟时间中；该命令会执行
+原生配置要求的训练。
+
+原生文本训练需要文本 checkpoint，估算器的 `--text-only` 不会为原生训练转换原始
+多模态权重。对于本地 Qwen3.5，先在 CPU 上导出并验证独立文本 checkpoint，
+同时生成用于框架集成检查的合成 Alpaca 数据：
+
+```bash
+python tests/native/prepare_finetune_fixture.py \
+  --model /path/to/Qwen3.5-0.8B \
+  --output-dir /tmp/fakegpu-finetune/qwen35-text \
+  --dataset-dir /tmp/fakegpu-finetune/data
+```
+
+导出时使用支持 `Qwen3_5ForCausalLM` 的 Transformers 环境。原生示例针对
+LLaMA-Factory 0.9.5 / Transformers 5.6.0 和 Axolotl 0.18.0 / Transformers 5.14.1。
+分别在独立环境安装对应框架及兼容的 CUDA PyTorch、PEFT、数据处理依赖。
+配置使用上述路径，输出目录必须为新目录或空目录；再次运行前选择新的
+`output_dir`。Axolotl 的预处理缓存单独保留在 `/tmp/fakegpu-finetune/axolotl-prepared`。
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-finetune \
+  --config examples/finetuning/axolotl-native-lora.yaml --framework axolotl \
+  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --output run.json
+python -m fakegpu estimate-finetune \
+  --run-report run.json --epochs 3 --max-steps -1 --json estimate.json
+```
+
+LLaMA-Factory 使用 `--framework llamafactory` 和
+[`llamafactory-native-lora.yaml`](examples/finetuning/llamafactory-native-lora.yaml)。应在**同一 Python
+环境**复用 `--run-report`：CLI 会核对当前本地权重、模型配置及软件版本与执行记录
+的身份一致性。有效数据内容摘要和实测形状仍绑定在报告中，GPU profile 默认沿用
+报告值；当前外推要求固定形状的完整 batch。原生流水线总耗时仅在相同数据和本地
+缓存状态、无周期性评估或 checkpoint 保存时，复用一次实测的启动、warmup 与最终
+保存开销。改变 `--num-samples` 只提供训练循环情景，不外推未测量的数据准备与
+加载时间。这些情景不是置信区间，也不包含 Python 进程启动或下载。
+
+独立校准与复测进程可通过
+[`tests/native/finetune_framework_matrix.py`](tests/native/finetune_framework_matrix.py) 运行。
+[原生框架验证归档](tests/data/finetune_framework_validation_evidence.json) 保留了
+Qwen3.5-0.8B LoRA 在 Blackwell GPU 上的两框架结果，各含三次独立完整 epoch 复测。
+整体时间最大误差为 Factory **3.931%**、已有编译缓存的 Axolotl **1.125%**。
+归档也保留首次运行校准外推到后续缓存进程时 **364.885%** 的误差：首次 update 耗时
+**66.542 秒**。目前不会自动核验 cache/JIT 状态；模型和软件签名相同不能保证这部分
+固定开销可复用。精确配置、版本、显存结果及未覆盖范围见 [`refactor.md`](refactor.md)。
 
 已有真实显卡时，可在**同一 Python 环境**中先采样，再外推数据量与 epochs：
 
@@ -970,6 +1044,8 @@ Blackwell GPU 上全量、LoRA、bitsandbytes QLoRA 的独立校准与复测，�
 | `fakegpu plan-training` | 统一分布式训练配置并估算单 rank 显存 |
 | `fakegpu estimate-finetune` | 根据框架配置估算单卡全量/LoRA/QLoRA 的步数、时间与显存 |
 | `fakegpu probe-finetune` | 在真实 CUDA 显卡上采集固定形状 Hugging Face Trainer 时间与显存 |
+| `fakegpu profile-finetune-data` | 全量扫描本地 JSONL 的 token 长度、截断、padding 与处理后序列数 |
+| `fakegpu run-finetune` | 执行 LLaMA-Factory/Axolotl 原生训练并记录数据、CUDA 时间、显存及最终保存 |
 | `fakegpu simulate-topology` | 模拟 collective 路由和链路竞争 |
 | `fakegpu replay-trace` | 汇总计算、通信、等待和显存时间线 |
 | `fakegpu calibrate` | 整理 serving 观测、对比显存报告并执行可靠性门槛检查 |
@@ -1125,6 +1201,7 @@ FakeGPU/
 - [x] FakeGPU-SMI 设备、runtime、allocator 和进程详细查询
 - [ ] 扩展可执行的原生 CUDA 运算和 cuBLAS 覆盖范围
 - [x] 适配三类框架的单卡微调预估与同配置 Hugging Face Trainer 真机采样
+- [x] 全量数据扫描与 LLaMA-Factory/Axolotl 单卡文本全量微调、LoRA 原生执行报告
 - [ ] 使用各自真实运行入口验证 LLaMA-Factory 与 Axolotl
 - [x] 通过 FakeGPU-SMI 发布原生 runtime 的实时状态和活动
 - [x] 增加建模拓扑、NVLink 视图和 NVML peer 查询

@@ -1,0 +1,55 @@
+# Native six-update LoRA example for Axolotl 0.18.0 with Transformers 5.14.1.
+# Install the framework and its compatible CUDA PyTorch/PEFT dependencies first.
+# Prepare the local text checkpoint and data with tests/native/prepare_finetune_fixture.py.
+# output_dir must be new or empty; final adapter saving is retained.
+base_model: /tmp/fakegpu-finetune/qwen35-text
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+strict: true
+trust_remote_code: false
+attn_implementation: sdpa
+adapter: lora
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.0
+lora_target_modules: [q_proj, v_proj]
+lora_mlp_kernel: false
+lora_qkv_kernel: false
+lora_o_kernel: false
+lora_embedding_kernel: false
+fused_attn_kernel: false
+load_in_8bit: false
+load_in_4bit: false
+datasets:
+  - path: /tmp/fakegpu-finetune/data/train.jsonl
+    type: alpaca
+    ds_type: json
+val_set_size: 0.0
+dataset_prepared_path: /tmp/fakegpu-finetune/axolotl-prepared
+dataset_num_proc: 1
+train_on_inputs: true
+sequence_len: 128
+excess_length_strategy: truncate
+sample_packing: false
+pad_to_sequence_len: true
+micro_batch_size: 1
+gradient_accumulation_steps: 2
+num_epochs: 1
+max_steps: 6
+learning_rate: 2.0e-5
+lr_scheduler: constant
+warmup_steps: 0
+weight_decay: 0.0
+max_grad_norm: 1.0
+optimizer: adamw_torch
+bf16: true
+fp16: false
+tf32: false
+gradient_checkpointing: false
+torch_compile: false
+seed: 42
+logging_steps: 1
+save_strategy: 'no'
+eval_strategy: 'no'
+output_dir: /tmp/fakegpu-finetune/axolotl-output
+wandb_project:

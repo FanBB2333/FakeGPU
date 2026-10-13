@@ -93,6 +93,11 @@ def finetune_workload_signature(
     profile = get_profile(profile_id)
     model_json = json.dumps(dict(model_config), sort_keys=True, separators=(",", ":"))
     fields = {key: training_config.get(key) for key in keys}
+    # Native runners bind preprocessing and framework-specific execution choices.
+    # Keep absent fields absent so existing v1 fixed-shape probe records still match.
+    for key in ("data_signature", "native_execution_signature"):
+        if key in training_config:
+            fields[key] = training_config[key]
     fields["sequence_length"] = (
         sequence_length
         if sequence_length is not None
@@ -999,7 +1004,11 @@ def _validate_observation(
             )
     result = dict(observation)
     result["verified_probe_metadata"] = False
-    if observation.get("source") == "fakegpu.huggingface_trainer_cuda_probe":
+    source = observation.get("source")
+    if source in {
+        "fakegpu.huggingface_trainer_cuda_probe",
+        "fakegpu.native_framework_cuda_run",
+    }:
         identity = observation.get("checkpoint_identity", {})
         digest = signature.get("checkpoint_sha256")
         if (
@@ -1040,9 +1049,37 @@ def _validate_observation(
             raise FinetuneEstimateError(
                 "probe workload does not match sequence length and measurement count"
             )
-        if signature.get("source_framework") != "huggingface":
+        if (
+            source == "fakegpu.huggingface_trainer_cuda_probe"
+            and signature.get("source_framework") != "huggingface"
+        ):
             raise FinetuneEstimateError(
                 "the Hugging Face probe cannot calibrate another framework"
             )
+        if source == "fakegpu.native_framework_cuda_run":
+            framework = observation.get("native_framework")
+            if framework not in {
+                "llamafactory",
+                "axolotl",
+            } or framework != signature.get("source_framework"):
+                raise FinetuneEstimateError(
+                    "native framework must match the calibration signature"
+                )
+            for key in ("data_signature", "native_execution_signature"):
+                digest = signature.get(key)
+                if (
+                    not isinstance(digest, str)
+                    or len(digest) != 64
+                    or any(character not in "0123456789abcdef" for character in digest)
+                ):
+                    raise FinetuneEstimateError(f"native observation requires {key}")
+            if workload.get("sha256") != signature["data_signature"]:
+                raise FinetuneEstimateError(
+                    "native processed data must match the calibration signature"
+                )
+            if workload.get("fixed_shape") is not True:
+                raise FinetuneEstimateError(
+                    "native calibration requires fixed full batches at sequence_length"
+                )
         result["verified_probe_metadata"] = True
     return result

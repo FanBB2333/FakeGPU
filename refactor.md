@@ -1,7 +1,51 @@
 # FakeGPU 重构分析报告
 
-> 最新功能与验证结果见下方 **2026-10-13 / 微调首批交付**；实施前承诺审计与后续路线见 **2026-10-13 / 功能闭环计划**；重构结果见 **2026-10-13 / 406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新功能与验证结果见下方 **2026-10-13 / 原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-13 / 原生框架与真实数据闭环
+
+本次继续 P1 的数据工作量闭环和 P3 的原生框架执行。命令目录扩展到 **24 项**；既有 HF Trainer full/LoRA/QLoRA probe 与历史观测签名保持兼容。
+
+| 交付项 | 行为与边界 |
+|---|---|
+| `profile-finetune-data` / `finetune_data.py` | 全量扫描本地 JSONL，支持 text、messages/chat template 和 input_ids；记录实际 token 长度分位数、截断、padding、有效 labels、文件/tokenizer 内容指纹。显式 generic concatenate 只表示所选算法的场景，不冒充任一框架的 packing。 |
+| `finetune_data_report.py` / `--dataset-report` | 独立检查报告的样本数、长度、token/padding 算术、来源与配置冲突；用实测序列数替换配置占位数量。raw scenario 与实际导出的 processed sequences 明确区分。运行时 sampler/collator packing 不能凭上游 dataset 行数推断。 |
+| `run-finetune` / `finetune_runner.py` | 调用 LLaMA-Factory `run_exp` 或 Axolotl `load_cfg` / `do_train`；让框架执行自身数据、模型、Trainer 与最终保存流程。首版限本地纯文本 checkpoint、单 GPU、无分片/offload、full 或未量化 LoRA、无 packing、显式 SDPA/eager。 |
+| `_finetune_observer.py` | 受控作用域内捕获框架创建的 Trainer，采集有效训练 split、实际参数 dtype/数量、kernel 实现、TF32、batch shapes、参数变化、finite loss 和完整累积窗口耗时。退出或异常都恢复临时方法；保存嵌套调用只计一次。 |
+| `estimate-finetune --run-report` / `estimate_finetuning_run` | 校验框架、GPU、软件、模型元数据、checkpoint 内容、processed data 与 native execution signature。固定完整 batch 可按样本数/epochs 外推训练；`--max-steps -1` 清除短跑限制。相同 dataset/cache 且无周期性 eval/save 时，另提供一次实测固定开销加稳态训练的整体时间场景。 |
+| 原生验收工具 | `tests/native/prepare_finetune_fixture.py` 在 CPU 独立导出 Qwen3.5 text checkpoint，验证无 missing/unexpected weights 且导出前后 logits 一致；`finetune_framework_matrix.py` 用独立进程执行校准与较长 holdout，对照实际训练步与整体耗时。两份 native YAML 与三语 README 提供复现流程。 |
+
+整体时间场景包含 runner 内加载、预处理、warmup、最终保存、checkpoint hashing 和观测开销，不包含 Python 进程启动或下载。单次固定开销不能代表 cache/JIT 波动的分布；逐步 logging/观测残差的增长也可能引入长期外推误差。原始 wall time、阶段耗时、allocated/reserved 峰值和逐 update 样本都保留；不将分析范围或样本 extrema 称为置信区间。
+
+### 本轮实际发现并修复的问题
+
+- LLaMA-Factory collator 返回 `BatchEncoding`；采集器改为接受 `Mapping`，补充对应回归，避免训练第一步错误退出。
+- Axolotl 原生 Alpaca 处理会先分别截断 prompt/response 再拼接。默认超长策略会丢弃本次全部 64 条样本；示例显式设置官方 `excess_length_strategy: truncate`，保留原生流程并得到 64 × 128 token。
+- 不将框架配置中的参数存储 dtype 当作实际加载 dtype。报告根据真实模型重建冻结 BF16、adapter FP32 的计数，并将实际 kernel/collator/TF32 纳入签名。
+- 数据/运行报告检查独立于 CLI；重复的 workload 字段与逐步样本必须一致，避免编辑外层计数后产生貌似匹配的错误估算。
+- 拒绝原生框架从随机参数重新初始化，以及自定义模型加载/配置覆写与未绑定版本的 kernel 选项。这些选项会绕开默认 checkpoint 文件选择或改变已声明架构；不能哈希一份本地权重后声称观测了另一种加载方式。新增 7 项 CPU 拒绝回归，已验证训练路径不变。
+
+### 验证记录
+
+最终完整回归 **768 passed / 1 skipped，58.94 秒**；Ruff 全仓检查通过。原始工作目录为 `/tmp/fakegpu-phase2/`。先前 `91b796d9` 的 571 passed / 1 skipped 属于上一轮基线。独立安装 wheel 的 **69 个 Python 文件**与工作树逐文件 SHA256 一致；无训练依赖的环境可列出 24 项命令并访问新增命令帮助；安装包成功复用真实 Factory 报告推算 1 epoch / 64 microsteps / 32 updates。
+
+使用独立导出的 **Qwen3.5-0.8B text backbone、64 条合成数据、sequence length 128、microbatch 1、accumulation 2、BF16 frozen weights / FP32 LoRA、rank 8 q_proj/v_proj、无 GC、无 packing、SDPA、Blackwell GPU**。每个框架分别 1 次 6-update 校准、3 次独立进程的 32-update 完整 epoch 验收，每次排除前 2 次 update 后计算稳态样本。两个框架使用自身模板与预处理，因此 raw data 一致不代表 processed tokens 或 kernel 一致。
+
+| 框架 / 软件栈 | 最大稳态 update 时间 APE | 最大原生整体 wall time APE | 峰值 allocated / reserved |
+|---|---:|---:|---:|
+| LLaMA-Factory 0.9.5 / Transformers 5.6.0 / Torch 2.9.1 / PEFT 0.18.1 | 4.906% | 3.931% | 2.334 / 2.408 GiB |
+| Axolotl 0.18.0 / Transformers 5.14.1 / Torch 2.11.0 / PEFT 0.19.1；已建立编译缓存 | 2.164% | 1.125% | 2.349 / 2.363 GiB |
+
+这两组的 allocated/reserved 峰值在各自 3 次 holdout 中均与校准相同，不能据此宣称任意数据、shape 或长期训练显存零误差。全部运行有 finite loss、实际 LoRA 参数变化与最终 adapter 保存。Factory 使用 Torch DeltaNet 路径，Axolotl 使用 FLA 0.4.1 chunk kernel，实际实现保存在签名中；不把两者速度当作同一内核的框架优劣比较。
+
+**首次运行与后续缓存状态不一致的负证据也保留。** Axolotl 初次校准的第一 update 为 **66.542 秒**，后续进程第一 update 约 **1.106–1.128 秒**。运行后 Triton autotune 文件时间与该首次 update 窗口相符，支持编译/调优开销这一解释，但没有独立剖析各项耗时，也没有清空并控制初始全局缓存。因此称为 first-use calibration，不能称为受控全冷缓存实验。该校准外推到后续缓存进程时，稳态 update 最大 APE 仍为 **1.276%**，而整体时间最大 APE 达 **364.885%**。这证明整体时间的固定成本必须匹配 cache/JIT 状态；后续 cached-repeat 结果不能掩盖这组失败边界。
+
+完整 3 组、12 次运行的时间样本、数据/模型身份、参数变化、实际 kernel、配置、报告原始 SHA256 和对照摘要见 [`finetune_framework_validation_evidence.json`](tests/data/finetune_framework_validation_evidence.json)。归档做了路径替换，供审核复现使用，不能直接作为 `--run-report` 输入；原始本地报告才可在匹配的环境中重新核验权重后复用。
+
+### 下一阶段
+
+P3 首批原生文本 SFT 流程交付后，优先扩展较长序列、microbatch、checkpointing、native QLoRA 与真实 packing 的计数和校准；为 eval/周期 checkpoint 与冷/热 cache 建独立开销模型。随后按原始 R24–R26 矩阵推进长上下文/online serving、diffusion 真机与训练、多 GPU/多机 MoE。当前 GPU 验收不能替代这些尚未完成的路线，也不能把单卡结果直接外推为多卡吞吐。
 
 ## 2026-10-13 / 微调首批交付
 

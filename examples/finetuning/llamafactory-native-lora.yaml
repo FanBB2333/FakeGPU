@@ -1,0 +1,45 @@
+# Native six-update LoRA example for LLaMA-Factory 0.9.5 with Transformers 5.6.0.
+# Install the framework and its compatible CUDA PyTorch/PEFT dependencies first.
+# Prepare the local text checkpoint and data with tests/native/prepare_finetune_fixture.py.
+# output_dir must be new or empty; final adapter saving is retained.
+model_name_or_path: /tmp/fakegpu-finetune/qwen35-text
+trust_remote_code: false
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: q_proj,v_proj
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.0
+dataset: synthetic_arithmetic
+dataset_dir: /tmp/fakegpu-finetune/data
+template: qwen3_nothink
+cutoff_len: 128
+packing: false
+train_on_prompt: true
+overwrite_cache: true
+preprocessing_num_workers: 1
+dataloader_num_workers: 0
+dataloader_pin_memory: true
+output_dir: /tmp/fakegpu-finetune/llamafactory-output
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 2
+max_steps: 6
+warmup_steps: 0
+optim: adamw_torch
+learning_rate: 2.0e-05
+lr_scheduler_type: constant
+bf16: true
+tf32: false
+flash_attn: sdpa
+disable_gradient_checkpointing: true
+gradient_checkpointing: false
+use_kv_cache: false
+report_to: none
+logging_steps: 1
+save_strategy: 'no'
+eval_strategy: 'no'
+disable_tqdm: true
+seed: 42
+use_v1_kernels: false
+enable_liger_kernel: false
