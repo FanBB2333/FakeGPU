@@ -1,7 +1,78 @@
 # FakeGPU 重构分析报告
 
-> 最新功能与验证结果见下方 **2026-10-13 / epoch 位置与事件上下文联合校准**；前一阶段见 **周期事件后的训练窗口校准**、**原生评估与 checkpoint 事件成本**、**动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新功能与验证结果见下方 **2026-10-13 / 完整原生训练预算、缓存条件与显存边界**；前一阶段见 **epoch 位置与事件上下文联合校准**、 **周期事件后的训练窗口校准**、**原生评估与 checkpoint 事件成本**、**动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-13 / 完整原生训练预算、缓存条件与显存边界
+
+接续 `c2d04c5c`，完成本轮约定的四项：互不重叠的时间账本、首次成本与指定缓存条件校准、未来轮次/步数的完整预算、动态 allocator 峰值与实际 OOM 对照。新增三个命令，CLI 总数增至 **29**。HF Trainer/PEFT、LLaMA-Factory 与 Axolotl 共用观测和预算协议；既有定长 probe 与历史预测接口保留。
+
+| 部件 | 实现与边界 |
+|---|---|
+| `_finetune_timeline.py` | update、根事件及 runner/Trainer 边界使用同源坐标；填满 setup、Trainer 间隙和 finalization，核对无重叠及 raw/net/metadata 时间守恒。嵌套事件只累计根区间，不再增加 CUDA 同步或峰值重置。 |
+| `_finetune_cache.py` | `uncontrolled`、`empty_kernel_cache`、`populated_kernel_cache` 三种显式条件；后两者核对五个指定目录及全部文件内容，不自动清理或预热。不同条件不能混用。 |
+| `_finetune_pipeline_plan.py` / `finetune_pipeline_estimator.py` | 完整有序窗口＋事件历史＋epoch 位置＋warmup/首次阶段分组；首次部件从独立进程取样，重复部件在每个校准进程至少两次。间隙按相邻操作与首次/重复阶段匹配，不用单次总残差兜底。至少两次独立校准，缺少覆盖则拒绝。 |
+| `finetune_pipeline_plan.py` | 从校准数据的完整实测 epoch 推导未来 `epochs` 或 `max_steps`；保留尾 batch、累积尾窗、小数轮次、末尾补触发和混合 step/epoch 调度的真实顺序。只支持已核对版本的顺序、无 packing 文本数据；改变数据行数需匹配的新校准。 |
+| `finetune_memory_estimator.py` / `_finetune_allocator.py` | 相同完整部件覆盖下，单独报告独立进程 allocated/reserved 峰值包络。绑定 allocator backend、环境和内存比例上限；预算及用户余量不得掩盖 allocator cap。不把窗口峰值相加，不把拟合误差或余量当 OOM 保证。 |
+| `_finetune_hf_runner.py` | 新增 HF 原生入口：平铺配置、明确 processed JSONL、动态 padding、完整 Trainer 生命周期与最终保存。CPU 验证 full/LoRA，GPU 本轮验证 Qwen3.5 LoRA；既有 `probe-finetune` 继续提供定长 full/LoRA/QLoRA 短跑。 |
+
+`plan-finetune-pipeline` 和 `estimate-finetune-pipeline` 在目标训练前运行；`validate-finetune-pipeline` 是独立训练后的误差核对。预算覆盖 runner 入口至原生调用和最终 GPU 同步，包含模型/数据处理、checkpoint 内容散列及所有已记录阶段；**不含 Python 进程启动、报告构造和 CLI 写盘**。raw wall 与仅扣除已测统计开销的 net 时间分别给出；时间范围组合各部件进程均值的极值，显存范围取完整运行峰值的极值，两者均非置信区间。统计插桩并非全部被测出，net 也不是无插桩基准。
+
+审查补齐了会改变实际工作量的边界：关闭日志或每 update 记录；拒绝未建模的周期 logging、checkpoint 轮转删除、最佳模型重载、early stopping、额外 profiler callback 与周期 `torch_empty_cache_steps`。预算绑定实际 TrainingArguments 的执行策略，以及旧 microstep 签名排除的预处理/数据缓存选项；不改变旧签名行为。新 API 对缺失信息明确报错，旧报告继续走既有兼容入口。
+
+### 独立验证
+
+模型为本地导出并核对权重的 Qwen3.5-0.8B text LoRA；设备为 Blackwell GPU。13 条变长训练记录、8 条评估记录，cap 256、microbatch 3、accumulation 2、eval batch 2、eval/save 每 2/4 updates、warmup 4、seed 42、SDPA、无 GC 或 packing。Factory/HF 的实际训练 batch shape 为 `[3,72] [3,64] [3,64] [3,72] [1,40]`；Ax 使用自己的模板与 collator，shape 为 `[3,98] [3,94] [3,92] [3,102] [1,70]`。这是三套原生流程的独立验收，不是同内核速度排名。
+
+未来调度要求 HF 与 Factory 的 `disable_shuffling=true`，Ax 的 `curriculum_sampling=true`。支持版本分别为 HF Trainer 5.6.0、Factory 0.9.5 / Transformers 5.6.0、Axolotl 0.18.0 / Transformers 5.14.1。两个实际 CPU Trainer 栈还分别执行混合 eval/save 策略与小数轮次，共 8 个场景；`epochs=2.5` 在该 fixture 上产生 8 updates / 14 microsteps / 38 条序列，最终 `TrainerState.epoch=2.8`，不把请求轮次数值直接当作实际消费比例。
+
+每个可用缓存条件有两次 68-update 校准、三次 92-update holdout。校准消费 114 microsteps / 298 条序列，holdout 消费 154 / 402；事件周期与 epoch 长度的组合相位均覆盖。全部 warmup、首次窗口、事件和间隙参与完整预算，没有沿用上一轮的稳态剔除规则。未来计划和预测在第二次校准完成后立即封存，之后才启动 holdout；逐次核对实际工作量与封存计划完全一致，并独立重建组件键、进程均值、极值及六阶段分项。
+
+下表为每组 3 次 holdout 的最大 APE。显存列为校准的完整进程峰值，本次各组两次校准的最小值与最大值相同。
+
+| 框架与缓存条件 | raw 总时间最大 APE | net 总时间最大 APE | allocated / reserved GiB | 显存最大低估 |
+|---|---:|---:|---:|---:|
+| LLaMA-Factory / 空目录 | 2.160% | 2.164% | 3.430 / 3.754 | 0% |
+| Axolotl / 空目录 | 0.835% | 0.837% | 2.797 / 3.775 | 0% |
+| Axolotl / 已有缓存＋固定外部依赖 | 1.732% | 1.737% | 2.805 / 3.775 | 0% |
+| HF Trainer/PEFT / 空目录 | 4.100% | 4.105% | 3.467 / 3.791 | 0% |
+
+分阶段 raw wall 最大 APE 同时保留，不能用总量抵消掩盖局部误差：
+
+| 条件 | setup | update | evaluation | checkpoint | Trainer 间隙 | finalization |
+|---|---:|---:|---:|---:|---:|---:|
+| LLaMA-Factory / 空目录 | 0.569% | 2.070% | 3.514% | 9.201% | 1.320% | 19.828% |
+| Axolotl / 空目录 | 0.544% | 0.866% | 1.350% | 1.251% | 3.558% | 5.387% |
+| Axolotl / 已有缓存＋固定外部依赖 | 0.867% | 2.486% | 2.653% | 1.146% | 3.186% | 11.958% |
+| HF Trainer/PEFT / 空目录 | 0.754% | 3.988% | 4.710% | 11.671% | 1.439% | 32.280% |
+
+共 **30 个真实训练进程**：20 个正式校准/holdout、4 个保留的早期 Ax 诊断、3 个成功显存对照及 3 个预期 CUDA OOM。Factory 与 HF 首次空目录运行没有生成指定缓存产物，因此已有缓存条件明确标为不可用；Ax 生成 2,247 个文件、87,112,221 bytes 的真实种子。上述误差只描述本模型、数据和环境的实测结果，不是后续任意任务的精度保证。
+
+五个受控目录为 `TRITON_CACHE_DIR`、`TORCHINDUCTOR_CACHE_DIR`、`CUDA_CACHE_PATH`、`TORCH_EXTENSIONS_DIR` 与 `PYTORCH_KERNEL_CACHE_PATH`。每次空目录运行使用新目录；已有缓存条件从首个空目录校准的真实产物构造不可变种子，再为每个进程复制新目录并核对相同内容。没有伪造缓存文件，也没有将空产物标成“已预热”。Triton 的 276 个 group 元数据含有 1,932 条指向首个空目录校准产物的绝对引用；已有缓存验证另外将原目录固定为只读依赖，并核对全部文件内容。因此该条件是“复制目录＋固定外部依赖”，不是各进程缓存完全自包含。运行报告的目录清单本身不认证外部引用或实际 cache 命中。这些条件不控制 OS 文件缓存、数据缓存、全部第三方缓存、GPU 时钟或系统负载。
+
+Axolotl 首轮已有缓存实验中，外部源目录到第二次校准运行时才设为只读，完整依赖审计更晚，因此最初两次校准及前两次 holdout 仅保留为诊断记录。发现后固定追加四个训练进程：在完整事前核验后重做两次校准并封存新预测，将此前尚未启动的原第三次 holdout 用作严格组第一次验证，再追加两次验证。原始结果全部保留；同一 holdout 的复用路径明确记录，不在同一估计中重复计数。补充实验是修正缓存控制协议，没有按误差挑选、删除或重写样本。
+
+HF 首次原生训练成功后，验收发现旧 observation validator 漏掉 `huggingface` 框架名。修复只在校验器允许列表增加这一项，并补三框架回归；训练入口、observer 和原生矩阵代码没有变化。保留最初失败的验收记录与完整训练产物，新版本校验通过后复用该校准，继续第二次校准及后续 holdout，没有重新采样。旧、新源码清单、原始文件、精确差异和续接驱动均归档，不将全部运行冒称为同一源码版本。
+
+| 框架 | 低 allocator cap | 实际结果 | 高 allocator cap | 实际结果 |
+|---|---:|---|---:|---|
+| llamafactory | 2.5 GiB | 原生 CUDA OOM | 4.75 GiB | 14 updates 成功 |
+| axolotl | 2 GiB | 原生 CUDA OOM | 4.75 GiB | 14 updates 成功 |
+| huggingface | 2.5 GiB | 原生 CUDA OOM | 4.75 GiB | 14 updates 成功 |
+
+低/高预算按校准结果使用预先确定的公式：`floor(0.75 × min allocated / 256MiB) × 256MiB` 与 `ceil(1.25 × max reserved / 256MiB) × 256MiB`；运行相同原生配置的 14 updates，仅改变新输出目录、时长及 allocator cap。失败保留真实 CUDA OOM 类型和 traceback，成功对照保留完整原生报告及权重。**这是进程 allocator 上限下的真实训练分配失败与成功对照，不是整张显卡耗尽测试，也没有测出精确最小显存。** 这些进程不加入时间校准。
+
+独立审计去重检查 27 份成功报告及 3 份预期 OOM。504 份周期/终点 checkpoint 与 27 份最终 adapter 共 **531 份权重**，均为 24 个张量、319,488 个参数，全部值有限且 12 个 LoRA B 张量非零；checkpoint 的 step/epoch、optimizer、scheduler、RNG、TrainerState 齐全。训练数据从实际 Arrow/processed JSONL 独立重算，逐 batch 的 tokens、labels、padding、epoch/tail 及每次评估的输入 SHA 均一致，时间区间和守恒检查通过。训练账本不含 token ID，不能据此声称逐条 sampler 身份已认证。36 处最终 metadata 的事件后改写（21 个 README、15 个 Ax debug.log）明确单列，保存时文件清单不视为永久不变或实际磁盘写入量。
+
+源码审计覆盖 **129 个文件**：127 个跨两版保持一致，另两个是已声明的 HF validator 一行修复及对应测试。每组实际采集版本、旧文件内容与新旧补丁均核对；原生采集和训练入口在这次修复前后没有变化。
+
+原始配置、日志、checkpoint、报告、独立审核与 wheel 保存在 `/tmp/fakegpu-pipeline-20261013/`。仓库提供[可读验收摘要](tests/data/finetune_pipeline_validation_evidence.json)及[完整压缩审阅记录](tests/data/finetune_pipeline_validation_records.json.gz)。压缩包是 UTF-8 JSON，含原始记录哈希、配置、预测、审计和复现脚本；路径已替换，仅供审阅，不能作为校准输入。
+
+同时修复既有 probe 的两个实际问题：PEFT 的 `all-linear` 必须使用字符串简写；QLoRA 准备阶段应透传与 Trainer 一致的 gradient-checkpointing 参数。真实 CPU PEFT 对照确认 non-reentrant 不安装输入梯度 hook，reentrant 控制保留该 hook；修复单独提交。
+
+最终全仓回归 **1370 passed / 1 skipped，100.09 秒**，Ruff 与 `git diff --check` 通过。wheel 独立安装后的 **85 个 Python 模块**与当前源码逐字节一致；`python -S` 下四个正式条件的计划、预算及三份 holdout 比较共 **20 项 CLI 检查**与提前封存的结果完全一致，不导入 Torch/Transformers。旧 Factory/Ax QLoRA 报告仍可推算 128 microsteps / 64 updates。相对 `c2d04c5c` 的 **152 份历史预测**（132 定长、4 动态窗口、4 事件、4 event-only、8 epoch 模式）在当前源码及独立 wheel 下均保持完整字典和序列化字节不变。
+
+本轮四项交付的是有独立证据的首版完整预算。后续仍需推进随机 sampler 与 packing 语义、更多数据/模型/GPU 的长期精度和显存增长、物理容量受限设备验证，以及既有 R24–R26 的 serving、diffusion 和多卡/多机真机覆盖。不能把本次同数据长短运行验证等同于任意研究任务的完整 toolkit 已完成。
 
 ## 2026-10-13 / epoch 位置与事件上下文联合校准
 

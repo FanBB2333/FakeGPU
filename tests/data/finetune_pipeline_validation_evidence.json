@@ -1,0 +1,1816 @@
+{
+"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
+  "compatibility": {
+    "baseline_commit": "c2d04c5c",
+    "canonical_sha256": "212770041b8f39ec85665edb37b268f55c9bb0cd9273e33fa99ebc0fc32f493b",
+    "complete_dictionaries_and_bytes_equal": true,
+    "final_repository_replay": {
+      "byte_identical_to_baseline": true,
+      "path": "<validation>/compatibility/final-predictions.json",
+      "predictions": 152,
+      "sha256": "212770041b8f39ec85665edb37b268f55c9bb0cd9273e33fa99ebc0fc32f493b"
+    },
+    "prediction_counts": {
+      "dynamic": 4,
+      "epoch_windows": 8,
+      "event_windows": 4,
+      "events": 4,
+      "fixed": 132
+    },
+    "total_predictions": 152
+  },
+  "experiment": "Qwen3.5-0.8B text LoRA, Blackwell GPU, unpacked sequential variable-length data, periodic evaluation and resumable checkpoints.",
+  "frameworks": {
+    "axolotl": {
+      "diagnostics": {
+        "original_populated_kernel_cache": {
+          "adjusted_full_span_max_ape_percent": 1.2551077474244532,
+          "all_run_memory_min_max": {
+            "peak_allocated_bytes": {
+              "max": 3012014592,
+              "min": 3012014592
+            },
+            "peak_reserved_bytes": {
+              "max": 4053794816,
+              "min": 4053794816
+            }
+          },
+          "by_kind_wall_max_ape_percent": {
+            "checkpoint": 0.6561468884296354,
+            "evaluation": 2.814764550155389,
+            "finalization": 20.4598585385084,
+            "optimizer_update": 0.9002923038237829,
+            "setup": 1.1964827348509592,
+            "trainer_other": 2.4545747955054362
+          },
+          "cohort_summary": "<validation>/validation/axolotl/summary.json",
+          "comparison_paths": {
+            "holdout-1": "<validation>/validation/axolotl/populated_kernel_cache/holdout-1/comparison.json",
+            "holdout-2": "<validation>/validation/axolotl/populated_kernel_cache/holdout-2/comparison.json",
+            "holdout-3": "<validation>/validation/axolotl/populated_kernel_cache/holdout-3/comparison.json"
+          },
+          "completed_runs": 5,
+          "component_groups": 112,
+          "diagnostic_only_roles": [
+            "calibration-1",
+            "calibration-2",
+            "holdout-1",
+            "holdout-2"
+          ],
+          "evidence_class": "original_populated_diagnostic_cohort",
+          "full_span_wall_max_ape_percent": 1.24689349031992,
+          "holdout_metrics": {
+            "holdout-1": {
+              "adjusted_wall_ape_percent": 0.17775981100159916,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3012014592,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3012014592,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4053794816,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4053794816,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 0.17919176489971383
+            },
+            "holdout-2": {
+              "adjusted_wall_ape_percent": 0.37405137071455397,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3012014592,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3012014592,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4053794816,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4053794816,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 0.37164693371933677
+            },
+            "holdout-3": {
+              "adjusted_wall_ape_percent": 1.2551077474244532,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3012014592,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3012014592,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4053794816,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4053794816,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 1.24689349031992
+            }
+          },
+          "kernel_cache_seed_files": 2247,
+          "maximum_component_group_wall_ape_percent": 53.013435901875205,
+          "maximum_holdout_memory_underprediction_percent": {
+            "peak_allocated_bytes": 0.0,
+            "peak_reserved_bytes": 0.0
+          },
+          "memory_envelope": {
+            "peak_allocated_bytes": {
+              "max": 3012014592,
+              "min": 3012014592
+            },
+            "peak_reserved_bytes": {
+              "max": 4053794816,
+              "min": 4053794816
+            }
+          },
+          "predicted_timing": {
+            "by_kind": {
+              "checkpoint": {
+                "instrumentation_seconds": {
+                  "expected": 0.033243393583688885,
+                  "max": 0.033457750629168004,
+                  "min": 0.033029036538209766
+                },
+                "seconds": {
+                  "expected": 9.99317425454501,
+                  "max": 10.05436700413702,
+                  "min": 9.931981504953
+                },
+                "wall_seconds": {
+                  "expected": 10.0264176481287,
+                  "max": 10.087460199953057,
+                  "min": 9.965375096304342
+                }
+              },
+              "evaluation": {
+                "instrumentation_seconds": {
+                  "expected": 0.10778465443714097,
+                  "max": 0.10919925295324487,
+                  "min": 0.10637005592103708
+                },
+                "seconds": {
+                  "expected": 13.384638418824498,
+                  "max": 13.41351882469925,
+                  "min": 13.355758012949744
+                },
+                "wall_seconds": {
+                  "expected": 13.492423073261639,
+                  "max": 13.522718077652495,
+                  "min": 13.462128068870781
+                }
+              },
+              "finalization": {
+                "instrumentation_seconds": {
+                  "expected": 0.0,
+                  "max": 0.0,
+                  "min": 0.0
+                },
+                "seconds": {
+                  "expected": 0.3887654417194426,
+                  "max": 0.3902357709594071,
+                  "min": 0.3872951124794781
+                },
+                "wall_seconds": {
+                  "expected": 0.3887654417194426,
+                  "max": 0.3902357709594071,
+                  "min": 0.3872951124794781
+                }
+              },
+              "optimizer_update": {
+                "instrumentation_seconds": {
+                  "expected": 0.031446694978512824,
+                  "max": 0.0321673268917948,
+                  "min": 0.030726063065230846
+                },
+                "seconds": {
+                  "expected": 16.555345094995573,
+                  "max": 16.70221459493041,
+                  "min": 16.408475595060736
+                },
+                "wall_seconds": {
+                  "expected": 16.586791789974086,
+                  "max": 16.733662447426468,
+                  "min": 16.439921132521704
+                }
+              },
+              "setup": {
+                "instrumentation_seconds": {
+                  "expected": 0.0013415291905403137,
+                  "max": 0.0013501890935003757,
+                  "min": 0.0013328692875802517
+                },
+                "seconds": {
+                  "expected": 11.719789751106873,
+                  "max": 11.732277204282582,
+                  "min": 11.707302297931165
+                },
+                "wall_seconds": {
+                  "expected": 11.721131280297413,
+                  "max": 11.733627393376082,
+                  "min": 11.708635167218745
+                }
+              },
+              "trainer_other": {
+                "instrumentation_seconds": {
+                  "expected": 0.011967974714934826,
+                  "max": 0.012159984714041153,
+                  "min": 0.011775964715828499
+                },
+                "seconds": {
+                  "expected": 0.389753775515904,
+                  "max": 0.3988934269485374,
+                  "min": 0.3806141240832706
+                },
+                "wall_seconds": {
+                  "expected": 0.40172175023083884,
+                  "max": 0.4109513702181478,
+                  "min": 0.39249213024352986
+                }
+              }
+            },
+            "instrumentation_seconds": {
+              "expected": 0.18578424690481782,
+              "max": 0.1883345042817492,
+              "min": 0.18323398952788644
+            },
+            "interval_kind": "sum_of_component_process_mean_extrema_not_confidence_interval",
+            "seconds": {
+              "expected": 52.4314667367073,
+              "max": 52.691506825957205,
+              "min": 52.171426647457395
+            },
+            "wall_seconds": {
+              "expected": 52.61725098361212,
+              "max": 52.878655259585656,
+              "min": 52.35584670763858
+            }
+          },
+          "prediction_path": "<validation>/validation/axolotl/populated_kernel_cache/future-prediction.json",
+          "report_paths": {
+            "calibration-1": "<validation>/validation/axolotl/populated_kernel_cache/calibration-1/report.json",
+            "calibration-2": "<validation>/validation/axolotl/populated_kernel_cache/calibration-2/report.json",
+            "holdout-1": "<validation>/validation/axolotl/populated_kernel_cache/holdout-1/report.json",
+            "holdout-2": "<validation>/validation/axolotl/populated_kernel_cache/holdout-2/report.json",
+            "holdout-3": "<validation>/validation/axolotl/populated_kernel_cache/holdout-3/report.json"
+          },
+          "retrospective_strict_dependency_control_claim": false,
+          "sealed_prediction": {
+            "plan_sha256": "5c7957e260d9e2b06b9a5cf98200ed82cab857fa5c879b7e99648de8505836ec",
+            "prediction_sha256": "7a138cb9b295b79cedcf639e4484e6344bc48a6120c5f450788241328c644de3",
+            "sealed_at_utc": "2026-10-13T13:06:56.661168+00:00"
+          },
+          "shared_physical_process": {
+            "formal_role": "holdout-1",
+            "original_role": "holdout-3"
+          },
+          "source_freeze_action": {
+            "action": "remove all write permissions from original completed calibration cache files and directories",
+            "directories": 321,
+            "files": 2247,
+            "finished_at_utc": "2026-10-13T13:06:41.339463+00:00",
+            "native_execution_states": {
+              "calibration-1": {
+                "argv": [
+                  "<native-framework-environments>/axolotl/venv/bin/python",
+                  "-m",
+                  "fakegpu",
+                  "run-finetune",
+                  "--framework",
+                  "axolotl",
+                  "--config",
+                  "<validation>/validation/axolotl/populated_kernel_cache/calibration-1/config.json",
+                  "--profile",
+                  "blackwell",
+                  "--warmup-steps",
+                  "4",
+                  "--cache-regime",
+                  "populated_kernel_cache",
+                  "--output",
+                  "<validation>/validation/axolotl/populated_kernel_cache/calibration-1/report.json"
+                ],
+                "expected_returncode": 0,
+                "finished_at_utc": "2026-10-13T13:06:10.367117+00:00",
+                "pid": 2988217,
+                "process_wall_seconds": 43.845770597457886,
+                "returncode": 0,
+                "started_at_utc": "2026-10-13T13:05:26.521362+00:00"
+              },
+              "calibration-2": {
+                "argv": [
+                  "<native-framework-environments>/axolotl/venv/bin/python",
+                  "-m",
+                  "fakegpu",
+                  "run-finetune",
+                  "--framework",
+                  "axolotl",
+                  "--config",
+                  "<validation>/validation/axolotl/populated_kernel_cache/calibration-2/config.json",
+                  "--profile",
+                  "blackwell",
+                  "--warmup-steps",
+                  "4",
+                  "--cache-regime",
+                  "populated_kernel_cache",
+                  "--output",
+                  "<validation>/validation/axolotl/populated_kernel_cache/calibration-2/report.json"
+                ],
+                "expected_returncode": 0,
+                "pid": 2989250,
+                "started_at_utc": "2026-10-13T13:06:11.567930+00:00"
+              }
+            },
+            "source": "<validation>/validation/axolotl/empty_kernel_cache/calibration-1/caches",
+            "started_at_utc": "2026-10-13T13:06:41.298999+00:00"
+          },
+          "target_components": 329
+        }
+      },
+      "oom_controls": {
+        "oom": {
+          "allocator": {
+            "reported_fraction": 0.028120931664403534,
+            "requested_budget_bytes": 2147483648,
+            "requested_fraction": 0.02812093167749836
+          },
+          "allocator_peak_allocated_bytes": 1504809472,
+          "allocator_peak_reserved_bytes": 1520435200,
+          "exception_class": "torch.OutOfMemoryError",
+          "outcome": "observed_allocator_budget_oom",
+          "physical_card_oom_test": false
+        },
+        "success": {
+          "allocator": {
+            "reported_fraction": 0.06678721273405862,
+            "requested_budget_bytes": 5100273664,
+            "requested_fraction": 0.06678721273405862
+          },
+          "allocator_peak_allocated_bytes": 3003789824,
+          "allocator_peak_reserved_bytes": 4053794816,
+          "outcome": "observed_native_success",
+          "physical_card_oom_test": false
+        }
+      },
+      "regimes": {
+        "empty_kernel_cache": {
+          "adjusted_full_span_max_ape_percent": 0.8369950914085689,
+          "all_run_memory_min_max": {
+            "peak_allocated_bytes": {
+              "max": 3003789824,
+              "min": 3003789824
+            },
+            "peak_reserved_bytes": {
+              "max": 4053794816,
+              "min": 4053794816
+            }
+          },
+          "by_kind_wall_max_ape_percent": {
+            "checkpoint": 1.2505527102394138,
+            "evaluation": 1.3500195215786783,
+            "finalization": 5.387235997492327,
+            "optimizer_update": 0.8661029351859019,
+            "setup": 0.5442104161302008,
+            "trainer_other": 3.557595607159604
+          },
+          "cohort_summary": "<validation>/validation/axolotl/summary.json",
+          "comparison_paths": {
+            "holdout-1": "<validation>/validation/axolotl/empty_kernel_cache/holdout-1/comparison.json",
+            "holdout-2": "<validation>/validation/axolotl/empty_kernel_cache/holdout-2/comparison.json",
+            "holdout-3": "<validation>/validation/axolotl/empty_kernel_cache/holdout-3/comparison.json"
+          },
+          "completed_runs": 5,
+          "component_groups": 112,
+          "evidence_class": "formal_native_cohort",
+          "full_span_wall_max_ape_percent": 0.8354876747174849,
+          "holdout_metrics": {
+            "holdout-1": {
+              "adjusted_wall_ape_percent": 0.7819105603132784,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3003789824,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3003789824,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4053794816,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4053794816,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 0.7815807146630389
+            },
+            "holdout-2": {
+              "adjusted_wall_ape_percent": 0.8369950914085689,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3003789824,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3003789824,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4053794816,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4053794816,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 0.8354876747174849
+            },
+            "holdout-3": {
+              "adjusted_wall_ape_percent": 0.18496492478197363,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3003789824,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3003789824,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4053794816,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4053794816,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 0.18634637647929153
+            }
+          },
+          "kernel_cache_seed_files": 0,
+          "maximum_component_group_wall_ape_percent": 80.17498585934302,
+          "maximum_holdout_memory_underprediction_percent": {
+            "peak_allocated_bytes": 0.0,
+            "peak_reserved_bytes": 0.0
+          },
+          "memory_envelope": {
+            "peak_allocated_bytes": {
+              "max": 3003789824,
+              "min": 3003789824
+            },
+            "peak_reserved_bytes": {
+              "max": 4053794816,
+              "min": 4053794816
+            }
+          },
+          "predicted_timing": {
+            "by_kind": {
+              "checkpoint": {
+                "instrumentation_seconds": {
+                  "expected": 0.033107244584243745,
+                  "max": 0.03324558160966262,
+                  "min": 0.03296890755882487
+                },
+                "seconds": {
+                  "expected": 11.513315159187187,
+                  "max": 11.530290162656456,
+                  "min": 11.496340155717917
+                },
+                "wall_seconds": {
+                  "expected": 11.54642240377143,
+                  "max": 11.56329698994523,
+                  "min": 11.529547817597631
+                }
+              },
+              "evaluation": {
+                "instrumentation_seconds": {
+                  "expected": 0.12387521827424115,
+                  "max": 0.12516231983053414,
+                  "min": 0.12258811671794816
+                },
+                "seconds": {
+                  "expected": 52.692277325232595,
+                  "max": 52.82438597184691,
+                  "min": 52.56016867861829
+                },
+                "wall_seconds": {
+                  "expected": 52.81615254350684,
+                  "max": 52.94697408856486,
+                  "min": 52.685330998448826
+                }
+              },
+              "finalization": {
+                "instrumentation_seconds": {
+                  "expected": 0.0,
+                  "max": 0.0,
+                  "min": 0.0
+                },
+                "seconds": {
+                  "expected": 0.4013696010224521,
+                  "max": 0.4145688391290605,
+                  "min": 0.3881703629158437
+                },
+                "wall_seconds": {
+                  "expected": 0.4013696010224521,
+                  "max": 0.4145688391290605,
+                  "min": 0.3881703629158437
+                }
+              },
+              "optimizer_update": {
+                "instrumentation_seconds": {
+                  "expected": 0.03341890836600214,
+                  "max": 0.03427523747086525,
+                  "min": 0.032562579261139035
+                },
+                "seconds": {
+                  "expected": 78.85547947883606,
+                  "max": 79.24371369951405,
+                  "min": 78.46724525815807
+                },
+                "wall_seconds": {
+                  "expected": 78.88889838720206,
+                  "max": 79.27734566363506,
+                  "min": 78.50045111076906
+                }
+              },
+              "setup": {
+                "instrumentation_seconds": {
+                  "expected": 0.0013212780468165874,
+                  "max": 0.0013362639583647251,
+                  "min": 0.0013062921352684498
+                },
+                "seconds": {
+                  "expected": 11.74230539985001,
+                  "max": 11.779946438968182,
+                  "min": 11.70466436073184
+                },
+                "wall_seconds": {
+                  "expected": 11.743626677896827,
+                  "max": 11.781282702926546,
+                  "min": 11.705970652867109
+                }
+              },
+              "trainer_other": {
+                "instrumentation_seconds": {
+                  "expected": 0.012114454914505282,
+                  "max": 0.012264924123883247,
+                  "min": 0.01196398570512732
+                },
+                "seconds": {
+                  "expected": 0.41661967236238223,
+                  "max": 0.4196468875122567,
+                  "min": 0.4135924572125077
+                },
+                "wall_seconds": {
+                  "expected": 0.4287341272768875,
+                  "max": 0.4318341647895674,
+                  "min": 0.4256340897642076
+                }
+              }
+            },
+            "instrumentation_seconds": {
+              "expected": 0.20383710418580891,
+              "max": 0.20628432699330998,
+              "min": 0.20138988137830782
+            },
+            "interval_kind": "sum_of_component_process_mean_extrema_not_confidence_interval",
+            "seconds": {
+              "expected": 155.62136663649068,
+              "max": 156.2125519996269,
+              "min": 155.0301812733545
+            },
+            "wall_seconds": {
+              "expected": 155.8252037406765,
+              "max": 156.41530244899033,
+              "min": 155.23510503236267
+            }
+          },
+          "prediction_path": "<validation>/validation/axolotl/empty_kernel_cache/future-prediction.json",
+          "report_paths": {
+            "calibration-1": "<validation>/validation/axolotl/empty_kernel_cache/calibration-1/report.json",
+            "calibration-2": "<validation>/validation/axolotl/empty_kernel_cache/calibration-2/report.json",
+            "holdout-1": "<validation>/validation/axolotl/empty_kernel_cache/holdout-1/report.json",
+            "holdout-2": "<validation>/validation/axolotl/empty_kernel_cache/holdout-2/report.json",
+            "holdout-3": "<validation>/validation/axolotl/empty_kernel_cache/holdout-3/report.json"
+          },
+          "sealed_prediction": {
+            "plan_sha256": "c6f177fc3ae65d15b5fc50ea281cbb10a59a6c8ae79943d6d66117b284115eca",
+            "prediction_sha256": "2a0488e020f845785ba17529a0ede1316a31c99f0be98ee3bb314388399f0bae",
+            "sealed_at_utc": "2026-10-13T12:57:27.167232+00:00"
+          },
+          "target_components": 329
+        },
+        "populated_kernel_cache": {
+          "adjusted_full_span_max_ape_percent": 1.737384673919594,
+          "all_run_memory_min_max": {
+            "peak_allocated_bytes": {
+              "max": 3012014592,
+              "min": 3012014592
+            },
+            "peak_reserved_bytes": {
+              "max": 4053794816,
+              "min": 4053794816
+            }
+          },
+          "by_kind_wall_max_ape_percent": {
+            "checkpoint": 1.1463227190852798,
+            "evaluation": 2.652849709905807,
+            "finalization": 11.958452120223196,
+            "optimizer_update": 2.486317358601502,
+            "setup": 0.8672349448721609,
+            "trainer_other": 3.1860479409102913
+          },
+          "cache_condition": "Per-run copies of one immutable seed plus fixed external read-only original Triton child references, with pre/post manifest/reference audits.",
+          "cohort_summary": "<validation>/validation/axolotl/controlled-populated/summary.json",
+          "comparison_paths": {
+            "holdout-1": "<validation>/validation/axolotl/controlled-populated/holdout-1-comparison.json",
+            "holdout-2": "<validation>/validation/axolotl/controlled-populated/holdout-2-comparison.json",
+            "holdout-3": "<validation>/validation/axolotl/controlled-populated/holdout-3-comparison.json"
+          },
+          "completed_runs": 5,
+          "component_groups": 112,
+          "dependency_boundaries": {
+            "calibration-1": {
+              "after": {
+                "path": "<validation>/validation/axolotl/controlled-populated/dependency-audits/after-calibration-1.json",
+                "sha256": "b8b0ba4e6d12d41e5a03cdbf752d0aa9af6ead3b817de38560f0ec2ec905988c"
+              },
+              "before": {
+                "path": "<validation>/validation/axolotl/controlled-populated/dependency-audits/before-calibration-1.json",
+                "sha256": "9888db50f7eb19e89f4113f29aa6d838d600c4fda464e52a1f516688e75ef293"
+              },
+              "native_process_at_after_audit": {
+                "checked_at_utc": "2026-10-13T13:14:58.858177+00:00",
+                "exists": false,
+                "pid": 2998033
+              },
+              "reused_original_run": false
+            },
+            "calibration-2": {
+              "after": {
+                "path": "<validation>/validation/axolotl/controlled-populated/dependency-audits/after-calibration-2.json",
+                "sha256": "f5e63649b6c34ca65bc7a2454ef86c08949233c1b32de38593bb01babd6770a5"
+              },
+              "before": {
+                "path": "<validation>/validation/axolotl/controlled-populated/dependency-audits/before-calibration-2.json",
+                "sha256": "8d95fe3974f74c88bcc86471e47ecbb1f4093af4a76770c50f794329c9a4abee"
+              },
+              "native_process_at_after_audit": {
+                "checked_at_utc": "2026-10-13T13:15:45.099611+00:00",
+                "exists": false,
+                "pid": 2999078
+              },
+              "reused_original_run": false
+            },
+            "holdout-1": {
+              "after": {
+                "path": "<validation>/validation/axolotl/cache-dependency-audits/after-holdout-3.json",
+                "sha256": "99f9c12a9e53e8923e77808e02a2f021c8653ca5a79f020462d34ab68e4601bb"
+              },
+              "before": {
+                "path": "<validation>/validation/axolotl/cache-dependency-audits/after-holdout-2.json",
+                "sha256": "beb1b3469290ea71ff636f24fafe1064fb9feb32a71e0da84d519debd5c12ab7"
+              },
+              "native_process_at_after_audit": {
+                "argv": [
+                  ""
+                ],
+                "checked_at_utc": "2026-10-13T13:17:17.465716+00:00",
+                "exists": true,
+                "pid": 3000762,
+                "start_clock_ticks": 304364022,
+                "state": "Z (zombie)"
+              },
+              "reused_original_run": true
+            },
+            "holdout-2": {
+              "after": {
+                "path": "<validation>/validation/axolotl/controlled-populated/dependency-audits/after-holdout-2.json",
+                "sha256": "aa09da4ca502c867300034c5805b4fde420c5573033727798474d266ec08048e"
+              },
+              "before": {
+                "path": "<validation>/validation/axolotl/controlled-populated/dependency-audits/before-holdout-2.json",
+                "sha256": "1d380661bbf4f8bdb67c672f7d7f35280095cf5c2638905820667bebacb86d94"
+              },
+              "native_process_at_after_audit": {
+                "checked_at_utc": "2026-10-13T13:20:59.170442+00:00",
+                "exists": false,
+                "pid": 3005044
+              },
+              "reused_original_run": false
+            },
+            "holdout-3": {
+              "after": {
+                "path": "<validation>/validation/axolotl/controlled-populated/dependency-audits/after-holdout-3.json",
+                "sha256": "bd38b39da4b9823a8ea371a36aa68e572662014a56401c38ad7f754c13a5201f"
+              },
+              "before": {
+                "path": "<validation>/validation/axolotl/controlled-populated/dependency-audits/before-holdout-3.json",
+                "sha256": "aa16c298a2327e13798b80f6f0f9193c3c45f6959eab0bb5c7b9ceb532c92a2f"
+              },
+              "native_process_at_after_audit": {
+                "checked_at_utc": "2026-10-13T13:21:57.291120+00:00",
+                "exists": false,
+                "pid": 3006469
+              },
+              "reused_original_run": false
+            }
+          },
+          "evidence_class": "formal_controlled_populated_cohort",
+          "full_span_wall_max_ape_percent": 1.7322915177705254,
+          "holdout_metrics": {
+            "holdout-1": {
+              "adjusted_wall_ape_percent": 0.2642210259334217,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3012014592,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3012014592,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4053794816,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4053794816,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 0.2604586590499406
+            },
+            "holdout-2": {
+              "adjusted_wall_ape_percent": 0.44194682400312557,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3012014592,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3012014592,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4053794816,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4053794816,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 0.4456191930476554
+            },
+            "holdout-3": {
+              "adjusted_wall_ape_percent": 1.737384673919594,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3012014592,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3012014592,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4053794816,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4053794816,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 1.7322915177705254
+            }
+          },
+          "kernel_cache_seed_files": 2247,
+          "maximum_component_group_wall_ape_percent": 64.36090950885138,
+          "maximum_holdout_memory_underprediction_percent": {
+            "peak_allocated_bytes": 0.0,
+            "peak_reserved_bytes": 0.0
+          },
+          "memory_envelope": {
+            "peak_allocated_bytes": {
+              "max": 3012014592,
+              "min": 3012014592
+            },
+            "peak_reserved_bytes": {
+              "max": 4053794816,
+              "min": 4053794816
+            }
+          },
+          "plan_fixed_before_new_runs": {
+            "calibration_steps": 68,
+            "calibrations": 2,
+            "holdout_steps": 92,
+            "holdouts": 3,
+            "new_native_processes": 4,
+            "reused_holdout": "<validation>/validation/axolotl/populated_kernel_cache/holdout-3/report.json"
+          },
+          "predicted_timing": {
+            "by_kind": {
+              "checkpoint": {
+                "instrumentation_seconds": {
+                  "expected": 0.0328757768147625,
+                  "max": 0.033101252920459956,
+                  "min": 0.03265030070906505
+                },
+                "seconds": {
+                  "expected": 10.01175174288801,
+                  "max": 10.041752109944355,
+                  "min": 9.981751375831664
+                },
+                "wall_seconds": {
+                  "expected": 10.044627519702772,
+                  "max": 10.074845022871159,
+                  "min": 10.014410016534384
+                }
+              },
+              "evaluation": {
+                "instrumentation_seconds": {
+                  "expected": 0.10781454938379201,
+                  "max": 0.10855393192138184,
+                  "min": 0.10707516684620218
+                },
+                "seconds": {
+                  "expected": 13.16969232993539,
+                  "max": 13.25155519948087,
+                  "min": 13.087829460389912
+                },
+                "wall_seconds": {
+                  "expected": 13.277506879319183,
+                  "max": 13.358660726046022,
+                  "min": 13.196353032592345
+                }
+              },
+              "finalization": {
+                "instrumentation_seconds": {
+                  "expected": 0.0,
+                  "max": 0.0,
+                  "min": 0.0
+                },
+                "seconds": {
+                  "expected": 0.3572895044926554,
+                  "max": 0.3629387062974274,
+                  "min": 0.3516403026878834
+                },
+                "wall_seconds": {
+                  "expected": 0.3572895044926554,
+                  "max": 0.3629387062974274,
+                  "min": 0.3516403026878834
+                }
+              },
+              "optimizer_update": {
+                "instrumentation_seconds": {
+                  "expected": 0.03218009974807501,
+                  "max": 0.0332409949041903,
+                  "min": 0.031119204591959715
+                },
+                "seconds": {
+                  "expected": 16.374997170525603,
+                  "max": 16.531487959669903,
+                  "min": 16.218506381381303
+                },
+                "wall_seconds": {
+                  "expected": 16.407177270273678,
+                  "max": 16.56352899502963,
+                  "min": 16.250825545517728
+                }
+              },
+              "setup": {
+                "instrumentation_seconds": {
+                  "expected": 0.001342938980087638,
+                  "max": 0.0013451091945171356,
+                  "min": 0.0013407687656581402
+                },
+                "seconds": {
+                  "expected": 11.612074251752347,
+                  "max": 11.652097349055111,
+                  "min": 11.572051154449582
+                },
+                "wall_seconds": {
+                  "expected": 11.613417190732434,
+                  "max": 11.653442458249629,
+                  "min": 11.57339192321524
+                }
+              },
+              "trainer_other": {
+                "instrumentation_seconds": {
+                  "expected": 0.01202462799847126,
+                  "max": 0.012147558697809776,
+                  "min": 0.011901697299132744
+                },
+                "seconds": {
+                  "expected": 0.39256520960479974,
+                  "max": 0.39741072558487456,
+                  "min": 0.38771969362472497
+                },
+                "wall_seconds": {
+                  "expected": 0.404589837603271,
+                  "max": 0.40946879535913466,
+                  "min": 0.39971087984740733
+                }
+              }
+            },
+            "instrumentation_seconds": {
+              "expected": 0.18623799292518842,
+              "max": 0.188388847638359,
+              "min": 0.18408713821201783
+            },
+            "interval_kind": "sum_of_component_process_mean_extrema_not_confidence_interval",
+            "seconds": {
+              "expected": 51.918370209198805,
+              "max": 52.23724205003254,
+              "min": 51.59949836836507
+            },
+            "wall_seconds": {
+              "expected": 52.10460820212399,
+              "max": 52.422884703853,
+              "min": 51.78633170039499
+            }
+          },
+          "prediction_path": "<validation>/validation/axolotl/controlled-populated/future-prediction.json",
+          "report_paths": {
+            "calibration-1": "<validation>/validation/axolotl/controlled-populated/calibration-1/report.json",
+            "calibration-2": "<validation>/validation/axolotl/controlled-populated/calibration-2/report.json",
+            "holdout-1": "<validation>/validation/axolotl/populated_kernel_cache/holdout-3/report.json",
+            "holdout-2": "<validation>/validation/axolotl/controlled-populated/holdout-2/report.json",
+            "holdout-3": "<validation>/validation/axolotl/controlled-populated/holdout-3/report.json"
+          },
+          "sealed_prediction": {
+            "plan_sha256": "5dcade0ceb8d5fdf01534ee0e64f25400c0a64f3b2f816057119917ec6d483ac",
+            "prediction_sha256": "ab48bea57396a0c8bea747f931f55455ff5fa81981c5ba4293b8a70119ef2df3",
+            "sealed_at_utc": "2026-10-13T13:15:46.321997+00:00"
+          },
+          "supplementation_reason": "Protocol supplementation chosen before new calibration/holdout outcomes; original populated observations retained as diagnostic evidence without retrospective strict-control claims.",
+          "target_components": 329
+        }
+      },
+      "source_freeze_manifest": "source-freeze.json",
+      "status": "complete",
+      "summary_path": "<validation>/validation/axolotl/summary.json"
+    },
+    "huggingface": {
+      "continuation": {
+        "changed_sources": [
+          "fakegpu/finetune_estimator.py"
+        ],
+        "driver_sha256": "6fc29b748effbae18e50779c302129c867c39aded4fe051c73c66df512083017",
+        "fixed_new_processes": {
+          "allocator_controls": 2,
+          "calibrations": 1,
+          "holdouts": 3
+        },
+        "original_collection_source_file_sha256": {
+          "fakegpu/__init__.py": "b949e9c372b3d589139487e45e069fa59075b0b64527f86657d5d3b15187e9d2",
+          "fakegpu/__main__.py": "f93d43139aa3d64e3a8a741161e42560eaea3cae88084dca0df3e26c9ef48129",
+          "fakegpu/_allocator.py": "7f6ae44f3b4ea1d30a7b0b49711b554bb39e7fb047798e2d67e31d17686de2b3",
+          "fakegpu/_api.py": "eafdb7d08ea262584778add9536199f885b6e3ab3cae7480d1034e73162b5662",
+          "fakegpu/_bandwidth_worker.py": "10db05d1cf9764ec14ffd0933c38b9dc266c18ddb65c95d36309e8cae03c4b77",
+          "fakegpu/_calibration_cuda.py": "455d665cd77bd52320161e8b7bc7fa0ae74112b3933fff5f3a6ce5385945aaac",
+          "fakegpu/_calibration_protocol.py": "2ecbc1cb5c8248d357f1c52f28926c5f4888531e080638b44fbea8ae592f1265",
+          "fakegpu/_cli.py": "d5c69a440a1ecbcaf4fb01e15e084099ed8ce219a1d712516f2a8d8f9cf0e429",
+          "fakegpu/_cross_device.py": "60ad7ec2f6e0917580d2adc52affc91d09f1b66b8bfb2ac0da0598b266eecadc",
+          "fakegpu/_diffusion_activation.py": "b901ce66b4e95735c1e5b108c14bd93a368986281850c68a624c92e21f0995c7",
+          "fakegpu/_diffusion_pipeline.py": "779e004c7ead149a6e34b658617256a430ec61b52f53edd62c366d7a577d3365",
+          "fakegpu/_diffusion_types.py": "04a6ab39253a8341206a5e6b6b733178fa8c75a16ed9af86f61e9a53abf59c8d",
+          "fakegpu/_ecosystem_compat.py": "27ccf8ae114e302bf3eba850ed44e93616ccaff16f22d666e5a26b4c30fc83d2",
+          "fakegpu/_finetune_allocator.py": "f63da86281a3a61135987daae988622ccc1e901d125470aa2d8525629f5e4795",
+          "fakegpu/_finetune_batches.py": "3561b9ea3fb4473cae2b5f6cf4d36c4055689e54904ac2c2b3100a515e5faf56",
+          "fakegpu/_finetune_cache.py": "d2a2ee4a0e009654ee56c1c96a594d7e8d4b2b2fa797f3db843f956cd9e7698c",
+          "fakegpu/_finetune_event_context.py": "09dd42b598ec259531027948f29ad2e28940dd0e6b7397c485aa00b9ccc552fb",
+          "fakegpu/_finetune_event_observer.py": "da8dff4ac10ba258f696bc0f61d3715d9948cea2b546b27eadb80d199c8b428d",
+          "fakegpu/_finetune_events.py": "b1943bbc7d7b5465f655e605547391f0952d96e7a3441fc549c7a07b03b9a86b",
+          "fakegpu/_finetune_hf_runner.py": "088402b27eb7335c51d7e016348897219cc4d920ad7e3c5f935f7c03db13a910",
+          "fakegpu/_finetune_model.py": "2c3e3c9065d9f9db0764d6eb6615e8bc2e30523f62ad16720f13fe0b972e2791",
+          "fakegpu/_finetune_observer.py": "e2231932f86c49ac74f9db5ee7aa5dcdef86e880c9f74b19cb4cf96c02a574aa",
+          "fakegpu/_finetune_pipeline_plan.py": "028dd16e5dbd5ce20bfba103b7f29992bda601f85d6fa54ac455e7bbef46ed7e",
+          "fakegpu/_finetune_timeline.py": "ce3f005ce39a14a4eb77ca9cba001ca9d2f379acdc333cc1485b69b8846d6c62",
+          "fakegpu/_local_checkpoint.py": "4e1b60fb03bc8a7cab2c13d70ad439afd8c4363e10d7a3ec2deddc76685e29a8",
+          "fakegpu/_preflight_bootstrap.py": "c350db5a0dd4c2240243afac126c04b3a87d1fb0827b4b335e425c24dbeddd1b",
+          "fakegpu/_preflight_report.py": "d13ff3440d2aee3cfef724df88e8d07368175487df8b19aa53654255a5afdcac",
+          "fakegpu/_profiles.py": "2512196baab04f0f34afde5171f8ce289009518cf57ed49304de3f4e18508f6c",
+          "fakegpu/_runtime.py": "977dc6b89f4db74d2202342ae3064101c8537e46b4564d6774c7b2db8f4d0afe",
+          "fakegpu/_serving_kv.py": "4ce50aee337b9a9fb4ba8ebccc5d8bb0ca0ef14e2bc84394f2baa089a9ee4a6b",
+          "fakegpu/_serving_memory.py": "d35e2ae01ea0a723d44575598ef7766f04bb94021353bdcf21e9847a6f502fa0",
+          "fakegpu/_serving_speculative.py": "5be88f9f868fbcf9cc44780ca5a90681e97a78c81893b5635d6166742c4b7f23",
+          "fakegpu/_serving_types.py": "1c51b88951308f3564abbf18499975cdd63424cabf81e5820cf6ebc6584d1560",
+          "fakegpu/_serving_vllm.py": "bda2c6ec20fbc062993c378ae30d5cebfe6cd52e6fa212c432f56739e92daba8",
+          "fakegpu/_smi_environment.py": "451a60d1d7b51c598b081310881f67b1f05b97b2bc88260ae2ffcb50044b82a2",
+          "fakegpu/_smi_query.py": "94f20b030df832a370cd27ac049c43623bcc1fefdce9988033c564e95b7d1057",
+          "fakegpu/_smi_render.py": "2dd4abb3ce8b663b5fb612caa5122c0d5ce251bc056c54c30160aed6953ffe77",
+          "fakegpu/_smi_state.py": "b6e51f286959357611eb421f85dd394a692de6b60609901b0537a044ec7fab6a",
+          "fakegpu/_stage.py": "6003b96af99a879486d32fa204d4c4dc3517919dff1a8847fe0088165077aa47",
+          "fakegpu/_torch_reporting.py": "b6e39eb09ef8e7e7587f7afad58d925f0816e21448ee96858589016b2f0ffab5",
+          "fakegpu/_upstream.py": "c88ec92b571e87c20e179df1f182cb7d85ad620fa3f209eef0de6b9113b7f9b5",
+          "fakegpu/_version.py": "0f1d4266e6bf3a9de70e3e02756eb0f192899b464f80b857d343a4a312762ad1",
+          "fakegpu/calibration.py": "2a0f0724c33e3775e1bf4f47da99607f1b8c143e9d2d60fa88e984bf916f77e4",
+          "fakegpu/capabilities.py": "479875ba481e4676e667e09e9879444b40e2fa8988dbff0c267bcc421ea5284d",
+          "fakegpu/data/__init__.py": "a2978dd4be43ceaf6dca206edb855bd055f8e2c0c9f39eec1cc7d2cfd92b6b8c",
+          "fakegpu/demo.py": "c70b5b4a14299c1ff0661af9e1b6500acf8e520447b1405e6ecfbb6290ad49f1",
+          "fakegpu/diffusion_estimator.py": "53462a4ee7fee002bad22e467afbfe05df236bb13cae6db3ae4989d4fc3476da",
+          "fakegpu/distributed_cli.py": "f871bfa866563296f6b5316e6c09810e8b1e39e3a71430b719b49048370334b2",
+          "fakegpu/doctor.py": "9ce8f107bcbbca1629c12c58ae54f5e48ce90927daf15135de50f87b4fa7166c",
+          "fakegpu/finetune_cli.py": "862a004e72826a64cb2caa9937b55b386714098e0002302a6141bd36ea0f57aa",
+          "fakegpu/finetune_config.py": "382311acf677fd864ea22660067efae7ea72695ea8d6e9d136ddac28e0665054",
+          "fakegpu/finetune_data.py": "12a3604e2b678c3e4bcba3db824d205825cd1201108df9118093b59736f76bda",
+          "fakegpu/finetune_data_cli.py": "10148bdc79427e74724ab242a8d9c5f7e0f18d0417c5d3358e928279ba1891d6",
+          "fakegpu/finetune_data_report.py": "92b9677c107f1cdf43b471664150d913465089da3a8d8d06cf34a4db264b6c1d",
+          "fakegpu/finetune_estimator.py": "46f09e6a8831e2e8145e8796c4436978da49929e362b5a55c8ee6b387245f78d",
+          "fakegpu/finetune_event_estimator.py": "90f614689c273711d466a0abb14ee2e6339ca1d08abd188fc2bd012c2555190c",
+          "fakegpu/finetune_memory_estimator.py": "e17afa6ec4685202303e3f8f5d3c8f4014e71a9fd92f067b4666e196a6b328f9",
+          "fakegpu/finetune_pipeline_cli.py": "46dd507a5b552d570917b8897db69759b7bc663e7fd179dcb3c1f692637ba6b9",
+          "fakegpu/finetune_pipeline_estimator.py": "53059328e6c6aea0711563ff377de90439cc4d73998d85bfb74f832d3bf5ca44",
+          "fakegpu/finetune_pipeline_plan.py": "31b688d39d75016ab1e92be3e3cb4d924470856b88ab08b3711ed18eadab2145",
+          "fakegpu/finetune_probe.py": "44867cc1311253a99a6a637f3dc5fc93efa8412136eaba1ebe2ee9531a9da2f5",
+          "fakegpu/finetune_run_estimator.py": "e639f36ddff41435620368c16dc20c943ea9c2a9a259aa3de362b888290eeeb2",
+          "fakegpu/finetune_runner.py": "649e2877b84cc4f51dca21c2f1d5181bcd2f22fb9d10d064e372845671746e4f",
+          "fakegpu/finetune_window_estimator.py": "225a51bac3dcd09753eb1c79a347275deafba6099cc4fb1bd5f50bf09d3798c5",
+          "fakegpu/flop_counter.py": "5ba1592b0ecda998752283c2103ee9356b913e6b57f8f140e905042e72563cf3",
+          "fakegpu/kernel_analysis.py": "c1a578271e64a4e6370f08157c8e43f729c261f73e6a2bbc6460e9aec1dd44d6",
+          "fakegpu/llm_cli.py": "90c0ef73ece59acd7626bb4afdfc9b6137a21e526e94ec92e1689685b1b57c7e",
+          "fakegpu/llm_estimator.py": "1adfe3d50e052277ca7aeecc5e62cf323f5124daacb06f438204fac3818e84ac",
+          "fakegpu/memory_estimator.py": "e7268510f38b126019aa2fb79beabf10b652d4af56efcb6fb357e48750fdfc9d",
+          "fakegpu/metrics.py": "2c9bf56efb05c67b5044ae937353996040edf234d01412a73ca44aa1ca971b9c",
+          "fakegpu/operator_profiles.py": "3ab3ab56a1f0e91a42e1463669dccee78eb8da19f48244a7c520b7fb379bbbbf",
+          "fakegpu/performance_model.py": "b43c4d9ffc1bca48b8dd985637d0b97a0ccd2ef27a192a9af0fe657cdb317f33",
+          "fakegpu/preflight.py": "4d6e50e907f84d5586faa05a841341f92056c0f43560ec739c50b806ef8caf5e",
+          "fakegpu/profile_catalog.py": "88490838e42ab3a4dbd2c75b236754a55e69d3263ad071cfd5d3be613e88f2b6",
+          "fakegpu/repository_analyzer.py": "97052d298aef94bff5bfad9a5179600670176d8b67ffba20dd0f62dc64ae177b",
+          "fakegpu/serving_plan.py": "1c6ba8739de803377e1126a5a0f78f296d3a7918cb508cf8a2df8f750438f3e7",
+          "fakegpu/smi.py": "260e4af048d8b6f8030aed6767978f44fae8e35365980a55925b7b4a357a620a",
+          "fakegpu/structured_io.py": "fe42612a914332881be52ebb0e539f9eb8b67d4fec24e1edfa749d511624c917",
+          "fakegpu/topology.py": "c5bbb3f2bbe5cc9d2ada76cf019aa4f2f28e8f49bde891b88bb24373057d424d",
+          "fakegpu/torch_patch.py": "c8b414b82983870b04cfb0463d4df30e21c3511ed196c828b533d6b459ae99f5",
+          "fakegpu/trace_replay.py": "e590d0d4cffb6467a0f53bc8d37b72bf6da5cc12c8da4ad2a19513385b0df73c",
+          "fakegpu/training_plan.py": "e019bea3669f0e234116dbedd641e91848ea3aa631bebd5aa246b3ce5b5f9a2d",
+          "fakegpu/validation.py": "558ef114147ce2033e96495235108cb6ecb8a1c80dcdf1e532c13e832daf6b1a",
+          "fakegpu/workspace_cli.py": "92c74d4aec0969199e91624c613b29e6afb4e4ea453dbeffc3d9d54d516e54fd",
+          "fakegpu/workspace_profiles.py": "6d2ab752238380bfe05a4d8d0128d4127c559197629a4514f401074b42a019cb",
+          "tests/native/finetune_allocator_oom.py": "4bddfdd099451c8e6815a0b9206ba0b171ff25f53d4d0d859b0d785b89a674a0",
+          "tests/native/finetune_event_matrix.py": "b4c69ecda004c7cfcfac00ef13ad5237b92b9560e9d1b57e781a0354a09ae2ca",
+          "tests/native/finetune_event_window_matrix.py": "02572ba48b879e828500d3e0e0157e0b2a29f8136c172df06f4429573dedf184",
+          "tests/native/finetune_framework_matrix.py": "5a06728af6021c3a3db9f380ae588b40aa6f45b87eeb9b5edb2f2889034fdfe6",
+          "tests/native/finetune_pipeline_matrix.py": "ec357d3142be2bc0007fd273e0e78040977c16ef215d7b2d30c63e76f9c1724b",
+          "tests/native/finetune_window_matrix.py": "f44bef65f2ea79f8d3494d23e28e8b6575d90d7beca8aea0fb53d09d7c231d07"
+        },
+        "original_failed_summary": "<validation>/validation/huggingface/summary.json",
+        "original_failed_summary_sha256": "d37a1b9edaf1bd5118d627162d81841e70a5f6afd23259d24c2236193de7df57",
+        "prepared_at_utc": "2026-10-13T13:27:23.188966+00:00",
+        "reason": "Original native calibration succeeded; acceptance rejected the newly supported framework because one observation validator allowlist omitted huggingface. Only that validator source changed. No native run was repeated."
+      },
+      "diagnostics": {
+        "original_validator_rejection": {
+          "failure": "Traceback (most recent call last):\n  File \"<repository>/tests/native/finetune_pipeline_matrix.py\", line 686, in main\n    actual_plan, calls = _verify_report(\n                         ^^^^^^^^^^^^^^^\n  File \"<repository>/tests/native/finetune_pipeline_matrix.py\", line 456, in _verify_report\n    plan = pipeline_plan_from_run(report)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<repository>/fakegpu/_finetune_pipeline_plan.py\", line 443, in pipeline_plan_from_run\n    config, observation, _, _, _ = validate_native_run(run, require_fixed_shape=False)\n                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<repository>/fakegpu/finetune_run_estimator.py\", line 122, in validate_native_run\n    _validate_observation(observation, signature, require_fixed_shape=require_fixed_shape)\n  File \"<repository>/fakegpu/finetune_estimator.py\", line 1137, in _validate_observation\n    raise FinetuneEstimateError(\nfakegpu.finetune_estimator.FinetuneEstimateError: native framework must match the calibration signature\n",
+          "native_collection_outcome": "successful calibration reused without rerunning training",
+          "reused_report": "<validation>/validation/huggingface/empty_kernel_cache/calibration-1/report.json",
+          "status": "failed",
+          "summary_path": "<validation>/validation/huggingface/summary.json",
+          "summary_sha256": "d37a1b9edaf1bd5118d627162d81841e70a5f6afd23259d24c2236193de7df57"
+        }
+      },
+      "oom_controls": {
+        "oom": {
+          "allocator": {
+            "reported_fraction": 0.03515116459687295,
+            "requested_budget_bytes": 2684354560,
+            "requested_fraction": 0.03515116459687295
+          },
+          "allocator_peak_allocated_bytes": 2654800896,
+          "allocator_peak_reserved_bytes": 2667577344,
+          "exception_class": "torch.OutOfMemoryError",
+          "outcome": "observed_allocator_budget_oom",
+          "physical_card_oom_test": false
+        },
+        "success": {
+          "allocator": {
+            "reported_fraction": 0.06678721273405862,
+            "requested_budget_bytes": 5100273664,
+            "requested_fraction": 0.06678721273405862
+          },
+          "allocator_peak_allocated_bytes": 3722450944,
+          "allocator_peak_reserved_bytes": 4070572032,
+          "outcome": "observed_native_success",
+          "physical_card_oom_test": false
+        }
+      },
+      "regimes": {
+        "empty_kernel_cache": {
+          "adjusted_full_span_max_ape_percent": 4.104989439811623,
+          "all_run_memory_min_max": {
+            "peak_allocated_bytes": {
+              "max": 3722450944,
+              "min": 3722450944
+            },
+            "peak_reserved_bytes": {
+              "max": 4070572032,
+              "min": 4070572032
+            }
+          },
+          "by_kind_wall_max_ape_percent": {
+            "checkpoint": 11.67050738047444,
+            "evaluation": 4.710014128494127,
+            "finalization": 32.28002633946617,
+            "optimizer_update": 3.9877467454598463,
+            "setup": 0.7538219468374252,
+            "trainer_other": 1.4390489760406684
+          },
+          "cohort_summary": "<validation>/validation/huggingface-continuation/summary.json",
+          "comparison_paths": {
+            "holdout-1": "<validation>/validation/huggingface-continuation/empty_kernel_cache/holdout-1/comparison.json",
+            "holdout-2": "<validation>/validation/huggingface-continuation/empty_kernel_cache/holdout-2/comparison.json",
+            "holdout-3": "<validation>/validation/huggingface-continuation/empty_kernel_cache/holdout-3/comparison.json"
+          },
+          "completed_runs": 5,
+          "component_groups": 110,
+          "evidence_class": "formal_native_cohort",
+          "full_span_wall_max_ape_percent": 4.100071042342934,
+          "holdout_metrics": {
+            "holdout-1": {
+              "adjusted_wall_ape_percent": 1.8269093523330096,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3722450944,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3722450944,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4070572032,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4070572032,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 1.8255189800217504
+            },
+            "holdout-2": {
+              "adjusted_wall_ape_percent": 2.5631429266450563,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3722450944,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3722450944,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4070572032,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4070572032,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 2.5599926802500743
+            },
+            "holdout-3": {
+              "adjusted_wall_ape_percent": 4.104989439811623,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3722450944,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3722450944,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4070572032,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4070572032,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 4.100071042342934
+            }
+          },
+          "kernel_cache_seed_files": 0,
+          "maximum_component_group_wall_ape_percent": 38.65827547936364,
+          "maximum_holdout_memory_underprediction_percent": {
+            "peak_allocated_bytes": 0.0,
+            "peak_reserved_bytes": 0.0
+          },
+          "memory_envelope": {
+            "peak_allocated_bytes": {
+              "max": 3722450944,
+              "min": 3722450944
+            },
+            "peak_reserved_bytes": {
+              "max": 4070572032,
+              "min": 4070572032
+            }
+          },
+          "predicted_timing": {
+            "by_kind": {
+              "checkpoint": {
+                "instrumentation_seconds": {
+                  "expected": 0.02632754997466691,
+                  "max": 0.02662819076795131,
+                  "min": 0.026026909181382507
+                },
+                "seconds": {
+                  "expected": 3.6254957415512763,
+                  "max": 3.852612732502166,
+                  "min": 3.3983787506003864
+                },
+                "wall_seconds": {
+                  "expected": 3.651823291525943,
+                  "max": 3.8787052277475595,
+                  "min": 3.424941355304327
+                }
+              },
+              "evaluation": {
+                "instrumentation_seconds": {
+                  "expected": 0.04326030387627808,
+                  "max": 0.043736027892340316,
+                  "min": 0.04278457986021584
+                },
+                "seconds": {
+                  "expected": 21.992088635960087,
+                  "max": 22.501166000030935,
+                  "min": 21.483011271889236
+                },
+                "wall_seconds": {
+                  "expected": 22.035348939836364,
+                  "max": 22.544902027923275,
+                  "min": 21.525795851749454
+                }
+              },
+              "finalization": {
+                "instrumentation_seconds": {
+                  "expected": 0.0,
+                  "max": 0.0,
+                  "min": 0.0
+                },
+                "seconds": {
+                  "expected": 0.00038694683462381363,
+                  "max": 0.00039007142186164856,
+                  "min": 0.0003838222473859787
+                },
+                "wall_seconds": {
+                  "expected": 0.00038694683462381363,
+                  "max": 0.00039007142186164856,
+                  "min": 0.0003838222473859787
+                }
+              },
+              "optimizer_update": {
+                "instrumentation_seconds": {
+                  "expected": 0.021043784799985588,
+                  "max": 0.021430823486298323,
+                  "min": 0.020656746113672853
+                },
+                "seconds": {
+                  "expected": 58.36151593143586,
+                  "max": 59.35953007731587,
+                  "min": 57.363501785555854
+                },
+                "wall_seconds": {
+                  "expected": 58.382559716235846,
+                  "max": 59.38075343519449,
+                  "min": 57.3843659972772
+                }
+              },
+              "setup": {
+                "instrumentation_seconds": {
+                  "expected": 0.0007093814201653004,
+                  "max": 0.0007113008759915829,
+                  "min": 0.0007074619643390179
+                },
+                "seconds": {
+                  "expected": 7.514709333656356,
+                  "max": 7.5567278931848705,
+                  "min": 7.472690774127841
+                },
+                "wall_seconds": {
+                  "expected": 7.515418715076521,
+                  "max": 7.557439194060862,
+                  "min": 7.47339823609218
+                }
+              },
+              "trainer_other": {
+                "instrumentation_seconds": {
+                  "expected": 0.0159934526309371,
+                  "max": 0.01609605100626747,
+                  "min": 0.01589085425560673
+                },
+                "seconds": {
+                  "expected": 0.23579487026048204,
+                  "max": 0.24004230657592415,
+                  "min": 0.2315474339450399
+                },
+                "wall_seconds": {
+                  "expected": 0.2517883228914191,
+                  "max": 0.2559864571628471,
+                  "min": 0.24759018861999113
+                }
+              }
+            },
+            "instrumentation_seconds": {
+              "expected": 0.10733447270203297,
+              "max": 0.108602394028849,
+              "min": 0.10606655137521695
+            },
+            "interval_kind": "sum_of_component_process_mean_extrema_not_confidence_interval",
+            "seconds": {
+              "expected": 91.72999145969868,
+              "max": 93.51046908103163,
+              "min": 89.94951383836575
+            },
+            "wall_seconds": {
+              "expected": 91.83732593240072,
+              "max": 93.6181764135109,
+              "min": 90.05647545129054
+            }
+          },
+          "prediction_path": "<validation>/validation/huggingface-continuation/empty_kernel_cache/future-prediction.json",
+          "report_paths": {
+            "calibration-1": "<validation>/validation/huggingface/empty_kernel_cache/calibration-1/report.json",
+            "calibration-2": "<validation>/validation/huggingface-continuation/empty_kernel_cache/calibration-2/report.json",
+            "holdout-1": "<validation>/validation/huggingface-continuation/empty_kernel_cache/holdout-1/report.json",
+            "holdout-2": "<validation>/validation/huggingface-continuation/empty_kernel_cache/holdout-2/report.json",
+            "holdout-3": "<validation>/validation/huggingface-continuation/empty_kernel_cache/holdout-3/report.json"
+          },
+          "sealed_prediction": {
+            "plan_sha256": "2117c9047cbf737a46bd88b57925f281580f7e4718d5598aaf58e5b213744c09",
+            "prediction_sha256": "56991015fc6be163baf9905fde6d8c6752d5da9eff2233db092bf061dcf31486",
+            "sealed_at_utc": "2026-10-13T13:28:34.520195+00:00"
+          },
+          "target_components": 327
+        },
+        "populated_kernel_cache": {
+          "reason": "The preserved first empty-cache calibration produced no files in any controlled kernel-cache directory; no dummy seed was created.",
+          "status": "unavailable"
+        }
+      },
+      "source_collection_versions": {
+        "acceptance_and_budget_validation": "source-freeze-final.json",
+        "new_calibration-2_and_holdouts_and_allocator_controls": "source-freeze-final.json",
+        "reused_calibration-1": "source-freeze.json"
+      },
+      "source_freeze_manifest": "source-freeze-final.json",
+      "status": "complete",
+      "summary_path": "<validation>/validation/huggingface-continuation/summary.json"
+    },
+    "llamafactory": {
+      "oom_controls": {
+        "oom": {
+          "allocator": {
+            "reported_fraction": 0.03515116459687295,
+            "requested_budget_bytes": 2684354560,
+            "requested_fraction": 0.03515116459687295
+          },
+          "allocator_peak_allocated_bytes": 2668811264,
+          "allocator_peak_reserved_bytes": 2684354560,
+          "exception_class": "torch.OutOfMemoryError",
+          "outcome": "observed_allocator_budget_oom",
+          "physical_card_oom_test": false
+        },
+        "success": {
+          "allocator": {
+            "reported_fraction": 0.06678721273405862,
+            "requested_budget_bytes": 5100273664,
+            "requested_fraction": 0.06678721273405862
+          },
+          "allocator_peak_allocated_bytes": 3682605056,
+          "allocator_peak_reserved_bytes": 4030726144,
+          "outcome": "observed_native_success",
+          "physical_card_oom_test": false
+        }
+      },
+      "regimes": {
+        "empty_kernel_cache": {
+          "adjusted_full_span_max_ape_percent": 2.164052822871516,
+          "all_run_memory_min_max": {
+            "peak_allocated_bytes": {
+              "max": 3682605056,
+              "min": 3682605056
+            },
+            "peak_reserved_bytes": {
+              "max": 4030726144,
+              "min": 4030726144
+            }
+          },
+          "by_kind_wall_max_ape_percent": {
+            "checkpoint": 9.20095275137391,
+            "evaluation": 3.51388448572197,
+            "finalization": 19.8276484487026,
+            "optimizer_update": 2.069976810419162,
+            "setup": 0.5686542493263268,
+            "trainer_other": 1.3204395542293246
+          },
+          "cohort_summary": "<validation>/validation/llamafactory/summary.json",
+          "comparison_paths": {
+            "holdout-1": "<validation>/validation/llamafactory/empty_kernel_cache/holdout-1/comparison.json",
+            "holdout-2": "<validation>/validation/llamafactory/empty_kernel_cache/holdout-2/comparison.json",
+            "holdout-3": "<validation>/validation/llamafactory/empty_kernel_cache/holdout-3/comparison.json"
+          },
+          "completed_runs": 5,
+          "component_groups": 112,
+          "evidence_class": "formal_native_cohort",
+          "full_span_wall_max_ape_percent": 2.160160332698138,
+          "holdout_metrics": {
+            "holdout-1": {
+              "adjusted_wall_ape_percent": 2.164052822871516,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3682605056,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3682605056,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4030726144,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4030726144,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 2.160160332698138
+            },
+            "holdout-2": {
+              "adjusted_wall_ape_percent": 1.4338305623421537,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3682605056,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3682605056,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4030726144,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4030726144,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 1.4328272662791084
+            },
+            "holdout-3": {
+              "adjusted_wall_ape_percent": 0.9800453722711615,
+              "memory": {
+                "peak_allocated_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 3682605056,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 3682605056,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                },
+                "peak_reserved_bytes": {
+                  "absolute_percentage_error": 0.0,
+                  "actual": 4030726144,
+                  "exceeds_observed_max": false,
+                  "observed_calibration_max": 4030726144,
+                  "underprediction_percent": 0.0,
+                  "within_observed_envelope": true
+                }
+              },
+              "wall_ape_percent": 0.9808698341349188
+            }
+          },
+          "kernel_cache_seed_files": 0,
+          "maximum_component_group_wall_ape_percent": 36.91032755130278,
+          "maximum_holdout_memory_underprediction_percent": {
+            "peak_allocated_bytes": 0.0,
+            "peak_reserved_bytes": 0.0
+          },
+          "memory_envelope": {
+            "peak_allocated_bytes": {
+              "max": 3682605056,
+              "min": 3682605056
+            },
+            "peak_reserved_bytes": {
+              "max": 4030726144,
+              "min": 4030726144
+            }
+          },
+          "predicted_timing": {
+            "by_kind": {
+              "checkpoint": {
+                "instrumentation_seconds": {
+                  "expected": 0.026412380539113656,
+                  "max": 0.026613799622282386,
+                  "min": 0.026210961455944926
+                },
+                "seconds": {
+                  "expected": 3.2404901652480476,
+                  "max": 3.2864447663305327,
+                  "min": 3.1945355641655624
+                },
+                "wall_seconds": {
+                  "expected": 3.266902545787161,
+                  "max": 3.3126560076489113,
+                  "min": 3.221149083925411
+                }
+              },
+              "evaluation": {
+                "instrumentation_seconds": {
+                  "expected": 0.08579338741996749,
+                  "max": 0.08622250985354185,
+                  "min": 0.08536426498639313
+                },
+                "seconds": {
+                  "expected": 22.618331724142823,
+                  "max": 22.85263901593333,
+                  "min": 22.38402443235232
+                },
+                "wall_seconds": {
+                  "expected": 22.704125111562792,
+                  "max": 22.938110958107494,
+                  "min": 22.47013926501809
+                }
+              },
+              "finalization": {
+                "instrumentation_seconds": {
+                  "expected": 0.0,
+                  "max": 0.0,
+                  "min": 0.0
+                },
+                "seconds": {
+                  "expected": 0.006742674158886075,
+                  "max": 0.008026011753827333,
+                  "min": 0.005459336563944817
+                },
+                "wall_seconds": {
+                  "expected": 0.006742674158886075,
+                  "max": 0.008026011753827333,
+                  "min": 0.005459336563944817
+                }
+              },
+              "optimizer_update": {
+                "instrumentation_seconds": {
+                  "expected": 0.020562689169310033,
+                  "max": 0.020951158832758665,
+                  "min": 0.0201742195058614
+                },
+                "seconds": {
+                  "expected": 58.022792522097006,
+                  "max": 58.45937190204859,
+                  "min": 57.586213142145425
+                },
+                "wall_seconds": {
+                  "expected": 58.04335521126632,
+                  "max": 58.47996326722205,
+                  "min": 57.606747155310586
+                }
+              },
+              "setup": {
+                "instrumentation_seconds": {
+                  "expected": 0.0017670339439064264,
+                  "max": 0.0017730486579239368,
+                  "min": 0.001761019229888916
+                },
+                "seconds": {
+                  "expected": 12.45588162029162,
+                  "max": 12.507480454165488,
+                  "min": 12.404282786417753
+                },
+                "wall_seconds": {
+                  "expected": 12.457648654235527,
+                  "max": 12.509253502823412,
+                  "min": 12.406043805647641
+                }
+              },
+              "trainer_other": {
+                "instrumentation_seconds": {
+                  "expected": 0.011007347144186497,
+                  "max": 0.01119203663741549,
+                  "min": 0.010822657650957504
+                },
+                "seconds": {
+                  "expected": 0.27329808777819076,
+                  "max": 0.2744446663806836,
+                  "min": 0.27215150917569797
+                },
+                "wall_seconds": {
+                  "expected": 0.28430543492237725,
+                  "max": 0.2853785629073779,
+                  "min": 0.28323230693737667
+                }
+              }
+            },
+            "instrumentation_seconds": {
+              "expected": 0.14554283821648412,
+              "max": 0.14675255360392234,
+              "min": 0.14433312282904587
+            },
+            "interval_kind": "sum_of_component_process_mean_extrema_not_confidence_interval",
+            "seconds": {
+              "expected": 96.61753679371658,
+              "max": 97.38840681661245,
+              "min": 95.8466667708207
+            },
+            "wall_seconds": {
+              "expected": 96.76307963193307,
+              "max": 97.53338831046307,
+              "min": 95.99277095340305
+            }
+          },
+          "prediction_path": "<validation>/validation/llamafactory/empty_kernel_cache/future-prediction.json",
+          "report_paths": {
+            "calibration-1": "<validation>/validation/llamafactory/empty_kernel_cache/calibration-1/report.json",
+            "calibration-2": "<validation>/validation/llamafactory/empty_kernel_cache/calibration-2/report.json",
+            "holdout-1": "<validation>/validation/llamafactory/empty_kernel_cache/holdout-1/report.json",
+            "holdout-2": "<validation>/validation/llamafactory/empty_kernel_cache/holdout-2/report.json",
+            "holdout-3": "<validation>/validation/llamafactory/empty_kernel_cache/holdout-3/report.json"
+          },
+          "sealed_prediction": {
+            "plan_sha256": "ec4801f086639a07d524a8c89c4358950b629453077c251147317fd62aefcbce",
+            "prediction_sha256": "b3af7b93f675905513e16855a0ee80f1da1594c6ef36afc78ce0c9c30f34ab5f",
+            "sealed_at_utc": "2026-10-13T12:46:21.684656+00:00"
+          },
+          "target_components": 329
+        },
+        "populated_kernel_cache": {
+          "reason": "The first empty-cache calibration produced no files in any controlled kernel-cache directory; no dummy seed was created.",
+          "status": "unavailable"
+        }
+      },
+      "source_freeze_manifest": "source-freeze.json",
+      "status": "complete",
+      "summary_path": "<validation>/validation/llamafactory/summary.json"
+    }
+  },
+  "limitations": [
+    "Complete native span ends after the native call and final CUDA synchronization; process startup, report building and CLI output are excluded.",
+    "The five explicit input-directory manifests do not prove self-contained Triton dependencies or actual cache hits. Triton group metadata retains absolute references to the first empty-cache run. The formal Axolotl populated cohort additionally pins that original tree read-only and audits all referenced contents before and after every formal process. OS caches, dataset caches, clocks and system load remain inherited.",
+    "The original Axolotl populated calibration-1 finished before the source tree was made read-only, and calibration-2 was running at that time. Those calibrations and original holdouts-1/2 are diagnostic evidence, without retrospective claims of before/after dependency control. Four additional fixed processes provide two new calibrations and two new holdouts; original holdout-3 started after the new forecast seal and is reused as formal holdout-1 with explicit boundary audits.",
+    "Populated mode is unavailable when the first empty-cache run produced no artifacts. Read-only permission bits and boundary hashes are reproducibility evidence, not protection against an owner modifying permissions or ancestor directories, and do not establish control over all caches.",
+    "Formal forecasts were sealed before their holdout execution. Original diagnostic forecasts and comparisons are retained separately, including the original comparison for the reused physical process. Cost coverage is empirical and does not guarantee accuracy for another model, dataset, software stack, GPU, random sampler, packing or longer memory growth.",
+    "Allocated/reserved ranges are complete-run allocator observations, not confidence bounds, total device usage or additive per-window memory measurements.",
+    "OOM controls constrain the PyTorch per-process allocator fraction. They are real native training allocation failures and successful controls, not physical-card exhaustion or an exact minimum-VRAM determination.",
+    "Source checkpoint and framework installations were not modified. Path substitution changes bound identities, so this archive cannot be used as calibration input.",
+    "The first Hugging Face native calibration completed successfully, then an observation-validator allowlist rejected its framework during acceptance. Its raw report and failed matrix summary are preserved. Only the validator allowlist and one regression test changed between the original and final source freezes; collector and native matrix sources did not change. A separate continuation reused that calibration, ran one new calibration, then sealed predictions before three new holdouts."
+  ],
+  "physical_run_accounting": {
+    "allocator_controls": 6,
+    "diagnostic_only_native_processes": 4,
+    "formal_native_processes": 20,
+    "note": "Original Axolotl populated holdout-3 and controlled-populated holdout-1 are one physical process, compared against two different presealed calibration sets.",
+    "shared_formal_and_diagnostic_processes": 1,
+    "unique_native_processes_excluding_allocator_controls": 24
+  },
+  "purpose": "Complete path-redacted review records. Not reusable run reports or calibration inputs.",
+  "pytest": {
+    "command": [
+      "<user-home>/anaconda3/envs/fakegpu/bin/python",
+      "-m",
+      "pytest",
+      "-q"
+    ],
+    "counts": {
+      "error": 0,
+      "failed": 0,
+      "passed": 1370,
+      "skipped": 1
+    },
+    "cwd": "<repository>",
+    "elapsed_seconds": 101.01544385682791,
+    "finished_at_utc": "2026-10-13T13:36:47.846669+00:00",
+    "gpu_measurements": "Separate native processes completed before this CPU regression.",
+    "log_sha256": "c8e25972ae0a2b63f435a2b85461bfe1f92053d2a54ab56e730a0065fb21e05e",
+    "returncode": 0,
+    "started_at_utc": "2026-10-13T13:35:06.831232+00:00",
+    "summary": "........................................................................ [ 94%]\n................s....................................................... [ 99%]\n...                                                                      [100%]\n1370 passed, 1 skipped in 100.09s (0:01:40)"
+  },
+  "records_bundle": {
+    "compressed_bytes": 8786735,
+    "encoding": "gzip-compressed UTF-8 JSON",
+    "json_bytes": 60383807,
+    "logs": 47,
+    "path": "finetune_pipeline_validation_records.json.gz",
+    "records": 193,
+    "scripts": 18,
+    "sha256": "39952d2756039fd5bb204156f76fa4cc5db3e48cae3a541ad72763fd5c904e54"
+  },
+  "sampling": {
+    "accumulation": 2,
+    "attention": "sdpa",
+    "calibration_updates": 68,
+    "calibrations_per_available_regime": 2,
+    "eval_every_updates": 2,
+    "evaluation_batch_size": 2,
+    "evaluation_rows": 8,
+    "gradient_checkpointing": false,
+    "holdout_updates": 92,
+    "holdouts_per_available_regime": 3,
+    "microbatch": 3,
+    "packing": false,
+    "save_every_updates": 4,
+    "seed": 42,
+    "sequence_cap": 256,
+    "training_rows": 13,
+    "warmup_updates": 4
+  },
+  "schema_version": "fakegpu.finetune_pipeline_validation_evidence.v1",
+  "source_files_frozen": 129,
+  "source_freeze_manifests": {
+    "final": "source-freeze-final.json",
+    "original": "source-freeze.json"
+  },
+  "source_revision": {
+    "changes": {
+      "fakegpu/finetune_estimator.py": {
+        "after_sha256": "465be3eb6d7a0cc48a3c01be366dac81e6f8a1009009e98bc24990dd0fd61260",
+        "before_sha256": "46f09e6a8831e2e8145e8796c4436978da49929e362b5a55c8ee6b387245f78d",
+        "before_source_path": "<validation>/source-revisions/before-hf-validator-fix/fakegpu/finetune_estimator.py",
+        "patch": "--- fakegpu/finetune_estimator.py (before)\n+++ fakegpu/finetune_estimator.py (after)\n@@ -1131,6 +1131,7 @@\n                 raise FinetuneEstimateError(str(exc)) from exc\n             framework = observation.get(\"native_framework\")\n             if framework not in {\n+                \"huggingface\",\n                 \"llamafactory\",\n                 \"axolotl\",\n             } or framework != signature.get(\"source_framework\"):\n"
+      },
+      "tests/test_finetune_run_estimator.py": {
+        "after_sha256": "7b036624e80518854138f1e791e4bf10f5c722d6e95d95fad7a8eb5dce6c8953",
+        "before_sha256": "b04bba5562ee0a81f26d9a7048e9f965c4b6e1097093992adc0524fc870d7f1e",
+        "before_source_path": "<validation>/source-revisions/before-hf-validator-fix/tests/test_finetune_run_estimator.py",
+        "patch": "--- tests/test_finetune_run_estimator.py (before)\n+++ tests/test_finetune_run_estimator.py (after)\n@@ -136,6 +136,22 @@\n     assert result[\"timing\"][\"native_pipeline\"][\"seconds\"][\"expected\"] == 20\n \n \n+@pytest.mark.parametrize(\"framework\", [\"huggingface\", \"llamafactory\", \"axolotl\"])\n+def test_native_projection_accepts_each_supported_framework(native_run, framework):\n+    native_run[\"framework\"] = framework\n+    native_run[\"training_config\"][\"source_framework\"] = framework\n+    native_run[\"dataset\"][\"source_framework\"] = framework\n+    native_run[\"observation\"][\"native_framework\"] = framework\n+    native_run[\"observation\"][\"signature\"] = finetune_workload_signature(\n+        native_run[\"model_config\"], native_run[\"training_config\"], profile_id=\"a100\"\n+    )\n+    result = estimate_finetuning_run(native_run)\n+    assert result[\"timing\"][\"native_pipeline\"][\"seconds\"][\"expected\"] == 20\n+    native_run[\"observation\"][\"native_framework\"] = \"unsupported-framework\"\n+    with pytest.raises(ValueError, match=\"native framework\"):\n+        estimate_finetuning_run(native_run)\n+\n+\n def test_different_dataset_size_only_projects_training(native_run):\n     result = estimate_finetuning_run(native_run, num_samples=24, epochs=2, max_steps=-1)\n     assert result[\"timing\"][\"training_loop_seconds\"][\"expected\"] == 24\n"
+      }
+    },
+    "new_manifest": "source-freeze-final.json",
+    "old_manifest": "source-freeze.json",
+    "reason": "Successful first native Hugging Face run was rejected by an older observation validator allowlist. Add huggingface and a three-framework regression; training/observer/native entry point/matrix sources are unchanged. Preserve the original failed matrix and reuse its successful raw calibration without rewriting it.",
+    "recorded_at_utc": "2026-10-13T13:26:56.528460+00:00",
+    "schema_version": "fakegpu.validation_source_revision.v1",
+    "test_results": {
+      "final": "pytest-hf-validator-fix-final.log",
+      "initial": "pytest-hf-validator-fix.log (290 passed, two new-fixture failures due to inconsistent dataset framework, corrected only in fixture)"
+    }
+  },
+  "wheel": {
+    "all_wheel_and_installed_sources_match": true,
+    "historical_predictions_byte_identical": 152,
+    "legacy_qlora_reuse": {
+      "axolotl": {
+        "microsteps": 128,
+        "optimizer_steps": 64
+      },
+      "llamafactory": {
+        "microsteps": 128,
+        "optimizer_steps": 64
+      }
+    },
+    "python_S_cli_checks": [
+      "llamafactory-empty_kernel_cache/plan",
+      "llamafactory-empty_kernel_cache/budget",
+      "llamafactory-empty_kernel_cache/holdout-1/validation",
+      "llamafactory-empty_kernel_cache/holdout-2/validation",
+      "llamafactory-empty_kernel_cache/holdout-3/validation",
+      "axolotl-empty_kernel_cache/plan",
+      "axolotl-empty_kernel_cache/budget",
+      "axolotl-empty_kernel_cache/holdout-1/validation",
+      "axolotl-empty_kernel_cache/holdout-2/validation",
+      "axolotl-empty_kernel_cache/holdout-3/validation",
+      "axolotl-populated_kernel_cache-controlled/plan",
+      "axolotl-populated_kernel_cache-controlled/budget",
+      "axolotl-populated_kernel_cache-controlled/holdout-1/validation",
+      "axolotl-populated_kernel_cache-controlled/holdout-2/validation",
+      "axolotl-populated_kernel_cache-controlled/holdout-3/validation",
+      "huggingface-empty_kernel_cache/plan",
+      "huggingface-empty_kernel_cache/budget",
+      "huggingface-empty_kernel_cache/holdout-1/validation",
+      "huggingface-empty_kernel_cache/holdout-2/validation",
+      "huggingface-empty_kernel_cache/holdout-3/validation"
+    ],
+    "python_modules": 85,
+    "wheel_sha256": "336e2f1b3ea1edf5dc04c84e13034397c2c5f085972eca3b3a75595f52170024"
+  }
+}

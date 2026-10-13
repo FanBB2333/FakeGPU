@@ -58,4 +58,5 @@ def test_observed_native_events_match_real_cpu_trainer(tmp_path):
         else [0, 2, 4, 6, 7]
     )
     assert report["eval_steps"] == expected
+    assert report["timeline_passed"] is True
     assert report["passed"] is True

@@ -19,13 +19,20 @@ from typing import Any
 from uuid import uuid4
 
 from ._calibration_cuda import _reject_simulated_cuda_environment
+from ._finetune_allocator import capture_memory_allocator
 from ._finetune_batches import summarize_batch_updates, validate_batch_profile
+from ._finetune_cache import capture_cache_regime
 from ._finetune_events import summarize_phase_events, validate_event_profile
 from ._finetune_model import (
     actual_training_config as _actual_training_config,
     native_config_signature as _execution_signature,
 )
 from ._finetune_observer import NativeTrainerObserver, capture_native_trainer
+from ._finetune_timeline import (
+    SCHEMA_VERSION as TIMELINE_SCHEMA,
+    build_native_timeline,
+    validate_native_timeline,
+)
 from ._local_checkpoint import bind_local_checkpoint
 from .finetune_config import normalize_finetune_config
 from .finetune_data import profile_tokenized_records
@@ -36,14 +43,22 @@ from .structured_io import load_mapping
 
 
 _RUN_LOCK = threading.Lock()
+_NATIVE_FRAMEWORKS = {"huggingface", "llamafactory", "axolotl"}
 
 
 def native_training_versions(framework: str) -> dict[str, str]:
     """Read package metadata without importing an optional training framework."""
-    if framework not in {"llamafactory", "axolotl"}:
-        raise ValueError("native framework must be llamafactory or axolotl")
+    if framework not in _NATIVE_FRAMEWORKS:
+        raise ValueError(
+            "native framework must be huggingface, llamafactory or axolotl"
+        )
     versions = installed_training_versions()
-    for package in (framework, "datasets", "trl"):
+    packages = (
+        ("datasets", "trl")
+        if framework == "huggingface"
+        else (framework, "datasets", "trl")
+    )
+    for package in packages:
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -52,8 +67,10 @@ def native_training_versions(framework: str) -> dict[str, str]:
 
 
 def _prepare_config(path: Path, framework: str, warmup_steps: int):
-    if framework not in {"llamafactory", "axolotl"}:
-        raise ValueError("native framework must be llamafactory or axolotl")
+    if framework not in _NATIVE_FRAMEWORKS:
+        raise ValueError(
+            "native framework must be huggingface, llamafactory or axolotl"
+        )
     if (
         isinstance(warmup_steps, bool)
         or not isinstance(warmup_steps, int)
@@ -133,6 +150,10 @@ def _prepare_config(path: Path, framework: str, warmup_steps: int):
         raise ValueError(
             "native runner requires a fresh output_dir to avoid automatic resume"
         )
+    if framework == "huggingface":
+        from ._finetune_hf_runner import validate_huggingface_config
+
+        validate_huggingface_config(raw, config, path.parent)
     return raw, config, model_config, model_dir
 
 
@@ -147,7 +168,14 @@ def _native_directory(path: Path):
 
 
 def _invoke_native(framework, config_path, raw):
-    if framework == "llamafactory":
+    if framework == "huggingface":
+        from ._finetune_hf_runner import invoke_huggingface
+
+        normalized = normalize_finetune_config(
+            raw, framework=framework, base_dir=config_path.parent
+        )
+        invoke_huggingface(raw, normalized)
+    elif framework == "llamafactory":
         from llamafactory.train.tuner import run_exp
 
         run_exp(args=raw)
@@ -160,7 +188,12 @@ def _invoke_native(framework, config_path, raw):
 
 
 def run_finetuning(
-    config_path: str | Path, *, framework: str, profile_id: str, warmup_steps: int = 2
+    config_path: str | Path,
+    *,
+    framework: str,
+    profile_id: str,
+    warmup_steps: int = 2,
+    cache_regime: str = "uncontrolled",
 ) -> dict[str, Any]:
     """Run native SFT; return evidence only after successful finite GPU updates.
 
@@ -169,6 +202,7 @@ def run_finetuning(
     from steady timing samples, independently of the native LR warmup setting.
     """
     started = time.perf_counter()
+    cache_evidence = capture_cache_regime(cache_regime)
     run_identity = {
         "uuid": str(uuid4()),
         "pid": os.getpid(),
@@ -202,6 +236,7 @@ def run_finetuning(
             raise ValueError("selected CUDA GPU does not match the requested profile")
         if config["dtype"] == "bf16" and not torch.cuda.is_bf16_supported():
             raise ValueError("selected CUDA GPU does not support BF16")
+        memory_allocator = capture_memory_allocator(torch)
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
         hash_started = time.perf_counter()
@@ -211,6 +246,7 @@ def run_finetuning(
         config["native_execution_signature"] = _execution_signature(raw)
         config["batch_observation_version"] = "fakegpu.finetune_batches.v1"
         config["event_observation_version"] = "fakegpu.finetune_events.v1"
+        config["timeline_observation_version"] = TIMELINE_SCHEMA
         state = {}
 
         def inspect_trainer(trainer):
@@ -250,6 +286,8 @@ def run_finetuning(
         torch.cuda.synchronize()
         observer.record_peaks()
         finished = time.perf_counter()
+        if capture_memory_allocator(torch) != memory_allocator:
+            raise RuntimeError("native execution changed CUDA allocator configuration")
         if observer.trainer is None or observer.outcome is None:
             raise RuntimeError(
                 "native framework did not complete an observed Trainer.train call"
@@ -328,6 +366,7 @@ def run_finetuning(
             ],
             "peak_allocated_bytes": observer.peak_allocated,
             "peak_reserved_bytes": observer.peak_reserved,
+            "memory_allocator": memory_allocator,
             "initialization_seconds": timing["setup_seconds"],
             "checkpoint_hash_seconds": hash_seconds,
             "checkpoint_identity": checkpoint_identity,
@@ -363,6 +402,7 @@ def run_finetuning(
             "batch_profile": summarize_batch_updates(observer.updates),
             "phase_events": observer.phase_events,
             "event_profile": summarize_phase_events(observer.phase_events),
+            "instrumentation_intervals": observer.instrumentation_intervals,
             "limitations": [
                 "Update timing includes accumulation-window prefetch and forward/backward/optimizer work; evaluation and checkpoint events are timed separately.",
                 "Allocator peaks include initialization, training and final saves; they are not total device usage.",
@@ -378,6 +418,15 @@ def run_finetuning(
         }
         validate_batch_profile(observation)
         validate_event_profile(observation, timing=timing)
+        observation["timeline"] = build_native_timeline(
+            observer.updates,
+            observer.phase_events,
+            observer.instrumentation_intervals,
+            trainer_start_seconds=observer.trainer_started - started,
+            trainer_end_seconds=observer.trainer_finished - started,
+            run_end_seconds=finished - started,
+        )
+        validate_native_timeline(observation, timing=timing)
         args = observer.trainer.args
         schedule = {
             key: getattr(getattr(args, key, "no"), "value", getattr(args, key, "no"))
@@ -387,6 +436,12 @@ def run_finetuning(
             requested_eval_steps=args.eval_steps,
             requested_save_steps=args.save_steps,
             resolved_eval_steps=observer.trainer.state.eval_steps,
+            logging_strategy=getattr(
+                args.logging_strategy, "value", args.logging_strategy
+            ),
+            requested_logging_steps=args.logging_steps,
+            resolved_logging_steps=observer.trainer.state.logging_steps,
+            logging_first_step=args.logging_first_step,
             resolved_save_steps=observer.trainer.state.save_steps,
             eval_on_start=args.eval_on_start,
             eval_delay=args.eval_delay,
@@ -399,6 +454,7 @@ def run_finetuning(
         return {
             "schema_version": "fakegpu.finetune_run.v1",
             "run_identity": run_identity,
+            "cache_regime": cache_evidence,
             "profile_id": profile_id,
             "framework": framework,
             "model_config": model_config,

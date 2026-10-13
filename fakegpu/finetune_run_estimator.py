@@ -7,8 +7,11 @@ import math
 from typing import Any
 
 from ._finetune_batches import validate_batch_profile
+from ._finetune_allocator import validate_memory_allocator
+from ._finetune_cache import validate_cache_regime
 from ._finetune_events import validate_event_profile
 from ._finetune_model import native_config_signature, native_execution_signature
+from ._finetune_timeline import validate_native_timeline
 from .finetune_data_report import apply_dataset_report
 from .finetune_estimator import (
     FinetuneEstimateError,
@@ -64,7 +67,7 @@ def validate_native_run(
     ):
         raise FinetuneEstimateError("unsupported native fine-tuning run schema")
     framework = run.get("framework")
-    if framework not in {"llamafactory", "axolotl"}:
+    if framework not in {"huggingface", "llamafactory", "axolotl"}:
         raise FinetuneEstimateError("unsupported native framework")
     for key in (
         "training_config",
@@ -88,6 +91,11 @@ def validate_native_run(
     try:
         validate_batch_profile(observation)
         validate_event_profile(observation, timing=run["timing"])
+        validate_native_timeline(observation, timing=run["timing"])
+        if "cache_regime" in run:
+            validate_cache_regime(run["cache_regime"])
+        if "memory_allocator" in observation:
+            validate_memory_allocator(observation["memory_allocator"])
     except ValueError as exc:
         raise FinetuneEstimateError(str(exc)) from exc
     dataset_digest = run["dataset"].get("provenance", {}).get("content_sha256")

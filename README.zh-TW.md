@@ -955,7 +955,7 @@ python -m fakegpu estimate-finetune \
 不能證明框架已執行。Packed 訓練需要最終處理後的序列計數，不能使用原始筆數或
 通用串接情境代替。
 
-`run-finetune` 在一張實體 CUDA 顯示卡上呼叫已安裝的 LLaMA-Factory 或 Axolotl
+`run-finetune` 在一張實體 CUDA 顯示卡上呼叫已安裝的 HF Trainer/PEFT、LLaMA-Factory 或 Axolotl
 原生流程，支援本機未量化文字 checkpoint、無 packing 的全量微調、LoRA 與
 bitsandbytes 4-bit QLoRA。輸入應為
 包含資料與輸出路徑的完整原生設定，相對路徑以設定檔目錄解析。報告記錄原生
@@ -1036,6 +1036,57 @@ python -m fakegpu validate-finetune-windows --event-context --epoch-context \
   --holdout-run holdout.json --json epoch-window-validation.json
 ```
 
+`plan-finetune-pipeline` 從校準執行中完整觀測到的 epoch 推導未來輪次或更新次數，
+在目標訓練啟動前產生計畫。`estimate-finetune-pipeline` 使用至少兩次獨立校準，
+組合 setup、warmup、首次視窗、訓練視窗、評估、checkpoint、Trainer 間隙與收尾。
+新執行報告提供互不重疊的時間帳本，分別保留原始牆鐘時間及已測統計開銷。計時止於
+原生呼叫及最後 CUDA 同步，不包含 Python 程序啟動、報告建構或 CLI 寫檔。
+時間區間由各部件程序均值的極值組合而成，不是信賴區間；任一部件缺少獨立覆蓋
+都會明確拒絕預測。
+
+未來排程首版支援無 packing、保留尾批次的循序文字資料：HF Trainer 5.6.0 和
+LLaMA-Factory 0.9.5 / Transformers 5.6.0 要求 `disable_shuffling: true`；
+Axolotl 0.18.0 / Transformers 5.14.1 要求 `curriculum_sampling: true`。
+會核對實際 batch 順序、評估/儲存排程、小數輪次及末尾事件。資料、模型、硬體和
+執行設定須符合校準；改變資料筆數需要新的匹配校準。日誌須關閉或每次 update
+記錄；checkpoint 輪替刪除和最佳模型重新載入仍需要獨立支援。
+
+```bash
+python -m fakegpu plan-finetune-pipeline \
+  --run-report calibration-1.json --epochs 30 --json future-plan.json
+python -m fakegpu estimate-finetune-pipeline \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --plan future-plan.json --memory-budget-gib 24 --reserve-gib 1 --json budget.json
+python -m fakegpu validate-finetune-pipeline \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json validation.json
+```
+
+記憶體結果為同一 GPU 和 allocator 上已覆蓋工作量的完整執行 allocated/reserved 峰值
+包絡，不相加各視窗峰值，也不代表已投射到一張更小的實體卡。
+`--reserve-gib` 是使用者指定的餘量；落在包絡內不保證不會 OOM。
+`validate-finetune-pipeline` 分別報告 holdout 時間誤差和記憶體低估；實際記憶體分配失敗
+透過另外的真實訓練驗證。
+
+`run-finetune --cache-regime empty_kernel_cache` 要求明確設定五個互不重疊、已存在
+且為空的目錄：`TRITON_CACHE_DIR`、`TORCHINDUCTOR_CACHE_DIR`、`CUDA_CACHE_PATH`、
+`TORCH_EXTENSIONS_DIR`、`PYTORCH_KERNEL_CACHE_PATH`。
+`populated_kernel_cache` 記錄其中全部檔案的相對路徑、大小和 SHA256；每次獨立
+執行應複製同一份種子到新目錄。runner 不建立、清理或預熱快取。這僅控制指定
+目錄，不代表 OS 檔案快取或所有函式庫快取均受控；預設 `uncontrolled` 不作快取狀態
+承諾，也不能與受控校準混用。檔案清單不證明實際 cache 命中或外部相依完整：
+Triton group 中繼資料可能仍透過絕對路徑引用原快取，必須保留並固定這些檔案；
+本輪驗證另外凍結、核對了該相依。
+
+HF 原生入口接收平鋪設定及每行恰好包含 `input_ids`、`attention_mask`、`labels` 的
+processed JSONL：三個等長整數陣列、二值 attention mask，padding 前長度為 2 到
+`sequence_length`；本機 tokenizer 須已有 pad token，不隱式斷詞或截斷。使用 [原生 LoRA 範例](examples/finetuning/huggingface-native-lora.yaml)
+並向 `run-finetune` 傳入 `--framework huggingface`；既有定長 `probe-finetune` 仍可使用。
+
+[完整流水線驗收紀錄](tests/data/finetune_pipeline_validation_evidence.json) 彙整三框架
+30 個原生程序，包含獨立的 allocator OOM 對照。分階段誤差、快取條件及未涵蓋範圍
+見 [`refactor.md`](refactor.md)。
+
 支援標準梯度檢查點。LLaMA-Factory 使用 `disable_gradient_checkpointing: false`，
 並透過 `use_reentrant_gc: true` 或 `false` 選擇實作；Axolotl 使用
 `gradient_checkpointing: true` 與 `gradient_checkpointing_kwargs: {use_reentrant: true}`
@@ -1071,7 +1122,8 @@ LLaMA-Factory 使用 `--framework llamafactory` 與
 [`llamafactory-native-lora.yaml`](examples/finetuning/llamafactory-native-lora.yaml)。應在**同一 Python
 環境**重用 `--run-report`：CLI 會核對目前本機權重、模型設定及軟體版本與執行紀錄
 的身分一致性。有效資料內容摘要與實測形狀仍綁定在報告中，GPU profile 預設沿用
-報告值；目前外推要求固定形狀的完整 batch。原生流程總耗時僅在相同資料與本機
+報告值。上述舊 `estimate-finetune` 單報告介面要求固定形狀的完整 batch；其原生
+流程總耗時僅在相同資料與本機
 快取狀態、無週期性評估或 checkpoint 儲存時，重用一次實測的啟動、warmup 與最終
 儲存開銷。改變 `--num-samples` 僅提供訓練迴圈情境，不外推未測量的資料準備與
 載入時間。這些情境不是信賴區間，也不包含 Python 程序啟動或下載。
@@ -1168,9 +1220,12 @@ Blackwell GPU 上全量、LoRA、bitsandbytes QLoRA 的獨立校準與複測，�
 | `fakegpu estimate-finetune` | 依框架設定估算單卡全量/LoRA/QLoRA 的步數、時間與 GPU 記憶體 |
 | `fakegpu probe-finetune` | 在實體 CUDA GPU 蒐集固定形狀 Hugging Face Trainer 時間與記憶體 |
 | `fakegpu profile-finetune-data` | 完整掃描本機 JSONL 的 token 長度、截斷、padding 與處理後序列數 |
-| `fakegpu run-finetune` | 執行 LLaMA-Factory/Axolotl 原生訓練並記錄資料、CUDA 時間、記憶體及最終儲存 |
+| `fakegpu run-finetune` | 執行 HF Trainer/PEFT、LLaMA-Factory 或 Axolotl 原生訓練並記錄資料、CUDA 時間、記憶體及最終儲存 |
 | `fakegpu validate-finetune-windows` | 使用獨立校準與 holdout 訓練驗證動態視窗耗時 |
 | `fakegpu validate-finetune-events` | 使用獨立原生事件記錄驗證評估與 checkpoint 成本 |
+| `fakegpu plan-finetune-pipeline` | 從校準循序資料推導未來原生訓練輪次或更新數 |
+| `fakegpu estimate-finetune-pipeline` | 估算完整原生執行時間和已覆蓋記憶體包絡 |
+| `fakegpu validate-finetune-pipeline` | 對照獨立原生訓練驗證完整時間和記憶體預測 |
 | `fakegpu simulate-topology` | 模擬 collective 路由與鏈路競爭 |
 | `fakegpu replay-trace` | 彙整運算、通訊、等待與 GPU 記憶體時間軸 |
 | `fakegpu calibrate` | 整理 serving 觀測、比較 GPU 記憶體報告並執行可靠性門檻檢查 |

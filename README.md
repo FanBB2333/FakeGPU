@@ -1043,7 +1043,7 @@ label records provenance only; it does not attest that the framework ran.
 Packed training requires final processed sequence counts, rather than a raw-row
 or generic concatenation scenario.
 
-`run-finetune` invokes the installed LLaMA-Factory or Axolotl native pipeline on
+`run-finetune` invokes the installed Hugging Face Trainer/PEFT, LLaMA-Factory or Axolotl native pipeline on
 one physical CUDA GPU. It supports full fine-tuning, LoRA, and bitsandbytes 4-bit
 QLoRA with a local unquantized text checkpoint and unpacked data. Use a complete native config, including dataset
 and output paths; relative paths resolve from the config directory. The report
@@ -1141,6 +1141,72 @@ python -m fakegpu validate-finetune-windows --event-context --epoch-context \
   --holdout-run holdout.json --json epoch-window-validation.json
 ```
 
+`plan-finetune-pipeline` projects future epochs or optimizer updates from a
+calibration run's complete observed epoch, before the target training runs.
+`estimate-finetune-pipeline` combines at least two independent calibrations into
+a complete native execution budget: setup, warmup and first occurrences, ordered
+training windows, evaluation, checkpoints, Trainer gaps, and finalization.
+New run reports provide a non-overlapping timeline and separate raw wall time
+from measured instrumentation. The span ends after the native call and final
+CUDA synchronization; Python process startup, report construction, and CLI
+output are outside it. Time ranges combine the extrema of per-process component means; they are not
+confidence intervals. Every component must have independent coverage; missing costs fail
+explicitly.
+
+The future schedule adapter supports unpacked, sequential text datasets with
+retained tail batches: Hugging Face Trainer (Transformers 5.6.0) and LLaMA-Factory 0.9.5 /
+Transformers 5.6.0 require `disable_shuffling: true`; Axolotl 0.18.0 /
+Transformers 5.14.1 requires `curriculum_sampling: true`. It verifies the actual
+observed batch sequence and eval/save schedule, including fractional epochs
+and terminal events. The dataset, model, hardware and execution settings must
+match calibration; changing the number of dataset rows requires a new matching
+calibration. Logging is disabled or performed every update; checkpoint rotation
+and best-model reload require additional calibration support.
+
+```bash
+python -m fakegpu plan-finetune-pipeline \
+  --run-report calibration-1.json --epochs 30 --json future-plan.json
+python -m fakegpu estimate-finetune-pipeline \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --plan future-plan.json --memory-budget-gib 24 --reserve-gib 1 --json budget.json
+python -m fakegpu validate-finetune-pipeline \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json validation.json
+```
+
+The memory result is the observed full-run CUDA allocated/reserved peak envelope
+for a covered workload on the same GPU and allocator. This does not project to a
+smaller physical card. Per-window peaks are not added. The optional reserve is
+a user-selected margin; fitting this envelope does not prove OOM safety.
+`validate-finetune-pipeline` compares against an independent holdout run and
+reports timing errors and memory underestimation. Actual allocation failures are tested separately.
+
+`run-finetune --cache-regime empty_kernel_cache` requires five explicitly set,
+distinct existing empty directories: `TRITON_CACHE_DIR`,
+`TORCHINDUCTOR_CACHE_DIR`, `CUDA_CACHE_PATH`, `TORCH_EXTENSIONS_DIR`, and
+`PYTORCH_KERNEL_CACHE_PATH`. `populated_kernel_cache` records every file's
+relative path, size and SHA256; replicate the same seed into fresh directories
+for independent runs. The runner never creates, clears or warms these caches.
+These modes control only the named directories, not OS file caches or all
+library caches. Default `uncontrolled` reports make no cache-state claim and
+cannot be mixed with controlled calibration. File manifests do not certify
+cache hits or external file dependencies: Triton group metadata can retain
+absolute references to the original cache. Keep those files available and
+unchanged. This experiment separately fixed and audited that dependency.
+
+Hugging Face native runs use a flat config and processed JSONL rows containing
+exactly `input_ids`, `attention_mask` and `labels`: equal-length integer arrays,
+a binary attention mask, and 2 through `sequence_length` tokens before padding.
+The local tokenizer must have a pad token. No implicit tokenization or truncation
+is applied. See [the native LoRA example](examples/finetuning/huggingface-native-lora.yaml)
+and pass `--framework huggingface` to `run-finetune`. The original
+`probe-finetune` fixed-shape workflow remains available.
+
+The [complete pipeline validation record](tests/data/finetune_pipeline_validation_evidence.json)
+summarizes 30 native processes across all three frameworks, including separate
+allocator OOM controls. See [`refactor.md`](refactor.md) for phase-level errors,
+cache conditions and the remaining coverage limits.
+
 Standard gradient checkpointing is supported. LLaMA-Factory uses
 `disable_gradient_checkpointing: false` with `use_reentrant_gc: true` or `false`;
 Axolotl uses `gradient_checkpointing: true` with
@@ -1182,8 +1248,9 @@ For LLaMA-Factory, use `--framework llamafactory` with
 `--run-report` in the same Python environment: the CLI checks the current local
 weights, model config, and software identity against the recorded execution.
 The effective dataset fingerprint and measured shapes remain bound to the
-report; the GPU profile defaults to the report's profile. Extrapolation currently
-requires fixed full batches. The native pipeline total reuses one measured
+report; the GPU profile defaults to the report's profile. This legacy
+`estimate-finetune` single-report interface requires fixed full batches. Its
+native pipeline total reuses one measured
 setup/warmup/final-save cost only for the same dataset and local cache state,
 with no periodic evaluation or checkpoint schedule. A different `--num-samples`
 provides a training-loop scenario; its unmeasured preprocessing and loading costs
@@ -1300,9 +1367,12 @@ maintained in [`refactor.md`](refactor.md).
 | `fakegpu estimate-finetune` | Estimate single-GPU full/LoRA/QLoRA training steps, time, and VRAM from framework configs |
 | `fakegpu probe-finetune` | Collect fixed-shape Hugging Face Trainer timing and memory on a physical CUDA GPU |
 | `fakegpu profile-finetune-data` | Scan local JSONL data for token lengths, truncation, padding, and processed sequence counts |
-| `fakegpu run-finetune` | Run native LLaMA-Factory/Axolotl training and record data, CUDA timing, memory, and final saving |
+| `fakegpu run-finetune` | Run native HF Trainer/PEFT, LLaMA-Factory or Axolotl training and record data, CUDA timing, memory, and final saving |
 | `fakegpu validate-finetune-windows` | Validate dynamic window timing using independent calibration and holdout runs |
 | `fakegpu validate-finetune-events` | Validate evaluation and checkpoint costs from independent native event records |
+| `fakegpu plan-finetune-pipeline` | Plan future native epochs/updates from a calibrated sequential dataset |
+| `fakegpu estimate-finetune-pipeline` | Estimate complete native execution time and a covered memory envelope |
+| `fakegpu validate-finetune-pipeline` | Compare full-span time and memory predictions against independent native runs |
 | `fakegpu simulate-topology` | Model collective routes and link contention |
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
 | `fakegpu calibrate` | Build serving observations, compare memory reports, and enforce reliability gates |
@@ -1479,7 +1549,7 @@ environments, binary assets, and design drafts are excluded through
 - [ ] Add real-GPU LLM validation for long-context and online-serving workloads
 - [ ] Add real-GPU diffusion validation plus training and DiT memory models
 - [ ] Validate distributed and MoE estimates across more GPU and software stacks
-- [ ] Validate LLaMA-Factory and Axolotl execution with their own real-GPU runners
+- [x] Validate LLaMA-Factory and Axolotl native runners on the documented Qwen3.5 single-GPU scenarios
 
 See the [open issues](https://github.com/FanBB2333/FakeGPU/issues) for proposed
 features and known limitations.

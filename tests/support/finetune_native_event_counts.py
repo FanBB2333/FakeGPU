@@ -6,6 +6,7 @@ CPU durations do not establish GPU evaluation or storage throughput accuracy.
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import sys
 import time
@@ -14,6 +15,11 @@ import transformers
 
 from fakegpu._finetune_observer import NativeTrainerObserver, capture_native_trainer
 from fakegpu._finetune_events import summarize_phase_events
+from fakegpu._finetune_timeline import (
+    SCHEMA_VERSION as TIMELINE_SCHEMA,
+    build_native_timeline,
+    validate_native_timeline,
+)
 
 import finetune_native_batch_counts as support
 
@@ -108,6 +114,7 @@ def main():
         trainer.train()
         trainer.evaluate()
         trainer.save_model(str(output / "final"))
+    finished = time.perf_counter()
     assert trainer.prediction_step == original_predict
     assert not observer._restores
     ledger = observer.phase_events
@@ -172,6 +179,43 @@ def main():
         < 1e-6
     )
     summary = summarize_phase_events(ledger)
+    timeline = build_native_timeline(
+        observer.updates,
+        ledger,
+        observer.instrumentation_intervals,
+        trainer_start_seconds=observer.trainer_started - started,
+        trainer_end_seconds=observer.trainer_finished - started,
+        run_end_seconds=finished - started,
+    )
+    validate_native_timeline(
+        {
+            "signature": {
+                "timeline_observation_version": TIMELINE_SCHEMA,
+                "event_observation_version": "fakegpu.finetune_events.v1",
+            },
+            "updates": observer.updates,
+            "phase_events": ledger,
+            "event_profile": summary,
+            "instrumentation_intervals": observer.instrumentation_intervals,
+            "timeline": timeline,
+            "workload": {"optimizer_steps": len(observer.updates)},
+        }
+    )
+    segments = timeline["segments"]
+    assert all(
+        left["end_seconds"] == right["start_seconds"]
+        for left, right in zip(segments, segments[1:])
+    )
+    assert math.isclose(
+        sum(row["wall_seconds"] for row in segments), finished - started
+    )
+    assert math.isclose(
+        sum(row["instrumentation_seconds"] for row in segments),
+        observer.instrumentation_seconds,
+    )
+    assert [row["event_id"] for row in segments if row["event_id"]] == [
+        event["event_id"] for event in roots
+    ]
     report = {
         "transformers": transformers.__version__,
         "events": ledger,
@@ -179,6 +223,8 @@ def main():
         "eval_steps": [e["optimizer_step"] for e in evals],
         "checkpoint_steps": reference.checkpoints,
         "updates": len(observer.updates),
+        "timeline": timeline,
+        "timeline_passed": True,
         "passed": True,
     }
     (output / "native-event-counts.json").write_text(
@@ -189,7 +235,7 @@ def main():
             {
                 key: value
                 for key, value in report.items()
-                if key not in ("events", "profile")
+                if key not in ("events", "profile", "timeline")
             }
         )
     )

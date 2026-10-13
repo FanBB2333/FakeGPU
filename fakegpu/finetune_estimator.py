@@ -103,6 +103,7 @@ def finetune_workload_signature(
         "gradient_checkpointing_kwargs",
         "batch_observation_version",
         "event_observation_version",
+        "timeline_observation_version",
     ):
         if key in training_config:
             fields[key] = training_config[key]
@@ -1130,6 +1131,7 @@ def _validate_observation(
                 raise FinetuneEstimateError(str(exc)) from exc
             framework = observation.get("native_framework")
             if framework not in {
+                "huggingface",
                 "llamafactory",
                 "axolotl",
             } or framework != signature.get("source_framework"):

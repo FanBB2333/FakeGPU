@@ -26,6 +26,7 @@ class NativeTrainerObserver:
         self.shapes = Counter()
         self.microsteps = self.samples = 0
         self.instrumentation_seconds = 0.0
+        self.instrumentation_intervals = []
         self.batch_instrumentation_seconds = 0.0
         self.trainer_started = self.trainer_finished = None
         self.phases = Counter()
@@ -33,9 +34,8 @@ class NativeTrainerObserver:
         self.during_train_phases = Counter()
         self.during_train_events = Counter()
         self._restores = []
-        self.event_observer = NativeEventObserver(
-            self, time.perf_counter() if run_started is None else run_started
-        )
+        self.run_started = time.perf_counter() if run_started is None else run_started
+        self.event_observer = NativeEventObserver(self, self.run_started)
         self.phase_events = self.event_observer.ledger
         self._preceding_event_ids = []
         self._inside_train = False
@@ -53,6 +53,19 @@ class NativeTrainerObserver:
     @property
     def event_instrumentation_seconds(self):
         return self.event_observer.instrumentation_seconds
+
+    def _finish_instrumentation(self, kind, started):
+        finished = time.perf_counter()
+        elapsed = finished - started
+        self.instrumentation_seconds += elapsed
+        self.instrumentation_intervals.append(
+            {
+                "kind": kind,
+                "start_seconds": started - self.run_started,
+                "end_seconds": finished - self.run_started,
+                "seconds": elapsed,
+            }
+        )
 
     def record_peaks(self):
         # Native memory trackers may reset allocator peaks between phases.
@@ -90,7 +103,7 @@ class NativeTrainerObserver:
             )
         started = time.perf_counter()
         self.on_trainer(trainer)
-        self.instrumentation_seconds += time.perf_counter() - started
+        self._finish_instrumentation("trainer_inspection", started)
         batch_samples = trainer.get_batch_samples
         training_step = trainer.training_step
 
@@ -152,7 +165,7 @@ class NativeTrainerObserver:
                 started = time.perf_counter()
                 observer.on_train_begin(trainer)
                 observer._before_weights = observer._weight_samples()
-                observer.instrumentation_seconds += time.perf_counter() - started
+                observer._finish_instrumentation("train_begin_inspection", started)
 
             def on_step_begin(self, args, state, control, **kwargs):
                 if observer._update_started is None:
@@ -176,7 +189,7 @@ class NativeTrainerObserver:
                     "changed_sampled_tensors": changed,
                     "has_changed_trainable_parameters": changed > 0,
                 }
-                observer.instrumentation_seconds += time.perf_counter() - started
+                observer._finish_instrumentation("train_end_parameter_check", started)
 
         self.callback = TimingCallback()
         trainer.add_callback(self.callback)
@@ -195,7 +208,8 @@ class NativeTrainerObserver:
 
     def _finish_update(self, step):
         self.torch.cuda.synchronize()
-        wall_seconds = time.perf_counter() - self._update_started
+        finished = time.perf_counter()
+        wall_seconds = finished - self._update_started
         elapsed = wall_seconds - self._update_batch_seconds
         self.record_peaks()
         if self._update_microsteps < 1 or step != len(self.updates) + 1:
@@ -210,11 +224,13 @@ class NativeTrainerObserver:
         losses = [float(loss.item()) for loss in self._losses]
         if not all(math.isfinite(loss) for loss in losses):
             raise RuntimeError("native training produced a nonfinite microstep loss")
-        self.instrumentation_seconds += time.perf_counter() - started
+        self._finish_instrumentation("loss_collection", started)
         self.updates.append(
             {
                 "optimizer_step": step,
                 "preceding_event_ids": self._preceding_event_ids,
+                "start_seconds": self._update_started - self.run_started,
+                "end_seconds": finished - self.run_started,
                 "seconds": elapsed,
                 "wall_seconds": wall_seconds,
                 "batch_instrumentation_seconds": self._update_batch_seconds,

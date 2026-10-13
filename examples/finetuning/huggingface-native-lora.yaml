@@ -1,0 +1,43 @@
+# Flat native Trainer configuration. Prepare local processed JSONL first;
+# every row must contain exactly input_ids, attention_mask and labels:
+# equal-length integer arrays, binary mask, 2..sequence_length tokens.
+# The local tokenizer must already define its pad token.
+model_name_or_path: /tmp/fakegpu-finetune/qwen35-text
+train_dataset: /tmp/fakegpu-finetune/processed/train.jsonl
+eval_dataset: /tmp/fakegpu-finetune/processed/eval.jsonl
+output_dir: /tmp/fakegpu-finetune/huggingface-output
+sequence_length: 256
+disable_shuffling: true
+pad_to_multiple_of: 8
+attn_implementation: sdpa
+parameter_dtype: bfloat16
+bf16: true
+tf32: false
+do_train: true
+do_eval: true
+per_device_train_batch_size: 3
+per_device_eval_batch_size: 2
+gradient_accumulation_steps: 2
+gradient_checkpointing: false
+num_train_epochs: 3
+eval_strategy: steps
+eval_steps: 2
+save_strategy: steps
+save_steps: 4
+save_only_model: false
+logging_strategy: steps
+logging_steps: 1
+learning_rate: 0.00002
+lr_scheduler_type: constant
+optim: adamw_torch
+seed: 42
+data_seed: 42
+dataloader_num_workers: 0
+report_to: none
+peft:
+  r: 8
+  lora_alpha: 16
+  target_modules: [q_proj, v_proj]
+  lora_dropout: 0.0
+  bias: none
+  task_type: CAUSAL_LM

@@ -297,7 +297,7 @@ def probe_main(argv: Sequence[str] | None = None) -> int:
 def run_main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog=command_prog(__name__, "run_main"),
-        description="Run native LLaMA-Factory or Axolotl training and record data, timing and CUDA memory.",
+        description="Run Hugging Face Trainer, LLaMA-Factory or Axolotl and record data, timing and CUDA memory.",
     )
     parser.add_argument(
         "--config",
@@ -305,7 +305,7 @@ def run_main(argv: Sequence[str] | None = None) -> int:
         help="Native framework config; relative paths resolve from its directory.",
     )
     parser.add_argument(
-        "--framework", required=True, choices=("llamafactory", "axolotl")
+        "--framework", required=True, choices=("huggingface", "llamafactory", "axolotl")
     )
     parser.add_argument("--profile", required=True)
     parser.add_argument(
@@ -315,15 +315,27 @@ def run_main(argv: Sequence[str] | None = None) -> int:
         help="Initial optimizer updates excluded from steady timing.",
     )
     parser.add_argument("--output", required=True, help="Run report JSON path.")
+    parser.add_argument(
+        "--cache-regime",
+        choices=("uncontrolled", "empty_kernel_cache", "populated_kernel_cache"),
+        default="uncontrolled",
+        help="Verify explicit kernel-cache directory contents before training; never clears caches.",
+    )
     args = parser.parse_args(argv)
     try:
         from .finetune_runner import run_finetuning
 
+        options = (
+            {"cache_regime": args.cache_regime}
+            if args.cache_regime != "uncontrolled"
+            else {}
+        )
         report = run_finetuning(
             args.config,
             framework=args.framework,
             profile_id=args.profile,
             warmup_steps=args.warmup_steps,
+            **options,
         )
         emit_json(args.output, report)
     except (OSError, ValueError, TypeError, ImportError, RuntimeError) as exc:
@@ -339,20 +351,25 @@ def _validation_main(
         prog=command_prog(__name__, entrypoint), description=description
     )
     parser.add_argument(
-        "--calibration-run", action="append", required=True,
+        "--calibration-run",
+        action="append",
+        required=True,
         help="Native run JSON; repeat for at least two independent calibration processes.",
     )
     parser.add_argument(
-        "--holdout-run", required=True,
+        "--holdout-run",
+        required=True,
         help="Independent native run JSON to predict and compare.",
     )
     if allow_window_context:
         parser.add_argument(
-            "--event-context", action="store_true",
+            "--event-context",
+            action="store_true",
             help="Match steady windows using their recorded evaluation/checkpoint history.",
         )
         parser.add_argument(
-            "--epoch-context", action="store_true",
+            "--epoch-context",
+            action="store_true",
             help="Also match each consumed batch's recorded position within its epoch.",
         )
     add_json_path_argument(parser)
@@ -378,7 +395,8 @@ def windows_main(argv: Sequence[str] | None = None) -> int:
     from .finetune_window_estimator import estimate_finetuning_windows
 
     return _validation_main(
-        argv, entrypoint="windows_main",
+        argv,
+        entrypoint="windows_main",
         description="Validate dynamic accumulation-window timing against an independent recorded native run.",
         estimate=estimate_finetuning_windows,
         allow_window_context=True,
@@ -389,7 +407,8 @@ def events_main(argv: Sequence[str] | None = None) -> int:
     from .finetune_event_estimator import estimate_finetuning_events
 
     return _validation_main(
-        argv, entrypoint="events_main",
+        argv,
+        entrypoint="events_main",
         description="Validate native evaluation and save costs against independent recorded events.",
         estimate=estimate_finetuning_events,
     )

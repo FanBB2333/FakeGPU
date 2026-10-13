@@ -136,6 +136,22 @@ def test_same_length_native_projection_reproduces_observed_wall(native_run):
     assert result["timing"]["native_pipeline"]["seconds"]["expected"] == 20
 
 
+@pytest.mark.parametrize("framework", ["huggingface", "llamafactory", "axolotl"])
+def test_native_projection_accepts_each_supported_framework(native_run, framework):
+    native_run["framework"] = framework
+    native_run["training_config"]["source_framework"] = framework
+    native_run["dataset"]["source_framework"] = framework
+    native_run["observation"]["native_framework"] = framework
+    native_run["observation"]["signature"] = finetune_workload_signature(
+        native_run["model_config"], native_run["training_config"], profile_id="a100"
+    )
+    result = estimate_finetuning_run(native_run)
+    assert result["timing"]["native_pipeline"]["seconds"]["expected"] == 20
+    native_run["observation"]["native_framework"] = "unsupported-framework"
+    with pytest.raises(ValueError, match="native framework"):
+        estimate_finetuning_run(native_run)
+
+
 def test_different_dataset_size_only_projects_training(native_run):
     result = estimate_finetuning_run(native_run, num_samples=24, epochs=2, max_steps=-1)
     assert result["timing"]["training_loop_seconds"]["expected"] == 24
