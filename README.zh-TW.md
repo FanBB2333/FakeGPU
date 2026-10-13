@@ -316,7 +316,7 @@ Serving 規劃報告提供與路徑無關的 `workload_signature`，避免校準
 `sample-transformers` runner 配合使用；vLLM 或自訂測量結果可先由
 `build_cuda_serving_sample` 轉成統一協定。
 
-#### 目前儲存庫驗證
+#### 儲存庫驗證快照（2026-08-05）
 
 目前儲存庫狀態於 2026-08-05 在 macOS 26.5 arm64、Python 3.11.9 與 PyTorch
 2.9.1 CPU 環境中執行了 `scripts/test.sh` 的全部測試群組與兩個宣告式驗證
@@ -907,6 +907,61 @@ GPU 比較資料前，報告狀態保持為 `Modeled`，`accuracy.status` 為
 
 ## 指令參考
 
+### 微調總時間與 GPU 記憶體預估
+
+`estimate-finetune` 讀取本機模型中繼資料，支援 Hugging Face Trainer/PEFT、
+LLaMA-Factory 與 Axolotl 設定，無須載入模型權重或匯入訓練框架。支援單卡
+全量、LoRA、4-bit QLoRA，輸出 optimizer step 數、梯度累積、可訓練/凍結參數、
+activation/workspace 記憶體，以及給定資料量與 epochs 的**訓練迴圈總時間**。
+`max_steps` 優先於 epochs。樣本數指過濾、切分與 packing 後的訓練序列；
+序列長度包含模板 token 與 padding，不能直接以原始文件行數代替 packed 序列數。
+
+```bash
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
+  --sequence-length 128 --json estimate.json
+```
+
+三類框架範例位於 [`examples/finetuning/`](examples/finetuning/)。設定轉換已通過
+CPU 測試，不代表三種框架的實際執行都有實體 GPU 證據。分散式/offload 與尚未
+涵蓋的 optimizer/adapter 策略會明確報錯；分散式記憶體規劃仍用 `plan-training`。
+Qwen3.5 的線性/完整 attention 分層計算，DeltaNet backward workspace、可選快速
+核心與 MoE dispatch 仍為部分解析涵蓋，未校準結果不能保證不會 OOM。
+`--text-only` 明確選擇多模態 checkpoint 的文字骨幹。
+
+有實體顯示卡時，可在**同一 Python 環境**先取樣，再推估資料量與 epochs：
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu probe-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --measure-steps 5 \
+  --output observation.json
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
+  --observation observation.json --json calibrated.json
+```
+
+內建 probe 使用 Hugging Face Trainer 與固定長度合成算術文字，需要 CUDA
+PyTorch、支援模型架構的 Transformers 與 Accelerate；adapter 另需 PEFT，QLoRA
+另需 bitsandbytes。觀測綁定模型、GPU、軟體版本、精度、adapter、attention、batch、
+長度與累積設定；保留啟動/穩態峰值，計時包含 batch 讀取與 optimizer 更新。
+它不驗證收斂，也不代替其他框架的實測。推估時間不含資料準備、模型載入、評估與
+checkpoint 儲存；解析情境範圍和實測樣本極值都不是統計信賴區間。
+採樣與重用觀測時會計算本機 checkpoint 檔案的內容摘要，同路徑替換權重會使
+舊校準失效；大型模型因此會增加啟動時的檔案讀取開銷。
+
+[Qwen3.5-0.8B 驗證紀錄](tests/data/finetune_validation_evidence.json) 保留了
+Blackwell GPU 上全量、LoRA、bitsandbytes QLoRA 的獨立校準與複測，以及未校準
+解析誤差。這些短跑不能證明更長或不同設定的精度；重現入口為
+[`tests/native/finetune_matrix.py`](tests/native/finetune_matrix.py)。
+
+完整功能驗收矩陣與後續階段見 [`refactor.md`](refactor.md)。
+
 | 指令 | 用途 |
 |---|---|
 | `fakegpu doctor` | 檢查安裝、原生函式庫、PyTorch 與 profiles |
@@ -919,6 +974,8 @@ GPU 比較資料前，報告狀態保持為 `Modeled`，`accuracy.status` 為
 | `fakegpu estimate-diffusion` | 估算 diffusion 的 text encode、denoise 與 VAE decode 階段 GPU 記憶體 |
 | `fakegpu estimate-roofline` | 產生與 profile 相關的分析延遲區間 |
 | `fakegpu plan-training` | 統一分散式訓練設定並估算單 rank GPU 記憶體 |
+| `fakegpu estimate-finetune` | 依框架設定估算單卡全量/LoRA/QLoRA 的步數、時間與 GPU 記憶體 |
+| `fakegpu probe-finetune` | 在實體 CUDA GPU 蒐集固定形狀 Hugging Face Trainer 時間與記憶體 |
 | `fakegpu simulate-topology` | 模擬 collective 路由與鏈路競爭 |
 | `fakegpu replay-trace` | 彙整運算、通訊、等待與 GPU 記憶體時間軸 |
 | `fakegpu calibrate` | 整理 serving 觀測、比較 GPU 記憶體報告並執行可靠性門檻檢查 |
@@ -1038,6 +1095,9 @@ FakeGPU/
   分支。
 - GPU 記憶體估算可能遺漏 backend 私有配置、自訂 operator、allocator 策略與未
   匹配的 workspace。
+- `estimate-llm` 與 `plan-serving` 對視覺模型計入 checkpoint 權重，但未涵蓋
+  vision/projector activation 與 FLOP；decoder token 數需要包含視覺 token，
+  完整多模態記憶體仍需另外驗證。
 - Diffusion profile 只描述固定的參考 pipeline。自訂 ControlNet、IP-Adapter、
   LoRA、safety checker、refiner、影片與 DiT 元件需要額外的元件資料及對應的
   實體 GPU 驗證。
@@ -1065,6 +1125,8 @@ FakeGPU/
 - [x] 儲存庫、kernel、拓撲與 trace 分析
 - [x] FakeGPU-SMI 裝置、runtime、allocator 與程序詳細查詢
 - [ ] 擴充可執行的原生 CUDA 運算與 cuBLAS 涵蓋範圍
+- [x] 支援三類框架的單卡微調預估與相同設定 Hugging Face Trainer 實體 GPU 取樣
+- [ ] 使用各自實際執行入口驗證 LLaMA-Factory 與 Axolotl
 - [x] 透過 FakeGPU-SMI 發布原生 runtime 的即時狀態與活動
 - [x] 加入建模拓撲、NVLink 檢視與 NVML peer 查詢
 - [x] 加入建模故障注入、健康狀態與可靠性事件檢視

@@ -343,7 +343,7 @@ Use `calibrate collect-serving` with the built-in `sample-transformers`
 runner, or with vLLM/custom measurements wrapped by
 `build_cuda_serving_sample`, when repeated real-CUDA evidence is needed.
 
-#### Current repository verification
+#### Verification snapshot (2026-08-05)
 
 This repository state was verified on 2026-08-05 with every suite from
 `scripts/test.sh` and both declarative validation manifests on macOS 26.5
@@ -983,6 +983,77 @@ emitted.
 
 ## Command reference
 
+### Fine-tuning time and VRAM
+
+`estimate-finetune` reads local model metadata and Hugging Face Trainer/PEFT,
+LLaMA-Factory, or Axolotl configurations without importing those frameworks or
+loading model weights. It estimates full/LoRA/4-bit QLoRA training on one GPU,
+including optimizer updates, gradient accumulation, trainable/frozen storage,
+activations, workspace, and the total **training-loop** time for a sample count
+and epochs. `max_steps` takes precedence over epochs. Samples mean processed
+training sequences after filtering, splitting, and packing; sequence length
+includes template tokens and padding. An equal number of raw documents is not
+an equal amount of training work.
+
+```bash
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
+  --sequence-length 128 --json estimate.json
+```
+
+Equivalent config examples are provided in
+[`examples/finetuning/`](examples/finetuning/) for all three frameworks.
+Configuration adaptation is covered by CPU tests; it does not imply that
+every framework runtime has been benchmarked. Distributed/offloaded execution,
+unsupported optimizer variants, and unresolved adapter targets produce explicit
+errors. `plan-training` remains the distributed memory-planning entry point.
+
+Qwen3.5's linear/full attention layers are counted separately. Chunked DeltaNet
+backward workspaces, optional fast kernels, and MoE dispatch remain partial
+analytical coverage; an uncalibrated report cannot certify OOM safety.
+`--text-only` explicitly selects the text backbone of a multimodal checkpoint.
+
+For a measured estimate, run a short real-GPU probe and reuse its observation
+in the **same Python environment**, with the same model, GPU, precision, adapter,
+attention implementation, batch, sequence length, and accumulation settings:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu probe-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --measure-steps 5 \
+  --output observation.json
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
+  --observation observation.json --json calibrated.json
+```
+
+The built-in probe executes Hugging Face Trainer with fixed-length synthetic
+arithmetic text; Transformers with support for the selected architecture,
+Accelerate, and CUDA PyTorch are required, plus PEFT for adapters and
+bitsandbytes for QLoRA. It records warmup separately, includes optimizer work
+and batch fetching in measured updates, and retains both startup and steady
+memory peaks. Its measurements do not establish convergence or another
+framework's runtime performance. Dataset preparation, model loading, evaluation,
+and checkpoint I/O are excluded from projected training-loop time. Analytical
+scenario ranges and measured sample extrema are not confidence intervals.
+Probe collection and observation reuse hash the local checkpoint files, so
+replacing weights at the same path invalidates the old calibration. Reading
+those files adds startup I/O, especially for large checkpoints.
+
+The [Qwen3.5-0.8B validation record](tests/data/finetune_validation_evidence.json)
+contains independent calibration/holdout runs for full, LoRA, and bitsandbytes
+QLoRA on an Blackwell GPU. It retains the analytical errors as well as calibrated
+comparisons; these short runs do not establish accuracy for longer or different
+workloads. Reproduce them with [`tests/native/finetune_matrix.py`](tests/native/finetune_matrix.py).
+
+The detailed feature acceptance matrix and remaining implementation phases are
+maintained in [`refactor.md`](refactor.md).
+
 | Command | Purpose |
 |---|---|
 | `fakegpu doctor` | Check the installation, native libraries, PyTorch, and profiles |
@@ -995,6 +1066,8 @@ emitted.
 | `fakegpu estimate-diffusion` | Estimate diffusion text-encode, denoise, and VAE-decode memory phases |
 | `fakegpu estimate-roofline` | Produce a profile-aware analytical latency interval |
 | `fakegpu plan-training` | Normalize distributed training configs and estimate rank memory |
+| `fakegpu estimate-finetune` | Estimate single-GPU full/LoRA/QLoRA training steps, time, and VRAM from framework configs |
+| `fakegpu probe-finetune` | Collect fixed-shape Hugging Face Trainer timing and memory on a physical CUDA GPU |
 | `fakegpu simulate-topology` | Model collective routes and link contention |
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
 | `fakegpu calibrate` | Build serving observations, compare memory reports, and enforce reliability gates |
@@ -1155,6 +1228,7 @@ environments, binary assets, and design drafts are excluded through
 - [x] Native CUDA, NVML, cuBLAS, and NCCL interception
 - [x] Architecture-aware GPU profile catalog
 - [x] Runtime, static, LLM, and distributed memory analysis
+- [x] Framework-aware single-GPU fine-tuning estimates and matching Hugging Face Trainer probes
 - [x] Phase-aware Stable Diffusion v1.5 and SDXL generation memory estimation
 - [x] Repository, kernel, topology, and trace analysis
 - [x] Detailed FakeGPU-SMI device, runtime, allocator, and process queries
@@ -1169,6 +1243,7 @@ environments, binary assets, and design drafts are excluded through
 - [ ] Add real-GPU LLM validation for long-context and online-serving workloads
 - [ ] Add real-GPU diffusion validation plus training and DiT memory models
 - [ ] Validate distributed and MoE estimates across more GPU and software stacks
+- [ ] Validate LLaMA-Factory and Axolotl execution with their own real-GPU runners
 
 See the [open issues](https://github.com/FanBB2333/FakeGPU/issues) for proposed
 features and known limitations.

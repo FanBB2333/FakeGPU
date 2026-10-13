@@ -1,0 +1,3983 @@
+{
+"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
+  "checkpoint_config_sha256": "b90b86f35c8e6925ef74ee04d0e758f0a845c83a42089ad82bbaa948de9b4204",
+  "host": "406",
+  "limitations": [
+    "Synthetic fixed-length text and single-GPU Hugging Face Trainer only.",
+    "Each method has 6 independent process runs; measured updates within a process are not independent process observations.",
+    "The holdout validates step-time and peak-memory extrapolation, not a complete multi-epoch target run.",
+    "Total training-loop estimates exclude model initialization, tokenization, evaluation and checkpoint I/O.",
+    "Allocator peaks exclude driver context and other non-PyTorch GPU allocations.",
+    "Successful collection is not an accuracy certification or model-quality assessment.",
+    "Uncalibrated analytical errors are retained alongside calibrated comparisons.",
+    "Calibration and holdouts use the same shape; longer sequences, larger models and other frameworks need their own evidence."
+  ],
+  "methodology": "Each method uses 6 independent CUDA processes: one calibration with 2 warmup + 4 measured updates, and 5 holdouts with 2 warmup + 20 measured updates each; every process uses a different seed. No concurrent FakeGPU test suite during the recorded run.",
+  "methods": {
+    "full": {
+      "calibrated_memory_fit": "observed_probe_fits",
+      "extrapolated_training_loop_seconds": {
+        "expected": 1376.312193453312,
+        "lower": 1373.2445576190948,
+        "upper": 1381.7211048603058
+      },
+      "holdout_comparisons": {
+        "allocated_peak_bytes": {
+          "absolute_percentage_error": 0.0,
+          "observed": 7632083456,
+          "predicted": 7632083456,
+          "underprediction_percent": 0.0
+        },
+        "analytical_allocated_peak_bytes": {
+          "absolute_percentage_error": 10.400033864619209,
+          "observed": 7632083456,
+          "predicted": 6838344192,
+          "underprediction_percent": 10.400033864619209
+        },
+        "optimizer_update_seconds": {
+          "absolute_percentage_error": 0.3979909545402876,
+          "observed": 0.8924845763947815,
+          "predicted": 0.8960365842795,
+          "underprediction_percent": 0.0
+        },
+        "reserved_peak_bytes": {
+          "absolute_percentage_error": 0.0,
+          "observed": 9594470400,
+          "predicted": 9594470400,
+          "underprediction_percent": 0.0
+        }
+      },
+      "holdout_comparisons_by_run": {
+        "holdout": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 7632083456,
+            "predicted": 7632083456,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 10.400033864619209,
+            "observed": 7632083456,
+            "predicted": 6838344192,
+            "underprediction_percent": 10.400033864619209
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 0.3979909545402876,
+            "observed": 0.8924845763947815,
+            "predicted": 0.8960365842795,
+            "underprediction_percent": 0.0
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 9594470400,
+            "predicted": 9594470400,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-2": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 7632083456,
+            "predicted": 7632083456,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 10.400033864619209,
+            "observed": 7632083456,
+            "predicted": 6838344192,
+            "underprediction_percent": 10.400033864619209
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 1.7755419474837657,
+            "observed": 0.9122336758533492,
+            "predicted": 0.8960365842795,
+            "underprediction_percent": 1.7755419474837657
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 9594470400,
+            "predicted": 9594470400,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-3": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 7632083456,
+            "predicted": 7632083456,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 10.400033864619209,
+            "observed": 7632083456,
+            "predicted": 6838344192,
+            "underprediction_percent": 10.400033864619209
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 4.932446712611146,
+            "observed": 0.9425261861644685,
+            "predicted": 0.8960365842795,
+            "underprediction_percent": 4.932446712611146
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 9594470400,
+            "predicted": 9594470400,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-4": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 7632083456,
+            "predicted": 7632083456,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 10.400033864619209,
+            "observed": 7632083456,
+            "predicted": 6838344192,
+            "underprediction_percent": 10.400033864619209
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 0.4448055263830149,
+            "observed": 0.8920686137862504,
+            "predicted": 0.8960365842795,
+            "underprediction_percent": 0.0
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 9594470400,
+            "predicted": 9594470400,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-5": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 7632083456,
+            "predicted": 7632083456,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 10.400033864619209,
+            "observed": 7632083456,
+            "predicted": 6838344192,
+            "underprediction_percent": 10.400033864619209
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 3.357839209442679,
+            "observed": 0.9271694433875382,
+            "predicted": 0.8960365842795,
+            "underprediction_percent": 3.357839209442679
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 9594470400,
+            "predicted": 9594470400,
+            "underprediction_percent": 0.0
+          }
+        }
+      },
+      "observations": {
+        "calibration": {
+          "checkpoint_hash_seconds": 0.9429486528970301,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 1.109771310351789,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 752393024
+          },
+          "optimizer_update_seconds": [
+            0.8995580109767616,
+            0.8953352756798267,
+            0.8952136249281466,
+            0.8940394255332649
+          ],
+          "peak_allocated_bytes": 7632083456,
+          "peak_reserved_bytes": 9594470400,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.4497790054883808,
+            0.44766763783991337,
+            0.4476068124640733,
+            0.44701971276663244
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": null,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": null,
+            "lora_target_modules": [],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "full",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 7632083456,
+            "reserved": 9594470400
+          },
+          "steady_peak_allocated_bytes": 7632083456,
+          "steady_peak_reserved_bytes": 9594470400,
+          "training_loss": 0.10256189107894897,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 4,
+            "samples": 12,
+            "seed": 42,
+            "sequence_length": 128,
+            "sha256": "68a756c2249694787c6aa192f039a1e8fd29c8ec9e50357f5c117f0f069cdca1",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout": {
+          "checkpoint_hash_seconds": 0.9418838396668434,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 1.0906012849882245,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 752393024
+          },
+          "optimizer_update_seconds": [
+            0.8975735763087869,
+            0.8980684760026634,
+            0.8893179250881076,
+            0.8937782123684883,
+            0.8922320795245469,
+            0.8915571002289653,
+            0.8952778647653759,
+            0.8922782721929252,
+            0.8914686013013124,
+            0.8934475742280483,
+            0.8919955426827073,
+            0.8899951311759651,
+            0.8906572521664202,
+            0.8888548905961215,
+            0.9007172361016273,
+            0.8902109633199871,
+            0.8909795745275915,
+            0.887667931150645,
+            0.8929227185435593,
+            0.8906906056217849
+          ],
+          "peak_allocated_bytes": 7632083456,
+          "peak_reserved_bytes": 9594470400,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.44878678815439343,
+            0.4490342380013317,
+            0.4446589625440538,
+            0.44688910618424416,
+            0.44611603976227343,
+            0.44577855011448264,
+            0.4476389323826879,
+            0.4461391360964626,
+            0.4457343006506562,
+            0.44672378711402416,
+            0.44599777134135365,
+            0.44499756558798254,
+            0.4453286260832101,
+            0.4444274452980608,
+            0.4503586180508137,
+            0.44510548165999353,
+            0.44548978726379573,
+            0.4438339655753225,
+            0.44646135927177966,
+            0.44534530281089246
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": null,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": null,
+            "lora_target_modules": [],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "full",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 7632083456,
+            "reserved": 9594470400
+          },
+          "steady_peak_allocated_bytes": 7632083456,
+          "steady_peak_reserved_bytes": 9594470400,
+          "training_loss": 0.06691240180622447,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 43,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-2": {
+          "checkpoint_hash_seconds": 0.9443013002164662,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 1.0821098620072007,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 752393024
+          },
+          "optimizer_update_seconds": [
+            0.9149083029478788,
+            0.9037285093218088,
+            0.9247104772366583,
+            0.9339654012583196,
+            0.9081442062743008,
+            0.9172160387970507,
+            0.9088708590716124,
+            0.905370285268873,
+            0.9043424930423498,
+            0.9159048604778945,
+            0.914910368155688,
+            0.9023095425218344,
+            0.9044092353433371,
+            0.9019141928292811,
+            0.923221352044493,
+            0.9293754198588431,
+            0.9119395283050835,
+            0.9144043810665607,
+            0.9015679052099586,
+            0.9034601580351591
+          ],
+          "peak_allocated_bytes": 7632083456,
+          "peak_reserved_bytes": 9594470400,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.4574541514739394,
+            0.4518642546609044,
+            0.46235523861832917,
+            0.4669827006291598,
+            0.4540721031371504,
+            0.45860801939852536,
+            0.4544354295358062,
+            0.4526851426344365,
+            0.4521712465211749,
+            0.4579524302389473,
+            0.457455184077844,
+            0.4511547712609172,
+            0.45220461767166853,
+            0.45095709641464055,
+            0.4616106760222465,
+            0.46468770992942154,
+            0.45596976415254176,
+            0.4572021905332804,
+            0.4507839526049793,
+            0.45173007901757956
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": null,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": null,
+            "lora_target_modules": [],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "full",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 7632083456,
+            "reserved": 9594470400
+          },
+          "steady_peak_allocated_bytes": 7632083456,
+          "steady_peak_reserved_bytes": 9594470400,
+          "training_loss": 0.06479457833550194,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 44,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-3": {
+          "checkpoint_hash_seconds": 0.9421655721962452,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 1.0777762839570642,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 752393024
+          },
+          "optimizer_update_seconds": [
+            0.9283462567254901,
+            0.9280268969014287,
+            0.9099270729348063,
+            0.9278429672122002,
+            0.9214655603282154,
+            0.913205458316952,
+            0.9229031321592629,
+            0.9112457069568336,
+            0.9077545134350657,
+            0.9084787438623607,
+            0.9086400950327516,
+            0.906877504196018,
+            0.9040567288175225,
+            0.9248101091943681,
+            0.9746713759377599,
+            1.3365486762486398,
+            0.9298079861328006,
+            0.9287772658281028,
+            0.9181068823672831,
+            0.9390307907015085
+          ],
+          "peak_allocated_bytes": 7632083456,
+          "peak_reserved_bytes": 9594470400,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.46417312836274505,
+            0.46401344845071435,
+            0.4549635364674032,
+            0.4639214836061001,
+            0.4607327801641077,
+            0.456602729158476,
+            0.46145156607963145,
+            0.4556228534784168,
+            0.4538772567175329,
+            0.45423937193118036,
+            0.4543200475163758,
+            0.453438752098009,
+            0.45202836440876126,
+            0.46240505459718406,
+            0.48733568796887994,
+            0.6682743381243199,
+            0.4649039930664003,
+            0.4643886329140514,
+            0.45905344118364155,
+            0.46951539535075426
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": null,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": null,
+            "lora_target_modules": [],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "full",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 7632083456,
+            "reserved": 9594470400
+          },
+          "steady_peak_allocated_bytes": 7632083456,
+          "steady_peak_reserved_bytes": 9594470400,
+          "training_loss": 0.05974231524900957,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 45,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-4": {
+          "checkpoint_hash_seconds": 0.9462292729876935,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 1.085619761608541,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 752393024
+          },
+          "optimizer_update_seconds": [
+            0.8979149707593024,
+            0.8888133480213583,
+            0.8831222811713815,
+            0.8921286137774587,
+            0.9024139475077391,
+            0.8955622985959053,
+            0.8918614848516881,
+            0.8878200985491276,
+            0.8952054302208126,
+            0.889877513051033,
+            0.8857363690622151,
+            0.8846561061218381,
+            0.893026459030807,
+            0.9015166005119681,
+            0.8995769186876714,
+            0.9015204105526209,
+            0.8866874021477997,
+            0.8839243394322693,
+            0.8884899849072099,
+            0.891517698764801
+          ],
+          "peak_allocated_bytes": 7632083456,
+          "peak_reserved_bytes": 9594470400,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.4489574853796512,
+            0.4444066740106791,
+            0.44156114058569074,
+            0.44606430688872933,
+            0.45120697375386953,
+            0.44778114929795265,
+            0.4459307424258441,
+            0.4439100492745638,
+            0.4476027151104063,
+            0.4449387565255165,
+            0.44286818453110754,
+            0.44232805306091905,
+            0.4465132295154035,
+            0.45075830025598407,
+            0.4497884593438357,
+            0.45076020527631044,
+            0.44334370107389987,
+            0.44196216971613467,
+            0.44424499245360494,
+            0.4457588493824005
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": null,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": null,
+            "lora_target_modules": [],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "full",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 7632083456,
+            "reserved": 9594470400
+          },
+          "steady_peak_allocated_bytes": 7632083456,
+          "steady_peak_reserved_bytes": 9594470400,
+          "training_loss": 0.061579677191647614,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 46,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-5": {
+          "checkpoint_hash_seconds": 0.9444670453667641,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 1.0928457090631127,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 752393024
+          },
+          "optimizer_update_seconds": [
+            0.9482032828964293,
+            0.9806188982911408,
+            0.9204329447820783,
+            0.9105208120308816,
+            0.9257391141727567,
+            0.9389231218956411,
+            0.9224857399240136,
+            0.9123061560094357,
+            0.9160999120213091,
+            0.9157325522974133,
+            0.9058575187809765,
+            0.9310429440811276,
+            0.9255216768942773,
+            0.9147125915624201,
+            0.9306075349450111,
+            0.9159305850043893,
+            0.9449547440744936,
+            0.9168998068198562,
+            0.9548061303794384,
+            0.9119928008876741
+          ],
+          "peak_allocated_bytes": 7632083456,
+          "peak_reserved_bytes": 9594470400,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.47410164144821465,
+            0.4903094491455704,
+            0.46021647239103913,
+            0.4552604060154408,
+            0.46286955708637834,
+            0.46946156094782054,
+            0.4612428699620068,
+            0.4561530780047178,
+            0.45804995601065457,
+            0.4578662761487067,
+            0.45292875939048827,
+            0.4655214720405638,
+            0.46276083844713867,
+            0.45735629578121006,
+            0.46530376747250557,
+            0.45796529250219464,
+            0.4724773720372468,
+            0.4584499034099281,
+            0.4774030651897192,
+            0.45599640044383705
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": null,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": null,
+            "lora_target_modules": [],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "full",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 7632083456,
+            "reserved": 9594470400
+          },
+          "steady_peak_allocated_bytes": 7632083456,
+          "steady_peak_reserved_bytes": 9594470400,
+          "training_loss": 0.0739006833596663,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 47,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        }
+      },
+      "status": "completed",
+      "target_workload": {
+        "effective_batch_size": 2,
+        "effective_epochs": 3.0,
+        "epochs": 3.0,
+        "gradient_accumulation_steps": 2,
+        "micro_batch_size": 1,
+        "microsteps": 3072,
+        "microsteps_per_epoch": 1024,
+        "num_samples": 1024,
+        "optimizer_steps": 1536,
+        "optimizer_steps_per_epoch": 512,
+        "padded_token_slots": 393216,
+        "processed_samples": 3072,
+        "processed_tokens": 393216,
+        "sequence_length": 128,
+        "stop_rule": "epochs"
+      },
+      "worst_holdout_errors": {
+        "allocated_peak_bytes": {
+          "maximum_absolute_percentage_error": 0.0,
+          "maximum_underprediction_percent": 0.0
+        },
+        "analytical_allocated_peak_bytes": {
+          "maximum_absolute_percentage_error": 10.400033864619209,
+          "maximum_underprediction_percent": 10.400033864619209
+        },
+        "optimizer_update_seconds": {
+          "maximum_absolute_percentage_error": 4.932446712611146,
+          "maximum_underprediction_percent": 4.932446712611146
+        },
+        "reserved_peak_bytes": {
+          "maximum_absolute_percentage_error": 0.0,
+          "maximum_underprediction_percent": 0.0
+        }
+      }
+    },
+    "lora": {
+      "calibrated_memory_fit": "observed_probe_fits",
+      "extrapolated_training_loop_seconds": {
+        "expected": 1179.5399411916733,
+        "lower": 1160.8576354980469,
+        "upper": 1211.629710674286
+      },
+      "holdout_comparisons": {
+        "allocated_peak_bytes": {
+          "absolute_percentage_error": 0.0,
+          "observed": 2541456896,
+          "predicted": 2541456896,
+          "underprediction_percent": 0.0
+        },
+        "analytical_allocated_peak_bytes": {
+          "absolute_percentage_error": 8.106312262240312,
+          "observed": 2541456896,
+          "predicted": 2335438464,
+          "underprediction_percent": 8.106312262240312
+        },
+        "optimizer_update_seconds": {
+          "absolute_percentage_error": 1.7296514191039558,
+          "observed": 0.7548729780362919,
+          "predicted": 0.767929649213329,
+          "underprediction_percent": 0.0
+        },
+        "reserved_peak_bytes": {
+          "absolute_percentage_error": 0.0,
+          "observed": 2625634304,
+          "predicted": 2625634304,
+          "underprediction_percent": 0.0
+        }
+      },
+      "holdout_comparisons_by_run": {
+        "holdout": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2541456896,
+            "predicted": 2541456896,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 8.106312262240312,
+            "observed": 2541456896,
+            "predicted": 2335438464,
+            "underprediction_percent": 8.106312262240312
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 1.7296514191039558,
+            "observed": 0.7548729780362919,
+            "predicted": 0.767929649213329,
+            "underprediction_percent": 0.0
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2625634304,
+            "predicted": 2625634304,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-2": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2541456896,
+            "predicted": 2541456896,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 8.106312262240312,
+            "observed": 2541456896,
+            "predicted": 2335438464,
+            "underprediction_percent": 8.106312262240312
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 1.3069754481176972,
+            "observed": 0.7780992149142548,
+            "predicted": 0.767929649213329,
+            "underprediction_percent": 1.3069754481176972
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2625634304,
+            "predicted": 2625634304,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-3": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2541456896,
+            "predicted": 2541456896,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 8.106312262240312,
+            "observed": 2541456896,
+            "predicted": 2335438464,
+            "underprediction_percent": 8.106312262240312
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 0.8372809192283956,
+            "observed": 0.7744136670837178,
+            "predicted": 0.767929649213329,
+            "underprediction_percent": 0.8372809192283956
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2625634304,
+            "predicted": 2625634304,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-4": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2541456896,
+            "predicted": 2541456896,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 8.106312262240312,
+            "observed": 2541456896,
+            "predicted": 2335438464,
+            "underprediction_percent": 8.106312262240312
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 0.5111133885020211,
+            "observed": 0.7640246171038598,
+            "predicted": 0.767929649213329,
+            "underprediction_percent": 0.0
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2625634304,
+            "predicted": 2625634304,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-5": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2541456896,
+            "predicted": 2541456896,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 8.106312262240312,
+            "observed": 2541456896,
+            "predicted": 2335438464,
+            "underprediction_percent": 8.106312262240312
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 1.866243516006965,
+            "observed": 0.7538607714464888,
+            "predicted": 0.767929649213329,
+            "underprediction_percent": 0.0
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2625634304,
+            "predicted": 2625634304,
+            "underprediction_percent": 0.0
+          }
+        }
+      },
+      "observations": {
+        "calibration": {
+          "checkpoint_hash_seconds": 0.9425205755978823,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.1652509830892086,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.7888214262202382,
+            0.7596037946641445,
+            0.7557666897773743,
+            0.7675266861915588
+          ],
+          "peak_allocated_bytes": 2541456896,
+          "peak_reserved_bytes": 2625634304,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.3944107131101191,
+            0.37980189733207226,
+            0.37788334488868713,
+            0.3837633430957794
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "lora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2541456896,
+            "reserved": 2625634304
+          },
+          "steady_peak_allocated_bytes": 2541456896,
+          "steady_peak_reserved_bytes": 2625634304,
+          "training_loss": 0.28345322608947754,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 4,
+            "samples": 12,
+            "seed": 42,
+            "sequence_length": 128,
+            "sha256": "68a756c2249694787c6aa192f039a1e8fd29c8ec9e50357f5c117f0f069cdca1",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout": {
+          "checkpoint_hash_seconds": 0.9480040799826384,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.1761079910211265,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.7407908337190747,
+            0.7479797131381929,
+            0.7587842987850308,
+            0.7429904267191887,
+            0.751267768908292,
+            0.7420544368214905,
+            0.7457824521698058,
+            0.7543506938964128,
+            0.7418749178759754,
+            0.7443112595938146,
+            0.7597565217874944,
+            0.768256685230881,
+            0.7710681995376945,
+            0.7675184844993055,
+            0.7638759091496468,
+            0.7639490701258183,
+            0.7873028824105859,
+            0.7431140309199691,
+            0.7543067964725196,
+            0.7481241789646447
+          ],
+          "peak_allocated_bytes": 2541456896,
+          "peak_reserved_bytes": 2625634304,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.37039541685953736,
+            0.37398985656909645,
+            0.3793921493925154,
+            0.37149521335959435,
+            0.375633884454146,
+            0.37102721841074526,
+            0.3728912260849029,
+            0.3771753469482064,
+            0.3709374589379877,
+            0.3721556297969073,
+            0.3798782608937472,
+            0.3841283426154405,
+            0.3855340997688472,
+            0.38375924224965274,
+            0.3819379545748234,
+            0.3819745350629091,
+            0.39365144120529294,
+            0.37155701545998454,
+            0.3771533982362598,
+            0.37406208948232234
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "lora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2541456896,
+            "reserved": 2625634304
+          },
+          "steady_peak_allocated_bytes": 2541456896,
+          "steady_peak_reserved_bytes": 2625634304,
+          "training_loss": 0.27381951158696954,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 43,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-2": {
+          "checkpoint_hash_seconds": 0.9452108768746257,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.185054389759898,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.763370162807405,
+            0.7862906367518008,
+            0.7674753200262785,
+            0.7672669612802565,
+            0.7680681510828435,
+            0.7672709110192955,
+            0.776862024795264,
+            0.7685947646386921,
+            0.7828663028776646,
+            0.7814942221157253,
+            0.7833004351705313,
+            0.772383610252291,
+            0.777843457646668,
+            0.7805139315314591,
+            0.7679139142856002,
+            0.797380656003952,
+            0.777022838126868,
+            0.7860231506638229,
+            0.792786639649421,
+            0.7972562075592577
+          ],
+          "peak_allocated_bytes": 2541456896,
+          "peak_reserved_bytes": 2625634304,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.3816850814037025,
+            0.3931453183759004,
+            0.38373766001313925,
+            0.38363348064012825,
+            0.38403407554142177,
+            0.3836354555096477,
+            0.388431012397632,
+            0.38429738231934607,
+            0.3914331514388323,
+            0.39074711105786264,
+            0.39165021758526564,
+            0.3861918051261455,
+            0.388921728823334,
+            0.39025696576572955,
+            0.3839569571428001,
+            0.398690328001976,
+            0.388511419063434,
+            0.39301157533191144,
+            0.3963933198247105,
+            0.3986281037796289
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "lora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2541456896,
+            "reserved": 2625634304
+          },
+          "steady_peak_allocated_bytes": 2541456896,
+          "steady_peak_reserved_bytes": 2625634304,
+          "training_loss": 0.27570917389609595,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 44,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-3": {
+          "checkpoint_hash_seconds": 0.9439620561897755,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.1794017078354955,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.7725123367272317,
+            0.78762436658144,
+            0.784868854098022,
+            0.7618382521905005,
+            0.7912079030647874,
+            0.7862622370012105,
+            0.7786465962417424,
+            0.7650629365816712,
+            0.7899043331854045,
+            0.7814919906668365,
+            0.7843157951720059,
+            0.7640950167551637,
+            0.7637409172020853,
+            0.7804294899106026,
+            0.7691787546500564,
+            0.7596291019581258,
+            0.7801532414741814,
+            0.7723680902272463,
+            0.7570536881685257,
+            0.757889439817518
+          ],
+          "peak_allocated_bytes": 2541456896,
+          "peak_reserved_bytes": 2625634304,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.38625616836361587,
+            0.39381218329072,
+            0.392434427049011,
+            0.38091912609525025,
+            0.3956039515323937,
+            0.3931311185006052,
+            0.3893232981208712,
+            0.3825314682908356,
+            0.39495216659270227,
+            0.39074599533341825,
+            0.39215789758600295,
+            0.38204750837758183,
+            0.38187045860104263,
+            0.3902147449553013,
+            0.3845893773250282,
+            0.3798145509790629,
+            0.3900766207370907,
+            0.38618404511362314,
+            0.37852684408426285,
+            0.378944719908759
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "lora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2541456896,
+            "reserved": 2625634304
+          },
+          "steady_peak_allocated_bytes": 2541456896,
+          "steady_peak_reserved_bytes": 2625634304,
+          "training_loss": 0.27197993885387073,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 45,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-4": {
+          "checkpoint_hash_seconds": 0.9447889588773251,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.1743737240321934,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.802163626998663,
+            0.7621945114806294,
+            0.7512470250949264,
+            0.7619300605729222,
+            0.7817336679436266,
+            0.7526934780180454,
+            0.7659967760555446,
+            0.7577277249656618,
+            0.7517801867797971,
+            0.7629053727723658,
+            0.7503617648035288,
+            0.7505225841887295,
+            0.7571210148744285,
+            0.7580727366730571,
+            0.7608710010536015,
+            0.7524614897556603,
+            0.7816923311911523,
+            0.7775049260817468,
+            0.7773260460235178,
+            0.7641860167495906
+          ],
+          "peak_allocated_bytes": 2541456896,
+          "peak_reserved_bytes": 2625634304,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.4010818134993315,
+            0.3810972557403147,
+            0.3756235125474632,
+            0.3809650302864611,
+            0.3908668339718133,
+            0.3763467390090227,
+            0.3829983880277723,
+            0.3788638624828309,
+            0.37589009338989854,
+            0.3814526863861829,
+            0.3751808824017644,
+            0.37526129209436476,
+            0.37856050743721426,
+            0.37903636833652854,
+            0.38043550052680075,
+            0.37623074487783015,
+            0.39084616559557617,
+            0.3887524630408734,
+            0.3886630230117589,
+            0.3820930083747953
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "lora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2541456896,
+            "reserved": 2625634304
+          },
+          "steady_peak_allocated_bytes": 2541456896,
+          "steady_peak_reserved_bytes": 2625634304,
+          "training_loss": 0.27443053505637427,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 46,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-5": {
+          "checkpoint_hash_seconds": 0.947796393185854,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.1676909369416535,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.7655144231393933,
+            0.7542478363029659,
+            0.7504384010098875,
+            0.747676417697221,
+            0.7665449241176248,
+            0.7495837109163404,
+            0.7495321501046419,
+            0.749523950740695,
+            0.7508282130584121,
+            0.7617517090402544,
+            0.7682199678383768,
+            0.749568551313132,
+            0.7495726319029927,
+            0.758748515509069,
+            0.7482976890169084,
+            0.7517192559316754,
+            0.7612587800249457,
+            0.7469617179594934,
+            0.7459451477043331,
+            0.7512814356014132
+          ],
+          "peak_allocated_bytes": 2541456896,
+          "peak_reserved_bytes": 2625634304,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.38275721156969666,
+            0.37712391815148294,
+            0.37521920050494373,
+            0.3738382088486105,
+            0.3832724620588124,
+            0.3747918554581702,
+            0.37476607505232096,
+            0.3747619753703475,
+            0.37541410652920604,
+            0.3808758545201272,
+            0.3841099839191884,
+            0.374784275656566,
+            0.37478631595149636,
+            0.3793742577545345,
+            0.3741488445084542,
+            0.3758596279658377,
+            0.38062939001247287,
+            0.3734808589797467,
+            0.37297257385216653,
+            0.3756407178007066
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": null,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "lora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": null,
+            "quantization_compute_dtype": null,
+            "quantization_storage": null,
+            "quantization_type": null,
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2541456896,
+            "reserved": 2625634304
+          },
+          "steady_peak_allocated_bytes": 2541456896,
+          "steady_peak_reserved_bytes": 2625634304,
+          "training_loss": 0.2751678770238703,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 47,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        }
+      },
+      "status": "completed",
+      "target_workload": {
+        "effective_batch_size": 2,
+        "effective_epochs": 3.0,
+        "epochs": 3.0,
+        "gradient_accumulation_steps": 2,
+        "micro_batch_size": 1,
+        "microsteps": 3072,
+        "microsteps_per_epoch": 1024,
+        "num_samples": 1024,
+        "optimizer_steps": 1536,
+        "optimizer_steps_per_epoch": 512,
+        "padded_token_slots": 393216,
+        "processed_samples": 3072,
+        "processed_tokens": 393216,
+        "sequence_length": 128,
+        "stop_rule": "epochs"
+      },
+      "worst_holdout_errors": {
+        "allocated_peak_bytes": {
+          "maximum_absolute_percentage_error": 0.0,
+          "maximum_underprediction_percent": 0.0
+        },
+        "analytical_allocated_peak_bytes": {
+          "maximum_absolute_percentage_error": 8.106312262240312,
+          "maximum_underprediction_percent": 8.106312262240312
+        },
+        "optimizer_update_seconds": {
+          "maximum_absolute_percentage_error": 1.866243516006965,
+          "maximum_underprediction_percent": 1.3069754481176972
+        },
+        "reserved_peak_bytes": {
+          "maximum_absolute_percentage_error": 0.0,
+          "maximum_underprediction_percent": 0.0
+        }
+      }
+    },
+    "qlora": {
+      "calibrated_memory_fit": "observed_probe_fits",
+      "extrapolated_training_loop_seconds": {
+        "expected": 1305.8314803242683,
+        "lower": 1296.0262877941132,
+        "upper": 1318.11372256279
+      },
+      "holdout_comparisons": {
+        "allocated_peak_bytes": {
+          "absolute_percentage_error": 0.0,
+          "observed": 2866692608,
+          "predicted": 2866692608,
+          "underprediction_percent": 0.0
+        },
+        "analytical_allocated_peak_bytes": {
+          "absolute_percentage_error": 26.10973684137675,
+          "observed": 2866692608,
+          "predicted": 2118206712,
+          "underprediction_percent": 26.10973684137675
+        },
+        "optimizer_update_seconds": {
+          "absolute_percentage_error": 3.387273651717551,
+          "observed": 0.8222972454037517,
+          "predicted": 0.8501507033361122,
+          "underprediction_percent": 0.0
+        },
+        "reserved_peak_bytes": {
+          "absolute_percentage_error": 0.0,
+          "observed": 3080716288,
+          "predicted": 3080716288,
+          "underprediction_percent": 0.0
+        }
+      },
+      "holdout_comparisons_by_run": {
+        "holdout": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2866692608,
+            "predicted": 2866692608,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 26.10973684137675,
+            "observed": 2866692608,
+            "predicted": 2118206712,
+            "underprediction_percent": 26.10973684137675
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 3.387273651717551,
+            "observed": 0.8222972454037517,
+            "predicted": 0.8501507033361122,
+            "underprediction_percent": 0.0
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 3080716288,
+            "predicted": 3080716288,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-2": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2866692608,
+            "predicted": 2866692608,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 26.10973684137675,
+            "observed": 2866692608,
+            "predicted": 2118206712,
+            "underprediction_percent": 26.10973684137675
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 2.2010721537657716,
+            "observed": 0.8318412766326219,
+            "predicted": 0.8501507033361122,
+            "underprediction_percent": 0.0
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 3080716288,
+            "predicted": 3080716288,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-3": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2866692608,
+            "predicted": 2866692608,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 26.10973684137675,
+            "observed": 2866692608,
+            "predicted": 2118206712,
+            "underprediction_percent": 26.10973684137675
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 2.8233614167941354,
+            "observed": 0.8268069547833875,
+            "predicted": 0.8501507033361122,
+            "underprediction_percent": 0.0
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 3080716288,
+            "predicted": 3080716288,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-4": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2866692608,
+            "predicted": 2866692608,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 26.10973684137675,
+            "observed": 2866692608,
+            "predicted": 2118206712,
+            "underprediction_percent": 26.10973684137675
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 0.7139807183161797,
+            "observed": 0.8441238220082596,
+            "predicted": 0.8501507033361122,
+            "underprediction_percent": 0.0
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 3080716288,
+            "predicted": 3080716288,
+            "underprediction_percent": 0.0
+          }
+        },
+        "holdout-5": {
+          "allocated_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 2866692608,
+            "predicted": 2866692608,
+            "underprediction_percent": 0.0
+          },
+          "analytical_allocated_peak_bytes": {
+            "absolute_percentage_error": 26.10973684137675,
+            "observed": 2866692608,
+            "predicted": 2118206712,
+            "underprediction_percent": 26.10973684137675
+          },
+          "optimizer_update_seconds": {
+            "absolute_percentage_error": 1.0316521539948365,
+            "observed": 0.8414696634281427,
+            "predicted": 0.8501507033361122,
+            "underprediction_percent": 0.0
+          },
+          "reserved_peak_bytes": {
+            "absolute_percentage_error": 0.0,
+            "observed": 3080716288,
+            "predicted": 3080716288,
+            "underprediction_percent": 0.0
+          }
+        }
+      },
+      "observations": {
+        "calibration": {
+          "checkpoint_hash_seconds": 0.9452938791364431,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.3121470790356398,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.8543123588897288,
+            0.8437671144492924,
+            0.858146954793483,
+            0.8443763852119446
+          ],
+          "peak_allocated_bytes": 2866692608,
+          "peak_reserved_bytes": 3080716288,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.4271561794448644,
+            0.4218835572246462,
+            0.4290734773967415,
+            0.4221881926059723
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": true,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "qlora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": 4,
+            "quantization_compute_dtype": "bf16",
+            "quantization_storage": "uint8",
+            "quantization_type": "nf4",
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2866692608,
+            "reserved": 3080716288
+          },
+          "steady_peak_allocated_bytes": 2866692608,
+          "steady_peak_reserved_bytes": 3080716288,
+          "training_loss": 0.28193716208140057,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 4,
+            "samples": 12,
+            "seed": 42,
+            "sequence_length": 128,
+            "sha256": "68a756c2249694787c6aa192f039a1e8fd29c8ec9e50357f5c117f0f069cdca1",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout": {
+          "checkpoint_hash_seconds": 0.9437444917857647,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.316935638897121,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.8224423257634044,
+            0.8334485325030982,
+            0.8291463572531939,
+            0.8177328114397824,
+            0.8216015161015093,
+            0.8190324231982231,
+            0.8241542498581111,
+            0.8197660548612475,
+            0.8265051450580359,
+            0.8215748979710042,
+            0.8208024469204247,
+            0.8190429648384452,
+            0.8182593234814703,
+            0.8233071113936603,
+            0.8191535249352455,
+            0.8222438003867865,
+            0.8172860438935459,
+            0.8223967412486672,
+            0.8202810580842197,
+            0.8277675788849592
+          ],
+          "peak_allocated_bytes": 2866692608,
+          "peak_reserved_bytes": 3080716288,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.4112211628817022,
+            0.4167242662515491,
+            0.4145731786265969,
+            0.4088664057198912,
+            0.41080075805075467,
+            0.40951621159911156,
+            0.41207712492905557,
+            0.40988302743062377,
+            0.4132525725290179,
+            0.4107874489855021,
+            0.41040122346021235,
+            0.4095214824192226,
+            0.4091296617407352,
+            0.41165355569683015,
+            0.40957676246762276,
+            0.41112190019339323,
+            0.40864302194677293,
+            0.4111983706243336,
+            0.41014052904210985,
+            0.4138837894424796
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": true,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "qlora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": 4,
+            "quantization_compute_dtype": "bf16",
+            "quantization_storage": "uint8",
+            "quantization_type": "nf4",
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2866692608,
+            "reserved": 3080716288
+          },
+          "steady_peak_allocated_bytes": 2866692608,
+          "steady_peak_reserved_bytes": 3080716288,
+          "training_loss": 0.270168737931685,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 43,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-2": {
+          "checkpoint_hash_seconds": 0.9456969141028821,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.3210666957311332,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.840533290989697,
+            0.8316734288819134,
+            0.8314951281063259,
+            0.8300021272152662,
+            0.8307077982462943,
+            0.8257495886646211,
+            0.8317484399303794,
+            0.8271516039967537,
+            0.8390118810348213,
+            0.8333222130313516,
+            0.8292356370948255,
+            0.8317807707935572,
+            0.8277705740183592,
+            0.8301123692654073,
+            0.8266482641920447,
+            0.8278946471400559,
+            0.8315555015578866,
+            0.8375646504573524,
+            0.8414389560930431,
+            0.831428661942482
+          ],
+          "peak_allocated_bytes": 2866692608,
+          "peak_reserved_bytes": 3080716288,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.4202666454948485,
+            0.4158367144409567,
+            0.41574756405316293,
+            0.4150010636076331,
+            0.41535389912314713,
+            0.41287479433231056,
+            0.4158742199651897,
+            0.41357580199837685,
+            0.41950594051741064,
+            0.4166611065156758,
+            0.41461781854741275,
+            0.4158903853967786,
+            0.4138852870091796,
+            0.41505618463270366,
+            0.41332413209602237,
+            0.41394732357002795,
+            0.4157777507789433,
+            0.4187823252286762,
+            0.42071947804652154,
+            0.415714330971241
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": true,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "qlora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": 4,
+            "quantization_compute_dtype": "bf16",
+            "quantization_storage": "uint8",
+            "quantization_type": "nf4",
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2866692608,
+            "reserved": 3080716288
+          },
+          "steady_peak_allocated_bytes": 2866692608,
+          "steady_peak_reserved_bytes": 3080716288,
+          "training_loss": 0.2700184258547696,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 44,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-3": {
+          "checkpoint_hash_seconds": 0.9482836262322962,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.3210902167484164,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.8224315820261836,
+            0.824742236174643,
+            0.8395118084736168,
+            0.8362173433415592,
+            0.825752638746053,
+            0.8220290620811284,
+            0.8227895740419626,
+            0.8215070725418627,
+            0.8254445479251444,
+            0.8252154891379178,
+            0.826289099175483,
+            0.8290034136734903,
+            0.8329155608080328,
+            0.8277190532535315,
+            0.8203090918250382,
+            0.8288855347782373,
+            0.8217443954199553,
+            0.837491387501359,
+            0.8201911831274629,
+            0.825949021615088
+          ],
+          "peak_allocated_bytes": 2866692608,
+          "peak_reserved_bytes": 3080716288,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.4112157910130918,
+            0.4123711180873215,
+            0.4197559042368084,
+            0.4181086716707796,
+            0.4128763193730265,
+            0.4110145310405642,
+            0.4113947870209813,
+            0.41075353627093136,
+            0.4127222739625722,
+            0.4126077445689589,
+            0.4131445495877415,
+            0.41450170683674514,
+            0.4164577804040164,
+            0.41385952662676573,
+            0.4101545459125191,
+            0.41444276738911867,
+            0.4108721977099776,
+            0.4187456937506795,
+            0.41009559156373143,
+            0.412974510807544
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": true,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "qlora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": 4,
+            "quantization_compute_dtype": "bf16",
+            "quantization_storage": "uint8",
+            "quantization_type": "nf4",
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2866692608,
+            "reserved": 3080716288
+          },
+          "steady_peak_allocated_bytes": 2866692608,
+          "steady_peak_reserved_bytes": 3080716288,
+          "training_loss": 0.2682585932991721,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 45,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-4": {
+          "checkpoint_hash_seconds": 0.9451272897422314,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.3157713101245463,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.843397390563041,
+            0.8369515808299184,
+            0.8505485421046615,
+            0.8505698111839592,
+            0.835185999982059,
+            0.853679345920682,
+            0.8487794902175665,
+            0.8470127168111503,
+            0.8471029279753566,
+            0.8380717150866985,
+            0.8424689401872456,
+            0.8492472423240542,
+            0.8458114159293473,
+            0.838250586297363,
+            0.836408703122288,
+            0.8360608625225723,
+            0.852702937554568,
+            0.8385272067971528,
+            0.8426626417785883,
+            0.8490363829769194
+          ],
+          "peak_allocated_bytes": 2866692608,
+          "peak_reserved_bytes": 3080716288,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.4216986952815205,
+            0.4184757904149592,
+            0.42527427105233073,
+            0.4252849055919796,
+            0.4175929999910295,
+            0.426839672960341,
+            0.42438974510878325,
+            0.42350635840557516,
+            0.4235514639876783,
+            0.41903585754334927,
+            0.4212344700936228,
+            0.4246236211620271,
+            0.42290570796467364,
+            0.4191252931486815,
+            0.418204351561144,
+            0.41803043126128614,
+            0.426351468777284,
+            0.4192636033985764,
+            0.42133132088929415,
+            0.4245181914884597
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": true,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "qlora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": 4,
+            "quantization_compute_dtype": "bf16",
+            "quantization_storage": "uint8",
+            "quantization_type": "nf4",
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2866692608,
+            "reserved": 3080716288
+          },
+          "steady_peak_allocated_bytes": 2866692608,
+          "steady_peak_reserved_bytes": 3080716288,
+          "training_loss": 0.2689643556421453,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 46,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        },
+        "holdout-5": {
+          "checkpoint_hash_seconds": 0.9458711482584476,
+          "checkpoint_identity": {
+            "algorithm": "sha256_content_manifest_v1",
+            "files": [
+              {
+                "name": "model.safetensors.index.json",
+                "sha256": "d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e",
+                "size_bytes": 50900
+              },
+              {
+                "name": "model.safetensors-00001-of-00001.safetensors",
+                "sha256": "04b1c301231dd422b8860db31311ab2721511346a32cb1e079c4c4e5f1fe4696",
+                "size_bytes": 1746942600
+              }
+            ],
+            "format": "safetensors",
+            "model_dir": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "selection": "model.safetensors.index.json",
+            "sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "total_bytes_read": 1746993500
+          },
+          "hardware": {
+            "compute_capability": "12.0",
+            "cuda_version": "12.8",
+            "name": "Blackwell GPU",
+            "total_memory_bytes": 76366020608
+          },
+          "initialization_seconds": 2.326379304751754,
+          "limitations": [
+            "Synthetic text measures fixed-shape training, not convergence or arbitrary input pipelines.",
+            "Timing excludes model initialization, checkpoint saving, and evaluation.",
+            "Checkpoint identity streams the selected weight files before model loading; its measured read cost is excluded from training-loop time.",
+            "Timing samples are complete optimizer updates divided by gradient accumulation.",
+            "Peak allocated/reserved memory is PyTorch allocator memory, not total device usage.",
+            "This probe runs Hugging Face Trainer and cannot validate another framework's execution."
+          ],
+          "observed_model": {
+            "parameter_count": 752393024,
+            "trainable_parameter_count": 319488
+          },
+          "optimizer_update_seconds": [
+            0.8749495726078749,
+            0.8421137151308358,
+            0.8411737154237926,
+            0.846912122797221,
+            0.8396886833943427,
+            0.839514053426683,
+            0.8351172860711813,
+            0.8403887446038425,
+            0.8396299029700458,
+            0.8373964005149901,
+            0.8459212626330554,
+            0.8380333222448826,
+            0.834623065777123,
+            0.8432337888516486,
+            0.8365212311036885,
+            0.8402196452952921,
+            0.8384594242088497,
+            0.8361355098895729,
+            0.8437233525328338,
+            0.8356384690850973
+          ],
+          "peak_allocated_bytes": 2866692608,
+          "peak_reserved_bytes": 3080716288,
+          "schema_version": "fakegpu.finetune_observation.v1",
+          "seconds_per_microstep": [
+            0.43747478630393744,
+            0.4210568575654179,
+            0.4205868577118963,
+            0.4234560613986105,
+            0.41984434169717133,
+            0.4197570267133415,
+            0.41755864303559065,
+            0.42019437230192125,
+            0.4198149514850229,
+            0.41869820025749505,
+            0.4229606313165277,
+            0.4190166611224413,
+            0.4173115328885615,
+            0.4216168944258243,
+            0.41826061555184424,
+            0.42010982264764607,
+            0.41922971210442483,
+            0.41806775494478643,
+            0.4218616762664169,
+            0.41781923454254866
+          ],
+          "signature": {
+            "attention_implementation": "sdpa",
+            "checkpoint_sha256": "6a7df6bbdf7de737d467c0cb67ffecec747d6170245c7d65503389cbc78bdf9d",
+            "dataloader_drop_last": false,
+            "distributed_config": {
+              "activation_checkpointing": false,
+              "framework": "single",
+              "gradient_accumulation_steps": 2,
+              "mixed_precision": "bf16",
+              "optimizer_offload_device": "none",
+              "parameter_offload_device": "none",
+              "sharding_strategy": "replicated",
+              "world_size": 1,
+              "zero_stage": 0
+            },
+            "double_quantization": true,
+            "dtype": "bf16",
+            "execution_backend": null,
+            "gradient_accumulation_steps": 2,
+            "gradient_checkpointing": false,
+            "learning_rate": 2e-05,
+            "lora_alpha": 16.0,
+            "lora_bias": "none",
+            "lora_dropout": 0.0,
+            "lora_rank": 8,
+            "lora_target_modules": [
+              "q_proj",
+              "v_proj"
+            ],
+            "lr_scheduler_type": "constant",
+            "max_grad_norm": 1.0,
+            "method": "qlora",
+            "micro_batch_size": 1,
+            "model_config_sha256": "7e9e3f44a8954667edb2f6e5dc10757ec800bf6176f6a78b3ee70027ce2ba54a",
+            "model_name_or_path": "Qwen/Qwen3.5-0.8B (local pretrained text backbone)",
+            "model_revision": null,
+            "modules_to_save": null,
+            "optimizer": "adamw_torch",
+            "packing": false,
+            "parameter_count": null,
+            "parameter_dtype": "bf16",
+            "profile": {
+              "compute_capability": "12.0",
+              "core_clock_mhz": 2377,
+              "id": "blackwell",
+              "memory_bus_width_bits": 384,
+              "memory_bytes": 76374540288,
+              "memory_clock_mhz": 14001,
+              "sm_count": 110
+            },
+            "quantization_bits": 4,
+            "quantization_compute_dtype": "bf16",
+            "quantization_storage": "uint8",
+            "quantization_type": "nf4",
+            "sequence_length": 128,
+            "software_versions": {
+              "accelerate": "1.14.0",
+              "bitsandbytes": "0.50.2",
+              "causal-conv1d": "not-installed",
+              "flash-attn": "2.6.3",
+              "flash-linear-attention": "not-installed",
+              "peft": "0.19.1",
+              "torch": "2.8.0+cu128",
+              "transformers": "5.12.1",
+              "triton": "3.4.0"
+            },
+            "source_framework": "huggingface",
+            "tf32": false,
+            "trainable_parameter_count": null,
+            "warmup_ratio": 0.0,
+            "warmup_steps": 0,
+            "weight_decay": 0.0,
+            "world_size": 1
+          },
+          "software_versions": {
+            "accelerate": "1.14.0",
+            "bitsandbytes": "0.50.2",
+            "causal-conv1d": "not-installed",
+            "flash-attn": "2.6.3",
+            "flash-linear-attention": "not-installed",
+            "peft": "0.19.1",
+            "torch": "2.8.0+cu128",
+            "transformers": "5.12.1",
+            "triton": "3.4.0"
+          },
+          "source": "fakegpu.huggingface_trainer_cuda_probe",
+          "startup_peaks": {
+            "allocated": 2866692608,
+            "reserved": 3080716288
+          },
+          "steady_peak_allocated_bytes": 2866692608,
+          "steady_peak_reserved_bytes": 3080716288,
+          "training_loss": 0.2702964869412509,
+          "workload": {
+            "kind": "synthetic_fixed_length_arithmetic_text",
+            "measured_optimizer_steps": 20,
+            "samples": 44,
+            "seed": 47,
+            "sequence_length": 128,
+            "sha256": "81f8dffebeb82965573fecb52533b1461bf9be1e2c7a558e1be03e717f51590d",
+            "warmup_optimizer_steps": 2
+          }
+        }
+      },
+      "status": "completed",
+      "target_workload": {
+        "effective_batch_size": 2,
+        "effective_epochs": 3.0,
+        "epochs": 3.0,
+        "gradient_accumulation_steps": 2,
+        "micro_batch_size": 1,
+        "microsteps": 3072,
+        "microsteps_per_epoch": 1024,
+        "num_samples": 1024,
+        "optimizer_steps": 1536,
+        "optimizer_steps_per_epoch": 512,
+        "padded_token_slots": 393216,
+        "processed_samples": 3072,
+        "processed_tokens": 393216,
+        "sequence_length": 128,
+        "stop_rule": "epochs"
+      },
+      "worst_holdout_errors": {
+        "allocated_peak_bytes": {
+          "maximum_absolute_percentage_error": 0.0,
+          "maximum_underprediction_percent": 0.0
+        },
+        "analytical_allocated_peak_bytes": {
+          "maximum_absolute_percentage_error": 26.10973684137675,
+          "maximum_underprediction_percent": 26.10973684137675
+        },
+        "optimizer_update_seconds": {
+          "maximum_absolute_percentage_error": 3.387273651717551,
+          "maximum_underprediction_percent": 0.0
+        },
+        "reserved_peak_bytes": {
+          "maximum_absolute_percentage_error": 0.0,
+          "maximum_underprediction_percent": 0.0
+        }
+      }
+    }
+  },
+  "model": "Qwen/Qwen3.5-0.8B",
+  "profile_id": "blackwell",
+  "recorded_on": "2026-10-13",
+  "reproduce_arguments": [
+    "--qlora",
+    "--holdout-runs",
+    "5",
+    "--holdout-steps",
+    "20"
+  ],
+  "reproduce_script": "tests/native/finetune_matrix.py",
+  "sampling_plan": {
+    "calibration_measured_optimizer_steps": 4,
+    "calibration_runs": 1,
+    "holdout_measured_optimizer_steps": 20,
+    "holdout_runs": 5,
+    "warmup_optimizer_steps": 2
+  },
+  "schema_version": "fakegpu.finetune_validation_evidence.v1",
+  "scope": "single_gpu_huggingface_trainer_text_only_synthetic_fixed_length",
+  "signature_path_note": "Local model paths are replaced with a portable display name; these nested observations document evidence and are not directly reusable calibration files.",
+  "source_file_sha256": {
+    "fakegpu/_local_checkpoint.py": "4e1b60fb03bc8a7cab2c13d70ad439afd8c4363e10d7a3ec2deddc76685e29a8",
+    "fakegpu/finetune_cli.py": "a8348c3bb78cc8d2f34e2fd9445d6bfe92b557234a4757ad5ebde6a9ee3ce2d4",
+    "fakegpu/finetune_config.py": "a831f6e76c612e56070526c45967114bb7469bcfdd45f9799a3acbd240b1cb30",
+    "fakegpu/finetune_estimator.py": "014d42d959d1afa1040f4eb178dd8a69437d1a1676e528486f8884a384d0802e",
+    "fakegpu/finetune_probe.py": "71df814c7b7bc36693c57e1f078abf11cc7e6b098275f319b54af095ed3de153",
+    "tests/native/finetune_matrix.py": "a45ff5f81a3e2b1a653ae4166b68a7da8dac584fdca404519d8dfa70929354eb"
+  }
+}

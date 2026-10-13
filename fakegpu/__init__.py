@@ -33,6 +33,16 @@ from .diffusion_estimator import (
     load_diffusion_profiles,
 )
 from .flop_counter import MatmulFlopCounterMode
+from .finetune_config import (
+    FinetuneConfigError,
+    load_finetune_config,
+    normalize_finetune_config,
+)
+from .finetune_estimator import (
+    FinetuneEstimateError,
+    estimate_finetuning,
+    finetune_workload_signature,
+)
 from .kernel_analysis import (
     KernelAnalysisError,
     analyze_kernel_file,
@@ -91,6 +101,8 @@ from .validation import load_validation_manifest, run_validation_manifest
 __all__ = [
     "CalibrationError",
     "DiffusionEstimateError",
+    "FinetuneConfigError",
+    "FinetuneEstimateError",
     "KernelAnalysisError",
     "MatmulFlopCounterMode",
     "OperatorProfileError",
@@ -120,6 +132,7 @@ __all__ = [
     "env",
     "estimate_decoder_inference",
     "estimate_diffusion_generation",
+    "estimate_finetuning",
     "estimate_kv_cache_memory",
     "estimate_module_memory",
     "estimate_roofline",
@@ -129,12 +142,14 @@ __all__ = [
     "estimate_serving_request_set",
     "estimate_training_plan",
     "evaluate_operator_profile",
+    "finetune_workload_signature",
     "init",
     "inspect_safetensors_checkpoint",
     "inspect_diffusion_pipeline",
     "is_initialized",
     "library_dir",
     "load_native_capabilities",
+    "load_finetune_config",
     "load_operator_profiles",
     "load_diffusion_profiles",
     "load_serving_requests",
@@ -144,6 +159,7 @@ __all__ = [
     "measure_transformers_serving_sample",
     "native_capability_report",
     "normalize_training_config",
+    "normalize_finetune_config",
     "patch_torch",
     "profile_roofline",
     "replay_trace",

@@ -64,6 +64,8 @@ BUILTIN_COMMANDS: dict[str, CommandSpec] = {
     "analyze-kernel": CommandSpec(".kernel_analysis", "main"),
     "calibrate": CommandSpec(".calibration", "main"),
     "plan-training": CommandSpec(".training_plan", "main"),
+    "estimate-finetune": CommandSpec(".finetune_cli", "main"),
+    "probe-finetune": CommandSpec(".finetune_cli", "probe_main"),
     "simulate-topology": CommandSpec(".topology", "main"),
     "replay-trace": CommandSpec(".trace_replay", "main"),
     "nvidia-smi": CommandSpec(".smi", "main"),

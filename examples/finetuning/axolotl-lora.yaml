@@ -1,0 +1,18 @@
+base_model: Qwen/Qwen3.5-0.8B
+torch_dtype: bfloat16
+attn_implementation: sdpa
+learning_rate: 2.0e-5
+lr_scheduler: constant
+adapter: lora
+lora_r: 8
+lora_alpha: 16
+lora_target_modules: [q_proj, v_proj]
+sequence_len: 128
+micro_batch_size: 1
+gradient_accumulation_steps: 4
+num_epochs: 3
+bf16: true
+gradient_checkpointing: false
+optimizer: adamw_torch
+sample_packing: false
+num_samples: 10000

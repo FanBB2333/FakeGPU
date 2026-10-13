@@ -4,4 +4,5 @@ include README.md
 recursive-include fakegpu *.py
 recursive-include fakegpu/data *.json
 recursive-include profiles *.yaml
+recursive-include examples *.yaml
 recursive-include src CMakeLists.txt *.cpp *.hpp

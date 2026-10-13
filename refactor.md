@@ -1,7 +1,173 @@
 # FakeGPU 重构分析报告
 
-> 最新检查与实施结果见下方 **2026-10-13 / 406**。后面的 2026-08 历史记录保留问题背景，其行号、规模和待办状态不能直接代表当前代码。
+> 最新功能与验证结果见下方 **2026-10-13 / 微调首批交付**；实施前承诺审计与后续路线见 **2026-10-13 / 功能闭环计划**；重构结果见 **2026-10-13 / 406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-13 / 微调首批交付
+
+### 本轮实现与阶段状态
+
+**P0 / 配置与验收契约、P1 / 离线微调计划的首版已交付；P2 / HF Trainer/PEFT 真机闭环已完成指定短跑场景的验证。** 项目新增 `estimate-finetune` 和 `probe-finetune`，现有 **22 个 CLI**。这次交付解决“三类框架配置 → 单卡微调工作量、时间及 VRAM 估计 → 同配置短跑校准”的主链路；下面原始 P0–P5 计划仍保留，不能将首批交付等同于全部路线完成。
+
+| 交付项 | 实际行为与边界 |
+|---|---|
+| `finetune_config.py` / 三类框架适配 | 读取 Hugging Face Trainer/PEFT、LLaMA-Factory、Axolotl 配置；归一模型与数据路径、方法、精度、adapter、optimizer、量化、batch/accumulation、序列长度和训练停止条件；冲突或不支持语义显式报错。无需导入这些框架或加载权重即可估算。Factory/Axolotl 的真实训练入口尚未在本轮运行。 |
+| `finetune_estimator.py` / Python API 与 `estimate-finetune` | 从本地模型元数据和处理后的样本数、epochs/max_steps 推导 microsteps、optimizer updates、处理 token 数；分项估计权重/adapter、梯度、optimizer/master state、激活和 workspace，输出 training-loop 总时间范围及显存/覆盖报告。首版限单 GPU、无 sharding/offload；分布式仍由 `plan-training` 处理。 |
+| Qwen3.5 架构处理 | 分别计算 full-attention 与 linear-attention 层，区分训练/冻结参数和 LoRA 的实际目标形状；`--text-only` 显式选择文本骨干。DeltaNet backward、可选快速 kernel 和 MoE dispatch 仍为部分解析覆盖，未校准结果不能认证 OOM 安全。 |
+| `finetune_probe.py` / `probe-finetune` | 真正执行 Hugging Face Trainer；支持本轮 full、PEFT LoRA 与 bitsandbytes NF4 QLoRA。拒绝模拟 CUDA、错误 GPU、未支持框架/packing/分片；记录软件与工作负载签名、原始 update 耗时、loss、参数数量以及 startup/steady allocator 峰值。计时覆盖 batch fetching、累积的 forward/backward 与 optimizer update。 |
+| 校准约束 | 对模型元数据、本地 checkpoint 内容 SHA256、实际模型路径、GPU profile、框架、精度、optimizer、adapter、量化、attention、shape 和软件版本进行签名匹配。dataset 数量/epochs 可以外推，改变执行 shape 不可直接复用；来源信息不足的手填观测与已验证采样器元数据分别标记。 |
+| 样例、回归与真机矩阵 | 三类配置位于 `examples/finetuning/`；新增配置、估算器、CLI、probe 协议回归；`tests/native/finetune_matrix.py` 可重复生成配置、启动独立进程、保存观测与估算并比较 holdout。 |
+
+输入样本数指过滤、切分和 packing **之后的训练序列数**；序列长度包含模板与 padding。首版不会自动将任意原始数据集转换为框架一致的 token/packed 数量。时间范围是 **training loop**，不含下载、预处理、模型加载、评估和 checkpoint 保存；解析场景范围与实测极值都不是统计置信区间。尾 batch 和不完整 accumulation 仍按匹配形状的平均开销外推，报告保留这一限制。
+
+### 最终代码复核中的修复
+
+- **空 PEFT 配置不再误判为 full。** 显式出现 `peft: {}` 或 `peft_config: {}` 仍表示请求 adapter；按 LoRA 处理并校验必需目标，与 full 配置冲突时明确报错。
+- **不再静默忽略执行选项。** 自定义 `gradient_checkpointing_kwargs` / `use_reentrant_gc`、`device_map` 和非空 `optim_args` / `optimizer_kwargs` 目前不受该单卡估算/采样协议支持，因此显式拒绝；不会将用户的重算实现、模型放置、offload 或额外 optimizer 状态语义丢掉后继续输出同配置估计。
+- **校准绑定权重内容。** `_local_checkpoint.py` 按 Transformers 的本地权重选择规则，对实际选中的单文件或 index + 引用 shards 流式计算 SHA256 内容清单。probe 和使用观测的 CLI 都重新绑定该身份，因此同一路径替换权重后不会继续接受旧观测；传入旧摘要或哈希期间文件变化会明确报错。哈希不反序列化权重，其 I/O 耗时单独记录并排除在 training-loop 外。
+- **按真实 PyTorch optimizer 存储规则修正显存项。** 显式 `adamw_torch` / `adamw_torch_fused` 的 moments 跟随可训练参数 dtype，不额外添加 FP32 master weights；相应 SGD 状态也按实现计数。其他 optimizer 实现保留明确标注的保守预算。该修复通过真实 PyTorch optimizer state 字节数测试验证，**没有根据此次 GPU 峰值拟合 activation/workspace 系数**；它修正首批 Full 结果中重复预算的状态显存，不消除未知 workspace 风险。
+- **区分估算与实际 OOM。** 解析下界超过容量时返回 `estimated_oom`；观测峰值加额外预算超过容量时返回 `budget_exceeds_capacity`。这两种状态都不冒充执行中已经发生的 OOM；部分覆盖仍保留 `uncertain`。
+- **隔离真实 Trainer 计数测试的运行状态。** 修复前序 mock/框架导入留下的 Torch/CUDA 缓存影响真实 CPU Trainer 回归的问题；改为独立子进程、清空可见 CUDA 设备并使用独立 Triton 缓存目录。依赖缺失或 Transformers 版本低于该测试适用范围时跳过；已安装且版本满足但导入失败仍报错。Transformers **4.57.3** 与 **5.12.1** 各实际执行 **12 个用例**，对照非整除样本、小数 epochs、max_steps 和 accumulation 尾部的 step 计数。
+
+这些修复已通过专项与完整回归，下面记录修复后重新执行的真机矩阵。代码修复与单卡校准完成都不代表下方全部研究路线已完成。
+
+### Qwen3.5-0.8B 真实 CUDA 证据
+
+本轮使用 406 的物理 GPU 1 **Blackwell GPU**，Qwen3.5-0.8B 本地预训练权重的 **text-only backbone**（752,393,024 个参数），合成定长算术问答。运行栈为 PyTorch **2.8.0+cu128**、Transformers **5.12.1**、Accelerate **1.14.0**、PEFT **0.19.1**，QLoRA 使用 bitsandbytes **0.50.2**。未安装 `flash-linear-attention` 与 `causal-conv1d`，不能将此结果直接迁移到启用这些快速 kernel 的栈。
+
+统一配置：BF16 参数与计算、SDPA、microbatch **1**、gradient accumulation **2**、sequence length **128**、AdamW、learning rate **2e-5**、不启用 checkpointing/packing。LoRA 为 `q_proj/v_proj`、rank **8**、alpha **16**、dropout **0**，可训练参数 **319,488**；QLoRA 为 NF4、double quantization、BF16 compute、uint8 storage。QLoRA 的非量化张量/adapter 实际精度还受到 PEFT k-bit preparation 影响，不能只按 BF16 权重总量推算显存。
+
+每种方法启动 **6 个独立 CUDA 进程**：1 个 calibration（seed 42，**2 个预热 + 4 个计时 optimizer updates**，12 条序列）和 **5 个 holdout**（seed 43–47，每个 **2 个预热 + 20 个计时 updates**，44 条序列），三种方法共 **18 个独立进程**。记录矩阵期间没有并发执行其他 FakeGPU 测试套件。所有运行得到有限正数 loss 和计时样本；这是执行与预测证据，不是模型质量评估。
+
+| 方法 | 5 次 holdout 峰值 allocated / reserved（GiB） | 5 次 holdout 均值范围（秒 / optimizer update） | 校准均值预测的最大时间绝对误差 | 未校准 allocated 显存期望值误差 |
+|---|---:|---:|---:|---:|
+| Full | **7.108 / 8.936** | **0.8921–0.9425** | **4.932%** | **低估 10.400%** |
+| LoRA | **2.367 / 2.445** | **0.7539–0.7781** | **1.866%** | **低估 8.106%** |
+| NF4 QLoRA | **2.670 / 2.869** | **0.8223–0.8441** | **3.387%** | **低估 26.110%** |
+
+每种方法的 calibration 与全部 5 次 holdout allocator 峰值相同，因此此处匹配观测的显存复用误差为 **0%**；这仅适用于已记录的同 shape、同软件栈，不能解释为通用显存估计精度。表中保留修正 optimizer 存储规则后仍存在的未校准显存低估，作为后续完善激活与 workspace 覆盖的依据。allocated/reserved 均来自 PyTorch allocator，不包含 CUDA context 和其他非 PyTorch 设备分配。
+
+例如对同 shape 的 **1,024 条处理后序列 × 3 epochs**，计划给出 3,072 microsteps、1,536 optimizer updates，校准后 training-loop 期望约 **22.94 / 19.66 / 21.76 分钟**（Full / LoRA / QLoRA）。这些数字是短跑外推，**本轮未完整执行这三个各处理 3,072 条序列的训练任务**。每个进程中的计时点不是独立进程观测；新增 5 次独立 holdout 提供了更充分的同配置重复证据，仍未覆盖长时间 allocator 漂移、完整数据流水线、OOM 边界或跨模型/硬件精度，不作普适认证。
+
+仓库中保存的数据源为 [`tests/data/finetune_validation_evidence.json`](tests/data/finetune_validation_evidence.json)，包含 **18 份观测**、每种方法 5 份 holdout 比较及最坏误差、软件版本、checkpoint 内容身份、执行代码 SHA256 和已知限制；`source_file_sha256` 已与当前源码逐项核对一致。为便于分发，其中的本地模型路径已改为显示名称，**该文件用于记录证据，不能直接作为 `--observation` 校准输入**；可复用的原始 observation、日志与配置保存在 `/tmp/fakegpu-research-20261013/qwen35-final/`。复现入口如下，应在具有上述可选依赖的 CUDA Python 环境执行：
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python tests/native/finetune_matrix.py \
+  --model /mnt/gm7/models/Qwen/Qwen3.5-0.8B \
+  --profile "$TARGET_GPU_PROFILE" \
+  --report-dir /tmp/fakegpu-finetune-reproduction --qlora \
+  --holdout-runs 5 --holdout-steps 20
+```
+
+### 本轮回归与下一步
+
+以下为本轮代码修复后的完整验证结果；后续校准协议或代码改动应重新运行相应检查。
+
+| 检查 | 本轮结果 |
+|---|---|
+| 完整 Python 回归 | **571 passed、1 skipped**，57.31 秒；日志 `/tmp/fakegpu-research-20261013/python-release-final.log`；跳过项为 CPU-only PyTorch 专属场景 |
+| 真实 Trainer step 计数对照 | Transformers **4.57.3** 和 **5.12.1** 各 **12 个实际训练用例**通过；与估算器的 optimizer/microstep 计数一致 |
+| 原生 smoke 与 CPU simulation | 均通过，包括库边界、capability、coordinator、82 profiles / 15 CC、8 组 cuBLAS 数值测试与 PyTorch matmul 对照 |
+| 严格 validation manifests | smoke **7/7**、research **39/39**；均无失败或跳过 |
+| 发布包 | 最终 wheel 内本轮模块与工作区逐字节一致；在 `cwd=/tmp`、`PYTHONPATH` 仅包含解包 wheel 和 bitsandbytes extras 的条件下，复用真实 LoRA 观测执行估算成功，得到 **1,536 optimizer steps**、`matched_real_measurement_extrapolation` 与 `observed_probe_fits` |
+| 真实微调矩阵 | Full / LoRA / NF4 QLoRA，**18 个独立 CUDA 进程**全部完成；每种方法 1 次校准、5 次独立 holdout，原始采样与 JSON 比较完整 |
+
+### P3 框架真实执行的环境准备审计
+
+只读核对本地 `/home/l1ght/repos/LLaMA-Factory`：工作区干净，`main` 为 `820ed764c47ede8f6ae56da89dc48aadc1b000ba`（2025-05-16），版本 **0.9.3.dev0**；该快照已有 Qwen3 模板，未包含 Qwen3.5 支持。其依赖上限为 Transformers **4.51.3**、PEFT **0.15.1**、Accelerate **1.6.0**，与现有用于本轮验证的环境不兼容。`fakegpu` 与 `torch` 两个 conda 环境均未安装 LLaMA-Factory、Axolotl 或 TRL；现有 Transformers 分别为 **4.57.3** 和 **5.12.1**。
+
+因此 P3 的下一项交付是建立支持 Qwen3.5 的现代框架隔离环境、锁定依赖与版本，再接入真实训练入口和同工作量观测协议。不能通过关闭版本校验强行运行旧快照，并将配置适配测试报告为框架执行通过。本轮没有改动该旧 LLaMA-Factory 仓库或现有环境的依赖约束。
+
+继续按依赖推进：先扩展 P2 的独立长跑、更多 sequence/batch/checkpointing 组合及低估/OOM 边界；再为 LLaMA-Factory、Axolotl 增加各自真实 runner 和相同工作量对照。补齐 tokenizer/chat-template/packing 的实际数据统计后，才能将原始数据文件直接作为可靠的训练工作量输入。尚未完成的 README 路线包括长上下文与在线 serving 广泛真测、diffusion 真机/训练、更多 GPU/多机 MoE 与分布式验证、原生可执行算子扩展；它们仍按下方验收矩阵逐项交付，不因本次微调入口完成而勾选。
+
+## 2026-10-13 / 功能闭环计划：README 承诺与微调成本预测
+
+### 目标与验收口径
+
+用户确认按 **Hugging Face Trainer/PEFT → LLaMA-Factory → Axolotl** 的顺序推进，使用 Qwen3.5 系列与本地合成数据建立验收。两个目标是：逐项实现 README 声明的功能；给定模型、框架配置、样本规模、训练轮次和目标 GPU，预测总训练时间与峰值 VRAM，并能通过小规模真实训练校准。
+
+本节是基于 `fcc0f848` 的实施前审计与交付计划，不能把这里列出的待办当作已交付功能。审计逐项核对了三个 README、20 项 CLI 注册、生产模块、维护测试和历史证据摘要。2026-10-13 单独重跑 README 契约测试为 **4 passed**；该检查证明声明中的命令、证据数字与示例约定一致，不等同于所有硬件场景已验证。该基线的完整回归结果另见下方重构验证表。
+
+采用三个状态维度：**实现**表示有可达代码；**维护验证**表示有对应测试或可复现的本地执行；**真实精度**表示与指定模型、形状、软件栈和真实 GPU 的独立观测对照。公式测试通过不能升级为真机精度通过，配置能解析不能升级为整个框架能训练。
+
+### README 功能验收矩阵
+
+下面覆盖三语 README 的使用场景、命令表、已勾选 roadmap 和未勾选 roadmap。相同行为在不同章节重复出现时合并为一个验收项。
+
+| ID | 功能承诺 / 入口 | 基线实现与维护证据 | 尚需完成的验收或边界 |
+|---|---|---|---|
+| R01 | 安装、原生库、GPU 目录；`doctor` | `_api.py`、`profile_catalog.py`、`doctor.py`；82 profiles / 15 CC；wheel 独立导入及 native 初始化已验证 | 目录元数据不等于各卡的实测性能；各发布平台仍要跑自己的安装矩阵 |
+| R02 | CPU PyTorch FakeCUDA、训练控制流；`demo` | `torch_patch.py`、`_upstream.py`、`_allocator.py`；runtime、allocator、cross-device、profile、stage 测试 | 仅维护的 PyTorch 运算；不承诺二进制 CUDA 扩展或任意 kernel 数值执行 |
+| R03 | 原生 CUDA/NVML/cuBLAS/NCCL 拦截与模式切换 | `src/`、`_api.py`；native smoke、库边界、物理 GPU 掩码与 hybrid/passthrough 对照 | `simulate`、`hybrid`、`passthrough` 必须分别列明真实计算和模拟设备的边界 |
+| R04 | 原生 API 分类和严格策略；`capabilities` | `native_api_capabilities.json`、`capabilities.py`；104 显式 API、policy/source/export 审计 | 未执行 API 不得伪装为正确数值结果；新增数值支持必须有参考对照与失败路径 |
+| R05 | 运行前 fit/OOM 检查；`preflight` | `preflight.py`、`_preflight_*`；阶段执行、OOM、timeout、报告回归 | 未覆盖的算子/workspace 不得给无条件安全结论；backend 私有内存需同栈校准 |
+| R06 | 静态 tensor/workspace 显存与 FLOP | `memory_estimator.py`、`workspace_*`、`flop_counter.py`；静态生命周期、算子 profile 和 workspace 测试 | 动态 shape、自定义算子、未知 workspace 的误差仍需单独观测 |
+| R07 | 仓库、依赖、CUDA/PTX/SASS 资源分析；`analyze-repo` / `analyze-kernel` | `repository_analyzer.py`、`kernel_analysis.py`；仓库夹具、occupancy/PTX/SASS 测试 | 静态扫描不能证明所有动态入口可运行 |
+| R08 | LLM 权重、KV、adapter、MoE、FLOPs；`estimate-llm` | `llm_estimator.py`；safetensors header、MHA/GQA/MQA/MLA、量化、adapter、MoE 回归 | Qwen3.5 hybrid attention 尚不能直接套用全层 GQA 公式；vision 激活与 FLOPs 已在英文 README 标为未建模 |
+| R09 | KV 动态/静态/量化/分页/滑窗 | `llm_estimator.py`、`_serving_kv.py`；字节公式、block rounding、CLI 与 research manifest | 模型 cache 实现、量化元数据、kernel workspace 需匹配真实 runtime |
+| R10 | 混合请求、continuous-batch 容量、chunked prefill、prefix sharing；`plan-serving` | `serving_plan.py`、`_serving_*`；generic/vLLM 预算、请求清单、准入测试 | 已实现容量模型；到达流量、排队、抢占、淘汰、吞吐/延迟不是该功能当前承诺 |
+| R11 | 独立 draft speculative 显存与准入 | `_serving_speculative.py`；双模型权重/cache、verify transient、signature 回归 | 未验证真实 speculative runtime；固定 acceptance 假设不能当作实测加速比 |
+| R12 | SD1.5、SDXL、PixArt、本地 UNet/cross/joint DiT 生成显存；`estimate-diffusion` | `diffusion_estimator.py`、`_diffusion_*`；分阶段、CFG、offload、切片/平铺及本地三架构测试 | **DiT generation 已有实现**；通用 DiT、video、自定义组件和所有 diffusion 真机精度尚未完成 |
+| R13 | GPU-aware 分析延迟区间；`estimate-roofline` | `performance_model.py`；全部 profile 可解析、有序区间与瓶颈测试 | 分析区间不是实测 kernel 时间，也尚不是完整训练总时长 |
+| R14 | DeepSpeed/Accelerate/FSDP/FSDP2 单 rank 训练显存；`plan-training` | `training_plan.py`；配置归一、阶段、分片、offload 与 research manifest | 当前需要显式 parameter/activation bytes；没有三类微调框架的数据规模、轮次与时长闭环 |
+| R15 | collective 路由与链路争用；`simulate-topology` | `topology.py`；算法、ECMP、争用与完整报告对照 | 分析链路模型，不是实际集群网络性能认证 |
+| R16 | compute/communication/wait/memory 时间线；`replay-trace` | `trace_replay.py`；合成 trace、rank 等待和韧性事件测试 | 后续需真实 profiler / distributed trace 的输入适配与时间基准校正 |
+| R17 | 校准、重复采集、比较和可靠性门禁；`calibrate` | `calibration.py`、`_calibration_*`；协议/schema、签名拒绝、重复样本、verify/bundle 测试 | 当前内建采集器主要面向 serving；训练耗时/显存需要独立的采样协议与观测 |
+| R18 | SMI 设备/进程、native 活动、NVLink/MIG/故障/健康视图；`nvidia-smi` | `smi.py`、`_smi_*`、`src/nvml`；SMI、native NVML 和 bounded publisher 回归 | 拓扑/MIG/故障为建模控制面；不是硬件分区管理、真实 ECC 或故障注入执行 |
+| R19 | Prometheus/JSON、有界历史与健康服务；`metrics` | `metrics.py`；cardinality、历史隔离、HTTP、坏状态降级测试 | 内存历史是短期观测，不承诺持久化监控服务 |
+| R20 | workspace 目录验证；`workspace-profiles` | `workspace_profiles.py`、`workspace_cli.py`；profile schema、匹配与 CLI 测试 | 未匹配的 profile 应显式保留覆盖缺口 |
+| R21 | 声明式 JSON/TOML/YAML 校验；`validate` | `validation.py`、schema、两份 manifest；7 smoke + 39 research 全通过 | 条目必须区分合成/CPU/真实 GPU；退出码、JSON 检查通过不自动证明精度 |
+| R22 | coordinator、TCP payload 和数值 collective；`coordinator` / `bandwidth` | `distributed_cli.py`、`src/distributed`；两缓冲路径数值测试、本机双逻辑节点 TCP 通过 | 尚缺真实跨机器与多栈验证；不可替代 NCCL/NVLink/RDMA benchmark |
+| R23 | roadmap：扩大原生可执行 CUDA/cuBLAS | 已有 8 组 cuBLAS 数值测试，其余高风险 API 明确分类 | **待扩展**。先从所选研究 workload 实际触发的 unsupported API 建有限清单，再逐个实现与参考比对 |
+| R24 | roadmap：长上下文/online serving 真实 GPU 验证 | 短序列 Transformers sampler 已有历史执行证据，generic/vLLM 容量已建模 | **待验证**。增加真实长上下文、动态请求、prefix/cache/预留策略对应观测和误差门禁 |
+| R25 | roadmap：diffusion 真机、训练及 DiT 显存 | generation 和部分 DiT 已实现；无 dedicated diffusion training estimator | **部分实现**。拆成 generation 真测、training 模型、扩展 DiT 三项独立验收 |
+| R26 | roadmap：更多 GPU/软件栈的 distributed/MoE | 分析模型、coordinator 与历史固定 GPU 结果存在 | **待验证**。指定版本、实际 TP/PP/EP/ZeRO/FSDP 组合和多机基准；本机逻辑节点不计入跨机完成 |
+
+基线 README 需要同步的说明：三语均保留历史精度范围和 immutable source revision；不能把历史 Qwen SFT/NF4 结果当作本轮框架验证。英文已有多模态未建模声明，简繁中文应同步。`Current repository verification` 的 2026-08-05 / 223 passed 是历史记录，应标明日期或用新的完整证据替换；不要与下方 2026-10-13 的 323 passed 混用。roadmap 的 DiT 一项应拆细，避免让已实现 generation 与尚未完成 training 互相掩盖。
+
+### 微调预测的最小完整产品
+
+输入必须包含：模型路径/版本、目标 GPU、框架与版本、训练方法、优化器及精度、microbatch、gradient accumulation、序列长度或真实 token 分布、样本数/数据文件、epochs 或 max_steps。仅“样本数 + epochs + GPU”不足以确定显存或时长；未给的必要参数应在报告中明确显示假设，不能静默当作短序列。
+
+| 层次 | 需要实现的行为 | 验收方法 |
+|---|---|---|
+| 框架配置适配 | 三类配置归一到同一训练描述，保留原字段来源；读取 full/LoRA/QLoRA、精度、checkpointing、packing、batch/accumulation、数据规模和轮次 | 三份等价配置得到相同核心描述；冲突精度、无效 batch、未知量化和不支持训练 stage 明确报错 |
+| 数据规模 | 保留样本数、有效 token 数、padding 后执行 token 数、长度分位数、被截断样本数；明确是否已应用 chat template/packing | 固定 seed 合成 JSONL；真实 tokenizer 后记录统计；验证 packing 开/关、尾批次与截断 |
+| 训练计划 | 展示每 epoch microsteps、optimizer updates、总 token、有效全局 batch；max_steps 优先级和尾部 accumulation 与指定框架版本一致 | 与真正 Trainer 的 global_step、实际 batch 数对照，覆盖不能整除与小数 epochs |
+| VRAM | 分别计权重、可训练参数、梯度、optimizer/master state、saved activations、logits/loss、临时 workspace；显示 allocated / reserved / process 口径 | 比较 load、forward、backward、首次及稳态 optimizer step；峰值取各阶段最大值，不能乘以 epochs |
+| 总时长 | 分离 load/tokenize/compile/warmup、训练 microstep、optimizer step、eval、checkpoint save；给分析区间与校准预测来源 | 用预热后多个独立样本预测未参与校准的较长训练；报告总时间误差和 step 吞吐波动 |
+| 校准约束 | 对模型结构/版本、shape、方法、optimizer、backend、kernel、GPU 和软件栈建立签名；保留原始 step 样本 | 匹配配置可复用；不同 GPU/框架/序列/量化的样本不直接覆盖预测，外推必须显式标注 |
+| 输出 | 人类可读表 + JSON，包含训练计划、阶段显存、fit/headroom、总时长范围、覆盖缺口与复现配置 | CLI/API/schema 一致；缺证据显示 `Modeled` 或 `uncalibrated`，不虚构“置信度” |
+
+时间应按执行工作量推导，例如在固定 shape 的明确假设下使用 `训练 microsteps × 对应 microstep 时间 + optimizer updates × update 开销 + 显式固定/周期性开销`。若直接测的是包含 update 的完整 optimizer step，则不能重复加 update 开销。LoRA 的可训练参数少，不代表前向/反向计算量按同一比例减少；QLoRA 还包含反量化 kernel 的成本。未校准 GPU 上的 roofline 结果保持分析区间，不能自动沿用另一张卡的 tokens/s。
+
+适配器以官方参数语义为准。HF Trainer 使用 `per_device_train_batch_size`、`gradient_accumulation_steps`、`num_train_epochs`/`max_steps`；LLaMA-Factory 的 `max_samples` 是**每个 dataset** 上限，多个数据集不能直接当成总样本数；Axolotl 的 `sample_packing` 会改变实际 batch 数，不能只乘样本数和 `sequence_len`。[HF Trainer](https://huggingface.co/docs/transformers/main_classes/trainer)、[LLaMA-Factory arguments](https://llamafactory.readthedocs.io/en/latest/advanced/arguments.html)、[Axolotl config reference](https://docs.axolotl.ai/docs/config-reference.html)
+
+### Qwen3.5 首批验收与架构约束
+
+首个验收模型选 **Qwen/Qwen3.5-0.8B**，随后扩展到同系列 2B。0.8B 官方配置是 dense text backbone 加 vision encoder，24 层中包含 18 个 Gated DeltaNet 和 6 个 full-attention 层；不能因为家族介绍含 MoE 就把 0.8B 判为 MoE，也不能按 24 个标准 attention 层计算全部 cache/activation。官方 Transformers 文档分别提供 dense 与 MoE 架构；DeltaNet 的 kernel 选择会影响时间与显存，必须记录 `fla`、`causal_conv1d` 与实际执行路径。[官方 0.8B 模型卡](https://huggingface.co/Qwen/Qwen3.5-0.8B)、[官方 config](https://huggingface.co/Qwen/Qwen3.5-0.8B/raw/main/config.json)、[Transformers Qwen3.5](https://huggingface.co/docs/transformers/model_doc/qwen3_5)
+
+- 初期使用纯文本 SFT、单卡、固定长度与不 packing 的样本；明确加载的是完整 conditional-generation 模型还是 text-only causal LM。即使输入只有文本，若加载了视觉权重，驻留显存仍需计入；视觉模块是否训练应单独记录。
+- 构造带固定 seed 的简单问答/指令 JSONL，并保留 tokenizer、chat template、截断后的统计。短 smoke 可用少量样本和 128-token shape；随后扩展到 512/1024-token、不同 microbatch、accumulation 与 checkpointing。短 smoke 不作为长上下文精度结论。
+- 先跑 full 与 LoRA，再跑明确 backend 的 QLoRA；原生 NF4 历史实验不能替代 bitsandbytes 4-bit 或其他量化实现。LoRA 应按实际匹配模块的输入/输出维度计数，不可假设所有层都有相同 `q_proj/k_proj/v_proj`。
+- 真实采样拒绝 FakeCUDA/simulate；记录 loss 有限、参数确实更新、模型/框架/torch/CUDA/GPU 版本、峰值 allocated/reserved 及同步后的耗时。
+- 校准与验收分开：短跑样本拟合 step 时间，独立更长运行验收总时长；新发布的显存精度数据按 README 要求保留至少五次独立观测及最坏低估。合成数据只验证执行与预测，不评价模型质量。
+- 图像/视频、多机 MoE、long-context DeltaNet backward、fused loss、特殊 optimizer 在各自完成支持与观测前标记为待扩展；纯文本单卡结果不覆盖它们。
+
+### 按依赖排序的交付阶段
+
+| 顺序 | 交付物 | 依赖与退出条件 |
+|---|---|---|
+| P0：承诺审计与配置契约 | 本验收矩阵；三语边界同步；三个框架配置适配、版本化 JSON 报告与样例 | 先锁定 full/LoRA/QLoRA 和纯文本 SFT 范围；解析成功与执行验证分别列状态 |
+| P1：离线微调计划 | 参数/adapter 计数、数据工作量、阶段 VRAM、profile 时间区间；Qwen3.5 hybrid-aware 处理或明确不支持项 | CPU 公式与属性测试、框架等价配置、极端/非法输入、CLI/API 一致；无需先下载全部大模型 |
+| P2：HF Trainer/PEFT 真机闭环 | Qwen3.5-0.8B + 合成 JSONL；分阶段测量、训练观测协议、校准与独立验证 | 真正 Trainer 跑 full/LoRA，随后指定 backend QLoRA；吻合 step 计数，输出未参与校准运行的显存/时间误差 |
+| P3：LLaMA-Factory 与 Axolotl 执行适配 | 各框架真实入口、环境检查、配置/数据导出、同格式测量结果 | 两个框架分别真实执行相同小模型/数据；记录自身依赖/模板/packing；配置归一测试不能替代这一步 |
+| P4：补齐 README 研究验证缺口 | R24 长上下文/serving、R25 diffusion generation 真测与训练估计、R26 distributed/MoE 多栈 | 复用观测/比较协议；每类给独立数据、精度门禁、失败/OOM 记录和明确支持矩阵 |
+| P5：原生数值扩展与实验工具包 | 按 R23 的需求清单扩展；统一实验 ID、参数 sweep、恢复、compare、图表与原始样本索引 | 每个原生 API 有真实数值参考与严格错误测试；完整实验从配置到报告可复现，旧功能回归通过 |
+
+P4 的 diffusion 与多机工作在 P2 协议稳定后可并行；P5 中实验产物目录和签名应在 P2 先使用最小实现，再扩展成通用 runner。每个阶段独立提交，不以勾完 roadmap 为目的降低已公开的验证要求。
+
+本机可立即开展 P0/P1 的 CPU 归一与公式验证、P2 的 Blackwell GPU 单卡小模型真实训练，以及 R24 的单卡 Transformers 长序列采样。P3 需要逐一验证安装栈和实际启动命令；R26 的真实多机/多栈证据不能仅靠本机增加逻辑 rank 补齐。当前机器另一张 secondary GPU 卡与 Blackwell GPU 属于不同设备环境，不能未经对应校准就当作同构多卡吞吐测试。
 
 ## 2026-10-13 / 406：完成度、逐部件检查与实施结果
 
