@@ -19,7 +19,9 @@ pytest.importorskip("accelerate")
 def trainer(monkeypatch):
     monkeypatch.setattr(
         "fakegpu._finetune_packed_sampler.validate_native_sampler_versions",
-        lambda framework: {"test": "synthetic"},
+        lambda framework, versions=None: (
+            {"test": "synthetic"} if versions is None else versions
+        ),
     )
     dataset = [
         {
@@ -44,13 +46,19 @@ def trainer(monkeypatch):
 
     instance = SimpleNamespace(
         train_dataset=dataset,
-        accelerator=SimpleNamespace(num_processes=1),
+        accelerator=SimpleNamespace(
+            num_processes=1, dataloader_config=SimpleNamespace(data_seed=42)
+        ),
         args=SimpleNamespace(
             world_size=1,
             n_gpu=0,
             gradient_accumulation_steps=2,
             per_device_train_batch_size=3,
             dataloader_drop_last=False,
+            dataloader_num_workers=0,
+            dataloader_prefetch_factor=None,
+            dataloader_persistent_workers=False,
+            dataloader_pin_memory=False,
         ),
     )
     instance.data_collator = IsolatedPackingCollator(
@@ -61,13 +69,22 @@ def trainer(monkeypatch):
     )
 
     def loader():
+        from accelerate.data_loader import prepare_data_loader
+
         if not hasattr(instance, "_train_dataloader"):
-            instance._train_dataloader = torch.utils.data.DataLoader(
+            native_loader = torch.utils.data.DataLoader(
                 instance.train_dataset,
                 batch_sampler=torch.utils.data.BatchSampler(
                     instance._get_train_sampler(), 3, instance.args.dataloader_drop_last
                 ),
                 collate_fn=instance.data_collator,
+            )
+            instance._train_dataloader = prepare_data_loader(
+                native_loader,
+                device=torch.device("cpu"),
+                num_processes=1,
+                use_seedable_sampler=True,
+                data_seed=instance.accelerator.dataloader_config.data_seed,
             )
         return instance._train_dataloader
 

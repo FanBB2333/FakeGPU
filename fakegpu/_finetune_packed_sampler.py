@@ -36,6 +36,9 @@ def install_packed_random_sampling(trainer, *, framework, seed, replace):
             "packing seed must be installed before loader preparation"
         )
 
+    if hasattr(trainer, "_fakegpu_packing_seed"):
+        raise FinetuneEstimateError("independent packing seed is already installed")
+
     def seeded(base, dataset):
         if type(base) is not torch.utils.data.RandomSampler or base.replacement:
             raise FinetuneEstimateError(
@@ -77,6 +80,10 @@ def install_packed_random_sampling(trainer, *, framework, seed, replace):
             return seeded(original(dataset), dataset)
 
         replace(trainer, "_get_train_sampler", sampler)
+    # Accelerate replaces RandomSampler subclasses during loader preparation.
+    # Its explicit data_seed must agree with the independently installed source.
+    replace(trainer.accelerator.dataloader_config, "data_seed", seed)
+    replace(trainer, "_fakegpu_packing_seed", seed)
 
 
 def inspect_packed_epochs(trainer, *, framework, epochs):
@@ -88,6 +95,9 @@ def inspect_packed_epochs(trainer, *, framework, epochs):
     versions = validate_native_sampler_versions(framework)
     _integer(epochs, "packing epochs")
     args = trainer.args
+    explicit_seed = getattr(trainer, "_fakegpu_packing_seed", None)
+    if explicit_seed is None:
+        raise FinetuneEstimateError("packing inspection requires the independent packing seed")
     if args.world_size != 1 or args.n_gpu > 1 or trainer.accelerator.num_processes != 1:
         raise FinetuneEstimateError("packing inspection requires one device")
     with _preserve_random_streams(torch):
@@ -105,7 +115,11 @@ def inspect_packed_epochs(trainer, *, framework, epochs):
                 "flat packing inspection requires native ordinary batches"
             )
         base = native.sampler
-        if type(base) is not SeedableRandomSampler or base.replacement:
+        if (
+            type(base) is not SeedableRandomSampler
+            or base.replacement
+            or base.initial_seed != explicit_seed
+        ):
             raise FinetuneEstimateError(
                 "packing inspection requires the independent packing seed"
             )

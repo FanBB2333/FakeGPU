@@ -766,5 +766,10 @@
     "Native Ax derived mask dropping prevented source proof; explicit reference adapter retains masks.",
     "Native CPU Arrow bulk fetch cannot accept nested bins without a fetch adapter; dataset-instance adapter verified actual consumption.",
     "Initial 128-token Factory fixture contained one logical sequence per row; separate 256-token CPU fixture exercises real packing. No GPU timing-based fixture choice."
-  ]
+  ],
+  "seed_correction": {
+    "requested_seed": 123,
+    "actual_prepared_seed": 42,
+    "scope": "All eight original CPU sampler/Trainer records retain source_seed=42. Accelerate replaced the source sampler during loader preparation. Counts and actual consumption match those recorded orders, but these records do not prove seed 123 was applied. Original archived records remain unchanged. Corrected seed binding is validated in the subsequent packed-budget evidence."
+  }
 }
