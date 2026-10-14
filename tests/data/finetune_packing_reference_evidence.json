@@ -1,0 +1,770 @@
+{
+  "schema_version": "fakegpu.packing_reference_evidence.v1",
+  "scope": "Native CPU collation/sampling/Trainer counts and tiny random real Qwen3.5 GPU kernel semantics. No native 0.8B packed time/VRAM budget or varlen throughput claim.",
+  "regression": {
+    "passed": 1596,
+    "skipped": 1,
+    "seconds": 138.79
+  },
+  "production_modules_frozen": 98,
+  "gpu_cases": 18,
+  "native_cpu_modes": [
+    {
+      "framework": "huggingface",
+      "real_batches": false,
+      "dataset_rows": 13,
+      "dataset_logical_sequences": 25,
+      "declared_microsteps": 5,
+      "native_cpu_training_updates": 8,
+      "native_cpu_training_microsteps": 14,
+      "epochs": [
+        {
+          "epoch_index": 1,
+          "microsteps": 5,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 13,
+          "dropped_dataset_row_indices": [],
+          "dropped_logical_sequences": 0,
+          "packed_rows": 13,
+          "logical_sequences": 25,
+          "nonpadding_tokens": 2368,
+          "executed_token_slots": 3328
+        },
+        {
+          "epoch_index": 2,
+          "microsteps": 5,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 13,
+          "dropped_dataset_row_indices": [],
+          "dropped_logical_sequences": 0,
+          "packed_rows": 13,
+          "logical_sequences": 25,
+          "nonpadding_tokens": 2368,
+          "executed_token_slots": 3328
+        },
+        {
+          "epoch_index": 3,
+          "microsteps": 5,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 13,
+          "dropped_dataset_row_indices": [],
+          "dropped_logical_sequences": 0,
+          "packed_rows": 13,
+          "logical_sequences": 25,
+          "nonpadding_tokens": 2368,
+          "executed_token_slots": 3328
+        }
+      ]
+    },
+    {
+      "framework": "llamafactory",
+      "real_batches": false,
+      "dataset_rows": 13,
+      "dataset_logical_sequences": 25,
+      "declared_microsteps": 5,
+      "native_cpu_training_updates": 8,
+      "native_cpu_training_microsteps": 14,
+      "epochs": [
+        {
+          "epoch_index": 1,
+          "microsteps": 5,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 13,
+          "dropped_dataset_row_indices": [],
+          "dropped_logical_sequences": 0,
+          "packed_rows": 13,
+          "logical_sequences": 25,
+          "nonpadding_tokens": 2368,
+          "executed_token_slots": 3328
+        },
+        {
+          "epoch_index": 2,
+          "microsteps": 5,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 13,
+          "dropped_dataset_row_indices": [],
+          "dropped_logical_sequences": 0,
+          "packed_rows": 13,
+          "logical_sequences": 25,
+          "nonpadding_tokens": 2368,
+          "executed_token_slots": 3328
+        },
+        {
+          "epoch_index": 3,
+          "microsteps": 5,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 13,
+          "dropped_dataset_row_indices": [],
+          "dropped_logical_sequences": 0,
+          "packed_rows": 13,
+          "logical_sequences": 25,
+          "nonpadding_tokens": 2368,
+          "executed_token_slots": 3328
+        }
+      ]
+    },
+    {
+      "framework": "axolotl",
+      "real_batches": false,
+      "dataset_rows": 25,
+      "dataset_logical_sequences": 25,
+      "declared_microsteps": 6,
+      "native_cpu_training_updates": 8,
+      "native_cpu_training_microsteps": 16,
+      "epochs": [
+        {
+          "epoch_index": 1,
+          "microsteps": 6,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 25,
+          "dropped_dataset_row_indices": [],
+          "dropped_logical_sequences": 0,
+          "packed_rows": 6,
+          "logical_sequences": 25,
+          "nonpadding_tokens": 2058,
+          "executed_token_slots": 2304
+        },
+        {
+          "epoch_index": 2,
+          "microsteps": 6,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 25,
+          "dropped_dataset_row_indices": [],
+          "dropped_logical_sequences": 0,
+          "packed_rows": 6,
+          "logical_sequences": 25,
+          "nonpadding_tokens": 2058,
+          "executed_token_slots": 2304
+        },
+        {
+          "epoch_index": 3,
+          "microsteps": 6,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 25,
+          "dropped_dataset_row_indices": [],
+          "dropped_logical_sequences": 0,
+          "packed_rows": 6,
+          "logical_sequences": 25,
+          "nonpadding_tokens": 2058,
+          "executed_token_slots": 2304
+        }
+      ]
+    },
+    {
+      "framework": "axolotl",
+      "real_batches": true,
+      "dataset_rows": 25,
+      "dataset_logical_sequences": 25,
+      "declared_microsteps": 6,
+      "native_cpu_training_updates": 8,
+      "native_cpu_training_microsteps": 16,
+      "epochs": [
+        {
+          "epoch_index": 1,
+          "microsteps": 6,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 24,
+          "dropped_dataset_row_indices": [
+            4
+          ],
+          "dropped_logical_sequences": 1,
+          "packed_rows": 18,
+          "logical_sequences": 24,
+          "nonpadding_tokens": 2007,
+          "executed_token_slots": 2304
+        },
+        {
+          "epoch_index": 2,
+          "microsteps": 6,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 24,
+          "dropped_dataset_row_indices": [
+            18
+          ],
+          "dropped_logical_sequences": 1,
+          "packed_rows": 18,
+          "logical_sequences": 24,
+          "nonpadding_tokens": 2006,
+          "executed_token_slots": 2304
+        },
+        {
+          "epoch_index": 3,
+          "microsteps": 6,
+          "optimizer_updates": 3,
+          "source_dataset_rows": 24,
+          "dropped_dataset_row_indices": [
+            16
+          ],
+          "dropped_logical_sequences": 1,
+          "packed_rows": 18,
+          "logical_sequences": 24,
+          "nonpadding_tokens": 2006,
+          "executed_token_slots": 2304
+        }
+      ]
+    }
+  ],
+  "gpu": [
+    {
+      "framework": "huggingface",
+      "torch": "2.9.1+cu128",
+      "transformers": "5.6.0",
+      "cases": [
+        {
+          "backend": "eager",
+          "checkpointing": null,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.0625,
+          "parameter_gradient_max_relative_delta": 0.008928571428571428,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "eager",
+          "checkpointing": false,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.0625,
+          "parameter_gradient_max_relative_delta": 0.008928571428571428,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "eager",
+          "checkpointing": true,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.0625,
+          "parameter_gradient_max_relative_delta": 0.008928571428571428,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "sdpa",
+          "checkpointing": null,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.125,
+          "parameter_gradient_max_relative_delta": 0.022222222222222223,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "sdpa",
+          "checkpointing": false,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.125,
+          "parameter_gradient_max_relative_delta": 0.022222222222222223,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "sdpa",
+          "checkpointing": true,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.125,
+          "parameter_gradient_max_relative_delta": 0.022222222222222223,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        }
+      ],
+      "packed_collation": {
+        "framework": "huggingface",
+        "native_class": "transformers.data.data_collator.DataCollatorForSeq2Seq",
+        "batch": {
+          "schema_version": "fakegpu.packed_batch.v1",
+          "tensor_dtypes": {
+            "input_ids": "torch.int64",
+            "attention_mask": "torch.bfloat16",
+            "labels": "torch.int64",
+            "position_ids": "torch.int64"
+          },
+          "shape": [
+            2,
+            8
+          ],
+          "packed_rows": 2,
+          "logical_sequences": 5,
+          "segments": [
+            [
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                4
+              ],
+              [
+                4,
+                8
+              ]
+            ],
+            [
+              [
+                0,
+                2
+              ],
+              [
+                2,
+                6
+              ]
+            ]
+          ],
+          "nonpadding_tokens": 14,
+          "padding_tokens": 2,
+          "supervised_tokens": 9,
+          "causal_supervised_tokens": 9,
+          "input_sha256": "d20f8c2da1afc51131f496e2f0149e4f40c46c8ca302e2702e2aee14292fe454"
+        }
+      }
+    },
+    {
+      "framework": "llamafactory",
+      "torch": "2.9.1+cu128",
+      "transformers": "5.6.0",
+      "cases": [
+        {
+          "backend": "eager",
+          "checkpointing": null,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.0625,
+          "parameter_gradient_max_relative_delta": 0.008928571428571428,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "eager",
+          "checkpointing": false,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.0625,
+          "parameter_gradient_max_relative_delta": 0.008928571428571428,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "eager",
+          "checkpointing": true,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.0625,
+          "parameter_gradient_max_relative_delta": 0.008928571428571428,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "sdpa",
+          "checkpointing": null,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.125,
+          "parameter_gradient_max_relative_delta": 0.022222222222222223,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "sdpa",
+          "checkpointing": false,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.125,
+          "parameter_gradient_max_relative_delta": 0.022222222222222223,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "sdpa",
+          "checkpointing": true,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.125,
+          "parameter_gradient_max_relative_delta": 0.022222222222222223,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        }
+      ],
+      "packed_collation": {
+        "framework": "llamafactory",
+        "native_class": "llamafactory.data.collator.SFTDataCollatorWith4DAttentionMask",
+        "batch": {
+          "schema_version": "fakegpu.packed_batch.v1",
+          "tensor_dtypes": {
+            "input_ids": "torch.int64",
+            "attention_mask": "torch.bfloat16",
+            "labels": "torch.int64",
+            "position_ids": "torch.int64"
+          },
+          "shape": [
+            2,
+            8
+          ],
+          "packed_rows": 2,
+          "logical_sequences": 5,
+          "segments": [
+            [
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                4
+              ],
+              [
+                4,
+                8
+              ]
+            ],
+            [
+              [
+                0,
+                2
+              ],
+              [
+                2,
+                6
+              ]
+            ]
+          ],
+          "nonpadding_tokens": 14,
+          "padding_tokens": 2,
+          "supervised_tokens": 9,
+          "causal_supervised_tokens": 9,
+          "input_sha256": "d20f8c2da1afc51131f496e2f0149e4f40c46c8ca302e2702e2aee14292fe454"
+        }
+      }
+    },
+    {
+      "framework": "axolotl",
+      "torch": "2.11.0+cu128",
+      "transformers": "5.14.1",
+      "cases": [
+        {
+          "backend": "eager",
+          "checkpointing": null,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.0625,
+          "parameter_gradient_max_relative_delta": 0.008733624454148471,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "eager",
+          "checkpointing": false,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.0625,
+          "parameter_gradient_max_relative_delta": 0.008733624454148471,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "eager",
+          "checkpointing": true,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.0625,
+          "parameter_gradient_max_relative_delta": 0.008733624454148471,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "sdpa",
+          "checkpointing": null,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.09375,
+          "parameter_gradient_max_relative_delta": 0.013157894736842105,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "sdpa",
+          "checkpointing": false,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.09375,
+          "parameter_gradient_max_relative_delta": 0.013157894736842105,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        },
+        {
+          "backend": "sdpa",
+          "checkpointing": true,
+          "logits_max_delta": 0.0,
+          "layer_max_delta": 0.0,
+          "parameter_gradient_max_delta": 0.09375,
+          "parameter_gradient_max_relative_delta": 0.013157894736842105,
+          "suffix_logits_max_delta": 0.0,
+          "suffix_gradient_into_prefix_max": 0.0,
+          "loaded_buffer_dtype_differences": {
+            "model.rotary_emb.inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            },
+            "model.rotary_emb.original_inv_freq": {
+              "original": "torch.bfloat16",
+              "loaded": "torch.float32"
+            }
+          },
+          "restored_logits_max_delta": 0.0
+        }
+      ],
+      "packed_collation": {
+        "framework": "axolotl",
+        "native_class": "axolotl.utils.collators.batching.V2BatchSamplerDataCollatorForSeq2Seq",
+        "batch": {
+          "schema_version": "fakegpu.packed_batch.v1",
+          "tensor_dtypes": {
+            "input_ids": "torch.int64",
+            "attention_mask": "torch.bfloat16",
+            "labels": "torch.int64",
+            "position_ids": "torch.int64"
+          },
+          "shape": [
+            2,
+            8
+          ],
+          "packed_rows": 2,
+          "logical_sequences": 5,
+          "segments": [
+            [
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                4
+              ],
+              [
+                4,
+                8
+              ]
+            ],
+            [
+              [
+                0,
+                2
+              ],
+              [
+                2,
+                6
+              ]
+            ]
+          ],
+          "nonpadding_tokens": 14,
+          "padding_tokens": 2,
+          "supervised_tokens": 9,
+          "causal_supervised_tokens": 9,
+          "input_sha256": "d20f8c2da1afc51131f496e2f0149e4f40c46c8ca302e2702e2aee14292fe454"
+        }
+      }
+    }
+  ],
+  "records": {
+    "path": "finetune_packing_reference_records.json.gz",
+    "bytes": 255970,
+    "sha256": "6b089b77b9d9ecaf913dd785b3675d0fedac199c83a29fbe6745d822155aeb1c",
+    "source_files": 57
+  },
+  "failures_retained": [
+    "Native Factory variable position IDs not padded; owned collation reconstructs verified positions.",
+    "Native Ax derived mask dropping prevented source proof; explicit reference adapter retains masks.",
+    "Native CPU Arrow bulk fetch cannot accept nested bins without a fetch adapter; dataset-instance adapter verified actual consumption.",
+    "Initial 128-token Factory fixture contained one logical sequence per row; separate 256-token CPU fixture exercises real packing. No GPU timing-based fixture choice."
+  ]
+}

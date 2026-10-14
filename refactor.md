@@ -69,6 +69,31 @@
 
 先用四项公开推理/serving API 回归复现 **4 failed**，修复后 LLM/serving/finetune 相关 **150 passed**，补全 malformed layer 与 attention-only 保持性后的专用检查 **8 passed**，Ruff 与 diff check 通过。基线及日志在 `/tmp/fakegpu-hybrid-20261015/`。此修复明确支持边界，不宣称已实现 hybrid 推理 cache/FLOPs；长上下文验收使用有对应状态模型的架构。
 
+### Packing 原生数据与计数基础（完整预算尚未开放）
+
+新增 `_finetune_packed_batches.py`，先从 HF/Factory 的显式 segment IDs 或 Ax 的原始记录 bins 证明 token、label、位置和边界对应，再保留有效的原生 4D mask 或建立隔离 mask。输出区分 physical packed rows、logical sequences、非 padding/监督/causal tokens、分段几何和实际 tensor dtypes；四类输入的 hash 保留浮点 mask 的原始小端位模式，包括 BF16。拒绝缺失 source mask、边界 label 未忽略、非法分段、原生 token/label 改写及跨段 mask。
+
+HF/Factory 原生 collator 不补齐任意 position IDs，适配层从已证明的 source 边界重建有效位置，仅把不参与状态/attention/loss 的 padding 位置设为零。Ax 原生 builder 从 `attn_decontaminates_packing` 派生 mask dropping，原始同名 YAML 设置不能替代实际参数检查；显式参考适配在准备 loader 前保留 source mask。nested-bin 的批量取数仅覆盖当前 Dataset 实例，支持普通 flat fetch 与 pickle round-trip，由 observer 的恢复机制管理；没有修改第三方全局类。
+
+新增 `_finetune_packed_sampler.py`，保留原生 BatchSampler / MultipackBatchSampler，仅以独立 SeedableRandomSampler 替换原始随机流。逐 epoch 克隆 sampler、保持原对象和全局 RNG，读取真实 bins、尾批和丢弃 ID；两次原生 collation 的描述符及输入 SHA 必须一致。包括 native 声明的 epoch 长度与真实执行 microsteps，不能把 `rows / configured_microbatch` 当作 multipack 的真实步数。
+
+原生 CPU 数据实验均为 **25 条逻辑序列**，HF/Factory 使用 Factory 原生 256-token neat-packing 导出的 13 行，Ax 使用各自原生 tokenization，seed=123、GAS=2。每种模式核对三轮 CPU 计划与真正 dataloader 消费，然后以轻量 scalar loss 执行原生 Trainer 8 次 optimizer updates，主动消耗模型 CPU RNG，消费前缀仍完全匹配。该 scalar loss 仅验证调度，不代表 Qwen 权重训练。
+
+| 模式 | 每轮 dataset rows 消费 | packed rows | logical sequences | microsteps / updates | 原生 8-update 消费 |
+|---|---:|---:|---:|---:|---:|
+| HF | 13 | 13 | 25 | 5 / 3 | 14 microsteps |
+| Factory | 13 | 13 | 25 | 5 / 3 | 14 microsteps |
+| Ax 默认合并行 | 25 | 6 | 25 | 6 / 3 | 16 microsteps |
+| Ax real batches | 24 | 18 | 24 | 6 / 3 | 16 microsteps |
+
+Ax real-batch 模式原生强制 `drop_last=True`，三轮实际丢弃行分别 **4 / 18 / 16**，均按原生消费核验，没有擅自保留或计作已训练。最初 128-token Factory CPU 情景实际每行仅一条逻辑序列，另建 256-token 情景验证真实多段；选择发生在任何本轮 GPU 测量之前。保留原始位置 padding、mask dropping 与缺少 nested fetch 的失败日志，没有用猜测补齐 mask 或源记录。
+
+真实 collator 接入四层 tiny Qwen3.5 后，三个框架各执行 eager/SDPA × 无/nonreentrant/reentrant checkpointing，共 **18 个 GPU BF16 场景**。输入逐项等于手写分段张量；有效 logits/逐层输出与逐段原生对照差、跨段输出差、跨段输入梯度、同 dtype 保存恢复差均为 **0**。参数梯度最大相对差保留为 HF/Factory **2.222%**、Ax **1.316%**，不宣称 BF16 梯度逐位相同。
+
+全仓 **1596 passed / 1 skipped，138.79 秒**，专用 packing 检查 **22 passed**，Ruff、diff check、纯标准库导入通过，**152 份历史预测逐字节一致**。**98 个生产 Python 模块**在 GPU 审计期间 SHA 不变。证据见[摘要](tests/data/finetune_packing_reference_evidence.json)与[57 份来源的审阅记录](tests/data/finetune_packing_reference_records.json.gz)，原始资料 `/tmp/fakegpu-packed-20261015/`。
+
+下一步接入分段形状、原生真实 epoch 计数及消费验证的预算协议，再做 0.8B packed LoRA 的独立完整时间/显存校准。当前生产 runner 的 unpacked gate 保留；这些 CPU 计数与 tiny 模型内核结果不等于 packed 原生训练预算已经交付。
+
 ## 2026-10-14 / 可复现长度分组与 packing 隔离边界
 
 接续 `478f8278`，推进原生长度分组，并实测 Qwen3.5 packing 的隔离边界。CLI 仍为 34 个；新增 `run-finetune` / `calibrate-finetune` 的显式 `--length-grouping-seed`，没有把依赖全局随机状态的原生排序伪装成可预排的未来计划。

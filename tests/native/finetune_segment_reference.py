@@ -21,8 +21,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--cuda-device", default="1")
+    parser.add_argument("--collator-framework", choices=("huggingface", "llamafactory", "axolotl"))
+    parser.add_argument("--tokenizer")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if bool(args.collator_framework) != bool(args.tokenizer):
+        parser.error("collator audits require both --collator-framework and --tokenizer")
     os.environ.update(CUDA_VISIBLE_DEVICES=args.cuda_device if args.device == "cuda" else "",
                       HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", OMP_NUM_THREADS="1")
     import torch
@@ -66,6 +70,52 @@ def main():
                   transformers=transformers.__version__,
                   script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                   cases=[])
+
+    if args.collator_framework:
+        from fakegpu._finetune_packed_batches import IsolatedPackingCollator, describe_packed_batch
+
+        tokenizer = transformers.AutoTokenizer.from_pretrained(args.tokenizer, local_files_only=True)
+        tokenizer.pad_token_id = 0
+        if args.collator_framework == "huggingface":
+            native = transformers.DataCollatorForSeq2Seq(tokenizer, padding=True, pad_to_multiple_of=8)
+        elif args.collator_framework == "llamafactory":
+            from llamafactory.data import SFTDataCollatorWith4DAttentionMask
+            from llamafactory.data.template import TEMPLATES
+
+            native = SFTDataCollatorWith4DAttentionMask(
+                tokenizer, template=TEMPLATES["qwen3_nothink"], model=None,
+                pad_to_multiple_of=8, block_diag_attn=True, neat_packing=True,
+                attn_implementation="eager", compute_dtype=dtype,
+            )
+        else:
+            from axolotl.utils.collators.batching import V2BatchSamplerDataCollatorForSeq2Seq
+
+            native = V2BatchSamplerDataCollatorForSeq2Seq(tokenizer, padding=True, pad_to_multiple_of=8)
+        features = []
+        for row, segments in enumerate(spans):
+            if args.collator_framework == "axolotl":
+                features.append([
+                    {"input_ids":ids[row,start:end].cpu().tolist(),
+                     "labels":labels[row,start:end].cpu().tolist(),
+                     "attention_mask":[1]*(end-start), "position_ids":list(range(end-start))}
+                    for start,end in segments
+                ])
+            else:
+                size = segments[-1][1]
+                features.append({
+                    "input_ids":ids[row,:size].cpu().tolist(),
+                    "labels":labels[row,:size].cpu().tolist(),
+                    "position_ids":positions[row,:size].cpu().tolist(),
+                    "attention_mask":[index+1 for index,(start,end) in enumerate(segments) for _ in range(end-start)],
+                })
+        collated = IsolatedPackingCollator(native, framework=args.collator_framework, mask_dtype=dtype)(features)
+        collated = {key:value.to(args.device) if isinstance(value,torch.Tensor) else value for key,value in collated.items()}
+        assert set(collated) == set(inputs)
+        assert all(torch.equal(value,inputs[key]) if isinstance(value,torch.Tensor) else value == inputs[key] for key,value in collated.items())
+        report["packed_collation"] = {"framework":args.collator_framework,
+                                      "native_class":f"{type(native).__module__}.{type(native).__qualname__}",
+                                      "batch":describe_packed_batch(collated)}
+        inputs = collated
 
     def new_model(backend):
         torch.manual_seed(42)
