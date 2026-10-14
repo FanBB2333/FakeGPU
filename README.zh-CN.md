@@ -1348,6 +1348,14 @@ FSDP2 `full_shard` 可为 `plan-training` 提供 `--parameter-shapes layout.json
 计算各 rank 字节，预算使用最大 rank。未提供形状时保留总量均衡切分近似，不能覆盖
 不均匀参数分区；optimizer dtype 和 workspace 假设仍适用，不覆盖自定义 placement。
 
+[版本化原生验收矩阵](tests/data/research_native_evidence.json)记录六组
+FP32/FP16/BF16 LoRA／attention CPU_SIM 数值、CPU／GPU 1 上 tiny Qwen3 MoE
+路由与梯度，以及两个 CPU rank 的原生 DDP／FSDP2 检查。这些是有限数值与语义
+覆盖；物理 TP／PP／CP／EP、多 GPU ZeRO／FSDP 和多机 collective 仍需额外授权
+设备验证。CPU_SIM 不执行任意 CUDA 设备代码，数值 probe 保留严格 unsupported API
+检查。主机数值可用 `scripts/test.sh cpu` 重现，本机语义入口见
+`tests/native/research_distributed.py --help`。
+
 实验批量运行使用显式 argv、参数网格和重复次数。下面的 CPU 示例将 worker 脚本、
 可执行文件、FakeGPU 源码和指定资源环境绑定到稳定运行 ID；顺序执行，每次尝试
 保留日志、退出状态、错误、产物 SHA 和数值指标。

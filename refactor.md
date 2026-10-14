@@ -14,10 +14,30 @@
 - [x] 更多模型、形状和重复 holdout；可用 GPU 验证与缺失硬件条件分开记录。
 - [x] R24 长上下文及 serving 的真实 GPU 验证。
 - [x] R25 diffusion generation 真测、训练估计及独立观测（明确限定 SD/SDXL 与缓存特征 U-Net）。
-- [ ] R26 distributed/MoE 验证与版本化硬件矩阵；真实多机需要实际远端设备。
+- [x] R26 本机软件矩阵、CPU／GPU 1 MoE 语义及原生两 CPU rank DDP／FSDP2。
+- [ ] R26 物理多 GPU／多机 TP／PP／CP／EP、ZeRO／FSDP：缺少额外授权设备与连接信息，不能用 CPU ranks 替代。
 - [ ] R23 原生数值扩展需求清单、实验产物与全仓/wheel 回归。
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### R23 有限数值需求与 R26 本机矩阵
+
+按明确研究计算建立有限需求：`Y = XW + 0.3 * (XA)B` 与四头 scaled QKᵀ。FP32/FP16/BF16 六组原生 cuBLAS host API，对照独立 Python float64 reduction 和每层独立 dtype 编码，所有输出最大绝对差 **0**。实际 **12 GEMM / 8526 FLOPs / 27 alloc+free / 4928 bytes H2D / 1080 bytes D2H**，独立重建计数一致；整数 GEMM 严格返回 NOT_SUPPORTED=15，输出保持不变。实际触发的七个 host API 已具备实现，本轮增加组合、dtype、参考与维护套件覆盖，没有凭空增加 CUDA 支持声明。任意 kernel launch、融合 softmax、backward 和 optimizer 设备代码仍不执行，按 capability catalog 与严格策略明确拒绝。
+
+`tests/native/research_numerics.py` 纳入 `scripts/test.sh cpu`。原八组 C++ 测试、六组新检查及真实 PyTorch CUDA 可见矩阵乘法均通过；unsupported policy、cuBLAS fallback policy 与 **104 个显式 API / 102 个严格策略 API** 的 capability 审计通过。新脚本重命名时误改 struct 格式导致一次集成失败，已修正并保存失败日志，再完整执行 CPU 套件通过。该开发失败不删除或替换已有参考观测。
+
+| 本机栈／工作负载 | 已验证范围 | 保留边界 |
+|---|---|---|
+| Torch 2.9.1 + Transformers 4.57.3 / tiny Qwen3 MoE | CPU + GPU 1，eager/SDPA × FP32/BF16，共八场景；独立逐 token 专家加权和、输入与参数梯度、完整模型 loss/梯度有限 | 随机 tiny 模型，不作预训练质量、吞吐或 VRAM 精度声明 |
+| 同一 Torch / Gloo DDP 与 FSDP2 | 一个主机两个 CPU rank；合并 batch 梯度与 AdamW 更新一致；显式 per-parameter shard 字节核对 | CPU 逻辑 ranks 不代表物理 GPU 或机器 |
+| HF/Factory：Transformers 5.6.0；Axolotl 0.18.0：Transformers 5.14.1、Torch 2.11 | 前述单 GPU 原生 SFT／packing／eval／预算证据 | 不外推物理分布式性能 |
+| vLLM 0.19.1 + Torch 2.10 | 前述混合流式请求和单 GPU cache 观测 | 非多机或任意服务负载精度保证 |
+| Diffusers 0.35.2 + Torch 2.9.1 | 前述 SD/SDXL generation 和缓存特征训练 | VAE generation 显存门槛失败保留 |
+| 物理多卡／多机 TP/PP/CP/EP、ZeRO/FSDP | **未验证：需要额外授权设备及连接信息** | GPU 0 未使用；当前唯一授权设备为 GPU 1 |
+
+MoE 共 **91,008 参数**，checkpoint header 与实际参数一致；四个专家的 36 次 token 分配为 **7/11/8/10**。FP32 输出差最多 **4.66e-10**，BF16 参数梯度差最多 **1.91e-6**，所有完整模型梯度有限。GPU 身份和驱动 **580.178.04** 已记录。自动 standalone rendezvous 未启动 worker，保留启动记录并只停止本轮进程组，改为显式 loopback static rendezvous 后 DDP/FSDP2 成功。修正不均匀 shard 后再次两 rank 核验，旧 v2 与新 v3 报告分别保留。没有任何跨机完成声明。
+
+独立标准库审计为 **errors=[]**；证据及版本矩阵见 [research native](tests/data/research_native_evidence.json)，[45 份压缩审阅记录](tests/data/research_native_records.json.gz)包括测量时的 runner、当前 runner、原始报告、失败启动、全部软件版本与检查日志。原始目录 `/tmp/fakegpu-research-validation-20261015/`。R23 本轮有限需求已经完成，后续新 workload 需要新的有限需求和参考；R26 真实物理分布式验收保留为外部硬件待办。
 
 ### FSDP2 不均匀 shard（独立 bug 修复）
 

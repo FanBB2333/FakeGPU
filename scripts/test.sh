@@ -105,6 +105,12 @@ run_cpu() {
     --expect-flops \
     --expect-unsupported-api
 
+  FAKEGPU_REPORT_PATH="$CPU_BUILD_DIR/research_numerics_native.json" \
+    FAKEGPU_UNSUPPORTED_API=error FAKEGPU_CPU_GEMM_MODE=naive \
+    run_fakegpu "$CPU_BUILD_DIR" "$PYTHON_BIN" \
+      tests/native/research_numerics.py --build-dir "$CPU_BUILD_DIR" \
+      --output "$CPU_BUILD_DIR/research_numerics.json"
+
   if "$PYTHON_BIN" -c \
       "import torch; raise SystemExit(0 if torch.version.cuda else 1)" \
       >/dev/null 2>&1; then

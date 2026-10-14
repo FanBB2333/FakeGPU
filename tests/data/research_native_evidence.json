@@ -1,0 +1,654 @@
+{
+"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
+  "artifact_root": "/tmp/fakegpu-research-validation-20261015",
+  "audit": {
+    "errors": [],
+    "fsdp2_per_parameter_bytes_by_rank": [
+      640,
+      536
+    ],
+    "independently_reconstructed_flops": 8526,
+    "native_cublas_calls": 12,
+    "scalar_reference_cases": 6
+  },
+  "hardware": {
+    "authorized_physical_devices": 1,
+    "gpu_0_used": false,
+    "gpu_1": "1, GPU-REDACTED, Blackwell GPU, 73415, 580.178.04",
+    "real_multi_gpu_multi_node": "unavailable; requires additional authorized hardware and access"
+  },
+  "local_distributed": {
+    "ddp": {
+      "backend": "gloo",
+      "mode": "ddp",
+      "parameter_bytes": 1176,
+      "physical_gpu_used": false,
+      "ranks": [
+        {
+          "gradient_max_absolute_error": 5.551115123125783e-17,
+          "optimizer_local_tensor_bytes": {
+            "exp_avg": 1176,
+            "exp_avg_sq": 1176,
+            "step": 16
+          },
+          "rank": 0,
+          "update_max_absolute_error": 4.336808689942018e-19
+        },
+        {
+          "gradient_max_absolute_error": 5.551115123125783e-17,
+          "optimizer_local_tensor_bytes": {
+            "exp_avg": 1176,
+            "exp_avg_sq": 1176,
+            "step": 16
+          },
+          "rank": 1,
+          "update_max_absolute_error": 4.336808689942018e-19
+        }
+      ],
+      "schema_version": "fakegpu.local_distributed_semantics.v1",
+      "scope": "Two CPU processes on one host. Mathematical synchronization and AdamW update comparison only; no physical multi-GPU, multi-node or communication-performance validation.",
+      "storage_plan": {
+        "communication": {
+          "allgather_bucket_bytes": 0,
+          "gradient_accumulation_steps": 1,
+          "overlap_communication": false,
+          "reduce_bucket_bytes": 0,
+          "stage3_prefetch_bucket_bytes": 0
+        },
+        "configuration": {
+          "framework": "fsdp",
+          "mixed_precision": "no",
+          "sharding_strategy": "replicated",
+          "world_size": 2
+        },
+        "cpu_offload": {
+          "optimizer_and_master_parameter_bytes": 0,
+          "parameter_bytes": 0,
+          "total_bytes": 0
+        },
+        "estimated_rank_peak_bytes": 5880,
+        "inputs": {
+          "activation_bytes": 0,
+          "optimizer": "adamw",
+          "parameter_bytes": 1176,
+          "parameter_element_bytes": 8,
+          "world_size": 2
+        },
+        "memory_timeline": {
+          "peak_bytes": 5880,
+          "peak_phase": "optimizer_step",
+          "phases": [
+            {
+              "component_sum_bytes": 1176,
+              "components": {
+                "parameters": 1176
+              },
+              "peak_bytes": 1176,
+              "phase": "model_load"
+            },
+            {
+              "component_sum_bytes": 1176,
+              "components": {
+                "parameters": 1176
+              },
+              "peak_bytes": 1176,
+              "phase": "forward"
+            },
+            {
+              "component_sum_bytes": 2352,
+              "components": {
+                "gradients": 1176,
+                "parameters": 1176
+              },
+              "peak_bytes": 2352,
+              "phase": "backward"
+            },
+            {
+              "component_sum_bytes": 5880,
+              "components": {
+                "gradients": 1176,
+                "optimizer_state": 2352,
+                "optimizer_temporary": 1176,
+                "parameters": 1176
+              },
+              "peak_bytes": 5880,
+              "phase": "optimizer_step"
+            }
+          ],
+          "unit": "bytes"
+        },
+        "method": "configuration_aware_rank_local_storage_and_phase_model",
+        "notes": [
+          "Gradient accumulation retains one gradient buffer; it does not multiply gradient storage by the accumulation count.",
+          "Activation checkpointing uses the configured retention factor and does not predict recomputation time.",
+          "ZeRO and FSDP prefetch windows depend on module granularity; bucket sizes provide a conservative communication workspace.",
+          "Use a matching real-GPU calibration to replace unmodeled runtime and allocator terms."
+        ],
+        "rank_local_storage": {
+          "communication_workspace_bytes": 0,
+          "gradient_bytes": 1176,
+          "master_parameter_bytes": 0,
+          "optimizer_state_bytes": 2352,
+          "parameter_bytes": 1176,
+          "retained_activation_bytes": 0
+        },
+        "schema_version": "fakegpu.training_plan.v1",
+        "sharding": {
+          "gradients_sharded": false,
+          "optimizer_state_sharded": false,
+          "parameters_sharded": false,
+          "shard_group_size": 2,
+          "strategy": "replicated",
+          "zero_stage": 0
+        },
+        "storage_offload": {
+          "cpu_bytes": 0,
+          "nvme_bytes": 0,
+          "optimizer_device": "none",
+          "parameter_device": "none"
+        },
+        "unmodeled_components": [
+          "cuda_context_and_loaded_modules",
+          "allocator_fragmentation",
+          "backend_operator_workspaces",
+          "prefetch_schedule_specific_overlap",
+          "fused_optimizer_temporaries"
+        ]
+      },
+      "torch": "2.9.1+cu128",
+      "world_size": 2
+    },
+    "fsdp2": {
+      "backend": "gloo",
+      "mode": "fsdp2",
+      "parameter_bytes": 1176,
+      "physical_gpu_used": false,
+      "ranks": [
+        {
+          "gradient_max_absolute_error": 5.551115123125783e-17,
+          "optimizer_local_tensor_bytes": {
+            "exp_avg": 640,
+            "exp_avg_sq": 640,
+            "step": 16
+          },
+          "rank": 0,
+          "update_max_absolute_error": 4.336808689942018e-19
+        },
+        {
+          "gradient_max_absolute_error": 5.551115123125783e-17,
+          "optimizer_local_tensor_bytes": {
+            "exp_avg": 536,
+            "exp_avg_sq": 536,
+            "step": 16
+          },
+          "rank": 1,
+          "update_max_absolute_error": 4.336808689942018e-19
+        }
+      ],
+      "schema_version": "fakegpu.local_distributed_semantics.v1",
+      "scope": "Two CPU processes on one host. Mathematical synchronization and AdamW update comparison only; no physical multi-GPU, multi-node or communication-performance validation.",
+      "storage_plan": {
+        "communication": {
+          "allgather_bucket_bytes": 1176,
+          "gradient_accumulation_steps": 1,
+          "overlap_communication": false,
+          "reduce_bucket_bytes": 1176,
+          "stage3_prefetch_bucket_bytes": 0
+        },
+        "configuration": {
+          "framework": "fsdp2",
+          "mixed_precision": "no",
+          "sharding_strategy": "full_shard",
+          "world_size": 2
+        },
+        "cpu_offload": {
+          "optimizer_and_master_parameter_bytes": 0,
+          "parameter_bytes": 0,
+          "total_bytes": 0
+        },
+        "estimated_rank_peak_bytes": 4376,
+        "inputs": {
+          "activation_bytes": 0,
+          "optimizer": "adamw",
+          "parameter_bytes": 1176,
+          "parameter_element_bytes": 8,
+          "world_size": 2
+        },
+        "memory_timeline": {
+          "peak_bytes": 4376,
+          "peak_phase": "optimizer_step",
+          "phases": [
+            {
+              "component_sum_bytes": 640,
+              "components": {
+                "parameters": 640
+              },
+              "peak_bytes": 640,
+              "phase": "model_load"
+            },
+            {
+              "component_sum_bytes": 2992,
+              "components": {
+                "allgathered_parameters": 1176,
+                "communication_workspace": 1176,
+                "parameters": 640
+              },
+              "peak_bytes": 2992,
+              "phase": "forward"
+            },
+            {
+              "component_sum_bytes": 3632,
+              "components": {
+                "allgathered_parameters": 1176,
+                "communication_workspace": 1176,
+                "gradients": 640,
+                "parameters": 640
+              },
+              "peak_bytes": 3632,
+              "phase": "backward"
+            },
+            {
+              "component_sum_bytes": 4376,
+              "components": {
+                "communication_workspace": 1176,
+                "gradients": 640,
+                "optimizer_state": 1280,
+                "optimizer_temporary": 640,
+                "parameters": 640
+              },
+              "peak_bytes": 4376,
+              "phase": "optimizer_step"
+            }
+          ],
+          "unit": "bytes"
+        },
+        "method": "configuration_aware_rank_local_storage_and_phase_model",
+        "notes": [
+          "Gradient accumulation retains one gradient buffer; it does not multiply gradient storage by the accumulation count.",
+          "Activation checkpointing uses the configured retention factor and does not predict recomputation time.",
+          "ZeRO and FSDP prefetch windows depend on module granularity; bucket sizes provide a conservative communication workspace.",
+          "Use a matching real-GPU calibration to replace unmodeled runtime and allocator terms."
+        ],
+        "rank_local_storage": {
+          "communication_workspace_bytes": 1176,
+          "gradient_bytes": 640,
+          "master_parameter_bytes": 0,
+          "optimizer_state_bytes": 1280,
+          "parameter_bytes": 640,
+          "retained_activation_bytes": 0
+        },
+        "schema_version": "fakegpu.training_plan.v1",
+        "sharding": {
+          "gradients_sharded": true,
+          "optimizer_state_sharded": true,
+          "parameter_layout": {
+            "budgeted_rank": 0,
+            "method": "fsdp2_per_parameter_dim0_chunk",
+            "parameter_bytes_by_rank": [
+              640,
+              536
+            ],
+            "parameter_count": 4
+          },
+          "parameters_sharded": true,
+          "shard_group_size": 2,
+          "strategy": "full_shard",
+          "zero_stage": 0
+        },
+        "storage_offload": {
+          "cpu_bytes": 0,
+          "nvme_bytes": 0,
+          "optimizer_device": "none",
+          "parameter_device": "none"
+        },
+        "unmodeled_components": [
+          "cuda_context_and_loaded_modules",
+          "allocator_fragmentation",
+          "backend_operator_workspaces",
+          "prefetch_schedule_specific_overlap",
+          "fused_optimizer_temporaries"
+        ]
+      },
+      "torch": "2.9.1+cu128",
+      "world_size": 2
+    }
+  },
+  "local_moe": {
+    "cpu": {
+      "cases": [
+        {
+          "attention": "eager",
+          "dtype": "torch.float32",
+          "expert_token_assignments": [
+            7,
+            11,
+            8,
+            10
+          ],
+          "full_model_gradients_finite": true,
+          "input_gradient_max_absolute_error": 2.9558577807620168e-12,
+          "loss": 4.835506916046143,
+          "moe_output_max_absolute_error": 4.656612873077393e-10,
+          "parameter_gradient_max_absolute_error": 8.731149137020111e-11
+        },
+        {
+          "attention": "sdpa",
+          "dtype": "torch.float32",
+          "expert_token_assignments": [
+            7,
+            11,
+            8,
+            10
+          ],
+          "full_model_gradients_finite": true,
+          "input_gradient_max_absolute_error": 2.9558577807620168e-12,
+          "loss": 4.835506916046143,
+          "moe_output_max_absolute_error": 4.656612873077393e-10,
+          "parameter_gradient_max_absolute_error": 8.731149137020111e-11
+        },
+        {
+          "attention": "eager",
+          "dtype": "torch.bfloat16",
+          "expert_token_assignments": [
+            7,
+            11,
+            8,
+            10
+          ],
+          "full_model_gradients_finite": true,
+          "input_gradient_max_absolute_error": 0.0,
+          "loss": 4.8357391357421875,
+          "moe_output_max_absolute_error": 0.0,
+          "parameter_gradient_max_absolute_error": 1.9073486328125e-06
+        },
+        {
+          "attention": "sdpa",
+          "dtype": "torch.bfloat16",
+          "expert_token_assignments": [
+            7,
+            11,
+            8,
+            10
+          ],
+          "full_model_gradients_finite": true,
+          "input_gradient_max_absolute_error": 0.0,
+          "loss": 4.835552215576172,
+          "moe_output_max_absolute_error": 0.0,
+          "parameter_gradient_max_absolute_error": 1.9073486328125e-06
+        }
+      ],
+      "environment": {
+        "device": "cpu",
+        "physical_gpu_used": false,
+        "torch": "2.9.1+cu128",
+        "transformers": "4.57.3"
+      },
+      "estimator_model": {
+        "architectures": [
+          "Qwen3MoeForCausalLM"
+        ],
+        "attention_kind": "grouped_query",
+        "dense_layer_count": 0,
+        "head_dim": 16,
+        "hidden_size": 64,
+        "intermediate_size": 96,
+        "kv_cache_elements_per_token_per_layer": 64,
+        "kv_cache_layout": "separate_key_value",
+        "kv_lora_rank": 0,
+        "model_kind": "mixture_of_experts",
+        "model_type": "qwen3_moe",
+        "moe_intermediate_size": 32,
+        "moe_layer_count": 2,
+        "num_attention_heads": 4,
+        "num_experts_per_token": 2,
+        "num_hidden_layers": 2,
+        "num_key_value_heads": 2,
+        "num_routed_experts": 4,
+        "path": "/tmp/fakegpu-research-validation-20261015/moe-cpu/checkpoint",
+        "q_lora_rank": null,
+        "qk_nope_head_dim": 16,
+        "qk_rope_head_dim": 0,
+        "shared_expert_intermediate_size": 0,
+        "v_head_dim": 16,
+        "vocab_size": 128
+      },
+      "header_parameter_count": 91008,
+      "parameter_count": 91008,
+      "schema_version": "fakegpu.local_moe_semantics.v1",
+      "scope": "Tiny random native Qwen3 MoE, local routing/output/gradients only. No expert/tensor/pipeline parallelism, pretrained quality, throughput or memory-accuracy claim."
+    },
+    "gpu": {
+      "cases": [
+        {
+          "attention": "eager",
+          "dtype": "torch.float32",
+          "expert_token_assignments": [
+            7,
+            11,
+            8,
+            10
+          ],
+          "full_model_gradients_finite": true,
+          "input_gradient_max_absolute_error": 2.2737367544323206e-12,
+          "loss": 4.835506916046143,
+          "moe_output_max_absolute_error": 3.4924596548080444e-10,
+          "parameter_gradient_max_absolute_error": 5.820766091346741e-11
+        },
+        {
+          "attention": "sdpa",
+          "dtype": "torch.float32",
+          "expert_token_assignments": [
+            7,
+            11,
+            8,
+            10
+          ],
+          "full_model_gradients_finite": true,
+          "input_gradient_max_absolute_error": 2.2737367544323206e-12,
+          "loss": 4.835506916046143,
+          "moe_output_max_absolute_error": 3.4924596548080444e-10,
+          "parameter_gradient_max_absolute_error": 5.820766091346741e-11
+        },
+        {
+          "attention": "eager",
+          "dtype": "torch.bfloat16",
+          "expert_token_assignments": [
+            7,
+            11,
+            8,
+            10
+          ],
+          "full_model_gradients_finite": true,
+          "input_gradient_max_absolute_error": 0.0,
+          "loss": 4.835737705230713,
+          "moe_output_max_absolute_error": 0.0,
+          "parameter_gradient_max_absolute_error": 1.9073486328125e-06
+        },
+        {
+          "attention": "sdpa",
+          "dtype": "torch.bfloat16",
+          "expert_token_assignments": [
+            7,
+            11,
+            8,
+            10
+          ],
+          "full_model_gradients_finite": true,
+          "input_gradient_max_absolute_error": 0.0,
+          "loss": 4.835569858551025,
+          "moe_output_max_absolute_error": 0.0,
+          "parameter_gradient_max_absolute_error": 1.9073486328125e-06
+        }
+      ],
+      "environment": {
+        "device": "cuda",
+        "gpu_name": "Blackwell GPU",
+        "gpu_uuid": "60bc12ae-4ba5-045e-428b-c582260ca743",
+        "physical_gpu_used": true,
+        "torch": "2.9.1+cu128",
+        "transformers": "4.57.3"
+      },
+      "estimator_model": {
+        "architectures": [
+          "Qwen3MoeForCausalLM"
+        ],
+        "attention_kind": "grouped_query",
+        "dense_layer_count": 0,
+        "head_dim": 16,
+        "hidden_size": 64,
+        "intermediate_size": 96,
+        "kv_cache_elements_per_token_per_layer": 64,
+        "kv_cache_layout": "separate_key_value",
+        "kv_lora_rank": 0,
+        "model_kind": "mixture_of_experts",
+        "model_type": "qwen3_moe",
+        "moe_intermediate_size": 32,
+        "moe_layer_count": 2,
+        "num_attention_heads": 4,
+        "num_experts_per_token": 2,
+        "num_hidden_layers": 2,
+        "num_key_value_heads": 2,
+        "num_routed_experts": 4,
+        "path": "/tmp/fakegpu-research-validation-20261015/moe-gpu/checkpoint",
+        "q_lora_rank": null,
+        "qk_nope_head_dim": 16,
+        "qk_rope_head_dim": 0,
+        "shared_expert_intermediate_size": 0,
+        "v_head_dim": 16,
+        "vocab_size": 128
+      },
+      "header_parameter_count": 91008,
+      "parameter_count": 91008,
+      "schema_version": "fakegpu.local_moe_semantics.v1",
+      "scope": "Tiny random native Qwen3 MoE, local routing/output/gradients only. No expert/tensor/pipeline parallelism, pretrained quality, throughput or memory-accuracy claim."
+    }
+  },
+  "numeric_demand": {
+    "implemented_and_exercised": [
+      "cudaMalloc",
+      "cudaMemcpy",
+      "cudaFree",
+      "cublasCreate_v2",
+      "cublasDestroy_v2",
+      "cublasGemmEx",
+      "cublasGemmStridedBatchedEx"
+    ],
+    "strict_rejection": {
+      "output_unchanged": true,
+      "status": 15
+    },
+    "unsupported_remaining": [
+      {
+        "acceptance": "Do not classify whole-model CUDA execution as CPU numeric coverage",
+        "requirement": "Arbitrary device-code execution for complete fused softmax, backward and optimizer kernels",
+        "status": "not_executed; strict policy rejects",
+        "surface": "cudaLaunchKernel / cuLaunchKernel"
+      }
+    ]
+  },
+  "record_count": 45,
+  "records": "tests/data/research_native_records.json.gz",
+  "retained_failures": [
+    "Standalone rendezvous produced no worker output; owned process groups stopped and static loopback startup used.",
+    "Initial integration of the new numeric probe had a renamed struct format; fixed and the complete CPU suite passed."
+  ],
+  "schema_version": "fakegpu.research_native_evidence.v1",
+  "scope": "Finite native host-API numeric coverage and local semantics only. CPU ranks are not physical GPUs or machines; no throughput or VRAM accuracy inferred from tiny random MoE.",
+  "software_matrix": {
+    "axolotl": {
+      "executable": "/tmp/fakegpu-phase2/axolotl/venv/bin/python",
+      "packages": {
+        "accelerate": "1.13.0",
+        "axolotl": "0.18.0",
+        "flash-linear-attention": "0.4.1",
+        "peft": "0.19.1",
+        "torch": "2.11.0+cu128",
+        "transformers": "5.14.1"
+      },
+      "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+      "python": "3.12.13 | packaged by Anaconda, Inc. | (main, Jul  9 2026, 14:38:16) [GCC 14.3.0]"
+    },
+    "core": {
+      "executable": "/home/l1ght/anaconda3/envs/fakegpu/bin/python",
+      "packages": {
+        "accelerate": "1.12.0",
+        "peft": "0.19.1",
+        "torch": "2.9.1",
+        "transformers": "4.57.3"
+      },
+      "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+      "python": "3.12.12 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 20:16:04) [GCC 11.2.0]"
+    },
+    "diffusion": {
+      "executable": "/tmp/fakegpu-diffusion-20261015/venv-clean/bin/python",
+      "packages": {
+        "accelerate": "1.12.0",
+        "diffusers": "0.35.2",
+        "peft": "0.19.1",
+        "torch": "2.9.1",
+        "transformers": "4.57.3"
+      },
+      "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+      "python": "3.12.12 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 20:16:04) [GCC 11.2.0]"
+    },
+    "hf-factory": {
+      "executable": "/tmp/fakegpu-phase2/factory/venv/bin/python",
+      "packages": {
+        "accelerate": "1.11.0",
+        "llamafactory": "0.9.5",
+        "peft": "0.18.1",
+        "torch": "2.9.1",
+        "transformers": "5.6.0"
+      },
+      "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+      "python": "3.12.12 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 20:16:04) [GCC 11.2.0]"
+    },
+    "vllm": {
+      "executable": "/home/l1ght/anaconda3/envs/vllm-new/bin/python",
+      "packages": {
+        "torch": "2.10.0",
+        "transformers": "5.6.0",
+        "vllm": "0.19.1"
+      },
+      "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+      "python": "3.12.13 | packaged by Anaconda, Inc. | (main, Mar 19 2026, 20:20:58) [GCC 14.3.0]"
+    }
+  },
+  "validation_matrix": [
+    {
+      "evidence": [
+        "tests/data/finetune_packing_budget_evidence.json",
+        "tests/data/finetune_length_evaluation_evidence.json",
+        "tests/data/finetune_qwen2b_evidence.json"
+      ],
+      "status": "single GPU validated",
+      "workload": "HF Trainer/PEFT + LLaMA-Factory + Axolotl native fine-tuning"
+    },
+    {
+      "evidence": [
+        "tests/data/serving_native_evidence.json"
+      ],
+      "status": "single GPU observations; reserved-memory gate failure retained",
+      "workload": "vLLM mixed streaming + Transformers 8K/32K"
+    },
+    {
+      "evidence": [
+        "tests/data/diffusion_native_evidence.json"
+      ],
+      "status": "single GPU observations; generation VAE gate failure retained",
+      "workload": "SD/SDXL generation + cached-feature UNet full/LoRA/EMA"
+    },
+    {
+      "status": "CPU + one physical GPU semantics validated; not EP/TP/PP",
+      "workload": "tiny random Qwen3 MoE eager/SDPA FP32/BF16"
+    },
+    {
+      "status": "two CPU ranks on one host, semantics and explicit shard bytes validated",
+      "workload": "DDP and FSDP2 native Gloo"
+    },
+    {
+      "status": "not validated; additional hardware required",
+      "workload": "physical TP/PP/CP/EP, multi-GPU ZeRO/FSDP, multi-node collectives"
+    }
+  ]
+}

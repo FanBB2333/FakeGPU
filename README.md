@@ -1541,6 +1541,15 @@ rank. Without explicit shapes the existing aggregate balanced-shard approximatio
 remains; it does not cover uneven parameter partitions. Optimizer dtype and
 workspace assumptions still apply. This path does not model custom placements.
 
+The [versioned native validation matrix](tests/data/research_native_evidence.json)
+records six FP32/FP16/BF16 LoRA/attention CPU_SIM cases, tiny Qwen3 MoE routing and
+gradients on CPU/GPU 1, and two CPU ranks running native DDP/FSDP2. These are finite
+numeric and semantic checks. Physical TP/PP/CP/EP, multi-GPU ZeRO/FSDP and multi-node
+collectives remain unvalidated pending additional authorized hardware. Arbitrary
+CUDA device code is not executed by CPU_SIM; strict unsupported-API checks remain
+enabled in the numeric probe. Reproduce the host math with `scripts/test.sh cpu`
+and the local semantics with `tests/native/research_distributed.py --help`.
+
 Finite experiment sweeps use an explicit argv array, parameter grid and repetition count.
 The CPU-only example below binds its worker script, executable, FakeGPU source and
 selected resource environment to stable run IDs. Execution is sequential; every
