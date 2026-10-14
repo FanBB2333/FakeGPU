@@ -23,6 +23,7 @@ from .finetune_estimator import FinetuneEstimateError
 
 SCHEMA_VERSION = "fakegpu.finetune_sampler_plan.v1"
 LENGTH_SCHEMA_VERSION = "fakegpu.finetune_sampler_plan.v2"
+PACKED_SCHEMA_VERSION = "fakegpu.finetune_sampler_plan.v3"
 VERIFICATION_SCHEMA_VERSION = "fakegpu.finetune_sampler_verification.v1"
 _INPUT_FIELDS = ("input_ids", "attention_mask", "labels", "position_ids")
 _WORKER_COLLATORS = {
@@ -410,6 +411,10 @@ def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
 
 def validate_sampler_plan(plan):
     """Validate a serialized CPU batch plan without importing Torch."""
+    if isinstance(plan, Mapping) and plan.get("schema_version") == PACKED_SCHEMA_VERSION:
+        from ._finetune_packed_sampler import validate_packed_sampler_plan
+
+        return validate_packed_sampler_plan(plan)
     if not isinstance(plan, Mapping) or plan.get("schema_version") not in {
         SCHEMA_VERSION, LENGTH_SCHEMA_VERSION
     }:
@@ -624,14 +629,12 @@ def validate_sampling_verification(plan, updates, verification):
                 "native sampling verification update differs from plan"
             )
         for batch, planned in zip(actual["batches"], expected["batches"]):
+            fields = ("epoch_index", "epoch_microstep", "row_indices", "input_sha256")
+            if plan["schema_version"] == PACKED_SCHEMA_VERSION:
+                fields = (*fields, "source_bins")
             if _descriptor(batch) != _descriptor(planned) or any(
                 batch.get(field) != planned[field]
-                for field in (
-                    "epoch_index",
-                    "epoch_microstep",
-                    "row_indices",
-                    "input_sha256",
-                )
+                for field in fields
             ):
                 raise FinetuneEstimateError(
                     "native sampling verification batch differs from plan"
@@ -674,6 +677,13 @@ class NativeBatchMatcher:
         self.consumed = 0
         self.actual_hashes = []
 
+    def describe(self, inputs):
+        if self.plan["schema_version"] == PACKED_SCHEMA_VERSION:
+            from ._finetune_packed_batches import describe_packed_core
+
+            return describe_packed_core(inputs)
+        return describe_batch(inputs)
+
     def observe(self, inputs, *, epoch_index, epoch_microstep, descriptor=None):
         if self.consumed >= len(self.batches):
             raise FinetuneEstimateError(
@@ -687,10 +697,15 @@ class NativeBatchMatcher:
             raise FinetuneEstimateError(
                 "native sampler epoch position differs from CPU plan"
             )
-        actual = describe_batch(inputs) if descriptor is None else descriptor
+        actual = self.describe(inputs) if descriptor is None else descriptor
         if _descriptor(actual) != _descriptor(expected):
             raise FinetuneEstimateError("native batch descriptor differs from CPU plan")
-        digest = batch_input_sha256(inputs)
+        if self.plan["schema_version"] == PACKED_SCHEMA_VERSION:
+            from ._finetune_packed_batches import packed_input_sha256
+
+            digest = packed_input_sha256(inputs)
+        else:
+            digest = batch_input_sha256(inputs)
         if digest != expected["input_sha256"]:
             raise FinetuneEstimateError(
                 "native batch tensor contents differ from CPU plan"

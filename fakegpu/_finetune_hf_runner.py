@@ -220,20 +220,28 @@ def validate_huggingface_config(raw, normalized, base_dir):
     _argument_options(raw, normalized, TrainingArguments)
 
 
-def _load_processed_dataset(path, sequence_length):
+def _load_processed_dataset(path, sequence_length, *, packed=False):
     records = []
     with Path(path).expanduser().open(encoding="utf-8") as source:
         for line_number, line in enumerate(source, 1):
             if not line.strip():
                 continue
             row = json.loads(line)
-            if not isinstance(row, dict) or set(row) != {
+            expected = {
                 "input_ids",
                 "attention_mask",
                 "labels",
-            }:
+            }
+            if packed:
+                expected.add("position_ids")
+            if not isinstance(row, dict) or set(row) != expected:
+                fields = (
+                    "input_ids, attention_mask, labels and position_ids"
+                    if packed
+                    else "input_ids, attention_mask and labels"
+                )
                 raise ValueError(
-                    f"processed dataset row {line_number} requires exactly input_ids, attention_mask and labels"
+                    f"processed dataset row {line_number} requires exactly {fields}"
                 )
             for key in row:
                 row[key] = _token_list(row[key], key, labels=key == "labels")
@@ -246,7 +254,11 @@ def _load_processed_dataset(path, sequence_length):
                 raise ValueError(
                     f"processed dataset row {line_number} mask and labels must match input_ids length"
                 )
-            if any(value not in (0, 1) for value in row["attention_mask"]):
+            if packed:
+                from ._finetune_packed_batches import packed_source_membership
+
+                packed_source_membership([row], framework="huggingface")
+            elif any(value not in (0, 1) for value in row["attention_mask"]):
                 raise ValueError(
                     f"processed dataset row {line_number} requires a binary attention_mask; packing is unsupported"
                 )
@@ -317,7 +329,9 @@ def invoke_huggingface(raw, normalized):
     arguments = transformers.TrainingArguments(**options)
     transformers.set_seed(arguments.seed)
     train_dataset = _load_processed_dataset(
-        raw["train_dataset"], normalized["sequence_length"]
+        raw["train_dataset"],
+        normalized["sequence_length"],
+        packed=normalized["packing"],
     )
     eval_dataset = (
         _load_processed_dataset(raw["eval_dataset"], normalized["sequence_length"])

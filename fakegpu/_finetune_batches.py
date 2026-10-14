@@ -202,7 +202,7 @@ def _descriptor(batch: Any) -> dict[str, Any]:
     if _integer(batch["token_slots"], "token_slots") != size * length:
         raise ValueError("native batch token_slots disagrees with shape")
     mask_kind = batch["attention_mask_kind"]
-    if mask_kind not in ("binary_2d", "missing", "unsupported"):
+    if mask_kind not in ("binary_2d", "block_causal_4d", "missing", "unsupported"):
         raise ValueError("native batch attention_mask_kind is unsupported")
     labels_kind = batch["labels_kind"]
     position_kind = batch["position_ids_kind"]
@@ -214,7 +214,7 @@ def _descriptor(batch: Any) -> dict[str, Any]:
         labels_kind != "missing"
     ):
         raise ValueError("native batch labels_present disagrees with labels_kind")
-    if mask_kind == "binary_2d":
+    if mask_kind in {"binary_2d", "block_causal_4d"}:
         nonpadding = _row_counts(
             batch, "row_nonpadding_tokens", "nonpadding_tokens", size, [length] * size
         )
@@ -279,7 +279,37 @@ def _descriptor(batch: Any) -> dict[str, Any]:
         raise ValueError(
             "native batch position resets require a binary mask and integer position_ids"
         )
-    return deepcopy({field: batch[field] for field in _BATCH_FIELDS})
+    result = deepcopy({field: batch[field] for field in _BATCH_FIELDS})
+    if mask_kind == "block_causal_4d":
+        from ._finetune_packed_batches import validate_packed_geometry
+
+        if labels_kind != "integer_2d" or position_kind != "integer_2d":
+            raise ValueError("packed batches require integer labels and positions")
+        result["packed"] = validate_packed_geometry(
+            batch.get("packed"),
+            shape=(size, length),
+            nonpadding=nonpadding,
+            resets=resets,
+        )
+    elif "packed" in batch:
+        raise ValueError("packed geometry requires a validated block-causal mask")
+    return result
+
+
+def execution_batch_shape(batch):
+    """Preserve legacy shape keys; packed work also binds segments and dtypes."""
+    value = {
+        field: deepcopy(batch[field])
+        for field in (
+            "shape",
+            "attention_mask_kind",
+            "labels_kind",
+            "position_ids_kind",
+        )
+    }
+    if batch["attention_mask_kind"] == "block_causal_4d":
+        value["packed"] = deepcopy(batch["packed"])
+    return value
 
 
 def _canonical(value: Any) -> str:

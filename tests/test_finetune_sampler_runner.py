@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from fakegpu._finetune_model import actual_training_config
+from fakegpu._finetune_batches import describe_batch
 from fakegpu._finetune_observer import capture_native_trainer
 from fakegpu._finetune_sampler import SCHEMA_VERSION
 from fakegpu.finetune_estimator import (
@@ -27,7 +28,7 @@ def test_input_matching_cost_is_counted_only_as_batch_instrumentation(monkeypatc
             "row_indices": [epoch_microstep - 1],
         }
 
-    observer.batch_matcher = SimpleNamespace(observe=observe)
+    observer.batch_matcher = SimpleNamespace(observe=observe, describe=describe_batch)
     with capture_native_trainer(base, Callback, observer):
         trainer.train()
     assert calls == [(1, index) for index in range(1, 9)]
@@ -50,7 +51,7 @@ def test_sampler_mismatch_aborts_before_training_and_restores_instrumentation(
     def reject(*_args, **_kwargs):
         raise FinetuneEstimateError("native batch tensor contents differ from CPU plan")
 
-    observer.batch_matcher = SimpleNamespace(observe=reject)
+    observer.batch_matcher = SimpleNamespace(observe=reject, describe=describe_batch)
     with pytest.raises(RuntimeError, match="tensor contents differ"):
         with capture_native_trainer(base, Callback, observer):
             trainer.train()

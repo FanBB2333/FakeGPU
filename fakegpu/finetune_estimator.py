@@ -107,6 +107,8 @@ def finetune_workload_signature(
         "sampler_observation_version",
         "length_grouping_seed",
         "length_grouping_evaluation",
+        "packing_seed",
+        "packing_reference",
     ):
         if key in training_config:
             fields[key] = training_config[key]
@@ -153,6 +155,14 @@ def estimate_finetuning(
     """
     config = dict(training_config)
     _check_supported_training(config)
+    if (
+        config.get("packing") is True
+        and config.get("sampler_observation_version")
+        == "fakegpu.finetune_sampler_plan.v3"
+    ):
+        raise FinetuneEstimateError(
+            "native packing source rows require the sampler-aware transfer estimator; fixed-shape analytical projection cannot count native bins"
+        )
     for key, override in (
         ("num_samples", num_samples),
         ("epochs", epochs),

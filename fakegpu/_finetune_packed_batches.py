@@ -268,6 +268,16 @@ def packed_input_sha256(inputs):
     """Hash actual integer text tensors and floating block-mask bits in LE order."""
     import torch
 
+    if not isinstance(inputs, Mapping) or set(inputs) != {
+        "input_ids",
+        "attention_mask",
+        "labels",
+        "position_ids",
+        "use_cache",
+    }:
+        raise FinetuneEstimateError(
+            "packed attestation requires four text tensors and use_cache=False"
+        )
     validate_segment_inputs(inputs)
     digest = hashlib.sha256(b"fakegpu.packed_batch_inputs.v1\0")
     integer_types = {torch.int32, torch.int64}
@@ -319,3 +329,96 @@ def describe_packed_batch(inputs):
         "causal_supervised_tokens": supervised - sum(row[0] != -100 for row in labels),
         "input_sha256": packed_input_sha256(inputs),
     }
+
+
+def describe_packed_core(inputs):
+    """Extend the ordinary batch descriptor with validated block geometry."""
+    from ._finetune_batches import describe_batch
+
+    spans = validate_segment_inputs(inputs)
+    active = inputs["attention_mask"][:, 0].diagonal(dim1=-2, dim2=-1) == 0
+    core = describe_batch({**inputs, "attention_mask": active})
+    core["attention_mask_kind"] = "block_causal_4d"
+    core["packed"] = {
+        "segments": [[list(span) for span in row] for row in spans],
+        "tensor_dtypes": {
+            field: str(inputs[field].dtype)
+            for field in ("input_ids", "attention_mask", "labels", "position_ids")
+        },
+        "logical_sequences": sum(map(len, spans)),
+    }
+    return core
+
+
+def validate_packed_geometry(packed, *, shape, nonpadding, resets):
+    """Check serialized geometry without loading Torch or a framework."""
+    if not isinstance(packed, Mapping) or set(packed) != {
+        "segments",
+        "tensor_dtypes",
+        "logical_sequences",
+    }:
+        raise FinetuneEstimateError("packed geometry is incomplete")
+    dtypes = packed["tensor_dtypes"]
+    if not isinstance(dtypes, Mapping) or set(dtypes) != {
+        "input_ids",
+        "attention_mask",
+        "labels",
+        "position_ids",
+    }:
+        raise FinetuneEstimateError("packed tensor dtypes are incomplete")
+    if (
+        any(not isinstance(value, str) for value in dtypes.values())
+        or any(
+            dtypes[field] not in {"torch.int32", "torch.int64"}
+            for field in ("input_ids", "labels", "position_ids")
+        )
+        or dtypes["attention_mask"]
+        not in {
+            "torch.float16",
+            "torch.bfloat16",
+            "torch.float32",
+        }
+    ):
+        raise FinetuneEstimateError("unsupported packed tensor dtypes")
+    rows = packed["segments"]
+    if not isinstance(rows, list) or len(rows) != shape[0]:
+        raise FinetuneEstimateError(
+            "packed geometry must contain one segment list per row"
+        )
+    count = 0
+    for row, active, offsets in zip(rows, nonpadding, resets):
+        if not isinstance(row, list) or not row:
+            raise FinetuneEstimateError("packed rows must contain nonempty segments")
+        previous = 0
+        for span in row:
+            if (
+                not isinstance(span, list)
+                or len(span) != 2
+                or any(
+                    isinstance(value, bool) or not isinstance(value, int)
+                    for value in span
+                )
+            ):
+                raise FinetuneEstimateError(
+                    "packed segments require integer start/end pairs"
+                )
+            start, end = span
+            if start != previous or not start < end <= shape[1]:
+                raise FinetuneEstimateError(
+                    "packed segments must cover a contiguous token prefix"
+                )
+            previous = end
+        if previous != active or [span[0] for span in row] != offsets:
+            raise FinetuneEstimateError(
+                "packed segments disagree with active tokens or reset positions"
+            )
+        count += len(row)
+    if (
+        isinstance(packed["logical_sequences"], bool)
+        or not isinstance(packed["logical_sequences"], int)
+        or packed["logical_sequences"] != count
+    ):
+        raise FinetuneEstimateError(
+            "packed logical sequence count differs from segment geometry"
+        )
+    return deepcopy(dict(packed))

@@ -18,6 +18,7 @@ def apply_dataset_report(
     *,
     num_samples: int | None = None,
     sequence_length: int | None = None,
+    packed_sampling_plan: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Bind consistent measured counts to a copy of normalized training settings.
 
@@ -63,9 +64,27 @@ def apply_dataset_report(
             "framework packing requires already processed sequence counts; raw or generic concatenate scenarios cannot establish framework packed counts"
         )
     if packing and dataset_report["provenance"]["source"] == "native_in_memory":
-        raise FinetuneDataError(
-            "native_in_memory rows cannot establish final packed counts when packing may occur in the runtime sampler or collator; supply final processed JSONL sequences"
-        )
+        if packed_sampling_plan is None:
+            raise FinetuneDataError(
+                "native_in_memory rows cannot establish final packed counts when packing may occur in the runtime sampler or collator; supply final processed JSONL sequences"
+            )
+        from ._finetune_sampler import PACKED_SCHEMA_VERSION, validate_sampler_plan
+
+        sampled = validate_sampler_plan(packed_sampling_plan)
+        if (
+            sampled["schema_version"] != PACKED_SCHEMA_VERSION
+            or training_config.get("sampler_observation_version")
+            != PACKED_SCHEMA_VERSION
+            or sampled["framework"] != framework
+            or sampled["dataset"]
+            != {
+                "num_samples": inputs["num_samples"],
+                "content_sha256": dataset_report["provenance"].get("content_sha256"),
+            }
+        ):
+            raise FinetuneDataError(
+                "packed native counts require matching verified source rows and native bins"
+            )
     if not packing and dataset_report["packing"]["strategy"] == "concatenate":
         raise FinetuneDataError(
             "generic concatenate report conflicts with training packing=false; profile the actual processed training sequences"

@@ -1222,7 +1222,7 @@ not a guarantee for the combined long run or a smaller GPU.
 CPU horizon directly. `plan-finetune-transfer`, `estimate-finetune-transfer`
 and `validate-finetune-transfer` expose planning, budgeting and independent
 holdout comparison without the workspace manager. Existing strict pipeline
-commands keep their original matching rules. Packing, streaming, custom samplers
+commands keep their original matching rules. Streaming, custom samplers
 and automatic batch-size changes remain unsupported.
 
 For length grouping, set `train_sampling_strategy: group_by_length` in HF or
@@ -1246,7 +1246,7 @@ one segment and checks the next segment's logits and gradients in tiny real
 Qwen3.5 models, with a dense-attention control. The tested ordinary HF/Factory
 hybrid paths leak across a block mask and reset positions; the tested Axolotl
 patch has a Transformers 5.14.1 decoder-interface incompatibility. These are
-kernel diagnostics, and packed training budgets remain unavailable. See
+kernel diagnostics of the ordinary framework paths. See
 [`refactor.md`](refactor.md) for the tested versions and retained results.
 
 The opt-in [segment reference audit](tests/native/finetune_segment_reference.py)
@@ -1254,8 +1254,30 @@ checks a project-owned Qwen3.5 interface that executes each linear-attention
 segment with empty convolution and recurrent state. It validates block masks,
 padding and causal label boundaries, and compares all layers and gradients with
 independent native sequences, including checkpoint recomputation and checkpoint
-reload. This reference interface is separate from native packed-sampler counting
-and training-budget calibration.
+reload. With dense `qwen3_5_text` LoRA, `--packing-seed 123` explicitly selects
+this reference interface for `run-finetune` or `calibrate-finetune`. It requires a
+planning horizon and native packing (`packing: true` plus `neat_packing: true`
+for Factory, or `sample_packing: true` for Axolotl), with evaluation disabled.
+HF processed rows additionally require `position_ids` and contiguous positive
+segment IDs in `attention_mask`, followed by optional zero right padding.
+The first label of every subsequent segment must be ignored; the row's first label is removed by the causal shift. Native source sampling uses an
+independent seed plus epoch; the native bin packer, tails and dropped rows remain
+in effect. Sampler plan v3 records complete epoch bins, logical-sequence counts,
+physical tensor rows, block geometry, dtypes and consumed input hashes. Budget
+identity retains the same dataset and packing seed; different data needs its own
+calibration. This path splits recurrent computation per segment and makes no
+varlen-kernel throughput claim. Full/QLoRA packing and grouped packing are not
+covered. The PEFT direct-forward regression is in
+[the native audit](tests/native/finetune_segment_peft.py). The
+[packed-budget evidence](tests/data/finetune_packing_budget_evidence.json) retains
+four native cases, their prediction errors and allocator underestimation.
+Native packing reports require the sampler-aware transfer commands; the old
+fixed-shape projection cannot interpret their source-row counts.
+
+Calibration workspaces isolate Axolotl prepared datasets and explicit Factory
+tokenized datasets under their own `prepared/` directory. They derive those
+files from the recorded raw inputs, preserving external caches. Resume rejects
+changed raw inputs; ordinary `run-finetune` retains the native cache policy.
 
 The memory result is the observed full-run CUDA allocated/reserved peak envelope
 for a covered workload on the same GPU and allocator. This does not project to a
@@ -1277,7 +1299,7 @@ cache hits or external file dependencies: Triton group metadata can retain
 absolute references to the original cache. Keep those files available and
 unchanged. This experiment separately fixed and audited that dependency.
 
-Hugging Face native runs use a flat config and processed JSONL rows containing
+Unpacked Hugging Face native runs use a flat config and processed JSONL rows containing
 exactly `input_ids`, `attention_mask` and `labels`: equal-length integer arrays,
 a binary attention mask, and 2 through `sequence_length` tokens before padding.
 The local tokenizer must have a pad token. No implicit tokenization or truncation

@@ -8,7 +8,7 @@
 接续 `23a5bbc1`，按用户要求持续完成已设计的修改及验证。下面按依赖记录状态；实现、CPU 语义验证、真机观测分别验收，不用逻辑设备代替物理设备。
 
 - [x] Qwen3.5 分段训练参考接口（cache 关闭）：卷积与递归状态、跨层 logits/梯度、checkpointing、保存恢复及异常恢复。
-- [ ] 三个框架的 packing 数据边界、真实 sampler 计数、消费核验及独立时间/显存预算。
+- [x] 三个框架的 packing 数据边界、真实 sampler 计数、消费核验及独立时间/显存预算。
 - [x] 长度分组与原生评估共存：独立采样随机流、评估输入核验及事件预算。
 - [ ] 大数据规划的重复扫描和存储成本，保留历史报告兼容与纯标准库离线预算。
 - [ ] 更多模型、形状和重复 holdout；可用 GPU 验证与缺失硬件条件分开记录。
@@ -18,6 +18,33 @@
 - [ ] R23 原生数值扩展需求清单、实验产物与全仓/wheel 回归。
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### Packing 完整预算验收（sampler v3）
+
+`run-finetune` / `calibrate-finetune` 新增显式 `--packing-seed`，限定 dense Qwen3.5 text LoRA、一个设备、关闭评估及已指定规划范围；Factory 要求 neat packing，HF 输入须包含已证明的 segment IDs 与 reset positions。默认 unpacked 行为及旧 v1/v2 报告保持兼容。v3 保留原生 packer、完整 epoch bins、真实尾窗和丢弃信息，区分 dataset source rows、physical packed rows、logical sequences；实际输入 SHA 必须匹配 CPU 计划。参考执行、collation 和采样实现的代码 SHA 纳入预算签名，不跨数据或显式 packing seed 池化。
+
+完整预算沿用现有事件和时间账本，未引入按样本数比例外推或缺组兜底。每组仍要求两个独立进程及足够重复观测。原生 collated width 可以包含合并 source rows 与 padding；以已核验的 prior CPU plan 和实际消费证明几何，不再套用源数据行的 sequence cap。旧固定形状分析入口明确拒绝 v3 packing，避免 Ax real-batch 恰好具有固定张量形状时，把 source rows 误当作最终训练行数。
+
+正式条件为本地 **Qwen3.5-0.8B / base checkpoint 752,393,024 参数、LoRA rank 8 q/v / 319,488 trainable 参数**，GPU 1 Blackwell GPU；42 条等长、重复内容的合成逻辑序列。HF/Factory 为原生导出的 14 个 prepacked source rows、cap 256，Ax 默认合并行为 cap 128，real-batch 为 cap 192。所有实际采样 seed 均为 123，GAS=2、microbatch 配置为 3，SDPA、无 GC/评估/周期保存。OMP/MKL threads=1，五个 kernel 缓存目录每进程新建且初始为空；不声称数据缓存或 OS cache 同样为空。
+
+每场景两次 88-update 校准、预测封存后一次独立 124-update holdout，共 **12 个有效原生进程 / 1200 updates / 2079 microsteps**。累计 **8070 次 source row 消费 / 4935 个 physical packed rows / 13686 条 logical sequences**，12 个根最终保存、无评估。每场景只有一次 holdout，不作为通用精度保证。
+
+| 场景 | raw / net 总时间 APE | holdout allocated / reserved GiB | reserved 峰值低估 |
+|---|---:|---:|---:|
+| HF / PEFT | 1.430% / 1.492% | 6.209 / 6.703 | 0% |
+| Factory | 1.537% / 1.599% | 6.174 / 6.666 | 0% |
+| Ax 默认合并行 | 6.991% / 7.514% | 3.098 / 3.465 | **2 MiB / 0.0564%** |
+| Ax real-batch | 6.718% / 7.523% | 3.936 / 4.262 | 0% |
+
+保留 Ax reserved 包络的低估，不事后加余量把验证改成零低估。Ax 首次 setup 生成工作区 prepared 数据，后续进程复用；该差异属于五个 kernel 缓存之外的条件，分项误差同样归档。完整进程 allocator 包络仍不代表物理 OOM 保证、不同 GPU 的安全容量或任意长跑增长。
+
+保留两次早期集成失败：PEFT 绕过 pre-hook，及完整 HF 训练后发现 Accelerate 把 seed 123 覆盖成 42，均已单独修复提交。Ax 默认第一次训练的源长度 cap 误拒绝属于训练后验证器问题：原 report、execution、失败工作区与 summary 均未改写，前后源码及 diff 有 SHA 证书；重验后直接复用该 88-update 报告，另启第二个独立进程，使用公开计划/预算接口封存预测后运行 holdout。没有为这项验证器修正重复第一份训练，也没有按预测误差重跑。主矩阵计时期间只有该训练后验证器在阶段之间改变；实际 CUDA 执行相关实现保持一致。随后协议类型检查与 legacy 入口保护通过回归和独立 real-batch 矩阵验收。
+
+独立审计分别 **9 processes / errors=[]** 与 **3 processes / errors=[]**，重建所有 native source bins、逐批输入 hash、消费前缀、时间守恒、每进程等权成本分组及封存时间，并验证 12 份 adapter 各 24 个有限张量、12 个 LoRA B 非零。首次主审计的嵌套 workspace 检查未应用验证器变更证书，失败记录保留；补齐严格限定为该单一文件的前后 SHA 核验后通过，没有重跑 GPU。
+
+显式 seed 修复后另在 25 条变长数据上完成四种模式的原生 CPU Trainer 8-update 验收，共 32 updates；三轮 loader 与真实训练消费匹配，实际 seed 均为 123。Ax real-batch 每轮原生丢弃一行，三轮 ID 为 **22 / 14 / 15**；这与旧档案的实际 seed=42 记录分开保留。real-batch 最初 cap 128 的 CPU 候选实际每行仅一条序列，另选 cap 192 证明每行两条逻辑序列；选择发生在该模式任何 GPU 测量之前。
+
+最终全仓 **1637 passed / 1 skipped，145.14 秒**；独立 wheel 的 **98 个 Python 模块**与源码逐字节一致，`python -S` 下 **42 项 CLI 检查**全部重放封存值（包括四个 packing 场景、旧 pipeline 与长度分组评估），**152 份历史预测逐字节一致**。Ruff、diff check 与无 ML 依赖导入通过。可读[预算证据](tests/data/finetune_packing_budget_evidence.json)及[压缩审阅记录](tests/data/finetune_packing_budget_records.json.gz)保留原始散列；资料在 `/tmp/fakegpu-packed-budget-20261015/` 与 `/tmp/fakegpu-packed-real-budget-20261015/`。这些是版本化、同 GPU 条件下的验收；不覆盖 full/QLoRA packing、评估 packing 或 varlen 吞吐。
 
 ### 分段隔离参考接口
 

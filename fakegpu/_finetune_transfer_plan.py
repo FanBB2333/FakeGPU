@@ -22,6 +22,7 @@ from ._finetune_pipeline_plan import (
 )
 from ._finetune_sampler import (
     LENGTH_SCHEMA_VERSION,
+    PACKED_SCHEMA_VERSION,
     SCHEMA_VERSION as SAMPLER_SCHEMA,
     _integer,
     validate_length_grouping_evaluation,
@@ -44,10 +45,24 @@ def _sampler_identity(sampling):
         # Grouping changes epoch setup work. First support retains the complete
         # native length sequence and grouping width rather than pooling sizes.
         identity["grouping"] = deepcopy(sampler["grouping"])
+    if sampling["schema_version"] == PACKED_SCHEMA_VERSION:
+        identity["seed"] = sampler["seed"]
+        identity["packing"] = {
+            key: deepcopy(value)
+            for key, value in sampling["packing"].items()
+            if key != "epoch_source_bins"
+        }
     return identity
 
 
 def _execution_identity(run, sampling):
+    if sampling["schema_version"] == PACKED_SCHEMA_VERSION:
+        return {
+            "signature": deepcopy(run["observation"]["signature"]),
+            "sampler": _sampler_identity(sampling),
+            "collator_class": sampling["collator_class"],
+            "dataloader": deepcopy(sampling["dataloader"]),
+        }
     raw = deepcopy(run["native_config"])
     raw.pop("data_seed", None)
     if run["framework"] == "huggingface":
@@ -82,7 +97,9 @@ def transfer_plan_from_run(run):
     _validate_native_schedule_options(run)
     plan = pipeline_plan_from_run(run)
     if plan["signature"].get("sampler_observation_version") not in {
-        SAMPLER_SCHEMA, LENGTH_SCHEMA_VERSION
+        SAMPLER_SCHEMA,
+        LENGTH_SCHEMA_VERSION,
+        PACKED_SCHEMA_VERSION,
     }:
         raise FinetuneEstimateError(
             "transfer budgets require a verified native sampling plan; rerun with a planning horizon"
@@ -118,19 +135,48 @@ def validate_transfer_plan(plan):
     validate_pipeline_plan(base)
     sampling = validate_sampler_plan(plan.get("sampling_plan"))
     signature = plan["signature"]
+    if sampling["schema_version"] == PACKED_SCHEMA_VERSION:
+        _integer(signature.get("packing_seed"), "packing_seed", minimum=0)
+        if (
+            signature.get("packing_seed") != sampling["sampler"]["seed"]
+            or signature.get("packing") is not True
+        ):
+            raise FinetuneEstimateError(
+                "packed source seed or execution flag differs from its signature"
+            )
+        native = {
+            key: value
+            for key, value in sampling["packing"].items()
+            if key
+            in {
+                "microsteps_per_epoch",
+                "batch_sampler",
+                "native_drop_last",
+                "row_logical_sequences",
+            }
+        }
+        if plan["setup_workload"].get("native_packing") != native:
+            raise FinetuneEstimateError(
+                "packed setup epoch counts differ from the sampled bins"
+            )
+    elif "packing_seed" in signature or "packing_reference" in signature:
+        raise FinetuneEstimateError("packing policy requires sampler plan v3")
     if "length_grouping_evaluation" in signature:
         if sampling["schema_version"] != LENGTH_SCHEMA_VERSION:
-            raise FinetuneEstimateError("evaluation grouping requires a v2 length sampler")
+            raise FinetuneEstimateError(
+                "evaluation grouping requires a v2 length sampler"
+            )
         validate_length_grouping_evaluation(
             signature["length_grouping_evaluation"], seed=sampling["sampler"]["seed"]
         )
     if sampling["schema_version"] == LENGTH_SCHEMA_VERSION:
-        _integer(signature.get("length_grouping_seed"), "length_grouping_seed", minimum=0)
+        _integer(
+            signature.get("length_grouping_seed"), "length_grouping_seed", minimum=0
+        )
     if (
         signature.get("sampler_observation_version") != sampling["schema_version"]
-        or ("length_grouping_seed" in signature) != (
-            sampling["schema_version"] == LENGTH_SCHEMA_VERSION
-        )
+        or ("length_grouping_seed" in signature)
+        != (sampling["schema_version"] == LENGTH_SCHEMA_VERSION)
         or (
             sampling["schema_version"] == LENGTH_SCHEMA_VERSION
             and signature.get("length_grouping_seed") != sampling["sampler"]["seed"]
@@ -170,7 +216,8 @@ def validate_transfer_plan(plan):
             "transfer execution identity is incomplete or changed"
         )
     expected = deepcopy(signature)
-    expected.pop("data_signature")
+    if sampling["schema_version"] != PACKED_SCHEMA_VERSION:
+        expected.pop("data_signature")
     expected["native_execution_signature"] = identity["signature"].get(
         "native_execution_signature"
     )
@@ -191,23 +238,18 @@ def transfer_signature(plan):
 
 
 def _execution_window(plan, update, context):
-    microsteps = math.ceil(
-        plan["setup_workload"]["dataset_num_samples"]
-        / plan["signature"]["micro_batch_size"]
+    from ._finetune_batches import execution_batch_shape
+
+    microsteps = (
+        plan["setup_workload"]["native_packing"]["microsteps_per_epoch"]
+        if "native_packing" in plan["setup_workload"]
+        else math.ceil(
+            plan["setup_workload"]["dataset_num_samples"]
+            / plan["signature"]["micro_batch_size"]
+        )
     )
     return {
-        "batches": [
-            {
-                field: deepcopy(batch[field])
-                for field in (
-                    "shape",
-                    "attention_mask_kind",
-                    "labels_kind",
-                    "position_ids_kind",
-                )
-            }
-            for batch in update["batches"]
-        ],
+        "batches": [execution_batch_shape(batch) for batch in update["batches"]],
         "context": context,
         "epoch_context": {
             "starts_epoch": update["batches"][0]["epoch_microstep"] == 1,

@@ -6,9 +6,10 @@ framework until run_finetuning has validated the requested local configuration.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import datetime, timezone
 import importlib.metadata
+import hashlib
 import json
 import math
 import os
@@ -46,6 +47,21 @@ _RUN_LOCK = threading.Lock()
 _NATIVE_FRAMEWORKS = {"huggingface", "llamafactory", "axolotl"}
 
 
+def _packing_implementation_sha256():
+    """Bind empirical packed costs to the owned collation/execution implementation."""
+    files = {
+        name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+        for name in (
+            "_finetune_segments.py",
+            "_finetune_packed_batches.py",
+            "_finetune_packed_sampler.py",
+        )
+    }
+    return hashlib.sha256(
+        json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def native_training_versions(framework: str) -> dict[str, str]:
     """Read package metadata without importing an optional training framework."""
     if framework not in _NATIVE_FRAMEWORKS:
@@ -66,7 +82,9 @@ def native_training_versions(framework: str) -> dict[str, str]:
     return versions
 
 
-def _prepare_config(path: Path, framework: str, warmup_steps: int):
+def _prepare_config(
+    path: Path, framework: str, warmup_steps: int, *, packed_reference=False
+):
     if framework not in _NATIVE_FRAMEWORKS:
         raise ValueError(
             "native framework must be huggingface, llamafactory or axolotl"
@@ -81,8 +99,15 @@ def _prepare_config(path: Path, framework: str, warmup_steps: int):
     config = normalize_finetune_config(raw, framework=framework, base_dir=path.parent)
     if config["quantization_bits"] not in {None, 4}:
         raise ValueError("native runner supports only 4-bit bitsandbytes quantization")
-    if config["packing"] or raw.get("neat_packing"):
+    if (config["packing"] or raw.get("neat_packing")) and not packed_reference:
         raise ValueError("native runner requires unpacked text data")
+    if packed_reference and (
+        not config["packing"]
+        or (framework == "llamafactory" and not raw.get("neat_packing"))
+    ):
+        raise ValueError(
+            "packing seed requires native packing, including Factory neat_packing"
+        )
     distributed = config["distributed_config"]
     if (
         config["world_size"] != 1
@@ -138,6 +163,10 @@ def _prepare_config(path: Path, framework: str, warmup_steps: int):
         raise ValueError("native runner requires an exported pure text checkpoint")
     if model_config.get("quantization_config"):
         raise ValueError("native runner requires unquantized checkpoint weights")
+    if packed_reference and (
+        model_config.get("model_type") != "qwen3_5_text" or config["method"] != "lora"
+    ):
+        raise ValueError("packed reference currently requires dense Qwen3.5 text LoRA")
     output = raw.get("output_dir")
     if not isinstance(output, str) or not output:
         raise ValueError("native runner requires an explicit output_dir")
@@ -197,6 +226,7 @@ def run_finetuning(
     planning_epochs: float | None = None,
     planning_max_steps: int | None = None,
     length_grouping_seed: int | None = None,
+    packing_seed: int | None = None,
 ) -> dict[str, Any]:
     """Run native SFT; return evidence only after successful finite GPU updates.
 
@@ -206,6 +236,19 @@ def run_finetuning(
     """
     if planning_epochs is not None and planning_max_steps is not None:
         raise ValueError("provide only one planning duration")
+    if packing_seed is not None:
+        if (
+            isinstance(packing_seed, bool)
+            or not isinstance(packing_seed, int)
+            or not 0 <= packing_seed < 2**63
+        ):
+            raise ValueError("packing_seed must be an integer in [0, 2**63)")
+        if length_grouping_seed is not None or (
+            planning_epochs is None and planning_max_steps is None
+        ):
+            raise ValueError(
+                "packing_seed requires a planning horizon and no length_grouping_seed"
+            )
     if planning_epochs is not None and (
         isinstance(planning_epochs, bool)
         or not isinstance(planning_epochs, (int, float))
@@ -234,9 +277,14 @@ def run_finetuning(
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     path = Path(config_path).expanduser().resolve()
-    raw, config, model_config, model_dir = _prepare_config(
-        path, framework, warmup_steps
-    )
+    if packing_seed is None:
+        raw, config, model_config, model_dir = _prepare_config(
+            path, framework, warmup_steps
+        )
+    else:
+        raw, config, model_config, model_dir = _prepare_config(
+            path, framework, warmup_steps, packed_reference=True
+        )
     if planning:
         from .finetune_pipeline_plan import _validate_native_schedule_options
 
@@ -280,13 +328,60 @@ def run_finetuning(
             from ._finetune_sampler import LENGTH_SCHEMA_VERSION, SCHEMA_VERSION
 
             config["sampler_observation_version"] = (
-                LENGTH_SCHEMA_VERSION if length_grouping_seed is not None else SCHEMA_VERSION
+                LENGTH_SCHEMA_VERSION
+                if length_grouping_seed is not None
+                else SCHEMA_VERSION
             )
+            if packing_seed is not None:
+                from ._finetune_sampler import PACKED_SCHEMA_VERSION
+
+                config["sampler_observation_version"] = PACKED_SCHEMA_VERSION
+                config["packing_seed"] = packing_seed
         if length_grouping_seed is not None:
             config["length_grouping_seed"] = length_grouping_seed
         state = {}
 
         def inspect_trainer(trainer):
+            if packing_seed is not None:
+                from ._finetune_packed_batches import install_isolated_packing_collation
+                from ._finetune_packed_sampler import install_packed_random_sampling
+                from ._finetune_segments import isolated_qwen35_segments
+
+                strategy = getattr(
+                    trainer.args.eval_strategy, "value", trainer.args.eval_strategy
+                )
+                if (
+                    strategy != "no"
+                    or trainer.args.do_eval
+                    or trainer.eval_dataset is not None
+                ):
+                    raise ValueError(
+                        "packed reference currently requires evaluation disabled"
+                    )
+                policy = install_isolated_packing_collation(
+                    trainer,
+                    framework=framework,
+                    mask_dtype={
+                        "bf16": torch.bfloat16,
+                        "fp16": torch.float16,
+                        "fp32": torch.float32,
+                    }[config["dtype"]],
+                    replace=observer._replace,
+                )
+                install_packed_random_sampling(
+                    trainer,
+                    framework=framework,
+                    seed=packing_seed,
+                    replace=observer._replace,
+                )
+                config["packing_reference"] = {
+                    **policy,
+                    "model_mode": "qwen35_reference.v1",
+                    "implementation_sha256": _packing_implementation_sha256(),
+                }
+                segmented_execution.enter_context(
+                    isolated_qwen35_segments(trainer.model.get_base_model())
+                )
             if length_grouping_seed is not None:
                 from ._finetune_length_sampler import install_length_grouping
 
@@ -316,6 +411,14 @@ def run_finetuning(
                     math.ceil(len(dataset) / args.per_device_train_batch_size)
                     / args.gradient_accumulation_steps
                 )
+                if packing_seed is not None:
+                    from ._finetune_sampler import _preserve_random_streams
+
+                    with _preserve_random_streams(torch):
+                        per_epoch = math.ceil(
+                            len(trainer.get_train_dataloader())
+                            / args.gradient_accumulation_steps
+                        )
                 native_steps = (
                     args.max_steps
                     if args.max_steps > 0
@@ -326,12 +429,26 @@ def run_finetuning(
                     if planning_max_steps is not None
                     else math.ceil(planning_epochs * per_epoch)
                 )
-                state["sampling_plan"] = plan_native_batches(
-                    trainer,
-                    max_steps=max(native_steps, target_steps),
-                    framework=framework,
-                    sequence_length=config["sequence_length"],
-                )
+                if packing_seed is not None:
+                    from ._finetune_packed_sampler import plan_native_packed_batches
+
+                    state["sampling_plan"] = plan_native_packed_batches(
+                        trainer,
+                        max_steps=max(native_steps, target_steps),
+                        framework=framework,
+                        dataset_profile=state["dataset"],
+                    )
+                    if state["sampling_plan"]["sampler"]["seed"] != packing_seed:
+                        raise ValueError(
+                            "prepared native loader changed the explicit packing seed"
+                        )
+                else:
+                    state["sampling_plan"] = plan_native_batches(
+                        trainer,
+                        max_steps=max(native_steps, target_steps),
+                        framework=framework,
+                        sequence_length=config["sequence_length"],
+                    )
                 if (
                     state["sampling_plan"]["dataset"]["content_sha256"]
                     != config["data_signature"]
@@ -354,6 +471,7 @@ def run_finetuning(
             run_started=started,
         )
         with (
+            ExitStack() as segmented_execution,
             capture_native_trainer(Trainer, TrainerCallback, observer),
             _native_directory(path.parent),
         ):
@@ -547,7 +665,12 @@ def run_finetuning(
             "schedule": schedule,
             "workload": dict(observation["workload"]),
             **({"sampling_plan": state["sampling_plan"]} if planning else {}),
-            **({"length_grouping_seed": length_grouping_seed} if length_grouping_seed is not None else {}),
+            **(
+                {"length_grouping_seed": length_grouping_seed}
+                if length_grouping_seed is not None
+                else {}
+            ),
+            **({"packing_seed": packing_seed} if packing_seed is not None else {}),
         }
     finally:
         _RUN_LOCK.release()

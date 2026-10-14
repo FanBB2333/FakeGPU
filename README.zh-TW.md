@@ -1098,7 +1098,7 @@ GPU 記憶體獨立報告完整校準程序峰值包絡，不保證長跑組合�
 亦可用 `run-finetune --planning-epochs N` 或 `--planning-max-steps N` 儲存 CPU 計畫，
 再分別呼叫 `plan-finetune-transfer`、`estimate-finetune-transfer`、
 `validate-finetune-transfer` 產生計畫、預算與獨立 holdout 比較。
-既有嚴格 pipeline 命令維持原匹配規則。packing、streaming、自訂採樣器及自動
+既有嚴格 pipeline 命令維持原匹配規則。streaming、自訂採樣器及自動
 batch size 調整仍未開放。
 
 長度分組時，HF/LLaMA-Factory 設定 `train_sampling_strategy: group_by_length`，
@@ -1115,13 +1115,29 @@ sampler plan v2 將完整有序分組長度及分組 batch size 保留於校準�
 [packing 語義審計](tests/native/finetune_packing_semantics.py) 在極小的真實 Qwen3.5 模型中
 改變前一段，檢查後一段的輸出與梯度，並提供純 attention 對照。實測一般 HF/Factory
 混合路徑於分塊 mask 及重設位置後仍有跨段影響；所測 Axolotl patch 與 Transformers
-5.14.1 的 decoder 介面不相容。這是核心診斷，尚未開放 packed 訓練預算。版本與保留結果
+5.14.1 的 decoder 介面不相容。這是一般框架路徑的核心診斷。版本與保留結果
 見 [`refactor.md`](refactor.md)。
 
 [分段參考審計](tests/native/finetune_segment_reference.py) 檢查專案自有的 Qwen3.5
 分段介面：每段 linear attention 使用空的卷積與遞迴狀態，並檢查分塊 mask、padding
 及 causal label 邊界。逐層輸出與梯度和獨立原生序列對照，同時檢查 checkpoint 重算
-與模型儲存還原。這是顯式參考介面；原生 packed sampler 計數與訓練預算另行驗收。
+與模型儲存還原。對於 dense `qwen3_5_text` LoRA，可向 `run-finetune` 或
+`calibrate-finetune` 明確加入 `--packing-seed 123` 選擇此參考路徑；必須指定規劃範圍、
+關閉評估並啟用原生 packing：Factory 設定 `packing: true` 和 `neat_packing: true`，
+Axolotl 設定 `sample_packing: true`。HF processed 列另須提供 `position_ids`，
+`attention_mask` 使用連續正整數 segment IDs，右側 padding 為零；後續各段首 label 忽略，列首 label 本身由 causal shift 移除。
+原生 source sampler 使用獨立 seed＋epoch，原生 packer、尾批及丟棄行為保留。
+sampler plan v3 記錄完整 epoch bins、邏輯序列數、實際張量列數、分段幾何、dtype
+及消費輸入 SHA。預算保留相同資料及 packing seed 的身分，不同資料需要獨立校準。
+此路徑逐段執行遞迴計算，不承諾 varlen 核心吞吐；full/QLoRA packing 與 grouped
+packing 未覆蓋。PEFT 直接呼叫 forward 的回歸見[原生審計](tests/native/finetune_segment_peft.py)。
+[完整 packing 預算證據](tests/data/finetune_packing_budget_evidence.json) 保留四個原生情境、
+預測誤差與 allocator 低估。原生 packing 報告須使用 sampler-aware transfer 命令；
+舊固定形狀外推不能把其 source rows 當作實際訓練列數。
+
+校準工作區將 Axolotl prepared 資料及明確設定的 Factory tokenized 資料隔離到自身
+`prepared/`，從已記錄的原始輸入產生，保留外部快取。恢復時拒絕原始輸入變更；
+一般 `run-finetune` 維持原生快取策略。
 
 記憶體結果為同一 GPU 和 allocator 上已覆蓋工作量的完整執行 allocated/reserved 峰值
 包絡，不相加各視窗峰值，也不代表已投射到一張更小的實體卡。
@@ -1139,7 +1155,7 @@ sampler plan v2 將完整有序分組長度及分組 batch size 保留於校準�
 Triton group 中繼資料可能仍透過絕對路徑引用原快取，必須保留並固定這些檔案；
 本輪驗證另外凍結、核對了該相依。
 
-HF 原生入口接收平鋪設定及每行恰好包含 `input_ids`、`attention_mask`、`labels` 的
+Unpacked HF 原生入口接收平鋪設定及每行恰好包含 `input_ids`、`attention_mask`、`labels` 的
 processed JSONL：三個等長整數陣列、二值 attention mask，padding 前長度為 2 到
 `sequence_length`；本機 tokenizer 須已有 pad token，不隱式斷詞或截斷。使用 [原生 LoRA 範例](examples/finetuning/huggingface-native-lora.yaml)
 並向 `run-finetune` 傳入 `--framework huggingface`；既有定長 `probe-finetune` 仍可使用。

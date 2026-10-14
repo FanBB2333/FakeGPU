@@ -323,16 +323,24 @@ def run_main(argv: Sequence[str] | None = None) -> int:
     )
     planning = parser.add_mutually_exclusive_group()
     planning.add_argument(
-        "--planning-epochs", type=float,
+        "--planning-epochs",
+        type=float,
         help="Prepare a CPU sampling plan for this many epochs and verify consumed batch inputs.",
     )
     planning.add_argument(
-        "--planning-max-steps", type=int,
+        "--planning-max-steps",
+        type=int,
         help="Prepare a CPU sampling plan for these future updates; native training duration is unchanged.",
     )
     parser.add_argument(
-        "--length-grouping-seed", type=int,
-        help="Opt into epoch-seeded native length grouping, with evaluation disabled and a planning horizon.",
+        "--length-grouping-seed",
+        type=int,
+        help="Opt into epoch-seeded native length grouping with a planning horizon; evaluation uses a fixed independent order.",
+    )
+    parser.add_argument(
+        "--packing-seed",
+        type=int,
+        help="Opt into isolated Qwen3.5 text LoRA packing with independent epoch-seeded native sampling",
     )
     args = parser.parse_args(argv)
     try:
@@ -345,7 +353,12 @@ def run_main(argv: Sequence[str] | None = None) -> int:
         )
         options.update(
             (field, getattr(args, field))
-            for field in ("planning_epochs", "planning_max_steps", "length_grouping_seed")
+            for field in (
+                "planning_epochs",
+                "planning_max_steps",
+                "length_grouping_seed",
+                "packing_seed",
+            )
             if getattr(args, field) is not None
         )
         report = run_finetuning(

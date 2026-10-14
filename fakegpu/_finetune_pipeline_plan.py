@@ -199,18 +199,43 @@ def validate_pipeline_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
         raise FinetuneEstimateError(
             "pipeline plans require a supported native framework"
         )
+    packed = (
+        signature.get("sampler_observation_version")
+        == "fakegpu.finetune_sampler_plan.v3"
+    )
     if (
-        signature.get("packing") is not False
+        signature.get("packing") is not packed
         or _integer(signature.get("world_size"), "world_size", minimum=1) != 1
     ):
         raise FinetuneEstimateError(
-            "pipeline plans require single-GPU unpacked execution"
+            "pipeline plans require single-GPU unpacked execution or verified packed sampler v3"
         )
     if signature.get("timeline_observation_version") != TIMELINE_SCHEMA:
         raise FinetuneEstimateError(
             "pipeline plans require the native timeline protocol"
         )
     setup = plan["setup_workload"]
+    if packed:
+        from ._finetune_sampler import _sha256
+
+        policy = signature.get("packing_reference")
+        native = setup.get("native_packing")
+        if (
+            not isinstance(policy, Mapping)
+            or policy.get("model_mode") != "qwen35_reference.v1"
+            or not isinstance(native, Mapping)
+        ):
+            raise FinetuneEstimateError(
+                "packed pipeline requires the verified reference policy and native epoch counts"
+            )
+        _sha256(policy.get("implementation_sha256"), "packed reference implementation")
+        _integer(
+            native.get("microsteps_per_epoch"), "packed epoch microsteps", minimum=1
+        )
+    elif "native_packing" in setup:
+        raise FinetuneEstimateError(
+            "native packing metadata requires a packed sampler protocol"
+        )
     if setup.get("dataset_content_sha256") != signature.get(
         "data_signature"
     ) or setup.get("checkpoint_sha256") != signature.get("checkpoint_sha256"):
@@ -271,7 +296,8 @@ def validate_pipeline_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
             except ValueError as exc:
                 raise FinetuneEstimateError(str(exc)) from exc
             if (
-                descriptor["attention_mask_kind"] != "binary_2d"
+                descriptor["attention_mask_kind"]
+                != ("block_causal_4d" if packed else "binary_2d")
                 or descriptor["labels_kind"] != "integer_2d"
             ):
                 raise FinetuneEstimateError(
@@ -285,6 +311,10 @@ def validate_pipeline_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
             microstep = _integer(
                 batch.get("epoch_microstep"), "epoch_microstep", minimum=1
             )
+            if packed and microstep > setup["native_packing"]["microsteps_per_epoch"]:
+                raise FinetuneEstimateError(
+                    "packed epoch microstep exceeds the native epoch length"
+                )
             expected = (
                 (previous_epoch, previous_microstep + 1)
                 if epoch == previous_epoch
@@ -525,6 +555,21 @@ def pipeline_plan_from_run(run: Mapping[str, Any]) -> dict[str, Any]:
             operation for _, _, operation in sorted(ordered, key=lambda item: item[:2])
         ],
     }
+    if (
+        signature.get("sampler_observation_version")
+        == "fakegpu.finetune_sampler_plan.v3"
+    ):
+        sampling = run.get("sampling_plan", {})
+        packing = sampling.get("packing", {})
+        plan["setup_workload"]["native_packing"] = {
+            key: deepcopy(packing[key])
+            for key in (
+                "microsteps_per_epoch",
+                "batch_sampler",
+                "native_drop_last",
+                "row_logical_sequences",
+            )
+        }
     return validate_pipeline_plan(plan)
 
 

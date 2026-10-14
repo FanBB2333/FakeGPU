@@ -80,7 +80,17 @@ def validate_native_run(
     ):
         if not isinstance(run.get(key), Mapping):
             raise FinetuneEstimateError(f"native run requires {key}")
-    config = apply_dataset_report(run["training_config"], run["dataset"])
+    if (
+        run["training_config"].get("sampler_observation_version")
+        == "fakegpu.finetune_sampler_plan.v3"
+    ):
+        config = apply_dataset_report(
+            run["training_config"],
+            run["dataset"],
+            packed_sampling_plan=run.get("sampling_plan"),
+        )
+    else:
+        config = apply_dataset_report(run["training_config"], run["dataset"])
     if config.get("source_framework") != framework:
         raise FinetuneEstimateError(
             "native run framework differs from its training configuration"
@@ -119,14 +129,19 @@ def validate_native_run(
     signature = finetune_workload_signature(
         run["model_config"], config, profile_id=run.get("profile_id")
     )
-    _validate_observation(observation, signature, require_fixed_shape=require_fixed_shape)
+    _validate_observation(
+        observation, signature, require_fixed_shape=require_fixed_shape
+    )
     observed_model = observation.get("observed_model")
     # Early v1 runs predate kernel implementation recording. Preserve their
     # existing signature checks; the batch protocol requires the complete backend.
     has_backend = (
-        isinstance(observed_model, Mapping) and "kernel_implementations" in observed_model
+        isinstance(observed_model, Mapping)
+        and "kernel_implementations" in observed_model
     )
-    if "native_config" in run and ("batch_observation_version" in config or has_backend):
+    if "native_config" in run and (
+        "batch_observation_version" in config or has_backend
+    ):
         raw = run["native_config"]
         if not isinstance(raw, Mapping) or not isinstance(observed_model, Mapping):
             raise FinetuneEstimateError(
@@ -233,6 +248,19 @@ def _validate_native_measurements(
         raise FinetuneEstimateError(
             "native updates must match workload.optimizer_steps"
         )
+    verified_packing = (
+        config.get("packing") is True
+        and config.get("sampler_observation_version")
+        == "fakegpu.finetune_sampler_plan.v3"
+    )
+    if verified_packing:
+        from ._finetune_sampler import validate_sampling_verification
+
+        # The cap describes source rows; native packing may concatenate rows and
+        # pad its bins. Use the prior CPU plan's exact, consumed tensor geometry.
+        validate_sampling_verification(
+            run.get("sampling_plan"), updates, observation.get("sampling_verification")
+        )
     microsteps = samples = warmup_microsteps = 0
     update_seconds = warmup_seconds = 0.0
     steady_seconds: list[float] = []
@@ -332,7 +360,7 @@ def _validate_native_measurements(
         if dimensions in seen_shapes:
             raise FinetuneEstimateError("native shape_counts contains duplicate shapes")
         if not require_fixed_shape and (
-            dimensions[0] > batch or dimensions[1] > sequence
+            dimensions[0] > batch or (not verified_packing and dimensions[1] > sequence)
         ):
             raise FinetuneEstimateError(
                 "native recorded batch shape exceeds the configured batch or sequence length"
