@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
+import json
 import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -45,6 +47,8 @@ SUPPORTED_DTYPES = {
 }
 SUPPORTED_ATTENTION_BACKENDS = {"eager", "sdpa"}
 SUPPORTED_OFFLOAD_MODES = {"none", "model"}
+
+
 def estimate_diffusion_generation(
     model_profile: str | None = None,
     *,
@@ -124,29 +128,17 @@ def estimate_diffusion_generation(
     )
     selected_dtype = str(dtype).lower()
     if selected_dtype not in SUPPORTED_DTYPES:
-        raise DiffusionEstimateError(
-            "dtype must be float16, bfloat16, or float32"
-        )
+        raise DiffusionEstimateError("dtype must be float16, bfloat16, or float32")
     if attention_backend not in SUPPORTED_ATTENTION_BACKENDS:
-        raise DiffusionEstimateError(
-            "attention_backend must be eager or sdpa"
-        )
+        raise DiffusionEstimateError("attention_backend must be eager or sdpa")
     if offload not in SUPPORTED_OFFLOAD_MODES:
-        raise DiffusionEstimateError(
-            "offload must be none or model"
-        )
+        raise DiffusionEstimateError("offload must be none or model")
     if not isinstance(attention_slicing, bool):
-        raise DiffusionEstimateError(
-            "attention_slicing must be a boolean"
-        )
+        raise DiffusionEstimateError("attention_slicing must be a boolean")
     if not isinstance(vae_slicing, bool):
-        raise DiffusionEstimateError(
-            "vae_slicing must be a boolean"
-        )
+        raise DiffusionEstimateError("vae_slicing must be a boolean")
     if not isinstance(vae_tiling, bool):
-        raise DiffusionEstimateError(
-            "vae_tiling must be a boolean"
-        )
+        raise DiffusionEstimateError("vae_tiling must be a boolean")
     tile_size = _positive_integer(vae_tile_size, "vae_tile_size")
     overhead_bytes = _nonnegative_integer(
         runtime_overhead_bytes,
@@ -156,10 +148,7 @@ def estimate_diffusion_generation(
     latent = _mapping(profile["latent"])
     latent_scale = int(latent["scale_factor"])
     latent_channels = int(latent["channels"])
-    if (
-        image_height % latent_scale != 0
-        or image_width % latent_scale != 0
-    ):
+    if image_height % latent_scale != 0 or image_width % latent_scale != 0:
         raise DiffusionEstimateError(
             "height and width must be divisible by the latent scale "
             f"factor ({latent_scale})"
@@ -174,14 +163,11 @@ def estimate_diffusion_generation(
         selected_tokens = (
             _positive_integer(text_tokens, "text_tokens")
             if text_tokens is not None
-            else int(
-                conditioning.get("default_tokens", maximum_tokens)
-            )
+            else int(conditioning.get("default_tokens", maximum_tokens))
         )
         if selected_tokens > maximum_tokens:
             raise DiffusionEstimateError(
-                f"text_tokens must not exceed {maximum_tokens} "
-                f"for {selected_model_id}"
+                f"text_tokens must not exceed {maximum_tokens} for {selected_model_id}"
             )
     else:
         if text_tokens is not None:
@@ -193,17 +179,11 @@ def estimate_diffusion_generation(
 
     element_bytes = SUPPORTED_DTYPES[selected_dtype]
     denoiser_profile = _mapping(profile["denoiser"])
-    guidance_mode = str(
-        denoiser_profile.get("guidance_mode")
-        or "classifier_free"
-    )
+    guidance_mode = str(denoiser_profile.get("guidance_mode") or "classifier_free")
     classifier_free_guidance = (
-        guidance_mode == "classifier_free"
-        and selected_guidance > 1.0
+        guidance_mode == "classifier_free" and selected_guidance > 1.0
     )
-    denoiser_batch = image_batch * (
-        2 if classifier_free_guidance else 1
-    )
+    denoiser_batch = image_batch * (2 if classifier_free_guidance else 1)
     component_parameter_counts = {
         "conditioning": int(conditioning["parameter_count"]),
         "denoiser": int(denoiser_profile["parameter_count"]),
@@ -248,27 +228,16 @@ def estimate_diffusion_generation(
     total_weight_bytes = sum(component_weight_bytes.values())
 
     latent_bytes = (
-        image_batch
-        * latent_channels
-        * latent_height
-        * latent_width
-        * element_bytes
+        image_batch * latent_channels * latent_height * latent_width * element_bytes
     )
-    denoiser_latent_bytes = latent_bytes * (
-        2 if classifier_free_guidance else 1
-    )
+    denoiser_latent_bytes = latent_bytes * (2 if classifier_free_guidance else 1)
     conditioning_output_bytes = (
-        denoiser_batch
-        * selected_tokens
-        * int(conditioning["width"])
-        * element_bytes
+        denoiser_batch * selected_tokens * int(conditioning["width"]) * element_bytes
     )
     text_activation = _text_encoder_activation(
         batch_size=denoiser_batch,
         tokens=selected_tokens,
-        width=int(
-            conditioning.get("encoder_width", conditioning["width"])
-        ),
+        width=int(conditioning.get("encoder_width", conditioning["width"])),
         element_bytes=element_bytes,
     )
     denoiser_activation = _denoiser_activation(
@@ -292,13 +261,7 @@ def estimate_diffusion_generation(
         tiling=vae_tiling,
         tile_size=tile_size,
     )
-    output_image_bytes = (
-        image_batch
-        * image_height
-        * image_width
-        * 3
-        * element_bytes
-    )
+    output_image_bytes = image_batch * image_height * image_width * 3 * element_bytes
     scheduler_bytes = 3 * denoiser_latent_bytes
 
     resident_weights = {
@@ -318,9 +281,7 @@ def estimate_diffusion_generation(
             "text_encode",
             {
                 "resident_weights": resident_weights["text_encode"],
-                "text_encoder_activations": text_activation[
-                    "peak_bytes"
-                ],
+                "text_encoder_activations": text_activation["peak_bytes"],
                 "conditioning_output": conditioning_output_bytes,
                 "runtime_overhead": overhead_bytes,
             },
@@ -331,15 +292,9 @@ def estimate_diffusion_generation(
                 "resident_weights": resident_weights["denoise"],
                 "latents": denoiser_latent_bytes,
                 "conditioning": conditioning_output_bytes,
-                "retained_residuals": denoiser_activation[
-                    "retained_residual_bytes"
-                ],
-                "working_tensors": denoiser_activation[
-                    "working_tensor_bytes"
-                ],
-                "attention_workspace": denoiser_activation[
-                    "attention_workspace_bytes"
-                ],
+                "retained_residuals": denoiser_activation["retained_residual_bytes"],
+                "working_tensors": denoiser_activation["working_tensor_bytes"],
+                "attention_workspace": denoiser_activation["attention_workspace_bytes"],
                 "scheduler_buffers": scheduler_bytes,
                 "runtime_overhead": overhead_bytes,
             },
@@ -350,12 +305,8 @@ def estimate_diffusion_generation(
                 "resident_weights": resident_weights["vae_decode"],
                 "latents": latent_bytes,
                 "decoded_image": output_image_bytes,
-                "retained_features": vae_activation[
-                    "retained_feature_bytes"
-                ],
-                "working_tensors": vae_activation[
-                    "working_tensor_bytes"
-                ],
+                "retained_features": vae_activation["retained_feature_bytes"],
+                "working_tensors": vae_activation["working_tensor_bytes"],
                 "runtime_overhead": overhead_bytes,
             },
         ),
@@ -375,22 +326,14 @@ def estimate_diffusion_generation(
             "fits": peak_bytes <= gpu.memory_bytes,
             "headroom_bytes": max(0, gpu.memory_bytes - peak_bytes),
             "overflow_bytes": max(0, peak_bytes - gpu.memory_bytes),
-            "utilization_percent": (
-                peak_bytes / gpu.memory_bytes * 100
-            ),
+            "utilization_percent": (peak_bytes / gpu.memory_bytes * 100),
         }
 
-    latent_pixel_steps = (
-        denoiser_batch
-        * latent_height
-        * latent_width
-        * denoising_steps
-    )
+    latent_pixel_steps = denoiser_batch * latent_height * latent_width * denoising_steps
     return {
         "schema_version": SCHEMA_VERSION,
         "method": (
-            "safetensors_headers_plus_architecture_specific_"
-            "phase_shape_memory_model"
+            "safetensors_headers_plus_architecture_specific_phase_shape_memory_model"
         ),
         "model_profile": {
             "id": selected_model_id,
@@ -403,9 +346,7 @@ def estimate_diffusion_generation(
         "architecture": {
             "denoiser_family": denoiser_profile["architecture"],
             "model_class": denoiser_profile.get("model_class"),
-            "attention_pattern": denoiser_profile.get(
-                "attention_pattern"
-            ),
+            "attention_pattern": denoiser_profile.get("attention_pattern"),
             "guidance_mode": guidance_mode,
             "configuration_source": (
                 "local_component_config"
@@ -446,16 +387,10 @@ def estimate_diffusion_generation(
         "weights": {
             "parameter_counts": component_parameter_counts,
             "checkpoint_bytes": component_checkpoint_bytes,
-            "checkpoint_dtype_bytes": (
-                component_checkpoint_dtype_bytes
-            ),
-            "total_checkpoint_bytes": sum(
-                component_checkpoint_bytes.values()
-            ),
+            "checkpoint_dtype_bytes": (component_checkpoint_dtype_bytes),
+            "total_checkpoint_bytes": sum(component_checkpoint_bytes.values()),
             "runtime_bytes": component_weight_bytes,
-            "total_parameter_count": sum(
-                component_parameter_counts.values()
-            ),
+            "total_parameter_count": sum(component_parameter_counts.values()),
             "total_runtime_bytes": total_weight_bytes,
             "runtime_dtype": selected_dtype,
             "source": (
@@ -485,24 +420,19 @@ def estimate_diffusion_generation(
             "peak_bytes": peak_bytes,
         },
         "workload_scale": {
-            "denoiser_evaluations": denoising_steps,
+            **_scheduler_workload(model_dir, denoising_steps),
             "latent_pixel_steps": latent_pixel_steps,
-            "description": (
-                "Shape-based work indicator; not a FLOP or latency claim."
-            ),
+            "description": ("Shape-based work indicator; not a FLOP or latency claim."),
         },
         "offload": {
             "mode": offload,
             "resident_weight_bytes_by_phase": resident_weights,
-            "maximum_resident_weight_bytes": max(
-                resident_weights.values()
-            ),
+            "maximum_resident_weight_bytes": max(resident_weights.values()),
             "maximum_cpu_weight_bytes": (
                 0
                 if offload == "none"
                 else max(
-                    total_weight_bytes - value
-                    for value in resident_weights.values()
+                    total_weight_bytes - value for value in resident_weights.values()
                 )
             ),
         },
@@ -543,6 +473,55 @@ def estimate_diffusion_generation(
             "The point estimate has no accuracy percentage until a matching real-GPU observation is compared.",
         ],
     }
+
+
+def _scheduler_workload(model_dir, steps):
+    """Count only declared scheduler paths with a verified evaluation rule."""
+    result = {
+        "requested_inference_steps": steps,
+        "denoiser_evaluations": None,
+        "scheduler_class": None,
+        "scheduler_config_sha256": None,
+        "evaluation_count_coverage": "unmodeled_scheduler",
+    }
+    if model_dir is None:
+        return result
+    root = Path(model_dir).expanduser().resolve()
+    declaration = json.loads((root / "model_index.json").read_text()).get("scheduler")
+    path = root / "scheduler/scheduler_config.json"
+    if (
+        not isinstance(declaration, list)
+        or len(declaration) != 2
+        or declaration[0] != "diffusers"
+        or not path.is_file()
+    ):
+        return result
+    raw = path.read_bytes()
+    config = json.loads(raw)
+    if not isinstance(config, dict):
+        raise DiffusionEstimateError("scheduler configuration must be an object")
+    name = declaration[1]
+    result.update(
+        scheduler_class=name, scheduler_config_sha256=hashlib.sha256(raw).hexdigest()
+    )
+    if name == "EulerDiscreteScheduler":
+        evaluations = steps
+    elif name == "PNDMScheduler":
+        skip = config.get("skip_prk_steps", False)
+        if not isinstance(skip, bool):
+            raise DiffusionEstimateError("PNDM skip_prk_steps must be a boolean")
+        if not skip and steps < 4:
+            raise DiffusionEstimateError(
+                "PNDM PRK warmup requires at least four inference steps"
+            )
+        evaluations = steps + (int(steps > 1) if skip else 9)
+    else:
+        return result
+    result.update(
+        denoiser_evaluations=evaluations,
+        evaluation_count_coverage="scheduler_config_formula",
+    )
+    return result
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -691,13 +670,9 @@ def _positive_argument(value: str) -> int:
     try:
         parsed = int(value)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "expected a positive integer"
-        ) from exc
+        raise argparse.ArgumentTypeError("expected a positive integer") from exc
     if parsed <= 0:
-        raise argparse.ArgumentTypeError(
-            "expected a positive integer"
-        )
+        raise argparse.ArgumentTypeError("expected a positive integer")
     return parsed
 
 
@@ -705,13 +680,9 @@ def _nonnegative_integer_argument(value: str) -> int:
     try:
         parsed = int(value)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "expected a non-negative integer"
-        ) from exc
+        raise argparse.ArgumentTypeError("expected a non-negative integer") from exc
     if parsed < 0:
-        raise argparse.ArgumentTypeError(
-            "expected a non-negative integer"
-        )
+        raise argparse.ArgumentTypeError("expected a non-negative integer")
     return parsed
 
 
@@ -723,9 +694,7 @@ def _nonnegative_float_argument(value: str) -> float:
             "expected a finite non-negative number"
         ) from exc
     if not math.isfinite(parsed) or parsed < 0:
-        raise argparse.ArgumentTypeError(
-            "expected a finite non-negative number"
-        )
+        raise argparse.ArgumentTypeError("expected a finite non-negative number")
     return parsed
 
 
@@ -747,10 +716,7 @@ def _print_report(report: Mapping[str, Any]) -> None:
     print(f"  peak phase: {timeline['peak_phase']}")
     print(f"  estimated peak: {_format_bytes(int(timeline['peak_bytes']))}")
     for phase in timeline["phases"]:
-        print(
-            f"  {phase['phase']}: "
-            f"{_format_bytes(int(phase['peak_bytes']))}"
-        )
+        print(f"  {phase['phase']}: {_format_bytes(int(phase['peak_bytes']))}")
     fit = report.get("fit")
     if isinstance(fit, Mapping):
         print(

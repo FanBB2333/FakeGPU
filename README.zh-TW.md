@@ -889,6 +889,8 @@ Diffusion 估算器分別計算 text encoding、重複 denoising 與 VAE decode 
 使用 `--model-dir` 時，它只讀取 `model_index.json`、元件 `config.json` 與選定
 safetensors 檔案的 header，不會匯入遠端自訂程式碼，也不會讀取 tensor payload。
 checkpoint 儲存位元組與指定 dtype 下的執行期權重位元組會分別列出。
+本機宣告的 Euler/PNDM scheduler 設定決定實際 denoiser 呼叫數；未涵蓋或未指定
+scheduler 時 `denoiser_evaluations` 為 `null`，要求的 inference steps 另行保留。
 內建 `pixart-sigma-xl-2-1024-ms` profile 與兩個 Stable Diffusion UNet profile
 一同提供固定版本的 Transformer 範例。
 

@@ -962,7 +962,10 @@ The diffusion estimator separates text encoding, repeated denoising, and VAE
 decode phases. With `--model-dir`, it reads only `model_index.json`, component
 `config.json` files, and selected safetensors headers. It does not import
 remote custom code or read tensor payloads. Checkpoint storage and runtime
-weight bytes at the requested dtype are reported separately.
+weight bytes at the requested dtype are reported separately. The declared local
+Euler/PNDM scheduler configuration determines denoiser evaluation counts;
+unsupported or unspecified schedulers report `denoiser_evaluations: null`.
+Requested inference steps remain separate from actual scheduler evaluations.
 The built-in `pixart-sigma-xl-2-1024-ms` profile provides a fixed-revision
 transformer example alongside the two Stable Diffusion UNet profiles.
 

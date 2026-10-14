@@ -23,9 +23,7 @@ PIXART = "pixart-sigma-xl-2-1024-ms"
 
 def _phase(report: dict, name: str) -> dict:
     return next(
-        item
-        for item in report["memory_timeline"]["phases"]
-        if item["phase"] == name
+        item for item in report["memory_timeline"]["phases"] if item["phase"] == name
     )
 
 
@@ -51,9 +49,7 @@ def _write_safetensors(
         offset += byte_count
     encoded = json.dumps(header, separators=(",", ":")).encode()
     encoded += b" " * ((-len(encoded)) % 8)
-    path.write_bytes(
-        struct.pack("<Q", len(encoded)) + encoded + b"\0" * offset
-    )
+    path.write_bytes(struct.pack("<Q", len(encoded)) + encoded + b"\0" * offset)
 
 
 def _write_component(
@@ -87,9 +83,7 @@ def _write_pipeline(
         pipeline_class = "FluxPipeline" if flux else "PixArtSigmaPipeline"
         denoiser_name = "transformer"
         denoiser_class = (
-            "FluxTransformer2DModel"
-            if flux
-            else "PixArtTransformer2DModel"
+            "FluxTransformer2DModel" if flux else "PixArtTransformer2DModel"
         )
         denoiser_config: dict[str, object] = {
             "_class_name": denoiser_class,
@@ -100,11 +94,7 @@ def _write_pipeline(
             "num_attention_heads": 2,
             "attention_head_dim": 4,
             "patch_size": 1 if flux else 2,
-            (
-                "joint_attention_dim"
-                if flux
-                else "cross_attention_dim"
-            ): 8,
+            ("joint_attention_dim" if flux else "cross_attention_dim"): 8,
         }
         latent_channels = 16 if flux else 4
     else:
@@ -178,21 +168,15 @@ def test_diffusion_profiles_use_fixed_official_component_metadata() -> None:
     assert profiles[SD15]["source"]["revision"] == (
         "451f4fe16113bff5a5d2269ed5ad43b0592e9a14"
     )
-    assert profiles[SDXL]["conditioning"]["parameter_count"] == (
-        817720320
-    )
-    assert profiles[SDXL]["denoiser"]["parameter_count"] == (
-        2567463684
-    )
+    assert profiles[SDXL]["conditioning"]["parameter_count"] == (817720320)
+    assert profiles[SDXL]["denoiser"]["parameter_count"] == (2567463684)
     assert profiles[SDXL]["default_generation"]["height"] == 1024
     assert profiles[SDXL]["source"]["revision"] == (
         "462165984030d82259a11f4367a4eed129e94a7b"
     )
     assert profiles[PIXART]["denoiser"]["architecture"] == "transformer"
     assert profiles[PIXART]["denoiser"]["parameter_count"] == 610856096
-    assert profiles[PIXART]["conditioning"]["parameter_count"] == (
-        4762310656
-    )
+    assert profiles[PIXART]["conditioning"]["parameter_count"] == (4762310656)
     assert profiles[PIXART]["source"]["revision"] == (
         "e102b3591cc82e97071b8b4cb90d834d0c487207"
     )
@@ -219,8 +203,7 @@ def test_diffusion_generation_report_separates_phases_and_fit() -> None:
     for phase in report["memory_timeline"]["phases"]:
         assert phase["peak_bytes"] == sum(phase["components"].values())
     assert report["memory_timeline"]["peak_bytes"] == max(
-        phase["peak_bytes"]
-        for phase in report["memory_timeline"]["phases"]
+        phase["peak_bytes"] for phase in report["memory_timeline"]["phases"]
     )
 
 
@@ -246,25 +229,29 @@ def test_diffusion_optimizations_and_shapes_change_modeled_memory() -> None:
         vae_tile_size=512,
     )
 
-    assert offloaded["memory_timeline"]["peak_bytes"] < (
-        baseline["memory_timeline"]["peak_bytes"]
+    assert (
+        offloaded["memory_timeline"]["peak_bytes"]
+        < (baseline["memory_timeline"]["peak_bytes"])
     )
-    assert batch_four["memory_timeline"]["peak_bytes"] > (
-        baseline["memory_timeline"]["peak_bytes"]
+    assert (
+        batch_four["memory_timeline"]["peak_bytes"]
+        > (baseline["memory_timeline"]["peak_bytes"])
     )
-    assert _phase(batch_four_sliced, "vae_decode")["peak_bytes"] < (
-        _phase(batch_four, "vae_decode")["peak_bytes"]
+    assert (
+        _phase(batch_four_sliced, "vae_decode")["peak_bytes"]
+        < (_phase(batch_four, "vae_decode")["peak_bytes"])
     )
-    assert high_resolution["memory_timeline"]["peak_bytes"] > (
-        baseline["memory_timeline"]["peak_bytes"]
+    assert (
+        high_resolution["memory_timeline"]["peak_bytes"]
+        > (baseline["memory_timeline"]["peak_bytes"])
     )
-    assert _phase(tiled, "vae_decode")["peak_bytes"] < (
-        _phase(high_resolution, "vae_decode")["peak_bytes"]
+    assert (
+        _phase(tiled, "vae_decode")["peak_bytes"]
+        < (_phase(high_resolution, "vae_decode")["peak_bytes"])
     )
     vae_model = high_resolution["activation_models"]["vae_decode"]
     assert vae_model["retained_feature_bytes"] == max(
-        stage["retained_feature_bytes"]
-        for stage in vae_model["stages"]
+        stage["retained_feature_bytes"] for stage in vae_model["stages"]
     )
     assert "sequential" in vae_model["formula"]
 
@@ -288,16 +275,13 @@ def test_diffusion_attention_and_guidance_controls_are_modeled() -> None:
     )
 
     assert (
-        sliced["activation_models"]["denoiser"][
-            "attention_workspace_bytes"
-        ]
-        < eager["activation_models"]["denoiser"][
-            "attention_workspace_bytes"
-        ]
+        sliced["activation_models"]["denoiser"]["attention_workspace_bytes"]
+        < eager["activation_models"]["denoiser"]["attention_workspace_bytes"]
     )
     assert without_cfg["inputs"]["denoiser_batch_size"] == 1
-    assert _phase(without_cfg, "denoise")["peak_bytes"] < (
-        _phase(eager, "denoise")["peak_bytes"]
+    assert (
+        _phase(without_cfg, "denoise")["peak_bytes"]
+        < (_phase(eager, "denoise")["peak_bytes"])
     )
 
 
@@ -330,12 +314,9 @@ def test_pixart_uses_patch_transformer_memory_model() -> None:
     assert sdpa["weights"]["total_runtime_bytes"] == (
         sdpa["weights"]["total_parameter_count"] * 2
     )
-    assert eager["activation_models"]["denoiser"][
-        "attention_workspace_bytes"
-    ] > (
-        sdpa["activation_models"]["denoiser"][
-            "attention_workspace_bytes"
-        ]
+    assert (
+        eager["activation_models"]["denoiser"]["attention_workspace_bytes"]
+        > (sdpa["activation_models"]["denoiser"]["attention_workspace_bytes"])
     )
     assert sdpa["accuracy"]["status"] == "uncalibrated"
     assert sdpa["accuracy"]["prediction_interval_bytes"] is None
@@ -351,17 +332,13 @@ def test_local_unet_pipeline_is_inspected_from_json_and_headers(
     assert inspection["architecture"]["family"] == "unet"
     assert inspection["roles"]["denoiser"] == ["unet"]
     assert inspection["evidence"]["tensor_payloads_loaded"] is False
-    assert inspection["components"]["unet"]["checkpoint"][
-        "parameter_count"
-    ] == 64
+    assert inspection["components"]["unet"]["checkpoint"]["parameter_count"] == 64
 
     report = estimate_diffusion_generation(
         model_dir=model_dir,
         text_tokens=32,
     )
-    assert report["model_profile"]["source_kind"] == (
-        "local_diffusers_pipeline"
-    )
+    assert report["model_profile"]["source_kind"] == ("local_diffusers_pipeline")
     assert report["inputs"]["height"] == 64
     assert report["inputs"]["width"] == 64
     assert report["architecture"]["denoiser_family"] == "unet"
@@ -370,9 +347,7 @@ def test_local_unet_pipeline_is_inspected_from_json_and_headers(
         "denoiser": 64,
         "vae": 16,
     }
-    assert report["pipeline_inspection"]["model_dir"] == str(
-        model_dir.resolve()
-    )
+    assert report["pipeline_inspection"]["model_dir"] == str(model_dir.resolve())
 
 
 def test_local_profile_validation_allows_missing_size_and_conditioning(
@@ -389,9 +364,7 @@ def test_local_profile_validation_allows_missing_size_and_conditioning(
         encoding="utf-8",
     )
     denoiser_config_path = model_dir / "unet" / "config.json"
-    denoiser_config = json.loads(
-        denoiser_config_path.read_text(encoding="utf-8")
-    )
+    denoiser_config = json.loads(denoiser_config_path.read_text(encoding="utf-8"))
     denoiser_config.pop("sample_size")
     denoiser_config_path.write_text(
         json.dumps(denoiser_config),
@@ -518,12 +491,39 @@ def test_diffusion_cli_lists_profiles_and_writes_json(
         == 0
     )
     local_report = json.loads(capsys.readouterr().out)
-    assert local_report["architecture"]["denoiser_family"] == (
-        "transformer"
-    )
-    assert local_report["model_profile"]["source_kind"] == (
-        "local_diffusers_pipeline"
-    )
+    assert local_report["architecture"]["denoiser_family"] == ("transformer")
+    assert local_report["model_profile"]["source_kind"] == ("local_diffusers_pipeline")
 
     with pytest.raises(SystemExit):
         main([])
+
+
+@pytest.mark.parametrize(
+    "scheduler,skip,steps,expected",
+    [
+        ("PNDMScheduler", True, 8, 9),
+        ("PNDMScheduler", True, 1, 1),
+        ("PNDMScheduler", False, 8, 17),
+        ("EulerDiscreteScheduler", False, 8, 8),
+        ("HeunDiscreteScheduler", False, 8, None),
+    ],
+)
+def test_local_denoiser_calls_use_declared_scheduler(
+    tmp_path, scheduler, skip, steps, expected
+):
+    root = tmp_path / "pipeline"
+    _write_pipeline(root, transformer=False)
+    index = json.loads((root / "model_index.json").read_text())
+    index["scheduler"] = ["diffusers", scheduler]
+    (root / "model_index.json").write_text(json.dumps(index))
+    (root / "scheduler").mkdir()
+    (root / "scheduler/scheduler_config.json").write_text(
+        json.dumps({"_class_name": scheduler, "skip_prk_steps": skip})
+    )
+    report = estimate_diffusion_generation(model_dir=root, steps=steps)
+    assert report["workload_scale"]["denoiser_evaluations"] == expected
+
+
+def test_reference_profile_does_not_claim_exact_scheduler_evaluations():
+    report = estimate_diffusion_generation(SD15, steps=8)
+    assert report["workload_scale"]["denoiser_evaluations"] is None

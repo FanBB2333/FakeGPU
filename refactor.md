@@ -19,6 +19,14 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### Diffusion scheduler 调用数（独立 bug 修复）
+
+真实 SD 1.4 请求 8 inference steps，PNDM `skip_prk_steps=true` 实际调用 UNet **9 次**；SDXL Euler 为 8 次。原 `workload_scale.denoiser_evaluations` 一律等于请求步数，会给出错误的实际调用计数。
+
+现在按 model_index 声明的本地 Euler/PNDM 类和 scheduler_config 计算：Euler 为 N，PNDM 跳过 PRK 时 N>1 为 N+1、N=1 为 1；PRK 模式为 N+9，并拒绝不足四步的 PRK 请求。未声明或未覆盖的 scheduler 明确返回 `null`，请求步数保留独立字段；不增加“一步一次”的兜底。scheduler 配置 SHA 纳入工作量元数据，显存计算字段全部保持一致。
+
+先复现 **4 failed / 2 passed**，修复后 diffusion 检查 **16 passed**；Diffusers 0.35.2 四个真实 CPU scheduler 的 timesteps 数逐项一致，并与原 GPU SD/SDXL 的 9/8 次调用吻合。旧 GPU 报告和预测未改写；对两个真实 pipeline 重算后，除 workload_scale 外所有字段完全一致。原始记录位于 `/tmp/fakegpu-diffusion-20261015/scheduler-native/`。
+
 ### R24 长上下文与在线 serving
 
 Qwen3-0.6B、GPU 1、BF16 SDPA/dynamic KV，8192/32768 prompt tokens＋128 generated tokens。每种长度对 allocated/reserved 各运行五个独立 Transformers 4.57.3 / Torch 2.9.1 进程，共 **20 次真实观测**。生产 Python 在矩阵内冻结，99 个模块另存完整源码快照。
