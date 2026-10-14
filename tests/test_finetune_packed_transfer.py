@@ -193,3 +193,31 @@ def test_packing_signature_seed_cannot_be_a_numerically_equal_float(native_run):
     plan["signature"]["packing_seed"] = 123.0
     with pytest.raises(FinetuneEstimateError, match="packing_seed"):
         validate_transfer_plan(plan)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("packing_seed", 124),
+        ("packing_seed", 123.0),
+        ("micro_batch_size", 2),
+        ("gradient_accumulation_steps", 3),
+        ("packing", False),
+        ("collator_class", "other.Collator"),
+        ("software_versions", {"torch": "modified"}),
+    ],
+)
+def test_native_evidence_requires_packed_sampler_execution_identity(
+    native_run, field, value
+):
+    from fakegpu.finetune_run_estimator import validate_native_run
+
+    run = padded_packed_run(native_run)
+    validate_native_run(run, require_fixed_shape=False)
+    if field == "collator_class":
+        run["observation"]["observed_model"][field] = value
+    else:
+        run["training_config"][field] = value
+    refresh_signature(run)
+    with pytest.raises(FinetuneEstimateError, match="packed.*identity|packing_seed"):
+        validate_native_run(run, require_fixed_shape=False)

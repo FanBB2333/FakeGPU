@@ -19,6 +19,10 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### Packing 原生报告配置绑定（独立 bug 修复）
+
+公共 `validate_native_run` 现在将 v3 计划与报告的 framework、microbatch、accumulation、显式整数 seed、packing 开关、collator 及软件版本逐项绑定。此前 transfer 入口有较强检查，但公共验证器可能接受互相矛盾的证据。新增七种篡改回归，相关检查 **175 passed**；四场景的 **12 份有效原生报告、封存计划、时间及显存预算和 holdout 比较均保持一致**，**152 份历史预测逐字节一致**。测试开发时修正了夹具错误的 fixed-shape 标记，未调整实际 GPU 档案。
+
 ### Packing 完整预算验收（sampler v3）
 
 `run-finetune` / `calibrate-finetune` 新增显式 `--packing-seed`，限定 dense Qwen3.5 text LoRA、一个设备、关闭评估及已指定规划范围；Factory 要求 neat packing，HF 输入须包含已证明的 segment IDs 与 reset positions。默认 unpacked 行为及旧 v1/v2 报告保持兼容。v3 保留原生 packer、完整 epoch bins、真实尾窗和丢弃信息，区分 dataset source rows、physical packed rows、logical sequences；实际输入 SHA 必须匹配 CPU 计划。参考执行、collation 和采样实现的代码 SHA 纳入预算签名，不跨数据或显式 packing seed 池化。

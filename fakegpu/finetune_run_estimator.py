@@ -125,6 +125,34 @@ def validate_native_run(
         raise FinetuneEstimateError(
             "dynamic validation requires the native batch observation protocol"
         )
+    if config.get("sampler_observation_version") == "fakegpu.finetune_sampler_plan.v3":
+        from ._finetune_sampler import _integer, validate_sampler_plan
+
+        sampling = validate_sampler_plan(run.get("sampling_plan"))
+        versions = config.get("software_versions")
+        backend = observation.get("observed_model")
+        expected = {
+            "sampler_observation_version": sampling["schema_version"],
+            "source_framework": sampling["framework"],
+            "micro_batch_size": sampling["micro_batch_size"],
+            "gradient_accumulation_steps": sampling["gradient_accumulation_steps"],
+            "packing_seed": sampling["sampler"]["seed"],
+        }
+        _integer(config.get("packing_seed"), "packing_seed", minimum=0)
+        if (
+            config.get("packing") is not True
+            or any(config.get(key) != value for key, value in expected.items())
+            or not isinstance(backend, Mapping)
+            or backend.get("collator_class") != sampling["collator_class"]
+            or not isinstance(versions, Mapping)
+            or any(
+                versions.get(key) != value
+                for key, value in sampling["sampler"]["versions"].items()
+            )
+        ):
+            raise FinetuneEstimateError(
+                "packed sampler execution identity differs from native configuration"
+            )
     _validate_native_measurements(run, config, require_fixed_shape=require_fixed_shape)
     signature = finetune_workload_signature(
         run["model_config"], config, profile_id=run.get("profile_id")
