@@ -131,6 +131,14 @@ def _prepare_inputs(config_path, framework, *, workspace=None):
             raise ValueError(
                 "calibration workflows currently support supervised datasets only"
             )
+    if workspace is not None:
+        # Native prepared-dataset keys need not include the raw file contents.
+        # A fresh workspace binds these derived files to its immutable input
+        # hashes; resume rejects changed inputs before another child starts.
+        if framework == "axolotl":
+            config["dataset_prepared_path"] = str(workspace / "prepared" / "axolotl")
+        elif framework == "llamafactory" and config.get("tokenized_path"):
+            config["tokenized_path"] = str(workspace / "prepared" / "llamafactory")
     return config, inputs
 
 

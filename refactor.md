@@ -69,6 +69,12 @@
 
 先用四项公开推理/serving API 回归复现 **4 failed**，修复后 LLM/serving/finetune 相关 **150 passed**，补全 malformed layer 与 attention-only 保持性后的专用检查 **8 passed**，Ruff 与 diff check 通过。基线及日志在 `/tmp/fakegpu-hybrid-20261015/`。此修复明确支持边界，不宣称已实现 hybrid 推理 cache/FLOPs；长上下文验收使用有对应状态模型的架构。
 
+### Prepared dataset 缓存隔离（独立 bug 修复）
+
+原生 CPU packing 预览将同一路径数据从 32 条更新为 42 条后，Axolotl 仍从既有 `dataset_prepared_path` 返回 32 条数据；改用新目录后才读取 42 条。工作区此前仅记录原始文件 SHA，把 prepared/tokenized 目录当作可复用缓存，无法证明外部缓存对应当前原始数据。
+
+校准工作流现在将 Axolotl prepared 数据及显式配置的 Factory tokenized 数据放入当前新工作区的 `prepared/`，原始配置和外部缓存保持不变。两个校准进程可以复用本工作区的派生数据；恢复时仍先核对原始输入 SHA，变更输入须创建新工作区。普通 `run-finetune` 的用户缓存行为保留。三项回归先复现 **3 failed**，修复后缓存与工作区检查 **31 passed**；原生复现、错误候选及日志保留在 `/tmp/fakegpu-packed-budget-20261015/`。
+
 ### Packing 原生数据与计数基础（完整预算尚未开放）
 
 新增 `_finetune_packed_batches.py`，先从 HF/Factory 的显式 segment IDs 或 Ax 的原始记录 bins 证明 token、label、位置和边界对应，再保留有效的原生 4D mask 或建立隔离 mask。输出区分 physical packed rows、logical sequences、非 padding/监督/causal tokens、分段几何和实际 tensor dtypes；四类输入的 hash 保留浮点 mask 的原始小端位模式，包括 BF16。拒绝缺失 source mask、边界 label 未忽略、非法分段、原生 token/label 改写及跨段 mask。
