@@ -1,0 +1,292 @@
+{
+"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
+  "functional_checks": {
+    "all_long_context_samples_valid": true,
+    "all_online_requests_passed_usage_checks": true,
+    "client_and_cli_tests_passed": 48,
+    "native_sources_snapshotted": 99,
+    "online_stream_and_output_hashes_reconciled": true
+  },
+  "long_context": {
+    "attention": "sdpa",
+    "cache": "dynamic",
+    "cases": {
+      "32768-allocated": {
+        "max_absolute_percentage_error_percent": 7.340186527997698,
+        "max_underestimate_percent": 0.0,
+        "peak_bytes": {
+          "decode": 5040679424,
+          "prefill": 14983379456
+        },
+        "samples": 5,
+        "underestimate_10_percent_gate_passed": true
+      },
+      "32768-reserved": {
+        "max_absolute_percentage_error_percent": 24.072667863384424,
+        "max_underestimate_percent": 24.072667863384424,
+        "peak_bytes": {
+          "decode": 7126122496,
+          "prefill": 16498294784
+        },
+        "samples": 5,
+        "underestimate_10_percent_gate_passed": false
+      },
+      "8192-allocated": {
+        "max_absolute_percentage_error_percent": 14.718999535922563,
+        "max_underestimate_percent": 0.0,
+        "peak_bytes": {
+          "decode": 2171775488,
+          "prefill": 4646320640
+        },
+        "samples": 5,
+        "underestimate_10_percent_gate_passed": true
+      },
+      "8192-reserved": {
+        "max_absolute_percentage_error_percent": 8.754935022872713,
+        "max_underestimate_percent": 8.754935022872713,
+        "peak_bytes": {
+          "decode": 2730491904,
+          "prefill": 4968153088
+        },
+        "samples": 5,
+        "underestimate_10_percent_gate_passed": true
+      }
+    },
+    "dtype": "bfloat16",
+    "generated_tokens": 128,
+    "processes": 20,
+    "runtime": "Transformers 4.57.3 / Torch 2.9.1+cu128"
+  },
+  "online": {
+    "cases": {
+      "prefix-off": {
+        "prefix_cache_hits": 0.0,
+        "prefix_cache_queries": 0.0,
+        "rounds": [
+          {
+            "completion_tokens": 960,
+            "end_to_end_seconds": {
+              "count": 12,
+              "max": 88.44801350627094,
+              "mean": 86.62601490069646,
+              "min": 85.22062460426241,
+              "p50": 86.3767938774079,
+              "p95": 88.44801350627094
+            },
+            "failed": 0,
+            "first_nonempty_text_seconds": {
+              "count": 12,
+              "max": 84.81811644509435,
+              "mean": 15.12329627131112,
+              "min": 0.034625984728336334,
+              "p50": 0.04060104722157121,
+              "p95": 84.81811644509435
+            },
+            "http_seconds": {
+              "count": 12,
+              "max": 86.376590823289,
+              "mean": 29.323216158198193,
+              "min": 0.41191296838223934,
+              "p50": 1.4867238970473409,
+              "p95": 86.376590823289
+            },
+            "succeeded": 12,
+            "successful_completion_tokens_per_wall_second": 10.82016224496319,
+            "wall_seconds": 88.72325370600447
+          },
+          {
+            "completion_tokens": 960,
+            "end_to_end_seconds": {
+              "count": 12,
+              "max": 3.2535402508452536,
+              "mean": 1.7286497493352122,
+              "min": 0.4033987601287663,
+              "p50": 1.5747938721440733,
+              "p95": 3.2535402508452536
+            },
+            "failed": 0,
+            "first_nonempty_text_seconds": {
+              "count": 12,
+              "max": 0.07179311476647854,
+              "mean": 0.042561504136150084,
+              "min": 0.024915162939578295,
+              "p50": 0.03414375288411975,
+              "p95": 0.07179311476647854
+            },
+            "http_seconds": {
+              "count": 12,
+              "max": 1.5861369869671762,
+              "mean": 0.9818442954759424,
+              "min": 0.39696269715204835,
+              "p50": 0.8026709239929914,
+              "p95": 1.5861369869671762
+            },
+            "succeeded": 12,
+            "successful_completion_tokens_per_wall_second": 272.0498182814121,
+            "wall_seconds": 3.528765452094376
+          },
+          {
+            "completion_tokens": 960,
+            "end_to_end_seconds": {
+              "count": 12,
+              "max": 3.2068446352146567,
+              "mean": 1.6968960945494473,
+              "min": 0.39217337779700756,
+              "p50": 1.5476042099297047,
+              "p95": 3.2068446352146567
+            },
+            "failed": 0,
+            "first_nonempty_text_seconds": {
+              "count": 12,
+              "max": 0.06727111525833607,
+              "mean": 0.04046024001824359,
+              "min": 0.02458937279880047,
+              "p50": 0.033804242964833975,
+              "p95": 0.06727111525833607
+            },
+            "http_seconds": {
+              "count": 12,
+              "max": 1.5620664902962744,
+              "mean": 0.966062088108932,
+              "min": 0.3920750976540148,
+              "p50": 0.7789679649285972,
+              "p95": 1.5620664902962744
+            },
+            "succeeded": 12,
+            "successful_completion_tokens_per_wall_second": 275.69812315994346,
+            "wall_seconds": 3.4820694061927497
+          }
+        ],
+        "server_returncode_after_cleanup": 0,
+        "server_version": {
+          "version": "0.19.1"
+        }
+      },
+      "prefix-on": {
+        "prefix_cache_hits": 44352.0,
+        "prefix_cache_queries": 48960.0,
+        "rounds": [
+          {
+            "completion_tokens": 960,
+            "end_to_end_seconds": {
+              "count": 12,
+              "max": 4.436221755947917,
+              "mean": 2.6809304397242766,
+              "min": 1.3139099348336458,
+              "p50": 2.430239300895482,
+              "p95": 4.436221755947917
+            },
+            "failed": 0,
+            "first_nonempty_text_seconds": {
+              "count": 12,
+              "max": 0.8864952400326729,
+              "mean": 0.30538716605709243,
+              "min": 0.033588483929634094,
+              "p50": 0.03679902199655771,
+              "p95": 0.8864952400326729
+            },
+            "http_seconds": {
+              "count": 12,
+              "max": 2.4300880450755358,
+              "mean": 1.32804785692133,
+              "min": 0.4161785109899938,
+              "p50": 1.3137986147776246,
+              "p95": 2.4300880450755358
+            },
+            "succeeded": 12,
+            "successful_completion_tokens_per_wall_second": 203.7580374367645,
+            "wall_seconds": 4.711470585782081
+          },
+          {
+            "completion_tokens": 960,
+            "end_to_end_seconds": {
+              "count": 12,
+              "max": 3.1466058561578394,
+              "mean": 1.6655337591189892,
+              "min": 0.3804920529946685,
+              "p50": 1.502101144939661,
+              "p95": 3.1466058561578394
+            },
+            "failed": 0,
+            "first_nonempty_text_seconds": {
+              "count": 12,
+              "max": 0.035792720038443804,
+              "mean": 0.03257412059853474,
+              "min": 0.023762003052979708,
+              "p50": 0.033599243964999914,
+              "p95": 0.035792720038443804
+            },
+            "http_seconds": {
+              "count": 12,
+              "max": 1.513858747202903,
+              "mean": 0.9483340998801092,
+              "min": 0.38038171315565705,
+              "p50": 0.7688780738972127,
+              "p95": 1.513858747202903
+            },
+            "succeeded": 12,
+            "successful_completion_tokens_per_wall_second": 280.5526646955643,
+            "wall_seconds": 3.421817436814308
+          },
+          {
+            "completion_tokens": 960,
+            "end_to_end_seconds": {
+              "count": 12,
+              "max": 3.1899991542100907,
+              "mean": 1.7017639888528115,
+              "min": 0.39981685718521476,
+              "p50": 1.541681808140129,
+              "p95": 3.1899991542100907
+            },
+            "failed": 0,
+            "first_nonempty_text_seconds": {
+              "count": 12,
+              "max": 0.03648508107289672,
+              "mean": 0.03355701457864294,
+              "min": 0.02466791495680809,
+              "p50": 0.034354936331510544,
+              "p95": 0.03648508107289672
+            },
+            "http_seconds": {
+              "count": 12,
+              "max": 1.5415199622511864,
+              "mean": 0.9625056190028166,
+              "min": 0.39459285605698824,
+              "p50": 0.790065853856504,
+              "p95": 1.5415199622511864
+            },
+            "succeeded": 12,
+            "successful_completion_tokens_per_wall_second": 277.0388308053559,
+            "wall_seconds": 3.4652182050049305
+          }
+        ],
+        "server_returncode_after_cleanup": 0,
+        "server_version": {
+          "version": "0.19.1"
+        }
+      }
+    },
+    "chunked_prefill_tokens": 2048,
+    "completion_tokens": 5760,
+    "eager_execution": true,
+    "gpu_memory_utilization": 0.25,
+    "limitations": [
+      "Rounds within each owned server share runtime/kernel caches; first-round timings are retained. The two server modes are not a controlled causal speed comparison.",
+      "Synthetic inputs repeat token ID 7 and deliberately share prefixes. HTTP first text and client queue times are not device token timestamps.",
+      "Prometheus counters verify prefix activity; after-round nvidia-smi snapshots are not phase peaks."
+    ],
+    "max_model_len": 8192,
+    "max_num_sequences": 4,
+    "request_count": 72,
+    "runtime": "vLLM 0.19.1"
+  },
+  "records": {
+    "bytes": 623061,
+    "path": "tests/data/serving_native_records.json.gz",
+    "sha256": "58a0f123eddb6f168caf61a3417712dcbff30a53cf5bb4907451a10c689b5603",
+    "sources": 153
+  },
+  "retained_failures": "Initial serving driver omitted the plan path; a temporary queue.py also shadowed stdlib queue before server startup. Valid v2 observations/predictions were not rewritten. A later HTTP-error-body timeout fix changes only failed-request diagnostics and is covered by loopback regression; measured positive client source is archived separately.",
+  "schema_version": "fakegpu.serving_native_evidence.v1",
+  "scope": "GPU 1 Blackwell GPU; Qwen3-0.6B; fixed attention-only long contexts and vLLM scheduled synthetic token-ID requests; no multi-GPU or OOM-safety claim"
+}

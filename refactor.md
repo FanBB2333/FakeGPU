@@ -12,12 +12,26 @@
 - [x] 长度分组与原生评估共存：独立采样随机流、评估输入核验及事件预算。
 - [x] 大数据规划的重复扫描和存储成本，保留历史报告兼容与纯标准库离线预算。
 - [x] 更多模型、形状和重复 holdout；可用 GPU 验证与缺失硬件条件分开记录。
-- [ ] R24 长上下文及 serving 的真实 GPU 验证。
+- [x] R24 长上下文及 serving 的真实 GPU 验证。
 - [ ] R25 diffusion generation 真测、训练估计及独立观测。
 - [ ] R26 distributed/MoE 验证与版本化硬件矩阵；真实多机需要实际远端设备。
 - [ ] R23 原生数值扩展需求清单、实验产物与全仓/wheel 回归。
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### R24 长上下文与在线 serving
+
+Qwen3-0.6B、GPU 1、BF16 SDPA/dynamic KV，8192/32768 prompt tokens＋128 generated tokens。每种长度对 allocated/reserved 各运行五个独立 Transformers 4.57.3 / Torch 2.9.1 进程，共 **20 次真实观测**。生产 Python 在矩阵内冻结，99 个模块另存完整源码快照。
+
+32K 的 allocated prefill/decode APE 为 **2.020% / 7.340%**，没有低估；reserved prefill/decode 低估 **7.348% / 24.073%**。reserved 的 10% 低估门槛明确未通过，原始结果与失败门槛保留，没有按误差重跑或加常数把公式改成通过。该分析式张量模型不能当作 allocator 预留或物理 OOM 上限。
+
+新增纯标准库 `benchmark-serving`：显式 token IDs、到达偏移、并发限额、重复轮次、流式原始事件、usage 核对、文本 SHA、客户端排队、首个非空文本和总延迟。HTTP/SSE/超时失败返回可审阅报告，不重试；错误体自身超时也保留原始 HTTP 失败。`.json.gz` 输出与 `python -S` 支持。协议与 CLI 检查 **48 passed**，包括成功/失败 CLI 状态与压缩报告。
+
+vLLM **0.19.1**、单卡 eager、2048-token chunked prefill、4 个 active sequences、8192 max model len、25% memory utilization，prefix caching 关闭/开启两台依次启动的自有 loopback 服务。每服务三轮、每轮 12 个预声明混合请求（64/256/1024/4096 prompt、32/64/96/128 output），共 **72 requests / 5760 completion tokens**，全部通过用量和 SSE 对账。每轮保留 Prometheus 与执行后显存快照，未把快照称为峰值。
+
+关闭 prefix 时三轮 **88.723 / 3.529 / 3.482 秒**，开启时 **4.711 / 3.422 / 3.465 秒**。首轮开销完整保留；两服务存在共享系统/kernel 缓存，不能把首轮差异归因为 prefix 开关。后续轮次约 **272–281 tokens/s**，仅代表这组重复 token-ID 合成负载。关闭时 prefix queries/hits 均为 0；开启后累计 **48,960 queries / 44,352 hits**。HTTP 首个文本块不等于设备首 token，单块可包含多个 token。
+
+初次 serving 驱动漏传 plan，另有临时 `queue.py` 遮蔽标准库的启动问题，诊断日志保留；所有有效 v2 观测与预测未改写。原生正向请求测量后补强了 HTTP 错误体超时处理，归档原测量客户端源码及该错误路径的回归。证据见 [serving](tests/data/serving_native_evidence.json)与[审阅记录](tests/data/serving_native_records.json.gz)，原始资料 `/tmp/fakegpu-serving-20261015/`。这不覆盖多卡、speculative、量化 cache 或任意在线负载的精度保证。
 
 ### Qwen3.5-2B 与重复独立 holdout
 

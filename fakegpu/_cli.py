@@ -58,6 +58,7 @@ BUILTIN_COMMANDS: dict[str, CommandSpec] = {
     "bandwidth": CommandSpec(".distributed_cli", "bandwidth_main"),
     "estimate-llm": CommandSpec(".llm_cli", "main"),
     "plan-serving": CommandSpec(".serving_plan", "main"),
+    "benchmark-serving": CommandSpec(".serving_benchmark", "main"),
     "estimate-diffusion": CommandSpec(".diffusion_estimator", "main"),
     "estimate-roofline": CommandSpec(".performance_model", "main"),
     "analyze-repo": CommandSpec(".repository_analyzer", "main"),

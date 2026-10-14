@@ -1472,6 +1472,25 @@ workloads. Reproduce them with [`tests/native/finetune_matrix.py`](tests/native/
 The detailed feature acceptance matrix and remaining implementation phases are
 maintained in [`refactor.md`](refactor.md).
 
+`benchmark-serving` measures an already running completion endpoint with vLLM's
+`ignore_eos` and final streaming usage fields. Its explicit token-ID manifest sets
+arrivals and output limits; the report retains SSE events, failures, client queue
+time and first nonempty text latency. It does not retry requests or infer device
+phase peaks. Use the served model name configured by your server.
+
+```bash
+python -m fakegpu benchmark-serving \
+  --base-url http://127.0.0.1:8000/v1 --model local-model \
+  --requests examples/serving/online-requests.json \
+  --concurrency 4 --repetitions 3 --json build/online.json.gz
+```
+
+The [native serving record](tests/data/serving_native_evidence.json) includes 20
+8K/32K Transformers processes and 72 mixed vLLM requests with prefix caching off/on.
+At 32K, allocated phase errors were 2.02%/7.34%; reserved decode was underestimated
+by 24.07%. Analytical tensor storage therefore does not establish allocator or OOM
+safety. Cache conditions, first-round overhead and all samples remain in the record.
+
 | Command | Purpose |
 |---|---|
 | `fakegpu doctor` | Check the installation, native libraries, PyTorch, and profiles |
@@ -1481,6 +1500,7 @@ maintained in [`refactor.md`](refactor.md).
 | `fakegpu analyze-kernel` | Inspect CUDA, PTX, and SASS resources and operations |
 | `fakegpu estimate-llm` | Estimate decoder memory, communication, and FLOPs |
 | `fakegpu plan-serving` | Plan homogeneous or mixed-request admission, chunked prefill, and grouped shared-prefix KV storage |
+| `fakegpu benchmark-serving` | Measure scheduled mixed streaming requests and retain usage, latency, SSE events, and failures |
 | `fakegpu estimate-diffusion` | Estimate diffusion text-encode, denoise, and VAE-decode memory phases |
 | `fakegpu estimate-roofline` | Produce a profile-aware analytical latency interval |
 | `fakegpu plan-training` | Normalize distributed training configs and estimate rank memory |

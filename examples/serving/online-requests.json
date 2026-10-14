@@ -1,0 +1,74 @@
+{
+  "schema_version": "fakegpu.online_serving_requests.v1",
+  "requests": [
+    {
+      "request_id": "short",
+      "prompt_token_ids": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ],
+      "max_tokens": 32,
+      "arrival_offset_seconds": 0
+    },
+    {
+      "request_id": "medium",
+      "prompt_token_ids": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ],
+      "max_tokens": 64,
+      "arrival_offset_seconds": 0.05
+    },
+    {
+      "request_id": "long",
+      "prompt_token_ids": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ],
+      "max_tokens": 96,
+      "arrival_offset_seconds": 0.1
+    }
+  ]
+}

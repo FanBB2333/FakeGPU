@@ -1290,6 +1290,23 @@ Blackwell GPU 上全量、LoRA、bitsandbytes QLoRA 的独立校准与复测，�
 
 完整功能验收矩阵与后续阶段见 [`refactor.md`](refactor.md)。
 
+`benchmark-serving` 测量已运行的 completion 服务，要求支持 vLLM 的 `ignore_eos`
+和最终流式 usage 字段。显式 token-ID 清单指定到达时间与输出上限；报告保留 SSE 事件、
+失败、客户端排队与首个非空文本延迟，不重试请求，也不推断设备阶段峰值。
+`--model` 应填写服务端配置的模型名称。
+
+```bash
+python -m fakegpu benchmark-serving \
+  --base-url http://127.0.0.1:8000/v1 --model local-model \
+  --requests examples/serving/online-requests.json \
+  --concurrency 4 --repetitions 3 --json build/online.json.gz
+```
+
+[真实 serving 验收](tests/data/serving_native_evidence.json) 包含 20 个 8K/32K Transformers
+进程，以及 prefix cache 关闭/开启时的 72 个混合 vLLM 请求。32K 的 allocated 两阶段
+误差为 2.02%/7.34%，reserved decode 低估 24.07%；张量公式不能据此保证 allocator 或
+OOM 安全。缓存条件、首轮开销及所有样本均保留在记录中。
+
 | 命令 | 用途 |
 |---|---|
 | `fakegpu doctor` | 检查安装、原生库、PyTorch 和 profiles |
@@ -1299,6 +1316,7 @@ Blackwell GPU 上全量、LoRA、bitsandbytes QLoRA 的独立校准与复测，�
 | `fakegpu analyze-kernel` | 检查 CUDA、PTX 和 SASS 资源与运算 |
 | `fakegpu estimate-llm` | 估算 decoder 显存、通信量和 FLOP |
 | `fakegpu plan-serving` | 规划同构或混合请求准入、chunked prefill 和分组共享 prefix KV 存储 |
+| `fakegpu benchmark-serving` | 测量混合流式请求，保留用量、延迟、SSE 事件和失败 |
 | `fakegpu estimate-diffusion` | 估算 diffusion 的 text encode、denoise 和 VAE decode 阶段显存 |
 | `fakegpu estimate-roofline` | 生成与 profile 相关的分析延迟区间 |
 | `fakegpu plan-training` | 统一分布式训练配置并估算单 rank 显存 |
