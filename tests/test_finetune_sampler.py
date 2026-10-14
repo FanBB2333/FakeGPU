@@ -97,6 +97,63 @@ def plan(trainer, *, steps=8):
     )
 
 
+def test_reusing_native_profile_preserves_plan_and_avoids_second_scan(
+    trainer, monkeypatch
+):
+    expected = plan(trainer)
+    profile = profile_tokenized_records(
+        trainer.train_dataset, sequence_length=64, source_framework="huggingface"
+    )
+    before = deepcopy(profile)
+    state = torch.get_rng_state().clone()
+
+    def duplicate_scan(*args, **kwargs):
+        pytest.fail("reused native profile must not scan the full dataset again")
+
+    monkeypatch.setattr(sampler_module, "profile_tokenized_records", duplicate_scan)
+    actual = plan_native_batches(
+        trainer,
+        max_steps=8,
+        framework="huggingface",
+        sequence_length=64,
+        dataset_profile=profile,
+    )
+    assert actual == expected
+    assert profile == before
+    assert torch.equal(state, torch.get_rng_state())
+    actual["dataset"]["num_samples"] = 999
+    assert profile == before
+
+
+@pytest.mark.parametrize(
+    "change", ["count", "cap", "framework", "provenance", "digest"]
+)
+def test_reused_profile_requires_valid_same_split_metadata(trainer, change):
+    profile = profile_tokenized_records(
+        trainer.train_dataset, sequence_length=64, source_framework="huggingface"
+    )
+    if change == "count":
+        profile = profile_tokenized_records(
+            trainer.train_dataset[:-1], sequence_length=64
+        )
+    elif change == "cap":
+        profile = profile_tokenized_records(trainer.train_dataset, sequence_length=128)
+    elif change == "framework":
+        profile["source_framework"] = "axolotl"
+    elif change == "provenance":
+        profile["provenance"]["source"] = "unknown"
+    else:
+        profile["provenance"]["content_sha256"] = "bad"
+    with pytest.raises(ValueError):
+        plan_native_batches(
+            trainer,
+            max_steps=8,
+            framework="huggingface",
+            sequence_length=64,
+            dataset_profile=profile,
+        )
+
+
 def reseal(value):
     value.pop("plan_sha256")
     value["plan_sha256"] = hashlib.sha256(

@@ -1,0 +1,50 @@
+{
+  "baseline": {
+    "mode": "baseline",
+    "optimizer_steps": 4,
+    "plan_sha256": "fa3a78074d234445be48964cad54763e521739cfe5d50ba1ce54e1dc28e31c5f",
+    "planning_seconds": 19.40934854792431,
+    "planning_tracemalloc_peak_bytes": 9527025,
+    "row_reads": 200128,
+    "rows": 100000,
+    "scope": "100000-row lazy dataset; native SeedableRandomSampler; synthetic deterministic collator; no GPU timing"
+  },
+  "checks": {
+    "compressed_python_S_cli_plan_and_budget_match_sealed_evidence": true,
+    "full_suite_passed": 1658,
+    "full_suite_seconds": 143.42,
+    "full_suite_skipped": 1,
+    "historical_predictions_byte_identical": 152,
+    "identical_plans": true,
+    "offline_no_ML_imports": true,
+    "reusable_script_smoke": true
+  },
+  "optimized": {
+    "mode": "optimized",
+    "optimizer_steps": 4,
+    "plan_sha256": "fa3a78074d234445be48964cad54763e521739cfe5d50ba1ce54e1dc28e31c5f",
+    "planning_seconds": 9.730334354098886,
+    "planning_tracemalloc_peak_bytes": 8718451,
+    "row_reads": 100128,
+    "rows": 100000,
+    "scope": "100000-row lazy dataset; native SeedableRandomSampler; synthetic deterministic collator; no GPU timing",
+    "storage": {
+      "json": {
+        "bytes": 26992593,
+        "sha256": "7947284c4b5675792d3137548206e324767674321e5fdec1680be6dc2caca2bd",
+        "write_seconds": 3.3645395198836923,
+        "write_tracemalloc_peak_bytes": 132588964
+      },
+      "json.gz": {
+        "bytes": 239705,
+        "sha256": "3c510a037d2ffdd94a4cf83344789eeb508cf73ad66f10d07d7bd26073c3600b",
+        "write_seconds": 3.9693583981133997,
+        "write_tracemalloc_peak_bytes": 392860
+      }
+    }
+  },
+  "original_benchmark_script_sha256": "cf9216d47795eecffbcdfce4037002790df1a3c3642e9ffecbd6c45178fdcd25",
+  "schema_version": "fakegpu.finetune_planning_storage_evidence.v1",
+  "scope": "CPU synthetic lazy dataset and highly repetitive report; not GPU timing or general compression guarantee",
+  "script_sha256": "3ca3f2979f355c39ffd511c6c4557feb6111ab47a94ad567d230833cd1da235d"
+}

@@ -10,7 +10,7 @@
 - [x] Qwen3.5 分段训练参考接口（cache 关闭）：卷积与递归状态、跨层 logits/梯度、checkpointing、保存恢复及异常恢复。
 - [x] 三个框架的 packing 数据边界、真实 sampler 计数、消费核验及独立时间/显存预算。
 - [x] 长度分组与原生评估共存：独立采样随机流、评估输入核验及事件预算。
-- [ ] 大数据规划的重复扫描和存储成本，保留历史报告兼容与纯标准库离线预算。
+- [x] 大数据规划的重复扫描和存储成本，保留历史报告兼容与纯标准库离线预算。
 - [ ] 更多模型、形状和重复 holdout；可用 GPU 验证与缺失硬件条件分开记录。
 - [ ] R24 长上下文及 serving 的真实 GPU 验证。
 - [ ] R25 diffusion generation 真测、训练估计及独立观测。
@@ -18,6 +18,16 @@
 - [ ] R23 原生数值扩展需求清单、实验产物与全仓/wheel 回归。
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### 大数据规划与压缩报告
+
+原生 runner 将刚完成的 native split 全量统计传给默认/长度分组规划器，校验报告完整性、计数、cap、framework 与内存来源；调用方负责同一未变更 split 的绑定。逐批两次 collation 和输入 SHA 核验保留。epoch permutation 用线性 bytearray 检查，v1/v2/v3 计划验签移除仅为计算 SHA 的整份 deepcopy；返回报告仍独立拥有数据。
+
+公共结构化 I/O 支持 `.json.gz`：纯标准库读取，确定性 gzip header、流式 JSON、同目录临时文件与原子替换，失败清理并保留已有目标。普通 JSON/stdout 的字节格式保持一致。大型精确计划仍随规划范围增长，本阶段不声称常数内存或无限数据支持。
+
+十万行 lazy 合成数据、原生 SeedableRandomSampler 和确定性合成 collator 对比：读取 **200,128 → 100,128**，计划逐字节相同；本次 CPU 耗时 **19.409 → 9.730 秒**，tracemalloc 峰值 **9,527,025 → 8,718,451 bytes**。高度重复的 26,992,593-byte 合成报告压缩为 **239,705 bytes**，写入 tracemalloc 峰值 **132,588,964 → 392,860 bytes**；写入耗时 **3.365 → 3.969 秒**。这些是特定 CPU/内容的观测，不作通用速度或压缩率保证。
+
+专用检查 **74 passed**，全仓 **1658 passed / 1 skipped，143.42 秒**；`python -S` 从压缩的真实 calibration 报告生成压缩计划和预算，与原始封存值/coverage 完全相同，未导入 ML 包。**152 份历史预测逐字节一致**。三语 README、Ruff、diff check 与可复用 benchmark 小规模运行通过；证据见 [planning/storage](tests/data/finetune_planning_storage_evidence.json)，脚本见 [benchmark](tests/native/benchmark_finetune_planning.py)，原始资料在 `/tmp/fakegpu-large-data-20261015/`。
 
 ### Packing 原生报告配置绑定（独立 bug 修复）
 

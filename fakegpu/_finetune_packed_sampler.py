@@ -143,9 +143,8 @@ def validate_packed_sampler_plan(plan):
         or plan["schema_version"] != PACKED_SCHEMA_VERSION
     ):
         raise FinetuneEstimateError("unsupported packed sampler plan fields or schema")
-    copied = deepcopy(dict(plan))
-    recorded = copied.pop("plan_sha256")
-    if recorded != _digest(copied):
+    content = {key: value for key, value in plan.items() if key != "plan_sha256"}
+    if plan["plan_sha256"] != _digest(content):
         raise FinetuneEstimateError("packed sampler plan SHA256 is inconsistent")
     dataset = plan["dataset"]
     if not isinstance(dataset, Mapping) or set(dataset) != {

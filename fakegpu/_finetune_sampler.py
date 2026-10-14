@@ -68,9 +68,7 @@ def _class_name(value):
 
 def validate_length_grouping_seed(seed):
     if seed is not None and (
-        isinstance(seed, bool)
-        or not isinstance(seed, int)
-        or not 0 <= seed < 2**63
+        isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**63
     ):
         raise ValueError("length_grouping_seed must be an integer in [0, 2**63)")
     return seed
@@ -78,8 +76,13 @@ def validate_length_grouping_seed(seed):
 
 def validate_length_grouping_evaluation(policy, *, seed):
     fields = {
-        "schema_version", "kind", "seed", "iteration_seed_rule",
-        "grouping_batch_size", "dataset_rows", "lengths_sha256",
+        "schema_version",
+        "kind",
+        "seed",
+        "iteration_seed_rule",
+        "grouping_batch_size",
+        "dataset_rows",
+        "lengths_sha256",
     }
     if not isinstance(policy, Mapping) or set(policy) != fields:
         raise FinetuneEstimateError("evaluation grouping policy is incomplete")
@@ -89,7 +92,9 @@ def validate_length_grouping_evaluation(policy, *, seed):
         or policy["iteration_seed_rule"] != "same_seed_each_invocation"
         or _integer(policy["seed"], "evaluation grouping seed", minimum=0) != seed
     ):
-        raise FinetuneEstimateError("evaluation grouping policy differs from its explicit seed")
+        raise FinetuneEstimateError(
+            "evaluation grouping policy differs from its explicit seed"
+        )
     _integer(policy["grouping_batch_size"], "evaluation grouping batch size")
     _integer(policy["dataset_rows"], "evaluation grouping dataset rows")
     _sha256(policy["lengths_sha256"], "evaluation grouping lengths")
@@ -216,7 +221,9 @@ def _sampler_configuration(trainer, loader, torch):
             if sampler.batch_size != (
                 trainer.args.train_batch_size * trainer.args.gradient_accumulation_steps
             ) or len(sampler.lengths) != len(loader.dataset):
-                raise FinetuneEstimateError("native length grouping workload is inconsistent")
+                raise FinetuneEstimateError(
+                    "native length grouping workload is inconsistent"
+                )
             return sampler, "seedable_length_grouped", sampler.initial_seed
         if type(sampler) is LengthGroupedSampler:
             raise FinetuneEstimateError(
@@ -258,7 +265,9 @@ def _collated_batch(loader, indices):
     return descriptor, input_sha256
 
 
-def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
+def plan_native_batches(
+    trainer, *, max_steps, framework, sequence_length, dataset_profile=None
+):
     """Build a complete target plan from the real prepared CPU dataloader.
 
     The caller must supply an unpacked, map-style, single-device text Trainer.
@@ -266,6 +275,9 @@ def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
     partial accumulation tails. Resume, iterable datasets, random worker transforms and
     custom/packing samplers are deliberately outside this contract. Length
     grouping requires the explicit epoch-seeded native adapter.
+    ``dataset_profile`` may reuse a complete scan of this same unchanged native
+    split. The caller owns that binding; row counts and report metadata are
+    checked here, while the emitted batch prefix is still collated twice.
     """
     import torch
     from accelerate.data_loader import SeedableRandomSampler
@@ -306,9 +318,26 @@ def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
         batch_size = _integer(loader.batch_sampler.batch_size, "native batch size")
         if batch_size != args.per_device_train_batch_size:
             raise FinetuneEstimateError("native batch size differs from configuration")
-        profile = profile_tokenized_records(
-            dataset, sequence_length=sequence_length, source_framework=framework
-        )
+        if dataset_profile is None:
+            profile = profile_tokenized_records(
+                dataset, sequence_length=sequence_length, source_framework=framework
+            )
+        else:
+            from .finetune_data_report import _validate_report
+
+            _validate_report(dataset_profile)
+            if (
+                dataset_profile["provenance"]["source"] != "native_in_memory"
+                or dataset_profile["processed"] is not True
+                or dataset_profile["training_inputs"]["num_samples"] != rows
+                or dataset_profile["training_inputs"]["sequence_length"]
+                != sequence_length
+                or dataset_profile.get("source_framework") not in (None, framework)
+            ):
+                raise FinetuneEstimateError(
+                    "reused dataset profile must describe the same native split and cap"
+                )
+            profile = dataset_profile
         if kind == "sequential":
             sampler = torch.utils.data.SequentialSampler(loader.dataset)
         elif kind == "seedable_length_grouped":
@@ -330,7 +359,19 @@ def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
             if kind != "sequential":
                 sampler.set_epoch(epoch)
             order = list(sampler)
-            if len(order) != rows or sorted(order) != list(range(rows)):
+            seen = bytearray(rows)
+            for index in order:
+                if (
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
+                    or not 0 <= index < rows
+                    or seen[index]
+                ):
+                    raise FinetuneEstimateError(
+                        "native sampler does not consume every row once"
+                    )
+                seen[index] = 1
+            if len(order) != rows:
                 raise FinetuneEstimateError(
                     "native sampler does not consume every row once"
                 )
@@ -364,7 +405,8 @@ def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
                 updates.append({"optimizer_step": len(updates) + 1, "batches": batches})
     plan = {
         "schema_version": LENGTH_SCHEMA_VERSION
-        if kind == "seedable_length_grouped" else SCHEMA_VERSION,
+        if kind == "seedable_length_grouped"
+        else SCHEMA_VERSION,
         "framework": framework,
         "dataset": {
             "num_samples": rows,
@@ -411,12 +453,16 @@ def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
 
 def validate_sampler_plan(plan):
     """Validate a serialized CPU batch plan without importing Torch."""
-    if isinstance(plan, Mapping) and plan.get("schema_version") == PACKED_SCHEMA_VERSION:
+    if (
+        isinstance(plan, Mapping)
+        and plan.get("schema_version") == PACKED_SCHEMA_VERSION
+    ):
         from ._finetune_packed_sampler import validate_packed_sampler_plan
 
         return validate_packed_sampler_plan(plan)
     if not isinstance(plan, Mapping) or plan.get("schema_version") not in {
-        SCHEMA_VERSION, LENGTH_SCHEMA_VERSION
+        SCHEMA_VERSION,
+        LENGTH_SCHEMA_VERSION,
     }:
         raise FinetuneEstimateError("unsupported native sampler plan schema")
     fields = {
@@ -437,9 +483,8 @@ def validate_sampler_plan(plan):
         raise FinetuneEstimateError(
             "native sampler plan fields are incomplete or unsupported"
         )
-    copied = deepcopy(dict(plan))
-    recorded = copied.pop("plan_sha256", None)
-    if recorded != _digest(copied):
+    content = {key: value for key, value in plan.items() if key != "plan_sha256"}
+    if plan.get("plan_sha256") != _digest(content):
         raise FinetuneEstimateError(
             "native sampler plan SHA256 differs from its contents"
         )
@@ -475,16 +520,26 @@ def validate_sampler_plan(plan):
     elif sampler["kind"] == "seedable_length_grouped":
         expected_class = "fakegpu._finetune_length_sampler.SeedableLengthGroupedSampler"
         if plan["schema_version"] != LENGTH_SCHEMA_VERSION:
-            raise FinetuneEstimateError("seeded length grouping requires sampler plan v2")
+            raise FinetuneEstimateError(
+                "seeded length grouping requires sampler plan v2"
+            )
         validate_length_grouping_seed(sampler["seed"])
-        if sampler["seed"] is None or sampler["epoch_seed_rule"] != "seed + zero_based_epoch":
+        if (
+            sampler["seed"] is None
+            or sampler["epoch_seed_rule"] != "seed + zero_based_epoch"
+        ):
             raise FinetuneEstimateError("seeded length grouping requires an epoch seed")
         grouping = sampler["grouping"]
         if set(grouping) != {"batch_size", "lengths", "lengths_sha256"}:
             raise FinetuneEstimateError("native length grouping identity is incomplete")
         _integer(grouping["batch_size"], "native grouping batch size")
-        if not isinstance(grouping["lengths"], list) or len(grouping["lengths"]) != rows:
-            raise FinetuneEstimateError("native grouping lengths differ from the dataset size")
+        if (
+            not isinstance(grouping["lengths"], list)
+            or len(grouping["lengths"]) != rows
+        ):
+            raise FinetuneEstimateError(
+                "native grouping lengths differ from the dataset size"
+            )
         for length in grouping["lengths"]:
             _integer(length, "native grouping length")
         if grouping["lengths_sha256"] != _digest(grouping["lengths"]):
@@ -493,7 +548,10 @@ def validate_sampler_plan(plan):
         raise FinetuneEstimateError("unsupported native sampler kind")
     if sampler["class"] != expected_class:
         raise FinetuneEstimateError("native sampler class differs from sampler kind")
-    if plan["schema_version"] == LENGTH_SCHEMA_VERSION and sampler["kind"] != "seedable_length_grouped":
+    if (
+        plan["schema_version"] == LENGTH_SCHEMA_VERSION
+        and sampler["kind"] != "seedable_length_grouped"
+    ):
         raise FinetuneEstimateError("sampler plan v2 requires seeded length grouping")
     if not isinstance(plan["collator_class"], str) or not plan["collator_class"]:
         raise FinetuneEstimateError("native sampler collator identity is missing")
@@ -526,7 +584,9 @@ def validate_sampler_plan(plan):
     if sampler["kind"] == "seedable_length_grouped" and (
         sampler["grouping"]["batch_size"] != batch_size * accumulation
     ):
-        raise FinetuneEstimateError("native grouping batch size differs from accumulation")
+        raise FinetuneEstimateError(
+            "native grouping batch size differs from accumulation"
+        )
     per_epoch = math.ceil(math.ceil(rows / batch_size) / accumulation)
     if plan["updates_per_epoch"] != per_epoch:
         raise FinetuneEstimateError("native sampler updates per epoch is inconsistent")
@@ -633,8 +693,7 @@ def validate_sampling_verification(plan, updates, verification):
             if plan["schema_version"] == PACKED_SCHEMA_VERSION:
                 fields = (*fields, "source_bins")
             if _descriptor(batch) != _descriptor(planned) or any(
-                batch.get(field) != planned[field]
-                for field in fields
+                batch.get(field) != planned[field] for field in fields
             ):
                 raise FinetuneEstimateError(
                     "native sampling verification batch differs from plan"

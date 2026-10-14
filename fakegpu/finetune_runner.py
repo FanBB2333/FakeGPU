@@ -448,6 +448,7 @@ def run_finetuning(
                         max_steps=max(native_steps, target_steps),
                         framework=framework,
                         sequence_length=config["sequence_length"],
+                        dataset_profile=state["dataset"],
                     )
                 if (
                     state["sampling_plan"]["dataset"]["content_sha256"]

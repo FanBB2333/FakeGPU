@@ -1163,6 +1163,11 @@ processed JSONL：三个等长整数数组、二值 attention mask，padding 前
 eval/save 组合。每组仅一次独立 holdout，保留分阶段误差和覆盖不足记录，不能视为通用
 精度或 OOM 安全保证。
 
+大型报告和计划可通过原有 `--json` 和输入路径选项使用 `.json.gz`。
+压缩采用流式写入、原子替换和可重复字节；普通 JSON 与 stdout 格式保持兼容。
+原生规划器复用刚完成的全量数据扫描，仍对每个计划批次独立核验两次。
+这减少重复工作；精确计划的大小仍随声明的规划范围增长。
+
 支持标准梯度检查点。LLaMA-Factory 使用 `disable_gradient_checkpointing: false`，
 并通过 `use_reentrant_gc: true` 或 `false` 选择实现；Axolotl 使用
 `gradient_checkpointing: true` 与 `gradient_checkpointing_kwargs: {use_reentrant: true}`

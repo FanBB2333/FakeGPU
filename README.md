@@ -1318,6 +1318,12 @@ changing 25 to 73 training rows, plus random sampling with periodic eval/save.
 Each condition has one independent holdout. These measurements do not establish
 general accuracy or OOM safety; phase errors and rejected coverage are retained.
 
+Large reports and plans can use `.json.gz` with the same `--json` and input-path
+options as JSON. Compression streams to an atomic replacement and is reproducible;
+plain JSON and stdout keep their existing format. The native planner reuses its
+just-completed full dataset scan and still verifies every planned batch twice.
+This reduces duplicate work; exact plans still grow with their declared horizon.
+
 Standard gradient checkpointing is supported. LLaMA-Factory uses
 `disable_gradient_checkpointing: false` with `use_reentrant_gc: true` or `false`;
 Axolotl uses `gradient_checkpointing: true` with
