@@ -1,0 +1,15 @@
+{
+  "schema_version": "fakegpu.experiment_matrix.v1",
+  "command": ["{python}", "{script}", "--size", "{size}", "--output", "{run_dir}/metrics.json"],
+  "inputs": {"script": "worker.py"},
+  "parameters": {"size": [10000, 100000, 1000000]},
+  "repetitions": 3,
+  "max_runs": 9,
+  "timeout_seconds": 30,
+  "environment": {"OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"},
+  "artifacts": ["metrics.json"],
+  "metrics": {
+    "seconds": {"artifact": "metrics.json", "path": ["seconds"], "unit": "s"},
+    "checksum": {"artifact": "metrics.json", "path": ["checksum"], "unit": "integer"}
+  }
+}

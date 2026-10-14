@@ -1,0 +1,190 @@
+{
+  "artifact_root": "/tmp/fakegpu-experiments-20261015",
+  "groups": [
+    {
+      "metrics": {
+        "checksum": {
+          "count": 3,
+          "max": 333283335000,
+          "mean": 333283335000.0,
+          "min": 333283335000,
+          "samples": [
+            {
+              "repetition": 1,
+              "run_id": "00e33c74a6af3d40fa36fd22",
+              "value": 333283335000
+            },
+            {
+              "repetition": 2,
+              "run_id": "00534820fb233d51a68da659",
+              "value": 333283335000
+            },
+            {
+              "repetition": 3,
+              "run_id": "f891dcde8062f87540da30c4",
+              "value": 333283335000
+            }
+          ],
+          "unit": "integer"
+        },
+        "seconds": {
+          "count": 3,
+          "max": 0.000334413256496191,
+          "mean": 0.0003296961076557636,
+          "min": 0.00032336218282580376,
+          "samples": [
+            {
+              "repetition": 1,
+              "run_id": "00e33c74a6af3d40fa36fd22",
+              "value": 0.000334413256496191
+            },
+            {
+              "repetition": 2,
+              "run_id": "00534820fb233d51a68da659",
+              "value": 0.00032336218282580376
+            },
+            {
+              "repetition": 3,
+              "run_id": "f891dcde8062f87540da30c4",
+              "value": 0.0003313128836452961
+            }
+          ],
+          "unit": "s"
+        }
+      },
+      "parameters": {
+        "size": 10000
+      }
+    },
+    {
+      "metrics": {
+        "checksum": {
+          "count": 3,
+          "max": 333328333350000,
+          "mean": 333328333350000.0,
+          "min": 333328333350000,
+          "samples": [
+            {
+              "repetition": 1,
+              "run_id": "51ba3394e69b7fd6f24d3bfc",
+              "value": 333328333350000
+            },
+            {
+              "repetition": 2,
+              "run_id": "dba8ec818e5c345f6c66063c",
+              "value": 333328333350000
+            },
+            {
+              "repetition": 3,
+              "run_id": "a0f534f450044c86a3a17a10",
+              "value": 333328333350000
+            }
+          ],
+          "unit": "integer"
+        },
+        "seconds": {
+          "count": 3,
+          "max": 0.00339763006195426,
+          "mean": 0.003392839804291725,
+          "min": 0.003388109151273966,
+          "samples": [
+            {
+              "repetition": 1,
+              "run_id": "51ba3394e69b7fd6f24d3bfc",
+              "value": 0.0033927801996469498
+            },
+            {
+              "repetition": 2,
+              "run_id": "dba8ec818e5c345f6c66063c",
+              "value": 0.00339763006195426
+            },
+            {
+              "repetition": 3,
+              "run_id": "a0f534f450044c86a3a17a10",
+              "value": 0.003388109151273966
+            }
+          ],
+          "unit": "s"
+        }
+      },
+      "parameters": {
+        "size": 100000
+      }
+    },
+    {
+      "metrics": {
+        "checksum": {
+          "count": 3,
+          "max": 333332833333500000,
+          "mean": 3.333328333335e+17,
+          "min": 333332833333500000,
+          "samples": [
+            {
+              "repetition": 1,
+              "run_id": "42e4abc58e7839020c82d8d6",
+              "value": 333332833333500000
+            },
+            {
+              "repetition": 2,
+              "run_id": "9091e7e769f88c6209112f67",
+              "value": 333332833333500000
+            },
+            {
+              "repetition": 3,
+              "run_id": "9a772712a43097037894b6d5",
+              "value": 333332833333500000
+            }
+          ],
+          "unit": "integer"
+        },
+        "seconds": {
+          "count": 3,
+          "max": 0.03528853924944997,
+          "mean": 0.03490598903348048,
+          "min": 0.03459845297038555,
+          "samples": [
+            {
+              "repetition": 1,
+              "run_id": "42e4abc58e7839020c82d8d6",
+              "value": 0.03459845297038555
+            },
+            {
+              "repetition": 2,
+              "run_id": "9091e7e769f88c6209112f67",
+              "value": 0.034830974880605936
+            },
+            {
+              "repetition": 3,
+              "run_id": "9a772712a43097037894b6d5",
+              "value": 0.03528853924944997
+            }
+          ],
+          "unit": "s"
+        }
+      },
+      "parameters": {
+        "size": 1000000
+      }
+    }
+  ],
+  "independent_audit": {
+    "all_integer_checksums_reconstructed": true,
+    "all_runs_have_one_attempt": true,
+    "errors": [],
+    "resume_exact_report": true
+  },
+  "parameters": {
+    "size": [
+      10000,
+      100000,
+      1000000
+    ]
+  },
+  "records": "tests/data/experiment_toolkit_records.json.gz",
+  "repetitions": 3,
+  "request_id": "6e3cf8a2c80e447829bfd756f57e74ad7451349278e648eda71791a32b40216d",
+  "schema_version": "fakegpu.experiment_toolkit_evidence.v1",
+  "scope": "CPU synthetic example, no GPU speed claim. Ranges are observations, not confidence intervals; external package state is author-pinned.",
+  "successful_processes": 9,
+  "tests": "81 passed in 33.07s"
+}

@@ -1533,6 +1533,31 @@ Six training holdouts have 0.044%–3.185% total-time error and no allocator-env
 underestimate. Generation VAE allocated peaks were underestimated by 12.0%–13.8%,
 and reserved peaks by up to 31.6%; those failures remain visible.
 
+Finite experiment sweeps use an explicit argv array, parameter grid and repetition count.
+The CPU-only example below binds its worker script, executable, FakeGPU source and
+selected resource environment to stable run IDs. Execution is sequential; every
+attempt retains stdout, exit status, errors, artifact hashes and numeric metrics.
+
+```bash
+python -m fakegpu plan-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --json /tmp/research-plan.json
+python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --json /tmp/research-results.json.gz
+python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --resume --json /tmp/research-resumed.json
+python -m fakegpu compare-experiments --workspace /tmp/research-sweep \
+  --plot /tmp/research-sweep.svg --x size --metric seconds \
+  --json /tmp/research-comparison.json
+```
+
+Resume skips verified successes; `--resume --retry-failed` explicitly creates new
+attempts for failures or interruptions. Input/source/environment changes require a
+new workspace. Compare works offline and keeps workspaces separate. Declared inputs
+are attested; authors must pin external packages and record native runtime identity.
+Commands must stay in the foreground. JSON key/index metric paths support nested
+objects/arrays. Plotting alone requires Matplotlib; bars show observed min/max, not
+confidence intervals. The example measures CPU work, not GPU training throughput.
+
 | Command | Purpose |
 |---|---|
 | `fakegpu doctor` | Check the installation, native libraries, PyTorch, and profiles |
@@ -1543,6 +1568,9 @@ and reserved peaks by up to 31.6%; those failures remain visible.
 | `fakegpu estimate-llm` | Estimate decoder memory, communication, and FLOPs |
 | `fakegpu plan-serving` | Plan homogeneous or mixed-request admission, chunked prefill, and grouped shared-prefix KV storage |
 | `fakegpu benchmark-serving` | Measure scheduled mixed streaming requests and retain usage, latency, SSE events, and failures |
+| `fakegpu plan-experiments` | Plan a bounded parameter sweep and inspect exact commands |
+| `fakegpu run-experiments` | Run or explicitly resume experiments while preserving every attempt |
+| `fakegpu compare-experiments` | Verify raw artifacts, compare repetitions and optionally export a plot |
 | `fakegpu estimate-diffusion` | Estimate diffusion text-encode, denoise, and VAE-decode memory phases |
 | `fakegpu plan-diffusion-training` | Inspect cached-feature UNet training plans and persistent storage |
 | `fakegpu run-diffusion-training` | Run cached-feature UNet full/LoRA training on one real GPU |

@@ -19,6 +19,14 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### P5 实验批量运行与产物管理
+
+新增纯标准库 `plan/run/compare-experiments` 与对应公开 Python API。显式有限参数网格、重复次数、最大运行数、argv 模板、声明输入、数值指标 JSON 路径和超时；计划只读，运行顺序执行。稳定 ID 绑定输入完整 SHA、可执行文件、FakeGPU 源码及指定环境。每次尝试单独保存 stdout、执行状态、错误原因、产物 SHA 和指标索引，恢复核验成功记录，失败／中断只有 `--resume --retry-failed` 才创建新尝试，原始失败记录不覆盖。共享进程执行器仅新增可选 cwd/purpose，既有校准默认参数和错误行为保留。
+
+比较可在输入文件删除后用 `python -S` 离线执行，逐份核验成功产物及历史尝试记录；不同工作区分别统计，不混合环境。可选 Matplotlib 导出独立 SVG/PNG，显示重复均值与观测范围，不标为置信区间。外部包版本需作者固定，命令须在前台运行；没有声称对未声明外部依赖做完整沙箱或自动环境快照。
+
+19 项专用测试连同工作流与 CLI 回归共 **81 passed / 33.07 秒**，覆盖失败保留、显式重试、活跃进程拒绝重叠、超时清理、自修改输入、产物篡改、压缩报告与无 ML 依赖离线比较。CPU 示例三种规模各三次，共九个进程，独立重建整型 checksum 全部一致，恢复报告逐字段相同，SVG 导出通过。三语命令表保持一致。证据见 [实验工具](tests/data/experiment_toolkit_evidence.json)及 [57 份审阅记录](tests/data/experiment_toolkit_records.json.gz)，原始目录 `/tmp/fakegpu-experiments-20261015/`。
+
 ### R25 generation 与缓存特征训练
 
 Diffusers 0.35.2 / Torch 2.9.1+cu128 / Transformers 4.57.3 / PEFT 0.18.1，GPU 1。SD 1.4 512²、SDXL 1024² 各五个独立 generation 进程，BF16、SDPA、CFG 7.5、请求 8 inference steps。三阶段 allocated 误差分别为 SD **1.578% / 5.000% / 12.001%**，SDXL **1.825% / 3.651% / 13.819%**；VAE reserved 最多低估 **28.802% / 31.640%**。10% 低估门槛明确未通过，不事后拟合系数或替换原始样本。

@@ -150,7 +150,9 @@ def _stop(process):
         process.wait()
 
 
-def _execute(command, directory, environment, timeout):
+def _execute(
+    command, directory, environment, timeout, *, cwd=None, purpose="native calibration"
+):
     started = time.monotonic()
     execution = {"argv": command, "status": "starting", "started_at_utc": _now()}
     path = directory / "execution.json"
@@ -163,6 +165,7 @@ def _execute(command, directory, environment, timeout):
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                **({"cwd": cwd} if cwd is not None else {}),
             )
         except OSError as exc:
             execution.update(status="failed", error=str(exc), finished_at_utc=_now())
@@ -195,6 +198,6 @@ def _execute(command, directory, environment, timeout):
             _write(path, execution)
     if process.returncode:
         raise RuntimeError(
-            f"native calibration exited {process.returncode}; preserved {directory / 'run.log'}"
+            f"{purpose} exited {process.returncode}; preserved {directory / 'run.log'}"
         )
     return execution

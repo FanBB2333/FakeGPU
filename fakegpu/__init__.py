@@ -39,6 +39,12 @@ from .diffusion_training import (
     compare_diffusion_training,
 )
 from .diffusion_training_runner import run_diffusion_training
+from .experiments import (
+    plan_experiments,
+    run_experiments,
+    compare_experiments,
+    plot_experiments,
+)
 from .flop_counter import MatmulFlopCounterMode
 from .finetune_config import (
     FinetuneConfigError,
@@ -172,6 +178,10 @@ __all__ = [
     "estimate_diffusion_training",
     "compare_diffusion_training",
     "run_diffusion_training",
+    "plan_experiments",
+    "run_experiments",
+    "compare_experiments",
+    "plot_experiments",
     "estimate_finetuning",
     "estimate_finetuning_run",
     "estimate_finetuning_windows",

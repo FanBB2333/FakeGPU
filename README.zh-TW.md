@@ -1348,6 +1348,28 @@ SD/SDXL generation 與 12 個快取特徵訓練程序。六次訓練 holdout 的
 0.044%–3.185%，allocator 包絡未低估；generation VAE allocated 仍低估 12.0%–13.8%，
 reserved 最多低估 31.6%，保留這些未通過的結果。
 
+實驗批次執行使用明確 argv、參數網格與重複次數。下方 CPU 範例將 worker 腳本、
+可執行檔、FakeGPU 原始碼及指定資源環境綁定至穩定執行 ID；依序執行，每次嘗試
+保留日誌、退出狀態、錯誤、產物 SHA 與數值指標。
+
+```bash
+python -m fakegpu plan-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --json /tmp/research-plan.json
+python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --json /tmp/research-results.json.gz
+python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --resume --json /tmp/research-resumed.json
+python -m fakegpu compare-experiments --workspace /tmp/research-sweep \
+  --plot /tmp/research-sweep.svg --x size --metric seconds \
+  --json /tmp/research-comparison.json
+```
+
+恢復會跳過已核驗成功項；只有 `--resume --retry-failed` 才會為失敗或中斷新增嘗試。
+輸入、原始碼或環境改變需要新工作區。比較可離線執行，各工作區分別統計。僅宣告輸入
+參與核驗，外部依賴版本需由實驗作者固定，並在原生報告記錄執行環境。命令須在前景
+執行。指標路徑支援巢狀 JSON key/index；只有繪圖需要 Matplotlib，誤差棒是觀測最小／
+最大值，並非信賴區間。範例測量 CPU 工作，不代表 GPU 訓練吞吐。
+
 | 指令 | 用途 |
 |---|---|
 | `fakegpu doctor` | 檢查安裝、原生函式庫、PyTorch 與 profiles |
@@ -1358,6 +1380,9 @@ reserved 最多低估 31.6%，保留這些未通過的結果。
 | `fakegpu estimate-llm` | 估算 decoder GPU 記憶體、通訊量與 FLOP |
 | `fakegpu plan-serving` | 規劃同構或混合請求準入、chunked prefill 與群組共享 prefix KV 儲存 |
 | `fakegpu benchmark-serving` | 測量混合串流請求，保留用量、延遲、SSE 事件與失敗 |
+| `fakegpu plan-experiments` | 展開限額參數網格並檢查實際命令 |
+| `fakegpu run-experiments` | 執行或明確恢復實驗，保留每次嘗試 |
+| `fakegpu compare-experiments` | 核驗原始產物、比較重複觀測並可匯出圖表 |
 | `fakegpu estimate-diffusion` | 估算 diffusion 的 text encode、denoise 與 VAE decode 階段 GPU 記憶體 |
 | `fakegpu plan-diffusion-training` | 規劃快取特徵 U-Net 訓練與持久儲存 |
 | `fakegpu run-diffusion-training` | 在單個實體 GPU 執行快取特徵 U-Net full/LoRA 訓練 |

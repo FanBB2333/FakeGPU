@@ -1342,6 +1342,28 @@ SD/SDXL generation 和 12 个缓存特征训练进程。六次训练 holdout 的
 0.044%–3.185%，allocator 包络未低估；generation VAE allocated 仍低估 12.0%–13.8%，
 reserved 最多低估 31.6%，保留这些未通过的结果。
 
+实验批量运行使用显式 argv、参数网格和重复次数。下面的 CPU 示例将 worker 脚本、
+可执行文件、FakeGPU 源码和指定资源环境绑定到稳定运行 ID；顺序执行，每次尝试
+保留日志、退出状态、错误、产物 SHA 和数值指标。
+
+```bash
+python -m fakegpu plan-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --json /tmp/research-plan.json
+python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --json /tmp/research-results.json.gz
+python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --resume --json /tmp/research-resumed.json
+python -m fakegpu compare-experiments --workspace /tmp/research-sweep \
+  --plot /tmp/research-sweep.svg --x size --metric seconds \
+  --json /tmp/research-comparison.json
+```
+
+恢复跳过已核验成功项；`--resume --retry-failed` 才会为失败或中断创建新尝试。
+输入、源码或环境改变需要新工作区。比较可离线运行，各工作区分别统计。仅声明输入
+参与核验，外部依赖版本需由实验作者固定，并在原生报告中记录运行环境。命令须在前台
+运行。指标路径支持嵌套 JSON key/index；仅绘图需要 Matplotlib，误差棒是观测最小／
+最大值，不是置信区间。示例测量 CPU 工作，不代表 GPU 训练吞吐。
+
 | 命令 | 用途 |
 |---|---|
 | `fakegpu doctor` | 检查安装、原生库、PyTorch 和 profiles |
@@ -1352,6 +1374,9 @@ reserved 最多低估 31.6%，保留这些未通过的结果。
 | `fakegpu estimate-llm` | 估算 decoder 显存、通信量和 FLOP |
 | `fakegpu plan-serving` | 规划同构或混合请求准入、chunked prefill 和分组共享 prefix KV 存储 |
 | `fakegpu benchmark-serving` | 测量混合流式请求，保留用量、延迟、SSE 事件和失败 |
+| `fakegpu plan-experiments` | 展开限额参数网格并检查实际命令 |
+| `fakegpu run-experiments` | 运行或显式恢复实验，保留每次尝试 |
+| `fakegpu compare-experiments` | 核验原始产物、比较重复观测并可导出图表 |
 | `fakegpu estimate-diffusion` | 估算 diffusion 的 text encode、denoise 和 VAE decode 阶段显存 |
 | `fakegpu plan-diffusion-training` | 规划缓存特征 U-Net 训练与持久存储 |
 | `fakegpu run-diffusion-training` | 在单个真实 GPU 执行缓存特征 U-Net full/LoRA 训练 |
