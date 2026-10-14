@@ -57,6 +57,14 @@
 
 wheel 独立安装后的 **94 个 Python 模块**与源码逐字节一致；在 `python -S` 下完成 **41 项 CLI 检查**（旧 pipeline 20、新 transfer 12、CPU 工作区重预算 9），历史 152 份预测仍逐字节一致。更新后的三语 README/命令清单另通过 5 项检查。原始运行、配置、日志、CPU 预览、独立审计、驱动及预测封存位于 `/tmp/fakegpu-transfer-20261014/`；仓库保留[可读摘要](tests/data/finetune_transfer_validation_evidence.json)和[压缩审阅档案](tests/data/finetune_transfer_validation_records.json.gz)。档案中的路径已替换，仅供审阅，不能作为可复用校准报告。
 
+### 校准工作区目录边界修复
+
+主功能及其 18 次 GPU 验收冻结于 `5cdbc0a1`。随后用纯 CPU 用例复现：把工作区放到模型目录下面时，原实现未提前拒绝，触发了被 mock 截止的运行时探测。按原流程继续训练，工作区新产物会改变模型目录指纹。修复在 `_prepare_inputs` 递归读取前核对解析后的绝对路径，提前拒绝工作区等于或位于被整体记录的输入目录内，覆盖模型、tokenizer、配置及实际选中的数据目录；`..` 和符号链接同样按真实路径检查。Factory 仅存放注册表及单独数据文件的 `dataset_dir` 没有被整体记录，因此其中不相关的工作区子目录仍可使用。
+
+该修复不改变采样、计时、预算算法或已有独立目录的输入内容；GPU 证据仍对应上述冻结提交，不冒充已对修改后的源码重跑。修复的基线失败记录位于 `/tmp/fakegpu-transfer-20261014/workspace-input-baseline/`，后续回归与安装包检查位于 `/tmp/fakegpu-workspace-guard-20261014/`。
+
+原工作流 28 项与新增路径回归 18 项共 **46 passed，16.80 秒**，三语 README 另有 4 项通过，Ruff 与 diff check 通过。修复后的 wheel 94 个 Python 模块与源码一致；`python -S` 下无训练依赖即可提前拒绝错误目录，已有 HF 20-step 计划、覆盖及预算文件逐字节保持不变。源码身份变化会正常生成新的封存请求目录，原预测的 seal 和全部产物不变；验收工具最初错误地要求两版请求 ID 也相同，其失败日志及修正记录保留。未新增原生训练。
+
 ### 后续推进顺序
 
 1. **原生 packing 与长度分组**：先核验三套框架的实际边界、attention 隔离、sampler/collator 和累积计数，再开放相应预算；不把普通拼接或 position reset 当成隔离证据。

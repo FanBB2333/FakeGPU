@@ -11,9 +11,12 @@ from ._finetune_workflow_store import _file, _source_identity
 from .structured_io import load_mapping
 
 
-def _prepare_inputs(config_path, framework):
+def _prepare_inputs(config_path, framework, *, workspace=None):
     """Resolve supported local sources before moving configs into the workspace."""
     source = Path(config_path).expanduser().resolve()
+    workspace = (
+        Path(workspace).expanduser().resolve() if workspace is not None else None
+    )
     raw = load_mapping(source)
     config = deepcopy(raw)
     inputs = {str(source): _file(source)}
@@ -26,6 +29,14 @@ def _prepare_inputs(config_path, framework):
         if existing and not path.exists():
             raise ValueError(f"local calibration input does not exist: {path}")
         if record and path.exists():
+            if (
+                workspace is not None
+                and path.is_dir()
+                and workspace.is_relative_to(path)
+            ):
+                raise ValueError(
+                    f"workspace must be outside recorded input directories: {path}"
+                )
             files = [path] if path.is_file() else sorted(path.rglob("*"))
             for item in files:
                 if item.is_file():

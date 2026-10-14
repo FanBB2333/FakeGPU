@@ -475,7 +475,7 @@ def calibrate_finetuning(
     duration = _duration(epochs, max_steps)
     _memory_limits(memory_budget_bytes, reserve_bytes)
     root = Path(workspace).expanduser().resolve()
-    config, inputs = _prepare_inputs(config_path, framework)
+    config, inputs = _prepare_inputs(config_path, framework, workspace=root)
     if any(root == Path(path) or root in Path(path).parents for path in inputs):
         raise ValueError("calibration inputs must be outside the generated workspace")
     executable = str(Path(python_executable or sys.executable).expanduser().absolute())
@@ -631,7 +631,8 @@ def calibrate_finetuning(
                     report = load_mapping(directory / "run.json")
                     _validate_run(report, execution, request, directory)
                     if (
-                        _prepare_inputs(config_path, framework)[1] != inputs
+                        _prepare_inputs(config_path, framework, workspace=root)[1]
+                        != inputs
                         or _source_identity() != request["source"]
                     ):
                         raise ValueError(

@@ -1200,7 +1200,9 @@ after interruption. Successful evidence is checked before reuse; it never
 silently expands a calibration or reruns it because its error is large. CPU-only
 rebudgeting needs no GPU or installed training framework and cannot exceed the
 saved sampling horizon. Keep the workspace at its original absolute path and
-outside the model directory. Only finite local datasets are supported.
+outside input directories recorded in full, such as the model or a local dataset
+directory. A nested workspace is rejected before runtime probing or training.
+Only finite local datasets are supported.
 Workspaces use POSIX process and lock semantics.
 
 Add repeated `--reuse-calibration-run PATH` arguments to reuse compatible
