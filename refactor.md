@@ -81,6 +81,12 @@
 
 分段入口改为临时包装原生模型实例的 forward，调用相同校验后再进入原函数；退出或异常删除实例覆盖，拒绝既有实例 forward 覆盖。新增直接调用回归先复现 **1 failed**，修复后分段单测 **25 passed**。两套真实 Transformers/PEFT（5.6.0/0.18.1、5.14.1/0.19.1）在 CPU 各验收 eager/SDPA × 三种 checkpointing，共 **12 场景**：最大 logits 差 **2.09e-7**，LoRA 梯度最大相对差 **1.68e-6**，后段反事实输出差为 **0**，实例方法均恢复。原始资料在 `/tmp/fakegpu-packed-budget-20261015/`；这些 CPU 结果不替代后续完整 GPU 预算。
 
+### 等长独立段合批的参考实现重构
+
+逐段调用原生 recurrent kernel 的 HF 88-update 诊断耗时 423.83 秒（该进程因 seed 校验失败，不是成功预算证据）。分段实现随后按实际长度分组，将等长段沿原生 batch 维拼接；每个 batch 项仍从空卷积和递归状态开始，不补造 token，最后按原始行与位置恢复。模型权重及 full-attention 路径不变。这是明确的执行重构，不能继续使用其前实现的时间校准。
+
+两套真实 PEFT 的 12 个 CPU 场景通过：最大 logits 差 **1.79e-7**、梯度相对差 **1.11e-6**、跨段反事实输出差 **0**。三个真实 collator 的 **18 个 GPU BF16 场景**再次核验各层、梯度、隔离及保存恢复；有效 logits 与层输出差、跨段扰动与输入梯度、同 dtype 重载差均为 **0**，参数梯度最大相对差 HF/Factory **2.222%**、Ax **1.714%**。新增单测同时核验 native 调用的 batch 形状与 padding 梯度，相关检查 **56 passed**。资料见 `/tmp/fakegpu-packed-budget-20261015/batched-gpu-reference/`；后续正式预算另行冻结、校准，不把语义审计当作性能测量。
+
 ### Packing 原生数据与计数基础（完整预算尚未开放）
 
 新增 `_finetune_packed_batches.py`，先从 HF/Factory 的显式 segment IDs 或 Ax 的原始记录 bins 证明 token、label、位置和边界对应，再保留有效的原生 4D mask 或建立隔离 mask。输出区分 physical packed rows、logical sequences、非 padding/监督/causal tokens、分段几何和实际 tensor dtypes；四类输入的 hash 保留浮点 mask 的原始小端位模式，包括 BF16。拒绝缺失 source mask、边界 label 未忽略、非法分段、原生 token/label 改写及跨段 mask。

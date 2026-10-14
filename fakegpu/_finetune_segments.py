@@ -116,18 +116,28 @@ def _linear_decoder_forward(self, hidden_states, position_embeddings,
     residual = hidden_states
     normalized = self.input_layernorm(hidden_states)
     active_rows = kwargs["fakegpu_segment_active"].detach().cpu().tolist()
+    # TF 5.14 drops a custom 4D mask from its recurrent mask. Validated active
+    # rows travel through native decoder kwargs, including checkpoint replay.
+    row_spans = [segment_ranges(positions, active) for positions, active in zip(
+        position_ids.detach().cpu().tolist(), active_rows
+    )]
+    by_length = {}
+    for row, spans in enumerate(row_spans):
+        for start, end in spans:
+            by_length.setdefault(end - start, []).append((row, start, end))
+    outputs = {}
+    for spans in by_length.values():
+        # Native recurrent state is independent along its batch dimension.
+        # Equal lengths need no artificial padding or extra cache semantics.
+        batch = torch.cat([normalized[row:row + 1, start:end] for row, start, end in spans])
+        result = self.linear_attn(hidden_states=batch, cache_params=None, attention_mask=None)
+        for index, (row, start, _) in enumerate(spans):
+            outputs[row, start] = result[index:index + 1]
     rows = []
-    for row, positions in enumerate(position_ids.detach().cpu().tolist()):
-        # TF 5.14 drops a custom 4D mask from its recurrent mask. Pass the
-        # validated active rows explicitly through native decoder kwargs, which
-        # also preserves them during gradient checkpoint recomputation.
-        spans = segment_ranges(positions, active_rows[row])
-        pieces = [self.linear_attn(
-            hidden_states=normalized[row:row + 1, start:end],
-            cache_params=None, attention_mask=None,
-        ) for start, end in spans]
+    for row, spans in enumerate(row_spans):
+        pieces = [outputs[row, start] for start, _ in spans]
         end = spans[-1][1]
-        if end < len(positions):
+        if end < normalized.shape[1]:
             pieces.append(torch.zeros_like(normalized[row:row + 1, end:]))
         rows.append(torch.cat(pieces, dim=1))
     mixed = residual + torch.cat(rows, dim=0)

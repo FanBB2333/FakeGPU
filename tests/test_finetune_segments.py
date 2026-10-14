@@ -145,3 +145,41 @@ def test_direct_forward_call_validates_and_restores_instance(
         with segments.isolated_qwen35_segments(model):
             raise RuntimeError("test failure")
     assert "forward" not in model.__dict__ and model.forward.__func__ is original
+
+
+def test_equal_length_segments_share_native_batch_without_padding():
+    import torch
+    from types import SimpleNamespace
+    from fakegpu._finetune_segments import _linear_decoder_forward
+
+    calls = []
+
+    def native(*, hidden_states, cache_params, attention_mask):
+        assert cache_params is attention_mask is None
+        calls.append(tuple(hidden_states.shape))
+        return hidden_states * 2
+
+    layer = SimpleNamespace(
+        input_layernorm=lambda x: x,
+        linear_attn=native,
+        post_attention_layernorm=lambda x: x,
+        mlp=torch.zeros_like,
+    )
+    hidden = torch.arange(16.0).reshape(2, 4, 2).requires_grad_(True)
+    positions = torch.tensor([[0, 1, 0, 1], [0, 1, 0, 0]])
+    active = torch.tensor([[True] * 4, [True, True, False, False]])
+    output = _linear_decoder_forward(
+        layer,
+        hidden,
+        None,
+        position_ids=positions,
+        use_cache=False,
+        fakegpu_segment_active=active,
+    )
+    assert calls == [(3, 2, 2)]
+    expected = torch.where(active[:, :, None], hidden * 3, hidden)
+    assert torch.equal(output, expected)
+    output.sum().backward()
+    assert torch.equal(
+        hidden.grad, torch.where(active[:, :, None], 3.0, 1.0).expand_as(hidden)
+    )
