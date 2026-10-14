@@ -32,6 +32,13 @@ from .diffusion_estimator import (
     inspect_diffusion_pipeline,
     load_diffusion_profiles,
 )
+from .diffusion_training import (
+    plan_diffusion_training,
+    project_diffusion_training,
+    estimate_diffusion_training,
+    compare_diffusion_training,
+)
+from .diffusion_training_runner import run_diffusion_training
 from .flop_counter import MatmulFlopCounterMode
 from .finetune_config import (
     FinetuneConfigError,
@@ -160,6 +167,11 @@ __all__ = [
     "env",
     "estimate_decoder_inference",
     "estimate_diffusion_generation",
+    "plan_diffusion_training",
+    "project_diffusion_training",
+    "estimate_diffusion_training",
+    "compare_diffusion_training",
+    "run_diffusion_training",
     "estimate_finetuning",
     "estimate_finetuning_run",
     "estimate_finetuning_windows",

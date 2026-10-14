@@ -354,7 +354,7 @@ GitHub CI 还会在 Python 3.10–3.12 上执行 Python 测试，并在 Linux �
 | Diffusion 图像生成 | Stable Diffusion v1.5、SDXL Base 和 PixArt-Sigma；本地 UNet、交叉注意力 DiT、SD3/Flux 类联合注意力 Transformer；CFG、offload、attention/VAE slicing 和 VAE tiling | 固定版本与本地组件 header、架构配置、阶段公式、CLI/单元测试和 `tests/data/research_validation.yaml` 中的三种本地架构矩阵 | `CPU-validated` + `Modeled` |
 | Speculative decoding | 独立自回归 draft 模型权重和 KV cache、target lookahead KV、批量 verification 临时显存、可选的固定接受率假设，以及同构/混合请求准入 | Checkpoint header、架构公式、`plan-serving --draft-model-dir`、`--speculative-tokens`、`--speculative-acceptance-rate` 和单元测试；尚无项目维护的真实 GPU 观测 | `CPU-validated` + `Modeled` |
 | 多 GPU LLM 执行 | TP、PP、CP、EP、MoE 负载不均衡，以及 FSDP/ZeRO 组合执行 | 目前只有分析拓扑和 coordinator 验证 | `Modeled` |
-| Diffusion 训练 | Optimizer、gradient、activation、EMA 和参数高效微调 | 尚无专用估算器或真实 GPU 数据 | `Planned` |
+| Diffusion 训练 | 缓存特征 U-Net full/LoRA、FP32 AdamW/EMA、BF16 autocast 与实测 activation/allocator 包络 | 12 个 SD/SDXL 原生进程、独立 holdout 与重载检查 | 已记录场景为 `GPU-validated` |
 
 <a id="research-scenario-effects"></a>
 
@@ -1309,6 +1309,39 @@ python -m fakegpu benchmark-serving \
 误差为 2.02%/7.34%，reserved decode 低估 24.07%；张量公式不能据此保证 allocator 或
 OOM 安全。缓存条件、首轮开销及所有样本均保留在记录中。
 
+缓存特征 U-Net 训练支持 full、LoRA 和可选 `--ema-decay`。
+`plan-diffusion-training` 绑定本地权重与 FP32 缓存张量的完整 SHA；
+`run-diffusion-training` 使用一个真实 CUDA GPU、BF16 autocast、FP32 可训练参数和 AdamW。
+VAE/text encoder 训练及原始图像预处理不在预算内。下面的 fixture 生成随机特征，
+仅供集成验证；需要兼容的 Diffusers/PEFT 环境，已验证版本记录在证据中。
+
+```bash
+python tests/native/prepare_diffusion_fixture.py \
+  --model-dir /path/to/stable-diffusion-v1-4 --output-dir /tmp/diff-fixture \
+  --num-samples 5 --epochs 3 --method lora --gradient-checkpointing
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
+  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-1 \
+  --json /tmp/diff-cal-1.json
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
+  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-2 \
+  --json /tmp/diff-cal-2.json
+python -m fakegpu estimate-diffusion-training --plan /tmp/diff-fixture/plan.json \
+  --epochs 5 --calibration-run /tmp/diff-cal-1.json \
+  --calibration-run /tmp/diff-cal-2.json --json /tmp/diff-budget.json.gz
+```
+
+缺少兼容原生观测时，activation 与 reserved 峰值保持未知。预算要求两个独立进程，
+且未来每类窗口都有足够重复样本，首次形状开销单独计费。`--cache-regime` 记录 kernel
+缓存状态，默认 `uncontrolled`；受控模式要求原生工作流中说明的五个显式缓存目录。
+Allocator、GPU UUID、软件、输入内容和执行身份必须一致；实测包络不是物理 OOM 保证。
+
+`validate-diffusion-training` 对照独立 `--holdout-run`；可用
+`--max-total-time-error-percent` 和 `--max-memory-underestimate-percent` 设置门槛，
+超限返回状态 1。[真实 diffusion 记录](tests/data/diffusion_native_evidence.json) 包含
+SD/SDXL generation 和 12 个缓存特征训练进程。六次训练 holdout 的总时间误差为
+0.044%–3.185%，allocator 包络未低估；generation VAE allocated 仍低估 12.0%–13.8%，
+reserved 最多低估 31.6%，保留这些未通过的结果。
+
 | 命令 | 用途 |
 |---|---|
 | `fakegpu doctor` | 检查安装、原生库、PyTorch 和 profiles |
@@ -1320,6 +1353,10 @@ OOM 安全。缓存条件、首轮开销及所有样本均保留在记录中。
 | `fakegpu plan-serving` | 规划同构或混合请求准入、chunked prefill 和分组共享 prefix KV 存储 |
 | `fakegpu benchmark-serving` | 测量混合流式请求，保留用量、延迟、SSE 事件和失败 |
 | `fakegpu estimate-diffusion` | 估算 diffusion 的 text encode、denoise 和 VAE decode 阶段显存 |
+| `fakegpu plan-diffusion-training` | 规划缓存特征 U-Net 训练与持久存储 |
+| `fakegpu run-diffusion-training` | 在单个真实 GPU 执行缓存特征 U-Net full/LoRA 训练 |
+| `fakegpu estimate-diffusion-training` | 用兼容原生观测预算缓存特征训练 |
+| `fakegpu validate-diffusion-training` | 对照独立原生 diffusion 训练 holdout |
 | `fakegpu estimate-roofline` | 生成与 profile 相关的分析延迟区间 |
 | `fakegpu plan-training` | 统一分布式训练配置并估算单 rank 显存 |
 | `fakegpu estimate-finetune` | 根据框架配置估算单卡全量/LoRA/QLoRA 的步数、时间与显存 |
@@ -1501,7 +1538,7 @@ FakeGPU/
 - [x] 增加 continuous batching、混合请求长度、chunked prefill 和分组 prefix caching 的在线 serving 容量模型
 - [x] 增加 draft-model speculative decoding 显存和准入模型
 - [ ] 为长上下文和在线服务添加真实 GPU LLM 验证
-- [ ] 添加真实 GPU diffusion 验证，以及训练和 DiT 显存模型
+- [x] 添加 SD/SDXL GPU 观测、缓存特征 U-Net full/LoRA/EMA 预算及按架构区分的 DiT 显存模型
 - [ ] 在更多 GPU 和软件栈上验证分布式与 MoE 估算
 
 提议功能和已知限制见

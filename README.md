@@ -384,7 +384,7 @@ report collection; without a comparison gate, it is not an accuracy claim.
 | Diffusion image generation | Stable Diffusion v1.5, SDXL Base, and PixArt-Sigma; local UNets, cross-attention DiTs, and SD3/Flux-style joint-attention transformers; CFG, offload, attention/VAE slicing, and VAE tiling | Fixed-revision and local component headers, architecture configs, phase formulas, CLI/unit tests, and a three-case local-architecture matrix in `tests/data/research_validation.yaml` | `CPU-validated` + `Modeled` |
 | speculative decoding | Independent autoregressive draft-model weights and KV cache, target lookahead KV, batched verification transients, optional fixed acceptance assumptions, and homogeneous/mixed request admission | Checkpoint headers, architecture formulas, `plan-serving --draft-model-dir`, `--speculative-tokens`, `--speculative-acceptance-rate`, and unit tests; no maintained real-GPU observation yet | `CPU-validated` + `Modeled` |
 | Multi-GPU LLM execution | TP, PP, CP, EP, MoE imbalance, and combined FSDP/ZeRO execution | Analytical topology and coordinator coverage only | `Modeled` |
-| Diffusion training | Optimizer, gradient, activation, EMA, and parameter-efficient tuning | No dedicated estimator or real-GPU evidence yet | `Planned` |
+| Diffusion training | Cached-feature UNet full/LoRA, FP32 AdamW/EMA storage, BF16 autocast and native activation/allocator envelopes | Twelve SD/SDXL native processes, independent holdouts and reload checks | `GPU-validated` for documented cases |
 
 <a id="research-scenario-effects"></a>
 
@@ -1494,6 +1494,45 @@ At 32K, allocated phase errors were 2.02%/7.34%; reserved decode was underestima
 by 24.07%. Analytical tensor storage therefore does not establish allocator or OOM
 safety. Cache conditions, first-round overhead and all samples remain in the record.
 
+Cached-feature UNet training supports full tuning, LoRA and optional `--ema-decay`.
+`plan-diffusion-training` hashes the exact local weights and FP32 cached tensors;
+`run-diffusion-training` uses one real CUDA GPU, BF16 autocast, FP32 trainable
+parameters and AdamW. VAE/text-encoder training and raw-image preparation are
+excluded. The fixture below generates random features for integration tests.
+Use a compatible Diffusers/PEFT environment; the validated stack is recorded below.
+
+```bash
+python tests/native/prepare_diffusion_fixture.py \
+  --model-dir /path/to/stable-diffusion-v1-4 --output-dir /tmp/diff-fixture \
+  --num-samples 5 --epochs 3 --method lora --gradient-checkpointing
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
+  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-1 \
+  --json /tmp/diff-cal-1.json
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
+  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-2 \
+  --json /tmp/diff-cal-2.json
+python -m fakegpu estimate-diffusion-training --plan /tmp/diff-fixture/plan.json \
+  --epochs 5 --calibration-run /tmp/diff-cal-1.json \
+  --calibration-run /tmp/diff-cal-2.json --json /tmp/diff-budget.json.gz
+```
+
+Activation and reserved peaks stay unknown without compatible native observations.
+Budgets require two independent processes and repeated samples for every future
+window; first use of a shape is charged separately. `--cache-regime` records the
+selected kernel-cache state (default `uncontrolled`); controlled modes require the
+five explicit cache directories documented in the native workflow. Allocator,
+GPU UUID, software, input content and execution identity must match. The observed
+allocator envelope is not a physical OOM guarantee.
+
+Use `validate-diffusion-training` with an independent `--holdout-run` and the same
+calibrations; optional `--max-total-time-error-percent` and
+`--max-memory-underestimate-percent` return status 1 when a limit is exceeded.
+The [native diffusion record](tests/data/diffusion_native_evidence.json) includes
+SD/SDXL generation observations and twelve cached-feature training processes.
+Six training holdouts have 0.044%–3.185% total-time error and no allocator-envelope
+underestimate. Generation VAE allocated peaks were underestimated by 12.0%–13.8%,
+and reserved peaks by up to 31.6%; those failures remain visible.
+
 | Command | Purpose |
 |---|---|
 | `fakegpu doctor` | Check the installation, native libraries, PyTorch, and profiles |
@@ -1505,6 +1544,10 @@ safety. Cache conditions, first-round overhead and all samples remain in the rec
 | `fakegpu plan-serving` | Plan homogeneous or mixed-request admission, chunked prefill, and grouped shared-prefix KV storage |
 | `fakegpu benchmark-serving` | Measure scheduled mixed streaming requests and retain usage, latency, SSE events, and failures |
 | `fakegpu estimate-diffusion` | Estimate diffusion text-encode, denoise, and VAE-decode memory phases |
+| `fakegpu plan-diffusion-training` | Inspect cached-feature UNet training plans and persistent storage |
+| `fakegpu run-diffusion-training` | Run cached-feature UNet full/LoRA training on one real GPU |
+| `fakegpu estimate-diffusion-training` | Budget compatible native cached-feature training observations |
+| `fakegpu validate-diffusion-training` | Compare an independent native diffusion training holdout |
 | `fakegpu estimate-roofline` | Produce a profile-aware analytical latency interval |
 | `fakegpu plan-training` | Normalize distributed training configs and estimate rank memory |
 | `fakegpu estimate-finetune` | Estimate single-GPU full/LoRA/QLoRA training steps, time, and VRAM from framework configs |
@@ -1694,8 +1737,8 @@ environments, binary assets, and design drafts are excluded through
 - [x] Export bounded device, process, and runtime metrics with in-memory history for Prometheus
 - [x] Add modeled online-serving plans for continuous batching, mixed request lengths, chunked prefill, and grouped prefix caching
 - [x] Add modeled draft-model speculative-decoding memory and admission plans
-- [ ] Add real-GPU LLM validation for long-context and online-serving workloads
-- [ ] Add real-GPU diffusion validation plus training and DiT memory models
+- [x] Add documented real-GPU long-context and online-serving validation
+- [x] Add SD/SDXL GPU observations, cached-feature UNet full/LoRA/EMA budgets, and architecture-specific modeled DiT memory
 - [ ] Validate distributed and MoE estimates across more GPU and software stacks
 - [x] Validate LLaMA-Factory and Axolotl native runners on the documented Qwen3.5 single-GPU scenarios
 

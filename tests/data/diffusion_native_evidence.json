@@ -1,0 +1,578 @@
+{
+"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
+  "cpu_semantics": {
+    "cases": [
+      {
+        "checkpointing": false,
+        "ema_reload_maximum_error": 0.0,
+        "loss_absolute_error": 2.9802322387695312e-08,
+        "maximum_gradient_absolute_error": 6.332993507385254e-08,
+        "method": "full",
+        "reload_maximum_error": 0.0,
+        "text_time": false
+      },
+      {
+        "checkpointing": true,
+        "ema_reload_maximum_error": 0.0,
+        "loss_absolute_error": 2.9802322387695312e-08,
+        "maximum_gradient_absolute_error": 6.332993507385254e-08,
+        "method": "full",
+        "reload_maximum_error": 0.0,
+        "text_time": false
+      },
+      {
+        "checkpointing": false,
+        "ema_reload_maximum_error": 0.0,
+        "loss_absolute_error": 5.960464477539063e-08,
+        "maximum_gradient_absolute_error": 1.862645149230957e-09,
+        "method": "lora",
+        "reload_maximum_error": 0.0,
+        "text_time": false
+      },
+      {
+        "checkpointing": true,
+        "ema_reload_maximum_error": 0.0,
+        "loss_absolute_error": 5.960464477539063e-08,
+        "maximum_gradient_absolute_error": 1.862645149230957e-09,
+        "method": "lora",
+        "reload_maximum_error": 0.0,
+        "text_time": false
+      },
+      {
+        "checkpointing": false,
+        "ema_reload_maximum_error": 0.0,
+        "loss_absolute_error": 1.1920928955078125e-07,
+        "maximum_gradient_absolute_error": 5.960464477539063e-08,
+        "method": "full",
+        "reload_maximum_error": 0.0,
+        "text_time": true
+      },
+      {
+        "checkpointing": true,
+        "ema_reload_maximum_error": 0.0,
+        "loss_absolute_error": 1.1920928955078125e-07,
+        "maximum_gradient_absolute_error": 5.960464477539063e-08,
+        "method": "full",
+        "reload_maximum_error": 0.0,
+        "text_time": true
+      },
+      {
+        "checkpointing": false,
+        "ema_reload_maximum_error": 0.0,
+        "loss_absolute_error": 1.1920928955078125e-07,
+        "maximum_gradient_absolute_error": 2.0372681319713593e-09,
+        "method": "lora",
+        "reload_maximum_error": 0.0,
+        "text_time": true
+      },
+      {
+        "checkpointing": true,
+        "ema_reload_maximum_error": 0.0,
+        "loss_absolute_error": 1.1920928955078125e-07,
+        "maximum_gradient_absolute_error": 2.0372681319713593e-09,
+        "method": "lora",
+        "reload_maximum_error": 0.0,
+        "text_time": true
+      }
+    ],
+    "cuda_initialized": false,
+    "scope": "Check native UNet accumulation, checkpointing and weight reload on CPU.\n\nRequires the optional Diffusers/PEFT environment. These tiny random models test\ntraining semantics, not pretrained quality, GPU timing or allocator accuracy.\n"
+  },
+  "generation": {
+    "sd14": {
+      "all_images_finite": true,
+      "native_denoiser_evaluations": 9,
+      "passes_10_percent_underestimate_gate": false,
+      "phase_comparisons": [
+        {
+          "absolute_percentage_error": 1.5777562306562232,
+          "metric": "allocated",
+          "observed_bytes": 2168097792,
+          "phase": "text_encode",
+          "predicted_bytes": 2133890494,
+          "underprediction_percent": 1.5777562306562232
+        },
+        {
+          "absolute_percentage_error": 3.5527697558651603,
+          "metric": "reserved",
+          "observed_bytes": 2212495360,
+          "phase": "text_encode",
+          "predicted_bytes": 2133890494,
+          "underprediction_percent": 3.5527697558651603
+        },
+        {
+          "absolute_percentage_error": 5.000162932073419,
+          "metric": "allocated",
+          "observed_bytes": 2303045632,
+          "phase": "denoise",
+          "predicted_bytes": 2187889598,
+          "underprediction_percent": 5.000162932073419
+        },
+        {
+          "absolute_percentage_error": 11.811744854395812,
+          "metric": "reserved",
+          "observed_bytes": 2480930816,
+          "phase": "denoise",
+          "predicted_bytes": 2187889598,
+          "underprediction_percent": 11.811744854395812
+        },
+        {
+          "absolute_percentage_error": 12.0010437122614,
+          "metric": "allocated",
+          "observed_bytes": 2806420992,
+          "phase": "vae_decode",
+          "predicted_bytes": 2469621182,
+          "underprediction_percent": 12.0010437122614
+        },
+        {
+          "absolute_percentage_error": 28.802469996183643,
+          "metric": "reserved",
+          "observed_bytes": 3468689408,
+          "phase": "vae_decode",
+          "predicted_bytes": 2469621182,
+          "underprediction_percent": 28.802469996183643
+        }
+      ],
+      "primary_output_semantic_check": {
+        "checks": {
+          "denoise": 9,
+          "text_encode": 2,
+          "vae_decode": 1
+        },
+        "image_hash_matches_original": true,
+        "peaks_match_original": true
+      },
+      "processes": 5,
+      "requested_inference_steps": 8
+    },
+    "sdxl": {
+      "all_images_finite": true,
+      "native_denoiser_evaluations": 8,
+      "passes_10_percent_underestimate_gate": false,
+      "phase_comparisons": [
+        {
+          "absolute_percentage_error": 1.82518822396811,
+          "metric": "allocated",
+          "observed_bytes": 7069305856,
+          "phase": "text_encode",
+          "predicted_bytes": 6940277718,
+          "underprediction_percent": 1.82518822396811
+        },
+        {
+          "absolute_percentage_error": 5.796120005932555,
+          "metric": "reserved",
+          "observed_bytes": 7367294976,
+          "phase": "text_encode",
+          "predicted_bytes": 6940277718,
+          "underprediction_percent": 5.796120005932555
+        },
+        {
+          "absolute_percentage_error": 3.6514604818385434,
+          "metric": "allocated",
+          "observed_bytes": 7404093440,
+          "phase": "denoise",
+          "predicted_bytes": 7133735894,
+          "underprediction_percent": 3.6514604818385434
+        },
+        {
+          "absolute_percentage_error": 10.081143244340753,
+          "metric": "reserved",
+          "observed_bytes": 7933526016,
+          "phase": "denoise",
+          "predicted_bytes": 7133735894,
+          "underprediction_percent": 10.081143244340753
+        },
+        {
+          "absolute_percentage_error": 13.819324421384337,
+          "metric": "allocated",
+          "observed_bytes": 9615004160,
+          "phase": "vae_decode",
+          "predicted_bytes": 8286275542,
+          "underprediction_percent": 13.819324421384337
+        },
+        {
+          "absolute_percentage_error": 31.640067793506237,
+          "metric": "reserved",
+          "observed_bytes": 12121538560,
+          "phase": "vae_decode",
+          "predicted_bytes": 8286275542,
+          "underprediction_percent": 31.640067793506237
+        }
+      ],
+      "primary_output_semantic_check": {
+        "checks": {
+          "denoise": 8,
+          "text_encode": 2,
+          "vae_decode": 1
+        },
+        "image_hash_matches_original": true,
+        "peaks_match_original": true
+      },
+      "processes": 5,
+      "requested_inference_steps": 8
+    }
+  },
+  "generation_correction": "Original five-process scope strings overstated per-forward finite checks: tuple results bypassed the .sample-only check. Every original final NumPy image was checked finite and the CUDA phase peaks remain valid. Two later primary-output checks cover Tensor/tuple/ModelOutput returns; both reproduce the original peaks and image hashes. They are separate semantic checks, not replacement accuracy samples.",
+  "records": {
+    "bytes": 1005451,
+    "path": "tests/data/diffusion_native_records.json.gz",
+    "sha256": "b8786b38a443871746c215dfbf44e70e61997c998bb0cf9d86cb67d61b95b949",
+    "sources": 401
+  },
+  "retained_failures": "Initial Diffusers environment hit an incompatible optional torchao import/logger error; isolated pure-Python Diffusers environment excludes torchao, original environments unchanged. Initial tiny LoRA reload needed explicit safetensors name/format. Prototype plans and the two-update pre-EMA smoke are not calibration evidence. No valid native training process was retried or extended.",
+  "scheduler_counts": {
+    "cases": [
+      {
+        "estimated_evaluations": 9,
+        "native_evaluations": 9,
+        "requested_steps": 8,
+        "scheduler": "PNDMScheduler",
+        "skip_prk_steps": true
+      },
+      {
+        "estimated_evaluations": 1,
+        "native_evaluations": 1,
+        "requested_steps": 1,
+        "scheduler": "PNDMScheduler",
+        "skip_prk_steps": true
+      },
+      {
+        "estimated_evaluations": 17,
+        "native_evaluations": 17,
+        "requested_steps": 8,
+        "scheduler": "PNDMScheduler",
+        "skip_prk_steps": false
+      },
+      {
+        "estimated_evaluations": 8,
+        "native_evaluations": 8,
+        "requested_steps": 8,
+        "scheduler": "EulerDiscreteScheduler",
+        "skip_prk_steps": false
+      }
+    ],
+    "diffusers_version": "0.35.2"
+  },
+  "schema_version": "fakegpu.diffusion_native_evidence.v1",
+  "scope": "GPU 1 Blackwell GPU; Diffusers 0.35.2, Torch 2.9.1+cu128, Transformers 4.57.3, PEFT 0.18.1; no multi-GPU or OOM-safety claim",
+  "tests": {
+    "full_suite_before_final_group_identity_checks": {
+      "passed": 1702,
+      "seconds": 146.9,
+      "skipped": 1
+    },
+    "targeted_release_log": "/tmp/fakegpu-diffusion-20261015/release-tests.log"
+  },
+  "training": {
+    "all_saved_tensors_finite": true,
+    "allocator": "native",
+    "audit_errors": [],
+    "calibration_epochs": 3,
+    "conditions": {
+      "sd14-full": {
+        "holdouts": {
+          "holdout-1": {
+            "memory": {
+              "peak_allocated_bytes": {
+                "actual": 19519291904,
+                "exceeds_observed_max": false,
+                "observed_max": 19519291904,
+                "underprediction_percent": 0.0
+              },
+              "peak_reserved_bytes": {
+                "actual": 20042481664,
+                "exceeds_observed_max": false,
+                "observed_max": 20042481664,
+                "underprediction_percent": 0.0
+              }
+            },
+            "time": {
+              "finalization_seconds": {
+                "absolute_percentage_error": 0.38797352327763446,
+                "actual": 15.597581955138594,
+                "predicted": 15.537067466881126,
+                "underprediction_percent": 0.38797352327763446
+              },
+              "setup_seconds": {
+                "absolute_percentage_error": 10.552844818039112,
+                "actual": 7.668577098287642,
+                "predicted": 6.8593240573536605,
+                "underprediction_percent": 10.552844818039112
+              },
+              "total_seconds": {
+                "absolute_percentage_error": 3.1849504780357223,
+                "actual": 26.94337804429233,
+                "predicted": 26.08524479647167,
+                "underprediction_percent": 3.1849504780357223
+              },
+              "updates_seconds": {
+                "absolute_percentage_error": 0.3163880475894255,
+                "actual": 3.677218990866095,
+                "predicted": 3.6888532722368836,
+                "underprediction_percent": 0.0
+              }
+            }
+          },
+          "holdout-2": {
+            "memory": {
+              "peak_allocated_bytes": {
+                "actual": 19519291904,
+                "exceeds_observed_max": false,
+                "observed_max": 19519291904,
+                "underprediction_percent": 0.0
+              },
+              "peak_reserved_bytes": {
+                "actual": 20042481664,
+                "exceeds_observed_max": false,
+                "observed_max": 20042481664,
+                "underprediction_percent": 0.0
+              }
+            },
+            "time": {
+              "finalization_seconds": {
+                "absolute_percentage_error": 1.4401613686877321,
+                "actual": 15.316485361661762,
+                "predicted": 15.537067466881126,
+                "underprediction_percent": 0.0
+              },
+              "setup_seconds": {
+                "absolute_percentage_error": 3.682211423437101,
+                "actual": 7.12155476026237,
+                "predicted": 6.8593240573536605,
+                "underprediction_percent": 3.682211423437101
+              },
+              "total_seconds": {
+                "absolute_percentage_error": 0.15528937534815848,
+                "actual": 26.125815412029624,
+                "predicted": 26.08524479647167,
+                "underprediction_percent": 0.15528937534815848
+              },
+              "updates_seconds": {
+                "absolute_percentage_error": 0.02923123147671308,
+                "actual": 3.687775290105492,
+                "predicted": 3.6888532722368836,
+                "underprediction_percent": 0.0
+              }
+            }
+          }
+        },
+        "specification": {
+          "base_parameters": 859520964,
+          "calibration_plan": "/tmp/fakegpu-diffusion-20261015/training/release-fixture/sd14-full/calibration-plan.json",
+          "ema_decay": 0.9,
+          "static_storage_lower_bound_bytes": 17190419280,
+          "target_plan": "/tmp/fakegpu-diffusion-20261015/training/release-fixture/sd14-full/target-plan.json",
+          "trainable_parameters": 859520964
+        }
+      },
+      "sd14-lora": {
+        "holdouts": {
+          "holdout-1": {
+            "memory": {
+              "peak_allocated_bytes": {
+                "actual": 2317425152,
+                "exceeds_observed_max": false,
+                "observed_max": 2317425152,
+                "underprediction_percent": 0.0
+              },
+              "peak_reserved_bytes": {
+                "actual": 2415919104,
+                "exceeds_observed_max": false,
+                "observed_max": 2415919104,
+                "underprediction_percent": 0.0
+              }
+            },
+            "time": {
+              "finalization_seconds": {
+                "absolute_percentage_error": 1.0516638337465323,
+                "actual": 0.030078161973506212,
+                "predicted": 0.029761840822175145,
+                "underprediction_percent": 1.0516638337465323
+              },
+              "setup_seconds": {
+                "absolute_percentage_error": 1.1473789381170307,
+                "actual": 7.762864937074482,
+                "predicted": 7.851934414356947,
+                "underprediction_percent": 0.0
+              },
+              "total_seconds": {
+                "absolute_percentage_error": 0.7851858875431175,
+                "actual": 11.10467138607055,
+                "predicted": 11.191863698652014,
+                "underprediction_percent": 0.0
+              },
+              "updates_seconds": {
+                "absolute_percentage_error": 0.04713078532997885,
+                "actual": 3.311728287022561,
+                "predicted": 3.310167443472892,
+                "underprediction_percent": 0.04713078532997885
+              }
+            }
+          },
+          "holdout-2": {
+            "memory": {
+              "peak_allocated_bytes": {
+                "actual": 2317425152,
+                "exceeds_observed_max": false,
+                "observed_max": 2317425152,
+                "underprediction_percent": 0.0
+              },
+              "peak_reserved_bytes": {
+                "actual": 2415919104,
+                "exceeds_observed_max": false,
+                "observed_max": 2415919104,
+                "underprediction_percent": 0.0
+              }
+            },
+            "time": {
+              "finalization_seconds": {
+                "absolute_percentage_error": 1.1871773238188978,
+                "actual": 0.030119411647319794,
+                "predicted": 0.029761840822175145,
+                "underprediction_percent": 1.1871773238188978
+              },
+              "setup_seconds": {
+                "absolute_percentage_error": 1.820357486129327,
+                "actual": 7.711556517984718,
+                "predicted": 7.851934414356947,
+                "underprediction_percent": 0.0
+              },
+              "total_seconds": {
+                "absolute_percentage_error": 1.391831123192982,
+                "actual": 11.038230175618082,
+                "predicted": 11.191863698652014,
+                "underprediction_percent": 0.0
+              },
+              "updates_seconds": {
+                "absolute_percentage_error": 0.4129523275226962,
+                "actual": 3.2965542459860444,
+                "predicted": 3.310167443472892,
+                "underprediction_percent": 0.0
+              }
+            }
+          }
+        },
+        "specification": {
+          "base_parameters": 859520964,
+          "calibration_plan": "/tmp/fakegpu-diffusion-20261015/training/release-fixture/sd14-lora/calibration-plan.json",
+          "ema_decay": null,
+          "static_storage_lower_bound_bytes": 1731796872,
+          "target_plan": "/tmp/fakegpu-diffusion-20261015/training/release-fixture/sd14-lora/target-plan.json",
+          "trainable_parameters": 797184
+        }
+      },
+      "sdxl-lora": {
+        "holdouts": {
+          "holdout-1": {
+            "memory": {
+              "peak_allocated_bytes": {
+                "actual": 6803586560,
+                "exceeds_observed_max": false,
+                "observed_max": 6803586560,
+                "underprediction_percent": 0.0
+              },
+              "peak_reserved_bytes": {
+                "actual": 7514095616,
+                "exceeds_observed_max": false,
+                "observed_max": 7514095616,
+                "underprediction_percent": 0.0
+              }
+            },
+            "time": {
+              "finalization_seconds": {
+                "absolute_percentage_error": 0.09266667792942711,
+                "actual": 0.13167073810473084,
+                "predicted": 0.13154872320592403,
+                "underprediction_percent": 0.09266667792942711
+              },
+              "setup_seconds": {
+                "absolute_percentage_error": 0.6886016656593131,
+                "actual": 14.59024874214083,
+                "predicted": 14.48978004627861,
+                "underprediction_percent": 0.6886016656593131
+              },
+              "total_seconds": {
+                "absolute_percentage_error": 0.7115367771716626,
+                "actual": 25.35756897320971,
+                "predicted": 25.17714054416865,
+                "underprediction_percent": 0.7115367771716626
+              },
+              "updates_seconds": {
+                "absolute_percentage_error": 0.7506614272390952,
+                "actual": 10.635649492964149,
+                "predicted": 10.555811774684116,
+                "underprediction_percent": 0.7506614272390952
+              }
+            }
+          },
+          "holdout-2": {
+            "memory": {
+              "peak_allocated_bytes": {
+                "actual": 6803586560,
+                "exceeds_observed_max": false,
+                "observed_max": 6803586560,
+                "underprediction_percent": 0.0
+              },
+              "peak_reserved_bytes": {
+                "actual": 7514095616,
+                "exceeds_observed_max": false,
+                "observed_max": 7514095616,
+                "underprediction_percent": 0.0
+              }
+            },
+            "time": {
+              "finalization_seconds": {
+                "absolute_percentage_error": 1.4607012549078602,
+                "actual": 0.12965485313907266,
+                "predicted": 0.13154872320592403,
+                "underprediction_percent": 0.0
+              },
+              "setup_seconds": {
+                "absolute_percentage_error": 0.6466099055488947,
+                "actual": 14.584082166198641,
+                "predicted": 14.48978004627861,
+                "underprediction_percent": 0.6466099055488947
+              },
+              "total_seconds": {
+                "absolute_percentage_error": 0.04430674115664867,
+                "actual": 25.16599031398073,
+                "predicted": 25.17714054416865,
+                "underprediction_percent": 0.0
+              },
+              "updates_seconds": {
+                "absolute_percentage_error": 0.9907766021531197,
+                "actual": 10.452253294643015,
+                "predicted": 10.555811774684116,
+                "underprediction_percent": 0.0
+              }
+            }
+          }
+        },
+        "specification": {
+          "base_parameters": 2567463684,
+          "calibration_plan": "/tmp/fakegpu-diffusion-20261015/training/release-fixture/sdxl-lora/calibration-plan.json",
+          "ema_decay": null,
+          "static_storage_lower_bound_bytes": 5227824648,
+          "target_plan": "/tmp/fakegpu-diffusion-20261015/training/release-fixture/sdxl-lora/target-plan.json",
+          "trainable_parameters": 5806080
+        }
+      }
+    },
+    "counts": {
+      "microsteps": 144,
+      "processes": 12,
+      "rows": 240,
+      "updates": 96
+    },
+    "first_window_shape_costs_separated": true,
+    "full_ema_differs_from_final_trained_weights": true,
+    "gradient_accumulation_steps": 2,
+    "gradient_checkpointing": true,
+    "holdout_epochs": 5,
+    "input_scope": "Prepared random FP32 latent/noise/text features; VAE/text encoders and raw-image preparation excluded.",
+    "kernel_cache_mode": "empty_kernel_cache",
+    "microbatch": 2,
+    "post_observation_change": "CLI-only optional acceptance thresholds were added after training. Producer/planner code is unchanged; native source snapshots and the CLI diff are archived.",
+    "rows_per_dataset": 5
+  }
+}

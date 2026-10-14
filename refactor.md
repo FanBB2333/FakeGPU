@@ -13,11 +13,33 @@
 - [x] 大数据规划的重复扫描和存储成本，保留历史报告兼容与纯标准库离线预算。
 - [x] 更多模型、形状和重复 holdout；可用 GPU 验证与缺失硬件条件分开记录。
 - [x] R24 长上下文及 serving 的真实 GPU 验证。
-- [ ] R25 diffusion generation 真测、训练估计及独立观测。
+- [x] R25 diffusion generation 真测、训练估计及独立观测（明确限定 SD/SDXL 与缓存特征 U-Net）。
 - [ ] R26 distributed/MoE 验证与版本化硬件矩阵；真实多机需要实际远端设备。
 - [ ] R23 原生数值扩展需求清单、实验产物与全仓/wheel 回归。
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### R25 generation 与缓存特征训练
+
+Diffusers 0.35.2 / Torch 2.9.1+cu128 / Transformers 4.57.3 / PEFT 0.18.1，GPU 1。SD 1.4 512²、SDXL 1024² 各五个独立 generation 进程，BF16、SDPA、CFG 7.5、请求 8 inference steps。三阶段 allocated 误差分别为 SD **1.578% / 5.000% / 12.001%**，SDXL **1.825% / 3.651% / 13.819%**；VAE reserved 最多低估 **28.802% / 31.640%**。10% 低估门槛明确未通过，不事后拟合系数或替换原始样本。
+
+原观测脚本的 `.sample` 检查漏掉 tuple 返回值，原十次最终 NumPy 图像均已验证有限，CUDA 峰值仍有效；原 scope 文案不能作为逐 forward 有限性的证明。新增可复用 `tests/native/diffusion_generation.py` 正确识别 Tensor/tuple/ModelOutput，再分别补一次语义检查，所有 primary outputs 有限，峰值和图像 SHA 与原矩阵完全相同。补充检查没有替代原五次精度样本。初始可选 torchao 导入不兼容，使用隔离环境排除该可选包；未改动原有环境。
+
+新增 `plan/run/estimate/validate-diffusion-training` 与公开 Python API。输入为明确的 FP32 latent/noise/text-feature safetensors 和 I64 timesteps，支持标准四通道 UNet、SDXL text_time conditioning、full/LoRA、非重入 GC、可选 FP32 EMA、native AdamW。参数/梯度/optimizer/EMA 精确持久存储是下界，activation/reserved 不用常数补齐；总时间与显存包络要求匹配 GPU UUID、软件、权重/数据 SHA、allocator、缓存与执行实现的两个独立原生进程。按真实尾批和 accumulation 窗口计数，首次窗口形状开销单独建组，缺少重复覆盖则不出总预算。
+
+CPU 八个真实 tiny UNet 场景覆盖 full/LoRA × 普通/text_time × GC 关闭/开启；尾批梯度与独立合并 batch 最大差 **6.33e-8**，普通权重和 EMA 导出/重载输出差均为 **0**，EMA 导出未改写训练参数。初次 LoRA 重载缺少显式 safetensors 格式的失败保留，补齐格式后通过。纯标准库 API、输入文件删除后的压缩报告离线预算、CLI 误差门槛及拒绝覆盖旧原生报告均通过。
+
+正式矩阵为五条随机缓存特征、microbatch 2/GAS 2、GC，三个条件：**SD 1.4 full＋EMA 0.9、SD 1.4 LoRA r4、SDXL LoRA r4**。每条件两次 3-epoch 校准，先封存 5-epoch 预测，再运行两次独立 holdout。共 **12 processes / 96 updates / 144 microsteps / 240 行消费**。五个指定 kernel cache 每进程新建为空，OMP/MKL=1；不宣称 OS/data cache 为空。所有正式训练成功，无自动重试、误差选择或延长。
+
+| 条件 | 两次 total-time APE | holdout allocated / reserved GiB |
+|---|---:|---:|
+| SD 1.4 full＋EMA | 3.185% / 0.155% | 18.179 / 18.666 |
+| SD 1.4 LoRA | 0.785% / 1.392% | 2.158 / 2.250 |
+| SDXL LoRA | 0.712% / 0.044% | 6.336 / 6.998 |
+
+六次 allocator 峰值均未超过校准包络。Full＋EMA 最终保存及 SHA 校验约 **15.5 秒**，已计入总时间；setup 分项最大误差 **10.55%** 同样保留，不能用总误差掩盖。独立审计重建输入字节 SHA、逐轮消费、时间守恒、进程等权预算和预封存，逐块扫描全部导出张量有限，EMA 与最终训练权重不同，结果 **12 processes / errors=[]**。102 个生产模块在正式矩阵保持冻结并保存源码快照。随后仅为 CLI 添加可选验收阈值，生产训练与计划核心不变，diff 归档。
+
+阶段全仓 **1702 passed / 1 skipped，146.90 秒**；最终定向回归 **77 passed**，Ruff/diff check 通过。预算仅覆盖缓存特征 denoiser，排除原始图像准备和 VAE/text-encoder 训练；实测包络不是物理 OOM 或任意长跑保证。证据及 401 份来源见 [diffusion](tests/data/diffusion_native_evidence.json)和[审阅记录](tests/data/diffusion_native_records.json.gz)，原始资料 `/tmp/fakegpu-diffusion-20261015/`。
 
 ### Diffusion scheduler 调用数（独立 bug 修复）
 
