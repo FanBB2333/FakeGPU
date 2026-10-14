@@ -1315,7 +1315,10 @@ cache conditions and the remaining coverage limits.
 The [sampler and transfer validation record](tests/data/finetune_transfer_validation_evidence.json)
 adds 18 Qwen3.5-0.8B native processes on Blackwell GPU: three framework tests
 changing 25 to 73 training rows, plus random sampling with periodic eval/save.
-Each condition has one independent holdout. These measurements do not establish
+Each condition has one independent holdout. The [Qwen3.5-2B record](tests/data/finetune_qwen2b_evidence.json)
+adds 512/1024-token LoRA and 512-token NF4 QLoRA with nonreentrant checkpointing:
+two calibration processes and two independent holdouts per condition, all on GPU 1.
+The six total-time errors range from 0.054% to 1.578%; these measurements do not establish
 general accuracy or OOM safety; phase errors and rejected coverage are retained.
 
 Large reports and plans can use `.json.gz` with the same `--json` and input-path

@@ -11,13 +11,29 @@
 - [x] 三个框架的 packing 数据边界、真实 sampler 计数、消费核验及独立时间/显存预算。
 - [x] 长度分组与原生评估共存：独立采样随机流、评估输入核验及事件预算。
 - [x] 大数据规划的重复扫描和存储成本，保留历史报告兼容与纯标准库离线预算。
-- [ ] 更多模型、形状和重复 holdout；可用 GPU 验证与缺失硬件条件分开记录。
+- [x] 更多模型、形状和重复 holdout；可用 GPU 验证与缺失硬件条件分开记录。
 - [ ] R24 长上下文及 serving 的真实 GPU 验证。
 - [ ] R25 diffusion generation 真测、训练估计及独立观测。
 - [ ] R26 distributed/MoE 验证与版本化硬件矩阵；真实多机需要实际远端设备。
 - [ ] R23 原生数值扩展需求清单、实验产物与全仓/wheel 回归。
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### Qwen3.5-2B 与重复独立 holdout
+
+本地 `Qwen3.5-2B-Base` 在 CPU 导出独立 text checkpoint，原模型保持只读；**1,881,825,088** 个 base 参数，导出前后 logits 精确相同，未初始化 CUDA。HF Trainer/PEFT 增加 512/1024-token BF16 LoRA 与 512-token NF4 double-quant QLoRA，均为 **417,792** 个 FP32 trainable 参数、非重入 GC、microbatch 2、GAS 2、8 条固定形状顺序合成数据。CPU 先确认 16-update 校准覆盖 24-update 目标全部 18 个成本组，模型 forward 未参与选择。
+
+每条件两次独立 16-update 校准、先封存预测后两次独立 24-update holdout；共 **12 个原生进程 / 240 updates / 480 microsteps / 960 行消费 / 12 次根保存**。GPU 1、五个 kernel cache 每进程新建为空、OMP/MKL=1；生产 Python 在整个矩阵保持冻结。没有训练失败、按误差延长或重跑。
+
+| 条件 | 两次 raw 总时间 APE |
+|---|---:|
+| 2B LoRA / 512 / GC | 0.649% / 0.607% |
+| 2B LoRA / 1024 / GC | 1.288% / 0.239% |
+| 2B NF4 QLoRA / 512 / GC | 0.054% / 1.578% |
+
+独立标准库审计重建逐批顺序、原始 int64 输入 hash、消费前缀、时间守恒、成本分组/进程等权均值及显存包络；核对预测早于两次 holdout，以及 12 份 adapter 各 24 个有限 FP32 张量、12 个非零 LoRA B。结果 **12 processes / errors=[]**。保留审计开发的旧 25 行断言及 raw config 缺少显式 eval_strategy 的失败，改用本次已声明 8 行与实际 native TrainingArguments 默认值后通过；未修改任何训练报告或预测。
+
+这是本机、这三种配置和同一数据条件的重复观测；其他 GPU、多机与更大模型不由本阶段推断。详细峰值、所有分项误差、原始 SHA 及脚本见 [2B 证据](tests/data/finetune_qwen2b_evidence.json)和[压缩审阅记录](tests/data/finetune_qwen2b_records.json.gz)，原始资料 `/tmp/fakegpu-qwen2b-20261015/`。同时验证了上一阶段复用 dataset profile 的真实训练路径。
 
 ### 大数据规划与压缩报告
 

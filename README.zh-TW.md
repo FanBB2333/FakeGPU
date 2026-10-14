@@ -1169,6 +1169,10 @@ processed JSONL：三個等長整數陣列、二值 attention mask，padding 前
 eval/save 組合。每組僅一次獨立 holdout，保留分階段誤差與覆蓋不足記錄，不能視為通用
 精度或 OOM 安全保證。
 
+[Qwen3.5-2B 驗收](tests/data/finetune_qwen2b_evidence.json) 增加 512/1024-token LoRA
+與 512-token NF4 QLoRA，均啟用非重入梯度檢查點；每條件兩次校準、兩次獨立 holdout。
+GPU 1 上六次總時間誤差為 0.054%–1.578%，不推廣為其他資料或裝置的精度保證。
+
 大型報告與計畫可透過原有 `--json` 與輸入路徑選項使用 `.json.gz`。
 壓縮採用串流寫入、原子替換與可重複位元組；一般 JSON 與 stdout 格式保持相容。
 原生規劃器重用剛完成的全量資料掃描，仍對每個計畫批次獨立核驗兩次。

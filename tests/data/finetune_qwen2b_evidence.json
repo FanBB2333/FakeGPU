@@ -1,0 +1,311 @@
+{
+  "audit": {
+    "checks": {
+      "production_estimators_not_called": true,
+      "torch_not_imported": true
+    },
+    "errors": [],
+    "initial_failures": "Audit retained a 25-row fixture assertion and then assumed eval_strategy was explicit. Replaced with declared 8 rows and recorded native default. No training/report/forecast changed or rerun.",
+    "source_unchanged": true
+  },
+  "base_parameters": 1881825088,
+  "calibration_updates": 16,
+  "cases": {
+    "lora-1024-gc": {
+      "holdouts": {
+        "holdout-1": {
+          "memory": {
+            "peak_allocated_bytes": {
+              "actual": 10108864000,
+              "exceeds_observed_max": false,
+              "observed_max": 10108864000,
+              "observed_min": 10108864000,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            },
+            "peak_reserved_bytes": {
+              "actual": 11492392960,
+              "exceeds_observed_max": false,
+              "observed_max": 11492392960,
+              "observed_min": 11492392960,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            }
+          },
+          "time": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.5187788971274616,
+              "actual": 0.26717300387099385,
+              "predicted": 0.2685590410338981,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 1.2909590714513604,
+              "actual": 70.63119206391275,
+              "predicted": 71.54301184513606,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 1.288049191985075,
+              "actual": 70.89836506778374,
+              "predicted": 71.81157088616996,
+              "underprediction_percent": 0.0
+            }
+          }
+        },
+        "holdout-2": {
+          "memory": {
+            "peak_allocated_bytes": {
+              "actual": 10108864000,
+              "exceeds_observed_max": false,
+              "observed_max": 10108864000,
+              "observed_min": 10108864000,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            },
+            "peak_reserved_bytes": {
+              "actual": 11492392960,
+              "exceeds_observed_max": false,
+              "observed_max": 11492392960,
+              "observed_min": 11492392960,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            }
+          },
+          "time": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 5.2784926755579935,
+              "actual": 0.2835248811170459,
+              "predicted": 0.2685590410338981,
+              "underprediction_percent": 5.2784926755579935
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.21880384051816645,
+              "actual": 71.69989396678284,
+              "predicted": 71.54301184513606,
+              "underprediction_percent": 0.21880384051816645
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.23873270328134386,
+              "actual": 71.98341884789988,
+              "predicted": 71.81157088616996,
+              "underprediction_percent": 0.23873270328134386
+            }
+          }
+        }
+      },
+      "specification": {
+        "accumulation": 2,
+        "config": "/tmp/fakegpu-qwen2b-20261015/fixture/lora-1024-gc/config.json",
+        "dataset_sha256": "f2fd19c1028c635f6c60e12e0c82f3607998f5472d6255a3c94b3c9cdc9a0db0",
+        "microbatch": 2,
+        "quantized": false,
+        "rows": 8,
+        "sequence_length": 1024
+      }
+    },
+    "lora-512-gc": {
+      "holdouts": {
+        "holdout-1": {
+          "memory": {
+            "peak_allocated_bytes": {
+              "actual": 6948136448,
+              "exceeds_observed_max": false,
+              "observed_max": 6948136448,
+              "observed_min": 6948136448,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            },
+            "peak_reserved_bytes": {
+              "actual": 7610564608,
+              "exceeds_observed_max": false,
+              "observed_max": 7610564608,
+              "observed_min": 7610564608,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            }
+          },
+          "time": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.21061660935932477,
+              "actual": 0.15961664728820324,
+              "predicted": 0.15995282645869469,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.6515745219388582,
+              "actual": 54.508372966665775,
+              "predicted": 54.15321029609157,
+              "underprediction_percent": 0.6515745219388582
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.6490571427802002,
+              "actual": 54.66798961395398,
+              "predicted": 54.31316312255027,
+              "underprediction_percent": 0.6490571427802002
+            }
+          }
+        },
+        "holdout-2": {
+          "memory": {
+            "peak_allocated_bytes": {
+              "actual": 6948136448,
+              "exceeds_observed_max": false,
+              "observed_max": 6948136448,
+              "observed_min": 6948136448,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            },
+            "peak_reserved_bytes": {
+              "actual": 7610564608,
+              "exceeds_observed_max": false,
+              "observed_max": 7610564608,
+              "observed_min": 7610564608,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            }
+          },
+          "time": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.9854888785744751,
+              "actual": 0.1583918919786811,
+              "predicted": 0.15995282645869469,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.61172307370629,
+              "actual": 54.48651689197868,
+              "predicted": 54.15321029609157,
+              "underprediction_percent": 0.61172307370629
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.6070934489408177,
+              "actual": 54.64490878395736,
+              "predicted": 54.31316312255027,
+              "underprediction_percent": 0.6070934489408177
+            }
+          }
+        }
+      },
+      "specification": {
+        "accumulation": 2,
+        "config": "/tmp/fakegpu-qwen2b-20261015/fixture/lora-512-gc/config.json",
+        "dataset_sha256": "64a977b8e396a195b8c1bf92d4721850a5e22dbe3f55c42d85983c1f429b6ecf",
+        "microbatch": 2,
+        "quantized": false,
+        "rows": 8,
+        "sequence_length": 512
+      }
+    },
+    "qlora-512-gc": {
+      "holdouts": {
+        "holdout-1": {
+          "memory": {
+            "peak_allocated_bytes": {
+              "actual": 7047502336,
+              "exceeds_observed_max": false,
+              "observed_max": 7047502336,
+              "observed_min": 7047502336,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            },
+            "peak_reserved_bytes": {
+              "actual": 7927234560,
+              "exceeds_observed_max": false,
+              "observed_max": 7927234560,
+              "observed_min": 7927234560,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            }
+          },
+          "time": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.3557166191209864,
+              "actual": 0.16103153815492988,
+              "predicted": 0.16160435409817311,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.053391361086399365,
+              "actual": 57.58482836885378,
+              "predicted": 57.615573692499176,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.05423443280447794,
+              "actual": 57.74585990700871,
+              "predicted": 57.77717804659734,
+              "underprediction_percent": 0.0
+            }
+          }
+        },
+        "holdout-2": {
+          "memory": {
+            "peak_allocated_bytes": {
+              "actual": 7047502336,
+              "exceeds_observed_max": false,
+              "observed_max": 7047502336,
+              "observed_min": 7047502336,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            },
+            "peak_reserved_bytes": {
+              "actual": 7927234560,
+              "exceeds_observed_max": false,
+              "observed_max": 7927234560,
+              "observed_min": 7927234560,
+              "underprediction_percent": 0.0,
+              "within_observed_envelope": true
+            }
+          },
+          "time": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.6439582169440645,
+              "actual": 0.16057034814730287,
+              "predicted": 0.16160435409817311,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 1.583720402079967,
+              "actual": 58.54272680077702,
+              "predicted": 57.615573692499176,
+              "underprediction_percent": 1.583720402079967
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 1.5776270623735298,
+              "actual": 58.70329714892432,
+              "predicted": 57.77717804659734,
+              "underprediction_percent": 1.5776270623735298
+            }
+          }
+        }
+      },
+      "specification": {
+        "accumulation": 2,
+        "config": "/tmp/fakegpu-qwen2b-20261015/fixture/qlora-512-gc/config.json",
+        "dataset_sha256": "64a977b8e396a195b8c1bf92d4721850a5e22dbe3f55c42d85983c1f429b6ecf",
+        "microbatch": 2,
+        "quantized": true,
+        "rows": 8,
+        "sequence_length": 512
+      }
+    }
+  },
+  "holdout_updates": 24,
+  "records": {
+    "bytes": 676828,
+    "path": "tests/data/finetune_qwen2b_records.json.gz",
+    "sha256": "8265c5708aa31b2d3dcfded834442c9450673e0398a56a5085c9c267b4fa2c42",
+    "sources": 152
+  },
+  "schema_version": "fakegpu.finetune_qwen2b_evidence.v1",
+  "scope": "Three predeclared HF/PEFT configurations on GPU 1; two independent calibrations and two holdouts each; same fixed-shape sequential synthetic dataset per condition; not arbitrary data/GPU accuracy",
+  "total_counts": {
+    "microsteps": 480,
+    "optimizer_updates": 240,
+    "physical_rows": 960,
+    "processes": 12,
+    "root_saves": 12
+  },
+  "trainable_parameters": 417792
+}
