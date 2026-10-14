@@ -194,6 +194,8 @@ def run_finetuning(
     profile_id: str,
     warmup_steps: int = 2,
     cache_regime: str = "uncontrolled",
+    planning_epochs: float | None = None,
+    planning_max_steps: int | None = None,
 ) -> dict[str, Any]:
     """Run native SFT; return evidence only after successful finite GPU updates.
 
@@ -201,6 +203,22 @@ def run_finetuning(
     the configured training duration; warmup_steps excludes initial updates only
     from steady timing samples, independently of the native LR warmup setting.
     """
+    if planning_epochs is not None and planning_max_steps is not None:
+        raise ValueError("provide only one planning duration")
+    if planning_epochs is not None and (
+        isinstance(planning_epochs, bool)
+        or not isinstance(planning_epochs, (int, float))
+        or not math.isfinite(planning_epochs)
+        or planning_epochs <= 0
+    ):
+        raise ValueError("planning_epochs must be finite and positive")
+    if planning_max_steps is not None and (
+        isinstance(planning_max_steps, bool)
+        or not isinstance(planning_max_steps, int)
+        or planning_max_steps < 1
+    ):
+        raise ValueError("planning_max_steps must be a positive integer")
+    planning = planning_epochs is not None or planning_max_steps is not None
     started = time.perf_counter()
     cache_evidence = capture_cache_regime(cache_regime)
     run_identity = {
@@ -212,6 +230,10 @@ def run_finetuning(
     raw, config, model_config, model_dir = _prepare_config(
         path, framework, warmup_steps
     )
+    if planning:
+        from .finetune_pipeline_plan import _validate_native_schedule_options
+
+        _validate_native_schedule_options({"native_config": raw})
     _reject_simulated_cuda_environment()
     if not _RUN_LOCK.acquire(blocking=False):
         raise RuntimeError(
@@ -247,6 +269,10 @@ def run_finetuning(
         config["batch_observation_version"] = "fakegpu.finetune_batches.v1"
         config["event_observation_version"] = "fakegpu.finetune_events.v1"
         config["timeline_observation_version"] = TIMELINE_SCHEMA
+        if planning:
+            from ._finetune_sampler import SCHEMA_VERSION as SAMPLER_SCHEMA
+
+            config["sampler_observation_version"] = SAMPLER_SCHEMA
         state = {}
 
         def inspect_trainer(trainer):
@@ -263,6 +289,36 @@ def run_finetuning(
             state["dataset"]["native_training_split_verified"] = True
             config["num_samples"] = state["dataset"]["training_inputs"]["num_samples"]
             config["data_signature"] = state["dataset"]["provenance"]["content_sha256"]
+            if planning:
+                from ._finetune_sampler import NativeBatchMatcher, plan_native_batches
+
+                args = trainer.args
+                per_epoch = math.ceil(
+                    math.ceil(len(dataset) / args.per_device_train_batch_size)
+                    / args.gradient_accumulation_steps
+                )
+                native_steps = (
+                    args.max_steps
+                    if args.max_steps > 0
+                    else math.ceil(args.num_train_epochs * per_epoch)
+                )
+                target_steps = (
+                    planning_max_steps
+                    if planning_max_steps is not None
+                    else math.ceil(planning_epochs * per_epoch)
+                )
+                state["sampling_plan"] = plan_native_batches(
+                    trainer,
+                    max_steps=max(native_steps, target_steps),
+                    framework=framework,
+                    sequence_length=config["sequence_length"],
+                )
+                if (
+                    state["sampling_plan"]["dataset"]["content_sha256"]
+                    != config["data_signature"]
+                ):
+                    raise ValueError("CPU sampling plan differs from native dataset")
+                observer.batch_matcher = NativeBatchMatcher(state["sampling_plan"])
 
         def inspect_started_trainer(trainer):
             state["config"], state["model"] = _actual_training_config(trainer, config)
@@ -416,6 +472,10 @@ def run_finetuning(
                 "Event metadata costs remain in raw wall time and are excluded from net event seconds. Save manifests describe present files, not physical disk writes or durability.",
             ],
         }
+        if planning:
+            observation["sampling_verification"] = observer.batch_matcher.finish(
+                expected_updates=len(observer.updates)
+            )
         validate_batch_profile(observation)
         validate_event_profile(observation, timing=timing)
         observation["timeline"] = build_native_timeline(
@@ -467,6 +527,7 @@ def run_finetuning(
             "config_path": str(path),
             "schedule": schedule,
             "workload": dict(observation["workload"]),
+            **({"sampling_plan": state["sampling_plan"]} if planning else {}),
         }
     finally:
         _RUN_LOCK.release()

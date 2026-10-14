@@ -1,0 +1,2473 @@
+{
+"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
+  "schema_version": "fakegpu.finetune_transfer_validation_evidence.v1",
+  "purpose": "Path-redacted review evidence only. Substituted paths change bound identities; these records must not be used as runnable reports or calibration inputs.",
+  "archived_at_utc": "2026-10-14T08:40:48.133213+00:00",
+  "experiment": "Qwen3.5-0.8B text LoRA on Blackwell GPU; native random sampling, dataset-scale component transfer, and periodic native eval/save.",
+  "independent_native_processes": 18,
+  "source_python_modules_frozen": 94,
+  "pre_native_pytest": {
+    "result": "1485 passed, 1 skipped in 139.65s",
+    "source_manifest": "<validation>/pre-native-source.json",
+    "source_manifest_sha256": "45f05591f23dc0e9edf85e1e3bbf2c4f33731e295467b142aca902f15debfd90",
+    "provenance": "Original pre-native source manifest; no transcript log was reconstructed."
+  },
+  "cohorts": {
+    "huggingface": {
+      "status": "complete",
+      "native_processes": 5,
+      "summary_path": "<validation>/validation/huggingface/summary.json",
+      "specification": {
+        "holdout_steps": 39,
+        "source_rows": 25,
+        "source_steps": 30,
+        "target_rows": 73,
+        "target_steps": 6,
+        "warmup_steps": 2
+      },
+      "policy": {
+        "accuracy_based_reruns": false,
+        "automatic_retries": false,
+        "cache_regime": "empty_kernel_cache",
+        "calibrations_per_dataset": 2,
+        "gpu": "CUDA_VISIBLE_DEVICES=1",
+        "holdouts": 1,
+        "timeout_seconds": 900
+      },
+      "report_roles": {
+        "holdout": "<validation>/validation/huggingface/holdout/run.json",
+        "setup": [
+          "<validation>/validation/huggingface/target-workspace/attempts/calibration-1/attempt-1/run.json",
+          "<validation>/validation/huggingface/target-workspace/attempts/calibration-2/attempt-1/run.json"
+        ],
+        "source": [
+          "<validation>/validation/huggingface/source-workspace/attempts/calibration-1/attempt-1/run.json",
+          "<validation>/validation/huggingface/source-workspace/attempts/calibration-2/attempt-1/run.json"
+        ]
+      },
+      "run_identities": [
+        {
+          "pid": 4023750,
+          "started_at_utc": "2026-10-14T08:06:03.993137+00:00",
+          "uuid": "efaf2346-cb64-4aa8-9586-5eb656d2ff5f"
+        },
+        {
+          "pid": 4024283,
+          "started_at_utc": "2026-10-14T08:06:35.451588+00:00",
+          "uuid": "223c7ab6-a6d4-4add-92b0-403589d42d6a"
+        },
+        {
+          "pid": 4024870,
+          "started_at_utc": "2026-10-14T08:07:08.594137+00:00",
+          "uuid": "103f54d5-0b4a-4c5a-a04b-b200efd01c18"
+        },
+        {
+          "pid": 4025075,
+          "started_at_utc": "2026-10-14T08:07:23.762835+00:00",
+          "uuid": "3099861e-ea54-4552-9f2d-0453c817c9c7"
+        },
+        {
+          "pid": 4025417,
+          "started_at_utc": "2026-10-14T08:07:39.829539+00:00",
+          "uuid": "a55fbdeb-b3b0-424c-a57e-7c720cfacc75"
+        }
+      ],
+      "execution_boundaries": [
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "huggingface",
+            "--config",
+            "<validation>/validation/huggingface/source-workspace/attempts/calibration-1/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/huggingface/source-workspace/attempts/calibration-1/attempt-1/run.json",
+            "--planning-max-steps",
+            "30"
+          ],
+          "finished_at_utc": "2026-10-14T08:06:34.436078+00:00",
+          "pid": 4023750,
+          "process_start_ticks": "311142142",
+          "process_wall_seconds": 30.515302954707295,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:06:03.920789+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "huggingface",
+            "--config",
+            "<validation>/validation/huggingface/source-workspace/attempts/calibration-2/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/huggingface/source-workspace/attempts/calibration-2/attempt-1/run.json",
+            "--planning-max-steps",
+            "30"
+          ],
+          "finished_at_utc": "2026-10-14T08:07:05.845439+00:00",
+          "pid": 4024283,
+          "process_start_ticks": "311145288",
+          "process_wall_seconds": 30.465479001868516,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:06:35.379977+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "huggingface",
+            "--config",
+            "<validation>/validation/huggingface/target-workspace/attempts/calibration-1/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/huggingface/target-workspace/attempts/calibration-1/attempt-1/run.json",
+            "--planning-max-steps",
+            "39"
+          ],
+          "finished_at_utc": "2026-10-14T08:07:22.764596+00:00",
+          "pid": 4024870,
+          "process_start_ticks": "311148602",
+          "process_wall_seconds": 14.240880014374852,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:07:08.523732+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "huggingface",
+            "--config",
+            "<validation>/validation/huggingface/target-workspace/attempts/calibration-2/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/huggingface/target-workspace/attempts/calibration-2/attempt-1/run.json",
+            "--planning-max-steps",
+            "39"
+          ],
+          "finished_at_utc": "2026-10-14T08:07:38.034619+00:00",
+          "pid": 4025075,
+          "process_start_ticks": "311150119",
+          "process_wall_seconds": 14.34296554280445,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:07:23.691671+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "huggingface",
+            "--config",
+            "<validation>/validation/huggingface/holdout/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/huggingface/holdout/run.json",
+            "--planning-max-steps",
+            "39"
+          ],
+          "finished_at_utc": "2026-10-14T08:08:18.135665+00:00",
+          "pid": 4025417,
+          "process_start_ticks": "311151726",
+          "process_wall_seconds": 38.37755703832954,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:07:39.758123+00:00",
+          "status": "succeeded"
+        }
+      ],
+      "forecast_seal": {
+        "artifacts": {
+          "budget.json": {
+            "bytes": 419551,
+            "sha256": "70af00b758f9ce50f3cbf4307ea6b0ab8a49c2978a9622c47c84316802f387e9"
+          },
+          "coverage.json": {
+            "bytes": 44666,
+            "sha256": "81b510c66593a078640ac675ccbf4ccdc8ccf7118365f38c0cb22362be79e5f3"
+          },
+          "plan.json": {
+            "bytes": 178101,
+            "sha256": "395e25fa43c56f6e57c265b25c95c3a0e13caeb3acc638d76ca91bee91250288"
+          },
+          "request.json": {
+            "bytes": 13627,
+            "sha256": "2dadd206e3a4d8a6854d253cc57d3a2141aba215c00b9ff5ec2a894981cb6b14"
+          },
+          "result.json": {
+            "bytes": 493891,
+            "sha256": "9867c7fd5244f2a989cdf21c9594ec7b1a5271247786df8a57db3f1baaebb4b2"
+          }
+        },
+        "request_sha256": "b1b3312b426050710decff0eb266f72310d4ee0d01b1db0f641250331d831fe4",
+        "schema_version": "fakegpu.finetune_prediction_seal.v1",
+        "sealed_at_utc": "2026-10-14T08:07:39.674125+00:00"
+      },
+      "prediction_directory": "<validation>/validation/huggingface/target-workspace/predictions/b1b3312b426050710decff0eb266f72310d4ee0d01b1db0f641250331d831fe4",
+      "fixture_manifest_identity": {
+        "bytes": 10889,
+        "sha256": "e5906675326d34774e6d40ef8e8e063a724549c61981e5d1c4560410a68313c8"
+      },
+      "component_groups": 25,
+      "target_components": 83,
+      "full_span": {
+        "prediction": {
+          "wall_seconds": {
+            "expected": 37.35202102577108,
+            "max": 37.70916300882476,
+            "min": 36.84289561801124
+          },
+          "instrumentation_seconds": {
+            "expected": 0.14190298268804327,
+            "max": 0.14275569846744046,
+            "min": 0.14112726144958287
+          },
+          "seconds": {
+            "expected": 37.21011804308304,
+            "max": 37.56698310614344,
+            "min": 36.701480965781954
+          }
+        },
+        "comparison": {
+          "instrumentation_seconds": {
+            "absolute_percentage_error": 0.3862974106442274,
+            "actual": 0.14135692454874516,
+            "predicted": 0.14190298268804327,
+            "underprediction_percent": 0.0
+          },
+          "seconds": {
+            "absolute_percentage_error": 0.31267358360460507,
+            "actual": 37.094134483486414,
+            "predicted": 37.21011804308304,
+            "underprediction_percent": 0.0
+          },
+          "wall_seconds": {
+            "absolute_percentage_error": 0.3129530814001147,
+            "actual": 37.23549140803516,
+            "predicted": 37.35202102577108,
+            "underprediction_percent": 0.0
+          }
+        }
+      },
+      "by_kind": {
+        "checkpoint": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.17155622108839452,
+              "max": 0.20195446209982038,
+              "min": 0.14115798007696867
+            },
+            "instrumentation_seconds": {
+              "expected": 0.0006805537268519402,
+              "max": 0.0007325536571443081,
+              "min": 0.0006285537965595722
+            },
+            "seconds": {
+              "expected": 0.17087566736154258,
+              "max": 0.20122190844267607,
+              "min": 0.1405294262804091
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 21.940531506853887,
+              "actual": 0.0005581029690802097,
+              "predicted": 0.0006805537268519402,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 30.226970825987664,
+              "actual": 0.13121373113244772,
+              "predicted": 0.17087566736154258,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 30.191874658292612,
+              "actual": 0.13177183410152793,
+              "predicted": 0.17155622108839452,
+              "underprediction_percent": 0.0
+            }
+          }
+        },
+        "finalization": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.0004069320857524872,
+              "max": 0.0004260423593223095,
+              "min": 0.00038782181218266487
+            },
+            "instrumentation_seconds": {
+              "expected": 0.0,
+              "max": 0.0,
+              "min": 0.0
+            },
+            "seconds": {
+              "expected": 0.0004069320857524872,
+              "max": 0.0004260423593223095,
+              "min": 0.00038782181218266487
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": null,
+              "actual": 0.0,
+              "predicted": 0.0,
+              "underprediction_percent": null
+            },
+            "seconds": {
+              "absolute_percentage_error": 8.369802588583397,
+              "actual": 0.00037550320848822594,
+              "predicted": 0.0004069320857524872,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 8.369802588583397,
+              "actual": 0.00037550320848822594,
+              "predicted": 0.0004069320857524872,
+              "underprediction_percent": 0.0
+            }
+          }
+        },
+        "optimizer_update": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 29.3691550794037,
+              "max": 29.669659996227196,
+              "min": 28.916778561775573
+            },
+            "instrumentation_seconds": {
+              "expected": 0.030197373882401735,
+              "max": 0.03041186189169393,
+              "min": 0.030000331928022206
+            },
+            "seconds": {
+              "expected": 29.3389577055213,
+              "max": 29.639466085347948,
+              "min": 28.886645171791315
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 1.3279524751964096,
+              "actual": 0.02980162249878049,
+              "predicted": 0.030197373882401735,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.23523282989535357,
+              "actual": 29.27010480966419,
+              "predicted": 29.3389577055213,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.2363442606926382,
+              "actual": 29.29990643216297,
+              "predicted": 29.3691550794037,
+              "underprediction_percent": 0.0
+            }
+          }
+        },
+        "setup": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 7.599310908932239,
+              "max": 7.622452619951218,
+              "min": 7.576169197913259
+            },
+            "instrumentation_seconds": {
+              "expected": 0.09699890203773975,
+              "max": 0.09735957905650139,
+              "min": 0.09663822501897812
+            },
+            "seconds": {
+              "expected": 7.502312006894499,
+              "max": 7.525093040894717,
+              "min": 7.479530972894281
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.06435640032660311,
+              "actual": 0.09706136723980308,
+              "predicted": 0.09699890203773975,
+              "underprediction_percent": 0.06435640032660311
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.21676179710276886,
+              "actual": 7.486085034441203,
+              "predicted": 7.502312006894499,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.21316359193130663,
+              "actual": 7.583146401681006,
+              "predicted": 7.599310908932239,
+              "underprediction_percent": 0.0
+            }
+          }
+        },
+        "trainer_other": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.21159188426099718,
+              "max": 0.21466988818719984,
+              "min": 0.20840205643326043
+            },
+            "instrumentation_seconds": {
+              "expected": 0.014026153041049838,
+              "max": 0.01425170386210084,
+              "min": 0.013860150706022978
+            },
+            "seconds": {
+              "expected": 0.19756573121994733,
+              "max": 0.20077602909877895,
+              "min": 0.1943875730037689
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.6481220568563412,
+              "actual": 0.01393583184108138,
+              "predicted": 0.014026153041049838,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 4.259483204925287,
+              "actual": 0.20635540504008532,
+              "predicted": 0.19756573121994733,
+              "underprediction_percent": 4.259483204925287
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 3.949023457915521,
+              "actual": 0.2202912368811667,
+              "predicted": 0.21159188426099718,
+              "underprediction_percent": 3.949023457915521
+            }
+          }
+        }
+      },
+      "maximum_component_group_ape": {
+        "wall_seconds": {
+          "group_id": "2347f8b6e977cc85a75db891340ab78236024a44f4f9860c969a015b52ec8cb7",
+          "comparison": {
+            "absolute_percentage_error": 30.191874658292612,
+            "actual": 0.13177183410152793,
+            "predicted": 0.17155622108839452,
+            "underprediction_percent": 0.0
+          }
+        },
+        "instrumentation_seconds": {
+          "group_id": "1a9fb342e665364cb02340955bc2e91f638c5d2b5a0cb779c10dc51d20416f4c",
+          "comparison": {
+            "absolute_percentage_error": 22.928840587624926,
+            "actual": 2.558017149567604e-05,
+            "predicted": 3.144540823996067e-05,
+            "underprediction_percent": 0.0
+          }
+        },
+        "seconds": {
+          "group_id": "2347f8b6e977cc85a75db891340ab78236024a44f4f9860c969a015b52ec8cb7",
+          "comparison": {
+            "absolute_percentage_error": 30.226970825987664,
+            "actual": 0.13121373113244772,
+            "predicted": 0.17087566736154258,
+            "underprediction_percent": 0.0
+          }
+        }
+      },
+      "memory_envelope": {
+        "peak_allocated_bytes": {
+          "max": 4522696192,
+          "min": 4522696192
+        },
+        "peak_reserved_bytes": {
+          "max": 4794089472,
+          "min": 4735369216
+        }
+      },
+      "memory_budget_boundaries": {
+        "fits_recorded_allocator_cap": true,
+        "memory_budget_bytes": null,
+        "observed_reserved_peak_plus_reserve_bytes": 4794089472,
+        "oom_safety_verified": false,
+        "recorded_allocator_limit_bytes": 76366020608,
+        "reserve_bytes": 0,
+        "status": "not_requested"
+      },
+      "memory_comparison": {
+        "peak_allocated_bytes": {
+          "actual": 4522696192,
+          "exceeds_observed_max": false,
+          "observed_max": 4522696192,
+          "observed_min": 4522696192,
+          "underprediction_percent": 0.0,
+          "within_observed_envelope": true
+        },
+        "peak_reserved_bytes": {
+          "actual": 4794089472,
+          "exceeds_observed_max": false,
+          "observed_max": 4794089472,
+          "observed_min": 4735369216,
+          "underprediction_percent": 0.0,
+          "within_observed_envelope": true
+        }
+      },
+      "all_run_allocator_peaks": {
+        "peak_allocated_bytes": {
+          "min": 4522696192,
+          "max": 4522696192
+        },
+        "peak_reserved_bytes": {
+          "min": 4735369216,
+          "max": 4794089472
+        }
+      },
+      "checks": {
+        "20_step_covered_interior_budget_complete": true,
+        "26_step_missing_terminal_gap_rejected_without_budget": true,
+        "all_presealed_group_and_total_predictions_unchanged": true,
+        "full_future_schedule_matches_actual": true,
+        "native_processes_reused": 5,
+        "native_processes_started": 0,
+        "original_driver_unchanged": true,
+        "original_summary_unchanged": true,
+        "production_source_unchanged": true,
+        "shortened_budget_cpu_only_no_new_attempts": true
+      },
+      "retained_original_driver_failure": {
+        "summary": "<validation>/validation/huggingface/summary.json",
+        "supplement": "<validation>/validation/huggingface/supplement.json",
+        "error": "ValueError: shorter CPU budget lacks coverage",
+        "classification": "CPU orchestration coverage assertion after five successful native runs",
+        "native_training_failed": false,
+        "additional_native_processes": 0
+      },
+      "cpu_rebudget": {
+        "statuses": {
+          "20": "complete",
+          "26": "coverage_incomplete"
+        },
+        "prediction_directories": {
+          "20": "<validation>/validation/huggingface/target-workspace/predictions/791a66092c133ae06d7487149e96602e45c59be0c832c7a44932ae627ba6a45d",
+          "26": "<validation>/validation/huggingface/target-workspace/predictions/d49c9309bf75f240c7e473939d7c000d1804145f8bc869dedb0686daaf617866"
+        },
+        "new_native_processes": 0,
+        "reason_26_rejected": "missing terminal trainer_other gap coverage; no fallback budget"
+      }
+    },
+    "llamafactory": {
+      "status": "complete",
+      "native_processes": 5,
+      "summary_path": "<validation>/validation/llamafactory/summary.json",
+      "specification": {
+        "holdout_steps": 39,
+        "source_rows": 25,
+        "source_steps": 30,
+        "target_rows": 73,
+        "target_steps": 6,
+        "warmup_steps": 2
+      },
+      "policy": {
+        "accuracy_based_reruns": false,
+        "automatic_retries": false,
+        "cache_regime": "empty_kernel_cache",
+        "calibrations_per_dataset": 2,
+        "gpu": "CUDA_VISIBLE_DEVICES=1",
+        "holdouts": 1,
+        "timeout_seconds": 900
+      },
+      "report_roles": {
+        "holdout": "<validation>/validation/llamafactory/holdout/run.json",
+        "setup": [
+          "<validation>/validation/llamafactory/target-workspace/attempts/calibration-1/attempt-1/run.json",
+          "<validation>/validation/llamafactory/target-workspace/attempts/calibration-2/attempt-1/run.json"
+        ],
+        "source": [
+          "<validation>/validation/llamafactory/source-workspace/attempts/calibration-1/attempt-1/run.json",
+          "<validation>/validation/llamafactory/source-workspace/attempts/calibration-2/attempt-1/run.json"
+        ]
+      },
+      "run_identities": [
+        {
+          "pid": 4029593,
+          "started_at_utc": "2026-10-14T08:11:36.418552+00:00",
+          "uuid": "73193b6b-3da2-4cd1-ab35-54cb5e50437f"
+        },
+        {
+          "pid": 4030234,
+          "started_at_utc": "2026-10-14T08:12:12.589495+00:00",
+          "uuid": "1f3d170e-d683-4957-a493-29bcafc99b84"
+        },
+        {
+          "pid": 4030874,
+          "started_at_utc": "2026-10-14T08:12:50.565848+00:00",
+          "uuid": "951f87ea-dfc2-49b5-b862-e28c12dcf768"
+        },
+        {
+          "pid": 4031269,
+          "started_at_utc": "2026-10-14T08:13:10.800082+00:00",
+          "uuid": "916cb9ad-64c5-4ce9-ba4b-03fbc6e5159b"
+        },
+        {
+          "pid": 4031560,
+          "started_at_utc": "2026-10-14T08:13:31.625077+00:00",
+          "uuid": "98685dcb-8337-4ac9-bb90-3e778fb6d48d"
+        }
+      ],
+      "execution_boundaries": [
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "llamafactory",
+            "--config",
+            "<validation>/validation/llamafactory/source-workspace/attempts/calibration-1/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/llamafactory/source-workspace/attempts/calibration-1/attempt-1/run.json",
+            "--planning-max-steps",
+            "30"
+          ],
+          "finished_at_utc": "2026-10-14T08:12:11.573442+00:00",
+          "pid": 4029593,
+          "process_start_ticks": "311175385",
+          "process_wall_seconds": 35.22589830402285,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:11:36.347559+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "llamafactory",
+            "--config",
+            "<validation>/validation/llamafactory/source-workspace/attempts/calibration-2/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/llamafactory/source-workspace/attempts/calibration-2/attempt-1/run.json",
+            "--planning-max-steps",
+            "30"
+          ],
+          "finished_at_utc": "2026-10-14T08:12:47.794952+00:00",
+          "pid": 4030234,
+          "process_start_ticks": "311179002",
+          "process_wall_seconds": 35.275494917761534,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:12:12.519477+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "llamafactory",
+            "--config",
+            "<validation>/validation/llamafactory/target-workspace/attempts/calibration-1/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/llamafactory/target-workspace/attempts/calibration-1/attempt-1/run.json",
+            "--planning-max-steps",
+            "39"
+          ],
+          "finished_at_utc": "2026-10-14T08:13:09.798128+00:00",
+          "pid": 4030874,
+          "process_start_ticks": "311182800",
+          "process_wall_seconds": 19.302790950983763,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:12:50.495353+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "llamafactory",
+            "--config",
+            "<validation>/validation/llamafactory/target-workspace/attempts/calibration-2/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/llamafactory/target-workspace/attempts/calibration-2/attempt-1/run.json",
+            "--planning-max-steps",
+            "39"
+          ],
+          "finished_at_utc": "2026-10-14T08:13:29.829973+00:00",
+          "pid": 4031269,
+          "process_start_ticks": "311184823",
+          "process_wall_seconds": 19.100411652121693,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:13:10.729577+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "llamafactory",
+            "--config",
+            "<validation>/validation/llamafactory/holdout/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/llamafactory/holdout/run.json",
+            "--planning-max-steps",
+            "39"
+          ],
+          "finished_at_utc": "2026-10-14T08:14:15.092692+00:00",
+          "pid": 4031560,
+          "process_start_ticks": "311186905",
+          "process_wall_seconds": 43.53844941826537,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:13:31.554259+00:00",
+          "status": "succeeded"
+        }
+      ],
+      "forecast_seal": {
+        "artifacts": {
+          "budget.json": {
+            "bytes": 419642,
+            "sha256": "3e55563a78e43806059bd1fafbf67628cd12d2496805767e8352808e8ac9fd15"
+          },
+          "coverage.json": {
+            "bytes": 44701,
+            "sha256": "83a4f8364e8b85fac324f051cbba236bfbd89a3a12b85c655c5c85318a4af4f6"
+          },
+          "plan.json": {
+            "bytes": 178275,
+            "sha256": "da55321da040a86e4efc0683932d0aa8483209c0cf644a1f5f7ef322ed84b321"
+          },
+          "request.json": {
+            "bytes": 13627,
+            "sha256": "b25dc677679a4bf5769dadb2c010e719db7b1f9cd995e953e6592d0985367036"
+          },
+          "result.json": {
+            "bytes": 494031,
+            "sha256": "6c84fe3ba310803837d94ed7450a5cbb3602cb0533df07f15ea1d01872b8e7e0"
+          }
+        },
+        "request_sha256": "f2269f1487e57a6779d7319c8a68fc9d4ca98def0d51c8332706341011d7dd5a",
+        "schema_version": "fakegpu.finetune_prediction_seal.v1",
+        "sealed_at_utc": "2026-10-14T08:13:31.472182+00:00"
+      },
+      "prediction_directory": "<validation>/validation/llamafactory/target-workspace/predictions/f2269f1487e57a6779d7319c8a68fc9d4ca98def0d51c8332706341011d7dd5a",
+      "fixture_manifest_identity": {
+        "bytes": 10889,
+        "sha256": "e5906675326d34774e6d40ef8e8e063a724549c61981e5d1c4560410a68313c8"
+      },
+      "component_groups": 25,
+      "target_components": 83,
+      "full_span": {
+        "prediction": {
+          "wall_seconds": {
+            "expected": 42.06459731307182,
+            "max": 42.54678103730548,
+            "min": 41.57997260207776
+          },
+          "instrumentation_seconds": {
+            "expected": 0.22235559420934056,
+            "max": 0.22499859416172566,
+            "min": 0.22027008400764317
+          },
+          "seconds": {
+            "expected": 41.84224171886248,
+            "max": 42.32587682111189,
+            "min": 41.357066991273314
+          }
+        },
+        "comparison": {
+          "instrumentation_seconds": {
+            "absolute_percentage_error": 0.4707891091694261,
+            "actual": 0.22131367353722453,
+            "predicted": 0.22235559420934056,
+            "underprediction_percent": 0.0
+          },
+          "seconds": {
+            "absolute_percentage_error": 0.4207662402657003,
+            "actual": 42.019043669104576,
+            "predicted": 41.84224171886248,
+            "underprediction_percent": 0.4207662402657003
+          },
+          "wall_seconds": {
+            "absolute_percentage_error": 0.41609503476559945,
+            "actual": 42.2403573426418,
+            "predicted": 42.06459731307182,
+            "underprediction_percent": 0.41609503476559945
+          }
+        }
+      },
+      "by_kind": {
+        "checkpoint": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.13792104204185307,
+              "max": 0.13934569293633103,
+              "min": 0.1364963911473751
+            },
+            "instrumentation_seconds": {
+              "expected": 0.0007804560009390116,
+              "max": 0.0008539911359548569,
+              "min": 0.0007069208659231663
+            },
+            "seconds": {
+              "expected": 0.13714058604091406,
+              "max": 0.13863877207040787,
+              "min": 0.13564240001142025
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 22.4048742368029,
+              "actual": 0.0006376020610332489,
+              "predicted": 0.0007804560009390116,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 5.035737197502088,
+              "actual": 0.14441283699125051,
+              "predicted": 0.13714058604091406,
+              "underprediction_percent": 5.035737197502088
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 4.915115774217606,
+              "actual": 0.14505043905228376,
+              "predicted": 0.13792104204185307,
+              "underprediction_percent": 4.915115774217606
+            }
+          }
+        },
+        "finalization": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.00608658860437572,
+              "max": 0.008305459283292294,
+              "min": 0.0038677179254591465
+            },
+            "instrumentation_seconds": {
+              "expected": 0.0,
+              "max": 0.0,
+              "min": 0.0
+            },
+            "seconds": {
+              "expected": 0.00608658860437572,
+              "max": 0.008305459283292294,
+              "min": 0.0038677179254591465
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": null,
+              "actual": 0.0,
+              "predicted": 0.0,
+              "underprediction_percent": null
+            },
+            "seconds": {
+              "absolute_percentage_error": 28.24671961425484,
+              "actual": 0.008482662495225668,
+              "predicted": 0.00608658860437572,
+              "underprediction_percent": 28.24671961425484
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 28.24671961425484,
+              "actual": 0.008482662495225668,
+              "predicted": 0.00608658860437572,
+              "underprediction_percent": 28.24671961425484
+            }
+          }
+        },
+        "optimizer_update": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 29.381133399403872,
+              "max": 29.79818401497323,
+              "min": 28.958975211833604
+            },
+            "instrumentation_seconds": {
+              "expected": 0.029960119028520936,
+              "max": 0.03126083220601739,
+              "min": 0.029189257766120136
+            },
+            "seconds": {
+              "expected": 29.351173280375352,
+              "max": 29.768501334358007,
+              "min": 28.92967644194141
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.3773268209413221,
+              "actual": 0.030073594767600298,
+              "predicted": 0.029960119028520936,
+              "underprediction_percent": 0.3773268209413221
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.48854445418330184,
+              "actual": 29.49527079006657,
+              "predicted": 29.351173280375352,
+              "underprediction_percent": 0.48854445418330184
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.48843117137144404,
+              "actual": 29.52534438483417,
+              "predicted": 29.381133399403872,
+              "underprediction_percent": 0.48843117137144404
+            }
+          }
+        },
+        "setup": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 12.29409705218859,
+              "max": 12.348950979299843,
+              "min": 12.239243125077337
+            },
+            "instrumentation_seconds": {
+              "expected": 0.1824688536580652,
+              "max": 0.18364500161260366,
+              "min": 0.18129270570352674
+            },
+            "seconds": {
+              "expected": 12.111628198530525,
+              "max": 12.167658273596317,
+              "min": 12.055598123464733
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.5116042460245053,
+              "actual": 0.1815400868654251,
+              "predicted": 0.1824688536580652,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.19261887720631143,
+              "actual": 12.135002504102886,
+              "predicted": 12.111628198530525,
+              "underprediction_percent": 0.19261887720631143
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.1822389571906317,
+              "actual": 12.31654259096831,
+              "predicted": 12.29409705218859,
+              "underprediction_percent": 0.1822389571906317
+            }
+          }
+        },
+        "trainer_other": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.2453592308331281,
+              "max": 0.2519948908127844,
+              "min": 0.24139015609398484
+            },
+            "instrumentation_seconds": {
+              "expected": 0.009146165521815419,
+              "max": 0.009238769207149744,
+              "min": 0.009081199672073126
+            },
+            "seconds": {
+              "expected": 0.23621306531131267,
+              "max": 0.24277298180386425,
+              "min": 0.2322823079302907
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.9244325183463709,
+              "actual": 0.009062389843165874,
+              "predicted": 0.009146165521815419,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.1433768060397518,
+              "actual": 0.23587487544864416,
+              "predicted": 0.23621306531131267,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.17227494591946002,
+              "actual": 0.24493726529181004,
+              "predicted": 0.2453592308331281,
+              "underprediction_percent": 0.0
+            }
+          }
+        }
+      },
+      "maximum_component_group_ape": {
+        "wall_seconds": {
+          "group_id": "8b859b0e5ca6f1e41120829cb1126217f98845abd732329098c8e9de5ea3bc26",
+          "comparison": {
+            "absolute_percentage_error": 30.983156949679923,
+            "actual": 0.0001514507457613945,
+            "predicted": 0.00019837496802210808,
+            "underprediction_percent": 0.0
+          }
+        },
+        "instrumentation_seconds": {
+          "group_id": "4bad9f1e2bf9dcea612c1ff5190e4667ff72c3b38d3b000daead36d04b9d0898",
+          "comparison": {
+            "absolute_percentage_error": 22.4048742368029,
+            "actual": 0.0006376020610332489,
+            "predicted": 0.0007804560009390116,
+            "underprediction_percent": 0.0
+          }
+        },
+        "seconds": {
+          "group_id": "8b859b0e5ca6f1e41120829cb1126217f98845abd732329098c8e9de5ea3bc26",
+          "comparison": {
+            "absolute_percentage_error": 30.983156949679923,
+            "actual": 0.0001514507457613945,
+            "predicted": 0.00019837496802210808,
+            "underprediction_percent": 0.0
+          }
+        }
+      },
+      "memory_envelope": {
+        "peak_allocated_bytes": {
+          "max": 4481814016,
+          "min": 4481814016
+        },
+        "peak_reserved_bytes": {
+          "max": 4754243584,
+          "min": 4695523328
+        }
+      },
+      "memory_budget_boundaries": {
+        "fits_recorded_allocator_cap": true,
+        "memory_budget_bytes": null,
+        "observed_reserved_peak_plus_reserve_bytes": 4754243584,
+        "oom_safety_verified": false,
+        "recorded_allocator_limit_bytes": 76366020608,
+        "reserve_bytes": 0,
+        "status": "not_requested"
+      },
+      "memory_comparison": {
+        "peak_allocated_bytes": {
+          "actual": 4481814016,
+          "exceeds_observed_max": false,
+          "observed_max": 4481814016,
+          "observed_min": 4481814016,
+          "underprediction_percent": 0.0,
+          "within_observed_envelope": true
+        },
+        "peak_reserved_bytes": {
+          "actual": 4754243584,
+          "exceeds_observed_max": false,
+          "observed_max": 4754243584,
+          "observed_min": 4695523328,
+          "underprediction_percent": 0.0,
+          "within_observed_envelope": true
+        }
+      },
+      "all_run_allocator_peaks": {
+        "peak_allocated_bytes": {
+          "min": 4481814016,
+          "max": 4481814016
+        },
+        "peak_reserved_bytes": {
+          "min": 4695523328,
+          "max": 4754243584
+        }
+      },
+      "checks": {
+        "20_step_covered_interior_budget_complete": true,
+        "26_step_missing_terminal_gap_rejected_without_budget": true,
+        "all_presealed_group_and_total_predictions_unchanged": true,
+        "forecast_sealed_before_holdout": true,
+        "full_future_schedule_matches_actual": true,
+        "independent_native_processes": 5,
+        "shortened_budget_cpu_only_no_new_attempts": true,
+        "source_unchanged": true
+      },
+      "retained_original_driver_failure": null,
+      "cpu_rebudget": {
+        "statuses": {
+          "20": "complete",
+          "26": "coverage_incomplete"
+        },
+        "prediction_directories": {
+          "20": "<validation>/validation/llamafactory/target-workspace/predictions/206f7fd01313f4b3e410875817df18ec5ecb84f0a6ab941a340a8165bcdc945c",
+          "26": "<validation>/validation/llamafactory/target-workspace/predictions/03c358ae16c302798c523b833d2c7aa85c85425ea02ffe80d95182f8127976f1"
+        },
+        "new_native_processes": 0,
+        "reason_26_rejected": "missing terminal trainer_other gap coverage; no fallback budget"
+      }
+    },
+    "axolotl": {
+      "status": "complete",
+      "native_processes": 5,
+      "summary_path": "<validation>/validation/axolotl/summary.json",
+      "specification": {
+        "holdout_steps": 39,
+        "source_rows": 25,
+        "source_steps": 30,
+        "target_rows": 73,
+        "target_steps": 6,
+        "warmup_steps": 2
+      },
+      "policy": {
+        "accuracy_based_reruns": false,
+        "automatic_retries": false,
+        "cache_regime": "empty_kernel_cache",
+        "calibrations_per_dataset": 2,
+        "gpu": "CUDA_VISIBLE_DEVICES=1",
+        "holdouts": 1,
+        "timeout_seconds": 900
+      },
+      "report_roles": {
+        "holdout": "<validation>/validation/axolotl/holdout/run.json",
+        "setup": [
+          "<validation>/validation/axolotl/target-workspace/attempts/calibration-1/attempt-1/run.json",
+          "<validation>/validation/axolotl/target-workspace/attempts/calibration-2/attempt-1/run.json"
+        ],
+        "source": [
+          "<validation>/validation/axolotl/source-workspace/attempts/calibration-1/attempt-1/run.json",
+          "<validation>/validation/axolotl/source-workspace/attempts/calibration-2/attempt-1/run.json"
+        ]
+      },
+      "run_identities": [
+        {
+          "pid": 4032569,
+          "started_at_utc": "2026-10-14T08:14:29.269655+00:00",
+          "uuid": "8bae0187-f871-43f7-ae84-16456453335a"
+        },
+        {
+          "pid": 4035035,
+          "started_at_utc": "2026-10-14T08:16:17.223062+00:00",
+          "uuid": "f20a9719-890f-412c-9c9e-c180902b877a"
+        },
+        {
+          "pid": 4037271,
+          "started_at_utc": "2026-10-14T08:18:07.158496+00:00",
+          "uuid": "f30afbe4-1cd3-452e-8c92-cd159a4ab505"
+        },
+        {
+          "pid": 4038774,
+          "started_at_utc": "2026-10-14T08:19:29.453742+00:00",
+          "uuid": "ec8b44a9-07d0-476e-b60b-3b98c1fdb76f"
+        },
+        {
+          "pid": 4040602,
+          "started_at_utc": "2026-10-14T08:20:52.480583+00:00",
+          "uuid": "be86da2d-b2c5-4f3d-9749-8982b89f1f24"
+        }
+      ],
+      "execution_boundaries": [
+        {
+          "argv": [
+            "<native-framework-environments>/axolotl/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "axolotl",
+            "--config",
+            "<validation>/validation/axolotl/source-workspace/attempts/calibration-1/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/axolotl/source-workspace/attempts/calibration-1/attempt-1/run.json",
+            "--planning-max-steps",
+            "30"
+          ],
+          "finished_at_utc": "2026-10-14T08:16:16.203118+00:00",
+          "pid": 4032569,
+          "process_start_ticks": "311192670",
+          "process_wall_seconds": 107.00537528283894,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:14:29.197758+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/axolotl/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "axolotl",
+            "--config",
+            "<validation>/validation/axolotl/source-workspace/attempts/calibration-2/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/axolotl/source-workspace/attempts/calibration-2/attempt-1/run.json",
+            "--planning-max-steps",
+            "30"
+          ],
+          "finished_at_utc": "2026-10-14T08:18:04.398631+00:00",
+          "pid": 4035035,
+          "process_start_ticks": "311203465",
+          "process_wall_seconds": 107.24625660479069,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:16:17.152391+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/axolotl/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "axolotl",
+            "--config",
+            "<validation>/validation/axolotl/target-workspace/attempts/calibration-1/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/axolotl/target-workspace/attempts/calibration-1/attempt-1/run.json",
+            "--planning-max-steps",
+            "39"
+          ],
+          "finished_at_utc": "2026-10-14T08:19:28.449292+00:00",
+          "pid": 4037271,
+          "process_start_ticks": "311214459",
+          "process_wall_seconds": 81.36229570023715,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:18:07.087013+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/axolotl/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "axolotl",
+            "--config",
+            "<validation>/validation/axolotl/target-workspace/attempts/calibration-2/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/axolotl/target-workspace/attempts/calibration-2/attempt-1/run.json",
+            "--planning-max-steps",
+            "39"
+          ],
+          "finished_at_utc": "2026-10-14T08:20:50.687198+00:00",
+          "pid": 4038774,
+          "process_start_ticks": "311222688",
+          "process_wall_seconds": 81.30432078894228,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:19:29.382896+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/axolotl/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "axolotl",
+            "--config",
+            "<validation>/validation/axolotl/holdout/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/axolotl/holdout/run.json",
+            "--planning-max-steps",
+            "39"
+          ],
+          "finished_at_utc": "2026-10-14T08:22:40.815169+00:00",
+          "pid": 4040602,
+          "process_start_ticks": "311230991",
+          "process_wall_seconds": 108.40588774904609,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:20:52.409295+00:00",
+          "status": "succeeded"
+        }
+      ],
+      "forecast_seal": {
+        "artifacts": {
+          "budget.json": {
+            "bytes": 417931,
+            "sha256": "7565af58c1879fcc84eb7894954331e66900c7b21f8ffb2ff783ffd255820c8e"
+          },
+          "coverage.json": {
+            "bytes": 44529,
+            "sha256": "8a44f47b2e62519d610e91a7b756be4de95472ae7bf1071024ec1a0376c7dbd3"
+          },
+          "plan.json": {
+            "bytes": 176872,
+            "sha256": "818c53c5b6c5e0e12de070508785e123da11a8e3ec1151f171715884f5795e2d"
+          },
+          "request.json": {
+            "bytes": 13627,
+            "sha256": "9d72814ed87d347c96bad2f05c9e24b21cc43af6c5bcab5cd50b98aea8308399"
+          },
+          "result.json": {
+            "bytes": 492114,
+            "sha256": "692c94ed300b7b0e40d9e7958850e9b8ff8d3900c25502a475aa7b48abf4b923"
+          }
+        },
+        "request_sha256": "6a13dce4a4b4e189cf06b037eacf5a48ab34c3c6559206b15a974467484e8980",
+        "schema_version": "fakegpu.finetune_prediction_seal.v1",
+        "sealed_at_utc": "2026-10-14T08:20:52.327213+00:00"
+      },
+      "prediction_directory": "<validation>/validation/axolotl/target-workspace/predictions/6a13dce4a4b4e189cf06b037eacf5a48ab34c3c6559206b15a974467484e8980",
+      "fixture_manifest_identity": {
+        "bytes": 10889,
+        "sha256": "e5906675326d34774e6d40ef8e8e063a724549c61981e5d1c4560410a68313c8"
+      },
+      "component_groups": 25,
+      "target_components": 83,
+      "full_span": {
+        "prediction": {
+          "wall_seconds": {
+            "expected": 106.7530031449764,
+            "max": 107.01702583761036,
+            "min": 106.45294863183517
+          },
+          "instrumentation_seconds": {
+            "expected": 0.1819005467798835,
+            "max": 0.18504384073483593,
+            "min": 0.1790575849590823
+          },
+          "seconds": {
+            "expected": 106.57110259819653,
+            "max": 106.83283797489233,
+            "min": 106.27378641627729
+          }
+        },
+        "comparison": {
+          "instrumentation_seconds": {
+            "absolute_percentage_error": 1.3093115732478031,
+            "actual": 0.18431378854438663,
+            "predicted": 0.1819005467798835,
+            "underprediction_percent": 1.3093115732478031
+          },
+          "seconds": {
+            "absolute_percentage_error": 0.20971856441730422,
+            "actual": 106.795071689412,
+            "predicted": 106.57110259819653,
+            "underprediction_percent": 0.20971856441730422
+          },
+          "wall_seconds": {
+            "absolute_percentage_error": 0.2116130429882005,
+            "actual": 106.97938547795638,
+            "predicted": 106.7530031449764,
+            "underprediction_percent": 0.2116130429882005
+          }
+        }
+      },
+      "by_kind": {
+        "checkpoint": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.016275997972115874,
+              "max": 0.01634914195165038,
+              "min": 0.016202853992581367
+            },
+            "instrumentation_seconds": {
+              "expected": 0.00045920698903501034,
+              "max": 0.00046910205855965614,
+              "min": 0.00044931191951036453
+            },
+            "seconds": {
+              "expected": 0.015816790983080864,
+              "max": 0.015880039893090725,
+              "min": 0.015753542073071003
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 2.6468703816867745,
+              "actual": 0.0004716920666396618,
+              "predicted": 0.00045920698903501034,
+              "underprediction_percent": 2.6468703816867745
+            },
+            "seconds": {
+              "absolute_percentage_error": 3.165501656201396,
+              "actual": 0.016333838924765587,
+              "predicted": 0.015816790983080864,
+              "underprediction_percent": 3.165501656201396
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 3.1509448857057256,
+              "actual": 0.01680553099140525,
+              "predicted": 0.016275997972115874,
+              "underprediction_percent": 3.1509448857057256
+            }
+          }
+        },
+        "finalization": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.4326285768765956,
+              "max": 0.4457963448949158,
+              "min": 0.4194608088582754
+            },
+            "instrumentation_seconds": {
+              "expected": 0.0,
+              "max": 0.0,
+              "min": 0.0
+            },
+            "seconds": {
+              "expected": 0.4326285768765956,
+              "max": 0.4457963448949158,
+              "min": 0.4194608088582754
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": null,
+              "actual": 0.0,
+              "predicted": 0.0,
+              "underprediction_percent": null
+            },
+            "seconds": {
+              "absolute_percentage_error": 9.101093371938788,
+              "actual": 0.47594475327059627,
+              "predicted": 0.4326285768765956,
+              "underprediction_percent": 9.101093371938788
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 9.101093371938788,
+              "actual": 0.47594475327059627,
+              "predicted": 0.4326285768765956,
+              "underprediction_percent": 9.101093371938788
+            }
+          }
+        },
+        "optimizer_update": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 94.13407603966976,
+              "max": 94.36346382725135,
+              "min": 93.86618746456224
+            },
+            "instrumentation_seconds": {
+              "expected": 0.0327487975694513,
+              "max": 0.03375311286243446,
+              "min": 0.032020483049564064
+            },
+            "seconds": {
+              "expected": 94.10132724210031,
+              "max": 94.33048159001149,
+              "min": 93.83407834870741
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 1.3990044494716458,
+              "actual": 0.03229696163907647,
+              "predicted": 0.0327487975694513,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.21852967524086134,
+              "actual": 94.30741693405434,
+              "predicted": 94.10132724210031,
+              "underprediction_percent": 0.21852967524086134
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.21797591653820353,
+              "actual": 94.33971389569342,
+              "predicted": 94.13407603966976,
+              "underprediction_percent": 0.21797591653820353
+            }
+          }
+        },
+        "setup": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 11.908012037863955,
+              "max": 11.923565567936748,
+              "min": 11.892458507791162
+            },
+            "instrumentation_seconds": {
+              "expected": 0.13930192356929183,
+              "max": 0.14132217690348625,
+              "min": 0.1372816702350974
+            },
+            "seconds": {
+              "expected": 11.768710114294663,
+              "max": 11.782243391033262,
+              "min": 11.755176837556064
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 1.9849254372107896,
+              "actual": 0.14212295832112432,
+              "predicted": 0.13930192356929183,
+              "underprediction_percent": 1.9849254372107896
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.1922912771100318,
+              "actual": 11.746123343706131,
+              "predicted": 11.768710114294663,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.16626283923246973,
+              "actual": 11.888246302027255,
+              "predicted": 11.908012037863955,
+              "underprediction_percent": 0.0
+            }
+          }
+        },
+        "trainer_other": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.26201049259398135,
+              "max": 0.2678509555757046,
+              "min": 0.25863899663090706
+            },
+            "instrumentation_seconds": {
+              "expected": 0.009390618652105331,
+              "max": 0.009499448910355568,
+              "min": 0.009306119754910469
+            },
+            "seconds": {
+              "expected": 0.252619873941876,
+              "max": 0.2584366090595722,
+              "min": 0.24931687908247113
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.3349318003337951,
+              "actual": 0.009422176517546177,
+              "predicted": 0.009390618652105331,
+              "underprediction_percent": 0.3349318003337951
+            },
+            "seconds": {
+              "absolute_percentage_error": 1.3508591369447531,
+              "actual": 0.24925281945616007,
+              "predicted": 0.252619873941876,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 1.289454594449534,
+              "actual": 0.25867499597370625,
+              "predicted": 0.26201049259398135,
+              "underprediction_percent": 0.0
+            }
+          }
+        }
+      },
+      "maximum_component_group_ape": {
+        "wall_seconds": {
+          "group_id": "6265db955f536334faa3ab7e992c378b6d1d87a98b8a2dbb8a41e502179e2387",
+          "comparison": {
+            "absolute_percentage_error": 36.564795818161066,
+            "actual": 0.012907354161143303,
+            "predicted": 0.008187806466594338,
+            "underprediction_percent": 36.564795818161066
+          }
+        },
+        "instrumentation_seconds": {
+          "group_id": "5429e8a01f59fc1bdc0490b422107de3836d84c572400cf9221b59e176af348c",
+          "comparison": {
+            "absolute_percentage_error": 20.80911385850217,
+            "actual": 3.597000613808632e-05,
+            "predicted": 2.8484966605901718e-05,
+            "underprediction_percent": 20.80911385850217
+          }
+        },
+        "seconds": {
+          "group_id": "6265db955f536334faa3ab7e992c378b6d1d87a98b8a2dbb8a41e502179e2387",
+          "comparison": {
+            "absolute_percentage_error": 36.564795818161066,
+            "actual": 0.012907354161143303,
+            "predicted": 0.008187806466594338,
+            "underprediction_percent": 36.564795818161066
+          }
+        }
+      },
+      "memory_envelope": {
+        "peak_allocated_bytes": {
+          "max": 3383547392,
+          "min": 3383547392
+        },
+        "peak_reserved_bytes": {
+          "max": 4106223616,
+          "min": 3969908736
+        }
+      },
+      "memory_budget_boundaries": {
+        "fits_recorded_allocator_cap": true,
+        "memory_budget_bytes": null,
+        "observed_reserved_peak_plus_reserve_bytes": 4106223616,
+        "oom_safety_verified": false,
+        "recorded_allocator_limit_bytes": 76366020608,
+        "reserve_bytes": 0,
+        "status": "not_requested"
+      },
+      "memory_comparison": {
+        "peak_allocated_bytes": {
+          "actual": 3383547392,
+          "exceeds_observed_max": false,
+          "observed_max": 3383547392,
+          "observed_min": 3383547392,
+          "underprediction_percent": 0.0,
+          "within_observed_envelope": true
+        },
+        "peak_reserved_bytes": {
+          "actual": 4106223616,
+          "exceeds_observed_max": false,
+          "observed_max": 4106223616,
+          "observed_min": 3969908736,
+          "underprediction_percent": 0.0,
+          "within_observed_envelope": true
+        }
+      },
+      "all_run_allocator_peaks": {
+        "peak_allocated_bytes": {
+          "min": 3383547392,
+          "max": 3383547392
+        },
+        "peak_reserved_bytes": {
+          "min": 3969908736,
+          "max": 4106223616
+        }
+      },
+      "checks": {
+        "20_step_covered_interior_budget_complete": true,
+        "26_step_missing_terminal_gap_rejected_without_budget": true,
+        "all_presealed_group_and_total_predictions_unchanged": true,
+        "forecast_sealed_before_holdout": true,
+        "full_future_schedule_matches_actual": true,
+        "independent_native_processes": 5,
+        "shortened_budget_cpu_only_no_new_attempts": true,
+        "source_unchanged": true
+      },
+      "retained_original_driver_failure": null,
+      "cpu_rebudget": {
+        "statuses": {
+          "20": "complete",
+          "26": "coverage_incomplete"
+        },
+        "prediction_directories": {
+          "20": "<validation>/validation/axolotl/target-workspace/predictions/686ebcf8557e723433ab9b572792f0f6740e4dde503f30fcc6a44e117c8b99c5",
+          "26": "<validation>/validation/axolotl/target-workspace/predictions/821fd0ee870e6e3d56a604a0f77a83288d95007f6b0e41a9de8e6bd6edf6de03"
+        },
+        "new_native_processes": 0,
+        "reason_26_rejected": "missing terminal trainer_other gap coverage; no fallback budget"
+      }
+    },
+    "huggingface-events-v2": {
+      "status": "complete",
+      "native_processes": 3,
+      "summary_path": "<validation>/validation/huggingface-events-v2/summary.json",
+      "specification": {
+        "calibration_steps": 108,
+        "calibrations": 2,
+        "eval_steps": 2,
+        "framework": "huggingface",
+        "holdout_steps": 124,
+        "holdouts": 1,
+        "planning_max_steps": 124,
+        "rows": 25,
+        "save_steps": 4,
+        "warmup_steps": 2
+      },
+      "policy": {
+        "accuracy_based_reruns": false,
+        "automatic_retries": false,
+        "cache_regime": "empty_kernel_cache",
+        "calibration_and_setup_share_the_same_two_processes": true,
+        "gpu": "CUDA_VISIBLE_DEVICES=1",
+        "timeout_seconds": 900
+      },
+      "report_roles": {
+        "holdout": "<validation>/validation/huggingface-events-v2/holdout/run.json",
+        "setup": [
+          "<validation>/validation/huggingface-events-v2/target-workspace/attempts/calibration-1/attempt-1/run.json",
+          "<validation>/validation/huggingface-events-v2/target-workspace/attempts/calibration-2/attempt-1/run.json"
+        ],
+        "source": [
+          "<validation>/validation/huggingface-events-v2/target-workspace/attempts/calibration-1/attempt-1/run.json",
+          "<validation>/validation/huggingface-events-v2/target-workspace/attempts/calibration-2/attempt-1/run.json"
+        ]
+      },
+      "run_identities": [
+        {
+          "pid": 4046418,
+          "started_at_utc": "2026-10-14T08:26:18.324159+00:00",
+          "uuid": "6c002ab7-805d-4536-94fe-53f0ffca1f03"
+        },
+        {
+          "pid": 4048516,
+          "started_at_utc": "2026-10-14T08:28:14.603272+00:00",
+          "uuid": "63d8cde2-a943-44a1-9e34-4c604b1350c8"
+        },
+        {
+          "pid": 4050582,
+          "started_at_utc": "2026-10-14T08:30:15.740026+00:00",
+          "uuid": "2a76141e-8300-4d9c-a87c-d790bca4de92"
+        }
+      ],
+      "execution_boundaries": [
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "huggingface",
+            "--config",
+            "<validation>/validation/huggingface-events-v2/target-workspace/attempts/calibration-1/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/huggingface-events-v2/target-workspace/attempts/calibration-1/attempt-1/run.json",
+            "--planning-max-steps",
+            "124"
+          ],
+          "finished_at_utc": "2026-10-14T08:28:12.943358+00:00",
+          "pid": 4046418,
+          "process_start_ticks": "311263575",
+          "process_wall_seconds": 114.68985185399652,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:26:18.253521+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "huggingface",
+            "--config",
+            "<validation>/validation/huggingface-events-v2/target-workspace/attempts/calibration-2/attempt-1/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/huggingface-events-v2/target-workspace/attempts/calibration-2/attempt-1/run.json",
+            "--planning-max-steps",
+            "124"
+          ],
+          "finished_at_utc": "2026-10-14T08:30:08.624303+00:00",
+          "pid": 4048516,
+          "process_start_ticks": "311275203",
+          "process_wall_seconds": 114.09186915354803,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:28:14.532451+00:00",
+          "status": "succeeded"
+        },
+        {
+          "argv": [
+            "<native-framework-environments>/factory/venv/bin/python",
+            "-m",
+            "fakegpu",
+            "run-finetune",
+            "--framework",
+            "huggingface",
+            "--config",
+            "<validation>/validation/huggingface-events-v2/holdout/config.json",
+            "--profile",
+            "blackwell",
+            "--warmup-steps",
+            "2",
+            "--cache-regime",
+            "empty_kernel_cache",
+            "--output",
+            "<validation>/validation/huggingface-events-v2/holdout/run.json",
+            "--planning-max-steps",
+            "124"
+          ],
+          "finished_at_utc": "2026-10-14T08:32:26.385940+00:00",
+          "pid": 4050582,
+          "process_start_ticks": "311287317",
+          "process_wall_seconds": 130.71647893916816,
+          "returncode": 0,
+          "started_at_utc": "2026-10-14T08:30:15.669484+00:00",
+          "status": "succeeded"
+        }
+      ],
+      "forecast_seal": {
+        "artifacts": {
+          "budget.json": {
+            "bytes": 1876860,
+            "sha256": "3936f5fbd8d05723a710d3d496fb842f375ea74747776057569ab96d90b92fad"
+          },
+          "coverage.json": {
+            "bytes": 562062,
+            "sha256": "53236b9296d1a2015732060978eb3245c19249fe5ca76726bc0b2378ab7f3ea7"
+          },
+          "plan.json": {
+            "bytes": 807627,
+            "sha256": "eaa955e17a28bdddb398905fe7173bd11331511f6b4d11827cb63383ad4decbd"
+          },
+          "request.json": {
+            "bytes": 13482,
+            "sha256": "5de35d6a9311db61ad33791606e5176f7b7f60d82cc9d8608dae1a18cf93b6f4"
+          },
+          "result.json": {
+            "bytes": 2585248,
+            "sha256": "000e62574f5509ef5ded5a65709d8da6a7bdd1629d8225081acef36d7b703fd2"
+          }
+        },
+        "request_sha256": "170a36a6176a144ededc93710e7d2c1abcae0228b11b1c1263228c710da746c3",
+        "schema_version": "fakegpu.finetune_prediction_seal.v1",
+        "sealed_at_utc": "2026-10-14T08:30:15.282057+00:00"
+      },
+      "prediction_directory": "<validation>/validation/huggingface-events-v2/target-workspace/predictions/170a36a6176a144ededc93710e7d2c1abcae0228b11b1c1263228c710da746c3",
+      "fixture_manifest_identity": {
+        "bytes": 1958,
+        "sha256": "0d31ccf06580cca5209914d8c6a0281931829807c34f261e9647d6803e3dfcab"
+      },
+      "component_groups": 115,
+      "target_components": 439,
+      "full_span": {
+        "prediction": {
+          "wall_seconds": {
+            "expected": 128.66872050374812,
+            "max": 129.44354383972856,
+            "min": 127.89389716776769
+          },
+          "instrumentation_seconds": {
+            "expected": 0.46470267819533073,
+            "max": 0.46880678781634844,
+            "min": 0.4605985685743131
+          },
+          "seconds": {
+            "expected": 128.2040178255528,
+            "max": 128.97569434882655,
+            "min": 127.43234130227906
+          }
+        },
+        "comparison": {
+          "instrumentation_seconds": {
+            "absolute_percentage_error": 0.20885641666768434,
+            "actual": 0.463734139688313,
+            "predicted": 0.46470267819533073,
+            "underprediction_percent": 0.0
+          },
+          "seconds": {
+            "absolute_percentage_error": 0.5973473304898435,
+            "actual": 128.97444321913645,
+            "predicted": 128.2040178255528,
+            "underprediction_percent": 0.5973473304898435
+          },
+          "wall_seconds": {
+            "absolute_percentage_error": 0.5944589693530484,
+            "actual": 129.43817735882476,
+            "predicted": 128.66872050374812,
+            "underprediction_percent": 0.5944589693530484
+          }
+        }
+      },
+      "by_kind": {
+        "checkpoint": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 4.714985799742863,
+              "max": 4.73933560329561,
+              "min": 4.690635996190115
+            },
+            "instrumentation_seconds": {
+              "expected": 0.03819282062781544,
+              "max": 0.038489226395120986,
+              "min": 0.03789641486050991
+            },
+            "seconds": {
+              "expected": 4.676792979115047,
+              "max": 4.701354959621452,
+              "min": 4.652230998608641
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 11.415719234974416,
+              "actual": 0.03427956206724048,
+              "predicted": 0.03819282062781544,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 2.8297938614344234,
+              "actual": 4.548091368749738,
+              "predicted": 4.676792979115047,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 2.894023005296973,
+              "actual": 4.582370930816978,
+              "predicted": 4.714985799742863,
+              "underprediction_percent": 0.0
+            }
+          }
+        },
+        "evaluation": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 29.652414886909096,
+              "max": 29.98479903800378,
+              "min": 29.320030735814417
+            },
+            "instrumentation_seconds": {
+              "expected": 0.07024836949213355,
+              "max": 0.07054584657878808,
+              "min": 0.06995089240547903
+            },
+            "seconds": {
+              "expected": 29.582166517416965,
+              "max": 29.914287334176237,
+              "min": 29.25004570065769
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 1.862744057394673,
+              "actual": 0.07158175436779857,
+              "predicted": 0.07024836949213355,
+              "underprediction_percent": 1.862744057394673
+            },
+            "seconds": {
+              "absolute_percentage_error": 1.2767389287695663,
+              "actual": 29.964737992268056,
+              "predicted": 29.582166517416965,
+              "underprediction_percent": 1.2767389287695663
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 1.2781354805285585,
+              "actual": 30.036319746635854,
+              "predicted": 29.652414886909096,
+              "underprediction_percent": 1.2781354805285585
+            }
+          }
+        },
+        "finalization": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.00038982718251645565,
+              "max": 0.000397401861846447,
+              "min": 0.0003822525031864643
+            },
+            "instrumentation_seconds": {
+              "expected": 0.0,
+              "max": 0.0,
+              "min": 0.0
+            },
+            "seconds": {
+              "expected": 0.00038982718251645565,
+              "max": 0.000397401861846447,
+              "min": 0.0003822525031864643
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": null,
+              "actual": 0.0,
+              "predicted": 0.0,
+              "underprediction_percent": null
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.7248626256282164,
+              "actual": 0.0003870218060910702,
+              "predicted": 0.00038982718251645565,
+              "underprediction_percent": 0.0
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.7248626256282164,
+              "actual": 0.0003870218060910702,
+              "predicted": 0.00038982718251645565,
+              "underprediction_percent": 0.0
+            }
+          }
+        },
+        "optimizer_update": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 86.314482905112,
+              "max": 86.72525861343767,
+              "min": 85.90370719678633
+            },
+            "instrumentation_seconds": {
+              "expected": 0.0886916640281145,
+              "max": 0.08921502803319267,
+              "min": 0.08816830002303634
+            },
+            "seconds": {
+              "expected": 86.2257912410839,
+              "max": 86.63643899069368,
+              "min": 85.81514349147412
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.7382377509522693,
+              "actual": 0.08935128897428513,
+              "predicted": 0.0886916640281145,
+              "underprediction_percent": 0.7382377509522693
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.5831179990722459,
+              "actual": 86.7315384526737,
+              "predicted": 86.2257912410839,
+              "underprediction_percent": 0.5831179990722459
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.5832776397971695,
+              "actual": 86.82088974164799,
+              "predicted": 86.314482905112,
+              "underprediction_percent": 0.5832776397971695
+            }
+          }
+        },
+        "setup": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 7.722101689781994,
+              "max": 7.727525326423347,
+              "min": 7.71667805314064
+            },
+            "instrumentation_seconds": {
+              "expected": 0.2503014064859599,
+              "max": 0.25308971386402845,
+              "min": 0.24751309910789132
+            },
+            "seconds": {
+              "expected": 7.471800283296034,
+              "max": 7.4744356125593185,
+              "min": 7.469164954032749
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.40791769002948736,
+              "actual": 0.2513266121968627,
+              "predicted": 0.2503014064859599,
+              "underprediction_percent": 0.40791769002948736
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.1431336559861247,
+              "actual": 7.482510273810476,
+              "predicted": 7.471800283296034,
+              "underprediction_percent": 0.1431336559861247
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.1517383466746935,
+              "actual": 7.733836886007339,
+              "predicted": 7.722101689781994,
+              "underprediction_percent": 0.1517383466746935
+            }
+          }
+        },
+        "trainer_other": {
+          "prediction": {
+            "wall_seconds": {
+              "expected": 0.26434539501965204,
+              "max": 0.2662278567063105,
+              "min": 0.26246293333299364
+            },
+            "instrumentation_seconds": {
+              "expected": 0.01726841756130736,
+              "max": 0.01746697294521822,
+              "min": 0.017069862177396495
+            },
+            "seconds": {
+              "expected": 0.2470769774583447,
+              "max": 0.24878004991401656,
+              "min": 0.24537390500267284
+            }
+          },
+          "comparison": {
+            "instrumentation_seconds": {
+              "absolute_percentage_error": 0.4274254854438465,
+              "actual": 0.01719492208212614,
+              "predicted": 0.01726841756130736,
+              "underprediction_percent": 0.0
+            },
+            "seconds": {
+              "absolute_percentage_error": 0.04091477603265459,
+              "actual": 0.24717810982838273,
+              "predicted": 0.2470769774583447,
+              "underprediction_percent": 0.04091477603265459
+            },
+            "wall_seconds": {
+              "absolute_percentage_error": 0.010453748121398961,
+              "actual": 0.26437303191050887,
+              "predicted": 0.26434539501965204,
+              "underprediction_percent": 0.010453748121398961
+            }
+          }
+        }
+      },
+      "maximum_component_group_ape": {
+        "wall_seconds": {
+          "group_id": "972096b8d4704faec3ef98d7da17a1d31d66e9027819e8375ca50c22b9fcec93",
+          "comparison": {
+            "absolute_percentage_error": 28.43049966166886,
+            "actual": 0.0005230121314525604,
+            "predicted": 0.0003743171691894531,
+            "underprediction_percent": 28.43049966166886
+          }
+        },
+        "instrumentation_seconds": {
+          "group_id": "b836350db8b79697f5bafdeaafa4afa895dc662477e8d32b15068b58106621cb",
+          "comparison": {
+            "absolute_percentage_error": 28.27248620560347,
+            "actual": 3.4769997000694275e-05,
+            "predicted": 4.4600339606404305e-05,
+            "underprediction_percent": 0.0
+          }
+        },
+        "seconds": {
+          "group_id": "972096b8d4704faec3ef98d7da17a1d31d66e9027819e8375ca50c22b9fcec93",
+          "comparison": {
+            "absolute_percentage_error": 29.896658743057912,
+            "actual": 0.00047818245366215706,
+            "predicted": 0.0003352218773216009,
+            "underprediction_percent": 29.896658743057912
+          }
+        }
+      },
+      "memory_envelope": {
+        "peak_allocated_bytes": {
+          "max": 4522696192,
+          "min": 4522696192
+        },
+        "peak_reserved_bytes": {
+          "max": 4794089472,
+          "min": 4794089472
+        }
+      },
+      "memory_budget_boundaries": {
+        "fits_recorded_allocator_cap": true,
+        "memory_budget_bytes": null,
+        "observed_reserved_peak_plus_reserve_bytes": 4794089472,
+        "oom_safety_verified": false,
+        "recorded_allocator_limit_bytes": 76366020608,
+        "reserve_bytes": 0,
+        "status": "not_requested"
+      },
+      "memory_comparison": {
+        "peak_allocated_bytes": {
+          "actual": 4522696192,
+          "exceeds_observed_max": false,
+          "observed_max": 4522696192,
+          "observed_min": 4522696192,
+          "underprediction_percent": 0.0,
+          "within_observed_envelope": true
+        },
+        "peak_reserved_bytes": {
+          "actual": 4794089472,
+          "exceeds_observed_max": false,
+          "observed_max": 4794089472,
+          "observed_min": 4794089472,
+          "underprediction_percent": 0.0,
+          "within_observed_envelope": true
+        }
+      },
+      "all_run_allocator_peaks": {
+        "peak_allocated_bytes": {
+          "min": 4522696192,
+          "max": 4522696192
+        },
+        "peak_reserved_bytes": {
+          "min": 4794089472,
+          "max": 4794089472
+        }
+      },
+      "checks": {
+        "all_presealed_group_and_total_predictions_unchanged": true,
+        "calibration_and_setup_roles_use_same_two_reports": true,
+        "complete_cpu_preview_before_native_execution": true,
+        "fixture_unchanged": true,
+        "forecast_sealed_before_holdout": true,
+        "full_future_schedule_matches_actual": true,
+        "independent_native_processes": 3,
+        "source_unchanged": true
+      },
+      "retained_original_driver_failure": null
+    }
+  },
+  "cpu_sampler_audits": {
+    "native_sampler_cases": 12,
+    "implementation_cases": 12,
+    "reports": [
+      {
+        "path": "<sampler-cpu-validation>/transformers-5.6.0/audit.json",
+        "sha256": "01a1790a7ca3537e11af7e5fde0cd0e18f789262a799a31da4753d4c4fde6a95",
+        "cases": 6,
+        "transformers": "5.6.0",
+        "accelerate": "1.11.0",
+        "torch": "2.9.1+cu128",
+        "script_sha256": "2837bdd52c05eba562381df1b1407beebc2005392c3653dcb9a7963f7ed5a329",
+        "source_sha256": null
+      },
+      {
+        "path": "<sampler-cpu-validation>/transformers-5.14.1/audit.json",
+        "sha256": "91a8803ad71cef2b13b057b0a8746edc94da2f78e60c2a71d88c6fcfb6a3a48b",
+        "cases": 6,
+        "transformers": "5.14.1",
+        "accelerate": "1.13.0",
+        "torch": "2.11.0+cu128",
+        "script_sha256": "2837bdd52c05eba562381df1b1407beebc2005392c3653dcb9a7963f7ed5a329",
+        "source_sha256": null
+      },
+      {
+        "path": "<sampler-cpu-validation>/implementation-huggingface-ipc/implementation-audit.json",
+        "sha256": "808af93086117367607f9106f75b6d67b520cae33e200f1815ad2b315e344121",
+        "cases": 4,
+        "transformers": "5.6.0",
+        "accelerate": "1.11.0",
+        "torch": "2.9.1+cu128",
+        "script_sha256": "b823c61e4d870bd606569e8e6d8c1f85b3222d4f8c307f14962130c1e65b4af2",
+        "source_sha256": "bb5e6e73ba18e04b973d488a33327183e001f4395730ebcb6ced0fe8596fb095"
+      },
+      {
+        "path": "<sampler-cpu-validation>/implementation-llamafactory-ipc/implementation-audit.json",
+        "sha256": "1712b9fea62e6845961127dfdc2a210652608319177d9389a057e5f51eca885f",
+        "cases": 4,
+        "transformers": "5.6.0",
+        "accelerate": "1.11.0",
+        "torch": "2.9.1+cu128",
+        "script_sha256": "b823c61e4d870bd606569e8e6d8c1f85b3222d4f8c307f14962130c1e65b4af2",
+        "source_sha256": "bb5e6e73ba18e04b973d488a33327183e001f4395730ebcb6ced0fe8596fb095"
+      },
+      {
+        "path": "<sampler-cpu-validation>/implementation-axolotl-ipc/implementation-audit.json",
+        "sha256": "cc2a17f9ea031b2cb3b1553bf17af51688fdfe923d90f310c2a1145474d823d2",
+        "cases": 4,
+        "transformers": "5.14.1",
+        "accelerate": "1.13.0",
+        "torch": "2.11.0+cu128",
+        "script_sha256": "b823c61e4d870bd606569e8e6d8c1f85b3222d4f8c307f14962130c1e65b4af2",
+        "source_sha256": "bb5e6e73ba18e04b973d488a33327183e001f4395730ebcb6ced0fe8596fb095"
+      }
+    ],
+    "scope": "CPU semantics, not GPU timing accuracy."
+  },
+  "independent_audit": {
+    "path": "<validation>/independent-audit.json",
+    "sha256": "b21a459d4a66a34245b446dfab2992e28bfc8021773faea8585ecefc01e110d0",
+    "status": "passed",
+    "started_at_utc": "2026-10-14T08:37:05.178763+00:00",
+    "finished_at_utc": "2026-10-14T08:38:17.819674+00:00",
+    "auditor_sha256": "db13b230c890984e9f0fb858bb4a6a65cabb7160080daf151ea4db33f50f8bb8"
+  },
+  "wheel": {
+    "python_modules": 94,
+    "all_wheel_and_installed_sources_match": true,
+    "wheel_sha256": "187774f8df5c99c2ba1cb36f8c07eaa1e73edf38e58108277999b9ab97b60f8b",
+    "python_S_cli_checks": [
+      "legacy-llamafactory-empty_kernel_cache/plan",
+      "legacy-llamafactory-empty_kernel_cache/budget",
+      "legacy-llamafactory-empty_kernel_cache/holdout-1",
+      "legacy-llamafactory-empty_kernel_cache/holdout-2",
+      "legacy-llamafactory-empty_kernel_cache/holdout-3",
+      "legacy-axolotl-empty_kernel_cache/plan",
+      "legacy-axolotl-empty_kernel_cache/budget",
+      "legacy-axolotl-empty_kernel_cache/holdout-1",
+      "legacy-axolotl-empty_kernel_cache/holdout-2",
+      "legacy-axolotl-empty_kernel_cache/holdout-3",
+      "legacy-axolotl-populated_kernel_cache/plan",
+      "legacy-axolotl-populated_kernel_cache/budget",
+      "legacy-axolotl-populated_kernel_cache/holdout-1",
+      "legacy-axolotl-populated_kernel_cache/holdout-2",
+      "legacy-axolotl-populated_kernel_cache/holdout-3",
+      "legacy-huggingface-empty_kernel_cache/plan",
+      "legacy-huggingface-empty_kernel_cache/budget",
+      "legacy-huggingface-empty_kernel_cache/holdout-1",
+      "legacy-huggingface-empty_kernel_cache/holdout-2",
+      "legacy-huggingface-empty_kernel_cache/holdout-3",
+      "huggingface/plan",
+      "huggingface/budget",
+      "huggingface/validation",
+      "huggingface/cpu-workspace-39",
+      "huggingface/cpu-workspace-26",
+      "huggingface/cpu-workspace-20",
+      "llamafactory/plan",
+      "llamafactory/budget",
+      "llamafactory/validation",
+      "llamafactory/cpu-workspace-39",
+      "llamafactory/cpu-workspace-26",
+      "llamafactory/cpu-workspace-20",
+      "axolotl/plan",
+      "axolotl/budget",
+      "axolotl/validation",
+      "axolotl/cpu-workspace-39",
+      "axolotl/cpu-workspace-26",
+      "axolotl/cpu-workspace-20",
+      "huggingface-events-v2/plan",
+      "huggingface-events-v2/budget",
+      "huggingface-events-v2/validation"
+    ],
+    "historical_predictions_byte_identical": 152
+  },
+  "compatibility": {
+    "historical_predictions_byte_identical": 152,
+    "historical_predictions_sha256": "212770041b8f39ec85665edb37b268f55c9bb0cd9273e33fa99ebc0fc32f493b",
+    "prior_pipeline_python_S_cli_checks": [
+      "legacy-llamafactory-empty_kernel_cache/plan",
+      "legacy-llamafactory-empty_kernel_cache/budget",
+      "legacy-llamafactory-empty_kernel_cache/holdout-1",
+      "legacy-llamafactory-empty_kernel_cache/holdout-2",
+      "legacy-llamafactory-empty_kernel_cache/holdout-3",
+      "legacy-axolotl-empty_kernel_cache/plan",
+      "legacy-axolotl-empty_kernel_cache/budget",
+      "legacy-axolotl-empty_kernel_cache/holdout-1",
+      "legacy-axolotl-empty_kernel_cache/holdout-2",
+      "legacy-axolotl-empty_kernel_cache/holdout-3",
+      "legacy-axolotl-populated_kernel_cache/plan",
+      "legacy-axolotl-populated_kernel_cache/budget",
+      "legacy-axolotl-populated_kernel_cache/holdout-1",
+      "legacy-axolotl-populated_kernel_cache/holdout-2",
+      "legacy-axolotl-populated_kernel_cache/holdout-3",
+      "legacy-huggingface-empty_kernel_cache/plan",
+      "legacy-huggingface-empty_kernel_cache/budget",
+      "legacy-huggingface-empty_kernel_cache/holdout-1",
+      "legacy-huggingface-empty_kernel_cache/holdout-2",
+      "legacy-huggingface-empty_kernel_cache/holdout-3"
+    ]
+  },
+  "retained_cpu_coverage_revisions": {
+    "original": {
+      "manifest": "<validation>/fixture/events-manifest.json",
+      "calibration_steps": 68,
+      "holdout_steps": 84,
+      "missing_repeated_trainer_other_groups": 14,
+      "samples_per_missing_group_per_process": 1,
+      "required_samples": 2,
+      "native_processes": 0
+    },
+    "revised": {
+      "manifest": "<validation>/fixture/huggingface/events-v2/manifest.json",
+      "calibration_steps": 108,
+      "holdout_steps": 124,
+      "chosen_before_native_timing": true,
+      "coverage_rules_changed": false
+    }
+  },
+  "limitations": [
+    "Each cohort has one independent holdout. Its errors describe this measurement, not statistical accuracy, confidence intervals or guaranteed prediction bounds.",
+    "Source 25-row calibrations and target 73-row short calibrations cover the planned 39 updates. Target-specific setup and finalization are measured on the target dataset, not scaled by its row count.",
+    "Measured component groups require two independent processes and unchanged within-process repeat thresholds. Missing terminal gaps reject a CPU rebudget even when a longer horizon was covered.",
+    "The same-model and fixed padded width-128 cohorts exercise changing random row order, dataset sizes, masks and labels; they do not establish transfer to other models, shapes, GPUs, software versions, packing or distributed training.",
+    "HF and Factory use model seed 42 with source data_seed 42 and target data_seed 123. Axolotl 0.18.0 forwards its seed 42 but does not forward a separate YAML data_seed, so both native Axolotl datasets use seed 42.",
+    "The complete native span excludes process startup, report construction and CLI output. Net time subtracts measured observation spans, including batch input hashing, and does not remove every observer perturbation.",
+    "Empty manifests describe the five controlled input cache directories. They do not attest cache hits, external cache dependencies, OS page caches, stable GPU clocks or system load.",
+    "Allocator peak ranges come from contributing calibration processes; coverage does not prove the combined future run's peak, fragmentation or long-run memory growth. Peaks exclude non-PyTorch memory and are neither physical-card OOM tests nor minimum-VRAM estimates. This round adds no OOM control trials.",
+    "The original HF driver incorrectly assumed a shorter CPU horizon must be covered. All five native runs succeeded; the unchanged original failed summary and CPU-only supplement are retained, with no training rerun or accuracy-based refitting.",
+    "The original 68-to-84 periodic-events CPU preview missed 14 repeated trainer_other groups. The 108-to-124 specification was fixed and checked before its three GPU runs; no coverage or error thresholds were relaxed.",
+    "CPU previews use the native data pipeline and collators without GPU training. Declared CPU pin-memory/precision differences are retained; tensor order and hashes are compared without requiring CPU/GPU whole-plan hashes to be identical.",
+    "Only review records, hashes and independent weight statistics are archived. Model weights, optimizer state tensors, tokenizer exports and cache contents are excluded. Path substitutions invalidate execution-bound identities for calibration reuse."
+  ],
+  "archive": {
+    "path": "tests/data/finetune_transfer_validation_records.json.gz",
+    "sha256": "7ef509fabded3383a40b02efa0e4f97314393e9375584784860ca1d65b5979c4",
+    "compressed_bytes": 5819203,
+    "uncompressed_bytes": 50916346,
+    "record_files": 299,
+    "script_files": 16,
+    "log_files": 46
+  }
+}

@@ -1174,6 +1174,55 @@ python -m fakegpu validate-finetune-pipeline \
   --holdout-run holdout.json --json validation.json
 ```
 
+For default random sampling and changed training datasets, use the explicit
+empirical transfer workflow. It reads the native prepared dataloader, plans
+CPU sampler/collator outputs up to the requested horizon, and verifies consumed
+row indices and input tensor hashes during calibration. Supported stacks are
+HF/Factory with Accelerate 1.11.0 and Axolotl with Accelerate 1.13.0, at the
+framework versions above. Random sampling uses the actual native data seed plus
+epoch; Axolotl 0.18.0 does not forward its YAML `data_seed` to Trainer.
+
+```bash
+python -m fakegpu calibrate-finetune \
+  --config target-training.json --framework huggingface \
+  --profile "$TARGET_GPU_PROFILE" --python /path/to/framework/python \
+  --cuda-device 0 --workspace ./calibration-target \
+  --calibration-steps 24 --warmup-steps 2 --epochs 3 \
+  --timeout-seconds 600 --json calibration.json
+python -m fakegpu budget-finetune-workspace \
+  --workspace ./calibration-target --epochs 2 --json revised-budget.json
+```
+
+The workflow runs exactly two fresh native processes with explicit step/time
+limits and new empty kernel-cache directories by default. It preserves every
+attempt, seals reports and predictions with SHA256, and supports `--resume`
+after interruption. Successful evidence is checked before reuse; it never
+silently expands a calibration or reruns it because its error is large. CPU-only
+rebudgeting needs no GPU or installed training framework and cannot exceed the
+saved sampling horizon. Keep the workspace at its original absolute path and
+outside the model directory. Only finite local datasets are supported.
+Workspaces use POSIX process and lock semantics.
+
+Add repeated `--reuse-calibration-run PATH` arguments to reuse compatible
+training evidence from another dataset. Two fresh target-dataset calibrations
+still supply startup and finalization costs; these costs are never multiplied
+by a sample-count ratio. Training groups preserve ordered tensor shapes,
+accumulation tails, epoch boundaries, warmup, first shape use and event context.
+They **approximate** costs across different token/mask/supervision distributions;
+full descriptor distributions remain visible in the report. Every group needs
+two independent processes, and repeated groups need two observations in each.
+Missing coverage returns exit status 1 and a list of gaps without a total budget.
+Even a shorter duration can require an unobserved terminal transition.
+Memory is a separate empirical envelope of complete calibration-process peaks,
+not a guarantee for the combined long run or a smaller GPU.
+
+`run-finetune --planning-epochs N` (or `--planning-max-steps N`) also records the
+CPU horizon directly. `plan-finetune-transfer`, `estimate-finetune-transfer`
+and `validate-finetune-transfer` expose planning, budgeting and independent
+holdout comparison without the workspace manager. Existing strict pipeline
+commands keep their original matching rules. Packing, length grouping,
+streaming, custom samplers and automatic batch-size changes remain unsupported.
+
 The memory result is the observed full-run CUDA allocated/reserved peak envelope
 for a covered workload on the same GPU and allocator. This does not project to a
 smaller physical card. Per-window peaks are not added. The optional reserve is
@@ -1206,6 +1255,12 @@ The [complete pipeline validation record](tests/data/finetune_pipeline_validatio
 summarizes 30 native processes across all three frameworks, including separate
 allocator OOM controls. See [`refactor.md`](refactor.md) for phase-level errors,
 cache conditions and the remaining coverage limits.
+
+The [sampler and transfer validation record](tests/data/finetune_transfer_validation_evidence.json)
+adds 18 Qwen3.5-0.8B native processes on Blackwell GPU: three framework tests
+changing 25 to 73 training rows, plus random sampling with periodic eval/save.
+Each condition has one independent holdout. These measurements do not establish
+general accuracy or OOM safety; phase errors and rejected coverage are retained.
 
 Standard gradient checkpointing is supported. LLaMA-Factory uses
 `disable_gradient_checkpointing: false` with `use_reentrant_gc: true` or `false`;
@@ -1373,6 +1428,11 @@ maintained in [`refactor.md`](refactor.md).
 | `fakegpu plan-finetune-pipeline` | Plan future native epochs/updates from a calibrated sequential dataset |
 | `fakegpu estimate-finetune-pipeline` | Estimate complete native execution time and a covered memory envelope |
 | `fakegpu validate-finetune-pipeline` | Compare full-span time and memory predictions against independent native runs |
+| `fakegpu plan-finetune-transfer` | Plan verified random or sequential native inputs |
+| `fakegpu estimate-finetune-transfer` | Estimate explicit empirical shape-transfer budgets |
+| `fakegpu validate-finetune-transfer` | Compare transfer budgets with independent native runs |
+| `fakegpu calibrate-finetune` | Run bounded native calibration in a resumable workspace |
+| `fakegpu budget-finetune-workspace` | Rebudget saved native evidence using only the CPU |
 | `fakegpu simulate-topology` | Model collective routes and link contention |
 | `fakegpu replay-trace` | Summarize compute, communication, wait, and memory timelines |
 | `fakegpu calibrate` | Build serving observations, compare memory reports, and enforce reliability gates |

@@ -321,6 +321,15 @@ def run_main(argv: Sequence[str] | None = None) -> int:
         default="uncontrolled",
         help="Verify explicit kernel-cache directory contents before training; never clears caches.",
     )
+    planning = parser.add_mutually_exclusive_group()
+    planning.add_argument(
+        "--planning-epochs", type=float,
+        help="Prepare a CPU sampling plan for this many epochs and verify consumed batch inputs.",
+    )
+    planning.add_argument(
+        "--planning-max-steps", type=int,
+        help="Prepare a CPU sampling plan for these future updates; native training duration is unchanged.",
+    )
     args = parser.parse_args(argv)
     try:
         from .finetune_runner import run_finetuning
@@ -329,6 +338,11 @@ def run_main(argv: Sequence[str] | None = None) -> int:
             {"cache_regime": args.cache_regime}
             if args.cache_regime != "uncontrolled"
             else {}
+        )
+        options.update(
+            (field, getattr(args, field))
+            for field in ("planning_epochs", "planning_max_steps")
+            if getattr(args, field) is not None
         )
         report = run_finetuning(
             args.config,

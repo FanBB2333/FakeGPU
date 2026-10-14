@@ -71,8 +71,21 @@ BUILTIN_COMMANDS: dict[str, CommandSpec] = {
     "validate-finetune-windows": CommandSpec(".finetune_cli", "windows_main"),
     "validate-finetune-events": CommandSpec(".finetune_cli", "events_main"),
     "plan-finetune-pipeline": CommandSpec(".finetune_pipeline_cli", "plan_main"),
-    "estimate-finetune-pipeline": CommandSpec(".finetune_pipeline_cli", "estimate_main"),
-    "validate-finetune-pipeline": CommandSpec(".finetune_pipeline_cli", "validate_main"),
+    "estimate-finetune-pipeline": CommandSpec(
+        ".finetune_pipeline_cli", "estimate_main"
+    ),
+    "validate-finetune-pipeline": CommandSpec(
+        ".finetune_pipeline_cli", "validate_main"
+    ),
+    "plan-finetune-transfer": CommandSpec(".finetune_transfer_cli", "plan_main"),
+    "estimate-finetune-transfer": CommandSpec(
+        ".finetune_transfer_cli", "estimate_main"
+    ),
+    "validate-finetune-transfer": CommandSpec(
+        ".finetune_transfer_cli", "validate_main"
+    ),
+    "calibrate-finetune": CommandSpec(".finetune_workflow_cli", "calibrate_main"),
+    "budget-finetune-workspace": CommandSpec(".finetune_workflow_cli", "budget_main"),
     "simulate-topology": CommandSpec(".topology", "main"),
     "replay-trace": CommandSpec(".trace_replay", "main"),
     "nvidia-smi": CommandSpec(".smi", "main"),

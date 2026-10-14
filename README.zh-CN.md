@@ -1056,6 +1056,44 @@ python -m fakegpu validate-finetune-pipeline \
   --holdout-run holdout.json --json validation.json
 ```
 
+默认随机采样和更换训练数据可使用显式的经验迁移预算。程序读取原生 prepared
+dataloader，在 CPU 上计划目标轮次内的 sampler/collator 输出，并在校准训练中
+逐批核对行号及输入张量 SHA256。上述 HF/Factory 版本配合 Accelerate 1.11.0，
+Axolotl 配合 Accelerate 1.13.0；采样使用实际 data seed 加 epoch。
+Axolotl 0.18.0 不会把 YAML 的 `data_seed` 转发给 Trainer。
+
+```bash
+python -m fakegpu calibrate-finetune \
+  --config target-training.json --framework huggingface \
+  --profile "$TARGET_GPU_PROFILE" --python /path/to/framework/python \
+  --cuda-device 0 --workspace ./calibration-target \
+  --calibration-steps 24 --warmup-steps 2 --epochs 3 \
+  --timeout-seconds 600 --json calibration.json
+python -m fakegpu budget-finetune-workspace \
+  --workspace ./calibration-target --epochs 2 --json revised-budget.json
+```
+
+工作流固定启动两次独立原生进程，明确限制校准步数和运行时间，默认各自使用新的
+空 kernel 缓存目录。保留所有尝试，用 SHA256 封存报告与预测，中断后可加 `--resume`。
+复用前核验成功产物，不隐式增加校准次数，也不因误差较大而重跑。
+纯 CPU 重预算无需 GPU 或框架环境，但不能超过已保存的采样计划范围。
+工作区需保留原始绝对路径，并放在模型目录之外。
+首版支持有限本地数据，工作区依赖 POSIX 进程及文件锁语义。
+
+通过重复的 `--reuse-calibration-run PATH` 可复用另一份数据的兼容训练证据。
+启动和收尾仍由目标数据的两次新校准提供，不按样本数比例放大。
+训练分组保留有序张量形状、累积尾窗、epoch 边界、warmup、形状首用及事件上下文；
+不同 token、mask、监督分布之间的成本复用是**经验近似**，报告保留完整描述符分布。
+每组至少两个独立进程，重复组在每进程至少两次；缺少覆盖时返回退出码 1 和缺口清单，
+不生成总预算。缩短时长也可能引入未校准的终止位置，仍须重新检查覆盖。
+显存独立报告完整校准进程峰值包络，不保证长跑组合或更小显卡不会 OOM。
+
+也可用 `run-finetune --planning-epochs N` 或 `--planning-max-steps N` 保存 CPU 计划，
+再分别调用 `plan-finetune-transfer`、`estimate-finetune-transfer`、
+`validate-finetune-transfer` 生成计划、预算和独立 holdout 比较。
+既有严格 pipeline 命令保持原匹配规则。packing、按长度分组、streaming、自定义采样器
+及自动 batch size 调整仍未开放。
+
 显存结果为同一 GPU 和 allocator 上已覆盖工作量的完整运行 allocated/reserved 峰值
 包络，不相加各窗口峰值，也不代表已投射到一张更小的物理卡。
 `--reserve-gib` 是用户指定的余量；落在包络内不保证不会 OOM。
@@ -1080,6 +1118,11 @@ processed JSONL：三个等长整数数组、二值 attention mask，padding 前
 [完整流水线验收记录](tests/data/finetune_pipeline_validation_evidence.json) 汇总三框架
 30 个原生进程，包含独立的 allocator OOM 对照。分阶段误差、缓存条件及未覆盖范围
 见 [`refactor.md`](refactor.md)。
+
+[采样与迁移验收记录](tests/data/finetune_transfer_validation_evidence.json) 另含 Blackwell GPU
+上的 18 个 Qwen3.5-0.8B 原生进程：三框架的 25 → 73 条数据迁移，以及随机采样和周期
+eval/save 组合。每组仅一次独立 holdout，保留分阶段误差和覆盖不足记录，不能视为通用
+精度或 OOM 安全保证。
 
 支持标准梯度检查点。LLaMA-Factory 使用 `disable_gradient_checkpointing: false`，
 并通过 `use_reentrant_gc: true` 或 `false` 选择实现；Axolotl 使用
@@ -1220,6 +1263,11 @@ Blackwell GPU 上全量、LoRA、bitsandbytes QLoRA 的独立校准与复测，�
 | `fakegpu plan-finetune-pipeline` | 从校准顺序数据推导未来原生训练轮次或更新数 |
 | `fakegpu estimate-finetune-pipeline` | 估算完整原生执行时间和已覆盖显存包络 |
 | `fakegpu validate-finetune-pipeline` | 对照独立原生训练验证完整时间和显存预测 |
+| `fakegpu plan-finetune-transfer` | 计划经核验的随机或顺序原生输入 |
+| `fakegpu estimate-finetune-transfer` | 估算显式经验形状迁移预算 |
+| `fakegpu validate-finetune-transfer` | 对照独立原生运行验证迁移预算 |
+| `fakegpu calibrate-finetune` | 在可恢复工作区中运行限额原生校准 |
+| `fakegpu budget-finetune-workspace` | 仅用 CPU 对保存的证据重预算 |
 | `fakegpu simulate-topology` | 模拟 collective 路由和链路竞争 |
 | `fakegpu replay-trace` | 汇总计算、通信、等待和显存时间线 |
 | `fakegpu calibrate` | 整理 serving 观测、对比显存报告并执行可靠性门槛检查 |

@@ -56,22 +56,7 @@ def _epoch_template(run):
         raise FinetuneEstimateError(
             "future epoch planning requires unpacked training retaining tail batches"
         )
-    if any(
-        raw.get(field)
-        for field in (
-            "callbacks",
-            "plugins",
-            "streaming",
-            "resume_from_checkpoint",
-            "early_stopping_steps",
-            "early_stopping_patience",
-            "enable_torch_profiler",
-            "profile_modules",
-        )
-    ):
-        raise FinetuneEstimateError(
-            "future epoch planning does not support callbacks, plugins, early stopping or resume"
-        )
+    _validate_native_schedule_options(run)
     count = _integer(config["num_samples"], "dataset num_samples")
     batch_size = _integer(config["micro_batch_size"], "micro_batch_size")
     accumulation = _integer(
@@ -107,6 +92,26 @@ def _epoch_template(run):
             "recorded epochs do not share a deterministic batch descriptor sequence"
         )
     return template, accumulation
+
+
+def _validate_native_schedule_options(run):
+    raw = run["native_config"]
+    if any(
+        raw.get(field)
+        for field in (
+            "callbacks",
+            "plugins",
+            "streaming",
+            "resume_from_checkpoint",
+            "early_stopping_steps",
+            "early_stopping_patience",
+            "enable_torch_profiler",
+            "profile_modules",
+        )
+    ):
+        raise FinetuneEstimateError(
+            "future epoch planning does not support callbacks, plugins, early stopping or resume"
+        )
 
 
 def _schedule_calls(run, steps, updates_per_epoch):
@@ -187,6 +192,44 @@ def plan_finetuning_pipeline(run, *, epochs=None, max_steps=None, num_samples=No
         ):
             raise FinetuneEstimateError("epochs must be finite and positive")
         steps = math.ceil(epochs * per_epoch)
+    planned_updates = []
+    for step in range(1, steps + 1):
+        epoch, position = divmod(step - 1, per_epoch)
+        start = position * accumulation
+        planned_updates.append(
+            {
+                "optimizer_step": step,
+                "batches": [
+                    dict(
+                        deepcopy(batch),
+                        epoch_index=epoch + 1,
+                        epoch_microstep=start + index + 1,
+                    )
+                    for index, batch in enumerate(
+                        template[start : start + accumulation]
+                    )
+                ],
+            }
+        )
+    return validate_pipeline_plan(
+        _assemble_schedule(
+            run,
+            plan,
+            planned_updates,
+            epochs=epochs,
+            max_steps=max_steps,
+            per_epoch=per_epoch,
+            dataset_rows=dataset_rows,
+            sampler="native_sequential",
+        )
+    )
+
+
+def _assemble_schedule(
+    run, plan, planned_updates, *, epochs, max_steps, per_epoch, dataset_rows, sampler
+):
+    """Attach the same native event schedule to independently planned inputs."""
+    steps = len(planned_updates)
     calls, resolved = _schedule_calls(run, steps, per_epoch)
     policy = plan["execution_policy"]
     if policy["logging_strategy"] == "steps":
@@ -253,16 +296,7 @@ def plan_finetuning_pipeline(run, *, epochs=None, max_steps=None, num_samples=No
     for operation in by_step[0]:
         add_event(0, operation)
     for step in range(1, steps + 1):
-        epoch, position = divmod(step - 1, per_epoch)
-        start = position * accumulation
-        batches = [
-            dict(
-                deepcopy(batch),
-                epoch_index=epoch + 1,
-                epoch_microstep=start + index + 1,
-            )
-            for index, batch in enumerate(template[start : start + accumulation])
-        ]
+        batches = deepcopy(planned_updates[step - 1]["batches"])
         updates.append(
             {
                 "optimizer_step": step,
@@ -297,7 +331,7 @@ def plan_finetuning_pipeline(run, *, epochs=None, max_steps=None, num_samples=No
             "dataset_rows": dataset_rows,
             "updates_per_epoch": per_epoch,
             "resolved_event_steps": resolved,
-            "sampler": "native_sequential",
+            "sampler": sampler,
         },
     )
-    return validate_pipeline_plan(plan)
+    return plan

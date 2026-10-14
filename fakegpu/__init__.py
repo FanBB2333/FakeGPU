@@ -51,6 +51,15 @@ from .finetune_data import (
 from .finetune_run_estimator import estimate_finetuning_run
 from .finetune_window_estimator import estimate_finetuning_windows
 from .finetune_event_estimator import estimate_finetuning_events
+from .finetune_transfer_plan import plan_finetuning_transfer
+from .finetune_transfer_estimator import (
+    estimate_finetuning_transfer,
+    compare_finetuning_transfer,
+    inspect_finetuning_transfer_coverage,
+    estimate_finetuning_transfer_memory,
+    compare_finetuning_transfer_memory,
+)
+from .finetune_workflow import calibrate_finetuning, budget_finetuning_workspace
 from .finetune_pipeline_plan import plan_finetuning_pipeline
 from .finetune_pipeline_estimator import (
     compare_finetuning_pipeline,
@@ -155,6 +164,14 @@ __all__ = [
     "estimate_finetuning_run",
     "estimate_finetuning_windows",
     "estimate_finetuning_events",
+    "plan_finetuning_transfer",
+    "estimate_finetuning_transfer",
+    "compare_finetuning_transfer",
+    "inspect_finetuning_transfer_coverage",
+    "estimate_finetuning_transfer_memory",
+    "compare_finetuning_transfer_memory",
+    "calibrate_finetuning",
+    "budget_finetuning_workspace",
     "plan_finetuning_pipeline",
     "estimate_finetuning_pipeline",
     "compare_finetuning_pipeline",

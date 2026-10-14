@@ -1,7 +1,67 @@
 # FakeGPU 重构分析报告
 
-> 最新功能与验证结果见下方 **2026-10-13 / 完整原生训练预算、缓存条件与显存边界**；前一阶段见 **epoch 位置与事件上下文联合校准**、 **周期事件后的训练窗口校准**、**原生评估与 checkpoint 事件成本**、**动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新功能与验证结果见下方 **2026-10-14 / 随机采样、跨数据规模与自动校准工作区**；上一阶段为 **2026-10-13 / 完整原生训练预算、缓存条件与显存边界**；前一阶段见 **epoch 位置与事件上下文联合校准**、 **周期事件后的训练窗口校准**、**原生评估与 checkpoint 事件成本**、**动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-14 / 随机采样、跨数据规模与自动校准工作区
+
+接续 `084ff5a4`，推进约定的前三项：更换数据规模后的完整预算、默认随机 sampler、自动校准及实验管理。新增五个命令，CLI 共 **34** 个；原有严格 pipeline、定长 probe 及历史预测保留。新路径明确使用经验形状迁移，不能把相同张量形状解释为任意 token 或监督分布的成本完全相同。
+
+| 部件 | 行为与边界 |
+|---|---|
+| `_finetune_sampler.py` | 从实际 prepared dataloader 取得 sampler/collator，以独立 sampler 在 CPU 规划目标 horizon；恢复 Python/NumPy/Torch CPU RNG，不推进原始 sampler。支持顺序及 SeedableRandomSampler 的 epoch 换种子、尾 batch 和累积尾窗。逐批保存行号、四类输入张量 SHA 和实际描述符，并在原生训练中逐批核对消费前缀。 |
+| `_finetune_transfer_plan.py` / `finetune_transfer_plan.py` | 从已核验 CPU 计划选取未来轮次或更新数，无需观察目标数据的完整 epoch。绑定原生版本、实际模型/内核/collator、allocator、GPU、缓存条件与日志/保存策略。复用原有事件调度器及时间账本分区，不复制调度逻辑。 |
+| `finetune_transfer_estimator.py` | 工作成本只去除训练数据定位、内容 SHA 和 sampler seed 的身份约束，保留模型 seed、格式、优化器等执行选择；启动、收尾及训练外根事件额外匹配目标的原始执行签名、完整数据和 CPU horizon。首次 shape 使用、首次有序窗口、warmup、epoch 首尾和事件上下文分别分组。每组至少两个独立进程；重复组在每进程至少两次，可由不同校准进程覆盖互补组。缺失组显式报告，无残差或样本数比例兜底。 |
+| `finetune_workflow.py` / 两个私有输入与存储模块 | 固定两次新进程，显式步数/超时/本次新增子进程总时间上限；默认五个新空缓存目录。保存配置、日志、状态、结果和失败尝试，SHA 校验成功产物再复用；POSIX 锁及 PID/start-time 检查避免并发，超时只清理自身进程组。封存预测后原子发布，中断可续发布；不按误差自动扩跑。 |
+| `finetune_transfer_cli.py` / `finetune_workflow_cli.py` | `plan/estimate/validate-finetune-transfer` 及 `calibrate-finetune`、`budget-finetune-workspace`。可导入其他数据的校准报告并在工作区保留内容快照；目标 setup 仍只用本工作区两次校准。CPU 重预算不依赖 GPU/框架环境且不会启动训练，只允许已保存 horizon 内的时长。 |
+
+时间预算仍覆盖 runner 入口至原生返回及最后 CUDA 同步，包含完整 setup、warmup、训练、事件、间隙和收尾；Python 进程启动及报告写出不在此计时内。实际 sampler 规划、输入 hash 验证计入既有统计开销区间，没有新增显式 CUDA synchronize 或 allocator 峰值重置。raw/net 分开报告，区间组合进程均值的极值，非置信区间。保留完整 token/mask/label 描述符分布，明确标出形状池化忽略的分布差异、模型状态及未观测 kernel/allocator 历史。
+
+显存采用贡献校准进程的整体 allocated/reserved 峰值包络，不能相加部件峰值，也不能据此推断组合长跑、碎片化增长或更小物理 GPU 的安全上限。没有沿用旧同数据显存验收的 0% 误差作为新迁移路径保证。packing、长度分组、自定义 sampler、streaming、多卡、自动 batch size、early stopping、resume training、checkpoint 轮转和额外 profiler 仍须单独支持。
+
+### CPU 语义与回归
+
+已核对 HF / LLaMA-Factory 0.9.5 的 Transformers 5.6.0 + Accelerate 1.11.0，及 Axolotl 0.18.0 的 Transformers 5.14.1 + Accelerate 1.13.0。两套 Trainer 的独立随机顺序审计为 12 次训练；接入新实现后又用三个框架的原生 sampler/collator 各做四次真实 CPU Trainer 训练，共 12 次，包含 workers=1 / prefetch=256、不同 seed/data_seed、尾部与部分轮次，输入顺序和 SHA 均一致。**Axolotl 0.18.0 的原生配置构造器不转发 YAML `data_seed`**；底层 Trainer 支持该参数不等于 Axolotl YAML 已生效，正式原生验收使用其实际 model seed 42。
+
+源码冻结后的全仓回归 **1485 passed / 1 skipped，139.65 秒**，Ruff、diff check 与纯标准库包导入通过。新增回归包括消费张量同形但 token 不同的拒绝、随机流不变、首用 shape 与首用窗口区分、目标启动身份、不同规模覆盖不足、缺少 horizon/协议、工作区锁、失败恢复、超时清理后代、产物篡改、封存发布中断、历史工作池快照及纯 CPU 缩短预算。工作流测试用真实子进程串起 sampler/原生账本/时间/显存协议；不把测试构造的输入散列当作 GPU 证据。
+
+**152 份历史预测完整字典和序列化字节保持不变**；上一阶段四个正式条件的计划、预算及 holdout 比较共 **20 项**也保持完整字典一致。原严格模式的分区器和调度组装器提取为共用内部函数，旧输出保持不变。
+
+### 原生 GPU 验证
+
+设备为 Blackwell GPU，模型为已核对权重的 Qwen3.5-0.8B text LoRA；microbatch 3、accumulation 2、cap/padding 128、warmup 2、SDPA、无 GC 或 packing。三个框架各用 **25 条源数据做两次 30-update 校准，73 条目标数据做两次 6-update 校准，再独立运行 39 updates（3 epochs）**。目标校准只消费 36 条记录，未跑完目标的一个 epoch；工作池可复用源数据成本，目标启动和收尾仍使用目标自己的两次测量。HF/Factory 的源和目标 data seed 为 42/123，Ax 使用实际生效的 seed 42。每次使用五个新的空 kernel 缓存目录。
+
+另用 HF 的 25 条数据验证随机采样与周期事件组合：eval/save 每 2/4 updates，两次 108-update 校准后独立运行 124 updates。四组共 **18 个真实训练进程**；每组只有一次 holdout。所有预测在 holdout 启动前封存，实际有序输入、未来事件顺序及全部分组数值与封存预测核对。没有按误差筛选或重跑。
+
+| 验证条件 | raw 总时间 APE | net 总时间 APE | holdout allocated / reserved GiB | 显存峰值低估 |
+|---|---:|---:|---:|---:|
+| HF Trainer/PEFT，25 → 73 条 | 0.313% | 0.313% | 4.212 / 4.465 | 0% |
+| LLaMA-Factory，25 → 73 条 | 0.416% | 0.421% | 4.174 / 4.428 | 0% |
+| Axolotl，25 → 73 条 | 0.212% | 0.210% | 3.151 / 3.824 | 0% |
+| HF，随机采样＋周期 eval/save | 0.594% | 0.597% | 4.212 / 4.465 | 0% |
+
+总量误差不代表各阶段同样准确。下表保留每个阶段的 raw wall APE；前三组没有周期 evaluation，checkpoint 列仍包含原生最终保存。
+
+| 条件 | setup | update | evaluation | checkpoint | Trainer 间隙 | finalization |
+|---|---:|---:|---:|---:|---:|---:|
+| HF，跨数据规模 | 0.213% | 0.236% | — | 30.192% | 3.949% | 8.370% |
+| Factory，跨数据规模 | 0.182% | 0.488% | — | 4.915% | 0.172% | 28.247% |
+| Ax，跨数据规模 | 0.166% | 0.218% | — | 3.151% | 1.289% | 9.101% |
+| HF，周期事件 | 0.152% | 0.583% | 1.278% | 2.894% | 0.010% | 0.725% |
+
+负证据也保留：最初仅 CPU 的 68/84-update 事件方案缺少 14 个间隙组的第二个样本，未启动 GPU；改为预先声明的 108/124 后，原有 115 组规则全部覆盖，没有放宽阈值。HF 主矩阵的原始验收脚本在五次训练成功后错误地假设 26-step 缩短预算一定可用；原始失败记录保留，补充审计复用五次运行，新增 GPU 进程为零。三个框架均确认 26-step 的末尾间隙缺少独立覆盖，返回 `coverage_incomplete` 且不输出总预算；20-step 的已有覆盖可直接用 CPU 重算。更短并不自动意味着有校准覆盖。
+
+这些结果只覆盖上述模型、框架版本、数据、缓存条件与一张 GPU。显存包络并不证明较长任务或更小物理显卡不会 OOM，单次 holdout 也不足以给出普遍精度保证。
+
+独立审计从原生预处理数据和 `randperm(seed + epoch)` 重算行序及真实 collator 张量 SHA，核对 **673 updates / 1235 microsteps / 3483 条消费记录**；不使用生产预算器重算组件分区、均值、完整分布、raw/net/metadata 守恒和显存包络。103 份保存的 adapter 张量全部有限，每份 12 个 LoRA B 均非零；周期 checkpoint 的 optimizer/scheduler/RNG/TrainerState 及评估输入单独核验。18 个 UUID/PID 独立，94 个 Python 源文件从计时前冻结至审计保持一致。审计工具最初对 Ax 最终 `save_pretrained` 及嵌套事件 ID 的假设错误、随后本地 IPC 权限失败，均保留原始输出；修正仅发生在验收工具，没有改变生产代码或重跑 GPU。
+
+wheel 独立安装后的 **94 个 Python 模块**与源码逐字节一致；在 `python -S` 下完成 **41 项 CLI 检查**（旧 pipeline 20、新 transfer 12、CPU 工作区重预算 9），历史 152 份预测仍逐字节一致。更新后的三语 README/命令清单另通过 5 项检查。原始运行、配置、日志、CPU 预览、独立审计、驱动及预测封存位于 `/tmp/fakegpu-transfer-20261014/`；仓库保留[可读摘要](tests/data/finetune_transfer_validation_evidence.json)和[压缩审阅档案](tests/data/finetune_transfer_validation_records.json.gz)。档案中的路径已替换，仅供审阅，不能作为可复用校准报告。
+
+### 后续推进顺序
+
+1. **原生 packing 与长度分组**：先核验三套框架的实际边界、attention 隔离、sampler/collator 和累积计数，再开放相应预算；不把普通拼接或 position reset 当成隔离证据。
+2. **规模与覆盖扩展**：优化大数据、多 epoch 的 CPU 计划存储与扫描成本；扩大变长数据、长序列、QLoRA/GC、模型与 GPU 的独立校准矩阵，单独检查长跑显存增长和 OOM 边界。工作区路径迁移也需要独立协议，目前须保留原始绝对路径。
+3. **README 剩余研究路线**：继续 R24 长上下文/在线 serving、R25 diffusion 真机与训练估计、R26 多 GPU/多机 MoE。单卡微调闭环不代表这三条路线完成。
 
 ## 2026-10-13 / 完整原生训练预算、缓存条件与显存边界
 

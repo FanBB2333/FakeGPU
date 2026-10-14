@@ -48,6 +48,7 @@ class NativeTrainerObserver:
         self._losses = []
         self._before_weights = {}
         self.parameter_changes = None
+        self.batch_matcher = None
         self.peak_allocated = self.peak_reserved = 0
 
     @property
@@ -125,6 +126,15 @@ class NativeTrainerObserver:
             metadata_started = time.perf_counter()
             try:
                 batch = describe_batch(inputs)
+                if self.batch_matcher is not None:
+                    batch.update(
+                        self.batch_matcher.observe(
+                            inputs,
+                            epoch_index=self._epoch_index or 1,
+                            epoch_microstep=self._epoch_microstep + 1,
+                            descriptor=batch,
+                        )
+                    )
             except ValueError as exc:
                 raise RuntimeError(f"invalid native text microbatch: {exc}") from exc
             self.torch.cuda.synchronize()

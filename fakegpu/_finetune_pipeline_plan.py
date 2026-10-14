@@ -535,6 +535,23 @@ def describe_pipeline_components(plan: Mapping[str, Any]) -> list[dict[str, Any]
     event IDs and all elapsed times. Gap hashes bind both neighboring complete
     work descriptors; the descriptors themselves appear on their work groups.
     """
+    return _describe_components(plan, _pipeline_window)
+
+
+def _pipeline_window(plan, update, context):
+    return {
+        "batches": [_descriptor(batch) for batch in update["batches"]],
+        "context": context,
+        "epoch_context": {
+            "batch_microsteps": [
+                batch["epoch_microstep"] for batch in update["batches"]
+            ]
+        },
+    }
+
+
+def _describe_components(plan, describe_window):
+    """Partition a validated plan using the selected cost grouping protocol."""
     roots = {root["event_id"]: root for root in plan["root_events"]}
     latest = {"evaluation": None, "checkpoint": None}
     seen_windows, seen_gaps = set(), set()
@@ -580,15 +597,7 @@ def describe_pipeline_components(plan: Mapping[str, Any]) -> list[dict[str, Any]
                 }
                 for name, boundary in latest.items()
             }
-            window = {
-                "batches": [_descriptor(batch) for batch in update["batches"]],
-                "context": context,
-                "epoch_context": {
-                    "batch_microsteps": [
-                        batch["epoch_microstep"] for batch in update["batches"]
-                    ]
-                },
-            }
+            window = describe_window(plan, update, context)
             key = _canonical(window)
             first = key not in seen_windows
             seen_windows.add(key)
