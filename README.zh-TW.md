@@ -1384,6 +1384,10 @@ python -m fakegpu compare-experiments --workspace /tmp/research-sweep \
 執行。指標路徑支援巢狀 JSON key/index；只有繪圖需要 Matplotlib，誤差棒是觀測最小／
 最大值，並非信賴區間。範例測量 CPU 工作，不代表 GPU 訓練吞吐。
 
+[發佈回歸記錄](tests/data/research_release_evidence.json)包含 1734 項通過的
+Python 測試（略過一個 CPU-only build 分支）、原生 CPU 套件、104 個封裝模組、
+42 個命令說明與 68 次離線 CLI 功能檢查；152 份歷史預測逐位元組保持一致。
+
 | 指令 | 用途 |
 |---|---|
 | `fakegpu doctor` | 檢查安裝、原生函式庫、PyTorch 與 profiles |

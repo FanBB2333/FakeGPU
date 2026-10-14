@@ -1575,6 +1575,11 @@ Commands must stay in the foreground. JSON key/index metric paths support nested
 objects/arrays. Plotting alone requires Matplotlib; bars show observed min/max, not
 confidence intervals. The example measures CPU work, not GPU training throughput.
 
+The [release regression record](tests/data/research_release_evidence.json) covers
+1734 passing Python tests (one CPU-only-build branch skipped), the native CPU
+suite, 104 packaged Python modules, 42 command help checks and 68 offline
+functional CLI checks. All 152 historical predictions remain byte-identical.
+
 | Command | Purpose |
 |---|---|
 | `fakegpu doctor` | Check the installation, native libraries, PyTorch, and profiles |

@@ -16,9 +16,19 @@
 - [x] R25 diffusion generation 真测、训练估计及独立观测（明确限定 SD/SDXL 与缓存特征 U-Net）。
 - [x] R26 本机软件矩阵、CPU／GPU 1 MoE 语义及原生两 CPU rank DDP／FSDP2。
 - [ ] R26 物理多 GPU／多机 TP／PP／CP／EP、ZeRO／FSDP：缺少额外授权设备与连接信息，不能用 CPU ranks 替代。
-- [ ] R23 原生数值扩展需求清单、实验产物与全仓/wheel 回归。
+- [x] R23 本轮有限原生数值需求、实验工具与产物，以及最终全仓／wheel 回归。
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### 最终发布回归与本轮完成边界
+
+已完成本轮所有可在现有授权环境中实施的改动和验收。最终全仓 **1734 passed / 1 skipped，153.09 秒**；跳过项专用于 CPU-only PyTorch build，本环境为 CUDA build。`fakegpu / tests / examples/experiments` 全量 Ruff、shell 语法与 diff check 通过。原生 CPU 集成套件重新构建，旧八组数值、新六组低精度检查及真实 PyTorch CUDA 可见 matmul 全部通过。没有新增 C++ 数值 API 或改变既有 kernel 不执行边界。
+
+构建并隔离安装 wheel 后，**104 个 Python 模块逐字节一致**，六个原生库／可执行文件和 **82 个 profile** 与构建／仓库一致；安装包严格 capability 审计通过。纯标准库 `python -S` 检查 **42 个命令帮助**，原有完整预算／packing／eval **41 次 CLI**、Qwen3.5-2B 与 Diffusion **21 次**、实验计划／运行／恢复／比较／绘图 **5 次**、FSDP2 显式 shard **1 次**，共 **68 次功能检查 / 110 次含 help 检查**。绘图单独使用可选 Matplotlib，其他离线检查不导入 Torch/Transformers。**152 份历史预测逐字节不变**，新校准与 holdout 原始报告、事前封存均未改写。
+
+wheel 新审计初次把完整比较 wrapper 与摘要里的 comparison 子树直接比较，导致审计断言失败；保留脚本和日志，改为比较对应子树后通过。未改生产输出、估计值或真实测量。原生新测试的 struct 格式开发失败同样保留。最终证据见 [release](tests/data/research_release_evidence.json)和 [19 份审阅记录](tests/data/research_release_records.json.gz)，包括源码 SHA、wheel SHA、构建安装日志、两个 wheel 审计脚本、全部 CLI 产物 SHA 索引与全仓日志。产物 `/tmp/fakegpu-final-release-20261015/`，仅本地提交，未 push／发布。
+
+剩余外部待办仅为实际多 GPU／多机硬件验收。已询问额外授权设备与连接信息，当前没有可用信息，GPU 0 未使用。32K serving reserved decode **24.07%** 低估、diffusion generation VAE allocated **12.0%–13.8%** 与 reserved 最多 **31.6%** 低估保留为公开精度边界；不因实现项完成而改为通过，也不把 allocator 经验包络当成物理 OOM 保证。
 
 ### R23 有限数值需求与 R26 本机矩阵
 

@@ -1,0 +1,509 @@
+{
+  "artifact_root": "/tmp/fakegpu-final-release-20261015",
+  "cli": {
+    "experiment_checks": 5,
+    "fsdp2_shard_check": 1,
+    "functional_total": 68,
+    "help_and_functional_total": 110,
+    "offline_legacy_native_checks": 41,
+    "offline_new_native_checks": 21,
+    "parent_imported_ml": false,
+    "python_S_help": 42
+  },
+  "historical_predictions_byte_identical": 152,
+  "lint": {
+    "passed": true,
+    "scope": "fakegpu, tests and the experiment example"
+  },
+  "native_cpu_suite": {
+    "legacy_cublas_groups": 8,
+    "passed": true,
+    "physical_gpu_used": false,
+    "pytorch_cuda_visible_matmul": true,
+    "research_numeric_cases": 6
+  },
+  "pytest": {
+    "passed": 1734,
+    "scope": "Complete maintained Python test suite after the shard fix. The CPU-only Torch-build branch is skipped in this CUDA-enabled environment.",
+    "seconds": 153.09,
+    "skipped": 1
+  },
+  "record_count": 19,
+  "records": "tests/data/research_release_records.json.gz",
+  "remaining_external_validation": [
+    "Physical multi-GPU/multi-node TP/PP/CP/EP and ZeRO/FSDP need additional authorized hardware."
+  ],
+  "retained_accuracy_limits": [
+    "32K serving reserved decode underestimation 24.07%.",
+    "Diffusion generation VAE allocated underestimation 12.0%-13.8%; reserved up to 31.6%.",
+    "Observed calibration envelopes do not guarantee physical OOM safety."
+  ],
+  "retained_failures": [
+    "New numeric test integration format-string error: fixed; original log retained, full suite passed afterwards.",
+    "Wheel audit initially compared a complete comparison wrapper with a reduced summary; audit field selection corrected without changing production outputs or native measurements."
+  ],
+  "schema_version": "fakegpu.research_release_evidence.v1",
+  "source_files": {
+    "fakegpu/__init__.py": {
+      "bytes": 6922,
+      "sha256": "2846f295d1e98a1bbab6b851db5ddb44c5b51bdffa470baa45c82a587cfdb9b4"
+    },
+    "fakegpu/__main__.py": {
+      "bytes": 4010,
+      "sha256": "f93d43139aa3d64e3a8a741161e42560eaea3cae88084dca0df3e26c9ef48129"
+    },
+    "fakegpu/_allocator.py": {
+      "bytes": 40513,
+      "sha256": "7f6ae44f3b4ea1d30a7b0b49711b554bb39e7fb047798e2d67e31d17686de2b3"
+    },
+    "fakegpu/_api.py": {
+      "bytes": 17288,
+      "sha256": "eafdb7d08ea262584778add9536199f885b6e3ab3cae7480d1034e73162b5662"
+    },
+    "fakegpu/_bandwidth_worker.py": {
+      "bytes": 7163,
+      "sha256": "10db05d1cf9764ec14ffd0933c38b9dc266c18ddb65c95d36309e8cae03c4b77"
+    },
+    "fakegpu/_calibration_cuda.py": {
+      "bytes": 18868,
+      "sha256": "455d665cd77bd52320161e8b7bc7fa0ae74112b3933fff5f3a6ce5385945aaac"
+    },
+    "fakegpu/_calibration_protocol.py": {
+      "bytes": 17344,
+      "sha256": "2ecbc1cb5c8248d357f1c52f28926c5f4888531e080638b44fbea8ae592f1265"
+    },
+    "fakegpu/_cli.py": {
+      "bytes": 7004,
+      "sha256": "6fb82f19f7e652e1587757422262790a4dbf062fbe4a08a8714fab8b1bd11a6e"
+    },
+    "fakegpu/_cross_device.py": {
+      "bytes": 3865,
+      "sha256": "60ad7ec2f6e0917580d2adc52affc91d09f1b66b8bfb2ac0da0598b266eecadc"
+    },
+    "fakegpu/_diffusion_activation.py": {
+      "bytes": 13709,
+      "sha256": "b901ce66b4e95735c1e5b108c14bd93a368986281850c68a624c92e21f0995c7"
+    },
+    "fakegpu/_diffusion_pipeline.py": {
+      "bytes": 35797,
+      "sha256": "779e004c7ead149a6e34b658617256a430ec61b52f53edd62c366d7a577d3365"
+    },
+    "fakegpu/_diffusion_types.py": {
+      "bytes": 2320,
+      "sha256": "04a6ab39253a8341206a5e6b6b733178fa8c75a16ed9af86f61e9a53abf59c8d"
+    },
+    "fakegpu/_ecosystem_compat.py": {
+      "bytes": 11541,
+      "sha256": "27ccf8ae114e302bf3eba850ed44e93616ccaff16f22d666e5a26b4c30fc83d2"
+    },
+    "fakegpu/_finetune_allocator.py": {
+      "bytes": 2157,
+      "sha256": "f63da86281a3a61135987daae988622ccc1e901d125470aa2d8525629f5e4795"
+    },
+    "fakegpu/_finetune_batches.py": {
+      "bytes": 23625,
+      "sha256": "9ac4799e3d06c562963a20f79b028dad1c9a52d3713d779be3126f3041d0518d"
+    },
+    "fakegpu/_finetune_cache.py": {
+      "bytes": 4875,
+      "sha256": "d2a2ee4a0e009654ee56c1c96a594d7e8d4b2b2fa797f3db843f956cd9e7698c"
+    },
+    "fakegpu/_finetune_event_context.py": {
+      "bytes": 5326,
+      "sha256": "09dd42b598ec259531027948f29ad2e28940dd0e6b7397c485aa00b9ccc552fb"
+    },
+    "fakegpu/_finetune_event_observer.py": {
+      "bytes": 13148,
+      "sha256": "da8dff4ac10ba258f696bc0f61d3715d9948cea2b546b27eadb80d199c8b428d"
+    },
+    "fakegpu/_finetune_events.py": {
+      "bytes": 16246,
+      "sha256": "b1943bbc7d7b5465f655e605547391f0952d96e7a3441fc549c7a07b03b9a86b"
+    },
+    "fakegpu/_finetune_hf_runner.py": {
+      "bytes": 13668,
+      "sha256": "b32be9dc5c0da40930db1acc7988e16003fec9af9b27f1544988e2218b3e7374"
+    },
+    "fakegpu/_finetune_length_sampler.py": {
+      "bytes": 3955,
+      "sha256": "f20509381170d0acc33aad3f101faa445d61c953277fe48897dc7adf31ec7111"
+    },
+    "fakegpu/_finetune_model.py": {
+      "bytes": 20439,
+      "sha256": "2c3e3c9065d9f9db0764d6eb6615e8bc2e30523f62ad16720f13fe0b972e2791"
+    },
+    "fakegpu/_finetune_observer.py": {
+      "bytes": 12506,
+      "sha256": "d2b540fccc91bd1fca9a7c0b732e5eb452b4fb319feabf03d080ad2dc5b80707"
+    },
+    "fakegpu/_finetune_packed_batches.py": {
+      "bytes": 17718,
+      "sha256": "8923f1b3321998ae9232898f445ad344f4d9e464b6f448c8fdc25dc3ec099521"
+    },
+    "fakegpu/_finetune_packed_sampler.py": {
+      "bytes": 25667,
+      "sha256": "5b0339f2e6054fd58a49ec7734d146657ad2b9b5aa5d53c8eeae2f2304fca1ce"
+    },
+    "fakegpu/_finetune_pipeline_plan.py": {
+      "bytes": 27627,
+      "sha256": "b09ac0ded5fdc7f15615f709dc66217cd94ed5ef86d802b82710cb5621fd9194"
+    },
+    "fakegpu/_finetune_sampler.py": {
+      "bytes": 34047,
+      "sha256": "38d5c15700f0ba141c3a4037f79785fd86c2d3c7be738f4e1fd741ab399f835c"
+    },
+    "fakegpu/_finetune_segments.py": {
+      "bytes": 10516,
+      "sha256": "c85a26a84eca85350853f9673b64f13fd6bb9137eccc329d426dc7bb99cd0a02"
+    },
+    "fakegpu/_finetune_timeline.py": {
+      "bytes": 13100,
+      "sha256": "ce3f005ce39a14a4eb77ca9cba001ca9d2f379acdc333cc1485b69b8846d6c62"
+    },
+    "fakegpu/_finetune_transfer_plan.py": {
+      "bytes": 10814,
+      "sha256": "975cba7aad830c84622dd0a5407a644df504cddd350c50dc6f1c571fc90cebc3"
+    },
+    "fakegpu/_finetune_workflow_inputs.py": {
+      "bytes": 7813,
+      "sha256": "eb633557c14199af6af060c32bd6b68705178fd5c3a3a85e2b8894bc8793666f"
+    },
+    "fakegpu/_finetune_workflow_store.py": {
+      "bytes": 6202,
+      "sha256": "bb1a993c9623fc2ba206907f95280624403b73ce2d364936ba8c6da1342140a3"
+    },
+    "fakegpu/_local_checkpoint.py": {
+      "bytes": 5019,
+      "sha256": "4e1b60fb03bc8a7cab2c13d70ad439afd8c4363e10d7a3ec2deddc76685e29a8"
+    },
+    "fakegpu/_preflight_bootstrap.py": {
+      "bytes": 4496,
+      "sha256": "c350db5a0dd4c2240243afac126c04b3a87d1fb0827b4b335e425c24dbeddd1b"
+    },
+    "fakegpu/_preflight_report.py": {
+      "bytes": 13621,
+      "sha256": "d13ff3440d2aee3cfef724df88e8d07368175487df8b19aa53654255a5afdcac"
+    },
+    "fakegpu/_profiles.py": {
+      "bytes": 4126,
+      "sha256": "2512196baab04f0f34afde5171f8ce289009518cf57ed49304de3f4e18508f6c"
+    },
+    "fakegpu/_runtime.py": {
+      "bytes": 6215,
+      "sha256": "977dc6b89f4db74d2202342ae3064101c8537e46b4564d6774c7b2db8f4d0afe"
+    },
+    "fakegpu/_serving_kv.py": {
+      "bytes": 25819,
+      "sha256": "4ce50aee337b9a9fb4ba8ebccc5d8bb0ca0ef14e2bc84394f2baa089a9ee4a6b"
+    },
+    "fakegpu/_serving_memory.py": {
+      "bytes": 32414,
+      "sha256": "d35e2ae01ea0a723d44575598ef7766f04bb94021353bdcf21e9847a6f502fa0"
+    },
+    "fakegpu/_serving_speculative.py": {
+      "bytes": 9622,
+      "sha256": "5be88f9f868fbcf9cc44780ca5a90681e97a78c81893b5635d6166742c4b7f23"
+    },
+    "fakegpu/_serving_types.py": {
+      "bytes": 705,
+      "sha256": "1c51b88951308f3564abbf18499975cdd63424cabf81e5820cf6ebc6584d1560"
+    },
+    "fakegpu/_serving_vllm.py": {
+      "bytes": 10668,
+      "sha256": "bda2c6ec20fbc062993c378ae30d5cebfe6cd52e6fa212c432f56739e92daba8"
+    },
+    "fakegpu/_smi_environment.py": {
+      "bytes": 25627,
+      "sha256": "451a60d1d7b51c598b081310881f67b1f05b97b2bc88260ae2ffcb50044b82a2"
+    },
+    "fakegpu/_smi_query.py": {
+      "bytes": 12847,
+      "sha256": "94f20b030df832a370cd27ac049c43623bcc1fefdce9988033c564e95b7d1057"
+    },
+    "fakegpu/_smi_render.py": {
+      "bytes": 40689,
+      "sha256": "2dd4abb3ce8b663b5fb612caa5122c0d5ce251bc056c54c30160aed6953ffe77"
+    },
+    "fakegpu/_smi_state.py": {
+      "bytes": 37397,
+      "sha256": "b6e51f286959357611eb421f85dd394a692de6b60609901b0537a044ec7fab6a"
+    },
+    "fakegpu/_stage.py": {
+      "bytes": 2099,
+      "sha256": "6003b96af99a879486d32fa204d4c4dc3517919dff1a8847fe0088165077aa47"
+    },
+    "fakegpu/_torch_reporting.py": {
+      "bytes": 2707,
+      "sha256": "b6e39eb09ef8e7e7587f7afad58d925f0816e21448ee96858589016b2f0ffab5"
+    },
+    "fakegpu/_upstream.py": {
+      "bytes": 46091,
+      "sha256": "c88ec92b571e87c20e179df1f182cb7d85ad620fa3f209eef0de6b9113b7f9b5"
+    },
+    "fakegpu/_version.py": {
+      "bytes": 58,
+      "sha256": "0f1d4266e6bf3a9de70e3e02756eb0f192899b464f80b857d343a4a312762ad1"
+    },
+    "fakegpu/calibration.py": {
+      "bytes": 65825,
+      "sha256": "2a0f0724c33e3775e1bf4f47da99607f1b8c143e9d2d60fa88e984bf916f77e4"
+    },
+    "fakegpu/capabilities.py": {
+      "bytes": 19515,
+      "sha256": "479875ba481e4676e667e09e9879444b40e2fa8988dbff0c267bcc421ea5284d"
+    },
+    "fakegpu/data/__init__.py": {
+      "bytes": 70,
+      "sha256": "a2978dd4be43ceaf6dca206edb855bd055f8e2c0c9f39eec1cc7d2cfd92b6b8c"
+    },
+    "fakegpu/demo.py": {
+      "bytes": 5337,
+      "sha256": "c70b5b4a14299c1ff0661af9e1b6500acf8e520447b1405e6ecfbb6290ad49f1"
+    },
+    "fakegpu/diffusion_estimator.py": {
+      "bytes": 26788,
+      "sha256": "020072db62ea549907362c043ec9f01f2ea6818fcab1fcf6b8215de39e2e23cb"
+    },
+    "fakegpu/diffusion_training.py": {
+      "bytes": 31510,
+      "sha256": "2b6e669040ea9d2a039c39197daf850d4924afafbab1caaf09aeda8afd1e0109"
+    },
+    "fakegpu/diffusion_training_cli.py": {
+      "bytes": 5934,
+      "sha256": "9b14261cc20f21fe5f50254e4fef6a2cbdac801e6ad3eb3f5dfba644690aa18f"
+    },
+    "fakegpu/diffusion_training_runner.py": {
+      "bytes": 15476,
+      "sha256": "59eee3d8680c30efe7b338b09c03219f681af17f9c47f84125d2de80a787701c"
+    },
+    "fakegpu/distributed_cli.py": {
+      "bytes": 31701,
+      "sha256": "f871bfa866563296f6b5316e6c09810e8b1e39e3a71430b719b49048370334b2"
+    },
+    "fakegpu/doctor.py": {
+      "bytes": 7812,
+      "sha256": "9ce8f107bcbbca1629c12c58ae54f5e48ce90927daf15135de50f87b4fa7166c"
+    },
+    "fakegpu/experiments.py": {
+      "bytes": 22447,
+      "sha256": "6853b700d9e97ea687068b2fb5f8ccaef6f7302aef9fde21b925e5e29d7a9caf"
+    },
+    "fakegpu/experiments_cli.py": {
+      "bytes": 2991,
+      "sha256": "0f3b1e16d75825b9a402944d81a4ecd90336a4099e79271efcc8f628eb0e7868"
+    },
+    "fakegpu/finetune_cli.py": {
+      "bytes": 16440,
+      "sha256": "c1eea4ea572f29d12d39a5f7b120897dbce61d9a124f02122681e7baa3004362"
+    },
+    "fakegpu/finetune_config.py": {
+      "bytes": 45493,
+      "sha256": "382311acf677fd864ea22660067efae7ea72695ea8d6e9d136ddac28e0665054"
+    },
+    "fakegpu/finetune_data.py": {
+      "bytes": 28854,
+      "sha256": "12a3604e2b678c3e4bcba3db824d205825cd1201108df9118093b59736f76bda"
+    },
+    "fakegpu/finetune_data_cli.py": {
+      "bytes": 4168,
+      "sha256": "10148bdc79427e74724ab242a8d9c5f7e0f18d0417c5d3358e928279ba1891d6"
+    },
+    "fakegpu/finetune_data_report.py": {
+      "bytes": 16774,
+      "sha256": "2a04d92b4f8e3e0ee5350a92999c12b19b3371a3386b36c8b43fbb1afaaf05ba"
+    },
+    "fakegpu/finetune_estimator.py": {
+      "bytes": 48416,
+      "sha256": "f152c5b93b3653b30214393829ef517cd101baa95860e6c7b4881e1cd761c7b4"
+    },
+    "fakegpu/finetune_event_estimator.py": {
+      "bytes": 10192,
+      "sha256": "90f614689c273711d466a0abb14ee2e6339ca1d08abd188fc2bd012c2555190c"
+    },
+    "fakegpu/finetune_memory_estimator.py": {
+      "bytes": 11115,
+      "sha256": "e17afa6ec4685202303e3f8f5d3c8f4014e71a9fd92f067b4666e196a6b328f9"
+    },
+    "fakegpu/finetune_pipeline_cli.py": {
+      "bytes": 4980,
+      "sha256": "46dd507a5b552d570917b8897db69759b7bc663e7fd179dcb3c1f692637ba6b9"
+    },
+    "fakegpu/finetune_pipeline_estimator.py": {
+      "bytes": 14697,
+      "sha256": "53059328e6c6aea0711563ff377de90439cc4d73998d85bfb74f832d3bf5ca44"
+    },
+    "fakegpu/finetune_pipeline_plan.py": {
+      "bytes": 12892,
+      "sha256": "e0f3b8ea18b896d9532913282c82390b68355ce41c1066a4c9805544ce1686e0"
+    },
+    "fakegpu/finetune_probe.py": {
+      "bytes": 15045,
+      "sha256": "44867cc1311253a99a6a637f3dc5fc93efa8412136eaba1ebe2ee9531a9da2f5"
+    },
+    "fakegpu/finetune_run_estimator.py": {
+      "bytes": 21492,
+      "sha256": "2b2d0bfed42cb2dcd769eb2f425dc429253576bf6d1ef4082719cc0cb1b47adb"
+    },
+    "fakegpu/finetune_runner.py": {
+      "bytes": 30388,
+      "sha256": "5a95847bcfb3c84746ec0cd56e6749e7971690f8c517ca81d30246287a195f40"
+    },
+    "fakegpu/finetune_transfer_cli.py": {
+      "bytes": 4554,
+      "sha256": "85bf403bb66b8550b08ff75b6bcd1eecbfac3d078127101af3be40b46207ee55"
+    },
+    "fakegpu/finetune_transfer_estimator.py": {
+      "bytes": 23852,
+      "sha256": "b22822fd1c06d1b05c8b99ab7d56c23278c366d01e1d2a519ea991e418339d3a"
+    },
+    "fakegpu/finetune_transfer_plan.py": {
+      "bytes": 2044,
+      "sha256": "e284cf88300089588f1d35fbd50acb5ec415308754ec10461d4bbf4b37a9aad6"
+    },
+    "fakegpu/finetune_window_estimator.py": {
+      "bytes": 19182,
+      "sha256": "225a51bac3dcd09753eb1c79a347275deafba6099cc4fb1bd5f50bf09d3798c5"
+    },
+    "fakegpu/finetune_workflow.py": {
+      "bytes": 27184,
+      "sha256": "ae827f7bef1e80372cf846a1f3a30c4b89dd12c10e119dfe20ce33c41629267a"
+    },
+    "fakegpu/finetune_workflow_cli.py": {
+      "bytes": 5466,
+      "sha256": "ab6e3939c0bac6930a236eef2acf54aabb67737cdfa71866c000ce0c114dca3c"
+    },
+    "fakegpu/flop_counter.py": {
+      "bytes": 2802,
+      "sha256": "5ba1592b0ecda998752283c2103ee9356b913e6b57f8f140e905042e72563cf3"
+    },
+    "fakegpu/kernel_analysis.py": {
+      "bytes": 14849,
+      "sha256": "c1a578271e64a4e6370f08157c8e43f729c261f73e6a2bbc6460e9aec1dd44d6"
+    },
+    "fakegpu/llm_cli.py": {
+      "bytes": 5873,
+      "sha256": "90c0ef73ece59acd7626bb4afdfc9b6137a21e526e94ec92e1689685b1b57c7e"
+    },
+    "fakegpu/llm_estimator.py": {
+      "bytes": 59624,
+      "sha256": "2c048af9b3dffef232d9ef92c9406016c9e07ce5c6de3d304157f42520efb380"
+    },
+    "fakegpu/memory_estimator.py": {
+      "bytes": 69829,
+      "sha256": "e7268510f38b126019aa2fb79beabf10b652d4af56efcb6fb357e48750fdfc9d"
+    },
+    "fakegpu/metrics.py": {
+      "bytes": 40716,
+      "sha256": "2c9bf56efb05c67b5044ae937353996040edf234d01412a73ca44aa1ca971b9c"
+    },
+    "fakegpu/operator_profiles.py": {
+      "bytes": 7172,
+      "sha256": "3ab3ab56a1f0e91a42e1463669dccee78eb8da19f48244a7c520b7fb379bbbbf"
+    },
+    "fakegpu/performance_model.py": {
+      "bytes": 9519,
+      "sha256": "b43c4d9ffc1bca48b8dd985637d0b97a0ccd2ef27a192a9af0fe657cdb317f33"
+    },
+    "fakegpu/preflight.py": {
+      "bytes": 40454,
+      "sha256": "4d6e50e907f84d5586faa05a841341f92056c0f43560ec739c50b806ef8caf5e"
+    },
+    "fakegpu/profile_catalog.py": {
+      "bytes": 16143,
+      "sha256": "88490838e42ab3a4dbd2c75b236754a55e69d3263ad071cfd5d3be613e88f2b6"
+    },
+    "fakegpu/repository_analyzer.py": {
+      "bytes": 34919,
+      "sha256": "97052d298aef94bff5bfad9a5179600670176d8b67ffba20dd0f62dc64ae177b"
+    },
+    "fakegpu/serving_benchmark.py": {
+      "bytes": 13568,
+      "sha256": "38bacd996d132c008cf49e6000b03292bb90ffe4ba65305047854fd90f5fafc2"
+    },
+    "fakegpu/serving_plan.py": {
+      "bytes": 60044,
+      "sha256": "1c6ba8739de803377e1126a5a0f78f296d3a7918cb508cf8a2df8f750438f3e7"
+    },
+    "fakegpu/smi.py": {
+      "bytes": 32102,
+      "sha256": "260e4af048d8b6f8030aed6767978f44fae8e35365980a55925b7b4a357a620a"
+    },
+    "fakegpu/structured_io.py": {
+      "bytes": 4277,
+      "sha256": "132170332b1e7075e2b68bca2e9859a771ca43fae602c4255ad0161fc2202f97"
+    },
+    "fakegpu/topology.py": {
+      "bytes": 34209,
+      "sha256": "c5bbb3f2bbe5cc9d2ada76cf019aa4f2f28e8f49bde891b88bb24373057d424d"
+    },
+    "fakegpu/torch_patch.py": {
+      "bytes": 60176,
+      "sha256": "c8b414b82983870b04cfb0463d4df30e21c3511ed196c828b533d6b459ae99f5"
+    },
+    "fakegpu/trace_replay.py": {
+      "bytes": 30302,
+      "sha256": "e590d0d4cffb6467a0f53bc8d37b72bf6da5cc12c8da4ad2a19513385b0df73c"
+    },
+    "fakegpu/training_plan.py": {
+      "bytes": 31555,
+      "sha256": "dd444f5bfc07079be44cb599225030e08ec16e4e9a99a2a5307f5bad6e4096ea"
+    },
+    "fakegpu/validation.py": {
+      "bytes": 25365,
+      "sha256": "558ef114147ce2033e96495235108cb6ecb8a1c80dcdf1e532c13e832daf6b1a"
+    },
+    "fakegpu/workspace_cli.py": {
+      "bytes": 1884,
+      "sha256": "92c74d4aec0969199e91624c613b29e6afb4e4ea453dbeffc3d9d54d516e54fd"
+    },
+    "fakegpu/workspace_profiles.py": {
+      "bytes": 24406,
+      "sha256": "6d2ab752238380bfe05a4d8d0128d4127c559197629a4514f401074b42a019cb"
+    }
+  },
+  "validation_artifacts": [
+    "tests/data/finetune_segment_validation_evidence.json",
+    "tests/data/finetune_length_evaluation_evidence.json",
+    "tests/data/finetune_packing_budget_evidence.json",
+    "tests/data/finetune_qwen2b_evidence.json",
+    "tests/data/serving_native_evidence.json",
+    "tests/data/diffusion_native_evidence.json",
+    "tests/data/experiment_toolkit_evidence.json",
+    "tests/data/research_native_evidence.json"
+  ],
+  "wheel": {
+    "all_sources_byte_identical": true,
+    "bytes": 3972913,
+    "installed_capability_audit_passed": true,
+    "native_artifacts": [
+      {
+        "name": "libnccl.so.2",
+        "sha256": "33fd4e5cd73ddc8ae2c6b5ae18e5d13cdd5f41b66f98205830bacd196552f983"
+      },
+      {
+        "name": "libcublas.so.12",
+        "sha256": "34b9ba52e4a1fc41216c30742ff4e50603c04083f7a8a58f6b2a150e0b107454"
+      },
+      {
+        "name": "libcudart.so.12",
+        "sha256": "ef30c88d5750357b610ea75223c5dd5349fb923d502f8f2d15cfb52d6076ca75"
+      },
+      {
+        "name": "libcuda.so.1",
+        "sha256": "114f717d13c7957595597d88d8fec4a380af60d965fd8161f7dabb533f5da661"
+      },
+      {
+        "name": "libnvidia-ml.so.1",
+        "sha256": "e07861d6ab21a07102ebcb0d5ec731bcefdea55ef4287ca466d7b4ac6bf97c20"
+      },
+      {
+        "name": "fakegpu-coordinator",
+        "sha256": "9caafcb70850bafbbd60e0b5d0b724f7eff8edfc818d9f7020b0f5dfde494a8e"
+      }
+    ],
+    "path": "/tmp/fakegpu-final-release-20261015/dist/fakegpu-1.5.5-py3-none-linux_x86_64.whl",
+    "profile_files": 82,
+    "python_module_count": 104,
+    "sha256": "fa1432afc19eb533925bc915eeee20acee0904a3869cdc29495fe8e2ad943a54"
+  }
+}
