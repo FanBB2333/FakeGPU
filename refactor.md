@@ -1,7 +1,74 @@
 # FakeGPU 重构分析报告
 
-> 最新功能与验证结果见下方 **2026-10-14 / 随机采样、跨数据规模与自动校准工作区**；上一阶段为 **2026-10-13 / 完整原生训练预算、缓存条件与显存边界**；前一阶段见 **epoch 位置与事件上下文联合校准**、 **周期事件后的训练窗口校准**、**原生评估与 checkpoint 事件成本**、**动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新功能与验证结果见下方 **2026-10-14 / 可复现长度分组与 packing 隔离边界**；上一阶段为 **随机采样、跨数据规模与自动校准工作区**、**完整原生训练预算、缓存条件与显存边界**；前一阶段见 **epoch 位置与事件上下文联合校准**、 **周期事件后的训练窗口校准**、**原生评估与 checkpoint 事件成本**、**动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-10-14 / 可复现长度分组与 packing 隔离边界
+
+接续 `478f8278`，推进原生长度分组，并实测 Qwen3.5 packing 的隔离边界。CLI 仍为 34 个；新增 `run-finetune` / `calibrate-finetune` 的显式 `--length-grouping-seed`，没有把依赖全局随机状态的原生排序伪装成可预排的未来计划。
+
+| 部件 | 实现与范围 |
+|---|---|
+| `_finetune_length_sampler.py` | 复用已安装 Trainer 的 LengthGroupedSampler 算法，以独立 CPU generator 在每 epoch 使用显式 seed＋epoch。只替换已知原生长度 sampler，由既有 observer 管理恢复；在 loader 已准备、自定义 sampler 或存在评估时拒绝。 |
+| `_finetune_sampler.py` | 新路径使用 sampler plan v2，保存原生完整有序 lengths、grouping batch size、长度 SHA、行顺序和真实输入 SHA；旧顺序/随机路径保持 v1。预排器克隆 sampler，保持原始 RNG、数据和采样状态。 |
+| `_finetune_transfer_plan.py` | 时间分区与成本均值复用原有实现。新路径保留完整长度序列、分组宽度和显式 seed 的身份，不跨不同长度工作量池化 epoch 排序成本。v1/v2 与签名互校，拒绝布尔 seed 或未应用的长度分组选项。 |
+| runner / workflow / CLI | 要求规划 horizon 和关闭评估，保留原生数据处理、尾 batch、累积尾窗、最终保存、缓存条件及显存观测。选择该选项会改变 sampler 的随机流；没有更改模型 seed 或默认原生采样流。工作区记录、传递并核对显式种子。 |
+| `tests/native/finetune_packing_semantics.py` | 极小真实 Qwen3.5 模型的反事实输入及梯度审计；纯 attention 为正对照，普通混合 attention 和 Ax packing patch 单独核验。随机权重的内核诊断不代表本地 0.8B checkpoint 的训练预算验收。 |
+
+### 语义与回归
+
+三个框架的原生 sampler 方法和 collator，各执行 5 次真实 CPU Trainer 训练，共 **15 次**。覆盖 5/13/17/65 行、seed=0/123/333、不同模型 seed 和 data_seed、worker=1/prefetch=256、尾 batch、小数轮次及更大的 megabatch。小模型启用 dropout，主动消耗模型 CPU RNG；所有消费顺序及输入 SHA 仍与独立 `randperm`、megabatch 分组/排序/最大项交换重建一致。
+
+TF 5.x 的正确参数为 `train_sampling_strategy: group_by_length`；Axolotl 0.18.0 的 builder 将自身 `group_by_length: true` 转到该参数。此前 HF 冲突检查仅识别旧 `group_by_length`，允许新版分组参数与 `disable_shuffling=true` 同时存在，随后被顺序 sampler 静默覆盖。已用 CPU 用例复现，修复于独立提交 `3cc27e61`，HF 相关 **26 项**回归通过。
+
+冻结后全仓回归 **1529 passed / 1 skipped，137.88 秒**；Ruff、diff check 和 `python -S` 纯标准库导入通过，**152 份历史预测逐字节一致**。新回归覆盖原生全局随机流不可预排、独立种子及状态恢复、v2 签名/长度/宽度约束、消费内容核验、原工作区命令兼容和早期参数拒绝。
+
+### Packing 隔离边界
+
+审计使用两层、hidden size 64 的真实 Qwen3.5 类，8 个 token 分为两段；传入分块 causal mask 与重置 position IDs。只改变第一段，检查第二段 logits 的最大差和第二段损失对第一段输入 embedding 的梯度。CPU 使用 FP32，Ax 另用 GPU 1 的 BF16 检查。纯 full-attention 对照的两个量均为 **0**。
+
+| 路径 | 后段 logits 最大差 | 后段对前段最大梯度 | 结果 |
+|---|---:|---:|---|
+| HF / TF 5.6.0 普通混合 attention，CPU | 0.01347984 | 0.00111157 | 未隔离 |
+| Factory 0.9.5 原生 neat-packing collator＋TF 5.6.0，CPU | 0.01347984 | 0.00111157 | mask 正确，混合状态仍跨段 |
+| TF 5.14.1 普通混合 attention，GPU BF16 | 0.01269531 | 0.00111389 | 未隔离 |
+| Axolotl 0.18.0 的 Qwen3.5 packing patch / TF 5.14.1 | — | — | decoder 缺少 `layer_type`，接口不兼容 |
+
+因此本轮没有开放 Qwen3.5 packed 训练预算。普通 full-attention 的 mask 隔离不代表卷积及递归状态已重置；Ax patch 存在也不代表当前软件栈可执行。第三方源码没有被修改；错误与完整 traceback 保留，不能把该诊断的 `passed`（反例及正对照成立）解释为 Ax packed 训练成功。
+
+### 原生长度分组验收与覆盖边界
+
+验收模型为本地 Qwen3.5-0.8B text LoRA，设备 Blackwell GPU；25 条记录、microbatch 3、accumulation 2、seed 42、显式分组 seed 123、SDPA、无 GC/packing/评估。Factory/HF 处理后长度为 64 或 128；Ax 使用原生模板并 padding 到 64 的倍数。实际 shape 包含 `[3,64] [3,128] [1,64] [1,128]`，保留尾 batch 和部分 epoch。
+
+所有 CPU 候选及缺口均保留。最初 120-step 目标的 64 组在 40–110-step 校准中缺少重复间隙样本；更稀疏长序列分布的 53/54 组也仍缺覆盖，没有启动这两种方案的 GPU 校准。随后在原数据的预声明网格中，只有 **89-step 校准 → 99-step 目标**获得三个框架共同的完整覆盖（60 组）。选择只依据 CPU 调度及样本计数，在任何计时 GPU 运行之前完成；不按 GPU 误差筛选、延长或重跑。
+
+同一 seed 下，原生分组的完整 24-epoch CPU 计划相对原生随机顺序减少 padding：HF/Factory **60.280%**，Ax **39.061%**。稀疏诊断数据的降幅仅 **5.172% / 1.292%**。这些是 collator 工作量计数，未执行未分组的 GPU 速度对照，不能解释为对应吞吐提升。短试跑不保证覆盖，缺失成本仍拒绝总预算。
+
+每框架两次 89-update 校准、一次 99-update holdout，实际消费分别为 **161 microsteps / 449 条序列**和 **179 / 499**；不是把小数 epoch 请求直接乘到行数。共 **9 个独立原生训练进程，831 updates / 1503 microsteps / 4191 条消费记录**。每组只有一次 holdout，每次五个新的空 kernel 缓存目录；全部 warmup、首次 shape、Trainer 间隙和最终保存计入完整预算。预测在 holdout 启动前封存，所有输入、调度及预算数值逐项核验，没有失败训练或精度筛选重跑。
+
+| 框架 | raw 总时间 APE | net 总时间 APE | holdout allocated / reserved GiB | 显存峰值低估 |
+|---|---:|---:|---:|---:|
+| HF Trainer/PEFT | 1.353% | 1.358% | 4.210 / 4.799 | 0% |
+| LLaMA-Factory 0.9.5 | 0.255% | 0.262% | 4.176 / 4.762 | 0% |
+| Axolotl 0.18.0 | 0.245% | 0.244% | 3.151 / 3.826 | 0% |
+
+分项 raw wall APE 同时保留，Ax 最终保存的相对误差明显较大，不能由总量误差掩盖：
+
+| 框架 | setup | update | checkpoint | Trainer 间隙 | finalization |
+|---|---:|---:|---:|---:|---:|
+| HF | 0.088% | 1.527% | 1.982% | 0.834% | 1.011% |
+| Factory | 0.864% | 0.149% | 1.053% | 0.733% | 1.900% |
+| Ax | 0.221% | 0.257% | 31.629% | 2.116% | 1.785% |
+
+独立审计重新执行原生预处理，以手写 `randperm`＋megabatch 排序及最大项交换重建 99-update 计划；9 份报告的完整输入 SHA、消费前缀、时间守恒、60 个成本组的每进程均值、描述符分布和显存包络均一致。9 份 adapter 各 24 个张量 / 319,488 参数，全部有限，每份 12 个 LoRA B 均非零。**95 个生产 Python 模块**从全仓测试后冻结至所有原生运行和审计结束保持一致。
+
+独立安装的 wheel 95 个 Python 模块与源码逐字节一致，`python -S` 下 **32 项 CLI 检查**（旧 pipeline 20、新长度分组计划/预算/holdout/工作区 12）全部与封存值一致，152 份历史预测仍逐字节一致；三语 README 与命令清单另通过 **5 项**检查。
+
+原始证据位于 `/tmp/fakegpu-length-20261014/`，包括 CPU 失败覆盖候选、稀疏分布、packing 反例及 Ax 接口异常。仓库提供[可读摘要](tests/data/finetune_length_validation_evidence.json)和[压缩审阅记录](tests/data/finetune_length_validation_records.json.gz)，路径替换后的记录不能作为可复用校准输入。实测只对应此模型、版本、数据、GPU 和缓存条件；单次 holdout 的误差及短程 allocator 包络不构成通用精度或 OOM 保证。
+
+### 下一步
+
+先为 Qwen3.5 的卷积与递归状态建立可执行的分段接口，验证 logits、梯度、跨层状态与保存恢复；再接入逐框架 packed sampler 的实际计数和独立时间/显存校准。长度分组后续补可复现的评估采样、更大的数据与 planning 存储成本，以及更多模型/GPU 的重复 holdout。R24–R26 的 serving、diffusion、多卡/多机路线仍待独立推进。
 
 ## 2026-10-14 / 随机采样、跨数据规模与自动校准工作区
 

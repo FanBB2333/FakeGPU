@@ -22,6 +22,7 @@ from .finetune_estimator import FinetuneEstimateError
 
 
 SCHEMA_VERSION = "fakegpu.finetune_sampler_plan.v1"
+LENGTH_SCHEMA_VERSION = "fakegpu.finetune_sampler_plan.v2"
 VERIFICATION_SCHEMA_VERSION = "fakegpu.finetune_sampler_verification.v1"
 _INPUT_FIELDS = ("input_ids", "attention_mask", "labels", "position_ids")
 _WORKER_COLLATORS = {
@@ -62,6 +63,16 @@ def _sha256(value, name):
 
 def _class_name(value):
     return f"{type(value).__module__}.{type(value).__qualname__}"
+
+
+def validate_length_grouping_seed(seed):
+    if seed is not None and (
+        isinstance(seed, bool)
+        or not isinstance(seed, int)
+        or not 0 <= seed < 2**63
+    ):
+        raise ValueError("length_grouping_seed must be an integer in [0, 2**63)")
+    return seed
 
 
 def validate_native_sampler_versions(framework, versions=None):
@@ -172,9 +183,27 @@ def _sampler_configuration(trainer, loader, torch):
     sampler = batch_sampler.sampler
     if type(sampler) is torch.utils.data.SequentialSampler:
         return sampler, "sequential", None
+    if _class_name(sampler) in {
+        "transformers.trainer_pt_utils.LengthGroupedSampler",
+        "fakegpu._finetune_length_sampler.SeedableLengthGroupedSampler",
+    }:
+        from transformers.trainer_pt_utils import LengthGroupedSampler
+        from ._finetune_length_sampler import SeedableLengthGroupedSampler
+
+        if type(sampler) is SeedableLengthGroupedSampler:
+            validate_length_grouping_seed(sampler.initial_seed)
+            if sampler.batch_size != (
+                trainer.args.train_batch_size * trainer.args.gradient_accumulation_steps
+            ) or len(sampler.lengths) != len(loader.dataset):
+                raise FinetuneEstimateError("native length grouping workload is inconsistent")
+            return sampler, "seedable_length_grouped", sampler.initial_seed
+        if type(sampler) is LengthGroupedSampler:
+            raise FinetuneEstimateError(
+                "native length grouping uses the global RNG; provide length_grouping_seed for future planning"
+            )
     if type(sampler) is not SeedableRandomSampler or sampler.replacement:
         raise FinetuneEstimateError(
-            "native sampler planning supports sequential or seedable random sampling without replacement; length grouping is unsupported"
+            "native sampler planning supports sequential, seedable random or explicitly seeded length grouping without replacement"
         )
     if sampler.num_samples != len(loader.dataset):
         raise FinetuneEstimateError("native random sampler must consume every row once")
@@ -214,7 +243,8 @@ def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
     The caller must supply an unpacked, map-style, single-device text Trainer.
     Default seedable random sampling is supported, including epoch reseeding and
     partial accumulation tails. Resume, iterable datasets, random worker transforms and
-    custom/bucket/packing samplers are deliberately outside this contract.
+    custom/packing samplers are deliberately outside this contract. Length
+    grouping requires the explicit epoch-seeded native adapter.
     """
     import torch
     from accelerate.data_loader import SeedableRandomSampler
@@ -258,20 +288,25 @@ def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
         profile = profile_tokenized_records(
             dataset, sequence_length=sequence_length, source_framework=framework
         )
-        sampler = (
-            torch.utils.data.SequentialSampler(loader.dataset)
-            if kind == "sequential"
-            else SeedableRandomSampler(
+        if kind == "sequential":
+            sampler = torch.utils.data.SequentialSampler(loader.dataset)
+        elif kind == "seedable_length_grouped":
+            from ._finetune_length_sampler import SeedableLengthGroupedSampler
+
+            sampler = SeedableLengthGroupedSampler(
+                native_sampler.batch_size, native_sampler.lengths, seed=seed
+            )
+        else:
+            sampler = SeedableRandomSampler(
                 loader.dataset,
                 data_seed=seed,
                 generator=torch.Generator(device="cpu"),
             )
-        )
         microsteps_per_epoch = math.ceil(rows / batch_size)
         updates_per_epoch = math.ceil(microsteps_per_epoch / accumulation)
         updates, epoch_orders = [], []
         for epoch in range(math.ceil(max_steps / updates_per_epoch)):
-            if kind == "seedable_random":
+            if kind != "sequential":
                 sampler.set_epoch(epoch)
             order = list(sampler)
             if len(order) != rows or sorted(order) != list(range(rows)):
@@ -307,7 +342,8 @@ def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
                     )
                 updates.append({"optimizer_step": len(updates) + 1, "batches": batches})
     plan = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": LENGTH_SCHEMA_VERSION
+        if kind == "seedable_length_grouped" else SCHEMA_VERSION,
         "framework": framework,
         "dataset": {
             "num_samples": rows,
@@ -341,13 +377,22 @@ def plan_native_batches(trainer, *, max_steps, framework, sequence_length):
             ),
         },
     }
+    if kind == "seedable_length_grouped":
+        lengths = list(native_sampler.lengths)
+        plan["sampler"]["grouping"] = {
+            "batch_size": native_sampler.batch_size,
+            "lengths": lengths,
+            "lengths_sha256": _digest(lengths),
+        }
     plan["plan_sha256"] = _digest(plan)
     return validate_sampler_plan(plan)
 
 
 def validate_sampler_plan(plan):
     """Validate a serialized CPU batch plan without importing Torch."""
-    if not isinstance(plan, Mapping) or plan.get("schema_version") != SCHEMA_VERSION:
+    if not isinstance(plan, Mapping) or plan.get("schema_version") not in {
+        SCHEMA_VERSION, LENGTH_SCHEMA_VERSION
+    }:
         raise FinetuneEstimateError("unsupported native sampler plan schema")
     fields = {
         "schema_version",
@@ -378,14 +423,17 @@ def validate_sampler_plan(plan):
         raise FinetuneEstimateError("native sampler dataset identity is incomplete")
     _sha256(plan["dataset"]["content_sha256"], "dataset content SHA256")
     sampler = plan["sampler"]
-    if set(sampler) != {
+    sampler_fields = {
         "kind",
         "class",
         "seed",
         "epoch_seed_rule",
         "epoch_order_sha256",
         "versions",
-    }:
+    }
+    if plan["schema_version"] == LENGTH_SCHEMA_VERSION:
+        sampler_fields.add("grouping")
+    if set(sampler) != sampler_fields:
         raise FinetuneEstimateError("native sampler identity is incomplete")
     validate_native_sampler_versions(plan["framework"], sampler["versions"])
     if sampler["kind"] == "sequential":
@@ -399,10 +447,29 @@ def validate_sampler_plan(plan):
         _integer(sampler["seed"], "native sampler seed", minimum=0)
         if sampler["epoch_seed_rule"] != "seed + zero_based_epoch":
             raise FinetuneEstimateError("unsupported native sampler epoch seed rule")
+    elif sampler["kind"] == "seedable_length_grouped":
+        expected_class = "fakegpu._finetune_length_sampler.SeedableLengthGroupedSampler"
+        if plan["schema_version"] != LENGTH_SCHEMA_VERSION:
+            raise FinetuneEstimateError("seeded length grouping requires sampler plan v2")
+        validate_length_grouping_seed(sampler["seed"])
+        if sampler["seed"] is None or sampler["epoch_seed_rule"] != "seed + zero_based_epoch":
+            raise FinetuneEstimateError("seeded length grouping requires an epoch seed")
+        grouping = sampler["grouping"]
+        if set(grouping) != {"batch_size", "lengths", "lengths_sha256"}:
+            raise FinetuneEstimateError("native length grouping identity is incomplete")
+        _integer(grouping["batch_size"], "native grouping batch size")
+        if not isinstance(grouping["lengths"], list) or len(grouping["lengths"]) != rows:
+            raise FinetuneEstimateError("native grouping lengths differ from the dataset size")
+        for length in grouping["lengths"]:
+            _integer(length, "native grouping length")
+        if grouping["lengths_sha256"] != _digest(grouping["lengths"]):
+            raise FinetuneEstimateError("native grouping length SHA256 is inconsistent")
     else:
         raise FinetuneEstimateError("unsupported native sampler kind")
     if sampler["class"] != expected_class:
         raise FinetuneEstimateError("native sampler class differs from sampler kind")
+    if plan["schema_version"] == LENGTH_SCHEMA_VERSION and sampler["kind"] != "seedable_length_grouped":
+        raise FinetuneEstimateError("sampler plan v2 requires seeded length grouping")
     if not isinstance(plan["collator_class"], str) or not plan["collator_class"]:
         raise FinetuneEstimateError("native sampler collator identity is missing")
     loader = plan["dataloader"]
@@ -431,6 +498,10 @@ def validate_sampler_plan(plan):
     accumulation = _integer(
         plan["gradient_accumulation_steps"], "gradient accumulation"
     )
+    if sampler["kind"] == "seedable_length_grouped" and (
+        sampler["grouping"]["batch_size"] != batch_size * accumulation
+    ):
+        raise FinetuneEstimateError("native grouping batch size differs from accumulation")
     per_epoch = math.ceil(math.ceil(rows / batch_size) / accumulation)
     if plan["updates_per_epoch"] != per_epoch:
         raise FinetuneEstimateError("native sampler updates per epoch is inconsistent")

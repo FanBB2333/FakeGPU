@@ -21,7 +21,9 @@ from ._finetune_pipeline_plan import (
     validate_pipeline_plan,
 )
 from ._finetune_sampler import (
+    LENGTH_SCHEMA_VERSION,
     SCHEMA_VERSION as SAMPLER_SCHEMA,
+    _integer,
     validate_sampler_plan,
     validate_sampling_verification,
 )
@@ -29,6 +31,19 @@ from .finetune_estimator import FinetuneEstimateError
 from .finetune_pipeline_plan import _validate_native_schedule_options
 
 SCHEMA_VERSION = "fakegpu.finetune_transfer_plan.v1"
+
+
+def _sampler_identity(sampling):
+    sampler = sampling["sampler"]
+    identity = {
+        field: deepcopy(sampler[field])
+        for field in ("kind", "class", "epoch_seed_rule", "versions")
+    }
+    if sampler["kind"] == "seedable_length_grouped":
+        # Grouping changes epoch setup work. First support retains the complete
+        # native length sequence and grouping width rather than pooling sizes.
+        identity["grouping"] = deepcopy(sampler["grouping"])
+    return identity
 
 
 def _execution_identity(run, sampling):
@@ -53,13 +68,9 @@ def _execution_identity(run, sampling):
     signature["native_execution_signature"] = native_execution_signature(
         native_config_signature(raw), observed
     )
-    sampler = sampling["sampler"]
     return {
         "signature": signature,
-        "sampler": {
-            field: deepcopy(sampler[field])
-            for field in ("kind", "class", "epoch_seed_rule", "versions")
-        },
+        "sampler": _sampler_identity(sampling),
         "collator_class": sampling["collator_class"],
         "dataloader": deepcopy(sampling["dataloader"]),
     }
@@ -69,7 +80,9 @@ def transfer_plan_from_run(run):
     """Require both native timing evidence and verified consumed input hashes."""
     _validate_native_schedule_options(run)
     plan = pipeline_plan_from_run(run)
-    if plan["signature"].get("sampler_observation_version") != SAMPLER_SCHEMA:
+    if plan["signature"].get("sampler_observation_version") not in {
+        SAMPLER_SCHEMA, LENGTH_SCHEMA_VERSION
+    }:
         raise FinetuneEstimateError(
             "transfer budgets require a verified native sampling plan; rerun with a planning horizon"
         )
@@ -104,8 +117,17 @@ def validate_transfer_plan(plan):
     validate_pipeline_plan(base)
     sampling = validate_sampler_plan(plan.get("sampling_plan"))
     signature = plan["signature"]
+    if sampling["schema_version"] == LENGTH_SCHEMA_VERSION:
+        _integer(signature.get("length_grouping_seed"), "length_grouping_seed", minimum=0)
     if (
-        signature.get("sampler_observation_version") != SAMPLER_SCHEMA
+        signature.get("sampler_observation_version") != sampling["schema_version"]
+        or ("length_grouping_seed" in signature) != (
+            sampling["schema_version"] == LENGTH_SCHEMA_VERSION
+        )
+        or (
+            sampling["schema_version"] == LENGTH_SCHEMA_VERSION
+            and signature.get("length_grouping_seed") != sampling["sampler"]["seed"]
+        )
         or any(
             signature["software_versions"].get(name) != version
             for name, version in sampling["sampler"]["versions"].items()
@@ -151,11 +173,7 @@ def validate_transfer_plan(plan):
             identity[field] != sampling[field]
             for field in ("collator_class", "dataloader")
         )
-        or identity["sampler"]
-        != {
-            field: sampling["sampler"][field]
-            for field in ("kind", "class", "epoch_seed_rule", "versions")
-        }
+        or identity["sampler"] != _sampler_identity(sampling)
     ):
         raise FinetuneEstimateError("transfer execution identity differs from the plan")
     return deepcopy(dict(plan))

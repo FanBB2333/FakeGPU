@@ -1222,8 +1222,28 @@ not a guarantee for the combined long run or a smaller GPU.
 CPU horizon directly. `plan-finetune-transfer`, `estimate-finetune-transfer`
 and `validate-finetune-transfer` expose planning, budgeting and independent
 holdout comparison without the workspace manager. Existing strict pipeline
-commands keep their original matching rules. Packing, length grouping,
-streaming, custom samplers and automatic batch-size changes remain unsupported.
+commands keep their original matching rules. Packing, streaming, custom samplers
+and automatic batch-size changes remain unsupported.
+
+For length grouping, set `train_sampling_strategy: group_by_length` in HF or
+LLaMA-Factory, or `group_by_length: true` in Axolotl, and explicitly add
+`--length-grouping-seed 123` to `calibrate-finetune` or `run-finetune`.
+This option uses the native Trainer grouping algorithm with an independent CPU
+generator seeded by `123 + epoch`; it changes the sampler's random stream.
+Native global-RNG length grouping cannot provide a reproducible future plan.
+A planning horizon and disabled evaluation, including no evaluation dataset,
+are required. Sampler plan v2 retains the complete ordered grouping lengths and
+grouping batch size in calibration identity. Different length sequences need
+their own evidence. Coverage still requires two independent runs and sufficient
+repeat observations; a short calibration may be insufficient for many shapes.
+
+The [packing semantics audit](tests/native/finetune_packing_semantics.py) changes
+one segment and checks the next segment's logits and gradients in tiny real
+Qwen3.5 models, with a dense-attention control. The tested ordinary HF/Factory
+hybrid paths leak across a block mask and reset positions; the tested Axolotl
+patch has a Transformers 5.14.1 decoder-interface incompatibility. These are
+kernel diagnostics, and packed training budgets remain unavailable. See
+[`refactor.md`](refactor.md) for the tested versions and retained results.
 
 The memory result is the observed full-run CUDA allocated/reserved peak envelope
 for a covered workload on the same GPU and allocator. This does not project to a

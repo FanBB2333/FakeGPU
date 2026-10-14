@@ -106,6 +106,8 @@ def _native_command(request, directory):
         str(directory / "run.json"),
     ]
     duration = request["planning_duration"]
+    if request.get("length_grouping_seed") is not None:
+        command.extend(["--length-grouping-seed", str(request["length_grouping_seed"])])
     flag, value = (
         ("--planning-epochs", duration["epochs"])
         if duration["epochs"] is not None
@@ -116,6 +118,8 @@ def _native_command(request, directory):
 
 def _validate_run(report, execution, request, directory):
     transfer_plan_from_run(report)
+    if report.get("length_grouping_seed") != request.get("length_grouping_seed"):
+        raise ValueError("native length grouping seed differs from the request")
     identity = report["run_identity"]
     if (
         str(UUID(identity["uuid"])) != identity["uuid"]
@@ -443,6 +447,7 @@ def calibrate_finetuning(
     memory_budget_bytes=None,
     reserve_bytes=0,
     reuse_calibration_runs=None,
+    length_grouping_seed=None,
 ):
     """Run two predeclared independent calibrations, retaining failures and seals.
 
@@ -452,6 +457,9 @@ def calibrate_finetuning(
     """
     if framework not in _FRAMEWORKS:
         raise ValueError("unsupported native calibration framework")
+    from ._finetune_sampler import validate_length_grouping_seed
+
+    validate_length_grouping_seed(length_grouping_seed)
     if cache_regime not in {"uncontrolled", "empty_kernel_cache"}:
         raise ValueError(
             "workflow cache regime must be uncontrolled or empty_kernel_cache"
@@ -497,6 +505,8 @@ def calibrate_finetuning(
         "inputs": inputs,
         "source": _source_identity(),
     }
+    if length_grouping_seed is not None:
+        request["length_grouping_seed"] = length_grouping_seed
     with _locked(root, create=True):
         if (root / "manifest.json").exists():
             if not resume:

@@ -76,6 +76,10 @@ def calibrate_main(argv=None):
     )
     parser.add_argument("--warmup-steps", type=int, default=2)
     parser.add_argument(
+        "--length-grouping-seed", type=int,
+        help="Separate native length grouping from the model RNG; requires evaluation disabled.",
+    )
+    parser.add_argument(
         "--cache-regime",
         choices=("uncontrolled", "empty_kernel_cache"),
         default="empty_kernel_cache",
@@ -110,6 +114,7 @@ def calibrate_main(argv=None):
             timeout_seconds=args.timeout_seconds,
             calibration_budget_seconds=args.calibration_budget_seconds,
             resume=args.resume,
+            length_grouping_seed=args.length_grouping_seed,
             **_budget_options(args),
         )
         emit_json(args.json_path or "-", result)

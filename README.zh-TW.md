@@ -1098,8 +1098,22 @@ GPU 記憶體獨立報告完整校準程序峰值包絡，不保證長跑組合�
 亦可用 `run-finetune --planning-epochs N` 或 `--planning-max-steps N` 儲存 CPU 計畫，
 再分別呼叫 `plan-finetune-transfer`、`estimate-finetune-transfer`、
 `validate-finetune-transfer` 產生計畫、預算與獨立 holdout 比較。
-既有嚴格 pipeline 命令維持原匹配規則。packing、依長度分組、streaming、自訂採樣器
-及自動 batch size 調整仍未開放。
+既有嚴格 pipeline 命令維持原匹配規則。packing、streaming、自訂採樣器及自動
+batch size 調整仍未開放。
+
+長度分組時，HF/LLaMA-Factory 設定 `train_sampling_strategy: group_by_length`，
+Axolotl 設定 `group_by_length: true`，再向 `calibrate-finetune` 或 `run-finetune`
+明確加入 `--length-grouping-seed 123`。它保留原生 Trainer 的分組演算法，以獨立 CPU
+生成器使用 `123 + epoch` 種子；此選項會改變 sampler 的隨機流。依賴全域 RNG 的原生
+長度分組不能直接用於可重現的未來計畫。必須指定規劃範圍並關閉評估，且不提供評估資料集。
+sampler plan v2 將完整有序分組長度及分組 batch size 保留於校準身分中；不同長度序列
+需有自己的證據。每組仍須有兩個獨立程序與足夠重複觀測，短校準可能無法覆蓋多種形狀。
+
+[packing 語義審計](tests/native/finetune_packing_semantics.py) 在極小的真實 Qwen3.5 模型中
+改變前一段，檢查後一段的輸出與梯度，並提供純 attention 對照。實測一般 HF/Factory
+混合路徑於分塊 mask 及重設位置後仍有跨段影響；所測 Axolotl patch 與 Transformers
+5.14.1 的 decoder 介面不相容。這是核心診斷，尚未開放 packed 訓練預算。版本與保留結果
+見 [`refactor.md`](refactor.md)。
 
 記憶體結果為同一 GPU 和 allocator 上已覆蓋工作量的完整執行 allocated/reserved 峰值
 包絡，不相加各視窗峰值，也不代表已投射到一張更小的實體卡。

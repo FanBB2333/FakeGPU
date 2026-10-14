@@ -196,6 +196,7 @@ def run_finetuning(
     cache_regime: str = "uncontrolled",
     planning_epochs: float | None = None,
     planning_max_steps: int | None = None,
+    length_grouping_seed: int | None = None,
 ) -> dict[str, Any]:
     """Run native SFT; return evidence only after successful finite GPU updates.
 
@@ -219,6 +220,12 @@ def run_finetuning(
     ):
         raise ValueError("planning_max_steps must be a positive integer")
     planning = planning_epochs is not None or planning_max_steps is not None
+    if length_grouping_seed is not None:
+        from ._finetune_sampler import validate_length_grouping_seed
+
+        validate_length_grouping_seed(length_grouping_seed)
+        if not planning:
+            raise ValueError("length_grouping_seed requires a planning horizon")
     started = time.perf_counter()
     cache_evidence = capture_cache_regime(cache_regime)
     run_identity = {
@@ -270,12 +277,22 @@ def run_finetuning(
         config["event_observation_version"] = "fakegpu.finetune_events.v1"
         config["timeline_observation_version"] = TIMELINE_SCHEMA
         if planning:
-            from ._finetune_sampler import SCHEMA_VERSION as SAMPLER_SCHEMA
+            from ._finetune_sampler import LENGTH_SCHEMA_VERSION, SCHEMA_VERSION
 
-            config["sampler_observation_version"] = SAMPLER_SCHEMA
+            config["sampler_observation_version"] = (
+                LENGTH_SCHEMA_VERSION if length_grouping_seed is not None else SCHEMA_VERSION
+            )
+        if length_grouping_seed is not None:
+            config["length_grouping_seed"] = length_grouping_seed
         state = {}
 
         def inspect_trainer(trainer):
+            if length_grouping_seed is not None:
+                from ._finetune_length_sampler import install_length_grouping
+
+                install_length_grouping(
+                    trainer, seed=length_grouping_seed, replace=observer._replace
+                )
             dataset = trainer.train_dataset
             if not hasattr(dataset, "__len__") or not hasattr(dataset, "__getitem__"):
                 raise ValueError(
@@ -528,6 +545,7 @@ def run_finetuning(
             "schedule": schedule,
             "workload": dict(observation["workload"]),
             **({"sampling_plan": state["sampling_plan"]} if planning else {}),
+            **({"length_grouping_seed": length_grouping_seed} if length_grouping_seed is not None else {}),
         }
     finally:
         _RUN_LOCK.release()
