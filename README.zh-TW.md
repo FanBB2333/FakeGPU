@@ -1115,6 +1115,11 @@ sampler plan v2 將完整有序分組長度及分組 batch size 保留於校準�
 5.14.1 的 decoder 介面不相容。這是核心診斷，尚未開放 packed 訓練預算。版本與保留結果
 見 [`refactor.md`](refactor.md)。
 
+[分段參考審計](tests/native/finetune_segment_reference.py) 檢查專案自有的 Qwen3.5
+分段介面：每段 linear attention 使用空的卷積與遞迴狀態，並檢查分塊 mask、padding
+及 causal label 邊界。逐層輸出與梯度和獨立原生序列對照，同時檢查 checkpoint 重算
+與模型儲存還原。這是顯式參考介面；原生 packed sampler 計數與訓練預算另行驗收。
+
 記憶體結果為同一 GPU 和 allocator 上已覆蓋工作量的完整執行 allocated/reserved 峰值
 包絡，不相加各視窗峰值，也不代表已投射到一張更小的實體卡。
 `--reserve-gib` 是使用者指定的餘量；落在包絡內不保證不會 OOM。

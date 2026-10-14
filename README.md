@@ -1245,6 +1245,14 @@ patch has a Transformers 5.14.1 decoder-interface incompatibility. These are
 kernel diagnostics, and packed training budgets remain unavailable. See
 [`refactor.md`](refactor.md) for the tested versions and retained results.
 
+The opt-in [segment reference audit](tests/native/finetune_segment_reference.py)
+checks a project-owned Qwen3.5 interface that executes each linear-attention
+segment with empty convolution and recurrent state. It validates block masks,
+padding and causal label boundaries, and compares all layers and gradients with
+independent native sequences, including checkpoint recomputation and checkpoint
+reload. This reference interface is separate from native packed-sampler counting
+and training-budget calibration.
+
 The memory result is the observed full-run CUDA allocated/reserved peak envelope
 for a covered workload on the same GPU and allocator. This does not project to a
 smaller physical card. Per-window peaks are not added. The optional reserve is

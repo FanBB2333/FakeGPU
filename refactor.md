@@ -3,6 +3,38 @@
 > 最新功能与验证结果见下方 **2026-10-14 / 可复现长度分组与 packing 隔离边界**；上一阶段为 **随机采样、跨数据规模与自动校准工作区**、**完整原生训练预算、缓存条件与显存边界**；前一阶段见 **epoch 位置与事件上下文联合校准**、 **周期事件后的训练窗口校准**、**原生评估与 checkpoint 事件成本**、**动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
 
+## 2026-10-15 / 连续推进验收清单
+
+接续 `23a5bbc1`，按用户要求持续完成已设计的修改及验证。下面按依赖记录状态；实现、CPU 语义验证、真机观测分别验收，不用逻辑设备代替物理设备。
+
+- [x] Qwen3.5 分段训练参考接口（cache 关闭）：卷积与递归状态、跨层 logits/梯度、checkpointing、保存恢复及异常恢复。
+- [ ] 三个框架的 packing 数据边界、真实 sampler 计数、消费核验及独立时间/显存预算。
+- [ ] 长度分组与原生评估共存：独立采样随机流、评估输入核验及事件预算。
+- [ ] 大数据规划的重复扫描和存储成本，保留历史报告兼容与纯标准库离线预算。
+- [ ] 更多模型、形状和重复 holdout；可用 GPU 验证与缺失硬件条件分开记录。
+- [ ] R24 长上下文及 serving 的真实 GPU 验证。
+- [ ] R25 diffusion generation 真测、训练估计及独立观测。
+- [ ] R26 distributed/MoE 验证与版本化硬件矩阵；真实多机需要实际远端设备。
+- [ ] R23 原生数值扩展需求清单、实验产物与全仓/wheel 回归。
+
+当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### 分段隔离参考接口
+
+新增 `_finetune_segments.py`，以显式 context manager 对原生 dense text Qwen3.5 的 linear decoder 实例临时替换 forward：每行每段分别调用未修改的原生 GatedDeltaNet，传入空 cache；full attention 继续使用经过校验的 block-causal mask。参数、权重名称及 checkpoint 格式保持原生，退出或异常时移除 hook 与实例方法。没有修改第三方源码，也没有开放 CLI packed 训练预算。
+
+接口限定 Transformers **5.6.0 / 5.14.1**，要求显式 2D reset positions、4D 浮点 block-causal mask、右侧 padding、忽略每段首 token 的 causal label，且 `use_cache=False`。拒绝缓存、错误隔离 mask、空行、非连续位置、嵌套安装及第三方全局 packing patches。TF 5.14 会丢弃 recurrent 层的 4D mask，因此有效 token 标记从已校验的根输入通过 decoder kwargs 显式传递，checkpoint 重算同样保留；不由 token 内容或 padding 位置的零值猜测边界。
+
+两套真实 Transformers 各执行 CPU FP32 与 GPU 1 BF16 审计，每组 eager/SDPA × 无/nonreentrant/reentrant checkpointing，共 **24 个场景**。模型为随机权重、四层、hidden size 64 的真实类；两行分别包含 1/3/4 与 2/4 token 的段，第二行有右侧 padding。逐段独立原生运行是对照，逐一核验四层输出及全部参数梯度，并检查反事实输入、输入梯度、保存恢复和异常恢复。
+
+- CPU 最大 logits 差 **2.54e-7**，逐层差 **2.61e-8**，参数梯度最大相对差 **2.56e-6**。
+- GPU 所有有效 token 的 logits 与逐层输出差均为 **0**；BF16 参数梯度最大相对差分别为 **2.222% / 1.316%**，保留原始值，不称数值完全一致。
+- 所有场景的后段 logits 对前段扰动差、后段梯度进入前段的最大值及相同 dtype 下保存恢复输出差均为 **0**。
+
+保留两次开发审计失败：初次 CPU 将 TF 5.14 原生 Accelerate decorator 错判为全局 patch，已按已知 decorator 的原函数核验；初次 GPU 重载对照未对齐非持久 rotary buffer dtype，新建模型为 BF16、加载模型为 FP32，输出差 0.001953125。修正的是审计对照的执行 dtype，权重保持逐项相同；失败报告与日志均保留，未通过放宽阈值消除错误。
+
+全仓回归 **1553 passed / 1 skipped，138.90 秒**，CLI/文档与分段边界复核 **58 passed**，Ruff、diff check、无 ML 依赖导入通过；**152 份历史预测逐字节一致**。GPU 审计期间冻结 **96 个生产 Python 模块**，SHA 全部保持一致。证据见[摘要](tests/data/finetune_segment_validation_evidence.json)及[压缩审阅记录](tests/data/finetune_segment_validation_records.json.gz)，原始资料在 `/tmp/fakegpu-segments-20261015/`。这验证分段训练语义，不提供 varlen 吞吐、0.8B 微调预算或带缓存分段推理的精度结论；packed sampler 和实际成本继续按上方清单推进。
+
 ## 2026-10-14 / 可复现长度分组与 packing 隔离边界
 
 接续 `478f8278`，推进原生长度分组，并实测 Qwen3.5 packing 的隔离边界。CLI 仍为 34 个；新增 `run-finetune` / `calibrate-finetune` 的显式 `--length-grouping-seed`，没有把依赖全局随机状态的原生排序伪装成可预排的未来计划。
