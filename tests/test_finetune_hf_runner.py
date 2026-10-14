@@ -59,6 +59,7 @@ def argument_type(monkeypatch):
         "auto_find_batch_size",
         "dataloader_num_workers",
         "group_by_length",
+        "train_sampling_strategy",
         "gradient_checkpointing_kwargs",
     )
     cls = make_dataclass("TrainingArguments", [(name, object) for name in names])
@@ -101,6 +102,10 @@ def test_normalized_training_options_and_official_extras_are_preserved(
         ({"eval_strategy": "steps"}, "requires eval_dataset"),
         ({"do_eval": True}, "requires an eval_strategy"),
         ({"group_by_length": True, "disable_shuffling": True}, "conflicts"),
+        pytest.param(
+            {"train_sampling_strategy": "group_by_length", "disable_shuffling": True},
+            "conflicts", id="new-length-grouping-conflict",
+        ),
     ],
 )
 def test_unsupported_configuration_is_not_silently_ignored(

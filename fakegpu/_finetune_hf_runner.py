@@ -135,7 +135,10 @@ def _argument_options(raw, normalized, argument_type):
         raise ValueError(
             "Hugging Face native runner requires training; do_train=false is unsupported"
         )
-    if raw.get("group_by_length") and raw.get("disable_shuffling"):
+    if raw.get("disable_shuffling") and (
+        raw.get("group_by_length")
+        or raw.get("train_sampling_strategy") == "group_by_length"
+    ):
         raise ValueError("disable_shuffling conflicts with group_by_length")
     checkpointing = normalized.get("gradient_checkpointing_kwargs")
     if (
