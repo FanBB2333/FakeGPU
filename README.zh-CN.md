@@ -1342,6 +1342,12 @@ SD/SDXL generation 和 12 个缓存特征训练进程。六次训练 holdout 的
 0.044%–3.185%，allocator 包络未低估；generation VAE allocated 仍低估 12.0%–13.8%，
 reserved 最多低估 31.6%，保留这些未通过的结果。
 
+FSDP2 `full_shard` 可为 `plan-training` 提供 `--parameter-shapes layout.json`，
+内容为 `{"shapes": [[12, 8], [12], [3, 12], [3]]}`，并给出一致的
+`--parameter-bytes` 和统一 `--parameter-element-bytes`。按原生每参数第 0 维 chunk
+计算各 rank 字节，预算使用最大 rank。未提供形状时保留总量均衡切分近似，不能覆盖
+不均匀参数分区；optimizer dtype 和 workspace 假设仍适用，不覆盖自定义 placement。
+
 实验批量运行使用显式 argv、参数网格和重复次数。下面的 CPU 示例将 worker 脚本、
 可执行文件、FakeGPU 源码和指定资源环境绑定到稳定运行 ID；顺序执行，每次尝试
 保留日志、退出状态、错误、产物 SHA 和数值指标。

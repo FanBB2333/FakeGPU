@@ -57,6 +57,7 @@ def estimate_training_plan(
     world_size: int | None = None,
     optimizer: str = "adamw",
     parameter_element_bytes: int = 2,
+    parameter_shapes: Sequence[Sequence[int]] | None = None,
 ) -> dict[str, Any]:
     """Estimate rank-local training memory from a normalized configuration.
 
@@ -114,14 +115,46 @@ def estimate_training_plan(
         full_shard or strategy == "shard_grad_op" or zero_stage >= 1
     )
 
+    parameter_layout = None
+    if parameter_shapes is not None:
+        if normalized.get("framework") != "fsdp2" or strategy != "full_shard":
+            raise TrainingPlanError("parameter_shapes requires fsdp2 full_shard")
+        if not isinstance(parameter_shapes, (list, tuple)):
+            raise TrainingPlanError("parameter_shapes must be a sequence of shapes")
+        local_bytes = [0] * ranks
+        total = 0
+        for shape in parameter_shapes:
+            if not isinstance(shape, (list, tuple)) or not shape:
+                raise TrainingPlanError("each parameter shape must be nonempty")
+            if any(type(d) is not int or d <= 0 for d in shape):
+                raise TrainingPlanError("parameter dimensions must be positive integers")
+            row_bytes = math.prod(shape[1:]) * parameter_element_bytes
+            total += shape[0] * row_bytes
+            chunk = _ceil_div(shape[0], ranks)
+            for rank in range(ranks):
+                local_bytes[rank] += max(0, min(chunk, shape[0] - rank * chunk)) * row_bytes
+        if total != parameter_bytes:
+            raise TrainingPlanError("parameter_shapes bytes must equal parameter_bytes")
+        parameter_layout = {
+            "method": "fsdp2_per_parameter_dim0_chunk",
+            "parameter_bytes_by_rank": local_bytes,
+            "budgeted_rank": local_bytes.index(max(local_bytes)),
+            "parameter_count": len(parameter_shapes),
+        }
+
+    def partition_bytes(total):
+        if parameter_layout is None:
+            return _ceil_div(total, shard_factor)
+        return _ceil_div(total * max(local_bytes), parameter_bytes) if parameter_bytes else 0
+
     rank_parameter_storage_bytes = (
-        _ceil_div(parameter_bytes, shard_factor)
+        partition_bytes(parameter_bytes)
         if full_shard
         else parameter_bytes
     )
     gradient_bytes = parameter_bytes
     gpu_gradient_bytes = (
-        _ceil_div(gradient_bytes, shard_factor)
+        partition_bytes(gradient_bytes)
         if shard_gradients
         else gradient_bytes
     )
@@ -132,7 +165,7 @@ def estimate_training_plan(
     else:
         optimizer_state_bytes = 0
     rank_optimizer_state_bytes = (
-        _ceil_div(optimizer_state_bytes, shard_factor)
+        partition_bytes(optimizer_state_bytes)
         if shard_optimizer
         else optimizer_state_bytes
     )
@@ -145,7 +178,7 @@ def estimate_training_plan(
         else 0
     )
     rank_master_parameter_bytes = (
-        _ceil_div(master_parameter_bytes, shard_factor)
+        partition_bytes(master_parameter_bytes)
         if shard_optimizer
         else master_parameter_bytes
     )
@@ -334,7 +367,7 @@ def estimate_training_plan(
         ),
     ]
 
-    return {
+    report = {
         "schema_version": SCHEMA_VERSION,
         "method": "configuration_aware_rank_local_storage_and_phase_model",
         "configuration": normalized,
@@ -415,6 +448,9 @@ def estimate_training_plan(
             "Use a matching real-GPU calibration to replace unmodeled runtime and allocator terms.",
         ],
     }
+    if parameter_layout is not None:
+        report["sharding"]["parameter_layout"] = parameter_layout
+    return report
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -440,6 +476,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="adamw",
     )
     parser.add_argument("--parameter-element-bytes", type=int, default=2)
+    parser.add_argument(
+        "--parameter-shapes",
+        help="JSON/TOML/YAML object with shapes: [[...], ...]; explicit FSDP2 full_shard dim-0 layout.",
+    )
     add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
@@ -448,6 +488,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             raw,
             framework=args.framework,
         )
+        shapes = None
+        if args.parameter_shapes:
+            layout = load_mapping(args.parameter_shapes)
+            if "shapes" not in layout:
+                raise TrainingPlanError("parameter-shapes input requires a shapes field")
+            shapes = layout["shapes"]
+            if shapes is None:
+                raise TrainingPlanError("parameter-shapes input requires a sequence of shapes")
         report = estimate_training_plan(
             normalized,
             parameter_bytes=args.parameter_bytes,
@@ -455,6 +503,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             world_size=args.world_size,
             optimizer=args.optimizer,
             parameter_element_bytes=args.parameter_element_bytes,
+            parameter_shapes=shapes,
         )
         if args.json_path:
             output = emit_json(args.json_path, report)

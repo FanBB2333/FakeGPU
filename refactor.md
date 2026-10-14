@@ -19,6 +19,14 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### FSDP2 不均匀 shard（独立 bug 修复）
+
+原生 Torch 2.9.1 CPU 两 rank、FP64 tiny MLP 的四个参数形状为 `[12,8] / [12] / [3,12] / [3]`。FSDP2 默认按每参数第 0 维 chunk，真实参数和每份 AdamW moment 为 **640 / 536 bytes**；原总字节除二得到 **588 bytes**，不能作为最大 rank 的准确值。
+
+`estimate_training_plan` 新增显式 `parameter_shapes`，CLI 对应 `--parameter-shapes`；只接受已验证的 FSDP2 full_shard、统一 dtype、非空正整数形状和匹配的总参数字节。逐参数计算 rank 布局，预算采用最大 rank，梯度、moments、master 分区一致；默认未给形状时保留均衡总量近似，并在三语说明边界。不猜测未知布局，不扩展为自定义 DTensor placement 或异 dtype optimizer 支持。
+
+先复现 **8 failed / 1 passed**，修正及 CLI 错误处理后相关 **37 passed**。原生两 CPU rank 再核验，预测布局 **[640,536]** 与两个 rank 的真实 moment 张量一致，预算 moments **1280 bytes**。DDP/FSDP2 梯度相对独立合并 batch 最大绝对差 **5.55e-17**，AdamW 更新差 **4.34e-19**。旧报告与新复核分别保存，没有覆盖；152 份历史预测仍逐字节一致。原始记录 `/tmp/fakegpu-research-validation-20261015/`，版本化矩阵随 R26 归档。CPU 同步不计入物理多卡／多机验证。
+
 ### P5 实验批量运行与产物管理
 
 新增纯标准库 `plan/run/compare-experiments` 与对应公开 Python API。显式有限参数网格、重复次数、最大运行数、argv 模板、声明输入、数值指标 JSON 路径和超时；计划只读，运行顺序执行。稳定 ID 绑定输入完整 SHA、可执行文件、FakeGPU 源码及指定环境。每次尝试单独保存 stdout、执行状态、错误原因、产物 SHA 和指标索引，恢复核验成功记录，失败／中断只有 `--resume --retry-failed` 才创建新尝试，原始失败记录不覆盖。共享进程执行器仅新增可选 cwd/purpose，既有校准默认参数和错误行为保留。

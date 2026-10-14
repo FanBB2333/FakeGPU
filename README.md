@@ -1533,6 +1533,14 @@ Six training holdouts have 0.044%–3.185% total-time error and no allocator-env
 underestimate. Generation VAE allocated peaks were underestimated by 12.0%–13.8%,
 and reserved peaks by up to 31.6%; those failures remain visible.
 
+For FSDP2 `full_shard`, `plan-training --parameter-shapes layout.json` accepts
+`{"shapes": [[12, 8], [12], [3, 12], [3]]}` plus the matching total
+`--parameter-bytes` and uniform `--parameter-element-bytes`. It models native
+per-parameter dim-0 chunks, exposes bytes for each rank, and budgets the largest
+rank. Without explicit shapes the existing aggregate balanced-shard approximation
+remains; it does not cover uneven parameter partitions. Optimizer dtype and
+workspace assumptions still apply. This path does not model custom placements.
+
 Finite experiment sweeps use an explicit argv array, parameter grid and repetition count.
 The CPU-only example below binds its worker script, executable, FakeGPU source and
 selected resource environment to stable run IDs. Execution is sequential; every

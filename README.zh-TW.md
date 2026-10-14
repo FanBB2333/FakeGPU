@@ -1348,6 +1348,12 @@ SD/SDXL generation 與 12 個快取特徵訓練程序。六次訓練 holdout 的
 0.044%–3.185%，allocator 包絡未低估；generation VAE allocated 仍低估 12.0%–13.8%，
 reserved 最多低估 31.6%，保留這些未通過的結果。
 
+FSDP2 `full_shard` 可為 `plan-training` 提供 `--parameter-shapes layout.json`，
+內容為 `{"shapes": [[12, 8], [12], [3, 12], [3]]}`，並提供一致的
+`--parameter-bytes` 及統一 `--parameter-element-bytes`。依原生每參數第 0 維 chunk
+計算各 rank 位元組，預算採最大 rank。未提供形狀時保留總量均衡切分近似，無法涵蓋
+不均勻參數分區；optimizer dtype 與 workspace 假設仍適用，不涵蓋自訂 placement。
+
 實驗批次執行使用明確 argv、參數網格與重複次數。下方 CPU 範例將 worker 腳本、
 可執行檔、FakeGPU 原始碼及指定資源環境綁定至穩定執行 ID；依序執行，每次嘗試
 保留日誌、退出狀態、錯誤、產物 SHA 與數值指標。
