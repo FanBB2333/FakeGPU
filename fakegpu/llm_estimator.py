@@ -460,6 +460,7 @@ def estimate_decoder_inference(
     decoder_config = config.get("text_config", config)
     if not isinstance(decoder_config, dict):
         raise ValueError("text_config must be an object")
+    _require_attention_only_decoder(decoder_config)
     checkpoint = inspect_safetensors_checkpoint(root)
     dimensions = _decoder_dimensions(decoder_config)
     has_vision_encoder = any(
@@ -940,6 +941,30 @@ def _read_safetensors_header(path: Path) -> dict[str, Any]:
     if not isinstance(header, dict):
         raise ValueError(f"safetensors header must be an object: {path}")
     return header
+
+
+def _require_attention_only_decoder(config: Mapping[str, Any]) -> None:
+    """Keep inference-only assumptions out of shared fine-tuning dimensions."""
+    recurrent_fields = (
+        "linear_num_key_heads", "linear_num_value_heads",
+        "linear_key_head_dim", "linear_value_head_dim", "linear_conv_kernel_dim",
+    )
+    layers = config.get("layer_types")
+    if any(field in config for field in recurrent_fields) or (
+        layers is not None and (
+            not isinstance(layers, list)
+            or len(layers) != config.get("num_hidden_layers")
+            or any(
+                not isinstance(kind, str)
+                or kind not in {"full_attention", "sliding_attention"}
+                for kind in layers
+            )
+        )
+    ):
+        raise ValueError(
+            "inference estimates do not support recurrent or linear attention; "
+            "KV/state memory and FLOPs require an architecture-specific model"
+        )
 
 
 def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:

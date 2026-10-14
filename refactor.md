@@ -61,9 +61,13 @@
 
 保留 CPU 审计开发失败日志（字段名误用 `verified`，应为 `matched`）；Ax 预处理因 IPC sandbox 限制及预览脚本缺少 multiprocessing main guard 的失败也保留。main guard 已补，并只终止确认归属本轮的进程组；这些均不是原生 GPU 校准失败或精度筛选重跑。
 
-### 已复现、待单独修复的问题
+### LLM hybrid 推理公式拒绝（独立 bug 修复）
 
-本轮静态检查对本地 Qwen3.5-0.8B text config 调用 `llm_estimator._decoder_dimensions`，实际 `layer_types` 为 18 个 `linear_attention` 与 6 个 `full_attention`，当前函数仍返回 24 层 `grouped_query / separate_key_value`，后续 KV/FLOPs 公式因此不匹配该架构。README 已说明 hybrid 未覆盖，但代码没有拒绝这类配置。单卡微调的原生预算没有调用此推理公式；待当前原生计时完成后，用独立 bug 回归和提交修复，不能把这个数值用于长上下文验收。
+本轮静态检查对本地 Qwen3.5-0.8B text config 调用 `llm_estimator._decoder_dimensions`，实际 `layer_types` 为 18 个 `linear_attention` 与 6 个 `full_attention`，函数返回 24 层 `grouped_query / separate_key_value`，推理入口继续使用该结果会使 KV/FLOPs 公式不匹配。README 已说明 hybrid 未覆盖，但代码没有拒绝这类配置。
+
+新增 `_require_attention_only_decoder`，只在推理入口检查已声明的循环参数和 layer types；顶层/nested text config、缺少显式 layer list 的 Qwen3.5、声明了不支持层或错误层数量均拒绝。标准 attention 显式层列表的 memory/compute 数值保持一致。共享维度提取保留给已经单独处理 hybrid 的微调估计器，避免使 Qwen3.5 微调失效；serving 入口通过同一推理检查拒绝错误预算。
+
+先用四项公开推理/serving API 回归复现 **4 failed**，修复后 LLM/serving/finetune 相关 **150 passed**，补全 malformed layer 与 attention-only 保持性后的专用检查 **8 passed**，Ruff 与 diff check 通过。基线及日志在 `/tmp/fakegpu-hybrid-20261015/`。此修复明确支持边界，不宣称已实现 hybrid 推理 cache/FLOPs；长上下文验收使用有对应状态模型的架构。
 
 ## 2026-10-14 / 可复现长度分组与 packing 隔离边界
 
