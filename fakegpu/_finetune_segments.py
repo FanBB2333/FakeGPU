@@ -10,6 +10,7 @@ This reference path does not claim varlen-kernel throughput or packing budgets.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from functools import wraps
 import importlib.metadata
 import inspect
 from types import MethodType
@@ -148,6 +149,8 @@ def isolated_qwen35_segments(model):
     version = importlib.metadata.version("transformers")
     if version not in {"5.6.0", "5.14.1"} or type(model) is not Qwen3_5ForCausalLM:
         raise FinetuneEstimateError("segment reference requires a supported native Qwen3.5 text model")
+    if "forward" in model.__dict__:
+        raise FinetuneEstimateError("segment reference requires an unmodified native model forward")
     layers = list(model.model.layers)
     linear = []
     for layer, kind in zip(layers, model.config.layer_types):
@@ -177,9 +180,17 @@ def isolated_qwen35_segments(model):
         active = kwargs["attention_mask"][:, 0].diagonal(dim1=-2, dim2=-1) == 0
         return args, {**original_kwargs, "fakegpu_segment_active": active}
 
-    hook = model.register_forward_pre_hook(validate, with_kwargs=True)
+    original_forward = model.forward
+
+    @wraps(original_forward.__func__)
+    def forward(self, *args, **kwargs):
+        # PEFT's BaseTuner calls model.forward directly, bypassing Module hooks.
+        args, kwargs = validate(self, args, kwargs)
+        return original_forward(*args, **kwargs)
+
     installed = []
     try:
+        model.forward = MethodType(forward, model)
         for layer in linear:
             layer.forward = MethodType(_linear_decoder_forward, layer)
             installed.append(layer)
@@ -187,4 +198,4 @@ def isolated_qwen35_segments(model):
     finally:
         for layer in installed:
             del layer.forward
-        hook.remove()
+        del model.forward

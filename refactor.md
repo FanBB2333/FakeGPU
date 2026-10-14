@@ -75,6 +75,12 @@
 
 校准工作流现在将 Axolotl prepared 数据及显式配置的 Factory tokenized 数据放入当前新工作区的 `prepared/`，原始配置和外部缓存保持不变。两个校准进程可以复用本工作区的派生数据；恢复时仍先核对原始输入 SHA，变更输入须创建新工作区。普通 `run-finetune` 的用户缓存行为保留。三项回归先复现 **3 failed**，修复后缓存与工作区检查 **31 passed**；原生复现、错误候选及日志保留在 `/tmp/fakegpu-packed-budget-20261015/`。
 
+### PEFT direct forward 的分段入口（独立 bug 修复）
+
+首次 0.8B packed LoRA GPU 尝试在首个 forward 失败：PEFT BaseTuner 直接调用底层模型的 `.forward()`，绕过 Module pre-hook，导致 decoder 缺少已验证的 segment active 标记。保留该尝试的原始日志与冻结源码 SHA，未生成成功校准或预测。
+
+分段入口改为临时包装原生模型实例的 forward，调用相同校验后再进入原函数；退出或异常删除实例覆盖，拒绝既有实例 forward 覆盖。新增直接调用回归先复现 **1 failed**，修复后分段单测 **25 passed**。两套真实 Transformers/PEFT（5.6.0/0.18.1、5.14.1/0.19.1）在 CPU 各验收 eager/SDPA × 三种 checkpointing，共 **12 场景**：最大 logits 差 **2.09e-7**，LoRA 梯度最大相对差 **1.68e-6**，后段反事实输出差为 **0**，实例方法均恢复。原始资料在 `/tmp/fakegpu-packed-budget-20261015/`；这些 CPU 结果不替代后续完整 GPU 预算。
+
 ### Packing 原生数据与计数基础（完整预算尚未开放）
 
 新增 `_finetune_packed_batches.py`，先从 HF/Factory 的显式 segment IDs 或 Ax 的原始记录 bins 证明 token、label、位置和边界对应，再保留有效的原生 4D mask 或建立隔离 mask。输出区分 physical packed rows、logical sequences、非 padding/监督/causal tokens、分段几何和实际 tensor dtypes；四类输入的 hash 保留浮点 mask 的原始小端位模式，包括 BF16。拒绝缺失 source mask、边界 label 未忽略、非法分段、原生 token/label 改写及跨段 mask。
