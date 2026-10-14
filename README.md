@@ -1231,8 +1231,12 @@ LLaMA-Factory, or `group_by_length: true` in Axolotl, and explicitly add
 This option uses the native Trainer grouping algorithm with an independent CPU
 generator seeded by `123 + epoch`; it changes the sampler's random stream.
 Native global-RNG length grouping cannot provide a reproducible future plan.
-A planning horizon and disabled evaluation, including no evaluation dataset,
-are required. Sampler plan v2 retains the complete ordered grouping lengths and
+A planning horizon is required. With one finite evaluation dataset, evaluation
+uses a separate generator with the same explicit seed for every invocation,
+including persistent-worker loaders; it does not advance the training sampler.
+The evaluation grouping policy and length digest are bound to calibration
+identity. Custom evaluation samplers and prepared loaders are rejected.
+Sampler plan v2 retains the complete ordered grouping lengths and
 grouping batch size in calibration identity. Different length sequences need
 their own evidence. Coverage still requires two independent runs and sufficient
 repeat observations; a short calibration may be insufficient for many shapes.

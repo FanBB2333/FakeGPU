@@ -9,6 +9,7 @@ from fakegpu._finetune_sampler import (
     NativeBatchMatcher,
     plan_native_batches,
     validate_sampler_plan,
+    validate_length_grouping_evaluation,
 )
 from fakegpu._finetune_workflow_store import _digest
 from fakegpu.finetune_estimator import FinetuneEstimateError
@@ -28,6 +29,7 @@ LengthGroupedSampler = trainer_utils.LengthGroupedSampler
 get_length_grouped_indices = trainer_utils.get_length_grouped_indices
 SeedableLengthGroupedSampler = native_sampler.SeedableLengthGroupedSampler
 install_length_grouping = native_sampler.install_length_grouping
+FixedLengthGroupedSampler = native_sampler.FixedLengthGroupedSampler
 
 
 def configured(trainer):
@@ -124,9 +126,69 @@ def test_install_rejects_unsupported_native_policy_without_mutation(trainer, fie
     configured(trainer)
     original = trainer._get_train_sampler
     setattr(trainer.args, field, value)
+    if field in {"eval_strategy", "do_eval"}:
+        match = "one finite evaluation dataset"
     with pytest.raises(FinetuneEstimateError, match=match):
         install_length_grouping(trainer, seed=123, replace=setattr)
     assert trainer._get_train_sampler is original
+
+
+def test_evaluation_repeats_fixed_native_grouping_without_model_rng_dependency(trainer):
+    configured(trainer)
+    trainer.args.eval_strategy = "steps"
+    trainer.args.do_eval = True
+    trainer.eval_dataset = deepcopy(trainer.train_dataset)
+    trainer._get_eval_sampler = lambda dataset: LengthGroupedSampler(3, dataset=dataset)
+    original = trainer._get_eval_sampler
+    policy = install_length_grouping(trainer, seed=123, replace=setattr)
+    sampler = trainer._get_eval_sampler(trainer.eval_dataset)
+    assert type(sampler) is FixedLengthGroupedSampler
+    state = torch.get_rng_state().clone()
+    expected = get_length_grouped_indices(
+        sampler.lengths, 3, generator=torch.Generator().manual_seed(123)
+    )
+    for epoch in range(4):
+        sampler.set_epoch(epoch)
+        assert list(sampler) == expected
+    assert torch.equal(torch.get_rng_state(), state)
+    assert trainer._get_eval_sampler is not original
+    assert policy["iteration_seed_rule"] == "same_seed_each_invocation"
+    assert policy["lengths_sha256"] == _digest(sampler.lengths)
+    assert validate_length_grouping_evaluation(policy, seed=123) == policy
+
+
+@pytest.mark.parametrize("field,value", [
+    ("schema_version", "wrong"), ("kind", "random"), ("seed", True),
+    ("seed", 124), ("iteration_seed_rule", "seed + epoch"),
+    ("dataset_rows", 0), ("grouping_batch_size", False), ("lengths_sha256", "bad"),
+])
+def test_invalid_evaluation_policy_rejected(field, value):
+    policy = {
+        "schema_version": "fakegpu.finetune_eval_sampler.v1",
+        "kind": "fixed_seed_length_grouped", "seed": 123,
+        "iteration_seed_rule": "same_seed_each_invocation",
+        "grouping_batch_size": 2, "dataset_rows": 7, "lengths_sha256": "a" * 64,
+    }
+    policy[field] = value
+    with pytest.raises(FinetuneEstimateError):
+        validate_length_grouping_evaluation(policy, seed=123)
+
+
+def test_unsupported_evaluation_sampler_does_not_partially_replace_training(trainer):
+    configured(trainer)
+    trainer.eval_dataset = trainer.train_dataset
+    trainer._get_eval_sampler = lambda dataset: torch.utils.data.SequentialSampler(dataset)
+    original = trainer._get_train_sampler
+    with pytest.raises(FinetuneEstimateError, match="ordinary native LengthGroupedSampler"):
+        install_length_grouping(trainer, seed=123, replace=setattr)
+    assert trainer._get_train_sampler is original
+
+
+def test_prepared_evaluation_loader_is_rejected(trainer):
+    configured(trainer)
+    trainer._eval_dataloaders = {"eval": object()}
+    with pytest.raises(FinetuneEstimateError, match="before dataloader preparation"):
+        install_length_grouping(trainer, seed=123, replace=setattr)
 
 
 def test_cached_loader_and_custom_sampler_rejected_before_install(trainer):
@@ -293,4 +355,26 @@ def test_v1_sampling_plan_cannot_claim_an_unapplied_length_seed(native_run):
     plan = transfer_plan_from_run(transfer_run(native_run, 1))
     plan["signature"]["length_grouping_seed"] = 123
     with pytest.raises(FinetuneEstimateError, match="workload identity"):
+        validate_transfer_plan(plan)
+
+
+def test_v1_sampling_plan_cannot_claim_grouped_evaluation(native_run):
+    plan = transfer_plan_from_run(transfer_run(native_run, 1))
+    plan["signature"]["length_grouping_evaluation"] = {}
+    with pytest.raises(FinetuneEstimateError, match="v2 length sampler"):
+        validate_transfer_plan(plan)
+
+
+def test_evaluation_policy_is_validated_and_part_of_cost_identity(native_run):
+    run = v2_fixture(native_run, 1)
+    run["training_config"]["length_grouping_evaluation"] = {
+        "schema_version": "fakegpu.finetune_eval_sampler.v1", "kind": "fixed_seed_length_grouped",
+        "seed": 123, "iteration_seed_rule": "same_seed_each_invocation",
+        "grouping_batch_size": 2, "dataset_rows": 7, "lengths_sha256": "a" * 64,
+    }
+    refresh_signature(run)
+    plan = transfer_plan_from_run(run)
+    assert plan["transfer_identity"]["signature"]["length_grouping_evaluation"] == run["training_config"]["length_grouping_evaluation"]
+    plan["signature"]["length_grouping_evaluation"]["seed"] = 124
+    with pytest.raises(FinetuneEstimateError, match="explicit seed"):
         validate_transfer_plan(plan)

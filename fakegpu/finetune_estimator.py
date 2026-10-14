@@ -106,6 +106,7 @@ def finetune_workload_signature(
         "timeline_observation_version",
         "sampler_observation_version",
         "length_grouping_seed",
+        "length_grouping_evaluation",
     ):
         if key in training_config:
             fields[key] = training_config[key]

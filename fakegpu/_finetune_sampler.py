@@ -75,6 +75,26 @@ def validate_length_grouping_seed(seed):
     return seed
 
 
+def validate_length_grouping_evaluation(policy, *, seed):
+    fields = {
+        "schema_version", "kind", "seed", "iteration_seed_rule",
+        "grouping_batch_size", "dataset_rows", "lengths_sha256",
+    }
+    if not isinstance(policy, Mapping) or set(policy) != fields:
+        raise FinetuneEstimateError("evaluation grouping policy is incomplete")
+    if (
+        policy["schema_version"] != "fakegpu.finetune_eval_sampler.v1"
+        or policy["kind"] != "fixed_seed_length_grouped"
+        or policy["iteration_seed_rule"] != "same_seed_each_invocation"
+        or _integer(policy["seed"], "evaluation grouping seed", minimum=0) != seed
+    ):
+        raise FinetuneEstimateError("evaluation grouping policy differs from its explicit seed")
+    _integer(policy["grouping_batch_size"], "evaluation grouping batch size")
+    _integer(policy["dataset_rows"], "evaluation grouping dataset rows")
+    _sha256(policy["lengths_sha256"], "evaluation grouping lengths")
+    return policy
+
+
 def validate_native_sampler_versions(framework, versions=None):
     if framework not in _VALIDATED_VERSIONS:
         raise FinetuneEstimateError("unsupported native sampler framework")

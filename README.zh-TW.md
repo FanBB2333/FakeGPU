@@ -1105,7 +1105,10 @@ batch size 調整仍未開放。
 Axolotl 設定 `group_by_length: true`，再向 `calibrate-finetune` 或 `run-finetune`
 明確加入 `--length-grouping-seed 123`。它保留原生 Trainer 的分組演算法，以獨立 CPU
 生成器使用 `123 + epoch` 種子；此選項會改變 sampler 的隨機流。依賴全域 RNG 的原生
-長度分組不能直接用於可重現的未來計畫。必須指定規劃範圍並關閉評估，且不提供評估資料集。
+長度分組不能直接用於可重現的未來計畫。必須指定規劃範圍。可提供一個有限評估資料集：
+評估使用獨立生成器，每次呼叫均使用同一明確種子，persistent worker 同樣維持固定順序，
+不推進訓練 sampler。評估分組策略與長度 SHA 納入校準身分；拒絕自訂評估 sampler
+及提前準備的 dataloader。
 sampler plan v2 將完整有序分組長度及分組 batch size 保留於校準身分中；不同長度序列
 需有自己的證據。每組仍須有兩個獨立程序與足夠重複觀測，短校準可能無法覆蓋多種形狀。
 

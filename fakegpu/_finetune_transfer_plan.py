@@ -24,6 +24,7 @@ from ._finetune_sampler import (
     LENGTH_SCHEMA_VERSION,
     SCHEMA_VERSION as SAMPLER_SCHEMA,
     _integer,
+    validate_length_grouping_evaluation,
     validate_sampler_plan,
     validate_sampling_verification,
 )
@@ -117,6 +118,12 @@ def validate_transfer_plan(plan):
     validate_pipeline_plan(base)
     sampling = validate_sampler_plan(plan.get("sampling_plan"))
     signature = plan["signature"]
+    if "length_grouping_evaluation" in signature:
+        if sampling["schema_version"] != LENGTH_SCHEMA_VERSION:
+            raise FinetuneEstimateError("evaluation grouping requires a v2 length sampler")
+        validate_length_grouping_evaluation(
+            signature["length_grouping_evaluation"], seed=sampling["sampler"]["seed"]
+        )
     if sampling["schema_version"] == LENGTH_SCHEMA_VERSION:
         _integer(signature.get("length_grouping_seed"), "length_grouping_seed", minimum=0)
     if (

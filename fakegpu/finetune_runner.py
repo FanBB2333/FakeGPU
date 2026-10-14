@@ -290,9 +290,11 @@ def run_finetuning(
             if length_grouping_seed is not None:
                 from ._finetune_length_sampler import install_length_grouping
 
-                install_length_grouping(
+                evaluation_policy = install_length_grouping(
                     trainer, seed=length_grouping_seed, replace=observer._replace
                 )
+                if evaluation_policy is not None:
+                    config["length_grouping_evaluation"] = evaluation_policy
             dataset = trainer.train_dataset
             if not hasattr(dataset, "__len__") or not hasattr(dataset, "__getitem__"):
                 raise ValueError(

@@ -1,6 +1,6 @@
 # FakeGPU 重构分析报告
 
-> 最新功能与验证结果见下方 **2026-10-14 / 可复现长度分组与 packing 隔离边界**；上一阶段为 **随机采样、跨数据规模与自动校准工作区**、**完整原生训练预算、缓存条件与显存边界**；前一阶段见 **epoch 位置与事件上下文联合校准**、 **周期事件后的训练窗口校准**、**原生评估与 checkpoint 事件成本**、**动态窗口独立校准验证**、**真实 batch 观测与校验**、**原生 QLoRA 与更多训练形状**、**原生框架与真实数据闭环**；此前交付见 **微调首批交付**；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新进度见下方 **2026-10-15 / 连续推进验收清单**；此前交付见 **可复现长度分组与 packing 隔离边界**、**随机采样、跨数据规模与自动校准工作区**、**完整原生训练预算、缓存条件与显存边界**等阶段；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
 
 ## 2026-10-15 / 连续推进验收清单
@@ -9,7 +9,7 @@
 
 - [x] Qwen3.5 分段训练参考接口（cache 关闭）：卷积与递归状态、跨层 logits/梯度、checkpointing、保存恢复及异常恢复。
 - [ ] 三个框架的 packing 数据边界、真实 sampler 计数、消费核验及独立时间/显存预算。
-- [ ] 长度分组与原生评估共存：独立采样随机流、评估输入核验及事件预算。
+- [x] 长度分组与原生评估共存：独立采样随机流、评估输入核验及事件预算。
 - [ ] 大数据规划的重复扫描和存储成本，保留历史报告兼容与纯标准库离线预算。
 - [ ] 更多模型、形状和重复 holdout；可用 GPU 验证与缺失硬件条件分开记录。
 - [ ] R24 长上下文及 serving 的真实 GPU 验证。
@@ -34,6 +34,36 @@
 保留两次开发审计失败：初次 CPU 将 TF 5.14 原生 Accelerate decorator 错判为全局 patch，已按已知 decorator 的原函数核验；初次 GPU 重载对照未对齐非持久 rotary buffer dtype，新建模型为 BF16、加载模型为 FP32，输出差 0.001953125。修正的是审计对照的执行 dtype，权重保持逐项相同；失败报告与日志均保留，未通过放宽阈值消除错误。
 
 全仓回归 **1553 passed / 1 skipped，138.90 秒**，CLI/文档与分段边界复核 **58 passed**，Ruff、diff check、无 ML 依赖导入通过；**152 份历史预测逐字节一致**。GPU 审计期间冻结 **96 个生产 Python 模块**，SHA 全部保持一致。证据见[摘要](tests/data/finetune_segment_validation_evidence.json)及[压缩审阅记录](tests/data/finetune_segment_validation_records.json.gz)，原始资料在 `/tmp/fakegpu-segments-20261015/`。这验证分段训练语义，不提供 varlen 吞吐、0.8B 微调预算或带缓存分段推理的精度结论；packed sampler 和实际成本继续按上方清单推进。
+
+### 长度分组评估验收
+
+分段接口已提交为 `4a8fb881`。随后接入独立固定种子的原生 evaluation LengthGroupedSampler：每次评估使用同一排序，训练仍使用 seed＋epoch；包括 persistent worker 的缓存 loader。只接受一个有限评估数据集、原生 sampler 和尚未准备的 loader；评估分组策略、batch size、行数及长度 SHA 纳入预算签名，v1 sampler 不能声明该策略。
+
+三个框架的真实 CPU Trainer、框架 sampler 方法及 collator，各验证 seed=0/123 与无/有 persistent worker，共六次原生训练。每次训练的周期评估与两次追加评估消费一致，训练输入 SHA 仍匹配独立 CPU 未来计划。全仓回归 **1566 passed / 1 skipped，139.75 秒**，相关预算回归 **94 passed**，新增策略最终单测 **38 passed**，Ruff 与无 ML 依赖导入通过。
+
+真机矩阵先在 CPU 上声明 25 条训练/8 条评估数据、microbatch 3、accumulation 2、seed 123、每 2 updates 评估/每 4 updates 保存、124-update 目标。48/68-step 校准缺少 22/14 个重复成本组；三个框架均在 88 steps 获得完整 CPU 覆盖（115/117/115 组），因此只选择 88-step 校准，不依据 GPU 误差调整。接下来每框架两次校准与一次独立 holdout，五个新空 kernel 缓存目录，预测先封存；生产代码冻结。资料目录 `/tmp/fakegpu-eval-grouping-20261015/`。
+
+九次原生 GPU 运行全部完成，没有训练失败、自动重试、误差筛选或校准延长。实际共 **900 updates / 1626 microsteps / 4530 条训练消费记录**，**456 个根评估与 234 个根保存**；最后一项是根调用数，嵌套保存不重复累计。每个框架仍只有一次 holdout，不作通用精度承诺。
+
+| 框架 | raw 总时间 APE | net 总时间 APE | holdout allocated / reserved GiB | 峰值低估 |
+|---|---:|---:|---:|---:|
+| HF / PEFT | 1.925% | 1.934% | 4.204 / 4.799 | 0% |
+| LLaMA-Factory | 0.271% | 0.268% | 4.167 / 4.762 | 0% |
+| Axolotl | 0.213% | 0.211% | 3.155 / 3.697 | 0% |
+
+分项 raw APE 为 HF setup/update/evaluation/checkpoint/gap/finalization **0.384/1.968/1.531/6.483/0.190/1.916%**，Factory **0.030/0.196/0.533/0.762/0.626/5.947%**，Ax **0.056/0.511/0.027/0.388/0.023/0.100%**。保留保存、尾部等分项偏差，不用总误差掩盖它们。
+
+独立审计重建全部 124-step 训练顺序与张量 SHA、固定评估顺序/逐批描述符/内容 SHA，核验九份完整消费前缀、时间守恒、成本分组和每进程等权算术、封存先于 holdout，以及九份各 24 张量 / 319,488 参数的 adapter 全部有限、12 个 LoRA B 均非零。**96 个生产 Python 模块**从回归后到全部运行及独立审计完成保持冻结。三语文档复核另为 **4 passed**。
+
+审计补正：Ax 的原生 builder 实际默认 `eval_on_start=True`，原始 CPU 预览已保存该参数，但预览脚本的手写事件表遗漏 step 0，因此独立审计第一次拒绝 Ax。已保留失败并按原生参数重建事件表；补充 CPU 覆盖为 **115/117/116 组**，原 88-step 选择仍完整覆盖。原始预览、九份训练、预算与封存预测均未修改；真实 runner 及生产预算从开始就记录并预测了这次初始评估，Factory 的训练外最终评估也已计入。没有因此重跑 GPU。
+
+审计最终 **9 processes / errors=[]**，**152 份历史预测逐字节一致**。证据见[摘要](tests/data/finetune_length_evaluation_evidence.json)与[压缩审阅记录](tests/data/finetune_length_evaluation_records.json.gz)。这些是同一 GPU、模型、版本、数据和缓存条件下的结果，allocator 包络不代表物理 OOM 保证，也不等同于不同长度/GPU 可直接复用。
+
+保留 CPU 审计开发失败日志（字段名误用 `verified`，应为 `matched`）；Ax 预处理因 IPC sandbox 限制及预览脚本缺少 multiprocessing main guard 的失败也保留。main guard 已补，并只终止确认归属本轮的进程组；这些均不是原生 GPU 校准失败或精度筛选重跑。
+
+### 已复现、待单独修复的问题
+
+本轮静态检查对本地 Qwen3.5-0.8B text config 调用 `llm_estimator._decoder_dimensions`，实际 `layer_types` 为 18 个 `linear_attention` 与 6 个 `full_attention`，当前函数仍返回 24 层 `grouped_query / separate_key_value`，后续 KV/FLOPs 公式因此不匹配该架构。README 已说明 hybrid 未覆盖，但代码没有拒绝这类配置。单卡微调的原生预算没有调用此推理公式；待当前原生计时完成后，用独立 bug 回归和提交修复，不能把这个数值用于长上下文验收。
 
 ## 2026-10-14 / 可复现长度分组与 packing 隔离边界
 

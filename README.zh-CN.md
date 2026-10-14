@@ -1099,7 +1099,10 @@ batch size 调整仍未开放。
 Axolotl 配置 `group_by_length: true`，再向 `calibrate-finetune` 或 `run-finetune`
 显式加入 `--length-grouping-seed 123`。它保留原生 Trainer 的分组算法，以独立 CPU
 生成器使用 `123 + epoch` 种子；该选项会改变 sampler 的随机流。依赖全局 RNG 的原生
-长度分组不能直接用于可复现未来计划。必须指定规划范围并关闭评估，且不提供评估数据集。
+长度分组不能直接用于可复现未来计划。必须指定规划范围。可提供一个有限评估数据集：
+评估使用独立生成器，每次调用都使用同一显式种子，persistent worker 同样保持固定顺序，
+不推进训练 sampler。评估分组策略及长度 SHA 纳入校准身份；拒绝自定义评估 sampler
+与提前准备的 dataloader。
 sampler plan v2 将完整有序分组长度及分组 batch size 保留在校准身份中；不同长度序列
 需有自己的证据。每组仍须有两个独立进程和足够重复观测，短校准可能无法覆盖多种形状。
 
