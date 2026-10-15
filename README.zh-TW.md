@@ -64,6 +64,10 @@
 
 ## 專案介紹
 
+範例中的 `TARGET_GPU_PROFILE` 由使用者透過
+`python3 -m fakegpu doctor --list-profiles` 選擇後設定。公開實驗資料只披露 GPU
+架構；支援目錄中的型號表示相容能力，不表示維護者持有該裝置。
+
 FakeGPU 為開發、CI、相容性檢查與容量規劃模擬面向 CUDA 的執行環境：應用程式
 可以偵測可設定的 NVIDIA 風格裝置，已維護的運算會在 CPU 上執行，模擬的 GPU
 記憶體與通訊資料會被記錄。對於不應直接載入的工作負載，FakeGPU 也提供靜態
@@ -1538,10 +1542,10 @@ GPU 記憶體估算或相容性問題應附上完整指令、選定的 profile�
 [python-url]: https://www.python.org/
 [license-shield]: https://img.shields.io/github/license/FanBB2333/FakeGPU?style=for-the-badge
 [license-url]: LICENSE
-[validation-static]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/ai-researcher-preflight.md#4-static-aten-storage-liveness-validation
-[validation-inference]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-inference-estimation.md#maintained-qwen3-8b-result
-[validation-sft]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#blackwell-matrix
-[validation-qlora]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#native-nf4-qlora-matrices
+[validation-static]: https://github.com/FanBB2333/FakeGPU/blob/6efed08ce20f9628481328ef31f90195df78c7fb/docs/ai-researcher-preflight.md#4-static-aten-storage-liveness-validation
+[validation-inference]: https://github.com/FanBB2333/FakeGPU/blob/6efed08ce20f9628481328ef31f90195df78c7fb/docs/llm-inference-estimation.md#maintained-qwen3-8b-result
+[validation-sft]: https://github.com/FanBB2333/FakeGPU/blob/6efed08ce20f9628481328ef31f90195df78c7fb/docs/llm-sft-memory-estimation.md#blackwell-gpu-matrix
+[validation-qlora]: https://github.com/FanBB2333/FakeGPU/blob/6efed08ce20f9628481328ef31f90195df78c7fb/docs/llm-sft-memory-estimation.md#native-nf4-qlora-matrices
 [diffusion-sd15]: https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/tree/451f4fe16113bff5a5d2269ed5ad43b0592e9a14
 [diffusion-sdxl]: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/tree/462165984030d82259a11f4367a4eed129e94a7b
 [diffusion-pixart]: https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/tree/e102b3591cc82e97071b8b4cb90d834d0c487207

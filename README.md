@@ -74,6 +74,10 @@ should not be loaded at all.
 
 A physical GPU is needed only for passthrough, hybrid, and calibration runs.
 
+Examples use `TARGET_GPU_PROFILE` for a catalog ID you select with
+`python3 -m fakegpu doctor --list-profiles`. Public experiment records disclose
+architecture only; supported model names describe compatibility, not ownership.
+
 ### What FakeGPU answers
 
 | Question | Recommended path | Physical GPU |
@@ -322,7 +326,7 @@ samples with `calibrate observe-serving` or `calibrate collect-serving`.
 
 Verified with every `scripts/test.sh` suite and both validation manifests on
 macOS 26.5 arm64, Python 3.11.9, and PyTorch 2.9.1 CPU. The Transformers
-sampler also ran on an Blackwell GPU (PyTorch 2.11.0+cu128,
+sampler also ran on a Blackwell GPU (PyTorch 2.11.0+cu128,
 Transformers 5.14.1).
 
 | Validation layer | Maintained check | Result |
@@ -1696,10 +1700,10 @@ Distributed under the MIT License. See [LICENSE](LICENSE) for details.
 [python-url]: https://www.python.org/
 [license-shield]: https://img.shields.io/github/license/FanBB2333/FakeGPU?style=for-the-badge
 [license-url]: LICENSE
-[validation-static]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/ai-researcher-preflight.md#4-static-aten-storage-liveness-validation
-[validation-inference]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-inference-estimation.md#maintained-qwen3-8b-result
-[validation-sft]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#blackwell-matrix
-[validation-qlora]: https://github.com/FanBB2333/FakeGPU/blob/df254c21eebc0a5bbf13992f3f5a8e995cfa8708/docs/llm-sft-memory-estimation.md#native-nf4-qlora-matrices
+[validation-static]: https://github.com/FanBB2333/FakeGPU/blob/6efed08ce20f9628481328ef31f90195df78c7fb/docs/ai-researcher-preflight.md#4-static-aten-storage-liveness-validation
+[validation-inference]: https://github.com/FanBB2333/FakeGPU/blob/6efed08ce20f9628481328ef31f90195df78c7fb/docs/llm-inference-estimation.md#maintained-qwen3-8b-result
+[validation-sft]: https://github.com/FanBB2333/FakeGPU/blob/6efed08ce20f9628481328ef31f90195df78c7fb/docs/llm-sft-memory-estimation.md#blackwell-gpu-matrix
+[validation-qlora]: https://github.com/FanBB2333/FakeGPU/blob/6efed08ce20f9628481328ef31f90195df78c7fb/docs/llm-sft-memory-estimation.md#native-nf4-qlora-matrices
 [diffusion-sd15]: https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/tree/451f4fe16113bff5a5d2269ed5ad43b0592e9a14
 [diffusion-sdxl]: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/tree/462165984030d82259a11f4367a4eed129e94a7b
 [diffusion-pixart]: https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/tree/e102b3591cc82e97071b8b4cb90d834d0c487207

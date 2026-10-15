@@ -1,7 +1,7 @@
 {
 "privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
   "schema_version": "fakegpu.memory_validation_evidence.v1",
-  "source_revision": "df254c21eebc0a5bbf13992f3f5a8e995cfa8708",
+  "source_revision": "6efed08ce20f9628481328ef31f90195df78c7fb",
   "metric": {
     "name": "absolute_percentage_error",
     "unit": "percent",
@@ -63,7 +63,7 @@
     {
       "id": "qwen_sft",
       "source_path": "docs/llm-sft-memory-estimation.md",
-      "source_anchor": "blackwell-matrix",
+      "source_anchor": "blackwell-gpu-matrix",
       "reference": "torch.cuda.max_memory_allocated",
       "environment": {
         "gpu": "Blackwell GPU",

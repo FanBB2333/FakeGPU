@@ -1,0 +1,60 @@
+name: Publish archived documentation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the redacted source of the published documentation
+        uses: actions/checkout@v4
+        with:
+          ref: 9a1ce78fb9be70bc1215b93f235fac823213f08a
+
+      - name: Check out published test reports
+        uses: actions/checkout@v4
+        with:
+          ref: reports
+          path: _reports
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install documentation dependencies
+        run: python -m pip install -e ".[docs]"
+
+      - uses: actions/configure-pages@v5
+
+      - name: Build the documentation and preserve report URLs
+        run: |
+          mkdocs build --strict
+          mkdir -p site/test site/test-results
+          cp test/report.html site/test/
+          cp test-results/index.html site/test-results/
+          cp -a _reports/test-results/. site/test-results/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish the redacted documentation
+        id: deployment
+        uses: actions/deploy-pages@v4
