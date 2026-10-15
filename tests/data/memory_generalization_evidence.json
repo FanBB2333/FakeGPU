@@ -1,0 +1,520 @@
+{
+"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
+  "all_analytic_gates_passed": true,
+  "artifact_root": "/tmp/fakegpu-memory-generalization-20261015",
+  "calibration_processes": 20,
+  "cases": [
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "sd-fp16",
+      "max_analytic_ape": 2.0407148406862308,
+      "max_analytic_underestimate": 2.0407148406862308
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "sd-fp32",
+      "max_analytic_ape": 5.620750733959616,
+      "max_analytic_underestimate": 1.381210333686619
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "case": "sd-rect-b2",
+      "max_analytic_ape": 3.06382950816852,
+      "max_analytic_underestimate": 3.06382950816852
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "sd-no-cfg",
+      "max_analytic_ape": 2.0138772022293483,
+      "max_analytic_underestimate": 2.0138772022293483
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "case": "xl-fp16",
+      "max_analytic_ape": 10.92623472189304,
+      "max_analytic_underestimate": 2.230388230805287
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "xl-fp32",
+      "max_analytic_ape": 3.6189909052280864,
+      "max_analytic_underestimate": 1.521007552457968
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "xl-rect-b2",
+      "max_analytic_ape": 2.430842717128859,
+      "max_analytic_underestimate": 2.430842717128859
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "xl-no-cfg",
+      "max_analytic_ape": 1.9916122061083947,
+      "max_analytic_underestimate": 1.9916122061083947
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "sd-new-b3",
+      "max_analytic_ape": 2.793154951681175,
+      "max_analytic_underestimate": 2.793154951681175
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "xl-fp16-new-rect",
+      "max_analytic_ape": 10.406288940368052,
+      "max_analytic_underestimate": 2.2128357605221476
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "sd-old-bf16",
+      "max_analytic_ape": 2.817219874383495,
+      "max_analytic_underestimate": 2.817219874383495
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "xl-old-bf16",
+      "max_analytic_ape": 2.235249289344463,
+      "max_analytic_underestimate": 2.235249289344463
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "qwen-b2",
+      "max_analytic_ape": 0.40047100272576414,
+      "max_analytic_underestimate": 0.18368357806662264
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "case": "qwen-fp16",
+      "max_analytic_ape": 0.4391982379445135,
+      "max_analytic_underestimate": 0.4391982379445135
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "qwen-fp32",
+      "max_analytic_ape": 1.0089851467867155,
+      "max_analytic_underestimate": 1.0089851467867155
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "qwen-eager",
+      "max_analytic_ape": 0.9742405903219798,
+      "max_analytic_underestimate": 0.9742405903219798
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "case": "qwen17-b2",
+      "max_analytic_ape": 0.18008739797219983,
+      "max_analytic_underestimate": 0.13104651377240126
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "qwen25-b2",
+      "max_analytic_ape": 3.5754843405057657,
+      "max_analytic_underestimate": 3.5754843405057657
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "sd-attention-slicing",
+      "max_analytic_ape": 4.165591255599805,
+      "max_analytic_underestimate": 1.6035678924224028
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "sd-eager",
+      "max_analytic_ape": 1.5777562306562232,
+      "max_analytic_underestimate": 1.5777562306562232
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "sd-vae-combined",
+      "max_analytic_ape": 3.378640032890069,
+      "max_analytic_underestimate": 3.378640032890069
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "sd-vae-slicing",
+      "max_analytic_ape": 3.212427205958647,
+      "max_analytic_underestimate": 3.212427205958647
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "sd-vae-tiling",
+      "max_analytic_ape": 3.0670742471303103,
+      "max_analytic_underestimate": 3.0670742471303103
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "xl-fp16-attention-slicing",
+      "max_analytic_ape": 6.685838918840993,
+      "max_analytic_underestimate": 1.82518822396811
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": null,
+      "case": "xl-vae-tiling",
+      "max_analytic_ape": 2.3779387268186807,
+      "max_analytic_underestimate": 2.3779387268186807
+    }
+  ],
+  "cross_scenario_budget_rejections": 68,
+  "first_cohort_audit": {
+    "accuracy_failure_policy": "Negative accuracy findings are preserved separately and do not fail the evidence integrity audit.",
+    "all_analytic_gates_passed": true,
+    "all_calibrated_gates_passed": true,
+    "analytic_gate_failures": [],
+    "audit": "stdlib independent reconstruction of the predeclared expanded memory matrix",
+    "calibrated_gate_failures": [],
+    "calibrated_holdout_phase_metric_comparisons": 60,
+    "calibration_processes": 20,
+    "errors": [],
+    "evidence_integrity_passed": true,
+    "execution_failures": [],
+    "expected_calibration_processes": 20,
+    "expected_cases": 18,
+    "expected_holdout_processes": 40,
+    "expected_processes": 60,
+    "holdout_processes": 40,
+    "json_asset_files": 4,
+    "model_input_files_hashed": 64,
+    "processes": 60,
+    "source_files": 107,
+    "thresholds": {
+      "max_absolute_error_percent": 20.0,
+      "max_underestimate_percent": 10.0
+    },
+    "unique_run_ids": 60
+  },
+  "formal_cases": 25,
+  "formal_native_processes": 74,
+  "gates": {
+    "max_absolute_error_percent": 20,
+    "max_underestimate_percent": 10
+  },
+  "historical_finetune_predictions_byte_identical": 152,
+  "independent_validation_processes": 54,
+  "max_analytic_absolute_error_percent": 10.92623472189304,
+  "max_analytic_underestimate_percent": 3.5754843405057657,
+  "mode_cohort_audit": {
+    "accuracy_failure_policy": "Failed accuracy gates are retained as findings; they do not invalidate evidence integrity.",
+    "all_analytic_gates_passed": true,
+    "analytic_gate_failures": [],
+    "audit": "Independent stdlib reconstruction of seven diffusion execution modes",
+    "completed_samples": 14,
+    "errors": [],
+    "evidence_integrity_passed": true,
+    "execution_failures": [],
+    "expected_cases": 7,
+    "expected_processes": 14,
+    "json_asset_files": 4,
+    "model_input_files_hashed": 38,
+    "phase_comparisons": 42,
+    "probe_identity": {
+      "bytes": 5089,
+      "sha256": "2f8b8cbfa48034d10c9c5d1ea005485df087c0ebc7a7a31522a573e678f44834"
+    },
+    "processes": 14,
+    "production_source_files": 107
+  },
+  "mode_old_formula_comparison": [
+    {
+      "actual": 2170108928,
+      "case": "sd-attention-slicing",
+      "new_ape": 1.6035678924224028,
+      "new_predicted": 2135309758,
+      "new_underestimate": 1.6035678924224028,
+      "old_ape": 1.6035678924224028,
+      "old_predicted": 2135309758,
+      "old_underestimate": 1.6035678924224028,
+      "phase": "text_encode"
+    },
+    {
+      "actual": 2563174912,
+      "case": "sd-attention-slicing",
+      "new_ape": 4.165591255599805,
+      "new_predicted": 2669946302,
+      "new_underestimate": 0.0,
+      "old_ape": 12.837281781259883,
+      "old_predicted": 2234132926,
+      "old_underestimate": 12.837281781259883,
+      "phase": "denoise"
+    },
+    {
+      "actual": 3444670464,
+      "case": "sd-attention-slicing",
+      "new_ape": 0.9634973895720668,
+      "new_predicted": 3477859774,
+      "new_underestimate": 0.0,
+      "old_ape": 0.9634973895720668,
+      "old_predicted": 3477859774,
+      "old_underestimate": 0.0,
+      "phase": "vae_decode"
+    },
+    {
+      "actual": 2168097792,
+      "case": "sd-eager",
+      "new_ape": 1.5777562306562232,
+      "new_predicted": 2133890494,
+      "new_underestimate": 1.5777562306562232,
+      "old_ape": 1.5777562306562232,
+      "old_predicted": 2133890494,
+      "old_underestimate": 1.5777562306562232,
+      "phase": "text_encode"
+    },
+    {
+      "actual": 3298144256,
+      "case": "sd-eager",
+      "new_ape": 1.112454858008491,
+      "new_predicted": 3334834622,
+      "new_underestimate": 0.0,
+      "old_ape": 33.51596862353858,
+      "old_predicted": 2192739262,
+      "old_underestimate": 33.51596862353858,
+      "phase": "denoise"
+    },
+    {
+      "actual": 2805504000,
+      "case": "sd-eager",
+      "new_ape": 0.012065496965964049,
+      "new_predicted": 2805165502,
+      "new_underestimate": 0.012065496965964049,
+      "old_ape": 0.012065496965964049,
+      "old_predicted": 2805165502,
+      "old_underestimate": 0.012065496965964049,
+      "phase": "vae_decode"
+    },
+    {
+      "actual": 2172531712,
+      "case": "sd-vae-combined",
+      "new_ape": 1.647970881264632,
+      "new_predicted": 2136729022,
+      "new_underestimate": 1.647970881264632,
+      "old_ape": 1.647970881264632,
+      "old_predicted": 2136729022,
+      "old_underestimate": 1.647970881264632,
+      "phase": "text_encode"
+    },
+    {
+      "actual": 2781902336,
+      "case": "sd-vae-combined",
+      "new_ape": 3.378640032890069,
+      "new_predicted": 2687911870,
+      "new_underestimate": 3.378640032890069,
+      "old_ape": 14.403774741285527,
+      "old_predicted": 2381203390,
+      "old_underestimate": 14.403774741285527,
+      "phase": "denoise"
+    },
+    {
+      "actual": 2336918528,
+      "case": "sd-vae-combined",
+      "new_ape": 1.2433714591183216,
+      "new_predicted": 2307861950,
+      "new_underestimate": 1.2433714591183216,
+      "old_ape": 1.2601977196528094,
+      "old_predicted": 2307468734,
+      "old_underestimate": 1.2601977196528094,
+      "phase": "vae_decode"
+    },
+    {
+      "actual": 2174352384,
+      "case": "sd-vae-slicing",
+      "new_ape": 1.6650520065840442,
+      "new_predicted": 2138148286,
+      "new_underestimate": 1.6650520065840442,
+      "old_ape": 1.6650520065840442,
+      "old_predicted": 2138148286,
+      "old_underestimate": 1.6650520065840442,
+      "phase": "text_encode"
+    },
+    {
+      "actual": 2713958400,
+      "case": "sd-vae-slicing",
+      "new_ape": 3.212427205958647,
+      "new_predicted": 2626774462,
+      "new_underestimate": 3.212427205958647,
+      "old_ape": 13.257892899168978,
+      "old_predicted": 2354144702,
+      "old_underestimate": 13.257892899168978,
+      "phase": "denoise"
+    },
+    {
+      "actual": 2813187072,
+      "case": "sd-vae-slicing",
+      "new_ape": 0.11391613561346553,
+      "new_predicted": 2809982398,
+      "new_underestimate": 0.11391613561346553,
+      "old_ape": 0.11391613561346553,
+      "old_predicted": 2809982398,
+      "old_underestimate": 0.11391613561346553,
+      "phase": "vae_decode"
+    },
+    {
+      "actual": 2168097792,
+      "case": "sd-vae-tiling",
+      "new_ape": 1.5777562306562232,
+      "new_predicted": 2133890494,
+      "new_underestimate": 1.5777562306562232,
+      "old_ape": 1.5777562306562232,
+      "old_predicted": 2133890494,
+      "old_underestimate": 1.5777562306562232,
+      "phase": "text_encode"
+    },
+    {
+      "actual": 2581508096,
+      "case": "sd-vae-tiling",
+      "new_ape": 3.0670742471303103,
+      "new_predicted": 2502331326,
+      "new_underestimate": 3.0670742471303103,
+      "old_ape": 10.987728081872342,
+      "old_predicted": 2297859006,
+      "old_underestimate": 10.987728081872342,
+      "phase": "denoise"
+    },
+    {
+      "actual": 2335585792,
+      "case": "sd-vae-tiling",
+      "new_ape": 1.2059591258208853,
+      "new_predicted": 2307419582,
+      "new_underestimate": 1.2059591258208853,
+      "old_ape": 1.306974297606962,
+      "old_predicted": 2305060286,
+      "old_underestimate": 1.306974297606962,
+      "phase": "vae_decode"
+    },
+    {
+      "actual": 7069305856,
+      "case": "xl-fp16-attention-slicing",
+      "new_ape": 1.82518822396811,
+      "new_predicted": 6940277718,
+      "new_underestimate": 1.82518822396811,
+      "old_ape": 1.82518822396811,
+      "old_predicted": 6940277718,
+      "old_underestimate": 1.82518822396811,
+      "phase": "text_encode"
+    },
+    {
+      "actual": 7277633536,
+      "case": "xl-fp16-attention-slicing",
+      "new_ape": 0.7034978299847167,
+      "new_predicted": 7226435542,
+      "new_underestimate": 0.7034978299847167,
+      "old_ape": 3.222667489917426,
+      "old_predicted": 7043099606,
+      "old_underestimate": 3.222667489917426,
+      "phase": "denoise"
+    },
+    {
+      "actual": 9477364736,
+      "case": "xl-fp16-attention-slicing",
+      "new_ape": 6.685838918840993,
+      "new_predicted": 10111006076,
+      "new_underestimate": 0.0,
+      "old_ape": 10.827133054215293,
+      "old_predicted": 8451237846,
+      "old_underestimate": 10.827133054215293,
+      "phase": "vae_decode"
+    },
+    {
+      "actual": 7069305856,
+      "case": "xl-vae-tiling",
+      "new_ape": 1.82518822396811,
+      "new_predicted": 6940277718,
+      "new_underestimate": 1.82518822396811,
+      "old_ape": 1.82518822396811,
+      "old_predicted": 6940277718,
+      "old_underestimate": 1.82518822396811,
+      "phase": "text_encode"
+    },
+    {
+      "actual": 7491715072,
+      "case": "xl-vae-tiling",
+      "new_ape": 2.3779387268186807,
+      "new_predicted": 7313566678,
+      "new_underestimate": 2.3779387268186807,
+      "old_ape": 4.1274980565625015,
+      "old_predicted": 7182494678,
+      "old_underestimate": 4.1274980565625015,
+      "phase": "denoise"
+    },
+    {
+      "actual": 7711937024,
+      "case": "xl-vae-tiling",
+      "new_ape": 1.1929397467029939,
+      "new_predicted": 7619938262,
+      "new_underestimate": 1.1929397467029939,
+      "old_ape": 1.2337301212899532,
+      "old_predicted": 7616792534,
+      "old_underestimate": 1.2337301212899532,
+      "phase": "vae_decode"
+    }
+  ],
+  "original_18_predictions_byte_identical_after_mode_fixes": 18,
+  "publication_scope": "Supporting generalization evidence, not new GPU-validated rows. Twenty-one conditions have only two independent observations, below the README five-observation publication minimum. No interval-coverage or OOM-boundary claim is made. Predeclared repeat counts were retained.",
+  "publication_status": "experimental",
+  "record_count": 947,
+  "records": "tests/data/memory_generalization_records.json.gz",
+  "remaining_limits": [
+    "phase-sample still intentionally supports homogeneous Transformers dynamic KV and SD/SDXL SDPA without offload/slicing/tiling; second cohort uses an archived native validation probe, not an expanded public calibration API.",
+    "New optimized diffusion modes have allocated accuracy validation and raw reserved observations; their reserved calibration envelopes have not been established.",
+    "Offload, quantized/custom diffusion processors, unseen GPUs/drivers/package versions, and long-lived mixed workloads remain unvalidated."
+  ],
+  "retained_development_failures": [
+    "Initial serving exploration omitted required target profile; corrected frozen archive then needed its profiles directory; all failed records kept.",
+    "Diagnostic UNet post-hook accidentally returned a string; fixed observer and retained original failure.",
+    "CPU remaining-boundary observer initially missed aten.softmax.int; corrected observer only.",
+    "Initial VAE slicing meta check manually changed the VAE processor; corrected via actual pipeline-level semantics and separate code commit.",
+    "Private patch/fixture setup errors and stale patch hunks were retained, corrected before application.",
+    "First optimized-mode audit used legacy checkpoint names directly; exact native loader name conversion was independently reconstructed without modifying samples."
+  ],
+  "schema_version": "fakegpu.memory_generalization_evidence.v1",
+  "scope": "Single authorized Blackwell GPU GPU1; fixed synthetic prompts/seeds. Two separately frozen cohorts. Analytical allocated estimates and exact-workload allocated/reserved calibration are different claims. No cross-GPU/software/unknown-shape accuracy or physical OOM guarantee. Physical multi-GPU/multi-node outside current scope.",
+  "tests": {
+    "earlier_restricted_run": "1760 passed,1failed,7errors,1skipped; all8 socket failures resolved in15-test elevated loopback recheck; final full run passed",
+    "passed": 1790,
+    "ruff_passed": true,
+    "seconds": 161.13,
+    "skipped": 1
+  },
+  "wheel": {
+    "all_payloads_match": true,
+    "help_checks": 45,
+    "json_assets": 4,
+    "ml_imported": false,
+    "native_artifacts": 6,
+    "prediction_checks": 18,
+    "profiles": 82,
+    "python_modules": 107,
+    "wheel_sha256": "f74257a4fd4897ca4e56c9241d5ebb012288f583d60d8204f67a27364a1ea5d8"
+  },
+  "wheel_checks": {
+    "help": 45,
+    "initial_scenario_predictions": 18,
+    "legacy_budget": 41,
+    "mode_predictions": 7,
+    "phase_budget": 16
+  }
+}

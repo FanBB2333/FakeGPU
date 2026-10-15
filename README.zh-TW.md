@@ -1354,6 +1354,19 @@ reserved 最多低估 31.6%，保留這些未通過的結果。
 門檻皆通過，這組固定輸入、BF16 條件的峰值與校準最大值一致。原未校準失敗保留，
 這些結果不代表可移轉至新形狀，也不構成實體 OOM 保證。
 
+[擴展記憶體驗證](tests/data/memory_generalization_evidence.json)涵蓋 25 個單卡條件、
+74 個全新程序：SD 1.4／SDXL、Qwen3-0.6B／1.7B／Qwen2.5-0.5B，FP16／BF16／FP32、
+不同 batch、矩形影像、guidance、eager attention、attention／VAE slicing 與 VAE tiling。
+結構性修正涵蓋 LLM 共享權重、U-Net GEGLU／attention 緩衝、VAE 混合精度升精度及
+tile／slice 輸出保留。全部解析式 allocated 比較通過預設的絕對誤差 20%／低估 10%
+門檻；最大絕對誤差 10.93%，最大低估 3.58%。四個條件各五次校準後再三次 holdout，
+其餘 21 個條件各兩次獨立驗證。精確匹配條件的 allocated／reserved 預算在十二次
+holdout 中與實測一致；68 次跨條件重用預算皆被拒絕。本輪為 experimental 泛化證據，
+不新增 `GPU-validated` 行：21 個條件未達公開結果的五次觀測要求，也未評估預測
+區間覆蓋率與 OOM 邊界。最佳化模式使用已封存的原生驗證
+探針；公開 `phase-sample` 的 diffusion 路徑仍限 SDPA 且無 offload／slicing／tiling，
+這些最佳化模式的 reserved 包絡尚未驗收。結論限於已測 GPU、軟體和負載。
+
 Allocated 張量儲存與 allocator reserved 是不同指標。`calibrate phase-sample`
 在全新 CUDA 程序同時採集兩者；`phase-estimate` 用至少五個獨立程序封存各階段實測
 最大值，`phase-validate` 對照稍後開始的獨立執行。每份樣本與預算均需新輸出路徑。

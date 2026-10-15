@@ -1541,6 +1541,25 @@ explicit native phase budgets. All held-out peaks equal their calibration maxima
 in this fixed-input BF16 matrix. Earlier uncalibrated failures remain preserved;
 these results do not imply transfer to new shapes or physical OOM safety.
 
+The [broader memory validation](tests/data/memory_generalization_evidence.json)
+covers 25 single-GPU conditions in 74 fresh processes: SD 1.4/SDXL and
+Qwen3-0.6B/1.7B/Qwen2.5-0.5B, FP16/BF16/FP32, batches, rectangular images,
+guidance, eager attention, attention/VAE slicing and VAE tiling. Structural fixes
+address shared LLM weights, U-Net GEGLU/attention buffers, mixed-precision VAE
+upcasting and retained tile/slice outputs. All analytical allocated comparisons
+pass the declared 20% absolute-error / 10% underestimate gates; the worst errors
+are 10.93% absolute and 3.58% underestimate. Four conditions each use five
+calibrations followed by three holdouts; the other 21 each have two independent
+validation runs. Exact-condition allocated/reserved budgets match all twelve
+holdouts; 68 attempts to reuse budgets across conditions are rejected.
+This is experimental generalization evidence, not new `GPU-validated` rows:
+21 conditions remain below the five-observation publication minimum, and
+prediction-interval coverage and OOM boundaries were not evaluated.
+Optimized diffusion modes use an archived native validation probe; the public
+`phase-sample` diffusion path remains SDPA without offload/slicing/tiling, and
+reserved envelopes for those optimized modes remain unvalidated. Results are
+limited to the tested GPU, software and workloads.
+
 Allocated tensor storage and allocator-reserved memory are separate quantities.
 `calibrate phase-sample` collects both in one fresh CUDA process; `phase-estimate`
 seals per-phase maxima from at least five independent processes, and `phase-validate`

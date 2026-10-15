@@ -17,9 +17,33 @@
 - [x] R26 本机软件矩阵、CPU／GPU 1 MoE 语义及原生两 CPU rank DDP／FSDP2。
 - 范围外：R26 物理多 GPU／多机 TP／PP／CP／EP、ZeRO／FSDP。用户已确认当前无法开展，不列为待办或完成阻塞；保持未验证。
 - [x] 显存精度改进：修复 VAE 上采样工作集，新增双指标原生校准，六种条件各五次校准＋五次独立验证通过。
+- [x] 扩展显存泛化验证：25 个条件／74 个进程，修复共享权重、GEGLU／attention、VAE 精度与输出保留；独立审计及全仓／wheel 回归通过。
 - [x] R23 本轮有限原生数值需求、实验工具与产物，以及最终全仓／wheel 回归。
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### 扩展显存泛化验证完成
+
+本轮进一步覆盖 **25 个单卡条件／74 个全新原生进程**，包括 SD 1.4／SDXL，Qwen3-0.6B／1.7B 与 Qwen2.5-0.5B，FP16／BF16／FP32、不同 batch、矩形分辨率、关闭 CFG、eager attention、attention slicing、VAE slicing／tiling 及两者组合。每批先冻结源码、模型输入和预测，再运行预先声明的独立进程；没有按误差筛选、重试或追加轮次。首批 18 条件／60 进程冻结在 `8458045d`，后续优化模式修正后这 18 份预测逐字节一致；第二批 7 条件／14 进程冻结在 `260ce922`。全部解析式 allocated 比较通过 **20% 绝对误差／10% 低估**门槛，最大绝对误差 **10.926%（高估）**、最大低估 **3.575%**。
+
+| 已复现问题 | 修正前 | 修正后独立观测 |
+|---|---:|---:|
+| Qwen3-0.6B 短上下文 decode 共享 embedding 重计 | 高估 21.21%–22.41% | FP16／BF16／FP32 相关场景全部阶段最大误差 0.40%–1.01% |
+| SD 1.4，512×768、batch 2，GEGLU 缓冲缺项 | denoise 低估 10.983% | 低估 3.064% |
+| SDXL 1024² FP16，VAE 自动升精度缺项 | VAE 低估 14.319% | 高估 10.926% |
+| SD 1.4 512² BF16 eager，自注意力与 softmax 缓冲缺项 | denoise 低估 33.516% | 高估 1.112% |
+
+最后一行的旧预测是用冻结的 `39c8ae90` 公式对第二批相同计划回算，并与新原生观测比较；没有伪称进行了额外旧版本 GPU 运行。修正按真实张量形状、精度和生命周期建模，没有按观测误差拟合系数。VAE slicing／tiling 的 GPU 验收包括矩形边缘、batch 与组合模式；原生 CPU/meta 检查补充参数共享、VAE dtype、十二种 attention 组合和拼接存储的语义证据。
+
+四个精确条件各 **5 次校准＋3 次后续 holdout**，其余 21 条件各 **2 次独立验证**；合计 20 个校准与 54 个独立验证进程。四份新 allocated／reserved 预算在 12 个 holdout、60 个 phase×metric 比较中误差均为 0%，只表示固定条件重复观测一致；**68 次跨条件预算复用被拒绝**。公开 diffusion `phase-sample` 仍限 SDPA 且无 offload／slicing／tiling。第二批优化模式使用归档原生探针，验收 allocated 解析式，reserved 仅保留原始观测，尚未建立该模式的校准包络。
+
+本轮是 **experimental 泛化证据，不新增 `GPU-validated` 行**。21 个条件只有两次独立观测，未达到 README 公开验证行至少五次的要求；也未评估预测区间覆盖率或 OOM 边界。保留事先声明的重复次数，不为了发布标签事后追加；门槛通过只描述本轮实际样本。
+
+两个独立标准库审计均 **errors=[]**，复核源码／模型文件 SHA、独立进程身份、预算事前封存、误差重算、有限输出与重复图像／token 一致性。第二批审计最初未转换 SD 旧权重 attention 名称，保留失败 JSON、日志和审计器；随后按安装的 Diffusers 原生映射逐项验证 SD 的 16 个别名、SDXL 的零个别名，以及两者全部 248 个参数张量的形状／元素数，未改动任何 GPU 样本。
+
+最终全仓 **1790 passed／1 skipped，161.13 秒**，全量 Ruff 通过。最终 wheel 的 **107 个 Python 模块、4 个 JSON 资源、6 个原生产物及 82 个 profiles** 与源码／构建一致；标准库离线执行 **127 项 CLI 检查**（45 help、18 首批预测、7 优化模式预测、16 phase budget、41 原预算功能），**152 份历史微调预测逐字节一致**。全仓早期受限运行的八项 socket 权限失败及随后的定向／完整通过日志均保留。
+
+证据见 [扩展显存验证](tests/data/memory_generalization_evidence.json)及 [947 份压缩审阅记录](tests/data/memory_generalization_records.json.gz)，包含两批冻结源码、原生样本与日志、旧公式对照、CPU 探针、独立审计和 wheel 检查。仍未验证其他 GPU／驱动／包版本、offload、量化／自定义 diffusion processor 及长期混合负载；后续需补足优化模式的公开采集入口与 reserved 校准，不能把本轮 allocated 结果视为这些范围已经通过。真实多卡／多机保持范围外。
 
 ### VAE slicing／tiling 输出生命周期（独立 bug 修复）
 
