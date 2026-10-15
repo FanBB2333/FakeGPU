@@ -317,6 +317,15 @@ def estimate_diffusion_generation(
         tile_size=tile_size,
     )
     output_image_bytes = image_batch * image_height * image_width * 3 * vae_element_bytes
+    vae_output_components = (
+        vae_activation["output_buffers"]["peak_components"]
+        if vae_slicing or vae_tiling
+        else {
+            "decoded_image": output_image_bytes,
+            "retained_features": vae_activation["retained_feature_bytes"],
+            "working_tensors": vae_activation["working_tensor_bytes"],
+        }
+    )
     vae_latent_bytes = (
         image_batch * latent_channels * latent_height * latent_width
         * SUPPORTED_DTYPES[vae_precision["decode_input_dtype"]]
@@ -366,9 +375,7 @@ def estimate_diffusion_generation(
             {
                 "resident_weights": resident_weights["vae_decode"],
                 "latents": vae_latent_bytes,
-                "decoded_image": output_image_bytes,
-                "retained_features": vae_activation["retained_feature_bytes"],
-                "working_tensors": vae_activation["working_tensor_bytes"],
+                **vae_output_components,
                 "runtime_overhead": overhead_bytes,
             },
         ),

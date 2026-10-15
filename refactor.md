@@ -21,6 +21,12 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### VAE slicing／tiling 输出生命周期（独立 bug 修复）
+
+原生 CPU 探针证明 batch 拼接同时保留全部切片与新输出；重叠 tiling 会保留全部 tile，再分配行拼接与最终图像。现按原生 25% overlap、逐行 tile 顺序和矩形边缘计算输出存活，分别比较解码／tile 拼接／batch 拼接的候选峰值，避免将不同时发生的激活峰值相加。小型参考中 batch cat 为 **92,160 bytes**，九 tile 的最终拼接为 **172,800 bytes**，与原生存储完全相符。
+
+`vae_tile_size` 保持默认 512，并明确要求设置原生 `tile_sample_min_size` 与 `tile_latent_min_size`；仅 enable_tiling 会保留模型原生默认（SD 512、SDXL 1024）。活跃 tiling 要求 tile size 能被 `4 × latent_scale` 整除，保证 overlap stride 与输出网格一致。集成 **49 tests passed**；原无 slicing／tiling 的 18 个场景预测保持一致，优化模式随后用第二批 GPU 进程验收。
+
 ### U-Net eager／自动 attention slicing 缓冲（独立 bug 修复）
 
 原生 tiny U-Net CPU 追踪证实自注意力 N² 分数及 softmax 输入／输出同时存活，旧公式仅有 cross-attention。标准 UNet 现在分别建模 self/cross 的最大缓冲，自动 slicing 按原生 `heads // 2` 切分展平的 batch/head 轴，并计入完整输出、前一 slice 与显式 Q/K upcast。保留 only_cross_attention 的层配置及原生 mid-block 自注意力，非标准处理器保持明确未建模。十二种 CPU 注意力组合与 cross-only 原生 UNet 检查通过；集成 **39 tests passed**。首批 18 场景均无此优化分支，预测逐字节一致；GPU 精度随后单独验收。

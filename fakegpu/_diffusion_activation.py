@@ -595,7 +595,7 @@ def _vae_decode_activation(
                 "working_tensor_bytes": working_bytes,
             }
         )
-    return {
+    result = {
         "processed_batch_size": processed_batch,
         "processed_height": processed_height,
         "processed_width": processed_width,
@@ -611,5 +611,140 @@ def _vae_decode_activation(
         "formula": (
             "maximum live decoder-stage/upsample-convolution feature set + maximum "
             "two-feature working set; decoder stages are sequential"
+        ),
+    }
+    if slicing or tiling:
+        result["output_buffers"] = _vae_decode_output_buffers(
+            profile=profile, height=height, width=width, batch_size=batch_size,
+            latent_scale=latent_scale, element_bytes=element_bytes,
+            slicing=slicing, tiling=tiling, tile_size=tile_size,
+        )
+    return result
+
+
+def _vae_decode_output_buffers(
+    *,
+    profile: Mapping[str, Any],
+    height: int,
+    width: int,
+    batch_size: int,
+    latent_scale: int,
+    element_bytes: int,
+    slicing: bool,
+    tiling: bool,
+    tile_size: int,
+) -> dict[str, Any]:
+    """Model native AutoencoderKL output lifetimes during decode and cat.
+
+    Native tiled_decode retains every overlapping tile, then all concatenated
+    rows, until its final concatenation completes. Sliced decode retains each
+    completed image until a separate batch concatenation finishes.
+    """
+    slicing_active = slicing and batch_size > 1
+    tiling_active = tiling and (height > tile_size or width > tile_size)
+    processed_batch = 1 if slicing_active else batch_size
+    image_bytes = processed_batch * height * width * 3 * element_bytes
+    full_batch_bytes = batch_size * height * width * 3 * element_bytes
+    previous_slices_bytes = full_batch_bytes - image_bytes
+    if tiling_active:
+        # Native stride truncates in latent pixels, while row_limit truncates
+        # in output pixels. Require alignment so both describe the same image.
+        if tile_size % (4 * latent_scale):
+            raise DiffusionEstimateError(
+                "active VAE tiling requires vae_tile_size divisible by four "
+                "times the latent scale for native 25% overlap alignment"
+            )
+        tile_latent_size = tile_size // latent_scale
+        latent_stride = tile_latent_size * 3 // 4
+        row_limit = tile_size * 3 // 4
+        heights = [
+            min(tile_latent_size, height // latent_scale - start) * latent_scale
+            for start in range(0, height // latent_scale, latent_stride)
+        ]
+        widths = [
+            min(tile_latent_size, width // latent_scale - start) * latent_scale
+            for start in range(0, width // latent_scale, latent_stride)
+        ]
+    else:
+        latent_stride = None
+        row_limit = None
+        heights = [height]
+        widths = [width]
+
+    candidates: dict[str, dict[str, Any]] = {}
+
+    def candidate(name: str, components: dict[str, int]) -> None:
+        peak = sum(components.values())
+        if name not in candidates or peak > candidates[name]["peak_bytes"]:
+            candidates[name] = {"peak_bytes": peak, "components": components}
+
+    tile_shapes: dict[tuple[int, int], dict[str, Any]] = {}
+    retained_tiles = 0
+    for tile_height in heights:
+        for tile_width in widths:
+            shape = (tile_height, tile_width)
+            if shape not in tile_shapes:
+                tile_shapes[shape] = _vae_decode_activation(
+                    profile=profile, height=tile_height, width=tile_width,
+                    batch_size=processed_batch, latent_scale=latent_scale,
+                    element_bytes=element_bytes, slicing=False, tiling=False,
+                    tile_size=tile_size,
+                )
+            activation = tile_shapes[shape]
+            tile_bytes = processed_batch * tile_height * tile_width * 3 * element_bytes
+            candidate("decoder", {
+                "decoded_image": tile_bytes,
+                "retained_decoded_outputs": previous_slices_bytes + retained_tiles,
+                "concat_buffers": 0,
+                "retained_features": activation["retained_feature_bytes"],
+                "working_tensors": activation["working_tensor_bytes"],
+            })
+            retained_tiles += tile_bytes
+    if tiling_active:
+        candidate("tile_assembly", {
+            "decoded_image": image_bytes,
+            "retained_decoded_outputs": previous_slices_bytes + retained_tiles,
+            "concat_buffers": image_bytes,
+            "retained_features": 0,
+            "working_tensors": 0,
+        })
+    if slicing_active:
+        candidate("slice_assembly", {
+            "decoded_image": full_batch_bytes,
+            "retained_decoded_outputs": full_batch_bytes,
+            "concat_buffers": 0,
+            "retained_features": 0,
+            "working_tensors": 0,
+        })
+    peak_phase = max(candidates, key=lambda name: candidates[name]["peak_bytes"])
+    return {
+        "native_slicing_active": slicing_active,
+        "native_tiling_active": tiling_active,
+        "decoded_output_channels": 3,
+        "processed_batch_size": processed_batch,
+        "slice_count": batch_size if slicing_active else 1,
+        "tile_count_per_decode": len(heights) * len(widths),
+        "tile_output_heights": heights,
+        "tile_output_widths": widths,
+        "tile_overlap_factor": 0.25 if tiling_active else None,
+        "tile_stride_latent_pixels": latent_stride,
+        "tile_row_limit_pixels": row_limit,
+        "retained_tile_outputs_bytes": retained_tiles if tiling_active else 0,
+        "previous_slices_bytes": previous_slices_bytes,
+        "full_batch_output_bytes": full_batch_bytes,
+        "candidate_phases": candidates,
+        "peak_phase": peak_phase,
+        "peak_bytes": candidates[peak_phase]["peak_bytes"],
+        "peak_components": candidates[peak_phase]["components"],
+        "native_configuration_requirement": (
+            "Set native VAE tile_sample_min_size to vae_tile_size and "
+            "tile_latent_min_size to vae_tile_size / latent_scale; native "
+            "enable_tiling alone retains the model's config.sample_size."
+            if tiling else None
+        ),
+        "formula": (
+            "maximum of decoder activations plus previously decoded outputs, "
+            "overlapping tiles plus row/final concatenations, and sliced-batch "
+            "concatenation; these phases execute sequentially"
         ),
     }
