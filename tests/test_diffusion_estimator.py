@@ -175,6 +175,8 @@ def test_diffusion_profiles_use_fixed_official_component_metadata() -> None:
     assert profiles[SDXL]["conditioning"]["parameter_count"] == (817720320)
     assert profiles[SDXL]["denoiser"]["parameter_count"] == (2567463684)
     assert profiles[SDXL]["default_generation"]["height"] == 1024
+    assert profiles[SDXL]["vae"]["force_upcast"] is True
+    assert profiles[SDXL]["vae"]["sdpa_low_precision_parameter_count"] == 10513940
     assert profiles[SDXL]["source"]["revision"] == (
         "462165984030d82259a11f4367a4eed129e94a7b"
     )
@@ -352,6 +354,78 @@ def test_local_unet_pipeline_is_inspected_from_json_and_headers(
         "vae": 16,
     }
     assert report["pipeline_inspection"]["model_dir"] == str(model_dir.resolve())
+
+
+@pytest.mark.parametrize(
+    "attention_backend,attention_slicing,retained_parameters",
+    [("sdpa", False, 16), ("eager", False, 0), ("sdpa", True, 0)],
+)
+@pytest.mark.parametrize("offload", ["none", "model"])
+def test_sdxl_fp16_decode_upcasts_only_native_vae_modules(
+    tmp_path: Path,
+    attention_backend: str,
+    attention_slicing: bool,
+    retained_parameters: int,
+    offload: str,
+) -> None:
+    model_dir = tmp_path / "local-sdxl"
+    _write_pipeline(model_dir, transformer=False)
+    index_path = model_dir / "model_index.json"
+    index = json.loads(index_path.read_text())
+    index["_class_name"] = "StableDiffusionXLPipeline"
+    index_path.write_text(json.dumps(index))
+    # Omitted force_upcast uses the native AutoencoderKL default of True.
+    _write_safetensors(
+        model_dir / "vae" / "diffusion_pytorch_model.safetensors",
+        tensors={
+            "post_quant_conv.weight": ("F16", [2, 2]),
+            "decoder.conv_in.weight": ("F16", [3, 2]),
+            "decoder.mid_block.attentions.0.to_q.weight": ("F16", [2, 3]),
+            "decoder.up_blocks.0.resnets.0.conv1.weight": ("F16", [4, 3]),
+            "encoder.conv_in.weight": ("F16", [5, 2]),
+        },
+    )
+    inspection = inspect_diffusion_pipeline(model_dir)
+    assert inspection["profile"]["vae"]["force_upcast"] is True
+    assert inspection["profile"]["vae"]["sdpa_low_precision_parameter_count"] == 16
+    options = {
+        "model_dir": model_dir,
+        "attention_backend": attention_backend,
+        "attention_slicing": attention_slicing,
+        "offload": offload,
+    }
+    half = estimate_diffusion_generation(**options, dtype="float16")
+    brain = estimate_diffusion_generation(**options, dtype="bfloat16")
+    single = estimate_diffusion_generation(**options, dtype="float32")
+    precision = half["vae_precision"]
+    assert precision["force_upcast_applied"] is True
+    assert precision["decoder_up_blocks_dtype"] == "float32"
+    assert precision["decoded_image_dtype"] == "float32"
+    assert precision["sdpa_low_precision_parameter_count"] == retained_parameters
+    assert precision["loaded_weight_bytes"] == 38 * 2
+    assert precision["decode_weight_bytes"] == 38 * 4 - retained_parameters * 2
+    assert half["weights"]["vae_decode_runtime_bytes"] == precision["decode_weight_bytes"]
+    assert _phase(half, "text_encode") == _phase(brain, "text_encode")
+    assert _phase(half, "denoise") == _phase(brain, "denoise")
+    assert half["activation_models"]["vae_decode"] == single["activation_models"]["vae_decode"]
+    for component in ("decoded_image", "retained_features", "working_tensors"):
+        assert _phase(half, "vae_decode")["components"][component] == (
+            2 * _phase(brain, "vae_decode")["components"][component]
+        )
+    expected_resident = precision["decode_weight_bytes"]
+    if offload == "none":
+        expected_resident += 2 * (16 + 64)
+    assert _phase(half, "vae_decode")["components"]["resident_weights"] == expected_resident
+    assert brain["vae_precision"]["force_upcast_applied"] is False
+    assert single["vae_precision"]["force_upcast_applied"] is False
+
+    config_path = model_dir / "vae" / "config.json"
+    config = json.loads(config_path.read_text())
+    config["force_upcast"] = False
+    config_path.write_text(json.dumps(config))
+    unchanged = estimate_diffusion_generation(**options, dtype="float16")
+    assert unchanged["vae_precision"]["force_upcast_applied"] is False
+    assert unchanged["memory_timeline"] == brain["memory_timeline"]
 
 
 def test_local_profile_validation_allows_missing_size_and_conditioning(

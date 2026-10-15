@@ -28,6 +28,7 @@ from ._diffusion_types import (
     _positive_integer_list,
 )
 from .llm_estimator import _DTYPE_BYTES as _SAFETENSORS_DTYPE_BYTES
+from .llm_estimator import _read_safetensors_header
 from .llm_estimator import inspect_safetensors_checkpoint
 
 
@@ -376,6 +377,26 @@ def _runtime_checkpoint_bytes(
     )
 
 
+def _vae_sdpa_low_precision_parameter_count(
+    directory: Path, files: Sequence[str]
+) -> int:
+    """Count the floating tensors SDXL keeps at load dtype when upcasting.
+
+    StableDiffusionXLPipeline.upcast_vae restores these three modules to the
+    original dtype when the VAE uses SDPA. The remaining VAE modules use FP32.
+    The full checkpoint has already passed header validation before this scan.
+    """
+    prefixes = ("post_quant_conv.", "decoder.conv_in.", "decoder.mid_block.")
+    return sum(
+        math.prod(metadata["shape"])
+        for filename in files
+        for name, metadata in _read_safetensors_header(directory / filename).items()
+        if name != "__metadata__"
+        and name.startswith(prefixes)
+        and metadata["dtype"] in _FLOAT_SAFETENSORS_DTYPES
+    )
+
+
 def _local_unet_profile(
     *,
     config: Mapping[str, Any],
@@ -711,6 +732,16 @@ def _local_profile(
                 vae_config.get("_class_name")
                 or vae_component["class_name"]
             ),
+            **(
+                {
+                    "force_upcast": vae_config.get("force_upcast", True),
+                    "sdpa_low_precision_parameter_count": components[vae_name][
+                        "checkpoint"
+                    ]["sdpa_low_precision_parameter_count"],
+                }
+                if pipeline_class == "StableDiffusionXLPipeline"
+                else {}
+            ),
         },
         "source": {
             "repository": str(root),
@@ -760,6 +791,19 @@ def _validate_profile(
     conditioning = _mapping(profile["conditioning"])
     denoiser = _mapping(profile["denoiser"])
     vae = _mapping(profile["vae"])
+    if "force_upcast" in vae and not isinstance(vae["force_upcast"], bool):
+        raise DiffusionEstimateError("vae.force_upcast must be a boolean")
+    if "sdpa_low_precision_parameter_count" in vae:
+        retained_parameters = _nonnegative_integer(
+            vae["sdpa_low_precision_parameter_count"],
+            "vae.sdpa_low_precision_parameter_count",
+        )
+        if retained_parameters > _positive_integer(
+            vae.get("parameter_count"), "vae.parameter_count"
+        ):
+            raise DiffusionEstimateError(
+                "vae.sdpa_low_precision_parameter_count exceeds VAE parameter count"
+            )
     for name, value in (
         ("default_generation.height", defaults.get("height")),
         ("default_generation.width", defaults.get("width")),
@@ -1068,6 +1112,12 @@ def inspect_diffusion_pipeline(
                     component["directory"],
                     files=selected_files,
                 )
+                if role == "vae" and pipeline_class == "StableDiffusionXLPipeline":
+                    checkpoint["sdpa_low_precision_parameter_count"] = (
+                        _vae_sdpa_low_precision_parameter_count(
+                            component["directory"], selected_files
+                        )
+                    )
             except (OSError, ValueError) as exc:
                 raise DiffusionEstimateError(
                     f"cannot inspect {component_name!r}: {exc}"

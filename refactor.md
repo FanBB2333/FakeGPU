@@ -21,6 +21,10 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### SDXL FP16 VAE 升精度（独立 bug 修复）
+
+跨 dtype 探索复现 SDXL 1024² FP16 VAE allocated 低估 **14.319%**：原估算将整个 VAE 按 FP16 计量，但 Diffusers `force_upcast=true` 会将 decoder up-blocks 与输出提升到 FP32；SDPA 下保留 post_quant_conv、decoder.conv_in、decoder.mid_block 的 FP16。现从所选 safetensors 张量名计算混合精度权重，按原生 pipeline 规则分别计算加载、decode 权重、输入、激活与输出 dtype。真实 SDXL 的 **10,513,940 FP16＋73,139,923 FP32 参数／313,587,572 bytes** 与原生 meta 模型 `upcast_vae` 完全相符。未按实测误差拟合系数；BF16、FP32、关闭 force_upcast 的行为保持，SDPA／eager／attention slicing 与 model offload 有定向回归。扩展独立 GPU 验证随后统一封存。
+
 ### 扩展场景校准身份（独立 bug 修复）
 
 扩展审查复现 `inputs.model_dir` 可覆盖已检查的 pipeline 路径，从而加载与身份 SHA 不同的权重；现明确拒绝该保留字段，并让已验证路径作为最终运行路径。采样结束时同时复核生产源码 SHA，拒绝执行期间发生的源码变化。两个缺口均有先失败后通过的 CPU 回归，不依赖 GPU；phase-memory 专用测试 **12 passed**。历史原生矩阵自身已冻结源码与路径，原始测量不变。

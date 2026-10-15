@@ -49,6 +49,54 @@ SUPPORTED_ATTENTION_BACKENDS = {"eager", "sdpa"}
 SUPPORTED_OFFLOAD_MODES = {"none", "model"}
 
 
+def _vae_decode_precision(
+    profile: Mapping[str, Any],
+    *,
+    dtype: str,
+    attention_backend: str,
+    attention_slicing: bool,
+    loaded_weight_bytes: int,
+) -> dict[str, Any]:
+    vae = _mapping(profile["vae"])
+    upcast = (
+        profile["pipeline_class"] == "StableDiffusionXLPipeline"
+        and dtype == "float16"
+        and vae.get("force_upcast", True)
+    )
+    retained_parameters = 0
+    input_dtype = dtype
+    decode_dtype = dtype
+    decode_weight_bytes = loaded_weight_bytes
+    if upcast:
+        decode_dtype = "float32"
+        input_dtype = "float32"
+        # Diffusers leaves these modules at FP16 only for its SDPA processor;
+        # eager and sliced processors use the fully upcast VAE instead.
+        if attention_backend == "sdpa" and not attention_slicing:
+            if "sdpa_low_precision_parameter_count" not in vae:
+                raise DiffusionEstimateError(
+                    "SDXL FP16 upcasting with SDPA requires "
+                    "vae.sdpa_low_precision_parameter_count from checkpoint headers"
+                )
+            retained_parameters = int(vae["sdpa_low_precision_parameter_count"])
+            input_dtype = "float16"
+        decode_weight_bytes = _runtime_checkpoint_bytes(
+            parameter_count=int(vae["parameter_count"]),
+            dtype_bytes=_mapping(vae.get("checkpoint_dtype_bytes", {})),
+            runtime_float_bytes=4,
+        ) - 2 * retained_parameters
+    return {
+        "force_upcast_applied": bool(upcast),
+        "loaded_dtype": dtype,
+        "decode_input_dtype": input_dtype,
+        "decoder_up_blocks_dtype": decode_dtype,
+        "decoded_image_dtype": decode_dtype,
+        "sdpa_low_precision_parameter_count": retained_parameters,
+        "loaded_weight_bytes": loaded_weight_bytes,
+        "decode_weight_bytes": decode_weight_bytes,
+    }
+
+
 def estimate_diffusion_generation(
     model_profile: str | None = None,
     *,
@@ -226,6 +274,14 @@ def estimate_diffusion_generation(
         for name in component_parameter_counts
     }
     total_weight_bytes = sum(component_weight_bytes.values())
+    vae_precision = _vae_decode_precision(
+        profile,
+        dtype=selected_dtype,
+        attention_backend=attention_backend,
+        attention_slicing=attention_slicing,
+        loaded_weight_bytes=component_weight_bytes["vae"],
+    )
+    vae_element_bytes = SUPPORTED_DTYPES[vae_precision["decoder_up_blocks_dtype"]]
 
     latent_bytes = (
         image_batch * latent_channels * latent_height * latent_width * element_bytes
@@ -256,12 +312,16 @@ def estimate_diffusion_generation(
         width=image_width,
         batch_size=image_batch,
         latent_scale=latent_scale,
-        element_bytes=element_bytes,
+        element_bytes=vae_element_bytes,
         slicing=vae_slicing,
         tiling=vae_tiling,
         tile_size=tile_size,
     )
-    output_image_bytes = image_batch * image_height * image_width * 3 * element_bytes
+    output_image_bytes = image_batch * image_height * image_width * 3 * vae_element_bytes
+    vae_latent_bytes = (
+        image_batch * latent_channels * latent_height * latent_width
+        * SUPPORTED_DTYPES[vae_precision["decode_input_dtype"]]
+    )
     scheduler_bytes = 3 * denoiser_latent_bytes
 
     resident_weights = {
@@ -276,6 +336,9 @@ def estimate_diffusion_generation(
             ("vae_decode", "vae"),
         )
     }
+    resident_weights["vae_decode"] += (
+        vae_precision["decode_weight_bytes"] - component_weight_bytes["vae"]
+    )
     phases = [
         _phase(
             "text_encode",
@@ -303,7 +366,7 @@ def estimate_diffusion_generation(
             "vae_decode",
             {
                 "resident_weights": resident_weights["vae_decode"],
-                "latents": latent_bytes,
+                "latents": vae_latent_bytes,
                 "decoded_image": output_image_bytes,
                 "retained_features": vae_activation["retained_feature_bytes"],
                 "working_tensors": vae_activation["working_tensor_bytes"],
@@ -393,12 +456,14 @@ def estimate_diffusion_generation(
             "total_parameter_count": sum(component_parameter_counts.values()),
             "total_runtime_bytes": total_weight_bytes,
             "runtime_dtype": selected_dtype,
+            "vae_decode_runtime_bytes": vae_precision["decode_weight_bytes"],
             "source": (
                 "local_safetensors_headers"
                 if inspection is not None
                 else "fixed_revision_safetensors_headers"
             ),
         },
+        "vae_precision": vae_precision,
         "pipeline_inspection": (
             {
                 key: copy.deepcopy(value)
@@ -465,7 +530,7 @@ def estimate_diffusion_generation(
         ],
         "notes": [
             "Component parameter and checkpoint byte counts come from selected safetensors headers.",
-            "Runtime weight bytes reflect the requested runtime dtype and are separate from checkpoint storage bytes.",
+            "Runtime weight bytes reflect the load dtype; VAE decode weights and activations additionally account for SDXL FP16 force_upcast.",
             "Classifier-free guidance duplicates denoiser inputs only for architectures that use a two-branch CFG batch.",
             "UNet and transformer denoisers use separate residual, token, and attention workspace formulas.",
             "VAE slicing processes one image at a time; VAE tiling limits the modeled decode tile.",

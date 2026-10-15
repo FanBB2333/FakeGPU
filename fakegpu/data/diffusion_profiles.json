@@ -148,7 +148,9 @@
           512,
           512
         ],
-        "layers_per_block": 2
+        "layers_per_block": 2,
+        "force_upcast": true,
+        "sdpa_low_precision_parameter_count": 10513940
       },
       "source": {
         "repository": "stabilityai/stable-diffusion-xl-base-1.0",
