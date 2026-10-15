@@ -51,6 +51,12 @@ _TORCH_DTYPE_TO_BYTES = {
     "double": 8,
 }
 
+# These Transformers decoders tie the two canonical weight names below when
+# tie_word_embeddings is explicit. Other checkpoint layouts remain unchanged.
+_CANONICAL_TIED_EMBEDDING_MODELS = frozenset(
+    {"llama", "mistral", "mixtral", "qwen2", "qwen2_moe", "qwen3", "qwen3_moe"}
+)
+
 
 def estimate_kv_cache_memory(
     *,
@@ -482,6 +488,21 @@ def estimate_decoder_inference(
         if quantization["enabled"]
         else int(checkpoint["parameter_count"]) * element_bytes
     )
+    tied_embedding_storage = (
+        None
+        if quantization["enabled"]
+        else _tied_embedding_storage(
+            root,
+            config=config,
+            decoder_config=decoder_config,
+            element_bytes=element_bytes,
+        )
+    )
+    if tied_embedding_storage is not None:
+        base_parameter_bytes -= tied_embedding_storage["removed_runtime_bytes"]
+        quantization["storage_accounting"] = (
+            "unique_runtime_parameters_times_compute_dtype"
+        )
     adapters = _adapter_summary(
         adapter_dirs or (),
         element_bytes=element_bytes,
@@ -921,9 +942,69 @@ def estimate_decoder_inference(
     }
     if not include_decode_steps:
         report["inputs"]["include_decode_steps"] = False
+    if tied_embedding_storage is not None:
+        report["weight_storage"]["tied_embedding_storage"] = tied_embedding_storage
+        report["notes"].append(
+            "Runtime storage counts the declared tied input/output embedding once; "
+            "checkpoint storage still includes both serialized tensors."
+        )
     if has_vision_encoder:
         report["notes"].append(VISION_ESTIMATE_WARNING)
     return report
+
+
+def _tied_embedding_storage(
+    root: Path,
+    *,
+    config: Mapping[str, Any],
+    decoder_config: Mapping[str, Any],
+    element_bytes: int,
+) -> dict[str, Any] | None:
+    """Account for an explicitly tied canonical pair without loading tensors."""
+    if (
+        config.get("model_type") not in _CANONICAL_TIED_EMBEDDING_MODELS
+        or decoder_config.get("tie_word_embeddings") is not True
+        or config.get("torchscript")
+        or decoder_config.get("torchscript")
+    ):
+        return None
+    input_name, output_name = "model.embed_tokens.weight", "lm_head.weight"
+    names = (input_name, output_name)
+    index_path = root / "model.safetensors.index.json"
+    if index_path.is_file():
+        weight_map = json.loads(index_path.read_text(encoding="utf-8"))["weight_map"]
+        if any(name not in weight_map for name in names):
+            return None
+        paths = [root / name for name in sorted({weight_map[n] for n in names})]
+    else:
+        paths = sorted(root.glob("*.safetensors"))
+    tensors = {}
+    for path in paths:
+        header = _read_safetensors_header(path)
+        for name in names:
+            if name in header:
+                if name in tensors:
+                    return None
+                tensors[name] = header[name]
+    if len(tensors) != 2:
+        return None
+    input_tensor, output_tensor = (tensors[name] for name in names)
+    expected_shape = [decoder_config["vocab_size"], decoder_config["hidden_size"]]
+    if (
+        input_tensor["shape"] != expected_shape
+        or output_tensor["shape"] != expected_shape
+        or input_tensor["dtype"] != output_tensor["dtype"]
+        or input_tensor["dtype"] not in {"F16", "BF16", "F32", "F64"}
+    ):
+        return None
+    removed_parameters = math.prod(expected_shape)
+    return {
+        "input_name": input_name,
+        "output_name": output_name,
+        "removed_parameter_count": removed_parameters,
+        "removed_runtime_bytes": removed_parameters * element_bytes,
+        "source": "explicit_tie_word_embeddings_and_matching_checkpoint_headers",
+    }
 
 
 def _read_safetensors_header(path: Path) -> dict[str, Any]:

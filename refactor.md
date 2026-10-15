@@ -21,6 +21,12 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### LLM 推理共享 embedding 计数（独立 bug 修复）
+
+Qwen3-0.6B 扩展 FP16／FP32／eager 采样复现短上下文 decode allocated **21.21%–22.41% 高估**。原生 meta 模型表明检查点保存的 input embedding 与 lm_head 两份参数在加载后共享：序列化 **751,632,384** 元素，实际唯一参数 **596,049,920**；重复的 **155,582,464** 元素对应 FP16/BF16 **311,164,928 bytes**。现只对已识别架构、显式 tie_word_embeddings、关闭 torchscript、两份匹配形状及浮点 dtype 的 header 去重运行时存储，检查点大小不变。TorchScript 原生会 clone，缺失／不一致／未知或量化布局均不减去猜测字节。
+
+原生 CPU/meta 检查权重身份、TorchScript clone 和三种 dtype 字节完全一致；相关 **91 tests passed**。**152 份历史微调预测逐字节一致**，重放 SHA `212770041b8f39ec85665edb37b268f55c9bb0cd9273e33fa99ebc0fc32f493b`。后续正式单卡矩阵还覆盖 Qwen3-1.7B 与 Qwen2.5-0.5B，以检验不同模型的泛化边界。
+
 ### U-Net GEGLU 工作集（独立 bug 修复）
 
 SD 1.4 BF16、512×768、batch 2、CFG 7.5 的 denoise allocated 低估 **10.983%**。逐算子追踪定位到原生 `up_blocks.3.attentions.*.transformer_blocks.0.ff.net.0` 的 GEGLU 乘法：投影 8F 与两个 4F 张量同时存活，局部工作集为 16F；实际峰值 **2,581,279,232 bytes**，与完整阶段仅差 589,824 bytes 的外部状态。原估算只计 3F 卷积，缺少前馈工作集。
