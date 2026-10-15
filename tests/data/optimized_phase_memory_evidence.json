@@ -1,0 +1,1621 @@
+{
+"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
+  "all_analytic_gates_passed": true,
+  "all_calibrated_gates_passed": true,
+  "analytic_gate_failures": [],
+  "analytical_allocated_absolute_error_percent": {
+    "maximum": 6.685838918840993,
+    "median": 1.6035678924224028,
+    "p95": 4.165591255599805
+  },
+  "analytical_allocated_max_underestimate_percent": 3.378640032890069,
+  "archive_sha256": "c414bd538fe3cde1fcff3bead72669eaa70cf829c91288934a6035e10c9e2c24",
+  "artifact_root": "/tmp/fakegpu-optimized-phase-20261015",
+  "calibrated_absolute_error_percent": {
+    "maximum": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "calibrated_gate_failures": [],
+  "calibrated_max_underestimate_percent": 0.0,
+  "calibrated_phase_metric_comparisons": 210,
+  "calibration_processes": 35,
+  "cases": [
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "calibration_processes": 5,
+      "case": "sd-eager",
+      "holdout_processes": 5,
+      "max_analytic_absolute_error_percent": 1.5777562306562232,
+      "max_analytic_underestimate_percent": 1.5777562306562232,
+      "max_calibrated_absolute_error_percent": 0.0,
+      "max_calibrated_underestimate_percent": 0.0,
+      "phases": {
+        "denoise": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.112454858008491,
+            "median": 1.112454858008491,
+            "p95": 1.112454858008491
+          },
+          "allocated_max_analytic_underestimate_percent": 0.0,
+          "analytic_prediction_bytes": 3334834622,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 3298144256,
+                "mean": 3298144256.0,
+                "min": 3298144256,
+                "samples": [
+                  3298144256,
+                  3298144256,
+                  3298144256,
+                  3298144256,
+                  3298144256
+                ]
+              },
+              "holdout_observed_bytes": [
+                3298144256,
+                3298144256,
+                3298144256,
+                3298144256,
+                3298144256
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 3883925504,
+                "mean": 3883925504.0,
+                "min": 3883925504,
+                "samples": [
+                  3883925504,
+                  3883925504,
+                  3883925504,
+                  3883925504,
+                  3883925504
+                ]
+              },
+              "holdout_observed_bytes": [
+                3883925504,
+                3883925504,
+                3883925504,
+                3883925504,
+                3883925504
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "text_encode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.5777562306562232,
+            "median": 1.5777562306562232,
+            "p95": 1.5777562306562232
+          },
+          "allocated_max_analytic_underestimate_percent": 1.5777562306562232,
+          "analytic_prediction_bytes": 2133890494,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2168097792,
+                "mean": 2168097792.0,
+                "min": 2168097792,
+                "samples": [
+                  2168097792,
+                  2168097792,
+                  2168097792,
+                  2168097792,
+                  2168097792
+                ]
+              },
+              "holdout_observed_bytes": [
+                2168097792,
+                2168097792,
+                2168097792,
+                2168097792,
+                2168097792
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2212495360,
+                "mean": 2212495360.0,
+                "min": 2212495360,
+                "samples": [
+                  2212495360,
+                  2212495360,
+                  2212495360,
+                  2212495360,
+                  2212495360
+                ]
+              },
+              "holdout_observed_bytes": [
+                2212495360,
+                2212495360,
+                2212495360,
+                2212495360,
+                2212495360
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "vae_decode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 0.012065496965964049,
+            "median": 0.012065496965964049,
+            "p95": 0.012065496965964049
+          },
+          "allocated_max_analytic_underestimate_percent": 0.012065496965964049,
+          "analytic_prediction_bytes": 2805165502,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2805504000,
+                "mean": 2805504000.0,
+                "min": 2805504000,
+                "samples": [
+                  2805504000,
+                  2805504000,
+                  2805504000,
+                  2805504000,
+                  2805504000
+                ]
+              },
+              "holdout_observed_bytes": [
+                2805504000,
+                2805504000,
+                2805504000,
+                2805504000,
+                2805504000
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 3883925504,
+                "mean": 3883925504.0,
+                "min": 3883925504,
+                "samples": [
+                  3883925504,
+                  3883925504,
+                  3883925504,
+                  3883925504,
+                  3883925504
+                ]
+              },
+              "holdout_observed_bytes": [
+                3883925504,
+                3883925504,
+                3883925504,
+                3883925504,
+                3883925504
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "calibration_processes": 5,
+      "case": "sd-attention-slicing",
+      "holdout_processes": 5,
+      "max_analytic_absolute_error_percent": 4.165591255599805,
+      "max_analytic_underestimate_percent": 1.6035678924224028,
+      "max_calibrated_absolute_error_percent": 0.0,
+      "max_calibrated_underestimate_percent": 0.0,
+      "phases": {
+        "denoise": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 4.165591255599805,
+            "median": 4.165591255599805,
+            "p95": 4.165591255599805
+          },
+          "allocated_max_analytic_underestimate_percent": 0.0,
+          "analytic_prediction_bytes": 2669946302,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2563174912,
+                "mean": 2563174912.0,
+                "min": 2563174912,
+                "samples": [
+                  2563174912,
+                  2563174912,
+                  2563174912,
+                  2563174912,
+                  2563174912
+                ]
+              },
+              "holdout_observed_bytes": [
+                2563174912,
+                2563174912,
+                2563174912,
+                2563174912,
+                2563174912
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2711617536,
+                "mean": 2711617536.0,
+                "min": 2711617536,
+                "samples": [
+                  2711617536,
+                  2711617536,
+                  2711617536,
+                  2711617536,
+                  2711617536
+                ]
+              },
+              "holdout_observed_bytes": [
+                2711617536,
+                2711617536,
+                2711617536,
+                2711617536,
+                2711617536
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "text_encode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.6035678924224028,
+            "median": 1.6035678924224028,
+            "p95": 1.6035678924224028
+          },
+          "allocated_max_analytic_underestimate_percent": 1.6035678924224028,
+          "analytic_prediction_bytes": 2135309758,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2170108928,
+                "mean": 2170108928.0,
+                "min": 2170108928,
+                "samples": [
+                  2170108928,
+                  2170108928,
+                  2170108928,
+                  2170108928,
+                  2170108928
+                ]
+              },
+              "holdout_observed_bytes": [
+                2170108928,
+                2170108928,
+                2170108928,
+                2170108928,
+                2170108928
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2216689664,
+                "mean": 2216689664.0,
+                "min": 2216689664,
+                "samples": [
+                  2216689664,
+                  2216689664,
+                  2216689664,
+                  2216689664,
+                  2216689664
+                ]
+              },
+              "holdout_observed_bytes": [
+                2216689664,
+                2216689664,
+                2216689664,
+                2216689664,
+                2216689664
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "vae_decode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 0.9634973895720668,
+            "median": 0.9634973895720668,
+            "p95": 0.9634973895720668
+          },
+          "allocated_max_analytic_underestimate_percent": 0.0,
+          "analytic_prediction_bytes": 3477859774,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 3444670464,
+                "mean": 3444670464.0,
+                "min": 3444670464,
+                "samples": [
+                  3444670464,
+                  3444670464,
+                  3444670464,
+                  3444670464,
+                  3444670464
+                ]
+              },
+              "holdout_observed_bytes": [
+                3444670464,
+                3444670464,
+                3444670464,
+                3444670464,
+                3444670464
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 4397727744,
+                "mean": 4397727744.0,
+                "min": 4397727744,
+                "samples": [
+                  4397727744,
+                  4397727744,
+                  4397727744,
+                  4397727744,
+                  4397727744
+                ]
+              },
+              "holdout_observed_bytes": [
+                4397727744,
+                4397727744,
+                4397727744,
+                4397727744,
+                4397727744
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "calibration_processes": 5,
+      "case": "sd-vae-slicing",
+      "holdout_processes": 5,
+      "max_analytic_absolute_error_percent": 3.212427205958647,
+      "max_analytic_underestimate_percent": 3.212427205958647,
+      "max_calibrated_absolute_error_percent": 0.0,
+      "max_calibrated_underestimate_percent": 0.0,
+      "phases": {
+        "denoise": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 3.212427205958647,
+            "median": 3.212427205958647,
+            "p95": 3.212427205958647
+          },
+          "allocated_max_analytic_underestimate_percent": 3.212427205958647,
+          "analytic_prediction_bytes": 2626774462,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2713958400,
+                "mean": 2713958400.0,
+                "min": 2713958400,
+                "samples": [
+                  2713958400,
+                  2713958400,
+                  2713958400,
+                  2713958400,
+                  2713958400
+                ]
+              },
+              "holdout_observed_bytes": [
+                2713958400,
+                2713958400,
+                2713958400,
+                2713958400,
+                2713958400
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2833252352,
+                "mean": 2833252352.0,
+                "min": 2833252352,
+                "samples": [
+                  2833252352,
+                  2833252352,
+                  2833252352,
+                  2833252352,
+                  2833252352
+                ]
+              },
+              "holdout_observed_bytes": [
+                2833252352,
+                2833252352,
+                2833252352,
+                2833252352,
+                2833252352
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "text_encode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.6650520065840442,
+            "median": 1.6650520065840442,
+            "p95": 1.6650520065840442
+          },
+          "allocated_max_analytic_underestimate_percent": 1.6650520065840442,
+          "analytic_prediction_bytes": 2138148286,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2174352384,
+                "mean": 2174352384.0,
+                "min": 2174352384,
+                "samples": [
+                  2174352384,
+                  2174352384,
+                  2174352384,
+                  2174352384,
+                  2174352384
+                ]
+              },
+              "holdout_observed_bytes": [
+                2174352384,
+                2174352384,
+                2174352384,
+                2174352384,
+                2174352384
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2216689664,
+                "mean": 2216689664.0,
+                "min": 2216689664,
+                "samples": [
+                  2216689664,
+                  2216689664,
+                  2216689664,
+                  2216689664,
+                  2216689664
+                ]
+              },
+              "holdout_observed_bytes": [
+                2216689664,
+                2216689664,
+                2216689664,
+                2216689664,
+                2216689664
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "vae_decode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 0.11391613561346553,
+            "median": 0.11391613561346553,
+            "p95": 0.11391613561346553
+          },
+          "allocated_max_analytic_underestimate_percent": 0.11391613561346553,
+          "analytic_prediction_bytes": 2809982398,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2813187072,
+                "mean": 2813187072.0,
+                "min": 2813187072,
+                "samples": [
+                  2813187072,
+                  2813187072,
+                  2813187072,
+                  2813187072,
+                  2813187072
+                ]
+              },
+              "holdout_observed_bytes": [
+                2813187072,
+                2813187072,
+                2813187072,
+                2813187072,
+                2813187072
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 3441426432,
+                "mean": 3441426432.0,
+                "min": 3441426432,
+                "samples": [
+                  3441426432,
+                  3441426432,
+                  3441426432,
+                  3441426432,
+                  3441426432
+                ]
+              },
+              "holdout_observed_bytes": [
+                3441426432,
+                3441426432,
+                3441426432,
+                3441426432,
+                3441426432
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "calibration_processes": 5,
+      "case": "sd-vae-tiling",
+      "holdout_processes": 5,
+      "max_analytic_absolute_error_percent": 3.0670742471303103,
+      "max_analytic_underestimate_percent": 3.0670742471303103,
+      "max_calibrated_absolute_error_percent": 0.0,
+      "max_calibrated_underestimate_percent": 0.0,
+      "phases": {
+        "denoise": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 3.0670742471303103,
+            "median": 3.0670742471303103,
+            "p95": 3.0670742471303103
+          },
+          "allocated_max_analytic_underestimate_percent": 3.0670742471303103,
+          "analytic_prediction_bytes": 2502331326,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2581508096,
+                "mean": 2581508096.0,
+                "min": 2581508096,
+                "samples": [
+                  2581508096,
+                  2581508096,
+                  2581508096,
+                  2581508096,
+                  2581508096
+                ]
+              },
+              "holdout_observed_bytes": [
+                2581508096,
+                2581508096,
+                2581508096,
+                2581508096,
+                2581508096
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2696937472,
+                "mean": 2696937472.0,
+                "min": 2696937472,
+                "samples": [
+                  2696937472,
+                  2696937472,
+                  2696937472,
+                  2696937472,
+                  2696937472
+                ]
+              },
+              "holdout_observed_bytes": [
+                2696937472,
+                2696937472,
+                2696937472,
+                2696937472,
+                2696937472
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "text_encode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.5777562306562232,
+            "median": 1.5777562306562232,
+            "p95": 1.5777562306562232
+          },
+          "allocated_max_analytic_underestimate_percent": 1.5777562306562232,
+          "analytic_prediction_bytes": 2133890494,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2168097792,
+                "mean": 2168097792.0,
+                "min": 2168097792,
+                "samples": [
+                  2168097792,
+                  2168097792,
+                  2168097792,
+                  2168097792,
+                  2168097792
+                ]
+              },
+              "holdout_observed_bytes": [
+                2168097792,
+                2168097792,
+                2168097792,
+                2168097792,
+                2168097792
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2212495360,
+                "mean": 2212495360.0,
+                "min": 2212495360,
+                "samples": [
+                  2212495360,
+                  2212495360,
+                  2212495360,
+                  2212495360,
+                  2212495360
+                ]
+              },
+              "holdout_observed_bytes": [
+                2212495360,
+                2212495360,
+                2212495360,
+                2212495360,
+                2212495360
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "vae_decode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.2059591258208853,
+            "median": 1.2059591258208853,
+            "p95": 1.2059591258208853
+          },
+          "allocated_max_analytic_underestimate_percent": 1.2059591258208853,
+          "analytic_prediction_bytes": 2307419582,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2335585792,
+                "mean": 2335585792.0,
+                "min": 2335585792,
+                "samples": [
+                  2335585792,
+                  2335585792,
+                  2335585792,
+                  2335585792,
+                  2335585792
+                ]
+              },
+              "holdout_observed_bytes": [
+                2335585792,
+                2335585792,
+                2335585792,
+                2335585792,
+                2335585792
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2699034624,
+                "mean": 2699034624.0,
+                "min": 2699034624,
+                "samples": [
+                  2699034624,
+                  2699034624,
+                  2699034624,
+                  2699034624,
+                  2699034624
+                ]
+              },
+              "holdout_observed_bytes": [
+                2699034624,
+                2699034624,
+                2699034624,
+                2699034624,
+                2699034624
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "calibration_processes": 5,
+      "case": "xl-fp16-attention-slicing",
+      "holdout_processes": 5,
+      "max_analytic_absolute_error_percent": 6.685838918840993,
+      "max_analytic_underestimate_percent": 1.82518822396811,
+      "max_calibrated_absolute_error_percent": 0.0,
+      "max_calibrated_underestimate_percent": 0.0,
+      "phases": {
+        "denoise": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 0.7034978299847167,
+            "median": 0.7034978299847167,
+            "p95": 0.7034978299847167
+          },
+          "allocated_max_analytic_underestimate_percent": 0.7034978299847167,
+          "analytic_prediction_bytes": 7226435542,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 7277633536,
+                "mean": 7277633536.0,
+                "min": 7277633536,
+                "samples": [
+                  7277633536,
+                  7277633536,
+                  7277633536,
+                  7277633536,
+                  7277633536
+                ]
+              },
+              "holdout_observed_bytes": [
+                7277633536,
+                7277633536,
+                7277633536,
+                7277633536,
+                7277633536
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 7662993408,
+                "mean": 7662993408.0,
+                "min": 7662993408,
+                "samples": [
+                  7662993408,
+                  7662993408,
+                  7662993408,
+                  7662993408,
+                  7662993408
+                ]
+              },
+              "holdout_observed_bytes": [
+                7662993408,
+                7662993408,
+                7662993408,
+                7662993408,
+                7662993408
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "text_encode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.82518822396811,
+            "median": 1.82518822396811,
+            "p95": 1.82518822396811
+          },
+          "allocated_max_analytic_underestimate_percent": 1.82518822396811,
+          "analytic_prediction_bytes": 6940277718,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 7069305856,
+                "mean": 7069305856.0,
+                "min": 7069305856,
+                "samples": [
+                  7069305856,
+                  7069305856,
+                  7069305856,
+                  7069305856,
+                  7069305856
+                ]
+              },
+              "holdout_observed_bytes": [
+                7069305856,
+                7069305856,
+                7069305856,
+                7069305856,
+                7069305856
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 7367294976,
+                "mean": 7367294976.0,
+                "min": 7367294976,
+                "samples": [
+                  7367294976,
+                  7367294976,
+                  7367294976,
+                  7367294976,
+                  7367294976
+                ]
+              },
+              "holdout_observed_bytes": [
+                7367294976,
+                7367294976,
+                7367294976,
+                7367294976,
+                7367294976
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "vae_decode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 6.685838918840993,
+            "median": 6.685838918840993,
+            "p95": 6.685838918840993
+          },
+          "allocated_max_analytic_underestimate_percent": 0.0,
+          "analytic_prediction_bytes": 10111006076,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 9477364736,
+                "mean": 9477364736.0,
+                "min": 9477364736,
+                "samples": [
+                  9477364736,
+                  9477364736,
+                  9477364736,
+                  9477364736,
+                  9477364736
+                ]
+              },
+              "holdout_observed_bytes": [
+                9477364736,
+                9477364736,
+                9477364736,
+                9477364736,
+                9477364736
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 11840520192,
+                "mean": 11840520192.0,
+                "min": 11840520192,
+                "samples": [
+                  11840520192,
+                  11840520192,
+                  11840520192,
+                  11840520192,
+                  11840520192
+                ]
+              },
+              "holdout_observed_bytes": [
+                11840520192,
+                11840520192,
+                11840520192,
+                11840520192,
+                11840520192
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "calibration_processes": 5,
+      "case": "xl-vae-tiling",
+      "holdout_processes": 5,
+      "max_analytic_absolute_error_percent": 2.3779387268186807,
+      "max_analytic_underestimate_percent": 2.3779387268186807,
+      "max_calibrated_absolute_error_percent": 0.0,
+      "max_calibrated_underestimate_percent": 0.0,
+      "phases": {
+        "denoise": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 2.3779387268186807,
+            "median": 2.3779387268186807,
+            "p95": 2.3779387268186807
+          },
+          "allocated_max_analytic_underestimate_percent": 2.3779387268186807,
+          "analytic_prediction_bytes": 7313566678,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 7491715072,
+                "mean": 7491715072.0,
+                "min": 7491715072,
+                "samples": [
+                  7491715072,
+                  7491715072,
+                  7491715072,
+                  7491715072,
+                  7491715072
+                ]
+              },
+              "holdout_observed_bytes": [
+                7491715072,
+                7491715072,
+                7491715072,
+                7491715072,
+                7491715072
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 8147435520,
+                "mean": 8147435520.0,
+                "min": 8147435520,
+                "samples": [
+                  8147435520,
+                  8147435520,
+                  8147435520,
+                  8147435520,
+                  8147435520
+                ]
+              },
+              "holdout_observed_bytes": [
+                8147435520,
+                8147435520,
+                8147435520,
+                8147435520,
+                8147435520
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "text_encode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.82518822396811,
+            "median": 1.82518822396811,
+            "p95": 1.82518822396811
+          },
+          "allocated_max_analytic_underestimate_percent": 1.82518822396811,
+          "analytic_prediction_bytes": 6940277718,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 7069305856,
+                "mean": 7069305856.0,
+                "min": 7069305856,
+                "samples": [
+                  7069305856,
+                  7069305856,
+                  7069305856,
+                  7069305856,
+                  7069305856
+                ]
+              },
+              "holdout_observed_bytes": [
+                7069305856,
+                7069305856,
+                7069305856,
+                7069305856,
+                7069305856
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 7367294976,
+                "mean": 7367294976.0,
+                "min": 7367294976,
+                "samples": [
+                  7367294976,
+                  7367294976,
+                  7367294976,
+                  7367294976,
+                  7367294976
+                ]
+              },
+              "holdout_observed_bytes": [
+                7367294976,
+                7367294976,
+                7367294976,
+                7367294976,
+                7367294976
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "vae_decode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.1929397467029939,
+            "median": 1.1929397467029939,
+            "p95": 1.1929397467029939
+          },
+          "allocated_max_analytic_underestimate_percent": 1.1929397467029939,
+          "analytic_prediction_bytes": 7619938262,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 7711937024,
+                "mean": 7711937024.0,
+                "min": 7711937024,
+                "samples": [
+                  7711937024,
+                  7711937024,
+                  7711937024,
+                  7711937024,
+                  7711937024
+                ]
+              },
+              "holdout_observed_bytes": [
+                7711937024,
+                7711937024,
+                7711937024,
+                7711937024,
+                7711937024
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 8906604544,
+                "mean": 8906604544.0,
+                "min": 8906604544,
+                "samples": [
+                  8906604544,
+                  8906604544,
+                  8906604544,
+                  8906604544,
+                  8906604544
+                ]
+              },
+              "holdout_observed_bytes": [
+                8906604544,
+                8906604544,
+                8906604544,
+                8906604544,
+                8906604544
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "analytic_gate_passed": true,
+      "calibrated_gate_passed": true,
+      "calibration_processes": 5,
+      "case": "sd-vae-combined",
+      "holdout_processes": 5,
+      "max_analytic_absolute_error_percent": 3.378640032890069,
+      "max_analytic_underestimate_percent": 3.378640032890069,
+      "max_calibrated_absolute_error_percent": 0.0,
+      "max_calibrated_underestimate_percent": 0.0,
+      "phases": {
+        "denoise": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 3.378640032890069,
+            "median": 3.378640032890069,
+            "p95": 3.378640032890069
+          },
+          "allocated_max_analytic_underestimate_percent": 3.378640032890069,
+          "analytic_prediction_bytes": 2687911870,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2781902336,
+                "mean": 2781902336.0,
+                "min": 2781902336,
+                "samples": [
+                  2781902336,
+                  2781902336,
+                  2781902336,
+                  2781902336,
+                  2781902336
+                ]
+              },
+              "holdout_observed_bytes": [
+                2781902336,
+                2781902336,
+                2781902336,
+                2781902336,
+                2781902336
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2921332736,
+                "mean": 2921332736.0,
+                "min": 2921332736,
+                "samples": [
+                  2921332736,
+                  2921332736,
+                  2921332736,
+                  2921332736,
+                  2921332736
+                ]
+              },
+              "holdout_observed_bytes": [
+                2921332736,
+                2921332736,
+                2921332736,
+                2921332736,
+                2921332736
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "text_encode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.647970881264632,
+            "median": 1.647970881264632,
+            "p95": 1.647970881264632
+          },
+          "allocated_max_analytic_underestimate_percent": 1.647970881264632,
+          "analytic_prediction_bytes": 2136729022,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2172531712,
+                "mean": 2172531712.0,
+                "min": 2172531712,
+                "samples": [
+                  2172531712,
+                  2172531712,
+                  2172531712,
+                  2172531712,
+                  2172531712
+                ]
+              },
+              "holdout_observed_bytes": [
+                2172531712,
+                2172531712,
+                2172531712,
+                2172531712,
+                2172531712
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2216689664,
+                "mean": 2216689664.0,
+                "min": 2216689664,
+                "samples": [
+                  2216689664,
+                  2216689664,
+                  2216689664,
+                  2216689664,
+                  2216689664
+                ]
+              },
+              "holdout_observed_bytes": [
+                2216689664,
+                2216689664,
+                2216689664,
+                2216689664,
+                2216689664
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        },
+        "vae_decode": {
+          "allocated_analytic_ape_percent": {
+            "maximum": 1.2433714591183216,
+            "median": 1.2433714591183216,
+            "p95": 1.2433714591183216
+          },
+          "allocated_max_analytic_underestimate_percent": 1.2433714591183216,
+          "analytic_prediction_bytes": 2307861950,
+          "metrics": {
+            "allocated": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2336918528,
+                "mean": 2336918528.0,
+                "min": 2336918528,
+                "samples": [
+                  2336918528,
+                  2336918528,
+                  2336918528,
+                  2336918528,
+                  2336918528
+                ]
+              },
+              "holdout_observed_bytes": [
+                2336918528,
+                2336918528,
+                2336918528,
+                2336918528,
+                2336918528
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            },
+            "reserved": {
+              "absolute_error_percent": {
+                "maximum": 0.0,
+                "median": 0.0,
+                "p95": 0.0
+              },
+              "calibration": {
+                "max": 2929721344,
+                "mean": 2929721344.0,
+                "min": 2929721344,
+                "samples": [
+                  2929721344,
+                  2929721344,
+                  2929721344,
+                  2929721344,
+                  2929721344
+                ]
+              },
+              "holdout_observed_bytes": [
+                2929721344,
+                2929721344,
+                2929721344,
+                2929721344,
+                2929721344
+              ],
+              "max_underestimate_percent": 0.0,
+              "observed_envelope_coverage": 1.0
+            }
+          }
+        }
+      }
+    }
+  ],
+  "cpu_native_checks": {
+    "cuda_initialized": false,
+    "meta_configurations": 32,
+    "numerical_vae_decode_configurations": 16
+  },
+  "cross_mode_budget_rejections": 42,
+  "effective_native_mode_rejections": 21,
+  "execution_failures": [],
+  "formal_conditions": 7,
+  "formal_native_processes": 70,
+  "gates": {
+    "max_absolute_error_percent": 20.0,
+    "max_underestimate_percent": 10.0
+  },
+  "historical_cli_output_archiving": "Repeated legacy training CLI outputs remain in artifact_root/release/wheel-checks; the archive retains their byte/SHA manifest, replay script and logs. Original expected reports are retained in the prior evidence archives.",
+  "historical_finetune_predictions_byte_identical": 152,
+  "independent_audit_summary": {
+    "accuracy_failure_policy": "Negative accuracy findings are preserved separately and do not fail the evidence integrity audit.",
+    "all_analytic_gates_passed": true,
+    "all_calibrated_gates_passed": true,
+    "analytic_gate_failures": [],
+    "audit": "stdlib independent reconstruction of the predeclared expanded memory matrix",
+    "calibrated_gate_failures": [],
+    "calibrated_holdout_phase_metric_comparisons": 210,
+    "calibration_processes": 35,
+    "errors": [],
+    "evidence_integrity_passed": true,
+    "execution_failures": [],
+    "expected_calibration_processes": 35,
+    "expected_cases": 7,
+    "expected_holdout_processes": 35,
+    "expected_processes": 70,
+    "holdout_processes": 35,
+    "json_asset_files": 4,
+    "model_input_files_hashed": 38,
+    "processes": 70,
+    "source_files": 107,
+    "thresholds": {
+      "max_absolute_error_percent": 20.0,
+      "max_underestimate_percent": 10.0
+    },
+    "unique_run_ids": 70
+  },
+  "independent_holdout_processes": 35,
+  "json_assets": 4,
+  "legacy_phase_budget_cross_scenario_rejections": 68,
+  "observed_envelope_coverage": {
+    "covered": 210,
+    "fraction": 1.0,
+    "observations": 210,
+    "scope": "Empirical coverage of the observed five-calibration min/max on five later holdouts per exact workload, not a statistical prediction interval."
+  },
+  "offline_cli_checks": {
+    "default_predictions": 18,
+    "help": 45,
+    "legacy_budget": 41,
+    "legacy_phase_budget": 16,
+    "mode_predictions": 7,
+    "public_phase_budget": 42,
+    "total": 169
+  },
+  "publication_status": "experimental",
+  "record_count": 498,
+  "records": "tests/data/optimized_phase_memory_records.json.gz",
+  "remaining_limits": [
+    "Other GPUs, software versions, long-lived mixed workloads, offload, quantization and custom processors are unvalidated.",
+    "Analytical allocated accuracy and exact-workload reserved budgets are separate claims. New shapes/modes require new calibration; no physical OOM guarantee.",
+    "OOM boundaries and statistical prediction-interval coverage were not tested; existing experimental results for other workloads retain their original status."
+  ],
+  "runtime_audit_summary": {
+    "errors": [],
+    "passed": true,
+    "public_cli_budget_seals": 7,
+    "public_cli_native_processes": 70,
+    "unchanged_analytic_predictions": 7
+  },
+  "schema_version": "fakegpu.optimized_phase_memory_evidence.v1",
+  "scope": "One authorized Blackwell GPU GPU1, frozen source/model files, fixed prompts and seed, native allocator, uncontrolled kernel caches. Public SD/SDXL eager or SDPA, attention slicing, VAE slicing/tiling and their combinations. No offload.",
+  "source_files": 107,
+  "statistics_method": "Unweighted phase comparisons across all declared holdouts; median, nearest-rank p95 and maximum. Allocated/reserved calibrated comparisons are pooled only in their explicitly labeled summary.",
+  "tests": {
+    "passed": 1802,
+    "ruff_passed": true,
+    "seconds": 157.54,
+    "skipped": 1,
+    "targeted_tests": 73
+  },
+  "wheel": {
+    "all_payloads_match": true,
+    "help_checks": 45,
+    "json_assets": 4,
+    "ml_imported": false,
+    "native_artifacts": 6,
+    "prediction_checks": 18,
+    "profiles": 82,
+    "python_modules": 107,
+    "wheel_sha256": "57774860648b80ecbf8568816ad751da701490a29c27b790854a18dfb5818cf4"
+  }
+}

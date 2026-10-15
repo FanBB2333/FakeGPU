@@ -68,16 +68,20 @@ def _model_inputs(plan):
             raise ValueError(
                 "phase diffusion inputs cannot override the inspected model_dir"
             )
-        if (
-            inputs["offload"] != "none"
-            or inputs["attention_backend"] != "sdpa"
-            or any(
-                inputs[k] for k in ("attention_slicing", "vae_slicing", "vae_tiling")
-            )
-        ):
-            raise ValueError(
-                "phase diffusion runner requires SDPA without offload/slicing/tiling"
-            )
+        if inputs["offload"] != "none":
+            raise ValueError("phase diffusion runner does not support offload")
+        if inputs["attention_backend"] not in {"sdpa", "eager"}:
+            raise ValueError("phase diffusion runner requires SDPA or eager attention")
+        for name in ("attention_slicing", "vae_slicing", "vae_tiling"):
+            if type(inputs[name]) is not bool:
+                raise ValueError(f"phase diffusion {name} must be a boolean")
+        if inputs["vae_tiling"]:
+            tile = inputs["vae_tile_size"]
+            scale = inspected["profile"]["latent"]["scale_factor"]
+            if type(tile) is not int or tile <= 0 or tile % (4 * scale):
+                raise ValueError(
+                    "phase diffusion vae_tile_size must be a positive multiple of 4 * latent scale"
+                )
         if inputs["text_tokens"] != 77:
             raise ValueError("phase diffusion runner uses native 77-token conditioning")
         weights = []
@@ -189,6 +193,39 @@ def _serving(torch, workload, peaks):
     }
 
 
+def _configure_diffusion(pipeline, workload):
+    """Apply the planned native modes and describe their effective settings."""
+    from diffusers.models.attention_processor import AttnProcessor, AttnProcessor2_0
+
+    processor = (
+        AttnProcessor2_0 if workload["attention_backend"] == "sdpa" else AttnProcessor
+    )
+    pipeline.unet.set_attn_processor(processor())
+    pipeline.vae.set_attn_processor(processor())
+    if workload["attention_slicing"]:
+        pipeline.enable_attention_slicing("auto")
+    if workload["vae_slicing"]:
+        pipeline.enable_vae_slicing()
+    if workload["vae_tiling"]:
+        pipeline.enable_vae_tiling()
+        pipeline.vae.tile_sample_min_size = workload["vae_tile_size"]
+        pipeline.vae.tile_latent_min_size = (
+            workload["vae_tile_size"] // pipeline.vae_scale_factor
+        )
+    return {
+        "unet_processors": sorted(
+            {type(p).__name__ for p in pipeline.unet.attn_processors.values()}
+        ),
+        "vae_processors": sorted(
+            {type(p).__name__ for p in pipeline.vae.attn_processors.values()}
+        ),
+        "vae_slicing": pipeline.vae.use_slicing,
+        "vae_tiling": pipeline.vae.use_tiling,
+        "vae_tile_sample_min_size": pipeline.vae.tile_sample_min_size,
+        "vae_tile_latent_min_size": pipeline.vae.tile_latent_min_size,
+    }
+
+
 def _diffusion(torch, workload, peaks):
     import diffusers
     import numpy as np
@@ -202,13 +239,19 @@ def _diffusion(torch, workload, peaks):
         requires_safety_checker=False,
     ).to("cuda")
     pipeline.set_progress_bar_config(disable=True)
+    runtime = _configure_diffusion(pipeline, workload)
     calls = {}
     originals = []
+    vae_dtypes = {}
 
     def install(owner, method, phase):
         original = getattr(owner, method)
 
         def measured(*args, **kwargs):
+            if phase == "vae_decode":
+                vae_dtypes.update(
+                    {name: str(p.dtype) for name, p in owner.named_parameters()}
+                )
             peaks.start()
             result = original(*args, **kwargs)
             primary = (
@@ -247,10 +290,20 @@ def _diffusion(torch, workload, peaks):
             )
         if not np.isfinite(result.images).all():
             raise RuntimeError("nonfinite final images")
+        if result.images.shape != (
+            workload["batch_size"],
+            workload["height"],
+            workload["width"],
+            3,
+        ):
+            raise RuntimeError("final image shape does not match the prediction")
         import hashlib
 
         return {
             "calls": calls,
+            "runtime": runtime,
+            "vae_parameter_dtypes_at_decode": vae_dtypes,
+            "image_shape": list(result.images.shape),
             "all_image_values_finite": True,
             "image_sha256": hashlib.sha256(
                 result.images.astype("<f4").tobytes()
@@ -317,6 +370,8 @@ def sample_phase_memory(prediction):
         if kind == "transformers"
         else _diffusion(torch, workload, peaks)
     )
+    if kind == "diffusers":
+        identity["execution"]["diffusion"] = execution["runtime"]
     if any(_marker(path) != marker for path, marker in markers.items()):
         raise ValueError("model input changed during native sampling")
     if _source_identity() != identity["implementation"]:

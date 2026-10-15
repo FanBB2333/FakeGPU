@@ -182,6 +182,62 @@ def test_diffusion_sampler_rejects_unverified_model_path_override(tmp_path):
         _model_inputs(prediction)
 
 
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"attention_backend": "eager"},
+        {"attention_slicing": True},
+        {"vae_slicing": True},
+        {"vae_tiling": True, "vae_tile_size": 256},
+        {
+            "attention_backend": "eager",
+            "attention_slicing": True,
+            "vae_slicing": True,
+            "vae_tiling": True,
+            "vae_tile_size": 256,
+        },
+    ],
+)
+def test_diffusion_sampler_accepts_planned_native_modes(tmp_path, options):
+    from test_diffusion_estimator import _write_pipeline
+
+    from fakegpu.diffusion_estimator import estimate_diffusion_generation
+    from fakegpu.phase_memory_runner import _model_inputs
+
+    root = tmp_path / "pipeline"
+    _write_pipeline(root, transformer=False)
+    plan = estimate_diffusion_generation(model_dir=root, **options)
+    kind, workload, root, _ = _model_inputs(plan)
+    assert kind == "diffusers" and root == tmp_path / "pipeline"
+    assert all(workload[key] == value for key, value in options.items())
+
+
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        ({"offload": "model"}, "offload"),
+        ({"attention_backend": "unknown"}, "attention"),
+        ({"attention_slicing": 1}, "boolean"),
+        ({"vae_slicing": "false"}, "boolean"),
+        ({"vae_tiling": True, "vae_tile_size": 255}, "vae_tile_size"),
+        ({"vae_tiling": True, "vae_tile_size": 0}, "vae_tile_size"),
+        ({"vae_tiling": True, "vae_tile_size": True}, "vae_tile_size"),
+    ],
+)
+def test_diffusion_sampler_rejects_unexecutable_mode_inputs(tmp_path, change, message):
+    from test_diffusion_estimator import _write_pipeline
+
+    from fakegpu.diffusion_estimator import estimate_diffusion_generation
+    from fakegpu.phase_memory_runner import _model_inputs
+
+    root = tmp_path / "pipeline"
+    _write_pipeline(root, transformer=False)
+    plan = estimate_diffusion_generation(model_dir=root)
+    plan["inputs"].update(change)
+    with pytest.raises(ValueError, match=message):
+        _model_inputs(plan)
+
+
 @pytest.mark.parametrize("source_changed", [False, True])
 def test_phase_sampler_checks_implementation_after_execution(
     tmp_path, monkeypatch, source_changed

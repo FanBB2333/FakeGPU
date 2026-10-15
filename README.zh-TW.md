@@ -1364,8 +1364,9 @@ tile／slice 輸出保留。全部解析式 allocated 比較通過預設的絕�
 holdout 中與實測一致；68 次跨條件重用預算皆被拒絕。本輪為 experimental 泛化證據，
 不新增 `GPU-validated` 行：21 個條件未達公開結果的五次觀測要求，也未評估預測
 區間覆蓋率與 OOM 邊界。最佳化模式使用已封存的原生驗證
-探針；公開 `phase-sample` 的 diffusion 路徑仍限 SDPA 且無 offload／slicing／tiling，
-這些最佳化模式的 reserved 包絡尚未驗收。結論限於已測 GPU、軟體和負載。
+探針；該批快照的公開 `phase-sample` diffusion 路徑限 SDPA 且無 offload／slicing／
+tiling，最佳化模式的 reserved 包絡當時尚未驗收；下文公開模式校準補充這部分涵蓋範圍。
+結論限於已測 GPU、軟體和負載。
 
 Allocated 張量儲存與 allocator reserved 是不同指標。`calibrate phase-sample`
 在全新 CUDA 程序同時採集兩者；`phase-estimate` 用至少五個獨立程序封存各階段實測
@@ -1390,11 +1391,23 @@ python -m fakegpu calibrate phase-validate --budget /tmp/phase-budget.json.gz \
   --max-underestimate-percent 10 --json /tmp/phase-validation.json
 ```
 
-採集支援同構 Transformers dynamic-cache serving，以及 SDPA、無 offload／slicing／
-tiling 的本機 SD／SDXL。計畫、選定完整權重與設定、GPU UUID、Torch／CUDA／cuDNN
+採集支援同構 Transformers dynamic-cache serving，以及本機 SD／SDXL 的 eager／SDPA、
+自動 attention slicing、VAE slicing／tiling 及其組合，要求無 offload。eager／SDPA
+同時設定 U-Net 與 VAE processor；pipeline attention slicing 僅影響 U-Net。Tiling
+將計畫中的 `--vae-tile-size` 同時套用至原生 sample／latent tile 限制，不沿用模型
+預設尺寸。實際 processor、VAE 開關與 tile 尺寸記錄於原生身分。
+計畫、選定完整權重與設定、GPU UUID、Torch／CUDA／cuDNN
 版本、allocator 與執行實作須匹配。報告分別提供兩項指標與原分析預測，不做形狀遷移
 或隱含安全係數；kernel cache 為 uncontrolled。離線預算／驗證僅依賴標準函式庫。
 預設門檻為絕對誤差 20%、低估 10%，未通過回傳狀態 1。實測範圍並非實體 OOM 保證。
+
+[公開最佳化模式驗收](tests/data/optimized_phase_memory_evidence.json)透過這套 CLI 驗證
+七個 SD／SDXL 條件，各五次校準、封存預算後再五次 holdout，共 70 個全新原生程序。
+210 項階段×指標 holdout 比較皆與 allocated／reserved 校準最大值一致；這組最佳化模式
+的解析式 allocated 最大絕對誤差為 6.69%，最大低估為 3.38%。42 次跨模式預算重用與
+21 次實際執行設定不匹配皆被拒絕。原生 CPU/meta 檢查另涵蓋 32 種設定與 16 種數值
+VAE 解碼。結果仍為 experimental：觀測包絡覆蓋率僅描述固定輸入與軟體下的樣本，
+未評估 OOM 邊界或統計預測區間。
 
 VAE 形狀模型納入了通道縮減前的高解析度上採樣卷積，其工作集可能大於後續 block
 輸出。SD／SDXL 的 allocated／reserved 原生精度證據另外記錄。

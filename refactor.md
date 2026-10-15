@@ -18,9 +18,36 @@
 - 范围外：R26 物理多 GPU／多机 TP／PP／CP／EP、ZeRO／FSDP。用户已确认当前无法开展，不列为待办或完成阻塞；保持未验证。
 - [x] 显存精度改进：修复 VAE 上采样工作集，新增双指标原生校准，六种条件各五次校准＋五次独立验证通过。
 - [x] 扩展显存泛化验证：25 个条件／74 个进程，修复共享权重、GEGLU／attention、VAE 精度与输出保留；独立审计及全仓／wheel 回归通过。
+- [x] 优化模式公开采集与 reserved 校准：七条件各五次校准＋五次 holdout，70 个全新原生进程与 210 项双指标比较通过。
 - [x] R23 本轮有限原生数值需求、实验工具与产物，以及最终全仓／wheel 回归。
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### 优化模式公开采集与双指标校准完成
+
+接续 `8c10ca96`，将上一批单独原生探针覆盖的优化模式接入公开 `calibrate phase-sample`。本地 SD／SDXL 可选择 eager／SDPA、自动 attention slicing、VAE slicing／tiling 及组合；offload 仍明确拒绝。集中在 `_configure_diffusion` 设置原生 pipeline：后端同时用于 U-Net 与 VAE，pipeline slicing 只改 U-Net，tile size 同时设置原生 sample／latent 阈值。采集实际 processor、VAE 开关与 tile 尺寸并绑定原生身份，另记录 decode 时全部 VAE 参数 dtype、图像形状与 SHA，避免计划与真实执行脱节。无新的安全倍率、形状迁移或误差拟合。
+
+七个条件各预声明 **5 次独立校准＋封存公开 CLI 预算＋5 次后续 holdout**，共 **70 个全新 CUDA 进程／35 个独立 holdout／210 个 phase×metric 比较**。只使用 GPU 1、native allocator、固定 prompt／seed、OMP/MKL=1，kernel cache uncontrolled；正式采样没有失败、重试、剔除样本或按误差追加次数。生产源码及 JSON 资源在完整队列内冻结。结果如下（APE 为全部阶段最大绝对百分比误差）：
+
+| 条件 | 解析式 allocated 最大 APE／低估 | 校准 allocated／reserved 最大 APE／低估 |
+|---|---:|---:|
+| SD 1.4 BF16 512² eager | 1.578%／1.578% | 0%／0% |
+| SD 1.4 BF16 512² batch 2 attention slicing | 4.166%／1.604% | 0%／0% |
+| SD 1.4 BF16 512² batch 4 VAE slicing | 3.212%／3.212% | 0%／0% |
+| SD 1.4 BF16 1024×768、tile 256 | 3.067%／3.067% | 0%／0% |
+| SDXL FP16 768² attention slicing | 6.686%／1.825% | 0%／0% |
+| SDXL BF16 1280×1024、tile 512 | 2.378%／2.378% | 0%／0% |
+| SD 1.4 BF16 768×512、batch 3、VAE slicing＋tile 256 | 3.379%／3.379% | 0%／0% |
+
+全部通过预设 **20% 绝对误差／10% 低估**门槛。210 项校准比较的观测 min/max 包络覆盖 **210／210**；这只是本次固定条件的经验覆盖率，不是统计预测区间。七份解析计划与上一轮逐字节一致，七条件全部十次运行的图像 SHA 与上一轮独立探针一致，allocated／reserved 阶段峰值也一致。由此检验公开采集路径的执行语义，没有修改旧样本。
+
+CPU/meta 原生 SD、SDXL 共 **32 种模式配置**，另有 **16 种实际 VAE CPU 解码**，形状及有限性通过；SDXL 全部组合复核 processor 与 `upcast_vae`，FP16／FP32 参数划分正确。两项独立标准库审计均 **errors=[]**：重算完整模型文件及 107 个源码／4 个 JSON 资源 SHA、70 个进程与 run ID、预算极值及事前封存、105 项解析式比较、210 项校准比较、原生配置和全部 VAE dtype。审计自测保留负精度结果为 findings，并拒绝篡改误差；另有九项错误运行配置／输出／dtype 反例全部拒绝。
+
+最终全仓 **1802 passed／1 skipped，157.54 秒**，相关定向 **73 passed**；全量 Ruff 通过。最终 wheel 的 107 个模块、4 个 JSON、6 个原生产物及 82 个 profiles 一致，纯标准库离线 **169 项 CLI 检查**通过：45 help、18 旧解析计划、7 优化计划、42 新 phase 预算／验证、16 旧 phase 预算／验证、41 微调预算；**152 份历史微调预测逐字节一致**。新预算的 **42 次跨模式复用、21 次实际运行配置不匹配**均拒绝，旧预算的 68 次跨条件拒绝保持。公开命令数量与历史报告读取兼容。
+
+证据见 [公开优化模式验收](tests/data/optimized_phase_memory_evidence.json)及 [压缩审阅记录](tests/data/optimized_phase_memory_records.json.gz)，包括全部正式样本／日志、事先冻结的源码与计划、预算、独立审计、原生 CPU 检查和 wheel 重放。重复的历史微调 CLI 大报告保留 SHA 清单、重放脚本与通过日志，完整副本仍在 `/tmp/fakegpu-optimized-phase-20261015/release/wheel-checks/`，避免重复归档既有预算。
+
+本轮标记为 **experimental**：未测试 OOM 边界或统计预测区间，不把固定 allocator 重复的一致性视为物理 OOM 保证。优化模式的公开采集入口与 reserved 校准已完成；其他 GPU／驱动／软件、offload、量化／自定义 processor、长期混合负载仍未验证。上一批其他低重复条件保持原有状态；真实多卡／多机继续范围外。
 
 ### 扩展显存泛化验证完成
 

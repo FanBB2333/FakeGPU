@@ -1556,8 +1556,9 @@ This is experimental generalization evidence, not new `GPU-validated` rows:
 21 conditions remain below the five-observation publication minimum, and
 prediction-interval coverage and OOM boundaries were not evaluated.
 Optimized diffusion modes use an archived native validation probe; the public
-`phase-sample` diffusion path remains SDPA without offload/slicing/tiling, and
-reserved envelopes for those optimized modes remain unvalidated. Results are
+`phase-sample` diffusion path at that snapshot was SDPA without
+offload/slicing/tiling, and reserved envelopes for those modes were unvalidated.
+The subsequent public-mode calibration below extends that coverage. Results are
 limited to the tested GPU, software and workloads.
 
 Allocated tensor storage and allocator-reserved memory are separate quantities.
@@ -1585,13 +1586,29 @@ python -m fakegpu calibrate phase-validate --budget /tmp/phase-budget.json.gz \
 ```
 
 Sampling supports homogeneous Transformers dynamic-cache serving, and local
-SD/SDXL with SDPA and no offload/slicing/tiling. Each plan, full selected weights
+SD/SDXL with eager or SDPA attention, automatic attention slicing, VAE slicing,
+VAE tiling and their combinations, without offload. Eager/SDPA selects both U-Net
+and VAE processors; pipeline attention slicing affects only U-Net. For tiling,
+the planned `--vae-tile-size` sets both native sample/latent tile limits rather
+than retaining model defaults. Effective processors, VAE flags and tile limits
+are recorded in the native identity. Each plan, full selected weights
 and configuration, GPU UUID, Torch/CUDA/cuDNN versions, allocator and execution
 implementation must match. Reports expose both metrics and the analytic prediction
 separately; no shape transfer or hidden safety multiplier is applied. Kernel caches
 are uncontrolled. Offline estimation/validation needs only the standard library.
 Default validation limits are 20% absolute error and 10% underestimation; failures
 return status 1. Observed envelopes are not physical OOM guarantees.
+
+The [public optimized-mode validation](tests/data/optimized_phase_memory_evidence.json)
+uses this CLI for seven SD/SDXL conditions, each with five calibration processes,
+a sealed budget and five later holdouts (70 fresh native processes). All 210
+phase/metric holdout comparisons match their allocated/reserved calibration
+maxima. Analytical allocated estimates have at most 6.69% absolute error and
+3.38% underestimate in this matrix. Forty-two cross-mode and 21 effective-mode
+identity mismatches are rejected. Native CPU/meta checks cover 32 mode settings
+and 16 numerical VAE decode cases. Results remain experimental: the observed
+envelope coverage is empirical for these fixed inputs and software, and OOM
+boundaries and statistical prediction intervals were not evaluated.
 
 The VAE shape model includes the high-resolution upsampling convolution before
 channel reduction; its working set can be larger than the following block output.
