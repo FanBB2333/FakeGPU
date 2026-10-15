@@ -109,6 +109,8 @@ def _unet_denoiser_activation(
     retained_residual_bytes = 0
     maximum_working_bytes = 0
     maximum_attention_bytes = 0
+    maximum_feed_forward_bytes = 0
+    uses_geglu = profile.get("model_class") == "UNet2DConditionModel"
     for level, channel_count in enumerate(channels):
         level_height = _ceil_div(latent_height, 2**level)
         level_width = _ceil_div(latent_width, 2**level)
@@ -123,8 +125,14 @@ def _unet_denoiser_activation(
             layers_by_level[level] + 1
         )
         convolution_working_bytes = 3 * feature_bytes
+        feed_forward_bytes = 0
         attention_bytes = 0
         if transformer_layers[level] > 0 and heads[level] > 0:
+            if uses_geglu:
+                # Diffusers' standard conditional UNet uses a 4x GEGLU
+                # expansion. Its two chunk views retain the 8F projection
+                # while the 4F GELU result and 4F product are both live.
+                feed_forward_bytes = (8 + 4 + 4) * feature_bytes
             query_bytes = feature_bytes
             key_value_bytes = (
                 batch_size
@@ -165,6 +173,11 @@ def _unet_denoiser_activation(
         maximum_working_bytes = max(
             maximum_working_bytes,
             convolution_working_bytes,
+            feed_forward_bytes,
+        )
+        maximum_feed_forward_bytes = max(
+            maximum_feed_forward_bytes,
+            feed_forward_bytes,
         )
         maximum_attention_bytes = max(
             maximum_attention_bytes,
@@ -181,6 +194,7 @@ def _unet_denoiser_activation(
                 "convolution_working_bytes": (
                     convolution_working_bytes
                 ),
+                "feed_forward_working_bytes": feed_forward_bytes,
                 "attention_workspace_bytes": attention_bytes,
                 "attention_heads": heads[level],
                 "transformer_layers": transformer_layers[level],
@@ -190,6 +204,16 @@ def _unet_denoiser_activation(
         "levels": levels,
         "retained_residual_bytes": retained_residual_bytes,
         "working_tensor_bytes": maximum_working_bytes,
+        "feed_forward_working_bytes": maximum_feed_forward_bytes,
+        "feed_forward_activation": "geglu" if uses_geglu else None,
+        "feed_forward_note": (
+            "Standard Diffusers UNet2DConditionModel GEGLU: 8F projection "
+            "+ 4F GELU output + 4F gated output; convolution and "
+            "feed-forward operations execute sequentially."
+            if uses_geglu
+            else "Feed-forward workspace is not modeled for this UNet "
+            "class; the prior convolution/attention approximation is retained."
+        ),
         "attention_workspace_bytes": maximum_attention_bytes,
         "peak_bytes": (
             retained_residual_bytes
@@ -199,8 +223,9 @@ def _unet_denoiser_activation(
         "attention_backend": attention_backend,
         "attention_slicing": attention_slicing,
         "formula": (
-            "retained UNet residual features + maximum convolution "
-            "working set + maximum cross-attention workspace"
+            "retained UNet residual features + maximum sequential "
+            "convolution/feed-forward working set + maximum "
+            "cross-attention workspace"
         ),
     }
 

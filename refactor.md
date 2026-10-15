@@ -21,6 +21,12 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### U-Net GEGLU 工作集（独立 bug 修复）
+
+SD 1.4 BF16、512×768、batch 2、CFG 7.5 的 denoise allocated 低估 **10.983%**。逐算子追踪定位到原生 `up_blocks.3.attentions.*.transformer_blocks.0.ff.net.0` 的 GEGLU 乘法：投影 8F 与两个 4F 张量同时存活，局部工作集为 16F；实际峰值 **2,581,279,232 bytes**，与完整阶段仅差 589,824 bytes 的外部状态。原估算只计 3F 卷积，缺少前馈工作集。
+
+标准 `UNet2DConditionModel` 现按 `max(卷积工作集, GEGLU 工作集)` 计算顺序操作的最大值，报告各层前馈字节；未知类型保留原有近似并明确未建模。没有修改系数拟合误差，eager 自注意力／双 score buffer 的精度仍需单独验证。四项新形状测试通过；结合 SDXL 升精度，三语 README 的解析示例同步重新计算。
+
 ### SDXL FP16 VAE 升精度（独立 bug 修复）
 
 跨 dtype 探索复现 SDXL 1024² FP16 VAE allocated 低估 **14.319%**：原估算将整个 VAE 按 FP16 计量，但 Diffusers `force_upcast=true` 会将 decoder up-blocks 与输出提升到 FP32；SDPA 下保留 post_quant_conv、decoder.conv_in、decoder.mid_block 的 FP16。现从所选 safetensors 张量名计算混合精度权重，按原生 pipeline 规则分别计算加载、decode 权重、输入、激活与输出 dtype。真实 SDXL 的 **10,513,940 FP16＋73,139,923 FP32 参数／313,587,572 bytes** 与原生 meta 模型 `upcast_vae` 完全相符。未按实测误差拟合系数；BF16、FP32、关闭 force_upcast 的行为保持，SDPA／eager／attention slicing 与 model offload 有定向回归。扩展独立 GPU 验证随后统一封存。
