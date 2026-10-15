@@ -47,6 +47,11 @@ distributed GPU workflows without a production GPU cluster.**
    - [Plan online LLM serving capacity](#plan-online-llm-serving-capacity)
    - [Analyze a repository or model](#analyze-a-repository-or-model)
 4. [Command reference](#command-reference)
+   - [Fine-tuning time and VRAM](#fine-tuning-time-and-vram)
+   - [Online serving benchmark](#online-serving-benchmark)
+   - [Diffusion training](#diffusion-training)
+   - [Phase memory calibration](#phase-memory-calibration)
+   - [Distributed plans and experiment sweeps](#distributed-plans-and-experiment-sweeps)
 5. [GPU profiles](#gpu-profiles)
 6. [Development](#development)
    - [Build](#build)
@@ -62,21 +67,12 @@ distributed GPU workflows without a production GPU cluster.**
 ## About the project
 
 FakeGPU simulates CUDA-facing environments for development, CI, compatibility
-checks, and capacity planning. It exposes configurable NVIDIA-like devices to
-applications while maintained operations run on CPU, records simulated memory
-and communication, and provides static estimators for workloads that should
-not be loaded at all.
+checks, and capacity planning. Applications see configurable NVIDIA-like
+devices while maintained operations run on CPU; FakeGPU records simulated
+memory and communication and provides static estimators for workloads that
+should not be loaded at all.
 
-Physical GPUs are optional for the simulation and analysis paths. A compatible
-physical CUDA stack is required only for passthrough, hybrid, and calibration
-runs.
-
-In native hybrid mode, `CUDA_VISIBLE_DEVICES` selects physical GPUs by index or
-UUID. When this variable is present, FakeGPU keeps physical NVML discovery so
-frameworks can resolve that selection correctly; without it, hybrid mode keeps
-the modeled NVML inventory. The CUDA runtime and cuBLAS remain native in both
-cases. Rebuilding a child environment with `fakegpu.env()` removes stale
-FakeGPU preloads from the selected library directory when changing modes.
+A physical GPU is needed only for passthrough, hybrid, and calibration runs.
 
 ### What FakeGPU answers
 
@@ -119,10 +115,8 @@ FakeGPU preloads from the selected library directory when changing modes.
 > estimator stayed within **0.08%** on 26 controlled GPU observations and
 > within **1.921%** across ten Qwen full/LoRA SFT cases.
 
-Absolute percentage error is
-`|predicted - observed| / observed × 100%`. “Agreement” below is its
-complement, `100% - error`, shown only as a more intuitive reading of the same
-measurement.
+Error is `|predicted - observed| / observed × 100%`; agreement is
+`100% - error`.
 
 | Validated envelope | Real-GPU reference | Evidence | Absolute percentage error | Agreement |
 |---|---|---:|---:|---:|
@@ -133,24 +127,21 @@ measurement.
 
 How to read these numbers:
 
-- The Qwen rows use `torch.cuda.max_memory_allocated()` as the reference. CUDA
-  context memory and reserved-but-unused allocator memory are excluded.
-- The controlled ATen row adds one backend-resident measurement from the exact
-  GPU and software stack; that value must not be reused on another stack.
-- Ranges show the minimum and maximum case error, not an average. Maximum
-  underestimation is the important failure mode when evaluating OOM risk.
-- A `99.x%` agreement value is not spare capacity. Capacity decisions should
-  still apply a workload-specific safety margin or factor.
+- Qwen rows use `torch.cuda.max_memory_allocated()`; CUDA context and
+  reserved-but-unused allocator memory are excluded.
+- The ATen row adds one backend-resident measurement from the exact stack; do
+  not reuse it on another stack.
+- Ranges are min/max case errors, not averages. Underestimation is the
+  failure mode that matters for OOM risk.
+- `99.x%` agreement is not spare capacity; still apply a safety margin.
 
-These are fixed-workload measurements, not a universal accuracy claim.
-Different models, shapes, attention backends, quantization kernels, allocators,
-PyTorch/CUDA versions, or GPUs require a matching calibration. The links above
-point to the immutable validation snapshot containing the full configurations
-and measured byte counts. A
-[machine-readable evidence summary](https://github.com/FanBB2333/FakeGPU/blob/main/tests/data/memory_validation_evidence.json)
-is checked against the README in CI.
+These are fixed-workload results, not a universal accuracy claim. Other
+models, shapes, backends, kernels, allocators, software versions, or GPUs need
+a matching calibration. The links point to an immutable snapshot with full
+configurations and byte counts; CI checks this table against a
+[machine-readable evidence summary](https://github.com/FanBB2333/FakeGPU/blob/main/tests/data/memory_validation_evidence.json).
 
-On a CUDA host, regenerate the maintained controlled comparison with:
+On a CUDA host, regenerate the controlled comparison with:
 
 ```bash
 python3 scripts/validation/static_memory_validation.py \
@@ -159,9 +150,9 @@ python3 scripts/validation/static_memory_validation.py \
   --max-underestimate-percent 5
 ```
 
-On a CPU-only host, add `--static-only`; this checks the estimation path but
-does not produce a real-GPU accuracy measurement. For a `plan-serving` report,
-normalize repeated real-GPU phase peaks before comparison:
+On a CPU-only host, `--static-only` checks the estimation path without
+producing an accuracy measurement. To compare a `plan-serving` report with
+repeated real-GPU phase peaks:
 
 ```bash
 python3 -m fakegpu calibrate observe-serving \
@@ -175,13 +166,12 @@ python3 -m fakegpu calibrate observe-serving \
   --json build/serving-observation.json
 ```
 
-The command retains every sample and uses the maximum for each phase. Five
-samples per phase are required by default; `--strict` returns status 1 when
-that minimum is not met. `ready_for_comparison` records sample sufficiency,
-not a `GPU-validated` claim. The plan must contain `--target-profile` so the
-observation keeps the same GPU identity.
+Every sample is kept and each phase uses its maximum. Five samples per phase
+are required by default (`--strict` exits 1 otherwise); `ready_for_comparison`
+means enough samples, not `GPU-validated`. The plan must set
+`--target-profile`.
 
-Automate the repeated executions with a framework-specific runner:
+To automate repeated runs with a framework-specific runner:
 
 ```bash
 python3 -m fakegpu calibrate collect-serving \
@@ -193,9 +183,8 @@ python3 -m fakegpu calibrate collect-serving \
   -- python3 benchmark_serving.py
 ```
 
-For a homogeneous, non-speculative Transformers workload, FakeGPU includes a
-runner, so no separate benchmark file is needed. The plan must describe the
-same execution semantics and use a dynamic KV cache:
+Homogeneous, non-speculative Transformers workloads can use the built-in
+runner; the plan must use a dynamic KV cache:
 
 ```bash
 python3 -m fakegpu plan-serving \
@@ -219,22 +208,19 @@ python3 -m fakegpu calibrate collect-serving \
   -- python3 -m fakegpu calibrate sample-transformers
 ```
 
-The model path keeps the Hugging Face `owner/repository` hierarchy. On hosts
-without `/mnt/z`, change only the models root and retain
-`Qwen/Qwen3-0.6B`.
+On hosts without `/mnt/z`, change only the models root and keep the
+`Qwen/Qwen3-0.6B` layout. `sample-transformers`:
 
-`sample-transformers` rechecks the local model configuration and Safetensors
-headers against the plan, then measures full prefill and token-at-a-time decode
-with the returned KV cache. Its default metric is
-`torch.cuda.max_memory_reserved`; use `--metric allocated` for tensor-only
-allocator peaks. It deliberately rejects mixed request sets, speculative
-decoding, paged or quantized caches, shared-prefix or chunked-prefill plans,
-quantized checkpoints, and adapters until those execution paths have matching
-measurement implementations. PyTorch and Transformers remain optional and
-must already be installed in the CUDA benchmark environment.
+- rechecks the local config and Safetensors headers against the plan, then
+  measures full prefill and token-by-token decode;
+- reports `torch.cuda.max_memory_reserved` by default (`--metric allocated`
+  for tensor-only peaks);
+- rejects mixed requests, speculative decoding, paged or quantized caches,
+  shared-prefix or chunked-prefill plans, quantized checkpoints, and adapters;
+- needs PyTorch and Transformers already installed in the CUDA environment.
 
-vLLM or custom instrumentation that already has trustworthy phase peaks can
-use the protocol builder without recreating CUDA metadata:
+vLLM or custom instrumentation with trustworthy phase peaks can build the
+sample directly:
 
 ```bash
 python3 -m fakegpu calibrate emit-serving-sample \
@@ -246,17 +232,13 @@ python3 -m fakegpu calibrate emit-serving-sample \
   --framework-version 0.10.2
 ```
 
-The same adapter is available as `fakegpu.build_cuda_serving_sample(...)` for
-use inside a Python benchmark. vLLM reserves engine and KV-cache memory from
-its configured GPU budget, while its cache-usage metric is a fraction of
-blocks rather than a process-memory byte peak. FakeGPU therefore requires the
-vLLM benchmark to provide real phase bytes instead of labeling cache usage as
-prefill or decode memory.
+The same adapter is `fakegpu.build_cuda_serving_sample(...)` in Python. vLLM's
+cache-usage metric is a block fraction, not a byte peak, so the benchmark must
+supply real phase bytes.
 
-The runner is invoked in a new process for every repetition and must emit one
-`fakegpu.serving_peak_sample.v1` JSON object. It may print the object as its
-last line or prefix a one-line object with `FAKEGPU_SERVING_SAMPLE=` when the
-framework also writes logs to stdout:
+Each repetition runs in a new process and must print one
+`fakegpu.serving_peak_sample.v1` object as its last line, or on a line prefixed
+with `FAKEGPU_SERVING_SAMPLE=`:
 
 ```json
 {
@@ -285,22 +267,19 @@ framework also writes logs to stdout:
 }
 ```
 
-FakeGPU supplies the plan path, workload signature, target profile, compute
-capability, run index, and run count through `FAKEGPU_SERVING_*` environment
-variables. The same protocol can wrap Transformers, vLLM, or a custom server
-without adding them as FakeGPU dependencies. The built-in Transformers runner
-and vLLM/custom protocol builder populate this contract automatically.
-Collection fails if the runner
-reports simulated CUDA, a target capacity outside a 2% profile tolerance, a
-different compute capability, inconsistent software metadata, a timeout, or a
-nonzero exit. The report retains the actual/profile capacity difference. Raw
-command arguments are not stored; the report retains only the executable name
-and a command fingerprint.
-`simulated: false` is still runner-supplied metadata rather than independent
-hardware attestation, so retained benchmark logs and calibration gates remain
-necessary for a `GPU-validated` claim.
+- FakeGPU passes the plan path, workload signature, target profile, compute
+  capability, run index, and run count through `FAKEGPU_SERVING_*` variables.
+  The built-in runner and the protocol builder fill this contract
+  automatically, and neither framework becomes a FakeGPU dependency.
+- Collection fails on simulated CUDA, capacity outside a 2% profile tolerance,
+  a different compute capability, inconsistent software metadata, a timeout,
+  or a nonzero exit.
+- Raw command arguments are not stored, only the executable name and a
+  command fingerprint.
+- `simulated: false` is runner-supplied, not hardware attestation; a
+  `GPU-validated` claim still needs retained logs and calibration gates.
 
-To compare compatible prediction and observation reports for any workload:
+To compare and gate any compatible prediction and observation:
 
 ```bash
 python3 -m fakegpu calibrate compare \
@@ -317,39 +296,34 @@ python3 -m fakegpu calibrate verify \
   --json build/calibration-verification.json
 ```
 
-The comparison reports per-phase signed and absolute error, interval coverage,
-and a recommended memory safety margin and factor. `calibrate verify` exits
-with status 1 when a configured gate fails. It checks maximum underestimation,
-median/p95/maximum absolute percentage error, prediction-interval coverage,
-false-safe fit decisions at the supplied capacity, and workload-dimension
-consistency. Apply results only to the same workload signature, shapes, dtype,
-software stack, and GPU profile.
+`compare` reports per-phase signed/absolute error, interval coverage, and a
+recommended safety margin. `verify` exits 1 when a gate fails: underestimation,
+median/p95/max error, interval coverage, false-safe fits at the given capacity,
+or workload consistency. Apply results only to the same workload signature,
+shapes, dtype, software stack, and GPU profile.
 
 <a id="llm-reliability"></a>
 
 ### Research workload reliability report
 
-FakeGPU reports reliability per workload and environment signature. A
-`GPU-validated` result applies only to the recorded model revision, shapes,
-dtype, attention backend, allocator, software stack, and GPU. `CPU-validated`
-means that maintained execution or analysis behavior passed without a physical
-GPU. `Modeled` identifies analytical coverage without matching real-GPU
-evidence, while `Planned` is not yet a supported accuracy claim.
-Serving plans expose a path-independent `workload_signature` so calibration
-evidence cannot silently cross serving configurations.
-Use `calibrate observe-serving` to retain repeated phase samples before
-comparison and reliability gates.
-Use `calibrate collect-serving` with the built-in `sample-transformers`
-runner, or with vLLM/custom measurements wrapped by
-`build_cuda_serving_sample`, when repeated real-CUDA evidence is needed.
+Reliability is reported per workload and environment signature:
+
+- `GPU-validated`: applies only to the recorded model revision, shapes, dtype,
+  attention backend, allocator, software stack, and GPU.
+- `CPU-validated`: maintained execution or analysis passed without a GPU.
+- `Modeled`: analytical coverage without matching real-GPU evidence.
+- `Planned`: not yet a supported accuracy claim.
+
+Serving plans expose a path-independent `workload_signature`, so evidence
+cannot silently cross serving configurations. Collect repeated real-CUDA
+samples with `calibrate observe-serving` or `calibrate collect-serving`.
 
 #### Verification snapshot (2026-08-05)
 
-This repository state was verified on 2026-08-05 with every suite from
-`scripts/test.sh` and both declarative validation manifests on macOS 26.5
-arm64, Python 3.11.9, and PyTorch 2.9.1 CPU. The Transformers sampling adapter
-was also exercised on an Blackwell GPU with PyTorch 2.11.0+cu128 and
-Transformers 5.14.1:
+Verified with every `scripts/test.sh` suite and both validation manifests on
+macOS 26.5 arm64, Python 3.11.9, and PyTorch 2.9.1 CPU. The Transformers
+sampler also ran on an Blackwell GPU (PyTorch 2.11.0+cu128,
+Transformers 5.14.1).
 
 | Validation layer | Maintained check | Result |
 |---|---|---|
@@ -364,11 +338,9 @@ Transformers 5.14.1:
 | CUDA-enabled PyTorch native matmul | Requires a CUDA build of PyTorch | **Not run on this CPU-only host** |
 | Transformers real-CUDA serving sampler | Qwen/Qwen3-0.6B, BF16 SDPA, 2 × 128-token prefill + 8 generated tokens, 3 isolated samples per phase | **Passed; `ready_for_comparison`** |
 
-GitHub CI separately runs the Python suite on Python 3.10–3.12 and the native
-smoke and CPU simulation suites on Linux and macOS. Published accuracy results
-above come from their linked immutable validation snapshots. The new
-Transformers sampler result validates repeated execution, CUDA identity, and
-report collection; without a comparison gate, it is not an accuracy claim.
+GitHub CI runs the Python suite on Python 3.10–3.12 and the native smoke and
+CPU simulation suites on Linux and macOS. The sampler row validates repeated
+execution and CUDA identity, not accuracy.
 
 #### Maintained research workload matrix
 
@@ -390,12 +362,9 @@ report collection; without a comparison gate, it is not an accuracy claim.
 
 #### Architecture-aware estimate comparisons
 
-The previous “reproducible modeled effects” label only meant that fixed inputs
-produce the same formula result; it did not mean the estimate matched a real
-GPU observation. This section is now named “architecture-aware estimate
-comparisons” to make that distinction explicit. The examples are generated by
-checked-in formulas and verified by README contract tests. GiB values are
-binary units, and the results do not replace same-configuration GPU calibration.
+These examples come from checked-in formulas and are verified by README
+contract tests. They are formula results, not real-GPU observations, and do
+not replace same-configuration calibration. GiB values are binary units.
 
 | Research scenario | Controlled comparison | Modeled effect | Validation |
 |---|---|---:|---|
@@ -410,50 +379,38 @@ binary units, and the results do not replace same-configuration GPU calibration.
 | SDXL high-resolution generation | 2048², batch 1, FP16, CFG; full-frame VAE → 512² VAE tiles | **26.64 → 8.28 GiB** (−68.9%) | Sequential VAE tile-shape model |
 | PixArt-Sigma DiT generation | 1024², batch 1, FP16, CFG, model offload; eager → SDPA denoise phase | **2.32 → 1.28 GiB** (−44.7%) | Patch-token, cross-attention, and phase model |
 
-The diffusion profiles use component parameter counts from fixed revisions of
-[Stable Diffusion v1.5][diffusion-sd15] and
-[SDXL Base 1.0][diffusion-sdxl], and
-[PixArt-Sigma XL 2][diffusion-pixart]. Runtime context, allocator
-fragmentation, backend-private workspaces, and transfer overlap remain outside
-these numbers.
-Architecture-aware reports remain `Modeled` with
-`accuracy.status` set to `uncalibrated` until a matching observation exists.
-Local architecture inspection is exercised through
-`estimate-diffusion --model-dir`.
-
-The cache formulas follow the workload shapes exposed by
-[Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache).
-The serving planner models homogeneous shapes and ordered heterogeneous active
-request sets. Its speculative mode follows the independent draft/target flow
-described by the
-[original speculative-decoding paper](https://arxiv.org/abs/2211.17192) and
-[Transformers assisted decoding](https://huggingface.co/docs/transformers/assisted_decoding): a smaller
-model proposes several tokens and the target verifies them in one forward
-pass. Request arrival distributions, cache eviction, preemption, adaptive
-draft length, KV rollback workspaces, and end-to-end throughput or latency
-remain outside the supported estimate. The workload terminology follows
-[vLLM serving](https://docs.vllm.ai/en/stable/). Binary CUDA extensions and
-arbitrary kernels remain outside CPU FakeCUDA execution; those workloads
-require analysis plus a passthrough or hybrid real-GPU observation.
+- Diffusion profiles use component parameter counts from fixed revisions of
+  [Stable Diffusion v1.5][diffusion-sd15], [SDXL Base 1.0][diffusion-sdxl],
+  and [PixArt-Sigma XL 2][diffusion-pixart]. Runtime context, fragmentation,
+  private workspaces, and transfer overlap are excluded.
+- Reports stay `Modeled` with `accuracy.status` set to `uncalibrated` until a
+  matching observation exists. `estimate-diffusion --model-dir` exercises
+  local architecture inspection.
+- Cache formulas follow
+  [Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache).
+  Speculative mode follows the draft/target flow of the
+  [original speculative-decoding paper](https://arxiv.org/abs/2211.17192) and
+  [Transformers assisted decoding](https://huggingface.co/docs/transformers/assisted_decoding);
+  serving terms follow [vLLM serving](https://docs.vllm.ai/en/stable/).
+- Arrival distributions, cache eviction, preemption, adaptive draft length,
+  KV rollback workspaces, and throughput or latency are out of scope. Binary
+  CUDA extensions and arbitrary kernels need a passthrough or hybrid real-GPU
+  observation.
 
 New or refreshed public validation rows should record:
 
 - at least five isolated observations and the maximum observed peak;
 - predicted and observed bytes for every reported phase;
-- maximum underprediction as the primary OOM-risk metric, with a publication
-  target of at most 5% for a `GPU-validated` row;
+- maximum underprediction as the primary OOM-risk metric, at most 5% for a
+  `GPU-validated` row;
 - median, 95th-percentile, and maximum absolute percentage error;
-- prediction-interval coverage and the count of false-safe decisions, where
-  FakeGPU predicted a fit but the real workload reached OOM; and
+- prediction-interval coverage and false-safe decisions (predicted fit, real
+  OOM); and
 - the model revision, command, shapes, dtype, backend, allocator settings,
   GPU, driver, CUDA, PyTorch, and framework versions.
 
-Use `calibrate verify` to apply these limits to machine-readable comparison
-reports before publishing a result.
-
-Rows that miss the target remain `Modeled` or are marked experimental instead
-of being presented as validated. Agreement percentages remain secondary to
-maximum underprediction and false-safe OOM decisions.
+Use `calibrate verify` to apply these limits before publishing. Rows that miss
+the target stay `Modeled` or experimental.
 
 ### How it works
 
@@ -600,68 +557,47 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --format=json
 ```
 
-The detailed report includes the FakeGPU version, runtime backend and policies,
-Python/PyTorch/CUDA versions, state freshness, profile catalog and native API
-coverage, synthetic device identity, compute properties, memory categories,
-allocator activity, dispatch tracking, and per-process peaks. Use `-i` with an
-index, UUID, PCI bus ID, or profile ID to select devices; use `--json` for the
-complete normalized inventory. State schema v2 is emitted, while v1 files
-remain readable.
-`--query-runtime` exposes the same runtime, policy, software, tracking,
-catalog, dispatch, and publisher-health details as script-friendly CSV or
-JSON. Use `--help-query-runtime` to list every supported field.
+- `-q` shows the FakeGPU version, runtime policies, software versions, state
+  freshness, catalog and native API coverage, device identity, memory
+  categories, allocator activity, dispatch tracking, and per-process peaks.
+- `-i` selects devices by index, UUID, PCI bus ID, or profile ID; `--json`
+  prints the full normalized inventory. State schema v2 is written; v1 stays
+  readable.
+- `--query-runtime` exposes the same runtime details as CSV or JSON;
+  `--help-query-runtime` lists every field.
+- Native interception also publishes allocation lifetime, transfer volume,
+  kernel launches, GEMM calls/FLOP, compatibility events, and unsupported API
+  counts. `FAKEGPU_SMI_DETAIL_LIMIT` and `FAKEGPU_SMI_MAX_STATE_BYTES` bound
+  retained detail and state-file size.
 
-Native interception additionally publishes allocation lifetime, transfer
-volume, kernel launches, GEMM calls/FLOP, compatibility events, and unsupported
-API counts. State is refreshed while the process is running and marked exited
-when the process shuts down. `FAKEGPU_SMI_DETAIL_LIMIT` bounds retained detail
-entries and `FAKEGPU_SMI_MAX_STATE_BYTES` limits each state file; `-q` reports
-publisher write counts, failures, latency, and serialized size.
+NVLink, MIG, and fault modeling are disabled by default. Set them before the
+workload starts; invalid input activates nothing and is reported as a
+configuration error.
 
-NVLink modeling is disabled by default. Set
-`FAKEGPU_NVLINK_GROUPS="0,1;2,3"` before starting the workload to create
-full-mesh peer relationships inside each semicolon-separated group. The
-optional `FAKEGPU_NVLINK_BANDWIDTH_GBPS` value defaults to `900`. The same
-model drives state files, `topo -m`, `nvlink -s`, the
-`topology.*`/`nvlink.*` query fields, and native NVML link-state, capability,
-remote-device-type, and remote-PCI queries. Invalid groups leave every link
-inactive and publish a configuration error.
+- **NVLink**: `FAKEGPU_NVLINK_GROUPS="0,1;2,3"` creates full-mesh peers within
+  each group; `FAKEGPU_NVLINK_BANDWIDTH_GBPS` defaults to `900`. This drives
+  `topo -m`, `nvlink -s`, the `topology.*`/`nvlink.*` fields, and native NVML
+  link queries.
+- **MIG**: `FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."`, e.g.
+  `FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`. Each GPU instance
+  owns one compute instance; layouts exceeding parent memory, eight slices, or
+  eight instances are rejected. Per-instance memory use is not observed.
+- **Faults**: `FAKEGPU_FAULT_EVENTS="DEVICE:CODE:SEVERITY[:COUNT];..."`, e.g.
+  `FAKEGPU_FAULT_EVENTS="0:XID_79:critical;1:NVLINK_CRC:error:3"`, with
+  severities `info`, `warning`, `error`, and `critical`. The `events` view also
+  shows unsupported API calls, publisher failures, and stale state; `health.*`
+  fields expose modeled device status.
 
-MIG modeling is disabled by default. Configure instances before starting the
-workload with
-`FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."`, for example
-`FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`. Each modeled GPU
-instance owns one compute instance. The layout drives state files, `-L`, `-q`,
-`mig -lgi`, `mig -lci`, the `mig.*` query fields, and native NVML MIG mode,
-handle, UUID, parent, instance-ID, and memory-capacity queries. Layouts that
-exceed parent memory, eight slices, or eight instances per device are rejected
-without creating partial instances. Per-instance runtime allocation attribution
-is not implemented, so state files mark used/free instance memory unobserved.
-
-Fault injection is also disabled by default. Set entries using
-`FAKEGPU_FAULT_EVENTS="DEVICE:CODE:SEVERITY[:COUNT];..."`, for example
-`FAKEGPU_FAULT_EVENTS="0:XID_79:critical;1:NVLINK_CRC:error:3"`. Codes are
-labels; supported severities are `info`, `warning`, `error`, and `critical`.
-The `events` view combines configured fault events with unsupported native API
-calls, publisher failures, stale state, and model-configuration errors.
-`health.*` query fields expose each device's modeled status, maximum severity,
-event counts, and the fact that hardware health is unobserved. Invalid input
-activates no faults and is reported as a configuration error.
-
-UUIDs and PCI bus IDs are stable simulated identifiers. Temperature, fan
-speed, live power draw, and hardware GPU utilization remain `N/A` because the
-CPU-backed runtime cannot observe them; profile power and clock values are
-shown separately as static specifications. Topology labels and configured
-bandwidth, fault codes, and health status are modeled inputs, not hardware
-measurements or observed ECC/Xid data.
+UUIDs and PCI bus IDs are stable simulated values. Temperature, fan speed, live
+power, and hardware utilization show `N/A`; topology, bandwidth, faults, and
+health are modeled inputs, not hardware measurements or ECC/Xid data.
 
 <a id="export-monitoring-metrics"></a>
 
 ### Export monitoring metrics
 
-The normalized FakeGPU-SMI state can be exported without adding a monitoring
-dependency. A one-shot command emits Prometheus text by default or a normalized
-JSON snapshot:
+Export the normalized FakeGPU-SMI state as Prometheus text (default) or JSON,
+without extra monitoring dependencies:
 
 ```bash
 python3 -m fakegpu metrics --state-dir build/smi
@@ -680,20 +616,17 @@ curl http://127.0.0.1:9400/healthz
 curl http://127.0.0.1:9400/api/v1/history
 ```
 
-`/metrics` exposes the latest device, process, runtime, MIG, topology, health,
-and publisher values; `/healthz` reports source and scrape status;
-`/api/v1/history` returns normalized recent samples. Process series retain the
-highest-memory processes first and are limited to 128 by default and 256 at
-most; `--max-process-series 0` disables them. History keeps 300 samples by
-default and at most 1,440. Both limits are enforced in memory, and no monitoring
-history is written to disk or tracked by Git. Use Prometheus or another scraper
-for durable retention.
-
-The server listens only on `127.0.0.1` by default and has no authentication.
-Place it behind an authenticated proxy or network policy before binding a
-non-loopback address. Exported values preserve the same modeled-versus-observed
-semantics as FakeGPU-SMI; they do not turn unavailable hardware telemetry into
-measurements.
+- `/metrics` serves the latest device, process, runtime, MIG, topology,
+  health, and publisher values; `/healthz` reports source and scrape status;
+  `/api/v1/history` returns recent samples.
+- Process series keep the highest-memory processes: 128 by default, 256 at
+  most, `--max-process-series 0` disables them. History keeps 300 samples by
+  default, 1,440 at most.
+- Everything stays in memory; use Prometheus or another scraper for durable
+  retention.
+- The server binds `127.0.0.1` without authentication; put it behind an
+  authenticated proxy before exposing it. Exported values keep FakeGPU-SMI's
+  modeled-versus-observed semantics.
 
 ### Intercept native CUDA libraries
 
@@ -715,6 +648,12 @@ python3 -m fakegpu --build-dir build \
 
 Unsupported native calls can be recorded, warned about, or returned as
 `cudaErrorNotSupported` or `CUDA_ERROR_NOT_SUPPORTED`.
+
+In native hybrid mode, the CUDA runtime and cuBLAS stay native. If
+`CUDA_VISIBLE_DEVICES` is set (by index or UUID), physical NVML discovery is
+kept so frameworks resolve that selection; otherwise the modeled NVML
+inventory is used. `fakegpu.env()` removes stale FakeGPU preloads when a child
+environment switches modes.
 
 ### Check memory before a run
 
@@ -756,17 +695,15 @@ python3 -m fakegpu plan-serving \
   --json build/serving-plan.json
 ```
 
-The report separates model weights, prefill and decode transients, shared and
-private KV segments, runtime/scheduler overhead, and usable device headroom.
-`--device-memory-gib` can replace `--target-profile` for a custom capacity.
-Prefix sharing is supported for dynamic and paged caches; paged shared and
-private segments are rounded independently. Capacity search never exceeds
-`--max-batch-size`.
+The report separates weights, prefill/decode transients, shared and private KV
+segments, runtime overhead, and usable headroom. Use `--device-memory-gib`
+instead of `--target-profile` for a custom capacity. Prefix sharing needs a
+dynamic or paged cache, and capacity search never exceeds `--max-batch-size`.
 
 #### Match vLLM runtime reservation
 
-vLLM preallocates a paged KV pool instead of growing only with the active
-requests. Select its memory policy when the deployment target is vLLM:
+vLLM preallocates a paged KV pool instead of growing it with active requests.
+Select its memory policy when deploying on vLLM:
 
 ```bash
 python3 -m fakegpu plan-serving \
@@ -783,27 +720,23 @@ python3 -m fakegpu plan-serving \
   --json build/vllm-serving-plan.json
 ```
 
-Automatic sizing follows the vLLM V1 policy: requested model-executor memory
-minus profiled non-KV memory, rounded down to whole cache blocks. The report
-keeps logical request KV demand separate from the reserved pool and exposes
-`num_gpu_blocks`, cache token capacity, block-rounding tail, initialization
-fit, and concurrency at `max_model_len`. If a matching vLLM startup profile is
-available, pass its weights + peak activations + non-torch + CUDA-graph total
-with `--vllm-non-kv-cache-memory-bytes`; this replaces FakeGPU's modeled
-non-KV value. `--vllm-kv-cache-memory-bytes` provides an exact per-GPU cache
-override and, like vLLM, ignores `--memory-utilization` for cache sizing.
-
-When `--memory-utilization` is omitted, vLLM mode uses `0.92`, matching the
-current [vLLM CacheConfig reference](https://docs.vllm.ai/en/latest/api/vllm/config/cache/).
-Specify the value explicitly for a version-locked report. The budget formula
-tracks vLLM's documented
-[GPU-worker profiling path](https://docs.vllm.ai/en/latest/api/vllm/v1/worker/gpu_worker/),
-but initial free memory, other processes, tensor/pipeline parallelism, hybrid
-cache groups, allocator fragmentation, and version-specific kernels still
-need same-stack observation. The research manifest checks both automatic and
-explicit-cache modes. Speculative decoding currently remains available only
-with the generic runtime model; vLLM-specific speculative schedulers and
-cache managers are not represented yet.
+- Automatic sizing follows vLLM V1: requested executor memory minus profiled
+  non-KV memory, rounded down to whole blocks. The report shows
+  `num_gpu_blocks`, cache token capacity, initialization fit, and concurrency
+  at `max_model_len`, separate from logical request KV demand.
+- `--vllm-non-kv-cache-memory-bytes` replaces the modeled non-KV value with a
+  vLLM startup profile (weights + peak activations + non-torch + CUDA graphs).
+- `--vllm-kv-cache-memory-bytes` sets an exact per-GPU cache size and, like
+  vLLM, ignores `--memory-utilization`.
+- `--memory-utilization` defaults to `0.92`, matching the
+  [vLLM CacheConfig reference](https://docs.vllm.ai/en/latest/api/vllm/config/cache/);
+  set it explicitly for version-locked reports.
+- The budget follows vLLM's
+  [GPU-worker profiling path](https://docs.vllm.ai/en/latest/api/vllm/v1/worker/gpu_worker/),
+  but free memory, other processes, tensor/pipeline parallelism, hybrid cache
+  groups, fragmentation, and version-specific kernels still need same-stack
+  observation. Speculative decoding is available only with the generic
+  runtime model.
 
 Add an independent autoregressive draft checkpoint to estimate speculative
 decoding memory:
@@ -823,20 +756,16 @@ python3 -m fakegpu plan-serving \
   --json build/speculative-serving-plan.json
 ```
 
-The report keeps target and draft weights plus both KV caches resident, adds
-conservative lookahead slots, and compares target verification with draft
-proposal transients. The acceptance assumption reports expected output tokens
-per target call; it does not change the memory peak or claim an end-to-end
-speedup. Equal vocabulary sizes are required, while tokenizer identity remains
-unverified because checkpoint headers cannot prove token-ID equivalence.
+Target and draft weights and both KV caches stay resident, with conservative
+lookahead slots. The acceptance rate only changes expected output tokens per
+target call, not peak memory or speedup. Vocabulary sizes must match;
+tokenizer identity is not verified.
 
-Every homogeneous or mixed-request serving report also emits a path-independent
-`workload_signature`. It covers target/draft architecture and weight storage,
-request shapes, KV/prefill settings, and speculative configuration while
-excluding absolute model paths and device capacity. Put the same field in a
-measurement report before using `calibrate verify`; the calibration gate
-compares the signature and checks `target.profile` as a separate dimension, so
-evidence from a different proposal length or GPU profile is rejected.
+Every serving report emits a path-independent `workload_signature` covering
+architecture, weight storage, request shapes, KV/prefill, and speculative
+settings, but not model paths or device capacity. `calibrate verify` checks it
+and `target.profile` separately, so evidence from another configuration or
+GPU is rejected.
 
 For chat, RAG, completion, or summarization traffic with different lengths,
 provide an ordered request manifest:
@@ -881,20 +810,15 @@ python3 -m fakegpu plan-serving \
   --json build/mixed-serving-plan.json
 ```
 
-Manifest mode calculates every request independently, stores each named
-prefix group once, and admits the longest fitting prefix of the file without
-reordering it. The report includes admitted and rejected request IDs,
-per-request transients, component-wise concurrent-prefill bounds, grouped KV
-segments, and the requested capacity headroom. Group members must use the same
-positive `shared_prefix_tokens` value; shared prefixes require dynamic or paged
-KV storage. Named groups are treated as resident cache hits; cache population,
-lookup probability, and eviction behavior are not predicted.
-
-Arrival timing, cache eviction, preemption/reordering, tensor parallelism,
-adaptive speculative scheduling, KV rollback workspaces, throughput, and
-latency are listed as unmodeled.
-Until a matching online-serving observation is supplied, `validation_status`
-remains `Modeled` and `accuracy.status` remains `uncalibrated`.
+- Requests are evaluated in file order; each prefix group is stored once, and
+  the longest fitting prefix of the list is admitted without reordering.
+- The report lists admitted and rejected IDs, per-request transients,
+  concurrent-prefill bounds, grouped KV segments, and headroom.
+- Group members must share the same positive `shared_prefix_tokens`. Named
+  groups are treated as resident cache hits.
+- Arrival timing, eviction, preemption, tensor parallelism, adaptive
+  speculation, KV rollback, throughput, and latency are unmodeled. Reports
+  stay `Modeled` and `uncalibrated` until a matching observation is supplied.
 
 ### Analyze a repository or model
 
@@ -945,721 +869,40 @@ python3 -m fakegpu capabilities \
   --strict
 ```
 
-The LLM estimator reads safetensors headers without materializing checkpoint
-weights. Choose `dynamic`, `static`, `quantized`, or `paged` with
-`--kv-cache-strategy`; the JSON report separates logical storage,
-quantization savings, static reservation, paged-block overhead, and optional
-sliding-window limits. Quantized cache accounting retains 128 recent tokens
-at the compute dtype by default; change it with
-`--kv-cache-residual-tokens`.
-MHA, GQA, and MQA use separate key/value storage. When the model config
-contains `kv_lora_rank`, `qk_nope_head_dim`, `qk_rope_head_dim`, and
-`v_head_dim`, the estimator identifies MLA and uses its compressed KV latent
-plus decoupled RoPE component for cache bytes. MLA backend workspaces and
-projection absorption remain runtime-specific and require calibration.
+LLM estimator:
 
-The diffusion estimator separates text encoding, repeated denoising, and VAE
-decode phases. With `--model-dir`, it reads only `model_index.json`, component
-`config.json` files, and selected safetensors headers. It does not import
-remote custom code or read tensor payloads. Checkpoint storage and runtime
-weight bytes at the requested dtype are reported separately. The declared local
-Euler/PNDM scheduler configuration determines denoiser evaluation counts;
-unsupported or unspecified schedulers report `denoiser_evaluations: null`.
-Requested inference steps remain separate from actual scheduler evaluations.
-The built-in `pixart-sigma-xl-2-1024-ms` profile provides a fixed-revision
-transformer example alongside the two Stable Diffusion UNet profiles.
+- Reads safetensors headers only. `--kv-cache-strategy` accepts `dynamic`,
+  `static`, `quantized`, or `paged`; the report separates logical storage,
+  quantization savings, static reservation, paged overhead, and sliding-window
+  limits.
+- Quantized caches keep 128 recent tokens at the compute dtype by default
+  (`--kv-cache-residual-tokens`).
+- MHA, GQA, and MQA use separate key/value storage. Configs with
+  `kv_lora_rank`, `qk_nope_head_dim`, `qk_rope_head_dim`, and `v_head_dim` are
+  treated as MLA (compressed latent + decoupled RoPE); MLA backend workspaces
+  need calibration.
 
-UNets, cross-attention patch transformers (DiT/PixArt), and SD3/Flux-style
-joint-attention transformers use distinct activation formulas. Image-token
-counts include the VAE scale, patch size, and Flux latent packing; CFG doubles
-the denoiser batch only for architectures that use positive and negative
-branches. Use `--weight-variant fp16|bf16|fp32` when a local directory contains
-multiple checkpoint families.
+Diffusion estimator:
 
-`--offload model`, `--attention-slicing`, `--vae-slicing`, and `--vae-tiling`
-expose common Diffusers memory trade-offs. Until a matching real-GPU comparison
-is supplied, the report remains `Modeled`, `accuracy.status` is
-`uncalibrated`, and no unsupported error percentage or prediction interval is
-emitted.
+- Separates text encoding, repeated denoising, and VAE decode. `--model-dir`
+  reads only `model_index.json`, component `config.json` files, and selected
+  safetensors headers, without remote code or tensor payloads.
+- Checkpoint storage and runtime weight bytes are reported separately. Local
+  Euler/PNDM scheduler configs set denoiser evaluation counts; other
+  schedulers report `denoiser_evaluations: null`.
+- UNets, cross-attention transformers (DiT/PixArt), and SD3/Flux-style
+  joint-attention transformers use distinct activation formulas. CFG doubles
+  the denoiser batch only where both branches exist.
+- `--weight-variant fp16|bf16|fp32` selects a checkpoint family. Built-in
+  profiles include `pixart-sigma-xl-2-1024-ms` and two Stable Diffusion UNets.
+- `--offload model`, `--attention-slicing`, `--vae-slicing`, and
+  `--vae-tiling` model common Diffusers trade-offs. Without a matching
+  real-GPU comparison, reports stay `Modeled` and `uncalibrated` with no error
+  percentage or prediction interval.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Command reference
-
-### Fine-tuning time and VRAM
-
-`estimate-finetune` reads local model metadata and Hugging Face Trainer/PEFT,
-LLaMA-Factory, or Axolotl configurations without importing those frameworks or
-loading model weights. It estimates full/LoRA/4-bit QLoRA training on one GPU,
-including optimizer updates, gradient accumulation, trainable/frozen storage,
-activations, workspace, and the total **training-loop** time for a sample count
-and epochs. `max_steps` takes precedence over epochs. Samples mean processed
-training sequences after filtering, splitting, and packing; sequence length
-includes template tokens and padding. An equal number of raw documents is not
-an equal amount of training work. Pass `--max-steps -1` to clear a configured
-step limit and estimate the requested epochs.
-
-```bash
-python -m fakegpu estimate-finetune \
-  --config examples/finetuning/huggingface-lora.yaml \
-  --model /path/to/Qwen3.5-0.8B --text-only \
-  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
-  --sequence-length 128 --json estimate.json
-```
-
-Estimation config examples are provided in
-[`examples/finetuning/`](examples/finetuning/) for all three frameworks.
-Configuration adaptation is covered by CPU tests; it does not imply that
-every framework/runtime combination has been benchmarked. Distributed/offloaded execution,
-unsupported optimizer variants, and unresolved adapter targets produce explicit
-errors. `plan-training` remains the distributed memory-planning entry point.
-
-Qwen3.5's linear/full attention layers are counted separately. Chunked DeltaNet
-backward workspaces, optional fast kernels, and MoE dispatch remain partial
-analytical coverage; an uncalibrated report cannot certify OOM safety.
-`--text-only` explicitly selects the text backbone of a multimodal checkpoint.
-
-`profile-finetune-data` scans every row of local JSONL files and records a content
-fingerprint, token lengths, truncation, padding, and processed sequence counts.
-Raw `text` or `messages` rows use a local tokenizer; their counts describe the
-selected preprocessing scenario. Generic `--packing concatenate` is a token
-budget scenario and does not reproduce a framework's packing algorithm. For
-counts from an actual training split, export its final `input_ids` rows and use
-`--processed`; this preserves row boundaries and rejects rows exceeding the cap.
-Optional `attention_mask` and `labels` retain padding and supervision accounting.
-
-```bash
-python -m fakegpu profile-finetune-data \
-  --data /path/to/processed-train.jsonl --format input_ids --processed \
-  --sequence-length 128 --json dataset.json
-python -m fakegpu estimate-finetune \
-  --config examples/finetuning/huggingface-lora.yaml \
-  --model /path/to/Qwen3.5-0.8B --text-only \
-  --profile "$TARGET_GPU_PROFILE" --dataset-report dataset.json \
-  --epochs 3 --max-steps -1 --json estimate.json
-```
-
-`--dataset-report` binds counts and the sequence cap together. It replaces an
-estimated config sample count, rejects conflicting explicit overrides, and
-requires the report cap to match the training config. A `--source-framework`
-label records provenance only; it does not attest that the framework ran.
-Packed training requires final processed sequence counts, rather than a raw-row
-or generic concatenation scenario.
-
-`run-finetune` invokes the installed Hugging Face Trainer/PEFT, LLaMA-Factory or Axolotl native pipeline on
-one physical CUDA GPU. It supports full fine-tuning, LoRA, and bitsandbytes 4-bit
-QLoRA with a local unquantized text checkpoint and unpacked data. Use a complete native config, including dataset
-and output paths; relative paths resolve from the config directory. The report
-records native preprocessing, the effective training dataset, actual batches,
-optimizer updates, allocator peaks, evaluation/checkpoint events, and final
-saving. Warmup is excluded from steady step samples but remains in total wall
-time. This command performs the training requested by the native config.
-
-Each `observation.updates[].batches` entry records a consumed microbatch's shape,
-one-based epoch position, token slots, nonpadding tokens, and supervised labels
-before and after the usual causal shift. `observation.batch_profile` reconciles
-these counts and groups timings by the complete ordered accumulation window;
-mixed shapes and partial windows keep separate groups. A group needs two steady
-updates before `sufficient` is true; this is sample availability, not an accuracy
-certificate. Missing or nonbinary attention masks leave token counts unknown.
-Position-ID resets do not identify original packed examples. Collection overhead
-is reported separately and excluded from update samples, while total wall time
-includes it. These synchronized observations have a separate calibration identity.
-`validate-finetune-windows` compares timing predictions against a separately
-recorded dynamic run. It requires at least two independent calibration reports
-from the same model, data, software and native execution settings. Each complete,
-ordered window must have two retained observations in every calibration run,
-after excluding global warmup and each window's first occurrence. Process means
-receive equal weight; uncovered windows are rejected. New reports include a run
-UUID, PID and UTC start time to catch accidental duplicate sampling.
-
-The comparison predicts only the holdout's recorded steady windows. Its timings
-are used for error measurement, never calibration. This is historical evidence
-validation: it neither loads current weights nor attests the current environment.
-It does not infer future shuffle order, warmup, total wall time or dynamic VRAM;
-window statistics are not complete input equivalence. Periodic evaluation/save
-schedules require the explicit event-context mode below. Native packing and MoE
-window calibration remain unsupported.
-```bash
-python -m fakegpu validate-finetune-windows \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --holdout-run holdout.json --json window-validation.json
-```
-
-
-`observation.phase_events` records the actual evaluation and save call tree,
-including training-start evaluation, periodic checkpoints, and final framework
-calls. Only root intervals enter phase totals. The ledger separates raw wall time
-from event metadata collection and records actual evaluation batch/content
-fingerprints and files present after saves. A file inventory is not a measurement
-of disk writes or durability. `preceding_event_ids` links an update to events
-that occurred after the previous update.
-
-`validate-finetune-events` compares evaluation and save subtotals against an
-independent recorded run. At least two calibration runs are required; initial,
-first, repeated and final events remain separate, and repeated groups need two
-samples per calibration run. Matching workloads use equally weighted process
-means; missing coverage is rejected. The first version requires unpacked dense
-text models, loss-only evaluation without custom metrics, and local
-model/adapter or resumable checkpoint saves.
-It does not predict future event counts or total pipeline time: saves can alter
-the allocator/cache state of subsequent training windows.
-
-```bash
-python -m fakegpu validate-finetune-events \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --holdout-run holdout.json --json event-validation.json
-```
-
-`validate-finetune-windows --event-context` also matches the recorded history
-before each training window. It retains the latest evaluation and checkpoint
-boundaries separately, including ordered calls, their workloads and phases, and
-the number of optimizer updates since each boundary. An evaluation cannot erase
-the context of an earlier save. Reports need the event ledger and matching actual
-hardware; event support has the same limits as `validate-finetune-events`.
-
-Global warmup and each window/context combination's first occurrence are excluded.
-Every retained combination still needs two samples per calibration run. This
-validates recurring windows following periodic events; it does not predict the
-first save's recovery, establish that older history has no effect, or predict
-complete training time. Evaluation/save durations remain separate subtotals.
-
-```bash
-python -m fakegpu validate-finetune-windows --event-context \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --holdout-run holdout.json --json event-window-validation.json
-```
-
-Add `--epoch-context` to match the recorded position of every microbatch within
-its epoch as well. This distinguishes otherwise identical windows that include
-epoch-start data loading or worker startup. It uses the complete ordered,
-one-based microstep positions, without binding the absolute epoch number.
-Epoch metadata is required; warmup, first-combination exclusion and independent
-sample requirements still apply. Use this flag on its own for runs without
-periodic events, or combine it with `--event-context`:
-
-```bash
-python -m fakegpu validate-finetune-windows --event-context --epoch-context \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --holdout-run holdout.json --json epoch-window-validation.json
-```
-
-`plan-finetune-pipeline` projects future epochs or optimizer updates from a
-calibration run's complete observed epoch, before the target training runs.
-`estimate-finetune-pipeline` combines at least two independent calibrations into
-a complete native execution budget: setup, warmup and first occurrences, ordered
-training windows, evaluation, checkpoints, Trainer gaps, and finalization.
-New run reports provide a non-overlapping timeline and separate raw wall time
-from measured instrumentation. The span ends after the native call and final
-CUDA synchronization; Python process startup, report construction, and CLI
-output are outside it. Time ranges combine the extrema of per-process component means; they are not
-confidence intervals. Every component must have independent coverage; missing costs fail
-explicitly.
-
-The future schedule adapter supports unpacked, sequential text datasets with
-retained tail batches: Hugging Face Trainer (Transformers 5.6.0) and LLaMA-Factory 0.9.5 /
-Transformers 5.6.0 require `disable_shuffling: true`; Axolotl 0.18.0 /
-Transformers 5.14.1 requires `curriculum_sampling: true`. It verifies the actual
-observed batch sequence and eval/save schedule, including fractional epochs
-and terminal events. The dataset, model, hardware and execution settings must
-match calibration; changing the number of dataset rows requires a new matching
-calibration. Logging is disabled or performed every update; checkpoint rotation
-and best-model reload require additional calibration support.
-
-```bash
-python -m fakegpu plan-finetune-pipeline \
-  --run-report calibration-1.json --epochs 30 --json future-plan.json
-python -m fakegpu estimate-finetune-pipeline \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --plan future-plan.json --memory-budget-gib 24 --reserve-gib 1 --json budget.json
-python -m fakegpu validate-finetune-pipeline \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --holdout-run holdout.json --json validation.json
-```
-
-For default random sampling and changed training datasets, use the explicit
-empirical transfer workflow. It reads the native prepared dataloader, plans
-CPU sampler/collator outputs up to the requested horizon, and verifies consumed
-row indices and input tensor hashes during calibration. Supported stacks are
-HF/Factory with Accelerate 1.11.0 and Axolotl with Accelerate 1.13.0, at the
-framework versions above. Random sampling uses the actual native data seed plus
-epoch; Axolotl 0.18.0 does not forward its YAML `data_seed` to Trainer.
-
-```bash
-python -m fakegpu calibrate-finetune \
-  --config target-training.json --framework huggingface \
-  --profile "$TARGET_GPU_PROFILE" --python /path/to/framework/python \
-  --cuda-device 0 --workspace ./calibration-target \
-  --calibration-steps 24 --warmup-steps 2 --epochs 3 \
-  --timeout-seconds 600 --json calibration.json
-python -m fakegpu budget-finetune-workspace \
-  --workspace ./calibration-target --epochs 2 --json revised-budget.json
-```
-
-The workflow runs exactly two fresh native processes with explicit step/time
-limits and new empty kernel-cache directories by default. It preserves every
-attempt, seals reports and predictions with SHA256, and supports `--resume`
-after interruption. Successful evidence is checked before reuse; it never
-silently expands a calibration or reruns it because its error is large. CPU-only
-rebudgeting needs no GPU or installed training framework and cannot exceed the
-saved sampling horizon. Keep the workspace at its original absolute path and
-outside input directories recorded in full, such as the model or a local dataset
-directory. A nested workspace is rejected before runtime probing or training.
-Only finite local datasets are supported.
-Workspaces use POSIX process and lock semantics.
-
-Add repeated `--reuse-calibration-run PATH` arguments to reuse compatible
-training evidence from another dataset. Two fresh target-dataset calibrations
-still supply startup and finalization costs; these costs are never multiplied
-by a sample-count ratio. Training groups preserve ordered tensor shapes,
-accumulation tails, epoch boundaries, warmup, first shape use and event context.
-They **approximate** costs across different token/mask/supervision distributions;
-full descriptor distributions remain visible in the report. Every group needs
-two independent processes, and repeated groups need two observations in each.
-Missing coverage returns exit status 1 and a list of gaps without a total budget.
-Even a shorter duration can require an unobserved terminal transition.
-Memory is a separate empirical envelope of complete calibration-process peaks,
-not a guarantee for the combined long run or a smaller GPU.
-
-`run-finetune --planning-epochs N` (or `--planning-max-steps N`) also records the
-CPU horizon directly. `plan-finetune-transfer`, `estimate-finetune-transfer`
-and `validate-finetune-transfer` expose planning, budgeting and independent
-holdout comparison without the workspace manager. Existing strict pipeline
-commands keep their original matching rules. Streaming, custom samplers
-and automatic batch-size changes remain unsupported.
-
-For length grouping, set `train_sampling_strategy: group_by_length` in HF or
-LLaMA-Factory, or `group_by_length: true` in Axolotl, and explicitly add
-`--length-grouping-seed 123` to `calibrate-finetune` or `run-finetune`.
-This option uses the native Trainer grouping algorithm with an independent CPU
-generator seeded by `123 + epoch`; it changes the sampler's random stream.
-Native global-RNG length grouping cannot provide a reproducible future plan.
-A planning horizon is required. With one finite evaluation dataset, evaluation
-uses a separate generator with the same explicit seed for every invocation,
-including persistent-worker loaders; it does not advance the training sampler.
-The evaluation grouping policy and length digest are bound to calibration
-identity. Custom evaluation samplers and prepared loaders are rejected.
-Sampler plan v2 retains the complete ordered grouping lengths and
-grouping batch size in calibration identity. Different length sequences need
-their own evidence. Coverage still requires two independent runs and sufficient
-repeat observations; a short calibration may be insufficient for many shapes.
-
-The [packing semantics audit](tests/native/finetune_packing_semantics.py) changes
-one segment and checks the next segment's logits and gradients in tiny real
-Qwen3.5 models, with a dense-attention control. The tested ordinary HF/Factory
-hybrid paths leak across a block mask and reset positions; the tested Axolotl
-patch has a Transformers 5.14.1 decoder-interface incompatibility. These are
-kernel diagnostics of the ordinary framework paths. See
-[`refactor.md`](refactor.md) for the tested versions and retained results.
-
-The opt-in [segment reference audit](tests/native/finetune_segment_reference.py)
-checks a project-owned Qwen3.5 interface that executes each linear-attention
-segment with empty convolution and recurrent state. It validates block masks,
-padding and causal label boundaries, and compares all layers and gradients with
-independent native sequences, including checkpoint recomputation and checkpoint
-reload. With dense `qwen3_5_text` LoRA, `--packing-seed 123` explicitly selects
-this reference interface for `run-finetune` or `calibrate-finetune`. It requires a
-planning horizon and native packing (`packing: true` plus `neat_packing: true`
-for Factory, or `sample_packing: true` for Axolotl), with evaluation disabled.
-HF processed rows additionally require `position_ids` and contiguous positive
-segment IDs in `attention_mask`, followed by optional zero right padding.
-The first label of every subsequent segment must be ignored; the row's first label is removed by the causal shift. Native source sampling uses an
-independent seed plus epoch; the native bin packer, tails and dropped rows remain
-in effect. Sampler plan v3 records complete epoch bins, logical-sequence counts,
-physical tensor rows, block geometry, dtypes and consumed input hashes. Budget
-identity retains the same dataset and packing seed; different data needs its own
-calibration. This path splits recurrent computation per segment and makes no
-varlen-kernel throughput claim. Full/QLoRA packing and grouped packing are not
-covered. The PEFT direct-forward regression is in
-[the native audit](tests/native/finetune_segment_peft.py). The
-[packed-budget evidence](tests/data/finetune_packing_budget_evidence.json) retains
-four native cases, their prediction errors and allocator underestimation.
-Native packing reports require the sampler-aware transfer commands; the old
-fixed-shape projection cannot interpret their source-row counts.
-
-Calibration workspaces isolate Axolotl prepared datasets and explicit Factory
-tokenized datasets under their own `prepared/` directory. They derive those
-files from the recorded raw inputs, preserving external caches. Resume rejects
-changed raw inputs; ordinary `run-finetune` retains the native cache policy.
-
-The memory result is the observed full-run CUDA allocated/reserved peak envelope
-for a covered workload on the same GPU and allocator. This does not project to a
-smaller physical card. Per-window peaks are not added. The optional reserve is
-a user-selected margin; fitting this envelope does not prove OOM safety.
-`validate-finetune-pipeline` compares against an independent holdout run and
-reports timing errors and memory underestimation. Actual allocation failures are tested separately.
-
-`run-finetune --cache-regime empty_kernel_cache` requires five explicitly set,
-distinct existing empty directories: `TRITON_CACHE_DIR`,
-`TORCHINDUCTOR_CACHE_DIR`, `CUDA_CACHE_PATH`, `TORCH_EXTENSIONS_DIR`, and
-`PYTORCH_KERNEL_CACHE_PATH`. `populated_kernel_cache` records every file's
-relative path, size and SHA256; replicate the same seed into fresh directories
-for independent runs. The runner never creates, clears or warms these caches.
-These modes control only the named directories, not OS file caches or all
-library caches. Default `uncontrolled` reports make no cache-state claim and
-cannot be mixed with controlled calibration. File manifests do not certify
-cache hits or external file dependencies: Triton group metadata can retain
-absolute references to the original cache. Keep those files available and
-unchanged. This experiment separately fixed and audited that dependency.
-
-Unpacked Hugging Face native runs use a flat config and processed JSONL rows containing
-exactly `input_ids`, `attention_mask` and `labels`: equal-length integer arrays,
-a binary attention mask, and 2 through `sequence_length` tokens before padding.
-The local tokenizer must have a pad token. No implicit tokenization or truncation
-is applied. See [the native LoRA example](examples/finetuning/huggingface-native-lora.yaml)
-and pass `--framework huggingface` to `run-finetune`. The original
-`probe-finetune` fixed-shape workflow remains available.
-
-The [complete pipeline validation record](tests/data/finetune_pipeline_validation_evidence.json)
-summarizes 30 native processes across all three frameworks, including separate
-allocator OOM controls. See [`refactor.md`](refactor.md) for phase-level errors,
-cache conditions and the remaining coverage limits.
-
-The [sampler and transfer validation record](tests/data/finetune_transfer_validation_evidence.json)
-adds 18 Qwen3.5-0.8B native processes on Blackwell GPU: three framework tests
-changing 25 to 73 training rows, plus random sampling with periodic eval/save.
-Each condition has one independent holdout. The [Qwen3.5-2B record](tests/data/finetune_qwen2b_evidence.json)
-adds 512/1024-token LoRA and 512-token NF4 QLoRA with nonreentrant checkpointing:
-two calibration processes and two independent holdouts per condition, all on GPU 1.
-The six total-time errors range from 0.054% to 1.578%; these measurements do not establish
-general accuracy or OOM safety; phase errors and rejected coverage are retained.
-
-Large reports and plans can use `.json.gz` with the same `--json` and input-path
-options as JSON. Compression streams to an atomic replacement and is reproducible;
-plain JSON and stdout keep their existing format. The native planner reuses its
-just-completed full dataset scan and still verifies every planned batch twice.
-This reduces duplicate work; exact plans still grow with their declared horizon.
-
-Standard gradient checkpointing is supported. LLaMA-Factory uses
-`disable_gradient_checkpointing: false` with `use_reentrant_gc: true` or `false`;
-Axolotl uses `gradient_checkpointing: true` with
-`gradient_checkpointing_kwargs: {use_reentrant: true}` (or set `use_reentrant`
-to `false`). Effective
-checkpointing and quantization settings are read from the loaded model and
-included in calibration identity. Changing them requires a new calibration.
-
-Native text runs require a text checkpoint; `--text-only` on an estimator does
-not convert the original multimodal weights for a native run. For local Qwen3.5,
-first export and verify a separate text checkpoint on CPU and create synthetic
-Alpaca data for framework integration checks:
-
-```bash
-python tests/native/prepare_finetune_fixture.py \
-  --model /path/to/Qwen3.5-0.8B \
-  --output-dir /tmp/fakegpu-finetune/qwen35-text \
-  --dataset-dir /tmp/fakegpu-finetune/data
-```
-
-Use a Transformers environment supporting `Qwen3_5ForCausalLM` for export.
-The native examples target LLaMA-Factory 0.9.5 with Transformers 5.6.0, and
-Axolotl 0.18.0 with Transformers 5.14.1. Install the selected framework and its
-compatible CUDA PyTorch, PEFT, and dataset dependencies in its own environment.
-The configs use the paths above and require a new or empty output directory;
-choose a new `output_dir` before repeating a run. Axolotl's prepared-data cache
-is retained separately at `/tmp/fakegpu-finetune/axolotl-prepared`.
-
-```bash
-CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-finetune \
-  --config examples/finetuning/axolotl-native-lora.yaml --framework axolotl \
-  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --output run.json
-python -m fakegpu estimate-finetune \
-  --run-report run.json --epochs 3 --max-steps -1 --json estimate.json
-```
-
-For LLaMA-Factory, use `--framework llamafactory` with
-[`llamafactory-native-lora.yaml`](examples/finetuning/llamafactory-native-lora.yaml). Reuse
-`--run-report` in the same Python environment: the CLI checks the current local
-weights, model config, and software identity against the recorded execution.
-The effective dataset fingerprint and measured shapes remain bound to the
-report; the GPU profile defaults to the report's profile. This legacy
-`estimate-finetune` single-report interface requires fixed full batches. Its
-native pipeline total reuses one measured
-setup/warmup/final-save cost only for the same dataset and local cache state,
-with no periodic evaluation or checkpoint schedule. A different `--num-samples`
-provides a training-loop scenario; its unmeasured preprocessing and loading costs
-are not projected. These scenarios are not confidence intervals and exclude
-Python process startup and downloads.
-
-For a 512-token NF4 QLoRA run with checkpointing, use
-[`llamafactory-native-qlora.yaml`](examples/finetuning/llamafactory-native-qlora.yaml)
-or [`axolotl-native-qlora.yaml`](examples/finetuning/axolotl-native-qlora.yaml).
-These examples enable double quantization and BF16 compute/storage, and require
-bitsandbytes in the selected framework environment. Create their longer dataset
-from the exported tokenizer without exporting the model again:
-
-```bash
-python tests/native/prepare_finetune_fixture.py \
-  --model /tmp/fakegpu-finetune/qwen35-text --dataset-only \
-  --dataset-dir /tmp/fakegpu-finetune/data-long \
-  --sequence-length 1024 --num-samples 64
-```
-
-The requested fixture length is a lower bound checked before native
-preprocessing. Each framework applies its configured 512- or 1024-token cutoff;
-the run report records the sequences and batches actually used.
-
-Independent calibration and holdout processes can be collected with
-[`tests/native/finetune_framework_matrix.py`](tests/native/finetune_framework_matrix.py).
-The matrix takes sequence length, microbatch size, accumulation, and seed from
-the native config. Calibration and holdout lengths are independently selectable:
-
-```bash
-python tests/native/finetune_framework_matrix.py \
-  --framework axolotl --config examples/finetuning/axolotl-native-qlora.yaml \
-  --python /path/to/axolotl/venv/bin/python \
-  --output-dir /tmp/fakegpu-finetune/axolotl-qlora-matrix \
-  --gpu-index 1 --calibration-steps 6 --warmup-steps 2 \
-  --holdout-runs 2 --holdout-steps 16
-```
-
-Step counts include warmup. Defaults remain 6 calibration updates, 2 warmup
-updates, and three 32-update holdouts. Every run uses a fresh output directory;
-the matrix preserves the source seed and resolves local paths before copying
-the config. Predictions use the production estimator and actual microstep
-counts, including partial accumulation windows at epoch boundaries.
-
-The [native validation archive](tests/data/finetune_framework_validation_evidence.json)
-retains the earlier 128-token Qwen3.5-0.8B LoRA runs for both frameworks on Blackwell GPU, including
-three independent one-epoch holdouts each. Maximum native wall-time errors were
-3.931% for Factory and 1.125% for the cached Axolotl repeat. It also retains a
-364.885% error when Axolotl's first-use calibration was applied to subsequent
-cached runs: the first update took 66.542 seconds. Cache/JIT state is not
-automatically fingerprinted; a matching model/software signature alone cannot
-make those fixed costs reusable. See [`refactor.md`](refactor.md) for the exact
-workload, versions, memory results, and remaining coverage.
-
-The [extended validation archive](tests/data/finetune_extended_validation_evidence.json)
-covers six configurations across both frameworks at 512/1024 tokens and batch
-sizes 1/2, including gradient checkpointing and native NF4 QLoRA. Each has one
-6-update calibration and two independent 16-update holdouts, with 2 warmup
-updates per process: 18 measured processes in total. Every configuration had a
-short priming run first, and shared caches were retained. Exact results and
-configuration boundaries are recorded in [`refactor.md`](refactor.md).
-
-For a measured estimate, run a short real-GPU probe and reuse its observation
-in the **same Python environment**, with the same model, GPU, precision, adapter,
-attention implementation, batch, sequence length, and accumulation settings:
-
-```bash
-CUDA_VISIBLE_DEVICES=1 python -m fakegpu probe-finetune \
-  --config examples/finetuning/huggingface-lora.yaml \
-  --model /path/to/Qwen3.5-0.8B --text-only \
-  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --measure-steps 5 \
-  --output observation.json
-python -m fakegpu estimate-finetune \
-  --config examples/finetuning/huggingface-lora.yaml \
-  --model /path/to/Qwen3.5-0.8B --text-only \
-  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
-  --observation observation.json --json calibrated.json
-```
-
-The built-in probe executes Hugging Face Trainer with fixed-length synthetic
-arithmetic text; Transformers with support for the selected architecture,
-Accelerate, and CUDA PyTorch are required, plus PEFT for adapters and
-bitsandbytes for QLoRA. It records warmup separately, includes optimizer work
-and batch fetching in measured updates, and retains both startup and steady
-memory peaks. Its measurements do not establish convergence or another
-framework's runtime performance. Dataset preparation, model loading, evaluation,
-and checkpoint I/O are excluded from projected training-loop time. Analytical
-scenario ranges and measured sample extrema are not confidence intervals.
-Probe collection and observation reuse hash the local checkpoint files, so
-replacing weights at the same path invalidates the old calibration. Reading
-those files adds startup I/O, especially for large checkpoints.
-
-The [Qwen3.5-0.8B validation record](tests/data/finetune_validation_evidence.json)
-contains independent calibration/holdout runs for full, LoRA, and bitsandbytes
-QLoRA on an Blackwell GPU. It retains the analytical errors as well as calibrated
-comparisons; these short runs do not establish accuracy for longer or different
-workloads. Reproduce them with [`tests/native/finetune_matrix.py`](tests/native/finetune_matrix.py).
-
-The detailed feature acceptance matrix and remaining implementation phases are
-maintained in [`refactor.md`](refactor.md).
-
-`benchmark-serving` measures an already running completion endpoint with vLLM's
-`ignore_eos` and final streaming usage fields. Its explicit token-ID manifest sets
-arrivals and output limits; the report retains SSE events, failures, client queue
-time and first nonempty text latency. It does not retry requests or infer device
-phase peaks. Use the served model name configured by your server.
-
-```bash
-python -m fakegpu benchmark-serving \
-  --base-url http://127.0.0.1:8000/v1 --model local-model \
-  --requests examples/serving/online-requests.json \
-  --concurrency 4 --repetitions 3 --json build/online.json.gz
-```
-
-The [native serving record](tests/data/serving_native_evidence.json) includes 20
-8K/32K Transformers processes and 72 mixed vLLM requests with prefix caching off/on.
-At 32K, allocated phase errors were 2.02%/7.34%; reserved decode was underestimated
-by 24.07%. Analytical tensor storage therefore does not establish allocator or OOM
-safety. Cache conditions, first-round overhead and all samples remain in the record.
-
-Cached-feature UNet training supports full tuning, LoRA and optional `--ema-decay`.
-`plan-diffusion-training` hashes the exact local weights and FP32 cached tensors;
-`run-diffusion-training` uses one real CUDA GPU, BF16 autocast, FP32 trainable
-parameters and AdamW. VAE/text-encoder training and raw-image preparation are
-excluded. The fixture below generates random features for integration tests.
-Use a compatible Diffusers/PEFT environment; the validated stack is recorded below.
-
-```bash
-python tests/native/prepare_diffusion_fixture.py \
-  --model-dir /path/to/stable-diffusion-v1-4 --output-dir /tmp/diff-fixture \
-  --num-samples 5 --epochs 3 --method lora --gradient-checkpointing
-CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
-  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-1 \
-  --json /tmp/diff-cal-1.json
-CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
-  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-2 \
-  --json /tmp/diff-cal-2.json
-python -m fakegpu estimate-diffusion-training --plan /tmp/diff-fixture/plan.json \
-  --epochs 5 --calibration-run /tmp/diff-cal-1.json \
-  --calibration-run /tmp/diff-cal-2.json --json /tmp/diff-budget.json.gz
-```
-
-Activation and reserved peaks stay unknown without compatible native observations.
-Budgets require two independent processes and repeated samples for every future
-window; first use of a shape is charged separately. `--cache-regime` records the
-selected kernel-cache state (default `uncontrolled`); controlled modes require the
-five explicit cache directories documented in the native workflow. Allocator,
-GPU UUID, software, input content and execution identity must match. The observed
-allocator envelope is not a physical OOM guarantee.
-
-Use `validate-diffusion-training` with an independent `--holdout-run` and the same
-calibrations; optional `--max-total-time-error-percent` and
-`--max-memory-underestimate-percent` return status 1 when a limit is exceeded.
-The [native diffusion record](tests/data/diffusion_native_evidence.json) includes
-SD/SDXL generation observations and twelve cached-feature training processes.
-Six training holdouts have 0.044%–3.185% total-time error and no allocator-envelope
-underestimate. Generation VAE allocated peaks were underestimated by 12.0%–13.8%,
-and reserved peaks by up to 31.6%; those failures remain visible.
-
-The [subsequent phase-memory validation](tests/data/phase_memory_evidence.json)
-fixes the VAE upsampling shape omission: four independent resolution cohorts have
-0.045%–1.172% VAE allocated error. Six conditions, each with five calibrations and
-five later holdouts (60 fresh processes), pass both allocated/reserved gates using
-explicit native phase budgets. All held-out peaks equal their calibration maxima
-in this fixed-input BF16 matrix. Earlier uncalibrated failures remain preserved;
-these results do not imply transfer to new shapes or physical OOM safety.
-
-The [broader memory validation](tests/data/memory_generalization_evidence.json)
-covers 25 single-GPU conditions in 74 fresh processes: SD 1.4/SDXL and
-Qwen3-0.6B/1.7B/Qwen2.5-0.5B, FP16/BF16/FP32, batches, rectangular images,
-guidance, eager attention, attention/VAE slicing and VAE tiling. Structural fixes
-address shared LLM weights, U-Net GEGLU/attention buffers, mixed-precision VAE
-upcasting and retained tile/slice outputs. All analytical allocated comparisons
-pass the declared 20% absolute-error / 10% underestimate gates; the worst errors
-are 10.93% absolute and 3.58% underestimate. Four conditions each use five
-calibrations followed by three holdouts; the other 21 each have two independent
-validation runs. Exact-condition allocated/reserved budgets match all twelve
-holdouts; 68 attempts to reuse budgets across conditions are rejected.
-This is experimental generalization evidence, not new `GPU-validated` rows:
-21 conditions remain below the five-observation publication minimum, and
-prediction-interval coverage and OOM boundaries were not evaluated.
-Optimized diffusion modes use an archived native validation probe; the public
-`phase-sample` diffusion path at that snapshot was SDPA without
-offload/slicing/tiling, and reserved envelopes for those modes were unvalidated.
-The subsequent public-mode calibration below extends that coverage. Results are
-limited to the tested GPU, software and workloads.
-
-Allocated tensor storage and allocator-reserved memory are separate quantities.
-`calibrate phase-sample` collects both in one fresh CUDA process; `phase-estimate`
-seals per-phase maxima from at least five independent processes, and `phase-validate`
-checks a later independent run. Use a new output path for every sample and budget.
-
-```bash
-# plan.json: a compatible local plan-serving or estimate-diffusion report
-for i in 1 2 3 4 5; do
-  CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
-    --json "/tmp/phase-cal-$i.json"
-done
-python -m fakegpu calibrate phase-estimate \
-  --calibration-sample /tmp/phase-cal-1.json \
-  --calibration-sample /tmp/phase-cal-2.json \
-  --calibration-sample /tmp/phase-cal-3.json \
-  --calibration-sample /tmp/phase-cal-4.json \
-  --calibration-sample /tmp/phase-cal-5.json --json /tmp/phase-budget.json.gz
-CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
-  --json /tmp/phase-holdout.json
-python -m fakegpu calibrate phase-validate --budget /tmp/phase-budget.json.gz \
-  --holdout-sample /tmp/phase-holdout.json --max-absolute-error-percent 20 \
-  --max-underestimate-percent 10 --json /tmp/phase-validation.json
-```
-
-Sampling supports homogeneous Transformers dynamic-cache serving, and local
-SD/SDXL with eager or SDPA attention, automatic attention slicing, VAE slicing,
-VAE tiling and their combinations, without offload. Eager/SDPA selects both U-Net
-and VAE processors; pipeline attention slicing affects only U-Net. For tiling,
-the planned `--vae-tile-size` sets both native sample/latent tile limits rather
-than retaining model defaults. Effective processors, VAE flags and tile limits
-are recorded in the native identity. Each plan, full selected weights
-and configuration, GPU UUID, Torch/CUDA/cuDNN versions, allocator and execution
-implementation must match. Reports expose both metrics and the analytic prediction
-separately; no shape transfer or hidden safety multiplier is applied. Kernel caches
-are uncontrolled. Offline estimation/validation needs only the standard library.
-Default validation limits are 20% absolute error and 10% underestimation; failures
-return status 1. Observed envelopes are not physical OOM guarantees.
-
-The [public optimized-mode validation](tests/data/optimized_phase_memory_evidence.json)
-uses this CLI for seven SD/SDXL conditions, each with five calibration processes,
-a sealed budget and five later holdouts (70 fresh native processes). All 210
-phase/metric holdout comparisons match their allocated/reserved calibration
-maxima. Analytical allocated estimates have at most 6.69% absolute error and
-3.38% underestimate in this matrix. Forty-two cross-mode and 21 effective-mode
-identity mismatches are rejected. Native CPU/meta checks cover 32 mode settings
-and 16 numerical VAE decode cases. Results remain experimental: the observed
-envelope coverage is empirical for these fixed inputs and software, and OOM
-boundaries and statistical prediction intervals were not evaluated.
-
-The VAE shape model includes the high-resolution upsampling convolution before
-channel reduction; its working set can be larger than the following block output.
-Native SD/SDXL allocated/reserved accuracy evidence is recorded separately below.
-
-For FSDP2 `full_shard`, `plan-training --parameter-shapes layout.json` accepts
-`{"shapes": [[12, 8], [12], [3, 12], [3]]}` plus the matching total
-`--parameter-bytes` and uniform `--parameter-element-bytes`. It models native
-per-parameter dim-0 chunks, exposes bytes for each rank, and budgets the largest
-rank. Without explicit shapes the existing aggregate balanced-shard approximation
-remains; it does not cover uneven parameter partitions. Optimizer dtype and
-workspace assumptions still apply. This path does not model custom placements.
-
-The [versioned native validation matrix](tests/data/research_native_evidence.json)
-records six FP32/FP16/BF16 LoRA/attention CPU_SIM cases, tiny Qwen3 MoE routing and
-gradients on CPU/GPU 1, and two CPU ranks running native DDP/FSDP2. These are finite
-numeric and semantic checks. Physical TP/PP/CP/EP, multi-GPU ZeRO/FSDP and multi-node
-collectives are outside the current project scope and remain unvalidated. Arbitrary
-CUDA device code is not executed by CPU_SIM; strict unsupported-API checks remain
-enabled in the numeric probe. Reproduce the host math with `scripts/test.sh cpu`
-and the local semantics with `tests/native/research_distributed.py --help`.
-
-Finite experiment sweeps use an explicit argv array, parameter grid and repetition count.
-The CPU-only example below binds its worker script, executable, FakeGPU source and
-selected resource environment to stable run IDs. Execution is sequential; every
-attempt retains stdout, exit status, errors, artifact hashes and numeric metrics.
-
-```bash
-python -m fakegpu plan-experiments --config examples/experiments/cpu-sweep.json \
-  --workspace /tmp/research-sweep --json /tmp/research-plan.json
-python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
-  --workspace /tmp/research-sweep --json /tmp/research-results.json.gz
-python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
-  --workspace /tmp/research-sweep --resume --json /tmp/research-resumed.json
-python -m fakegpu compare-experiments --workspace /tmp/research-sweep \
-  --plot /tmp/research-sweep.svg --x size --metric seconds \
-  --json /tmp/research-comparison.json
-```
-
-Resume skips verified successes; `--resume --retry-failed` explicitly creates new
-attempts for failures or interruptions. Input/source/environment changes require a
-new workspace. Compare works offline and keeps workspaces separate. Declared inputs
-are attested; authors must pin external packages and record native runtime identity.
-Commands must stay in the foreground. JSON key/index metric paths support nested
-objects/arrays. Plotting alone requires Matplotlib; bars show observed min/max, not
-confidence intervals. The example measures CPU work, not GPU training throughput.
-
-The [release regression record](tests/data/research_release_evidence.json) covers
-1734 passing Python tests (one CPU-only-build branch skipped), the native CPU
-suite, 104 packaged Python modules, 42 command help checks and 68 offline
-functional CLI checks. All 152 historical predictions remain byte-identical.
 
 | Command | Purpose |
 |---|---|
@@ -1707,7 +950,543 @@ functional CLI checks. All 152 historical predictions remain byte-identical.
 | `fakegpu bandwidth` | Validate simulated TCP payloads and report throughput |
 
 Use `python3 -m fakegpu --help` for the complete list and
-`python3 -m fakegpu <command> --help` for command-specific options.
+`python3 -m fakegpu <command> --help` for command-specific options. Large
+reports and plans can use `.json.gz` wherever JSON paths are accepted;
+compressed output is written atomically and reproducibly.
+
+### Fine-tuning time and VRAM
+
+`estimate-finetune` estimates single-GPU full, LoRA, and 4-bit QLoRA memory and
+**training-loop** time from local model metadata and a Hugging Face
+Trainer/PEFT, LLaMA-Factory, or Axolotl config, without importing those
+frameworks or loading weights.
+
+- Samples are processed training sequences after filtering, splitting, and
+  packing; sequence length includes template tokens and padding.
+- `max_steps` overrides epochs; `--max-steps -1` clears a configured limit.
+
+```bash
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
+  --sequence-length 128 --json estimate.json
+```
+
+- Config examples for all three frameworks are in
+  [`examples/finetuning/`](examples/finetuning/). Adaptation is CPU-tested,
+  not benchmarked for every framework/runtime combination.
+- Distributed/offloaded execution, unsupported optimizers, and unresolved
+  adapter targets fail explicitly; use `plan-training` for distributed plans.
+- Qwen3.5 linear/full attention layers are counted separately; DeltaNet
+  backward workspaces, fast kernels, and MoE dispatch are only partially
+  modeled. `--text-only` selects the text backbone of a multimodal checkpoint.
+
+`profile-finetune-data` scans every row of local JSONL files and records a
+content fingerprint, token lengths, truncation, padding, and sequence counts.
+Raw `text`/`messages` rows use a local tokenizer, and `--packing concatenate`
+is a token-budget scenario, not a framework's packing algorithm. For counts
+from a real training split, export its final `input_ids` rows (optionally with
+`attention_mask` and `labels`) and pass `--processed`:
+
+```bash
+python -m fakegpu profile-finetune-data \
+  --data /path/to/processed-train.jsonl --format input_ids --processed \
+  --sequence-length 128 --json dataset.json
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --dataset-report dataset.json \
+  --epochs 3 --max-steps -1 --json estimate.json
+```
+
+`--dataset-report` binds sample counts and the sequence cap: it replaces the
+config's sample count, rejects conflicting overrides, and requires a matching
+cap. `--source-framework` is a provenance label only. Packed training needs
+final processed sequence counts.
+
+`run-finetune` runs the installed native HF Trainer/PEFT, LLaMA-Factory, or
+Axolotl pipeline on one physical CUDA GPU (full, LoRA, or bitsandbytes 4-bit
+QLoRA; local unquantized text checkpoint; unpacked data unless noted below).
+It performs the training in the complete native config (relative paths resolve
+from the config directory) and records:
+
+- native preprocessing, the effective dataset, actual batches, optimizer
+  updates, allocator peaks, evaluation/checkpoint events, and final saving;
+- `observation.updates[].batches`: each microbatch's shape, epoch position,
+  token slots, nonpadding tokens, and supervised labels;
+- `observation.batch_profile`: timings grouped by complete ordered
+  accumulation window; a group is `sufficient` after two steady updates
+  (sample availability, not accuracy);
+- `observation.phase_events`: the actual evaluation/save call tree; only root
+  intervals count toward phase totals, and post-save file inventories are not
+  disk-write measurements.
+
+Warmup and collection overhead are excluded from steady samples but included
+in total wall time.
+
+`validate-finetune-windows` compares timing predictions with a separately
+recorded holdout run:
+
+- It needs at least two independent calibration reports with the same model,
+  data, software, and native settings.
+- Every window needs two retained observations per calibration run, after
+  excluding global warmup and the window's first occurrence; uncovered windows
+  are rejected.
+- It validates historical evidence only: no shuffle order, warmup, total wall
+  time, or dynamic VRAM prediction. Native packing and MoE windows are
+  unsupported.
+
+```bash
+python -m fakegpu validate-finetune-windows \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json window-validation.json
+```
+
+`validate-finetune-events` validates evaluation and save subtotals the same
+way. Initial, first, repeated, and final events stay separate. It currently
+supports unpacked dense text models, loss-only evaluation, and local
+model/adapter or resumable checkpoint saves, and does not predict event counts
+or total pipeline time.
+
+```bash
+python -m fakegpu validate-finetune-events \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json event-validation.json
+```
+
+`--event-context` also matches the latest evaluation and checkpoint boundaries
+before each window (ordered calls, workloads, phases, and updates since each
+boundary). Each window/context combination needs two samples per calibration
+run. It validates recurring windows after periodic events, not first-save
+recovery or complete training time.
+
+```bash
+python -m fakegpu validate-finetune-windows --event-context \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json event-window-validation.json
+```
+
+`--epoch-context` also matches each microbatch's position within its epoch, to
+separate windows that include epoch-start loading or worker startup. Use it
+alone or with `--event-context`:
+
+```bash
+python -m fakegpu validate-finetune-windows --event-context --epoch-context \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json epoch-window-validation.json
+```
+
+`plan-finetune-pipeline` projects future epochs or updates from a calibration
+run's complete observed epoch. `estimate-finetune-pipeline` combines at least
+two calibrations into a complete native budget: setup, warmup, ordered
+training windows, evaluation, checkpoints, Trainer gaps, and finalization.
+
+- The span ends after the native call and final CUDA sync; Python startup,
+  report construction, and CLI output are excluded.
+- Time ranges are extrema of per-process means, not confidence intervals.
+  Missing components fail explicitly.
+- Supported schedules are unpacked, sequential text datasets with retained
+  tail batches: HF Trainer (Transformers 5.6.0) and LLaMA-Factory 0.9.5 with
+  `disable_shuffling: true`; Axolotl 0.18.0 (Transformers 5.14.1) with
+  `curriculum_sampling: true`.
+- Dataset, model, hardware, and execution settings must match calibration; a
+  different row count needs a new calibration. Logging must be off or every
+  update; checkpoint rotation and best-model reload are unsupported.
+
+```bash
+python -m fakegpu plan-finetune-pipeline \
+  --run-report calibration-1.json --epochs 30 --json future-plan.json
+python -m fakegpu estimate-finetune-pipeline \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --plan future-plan.json --memory-budget-gib 24 --reserve-gib 1 --json budget.json
+python -m fakegpu validate-finetune-pipeline \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json validation.json
+```
+
+For default random sampling or a changed dataset, use the empirical transfer
+workflow. It plans CPU sampler/collator outputs from the native prepared
+dataloader and verifies consumed row indices and input tensor hashes during
+calibration. Supported stacks: HF/Factory with Accelerate 1.11.0 and Axolotl
+with Accelerate 1.13.0. Random sampling uses the native data seed plus epoch
+(Axolotl 0.18.0 does not forward its YAML `data_seed` to Trainer).
+
+```bash
+python -m fakegpu calibrate-finetune \
+  --config target-training.json --framework huggingface \
+  --profile "$TARGET_GPU_PROFILE" --python /path/to/framework/python \
+  --cuda-device 0 --workspace ./calibration-target \
+  --calibration-steps 24 --warmup-steps 2 --epochs 3 \
+  --timeout-seconds 600 --json calibration.json
+python -m fakegpu budget-finetune-workspace \
+  --workspace ./calibration-target --epochs 2 --json revised-budget.json
+```
+
+- `calibrate-finetune` runs exactly two fresh native processes with step/time
+  limits and new empty kernel-cache directories by default. It keeps every
+  attempt, seals reports with SHA256, supports `--resume`, and never silently
+  extends or reruns a calibration.
+- CPU-only rebudgeting needs no GPU or framework but cannot exceed the saved
+  sampling horizon.
+- Keep the workspace at its original absolute path and outside recorded input
+  directories (nested workspaces are rejected). Only finite local datasets and
+  POSIX lock semantics are supported. Prepared Axolotl/Factory datasets are
+  isolated under the workspace's `prepared/` directory; resume rejects changed
+  raw inputs.
+- `--reuse-calibration-run PATH` (repeatable) reuses compatible training
+  evidence from another dataset. Two fresh target-dataset calibrations still
+  provide startup and finalization costs, which are never scaled by sample
+  count. Training costs across different token/mask/supervision distributions
+  are **approximate**; missing coverage exits 1 with a list of gaps.
+- `run-finetune --planning-epochs N` (or `--planning-max-steps N`) records the
+  CPU horizon directly. `plan-finetune-transfer`, `estimate-finetune-transfer`,
+  and `validate-finetune-transfer` expose the same steps without the workspace
+  manager. Streaming, custom samplers, and automatic batch-size changes are
+  unsupported.
+
+Memory results are the observed full-run allocated/reserved peak envelope on
+the same GPU and allocator. They do not project to smaller cards; the optional
+reserve is a user-chosen margin, not proof of OOM safety.
+`validate-finetune-pipeline` reports timing errors and memory underestimation
+against an independent holdout.
+
+Length grouping: set `train_sampling_strategy: group_by_length` (HF/Factory) or
+`group_by_length: true` (Axolotl) and pass `--length-grouping-seed 123` to
+`calibrate-finetune` or `run-finetune`.
+
+- It uses the native grouping algorithm with an independent CPU generator
+  seeded by `123 + epoch`; native global-RNG grouping is not reproducible.
+- A planning horizon is required. One finite evaluation dataset uses the same
+  explicit seed without advancing the training sampler; custom evaluation
+  samplers and prepared loaders are rejected.
+- Sampler plan v2 binds the grouping lengths and batch size into calibration
+  identity, so different length sequences need their own evidence.
+
+Packing:
+
+- The [packing semantics audit](tests/native/finetune_packing_semantics.py)
+  shows that the tested ordinary HF/Factory hybrid paths leak across block
+  masks and reset positions in tiny Qwen3.5 models, and that the tested
+  Axolotl patch is incompatible with the Transformers 5.14.1 decoder interface.
+- The opt-in [segment reference audit](tests/native/finetune_segment_reference.py)
+  checks a project-owned Qwen3.5 interface that runs each linear-attention
+  segment with empty convolution and recurrent state, matching independent
+  native sequences including checkpoint recomputation and reload.
+- Enable it with `--packing-seed 123` on `run-finetune` or
+  `calibrate-finetune` for dense `qwen3_5_text` LoRA, with a planning horizon,
+  native packing (`packing: true` plus `neat_packing: true` for Factory, or
+  `sample_packing: true` for Axolotl), and evaluation disabled.
+- HF processed rows also need `position_ids` and contiguous positive segment
+  IDs in `attention_mask` (optional zero right padding). The first label of
+  every later segment must be ignored.
+- Sampler plan v3 records epoch bins, logical-sequence counts, tensor rows,
+  block geometry, dtypes, and input hashes; different data needs its own
+  calibration. Native packing reports require the transfer commands.
+- No varlen-kernel throughput claim; full/QLoRA and grouped packing are not
+  covered. See also the [PEFT direct-forward audit](tests/native/finetune_segment_peft.py)
+  and the [packed-budget evidence](tests/data/finetune_packing_budget_evidence.json).
+
+`run-finetune --cache-regime empty_kernel_cache` requires five distinct,
+existing, empty directories set explicitly: `TRITON_CACHE_DIR`,
+`TORCHINDUCTOR_CACHE_DIR`, `CUDA_CACHE_PATH`, `TORCH_EXTENSIONS_DIR`, and
+`PYTORCH_KERNEL_CACHE_PATH`. `populated_kernel_cache` records each file's
+relative path, size, and SHA256. The runner never creates, clears, or warms
+these caches. Default `uncontrolled` reports make no cache claim and cannot be
+mixed with controlled calibration. Triton metadata can reference the original
+cache path, so keep those files unchanged.
+
+Native run setup:
+
+- Unpacked HF runs (`--framework huggingface`) use a flat config and processed
+  JSONL rows with exactly `input_ids`, `attention_mask`, and `labels`:
+  equal-length integer arrays, a binary mask, and 2 to `sequence_length`
+  tokens. No implicit tokenization is applied and the tokenizer needs a pad
+  token. See [the native LoRA example](examples/finetuning/huggingface-native-lora.yaml).
+- Gradient checkpointing: LLaMA-Factory uses
+  `disable_gradient_checkpointing: false` with `use_reentrant_gc: true` or
+  `false`; Axolotl uses `gradient_checkpointing: true` with
+  `gradient_checkpointing_kwargs: {use_reentrant: true}` (or `false`).
+  Effective checkpointing and quantization settings are part of calibration
+  identity.
+- Native runs need a text checkpoint; `--text-only` does not convert weights.
+  For local Qwen3.5, export a text checkpoint on CPU and create synthetic
+  Alpaca data for integration checks:
+
+```bash
+python tests/native/prepare_finetune_fixture.py \
+  --model /path/to/Qwen3.5-0.8B \
+  --output-dir /tmp/fakegpu-finetune/qwen35-text \
+  --dataset-dir /tmp/fakegpu-finetune/data
+```
+
+Export needs a Transformers version with `Qwen3_5ForCausalLM`. The native
+examples target LLaMA-Factory 0.9.5 (Transformers 5.6.0) and Axolotl 0.18.0
+(Transformers 5.14.1); install each with compatible CUDA PyTorch, PEFT, and
+dataset dependencies in its own environment. Use a new `output_dir` for every
+run; Axolotl's prepared cache lives in `/tmp/fakegpu-finetune/axolotl-prepared`.
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-finetune \
+  --config examples/finetuning/axolotl-native-lora.yaml --framework axolotl \
+  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --output run.json
+python -m fakegpu estimate-finetune \
+  --run-report run.json --epochs 3 --max-steps -1 --json estimate.json
+```
+
+- For LLaMA-Factory, use `--framework llamafactory` with
+  [`llamafactory-native-lora.yaml`](examples/finetuning/llamafactory-native-lora.yaml).
+- Reuse `--run-report` in the same Python environment; the CLI rechecks local
+  weights, model config, and software identity, and defaults to the report's
+  GPU profile.
+- This single-report `estimate-finetune` interface needs fixed full batches.
+  A different `--num-samples` gives a training-loop scenario without
+  preprocessing or loading costs; Python startup and downloads are excluded.
+
+For 512-token NF4 QLoRA with checkpointing, use
+[`llamafactory-native-qlora.yaml`](examples/finetuning/llamafactory-native-qlora.yaml)
+or [`axolotl-native-qlora.yaml`](examples/finetuning/axolotl-native-qlora.yaml)
+(double quantization, BF16, requires bitsandbytes). Create the longer dataset
+from the exported tokenizer:
+
+```bash
+python tests/native/prepare_finetune_fixture.py \
+  --model /tmp/fakegpu-finetune/qwen35-text --dataset-only \
+  --dataset-dir /tmp/fakegpu-finetune/data-long \
+  --sequence-length 1024 --num-samples 64
+```
+
+The fixture length is a lower bound; each framework applies its configured
+512- or 1024-token cutoff, and the run report records the sequences used.
+
+Collect independent calibration and holdout processes with
+[`tests/native/finetune_framework_matrix.py`](tests/native/finetune_framework_matrix.py).
+It takes sequence length, microbatch size, accumulation, and seed from the
+native config:
+
+```bash
+python tests/native/finetune_framework_matrix.py \
+  --framework axolotl --config examples/finetuning/axolotl-native-qlora.yaml \
+  --python /path/to/axolotl/venv/bin/python \
+  --output-dir /tmp/fakegpu-finetune/axolotl-qlora-matrix \
+  --gpu-index 1 --calibration-steps 6 --warmup-steps 2 \
+  --holdout-runs 2 --holdout-steps 16
+```
+
+Step counts include warmup (defaults: 6 calibration updates, 2 warmup updates,
+three 32-update holdouts). Every run uses a fresh output directory, and
+predictions use the production estimator with actual microstep counts.
+
+For a measured estimate, run a short real-GPU probe and reuse its observation
+in the **same Python environment**, with the same model, GPU, precision,
+adapter, attention implementation, batch, sequence length, and accumulation:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu probe-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --measure-steps 5 \
+  --output observation.json
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
+  --observation observation.json --json calibrated.json
+```
+
+The probe runs Hugging Face Trainer on fixed-length synthetic text and needs
+Transformers, Accelerate, and CUDA PyTorch, plus PEFT for adapters and
+bitsandbytes for QLoRA. Warmup is recorded separately and both startup and
+steady peaks are kept. Dataset preparation, model loading, evaluation, and
+checkpoint I/O are excluded from projected time. Checkpoint files are hashed,
+so replacing weights invalidates the calibration.
+
+Validation records (exact workloads, versions, and limits are in
+[`refactor.md`](refactor.md)):
+
+- [Complete pipeline validation](tests/data/finetune_pipeline_validation_evidence.json):
+  30 native processes across all three frameworks, including allocator OOM
+  controls.
+- [Sampler and transfer validation](tests/data/finetune_transfer_validation_evidence.json):
+  18 Qwen3.5-0.8B processes on Blackwell GPU, changing 25 to 73 training rows
+  plus random sampling with periodic eval/save; one holdout per condition.
+- [Qwen3.5-2B record](tests/data/finetune_qwen2b_evidence.json): 512/1024-token
+  LoRA and 512-token NF4 QLoRA with checkpointing, two calibrations and two
+  holdouts per condition; total-time errors 0.054%–1.578%.
+- [Native validation archive](tests/data/finetune_framework_validation_evidence.json):
+  earlier 128-token LoRA runs; maximum wall-time errors 3.931% (Factory) and
+  1.125% (cached Axolotl). Reusing Axolotl's first-use calibration on later
+  cached runs gave a 364.885% error (first update: 66.542 s), so cache/JIT
+  costs are not reusable from a model/software signature alone.
+- [Extended validation archive](tests/data/finetune_extended_validation_evidence.json):
+  six configurations at 512/1024 tokens and batch 1/2, including checkpointing
+  and NF4 QLoRA; 18 measured processes.
+- [Qwen3.5-0.8B probe record](tests/data/finetune_validation_evidence.json):
+  full, LoRA, and QLoRA calibration/holdout runs, reproducible with
+  [`tests/native/finetune_matrix.py`](tests/native/finetune_matrix.py).
+
+These short runs do not establish general accuracy or OOM safety.
+
+### Online serving benchmark
+
+`benchmark-serving` measures an already running completion endpoint using
+vLLM's `ignore_eos` and final streaming usage fields. A token-ID manifest sets
+arrivals and output limits; the report keeps SSE events, failures, client queue
+time, and first nonempty text latency. It does not retry requests or infer
+device phase peaks. Use your server's served model name.
+
+```bash
+python -m fakegpu benchmark-serving \
+  --base-url http://127.0.0.1:8000/v1 --model local-model \
+  --requests examples/serving/online-requests.json \
+  --concurrency 4 --repetitions 3 --json build/online.json.gz
+```
+
+The [native serving record](tests/data/serving_native_evidence.json) covers 20
+8K/32K Transformers processes and 72 mixed vLLM requests with prefix caching
+off/on. At 32K, allocated phase errors were 2.02%/7.34%, but reserved decode
+was underestimated by 24.07%: tensor-storage estimates do not establish
+allocator or OOM safety.
+
+### Diffusion training
+
+Cached-feature UNet training supports full tuning, LoRA, and optional
+`--ema-decay`. `plan-diffusion-training` hashes the local weights and FP32
+cached tensors; `run-diffusion-training` uses one CUDA GPU with BF16 autocast,
+FP32 trainable parameters, and AdamW. VAE/text-encoder training and raw-image
+preparation are excluded. The fixture below generates random features for
+integration tests:
+
+```bash
+python tests/native/prepare_diffusion_fixture.py \
+  --model-dir /path/to/stable-diffusion-v1-4 --output-dir /tmp/diff-fixture \
+  --num-samples 5 --epochs 3 --method lora --gradient-checkpointing
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
+  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-1 \
+  --json /tmp/diff-cal-1.json
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
+  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-2 \
+  --json /tmp/diff-cal-2.json
+python -m fakegpu estimate-diffusion-training --plan /tmp/diff-fixture/plan.json \
+  --epochs 5 --calibration-run /tmp/diff-cal-1.json \
+  --calibration-run /tmp/diff-cal-2.json --json /tmp/diff-budget.json.gz
+```
+
+- Activation and reserved peaks are unknown without native observations.
+- Budgets need two independent processes and repeated samples for every future
+  window; the first use of a shape is charged separately.
+- `--cache-regime` behaves as in the fine-tuning workflow (default
+  `uncontrolled`). Allocator, GPU UUID, software, inputs, and execution
+  identity must match.
+- `validate-diffusion-training` compares an independent `--holdout-run`;
+  `--max-total-time-error-percent` and `--max-memory-underestimate-percent`
+  exit 1 when exceeded.
+
+The [native diffusion record](tests/data/diffusion_native_evidence.json) has
+SD/SDXL generation observations and twelve training processes. Six training
+holdouts show 0.044%–3.185% total-time error with no allocator-envelope
+underestimate; generation VAE allocated peaks were underestimated by
+12.0%–13.8% and reserved peaks by up to 31.6%.
+
+### Phase memory calibration
+
+Allocated tensor storage and allocator-reserved memory are tracked separately.
+`calibrate phase-sample` collects both in one fresh CUDA process,
+`phase-estimate` seals per-phase maxima from at least five processes, and
+`phase-validate` checks a later independent run. Use a new output path for
+every sample and budget.
+
+```bash
+# plan.json: a compatible local plan-serving or estimate-diffusion report
+for i in 1 2 3 4 5; do
+  CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
+    --json "/tmp/phase-cal-$i.json"
+done
+python -m fakegpu calibrate phase-estimate \
+  --calibration-sample /tmp/phase-cal-1.json \
+  --calibration-sample /tmp/phase-cal-2.json \
+  --calibration-sample /tmp/phase-cal-3.json \
+  --calibration-sample /tmp/phase-cal-4.json \
+  --calibration-sample /tmp/phase-cal-5.json --json /tmp/phase-budget.json.gz
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
+  --json /tmp/phase-holdout.json
+python -m fakegpu calibrate phase-validate --budget /tmp/phase-budget.json.gz \
+  --holdout-sample /tmp/phase-holdout.json --max-absolute-error-percent 20 \
+  --max-underestimate-percent 10 --json /tmp/phase-validation.json
+```
+
+- Sampling supports homogeneous Transformers dynamic-cache serving and local
+  SD/SDXL with eager or SDPA attention, attention slicing, VAE slicing, VAE
+  tiling, and their combinations, without offload.
+- For tiling, `--vae-tile-size` sets both native sample and latent tile
+  limits. Effective processors, VAE flags, and tile limits are part of the
+  native identity.
+- The plan, selected weights and config, GPU UUID, Torch/CUDA/cuDNN versions,
+  allocator, and implementation must match. No shape transfer or hidden
+  safety multiplier is applied; kernel caches are uncontrolled.
+- Default limits are 20% absolute error and 10% underestimation, exiting 1 on
+  failure. Offline estimation and validation need only the standard library.
+
+Evidence (experimental; limited to the tested GPU, software, and fixed inputs):
+
+- [Phase-memory validation](tests/data/phase_memory_evidence.json): after
+  adding the VAE upsampling convolution, four resolution cohorts show
+  0.045%–1.172% VAE allocated error. Six conditions with five calibrations and
+  five holdouts each (60 processes) pass both gates.
+- [Broader memory validation](tests/data/memory_generalization_evidence.json):
+  25 single-GPU conditions in 74 processes across SD 1.4/SDXL,
+  Qwen3-0.6B/1.7B/Qwen2.5-0.5B, FP16/BF16/FP32, batches, rectangular images,
+  guidance, eager attention, slicing, and tiling. Worst allocated errors are
+  10.93% absolute and 3.58% underestimate (gates: 20%/10%). Exact-condition
+  budgets match all twelve holdouts; 68 cross-condition reuses are rejected.
+  These are not `GPU-validated` rows: 21 conditions have fewer than five
+  observations, and optimized modes used an archived native probe rather
+  than the public CLI.
+- [Public optimized-mode validation](tests/data/optimized_phase_memory_evidence.json):
+  seven SD/SDXL conditions in 70 processes; all 210 holdout comparisons match
+  their calibration maxima, with analytical allocated error at most 6.69%
+  absolute and 3.38% underestimate. 42 cross-mode and 21 effective-mode
+  identity mismatches are rejected.
+
+None of these establish transfer to new shapes, prediction intervals, or
+physical OOM safety.
+
+### Distributed plans and experiment sweeps
+
+For FSDP2 `full_shard`, `plan-training --parameter-shapes layout.json` accepts
+`{"shapes": [[12, 8], [12], [3, 12], [3]]}` plus the matching total
+`--parameter-bytes` and uniform `--parameter-element-bytes`. It models native
+per-parameter dim-0 chunks and budgets the largest rank. Without shapes, the
+balanced-shard approximation is used; custom placements are not modeled.
+
+The [versioned native validation matrix](tests/data/research_native_evidence.json)
+records six FP32/FP16/BF16 LoRA/attention CPU_SIM cases, tiny Qwen3 MoE
+routing and gradients on CPU and GPU, and two CPU ranks running native
+DDP/FSDP2. Physical TP/PP/CP/EP, multi-GPU ZeRO/FSDP, and multi-node
+collectives are out of scope. Reproduce with `scripts/test.sh cpu` and
+`tests/native/research_distributed.py --help`.
+
+Finite experiment sweeps use an explicit argv array, parameter grid, and
+repetition count. Runs are sequential, bound to stable run IDs, and keep
+stdout, exit status, errors, artifact hashes, and numeric metrics:
+
+```bash
+python -m fakegpu plan-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --json /tmp/research-plan.json
+python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --json /tmp/research-results.json.gz
+python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --resume --json /tmp/research-resumed.json
+python -m fakegpu compare-experiments --workspace /tmp/research-sweep \
+  --plot /tmp/research-sweep.svg --x size --metric seconds \
+  --json /tmp/research-comparison.json
+```
+
+`--resume` skips verified successes; `--resume --retry-failed` retries
+failures and interruptions. Changed inputs, sources, or environments need a new
+workspace. Commands must stay in the foreground, and metric paths support
+nested JSON. Plotting needs Matplotlib; bars show observed min/max, not
+confidence intervals. The example measures CPU work, not GPU throughput.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -1777,6 +1556,11 @@ python3 -m fakegpu validate \
   --strict
 ```
 
+The [release regression record](tests/data/research_release_evidence.json)
+covers 1734 passing Python tests (one CPU-only-build branch skipped), the
+native CPU suite, 104 packaged Python modules, 42 command help checks, and 68
+offline CLI checks; all 152 historical predictions remain byte-identical.
+
 ### Reusable scripts
 
 | Path | Purpose |
@@ -1817,32 +1601,24 @@ environments, binary assets, and design drafts are excluded through
   runtime shape, or data-dependent branch.
 - Memory estimates can miss backend-private allocations, custom operators,
   allocator policies, and unmatched workspaces.
-- Native cuBLAS algorithms without numeric implementations, unsupported GEMM/Lt
-  dtypes, layouts or pointer modes, and disabled or skipped CPU computation follow
-  `FAKEGPU_UNSUPPORTED_API`.
-  `warn` records and warns about each fallback; `error` returns
-  `CUBLAS_STATUS_NOT_SUPPORTED` before writing synthetic output or success metadata.
-  Supported CPU calculations still execute in strict mode; this does not turn
-  arbitrary CUDA kernels into executable implementations.
-- For models declaring a vision encoder, `estimate-llm` and `plan-serving`
-  include checkpoint weights but leave vision/projector activations and FLOPs
-  unmodeled. Both JSON and terminal reports flag this incomplete coverage.
-  Decoder token counts must already include the visual tokens inserted by the
-  processor; validate full multimodal memory before using a fit/admission result.
+- Native cuBLAS algorithms without numeric implementations, unsupported
+  GEMM/Lt dtypes, layouts, or pointer modes, and skipped CPU computation follow
+  `FAKEGPU_UNSUPPORTED_API`: `warn` records a warning, and `error` returns
+  `CUBLAS_STATUS_NOT_SUPPORTED` before writing output.
+- For models with a vision encoder, `estimate-llm` and `plan-serving` count
+  checkpoint weights but not vision/projector activations or FLOPs (flagged in
+  reports). Decoder token counts must already include visual tokens.
 - Diffusion profiles model fixed reference pipelines. Custom ControlNet,
-  IP-Adapter, LoRA, safety-checker, refiner, video, and DiT components require
-  additional component metadata and matching real-GPU validation.
-- Online-serving plans accept explicit mixed lengths and independent
-  autoregressive draft models. They do not model request arrival distributions,
-  cache eviction, preemption or scheduler reordering, self-speculative/Medusa/
-  EAGLE variants, tokenizer remapping, tensor-parallel execution, throughput,
-  or latency.
+  IP-Adapter, LoRA, safety-checker, refiner, video, and DiT components need
+  extra metadata and real-GPU validation.
+- Online-serving plans do not model request arrival distributions, cache
+  eviction, preemption or reordering, self-speculative/Medusa/EAGLE variants,
+  tokenizer remapping, tensor-parallel execution, throughput, or latency.
 - Roofline output is an analytical interval, not measured kernel latency.
 - Distributed timing includes coordinator work, memory copies, sockets, and
   process scheduling; it is not an NCCL, NVLink, or RDMA benchmark.
-- Modeled fault events are report-only control-plane inputs. They do not alter
-  CUDA execution or represent NVML ECC counters, Xid observations, or hardware
-  failures.
+- Modeled fault events are report-only inputs; they do not alter CUDA
+  execution or represent real ECC/Xid data.
 - Hybrid and passthrough modes require a compatible physical CUDA stack.
 - macOS System Integrity Protection can remove `DYLD_*` variables from system
   binaries. Prefer a Homebrew, conda, or pyenv Python for native interception.

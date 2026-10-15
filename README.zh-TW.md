@@ -45,6 +45,11 @@
    - [規劃線上 LLM 服務容量](#plan-online-llm-serving-capacity)
    - [分析儲存庫或模型](#分析儲存庫或模型)
 4. [指令參考](#指令參考)
+   - [微調總時間與 GPU 記憶體預估](#微調總時間與-gpu-記憶體預估)
+   - [線上 serving 基準測試](#線上-serving-基準測試)
+   - [Diffusion 訓練](#diffusion-訓練)
+   - [階段記憶體校準](#階段記憶體校準)
+   - [分散式規劃與實驗批次執行](#分散式規劃與實驗批次執行)
 5. [GPU profiles](#gpu-profiles)
 6. [開發](#開發)
    - [建置](#建置)
@@ -59,13 +64,12 @@
 
 ## 專案介紹
 
-FakeGPU 為開發、CI、相容性檢查與容量規劃模擬面向 CUDA 的執行環境。應用程式
-可以偵測可設定的 NVIDIA 風格裝置；已維護的運算會在 CPU 上執行；模擬的 GPU
+FakeGPU 為開發、CI、相容性檢查與容量規劃模擬面向 CUDA 的執行環境：應用程式
+可以偵測可設定的 NVIDIA 風格裝置，已維護的運算會在 CPU 上執行，模擬的 GPU
 記憶體與通訊資料會被記錄。對於不應直接載入的工作負載，FakeGPU 也提供靜態
 估算工具。
 
-模擬與分析功能不需要實體 GPU。只有 passthrough、hybrid 與校準流程需要相容的
-真實 CUDA 環境。
+只有 passthrough、hybrid 與校準流程需要實體 GPU。
 
 ### FakeGPU 能回答哪些問題
 
@@ -108,9 +112,7 @@ FakeGPU 為開發、CI、相容性檢查與容量規劃模擬面向 CUDA 的執�
 > GPU 觀測上的誤差不超過 **0.08%**；十個 Qwen 完整參數/LoRA SFT 案例的
 > 誤差不超過 **1.921%**。
 
-絕對百分比誤差依
-`|預測值 - 實測值| / 實測值 × 100%` 計算。表中的「一致度」等於
-`100% - 誤差`，只是同一測量結果的直觀表示。
+誤差依 `|預測值 - 實測值| / 實測值 × 100%` 計算，一致度為 `100% - 誤差`。
 
 | 已驗證範圍 | 實體 GPU 參考環境 | 證據規模 | 絕對百分比誤差 | 一致度 |
 |---|---|---:|---:|---:|
@@ -121,21 +123,17 @@ FakeGPU 為開發、CI、相容性檢查與容量規劃模擬面向 CUDA 的執�
 
 這些數字需要配合測量方式理解：
 
-- Qwen 資料以 `torch.cuda.max_memory_allocated()` 為參考，不包含 CUDA context
-  與 allocator 已保留但尚未使用的 GPU 記憶體。
-- 受控 ATen 資料加入目前 GPU 與軟體堆疊的 backend 常駐 GPU 記憶體測量值，
-  不能將該值用於其他環境。
-- 區間表示所有案例中的最小與最大誤差，不是平均值。評估 OOM 風險時應特別注意
-  最大低估值。
-- `99.x%` 一致度不表示還有相同比例的可用 GPU 記憶體。容量規劃仍應加入與
-  工作負載對應的安全餘量或係數。
+- Qwen 資料以 `torch.cuda.max_memory_allocated()` 為參考，不含 CUDA context
+  與 allocator 已保留但未使用的 GPU 記憶體。
+- 受控 ATen 資料加入目前軟體堆疊的 backend 常駐記憶體測量值，不能用於其他環境。
+- 區間是案例中的最小/最大誤差，不是平均值；評估 OOM 風險應特別注意最大低估。
+- `99.x%` 一致度不等於可用記憶體餘量，容量規劃仍需加入安全餘量。
 
-這些數字來自固定工作負載，不能作為任意情境的通用準確率。模型、shape、
-attention backend、量化 kernel、allocator、PyTorch/CUDA 版本或 GPU 改變時，
-需要重新校準。表中連結指向固定版本的驗證快照，其中保留完整設定與實測位元組數。
-CI 也會檢查目前儲存庫中的
+這些數字來自固定工作負載，不是通用準確率；模型、shape、backend、kernel、
+allocator、軟體版本或 GPU 改變時需要重新校準。表中連結指向保留完整設定與實測
+位元組數的固定版本快照；CI 會檢查本表與
 [結構化證據摘要](https://github.com/FanBB2333/FakeGPU/blob/main/tests/data/memory_validation_evidence.json)
-與 README 是否一致。
+是否一致。
 
 在真實 CUDA 主機上，可以重新執行專案維護的受控比較：
 
@@ -146,9 +144,8 @@ python3 scripts/validation/static_memory_validation.py \
   --max-underestimate-percent 5
 ```
 
-在無 GPU 主機上加入 `--static-only` 可以檢查估算流程，但不會產生實體 GPU
-準確性結果。對於 `plan-serving` 報告，可先將多次實體 GPU 階段峰值整理為標準
-觀測報告：
+無 GPU 主機加入 `--static-only` 只檢查估算流程，不產生準確性結果。將
+`plan-serving` 報告與多次實體 GPU 階段峰值比較：
 
 ```bash
 python3 -m fakegpu calibrate observe-serving \
@@ -162,12 +159,11 @@ python3 -m fakegpu calibrate observe-serving \
   --json build/serving-observation.json
 ```
 
-此命令保留全部樣本，並採用每個階段的最大值。預設要求每個階段至少五次觀測；
-樣本不足時，`--strict` 傳回狀態碼 1。`ready_for_comparison` 只表示樣本數量符合
-要求，不代表結果已經是 `GPU-validated`。Serving plan 必須包含
-`--target-profile`，觀測報告才能記錄一致的 GPU 身分。
+此指令保留全部樣本，每個階段取最大值。預設每階段至少五次觀測（不足時 `--strict`
+傳回 1）；`ready_for_comparison` 只表示樣本數足夠，不代表 `GPU-validated`。
+Plan 必須包含 `--target-profile`。
 
-需要自動執行多次測量時，可以接入與框架對應的 runner：
+以框架對應的 runner 自動執行多次測量：
 
 ```bash
 python3 -m fakegpu calibrate collect-serving \
@@ -179,9 +175,8 @@ python3 -m fakegpu calibrate collect-serving \
   -- python3 benchmark_serving.py
 ```
 
-對於同質、非 speculative 的 Transformers 工作負載，FakeGPU 已內建 runner，
-不需要另外維護 benchmark 檔案。Plan 必須採用相同的執行參數，並使用 dynamic
-KV cache：
+同構、非 speculative 的 Transformers 工作負載可使用內建 runner，plan 須使用
+dynamic KV cache：
 
 ```bash
 python3 -m fakegpu plan-serving \
@@ -205,19 +200,17 @@ python3 -m fakegpu calibrate collect-serving \
   -- python3 -m fakegpu calibrate sample-transformers
 ```
 
-模型路徑保留 Hugging Face 的 `owner/repository` 兩層結構。主機沒有
-`/mnt/z` 時，只需替換 models 根目錄，並保留 `Qwen/Qwen3-0.6B`。
+主機沒有 `/mnt/z` 時只替換 models 根目錄，保留 `Qwen/Qwen3-0.6B` 結構。
+`sample-transformers`：
 
-`sample-transformers` 會重新核對本機模型設定、Safetensors header 與 plan，
-接著測量完整 prefill 和重用 KV cache 的逐 token decode。預設指標是
-`torch.cuda.max_memory_reserved`；如需張量配置峰值，可使用
-`--metric allocated`。目前不接受混合請求集、speculative decoding、paged 或
-quantized cache、共享前綴、chunked prefill、量化 checkpoint 和 adapter，因為
-這些執行路徑還沒有語意一致的測量實作。PyTorch 與 Transformers 仍是選用相依，
-需要預先安裝在 CUDA benchmark 環境中。
+- 重新核對本機設定、Safetensors header 與 plan，再測量完整 prefill 和逐 token
+  decode；
+- 預設指標為 `torch.cuda.max_memory_reserved`（`--metric allocated` 取張量配置峰值）；
+- 不接受混合請求、speculative decoding、paged/quantized cache、共享前綴或
+  chunked prefill plan、量化 checkpoint 和 adapter；
+- 需要在 CUDA 環境中預先安裝 PyTorch 與 Transformers。
 
-如果 vLLM 或自訂測量程式已取得可信的階段峰值，可以用協定建構器補齊 CUDA
-環境資訊：
+vLLM 或自訂測量程式已有可信階段峰值時，可直接建構樣本：
 
 ```bash
 python3 -m fakegpu calibrate emit-serving-sample \
@@ -229,15 +222,11 @@ python3 -m fakegpu calibrate emit-serving-sample \
   --framework-version 0.10.2
 ```
 
-Python benchmark 也可以呼叫 `fakegpu.build_cuda_serving_sample(...)`。vLLM 會按
-設定的 GPU 預算預留 engine 與 KV cache 記憶體，而 cache usage 指標表示 block
-使用比例，不是程序記憶體位元組峰值。因此，vLLM benchmark 需要提供真實的階段
-位元組數，FakeGPU 不會把 cache usage 標記成 prefill 或 decode 記憶體。
+Python 中對應 `fakegpu.build_cuda_serving_sample(...)`。vLLM 的 cache usage 指標
+是 block 使用比例而非位元組峰值，因此 benchmark 需提供真實的階段位元組數。
 
-採集器每次都會啟動新的子程序。Runner 需要輸出一個
-`fakegpu.serving_peak_sample.v1` JSON 物件。可以將它作為最後一行輸出；
-如果框架也會向 stdout 寫入日誌，則使用 `FAKEGPU_SERVING_SAMPLE=`
-作為單行 JSON 的前綴：
+每次重複都會啟動新程序，runner 需輸出一個 `fakegpu.serving_peak_sample.v1`
+物件：放在最後一行，或以 `FAKEGPU_SERVING_SAMPLE=` 作為單行前綴：
 
 ```json
 {
@@ -266,18 +255,16 @@ Python benchmark 也可以呼叫 `fakegpu.build_cuda_serving_sample(...)`。vLLM
 }
 ```
 
-FakeGPU 會透過 `FAKEGPU_SERVING_*` 環境變數提供 plan 路徑、工作負載
-簽章、目標 profile、compute capability、目前次數與總次數。這套協定可以
-包裝 Transformers、vLLM 或自訂服務，無需將這些大型依賴加入 FakeGPU。
-內建 Transformers runner 與 vLLM/自訂協定建構器會自動產生該物件。
-Runner 報告模擬 CUDA、GPU 容量超出 profile 的 2% 容差、compute capability
-不符、軟體環境變動、逾時或非零退出時，採集會失敗。報告會記錄實際容量
-與 profile 容量的差值。報告不儲存原始命令參數，只記錄
-可執行檔名與命令指紋。`simulated: false` 仍是 runner 提供的中繼資料，
-不是獨立的硬體證明；聲明 `GPU-validated` 仍需保留 benchmark 日誌並通過校準
-門檻檢查。
+- FakeGPU 透過 `FAKEGPU_SERVING_*` 環境變數提供 plan 路徑、工作負載簽章、目標
+  profile、compute capability、目前次數與總次數；內建 runner 與協定建構器會自動
+  產生該物件，無需將這些框架加入 FakeGPU 相依。
+- Runner 報告模擬 CUDA、容量超出 profile 2% 容差、compute capability 不符、
+  軟體環境變動、逾時或非零退出時，採集失敗。
+- 報告不儲存原始指令參數，只記錄可執行檔名與指令指紋。
+- `simulated: false` 是 runner 提供的中繼資料，不是硬體證明；聲明 `GPU-validated`
+  仍需保留 benchmark 日誌並通過校準門檻。
 
-對於任意工作負載，可以對相容的預測報告與觀測報告執行：
+對任意相容的預測報告與觀測報告執行比較與門檻檢查：
 
 ```bash
 python3 -m fakegpu calibrate compare \
@@ -294,34 +281,33 @@ python3 -m fakegpu calibrate verify \
   --json build/calibration-verification.json
 ```
 
-比較報告包含各階段的有號誤差、絕對誤差、預測區間涵蓋情形，以及建議的 GPU
-記憶體安全餘量與係數。`calibrate verify` 會檢查最大低估、絕對百分比誤差的
-中位數/95 百分位數/最大值、預測區間涵蓋率、指定容量下的 false-safe 判斷，
-以及工作負載參數是否一致；任一門檻未通過時傳回狀態碼 1。結果只適用於相同的
-工作負載簽章、shape、dtype、軟體堆疊與 GPU profile。
+`compare` 報告各階段有號/絕對誤差、區間涵蓋率與建議安全餘量。`verify` 在任一
+門檻未通過時傳回 1：最大低估、誤差中位數/95 百分位數/最大值、區間涵蓋率、指定
+容量下的 false-safe 判斷或工作負載一致性。結果只適用於相同的工作負載簽章、
+shape、dtype、軟體堆疊與 GPU profile。
 
 <a id="llm-reliability"></a>
 
 ### 研究情境可靠性報告
 
-FakeGPU 依工作負載與環境簽章報告可靠性。`GPU-validated` 結果只適用於記錄中的
-模型 revision、shape、dtype、attention backend、allocator、軟體堆疊與 GPU。
-`CPU-validated` 表示已維護的執行或分析行為在無實體 GPU 的環境中通過驗證。
-`Modeled` 表示已有分析模型，但沒有對應的實體 GPU 資料；`Planned` 表示尚未
-形成可公開聲明的準確率。
-Serving 規劃報告提供與路徑無關的 `workload_signature`，避免校準資料在不同
-服務設定之間被誤用。
-可使用 `calibrate observe-serving` 保存重複的階段觀測，再執行比較與可靠性門檻檢查。
-需要重複採集真實 CUDA 資料時，可將 `calibrate collect-serving` 與內建
-`sample-transformers` runner 配合使用；vLLM 或自訂測量結果可先由
-`build_cuda_serving_sample` 轉成統一協定。
+FakeGPU 依工作負載與環境簽章報告可靠性：
+
+- `GPU-validated`：只適用於記錄中的模型 revision、shape、dtype、attention
+  backend、allocator、軟體堆疊與 GPU。
+- `CPU-validated`：已維護的執行或分析行為在無 GPU 環境中通過驗證。
+- `Modeled`：已有分析模型，但沒有對應的實體 GPU 資料。
+- `Planned`：尚未形成可公開聲明的準確率。
+
+Serving 規劃報告提供與路徑無關的 `workload_signature`，避免校準資料在不同服務
+設定之間誤用。需要重複採集真實 CUDA 資料時，使用 `calibrate observe-serving`
+或 `calibrate collect-serving`。
 
 #### 儲存庫驗證快照（2026-08-05）
 
-目前儲存庫狀態於 2026-08-05 在 macOS 26.5 arm64、Python 3.11.9 與 PyTorch
-2.9.1 CPU 環境中執行了 `scripts/test.sh` 的全部測試群組與兩個宣告式驗證
-manifest。Transformers 取樣適配器也在 Blackwell GPU、PyTorch
-2.11.0+cu128 與 Transformers 5.14.1 環境中完成實體 CUDA 驗證：
+在 macOS 26.5 arm64、Python 3.11.9 與 PyTorch 2.9.1 CPU 環境中執行了
+`scripts/test.sh` 全部測試群組與兩個宣告式驗證 manifest；Transformers 取樣器另在
+Blackwell GPU（PyTorch 2.11.0+cu128、Transformers 5.14.1）上完成實體
+CUDA 驗證：
 
 | 驗證層 | 已維護的檢查 | 結果 |
 |---|---|---|
@@ -330,16 +316,15 @@ manifest。Transformers 取樣適配器也在 Blackwell GPU、PyTorch
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
 | FakeGPU-SMI 診斷 | 有上限的狀態發布、拓撲/NVLink/MIG 檢視、NVML peer/MIG 查詢、健康欄位與事件報告 | **通過** |
 | 監控 exporter | Prometheus/JSON 快照、歷史與序列數量限制、異常狀態降級及 HTTP 介面 | **通過** |
-| 原生能力清單 | 5 個能力群組、26 個明確 API、24 個強制執行策略的 API | **通過** |
+| 原生能力清單（2026-09-05 更新） | 5 個能力群組、104 個明確 API、102 個強制執行策略的 API | **通過** |
 | GPU profile 目錄 | 82 個 profile，涵蓋 15 種 compute capability | **通過** |
 | CPU 數值模擬 | GEMM、cuBLASLt、批次 GEMM、BLAS1/2 與 FP16，共 8 組測試 | **通過** |
 | CUDA 版 PyTorch 原生矩陣乘法 | 需要含 CUDA 的 PyTorch | **目前 CPU-only 主機未執行** |
 | Transformers 實體 CUDA serving 取樣器 | Qwen/Qwen3-0.6B、BF16 SDPA、2 × 128-token prefill + 8 個生成 token，每階段 3 個獨立樣本 | **通過；`ready_for_comparison`** |
 
-GitHub CI 也會在 Python 3.10–3.12 上執行 Python 測試，並在 Linux 與 macOS
-上執行原生 smoke 與 CPU simulation。上文已發布的準確率來自對應的固定版本
-驗證快照。新增的 Transformers 結果驗證了重複執行、CUDA 身分與報告採集；
-由於尚未通過預測值與實測值的比較門檻，它不構成新的準確率聲明。
+GitHub CI 在 Python 3.10–3.12 上執行 Python 測試，並在 Linux 與 macOS 上執行
+原生 smoke 與 CPU simulation。取樣器一列只驗證了重複執行與 CUDA 身分，不構成
+準確率聲明。
 
 #### 已維護的研究工作負載矩陣
 
@@ -361,11 +346,8 @@ GitHub CI 也會在 Python 3.10–3.12 上執行 Python 測試，並在 Linux �
 
 #### 架構感知估算比較
 
-先前的「可重現的建模效果」只表示固定輸入能得到相同的公式結果，並不表示
-估算值已接近實體 GPU 觀測。為避免混淆，本節改為「架構感知估算比較」。
-下表由儲存庫中的公式產生，並由 README 契約測試檢查；GiB 使用二進位單位。
-它用於檢查架構、shape 與最佳化選項造成的變化，不能取代相同設定的實體 GPU
-校準。
+下表由儲存庫中的公式產生，並由 README 契約測試檢查。它們是公式結果，不是實體
+GPU 觀測，不能取代相同設定的校準；GiB 使用二進位單位。
 
 | Research 情境 | 對照條件 | 建模結果 | 驗證方式 |
 |---|---|---:|---|
@@ -380,45 +362,33 @@ GitHub CI 也會在 Python 3.10–3.12 上執行 Python 測試，並在 Linux �
 | SDXL 高解析度生成 | 2048²、batch 1、FP16、CFG；完整影像 VAE → 512² VAE tile | **26.64 → 8.28 GiB**（減少 68.9%） | 依序 VAE tile shape 模型 |
 | PixArt-Sigma DiT 生成 | 1024²、batch 1、FP16、CFG、model offload；eager → SDPA 的 denoise 階段 | **2.32 → 1.28 GiB**（減少 44.7%） | patch token、交叉注意力與階段模型 |
 
-Diffusion profile 中的元件參數量來自
-[Stable Diffusion v1.5][diffusion-sd15] 與
-[SDXL Base 1.0][diffusion-sdxl]、[PixArt-Sigma XL 2][diffusion-pixart]
-的固定版本。上述數字不包含 runtime context、allocator 碎片、backend 私有
-workspace 與傳輸重疊。
-在取得匹配觀測值之前，架構感知報告保持為 `Modeled`，`accuracy.status`
-為 `uncalibrated`。
-本機架構檢查透過 `estimate-diffusion --model-dir` 使用。
-
-Cache 公式參考
-[Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache)
-提供的工作負載形態。Serving 規劃器支援同構 shape 與依清單排列的異構活躍
-請求集。Speculative 模式依照
-[原始 speculative decoding 論文](https://arxiv.org/abs/2211.17192)與
-[Transformers assisted decoding](https://huggingface.co/docs/transformers/assisted_decoding)描述的獨立
-draft/target 流程建模：較小的模型提出多個 token，target 在一次 forward 中完成
-驗證。請求到達分布、cache eviction、preemption、自適應 draft 長度、KV 回復
-workspace、端到端吞吐量與延遲不在目前估算範圍內。相關術語參考
-[vLLM serving](https://docs.vllm.ai/en/stable/)。CPU FakeCUDA 不執行二進位
-CUDA 擴充或任意 kernel；這類工作負載需要分析結果，並透過 passthrough 或
-hybrid 模式取得實體 GPU 觀測值。
+- Diffusion profile 的元件參數量來自 [Stable Diffusion v1.5][diffusion-sd15]、
+  [SDXL Base 1.0][diffusion-sdxl] 與 [PixArt-Sigma XL 2][diffusion-pixart] 的固定
+  版本，不含 runtime context、allocator 碎片、backend 私有 workspace 與傳輸重疊。
+- 取得匹配觀測前，報告保持 `Modeled`，`accuracy.status` 為 `uncalibrated`。
+  本機架構檢查透過 `estimate-diffusion --model-dir` 使用。
+- Cache 公式參考
+  [Transformers cache strategies](https://huggingface.co/docs/transformers/kv_cache)；
+  Speculative 模式依照
+  [原始 speculative decoding 論文](https://arxiv.org/abs/2211.17192)與
+  [Transformers assisted decoding](https://huggingface.co/docs/transformers/assisted_decoding)
+  描述的 draft/target 流程建模；術語參考 [vLLM serving](https://docs.vllm.ai/en/stable/)。
+- 請求到達分布、cache eviction、preemption、自適應 draft 長度、KV 回復 workspace、
+  吞吐量與延遲不在估算範圍內。二進位 CUDA 擴充與任意 kernel 需要透過 passthrough
+  或 hybrid 模式取得實體 GPU 觀測。
 
 後續新增或更新的公開驗證資料應包含：
 
 - 至少五次獨立執行，以及其中最大的觀測峰值；
 - 每個報告階段的預測位元組數與實測位元組數；
-- 將最大低估作為主要 OOM 風險指標；標記為 `GPU-validated` 時，建議不超過
-  5%；
+- 將最大低估作為主要 OOM 風險指標；標記為 `GPU-validated` 時不超過 5%；
 - 絕對百分比誤差的中位數、95 分位數與最大值；
-- 預測區間涵蓋率，以及 FakeGPU 判斷可執行但實際工作負載發生 OOM 的
-  false-safe 次數；
+- 預測區間涵蓋率，以及 false-safe 次數（判斷可執行但實際 OOM）；
 - 模型 revision、完整指令、shape、dtype、backend、allocator 設定、GPU、
   driver、CUDA、PyTorch 與框架版本。
 
-公開結果前可使用 `calibrate verify` 對機器可讀的比較報告執行這些門檻檢查。
-
-未達到上述目標的資料繼續標記為 `Modeled` 或 experimental，不作為已驗證
-準確率展示。「一致度」只作為輔助資訊，最大低估與 false-safe OOM 判斷更能反映
-容量規劃風險。
+公開結果前使用 `calibrate verify` 執行這些門檻檢查；未達標的資料繼續標記為
+`Modeled` 或 experimental。
 
 ### 運作方式
 
@@ -560,57 +530,41 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   --format=json
 ```
 
-詳細報告包含 FakeGPU 版本、runtime backend 與策略、Python/PyTorch/CUDA 版本、
-狀態更新時間、profile 目錄與原生 API 涵蓋情形、模擬裝置識別、運算規格、GPU
-記憶體分類、allocator 活動、dispatch 追蹤及各程序峰值。`-i` 可以依裝置索引、
-UUID、PCI Bus ID 或 profile ID 篩選；`--json` 會輸出完整的標準化資料。目前
-發布 state schema v2，同時仍可讀取 v1 狀態檔。
-`--query-runtime` 可將相同的執行期、策略、軟體、追蹤、catalog、dispatch 與
-publisher 健康資訊輸出為便於程式處理的 CSV 或 JSON。使用
-`--help-query-runtime` 可查看全部欄位。
+- `-q` 顯示 FakeGPU 版本、runtime 策略、軟體版本、狀態更新時間、profile 目錄與
+  原生 API 涵蓋、裝置識別、GPU 記憶體分類、allocator 活動、dispatch 追蹤及各程序
+  峰值。
+- `-i` 依裝置索引、UUID、PCI Bus ID 或 profile ID 篩選；`--json` 輸出完整的標準化
+  資料。目前寫入 state schema v2，仍可讀取 v1。
+- `--query-runtime` 以 CSV 或 JSON 輸出相同的執行期資訊；`--help-query-runtime`
+  列出全部欄位。
+- 原生攔截也會發布 allocation 生命週期、傳輸量、kernel launch、GEMM 呼叫與 FLOP、
+  相容性事件及 unsupported API 次數。`FAKEGPU_SMI_DETAIL_LIMIT` 與
+  `FAKEGPU_SMI_MAX_STATE_BYTES` 分別限制保留明細與單一狀態檔大小。
 
-原生攔截也會發布 allocation 生命週期、傳輸量、kernel launch、GEMM 呼叫與
-FLOP、相容性事件及 unsupported API 次數。程序執行時會定期更新狀態，結束時會
-將狀態標記為 exited。`FAKEGPU_SMI_DETAIL_LIMIT` 用於限制保留的明細數量，
-`FAKEGPU_SMI_MAX_STATE_BYTES` 用於限制單一狀態檔大小；`-q` 會顯示發布次數、
-失敗次數、耗時與序列化大小。
+NVLink、MIG 與故障模型預設關閉，需在工作負載啟動前設定；設定無效時不會啟用
+任何內容，只回報設定錯誤。
 
-NVLink 模型預設關閉。在工作負載啟動前設定
-`FAKEGPU_NVLINK_GROUPS="0,1;2,3"`，可為分號分隔的每組裝置建立全連接關係。
-`FAKEGPU_NVLINK_BANDWIDTH_GBPS` 是選用的頻寬參數，預設值為 `900`。狀態檔、
-`topo -m`、`nvlink -s`、`topology.*`/`nvlink.*` 查詢欄位，以及原生 NVML
-的鏈路狀態、capability、遠端裝置類型與遠端 PCI 查詢共用同一模型。設定無效時，
-所有鏈路都會保持 inactive，狀態中會顯示設定錯誤。
+- **NVLink**：`FAKEGPU_NVLINK_GROUPS="0,1;2,3"` 為每組裝置建立全連接關係；
+  `FAKEGPU_NVLINK_BANDWIDTH_GBPS` 預設為 `900`。`topo -m`、`nvlink -s`、
+  `topology.*`/`nvlink.*` 欄位與原生 NVML 鏈路查詢共用該模型。
+- **MIG**：`FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."`，例如
+  `FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`。每個 GPU Instance
+  對應一個 Compute Instance；超出父裝置記憶體、8 個 slice 或 8 個實例的設定會被
+  拒絕。實例的 used/free GPU 記憶體標示為 `unobserved`。
+- **故障**：`FAKEGPU_FAULT_EVENTS="DEVICE:CODE:SEVERITY[:COUNT];..."`，例如
+  `FAKEGPU_FAULT_EVENTS="0:XID_79:critical;1:NVLINK_CRC:error:3"`，嚴重度支援
+  `info`、`warning`、`error` 與 `critical`。`events` 檢視同時彙整 unsupported API
+  呼叫、發布失敗與過期狀態；`health.*` 欄位顯示裝置的建模狀態。
 
-MIG 模型預設關閉。請在工作負載啟動前使用
-`FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."` 設定實例，例如
-`FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`。每個建模 GPU
-Instance 對應一個 Compute Instance。狀態檔、`-L`、`-q`、`mig -lgi`、
-`mig -lci`、`mig.*` 查詢欄位，以及原生 NVML 的 MIG mode、handle、UUID、
-父裝置、實例 ID 與 GPU 記憶體容量查詢共用同一設定。單一裝置最多包含 8 個
-實例與 8 個 slice，實例 GPU 記憶體總量不能超過父裝置；無效設定不會建立部分
-實例。目前還無法將 runtime allocation 歸屬到特定 MIG 實例，因此狀態檔會將
-實例 used/free GPU 記憶體標示為 `unobserved`。
-
-故障注入預設同樣關閉。設定格式為
-`FAKEGPU_FAULT_EVENTS="DEVICE:CODE:SEVERITY[:COUNT];..."`，例如
-`FAKEGPU_FAULT_EVENTS="0:XID_79:critical;1:NVLINK_CRC:error:3"`。CODE 僅作為
-標籤，嚴重度支援 `info`、`warning`、`error` 與 `critical`。`events` 檢視會
-彙整設定的故障事件、原生 unsupported API 呼叫、狀態發布失敗、過期狀態與模型
-設定錯誤。`health.*` 查詢欄位會顯示每個裝置的建模狀態、最高嚴重度、事件數，
-並明確標註硬體健康狀態無法觀測。輸入無效時不會啟用任何故障，只會回報設定錯誤。
-
-UUID 與 PCI Bus ID 是穩定的模擬識別。CPU runtime 無法觀測溫度、風扇轉速、
-即時功耗與硬體 GPU 使用率，因此這些欄位顯示為 `N/A`；profile 功耗與時脈會
-作為靜態規格分開顯示。拓撲關係、設定頻寬、故障代碼與健康狀態屬於建模輸入，
-不是硬體測量結果，也不是觀測到的 ECC/Xid 資料。
+UUID 與 PCI Bus ID 是穩定的模擬識別。溫度、風扇轉速、即時功耗與硬體使用率顯示
+為 `N/A`；拓撲、頻寬、故障與健康狀態屬於建模輸入，不是硬體測量或 ECC/Xid 資料。
 
 <a id="export-monitoring-metrics"></a>
 
 ### 匯出監控指標
 
-FakeGPU-SMI 的標準化狀態無需安裝監控相依套件即可匯出。單次指令預設輸出
-Prometheus 文字，也可以輸出標準化 JSON 快照：
+無需安裝監控相依套件，即可將 FakeGPU-SMI 標準化狀態匯出為 Prometheus 文字
+（預設）或 JSON：
 
 ```bash
 python3 -m fakegpu metrics --state-dir build/smi
@@ -629,16 +583,13 @@ curl http://127.0.0.1:9400/healthz
 curl http://127.0.0.1:9400/api/v1/history
 ```
 
-`/metrics` 提供最新的裝置、程序、runtime、MIG、拓撲、健康狀態與發布器指標；
-`/healthz` 顯示資料來源與收集狀態；`/api/v1/history` 傳回近期的標準化樣本。
-程序序列優先保留 GPU 記憶體使用量最高的程序，預設上限為 128，最大為 256；
-`--max-process-series 0` 可以關閉程序序列。歷史預設保留 300 個樣本，最多
-1,440 個。這些限制都在記憶體中執行，監控歷史不會寫入磁碟，也不會由 Git
-管理。如需長期保留，請使用 Prometheus 或其他收集系統。
-
-服務預設只監聽 `127.0.0.1`，本身不提供身分驗證。繫結非本機位址前，應在前方
-設定帶身分驗證的 proxy 或網路存取策略。匯出的資料沿用 FakeGPU-SMI 對「建模值」
-和「觀測值」的區分，不會把無法取得的硬體遙測資料表示為真實測量結果。
+- `/metrics` 提供最新的裝置、程序、runtime、MIG、拓撲、健康狀態與發布器指標；
+  `/healthz` 顯示資料來源與收集狀態；`/api/v1/history` 傳回近期樣本。
+- 程序序列優先保留 GPU 記憶體使用量最高的程序，預設 128 個、最多 256 個，
+  `--max-process-series 0` 可關閉；歷史預設 300 個樣本、最多 1,440 個。
+- 資料只保存在記憶體中；長期保留請使用 Prometheus 或其他收集系統。
+- 服務預設只監聽 `127.0.0.1` 且不提供身分驗證；對外開放前應設定帶身分驗證的
+  proxy。匯出資料沿用 FakeGPU-SMI 對建模值與觀測值的區分。
 
 ### 攔截原生 CUDA 函式庫
 
@@ -660,6 +611,11 @@ python3 -m fakegpu --build-dir build \
 
 不支援的原生呼叫可以記錄、顯示警告，或傳回 `cudaErrorNotSupported` 或
 `CUDA_ERROR_NOT_SUPPORTED`。
+
+原生 hybrid 模式下，CUDA runtime 與 cuBLAS 保持原生。設定了
+`CUDA_VISIBLE_DEVICES`（依索引或 UUID）時會保留實體 NVML 偵測，讓框架正確解析
+該選擇；否則使用建模的 NVML 裝置清單。子環境切換模式時，`fakegpu.env()` 會移除
+殘留的 FakeGPU preload。
 
 ### 執行前檢查 GPU 記憶體
 
@@ -700,16 +656,14 @@ python3 -m fakegpu plan-serving \
   --json build/serving-plan.json
 ```
 
-報告分別列出模型權重、prefill/decode 暫存記憶體、共享與私有 KV segment、
-runtime/scheduler 開銷和裝置可用餘量。自訂容量可以用
-`--device-memory-gib` 取代 `--target-profile`。Prefix 共享支援 dynamic 和
-paged cache；paged 的共享與私有 segment 會分別依 block 取整。容量搜尋不會
-超過 `--max-batch-size`。
+報告分別列出模型權重、prefill/decode 暫存記憶體、共享與私有 KV segment、runtime
+開銷與可用餘量。自訂容量可用 `--device-memory-gib` 取代 `--target-profile`。
+Prefix 共享需要 dynamic 或 paged cache，容量搜尋不會超過 `--max-batch-size`。
 
 #### 對齊 vLLM 的執行期預留
 
-vLLM 會預先配置 paged KV 池，不是只依目前活躍請求逐步增加 cache。部署目標為
-vLLM 時，可以選擇對應的 GPU 記憶體策略：
+vLLM 會預先配置 paged KV 池，而不是隨活躍請求逐步增長。部署目標為 vLLM 時可選擇
+對應的 GPU 記憶體策略：
 
 ```bash
 python3 -m fakegpu plan-serving \
@@ -726,25 +680,20 @@ python3 -m fakegpu plan-serving \
   --json build/vllm-serving-plan.json
 ```
 
-自動模式採用 vLLM V1 的計算方式：model executor 申請的 GPU 記憶體減去
-profile 得到的非 KV 記憶體，再向下取整為完整 cache block。報告會區分請求
-實際需要的 KV 與預留池，並列出 `num_gpu_blocks`、cache token 容量、block
-取整餘量、初始化是否可行，以及 `max_model_len` 下的並行容量。若已取得相同
-設定的 vLLM 啟動 profile，可用 `--vllm-non-kv-cache-memory-bytes` 傳入權重、
-activation 峰值、非 PyTorch 配置與 CUDA graph 的合計值，取代 FakeGPU 的
-非 KV 建模值。`--vllm-kv-cache-memory-bytes` 用於指定每張 GPU 的 cache
-大小；與 vLLM 一致，該選項會使 `--memory-utilization` 不再參與 cache 大小
-計算。
-
-未指定 `--memory-utilization` 時，vLLM 模式使用 `0.92`，與目前的
-[vLLM CacheConfig 文件](https://docs.vllm.ai/en/latest/api/vllm/config/cache/)
-一致。需要固定軟體版本時，建議明確填入該值。預算公式對應 vLLM 文件中的
-[GPU worker profile 流程](https://docs.vllm.ai/en/latest/api/vllm/v1/worker/gpu_worker/)；
-初始可用 GPU 記憶體、其他程序、tensor/pipeline parallelism、hybrid cache
-group、allocator 碎片與版本相關 kernel 仍需在相同軟體堆疊上觀測。Research
-manifest 覆蓋自動計算與明確 cache 兩種模式。Speculative decoding 目前只適用
-於 generic 執行期模型；vLLM 專用的 speculative scheduler 與 cache manager
-尚未納入估算。
+- 自動模式採用 vLLM V1 的計算方式：executor 申請的 GPU 記憶體減去 profile 得到的
+  非 KV 記憶體，再向下取整為完整 block。報告區分請求實際需要的 KV 與預留池，並列出
+  `num_gpu_blocks`、cache token 容量、初始化是否可行與 `max_model_len` 下的並行量。
+- `--vllm-non-kv-cache-memory-bytes` 以 vLLM 啟動 profile（權重 + activation 峰值
+  + 非 PyTorch 配置 + CUDA graph）取代建模的非 KV 值。
+- `--vllm-kv-cache-memory-bytes` 指定每張 GPU 的精確 cache 大小；與 vLLM 一致，
+  此時不再使用 `--memory-utilization`。
+- `--memory-utilization` 預設 `0.92`，與
+  [vLLM CacheConfig 文件](https://docs.vllm.ai/en/latest/api/vllm/config/cache/)
+  一致；固定軟體版本時建議明確填入。
+- 預算對應 vLLM 的 [GPU worker profile 流程](https://docs.vllm.ai/en/latest/api/vllm/v1/worker/gpu_worker/)，
+  但初始可用 GPU 記憶體、其他程序、tensor/pipeline parallelism、hybrid cache group、
+  allocator 碎片與版本相關 kernel 仍需在相同軟體堆疊上觀測。Speculative decoding
+  目前只適用於 generic 執行期模型。
 
 指定獨立的自迴歸 draft checkpoint，即可估算 speculative decoding 記憶體：
 
@@ -763,18 +712,14 @@ python3 -m fakegpu plan-serving \
   --json build/speculative-serving-plan.json
 ```
 
-報告會同時保留 target 與 draft 權重和兩套 KV cache，加入保守的 lookahead
-slot，並比較 target verification 與 draft proposal 的暫存記憶體。接受率用於
-計算每次 target 呼叫的預期輸出 token 數，不會改變記憶體峰值，也不表示端到端
-加速比。兩個模型必須具有相同的 vocabulary 大小；checkpoint header 無法證明
-token ID 完全一致，因此 tokenizer identity 仍標記為未驗證。
+報告同時保留 target 與 draft 權重和兩套 KV cache，並加入保守的 lookahead slot。
+接受率只影響每次 target 呼叫的預期輸出 token 數，不改變記憶體峰值，也不表示加速比。
+兩個模型的 vocabulary 大小必須相同；tokenizer identity 不做驗證。
 
-每份同質或混合請求的 serving 報告也會產生與路徑無關的
-`workload_signature`。此簽章涵蓋 target/draft 架構與權重儲存、請求 shape、
-KV/prefill 參數和 speculative 設定，不包含絕對模型路徑與裝置容量。使用
-`calibrate verify` 前，可將相同欄位寫入觀測報告；校準檢查會比較簽章，並將
-`target.profile` 作為獨立維度檢查，因此 proposal 長度或 GPU profile 不一致的
-觀測資料不會通過驗證。
+每份 serving 報告都會產生與路徑無關的 `workload_signature`，涵蓋架構、權重儲存、
+請求 shape、KV/prefill 與 speculative 設定，不含模型路徑與裝置容量。
+`calibrate verify` 會比較簽章並單獨檢查 `target.profile`，其他設定或 GPU 的觀測
+不會通過驗證。
 
 對於長度不同的 chat、RAG、completion 或 summarization 請求，可提供一份依
 準入順序排列的請求清單：
@@ -819,19 +764,15 @@ python3 -m fakegpu plan-serving \
   --json build/mixed-serving-plan.json
 ```
 
-清單模式會分別計算每個請求，同名 prefix 群組只儲存一次，並在不改變請求順序
-的前提下接納能夠放入 GPU 記憶體的最長清單前綴。報告包含已接納與被拒絕的
-請求 ID、每個請求的暫存記憶體、並行 prefill 中各元件的記憶體上界、群組 KV
-segment 與容量餘量。同組請求必須使用相同且大於零的
-`shared_prefix_tokens`；共享 prefix 僅支援 dynamic 或 paged KV 儲存。命名
-群組視為已命中並駐留於 cache；報告不預測 cache 填充、命中機率或 eviction
-行為。
-
-請求到達時間、cache eviction、preemption 或排程器重排、tensor parallelism、
-自適應 speculative 排程、KV 回復 workspace、吞吐量與延遲會列入未建模項目。
-取得相同設定的線上服務觀測前，`validation_status` 保持為 `Modeled`，
-`accuracy.status` 保持為
-`uncalibrated`。
+- 依清單順序逐一計算請求，同名 prefix 群組只儲存一次，在不重排的前提下接納能放入
+  GPU 記憶體的最長清單前綴。
+- 報告包含已接納與被拒絕的請求 ID、每個請求的暫存記憶體、並行 prefill 上界、群組
+  KV segment 與容量餘量。
+- 同組請求必須使用相同且大於零的 `shared_prefix_tokens`；命名群組視為已駐留的
+  cache 命中。
+- 請求到達時間、eviction、preemption、tensor parallelism、自適應 speculative 排程、
+  KV 回復、吞吐量與延遲均未建模；取得匹配觀測前，報告保持 `Modeled` 與
+  `uncalibrated`。
 
 ### 分析儲存庫或模型
 
@@ -875,582 +816,35 @@ python3 -m fakegpu capabilities \
   --strict
 ```
 
-LLM 估算器只會讀取 safetensors header，不會把 checkpoint 權重載入記憶體。
-`--kv-cache-strategy` 可選 `dynamic`、`static`、`quantized` 或 `paged`；
-JSON 報告會分別列出邏輯儲存量、量化節省量、static 預留、paged block 額外占用
-與可選的 sliding-window 上限。量化 cache 預設將最近 128 個 token 保留為計算
-dtype，可透過 `--kv-cache-residual-tokens` 調整。
-MHA、GQA 與 MQA 使用分離的 key/value 儲存。模型設定同時包含
-`kv_lora_rank`、`qk_nope_head_dim`、`qk_rope_head_dim` 與 `v_head_dim`
-時，估算器會辨識 MLA，並依壓縮 KV latent 與獨立 RoPE 分量計算 cache 位元組。
-MLA backend workspace 與 projection absorption 取決於執行期，仍需校準。
+LLM 估算器：
 
-Diffusion 估算器分別計算 text encoding、重複 denoising 與 VAE decode 階段。
-使用 `--model-dir` 時，它只讀取 `model_index.json`、元件 `config.json` 與選定
-safetensors 檔案的 header，不會匯入遠端自訂程式碼，也不會讀取 tensor payload。
-checkpoint 儲存位元組與指定 dtype 下的執行期權重位元組會分別列出。
-本機宣告的 Euler/PNDM scheduler 設定決定實際 denoiser 呼叫數；未涵蓋或未指定
-scheduler 時 `denoiser_evaluations` 為 `null`，要求的 inference steps 另行保留。
-內建 `pixart-sigma-xl-2-1024-ms` profile 與兩個 Stable Diffusion UNet profile
-一同提供固定版本的 Transformer 範例。
+- 只讀取 safetensors header。`--kv-cache-strategy` 可選 `dynamic`、`static`、
+  `quantized` 或 `paged`；報告分別列出邏輯儲存量、量化節省量、static 預留、
+  paged 額外占用與 sliding-window 上限。
+- 量化 cache 預設將最近 128 個 token 保留為計算 dtype（`--kv-cache-residual-tokens`）。
+- MHA、GQA 與 MQA 使用分離的 key/value 儲存；設定同時包含 `kv_lora_rank`、
+  `qk_nope_head_dim`、`qk_rope_head_dim` 與 `v_head_dim` 時辨識為 MLA（壓縮
+  latent + 獨立 RoPE），MLA backend workspace 仍需校準。
 
-估算器會區分 UNet、含交叉注意力的 patch Transformer（DiT/PixArt），以及
-SD3/Flux 類聯合注意力 Transformer。圖像 token 數會結合 VAE 縮放、patch size
-與 Flux latent packing 計算；CFG 只在需要正負分支 batch 的架構上使 denoiser
-batch 加倍。當本機目錄包含多套權重時，可用
-`--weight-variant fp16|bf16|fp32` 指定要檢查的檔案族。
+Diffusion 估算器：
 
-`--offload model`、`--attention-slicing`、`--vae-slicing` 與
-`--vae-tiling` 對應 Diffusers 中常見的 GPU 記憶體選項。取得相同設定的實體
-GPU 比較資料前，報告狀態保持為 `Modeled`，`accuracy.status` 為
-`uncalibrated`，也不會產生缺乏觀測依據的誤差百分比或預測區間。
+- 分別計算 text encoding、重複 denoising 與 VAE decode。`--model-dir` 只讀取
+  `model_index.json`、元件 `config.json` 與選定 safetensors header，不匯入遠端
+  程式碼，也不讀取 tensor payload。
+- checkpoint 儲存位元組與執行期權重位元組分別列出。本機 Euler/PNDM scheduler
+  設定決定 denoiser 呼叫數，其他 scheduler 回報 `denoiser_evaluations: null`。
+- UNet、交叉注意力 Transformer（DiT/PixArt）與 SD3/Flux 類聯合注意力
+  Transformer 使用不同的 activation 公式；CFG 只在存在正負分支的架構上使 batch
+  加倍。
+- `--weight-variant fp16|bf16|fp32` 指定權重檔案族。內建 profile 包含
+  `pixart-sigma-xl-2-1024-ms` 與兩個 Stable Diffusion UNet。
+- `--offload model`、`--attention-slicing`、`--vae-slicing` 與 `--vae-tiling`
+  對應 Diffusers 常見 GPU 記憶體選項。沒有相同設定的實體 GPU 比較時，報告保持
+  `Modeled` 與 `uncalibrated`，不給出誤差百分比或預測區間。
 
 <p align="right">(<a href="#readme-top">返回頂端</a>)</p>
 
 ## 指令參考
-
-### 微調總時間與 GPU 記憶體預估
-
-`estimate-finetune` 讀取本機模型中繼資料，支援 Hugging Face Trainer/PEFT、
-LLaMA-Factory 與 Axolotl 設定，無須載入模型權重或匯入訓練框架。支援單卡
-全量、LoRA、4-bit QLoRA，輸出 optimizer step 數、梯度累積、可訓練/凍結參數、
-activation/workspace 記憶體，以及給定資料量與 epochs 的**訓練迴圈總時間**。
-`max_steps` 優先於 epochs。樣本數指過濾、切分與 packing 後的訓練序列；
-序列長度包含模板 token 與 padding，不能直接以原始文件行數代替 packed 序列數。
-可用 `--max-steps -1` 清除設定中的步數限制，按指定 epochs 估算。
-
-```bash
-python -m fakegpu estimate-finetune \
-  --config examples/finetuning/huggingface-lora.yaml \
-  --model /path/to/Qwen3.5-0.8B --text-only \
-  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
-  --sequence-length 128 --json estimate.json
-```
-
-三類框架的估算範例位於 [`examples/finetuning/`](examples/finetuning/)。設定轉換已通過
-CPU 測試，不代表所有框架與執行環境組合都已完成實體 GPU 基準測試。分散式/offload 與尚未
-涵蓋的 optimizer/adapter 策略會明確報錯；分散式記憶體規劃仍用 `plan-training`。
-Qwen3.5 的線性/完整 attention 分層計算，DeltaNet backward workspace、可選快速
-核心與 MoE dispatch 仍為部分解析涵蓋，未校準結果不能保證不會 OOM。
-`--text-only` 明確選擇多模態 checkpoint 的文字骨幹。
-
-`profile-finetune-data` 完整掃描本機 JSONL 的每筆資料，統計內容摘要、token 長度、
-截斷、padding 與處理後的序列數。原始 `text` 或 `messages` 使用本機 tokenizer，
-計數表示所選前處理情境；通用 `--packing concatenate` 僅估算串接後的 token 預算，
-不重現框架的 packing 演算法。要使用實際訓練集計數，應匯出最終 `input_ids` 並加上
-`--processed`；此模式保留序列邊界，拒絕超過長度上限的資料。可選的
-`attention_mask` 與 `labels` 用於統計 padding 與監督 token。
-
-```bash
-python -m fakegpu profile-finetune-data \
-  --data /path/to/processed-train.jsonl --format input_ids --processed \
-  --sequence-length 128 --json dataset.json
-python -m fakegpu estimate-finetune \
-  --config examples/finetuning/huggingface-lora.yaml \
-  --model /path/to/Qwen3.5-0.8B --text-only \
-  --profile "$TARGET_GPU_PROFILE" --dataset-report dataset.json \
-  --epochs 3 --max-steps -1 --json estimate.json
-```
-
-`--dataset-report` 同時綁定樣本數與序列上限，取代設定中的預估樣本數，並拒絕衝突的
-明確覆寫；報告長度上限必須與訓練設定一致。`--source-framework` 僅記錄來源標籤，
-不能證明框架已執行。Packed 訓練需要最終處理後的序列計數，不能使用原始筆數或
-通用串接情境代替。
-
-`run-finetune` 在一張實體 CUDA 顯示卡上呼叫已安裝的 HF Trainer/PEFT、LLaMA-Factory 或 Axolotl
-原生流程，支援本機未量化文字 checkpoint、無 packing 的全量微調、LoRA 與
-bitsandbytes 4-bit QLoRA。輸入應為
-包含資料與輸出路徑的完整原生設定，相對路徑以設定檔目錄解析。報告記錄原生
-前處理、有效訓練資料、實際 batch、optimizer 更新、allocator 峰值、評估/儲存事件與
-最終模型儲存。Warmup 不計入穩態步驟樣本，但保留在總牆鐘時間中；此指令會執行
-原生設定要求的訓練。
-
-`observation.updates[].batches` 記錄每個實際訓練 microbatch 的形狀、從 1 開始的
-epoch 位置、token 槽位、非 padding tokens，以及一般因果移位前後的有效 labels。
-`observation.batch_profile` 核對總數，並依完整且有序的梯度累積窗口分組耗時；混合
-形狀與不完整窗口分別保留。每組至少有兩個穩態 update 才標記 `sufficient`，這僅
-表示樣本數量足夠，不代表精度認證。缺失或非二值 attention mask 的 token 數保持未知，
-position IDs 的重置也不代表原始 packed 樣本邊界。統計開銷分別記錄並從 update
-耗時中扣除，總牆鐘時間仍包含該開銷；同步觀測使用獨立校準身分。
-
-`validate-finetune-windows` 使用獨立訓練報告驗證動態視窗耗時預測。至少提供兩份
-模型、資料、軟體及原生執行設定相同的獨立校準報告；每個完整有序視窗，在每份
-校準報告中排除全域 warmup 和該視窗首次出現後，仍須有兩個樣本。各程序均值
-等權聚合，缺少覆蓋的視窗直接拒絕。新報告記錄 run UUID、PID 與 UTC 開始時間，
-用於發現意外重複採樣。
-
-只預測 holdout 已記錄的穩態視窗；holdout 耗時僅用於計算誤差，不參與校準。
-該命令驗證歷史證據，不載入目前權重，也不認證目前環境。它不推斷未來 shuffle
-順序、warmup、總牆鐘時間或動態 VRAM；視窗統計相同不代表完整輸入等價。
-週期 evaluation/save 排程需要下方明確啟用的事件上下文模式；原生 packing 與 MoE
-視窗校準仍未支援。
-```bash
-python -m fakegpu validate-finetune-windows \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --holdout-run holdout.json --json window-validation.json
-```
-
-
-`observation.phase_events` 記錄實際評估/儲存呼叫樹，包括訓練開始評估、週期
-checkpoint 和框架最終呼叫；階段總量只累計根事件。帳本區分原始牆鐘時間與
-事件統計開銷，記錄真實評估 batch/內容指紋和儲存後存在的檔案。檔案清單不代表
-實際磁碟寫入量或持久化完成時間。update 的 `preceding_event_ids` 指向上次更新
-之後發生的事件。
-
-`validate-finetune-events` 用獨立訓練報告驗證評估/儲存子總時間。至少提供兩份
-校準報告；開始、首次、重複和最終事件分別匹配，重複事件在每份校準報告中至少
-需要兩個樣本。程序均值等權聚合，缺少覆蓋直接拒絕。首版限無 packing 的 dense
-文字模型，支援 loss-only 且無自訂 metrics 的評估，以及本地模型/adapter 或
-完整可恢復 checkpoint 儲存。
-它不推斷未來事件次數或完整流程時間：儲存可能改變後續訓練的 allocator/cache
-狀態。
-
-```bash
-python -m fakegpu validate-finetune-events \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --holdout-run holdout.json --json event-validation.json
-```
-
-`validate-finetune-windows --event-context` 也會匹配訓練視窗之前的實際事件歷史。
-它分別保留最近的評估和 checkpoint 邊界，包括有序呼叫、工作量、首次/重複階段，
-以及各邊界之後已完成的 optimizer updates。新的評估不會抹去之前儲存的上下文。
-報告必須包含事件帳本且實際硬體一致；事件支援範圍與 `validate-finetune-events` 相同。
-
-排除全域 warmup 和每個「視窗＋上下文」組合的首次出現後，每份校準報告仍須有
-至少兩個樣本。這驗證週期事件後重複出現的視窗，不預測第一次儲存的恢復耗時，
-也不證明更早歷史已無影響或完整訓練時間可預測。評估/儲存本身的耗時仍分別統計。
-
-```bash
-python -m fakegpu validate-finetune-windows --event-context \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --holdout-run holdout.json --json event-window-validation.json
-```
-
-增加 `--epoch-context` 可同時匹配每個 microbatch 在 epoch 內的實際位置，區分
-包含新一輪取數或 worker 啟動的同形視窗。它使用完整有序、從 1 開始的 microstep
-位置，不綁定絕對 epoch 編號。報告必須有 epoch 中繼資料；仍排除 warmup 和組合首次
-出現，並要求足夠的獨立樣本。無週期事件時可單獨使用，有週期事件時與
-`--event-context` 一起使用：
-
-```bash
-python -m fakegpu validate-finetune-windows --event-context --epoch-context \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --holdout-run holdout.json --json epoch-window-validation.json
-```
-
-`plan-finetune-pipeline` 從校準執行中完整觀測到的 epoch 推導未來輪次或更新次數，
-在目標訓練啟動前產生計畫。`estimate-finetune-pipeline` 使用至少兩次獨立校準，
-組合 setup、warmup、首次視窗、訓練視窗、評估、checkpoint、Trainer 間隙與收尾。
-新執行報告提供互不重疊的時間帳本，分別保留原始牆鐘時間及已測統計開銷。計時止於
-原生呼叫及最後 CUDA 同步，不包含 Python 程序啟動、報告建構或 CLI 寫檔。
-時間區間由各部件程序均值的極值組合而成，不是信賴區間；任一部件缺少獨立覆蓋
-都會明確拒絕預測。
-
-未來排程首版支援無 packing、保留尾批次的循序文字資料：HF Trainer 5.6.0 和
-LLaMA-Factory 0.9.5 / Transformers 5.6.0 要求 `disable_shuffling: true`；
-Axolotl 0.18.0 / Transformers 5.14.1 要求 `curriculum_sampling: true`。
-會核對實際 batch 順序、評估/儲存排程、小數輪次及末尾事件。資料、模型、硬體和
-執行設定須符合校準；改變資料筆數需要新的匹配校準。日誌須關閉或每次 update
-記錄；checkpoint 輪替刪除和最佳模型重新載入仍需要獨立支援。
-
-```bash
-python -m fakegpu plan-finetune-pipeline \
-  --run-report calibration-1.json --epochs 30 --json future-plan.json
-python -m fakegpu estimate-finetune-pipeline \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --plan future-plan.json --memory-budget-gib 24 --reserve-gib 1 --json budget.json
-python -m fakegpu validate-finetune-pipeline \
-  --calibration-run calibration-1.json --calibration-run calibration-2.json \
-  --holdout-run holdout.json --json validation.json
-```
-
-預設隨機採樣與更換訓練資料可使用顯式的經驗遷移預算。程式讀取原生 prepared
-dataloader，在 CPU 計畫目標輪次內的 sampler/collator 輸出，並於校準訓練中
-逐批核對列號及輸入張量 SHA256。上述 HF/Factory 版本搭配 Accelerate 1.11.0，
-Axolotl 搭配 Accelerate 1.13.0；採樣使用實際 data seed 加 epoch。
-Axolotl 0.18.0 不會將 YAML 的 `data_seed` 傳給 Trainer。
-
-```bash
-python -m fakegpu calibrate-finetune \
-  --config target-training.json --framework huggingface \
-  --profile "$TARGET_GPU_PROFILE" --python /path/to/framework/python \
-  --cuda-device 0 --workspace ./calibration-target \
-  --calibration-steps 24 --warmup-steps 2 --epochs 3 \
-  --timeout-seconds 600 --json calibration.json
-python -m fakegpu budget-finetune-workspace \
-  --workspace ./calibration-target --epochs 2 --json revised-budget.json
-```
-
-工作流程固定啟動兩次獨立原生程序，明確限制校準步數及執行時間，預設各自使用新的
-空 kernel 快取目錄。保留所有嘗試，以 SHA256 封存報告與預測，中斷後可加 `--resume`。
-重用前核驗成功產物，不隱式增加校準次數，也不因誤差較大而重跑。
-純 CPU 重估預算不需 GPU 或框架環境，但不能超過已儲存的採樣計畫範圍。
-工作區需保留原始絕對路徑，並放在被整體讀取的輸入目錄（如模型或本機資料目錄）之外；
-巢狀路徑會在探測執行環境或訓練之前拒絕。
-首版支援有限本機資料，工作區依賴 POSIX 程序及檔案鎖語義。
-
-重複加入 `--reuse-calibration-run PATH` 可重用另一份資料的相容訓練證據。
-啟動及收尾仍由目標資料的兩次新校準提供，不依樣本數比例放大。
-訓練分組保留有序張量形狀、累積尾窗、epoch 邊界、warmup、形狀首次使用及事件上下文；
-不同 token、mask、監督分布間的成本重用是**經驗近似**，報告保留完整描述符分布。
-每組至少兩個獨立程序，重複組於每程序至少兩次；缺少覆蓋時回傳退出碼 1 及缺口清單，
-不產生總預算。縮短時長亦可能引入未校準的終止位置，仍須重新檢查覆蓋。
-GPU 記憶體獨立報告完整校準程序峰值包絡，不保證長跑組合或更小顯卡不會 OOM。
-
-亦可用 `run-finetune --planning-epochs N` 或 `--planning-max-steps N` 儲存 CPU 計畫，
-再分別呼叫 `plan-finetune-transfer`、`estimate-finetune-transfer`、
-`validate-finetune-transfer` 產生計畫、預算與獨立 holdout 比較。
-既有嚴格 pipeline 命令維持原匹配規則。streaming、自訂採樣器及自動
-batch size 調整仍未開放。
-
-長度分組時，HF/LLaMA-Factory 設定 `train_sampling_strategy: group_by_length`，
-Axolotl 設定 `group_by_length: true`，再向 `calibrate-finetune` 或 `run-finetune`
-明確加入 `--length-grouping-seed 123`。它保留原生 Trainer 的分組演算法，以獨立 CPU
-生成器使用 `123 + epoch` 種子；此選項會改變 sampler 的隨機流。依賴全域 RNG 的原生
-長度分組不能直接用於可重現的未來計畫。必須指定規劃範圍。可提供一個有限評估資料集：
-評估使用獨立生成器，每次呼叫均使用同一明確種子，persistent worker 同樣維持固定順序，
-不推進訓練 sampler。評估分組策略與長度 SHA 納入校準身分；拒絕自訂評估 sampler
-及提前準備的 dataloader。
-sampler plan v2 將完整有序分組長度及分組 batch size 保留於校準身分中；不同長度序列
-需有自己的證據。每組仍須有兩個獨立程序與足夠重複觀測，短校準可能無法覆蓋多種形狀。
-
-[packing 語義審計](tests/native/finetune_packing_semantics.py) 在極小的真實 Qwen3.5 模型中
-改變前一段，檢查後一段的輸出與梯度，並提供純 attention 對照。實測一般 HF/Factory
-混合路徑於分塊 mask 及重設位置後仍有跨段影響；所測 Axolotl patch 與 Transformers
-5.14.1 的 decoder 介面不相容。這是一般框架路徑的核心診斷。版本與保留結果
-見 [`refactor.md`](refactor.md)。
-
-[分段參考審計](tests/native/finetune_segment_reference.py) 檢查專案自有的 Qwen3.5
-分段介面：每段 linear attention 使用空的卷積與遞迴狀態，並檢查分塊 mask、padding
-及 causal label 邊界。逐層輸出與梯度和獨立原生序列對照，同時檢查 checkpoint 重算
-與模型儲存還原。對於 dense `qwen3_5_text` LoRA，可向 `run-finetune` 或
-`calibrate-finetune` 明確加入 `--packing-seed 123` 選擇此參考路徑；必須指定規劃範圍、
-關閉評估並啟用原生 packing：Factory 設定 `packing: true` 和 `neat_packing: true`，
-Axolotl 設定 `sample_packing: true`。HF processed 列另須提供 `position_ids`，
-`attention_mask` 使用連續正整數 segment IDs，右側 padding 為零；後續各段首 label 忽略，列首 label 本身由 causal shift 移除。
-原生 source sampler 使用獨立 seed＋epoch，原生 packer、尾批及丟棄行為保留。
-sampler plan v3 記錄完整 epoch bins、邏輯序列數、實際張量列數、分段幾何、dtype
-及消費輸入 SHA。預算保留相同資料及 packing seed 的身分，不同資料需要獨立校準。
-此路徑逐段執行遞迴計算，不承諾 varlen 核心吞吐；full/QLoRA packing 與 grouped
-packing 未覆蓋。PEFT 直接呼叫 forward 的回歸見[原生審計](tests/native/finetune_segment_peft.py)。
-[完整 packing 預算證據](tests/data/finetune_packing_budget_evidence.json) 保留四個原生情境、
-預測誤差與 allocator 低估。原生 packing 報告須使用 sampler-aware transfer 命令；
-舊固定形狀外推不能把其 source rows 當作實際訓練列數。
-
-校準工作區將 Axolotl prepared 資料及明確設定的 Factory tokenized 資料隔離到自身
-`prepared/`，從已記錄的原始輸入產生，保留外部快取。恢復時拒絕原始輸入變更；
-一般 `run-finetune` 維持原生快取策略。
-
-記憶體結果為同一 GPU 和 allocator 上已覆蓋工作量的完整執行 allocated/reserved 峰值
-包絡，不相加各視窗峰值，也不代表已投射到一張更小的實體卡。
-`--reserve-gib` 是使用者指定的餘量；落在包絡內不保證不會 OOM。
-`validate-finetune-pipeline` 分別報告 holdout 時間誤差和記憶體低估；實際記憶體分配失敗
-透過另外的真實訓練驗證。
-
-`run-finetune --cache-regime empty_kernel_cache` 要求明確設定五個互不重疊、已存在
-且為空的目錄：`TRITON_CACHE_DIR`、`TORCHINDUCTOR_CACHE_DIR`、`CUDA_CACHE_PATH`、
-`TORCH_EXTENSIONS_DIR`、`PYTORCH_KERNEL_CACHE_PATH`。
-`populated_kernel_cache` 記錄其中全部檔案的相對路徑、大小和 SHA256；每次獨立
-執行應複製同一份種子到新目錄。runner 不建立、清理或預熱快取。這僅控制指定
-目錄，不代表 OS 檔案快取或所有函式庫快取均受控；預設 `uncontrolled` 不作快取狀態
-承諾，也不能與受控校準混用。檔案清單不證明實際 cache 命中或外部相依完整：
-Triton group 中繼資料可能仍透過絕對路徑引用原快取，必須保留並固定這些檔案；
-本輪驗證另外凍結、核對了該相依。
-
-Unpacked HF 原生入口接收平鋪設定及每行恰好包含 `input_ids`、`attention_mask`、`labels` 的
-processed JSONL：三個等長整數陣列、二值 attention mask，padding 前長度為 2 到
-`sequence_length`；本機 tokenizer 須已有 pad token，不隱式斷詞或截斷。使用 [原生 LoRA 範例](examples/finetuning/huggingface-native-lora.yaml)
-並向 `run-finetune` 傳入 `--framework huggingface`；既有定長 `probe-finetune` 仍可使用。
-
-[完整流水線驗收紀錄](tests/data/finetune_pipeline_validation_evidence.json) 彙整三框架
-30 個原生程序，包含獨立的 allocator OOM 對照。分階段誤差、快取條件及未涵蓋範圍
-見 [`refactor.md`](refactor.md)。
-
-[採樣與遷移驗收記錄](tests/data/finetune_transfer_validation_evidence.json) 另含 Blackwell GPU
-上的 18 個 Qwen3.5-0.8B 原生程序：三框架的 25 → 73 筆資料遷移，以及隨機採樣與週期
-eval/save 組合。每組僅一次獨立 holdout，保留分階段誤差與覆蓋不足記錄，不能視為通用
-精度或 OOM 安全保證。
-
-[Qwen3.5-2B 驗收](tests/data/finetune_qwen2b_evidence.json) 增加 512/1024-token LoRA
-與 512-token NF4 QLoRA，均啟用非重入梯度檢查點；每條件兩次校準、兩次獨立 holdout。
-GPU 1 上六次總時間誤差為 0.054%–1.578%，不推廣為其他資料或裝置的精度保證。
-
-大型報告與計畫可透過原有 `--json` 與輸入路徑選項使用 `.json.gz`。
-壓縮採用串流寫入、原子替換與可重複位元組；一般 JSON 與 stdout 格式保持相容。
-原生規劃器重用剛完成的全量資料掃描，仍對每個計畫批次獨立核驗兩次。
-這減少重複工作；精確計畫的大小仍隨宣告的規劃範圍增長。
-
-支援標準梯度檢查點。LLaMA-Factory 使用 `disable_gradient_checkpointing: false`，
-並透過 `use_reentrant_gc: true` 或 `false` 選擇實作；Axolotl 使用
-`gradient_checkpointing: true` 與 `gradient_checkpointing_kwargs: {use_reentrant: true}`
-（也可將 `use_reentrant` 設為 `false`）。程式從載入後的模型核驗實際檢查點與量化設定，並納入校準身分；
-變更這些設定後需要重新校準。
-
-原生文字訓練需要文字 checkpoint，估算器的 `--text-only` 不會為原生訓練轉換原始
-多模態權重。對於本機 Qwen3.5，先在 CPU 上匯出並驗證獨立文字 checkpoint，
-同時產生用於框架整合檢查的合成 Alpaca 資料：
-
-```bash
-python tests/native/prepare_finetune_fixture.py \
-  --model /path/to/Qwen3.5-0.8B \
-  --output-dir /tmp/fakegpu-finetune/qwen35-text \
-  --dataset-dir /tmp/fakegpu-finetune/data
-```
-
-匯出時使用支援 `Qwen3_5ForCausalLM` 的 Transformers 環境。原生範例針對
-LLaMA-Factory 0.9.5 / Transformers 5.6.0 與 Axolotl 0.18.0 / Transformers 5.14.1。
-分別在獨立環境安裝對應框架與相容的 CUDA PyTorch、PEFT、資料處理依賴。
-設定使用上述路徑，輸出目錄必須為新目錄或空目錄；再次執行前選擇新的
-`output_dir`。Axolotl 的前處理快取另行保留在 `/tmp/fakegpu-finetune/axolotl-prepared`。
-
-```bash
-CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-finetune \
-  --config examples/finetuning/axolotl-native-lora.yaml --framework axolotl \
-  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --output run.json
-python -m fakegpu estimate-finetune \
-  --run-report run.json --epochs 3 --max-steps -1 --json estimate.json
-```
-
-LLaMA-Factory 使用 `--framework llamafactory` 與
-[`llamafactory-native-lora.yaml`](examples/finetuning/llamafactory-native-lora.yaml)。應在**同一 Python
-環境**重用 `--run-report`：CLI 會核對目前本機權重、模型設定及軟體版本與執行紀錄
-的身分一致性。有效資料內容摘要與實測形狀仍綁定在報告中，GPU profile 預設沿用
-報告值。上述舊 `estimate-finetune` 單報告介面要求固定形狀的完整 batch；其原生
-流程總耗時僅在相同資料與本機
-快取狀態、無週期性評估或 checkpoint 儲存時，重用一次實測的啟動、warmup 與最終
-儲存開銷。改變 `--num-samples` 僅提供訓練迴圈情境，不外推未測量的資料準備與
-載入時間。這些情境不是信賴區間，也不包含 Python 程序啟動或下載。
-
-512-token NF4 QLoRA 與梯度檢查點範例見
-[`llamafactory-native-qlora.yaml`](examples/finetuning/llamafactory-native-qlora.yaml) 與
-[`axolotl-native-qlora.yaml`](examples/finetuning/axolotl-native-qlora.yaml)。兩者啟用
-double quantization 與 BF16 compute/storage，需要在對應框架環境安裝 bitsandbytes。
-使用已匯出的 tokenizer 產生較長資料，無須再次匯出模型：
-
-```bash
-python tests/native/prepare_finetune_fixture.py \
-  --model /tmp/fakegpu-finetune/qwen35-text --dataset-only \
-  --dataset-dir /tmp/fakegpu-finetune/data-long \
-  --sequence-length 1024 --num-samples 64
-```
-
-fixture 參數指定並檢查原始資料的最小長度；框架隨後依設定截斷至 512 或 1024
-tokens，執行報告記錄實際採用的序列與 batch。
-
-獨立校準與複測程序可透過
-[`tests/native/finetune_framework_matrix.py`](tests/native/finetune_framework_matrix.py) 執行。
-矩陣沿用原生設定的序列長度、microbatch、梯度累積與 seed；可分別指定校準與複測步數：
-
-```bash
-python tests/native/finetune_framework_matrix.py \
-  --framework axolotl --config examples/finetuning/axolotl-native-qlora.yaml \
-  --python /path/to/axolotl/venv/bin/python \
-  --output-dir /tmp/fakegpu-finetune/axolotl-qlora-matrix \
-  --gpu-index 1 --calibration-steps 6 --warmup-steps 2 \
-  --holdout-runs 2 --holdout-steps 16
-```
-
-步數包含 warmup。預設仍為 6 次校準更新、2 次 warmup，以及三次各 32 次更新的複測。
-每次訓練使用獨立輸出目錄；矩陣保留原 seed，複製設定前解析本機相對路徑。
-時間預測呼叫正式估算器，並使用實際 microstep 計數，包含 epoch 尾端不完整的累積視窗。
-
-[原生框架驗證歸檔](tests/data/finetune_framework_validation_evidence.json) 保留了
-先前 128-token Qwen3.5-0.8B LoRA 在 Blackwell GPU 上的兩框架結果，各含三次獨立完整 epoch 複測。
-整體時間最大誤差為 Factory **3.931%**、已有編譯快取的 Axolotl **1.125%**。
-歸檔也保留首次執行校準外推至後續快取程序時 **364.885%** 的誤差：首次 update 耗時
-**66.542 秒**。目前不會自動核驗 cache/JIT 狀態；模型與軟體簽名相同不能保證這部分
-固定開銷可重用。精確設定、版本、GPU 記憶體結果及未涵蓋範圍見 [`refactor.md`](refactor.md)。
-
-[擴充驗證歸檔](tests/data/finetune_extended_validation_evidence.json) 涵蓋兩框架的六組
-設定，包括 512/1024 tokens、batch 1/2、梯度檢查點與原生 NF4 QLoRA。每組包含
-一次 6-update 校準與兩次獨立 16-update 複測，每個程序前 2 次更新為 warmup，
-共 18 個測量程序。各組均先短跑預熱，並保留共享快取。精確結果與設定適用範圍
-見 [`refactor.md`](refactor.md)。
-
-有實體顯示卡時，可在**同一 Python 環境**先取樣，再推估資料量與 epochs：
-
-```bash
-CUDA_VISIBLE_DEVICES=1 python -m fakegpu probe-finetune \
-  --config examples/finetuning/huggingface-lora.yaml \
-  --model /path/to/Qwen3.5-0.8B --text-only \
-  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --measure-steps 5 \
-  --output observation.json
-python -m fakegpu estimate-finetune \
-  --config examples/finetuning/huggingface-lora.yaml \
-  --model /path/to/Qwen3.5-0.8B --text-only \
-  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
-  --observation observation.json --json calibrated.json
-```
-
-內建 probe 使用 Hugging Face Trainer 與固定長度合成算術文字，需要 CUDA
-PyTorch、支援模型架構的 Transformers 與 Accelerate；adapter 另需 PEFT，QLoRA
-另需 bitsandbytes。觀測綁定模型、GPU、軟體版本、精度、adapter、attention、batch、
-長度與累積設定；保留啟動/穩態峰值，計時包含 batch 讀取與 optimizer 更新。
-它不驗證收斂，也不代替其他框架的實測。推估時間不含資料準備、模型載入、評估與
-checkpoint 儲存；解析情境範圍和實測樣本極值都不是統計信賴區間。
-採樣與重用觀測時會計算本機 checkpoint 檔案的內容摘要，同路徑替換權重會使
-舊校準失效；大型模型因此會增加啟動時的檔案讀取開銷。
-
-[Qwen3.5-0.8B 驗證紀錄](tests/data/finetune_validation_evidence.json) 保留了
-Blackwell GPU 上全量、LoRA、bitsandbytes QLoRA 的獨立校準與複測，以及未校準
-解析誤差。這些短跑不能證明更長或不同設定的精度；重現入口為
-[`tests/native/finetune_matrix.py`](tests/native/finetune_matrix.py)。
-
-完整功能驗收矩陣與後續階段見 [`refactor.md`](refactor.md)。
-
-`benchmark-serving` 測量已執行的 completion 服務，要求支援 vLLM 的 `ignore_eos`
-與最終串流 usage 欄位。明確的 token-ID 清單指定到達時間與輸出上限；報告保留 SSE 事件、
-失敗、用戶端排隊與首個非空文字延遲，不重試請求，也不推斷裝置階段峰值。
-`--model` 應填寫服務端設定的模型名稱。
-
-```bash
-python -m fakegpu benchmark-serving \
-  --base-url http://127.0.0.1:8000/v1 --model local-model \
-  --requests examples/serving/online-requests.json \
-  --concurrency 4 --repetitions 3 --json build/online.json.gz
-```
-
-[真實 serving 驗收](tests/data/serving_native_evidence.json) 包含 20 個 8K/32K Transformers
-程序，以及 prefix cache 關閉/開啟時的 72 個混合 vLLM 請求。32K 的 allocated 兩階段
-誤差為 2.02%/7.34%，reserved decode 低估 24.07%；張量公式不能據此保證 allocator 或
-OOM 安全。快取條件、首輪開銷與所有樣本均保留於記錄中。
-
-快取特徵 U-Net 訓練支援 full、LoRA 與可選 `--ema-decay`。
-`plan-diffusion-training` 綁定本機權重與 FP32 快取張量的完整 SHA；
-`run-diffusion-training` 使用一個實體 CUDA GPU、BF16 autocast、FP32 可訓練參數與 AdamW。
-VAE/text encoder 訓練及原始影像前處理不在預算內。以下 fixture 產生隨機特徵，
-僅供整合驗證；需要相容的 Diffusers/PEFT 環境，已驗證版本記錄於證據中。
-
-```bash
-python tests/native/prepare_diffusion_fixture.py \
-  --model-dir /path/to/stable-diffusion-v1-4 --output-dir /tmp/diff-fixture \
-  --num-samples 5 --epochs 3 --method lora --gradient-checkpointing
-CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
-  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-1 \
-  --json /tmp/diff-cal-1.json
-CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
-  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-2 \
-  --json /tmp/diff-cal-2.json
-python -m fakegpu estimate-diffusion-training --plan /tmp/diff-fixture/plan.json \
-  --epochs 5 --calibration-run /tmp/diff-cal-1.json \
-  --calibration-run /tmp/diff-cal-2.json --json /tmp/diff-budget.json.gz
-```
-
-缺少相容原生觀測時，activation 與 reserved 峰值保持未知。預算要求兩個獨立程序，
-且未來每類窗口都有足夠重複樣本，首次形狀開銷另計。`--cache-regime` 記錄 kernel
-快取狀態，預設 `uncontrolled`；受控模式要求原生工作流中說明的五個明確快取目錄。
-Allocator、GPU UUID、軟體、輸入內容與執行身分必須一致；實測包絡不是物理 OOM 保證。
-
-`validate-diffusion-training` 對照獨立 `--holdout-run`；可用
-`--max-total-time-error-percent` 與 `--max-memory-underestimate-percent` 設定門檻，
-超限回傳狀態 1。[真實 diffusion 記錄](tests/data/diffusion_native_evidence.json) 包含
-SD/SDXL generation 與 12 個快取特徵訓練程序。六次訓練 holdout 的總時間誤差為
-0.044%–3.185%，allocator 包絡未低估；generation VAE allocated 仍低估 12.0%–13.8%，
-reserved 最多低估 31.6%，保留這些未通過的結果。
-
-[後續記憶體精度驗收](tests/data/phase_memory_evidence.json)修正了 VAE 上採樣
-形狀缺項，四種解析度的獨立觀測中 VAE allocated 誤差為 0.045%–1.172%。六個條件
-各五次校準後再五次 holdout，共 60 個新程序；明確原生預算的 allocated／reserved
-門檻皆通過，這組固定輸入、BF16 條件的峰值與校準最大值一致。原未校準失敗保留，
-這些結果不代表可移轉至新形狀，也不構成實體 OOM 保證。
-
-[擴展記憶體驗證](tests/data/memory_generalization_evidence.json)涵蓋 25 個單卡條件、
-74 個全新程序：SD 1.4／SDXL、Qwen3-0.6B／1.7B／Qwen2.5-0.5B，FP16／BF16／FP32、
-不同 batch、矩形影像、guidance、eager attention、attention／VAE slicing 與 VAE tiling。
-結構性修正涵蓋 LLM 共享權重、U-Net GEGLU／attention 緩衝、VAE 混合精度升精度及
-tile／slice 輸出保留。全部解析式 allocated 比較通過預設的絕對誤差 20%／低估 10%
-門檻；最大絕對誤差 10.93%，最大低估 3.58%。四個條件各五次校準後再三次 holdout，
-其餘 21 個條件各兩次獨立驗證。精確匹配條件的 allocated／reserved 預算在十二次
-holdout 中與實測一致；68 次跨條件重用預算皆被拒絕。本輪為 experimental 泛化證據，
-不新增 `GPU-validated` 行：21 個條件未達公開結果的五次觀測要求，也未評估預測
-區間覆蓋率與 OOM 邊界。最佳化模式使用已封存的原生驗證
-探針；該批快照的公開 `phase-sample` diffusion 路徑限 SDPA 且無 offload／slicing／
-tiling，最佳化模式的 reserved 包絡當時尚未驗收；下文公開模式校準補充這部分涵蓋範圍。
-結論限於已測 GPU、軟體和負載。
-
-Allocated 張量儲存與 allocator reserved 是不同指標。`calibrate phase-sample`
-在全新 CUDA 程序同時採集兩者；`phase-estimate` 用至少五個獨立程序封存各階段實測
-最大值，`phase-validate` 對照稍後開始的獨立執行。每份樣本與預算均需新輸出路徑。
-
-```bash
-# plan.json: a compatible local plan-serving or estimate-diffusion report
-for i in 1 2 3 4 5; do
-  CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
-    --json "/tmp/phase-cal-$i.json"
-done
-python -m fakegpu calibrate phase-estimate \
-  --calibration-sample /tmp/phase-cal-1.json \
-  --calibration-sample /tmp/phase-cal-2.json \
-  --calibration-sample /tmp/phase-cal-3.json \
-  --calibration-sample /tmp/phase-cal-4.json \
-  --calibration-sample /tmp/phase-cal-5.json --json /tmp/phase-budget.json.gz
-CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
-  --json /tmp/phase-holdout.json
-python -m fakegpu calibrate phase-validate --budget /tmp/phase-budget.json.gz \
-  --holdout-sample /tmp/phase-holdout.json --max-absolute-error-percent 20 \
-  --max-underestimate-percent 10 --json /tmp/phase-validation.json
-```
-
-採集支援同構 Transformers dynamic-cache serving，以及本機 SD／SDXL 的 eager／SDPA、
-自動 attention slicing、VAE slicing／tiling 及其組合，要求無 offload。eager／SDPA
-同時設定 U-Net 與 VAE processor；pipeline attention slicing 僅影響 U-Net。Tiling
-將計畫中的 `--vae-tile-size` 同時套用至原生 sample／latent tile 限制，不沿用模型
-預設尺寸。實際 processor、VAE 開關與 tile 尺寸記錄於原生身分。
-計畫、選定完整權重與設定、GPU UUID、Torch／CUDA／cuDNN
-版本、allocator 與執行實作須匹配。報告分別提供兩項指標與原分析預測，不做形狀遷移
-或隱含安全係數；kernel cache 為 uncontrolled。離線預算／驗證僅依賴標準函式庫。
-預設門檻為絕對誤差 20%、低估 10%，未通過回傳狀態 1。實測範圍並非實體 OOM 保證。
-
-[公開最佳化模式驗收](tests/data/optimized_phase_memory_evidence.json)透過這套 CLI 驗證
-七個 SD／SDXL 條件，各五次校準、封存預算後再五次 holdout，共 70 個全新原生程序。
-210 項階段×指標 holdout 比較皆與 allocated／reserved 校準最大值一致；這組最佳化模式
-的解析式 allocated 最大絕對誤差為 6.69%，最大低估為 3.38%。42 次跨模式預算重用與
-21 次實際執行設定不匹配皆被拒絕。原生 CPU/meta 檢查另涵蓋 32 種設定與 16 種數值
-VAE 解碼。結果仍為 experimental：觀測包絡覆蓋率僅描述固定輸入與軟體下的樣本，
-未評估 OOM 邊界或統計預測區間。
-
-VAE 形狀模型納入了通道縮減前的高解析度上採樣卷積，其工作集可能大於後續 block
-輸出。SD／SDXL 的 allocated／reserved 原生精度證據另外記錄。
-
-FSDP2 `full_shard` 可為 `plan-training` 提供 `--parameter-shapes layout.json`，
-內容為 `{"shapes": [[12, 8], [12], [3, 12], [3]]}`，並提供一致的
-`--parameter-bytes` 及統一 `--parameter-element-bytes`。依原生每參數第 0 維 chunk
-計算各 rank 位元組，預算採最大 rank。未提供形狀時保留總量均衡切分近似，無法涵蓋
-不均勻參數分區；optimizer dtype 與 workspace 假設仍適用，不涵蓋自訂 placement。
-
-[版本化原生驗收矩陣](tests/data/research_native_evidence.json)記錄六組
-FP32/FP16/BF16 LoRA／attention CPU_SIM 數值、CPU／GPU 1 上 tiny Qwen3 MoE
-路由與梯度，以及兩個 CPU rank 的原生 DDP／FSDP2 檢查。這些是有限數值與語義
-涵蓋；實體 TP／PP／CP／EP、多 GPU ZeRO／FSDP 與多機 collective 目前不納入
-專案驗收範圍，維持未驗證。CPU_SIM 不執行任意 CUDA 裝置程式碼，數值 probe 保留嚴格 unsupported API
-檢查。主機數值可用 `scripts/test.sh cpu` 重現，本機語義入口見
-`tests/native/research_distributed.py --help`。
-
-實驗批次執行使用明確 argv、參數網格與重複次數。下方 CPU 範例將 worker 腳本、
-可執行檔、FakeGPU 原始碼及指定資源環境綁定至穩定執行 ID；依序執行，每次嘗試
-保留日誌、退出狀態、錯誤、產物 SHA 與數值指標。
-
-```bash
-python -m fakegpu plan-experiments --config examples/experiments/cpu-sweep.json \
-  --workspace /tmp/research-sweep --json /tmp/research-plan.json
-python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
-  --workspace /tmp/research-sweep --json /tmp/research-results.json.gz
-python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
-  --workspace /tmp/research-sweep --resume --json /tmp/research-resumed.json
-python -m fakegpu compare-experiments --workspace /tmp/research-sweep \
-  --plot /tmp/research-sweep.svg --x size --metric seconds \
-  --json /tmp/research-comparison.json
-```
-
-恢復會跳過已核驗成功項；只有 `--resume --retry-failed` 才會為失敗或中斷新增嘗試。
-輸入、原始碼或環境改變需要新工作區。比較可離線執行，各工作區分別統計。僅宣告輸入
-參與核驗，外部依賴版本需由實驗作者固定，並在原生報告記錄執行環境。命令須在前景
-執行。指標路徑支援巢狀 JSON key/index；只有繪圖需要 Matplotlib，誤差棒是觀測最小／
-最大值，並非信賴區間。範例測量 CPU 工作，不代表 GPU 訓練吞吐。
-
-[發佈回歸記錄](tests/data/research_release_evidence.json)包含 1734 項通過的
-Python 測試（略過一個 CPU-only build 分支）、原生 CPU 套件、104 個封裝模組、
-42 個命令說明與 68 次離線 CLI 功能檢查；152 份歷史預測逐位元組保持一致。
 
 | 指令 | 用途 |
 |---|---|
@@ -1498,7 +892,457 @@ Python 測試（略過一個 CPU-only build 分支）、原生 CPU 套件、104 
 | `fakegpu bandwidth` | 驗證模擬 TCP payload 並回報吞吐量 |
 
 使用 `python3 -m fakegpu --help` 查看完整列表，使用
-`python3 -m fakegpu <command> --help` 查看各指令的選項。
+`python3 -m fakegpu <command> --help` 查看各指令的選項。大型報告與計畫在所有接受
+JSON 路徑的位置都可以使用 `.json.gz`，壓縮輸出採用原子替換且位元組可重現。
+
+### 微調總時間與 GPU 記憶體預估
+
+`estimate-finetune` 讀取本機模型中繼資料與 Hugging Face Trainer/PEFT、LLaMA-Factory
+或 Axolotl 設定，無須匯入訓練框架或載入權重，即可估算單卡全量、LoRA、4-bit QLoRA
+的 GPU 記憶體與**訓練迴圈總時間**。
+
+- 樣本數指過濾、切分與 packing 後的訓練序列；序列長度包含模板 token 與 padding。
+- `max_steps` 優先於 epochs；`--max-steps -1` 可清除設定中的步數限制。
+
+```bash
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
+  --sequence-length 128 --json estimate.json
+```
+
+- 三類框架的設定範例位於 [`examples/finetuning/`](examples/finetuning/)。設定轉換已
+  通過 CPU 測試，不代表所有框架與執行環境組合都已完成實體 GPU 基準測試。
+- 分散式/offload、未涵蓋的 optimizer 或無法解析的 adapter 目標會明確報錯；分散式
+  規劃使用 `plan-training`。
+- Qwen3.5 的線性/完整 attention 分層計算；DeltaNet backward workspace、快速核心與
+  MoE dispatch 只有部分解析涵蓋。`--text-only` 選擇多模態 checkpoint 的文字骨幹。
+
+`profile-finetune-data` 完整掃描本機 JSONL 的每筆資料，統計內容摘要、token 長度、
+截斷、padding 與序列數。原始 `text`/`messages` 使用本機 tokenizer；
+`--packing concatenate` 只是 token 預算情境，不重現框架的 packing 演算法。要使用
+實際訓練集計數，請匯出最終 `input_ids`（可附帶 `attention_mask` 與 `labels`）並加上
+`--processed`：
+
+```bash
+python -m fakegpu profile-finetune-data \
+  --data /path/to/processed-train.jsonl --format input_ids --processed \
+  --sequence-length 128 --json dataset.json
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --dataset-report dataset.json \
+  --epochs 3 --max-steps -1 --json estimate.json
+```
+
+`--dataset-report` 同時綁定樣本數與序列上限：取代設定中的樣本數、拒絕衝突的覆寫，
+並要求長度上限一致。`--source-framework` 只是來源標籤。Packed 訓練需要最終處理後的
+序列計數。
+
+`run-finetune` 在一張實體 CUDA 顯示卡上呼叫已安裝的 HF Trainer/PEFT、LLaMA-Factory
+或 Axolotl 原生流程（全量、LoRA 或 bitsandbytes 4-bit QLoRA；本機未量化文字
+checkpoint；除下文 packing 說明外為無 packing 資料）。它依完整原生設定執行訓練
+（相對路徑以設定檔目錄解析），並記錄：
+
+- 原生前處理、有效訓練資料、實際 batch、optimizer 更新、allocator 峰值、評估/儲存
+  事件與最終儲存；
+- `observation.updates[].batches`：每個 microbatch 的形狀、epoch 位置、token 槽位、
+  非 padding token 與有效 labels；
+- `observation.batch_profile`：依完整有序的梯度累積視窗分組耗時；每組有兩個穩態
+  update 後才標記 `sufficient`（僅表示樣本足夠，不是精度認證）；
+- `observation.phase_events`：實際評估/儲存呼叫樹，階段總量只累計根事件；儲存後的
+  檔案清單不代表磁碟寫入量。
+
+Warmup 與統計開銷不計入穩態樣本，但包含在總牆鐘時間中。
+
+`validate-finetune-windows` 使用獨立記錄的 holdout 驗證耗時預測：
+
+- 至少提供兩份模型、資料、軟體及原生執行設定相同的獨立校準報告。
+- 排除全域 warmup 與視窗首次出現後，每個視窗在每份校準報告中仍須有兩個樣本；
+  缺少涵蓋的視窗直接拒絕。
+- 只驗證歷史證據，不預測 shuffle 順序、warmup、總牆鐘時間或動態 VRAM；原生
+  packing 與 MoE 視窗尚未支援。
+
+```bash
+python -m fakegpu validate-finetune-windows \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json window-validation.json
+```
+
+`validate-finetune-events` 以同樣方式驗證評估/儲存子總時間，開始、首次、重複與最終
+事件分別匹配。目前支援無 packing 的 dense 文字模型、loss-only 評估，以及本機
+模型/adapter 或可恢復 checkpoint 儲存；不預測事件次數或完整流程時間。
+
+```bash
+python -m fakegpu validate-finetune-events \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json event-validation.json
+```
+
+`--event-context` 也會匹配視窗前最近的評估與 checkpoint 邊界（有序呼叫、工作量、
+階段及各邊界後的 update 數）。每個「視窗＋上下文」組合在每份校準報告中需要兩個
+樣本。它驗證週期事件後重複出現的視窗，不預測首次儲存的恢復耗時或完整訓練時間。
+
+```bash
+python -m fakegpu validate-finetune-windows --event-context \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json event-window-validation.json
+```
+
+`--epoch-context` 也會匹配每個 microbatch 在 epoch 內的位置，用來區分包含新一輪
+取數或 worker 啟動的視窗；可單獨使用，也可與 `--event-context` 組合：
+
+```bash
+python -m fakegpu validate-finetune-windows --event-context --epoch-context \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json epoch-window-validation.json
+```
+
+`plan-finetune-pipeline` 從校準執行中完整觀測到的 epoch 推導未來輪次或更新次數。
+`estimate-finetune-pipeline` 組合至少兩次獨立校準，得到完整原生預算：setup、warmup、
+有序訓練視窗、評估、checkpoint、Trainer 間隙與收尾。
+
+- 計時止於原生呼叫及最後 CUDA 同步，不含 Python 啟動、報告建構或 CLI 輸出。
+- 時間區間是各程序均值的極值，不是信賴區間；任一部件缺少涵蓋都會明確報錯。
+- 支援無 packing、保留尾批次的循序文字資料：HF Trainer（Transformers 5.6.0）與
+  LLaMA-Factory 0.9.5 需 `disable_shuffling: true`；Axolotl 0.18.0
+  （Transformers 5.14.1）需 `curriculum_sampling: true`。
+- 資料、模型、硬體與執行設定須與校準一致，改變資料筆數需重新校準。日誌須關閉或
+  每次 update 記錄；不支援 checkpoint 輪替刪除與最佳模型重新載入。
+
+```bash
+python -m fakegpu plan-finetune-pipeline \
+  --run-report calibration-1.json --epochs 30 --json future-plan.json
+python -m fakegpu estimate-finetune-pipeline \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --plan future-plan.json --memory-budget-gib 24 --reserve-gib 1 --json budget.json
+python -m fakegpu validate-finetune-pipeline \
+  --calibration-run calibration-1.json --calibration-run calibration-2.json \
+  --holdout-run holdout.json --json validation.json
+```
+
+預設隨機採樣或更換訓練資料時，使用經驗遷移流程：讀取原生 prepared dataloader，在
+CPU 上計畫 sampler/collator 輸出，並於校準中核對實際消費的列號與輸入張量 SHA256。
+支援 HF/Factory 搭配 Accelerate 1.11.0、Axolotl 搭配 Accelerate 1.13.0；隨機採樣
+使用原生 data seed 加 epoch（Axolotl 0.18.0 不會將 YAML 的 `data_seed` 傳給
+Trainer）。
+
+```bash
+python -m fakegpu calibrate-finetune \
+  --config target-training.json --framework huggingface \
+  --profile "$TARGET_GPU_PROFILE" --python /path/to/framework/python \
+  --cuda-device 0 --workspace ./calibration-target \
+  --calibration-steps 24 --warmup-steps 2 --epochs 3 \
+  --timeout-seconds 600 --json calibration.json
+python -m fakegpu budget-finetune-workspace \
+  --workspace ./calibration-target --epochs 2 --json revised-budget.json
+```
+
+- `calibrate-finetune` 固定啟動兩次全新原生程序，限制步數與執行時間，預設各自使用
+  新的空 kernel 快取目錄。保留所有嘗試，以 SHA256 封存報告，支援 `--resume`，不會
+  隱式增加或重跑校準。
+- 純 CPU 重估預算不需 GPU 或框架，但不能超過已儲存的採樣計畫範圍。
+- 工作區需保留原始絕對路徑，並放在已記錄的輸入目錄之外（巢狀路徑會被拒絕）；只支援
+  有限本機資料與 POSIX 鎖語義。Axolotl/Factory 的 prepared 資料隔離在工作區的
+  `prepared/` 中，恢復時拒絕原始輸入變更。
+- 重複的 `--reuse-calibration-run PATH` 可重用另一份資料的相容訓練證據；啟動與收尾
+  仍由目標資料的兩次新校準提供，且不依樣本數放大。不同 token/mask/監督分布之間的
+  訓練成本重用是**經驗近似**；缺少涵蓋時回傳 1 並列出缺口。
+- `run-finetune --planning-epochs N`（或 `--planning-max-steps N`）直接儲存 CPU 計畫；
+  `plan-finetune-transfer`、`estimate-finetune-transfer`、`validate-finetune-transfer`
+  無需工作區管理即可完成相同步驟。streaming、自訂採樣器與自動 batch size 調整
+  尚未支援。
+
+記憶體結果為同一 GPU 與 allocator 上完整執行的 allocated/reserved 峰值包絡，不能
+推算到更小的顯示卡；`--reserve-gib` 只是使用者指定的餘量，不證明不會 OOM。
+`validate-finetune-pipeline` 對照獨立 holdout 回報時間誤差與記憶體低估。
+
+長度分組：HF/Factory 設定 `train_sampling_strategy: group_by_length`，Axolotl 設定
+`group_by_length: true`，並向 `calibrate-finetune` 或 `run-finetune` 傳入
+`--length-grouping-seed 123`。
+
+- 保留原生分組演算法，使用以 `123 + epoch` 為種子的獨立 CPU 生成器；依賴全域 RNG 的
+  原生分組無法重現。
+- 必須指定規劃範圍。一個有限評估資料集使用同一明確種子，不推進訓練 sampler；
+  拒絕自訂評估 sampler 與提前準備的 dataloader。
+- sampler plan v2 把分組長度與 batch size 納入校準身分，不同長度序列需要各自的證據。
+
+Packing：
+
+- [packing 語義審計](tests/native/finetune_packing_semantics.py) 顯示，在極小的
+  Qwen3.5 模型中，所測一般 HF/Factory 混合路徑於分塊 mask 與重設位置後仍有跨段
+  影響；所測 Axolotl patch 與 Transformers 5.14.1 的 decoder 介面不相容。
+- 選用的 [分段參考審計](tests/native/finetune_segment_reference.py) 檢查專案自有的
+  Qwen3.5 分段介面：每段 linear attention 使用空的卷積與遞迴狀態，逐層輸出與梯度
+  與獨立原生序列一致，包括 checkpoint 重算與重新載入。
+- 對 dense `qwen3_5_text` LoRA，向 `run-finetune` 或 `calibrate-finetune` 傳入
+  `--packing-seed 123` 啟用此路徑；需指定規劃範圍、關閉評估並啟用原生 packing
+  （Factory 設定 `packing: true` 與 `neat_packing: true`，Axolotl 設定
+  `sample_packing: true`）。
+- HF processed 列另需 `position_ids`，`attention_mask` 使用連續正整數 segment ID
+  （右側 padding 為零）；後續各段的首個 label 必須忽略。
+- sampler plan v3 記錄 epoch bins、邏輯序列數、張量列數、分段幾何、dtype 與輸入
+  SHA；不同資料需要獨立校準。原生 packing 報告須使用 transfer 指令。
+- 不承諾 varlen 核心吞吐；full/QLoRA packing 與 grouped packing 未涵蓋。另見
+  [PEFT forward 審計](tests/native/finetune_segment_peft.py) 與
+  [packing 預算證據](tests/data/finetune_packing_budget_evidence.json)。
+
+`run-finetune --cache-regime empty_kernel_cache` 要求明確設定五個互不相同、已存在且
+為空的目錄：`TRITON_CACHE_DIR`、`TORCHINDUCTOR_CACHE_DIR`、`CUDA_CACHE_PATH`、
+`TORCH_EXTENSIONS_DIR`、`PYTORCH_KERNEL_CACHE_PATH`。`populated_kernel_cache` 記錄
+其中每個檔案的相對路徑、大小與 SHA256。runner 不建立、清理或預熱快取；預設
+`uncontrolled` 不作快取狀態承諾，也不能與受控校準混用。Triton 中繼資料可能透過
+絕對路徑引用原快取，必須保持這些檔案不變。
+
+原生執行準備：
+
+- Unpacked HF 執行（`--framework huggingface`）使用平鋪設定，以及每行恰好包含
+  `input_ids`、`attention_mask`、`labels` 的 processed JSONL：等長整數陣列、二值
+  mask、長度 2 到 `sequence_length`。不隱式斷詞，tokenizer 須有 pad token。參見
+  [原生 LoRA 範例](examples/finetuning/huggingface-native-lora.yaml)。
+- 梯度檢查點：LLaMA-Factory 使用 `disable_gradient_checkpointing: false` 並以
+  `use_reentrant_gc: true` 或 `false` 選擇實作；Axolotl 使用
+  `gradient_checkpointing: true` 與 `gradient_checkpointing_kwargs: {use_reentrant: true}`
+  （或 `false`）。實際檢查點與量化設定納入校準身分。
+- 原生訓練需要文字 checkpoint，`--text-only` 不會轉換權重。對於本機 Qwen3.5，先在
+  CPU 上匯出文字 checkpoint，並產生用於整合檢查的合成 Alpaca 資料：
+
+```bash
+python tests/native/prepare_finetune_fixture.py \
+  --model /path/to/Qwen3.5-0.8B \
+  --output-dir /tmp/fakegpu-finetune/qwen35-text \
+  --dataset-dir /tmp/fakegpu-finetune/data
+```
+
+匯出需要支援 `Qwen3_5ForCausalLM` 的 Transformers。原生範例針對 LLaMA-Factory 0.9.5
+（Transformers 5.6.0）與 Axolotl 0.18.0（Transformers 5.14.1），請分別在獨立環境
+安裝對應框架及相容的 CUDA PyTorch、PEFT 與資料相依。每次執行使用新的 `output_dir`；
+Axolotl 前處理快取位於 `/tmp/fakegpu-finetune/axolotl-prepared`。
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-finetune \
+  --config examples/finetuning/axolotl-native-lora.yaml --framework axolotl \
+  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --output run.json
+python -m fakegpu estimate-finetune \
+  --run-report run.json --epochs 3 --max-steps -1 --json estimate.json
+```
+
+- LLaMA-Factory 使用 `--framework llamafactory` 與
+  [`llamafactory-native-lora.yaml`](examples/finetuning/llamafactory-native-lora.yaml)。
+- 在同一 Python 環境重用 `--run-report`：CLI 會核對本機權重、模型設定與軟體身分，
+  GPU profile 預設沿用報告值。
+- 此單報告 `estimate-finetune` 介面要求固定形狀的完整 batch。改變 `--num-samples`
+  只提供訓練迴圈情境，不包含資料準備與載入時間，也不含 Python 啟動或下載。
+
+512-token NF4 QLoRA 與梯度檢查點範例見
+[`llamafactory-native-qlora.yaml`](examples/finetuning/llamafactory-native-qlora.yaml) 與
+[`axolotl-native-qlora.yaml`](examples/finetuning/axolotl-native-qlora.yaml)（double
+quantization、BF16，需要 bitsandbytes）。以已匯出的 tokenizer 產生較長資料：
+
+```bash
+python tests/native/prepare_finetune_fixture.py \
+  --model /tmp/fakegpu-finetune/qwen35-text --dataset-only \
+  --dataset-dir /tmp/fakegpu-finetune/data-long \
+  --sequence-length 1024 --num-samples 64
+```
+
+fixture 長度只是下限；框架會依設定截斷至 512 或 1024 tokens，執行報告記錄實際
+採用的序列。
+
+以 [`tests/native/finetune_framework_matrix.py`](tests/native/finetune_framework_matrix.py)
+執行獨立校準與複測程序，序列長度、microbatch、梯度累積與 seed 沿用原生設定：
+
+```bash
+python tests/native/finetune_framework_matrix.py \
+  --framework axolotl --config examples/finetuning/axolotl-native-qlora.yaml \
+  --python /path/to/axolotl/venv/bin/python \
+  --output-dir /tmp/fakegpu-finetune/axolotl-qlora-matrix \
+  --gpu-index 1 --calibration-steps 6 --warmup-steps 2 \
+  --holdout-runs 2 --holdout-steps 16
+```
+
+步數包含 warmup（預設 6 次校準更新、2 次 warmup、三次各 32 次更新的複測）。每次
+訓練使用獨立輸出目錄，時間預測呼叫正式估算器並使用實際 microstep 計數。
+
+有實體顯示卡時，可在**同一 Python 環境**先短跑取樣，再推估資料量與 epochs；
+模型、GPU、精度、adapter、attention、batch、長度與累積設定須保持一致：
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu probe-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --warmup-steps 2 --measure-steps 5 \
+  --output observation.json
+python -m fakegpu estimate-finetune \
+  --config examples/finetuning/huggingface-lora.yaml \
+  --model /path/to/Qwen3.5-0.8B --text-only \
+  --profile "$TARGET_GPU_PROFILE" --num-samples 10000 --epochs 3 \
+  --observation observation.json --json calibrated.json
+```
+
+內建 probe 以 Hugging Face Trainer 與固定長度的合成文字執行，需要 Transformers、
+Accelerate 與 CUDA PyTorch；adapter 另需 PEFT，QLoRA 另需 bitsandbytes。warmup
+另行記錄，並保留啟動/穩態峰值。推估時間不含資料準備、模型載入、評估與 checkpoint
+I/O。checkpoint 檔案會計算內容摘要，同路徑替換權重會使舊校準失效。
+
+驗證紀錄（精確負載、版本與適用範圍見 [`refactor.md`](refactor.md)）：
+
+- [完整流水線驗收](tests/data/finetune_pipeline_validation_evidence.json)：三框架共
+  30 個原生程序，含獨立的 allocator OOM 對照。
+- [採樣與遷移驗收](tests/data/finetune_transfer_validation_evidence.json)：Blackwell GPU 上 18 個 Qwen3.5-0.8B 程序，包括 25 → 73 筆資料遷移以及隨機採樣搭配週期
+  eval/save；每組一次獨立 holdout。
+- [Qwen3.5-2B 驗收](tests/data/finetune_qwen2b_evidence.json)：512/1024-token LoRA
+  與 512-token NF4 QLoRA（啟用梯度檢查點），每條件兩次校準、兩次 holdout；總時間
+  誤差 0.054%–1.578%。
+- [原生框架驗證歸檔](tests/data/finetune_framework_validation_evidence.json)：先前的
+  128-token LoRA，最大牆鐘誤差 Factory 3.931%、已快取的 Axolotl 1.125%。把 Axolotl
+  首次執行的校準用於後續快取程序時誤差為 364.885%（首次 update 66.542 秒），因此
+  模型/軟體簽章相同不代表 cache/JIT 開銷可重用。
+- [擴充驗證歸檔](tests/data/finetune_extended_validation_evidence.json)：兩框架六組
+  設定，涵蓋 512/1024 tokens、batch 1/2、梯度檢查點與 NF4 QLoRA，共 18 個測量程序。
+- [Qwen3.5-0.8B probe 紀錄](tests/data/finetune_validation_evidence.json)：全量、LoRA、
+  QLoRA 的校準與複測，可用 [`tests/native/finetune_matrix.py`](tests/native/finetune_matrix.py)
+  重現。
+
+這些短跑結果不代表通用精度或 OOM 安全。
+
+### 線上 serving 基準測試
+
+`benchmark-serving` 測量已執行的 completion 服務，依賴 vLLM 的 `ignore_eos` 與最終
+串流 usage 欄位。token-ID 清單指定到達時間與輸出上限；報告保留 SSE 事件、失敗、
+用戶端排隊與首個非空文字延遲，不重試請求，也不推斷裝置階段峰值。`--model` 填寫
+服務端設定的模型名稱。
+
+```bash
+python -m fakegpu benchmark-serving \
+  --base-url http://127.0.0.1:8000/v1 --model local-model \
+  --requests examples/serving/online-requests.json \
+  --concurrency 4 --repetitions 3 --json build/online.json.gz
+```
+
+[真實 serving 驗收](tests/data/serving_native_evidence.json) 包含 20 個 8K/32K
+Transformers 程序，以及 prefix cache 關閉/開啟時的 72 個混合 vLLM 請求。32K 時
+allocated 兩階段誤差為 2.02%/7.34%，但 reserved decode 低估 24.07%：張量公式無法
+保證 allocator 或 OOM 安全。
+
+### Diffusion 訓練
+
+快取特徵 U-Net 訓練支援 full、LoRA 與可選 `--ema-decay`。`plan-diffusion-training`
+綁定本機權重與 FP32 快取張量的 SHA；`run-diffusion-training` 使用一個實體 CUDA
+GPU、BF16 autocast、FP32 可訓練參數與 AdamW。VAE/text encoder 訓練與原始影像
+前處理不在範圍內；以下 fixture 產生隨機特徵，僅供整合驗證：
+
+```bash
+python tests/native/prepare_diffusion_fixture.py \
+  --model-dir /path/to/stable-diffusion-v1-4 --output-dir /tmp/diff-fixture \
+  --num-samples 5 --epochs 3 --method lora --gradient-checkpointing
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
+  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-1 \
+  --json /tmp/diff-cal-1.json
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu run-diffusion-training \
+  --plan /tmp/diff-fixture/plan.json --output-dir /tmp/diff-cal-2 \
+  --json /tmp/diff-cal-2.json
+python -m fakegpu estimate-diffusion-training --plan /tmp/diff-fixture/plan.json \
+  --epochs 5 --calibration-run /tmp/diff-cal-1.json \
+  --calibration-run /tmp/diff-cal-2.json --json /tmp/diff-budget.json.gz
+```
+
+- 缺少原生觀測時，activation 與 reserved 峰值保持未知。
+- 預算要求兩個獨立程序，且未來每類視窗都有重複樣本；首次形狀開銷另計。
+- `--cache-regime` 與微調流程相同（預設 `uncontrolled`）。Allocator、GPU UUID、
+  軟體、輸入內容與執行身分必須一致。
+- `validate-diffusion-training` 對照獨立 `--holdout-run`；
+  `--max-total-time-error-percent` 與 `--max-memory-underestimate-percent` 超限時
+  回傳 1。
+
+[真實 diffusion 記錄](tests/data/diffusion_native_evidence.json) 包含 SD/SDXL
+generation 觀測與 12 個訓練程序。六次訓練 holdout 的總時間誤差為 0.044%–3.185%，
+allocator 包絡未低估；generation VAE allocated 峰值低估 12.0%–13.8%，reserved
+最多低估 31.6%。
+
+### 階段記憶體校準
+
+Allocated 張量儲存與 allocator reserved 分別統計。`calibrate phase-sample` 在一個
+全新 CUDA 程序中同時採集兩者，`phase-estimate` 以至少五個獨立程序封存各階段最大值，
+`phase-validate` 對照之後的獨立執行。每份樣本與預算都使用新的輸出路徑。
+
+```bash
+# plan.json: a compatible local plan-serving or estimate-diffusion report
+for i in 1 2 3 4 5; do
+  CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
+    --json "/tmp/phase-cal-$i.json"
+done
+python -m fakegpu calibrate phase-estimate \
+  --calibration-sample /tmp/phase-cal-1.json \
+  --calibration-sample /tmp/phase-cal-2.json \
+  --calibration-sample /tmp/phase-cal-3.json \
+  --calibration-sample /tmp/phase-cal-4.json \
+  --calibration-sample /tmp/phase-cal-5.json --json /tmp/phase-budget.json.gz
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
+  --json /tmp/phase-holdout.json
+python -m fakegpu calibrate phase-validate --budget /tmp/phase-budget.json.gz \
+  --holdout-sample /tmp/phase-holdout.json --max-absolute-error-percent 20 \
+  --max-underestimate-percent 10 --json /tmp/phase-validation.json
+```
+
+- 採集支援同構 Transformers dynamic-cache serving，以及本機 SD/SDXL 的 eager/SDPA、
+  attention slicing、VAE slicing、VAE tiling 及其組合，要求無 offload。
+- Tiling 時，`--vae-tile-size` 同時設定原生 sample 與 latent tile 上限；實際
+  processor、VAE 開關與 tile 尺寸納入原生身分。
+- 計畫、選定權重與設定、GPU UUID、Torch/CUDA/cuDNN 版本、allocator 與執行實作須
+  一致；不做形狀遷移，也不加隱含安全係數；kernel cache 不受控。
+- 預設門檻為絕對誤差 20%、低估 10%，未通過回傳 1。離線預算/驗證只依賴標準函式庫。
+
+驗證證據（experimental，僅適用於已測 GPU、軟體與固定輸入）：
+
+- [階段記憶體驗收](tests/data/phase_memory_evidence.json)：補上 VAE 上採樣卷積後，
+  四種解析度的 VAE allocated 誤差為 0.045%–1.172%；六個條件各五次校準、五次
+  holdout（共 60 個程序）皆通過兩項門檻。
+- [擴展記憶體驗證](tests/data/memory_generalization_evidence.json)：25 個單卡條件、
+  74 個程序，涵蓋 SD 1.4/SDXL、Qwen3-0.6B/1.7B/Qwen2.5-0.5B、FP16/BF16/FP32、
+  不同 batch、矩形影像、guidance、eager attention、slicing 與 tiling。最大 allocated
+  絕對誤差 10.93%、最大低估 3.58%（門檻 20%/10%）。精確匹配條件的預算在十二次
+  holdout 中全部吻合，68 次跨條件重用被拒絕。這些不是 `GPU-validated` 列：21 個
+  條件不足五次觀測，最佳化模式使用的是封存的原生探針而非公開 CLI。
+- [公開最佳化模式驗收](tests/data/optimized_phase_memory_evidence.json)：七個 SD/SDXL
+  條件、70 個程序，210 項 holdout 比較皆與校準最大值一致；解析式 allocated 最大
+  絕對誤差 6.69%、最大低估 3.38%；42 次跨模式與 21 次實際模式不匹配被拒絕。
+
+這些結果皆不代表可移轉至新形狀、具備預測區間或實體 OOM 安全。
+
+### 分散式規劃與實驗批次執行
+
+FSDP2 `full_shard` 可向 `plan-training` 提供 `--parameter-shapes layout.json`，內容為
+`{"shapes": [[12, 8], [12], [3, 12], [3]]}`，並提供一致的 `--parameter-bytes` 與
+統一的 `--parameter-element-bytes`。它依原生每參數第 0 維 chunk 計算並以最大 rank
+做預算；未提供形狀時使用均衡切分近似，不涵蓋自訂 placement。
+
+[版本化原生驗收矩陣](tests/data/research_native_evidence.json) 記錄六組
+FP32/FP16/BF16 LoRA/attention CPU_SIM 案例、CPU 與 GPU 上 tiny Qwen3 MoE 的路由與
+梯度，以及兩個 CPU rank 的原生 DDP/FSDP2。實體 TP/PP/CP/EP、多 GPU ZeRO/FSDP 與
+多機 collective 不在目前範圍內。重現入口為 `scripts/test.sh cpu` 與
+`tests/native/research_distributed.py --help`。
+
+實驗批次執行使用明確 argv、參數網格與重複次數，依序執行並綁定穩定執行 ID，每次
+嘗試保留日誌、退出狀態、錯誤、產物 SHA 與數值指標：
+
+```bash
+python -m fakegpu plan-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --json /tmp/research-plan.json
+python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --json /tmp/research-results.json.gz
+python -m fakegpu run-experiments --config examples/experiments/cpu-sweep.json \
+  --workspace /tmp/research-sweep --resume --json /tmp/research-resumed.json
+python -m fakegpu compare-experiments --workspace /tmp/research-sweep \
+  --plot /tmp/research-sweep.svg --x size --metric seconds \
+  --json /tmp/research-comparison.json
+```
+
+`--resume` 跳過已核驗成功項，`--resume --retry-failed` 重試失敗或中斷的項目。輸入、
+原始碼或環境改變需要新工作區。指令須在前景執行，指標路徑支援巢狀 JSON。繪圖需要
+Matplotlib，誤差棒是觀測最小/最大值，並非信賴區間。範例測量 CPU 工作，不代表 GPU
+吞吐。
 
 <p align="right">(<a href="#readme-top">返回頂端</a>)</p>
 
@@ -1567,6 +1411,10 @@ python3 -m fakegpu validate \
   --strict
 ```
 
+[發佈回歸記錄](tests/data/research_release_evidence.json) 包含 1734 項通過的 Python
+測試（略過一個 CPU-only build 分支）、原生 CPU 套件、104 個封裝模組、42 個指令說明
+與 68 次離線 CLI 功能檢查；152 份歷史預測逐位元組保持一致。
+
 ### 可重複使用的腳本
 
 | 路徑 | 用途 |
@@ -1605,20 +1453,16 @@ FakeGPU/
   分支。
 - GPU 記憶體估算可能遺漏 backend 私有配置、自訂 operator、allocator 策略與未
   匹配的 workspace。
-- `estimate-llm` 與 `plan-serving` 對視覺模型計入 checkpoint 權重，但未涵蓋
-  vision/projector activation 與 FLOP；decoder token 數需要包含視覺 token，
-  完整多模態記憶體仍需另外驗證。
+- `estimate-llm` 與 `plan-serving` 對視覺模型只計入 checkpoint 權重，不含
+  vision/projector activation 與 FLOP；decoder token 數需已包含視覺 token。
 - Diffusion profile 只描述固定的參考 pipeline。自訂 ControlNet、IP-Adapter、
-  LoRA、safety checker、refiner、影片與 DiT 元件需要額外的元件資料及對應的
-  實體 GPU 驗證。
-- 線上 serving 規劃支援不同請求長度與獨立的自迴歸 draft 模型，但不估算請求
-  到達分布、cache eviction、preemption 或排程器重排、self-speculative、
-  Medusa、EAGLE、tokenizer 重映射、tensor parallelism、吞吐量與延遲。
+  LoRA、safety checker、refiner、影片與 DiT 元件需要額外的元件資料及實體 GPU 驗證。
+- 線上 serving 規劃不估算請求到達分布、cache eviction、preemption 或排程器重排、
+  self-speculative/Medusa/EAGLE、tokenizer 重映射、tensor parallelism、吞吐量與延遲。
 - Roofline 輸出是分析區間，不是實測 kernel 延遲。
 - 分散式耗時包含 coordinator、記憶體複製、socket 與程序排程，不能作為 NCCL、
   NVLink 或 RDMA benchmark。
-- 建模故障事件僅用於檢查控制面報告，不會改變 CUDA 執行，也不代表 NVML ECC
-  計數、實際觀測到的 Xid 或硬體故障。
+- 建模故障事件只用於報告，不會改變 CUDA 執行，也不代表真實的 ECC/Xid 資料。
 - Hybrid 與 passthrough 模式需要相容的實體 CUDA 環境。
 - macOS System Integrity Protection 可能移除系統程式的 `DYLD_*` 環境變數。
   原生攔截建議使用 Homebrew、conda 或 pyenv Python。
