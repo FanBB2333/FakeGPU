@@ -15,6 +15,7 @@ import math
 from pathlib import Path
 import random
 import struct
+import sys
 
 
 P, Int, L = ct.c_void_p, ct.c_int, ct.c_longlong
@@ -69,8 +70,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     root = args.build_dir.resolve()
-    cuda = ct.CDLL(str(root / "libcudart.so.12"))
-    blas = ct.CDLL(str(root / "libcublas.so.12"))
+    suffix = "dylib" if sys.platform == "darwin" else "so.12"
+    cuda = ct.CDLL(str(root / f"libcudart.{suffix}"))
+    blas = ct.CDLL(str(root / f"libcublas.{suffix}"))
 
     def bind(lib, name, types):
         function = getattr(lib, name)
