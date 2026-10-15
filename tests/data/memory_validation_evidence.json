@@ -1,7 +1,7 @@
 {
 "privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
   "schema_version": "fakegpu.memory_validation_evidence.v1",
-  "source_revision": "6efed08ce20f9628481328ef31f90195df78c7fb",
+  "source_revision": "cc7f221356b582e3e06618f226d9e05bd7da64ef",
   "metric": {
     "name": "absolute_percentage_error",
     "unit": "percent",

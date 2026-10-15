@@ -19,7 +19,7 @@ jobs:
       - name: Check out the redacted source of the published documentation
         uses: actions/checkout@v4
         with:
-          ref: 9a1ce78fb9be70bc1215b93f235fac823213f08a
+          ref: 5e978dc24e5f5f7325ea95e28472e98497f465f6
 
       - name: Check out published test reports
         uses: actions/checkout@v4
