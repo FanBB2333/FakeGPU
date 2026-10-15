@@ -405,9 +405,9 @@ binary units, and the results do not replace same-configuration GPU calibration.
 | Mixed chat/completion serving | Same decoder; prompts 4K/8K/2K and generation 256/512/1024; independent KV → two chat requests sharing a 1K system prefix | **1.97 → 1.84 GiB** decode KV (−6.3%) | Heterogeneous request-set formula and chat/RAG matrix |
 | Speculative target calls | 5 draft tokens per verification step and an independent 70% per-token acceptance assumption | **1.00 → 2.94** expected output tokens per target step; not a throughput claim | Geometric acceptance formula plus dual-model memory tests |
 | LLM training | 8B BF16 parameters, AdamW, 4 GPUs, checkpointed activations; replicated → full shard | **104.31 → 26.54 GiB** per rank (−74.6%) | Training-plan phase model |
-| Stable Diffusion v1.5 generation | 512², batch 1, FP16, CFG; all weights resident → model offload | **2.30 → 1.65 GiB** (−28.1%) | Component + phase model |
-| SDXL batch generation | 1024², batch 4, FP16, CFG; regular VAE decode → VAE slicing | **11.49 → 7.74 GiB** (−32.7%) | Sequential VAE batch-shape model |
-| SDXL high-resolution generation | 2048², batch 1, FP16, CFG; full-frame VAE → 512² VAE tiles | **11.49 → 7.27 GiB** (−36.7%) | Sequential VAE tile-shape model |
+| Stable Diffusion v1.5 generation | 512², batch 1, FP16, CFG; all weights resident → model offload | **2.61 → 1.65 GiB** (−36.7%) | Component + phase model |
+| SDXL batch generation | 1024², batch 4, FP16, CFG; regular VAE decode → VAE slicing | **16.49 → 8.99 GiB** (−45.5%) | Sequential VAE batch-shape model |
+| SDXL high-resolution generation | 2048², batch 1, FP16, CFG; full-frame VAE → 512² VAE tiles | **16.49 → 7.27 GiB** (−55.9%) | Sequential VAE tile-shape model |
 | PixArt-Sigma DiT generation | 1024², batch 1, FP16, CFG, model offload; eager → SDPA denoise phase | **2.32 → 1.28 GiB** (−44.7%) | Patch-token, cross-attention, and phase model |
 
 The diffusion profiles use component parameter counts from fixed revisions of

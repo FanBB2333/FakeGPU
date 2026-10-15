@@ -373,9 +373,9 @@ GitHub CI 还会在 Python 3.10–3.12 上执行 Python 测试，并在 Linux �
 | 混合 chat/completion serving | 同一 decoder；prompt 为 4K/8K/2K，生成长度为 256/512/1024；独立 KV → 两个 chat 请求共享 1K system prefix | **1.97 → 1.84 GiB** decode KV（减少 6.3%） | 异构请求集公式和 chat/RAG 矩阵 |
 | Speculative target 调用 | 每次 verification 生成 5 个 draft token，并假设单 token 独立接受率为 70% | 每个 target step 的预期输出 token 为 **1.00 → 2.94**；该数值不表示吞吐提升 | 几何接受率公式和双模型显存测试 |
 | LLM 训练 | 8B BF16 参数、AdamW、4 张 GPU、activation checkpointing；replicated → full shard | **104.31 → 26.54 GiB**/rank（减少 74.6%） | 训练阶段模型 |
-| Stable Diffusion v1.5 生成 | 512²、batch 1、FP16、CFG；全部权重常驻 → model offload | **2.30 → 1.65 GiB**（减少 28.1%） | 组件与阶段模型 |
-| SDXL 批量生成 | 1024²、batch 4、FP16、CFG；普通 VAE decode → VAE slicing | **11.49 → 7.74 GiB**（减少 32.7%） | 顺序 VAE batch shape 模型 |
-| SDXL 高分辨率生成 | 2048²、batch 1、FP16、CFG；整图 VAE → 512² VAE tile | **11.49 → 7.27 GiB**（减少 36.7%） | 顺序 VAE tile shape 模型 |
+| Stable Diffusion v1.5 生成 | 512²、batch 1、FP16、CFG；全部权重常驻 → model offload | **2.61 → 1.65 GiB**（减少 36.7%） | 组件与阶段模型 |
+| SDXL 批量生成 | 1024²、batch 4、FP16、CFG；普通 VAE decode → VAE slicing | **16.49 → 8.99 GiB**（减少 45.5%） | 顺序 VAE batch shape 模型 |
+| SDXL 高分辨率生成 | 2048²、batch 1、FP16、CFG；整图 VAE → 512² VAE tile | **16.49 → 7.27 GiB**（减少 55.9%） | 顺序 VAE tile shape 模型 |
 | PixArt-Sigma DiT 生成 | 1024²、batch 1、FP16、CFG、model offload；eager → SDPA 的 denoise 阶段 | **2.32 → 1.28 GiB**（减少 44.7%） | patch token、交叉注意力与阶段模型 |
 
 Diffusion profile 中的组件参数量来自

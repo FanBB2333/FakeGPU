@@ -394,8 +394,16 @@ def _vae_decode_activation(
             * channel_count
             * element_bytes
         )
-        retained_bytes = feature_bytes * (layers_per_block + 1)
-        working_bytes = 2 * feature_bytes
+        # The previous block upsamples before this block reduces its channels.
+        # Its convolution therefore runs at this resolution with the previous
+        # channel count, which can exceed the current block's output feature.
+        upsample_channels = channels[stage - 1] if stage else 0
+        working_feature_bytes = max(
+            feature_bytes,
+            processed_batch * stage_height * stage_width * upsample_channels * element_bytes,
+        )
+        retained_bytes = working_feature_bytes * (layers_per_block + 1)
+        working_bytes = 2 * working_feature_bytes
         retained_feature_bytes = max(
             retained_feature_bytes,
             retained_bytes,
@@ -411,6 +419,8 @@ def _vae_decode_activation(
                 "width": stage_width,
                 "channels": channel_count,
                 "feature_bytes": feature_bytes,
+                "upsample_convolution_channels": upsample_channels,
+                "working_feature_bytes": working_feature_bytes,
                 "retained_feature_bytes": retained_bytes,
                 "working_tensor_bytes": working_bytes,
             }
@@ -429,7 +439,7 @@ def _vae_decode_activation(
             retained_feature_bytes + maximum_working_bytes
         ),
         "formula": (
-            "maximum live decoder-stage feature set + maximum "
+            "maximum live decoder-stage/upsample-convolution feature set + maximum "
             "two-feature working set; decoder stages are sequential"
         ),
     }

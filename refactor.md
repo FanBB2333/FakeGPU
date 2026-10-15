@@ -21,6 +21,14 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### Diffusion VAE 上采样工作集（独立 bug 修复）
+
+用户要求继续尝试修复显存低估。逐算子 CUDA 诊断定位：SD 512 和 SDXL 1024 的 VAE allocated 峰值均出现在 **256 输入／输出通道、最终图像分辨率**的上采样卷积，之后的 ResNet 才降到 128 通道。原公式仅取当前 decoder block 的输出通道，漏算该过渡阶段；不是新增倍率来吸收误差。
+
+保留原有 working-set 计算规则，每个阶段另计前一 block 的上采样卷积通道，取当前输出与过渡张量的最大工作特征。`feature_bytes` 仍表示当前 block 输出，新增 `upsample_convolution_channels / working_feature_bytes` 解释工作集。原 stage、batch slicing 和 tiling 接口保持，三语表格的解析式示例同步重新计算。先复现专用失败，再通过 diffusion **17 项**与相关完整回归；旧报告与旧预测不改写。
+
+此修正针对解析式 allocated 张量形状，仍不把结果当作 allocator reserved 或物理 OOM 上界。后续独立验证和显式双指标校准证据另行记录，不能将先前诊断数据称作独立 holdout。
+
 ### 最终发布回归与本轮完成边界
 
 已完成本轮所有可在现有授权环境中实施的改动和验收。最终全仓 **1734 passed / 1 skipped，153.09 秒**；跳过项专用于 CPU-only PyTorch build，本环境为 CUDA build。`fakegpu / tests / examples/experiments` 全量 Ruff、shell 语法与 diff check 通过。原生 CPU 集成套件重新构建，旧八组数值、新六组低精度检查及真实 PyTorch CUDA 可见 matmul 全部通过。没有新增 C++ 数值 API 或改变既有 kernel 不执行边界。

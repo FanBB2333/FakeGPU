@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from fakegpu._diffusion_activation import _vae_decode_activation
+
+
+
 import json
 import math
 import struct
@@ -527,3 +531,16 @@ def test_local_denoiser_calls_use_declared_scheduler(
 def test_reference_profile_does_not_claim_exact_scheduler_evaluations():
     report = estimate_diffusion_generation(SD15, steps=8)
     assert report["workload_scale"]["denoiser_evaluations"] is None
+
+
+def test_vae_decode_counts_upsampling_before_channel_reduction():
+    report = _vae_decode_activation(
+        profile={"block_out_channels": [128, 256, 512, 512], "layers_per_block": 2},
+        height=512, width=512, batch_size=1, latent_scale=8,
+        element_bytes=2, slicing=False, tiling=False, tile_size=512,
+    )
+    # The final upsampler convolves 256 channels at 512² before reducing to 128.
+    stage = report["stages"][-1]
+    assert stage["upsample_convolution_channels"] == 256
+    assert stage["working_feature_bytes"] == 1 * 512 * 512 * 256 * 2
+    assert report["peak_bytes"] == 5 * 512 * 512 * 256 * 2
