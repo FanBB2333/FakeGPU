@@ -1348,6 +1348,44 @@ SD/SDXL generation 與 12 個快取特徵訓練程序。六次訓練 holdout 的
 0.044%–3.185%，allocator 包絡未低估；generation VAE allocated 仍低估 12.0%–13.8%，
 reserved 最多低估 31.6%，保留這些未通過的結果。
 
+[後續記憶體精度驗收](tests/data/phase_memory_evidence.json)修正了 VAE 上採樣
+形狀缺項，四種解析度的獨立觀測中 VAE allocated 誤差為 0.045%–1.172%。六個條件
+各五次校準後再五次 holdout，共 60 個新程序；明確原生預算的 allocated／reserved
+門檻皆通過，這組固定輸入、BF16 條件的峰值與校準最大值一致。原未校準失敗保留，
+這些結果不代表可移轉至新形狀，也不構成實體 OOM 保證。
+
+Allocated 張量儲存與 allocator reserved 是不同指標。`calibrate phase-sample`
+在全新 CUDA 程序同時採集兩者；`phase-estimate` 用至少五個獨立程序封存各階段實測
+最大值，`phase-validate` 對照稍後開始的獨立執行。每份樣本與預算均需新輸出路徑。
+
+```bash
+# plan.json: a compatible local plan-serving or estimate-diffusion report
+for i in 1 2 3 4 5; do
+  CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
+    --json "/tmp/phase-cal-$i.json"
+done
+python -m fakegpu calibrate phase-estimate \
+  --calibration-sample /tmp/phase-cal-1.json \
+  --calibration-sample /tmp/phase-cal-2.json \
+  --calibration-sample /tmp/phase-cal-3.json \
+  --calibration-sample /tmp/phase-cal-4.json \
+  --calibration-sample /tmp/phase-cal-5.json --json /tmp/phase-budget.json.gz
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
+  --json /tmp/phase-holdout.json
+python -m fakegpu calibrate phase-validate --budget /tmp/phase-budget.json.gz \
+  --holdout-sample /tmp/phase-holdout.json --max-absolute-error-percent 20 \
+  --max-underestimate-percent 10 --json /tmp/phase-validation.json
+```
+
+採集支援同構 Transformers dynamic-cache serving，以及 SDPA、無 offload／slicing／
+tiling 的本機 SD／SDXL。計畫、選定完整權重與設定、GPU UUID、Torch／CUDA／cuDNN
+版本、allocator 與執行實作須匹配。報告分別提供兩項指標與原分析預測，不做形狀遷移
+或隱含安全係數；kernel cache 為 uncontrolled。離線預算／驗證僅依賴標準函式庫。
+預設門檻為絕對誤差 20%、低估 10%，未通過回傳狀態 1。實測範圍並非實體 OOM 保證。
+
+VAE 形狀模型納入了通道縮減前的高解析度上採樣卷積，其工作集可能大於後續 block
+輸出。SD／SDXL 的 allocated／reserved 原生精度證據另外記錄。
+
 FSDP2 `full_shard` 可為 `plan-training` 提供 `--parameter-shapes layout.json`，
 內容為 `{"shapes": [[12, 8], [12], [3, 12], [3]]}`，並提供一致的
 `--parameter-bytes` 及統一 `--parameter-element-bytes`。依原生每參數第 0 維 chunk

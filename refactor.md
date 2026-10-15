@@ -16,10 +16,35 @@
 - [x] R25 diffusion generation 真测、训练估计及独立观测（明确限定 SD/SDXL 与缓存特征 U-Net）。
 - [x] R26 本机软件矩阵、CPU／GPU 1 MoE 语义及原生两 CPU rank DDP／FSDP2。
 - 范围外：R26 物理多 GPU／多机 TP／PP／CP／EP、ZeRO／FSDP。用户已确认当前无法开展，不列为待办或完成阻塞；保持未验证。
-- [ ] 显存精度改进：定位 serving reserved decode 和 diffusion VAE 的低估，修改后使用新的独立观测验收。
+- [x] 显存精度改进：修复 VAE 上采样工作集，新增双指标原生校准，六种条件各五次校准＋五次独立验证通过。
 - [x] R23 本轮有限原生数值需求、实验工具与产物，以及最终全仓／wheel 回归。
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
+
+### 分阶段 allocated／reserved 精度改进完成
+
+真实多卡／多机已按用户说明移出当前范围；本阶段只使用 GPU 1。纯形状公式描述张量工作集，不能把同一个点当成 allocator reserved 的可靠估计。新增公开 `sample_phase_memory / estimate_phase_memory / validate_phase_memory`，CLI 为 `calibrate phase-sample / phase-estimate / phase-validate`，仍是 42 个内置命令。
+
+采集器在一个全新 CUDA 进程同时记录 allocated/reserved，支持同构 Transformers dynamic cache 与本地 SD/SDXL SDPA，无 offload/slicing/tiling。完整所选权重、小型配置／tokenizer 文件、GPU UUID、Torch/CUDA/cuDNN 版本、allocator 环境／fraction、后端执行开关及 107 个生产模块 SHA 绑定原生身份。至少五个独立 process 建立各阶段观测 min/mean/max 和总体峰值，不加安全系数，不按形状迁移；未覆盖条件必须重新采集。预算封存后才能开始独立 holdout，同一 process、不同输入／硬件／版本／实现或事后封存均拒绝。离线消费无需 Torch、CUDA 或原始模型文件。
+
+正式协议事先声明六个 BF16 条件，GPU 1、OMP/MKL=1、kernel cache uncontrolled。每条件五次校准、先封存预算，再五次独立验证，共 **60 processes / 30 holdouts / 160 个 phase×metric 比较**。绝对误差门槛 20%、低估门槛 10%，没有失败重试、误差筛选、增加轮次或事后调参。原校准和旧失败观测均未改写。
+
+| 条件 | 纯形状模型 VAE allocated APE | 双指标校准的独立验证最大 APE／低估 |
+|---|---:|---:|
+| Qwen3-0.6B 8192＋128 tokens | 不适用 | 0%／0% |
+| Qwen3-0.6B 32768＋128 tokens | 不适用 | 0%／0% |
+| SD 1.4 / 512² | 0.045% | 0%／0% |
+| SD 1.4 / 768² | 1.172% | 0%／0% |
+| SDXL / 1024² | 0.140% | 0%／0% |
+| SDXL / 1280² | 0.833% | 0%／0% |
+
+旧 32K decode reserved 的 24.07% 低估由显式 reserved 原生预算处理；VAE allocated 的旧 12.0%–13.8% 低估由上采样形状修正处理，reserved 使用独立原生量。六个条件的解析式 **allocated** 比较也全部通过预设 20%／10% 门槛，但 serving 8K prefill 的原 14.719% 高估仍保留，没有按结果修正该公式。零误差仅代表这些固定形状、输入与环境中的重复 allocator 观测，不是未知负载、GPU、package patch、长期增长或物理 OOM 的保证。
+
+独立标准库审计重算全部输入文件 SHA、107 个冻结源文件、独立 process／run ID、校准极值与均值、160 个比较及事前封存，结果 **60 processes / 47 模型输入文件 / errors=[]**。四个 diffusion 条件的最终图像 SHA 在各自十次运行中一致，serving 的最终 token IDs 一致；全部有限性检查通过，不作生成质量或无 instrumentation 的性能声明。
+
+全仓 **1744 passed / 1 skipped，159.58 秒**（跳过 CPU-only PyTorch build 分支），相关定向 **87 passed**，全量 Ruff 与 diff check 通过。安装包 **107 模块、六个原生库／可执行文件、82 profiles** 与源码／构建一致，纯标准库 **45 help（42 命令＋3 子命令）/ 36 新校准功能 / 41 原完整预算功能** 检查通过，**152 份历史微调预测逐字节一致**。新采集器首次把 inspector 的 auto variant 标记当成显式 variant 而拒绝，已在正式矩阵前修正；README 解析数值同步更新后定向回归通过，保留两次开发失败日志。
+
+证据见 [phase memory](tests/data/phase_memory_evidence.json)与 [408 份压缩审阅记录](tests/data/phase_memory_records.json.gz)，包括完整冻结源码、两次逐算子诊断、60 份原生样本／日志、每条件预算与封存、独立审计、全仓及 wheel 检查。原始产物 `/tmp/fakegpu-memory-accuracy-20261015/`。VAE bug 独立提交 `ef7cb741`；校准功能另行提交，未 push／发布。
 
 ### Diffusion VAE 上采样工作集（独立 bug 修复）
 

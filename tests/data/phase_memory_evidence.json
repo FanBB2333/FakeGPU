@@ -1,0 +1,205 @@
+{
+  "artifact_root": "/tmp/fakegpu-memory-accuracy-20261015",
+  "audit": {
+    "cases": [
+      {
+        "analytic_gate_passed": true,
+        "calibrated_gate_passed": true,
+        "calibration_processes": 5,
+        "case": "serving-8192",
+        "exceeds_calibration_envelope": [],
+        "holdout_processes": 5,
+        "last_token_ids_consistent": true,
+        "max_analytic_allocated_error_percent": 14.718999535922563,
+        "max_analytic_allocated_underestimate_percent": 0.0,
+        "max_calibrated_absolute_error_percent": 0.0,
+        "max_calibrated_underestimate_percent": 0.0
+      },
+      {
+        "analytic_gate_passed": true,
+        "calibrated_gate_passed": true,
+        "calibration_processes": 5,
+        "case": "serving-32768",
+        "exceeds_calibration_envelope": [],
+        "holdout_processes": 5,
+        "last_token_ids_consistent": true,
+        "max_analytic_allocated_error_percent": 7.340186527997698,
+        "max_analytic_allocated_underestimate_percent": 0.0,
+        "max_calibrated_absolute_error_percent": 0.0,
+        "max_calibrated_underestimate_percent": 0.0
+      },
+      {
+        "analytic_gate_passed": true,
+        "calibrated_gate_passed": true,
+        "calibration_processes": 5,
+        "case": "sd14-512",
+        "exceeds_calibration_envelope": [],
+        "holdout_processes": 5,
+        "image_hashes_consistent": true,
+        "max_analytic_allocated_error_percent": 5.000162932073419,
+        "max_analytic_allocated_underestimate_percent": 5.000162932073419,
+        "max_calibrated_absolute_error_percent": 0.0,
+        "max_calibrated_underestimate_percent": 0.0,
+        "vae_analytic_errors_percent": [
+          0.04473633868827618,
+          0.04473633868827618,
+          0.04473633868827618,
+          0.04473633868827618,
+          0.04473633868827618
+        ]
+      },
+      {
+        "analytic_gate_passed": true,
+        "calibrated_gate_passed": true,
+        "calibration_processes": 5,
+        "case": "sd14-768",
+        "exceeds_calibration_envelope": [],
+        "holdout_processes": 5,
+        "image_hashes_consistent": true,
+        "max_analytic_allocated_error_percent": 9.001264576569879,
+        "max_analytic_allocated_underestimate_percent": 9.001264576569879,
+        "max_calibrated_absolute_error_percent": 0.0,
+        "max_calibrated_underestimate_percent": 0.0,
+        "vae_analytic_errors_percent": [
+          1.1722114236627161,
+          1.1722114236627161,
+          1.1722114236627161,
+          1.1722114236627161,
+          1.1722114236627161
+        ]
+      },
+      {
+        "analytic_gate_passed": true,
+        "calibrated_gate_passed": true,
+        "calibration_processes": 5,
+        "case": "sdxl-1024",
+        "exceeds_calibration_envelope": [],
+        "holdout_processes": 5,
+        "image_hashes_consistent": true,
+        "max_analytic_allocated_error_percent": 3.6514604818385434,
+        "max_analytic_allocated_underestimate_percent": 3.6514604818385434,
+        "max_calibrated_absolute_error_percent": 0.0,
+        "max_calibrated_underestimate_percent": 0.0,
+        "vae_analytic_errors_percent": [
+          0.13987161915070873,
+          0.13987161915070873,
+          0.13987161915070873,
+          0.13987161915070873,
+          0.13987161915070873
+        ]
+      },
+      {
+        "analytic_gate_passed": true,
+        "calibrated_gate_passed": true,
+        "calibration_processes": 5,
+        "case": "sdxl-1280",
+        "exceeds_calibration_envelope": [],
+        "holdout_processes": 5,
+        "image_hashes_consistent": true,
+        "max_analytic_allocated_error_percent": 4.625608189895513,
+        "max_analytic_allocated_underestimate_percent": 4.625608189895513,
+        "max_calibrated_absolute_error_percent": 0.0,
+        "max_calibrated_underestimate_percent": 0.0,
+        "vae_analytic_errors_percent": [
+          0.8329677951595909,
+          0.8329677951595909,
+          0.8329677951595909,
+          0.8329677951595909,
+          0.8329677951595909
+        ]
+      }
+    ],
+    "errors": [],
+    "holdout_phase_metric_comparisons": 160,
+    "model_input_files_hashed": 47,
+    "processes": 60,
+    "source_files": 107
+  },
+  "diagnostic_vae_peaks": {
+    "sd14": {
+      "after": 2535888384,
+      "input": {
+        "dtype": "torch.bfloat16",
+        "shape": [
+          1,
+          256,
+          512,
+          512
+        ]
+      },
+      "operation": "aten.conv2d.default",
+      "peak_allocated": 2806420992,
+      "temporary_bytes": 270532608
+    },
+    "sdxl": {
+      "after": 8539165184,
+      "input": {
+        "dtype": "torch.bfloat16",
+        "shape": [
+          1,
+          256,
+          1024,
+          1024
+        ]
+      },
+      "operation": "aten.conv2d.default",
+      "peak_allocated": 9615004160,
+      "temporary_bytes": 1075838976
+    }
+  },
+  "historical_finetune_predictions_byte_identical": 152,
+  "original_vae_observations": {
+    "sd14": {
+      "native_allocated_bytes": 2806420992,
+      "native_reserved_bytes": 3468689408,
+      "original_shape_peak_bytes": 2469621182
+    },
+    "sdxl": {
+      "native_allocated_bytes": 9615004160,
+      "native_reserved_bytes": 12121538560,
+      "original_shape_peak_bytes": 8286275542
+    }
+  },
+  "protocol": {
+    "calibrations_per_case": 5,
+    "cases": [
+      "serving-8192",
+      "serving-32768",
+      "sd14-512",
+      "sd14-768",
+      "sdxl-1024",
+      "sdxl-1280"
+    ],
+    "holdouts_per_case": 5,
+    "kernel_cache_regime": "uncontrolled",
+    "max_absolute_error_percent": 20.0,
+    "max_underestimate_percent": 10.0,
+    "native_allocator": "native",
+    "scope": "One physical GPU 1, exact workload calibration. Both allocator metrics collected in each fresh process; VAE analytic allocated peaks separately tested on old and new shapes. No retry or accuracy-based extension.",
+    "started_at_utc": "2026-10-15T04:35:41.770698+00:00"
+  },
+  "record_count": 408,
+  "records": "tests/data/phase_memory_records.json.gz",
+  "retained_development_failures": [
+    "Initial phase-sample rejected the inspector auto variant token; corrected before the formal cohort.",
+    "The old README numeric examples failed after the VAE formula fix; recalculated all three languages before formal validation."
+  ],
+  "schema_version": "fakegpu.phase_memory_evidence.v1",
+  "scope": "BF16 single GPU observations only. Shape model allocated correction is separate from exact-workload native allocated/reserved calibration. No shape transfer, fitted safety factor, confidence interval or physical OOM guarantee; old failures remain in their original records. Physical multi-GPU/multi-node work is outside current scope.",
+  "tests": {
+    "passed": 1744,
+    "pre_matrix_related_passed": 87,
+    "ruff_passed": true,
+    "seconds": 159.58,
+    "skipped": 1
+  },
+  "wheel": {
+    "all_source_bytes_match": true,
+    "help_checks": 45,
+    "legacy_cli_checks": 41,
+    "parent_imported_ml": false,
+    "phase_functional_cli_checks": 36,
+    "python_modules": 107,
+    "sha256": "c9bb53acc187e24bcda3d6a21d1674006a79102c54c8d37234ad04d53d9de9d1"
+  }
+}

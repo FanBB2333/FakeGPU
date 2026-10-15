@@ -39,6 +39,8 @@ from .diffusion_training import (
     compare_diffusion_training,
 )
 from .diffusion_training_runner import run_diffusion_training
+from .phase_memory import estimate_phase_memory, validate_phase_memory
+from .phase_memory_runner import sample_phase_memory
 from .experiments import (
     plan_experiments,
     run_experiments,
@@ -178,6 +180,9 @@ __all__ = [
     "estimate_diffusion_training",
     "compare_diffusion_training",
     "run_diffusion_training",
+    "estimate_phase_memory",
+    "validate_phase_memory",
+    "sample_phase_memory",
     "plan_experiments",
     "run_experiments",
     "compare_experiments",

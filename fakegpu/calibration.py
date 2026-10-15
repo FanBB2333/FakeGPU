@@ -930,6 +930,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     subparsers = parser.add_subparsers(dest="action", required=True)
+    from .phase_memory_cli import configure
+    configure(subparsers)
 
     compare_parser = subparsers.add_parser(
         "compare",
@@ -1127,6 +1129,9 @@ def _dispatch(
     parser: argparse.ArgumentParser,
 ) -> int:
     try:
+        from .phase_memory_cli import ACTIONS, dispatch
+        if args.action in ACTIONS:
+            return dispatch(args)
         if args.action == "sample-transformers":
             plan_path = _serving_sample_plan_path(args.plan)
             plan = load_mapping(plan_path)

@@ -1533,6 +1533,51 @@ Six training holdouts have 0.044%–3.185% total-time error and no allocator-env
 underestimate. Generation VAE allocated peaks were underestimated by 12.0%–13.8%,
 and reserved peaks by up to 31.6%; those failures remain visible.
 
+The [subsequent phase-memory validation](tests/data/phase_memory_evidence.json)
+fixes the VAE upsampling shape omission: four independent resolution cohorts have
+0.045%–1.172% VAE allocated error. Six conditions, each with five calibrations and
+five later holdouts (60 fresh processes), pass both allocated/reserved gates using
+explicit native phase budgets. All held-out peaks equal their calibration maxima
+in this fixed-input BF16 matrix. Earlier uncalibrated failures remain preserved;
+these results do not imply transfer to new shapes or physical OOM safety.
+
+Allocated tensor storage and allocator-reserved memory are separate quantities.
+`calibrate phase-sample` collects both in one fresh CUDA process; `phase-estimate`
+seals per-phase maxima from at least five independent processes, and `phase-validate`
+checks a later independent run. Use a new output path for every sample and budget.
+
+```bash
+# plan.json: a compatible local plan-serving or estimate-diffusion report
+for i in 1 2 3 4 5; do
+  CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
+    --json "/tmp/phase-cal-$i.json"
+done
+python -m fakegpu calibrate phase-estimate \
+  --calibration-sample /tmp/phase-cal-1.json \
+  --calibration-sample /tmp/phase-cal-2.json \
+  --calibration-sample /tmp/phase-cal-3.json \
+  --calibration-sample /tmp/phase-cal-4.json \
+  --calibration-sample /tmp/phase-cal-5.json --json /tmp/phase-budget.json.gz
+CUDA_VISIBLE_DEVICES=1 python -m fakegpu calibrate phase-sample plan.json \
+  --json /tmp/phase-holdout.json
+python -m fakegpu calibrate phase-validate --budget /tmp/phase-budget.json.gz \
+  --holdout-sample /tmp/phase-holdout.json --max-absolute-error-percent 20 \
+  --max-underestimate-percent 10 --json /tmp/phase-validation.json
+```
+
+Sampling supports homogeneous Transformers dynamic-cache serving, and local
+SD/SDXL with SDPA and no offload/slicing/tiling. Each plan, full selected weights
+and configuration, GPU UUID, Torch/CUDA/cuDNN versions, allocator and execution
+implementation must match. Reports expose both metrics and the analytic prediction
+separately; no shape transfer or hidden safety multiplier is applied. Kernel caches
+are uncontrolled. Offline estimation/validation needs only the standard library.
+Default validation limits are 20% absolute error and 10% underestimation; failures
+return status 1. Observed envelopes are not physical OOM guarantees.
+
+The VAE shape model includes the high-resolution upsampling convolution before
+channel reduction; its working set can be larger than the following block output.
+Native SD/SDXL allocated/reserved accuracy evidence is recorded separately below.
+
 For FSDP2 `full_shard`, `plan-training --parameter-shapes layout.json` accepts
 `{"shapes": [[12, 8], [12], [3, 12], [3]]}` plus the matching total
 `--parameter-bytes` and uniform `--parameter-element-bytes`. It models native
