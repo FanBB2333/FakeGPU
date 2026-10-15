@@ -21,6 +21,12 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### Pipeline attention slicing 与 VAE 精度（独立复核修正）
+
+审查发现本轮最初的 CPU/meta upcast 验证手动替换了 VAE processor，不能证明 `pipeline.enable_attention_slicing()` 的行为。实际 pipeline 仅修改 U-Net，AutoencoderKL 继续使用原 backend。已保留早期脚本／结果，并用真实 pipeline 的 SDPA／eager × slicing 开关四种 CPU/meta 条件重新核验；现切片开关不会额外升高 VAE dtype。修正 SDXL SDPA+slicing 的 **21,027,880 bytes** 权重多计与输入 dtype 误报。
+
+第一批正式 **18 场景／60 进程**全部 slicing=False，原验收不受影响，独立审计已经完成且 errors=[]。后续再验证该优化模式；不会将手动替换 VAE processor 的旧证据作为 pipeline slicing 的证明。
+
 ### LLM 推理共享 embedding 计数（独立 bug 修复）
 
 Qwen3-0.6B 扩展 FP16／FP32／eager 采样复现短上下文 decode allocated **21.21%–22.41% 高估**。原生 meta 模型表明检查点保存的 input embedding 与 lm_head 两份参数在加载后共享：序列化 **751,632,384** 元素，实际唯一参数 **596,049,920**；重复的 **155,582,464** 元素对应 FP16/BF16 **311,164,928 bytes**。现只对已识别架构、显式 tie_word_embeddings、关闭 torchscript、两份匹配形状及浮点 dtype 的 header 去重运行时存储，检查点大小不变。TorchScript 原生会 clone，缺失／不一致／未知或量化布局均不减去猜测字节。

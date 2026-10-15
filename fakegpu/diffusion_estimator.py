@@ -54,7 +54,6 @@ def _vae_decode_precision(
     *,
     dtype: str,
     attention_backend: str,
-    attention_slicing: bool,
     loaded_weight_bytes: int,
 ) -> dict[str, Any]:
     vae = _mapping(profile["vae"])
@@ -71,8 +70,9 @@ def _vae_decode_precision(
         decode_dtype = "float32"
         input_dtype = "float32"
         # Diffusers leaves these modules at FP16 only for its SDPA processor;
-        # eager and sliced processors use the fully upcast VAE instead.
-        if attention_backend == "sdpa" and not attention_slicing:
+        # Pipeline attention slicing changes the UNet processor only: the
+        # AutoencoderKL keeps its selected backend and precision split.
+        if attention_backend == "sdpa":
             if "sdpa_low_precision_parameter_count" not in vae:
                 raise DiffusionEstimateError(
                     "SDXL FP16 upcasting with SDPA requires "
@@ -278,7 +278,6 @@ def estimate_diffusion_generation(
         profile,
         dtype=selected_dtype,
         attention_backend=attention_backend,
-        attention_slicing=attention_slicing,
         loaded_weight_bytes=component_weight_bytes["vae"],
     )
     vae_element_bytes = SUPPORTED_DTYPES[vae_precision["decoder_up_blocks_dtype"]]

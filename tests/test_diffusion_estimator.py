@@ -358,7 +358,7 @@ def test_local_unet_pipeline_is_inspected_from_json_and_headers(
 
 @pytest.mark.parametrize(
     "attention_backend,attention_slicing,retained_parameters",
-    [("sdpa", False, 16), ("eager", False, 0), ("sdpa", True, 0)],
+    [("sdpa", False, 16), ("eager", False, 0), ("sdpa", True, 16)],
 )
 @pytest.mark.parametrize("offload", ["none", "model"])
 def test_sdxl_fp16_decode_upcasts_only_native_vae_modules(
@@ -618,3 +618,13 @@ def test_vae_decode_counts_upsampling_before_channel_reduction():
     assert stage["upsample_convolution_channels"] == 256
     assert stage["working_feature_bytes"] == 1 * 512 * 512 * 256 * 2
     assert report["peak_bytes"] == 5 * 512 * 512 * 256 * 2
+
+
+def test_sdxl_pipeline_attention_slicing_preserves_vae_precision() -> None:
+    baseline = estimate_diffusion_generation(SDXL, dtype="float16")
+    sliced = estimate_diffusion_generation(
+        SDXL, dtype="float16", attention_slicing=True
+    )
+    assert sliced["vae_precision"] == baseline["vae_precision"]
+    assert _phase(sliced, "vae_decode") == _phase(baseline, "vae_decode")
+    assert _phase(sliced, "denoise") != _phase(baseline, "denoise")
