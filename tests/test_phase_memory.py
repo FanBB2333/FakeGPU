@@ -162,3 +162,92 @@ def test_cli_offline_budget_and_failed_gate(tmp_path):
     with pytest.raises(SystemExit) as error:
         main(["phase-estimate", *paths, "--json", str(budget_path)])
     assert error.value.code == 2
+
+
+def test_diffusion_sampler_rejects_unverified_model_path_override(tmp_path):
+    from test_diffusion_estimator import _write_pipeline
+
+    from fakegpu.diffusion_estimator import estimate_diffusion_generation
+    from fakegpu.phase_memory_runner import _model_inputs
+
+    root = tmp_path / "verified-pipeline"
+    _write_pipeline(root, transformer=False)
+    prediction = estimate_diffusion_generation(model_dir=root, dtype="bfloat16")
+    _, workload, verified_root, paths = _model_inputs(prediction)
+    assert workload["model_dir"] == verified_root == root
+    assert all(path.is_relative_to(root) for path in paths)
+
+    prediction["inputs"]["model_dir"] = str(tmp_path / "unverified-pipeline")
+    with pytest.raises(ValueError, match="model_dir"):
+        _model_inputs(prediction)
+
+
+@pytest.mark.parametrize("source_changed", [False, True])
+def test_phase_sampler_checks_implementation_after_execution(
+    tmp_path, monkeypatch, source_changed
+):
+    import sys
+    from types import SimpleNamespace
+
+    from fakegpu import phase_memory_runner as runner
+
+    def noop(*args, **kwargs):
+        return None
+
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 1,
+            is_initialized=lambda: False,
+            set_device=noop,
+        ),
+        set_num_threads=noop,
+        manual_seed=noop,
+        backends=SimpleNamespace(
+            cuda=SimpleNamespace(
+                matmul=SimpleNamespace(allow_tf32=False),
+                flash_sdp_enabled=lambda: True,
+                mem_efficient_sdp_enabled=lambda: True,
+                math_sdp_enabled=lambda: True,
+            ),
+            cudnn=SimpleNamespace(
+                allow_tf32=False,
+                benchmark=False,
+                deterministic=False,
+                version=lambda: 123,
+            ),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(__version__="test"))
+    monkeypatch.setattr(runner, "_reject_simulated_cuda_environment", noop)
+    base = sample(0)
+    monkeypatch.setattr(
+        runner, "_real_cuda_environment", lambda *a, **k: base["identity"]["environment"]
+    )
+    monkeypatch.setattr(
+        runner, "capture_memory_allocator", lambda _: base["identity"]["allocator"]
+    )
+    weights = tmp_path / "model.safetensors"
+    weights.write_bytes(b"fixed-model-content")
+    monkeypatch.setattr(
+        runner, "_model_inputs", lambda _: ("transformers", {}, tmp_path, [weights])
+    )
+    before = {"runner.py": {"sha256": "before"}}
+    after = {"runner.py": {"sha256": "after"}} if source_changed else deepcopy(before)
+    identities = iter([before, after])
+    monkeypatch.setattr(runner, "_source_identity", lambda: next(identities))
+    monkeypatch.setattr(runner, "_process_marker", lambda _: {"start_ticks": "1"})
+
+    def execute(torch, workload, peaks):
+        peaks.phases = deepcopy(base["phases"])
+        return {"finite_check": "stubbed native execution"}
+
+    monkeypatch.setattr(runner, "_serving", execute)
+    if source_changed:
+        with pytest.raises(ValueError, match="implementation changed"):
+            runner.sample_phase_memory(base["prediction"])
+    else:
+        result = runner.sample_phase_memory(base["prediction"])
+        assert result["identity"]["implementation"] == before
+        assert result["phases"] == base["phases"]

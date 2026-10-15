@@ -64,6 +64,10 @@ def _model_inputs(plan):
         }:
             raise ValueError("phase diffusion runner supports SD and SDXL only")
         inputs = plan["inputs"]
+        if "model_dir" in inputs:
+            raise ValueError(
+                "phase diffusion inputs cannot override the inspected model_dir"
+            )
         if (
             inputs["offload"] != "none"
             or inputs["attention_backend"] != "sdpa"
@@ -86,7 +90,7 @@ def _model_inputs(plan):
                     "phase diffusion runner requires default safetensors weights"
                 )
             weights.extend(root / name / value for value in names)
-        workload = {"model_dir": root, **inputs}
+        workload = {**inputs, "model_dir": root}
         kind = "diffusers"
     else:
         raise ValueError(
@@ -315,6 +319,8 @@ def sample_phase_memory(prediction):
     )
     if any(_marker(path) != marker for path, marker in markers.items()):
         raise ValueError("model input changed during native sampling")
+    if _source_identity() != identity["implementation"]:
+        raise ValueError("implementation changed during native sampling")
     marker = _process_marker(os.getpid())
     report = {
         "schema_version": SAMPLE_SCHEMA,

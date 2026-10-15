@@ -21,6 +21,10 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### 扩展场景校准身份（独立 bug 修复）
+
+扩展审查复现 `inputs.model_dir` 可覆盖已检查的 pipeline 路径，从而加载与身份 SHA 不同的权重；现明确拒绝该保留字段，并让已验证路径作为最终运行路径。采样结束时同时复核生产源码 SHA，拒绝执行期间发生的源码变化。两个缺口均有先失败后通过的 CPU 回归，不依赖 GPU；phase-memory 专用测试 **12 passed**。历史原生矩阵自身已冻结源码与路径，原始测量不变。
+
 ### 分阶段 allocated／reserved 精度改进完成
 
 真实多卡／多机已按用户说明移出当前范围；本阶段只使用 GPU 1。纯形状公式描述张量工作集，不能把同一个点当成 allocator reserved 的可靠估计。新增公开 `sample_phase_memory / estimate_phase_memory / validate_phase_memory`，CLI 为 `calibrate phase-sample / phase-estimate / phase-validate`，仍是 42 个内置命令。
