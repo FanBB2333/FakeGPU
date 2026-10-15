@@ -1357,8 +1357,8 @@ FSDP2 `full_shard` 可為 `plan-training` 提供 `--parameter-shapes layout.json
 [版本化原生驗收矩陣](tests/data/research_native_evidence.json)記錄六組
 FP32/FP16/BF16 LoRA／attention CPU_SIM 數值、CPU／GPU 1 上 tiny Qwen3 MoE
 路由與梯度，以及兩個 CPU rank 的原生 DDP／FSDP2 檢查。這些是有限數值與語義
-涵蓋；實體 TP／PP／CP／EP、多 GPU ZeRO／FSDP 與多機 collective 仍需額外授權
-裝置驗證。CPU_SIM 不執行任意 CUDA 裝置程式碼，數值 probe 保留嚴格 unsupported API
+涵蓋；實體 TP／PP／CP／EP、多 GPU ZeRO／FSDP 與多機 collective 目前不納入
+專案驗收範圍，維持未驗證。CPU_SIM 不執行任意 CUDA 裝置程式碼，數值 probe 保留嚴格 unsupported API
 檢查。主機數值可用 `scripts/test.sh cpu` 重現，本機語義入口見
 `tests/native/research_distributed.py --help`。
 

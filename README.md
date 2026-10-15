@@ -1545,7 +1545,7 @@ The [versioned native validation matrix](tests/data/research_native_evidence.jso
 records six FP32/FP16/BF16 LoRA/attention CPU_SIM cases, tiny Qwen3 MoE routing and
 gradients on CPU/GPU 1, and two CPU ranks running native DDP/FSDP2. These are finite
 numeric and semantic checks. Physical TP/PP/CP/EP, multi-GPU ZeRO/FSDP and multi-node
-collectives remain unvalidated pending additional authorized hardware. Arbitrary
+collectives are outside the current project scope and remain unvalidated. Arbitrary
 CUDA device code is not executed by CPU_SIM; strict unsupported-API checks remain
 enabled in the numeric probe. Reproduce the host math with `scripts/test.sh cpu`
 and the local semantics with `tests/native/research_distributed.py --help`.
