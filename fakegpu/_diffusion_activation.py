@@ -81,6 +81,92 @@ def _denoiser_activation(
     )
 
 
+def _unet_materialized_attention(
+    *,
+    batch_size: int,
+    spatial_tokens: int,
+    text_tokens: int,
+    channels: int,
+    heads: int,
+    element_bytes: int,
+    only_cross_attention: bool,
+    upcast_attention: bool,
+    slicing: bool,
+) -> dict[str, Any]:
+    """Live buffers in standard Diffusers AttnProcessor/SlicedAttnProcessor.
+
+    Scores and softmax probabilities coexist. Slicing replaces the processor,
+    including when the requested backend is SDPA, and chunks the flattened
+    batch/head axis using ``heads // 2`` for native ``slice_size='auto'``.
+    """
+    head_dim = channels // heads
+    if head_dim == 0:
+        raise DiffusionEstimateError(
+            "standard UNet attention requires at least one channel per head"
+        )
+    score_heads = heads // 2 if slicing else batch_size * heads
+    if score_heads == 0:
+        raise DiffusionEstimateError(
+            "Diffusers automatic attention slicing requires at least two heads"
+        )
+    projection_channels = heads * head_dim
+    feature_bytes = batch_size * spatial_tokens * projection_channels * element_bytes
+    score_element_bytes = 4 if upcast_attention else element_bytes
+    candidates = {}
+    kinds = ("cross",) if only_cross_attention else ("self", "cross")
+    for kind in kinds:
+        key_tokens = spatial_tokens if kind == "self" else text_tokens
+        qkv_bytes = feature_bytes + 2 * batch_size * key_tokens * projection_channels * element_bytes
+        score_bytes = score_heads * spatial_tokens * key_tokens * score_element_bytes
+        # get_attention_scores casts Q/K while the caller retains the original
+        # projections. Slice views only cast the active flattened head rows.
+        cast_bytes = (
+            score_heads * (spatial_tokens + key_tokens) * head_dim * 4
+            if upcast_attention and element_bytes != 4
+            else 0
+        )
+        if slicing:
+            # The full output buffer is allocated before the slice loop. On
+            # subsequent iterations the previous bmm slice remains referenced
+            # until the next get_attention_scores call returns.
+            previous_slice_bytes = score_heads * spatial_tokens * head_dim * element_bytes
+            output_bytes = feature_bytes
+            score_peak = output_bytes + previous_slice_bytes + cast_bytes + 2 * score_bytes
+            # During bmm, probabilities and the newly computed output slice
+            # coexist with the preallocated full output.
+            probability_bytes = score_heads * spatial_tokens * key_tokens * element_bytes
+            value_peak = output_bytes + probability_bytes + previous_slice_bytes
+            projection_peak = 2 * feature_bytes + previous_slice_bytes
+        else:
+            previous_slice_bytes = 0
+            output_bytes = 0
+            score_peak = cast_bytes + 2 * score_bytes
+            probability_bytes = batch_size * heads * spatial_tokens * key_tokens * element_bytes
+            value_peak = probability_bytes + 2 * feature_bytes
+            projection_peak = value_peak
+        candidates[kind] = {
+            "query_tokens": spatial_tokens,
+            "key_tokens": key_tokens,
+            "score_head_rows": score_heads,
+            "projection_channels": projection_channels,
+            "score_element_bytes": score_element_bytes,
+            "qkv_bytes": qkv_bytes,
+            "qk_upcast_bytes": cast_bytes,
+            "score_buffer_bytes": score_bytes,
+            "simultaneous_score_buffer_bytes": 2 * score_bytes,
+            "sliced_output_bytes": output_bytes,
+            "previous_slice_output_bytes": previous_slice_bytes,
+            "peak_bytes": qkv_bytes + max(score_peak, value_peak, projection_peak),
+        }
+    return {
+        "processor": "SlicedAttnProcessor(auto)" if slicing else "AttnProcessor",
+        "self_attention": not only_cross_attention,
+        "upcast_attention": upcast_attention,
+        "candidates": candidates,
+        "peak_bytes": max(value["peak_bytes"] for value in candidates.values()),
+    }
+
+
 def _unet_denoiser_activation(
     *,
     profile: Mapping[str, Any],
@@ -111,6 +197,16 @@ def _unet_denoiser_activation(
     maximum_attention_bytes = 0
     maximum_feed_forward_bytes = 0
     uses_geglu = profile.get("model_class") == "UNet2DConditionModel"
+    materialized_attention = attention_backend == "eager" or attention_slicing
+    standard_attention = uses_geglu and profile.get("standard_transformer_attention", True)
+    use_attention_buffers = materialized_attention and standard_attention
+    only_cross_by_level = profile.get("only_cross_attention_by_level", [False] * len(channels))
+    if use_attention_buffers and (
+        not isinstance(only_cross_by_level, (list, tuple))
+        or len(only_cross_by_level) != len(channels)
+        or any(type(value) is not bool for value in only_cross_by_level)
+    ):
+        raise DiffusionEstimateError("only_cross_attention_by_level requires one boolean per level")
     for level, channel_count in enumerate(channels):
         level_height = _ceil_div(latent_height, 2**level)
         level_width = _ceil_div(latent_width, 2**level)
@@ -127,6 +223,7 @@ def _unet_denoiser_activation(
         convolution_working_bytes = 3 * feature_bytes
         feed_forward_bytes = 0
         attention_bytes = 0
+        attention_buffers = None
         if transformer_layers[level] > 0 and heads[level] > 0:
             if uses_geglu:
                 # Diffusers' standard conditional UNet uses a 4x GEGLU
@@ -141,7 +238,20 @@ def _unet_denoiser_activation(
                 * element_bytes
                 * 2
             )
-            if attention_backend == "eager":
+            if use_attention_buffers:
+                attention_buffers = _unet_materialized_attention(
+                    batch_size=batch_size,
+                    spatial_tokens=spatial_tokens,
+                    text_tokens=text_tokens,
+                    channels=channel_count,
+                    heads=heads[level],
+                    element_bytes=element_bytes,
+                    only_cross_attention=only_cross_by_level[level],
+                    upcast_attention=bool(profile.get("upcast_attention", False)),
+                    slicing=attention_slicing,
+                )
+                attention_bytes = attention_buffers["peak_bytes"]
+            elif attention_backend == "eager":
                 score_bytes = (
                     batch_size
                     * heads[level]
@@ -200,7 +310,23 @@ def _unet_denoiser_activation(
                 "transformer_layers": transformer_layers[level],
             }
         )
-    return {
+        if attention_buffers is not None:
+            levels[-1]["attention_buffers"] = attention_buffers
+    mid_attention = None
+    if use_attention_buffers and profile.get("mid_block_attention_heads"):
+        mid_attention = _unet_materialized_attention(
+            batch_size=batch_size,
+            spatial_tokens=levels[-1]["height"] * levels[-1]["width"],
+            text_tokens=text_tokens,
+            channels=channels[-1],
+            heads=int(profile["mid_block_attention_heads"]),
+            element_bytes=element_bytes,
+            only_cross_attention=False,
+            upcast_attention=bool(profile.get("upcast_attention", False)),
+            slicing=attention_slicing,
+        )
+        maximum_attention_bytes = max(maximum_attention_bytes, mid_attention["peak_bytes"])
+    report = {
         "levels": levels,
         "retained_residual_bytes": retained_residual_bytes,
         "working_tensor_bytes": maximum_working_bytes,
@@ -228,6 +354,25 @@ def _unet_denoiser_activation(
             "cross-attention workspace"
         ),
     }
+    if materialized_attention:
+        report["attention_model_scope"] = (
+            "Standard Diffusers UNet self/cross attention execute sequentially; "
+            "each materialized score operation retains two score buffers. "
+            "Automatic slicing replaces SDPA and chunks the flattened batch/head axis. "
+            "Native CUDA workspace and allocator accuracy remain unvalidated."
+            if use_attention_buffers
+            else "The prior cross-attention approximation is retained for this "
+            "nonstandard UNet; materialized self-attention and custom processors are not modeled."
+        )
+        if use_attention_buffers:
+            report["formula"] = (
+                "retained UNet residual features + maximum sequential "
+                "convolution/feed-forward working set + maximum sequential "
+                "self/cross materialized-attention buffer set"
+            )
+        if mid_attention is not None:
+            report["mid_block_attention_buffers"] = mid_attention
+    return report
 
 
 def _transformer_denoiser_activation(

@@ -21,6 +21,10 @@
 
 当前只有 GPU 1（Blackwell GPU）用于真实测量；GPU 0 不纳入未经授权的训练或多卡验收。前阶段进程均已退出，工作区开始时干净。
 
+### U-Net eager／自动 attention slicing 缓冲（独立 bug 修复）
+
+原生 tiny U-Net CPU 追踪证实自注意力 N² 分数及 softmax 输入／输出同时存活，旧公式仅有 cross-attention。标准 UNet 现在分别建模 self/cross 的最大缓冲，自动 slicing 按原生 `heads // 2` 切分展平的 batch/head 轴，并计入完整输出、前一 slice 与显式 Q/K upcast。保留 only_cross_attention 的层配置及原生 mid-block 自注意力，非标准处理器保持明确未建模。十二种 CPU 注意力组合与 cross-only 原生 UNet 检查通过；集成 **39 tests passed**。首批 18 场景均无此优化分支，预测逐字节一致；GPU 精度随后单独验收。
+
 ### Pipeline attention slicing 与 VAE 精度（独立复核修正）
 
 审查发现本轮最初的 CPU/meta upcast 验证手动替换了 VAE processor，不能证明 `pipeline.enable_attention_slicing()` 的行为。实际 pipeline 仅修改 U-Net，AutoencoderKL 继续使用原 backend。已保留早期脚本／结果，并用真实 pipeline 的 SDPA／eager × slicing 开关四种 CPU/meta 条件重新核验；现切片开关不会额外升高 VAE dtype。修正 SDXL SDPA+slicing 的 **21,027,880 bytes** 权重多计与输入 dtype 误报。

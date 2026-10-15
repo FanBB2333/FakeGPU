@@ -422,6 +422,7 @@ def _local_unet_profile(
         level_count=level_count,
         name="denoiser transformer layers",
     )
+    deepest_heads = heads[-1]
     if len(down_block_types) == level_count:
         for index, block_type in enumerate(down_block_types):
             if "Attn" not in str(block_type):
@@ -432,7 +433,7 @@ def _local_unet_profile(
         level_count=level_count,
         name="denoiser layers per block",
     )
-    return {
+    profile = {
         "architecture": "unet",
         "model_class": model_class,
         "guidance_mode": "classifier_free",
@@ -448,6 +449,42 @@ def _local_unet_profile(
         "transformer_layers_per_block": transformer_layers,
         "cross_attention_dim": conditioning_width,
     }
+    # Preserve nondefault attention semantics without changing reports for
+    # ordinary SD/SDXL configurations that already use these defaults.
+    only_cross = config.get("only_cross_attention", False)
+    if isinstance(only_cross, bool):
+        only_cross = [only_cross] * level_count
+    if (
+        not isinstance(only_cross, (list, tuple))
+        or len(only_cross) != level_count
+        or any(type(value) is not bool for value in only_cross)
+    ):
+        raise DiffusionEstimateError(
+            "denoiser.only_cross_attention must be a boolean or one boolean per level"
+        )
+    if any(only_cross):
+        profile["only_cross_attention_by_level"] = list(only_cross)
+        # UNetMidBlock2DCrossAttn does not forward only_cross_attention to
+        # Transformer2DModel: its attn1 remains self-attention.
+        if config.get("mid_block_type", "UNetMidBlock2DCrossAttn") == "UNetMidBlock2DCrossAttn":
+            profile["mid_block_attention_heads"] = deepest_heads
+    upcast_attention = config.get("upcast_attention")
+    if upcast_attention is not None and type(upcast_attention) is not bool:
+        raise DiffusionEstimateError("denoiser.upcast_attention must be a boolean or null")
+    if upcast_attention:
+        profile["upcast_attention"] = True
+    standard_down = {"DownBlock2D", "CrossAttnDownBlock2D"}
+    standard_up = {"UpBlock2D", "CrossAttnUpBlock2D"}
+    if (
+        config.get("dual_cross_attention", False)
+        or config.get("attention_type", "default") != "default"
+        or any(block not in standard_down for block in down_block_types)
+        or any(block not in standard_up for block in config.get("up_block_types", []))
+        or config.get("mid_block_type", "UNetMidBlock2DCrossAttn")
+        not in {None, "UNetMidBlock2DCrossAttn"}
+    ):
+        profile["standard_transformer_attention"] = False
+    return profile
 
 
 def _local_transformer_profile(
