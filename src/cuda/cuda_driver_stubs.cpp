@@ -1738,6 +1738,9 @@ CUresult cuGetErrorString(CUresult error, const char **pStr) {
             case CUDA_ERROR_NOT_SUPPORTED:
                 *pStr = "CUDA_ERROR_NOT_SUPPORTED";
                 break;
+            case CUDA_ERROR_PEER_ACCESS_UNSUPPORTED:
+                *pStr = "CUDA_ERROR_PEER_ACCESS_UNSUPPORTED";
+                break;
             default:
                 *pStr = "CUDA_ERROR_UNKNOWN";
                 break;
@@ -2173,7 +2176,14 @@ CUresult cuDeviceCanAccessPeer(int *canAccessPeer, CUdevice dev, CUdevice peerDe
             return real_fn(canAccessPeer, real_dev, real_peer);
         }
     }
-    if (canAccessPeer) *canAccessPeer = 1;  // Fake: all devices can access each other
+    if (!canAccessPeer) return CUDA_ERROR_INVALID_VALUE;
+    GlobalState& state = GlobalState::instance();
+    state.initialize();
+    if (dev < 0 || dev >= state.get_device_count() || peerDev < 0 || peerDev >= state.get_device_count()) {
+        return CUDA_ERROR_INVALID_DEVICE;
+    }
+    // Follows the modeled NVLink/PCIe topology; without one every pair has access.
+    *canAccessPeer = state.snapshot_device_topology().can_access_peer(dev, peerDev) ? 1 : 0;
     return CUDA_SUCCESS;
 }
 
@@ -2185,7 +2195,14 @@ CUresult cuCtxEnablePeerAccess(CUcontext peerContext, unsigned int Flags) {
             CudaDriverPassthrough::instance().getRealFunction("cuCtxEnablePeerAccess"));
         if (real_fn) return real_fn(peerContext, Flags);
     }
-    return CUDA_SUCCESS;
+    if (!peerContext) return CUDA_ERROR_INVALID_CONTEXT;
+    int can_access = 0;
+    const CUresult result = cuDeviceCanAccessPeer(
+        &can_access,
+        current_context_device,
+        static_cast<CUdevice>(reinterpret_cast<uintptr_t>(peerContext) - 1));
+    if (result != CUDA_SUCCESS) return result;
+    return can_access ? CUDA_SUCCESS : CUDA_ERROR_PEER_ACCESS_UNSUPPORTED;
 }
 
 CUresult cuCtxDisablePeerAccess(CUcontext peerContext) {
@@ -3523,7 +3540,30 @@ CUresult cuDeviceGetP2PAttribute(int *value, int attrib, CUdevice srcDevice, CUd
             return real_fn(value, attrib, real_src, real_dst);
         }
     }
-    if (value) *value = 1;
+    if (!value) return CUDA_ERROR_INVALID_VALUE;
+    GlobalState& state = GlobalState::instance();
+    state.initialize();
+    if (srcDevice < 0 || srcDevice >= state.get_device_count() ||
+        dstDevice < 0 || dstDevice >= state.get_device_count() || srcDevice == dstDevice) {
+        return CUDA_ERROR_INVALID_DEVICE;
+    }
+    const ModeledDeviceTopology topology = state.snapshot_device_topology();
+    const bool access = topology.can_access_peer(srcDevice, dstDevice);
+    const bool nvlink = topology.nvlink_links(srcDevice, dstDevice) > 0;
+    switch (attrib) {
+        case 0x01:  // CU_DEVICE_P2P_ATTRIBUTE_PERFORMANCE_RANK: lower is faster
+            *value = !access || nvlink ? 0 : topology.pcie_relation(srcDevice, dstDevice) == "PIX" ? 1 : 2;
+            break;
+        case 0x02:  // CU_DEVICE_P2P_ATTRIBUTE_ACCESS_SUPPORTED
+        case 0x04:  // CU_DEVICE_P2P_ATTRIBUTE_CUDA_ARRAY_ACCESS_SUPPORTED
+            *value = access ? 1 : 0;
+            break;
+        case 0x03:  // CU_DEVICE_P2P_ATTRIBUTE_NATIVE_ATOMIC_SUPPORTED
+            *value = nvlink ? 1 : 0;
+            break;
+        default:
+            return CUDA_ERROR_INVALID_VALUE;
+    }
     return CUDA_SUCCESS;
 }
 

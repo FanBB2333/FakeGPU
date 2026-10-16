@@ -88,6 +88,8 @@ static cudaError_t convertDriverError(CUresult result) {
             return cudaErrorNotReady;
         case CUDA_ERROR_NOT_SUPPORTED:
             return cudaErrorNotSupported;
+        case CUDA_ERROR_PEER_ACCESS_UNSUPPORTED:
+            return cudaErrorPeerAccessUnsupported;
         default:
             return cudaErrorUnknown;
     }
@@ -601,6 +603,8 @@ const char* cudaGetErrorString(cudaError_t error) {
             return "not ready";
         case cudaErrorNotSupported:
             return "operation not supported";
+        case cudaErrorPeerAccessUnsupported:
+            return "peer access is not supported between these two devices";
         default:
             return "unknown error";
     }
@@ -624,6 +628,8 @@ const char* cudaGetErrorName(cudaError_t error) {
             return "cudaErrorNotReady";
         case cudaErrorNotSupported:
             return "cudaErrorNotSupported";
+        case cudaErrorPeerAccessUnsupported:
+            return "cudaErrorPeerAccessUnsupported";
         default:
             return "cudaErrorUnknown";
     }
@@ -811,22 +817,43 @@ cudaError_t cudaHostUnregister(void *ptr) {
 // Peer Access
 // ============================================================================
 
+// Peer access follows the modeled NVLink/PCIe topology (FAKEGPU_SLOTS,
+// FAKEGPU_NVLINK_FABRIC); without one every pair of devices has access.
+static bool modeled_peer_access(int device, int peerDevice, cudaError_t& error) {
+    fake_gpu::GlobalState& state = fake_gpu::GlobalState::instance();
+    state.initialize();
+    const int count = state.get_device_count();
+    if (device < 0 || device >= count || peerDevice < 0 || peerDevice >= count) {
+        error = cudaErrorInvalidDevice;
+        return false;
+    }
+    error = cudaSuccess;
+    return state.snapshot_device_topology().can_access_peer(device, peerDevice);
+}
+
 cudaError_t cudaDeviceCanAccessPeer(int *canAccessPeer, int device, int peerDevice) {
     if (!canAccessPeer) {
         last_error = cudaErrorInvalidValue;
         return last_error;
     }
-
-    // Simplified: always allow peer access
-    *canAccessPeer = 1;
+    cudaError_t error = cudaSuccess;
+    const bool allowed = modeled_peer_access(device, peerDevice, error);
+    if (error != cudaSuccess) {
+        last_error = error;
+        return last_error;
+    }
+    *canAccessPeer = allowed ? 1 : 0;
     last_error = cudaSuccess;
     return last_error;
 }
 
 cudaError_t cudaDeviceEnablePeerAccess(int peerDevice, unsigned int flags) {
-    // Simplified: just succeed
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaDeviceEnablePeerAccess(%d)\n", peerDevice);
+    (void)flags;
+    cudaError_t error = cudaSuccess;
+    const int device = fake_gpu::GlobalState::instance().get_current_device();
+    const bool allowed = modeled_peer_access(device, peerDevice, error);
+    last_error = error != cudaSuccess ? error : allowed ? cudaSuccess : cudaErrorPeerAccessUnsupported;
+    FGPU_LOG("[FakeCUDART] cudaDeviceEnablePeerAccess(%d -> %d) = %d\n", device, peerDevice, last_error);
     return last_error;
 }
 

@@ -357,18 +357,21 @@ const DeviceReportStats* find_device(
     return found == devices.end() ? nullptr : &*found;
 }
 
-const std::vector<ModeledNvLinkPeer>& topology_peers(
-    const ModeledDeviceTopology& topology,
-    int device_index) {
-    static const std::vector<ModeledNvLinkPeer> empty;
-    if (
-        device_index < 0 ||
-        static_cast<std::size_t>(device_index) >=
-            topology.nvlink_peers.size()) {
-        return empty;
+void append_pcie_link_fields(
+    std::ostringstream& out,
+    const char* generation_key,
+    const char* width_key,
+    const ModeledPcieLink& link) {
+    out << '"' << generation_key << "\":" << link.generation;
+    out << ",\"" << width_key << "\":" << link.width;
+}
+
+void append_optional_gbps(std::ostringstream& out, double value) {
+    if (value > 0.0) {
+        out << value;
+    } else {
+        out << "null";
     }
-    return topology.nvlink_peers[
-        static_cast<std::size_t>(device_index)];
 }
 
 void append_device_topology(
@@ -376,45 +379,110 @@ void append_device_topology(
     const DeviceReportStats& device,
     const std::vector<DeviceReportStats>& devices,
     const ModeledDeviceTopology& topology) {
-    const auto& peers = topology_peers(topology, device.index);
+    static const std::vector<ModeledNvLinkPeer> no_ports;
+    const int index = device.index;
+    const auto& ports =
+        index >= 0 && static_cast<std::size_t>(index) < topology.nvlink_peers.size()
+        ? topology.nvlink_peers[static_cast<std::size_t>(index)]
+        : no_ports;
+    const auto peers = topology.peers(index);
     double aggregate_bandwidth_gbps = 0.0;
-    for (const auto& peer : peers) {
-        aggregate_bandwidth_gbps += peer.bandwidth_gbps;
+    for (const auto& port : ports) {
+        aggregate_bandwidth_gbps += port.bandwidth_gbps;
     }
 
     out << ",\"topology\":{\"source\":";
     append_json_string(out, topology.source);
+    out << ",\"platform\":";
+    append_json_string(out, topology.platform);
     out << ",\"configured\":"
         << (topology.configured ? "true" : "false");
     out << ",\"valid\":" << (topology.valid ? "true" : "false");
     out << ",\"error\":";
     append_json_string(out, topology.error);
-    out << ",\"nvlink\":{\"active_links\":" << peers.size();
+    if (const ModeledSlot* slot = topology.slot(index)) {
+        out << ",\"slot\":{\"type\":";
+        append_json_string(out, slot->type);
+        out << ",\"numa_node\":" << slot->numa;
+        out << ",\"host_bridge\":" << slot->bridge;
+        out << ",\"pcie_switch\":";
+        append_json_string(out, slot->pcie_switch);
+        out << "},\"pcie\":";
+        if (slot->pcie.present()) {
+            out << '{';
+            append_pcie_link_fields(out, "generation", "width", slot->pcie);
+            out << ',';
+            append_pcie_link_fields(out, "max_generation", "max_width", slot->pcie);
+            out << ',';
+            append_pcie_link_fields(out, "gpu_max_generation", "gpu_max_width", slot->gpu_max_pcie());
+            out << ",\"bandwidth_gbps\":" << slot->pcie.bandwidth_gbps() << '}';
+        } else {
+            out << "null";
+        }
+        out << ",\"host_link\":{\"kind\":";
+        append_json_string(out, slot->host_link);
+        out << ",\"bandwidth_gbps\":";
+        append_optional_gbps(out, slot->host_bandwidth_gbps());
+        out << '}';
+    }
+    out << ",\"peer_access\":[";
+    bool first = true;
+    for (const auto& remote : devices) {
+        if (!topology.can_access_peer(index, remote.index)) continue;
+        out << (first ? "" : ",") << remote.index;
+        first = false;
+    }
+    out << ']';
+    out << ",\"nvlink\":{\"source\":";
+    append_json_string(out, topology.nvlink_source);
+    out << ",\"active_links\":" << ports.size();
     out << ",\"peer_count\":" << peers.size();
+    out << ",\"link_bandwidth_gbps\":"
+        << (ports.empty() ? 0.0 : ports.front().bandwidth_gbps);
     out << ",\"aggregate_bandwidth_gbps\":"
         << aggregate_bandwidth_gbps;
-    out << ",\"peers\":[";
-    for (std::size_t index = 0; index < peers.size(); ++index) {
-        if (index != 0) {
-            out << ',';
-        }
-        const ModeledNvLinkPeer& peer = peers[index];
+    out << ",\"links\":[";
+    for (std::size_t position = 0; position < ports.size(); ++position) {
+        const ModeledNvLinkPeer& port = ports[position];
         const DeviceReportStats* remote =
-            find_device(devices, peer.peer_index);
-        out << "{\"link\":" << peer.link;
-        out << ",\"index\":" << peer.peer_index;
+            port.peer_index >= 0 ? find_device(devices, port.peer_index) : nullptr;
+        out << (position ? "," : "") << "{\"link\":" << port.link;
+        out << ",\"remote\":" << (port.peer_index >= 0 ? "\"gpu\"" : "\"nvswitch\"");
+        out << ",\"index\":";
+        if (port.peer_index >= 0) {
+            out << port.peer_index;
+        } else {
+            out << "null";
+        }
         out << ",\"uuid\":";
         append_json_string(
             out,
-            remote ? remote->uuid : std::string("unknown"));
+            port.peer_index < 0 ? std::string() : remote ? remote->uuid : std::string("unknown"));
         out << ",\"pci_bus_id\":";
         append_json_string(
             out,
-            remote ? remote->pci_bus_id : std::string("unknown"));
+            port.peer_index < 0 ? std::string(kNvSwitchPciBusId)
+                                : remote ? remote->pci_bus_id : std::string("unknown"));
+        out << ",\"bandwidth_gbps\":" << port.bandwidth_gbps;
+        out << ",\"active\":true}";
+    }
+    out << "],\"peers\":[";
+    for (std::size_t position = 0; position < peers.size(); ++position) {
+        const auto& peer = peers[position];
+        const DeviceReportStats* remote = find_device(devices, peer.index);
+        out << (position ? "," : "") << "{\"link\":" << peer.first_link;
+        out << ",\"index\":" << peer.index;
+        out << ",\"uuid\":";
+        append_json_string(out, remote ? remote->uuid : std::string("unknown"));
+        out << ",\"pci_bus_id\":";
+        append_json_string(out, remote ? remote->pci_bus_id : std::string("unknown"));
+        out << ",\"links\":" << peer.links;
+        out << ",\"via\":";
+        append_json_string(out, peer.via);
         out << ",\"bandwidth_gbps\":" << peer.bandwidth_gbps;
         out << ",\"active\":true";
         out << ",\"source\":";
-        append_json_string(out, topology.source);
+        append_json_string(out, topology.nvlink_source);
         out << '}';
     }
     out << "]}}";
@@ -424,16 +492,38 @@ void append_topology(
     std::ostringstream& out,
     const std::vector<DeviceReportStats>& devices,
     const ModeledDeviceTopology& topology) {
+    std::ostringstream links;
     std::size_t link_count = 0;
-    for (const auto& peers : topology.nvlink_peers) {
-        link_count += peers.size();
+    for (const auto& source : devices) {
+        for (const auto& peer : topology.peers(source.index)) {
+            if (peer.index <= source.index) continue;
+            const DeviceReportStats* target = find_device(devices, peer.index);
+            links << (link_count ? "," : "");
+            ++link_count;
+            links << "{\"source_index\":" << source.index;
+            links << ",\"target_index\":" << peer.index;
+            links << ",\"source_uuid\":";
+            append_json_string(links, source.uuid);
+            links << ",\"target_uuid\":";
+            append_json_string(links, target ? target->uuid : std::string("unknown"));
+            links << ",\"kind\":\"NVLink\"";
+            links << ",\"via\":";
+            append_json_string(links, peer.via);
+            links << ",\"links\":" << peer.links;
+            links << ",\"active\":true";
+            links << ",\"bandwidth_gbps\":" << peer.bandwidth_gbps;
+            links << ",\"source\":";
+            append_json_string(links, topology.nvlink_source);
+            links << '}';
+        }
     }
-    link_count /= 2;
 
     out << ",\"topology\":{";
-    out << "\"schema_version\":\"fakegpu.device_topology.v1\"";
+    out << "\"schema_version\":\"fakegpu.device_topology.v2\"";
     out << ",\"source\":";
     append_json_string(out, topology.source);
+    out << ",\"platform\":";
+    append_json_string(out, topology.platform);
     out << ",\"configured\":"
         << (topology.configured ? "true" : "false");
     out << ",\"valid\":" << (topology.valid ? "true" : "false");
@@ -442,45 +532,15 @@ void append_topology(
     out << ",\"nvlink_bandwidth_gbps\":"
         << topology.nvlink_bandwidth_gbps;
     out << ",\"link_count\":" << link_count;
-    out << ",\"links\":[";
-    bool first = true;
-    for (
-        std::size_t source_index = 0;
-        source_index < topology.nvlink_peers.size();
-        ++source_index) {
-        for (const auto& peer : topology.nvlink_peers[source_index]) {
-            if (
-                peer.peer_index < 0 ||
-                source_index >=
-                    static_cast<std::size_t>(peer.peer_index)) {
-                continue;
-            }
-            if (!first) {
-                out << ',';
-            }
-            first = false;
-            const DeviceReportStats* source =
-                find_device(devices, static_cast<int>(source_index));
-            const DeviceReportStats* target =
-                find_device(devices, peer.peer_index);
-            out << "{\"source_index\":" << source_index;
-            out << ",\"target_index\":" << peer.peer_index;
-            out << ",\"source_uuid\":";
-            append_json_string(
-                out,
-                source ? source->uuid : std::string("unknown"));
-            out << ",\"target_uuid\":";
-            append_json_string(
-                out,
-                target ? target->uuid : std::string("unknown"));
-            out << ",\"kind\":\"NVLink\"";
-            out << ",\"active\":true";
-            out << ",\"bandwidth_gbps\":"
-                << peer.bandwidth_gbps;
-            out << ",\"source\":";
-            append_json_string(out, topology.source);
-            out << '}';
+    out << ",\"links\":[" << links.str() << ']';
+    out << ",\"matrix\":[";
+    for (std::size_t row = 0; row < devices.size(); ++row) {
+        out << (row ? "," : "") << '[';
+        for (std::size_t column = 0; column < devices.size(); ++column) {
+            out << (column ? "," : "");
+            append_json_string(out, topology.relation(devices[row].index, devices[column].index));
         }
+        out << ']';
     }
     out << "]}";
 }

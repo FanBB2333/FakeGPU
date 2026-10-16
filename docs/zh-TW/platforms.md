@@ -69,6 +69,13 @@ PCIe 伺服器、工作站、桌上型電腦與筆電範本是代表性配置，
   RTX 4090（NVIDIA 關閉了它的 PCIe peer access），以及超級晶片平台上沒有 NVLink 的
   GPU 之間（NVIDIA 未說明支援 peer access）為假。
 
+原生程式看到的是同一個模型。NVML 回報 PCIe 代數與寬度（目前值、最大值與 GPU 自身的
+最大值）、每個 NVLink 埠及其對端（GPU 或 NVSwitch），並提供
+`nvmlDeviceGetTopologyCommonAncestor` 與 `nvmlDeviceGetP2PStatus`。
+`cudaDeviceCanAccessPeer`、`cuDeviceCanAccessPeer` 與 `cuDeviceGetP2PAttribute`
+依拓撲作答；對沒有 peer access 的 GPU 對，`cudaDeviceEnablePeerAccess` 回傳
+`cudaErrorPeerAccessUnsupported`。
+
 `fakegpu nvidia-smi topo -m` 以 NVIDIA 的圖例顯示結果：
 
 ```text
@@ -111,7 +118,8 @@ fakegpu.init(devices="v100:8", platform="auto")
 兩張 GPU 之間都有 peer access，與引入平台之前的行為一致。
 
 平台透過三個環境變數傳給 FakeCUDA 程序；對於以其他方式啟動的程式，可以用
-`fakegpu platform env --devices ...` 印出這些變數：
+`fakegpu platform env --devices ...` 印出這些變數。原生程式若只設定了
+`FAKEGPU_PLATFORM`，會回報設定錯誤，因為解析平台需要 Python：
 
 | 變數 | 內容 |
 |---|---|

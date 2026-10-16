@@ -38,6 +38,8 @@ GpuProfile ArchProfile::build(const GpuProfileParams& params) const {
     profile.typical_power_usage_mw = params.typical_power_usage_mw;
     profile.max_power_limit_mw = params.max_power_limit_mw;
     profile.pci_device_id = params.pci_device_id;
+    profile.pcie_generation = params.pcie_generation;
+    profile.pcie_lanes = params.pcie_lanes;
     profile.supported_types = params.supported_types.empty() ? default_types : params.supported_types;
     return profile;
 }
@@ -276,6 +278,8 @@ GpuProfile build_profile_from_definition(const ProfileDefinition& def) {
     profile.typical_power_usage_mw = def.params.typical_power_usage_mw;
     profile.max_power_limit_mw = def.params.max_power_limit_mw;
     profile.pci_device_id = def.params.pci_device_id;
+    profile.pcie_generation = def.params.pcie_generation;
+    profile.pcie_lanes = def.params.pcie_lanes;
     profile.supported_types = def.params.supported_types.empty() ? std::vector<GpuDataType>{GpuDataType::FP32} : def.params.supported_types;
     return profile;
 }
@@ -376,6 +380,16 @@ std::optional<ProfileDefinition> parse_definition(const ProfileYamlBlob& blob) {
     def.params.max_power_limit_mw = static_cast<unsigned int>(numeric_value);
     if (!parse_required_int(parsed, "pci_device_id", numeric_value, blob.filename)) return std::nullopt;
     def.params.pci_device_id = static_cast<uint32_t>(numeric_value);
+    for (const auto& [key, target] : {
+             std::pair<const char*, int*>{"pcie_generation", &def.params.pcie_generation},
+             std::pair<const char*, int*>{"pcie_lanes", &def.params.pcie_lanes}}) {
+        auto optional_it = parsed.scalars.find(key);
+        if (optional_it == parsed.scalars.end()) continue;
+        if (!parse_integer(optional_it->second, *target) || *target < 0) {
+            FGPU_LOG("[GpuProfile] Failed to parse numeric key '%s' in %s (value=%s)\n", key, blob.filename, optional_it->second.c_str());
+            return std::nullopt;
+        }
+    }
 
     auto types_it = parsed.lists.find("supported_types");
     if (types_it != parsed.lists.end()) {

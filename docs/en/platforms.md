@@ -80,6 +80,14 @@ layout.
   disables its PCIe peer access), and on superchip platforms between GPUs
   without NVLink, where NVIDIA documents no peer access.
 
+Native programs see the same model. NVML reports the PCIe generation and width
+(current, maximum and the GPU's own maximum), each NVLink port with a GPU or
+NVSwitch at the far end, `nvmlDeviceGetTopologyCommonAncestor` and
+`nvmlDeviceGetP2PStatus`. `cudaDeviceCanAccessPeer`, `cuDeviceCanAccessPeer`
+and `cuDeviceGetP2PAttribute` answer from the topology, and
+`cudaDeviceEnablePeerAccess` returns `cudaErrorPeerAccessUnsupported` for a
+pair without peer access.
+
 `fakegpu nvidia-smi topo -m` shows the result with NVIDIA's legend:
 
 ```text
@@ -127,7 +135,8 @@ access, as before platforms existed.
 
 The platform reaches FakeCUDA processes as three environment variables, which
 `fakegpu platform env --devices ...` prints for programs started some other
-way:
+way. A native program that sets only `FAKEGPU_PLATFORM` reports a
+configuration error, since resolving a platform needs Python:
 
 | Variable | Contents |
 |---|---|

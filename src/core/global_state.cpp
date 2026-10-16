@@ -163,7 +163,7 @@ void GlobalState::initialize() {
         for (size_t i = 0; i < profiles.size(); ++i) {
             devices.emplace_back(static_cast<int>(i), profiles[i]);
         }
-        device_topology = build_modeled_device_topology(devices.size());
+        device_topology = build_modeled_device_topology(devices);
         fault_model = build_modeled_fault_model(devices.size());
         mig_layout = build_modeled_mig_layout(devices);
         mig_devices.reserve(mig_layout.instances.size());

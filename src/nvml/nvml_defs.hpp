@@ -42,6 +42,34 @@ typedef enum nvmlIntNvLinkDeviceType_enum {
     NVML_NVLINK_DEVICE_TYPE_UNKNOWN = 0xFF,
 } nvmlIntNvLinkDeviceType_t;
 
+typedef enum nvmlGpuLevel_enum {
+    NVML_TOPOLOGY_INTERNAL = 0,
+    NVML_TOPOLOGY_SINGLE = 10,
+    NVML_TOPOLOGY_MULTIPLE = 20,
+    NVML_TOPOLOGY_HOSTBRIDGE = 30,
+    NVML_TOPOLOGY_NODE = 40,
+    NVML_TOPOLOGY_SYSTEM = 50,
+} nvmlGpuTopologyLevel_t;
+
+typedef enum nvmlGpuP2PStatus_enum {
+    NVML_P2P_STATUS_OK = 0,
+    NVML_P2P_STATUS_CHIPSET_NOT_SUPPORTED = 1,
+    NVML_P2P_STATUS_GPU_NOT_SUPPORTED = 2,
+    NVML_P2P_STATUS_IOH_TOPOLOGY_NOT_SUPPORTED = 3,
+    NVML_P2P_STATUS_DISABLED_BY_REGKEY = 4,
+    NVML_P2P_STATUS_NOT_SUPPORTED = 5,
+    NVML_P2P_STATUS_UNKNOWN = 6,
+} nvmlGpuP2PStatus_t;
+
+typedef enum nvmlGpuP2PCapsIndex_enum {
+    NVML_P2P_CAPS_INDEX_READ = 0,
+    NVML_P2P_CAPS_INDEX_WRITE = 1,
+    NVML_P2P_CAPS_INDEX_NVLINK = 2,
+    NVML_P2P_CAPS_INDEX_ATOMICS = 3,
+    NVML_P2P_CAPS_INDEX_PCI = 4,
+    NVML_P2P_CAPS_INDEX_UNKNOWN = 5,
+} nvmlGpuP2PCapsIndex_t;
+
 typedef struct nvmlMemory_st {
     unsigned long long total;
     unsigned long long free;

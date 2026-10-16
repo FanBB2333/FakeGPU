@@ -20,6 +20,7 @@ typedef enum cudaError_enum {
     cudaErrorNotReady = 600,
     cudaErrorNotSupported = 801,
     cudaErrorInvalidDevice = 101,
+    cudaErrorPeerAccessUnsupported = 217,
     cudaErrorInvalidMemcpyDirection = 21,
     cudaErrorUnknown = 999
 } cudaError_t;

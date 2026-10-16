@@ -68,6 +68,13 @@ GPU 设计的基板上，彼此通过 NVLink 通信，通常经过 NVSwitch 芯�
   RTX 4090（NVIDIA 关闭了它的 PCIe peer access），以及超级芯片平台上没有 NVLink 的
   GPU 之间（NVIDIA 未说明支持 peer access）为假。
 
+原生程序看到的是同一个模型。NVML 报告 PCIe 代数和宽度（当前值、最大值和 GPU 自身的
+最大值）、每个 NVLink 端口及其对端（GPU 或 NVSwitch），并提供
+`nvmlDeviceGetTopologyCommonAncestor` 和 `nvmlDeviceGetP2PStatus`。
+`cudaDeviceCanAccessPeer`、`cuDeviceCanAccessPeer` 和 `cuDeviceGetP2PAttribute`
+按拓扑作答；对没有 peer access 的 GPU 对，`cudaDeviceEnablePeerAccess` 返回
+`cudaErrorPeerAccessUnsupported`。
+
 `fakegpu nvidia-smi topo -m` 用 NVIDIA 的图例显示结果：
 
 ```text
@@ -110,7 +117,8 @@ fakegpu.init(devices="v100:8", platform="auto")
 两块 GPU 之间都有 peer access，与引入平台之前的行为一致。
 
 平台通过三个环境变量传给 FakeCUDA 进程；对于以其他方式启动的程序，可以用
-`fakegpu platform env --devices ...` 打印这些变量：
+`fakegpu platform env --devices ...` 打印这些变量。原生程序如果只设置了
+`FAKEGPU_PLATFORM`，会报告配置错误，因为解析平台需要 Python：
 
 | 变量 | 内容 |
 |---|---|

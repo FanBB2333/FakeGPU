@@ -57,6 +57,9 @@ struct GpuProfileParams {
     unsigned int typical_power_usage_mw = 0;
     unsigned int max_power_limit_mw = 0;
     uint32_t pci_device_id = 0;
+    // PCIe generation and lane count of the GPU itself; 0 when unknown.
+    int pcie_generation = 0;
+    int pcie_lanes = 0;
     std::vector<GpuDataType> supported_types;
 };
 
@@ -136,6 +139,8 @@ struct GpuProfile {
     unsigned int typical_power_usage_mw;
     unsigned int max_power_limit_mw;
     uint32_t pci_device_id;
+    int pcie_generation = 0;
+    int pcie_lanes = 0;
     std::vector<GpuDataType> supported_types;
 
     bool supports(GpuDataType type) const;

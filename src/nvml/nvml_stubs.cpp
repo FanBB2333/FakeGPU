@@ -114,6 +114,42 @@ static bool modeled_nvlink_peer(
     return true;
 }
 
+// Slot of a physical GPU (MIG instances use their parent's); null in bridge mode.
+static bool modeled_slot(const Device* device, ModeledSlot& result, ModeledDeviceTopology* topology_out = nullptr) {
+    if (nvml_bridge::enabled() || !device) {
+        return false;
+    }
+    GlobalState& state = GlobalState::instance();
+    const Device* physical = device;
+    if (device->is_mig_device) {
+        physical = state.get_parent_device_for_mig(const_cast<Device*>(device));
+        if (!physical) return false;
+    }
+    ModeledDeviceTopology topology = state.snapshot_device_topology();
+    const ModeledSlot* slot = topology.slot(physical->index);
+    if (!slot) return false;
+    result = *slot;
+    if (topology_out) *topology_out = std::move(topology);
+    return true;
+}
+
+// PCIe link to report: the modeled slot, or the profile's own link in bridge mode.
+static nvmlReturn_t modeled_pcie(nvmlDevice_t device, ModeledPcieLink& current, ModeledPcieLink& gpu_max) {
+    if (!device) return NVML_ERROR_INVALID_ARGUMENT;
+    const Device* dev = reinterpret_cast<const Device*>(device);
+    ModeledSlot slot;
+    if (!modeled_slot(dev, slot)) {
+        current.generation = dev->profile.pcie_generation > 0 ? static_cast<unsigned int>(dev->profile.pcie_generation) : 4U;
+        current.width = dev->profile.pcie_lanes > 0 ? static_cast<unsigned int>(dev->profile.pcie_lanes) : 16U;
+        gpu_max = current;
+        return NVML_SUCCESS;
+    }
+    if (!slot.pcie.present()) return NVML_ERROR_NOT_SUPPORTED;
+    current = slot.pcie;
+    gpu_max = slot.gpu_max_pcie();
+    return NVML_SUCCESS;
+}
+
 static void fill_pci_info(const Device& device, nvmlPciInfo_t& pci) {
     memset(&pci, 0, sizeof(pci));
     snprintf(
@@ -867,8 +903,10 @@ nvmlReturn_t nvmlDeviceGetSupportedClocksThrottleReasons(nvmlDevice_t device, un
 
 nvmlReturn_t nvmlDeviceGetGpuMaxPcieLinkGeneration(nvmlDevice_t device, unsigned int *maxLinkGen) {
     if (!device || !maxLinkGen) return NVML_ERROR_INVALID_ARGUMENT;
-    *maxLinkGen = 4;
-    return NVML_SUCCESS;
+    ModeledPcieLink current, gpu_max;
+    const nvmlReturn_t result = modeled_pcie(device, current, gpu_max);
+    if (result == NVML_SUCCESS) *maxLinkGen = gpu_max.generation;
+    return result;
 }
 
 nvmlReturn_t nvmlDeviceGetVirtualizationMode(nvmlDevice_t device, nvmlGpuVirtualizationMode_t *pVirtualMode) {
@@ -1133,12 +1171,13 @@ nvmlReturn_t nvmlDeviceGetNvLinkRemoteDeviceType(
     nvmlIntNvLinkDeviceType_t *remoteDeviceType) {
     if (!device || !remoteDeviceType) return NVML_ERROR_INVALID_ARGUMENT;
     ModeledNvLinkPeer peer;
-    *remoteDeviceType = modeled_nvlink_peer(
-        reinterpret_cast<Device*>(device),
-        link,
-        peer)
-        ? NVML_NVLINK_DEVICE_TYPE_GPU
-        : NVML_NVLINK_DEVICE_TYPE_UNKNOWN;
+    if (!modeled_nvlink_peer(reinterpret_cast<Device*>(device), link, peer)) {
+        *remoteDeviceType = NVML_NVLINK_DEVICE_TYPE_UNKNOWN;
+    } else {
+        *remoteDeviceType = peer.peer_index < 0
+            ? NVML_NVLINK_DEVICE_TYPE_SWITCH
+            : NVML_NVLINK_DEVICE_TYPE_GPU;
+    }
     return NVML_SUCCESS;
 }
 
@@ -1154,6 +1193,13 @@ nvmlReturn_t nvmlDeviceGetNvLinkRemotePciInfo_v2(
             peer)) {
         memset(pci, 0, sizeof(*pci));
         return NVML_ERROR_NOT_SUPPORTED;
+    }
+    if (peer.peer_index < 0) {
+        memset(pci, 0, sizeof(*pci));
+        snprintf(pci->busIdLegacy, sizeof(pci->busIdLegacy), "%s", kNvSwitchPciBusId);
+        snprintf(pci->busId, sizeof(pci->busId), "%s", kNvSwitchPciBusId);
+        pci->bus = 0xc0;
+        return NVML_SUCCESS;
     }
     Device& remote =
         GlobalState::instance().get_device(peer.peer_index);
@@ -1230,14 +1276,18 @@ nvmlReturn_t nvmlDeviceGetPcieReplayCounter(nvmlDevice_t device, unsigned int *v
 
 nvmlReturn_t nvmlDeviceGetPcieLinkGeneration(nvmlDevice_t device, unsigned int *currLinkGen) {
     if (!device || !currLinkGen) return NVML_ERROR_INVALID_ARGUMENT;
-    *currLinkGen = 4;  // PCIe Gen4
-    return NVML_SUCCESS;
+    ModeledPcieLink current, gpu_max;
+    const nvmlReturn_t result = modeled_pcie(device, current, gpu_max);
+    if (result == NVML_SUCCESS) *currLinkGen = current.generation;
+    return result;
 }
 
 nvmlReturn_t nvmlDeviceGetPcieLinkWidth(nvmlDevice_t device, unsigned int *currLinkWidth) {
     if (!device || !currLinkWidth) return NVML_ERROR_INVALID_ARGUMENT;
-    *currLinkWidth = 16;  // x16
-    return NVML_SUCCESS;
+    ModeledPcieLink current, gpu_max;
+    const nvmlReturn_t result = modeled_pcie(device, current, gpu_max);
+    if (result == NVML_SUCCESS) *currLinkWidth = current.width;
+    return result;
 }
 
 nvmlReturn_t nvmlDeviceGetCurrPcieLinkGeneration(nvmlDevice_t device, unsigned int *currLinkGen) {
@@ -1248,15 +1298,88 @@ nvmlReturn_t nvmlDeviceGetCurrPcieLinkWidth(nvmlDevice_t device, unsigned int *c
     return nvmlDeviceGetPcieLinkWidth(device, currLinkWidth);
 }
 
+// The maximum the device and system allow: the trained link, since the
+// model has no power-saving downtraining.
 nvmlReturn_t nvmlDeviceGetMaxPcieLinkGeneration(nvmlDevice_t device, unsigned int *maxLinkGen) {
-    if (!device || !maxLinkGen) return NVML_ERROR_INVALID_ARGUMENT;
-    *maxLinkGen = 4;  // PCIe Gen4
-    return NVML_SUCCESS;
+    return nvmlDeviceGetPcieLinkGeneration(device, maxLinkGen);
 }
 
 nvmlReturn_t nvmlDeviceGetMaxPcieLinkWidth(nvmlDevice_t device, unsigned int *maxLinkWidth) {
-    if (!device || !maxLinkWidth) return NVML_ERROR_INVALID_ARGUMENT;
-    *maxLinkWidth = 16;  // x16
+    return nvmlDeviceGetPcieLinkWidth(device, maxLinkWidth);
+}
+
+static nvmlReturn_t modeled_pair(
+    nvmlDevice_t device1,
+    nvmlDevice_t device2,
+    ModeledDeviceTopology& topology,
+    int& first,
+    int& second) {
+    if (!device1 || !device2) return NVML_ERROR_INVALID_ARGUMENT;
+    ModeledSlot slot;
+    const Device* left = reinterpret_cast<const Device*>(device1);
+    const Device* right = reinterpret_cast<const Device*>(device2);
+    if (left->is_mig_device || right->is_mig_device) return NVML_ERROR_NOT_SUPPORTED;
+    if (!modeled_slot(left, slot, &topology)) return NVML_ERROR_NOT_SUPPORTED;
+    first = left->index;
+    second = right->index;
+    return topology.slot(second) ? NVML_SUCCESS : NVML_ERROR_INVALID_ARGUMENT;
+}
+
+nvmlReturn_t nvmlDeviceGetTopologyCommonAncestor(
+    nvmlDevice_t device1,
+    nvmlDevice_t device2,
+    nvmlGpuTopologyLevel_t *pathInfo) {
+    if (!pathInfo) return NVML_ERROR_INVALID_ARGUMENT;
+    ModeledDeviceTopology topology;
+    int first = -1, second = -1;
+    const nvmlReturn_t result = modeled_pair(device1, device2, topology, first, second);
+    if (result != NVML_SUCCESS) return result;
+    const std::string path = topology.pcie_relation(first, second);
+    *pathInfo = path == "X" ? NVML_TOPOLOGY_INTERNAL
+        : path == "PIX" ? NVML_TOPOLOGY_SINGLE
+        : path == "PXB" ? NVML_TOPOLOGY_MULTIPLE
+        : path == "PHB" ? NVML_TOPOLOGY_HOSTBRIDGE
+        : path == "NODE" ? NVML_TOPOLOGY_NODE
+        : NVML_TOPOLOGY_SYSTEM;
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t nvmlDeviceGetP2PStatus(
+    nvmlDevice_t device1,
+    nvmlDevice_t device2,
+    nvmlGpuP2PCapsIndex_t p2pIndex,
+    nvmlGpuP2PStatus_t *p2pStatus) {
+    if (!p2pStatus) return NVML_ERROR_INVALID_ARGUMENT;
+    ModeledDeviceTopology topology;
+    int first = -1, second = -1;
+    const nvmlReturn_t result = modeled_pair(device1, device2, topology, first, second);
+    if (result != NVML_SUCCESS) return result;
+    const bool nvlink = topology.nvlink_links(first, second) > 0;
+    const ModeledSlot& left = *topology.slot(first);
+    const ModeledSlot& right = *topology.slot(second);
+    nvmlGpuP2PStatus_t pcie_status = NVML_P2P_STATUS_OK;
+    if (first == second || !left.pcie.present() || !right.pcie.present()) {
+        pcie_status = NVML_P2P_STATUS_NOT_SUPPORTED;
+    } else if (!left.p2p || !right.p2p) {
+        pcie_status = NVML_P2P_STATUS_GPU_NOT_SUPPORTED;
+    } else if (topology.pcie_relation(first, second) == "SYS") {
+        pcie_status = NVML_P2P_STATUS_IOH_TOPOLOGY_NOT_SUPPORTED;
+    }
+    switch (p2pIndex) {
+        case NVML_P2P_CAPS_INDEX_READ:
+        case NVML_P2P_CAPS_INDEX_WRITE:
+            *p2pStatus = nvlink ? NVML_P2P_STATUS_OK : pcie_status;
+            break;
+        case NVML_P2P_CAPS_INDEX_NVLINK:
+        case NVML_P2P_CAPS_INDEX_ATOMICS:
+            *p2pStatus = nvlink ? NVML_P2P_STATUS_OK : NVML_P2P_STATUS_NOT_SUPPORTED;
+            break;
+        case NVML_P2P_CAPS_INDEX_PCI:
+            *p2pStatus = pcie_status;
+            break;
+        default:
+            return NVML_ERROR_INVALID_ARGUMENT;
+    }
     return NVML_SUCCESS;
 }
 

@@ -77,6 +77,16 @@ run_smoke() {
     FAKEGPU_FAULT_EVENTS="0:XID_79:critical;1:NVLINK_CRC:error:3" \
     FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480" \
     run_fakegpu "$BUILD_DIR" "$PYTHON_BIN" tests/native/memory_types.py
+  # Native NVML/CUDA answers and SMI state must match the Python platform model.
+  local layout devices platform bridges
+  for layout in "v100:8 auto -" "a100:8 auto -" "a100-pcie-80gb:8 auto -" \
+      "rtx3090:2 desktop 0-1" "gb300-dgx-station,rtx-pro-6000-blackwell auto -"; do
+    read -r devices platform bridges <<<"$layout"
+    FAKEGPU_SMI_STATE_DIR="$BUILD_DIR/smi-platform" \
+      FAKEGPU_NVLINK_BRIDGES="${bridges#-}" \
+      run_fakegpu "$BUILD_DIR" --devices "$devices" --platform "$platform" \
+        "$PYTHON_BIN" tests/native/platform_topology.py
+  done
   FAKEGPU_BUILD_DIR="$BUILD_DIR" \
     "$PYTHON_BIN" tests/native/coordinator_smoke.py
 
