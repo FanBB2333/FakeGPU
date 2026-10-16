@@ -225,8 +225,10 @@ fakegpu nvitop --state-dir /tmp/fakegpu-smi --telemetry reference
   依明確的熱響應模型變化。記憶體引擎使用率依張量 I/O 與參考頻寬計算，並非
   記憶體容量使用率。負載曲線屬於模型假設，不是 A100 實測或效能校準結果。
 
-模型目前只匹配 `a100`（SXM4 80GB）；其他 profile 或缺少活躍度觀測的發布者仍
-保留 `N/A`。GPU 風扇與公開快照一致，繼續顯示 `N/A`；CUDA 驅動及未支援的影片、
+實測的閒置讀數只屬於 `a100`（SXM4 80GB）。其他目錄 profile 使用同樣的活躍度輸入與一條預設曲線：
+閒置時 30°C、1 W；功耗線性升至該 profile 在目錄中的功率上限（目錄缺漏時以 300 W 計）；溫度沿用
+同樣的 45°C 溫升與 10 秒熱響應；負載時脈取自目錄（缺漏時以 1500 MHz 計）。這些預設值是顯示用的
+模型假設，不是測量值。缺少活躍度觀測的發布者與目錄之外的 profile 仍保留 `N/A`。GPU 風扇與公開快照一致，繼續顯示 `N/A`；CUDA 驅動及未支援的影片、
 PCIe 遙測也不會虛構。預設 `--telemetry none` 維持原行為，macOS 無需 NVIDIA 驅動。
 
 維護的 `tests/support/a100_monitor_smoke.py` 會啟動此 torch 程式與原版 nvitop

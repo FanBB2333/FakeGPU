@@ -283,7 +283,7 @@ class GpuCard(Static):
                 ),
             ]
         else:
-            lines += [Text("sensors N/A for this profile", style="dim"), Text(""), Text("")]
+            lines += [Text("sensors N/A", style="dim"), Text(""), Text("")]
         half = (self.BAR + 10) // 2
         lines.append(Text.assemble(
             ("mem ", COLORS["memory"]), sparkline(history.get("memory_percent", []), half, color=COLORS["memory"]),

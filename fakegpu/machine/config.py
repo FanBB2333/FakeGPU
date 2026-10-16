@@ -110,8 +110,9 @@ class MachineConfig:
     pcie_generation: int = 0
     # NVLink bridges between PCIe cards, e.g. "0-1,2-3" or "0-1-2-3".
     nvlink_bridges: str = ""
-    # The A100 reference model fills temperature/power/clocks from public idle
-    # readings plus CPU activity. Other profiles keep those fields empty.
+    # "reference" models temperature/power/clocks from CPU activity, starting
+    # from public idle readings for a100 and a default curve (30°C, 1 W idle)
+    # for every other profile. "none" leaves them N/A.
     telemetry: str = "reference"
     # Keep the daemon running after the console exits.
     background: bool = True

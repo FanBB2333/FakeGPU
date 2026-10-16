@@ -464,12 +464,11 @@ class MachineService:
             },
         }
 
-    @staticmethod
-    def _device_telemetry(device: dict, values: dict | None) -> dict[str, Any] | None:
-        if not values:
+    def _device_telemetry(self, device: dict, values: dict | None) -> dict[str, Any] | None:
+        if not values or self._telemetry is None:
             return None
         return {
-            "source": "a100_reference_model",
+            "source": self._telemetry.source(device["profile_id"]),
             "gpu_percent": values["gpu"],
             "memory_bandwidth_percent": values["memory"],
             "temperature_c": values["temperature"],

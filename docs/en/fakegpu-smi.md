@@ -254,8 +254,14 @@ separates its sources and assumptions:
   against reference bandwidth, not allocated-capacity percentage. Loaded curves
   are assumptions, not measured A100 behavior or a performance calibration.
 
-The model currently matches only the `a100` SXM4 80GB profile. Other profiles or
-publishers without activity observations retain `N/A`. The GPU-local fan remains
+The observed idle readings belong to the `a100` SXM4 80GB profile only. Every
+other catalog profile follows a default curve with the same activity input: it
+idles at 30°C and 1 W, power rises linearly to the profile's catalog power cap
+(300 W when the catalog has none), temperature follows the same 45°C rise and
+10 s thermal response, and loaded clocks come from the catalog (1500 MHz when
+missing). These defaults are display assumptions, not measurements. Publishers
+without activity observations, and profiles outside the catalog, retain `N/A`.
+The GPU-local fan remains
 `N/A`, matching the public snapshot; CUDA-driver and unsupported video/PCIe
 telemetry also remain unavailable. The default `--telemetry none` retains the
 original behavior. No NVIDIA CUDA driver is installed on macOS.

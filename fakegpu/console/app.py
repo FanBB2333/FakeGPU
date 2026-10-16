@@ -58,7 +58,11 @@ from .widgets import (
 )
 
 TABS = ("overview", "processes", "devices", "events", "machine", "profiles")
-TELEMETRY_LABELS = {"reference": "A100 reference (modeled)", "none": "none (sensors N/A)"}
+TELEMETRY_LABELS = {"reference": "modeled (A100 reference, default curve)", "none": "none (sensors N/A)"}
+SENSOR_SOURCES = {
+    "a100_reference_model": "A100 reference readings, follow activity (modeled)",
+    "default_model": "default curve: idle 30°C and 1 W, follow activity (modeled)",
+}
 # Actions that only apply on some tabs; elsewhere their keys are inactive and
 # left out of the footer.
 TAB_ACTIONS = {
@@ -182,6 +186,7 @@ def machine_charts(devices: list[dict[str, Any]], height: int = 3) -> list[Chart
     no_sensors = None if sensed else "N/A"
     readings = [device["telemetry"] for device in sensed]
     limit = sum(device["power_limit_w"] or 0 for device in sensed)
+    peak_power = max([value for value in power if value is not None], default=0.0)
     return [
         Chart(
             "Memory", memory, maximum=100, unit="%", color=COLORS["memory"], height=height,
@@ -196,7 +201,8 @@ def machine_charts(devices: list[dict[str, Any]], height: int = 3) -> list[Chart
         ),
         Chart(
             "Power", power, unit="W", color=COLORS["power"], height=height,
-            maximum=limit or nice_ceiling(max([v for v in power if v is not None], default=1)),
+            # Profiles without a catalog power cap still draw power.
+            maximum=limit if peak_power <= limit else nice_ceiling(peak_power),
             current=no_sensors or f"{sum(r['power_w'] for r in readings):.0f} / {limit:.0f} W",
         ),
         Chart(
@@ -917,7 +923,8 @@ class ConsoleApp(App[str]):
                 ("Memory", f"{size(memory['used_bytes'])} used, peak {size(memory['peak_bytes'])}, "
                            f"tracked {size(memory['tracked_bytes'])}, reserved {size(memory['reserved_bytes'])}"),
                 ("Allocator", f"{allocator['allocation_count']} allocations in {allocator['segment_count']} segments"),
-                ("Sensors", TELEMETRY_LABELS["reference"] if device["telemetry"] else "N/A for this profile"),
+                ("Sensors", SENSOR_SOURCES.get(device["telemetry"]["source"], "modeled")
+                            if device["telemetry"] else "N/A (sensor model off, or no activity published)"),
             ]),
             Text(),
             Text(f"Trends, {window_text(times)}", style="bold"),

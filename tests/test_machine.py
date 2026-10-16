@@ -109,6 +109,15 @@ def test_devices_carry_modeled_link_traffic(service, child):
     assert second["transfer"] is None and second["history"]["pcie_gbps"][-1] is None
 
 
+def test_every_profile_has_modeled_sensors(tmp_path):
+    config = MachineConfig(devices="a100:1,rtx4090:1", platform="generic", telemetry="reference")
+    a100, rtx = MachineService(MachinePaths(tmp_path), config).status()["devices"]
+    assert a100["telemetry"]["source"] == "a100_reference_model"
+    assert rtx["telemetry"]["source"] == "default_model"
+    assert (rtx["telemetry"]["temperature_c"], rtx["telemetry"]["power_w"]) == (30, 1.0)
+    assert rtx["history"]["power_w"] == [1.0]
+
+
 def test_daemon_status_prints_the_platform_slots(service, capsys):
     from fakegpu.daemon_cli import _print_status
 

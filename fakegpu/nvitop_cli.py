@@ -30,7 +30,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--stale-after-seconds", type=float, default=2.0, help="Ignore older heartbeats (default: 2).")
     parser.add_argument("--lib-dir", help="Override bundled FakeGPU native library directory.")
     parser.add_argument("--telemetry", choices=("none", "reference"),
-                        help="A100 reference sensor model (default: the daemon's setting, else none); "
+                        help="Modeled sensors: A100 reference readings, a default curve for other "
+                             "profiles (default: the daemon's setting, else none); "
                              "publishers need FAKEGPU_TELEMETRY=reference.")
     args, remaining = parser.parse_known_args(argv)
     paths = MachinePaths.from_env()
@@ -60,7 +61,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
             from nvitop.cli import main as nvitop_main
 
-            label = ("A100 reference model (CPU activity proxy, not hardware measurements)"
+            label = ("modeled sensors, A100 reference or default curve "
+                     "(CPU activity proxy, not hardware measurements)"
                      if args.telemetry == "reference" else "hardware telemetry is N/A")
             print(f"FakeGPU NVML: simulated memory/processes; {label}.", file=sys.stderr)
             sys.argv = ["nvitop", *remaining]

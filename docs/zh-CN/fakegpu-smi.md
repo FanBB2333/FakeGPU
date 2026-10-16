@@ -226,8 +226,10 @@ fakegpu nvitop --state-dir /tmp/fakegpu-smi --telemetry reference
   按显式热响应模型变化。显存引擎利用率按张量 I/O 与参考带宽计算，不是显存容量
   占用率。负载曲线属于模型假设，不是 A100 实测或性能校准结果。
 
-模型目前只匹配 `a100`（SXM4 80GB）；其他 profile 或缺少活跃度观测的发布者仍
-保留 `N/A`。GPU 风扇与公开快照一致，继续显示 `N/A`；CUDA 驱动及未支持的视频、
+实测的空闲读数只属于 `a100`（SXM4 80GB）。其他目录 profile 使用同样的活跃度输入和一条默认曲线：
+空闲时 30°C、1 W；功耗线性升至该 profile 在目录中的功率上限（目录缺失时按 300 W）；温度沿用
+同样的 45°C 温升和 10 秒热响应；负载时钟取自目录（缺失时按 1500 MHz）。这些默认值是显示用的
+模型假设，不是测量值。缺少活跃度观测的发布者和目录之外的 profile 仍保留 `N/A`。GPU 风扇与公开快照一致，继续显示 `N/A`；CUDA 驱动及未支持的视频、
 PCIe 遥测也不会虚构。默认 `--telemetry none` 保持原行为，macOS 上无需 NVIDIA 驱动。
 
 维护的 `tests/support/a100_monitor_smoke.py` 会启动该 torch 程序及原版 nvitop

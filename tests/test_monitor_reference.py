@@ -7,6 +7,7 @@ import pytest
 
 from fakegpu._monitor_reference import ReferenceTelemetry
 from fakegpu.nvml import _DeviceV2, _ProcessV2
+from fakegpu.profile_catalog import get_profile
 
 
 def inventory(*, profile="a100", busy=0, io_bytes=0, timestamp=10**9, used=2**30):
@@ -50,9 +51,32 @@ def test_activity_changes_sensors_and_cools_after_idle():
     assert 29 < cool["synthetic-test"]["temperature"] < hot
 
 
-@pytest.mark.parametrize("profile", ["a100-pcie-80gb", "a100-sxm4-40gb", "h100", "unknown"])
-def test_reference_is_specific_to_the_sxm_80gb_profile(profile):
-    assert ReferenceTelemetry().sample(inventory(profile=profile)) == ({}, {})
+@pytest.mark.parametrize("profile", ["a100-pcie-80gb", "a100-sxm4-40gb", "h100", "rtx4090"])
+def test_other_profiles_follow_the_default_curve(profile):
+    model = ReferenceTelemetry()
+    assert model.source(profile) == "default_model" and model.source("a100") == "a100_reference_model"
+    devices, _ = model.sample(inventory(profile=profile), now=0)
+    idle = devices["synthetic-test"]
+    # A100 observations are never applied to another profile.
+    assert (idle["temperature"], idle["power_mw"], idle["gpu"], idle["sm_clock"]) == (30, 1000, 0, 210)
+    catalog = get_profile(profile)
+    devices, _ = model.sample(inventory(profile=profile, busy=10**9, timestamp=2 * 10**9), now=10)
+    busy = devices["synthetic-test"]
+    assert busy["power_mw"] == catalog.max_power_limit_mw
+    assert (busy["sm_clock"], busy["memory_clock"]) == (catalog.core_clock_mhz, catalog.memory_clock_mhz)
+    assert 30 < busy["temperature"] < 75
+
+
+def test_default_curve_falls_back_where_the_catalog_has_no_figure():
+    model = ReferenceTelemetry()
+    model.sample(inventory(profile="b100"), now=0)
+    devices, _ = model.sample(inventory(profile="b100", busy=10**9, timestamp=2 * 10**9), now=10)
+    busy = devices["synthetic-test"]
+    assert (busy["power_mw"], busy["sm_clock"], busy["memory_clock"]) == (300000, 1500, 1500)
+
+
+def test_profiles_outside_the_catalog_remain_unknown():
+    assert ReferenceTelemetry().sample(inventory(profile="unknown")) == ({}, {})
 
 
 def test_missing_observations_remain_unknown():
