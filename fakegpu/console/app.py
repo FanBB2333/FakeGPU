@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from rich.console import Group
@@ -45,7 +46,7 @@ from .widgets import (
 )
 
 TABS = ("overview", "processes", "devices", "events", "machine", "profiles")
-TELEMETRY_LABELS = {"reference": "A100 reference model (modeled, not measured)", "none": "none"}
+TELEMETRY_LABELS = {"reference": "A100 reference (modeled)", "none": "none (sensors N/A)"}
 
 
 class Confirm(ModalScreen[bool]):
@@ -77,7 +78,11 @@ class ConsoleApp(App[str]):
     TITLE = "FakeGPU Console"
     CSS = """
     #stats { height: 4; margin: 0 1; }
-    StatTile { width: 1fr; height: 4; border: round $primary-darken-2; text-align: center; }
+    TabbedContent, TabbedContent > ContentSwitcher, TabPane { height: 1fr; }
+    StatTile {
+        width: 1fr; height: 4; border: round $primary-darken-2; text-align: center;
+        text-wrap: nowrap; text-overflow: ellipsis;
+    }
     #gpus { grid-size: 4; grid-gutter: 0 1; height: auto; max-height: 60%; overflow-y: auto; margin: 0 1; }
     GpuCard { height: 9; border: round $panel-lighten-2; padding: 0 1; }
     GpuCard.busy { border: round $success; }
@@ -86,17 +91,22 @@ class ConsoleApp(App[str]):
     #lower { height: 1fr; margin: 0 1; }
     #overview-processes { width: 3fr; }
     #overview-events { width: 2fr; border-left: tall $panel; }
-    #processes-table, #devices-table { height: 1fr; }
-    #ended-table { height: 8; }
+    #processes-table, #devices-table { height: 1fr; min-height: 5; }
+    #ended-table { height: auto; max-height: 7; }
     .detail { height: auto; max-height: 50%; border-top: tall $panel; padding: 0 1; }
     .section { text-style: bold; color: $accent; margin-top: 1; }
     #event-filters { height: 3; }
     #event-filter { width: 1fr; }
     #event-level { width: 30; }
-    #machine-form { padding: 0 2; }
-    #machine-form Input, #machine-form Select { width: 60; }
+    #machine-body { layout: horizontal; }
+    #machine-form { width: 92; height: auto; padding: 0 2; }
+    #machine-form Input, #machine-form Select { width: 1fr; max-width: 60; }
     #machine-form .row { height: 3; align: left middle; }
-    #machine-form .row Label { width: 40; }
+    #machine-form .row Label { width: 26; }
+    #machine-info { width: 1fr; height: auto; padding: 1 2; border-left: tall $panel; }
+    #machine-body.stacked { layout: vertical; }
+    #machine-body.stacked #machine-form { width: 1fr; }
+    #machine-body.stacked #machine-info { border-left: none; border-top: tall $panel; }
     #machine-form .buttons { height: 3; margin-top: 1; }
     #machine-form .buttons Button { margin-right: 2; }
     #cfg-devices-check { margin-bottom: 1; }
@@ -142,15 +152,17 @@ class ConsoleApp(App[str]):
                 yield Grid(id="gpus")
                 with Horizontal(id="lower"):
                     yield DataTable(id="overview-processes", cursor_type="row")
-                    yield RichLog(id="overview-events", max_lines=300, wrap=True)
+                    yield RichLog(id="overview-events", max_lines=300, wrap=True, min_width=20)
             with TabPane("2 Processes", id="processes"):
                 yield DataTable(id="processes-table", cursor_type="row")
-                yield Static(id="process-detail", classes="detail")
+                with VerticalScroll(classes="detail"):
+                    yield Static(id="process-detail")
                 yield Static("Recently ended", classes="section")
                 yield DataTable(id="ended-table", cursor_type="row")
             with TabPane("3 Devices", id="devices"):
                 yield DataTable(id="devices-table", cursor_type="row")
-                yield Static(id="device-detail", classes="detail")
+                with VerticalScroll(classes="detail"):
+                    yield Static(id="device-detail")
             with TabPane("4 Events", id="events"):
                 with Horizontal(id="event-filters"):
                     yield Input(placeholder="Filter events by text", id="event-filter")
@@ -160,32 +172,33 @@ class ConsoleApp(App[str]):
                         value="info",
                         id="event-level",
                     )
-                yield RichLog(id="events-log", max_lines=EVENT_BUFFER, wrap=True)
+                yield RichLog(id="events-log", max_lines=EVENT_BUFFER, wrap=True, min_width=20)
             with TabPane("5 Machine", id="machine"):
-                with VerticalScroll(id="machine-form"):
-                    yield Static("Device layout", classes="section")
-                    yield Input(placeholder="a100:8 or a100:4,h100:4", id="cfg-devices")
-                    yield Static(id="cfg-devices-check")
-                    with Horizontal(classes="row"):
-                        yield Label("Sensor model")
-                        yield Select(
-                            [(label, mode) for mode, label in TELEMETRY_LABELS.items()],
-                            allow_blank=False,
-                            id="cfg-telemetry",
-                        )
-                    with Horizontal(classes="row"):
-                        yield Label("Keep running after the console quits")
-                        yield Switch(id="cfg-background")
-                    with Horizontal(classes="row"):
-                        yield Label("Memory warning threshold (%)")
-                        yield Input(id="cfg-warning", type="number")
-                    with Horizontal(classes="row"):
-                        yield Label("Heartbeat timeout (seconds)")
-                        yield Input(id="cfg-stale", type="number")
-                    with Horizontal(classes="buttons"):
-                        yield Button("Apply", variant="primary", id="cfg-apply")
-                        yield Button("Reload", id="cfg-reload")
-                        yield Button("Stop machine", variant="error", id="stop-machine")
+                with VerticalScroll(id="machine-body"):
+                    with Vertical(id="machine-form"):
+                        yield Static("Device layout", classes="section")
+                        yield Input(placeholder="a100:8 or a100:4,h100:4", id="cfg-devices")
+                        yield Static(id="cfg-devices-check")
+                        with Horizontal(classes="row"):
+                            yield Label("Sensor model")
+                            yield Select(
+                                [(label, mode) for mode, label in TELEMETRY_LABELS.items()],
+                                allow_blank=False,
+                                id="cfg-telemetry",
+                            )
+                        with Horizontal(classes="row"):
+                            yield Label("Keep running after quit")
+                            yield Switch(id="cfg-background")
+                        with Horizontal(classes="row"):
+                            yield Label("Memory warning at (%)")
+                            yield Input(id="cfg-warning", type="number")
+                        with Horizontal(classes="row"):
+                            yield Label("Heartbeat timeout (s)")
+                            yield Input(id="cfg-stale", type="number")
+                        with Horizontal(classes="buttons"):
+                            yield Button("Apply", variant="primary", id="cfg-apply")
+                            yield Button("Reload", id="cfg-reload")
+                            yield Button("Stop machine", variant="error", id="stop-machine")
                     yield Static(id="machine-info")
             with TabPane("6 Profiles", id="profiles"):
                 yield Input(placeholder="Filter by id, name, architecture or segment; press a to add", id="profile-filter")
@@ -214,6 +227,8 @@ class ConsoleApp(App[str]):
 
     def on_resize(self) -> None:
         self.query_one("#gpus", Grid).styles.grid_size_columns = max(1, (self.size.width - 2) // 42)
+        # Settings and machine details side by side only when both fit.
+        self.query_one("#machine-body").set_class(self.size.width < 140, "stacked")
 
     # ----------------------------------------------------------- refresh
 
@@ -406,16 +421,27 @@ class ConsoleApp(App[str]):
         config, daemon, paths = status["config"], status["daemon"], status["paths"]
         if not self.form_loaded:
             self.load_form(config)
+        home = str(Path.home())
+
+        def path(value: str) -> str:
+            return "~" + value[len(home):] if value.startswith(home + "/") else value
+
         self.query_one("#machine-info", Static).update(Group(
             Text("Machine", style="bold"),
             key_values([
-                ("Daemon", f"pid {daemon['pid']} on {daemon['host']}, fakegpu {daemon['version']}"),
+                ("Daemon", f"pid {daemon['pid']} on {daemon['host']}"),
+                ("Version", f"fakegpu {daemon['version']}"),
                 ("Started", f"{daemon['started_at']} (up {duration(daemon['uptime_seconds'])})"),
                 ("Sensors", TELEMETRY_LABELS[config["telemetry"]]),
-                ("Data", paths["root"]),
-                ("Joining", "scripts that call fakegpu.init() join automatically; FAKEGPU_MACHINE=off opts out"),
-                ("Other views", f"fakegpu nvitop, fakegpu nvidia-smi --state-dir {paths['state_dir']}, "
-                                "fakegpu daemon events -f"),
+                ("Data", Text(path(paths["root"]), overflow="fold")),
+                ("Joining", "fakegpu.init() joins; FAKEGPU_MACHINE=off opts out"),
+            ]),
+            Text(),
+            Text("Other views", style="bold"),
+            key_values([
+                ("nvitop", "fakegpu nvitop"),
+                ("nvidia-smi", Text(f"fakegpu nvidia-smi --state-dir {path(paths['state_dir'])}", overflow="fold")),
+                ("Events", "fakegpu daemon events -f"),
             ]),
         ))
 
