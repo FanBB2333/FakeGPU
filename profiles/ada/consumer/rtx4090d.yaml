@@ -1,0 +1,36 @@
+id: rtx4090d
+name: Fake NVIDIA GeForce RTX 4090 D
+torch_name: NVIDIA GeForce RTX 4090 D
+official_model: GeForce RTX 4090 D
+architecture: ada
+compute_major: 8
+compute_minor: 9
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/
+spec_source: https://www.nvidia.cn/geforce/graphics-cards/40-series/rtx-4090-d/
+notes: China-market reference board; 21 Gbps memory rate derived from NVIDIA's 1008 GB/s bandwidth shown on the RTX 5090 D v2 comparison page. SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
+memory_bytes: 25769803776
+sm_count: 114
+memory_bus_width_bits: 384
+core_clock_mhz: 2520
+memory_clock_mhz: 10500
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 425000
+max_power_limit_mw: 425000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - fp8
+  - int8
+  - int4

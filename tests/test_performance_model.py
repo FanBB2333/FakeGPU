@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -9,7 +10,7 @@ from fakegpu.performance_model import (
     estimate_roofline,
     profile_roofline,
 )
-from fakegpu.profile_catalog import load_profiles
+from fakegpu.profile_catalog import get_profile, load_profiles
 
 
 def test_roofline_uses_profile_architecture_and_clock_data() -> None:
@@ -27,9 +28,14 @@ def test_roofline_uses_profile_architecture_and_clock_data() -> None:
     assert blackwell["compiler_target"] == "sm_120"
 
 
-def test_roofline_supports_every_catalog_profile() -> None:
+def test_roofline_handles_complete_and_partial_reference_profiles() -> None:
     profiles = load_profiles()
     for profile_id, profile in profiles.items():
+        required = {"sm_count", "core_clock_mhz", "memory_bus_width_bits", "memory_clock_mhz"}
+        if required.intersection(profile.unavailable_fields):
+            with pytest.raises(PerformanceModelError, match="no verified throughput specifications"):
+                profile_roofline(profile_id)
+            continue
         report = profile_roofline(profile_id)
         assert report["architecture"] == profile.architecture
         assert report["compute_capability"] == (
@@ -37,6 +43,14 @@ def test_roofline_supports_every_catalog_profile() -> None:
         )
         assert report["scalar_fp32_peak_flops_per_second"] > 0
         assert report["profile_memory_bandwidth_bytes_per_second"] > 0
+
+
+@pytest.mark.parametrize("field", ["sm_count", "core_clock_mhz", "memory_bus_width_bits", "memory_clock_mhz"])
+def test_roofline_rejects_unknown_throughput_instead_of_dividing_by_zero(monkeypatch, field) -> None:
+    profile = replace(get_profile("gtx980"), **{field: 0})
+    monkeypatch.setattr("fakegpu.performance_model.get_profile", lambda _profile_id: profile)
+    with pytest.raises(PerformanceModelError, match=field):
+        estimate_roofline(profile_id=profile.id, flops=1, memory_bytes=1)
 
 
 def test_roofline_returns_ordered_interval_and_bottleneck() -> None:

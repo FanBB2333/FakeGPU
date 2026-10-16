@@ -1,0 +1,33 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/maxwell-tuning-guide/index.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+id: m40
+name: Fake NVIDIA Tesla M40 12GB
+torch_name: Tesla M40 12GB
+official_model: Tesla M40
+architecture: maxwell
+compute_major: 5
+compute_minor: 2
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://developer.nvidia.com/blog/accelerating-hyperscale-datacenter-applications-tesla-gpus/
+notes: 12 GiB GDDR5 PCIe variant; 3072 cores / 128 = 24 SMs. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0).
+memory_bytes: 12884901888
+sm_count: 24
+memory_bus_width_bits: 384
+core_clock_mhz: 1114
+memory_clock_mhz: 3000
+l2_cache_bytes: 3145728
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 250000
+pci_device_id: 402460894
+supported_types:
+  - fp32

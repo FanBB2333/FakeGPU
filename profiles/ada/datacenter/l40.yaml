@@ -1,0 +1,39 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+id: l40
+name: Fake NVIDIA L40
+torch_name: NVIDIA L40
+official_model: NVIDIA L40
+architecture: ada
+compute_major: 8
+compute_minor: 9
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf
+notes: 48 GiB GDDR6; 142 enabled SMs and 96 MiB L2. Memory clock rounded from 864 GB/s at 384 bits; GPU core clock unverified. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for core_clock_mhz.
+memory_bytes: 51539607552
+sm_count: 142
+memory_bus_width_bits: 384
+core_clock_mhz: 0
+memory_clock_mhz: 9000
+l2_cache_bytes: 100663296
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 0
+max_power_limit_mw: 300000
+pci_device_id: 649400542
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8

@@ -1,0 +1,34 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/maxwell-tuning-guide/index.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/161207-GRID-Packaging-and-Licensing-Guide.pdf
+id: m10
+name: Fake NVIDIA Tesla M10 (one GPU)
+torch_name: Tesla M10
+official_model: Tesla M10
+architecture: maxwell
+compute_major: 5
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://images.nvidia.com/content/pdf/tesla/Tesla-M10-Product-Brief.pdf
+notes: One of four GM107 GPUs; each has 640 cores and 8 GiB, rather than the 32 GiB board aggregate. The shared board TDP is 225 W; per-device power limit is unverified. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for l2_cache_bytes, max_power_limit_mw, pci_device_id.
+memory_bytes: 8589934592
+sm_count: 5
+memory_bus_width_bits: 128
+core_clock_mhz: 1033
+memory_clock_mhz: 2600
+l2_cache_bytes: 0
+shared_mem_per_sm: 65536
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 0
+supported_types:
+  - fp32

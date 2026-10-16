@@ -1,0 +1,30 @@
+id: gtx970
+name: Fake NVIDIA GeForce GTX 970
+torch_name: NVIDIA GeForce GTX 970
+official_model: GeForce GTX 970
+architecture: maxwell
+compute_major: 5
+compute_minor: 2
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://www.nvidia.com/en-us/geforce/900-series/
+notes: Reference desktop board. GTX 970 has segmented 3.5 GB + 0.5 GB VRAM; nominal aggregate bus width does not imply uniform bandwidth. SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
+memory_bytes: 4294967296
+sm_count: 13
+memory_bus_width_bits: 256
+core_clock_mhz: 1178
+memory_clock_mhz: 3500
+l2_cache_bytes: 0
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 145000
+max_power_limit_mw: 145000
+pci_device_id: 0
+supported_types:
+  - fp32

@@ -1,3 +1,6 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 id: l4
 name: Fake NVIDIA L4
 torch_name: NVIDIA L4
@@ -8,13 +11,13 @@ compute_minor: 9
 memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
-spec_source: https://www.nvidia.com/en-us/data-center/l4/
-notes: Reference L4 profile using NVIDIA product specifications and compute capability 8.9 limits.
+spec_source: https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf
+notes: 24 GiB GDDR6; 58 enabled SMs, 48 MiB L2, 300 GB/s and 72 W. Memory clock rounded from bandwidth; GPU core clock not published in the source table. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for core_clock_mhz.
 memory_bytes: 25769803776
 sm_count: 58
 memory_bus_width_bits: 192
-core_clock_mhz: 2040
-memory_clock_mhz: 6251
+core_clock_mhz: 0
+memory_clock_mhz: 6250
 l2_cache_bytes: 50331648
 shared_mem_per_sm: 102400
 shared_mem_per_block: 49152
@@ -23,9 +26,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
-typical_power_usage_mw: 72000
+typical_power_usage_mw: 0
 max_power_limit_mw: 72000
-pci_device_id: 0x27B810DE
+pci_device_id: 666374366
 supported_types:
   - fp32
   - tf32

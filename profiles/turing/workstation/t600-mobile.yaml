@@ -1,0 +1,31 @@
+id: t600-mobile
+name: Fake NVIDIA T600 Laptop GPU
+torch_name: NVIDIA T600 Laptop GPU
+official_model: NVIDIA T600
+architecture: turing
+compute_major: 7
+compute_minor: 5
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://www.nvidia.com/content/dam/en-zz/ja/Solutions/design-visualization/documents/ampere-mobile-linecard-master-mar22-jp.pdf
+notes: Reference laptop configuration. SM count derived from NVIDIA 896 CUDA cores and 64 cores per SM. Core clock, L2 cache, typical power, and PCI device ID are unverified and zero. Maximum power is the published operating-envelope ceiling; OEM TGP and clocks vary. Entry professional Turing GPU without Tensor Cores; no tensor throughput is claimed. Memory clock is an equivalent half-data-rate value derived from NVIDIA 192 GB/s and 128-bit bus, rounded to MHz; it is not a measured oscillator clock.
+memory_bytes: 4294967296
+sm_count: 14
+memory_bus_width_bits: 128
+core_clock_mhz: 0
+memory_clock_mhz: 6000
+l2_cache_bytes: 0
+shared_mem_per_sm: 65536
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 65536
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1024
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 0
+max_power_limit_mw: 60000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - fp16

@@ -1,3 +1,8 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://developer-blogs.nvidia.com/wp-content/uploads/2024/08/CUDA-Programming-and-Optimization.pdf
+# Additional source: https://docs.nvidia.com/nim/benchmarking/llm/1.0.0/performance
 id: h200
 name: Fake NVIDIA H200-SXM-141GB
 torch_name: NVIDIA H200-SXM-141GB
@@ -9,13 +14,13 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
 spec_source: https://www.nvidia.com/en-us/data-center/h200/
-notes: Reference H200 SXM profile with 141 GiB HBM3e and Hopper compute capability 9.0 limits.
+notes: Retained ID for H200 SXM; nominal 141 GiB HBM3e at 4.8 TB/s. 132 SMs verified by NVIDIA CUDA optimization presentation. Active bus width and memory clock not copied from H100 or NVL. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for memory_bus_width_bits, memory_clock_mhz, l2_cache_bytes.
 memory_bytes: 151397597184
 sm_count: 132
-memory_bus_width_bits: 5120
+memory_bus_width_bits: 0
 core_clock_mhz: 1980
-memory_clock_mhz: 2400
-l2_cache_bytes: 52428800
+memory_clock_mhz: 0
+l2_cache_bytes: 0
 shared_mem_per_sm: 233472
 shared_mem_per_block: 49152
 shared_mem_per_block_optin: 232448
@@ -23,9 +28,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
-typical_power_usage_mw: 700000
+typical_power_usage_mw: 0
 max_power_limit_mw: 700000
-pci_device_id: 0x233510DE
+pci_device_id: 590680286
 supported_types:
   - fp32
   - tf32

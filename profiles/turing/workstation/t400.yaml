@@ -1,0 +1,31 @@
+id: t400
+name: Fake NVIDIA T400
+torch_name: NVIDIA T400
+official_model: NVIDIA T400
+architecture: turing
+compute_major: 7
+compute_minor: 5
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/proviz-print-nvidia-T400-datasheet-us-nvidia-1670004-r5-web.pdf
+notes: Reference desktop-board configuration. SM count derived from NVIDIA 384 CUDA cores and 64 cores per SM. Core clock, L2 cache, typical power, and PCI device ID are unverified and zero. TU117 entry workstation GPU has no Tensor Cores; listed fp16 is a supported data format, not Tensor Core acceleration. Memory clock is an equivalent half-data-rate value derived from NVIDIA 80 GB/s and 64-bit bus, rounded to MHz; it is not a measured oscillator clock.
+memory_bytes: 2147483648
+sm_count: 6
+memory_bus_width_bits: 64
+core_clock_mhz: 0
+memory_clock_mhz: 5000
+l2_cache_bytes: 0
+shared_mem_per_sm: 65536
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 65536
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1024
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 0
+max_power_limit_mw: 30000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - fp16

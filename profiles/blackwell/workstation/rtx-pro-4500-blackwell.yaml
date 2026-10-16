@@ -1,7 +1,7 @@
 id: rtx-pro-4500-blackwell
 name: Fake NVIDIA RTX PRO 4500 Blackwell Workstation Edition
 torch_name: NVIDIA RTX PRO 4500 Blackwell Workstation Edition
-official_model: NVIDIA RTX PRO 4500 Blackwell
+official_model: NVIDIA RTX PRO 4500 Blackwell Workstation Edition
 architecture: blackwell
 compute_major: 12
 compute_minor: 0

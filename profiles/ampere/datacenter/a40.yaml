@@ -1,3 +1,7 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf
 id: a40
 name: Fake NVIDIA A40
 torch_name: NVIDIA A40
@@ -8,13 +12,13 @@ compute_minor: 6
 memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
-spec_source: https://www.nvidia.com/en-us/data-center/a40/
-notes: Reference profile based on NVIDIA A40 specifications and CUDA compute-capability limits.
+spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a40/NVIDIA%20A40%20Product%20Brief.pdf
+notes: 48 GiB GDDR6; memory clock rounded from 696 GB/s at 384 bits. 300 W board TDP; boost 1740 MHz. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0).
 memory_bytes: 51539607552
 sm_count: 84
 memory_bus_width_bits: 384
-core_clock_mhz: 1530
-memory_clock_mhz: 1188
+core_clock_mhz: 1740
+memory_clock_mhz: 7250
 l2_cache_bytes: 6291456
 shared_mem_per_sm: 102400
 shared_mem_per_block: 49152
@@ -23,9 +27,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 16
-typical_power_usage_mw: 300000
-max_power_limit_mw: 350000
-pci_device_id: 0x223510DE
+typical_power_usage_mw: 0
+max_power_limit_mw: 300000
+pci_device_id: 573903070
 supported_types:
   - fp32
   - tf32

@@ -9,7 +9,7 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
 spec_source: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/
-notes: Reference 16 GB desktop profile using NVIDIA GeForce specifications and Ada device limits; use a custom profile for the 8 GB variant.
+notes: Reference 16 GB desktop profile using NVIDIA GeForce specifications and Ada device limits; use rtx4060ti-8gb for the 8 GB variant.
 memory_bytes: 17179869184
 sm_count: 34
 memory_bus_width_bits: 128

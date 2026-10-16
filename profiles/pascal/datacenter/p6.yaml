@@ -1,0 +1,36 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/pascal-tuning-guide/index.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/161207-GRID-Packaging-and-Licensing-Guide.pdf
+id: p6
+name: Fake NVIDIA Tesla P6
+torch_name: Tesla P6
+official_model: Tesla P6
+architecture: pascal
+compute_major: 6
+compute_minor: 1
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/solutions/resources/documents1/Tesla-P6-Product-Brief.pdf
+notes: 2048 CUDA cores / 128 = 16 SMs; single-GPU MXM module. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for memory_bus_width_bits, memory_clock_mhz, l2_cache_bytes.
+memory_bytes: 17179869184
+sm_count: 16
+memory_bus_width_bits: 0
+core_clock_mhz: 1506
+memory_clock_mhz: 0
+l2_cache_bytes: 0
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 90000
+pci_device_id: 464785630
+supported_types:
+  - fp32
+  - fp16
+  - int8

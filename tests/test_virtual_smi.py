@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import fakegpu.smi as smi_module
+from fakegpu.profile_catalog import load_profiles
 from fakegpu.smi import (
     SCHEMA_VERSION,
     SmiStatePublisher,
@@ -55,7 +56,7 @@ def test_publisher_and_virtual_smi_include_process_memory(
     state = publisher.publish_once(running=True)
     assert state["schema_version"] == SCHEMA_VERSION
     assert state["fakegpu"]["version"]
-    assert state["fakegpu"]["profile_catalog"]["profile_count"] == 82
+    assert state["fakegpu"]["profile_catalog"]["profile_count"] == len(load_profiles())
     assert (
         state["fakegpu"]["native_capabilities"]["explicit_api_count"]
         == 104
@@ -220,7 +221,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
             "runtime.mode": "simulate",
             "policy.oom": "default",
             "tracking.dispatch": True,
-            "catalog.profiles": 82,
+            "catalog.profiles": len(load_profiles()),
             "catalog.native_apis": 104,
             "dispatch.calls": 7,
             "publisher.successful_writes": 1,
@@ -1108,7 +1109,7 @@ def test_fakecuda_runtime_publishes_profile_stage_and_peak(tmp_path: Path) -> No
     assert state["stage"] == "forward"
     assert state["tracking_confidence"] == "C3_torch_dispatch_lifetime"
     assert state["fakegpu"]["backend"] == "upstream"
-    assert state["fakegpu"]["profile_catalog"]["profile_count"] == 82
+    assert state["fakegpu"]["profile_catalog"]["profile_count"] == len(load_profiles())
     assert (
         state["fakegpu"]["native_capabilities"]["group_count"]
         == 5

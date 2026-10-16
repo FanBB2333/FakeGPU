@@ -1,0 +1,41 @@
+# Additional source: https://aws.amazon.com/ec2/instance-types/g5/
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/nim/bionemo/rfdiffusion/2.2.0/support-matrix.html
+id: a10g
+name: Fake NVIDIA A10G
+torch_name: NVIDIA A10G
+official_model: NVIDIA A10G
+architecture: ampere
+compute_major: 8
+compute_minor: 6
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://docs.nvidia.com/datascience/deployment/nightly/cloud/aws/
+notes: 80 enabled SMs derived from AWS-published 80 RT cores and 320 Ampere Tensor Cores (4 per SM); this differs from the 72-SM A10. AWS cloud Ampere variant; NVIDIA RAPIDS and NIM publish 24 GiB per GPU. No A10 clocks are assumed. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, l2_cache_bytes, max_power_limit_mw.
+memory_bytes: 25769803776
+sm_count: 80
+memory_bus_width_bits: 0
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 574034142
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4

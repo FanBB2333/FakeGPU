@@ -57,8 +57,9 @@ Python 测试（跳过一个 CPU-only build 分支）、原生 CPU 套件、104 
 
 ## GPU profiles
 
-目录包含 82 个 YAML profile，覆盖从 Maxwell 到 Blackwell 的消费级、工作站、
+目录包含 306 个 YAML profile，覆盖从 Maxwell 到 Blackwell 的消费级、工作站、
 数据中心和嵌入式 NVIDIA GPU。Python 与原生 runtime 共用这些 profiles。
+型号、参数来源、变体口径和未知字段见[完整目录](../../profiles/README.md)。
 
 ```bash
 python3 -m fakegpu doctor --list-profiles
@@ -66,6 +67,7 @@ python3 -m fakegpu demo --profile rtx4090
 python3 -m fakegpu --build-dir build --devices "t4,a100:2,h100" \
   python3 your_script.py
 python3 scripts/update_nvidia_gpu_catalog.py --check
+python3 scripts/render_gpu_catalog.py --check
 ```
 
 设置 `FAKEGPU_PROFILE` 或传入 `--profile` 可以选择一个 profile。用 `--devices`
@@ -75,7 +77,8 @@ python3 scripts/update_nvidia_gpu_catalog.py --check
 
 - `scripts/build.sh` 配置并编译原生目标。
 - `scripts/test.sh` 执行维护中的测试组。
-- `scripts/update_nvidia_gpu_catalog.py` 检查或更新 profile 元数据。
+- `scripts/update_nvidia_gpu_catalog.py` 检查或更新 NVIDIA compute capability 快照。
+- `scripts/render_gpu_catalog.py` 从 YAML profile 重新生成公开目录与官网统计。
 - `scripts/validation/` 存放共用的报告和产物验证工具。
 - `scripts/linux/` 存放 Linux GPU 管理工具。
 - `scripts/macos/` 存放 macOS 到 Linux VM 的辅助工具。

@@ -72,6 +72,9 @@ docs/*
 !docs/en/
 !docs/zh-CN/
 !docs/zh-TW/
+!docs/catalog-consumer-research.md
+!docs/catalog-datacenter-research.md
+!docs/catalog-workstation-research.md
 README.*.md
 !README.zh-CN.md
 !README.zh-TW.md

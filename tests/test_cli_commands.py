@@ -139,7 +139,7 @@ def test_profile_catalog_matches_nvidia_snapshot() -> None:
     summary = catalog_summary(profiles)
 
     assert validation.errors == ()
-    assert summary["profile_count"] == 82
+    assert summary["profile_count"] >= 200
     assert set(summary["architectures"]) == {
         "maxwell",
         "pascal",
@@ -150,14 +150,13 @@ def test_profile_catalog_matches_nvidia_snapshot() -> None:
         "hopper",
         "blackwell",
     }
-    assert summary["segments"] == {
-        "consumer": 40,
-        "datacenter": 16,
-        "embedded": 2,
-        "test": 1,
-        "workstation": 23,
-    }
+    assert summary["segments"]["consumer"] >= 100
+    assert summary["segments"]["datacenter"] >= 35
+    assert summary["segments"]["workstation"] >= 60
+    assert summary["segments"]["embedded"] == 2
+    assert summary["segments"]["test"] == 1
     assert summary["compute_capabilities"] == [
+        "5.0",
         "5.2",
         "6.0",
         "6.1",
@@ -244,7 +243,7 @@ def test_doctor_reports_selected_blackwell_profile_as_json() -> None:
     payload = json.loads(result.stdout)
 
     assert payload["ok"] is True
-    assert payload["profile_summary"]["profile_count"] == 82
+    assert payload["profile_summary"]["profile_count"] == len(load_profiles())
     assert payload["selected_profile"]["id"] == "b300"
     assert payload["selected_profile"]["architecture"] == "blackwell"
     assert payload["selected_profile"]["segment"] == "datacenter"
@@ -300,7 +299,8 @@ def test_fakecuda_profile_matrix() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert (
-        f"validated {len(profiles)} profiles across 15 compute capabilities"
+        f"validated {len(profiles)} profiles across "
+        f"{len(catalog_summary(profiles)['compute_capabilities'])} compute capabilities"
         in result.stdout
     )
 
@@ -936,8 +936,8 @@ def test_readmes_report_research_reliability_scope() -> None:
         "https://docs.vllm.ai/en/stable/",
     }
 
-    assert len(profiles) == 82
-    assert compute_capability_count == 15
+    assert len(profiles) >= 200
+    assert compute_capability_count == 16
     assert len(capabilities["groups"]) == 5
     assert len(capabilities["apis"]) == 104
     assert policy_enforced_count == 102

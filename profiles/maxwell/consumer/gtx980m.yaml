@@ -1,0 +1,30 @@
+id: gtx980m
+name: Fake NVIDIA GeForce GTX 980M 8 GB
+torch_name: NVIDIA GeForce GTX 980M 8 GB
+official_model: GeForce GTX 980M
+architecture: maxwell
+compute_major: 5
+compute_minor: 2
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://eurocom.com/ec/release%28267%29ec
+notes: 8 GB Eurocom shipping configuration; core clock uses the published BASE clock plus unspecified boost, not an invented boost maximum. Bus width from NVIDIA's 900M line card https://www.nvidia.com/content/ndemand/la/geforce/LC_GeForce_GTX_960M_FEB15_US_FNL_SPA_hires.pdf . SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
+memory_bytes: 8589934592
+sm_count: 12
+memory_bus_width_bits: 256
+core_clock_mhz: 1038
+memory_clock_mhz: 2500
+l2_cache_bytes: 0
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 0
+supported_types:
+  - fp32

@@ -1,0 +1,32 @@
+id: gtx1050-2gb
+name: Fake NVIDIA GeForce GTX 1050 2 GB
+torch_name: NVIDIA GeForce GTX 1050 2 GB
+official_model: GeForce GTX 1050
+architecture: pascal
+compute_major: 6
+compute_minor: 1
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://rog.asus.com/es/articles/news/asus-anuncia-su-gama-de-tarjetas-graficas-basadas-en-las-nuevas-gpus-geforce-gtx-1050-y-gtx-1050-ti/
+notes: Standard desktop 2 GB / 640-core / 128-bit configuration; the existing gtx1050 ID retains its legacy 4 GB compatibility capacity. SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
+memory_bytes: 2147483648
+sm_count: 5
+memory_bus_width_bits: 128
+core_clock_mhz: 1455
+memory_clock_mhz: 3500
+l2_cache_bytes: 0
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 75000
+max_power_limit_mw: 75000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - fp16
+  - int8

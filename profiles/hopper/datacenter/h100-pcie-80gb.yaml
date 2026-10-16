@@ -1,0 +1,40 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://www.nvidia.com/en-us/data-center/h100/
+id: h100-pcie-80gb
+name: Fake NVIDIA H100 PCIe 80GB
+torch_name: NVIDIA H100 PCIe 80GB
+official_model: NVIDIA H100
+architecture: hopper
+compute_major: 9
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/
+notes: PCIe 80 GiB HBM2e variant; 114 enabled SMs and 2 TB/s rather than the SXM variant. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for core_clock_mhz.
+memory_bytes: 85899345920
+sm_count: 114
+memory_bus_width_bits: 5120
+core_clock_mhz: 0
+memory_clock_mhz: 1593
+l2_cache_bytes: 52428800
+shared_mem_per_sm: 233472
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 232448
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 350000
+pci_device_id: 590418142
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8

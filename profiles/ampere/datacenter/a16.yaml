@@ -1,0 +1,39 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://www.nvidia.cn/content/dam/en-zz/Solutions/gtcs22/design-visualization/quadro-product-literature/quadro-ampere-linecard-us-nvidia-web.pdf
+id: a16
+name: Fake NVIDIA A16 (one GPU)
+torch_name: NVIDIA A16
+official_model: NVIDIA A16
+architecture: ampere
+compute_major: 8
+compute_minor: 6
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://images.nvidia.com/content/Solutions/data-center/vgpu-a16-product-brief.pdf
+notes: One of four GA107 GPUs; each has 1280 CUDA cores and 16 GiB. Shared board TDP is 250 W; per-device cap is unverified. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for l2_cache_bytes, max_power_limit_mw.
+memory_bytes: 17179869184
+sm_count: 10
+memory_bus_width_bits: 128
+core_clock_mhz: 1755
+memory_clock_mhz: 6250
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 632688862
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4

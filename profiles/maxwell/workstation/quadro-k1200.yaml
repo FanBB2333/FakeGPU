@@ -1,0 +1,30 @@
+id: quadro-k1200
+name: Fake NVIDIA Quadro K1200
+torch_name: NVIDIA Quadro K1200
+official_model: Quadro K1200
+architecture: maxwell
+compute_major: 5
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/75509_DS_NV_Quadro_K1200_US_NV_HR.pdf
+notes: Reference desktop-board configuration. SM count derived from NVIDIA 512 CUDA cores and 128 cores per SM. Core clock, L2 cache, typical power, and PCI device ID are unverified and zero.  Memory clock is an equivalent half-data-rate value derived from NVIDIA 80 GB/s and 128-bit bus, rounded to MHz; it is not a measured oscillator clock.
+memory_bytes: 4294967296
+sm_count: 4
+memory_bus_width_bits: 128
+core_clock_mhz: 0
+memory_clock_mhz: 2500
+l2_cache_bytes: 0
+shared_mem_per_sm: 65536
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 45000
+pci_device_id: 0
+supported_types:
+  - fp32

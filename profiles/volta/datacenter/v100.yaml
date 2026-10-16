@@ -1,3 +1,7 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf
 id: v100
 name: Fake NVIDIA Tesla V100-SXM2-32GB
 torch_name: Tesla V100-SXM2-32GB
@@ -9,11 +13,11 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
 spec_source: https://www.nvidia.com/en-us/data-center/v100/
-notes: Legacy reference profile retained for Volta compatibility testing.
+notes: SXM2 variant; 5120 cores / 64 = 80 SMs. Memory clock rounded from 900 GB/s at 4096 bits. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0).
 memory_bytes: 34359738368
 sm_count: 80
 memory_bus_width_bits: 4096
-core_clock_mhz: 1380
+core_clock_mhz: 1530
 memory_clock_mhz: 877
 l2_cache_bytes: 6291456
 shared_mem_per_sm: 98304
@@ -23,9 +27,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
-typical_power_usage_mw: 250000
+typical_power_usage_mw: 0
 max_power_limit_mw: 300000
-pci_device_id: 0x1DB410DE
+pci_device_id: 498405598
 supported_types:
   - fp32
   - fp16

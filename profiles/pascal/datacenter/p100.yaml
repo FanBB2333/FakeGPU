@@ -1,3 +1,7 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/pascal-tuning-guide/index.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://developer.nvidia.com/blog/inside-pascal/
 id: p100
 name: Fake NVIDIA Tesla P100-PCIE-16GB
 torch_name: Tesla P100-PCIE-16GB
@@ -8,8 +12,8 @@ compute_minor: 0
 memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
-spec_source: https://developer.nvidia.com/cuda/gpus/legacy
-notes: Legacy reference profile retained for Pascal compute capability 6.0 testing.
+spec_source: https://images.nvidia.com/content/pdf/tesla/NV-tesla-p100-pcie-PB-08248-001-v01.pdf
+notes: Retained ID for the 16 GiB PCIe variant. GP100 has 64 KiB shared memory per SM but only 48 KiB per block. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0).
 memory_bytes: 17179869184
 sm_count: 56
 memory_bus_width_bits: 4096
@@ -18,14 +22,14 @@ memory_clock_mhz: 715
 l2_cache_bytes: 4194304
 shared_mem_per_sm: 65536
 shared_mem_per_block: 49152
-shared_mem_per_block_optin: 65536
+shared_mem_per_block_optin: 49152
 regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
-typical_power_usage_mw: 250000
-max_power_limit_mw: 300000
-pci_device_id: 0x15F810DE
+typical_power_usage_mw: 0
+max_power_limit_mw: 250000
+pci_device_id: 368578782
 supported_types:
   - fp32
   - fp16

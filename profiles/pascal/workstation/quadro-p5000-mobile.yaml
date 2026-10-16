@@ -1,0 +1,30 @@
+id: quadro-p5000-mobile
+name: Fake NVIDIA Quadro P5000 Mobile
+torch_name: NVIDIA Quadro P5000 Mobile
+official_model: Quadro P5000
+architecture: pascal
+compute_major: 6
+compute_minor: 1
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://images.nvidia.com/content/quadro/quadro-mobile/pdf/341544-PTC-CREO-SolutionOverview-US-NV-FNL-HR.pdf
+notes: Reference laptop configuration. SM count is unverified and zero. Core and memory clocks, L2 cache, typical power, and PCI device ID are unverified and zero. Memory bus width is unverified and zero. Maximum power is unverified and zero. NVIDIA PTC Creo guide confirms the mobile memory configuration; CUDA core count is not taken from the different desktop board.
+memory_bytes: 17179869184
+sm_count: 0
+memory_bus_width_bits: 0
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 0
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 0
+supported_types:
+  - fp32

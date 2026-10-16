@@ -1,0 +1,35 @@
+id: rtx-a1000-6gb-mobile
+name: Fake NVIDIA RTX A1000 Laptop GPU 6GB configuration
+torch_name: NVIDIA RTX A1000 Laptop GPU
+official_model: NVIDIA RTX A1000
+architecture: ampere
+compute_major: 8
+compute_minor: 6
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/gtcs22/design-visualization/quadro-product-literature/rtx-6000-l40-linecard-nvidia-us-2653097-r7-web.pdf
+notes: Reference laptop configuration. SM count derived from NVIDIA 2560 CUDA cores and 128 cores per SM. Core and memory clocks, L2 cache, typical power, and PCI device ID are unverified and zero. Maximum power is unverified and zero. Mobile GPU specifications are separate from the similarly named desktop board. Memory bus width is unverified and zero. Compute capability is an architecture-family inference; the exact marketing name is absent from the cached NVIDIA model table.
+memory_bytes: 6442450944
+sm_count: 20
+memory_bus_width_bits: 0
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4

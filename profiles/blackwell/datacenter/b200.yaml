@@ -1,3 +1,7 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://developer.nvidia.com/blog/scaling-autonomous-ai-agents-and-workloads-with-nvidia-dgx-spark/
 id: b200
 name: Fake NVIDIA B200
 torch_name: NVIDIA B200
@@ -9,13 +13,13 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
 spec_source: https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html
-notes: Reference B200 SXM profile with 180 GiB HBM3e and architecture-derived SM limits.
+notes: 180 GiB nominal HBM3e per exposed GPU; 148 enabled SMs verified in NVIDIA DGX Spark technical blog, rather than the full-die 160 SM count. Clock, active bus and cache remain unverified. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, l2_cache_bytes, max_power_limit_mw.
 memory_bytes: 193273528320
-sm_count: 160
-memory_bus_width_bits: 6144
-core_clock_mhz: 2050
-memory_clock_mhz: 2400
-l2_cache_bytes: 90112000
+sm_count: 148
+memory_bus_width_bits: 0
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 0
 shared_mem_per_sm: 233472
 shared_mem_per_block: 49152
 shared_mem_per_block_optin: 232448
@@ -23,9 +27,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
-typical_power_usage_mw: 700000
-max_power_limit_mw: 800000
-pci_device_id: 0x26B510DE
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 687935710
 supported_types:
   - fp32
   - tf32

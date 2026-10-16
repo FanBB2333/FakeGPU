@@ -1,0 +1,37 @@
+id: rtx-pro-5000-blackwell-72gb
+name: Fake NVIDIA RTX PRO 5000 72GB Blackwell
+torch_name: NVIDIA RTX PRO 5000 72GB Blackwell
+official_model: NVIDIA RTX PRO 5000 Blackwell
+architecture: blackwell
+compute_major: 12
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/professional-desktop-gpus/rtx-pro-5000-blackwell/workstation-datasheet-blackwell-rtx-pro-5000-5488550-nvidia.pdf
+notes: Reference desktop-board configuration. SM count derived from NVIDIA 14080 CUDA cores and 128 cores per SM. Core clock, L2 cache, typical power, and PCI device ID are unverified and zero. Nominal public memory-capacity variant; retained separately from the pre-existing measured compatibility profile. Memory clock is an equivalent half-data-rate value derived from NVIDIA 1344 GB/s and 384-bit bus, rounded to MHz; it is not a measured oscillator clock.
+memory_bytes: 77309411328
+sm_count: 110
+memory_bus_width_bits: 384
+core_clock_mhz: 0
+memory_clock_mhz: 14000
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 0
+max_power_limit_mw: 300000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8
+  - fp4

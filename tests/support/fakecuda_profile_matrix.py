@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,10 +14,9 @@ import fakegpu  # noqa: E402
 from fakegpu.profile_catalog import load_profiles  # noqa: E402
 
 
-def main() -> None:
+def _validate_batch(profile_matrix: tuple[str, ...]) -> None:
     os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
     catalog = load_profiles()
-    profile_matrix = tuple(sorted(catalog))
     runtime = fakegpu.init(runtime="fakecuda", devices=profile_matrix)
 
     import torch
@@ -44,6 +45,38 @@ def main() -> None:
     print(
         f"OK: fakecuda backend={runtime.backend} validated "
         f"{len(profile_matrix)} profiles across {len(capabilities)} compute capabilities"
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Exercise every GPU profile with FakeCUDA.")
+    parser.add_argument("--profiles", nargs="+", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.profiles:
+        _validate_batch(tuple(args.profiles))
+        return
+
+    catalog = load_profiles()
+    profile_matrix = tuple(sorted(catalog))
+    # PyTorch stores device indices in a signed byte. A catalog can contain
+    # more models than one process can represent as simultaneous devices.
+    batch_size = 64
+    for start in range(0, len(profile_matrix), batch_size):
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--profiles",
+             *profile_matrix[start:start + batch_size]],
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode:
+            sys.stderr.write(result.stdout + result.stderr)
+            raise SystemExit(result.returncode)
+
+    capabilities = {profile.compute_capability for profile in catalog.values()}
+    print(
+        f"OK: fakecuda validated {len(profile_matrix)} profiles across "
+        f"{len(capabilities)} compute capabilities in isolated batches"
     )
 
 

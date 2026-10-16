@@ -50,6 +50,18 @@ def profile_roofline(profile_id: str) -> dict[str, Any]:
     """Return a profile-derived scalar compute and memory-bandwidth ceiling."""
 
     profile = get_profile(profile_id)
+    required_specs = (
+        "sm_count",
+        "core_clock_mhz",
+        "memory_bus_width_bits",
+        "memory_clock_mhz",
+    )
+    unavailable = [key for key in required_specs if getattr(profile, key) <= 0]
+    if unavailable:
+        raise PerformanceModelError(
+            f"profile {profile.id!r} has no verified throughput specifications for "
+            f"{', '.join(unavailable)}; use a profile with documented clocks and bus width"
+        )
     try:
         fp32_cores_per_sm = _FP32_CORES_PER_SM[profile.compute_capability]
     except KeyError as exc:

@@ -1,0 +1,38 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+id: a2
+name: Fake NVIDIA A2
+torch_name: NVIDIA A2
+official_model: NVIDIA A2
+architecture: ampere
+compute_major: 8
+compute_minor: 6
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/data-center/products/a2/
+notes: 10 RT cores imply 10 Ampere SMs. Low-profile PCIe Gen4 x8; configurable 40-60 W TDP. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, l2_cache_bytes.
+memory_bytes: 17179869184
+sm_count: 10
+memory_bus_width_bits: 0
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 0
+max_power_limit_mw: 60000
+pci_device_id: 632688862
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4

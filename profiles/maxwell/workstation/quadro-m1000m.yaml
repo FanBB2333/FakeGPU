@@ -1,0 +1,30 @@
+id: quadro-m1000m
+name: Fake NVIDIA Quadro M1000M
+torch_name: NVIDIA Quadro M1000M
+official_model: Quadro M1000M
+architecture: maxwell
+compute_major: 5
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://images.nvidia.com/content/quadro/product-literature/line-card/ProGraphicsLineCard-M6000-24GB-FEB16-US-fnl-HR.pdf
+notes: Reference laptop configuration. SM count derived from NVIDIA 512 CUDA cores and 128 cores per SM. Core and memory clocks, L2 cache, typical power, and PCI device ID are unverified and zero. Memory bus width is unverified and zero. Maximum power is unverified and zero. Compute capability follows the model-specific NVIDIA legacy CUDA table.
+memory_bytes: 2147483648
+sm_count: 4
+memory_bus_width_bits: 0
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 0
+shared_mem_per_sm: 65536
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 0
+supported_types:
+  - fp32

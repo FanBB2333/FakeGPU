@@ -1,0 +1,30 @@
+id: quadro-p400
+name: Fake NVIDIA Quadro P400
+torch_name: NVIDIA Quadro P400
+official_model: Quadro P400
+architecture: pascal
+compute_major: 6
+compute_minor: 1
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/quadro-pascal-p400-data-sheet-us-nv-704503-r1.pdf
+notes: Reference desktop-board configuration. SM count derived from NVIDIA 256 CUDA cores and 128 cores per SM. Core clock, L2 cache, typical power, and PCI device ID are unverified and zero.  Memory clock is an equivalent half-data-rate value derived from NVIDIA 32 GB/s and 64-bit bus, rounded to MHz; it is not a measured oscillator clock.
+memory_bytes: 2147483648
+sm_count: 2
+memory_bus_width_bits: 64
+core_clock_mhz: 0
+memory_clock_mhz: 2000
+l2_cache_bytes: 0
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 30000
+pci_device_id: 0
+supported_types:
+  - fp32

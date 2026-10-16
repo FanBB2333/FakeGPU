@@ -1,0 +1,30 @@
+id: quadro-p2000
+name: Fake NVIDIA Quadro P2000
+torch_name: NVIDIA Quadro P2000
+official_model: Quadro P2000
+architecture: pascal
+compute_major: 6
+compute_minor: 1
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://images.nvidia.com/content/pdf/quadro/data-sheets/301941-DS-NV-Quadro-Pascal-P2000-US-03Feb17-NV-fnl-WEB.pdf
+notes: Reference desktop-board configuration. SM count derived from NVIDIA 1024 CUDA cores and 128 cores per SM. Core clock, L2 cache, typical power, and PCI device ID are unverified and zero.  Memory clock is an equivalent half-data-rate value derived from NVIDIA 140 GB/s and 160-bit bus, rounded to MHz; it is not a measured oscillator clock.
+memory_bytes: 5368709120
+sm_count: 8
+memory_bus_width_bits: 160
+core_clock_mhz: 0
+memory_clock_mhz: 3500
+l2_cache_bytes: 0
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 75000
+pci_device_id: 0
+supported_types:
+  - fp32

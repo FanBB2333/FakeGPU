@@ -1,0 +1,39 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+id: h100-sxm5-94gb
+name: Fake NVIDIA H100 SXM5 94GB
+torch_name: NVIDIA H100 SXM5 94GB
+official_model: NVIDIA H100
+architecture: hopper
+compute_major: 9
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://docs.nvidia.com/ai-enterprise/release-4/latest/infra-software/vgpu/features.html
+notes: SXM5 memory variant explicitly listed by NVIDIA vGPU support tables. GPU-specific internals are not inherited from the 80 GiB profile. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for sm_count, memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, l2_cache_bytes, max_power_limit_mw, pci_device_id.
+memory_bytes: 100931731456
+sm_count: 0
+memory_bus_width_bits: 0
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 0
+shared_mem_per_sm: 233472
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 232448
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8

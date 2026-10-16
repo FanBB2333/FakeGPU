@@ -1,0 +1,35 @@
+id: a800-40gb-active
+name: Fake NVIDIA A800 40GB Active
+torch_name: NVIDIA A800 40GB Active
+official_model: NVIDIA A800 40GB Active
+architecture: ampere
+compute_major: 8
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+spec_source: https://www.nvidia.com/en-us/products/workstations/a800/
+notes: Reference desktop-board configuration. Core clock, typical power, and PCI device ID are unverified and zero. Workstation GA100 configuration; SM count derives from NVIDIA 6912 CUDA cores and 64 cores per SM. L2 cache is published as 40 MB; no display connectors are fitted. Compute capability is an architecture-family inference; the exact marketing name is absent from the cached NVIDIA model table. Memory clock is an equivalent half-data-rate value derived from NVIDIA 1555.2 GB/s and 5120-bit bus, rounded to MHz; it is not a measured oscillator clock.
+memory_bytes: 42949672960
+sm_count: 108
+memory_bus_width_bits: 5120
+core_clock_mhz: 0
+memory_clock_mhz: 1215
+l2_cache_bytes: 41943040
+shared_mem_per_sm: 167936
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 166912
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 240000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4

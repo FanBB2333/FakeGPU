@@ -1,0 +1,41 @@
+# Additional source: https://www.supermicro.com/white_paper/white_paper_Accelerating_Edge_Innovation.pdf
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/7n7vya4684sdccfyy6kv37ek5lw702h7.pdf
+id: h200-nvl
+name: Fake NVIDIA H200 NVL 141GB (one GPU)
+torch_name: NVIDIA H200 NVL 141GB
+official_model: NVIDIA H200
+architecture: hopper
+compute_major: 9
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/data-center/h200/
+notes: 132 enabled SMs derived from Supermicro-published 16896 CUDA cores / 128 Hopper FP32 cores per SM. One 141 GiB PCIe GPU, not an NVLink group aggregate. Publicly linked product brief Table 2-2 publishes 6016-bit active bus, 3201 MHz and 4813 GB/s. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for l2_cache_bytes.
+memory_bytes: 151397597184
+sm_count: 132
+memory_bus_width_bits: 6016
+core_clock_mhz: 1785
+memory_clock_mhz: 3201
+l2_cache_bytes: 0
+shared_mem_per_sm: 233472
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 232448
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 600000
+pci_device_id: 591073502
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8

@@ -1,0 +1,35 @@
+id: rtx-a1000-mobile
+name: Fake NVIDIA RTX A1000 Laptop GPU
+torch_name: NVIDIA RTX A1000 Laptop GPU
+official_model: NVIDIA RTX A1000
+architecture: ampere
+compute_major: 8
+compute_minor: 6
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+spec_source: https://www.nvidia.com/content/dam/en-zz/ja/Solutions/design-visualization/documents/ampere-mobile-linecard-master-mar22-jp.pdf
+notes: Reference laptop configuration. SM count derived from NVIDIA 2048 CUDA cores and 128 cores per SM. Core clock, L2 cache, typical power, and PCI device ID are unverified and zero. Maximum power is the published operating-envelope ceiling; OEM TGP and clocks vary. Mobile GPU specifications are separate from the similarly named desktop board. Compute capability is an architecture-family inference; the exact marketing name is absent from the cached NVIDIA model table. Memory clock is an equivalent half-data-rate value derived from NVIDIA 224 GB/s and 128-bit bus, rounded to MHz; it is not a measured oscillator clock.
+memory_bytes: 4294967296
+sm_count: 16
+memory_bus_width_bits: 128
+core_clock_mhz: 0
+memory_clock_mhz: 7000
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 0
+max_power_limit_mw: 95000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4

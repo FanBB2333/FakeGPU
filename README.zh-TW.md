@@ -193,7 +193,8 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi
 - [限制](docs/zh-TW/limitations.md)
 
 GPU profiles 是 [`profiles/`](profiles/) 中的 YAML 檔。目錄包含從 Maxwell 到
-Blackwell 的 82 款 NVIDIA GPU。用 `--profile` 或 `FAKEGPU_PROFILE` 選擇一款，或用
+Blackwell 的 306 個可選配置，涵蓋桌上型、筆記型、不同記憶體與板卡版本。
+型號、參數和來源見[完整目錄](profiles/README.md)。用 `--profile` 或 `FAKEGPU_PROFILE` 選擇一款，或用
 `--devices` 傳入混合列表。針對實體裝置的範例使用 `TARGET_GPU_PROFILE`，請設定為
 `python3 -m fakegpu doctor --list-profiles` 列出的目錄 ID。
 

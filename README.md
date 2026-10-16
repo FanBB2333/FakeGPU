@@ -200,8 +200,9 @@ The detailed guides live in [`docs/`](docs/en/README.md):
 - [Development and testing](docs/en/development.md)
 - [Limitations](docs/en/limitations.md)
 
-GPU profiles are YAML files in [`profiles/`](profiles/). The catalog has 82
-NVIDIA GPUs from Maxwell through Blackwell. Pick one with `--profile` or
+GPU profiles are YAML files in [`profiles/`](profiles/). The catalog has 306
+selectable configurations from Maxwell through Blackwell, including desktop,
+laptop, memory-capacity, and board variants. See the [full inventory and sources](profiles/README.md). Pick one with `--profile` or
 `FAKEGPU_PROFILE`, or pass a mixed list with `--devices`. Examples that target
 a physical device use `TARGET_GPU_PROFILE`, which you set to a catalog ID from
 `python3 -m fakegpu doctor --list-profiles`.

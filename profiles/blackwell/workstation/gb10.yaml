@@ -16,7 +16,7 @@ memory_bus_width_bits: 256
 core_clock_mhz: 1500
 memory_clock_mhz: 4266
 l2_cache_bytes: 33554432
-shared_mem_per_sm: 131072
+shared_mem_per_sm: 102400
 shared_mem_per_block: 49152
 shared_mem_per_block_optin: 101376
 regs_per_block: 65536

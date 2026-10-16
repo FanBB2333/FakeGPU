@@ -1,0 +1,30 @@
+id: gtx965m-4gb
+name: Fake NVIDIA GeForce GTX 965M 4 GB
+torch_name: NVIDIA GeForce GTX 965M 4 GB
+official_model: GeForce GTX 965M
+architecture: maxwell
+compute_major: 5
+compute_minor: 2
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://eurocom.com/ec/components%28254%29EUROCOM_X3R2
+notes: 4 GB Eurocom X3 R2 MXM configuration; core/memory clocks unspecified. Bus width follows the same official-model specification in https://rog.asus.com/articles/product-news/rog-g751jl-gaming-laptop-launches-with-nvidia-gtx-965m/ . SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
+memory_bytes: 4294967296
+sm_count: 8
+memory_bus_width_bits: 128
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 0
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 50000
+max_power_limit_mw: 50000
+pci_device_id: 0
+supported_types:
+  - fp32

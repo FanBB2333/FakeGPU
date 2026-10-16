@@ -1,0 +1,40 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/ai-enterprise/release-4/latest/infra-software/vgpu/features.html
+id: l20
+name: Fake NVIDIA L20
+torch_name: NVIDIA L20
+official_model: NVIDIA L20
+architecture: ada
+compute_major: 8
+compute_minor: 9
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://docs.nvidia.com/vgpu/18.0/grid-vgpu-user-guide/index.html
+notes: Ada regional variant; full-device framebuffer is confirmed by vGPU types. The licensing overview has inconsistent L2 memory entries, so the detailed L2-24C table takes precedence. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for sm_count, memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, l2_cache_bytes, max_power_limit_mw.
+memory_bytes: 51539607552
+sm_count: 0
+memory_bus_width_bits: 0
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 649728222
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8

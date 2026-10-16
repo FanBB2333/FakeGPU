@@ -1,3 +1,7 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/nvidia-ampere-architecture-whitepaper.pdf
 id: a100
 name: Fake NVIDIA A100-SXM4-80GB
 torch_name: NVIDIA A100-SXM4-80GB
@@ -9,12 +13,12 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
 spec_source: https://www.nvidia.com/en-us/data-center/a100/
-notes: Reference profile based on NVIDIA A100 SXM specifications and CUDA compute-capability limits.
+notes: Retained ID for the 80 GiB SXM4 HBM2e variant; 2039 GB/s rather than the 40 GiB variant bandwidth. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0).
 memory_bytes: 85899345920
 sm_count: 108
 memory_bus_width_bits: 5120
 core_clock_mhz: 1410
-memory_clock_mhz: 1215
+memory_clock_mhz: 1593
 l2_cache_bytes: 41943040
 shared_mem_per_sm: 167936
 shared_mem_per_block: 49152
@@ -23,9 +27,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
-typical_power_usage_mw: 300000
+typical_power_usage_mw: 0
 max_power_limit_mw: 400000
-pci_device_id: 0x20B010DE
+pci_device_id: 548540638
 supported_types:
   - fp32
   - tf32

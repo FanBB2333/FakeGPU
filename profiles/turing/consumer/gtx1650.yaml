@@ -1,0 +1,32 @@
+id: gtx1650
+name: Fake NVIDIA GeForce GTX 1650
+torch_name: NVIDIA GeForce GTX 1650
+official_model: GeForce GTX 1650
+architecture: turing
+compute_major: 7
+compute_minor: 5
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/
+spec_source: https://www.nvidia.com/en-ph/geforce/graphics-cards/gtx-1650/
+notes: Reference desktop board without Tensor or RT cores. GDDR5 variant. SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
+memory_bytes: 4294967296
+sm_count: 14
+memory_bus_width_bits: 128
+core_clock_mhz: 1665
+memory_clock_mhz: 4000
+l2_cache_bytes: 0
+shared_mem_per_sm: 65536
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 65536
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1024
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 75000
+max_power_limit_mw: 75000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - fp16
+  - int8

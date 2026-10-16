@@ -1,0 +1,41 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html
+id: gb200
+name: Fake NVIDIA GB200 (one GPU)
+torch_name: NVIDIA GB200
+official_model: NVIDIA GB200
+architecture: blackwell
+compute_major: 10
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://docs.nvidia.com/dsx/ncp/software-reference-guide/data-center-architecture
+notes: One exposed Blackwell GPU of the two-GPU Grace Blackwell Superchip. 180 GiB HBM3e excludes Grace LPDDR and the 360 GB Superchip memory total. NVIDIA tuning guide publishes 126 MiB L2 for GB200. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for sm_count, memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, max_power_limit_mw.
+memory_bytes: 193273528320
+sm_count: 0
+memory_bus_width_bits: 0
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 132120576
+shared_mem_per_sm: 233472
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 232448
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 692130014
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8
+  - fp4

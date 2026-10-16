@@ -1,0 +1,34 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/maxwell-tuning-guide/index.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/161207-GRID-Packaging-and-Licensing-Guide.pdf
+id: m60
+name: Fake NVIDIA Tesla M60 (one GPU)
+torch_name: Tesla M60
+official_model: Tesla M60
+architecture: maxwell
+compute_major: 5
+compute_minor: 2
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://images.nvidia.com/content/pdf/tesla/tesla-m60-product-brief.pdf
+notes: One of two GM204 GPUs; each has 2048 cores and 8 GiB. Shared board TDP is 300 W passive or 240 W active; per-device cap is unverified. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for l2_cache_bytes, max_power_limit_mw.
+memory_bytes: 8589934592
+sm_count: 16
+memory_bus_width_bits: 256
+core_clock_mhz: 1178
+memory_clock_mhz: 2505
+l2_cache_bytes: 0
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 334631134
+supported_types:
+  - fp32

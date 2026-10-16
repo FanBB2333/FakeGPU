@@ -1,6 +1,11 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/
+# Additional source: https://docs.nvidia.com/nim/benchmarking/llm/1.0.0/performance
 id: h100
 name: Fake NVIDIA H100-SXM-80GB
-torch_name: NVIDIA H100 80GB HBM3
+torch_name: NVIDIA H100-SXM-80GB
 official_model: NVIDIA H100
 architecture: hopper
 compute_major: 9
@@ -9,12 +14,12 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
 spec_source: https://www.nvidia.com/en-us/data-center/h100/
-notes: Reference profile based on NVIDIA H100 SXM specifications and CUDA compute-capability limits.
+notes: Retained ID for H100 SXM 80 GiB HBM3; approximately 3.35 TB/s. Core and memory clocks verified by NVIDIA NIM hardware specifications. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0).
 memory_bytes: 85899345920
 sm_count: 132
 memory_bus_width_bits: 5120
-core_clock_mhz: 1800
-memory_clock_mhz: 1593
+core_clock_mhz: 1980
+memory_clock_mhz: 2619
 l2_cache_bytes: 52428800
 shared_mem_per_sm: 233472
 shared_mem_per_block: 49152
@@ -23,9 +28,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
-typical_power_usage_mw: 500000
+typical_power_usage_mw: 0
 max_power_limit_mw: 700000
-pci_device_id: 0x233010DE
+pci_device_id: 590352606
 supported_types:
   - fp32
   - tf32

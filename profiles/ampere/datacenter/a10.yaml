@@ -1,3 +1,6 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 id: a10
 name: Fake NVIDIA A10
 torch_name: NVIDIA A10
@@ -8,8 +11,8 @@ compute_minor: 6
 memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
-spec_source: https://www.nvidia.com/en-us/data-center/products/a10-gpu/
-notes: Reference A10 profile using NVIDIA product specifications and compute capability 8.6 limits.
+spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a10/pdf/A10-Product-Brief.pdf
+notes: 24 GiB GDDR6 PCIe Gen4 card; 6251 MHz is the published memory clock, approximately 600 GB/s. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0).
 memory_bytes: 25769803776
 sm_count: 72
 memory_bus_width_bits: 384
@@ -23,9 +26,9 @@ regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 16
-typical_power_usage_mw: 150000
+typical_power_usage_mw: 0
 max_power_limit_mw: 150000
-pci_device_id: 0x223710DE
+pci_device_id: 573968606
 supported_types:
   - fp32
   - tf32

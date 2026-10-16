@@ -70,7 +70,7 @@ Blackwell GPU（PyTorch 2.11.0+cu128、Transformers 5.14.1）上跑过。
 | FakeGPU-SMI 诊断 | 有上限的状态、拓扑/NVLink/MIG 视图、NVML peer/MIG 查询、健康字段和事件报告 | **通过** |
 | 监控 exporter | Prometheus/JSON 快照、有上限的历史和序列数量、异常状态降级及 HTTP 接口 | **通过** |
 | 原生能力清单（2026-09-05 更新） | 5 个能力组、104 个显式 API、102 个强制执行策略的 API | **通过** |
-| GPU profile 目录 | 82 个 profile，覆盖 15 种 compute capability | **通过** |
+| GPU profile 目录 | 306 个 profile，覆盖 16 种 compute capability（目录更新于 2026-10-16） | **通过** |
 | CPU 数值模拟 | GEMM、cuBLASLt、批量 GEMM、BLAS1/2 和 FP16，共 8 组测试 | **通过** |
 | CUDA 版 PyTorch 原生矩阵乘法 | 需要带 CUDA 的 PyTorch | **当前 CPU-only 主机未执行** |
 | Transformers 真实 CUDA serving 采样器 | Qwen/Qwen3-0.6B、BF16 SDPA、2 × 128-token prefill + 8 个生成 token，每阶段 3 个独立样本 | **通过，`ready_for_comparison`** |

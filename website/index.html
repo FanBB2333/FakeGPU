@@ -562,7 +562,7 @@ footer ul a:hover{color:var(--text)}
   <div class="gridlines" aria-hidden="true"></div>
   <div class="wrap">
     <div class="hero-copy">
-      <a class="pill" href="#profiles"><span class="dot">82</span>GPU profiles, from Maxwell to Blackwell <span class="arr" aria-hidden="true">→</span></a>
+      <a class="pill" href="#profiles"><span class="dot" data-gpu-profile-count>306</span>GPU profiles, from Maxwell to Blackwell <span class="arr" aria-hidden="true">→</span></a>
       <h1><span class="w">Fake</span><span class="g">GPU</span></h1>
       <p class="tagline">Validate CUDA-facing applications, estimate GPU memory, and simulate distributed GPU workflows without a production GPU cluster.</p>
       <p class="lead">FakeGPU makes a machine without a GPU look like it has one. Applications see configurable NVIDIA-like devices, while the supported operations actually run on the CPU. Along the way, FakeGPU records memory use and communication, so you can check whether code works and whether a workload would fit before you pay for real hardware.</p>
@@ -787,8 +787,8 @@ loss.<span class="t-f">backward</span>()
     </div>
 
     <div class="facts">
-      <div class="fact"><div class="fact-n">82</div><div class="fact-l">GPU profiles, from Maxwell to Blackwell</div></div>
-      <div class="fact"><div class="fact-n">15</div><div class="fact-l">compute capabilities</div></div>
+      <div class="fact"><div class="fact-n" data-gpu-profile-count>306</div><div class="fact-l">GPU profiles, from Maxwell to Blackwell</div></div>
+      <div class="fact"><div class="fact-n" data-gpu-capability-count>16</div><div class="fact-l">compute capabilities</div></div>
       <div class="fact"><div class="fact-n">5</div><div class="fact-l">intercepted libraries</div></div>
       <div class="fact"><div class="fact-n">3</div><div class="fact-l">ways to run</div></div>
     </div>
@@ -956,32 +956,36 @@ python3 -m fakegpu demo --profile l4</code></pre>
 <section class="sec" id="profiles">
   <div class="wrap">
     <span class="eyebrow">GPU profile catalog</span>
-    <h2>82 NVIDIA GPUs to choose from, <span class="dim">from Maxwell to Blackwell.</span></h2>
-    <p class="sec-lead">GPU profiles are YAML files in <code>profiles/</code>. Pick one with <code>--profile</code> or <code>FAKEGPU_PROFILE</code>, or pass a mixed list with <code>--devices</code>.</p>
+    <h2><span data-gpu-profile-count>306</span> NVIDIA GPU profiles to choose from, <span class="dim">from Maxwell to Blackwell.</span></h2>
+    <p class="sec-lead">Choose gaming, data-center, or professional GPUs, including desktop, laptop, and memory variants. Pick one with <code>--profile</code> or <code>FAKEGPU_PROFILE</code>, or pass a mixed list with <code>--devices</code>.</p>
     <div class="cat">
       <div class="card">
-        <div class="cat-total"><b>82</b><span>profiles across 8 architectures and 15 compute capabilities</span></div>
-        <div class="bar" role="img" aria-label="Profiles per architecture: Maxwell 1, Pascal 9, Volta 1, Turing 12, Ampere 22, Ada 17, Hopper 2, Blackwell 18">
-          <span class="seg" data-arch="maxwell" style="flex-grow:1" title="Maxwell: 1 profile"></span>
-          <span class="seg" data-arch="pascal" style="flex-grow:9" title="Pascal: 9 profiles"></span>
-          <span class="seg" data-arch="volta" style="flex-grow:1" title="Volta: 1 profile"></span>
-          <span class="seg" data-arch="turing" style="flex-grow:12" title="Turing: 12 profiles"></span>
-          <span class="seg" data-arch="ampere" style="flex-grow:22" title="Ampere: 22 profiles"></span>
-          <span class="seg" data-arch="ada" style="flex-grow:17" title="Ada: 17 profiles"></span>
-          <span class="seg" data-arch="hopper" style="flex-grow:2" title="Hopper: 2 profiles"></span>
-          <span class="seg" data-arch="blackwell" style="flex-grow:18" title="Blackwell: 18 profiles"></span>
+        <!-- GPU_CATALOG_START -->
+        <div class="cat-total"><b>306</b><span>profiles across 8 architectures and 16 compute capabilities</span></div>
+        <div class="bar" role="img" aria-label="Profiles per architecture: Maxwell 40, Pascal 51, Volta 10, Turing 46, Ampere 67, Ada 38, Hopper 14, Blackwell 40">
+          <span class="seg" data-arch="maxwell" style="flex-grow:40" title="Maxwell: 40 profiles"></span>
+          <span class="seg" data-arch="pascal" style="flex-grow:51" title="Pascal: 51 profiles"></span>
+          <span class="seg" data-arch="volta" style="flex-grow:10" title="Volta: 10 profiles"></span>
+          <span class="seg" data-arch="turing" style="flex-grow:46" title="Turing: 46 profiles"></span>
+          <span class="seg" data-arch="ampere" style="flex-grow:67" title="Ampere: 67 profiles"></span>
+          <span class="seg" data-arch="ada" style="flex-grow:38" title="Ada: 38 profiles"></span>
+          <span class="seg" data-arch="hopper" style="flex-grow:14" title="Hopper: 14 profiles"></span>
+          <span class="seg" data-arch="blackwell" style="flex-grow:40" title="Blackwell: 40 profiles"></span>
         </div>
         <div class="bar-axis" aria-hidden="true"><span>Maxwell</span><span>→</span><span>Blackwell</span></div>
         <div class="legend">
-          <div class="lg" data-arch="maxwell"><div class="lg-h"><i class="sw"></i>Maxwell<span class="lg-n">1</span></div><div class="lg-cc">CC 5.2</div><div class="lg-id">gtx980</div></div>
-          <div class="lg" data-arch="pascal"><div class="lg-h"><i class="sw"></i>Pascal<span class="lg-n">9</span></div><div class="lg-cc">CC 6.0, 6.1</div><div class="lg-id">p100</div></div>
-          <div class="lg" data-arch="volta"><div class="lg-h"><i class="sw"></i>Volta<span class="lg-n">1</span></div><div class="lg-cc">CC 7.0</div><div class="lg-id">v100</div></div>
-          <div class="lg" data-arch="turing"><div class="lg-h"><i class="sw"></i>Turing<span class="lg-n">12</span></div><div class="lg-cc">CC 7.5</div><div class="lg-id">t4</div></div>
-          <div class="lg" data-arch="ampere"><div class="lg-h"><i class="sw"></i>Ampere<span class="lg-n">22</span></div><div class="lg-cc">CC 8.0, 8.6, 8.7</div><div class="lg-id">a100</div></div>
-          <div class="lg" data-arch="ada"><div class="lg-h"><i class="sw"></i>Ada<span class="lg-n">17</span></div><div class="lg-cc">CC 8.9</div><div class="lg-id">l4</div></div>
-          <div class="lg" data-arch="hopper"><div class="lg-h"><i class="sw"></i>Hopper<span class="lg-n">2</span></div><div class="lg-cc">CC 9.0</div><div class="lg-id">h100</div></div>
-          <div class="lg" data-arch="blackwell"><div class="lg-h"><i class="sw"></i>Blackwell<span class="lg-n">18</span></div><div class="lg-cc">CC 10.0, 10.3, 11.0, 12.0, 12.1</div><div class="lg-id">b200</div></div>
+          <div class="lg" data-arch="maxwell"><div class="lg-h"><i class="sw"></i>Maxwell<span class="lg-n">40</span></div><div class="lg-cc">CC 5.0, 5.2</div><div class="lg-id">gtx980</div></div>
+          <div class="lg" data-arch="pascal"><div class="lg-h"><i class="sw"></i>Pascal<span class="lg-n">51</span></div><div class="lg-cc">CC 6.0, 6.1</div><div class="lg-id">p100</div></div>
+          <div class="lg" data-arch="volta"><div class="lg-h"><i class="sw"></i>Volta<span class="lg-n">10</span></div><div class="lg-cc">CC 7.0</div><div class="lg-id">v100</div></div>
+          <div class="lg" data-arch="turing"><div class="lg-h"><i class="sw"></i>Turing<span class="lg-n">46</span></div><div class="lg-cc">CC 7.5</div><div class="lg-id">t4</div></div>
+          <div class="lg" data-arch="ampere"><div class="lg-h"><i class="sw"></i>Ampere<span class="lg-n">67</span></div><div class="lg-cc">CC 8.0, 8.6, 8.7</div><div class="lg-id">a100</div></div>
+          <div class="lg" data-arch="ada"><div class="lg-h"><i class="sw"></i>Ada<span class="lg-n">38</span></div><div class="lg-cc">CC 8.9</div><div class="lg-id">l4</div></div>
+          <div class="lg" data-arch="hopper"><div class="lg-h"><i class="sw"></i>Hopper<span class="lg-n">14</span></div><div class="lg-cc">CC 9.0</div><div class="lg-id">h100</div></div>
+          <div class="lg" data-arch="blackwell"><div class="lg-h"><i class="sw"></i>Blackwell<span class="lg-n">40</span></div><div class="lg-cc">CC 10.0, 10.3, 11.0, 12.0, 12.1</div><div class="lg-id">b200</div></div>
         </div>
+        <p class="cat-note">124 consumer · 65 data-center · 114 workstation · 3 embedded/test profiles</p>
+        <!-- GPU_CATALOG_END -->
+        <p class="cat-note">Profiles include distinct memory and board variants, plus synthetic compatibility configurations. Unpublished specifications are marked as unknown; reference profiles do not establish hardware calibration.</p>
       </div>
       <div class="mini" style="align-self:start">
         <div class="panel-h"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span>profiles/ampere/datacenter/a100.yaml</span></div>

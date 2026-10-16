@@ -8,23 +8,23 @@ compute_minor: 2
 memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
-spec_source: https://developer.nvidia.com/cuda/gpus/legacy
-notes: Legacy reference profile retained for Maxwell compatibility testing.
+spec_source: https://www.nvidia.com/en-us/geforce/900-series/
+notes: Public 4 GB reference board; memory clock is half the official 7 Gbps effective data rate. Maxwell 5.2 allows 96 KiB shared memory per SM and 48 KiB per block. Board rating is 165 W; add-in-board clocks and power can differ.
 memory_bytes: 4294967296
 sm_count: 16
 memory_bus_width_bits: 256
 core_clock_mhz: 1216
-memory_clock_mhz: 1750
+memory_clock_mhz: 3500
 l2_cache_bytes: 2097152
-shared_mem_per_sm: 65536
+shared_mem_per_sm: 98304
 shared_mem_per_block: 49152
-shared_mem_per_block_optin: 65536
+shared_mem_per_block_optin: 49152
 regs_per_block: 65536
 regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 165000
-max_power_limit_mw: 180000
+max_power_limit_mw: 165000
 pci_device_id: 0x13C010DE
 supported_types:
   - fp32

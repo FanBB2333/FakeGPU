@@ -1,0 +1,37 @@
+id: rtx-pro-5500-blackwell
+name: Fake NVIDIA RTX PRO 5500 Blackwell Workstation Edition
+torch_name: NVIDIA RTX PRO 5500 Blackwell Workstation Edition
+official_model: NVIDIA RTX PRO 5500 Blackwell Workstation Edition
+architecture: blackwell
+compute_major: 12
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/products/workstations/professional-desktop-gpus/rtx-pro-5500/
+notes: Reference desktop-board configuration. SM count is unverified and zero. Core and memory clocks, L2 cache, typical power, and PCI device ID are unverified and zero. Memory bus width is unverified and zero. Preliminary announced specification, subject to change; NVIDIA had not published CUDA core count or bus width at review time.
+memory_bytes: 90194313216
+sm_count: 0
+memory_bus_width_bits: 0
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 0
+max_power_limit_mw: 600000
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8
+  - fp4

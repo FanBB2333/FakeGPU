@@ -1,0 +1,35 @@
+id: rtx2050-laptop
+name: Fake NVIDIA GeForce RTX 2050 Laptop GPU
+torch_name: NVIDIA GeForce RTX 2050 Laptop GPU
+official_model: GeForce RTX 2050
+architecture: ampere
+compute_major: 8
+compute_minor: 6
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://forums.developer.nvidia.com/t/confusion-about-setting-kernel-block-and-grid-size-for-maximum-occupancy/287857
+spec_source: https://forums.developer.nvidia.com/t/confusion-about-setting-kernel-block-and-grid-size-for-maximum-occupancy/287857
+notes: NVIDIA announces this laptop model at https://www.nvidia.com/en-in/geforce/news/geforce-rtx-laptop-new-options/ . A public original CUDA deviceQuery report verifies compute capability 8.6, 16 SMs, 64-bit bus and 1 MiB L2. Its outdated core-mapping helper incorrectly prints 192 cores/SM; 2048 CUDA cores are derived as 16 x 128 for Ampere 8.6. Clocks/power remain unspecified to avoid treating one reported laptop configuration as a universal limit. Nominal 4 GB GDDR6 capacity. SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
+memory_bytes: 4294967296
+sm_count: 16
+memory_bus_width_bits: 64
+core_clock_mhz: 0
+memory_clock_mhz: 0
+l2_cache_bytes: 1048576
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 16
+typical_power_usage_mw: 0
+max_power_limit_mw: 0
+pci_device_id: 0
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4

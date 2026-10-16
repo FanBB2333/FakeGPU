@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 
 CURRENT_COMPUTE_CAPABILITY_SOURCE = "https://developer.nvidia.com/cuda/gpus"
@@ -57,6 +58,18 @@ _REQUIRED_INTEGER_FIELDS = (
     "regs_per_multiprocessor",
     "max_threads_per_multiprocessor",
     "max_blocks_per_multiprocessor",
+    "typical_power_usage_mw",
+    "max_power_limit_mw",
+    "pci_device_id",
+)
+# Zero is an explicit unknown for public reference specifications. CUDA
+# resource limits and memory capacity are still required by the runtime.
+_REFERENCE_SPEC_FIELDS = (
+    "sm_count",
+    "memory_bus_width_bits",
+    "core_clock_mhz",
+    "memory_clock_mhz",
+    "l2_cache_bytes",
     "typical_power_usage_mw",
     "max_power_limit_mw",
     "pci_device_id",
@@ -113,11 +126,18 @@ class GpuProfile:
     def compiler_target(self) -> str:
         return f"sm_{self.compute_major}{self.compute_minor}"
 
+    @property
+    def unavailable_fields(self) -> tuple[str, ...]:
+        """Public specifications not established for this reference profile."""
+
+        return tuple(key for key in _REFERENCE_SPEC_FIELDS if getattr(self, key) == 0)
+
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["compute_capability"] = self.compute_capability_text
         payload["compiler_target"] = self.compiler_target
         payload["supported_types"] = list(self.supported_types)
+        payload["unavailable_fields"] = list(self.unavailable_fields)
         return payload
 
 
@@ -271,8 +291,13 @@ def validate_catalog(
             errors.append(f"{prefix} unknown memory_kind {profile.memory_kind!r}")
         if profile.profile_status not in _SUPPORTED_PROFILE_STATUSES:
             errors.append(f"{prefix} unknown profile_status {profile.profile_status!r}")
-        if profile.memory_bytes <= 0 or profile.sm_count <= 0:
-            errors.append(f"{prefix} memory_bytes and sm_count must be positive")
+        if profile.memory_bytes <= 0:
+            errors.append(f"{prefix} memory_bytes must be positive")
+        if profile.sm_count == 0 and profile.profile_status != "reference":
+            errors.append(f"{prefix} sm_count must be positive for non-reference profiles")
+        for field in _REQUIRED_INTEGER_FIELDS:
+            if getattr(profile, field) < 0:
+                errors.append(f"{prefix} {field} must not be negative")
         if not profile.supported_types:
             errors.append(f"{prefix} supported_types must not be empty")
         elif "fp32" not in profile.supported_types:
@@ -320,7 +345,12 @@ def validate_catalog(
 
         for field in ("compute_capability_source", "spec_source"):
             value = getattr(profile, field)
-            if profile.profile_status != "synthetic" and "nvidia.com" not in value:
+            hostname = (urlparse(value).hostname or "").lower()
+            official_host = any(
+                hostname == domain or hostname.endswith(f".{domain}")
+                for domain in ("nvidia.com", "nvidia.cn")
+            )
+            if profile.profile_status != "synthetic" and not official_host:
                 warnings.append(f"{prefix} {field} is not an NVIDIA URL")
 
     return CatalogValidation(errors=tuple(errors), warnings=tuple(warnings))

@@ -1,0 +1,33 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/maxwell-tuning-guide/index.html
+# PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+id: m4
+name: Fake NVIDIA Tesla M4
+torch_name: Tesla M4
+official_model: Tesla M4
+architecture: maxwell
+compute_major: 5
+compute_minor: 2
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
+spec_source: https://developer.nvidia.com/blog/accelerating-hyperscale-datacenter-applications-tesla-gpus/
+notes: GM206; 8 SMs and 4 GiB per device. Published memory clock is the DDR half-data-rate. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0).
+memory_bytes: 4294967296
+sm_count: 8
+memory_bus_width_bits: 128
+core_clock_mhz: 1072
+memory_clock_mhz: 2750
+l2_cache_bytes: 2097152
+shared_mem_per_sm: 98304
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 49152
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 2048
+max_blocks_per_multiprocessor: 32
+typical_power_usage_mw: 0
+max_power_limit_mw: 75000
+pci_device_id: 338759902
+supported_types:
+  - fp32
