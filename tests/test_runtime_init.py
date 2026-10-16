@@ -205,11 +205,15 @@ def test_inplace_hybrid_env_removes_stale_library_path(monkeypatch) -> None:
         _apply_env_inplace,
     )
 
-    # _apply_env_inplace mutates these keys directly; register their original
-    # values with monkeypatch so this process-level test cannot leak state.
-    monkeypatch.setenv("FAKEGPU_RUNTIME", "native")
-    monkeypatch.setenv("FAKEGPU_MODE", "simulate")
-    monkeypatch.setenv(_LIBRARY_PATH_VAR, str(ROOT / "build"))
+    # _apply_env_inplace writes the preload variables into os.environ; give it
+    # a private copy so later subprocess tests do not inherit them.
+    environment = {
+        **os.environ,
+        "FAKEGPU_RUNTIME": "native",
+        "FAKEGPU_MODE": "simulate",
+        _LIBRARY_PATH_VAR: str(ROOT / "build"),
+    }
+    monkeypatch.setattr(os, "environ", environment)
     monkeypatch.setattr(
         api,
         "library_dir",
@@ -222,7 +226,7 @@ def test_inplace_hybrid_env_removes_stale_library_path(monkeypatch) -> None:
         _FakeGpuRuntimeConfig(mode="hybrid"),
     )
 
-    assert _LIBRARY_PATH_VAR not in os.environ
+    assert _LIBRARY_PATH_VAR not in environment
 
 
 def main() -> None:
