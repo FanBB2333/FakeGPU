@@ -252,7 +252,7 @@ def main() -> int:
     capture_parser.add_argument("--mode", choices=["real", "fakecuda"], required=True)
     capture_parser.add_argument(
         "--profile",
-        default="rtx-pro-5000-blackwell",
+        default="rtx-pro-5000-blackwell-72gb",
     )
     capture_parser.add_argument("--output", type=Path, required=True)
 

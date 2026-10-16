@@ -9,7 +9,7 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/
 spec_source: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/
-notes: Public nominal 24 GB reference board. Existing stable rtx3090ti compatibility profile is preserved independently; nominal capacity and boost must not be substituted into existing calibration records. SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
+notes: Public nominal 24 GB reference board. SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
 memory_bytes: 25769803776
 sm_count: 84
 memory_bus_width_bits: 384

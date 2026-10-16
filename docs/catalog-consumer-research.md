@@ -1,6 +1,6 @@
 # Consumer GPU catalog research
 
-Public-source review date: **2026-10-16**. The consumer catalog contains **124 selectable configurations**, including desktop, notebook, memory-capacity and memory-type variants. This update adds 84 configurations to the original 40 consumer profiles. These are public compatibility references, not a list of devices owned or tested by the maintainer. A configuration count is not a count of distinct silicon dies.
+Public-source review date: **2026-10-16**. The consumer catalog contains **123 selectable configurations**, including desktop, notebook, memory-capacity and memory-type variants. This update added 84 configurations to the original 40 consumer profiles; the measured `rtx3090ti` profile was later removed. These are public compatibility references, not a list of devices owned or tested by the maintainer. A configuration count is not a count of distinct silicon dies.
 
 ## Coverage
 
@@ -12,7 +12,7 @@ Public-source review date: **2026-10-16**. The consumer catalog contains **124 s
 - Ada: desktop RTX 40/SUPER models, explicit 4060 Ti 8/16 GB and 4070 GDDR6, RTX 4090 D, the five RTX 40 notebook models, and RTX 3050 A notebook.
 - Blackwell: desktop RTX 5050–5090, both 5060 Ti capacities, original RTX 5090 D and D v2, and the six RTX 50 notebook model families including the currently listed RTX 5070 notebook 8/12 GB options.
 
-Existing IDs remain available. In particular, `rtx4060ti` retains its existing 16 GB default, with explicit `rtx4060ti-8gb` and `rtx4060ti-16gb` selections. `gtx1050` retains its previous compatibility capacity; `gtx1050-2gb` identifies the documented standard desktop configuration. `rtx3090ti-reference` supplies public nominal specifications independently of the pre-existing measured compatibility profile; it does not alter calibration records.
+Existing IDs remain available. In particular, `rtx4060ti` retains its existing 16 GB default, with explicit `rtx4060ti-8gb` and `rtx4060ti-16gb` selections. `gtx1050` retains its previous compatibility capacity; `gtx1050-2gb` identifies the documented standard desktop configuration. `rtx3090ti-reference` supplies public nominal specifications; the former measured `rtx3090ti` profile was removed.
 
 ## Primary sources
 

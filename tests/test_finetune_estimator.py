@@ -378,7 +378,7 @@ def test_observation_extrapolates_data_volume_but_not_execution_shape() -> None:
         _estimate(observation=observation, sequence_length=64)
     with pytest.raises(FinetuneEstimateError, match="signature mismatch"):
         estimate_finetuning(
-            _model(), _training(), profile_id="rtx3090ti", observation=observation
+            _model(), _training(), profile_id="rtx3090ti-reference", observation=observation
         )
 
 

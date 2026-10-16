@@ -9,7 +9,7 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
 spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/professional-desktop-gpus/rtx-pro-5000-blackwell/workstation-datasheet-blackwell-rtx-pro-5000-5488550-nvidia.pdf
-notes: Reference desktop-board configuration. SM count derived from NVIDIA 14080 CUDA cores and 128 cores per SM. Core clock, L2 cache, typical power, and PCI device ID are unverified and zero. Nominal public memory-capacity variant; retained separately from the pre-existing measured compatibility profile. Memory clock is an equivalent half-data-rate value derived from NVIDIA 1344 GB/s and 384-bit bus, rounded to MHz; it is not a measured oscillator clock.
+notes: Reference desktop-board configuration. SM count derived from NVIDIA 14080 CUDA cores and 128 cores per SM. Core clock, L2 cache, typical power, and PCI device ID are unverified and zero. Nominal public memory-capacity variant. Memory clock is an equivalent half-data-rate value derived from NVIDIA 1344 GB/s and 384-bit bus, rounded to MHz; it is not a measured oscillator clock.
 memory_bytes: 51539607552
 sm_count: 110
 memory_bus_width_bits: 384

@@ -21,9 +21,9 @@ def runtime_options(tmp_path: Path) -> dict:
         "cluster_config": tmp_path / "cluster.yaml",
         "coordinator_addr": "127.0.0.1:29501",
         "coordinator_transport": "tcp",
-        "profile": "rtx3090ti",
+        "profile": "rtx3090ti-reference",
         "device_count": 2,
-        "devices": ["rtx3090ti", "test-512m"],
+        "devices": ["rtx3090ti-reference", "test-512m"],
     }
 
 
@@ -55,9 +55,9 @@ def test_env_maps_all_options_without_mutating_base(
         "FAKEGPU_CLUSTER_CONFIG": str(runtime_options["cluster_config"]),
         "FAKEGPU_COORDINATOR_ADDR": "127.0.0.1:29501",
         "FAKEGPU_COORDINATOR_TRANSPORT": "tcp",
-        "FAKEGPU_PROFILE": "rtx3090ti",
+        "FAKEGPU_PROFILE": "rtx3090ti-reference",
         "FAKEGPU_DEVICE_COUNT": "2",
-        "FAKEGPU_PROFILES": "rtx3090ti,test-512m",
+        "FAKEGPU_PROFILES": "rtx3090ti-reference,test-512m",
     }
     assert expected.items() <= environment.items()
     assert base == {"SENTINEL": "preserved"}
@@ -144,7 +144,7 @@ def test_run_forwards_config_and_subprocess_options(
     result = _api.run(["probe"], lib_dir=native_directory, check=False, capture_output=True, **runtime_options)
     assert result is completed
     arguments = runner.call_args.kwargs
-    assert arguments["env"]["FAKEGPU_PROFILES"] == "rtx3090ti,test-512m"
+    assert arguments["env"]["FAKEGPU_PROFILES"] == "rtx3090ti-reference,test-512m"
     assert arguments["env"]["FAKEGPU_UNSUPPORTED_API"] == "warn"
     assert arguments["check"] is False
     assert arguments["capture_output"] is True

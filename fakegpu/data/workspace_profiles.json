@@ -2,7 +2,7 @@
   "schema_version": "fakegpu.workspace_profiles.v1",
   "profiles": [
     {
-      "id": "conv-bf16-n2-c64-h128-k64.rtx-pro-5000-blackwell.torch-2.9.1.cuda-12.8",
+      "id": "conv-bf16-n2-c64-h128-k64.rtx-pro-5000-blackwell-72gb.torch-2.9.1.cuda-12.8",
       "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
       "lifetime": "operator_local",
       "kind": "operator_workspace_storage",
@@ -13,7 +13,7 @@
           "cuda"
         ],
         "profile_ids": [
-          "rtx-pro-5000-blackwell"
+          "rtx-pro-5000-blackwell-72gb"
         ],
         "compute_capabilities": [
           "12.0"
@@ -55,7 +55,7 @@
       }
     },
     {
-      "id": "conv-bf16-n2-c64-h128-k64.rtx3090ti.torch-2.12.1.cuda-13.0",
+      "id": "conv-bf16-n2-c64-h128-k64.rtx3090ti-reference.torch-2.12.1.cuda-13.0",
       "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
       "lifetime": "operator_local",
       "kind": "operator_workspace_storage",
@@ -66,7 +66,7 @@
           "cuda"
         ],
         "profile_ids": [
-          "rtx3090ti"
+          "rtx3090ti-reference"
         ],
         "compute_capabilities": [
           "8.6"
@@ -108,7 +108,7 @@
       }
     },
     {
-      "id": "conv-fp32-n2-c64-h128-k64.rtx-pro-5000-blackwell.torch-2.9.1.cuda-12.8",
+      "id": "conv-fp32-n2-c64-h128-k64.rtx-pro-5000-blackwell-72gb.torch-2.9.1.cuda-12.8",
       "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
       "lifetime": "operator_local",
       "kind": "operator_workspace_storage",
@@ -119,7 +119,7 @@
           "cuda"
         ],
         "profile_ids": [
-          "rtx-pro-5000-blackwell"
+          "rtx-pro-5000-blackwell-72gb"
         ],
         "compute_capabilities": [
           "12.0"
@@ -161,7 +161,7 @@
       }
     },
     {
-      "id": "conv-fp32-n2-c64-h128-k64.rtx3090ti.torch-2.12.1.cuda-13.0",
+      "id": "conv-fp32-n2-c64-h128-k64.rtx3090ti-reference.torch-2.12.1.cuda-13.0",
       "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
       "lifetime": "operator_local",
       "kind": "operator_workspace_storage",
@@ -172,7 +172,7 @@
           "cuda"
         ],
         "profile_ids": [
-          "rtx3090ti"
+          "rtx3090ti-reference"
         ],
         "compute_capabilities": [
           "8.6"
@@ -214,7 +214,7 @@
       }
     },
     {
-      "id": "conv-fp32-n4-c128-h64-k128.rtx-pro-5000-blackwell.torch-2.9.1.cuda-12.8",
+      "id": "conv-fp32-n4-c128-h64-k128.rtx-pro-5000-blackwell-72gb.torch-2.9.1.cuda-12.8",
       "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
       "lifetime": "operator_local",
       "kind": "operator_workspace_storage",
@@ -225,7 +225,7 @@
           "cuda"
         ],
         "profile_ids": [
-          "rtx-pro-5000-blackwell"
+          "rtx-pro-5000-blackwell-72gb"
         ],
         "compute_capabilities": [
           "12.0"
@@ -267,7 +267,7 @@
       }
     },
     {
-      "id": "conv-fp32-n4-c128-h64-k128.rtx3090ti.torch-2.12.1.cuda-13.0",
+      "id": "conv-fp32-n4-c128-h64-k128.rtx3090ti-reference.torch-2.12.1.cuda-13.0",
       "operator": "aten::convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor",
       "lifetime": "operator_local",
       "kind": "operator_workspace_storage",
@@ -278,7 +278,7 @@
           "cuda"
         ],
         "profile_ids": [
-          "rtx3090ti"
+          "rtx3090ti-reference"
         ],
         "compute_capabilities": [
           "8.6"
@@ -320,7 +320,7 @@
       }
     },
     {
-      "id": "mm-bf16-1024.rtx-pro-5000-blackwell.torch-2.9.1.cuda-12.8",
+      "id": "mm-bf16-1024.rtx-pro-5000-blackwell-72gb.torch-2.9.1.cuda-12.8",
       "operator": "aten::mm(Tensor self, Tensor mat2) -> Tensor",
       "lifetime": "operator_local",
       "kind": "operator_workspace_storage",
@@ -331,7 +331,7 @@
           "cuda"
         ],
         "profile_ids": [
-          "rtx-pro-5000-blackwell"
+          "rtx-pro-5000-blackwell-72gb"
         ],
         "compute_capabilities": [
           "12.0"
@@ -369,7 +369,7 @@
       }
     },
     {
-      "id": "mm-bf16-1024.rtx3090ti.torch-2.12.1.cuda-13.0",
+      "id": "mm-bf16-1024.rtx3090ti-reference.torch-2.12.1.cuda-13.0",
       "operator": "aten::mm(Tensor self, Tensor mat2) -> Tensor",
       "lifetime": "operator_local",
       "kind": "operator_workspace_storage",
@@ -380,7 +380,7 @@
           "cuda"
         ],
         "profile_ids": [
-          "rtx3090ti"
+          "rtx3090ti-reference"
         ],
         "compute_capabilities": [
           "8.6"
@@ -418,7 +418,7 @@
       }
     },
     {
-      "id": "mm-fp32-1024.rtx-pro-5000-blackwell.torch-2.9.1.cuda-12.8",
+      "id": "mm-fp32-1024.rtx-pro-5000-blackwell-72gb.torch-2.9.1.cuda-12.8",
       "operator": "aten::mm(Tensor self, Tensor mat2) -> Tensor",
       "lifetime": "operator_local",
       "kind": "operator_workspace_storage",
@@ -429,7 +429,7 @@
           "cuda"
         ],
         "profile_ids": [
-          "rtx-pro-5000-blackwell"
+          "rtx-pro-5000-blackwell-72gb"
         ],
         "compute_capabilities": [
           "12.0"
@@ -467,7 +467,7 @@
       }
     },
     {
-      "id": "mm-fp32-1024.rtx3090ti.torch-2.12.1.cuda-13.0",
+      "id": "mm-fp32-1024.rtx3090ti-reference.torch-2.12.1.cuda-13.0",
       "operator": "aten::mm(Tensor self, Tensor mat2) -> Tensor",
       "lifetime": "operator_local",
       "kind": "operator_workspace_storage",
@@ -478,7 +478,7 @@
           "cuda"
         ],
         "profile_ids": [
-          "rtx3090ti"
+          "rtx3090ti-reference"
         ],
         "compute_capabilities": [
           "8.6"

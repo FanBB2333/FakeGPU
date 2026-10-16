@@ -120,7 +120,7 @@ and Traditional Chinese documents together.
 
 ## GPU profiles
 
-The catalog has 306 YAML profiles covering consumer, workstation, data-center,
+The catalog has 304 YAML profiles covering consumer, workstation, data-center,
 and embedded NVIDIA GPUs from Maxwell through Blackwell. The Python and native
 runtimes share them. The [full inventory](../../profiles/README.md) lists per-profile
 specifications, sources, variant conventions, and unknown parameters.

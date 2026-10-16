@@ -34,7 +34,7 @@ def _capture(mode: str, reserved_offset: int = 0) -> dict:
         "compute_capability": "8.6",
         "torch_version": "2.12",
         "torch_cuda_version": "13.0",
-        "profile": "rtx3090ti" if mode == "fakecuda" else None,
+        "profile": "rtx3090ti-reference" if mode == "fakecuda" else None,
         "stages": stages,
     }
 

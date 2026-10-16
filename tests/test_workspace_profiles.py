@@ -58,7 +58,7 @@ def test_workspace_profile_matches_stack_dtype_shape_and_formula(
                 "confidence": "measured_test",
                 "match": {
                     "device_types": ["cuda"],
-                    "profile_ids": ["rtx3090ti"],
+                    "profile_ids": ["rtx3090ti-reference"],
                     "architectures": ["ampere"],
                     "compute_capabilities": ["8.6"],
                     "torch_versions": ["*"],
@@ -85,7 +85,7 @@ def test_workspace_profile_matches_stack_dtype_shape_and_formula(
         _node(torch),
         "aten.mm.default",
         target_device=torch.device("cuda"),
-        target_profile="rtx3090ti",
+        target_profile="rtx3090ti-reference",
         profile_paths=[catalog],
     )
     assert profile is not None

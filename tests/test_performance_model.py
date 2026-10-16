@@ -15,8 +15,8 @@ from fakegpu.profile_catalog import get_profile, load_profiles
 
 def test_roofline_uses_profile_architecture_and_clock_data() -> None:
     turing = profile_roofline("rtx2080ti")
-    ampere = profile_roofline("rtx3090ti")
-    blackwell = profile_roofline("rtx-pro-5000-blackwell")
+    ampere = profile_roofline("rtx3090ti-reference")
+    blackwell = profile_roofline("rtx5090")
 
     assert turing["architecture"] == "turing"
     assert turing["compiler_target"] == "sm_75"
@@ -55,7 +55,7 @@ def test_roofline_rejects_unknown_throughput_instead_of_dividing_by_zero(monkeyp
 
 def test_roofline_returns_ordered_interval_and_bottleneck() -> None:
     report = estimate_roofline(
-        profile_id="rtx3090ti",
+        profile_id="rtx3090ti-reference",
         flops=2_000_000_000_000,
         memory_bytes=50_000_000,
         launch_count=10,
@@ -67,7 +67,7 @@ def test_roofline_returns_ordered_interval_and_bottleneck() -> None:
     assert report["compute_model"]["basis"] == "scalar_fp32_fma"
 
     memory_bound = estimate_roofline(
-        profile_id="rtx3090ti",
+        profile_id="rtx3090ti-reference",
         flops=1_000,
         memory_bytes=10_000_000_000,
     )

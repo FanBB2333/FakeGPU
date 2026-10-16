@@ -261,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", required=True)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--profile", default="rtx-pro-5000-blackwell")
+    parser.add_argument("--profile", default="rtx-pro-5000-blackwell-72gb")
     parser.add_argument("--calibration-runs", type=int, default=2)
     parser.add_argument("--holdout-runs", type=int, default=2)
     parser.add_argument("--calibration-epochs", type=int, default=24)

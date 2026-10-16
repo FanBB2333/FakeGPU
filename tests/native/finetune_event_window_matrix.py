@@ -247,7 +247,7 @@ def main(argv=None):
     parser.add_argument("--config", required=True)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--profile", default="rtx-pro-5000-blackwell")
+    parser.add_argument("--profile", default="rtx-pro-5000-blackwell-72gb")
     parser.add_argument("--calibration-steps", type=int, default=72)
     parser.add_argument("--holdout-steps", type=int, default=101)
     parser.add_argument("--warmup-steps", type=int, default=4)

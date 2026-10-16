@@ -109,7 +109,7 @@ Python 测试（跳过一个 CPU-only build 分支）、原生 CPU 套件、104 
 
 ## GPU profiles
 
-目录包含 306 个 YAML profile，覆盖从 Maxwell 到 Blackwell 的消费级、工作站、
+目录包含 304 个 YAML profile，覆盖从 Maxwell 到 Blackwell 的消费级、工作站、
 数据中心和嵌入式 NVIDIA GPU。Python 与原生 runtime 共用这些 profiles。
 型号、参数来源、变体口径和未知字段见[完整目录](../../profiles/README.md)。
 

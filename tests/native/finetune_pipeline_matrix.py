@@ -519,7 +519,7 @@ def main(argv=None):
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--profile", default="rtx-pro-5000-blackwell")
+    parser.add_argument("--profile", default="rtx-pro-5000-blackwell-72gb")
     parser.add_argument("--gpu-index", type=int, default=1)
     parser.add_argument("--calibration-steps", type=int, default=68)
     parser.add_argument("--holdout-steps", type=int, default=92)

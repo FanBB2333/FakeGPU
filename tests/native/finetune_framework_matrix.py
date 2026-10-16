@@ -290,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output-dir", required=True, help="New or empty evidence directory."
     )
-    parser.add_argument("--profile", default="rtx-pro-5000-blackwell")
+    parser.add_argument("--profile", default="rtx-pro-5000-blackwell-72gb")
     parser.add_argument("--holdout-runs", type=int, default=3)
     parser.add_argument("--calibration-steps", type=int, default=CALIBRATION_STEPS)
     parser.add_argument("--warmup-steps", type=int, default=WARMUP_STEPS)

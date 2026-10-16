@@ -12,8 +12,8 @@ cases:
   - name: profile-doctor
     matrix:
       profile:
-        - rtx3090ti
-        - rtx-pro-5000-blackwell
+        - rtx3090ti-reference
+        - rtx-pro-5000-blackwell-72gb
     command:
       - "{python}"
       - -m
@@ -31,8 +31,8 @@ cases:
     matrix:
       profile:
         - test-512m
-        - rtx3090ti
-        - rtx-pro-5000-blackwell
+        - rtx3090ti-reference
+        - rtx-pro-5000-blackwell-72gb
     requires:
       python_modules:
         - torch

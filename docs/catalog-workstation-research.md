@@ -49,7 +49,7 @@ Model compute capabilities follow the [current CUDA GPU table](https://developer
 - Core clock, cache sizes, PCI ID and typical operating power remain zero when no verified model specification was found. Public maximum TGP is stored separately from typical power. Zero means unavailable, not a real zero-capacity resource.
 - Laptop maximum power is the top of the published configurable operating envelope, including Dynamic Boost where the source says so. It is not a claim that every OEM laptop operates at that power or achieves the same clocks.
 - Turing T-series profiles do not advertise Tensor Core data types or throughput. Format support such as `fp16` does not establish Tensor Core acceleration.
-- The existing `rtx-pro-5000-blackwell` ID retains its original measured compatibility values. New `rtx-pro-5000-blackwell-48gb` and `rtx-pro-5000-blackwell-72gb` IDs use public nominal specifications. These are different evidence classes; a reference profile is not a calibration record.
+- `rtx-pro-5000-blackwell-48gb` and `rtx-pro-5000-blackwell-72gb` use public nominal specifications. The former measured `rtx-pro-5000-blackwell` profile was removed; a reference profile is not a calibration record.
 
 ## Source conflicts and remaining gaps
 
