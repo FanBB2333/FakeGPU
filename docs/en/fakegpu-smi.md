@@ -11,7 +11,9 @@ Prometheus.
 
 State publishing is opt-in. Set a state directory before the workload calls
 `fakegpu.init(...)` or starts through the native launcher. `build/` is ignored
-by Git.
+by Git. With the [background machine](console.md) running, workloads publish
+to it, and `fakegpu nvidia-smi` and `fakegpu nvitop` without a state source
+show the machine, its idle GPUs included.
 
 ```bash
 export FAKEGPU_SMI_STATE_DIR=build/smi

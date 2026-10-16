@@ -44,8 +44,9 @@ A process keeps its own layout when it passes `profile`, `devices` or
 a process out of the machine. A new layout applies to processes started after
 the change; running processes keep the devices they started with.
 
-`fakegpu nvitop` and `fakegpu nvidia-smi --state-dir ~/.fakegpu/machine/state`
-read the same state, so processes on the machine also appear there.
+While the daemon runs, `fakegpu nvitop` and `fakegpu nvidia-smi` read the
+machine without options. Like on a real host they list every GPU of the
+layout, idle ones included, and the processes on the machine.
 
 ## The console
 

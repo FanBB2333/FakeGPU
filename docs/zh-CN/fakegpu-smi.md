@@ -9,7 +9,9 @@
 ## 从工作负载发布状态
 
 状态发布需要显式启用。请在工作负载调用 `fakegpu.init(...)` 或通过原生启动器运行
-之前设置状态目录。`build/` 已被 Git 忽略。
+之前设置状态目录。`build/` 已被 Git 忽略。[后台机器](console.md)运行时，工作负载向它
+发布状态；不指定状态来源的 `fakegpu nvidia-smi` 和 `fakegpu nvitop` 会显示这台机器，
+包括空闲的 GPU。
 
 ```bash
 export FAKEGPU_SMI_STATE_DIR=build/smi

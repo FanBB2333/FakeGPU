@@ -10,6 +10,7 @@ from typing import Sequence
 from ._cli import command_prog
 from .machine.client import daemon_pid
 from .machine.config import MachineConfig, MachinePaths
+from .machine.layout import is_machine_state_dir, layout_state
 from .nvml import NvmlStateBridge
 
 
@@ -32,12 +33,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="A100 reference sensor model (default: the daemon's setting, else none); "
                              "publishers need FAKEGPU_TELEMETRY=reference.")
     args, remaining = parser.parse_known_args(argv)
+    paths = MachinePaths.from_env()
     if not (args.state_dir or args.state or os.environ.get("FAKEGPU_SMI_STATE_DIR")):
-        paths = MachinePaths.from_env()
         if daemon_pid(paths) is not None:
             args.state_dir = str(paths.state_dir)
             args.telemetry = args.telemetry or MachineConfig.load(paths.config).telemetry
     args.telemetry = args.telemetry or "none"
+    state_dir = args.state_dir or os.environ.get("FAKEGPU_SMI_STATE_DIR")
+    # The machine lists its GPUs even when no process uses them.
+    layout = (lambda: layout_state(paths)) if is_machine_state_dir(state_dir, paths) else None
     if remaining[:1] == ["--"]:
         remaining = remaining[1:]
     old_argv = sys.argv
@@ -45,11 +49,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         with NvmlStateBridge(
             state_dir=args.state_dir, state_paths=args.state,
             refresh_interval=args.refresh_interval, stale_after_seconds=args.stale_after_seconds,
-            lib_dir=args.lib_dir, telemetry=args.telemetry,
+            lib_dir=args.lib_dir, telemetry=args.telemetry, layout=layout,
         ) as bridge:
             if bridge.device_count == 0:
-                print("No live local FakeGPU publishers. Start a workload with the same "
-                      "FAKEGPU_SMI_STATE_DIR, then restart this viewer.", file=sys.stderr)
+                print("No live local FakeGPU publishers and no running machine. Start the machine "
+                      "with 'fakegpu daemon start', or a workload with the same FAKEGPU_SMI_STATE_DIR, "
+                      "then restart this viewer.", file=sys.stderr)
                 if bridge.errors:
                     print(f"Ignored {len(bridge.errors)} unreadable/invalid state file(s).", file=sys.stderr)
                 return 1

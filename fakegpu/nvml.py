@@ -24,7 +24,7 @@ from pathlib import Path
 import sys
 import threading
 import time
-from typing import Sequence
+from typing import Callable, Sequence
 
 from ._api import library_dir
 from ._smi_state import (
@@ -114,10 +114,14 @@ class NvmlStateBridge:
         stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
         lib_dir: str | os.PathLike[str] | None = None,
         telemetry: str = "none",
+        layout: Callable[[], dict | None] | None = None,
     ):
         if telemetry not in {"none", "reference"}:
             raise ValueError("telemetry must be none or reference")
         self.telemetry = telemetry
+        # Optional layout-only state (fakegpu.machine.layout): GPUs listed
+        # while no process uses them.
+        self._layout = layout
         self._reference = None
         if telemetry == "reference":
             from ._monitor_reference import ReferenceTelemetry
@@ -160,6 +164,9 @@ class NvmlStateBridge:
             paths, stale_after_seconds=self.stale_after_seconds, now_ns=now,
         )
         self.errors = tuple(errors)
+        layout = self._layout() if self._layout is not None else None
+        if layout is not None:
+            states = [layout, *states]
         return build_inventory(states, now_ns=now)
 
     @staticmethod

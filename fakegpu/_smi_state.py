@@ -50,6 +50,11 @@ SUPPORTED_SCHEMA_VERSIONS = frozenset(
 DEFAULT_STALE_AFTER_SECONDS = 2.0
 
 
+# A state with this key set lists GPUs without a process using them: the
+# background machine's layout (see fakegpu.machine.layout).
+LAYOUT_ONLY_KEY = "layout_only"
+
+
 def _discover_state_paths(
     *,
     explicit_paths: Sequence[Path],
@@ -831,12 +836,9 @@ def _state_status(
 
 
 def _aggregate_status(statuses: set[str]) -> str:
-    if "running" in statuses:
-        return "running"
-    if "stale" in statuses:
-        return "stale"
-    if "exited" in statuses:
-        return "exited"
+    for status in ("running", "stale", "exited", "idle"):
+        if status in statuses:
+            return status
     return "unknown"
 
 
@@ -1052,7 +1054,8 @@ def _finalize_device_aggregate(item: dict[str, Any]) -> dict[str, Any]:
     stages = sorted(value for value in item.pop("_stages") if value)
     tracking = sorted(value for value in item.pop("_tracking") if value)
     ages = list(item.pop("_ages"))
-    item["name"] = ", ".join(names) or "Fake NVIDIA GPU"
+    layout_name = item.pop("_layout_name", None)
+    item["name"] = ", ".join(names) or layout_name or "Fake NVIDIA GPU"
     item["profile_id"] = ", ".join(profiles) or "unknown"
     item["stages"] = ", ".join(stages) or "unknown"
     item["tracking_confidence"] = (
@@ -1140,11 +1143,31 @@ def build_inventory(
         timestamp_ns = _nonnegative_int(state.get("timestamp_ns"))
         timestamp = _format_timestamp_ns(timestamp_ns)
         raw_devices = state.get("devices") or []
+        layout_only = bool(state.get(LAYOUT_ONLY_KEY))
         for raw_device in raw_devices:
             if not isinstance(raw_device, Mapping):
                 continue
             device = _normalize_device(raw_device, host=host)
             if selectors and not _matches_device(device, selectors):
+                continue
+            if layout_only:
+                aggregate = device_rows.setdefault(
+                    (host, str(device["uuid"])),
+                    _empty_device_aggregate(
+                        host=host,
+                        device=device,
+                        fakegpu=fakegpu,
+                        software=software,
+                    ),
+                )
+                aggregate["_layout_name"] = device["name"]
+                aggregate["_profile_ids"].add(device["profile_id"])
+                _accumulate_memory(aggregate["memory"], device["memory"])
+                aggregate["_statuses"].add("idle")
+                aggregate["timestamp_ns"] = max(
+                    int(aggregate["timestamp_ns"]),
+                    timestamp_ns,
+                )
                 continue
             selected_device = True
             process = {

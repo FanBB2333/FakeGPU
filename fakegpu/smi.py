@@ -714,8 +714,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         if fallback_state_text
         else None
     )
+    from .machine.layout import is_machine_state_dir, layout_state, machine_state_dir
+
     if not explicit_paths and state_dir is None and fallback_state is None:
-        parser.error("provide --state, --state-dir, or FAKEGPU_SMI_STATE_PATH")
+        # Like nvidia-smi on a real host: show the background machine.
+        state_dir = machine_state_dir()
+    if not explicit_paths and state_dir is None and fallback_state is None:
+        parser.error(
+            "provide --state, --state-dir, or FAKEGPU_SMI_STATE_PATH, "
+            "or start the background machine with 'fakegpu daemon start'"
+        )
+    # The machine lists its GPUs even when no process uses them.
+    show_layout = is_machine_state_dir(state_dir)
 
     refresh = 0
     saw_states = False
@@ -730,6 +740,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 paths,
                 include_exited=bool(args.include_exited),
             )
+            machine = layout_state() if show_layout else None
+            if machine is not None:
+                states = [machine, *states]
             saw_states = saw_states or bool(states)
             inventory = build_inventory(
                 states,

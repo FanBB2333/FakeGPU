@@ -65,11 +65,13 @@ def _synthetic_mig_uuid(
 
 def _modeled_device_topology(
     devices: list[dict[str, Any]],
+    environ: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Attach each device's slot, PCIe link and NVLinks; return the summary.
 
     The model comes from ``FAKEGPU_PLATFORM``/``FAKEGPU_SLOTS``/
-    ``FAKEGPU_NVLINK_FABRIC`` (or the older ``FAKEGPU_NVLINK_GROUPS``); see
+    ``FAKEGPU_NVLINK_FABRIC`` (or the older ``FAKEGPU_NVLINK_GROUPS``) in
+    ``environ`` (default: the process environment); see
     :mod:`fakegpu.link_topology`.
     """
 
@@ -78,7 +80,7 @@ def _modeled_device_topology(
     ordered = sorted(devices, key=lambda item: _nonnegative_int(item.get("index")))
     topology = topology_from_environment(
         [str(device.get("profile_id") or "") for device in ordered],
-        os.environ,
+        os.environ if environ is None else environ,
     )
     for position, device in enumerate(ordered):
         device["topology"] = device_topology_record(topology, position, ordered)

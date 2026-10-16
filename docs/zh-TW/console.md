@@ -37,8 +37,8 @@ PYTHON
 設定 `FAKEGPU_MACHINE=off` 可讓程序不接入機器。新配置只對修改之後啟動的程序生效；
 已在執行的程序保留啟動時的裝置。
 
-`fakegpu nvitop` 與 `fakegpu nvidia-smi --state-dir ~/.fakegpu/machine/state`
-讀取的是同一份狀態，因此機器上的程序也會出現在這兩個工具中。
+常駐程序執行時，`fakegpu nvitop` 與 `fakegpu nvidia-smi` 不帶參數就會讀取這台機器：
+和真機一樣列出配置中的每張 GPU（包括閒置的），以及機器上的程序。
 
 ## 控制台
 

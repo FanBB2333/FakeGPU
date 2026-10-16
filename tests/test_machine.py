@@ -118,6 +118,47 @@ def test_daemon_status_prints_the_platform_slots(service, capsys):
     assert "a100            sxm 0      Gen4 x16" in output
 
 
+def test_viewers_list_the_idle_machine_layout(tmp_path, monkeypatch, capsys, child):
+    from fakegpu._smi_state import build_inventory
+    from fakegpu.machine import layout
+    from fakegpu.nvml import NvmlStateBridge
+    from fakegpu.smi import main as smi_main
+
+    monkeypatch.setenv("FAKEGPU_HOME", str(tmp_path))
+    monkeypatch.delenv("FAKEGPU_SMI_STATE_DIR", raising=False)
+    monkeypatch.delenv("FAKEGPU_SMI_STATE_PATH", raising=False)
+    paths = MachinePaths.from_env()
+    paths.create()
+    MachineConfig(devices="a100:8").save(paths.config)
+    assert layout.layout_state(paths) is None  # no daemon
+    monkeypatch.setattr(layout, "daemon_pid", lambda _paths: os.getpid())
+
+    state = layout.layout_state(paths)
+    inventory = build_inventory([state])
+    assert (inventory["device_count"], inventory["process_count"], inventory["runtime_count"]) == (8, 0, 0)
+    first = inventory["devices"][0]
+    assert first["state"]["status"] == "idle"
+    assert first["name"] == "NVIDIA A100-SXM4-80GB"
+    assert first["topology"]["platform"] == "hgx-a100-8"
+    assert first["memory"]["total_bytes"] == 80 * GIB
+
+    # A process on the machine merges into the layout's devices.
+    service = MachineService(paths, MachineConfig.load(paths.config))
+    publish(service, child.pid)
+    process_state = json.loads((paths.state_dir / f"{child.pid}.json").read_text())
+    inventory = build_inventory([state, process_state])
+    assert (inventory["device_count"], inventory["process_count"]) == (8, 2)
+    assert inventory["devices"][0]["memory"]["used_bytes"] == GIB
+
+    assert smi_main([]) == 0
+    output = capsys.readouterr().out
+    assert output.count("| a100 | 8.0 |") == 8
+
+    bridge = NvmlStateBridge(state_dir=paths.state_dir, layout=lambda: layout.layout_state(paths))
+    devices, _processes = bridge._arrays(bridge._inventory())
+    assert len(devices) == 8
+
+
 def test_clean_exit_and_retention(service, child):
     publish(service, child.pid)
     service.poll()

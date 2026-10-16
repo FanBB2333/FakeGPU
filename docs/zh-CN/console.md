@@ -37,8 +37,8 @@ PYTHON
 设置 `FAKEGPU_MACHINE=off` 可以让进程不接入机器。新布局只对修改之后启动的进程生效；
 已经在运行的进程保留启动时的设备。
 
-`fakegpu nvitop` 和 `fakegpu nvidia-smi --state-dir ~/.fakegpu/machine/state`
-读取的是同一份状态，所以机器上的进程也会出现在这两个工具里。
+守护进程运行时，`fakegpu nvitop` 和 `fakegpu nvidia-smi` 不带参数就会读取这台机器：
+和真机一样列出布局中的每块 GPU（包括空闲的），以及机器上的进程。
 
 ## 控制台
 

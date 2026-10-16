@@ -9,7 +9,9 @@
 ## 從工作負載發布狀態
 
 狀態發布功能需要明確啟用。請在工作負載呼叫 `fakegpu.init(...)` 或透過原生啟動器
-執行前設定狀態目錄。`build/` 已被 Git 忽略。
+執行前設定狀態目錄。`build/` 已被 Git 忽略。[背景機器](console.md)執行時，工作負載向它
+發布狀態；不指定狀態來源的 `fakegpu nvidia-smi` 與 `fakegpu nvitop` 會顯示這台機器，
+包括閒置的 GPU。
 
 ```bash
 export FAKEGPU_SMI_STATE_DIR=build/smi

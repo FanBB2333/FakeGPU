@@ -554,7 +554,7 @@ class ConsoleApp(App[str]):
             Text("Other views", style="bold"),
             key_values([
                 ("nvitop", "fakegpu nvitop"),
-                ("nvidia-smi", Text(f"fakegpu nvidia-smi --state-dir {path(paths['state_dir'])}", overflow="fold")),
+                ("nvidia-smi", "fakegpu nvidia-smi"),
                 ("Events", "fakegpu daemon events -f"),
             ]),
         ))
