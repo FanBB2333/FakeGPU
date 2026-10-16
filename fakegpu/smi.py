@@ -348,6 +348,11 @@ class SmiStatePublisher:
                     "total_memory": total,
                     "free_memory": free,
                     "activity": dict(item.get("activity") or {}),
+                    **(
+                        {"transfer": item["transfer"]}
+                        if isinstance(item.get("transfer"), Mapping)
+                        else {}
+                    ),
                     "tracked_memory": current,
                     "peak_tracked_memory": peak,
                     "reserved_memory": reserved,

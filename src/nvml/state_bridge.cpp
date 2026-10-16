@@ -28,6 +28,7 @@ struct Entry {
     uint64_t total = 0, used = 0;
     std::vector<ProcessV2> processes;
     FakeGpuNvmlTelemetryV1 telemetry{};
+    FakeGpuNvmlLinksV1 links{};
     std::vector<UtilizationSample> samples;
 };
 std::mutex mutex;
@@ -46,7 +47,7 @@ Entry* find(nvmlDevice_t handle) {
 extern "C" nvmlReturn_t fakegpuNvmlSetSnapshot(
     unsigned int version, unsigned int device_count,
     const void* device_data, unsigned int process_count, const void* process_data) {
-    if ((version != 1 && version != 2) || device_count > 4096 || process_count > 65536 ||
+    if (version < 1 || version > 3 || device_count > 4096 || process_count > 65536 ||
         (device_count && !device_data) || (process_count && !process_data)) {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
@@ -55,16 +56,29 @@ extern "C" nvmlReturn_t fakegpuNvmlSetSnapshot(
         std::vector<FakeGpuNvmlDeviceV1> devices(device_count);
         std::vector<FakeGpuNvmlProcessV1> processes(process_count);
         std::vector<FakeGpuNvmlTelemetryV1> telemetry(device_count);
+        std::vector<FakeGpuNvmlLinksV1> links(device_count);
         std::vector<std::vector<UtilizationSample>> samples(device_count);
         for (unsigned int i = 0; i < device_count; ++i) {
             if (version == 1) devices[i] = static_cast<const FakeGpuNvmlDeviceV1*>(device_data)[i];
             else {
-                const auto& row = static_cast<const FakeGpuNvmlDeviceV2*>(device_data)[i];
+                FakeGpuNvmlDeviceV3 row{};
+                if (version == 2) {
+                    const auto& v2 = static_cast<const FakeGpuNvmlDeviceV2*>(device_data)[i];
+                    row.device = v2.device;
+                    row.telemetry = v2.telemetry;
+                } else {
+                    row = static_cast<const FakeGpuNvmlDeviceV3*>(device_data)[i];
+                }
                 devices[i] = row.device;
                 telemetry[i] = row.telemetry;
+                links[i] = row.links;
                 const auto& t = row.telemetry;
                 if (t.valid > 1 || t.gpu > 100 || t.memory > 100 || t.temperature > 120 ||
                     t.pstate > 15 || t.power_mw > 1000000 || t.sm_clock > 10000 || t.memory_clock > 100000)
+                    return NVML_ERROR_INVALID_ARGUMENT;
+                const auto& l = row.links;
+                if (l.valid > 1 || l.pcie_generation > 6 || l.pcie_width > 32 || l.pcie_max_generation > 6 ||
+                    l.pcie_max_width > 32 || l.nvlink_count > 18)
                     return NVML_ERROR_INVALID_ARGUMENT;
             }
         }
@@ -120,6 +134,7 @@ extern "C" nvmlReturn_t fakegpuNvmlSetSnapshot(
             entry.used = 0;
             entry.processes.clear();
             entry.telemetry = {};
+            entry.links = {};
             entry.samples.clear();
         }
         for (unsigned int i = 0; i < device_count; ++i) {
@@ -128,6 +143,7 @@ extern "C" nvmlReturn_t fakegpuNvmlSetSnapshot(
             entry.used = devices[i].used_memory;
             entry.processes = std::move(rows[i]);
             entry.telemetry = telemetry[i];
+            entry.links = links[i];
             entry.samples = std::move(samples[i]);
         }
         active.store(true);
@@ -200,6 +216,16 @@ nvmlReturn_t telemetry(nvmlDevice_t device, FakeGpuNvmlTelemetryV1* result) {
     if (!entry) return NVML_ERROR_INVALID_ARGUMENT;
     if (!entry->telemetry.valid) return NVML_ERROR_NOT_SUPPORTED;
     *result = entry->telemetry;
+    return NVML_SUCCESS;
+}
+
+nvmlReturn_t links(nvmlDevice_t device, FakeGpuNvmlLinksV1* result) {
+    if (!device || !result) return NVML_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto* entry = find(device);
+    if (!entry) return NVML_ERROR_INVALID_ARGUMENT;
+    if (!entry->links.valid) return NVML_ERROR_NOT_SUPPORTED;
+    *result = entry->links;
     return NVML_SUCCESS;
 }
 

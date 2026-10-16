@@ -30,6 +30,7 @@ from textual.widgets import (
 
 from ..machine.client import MachineError
 from ..machine.config import parse_devices
+from ..link_traffic import copies_summary, format_rate, throughput_summary
 from ..platforms import AUTO, load_platforms, resolve_platform
 from ..machine.service import EVENT_BUFFER
 from ..profile_catalog import load_profiles
@@ -60,6 +61,29 @@ def slot_text(slot: dict[str, Any] | None) -> str:
         parts.append(f"{slot['nvlink_links']} NVLinks, {slot['nvlink_bandwidth_gbps']:g} GB/s")
     parts.append(f"NUMA {slot['numa_node']}")
     return ", ".join(parts)
+
+
+def device_links(slot: dict[str, Any] | None) -> list[tuple[str, str, float | None]]:
+    """Links of a GPU as (kind, label, GB/s per direction) for its trend rows."""
+    if not slot:
+        return [("pcie", "PCIe", None)]
+    links: list[tuple[str, str, float | None]] = []
+    if slot["pcie"]:
+        links.append(("pcie", "PCIe", slot["host_bandwidth_gbps"] if slot["host_link"] == "pcie" else None))
+    if slot["host_link"] == "c2c":
+        links.append(("c2c", "C2C", slot["host_bandwidth_gbps"]))
+    if slot["nvlink_links"]:
+        links.append(("nvlink", "NVLink", slot["nvlink_bandwidth_gbps"]))
+    return links
+
+
+def link_io_text(transfer: dict[str, Any] | None) -> str:
+    if not transfer:
+        return "N/A"
+    total = sum(
+        entry["tx_bytes_per_second"] + entry["rx_bytes_per_second"] for entry in transfer["links"].values()
+    )
+    return format_rate(total)
 
 
 def platform_view(platform: dict[str, Any]) -> list[Any]:
@@ -289,7 +313,7 @@ class ConsoleApp(App[str]):
             "ended-table": ("PID", "Name", "Result", "Runtime", "Peak", "Ended (UTC)"),
             "devices-table": (
                 "GPU", "Profile", "Name", "Arch", "CC", "Used", "Total", "Mem %", "Procs", "Util",
-                "Temp", "Power", "SM clock",
+                "Temp", "Power", "SM clock", "Link I/O",
             ),
             "profiles-table": ("ID", "Name", "Architecture", "Segment", "Memory", "CC", "SMs", "Power"),
         }
@@ -415,6 +439,7 @@ class ConsoleApp(App[str]):
                 f"{sensors['temperature_c']}°C" if sensors else "N/A",
                 f"{sensors['power_w']:.0f} W" if sensors else "N/A",
                 f"{sensors['sm_clock_mhz']} MHz" if sensors else "N/A",
+                link_io_text(d.get("transfer")),
             )))
         sync_rows(self.query_one("#devices-table", DataTable), rows)
         self.show_device_detail()
@@ -469,6 +494,14 @@ class ConsoleApp(App[str]):
             values = history.get(key, [])
             last = next((value for value in reversed(values) if value is not None), None)
             trends.add_row(label, sparkline(values, 60, maximum), "N/A" if last is None else f"{last:g}{unit}")
+        for link, label, bandwidth in device_links(device.get("slot")):
+            values = history.get(f"{link}_gbps", [])
+            last = next((value for value in reversed(values) if value is not None), None)
+            # TX plus RX against both directions of the link
+            maximum = 2 * bandwidth if bandwidth else max([1.0, *(v for v in values if v is not None)])
+            trends.add_row(label, sparkline(values, 60, maximum), "N/A" if last is None else f"{last:g} GB/s")
+        transfer = device.get("transfer")
+        links = [link for link, _label, _bandwidth in device_links(device.get("slot"))]
         categories = Table.grid(padding=(0, 2))
         for name, value in sorted(allocator["categories"].items(), key=lambda item: -item[1])[:8]:
             share = value / memory["used_bytes"] * 100 if memory["used_bytes"] else 0
@@ -482,6 +515,9 @@ class ConsoleApp(App[str]):
                 ("Device", f"GPU {device['index']} {device['name']} ({device['profile_id']})"),
                 ("UUID", device["uuid"]),
                 ("Slot", slot_text(device.get("slot"))),
+                ("Copies", copies_summary(transfer, size) + " (modeled)" if transfer else "none recorded"),
+                ("Links", f"{throughput_summary(transfer, links)} (last {transfer['window_seconds']:g} s)"
+                          if transfer else "N/A"),
                 ("Memory", f"{size(memory['used_bytes'])} used, peak {size(memory['peak_bytes'])}, "
                            f"tracked {size(memory['tracked_bytes'])}, reserved {size(memory['reserved_bytes'])}"),
                 ("Allocator", f"{allocator['allocation_count']} allocations in {allocator['segment_count']} segments"),

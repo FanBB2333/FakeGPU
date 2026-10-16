@@ -59,8 +59,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 ```
 
 - `-q` shows the FakeGPU version, runtime policies, software versions, state
-  freshness, catalog and native API coverage, device identity, memory
-  categories, allocator activity, dispatch tracking, and per-process peaks.
+  freshness, catalog and native API coverage, device identity, slot, modeled
+  copies and link throughput, memory categories, allocator activity, dispatch
+  tracking, and per-process peaks.
 - `-i` selects devices by index, UUID, PCI bus ID, or profile ID. `--json`
   prints the full normalized inventory. FakeGPU writes state schema v2 and can
   still read v1.
@@ -85,7 +86,9 @@ activates nothing and is reported as a configuration error.
   `topo -m` (NV#, PIX, PXB, PHB, NODE, SYS and NUMA affinity), `nvlink -s`
   (GB/s per link and direction), the `topology.*`, `nvlink.*`, `platform`,
   `slot.type`, `numa.node`, `pcie.link.*` and `host_link.bandwidth` fields,
-  and native NVML link queries.
+  and native NVML link queries. Copies are recorded with their modeled time
+  and link throughput (the `copy.*` and `*.throughput.*` fields); see
+  [Copy time and throughput](platforms.md#copy-time-and-throughput).
 - **MIG**: `FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."`, for
   example `FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`. Each GPU
   instance owns one compute instance. Layouts that exceed the parent memory,

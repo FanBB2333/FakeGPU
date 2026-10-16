@@ -82,6 +82,36 @@ GPU 设计的基板上，彼此通过 NVLink 通信，通常经过 NVSwitch 芯�
 GPU0  X     NV1   NV1   NV2   NV2   SYS   SYS   SYS   0
 ```
 
+## 拷贝时间与吞吐
+
+FakeGPU 的拷贝以主机内存的速度完成，平台不会拖慢程序。主机内存与 GPU 之间、两块 GPU
+之间的每次拷贝，都会按它在建模链路上所需的时间记录下来：
+
+- 主机到 GPU 及反方向走 GPU 的 CPU 链路：PCIe、NVLink-C2C，或 DGX Spark 和 Jetson
+  上的共享内存（只计时间，不占链路）。
+- GPU 之间有 NVLink 时走 NVLink；有 PCIe peer access 时走 PCIe 点对点；否则经主机
+  内存中转，经过两块 GPU 各自的 CPU 链路，取两者中较慢的速率。
+- 同一链路同一方向上的拷贝依次进行，一批拷贝会让链路忙碌它们时间之和那么久。吞吐是
+  链路在最近一秒内送达的数据量。
+
+FakeCUDA 记录 `Tensor.to/.cuda/.cpu`、`Module.to/.cuda`、指定 CUDA 设备的
+`torch.tensor` 和 `torch.as_tensor`、跨设备的 `copy_`，以及 `item`/`tolist`。原生
+程序记录 `cudaMemcpy*` 和 `cuMemcpy*` 传输。结果显示在：
+
+- `fakegpu nvidia-smi -q`：`Copies (modeled)` 给出每个方向的字节数和建模时间，
+  `Link throughput (modeled)` 给出每条链路的吞吐；查询字段 `copy.h2d`、`copy.d2h`、
+  `copy.peer`（MiB）、`copy.modeled_time`（秒），以及 `pcie.throughput.tx/rx`、
+  `nvlink.throughput.tx/rx`、`c2c.throughput.tx/rx`（KB/s）。
+- NVML：`nvmlDeviceGetPcieThroughput`，以及 `nvmlDeviceGetFieldValues` 的 NVLink
+  链路数和每条链路的数据计数器；原生程序直接可见，`fakegpu nvitop` 等 NVML 客户端经
+  state bridge 可见。
+- 控制台的 `Link I/O` 列，以及设备详情中的 `Copies`、`Links` 行和 PCIe、C2C、
+  NVLink 趋势图。
+- 每个进程退出时打印的报告（每块 GPU 一行 `Copies (modeled)`），以及原生 JSON 报告
+  中每个设备的 `transfer` 对象。
+
+没有平台时，拷贝走每块 GPU 自身的 PCIe 链路。
+
 ## 配置后台机器
 
 后台机器（见[控制台说明](console.md)）把平台和设备布局一起保存：
@@ -140,3 +170,6 @@ GPU 一条速率为 `FAKEGPU_NVLINK_BANDWIDTH_GBPS`（默认 900）的链路。
   没有模板使用它们。
 - RTX 4090 以外的 GeForce 卡的 PCIe peer access 按上面的 socket 规则处理；NVIDIA 没有
   公布逐型号的策略。
+- 一块 GPU 发往不同对端的拷贝共用它的 NVLink 时间线，因此经不同直连链路的拷贝在模型
+  中依次进行。同一 PCIe switch 或 CPU socket 下的 GPU 不分摊其带宽。
+- NVML 把一块 GPU 的 NVLink 流量平均分到它的各个端口上。

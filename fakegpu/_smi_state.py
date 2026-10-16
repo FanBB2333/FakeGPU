@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from ._process import is_alive
+from .link_traffic import merge_records as merge_transfer_records
+from .link_traffic import normalize_record as normalize_transfer_record
 from ._smi_environment import (
     FAULT_SEVERITY_RANK,
     MAXIMUM_MODELED_FAULT_COUNT,
@@ -739,6 +741,7 @@ def _normalize_device(
         "native_activity": _normalize_native_activity(
             raw.get("native_activity")
         ),
+        "transfer": normalize_transfer_record(raw.get("transfer")),
         "topology": topology,
         "health": health,
         "mig": mig,
@@ -920,6 +923,8 @@ def _empty_device_aggregate(
             "kernels": {},
             "unsupported_apis": [],
         },
+        "transfer": None,
+        "_transfers": [],
         "topology": dict(device["topology"]),
         "health": dict(device["health"]),
         "mig": dict(device["mig"]),
@@ -1079,7 +1084,20 @@ def _finalize_device_aggregate(item: dict[str, Any]) -> dict[str, Any]:
     native_activity["unsupported_apis"] = native_activity[
         "unsupported_apis"
     ][:10]
+    item["transfer"] = merge_transfer_records(item.pop("_transfers"))
     return item
+
+
+def _idle_transfer(record: Mapping[str, Any]) -> dict[str, Any]:
+    links = {
+        name: {
+            **values,
+            "tx_bytes_per_second": 0,
+            "rx_bytes_per_second": 0,
+        }
+        for name, values in record["links"].items()
+    }
+    return {**record, "links": links}
 
 
 def build_inventory(
@@ -1152,6 +1170,7 @@ def build_inventory(
                 "activity": dict(device["activity"]),
                 "dispatch_tracking": dispatch_tracking,
                 "native_activity": dict(device["native_activity"]),
+                "transfer": device["transfer"],
             }
             process_rows.append(process)
 
@@ -1197,6 +1216,12 @@ def build_inventory(
                 pid=pid,
                 process_name=process_name,
             )
+            if device["transfer"] is not None:
+                transfer = device["transfer"]
+                if status != "running":
+                    # A process that is gone or silent moves no data now.
+                    transfer = _idle_transfer(transfer)
+                aggregate["_transfers"].append(transfer)
 
         if selected_device or (not selectors and not raw_devices):
             runtime_rows.append(

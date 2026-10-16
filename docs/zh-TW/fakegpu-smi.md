@@ -57,8 +57,8 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 ```
 
 - `-q` 顯示 FakeGPU 版本、runtime 策略、軟體版本、狀態更新時間、profile 目錄與
-  原生 API 涵蓋、裝置識別、GPU 記憶體分類、allocator 活動、dispatch 追蹤及各程序
-  峰值。
+  原生 API 涵蓋、裝置識別、插槽、建模的拷貝與鏈路吞吐、GPU 記憶體分類、allocator
+  活動、dispatch 追蹤及各程序峰值。
 - `-i` 依裝置索引、UUID、PCI Bus ID 或 profile ID 篩選。`--json` 輸出完整的標準化
   資料。FakeGPU 寫入 state schema v2，仍可讀取 v1。
 - `--query-runtime` 以 CSV 或 JSON 輸出相同的執行期資訊。`--help-query-runtime`
@@ -78,7 +78,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   `FAKEGPU_NVLINK_BANDWIDTH_GBPS`（預設 `900`）的鏈路。`topo -m`（NV#、PIX、PXB、
   PHB、NODE、SYS 與 NUMA affinity）、`nvlink -s`（每條鏈路每個方向的 GB/s）、
   `topology.*`、`nvlink.*`、`platform`、`slot.type`、`numa.node`、`pcie.link.*`、
-  `host_link.bandwidth` 欄位，以及原生 NVML 鏈路查詢都使用這個模型。
+  `host_link.bandwidth` 欄位，以及原生 NVML 鏈路查詢都使用這個模型。拷貝依建模的
+  時間與鏈路吞吐記錄（`copy.*` 與 `*.throughput.*` 欄位），見
+  [拷貝時間與吞吐](platforms.md#拷貝時間與吞吐)。
 - **MIG**：`FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."`，例如
   `FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`。每個 GPU Instance
   對應一個 Compute Instance。超出父裝置記憶體、8 個 slice 或 8 個實例的設定會被

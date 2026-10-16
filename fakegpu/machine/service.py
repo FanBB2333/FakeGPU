@@ -136,6 +136,10 @@ class _DeviceHistory:
     gpu: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
     temperature: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
     power_w: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
+    # Modeled link throughput, TX plus RX, in GB/s
+    pcie_gbps: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
+    c2c_gbps: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
+    nvlink_gbps: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
 
     def to_dict(self) -> dict[str, list]:
         return {name: list(getattr(self, name)) for name in self.__dataclass_fields__}
@@ -460,6 +464,7 @@ class MachineService:
                 "percent": round(used / total * 100, 2) if total else 0.0,
             },
             "process_count": users.get(uuid, 0),
+            "transfer": (observed or {}).get("transfer"),
             "allocator": {
                 "categories": dict(allocator.get("categories") or {}),
                 "stage_peaks": dict(allocator.get("stage_peaks") or {}),
@@ -492,6 +497,13 @@ class MachineService:
         history.gpu.append(telemetry.get("gpu_percent"))
         history.temperature.append(telemetry.get("temperature_c"))
         history.power_w.append(telemetry.get("power_w"))
+        transfer = device["transfer"]
+        for link in ("pcie", "c2c", "nvlink"):
+            rate = None
+            if transfer is not None:
+                entry = transfer["links"][link]
+                rate = round((entry["tx_bytes_per_second"] + entry["rx_bytes_per_second"]) / 1e9, 3)
+            getattr(history, f"{link}_gbps").append(rate)
         device["history"] = history.to_dict()
 
     def _check_memory(self, device: dict) -> None:

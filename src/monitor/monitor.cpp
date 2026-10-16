@@ -114,6 +114,18 @@ private:
             return;
         }
 
+        auto fmt_seconds = [](double seconds) -> std::string {
+            char buf[32];
+            if (seconds < 1e-3) {
+                std::snprintf(buf, sizeof(buf), "%.1f us", seconds * 1e6);
+            } else if (seconds < 1.0) {
+                std::snprintf(buf, sizeof(buf), "%.1f ms", seconds * 1e3);
+            } else {
+                std::snprintf(buf, sizeof(buf), "%.2f s", seconds);
+            }
+            return buf;
+        };
+
         auto fmt_bytes = [](uint64_t bytes) -> std::string {
             char buf[32];
             if (bytes >= 1024ULL * 1024 * 1024) {
@@ -186,6 +198,18 @@ private:
                              fmt_bytes(dev.memcpy_h2d_bytes).c_str(),
                              fmt_bytes(dev.memcpy_d2h_bytes).c_str(),
                              fmt_bytes(dev.memcpy_d2d_bytes).c_str());
+            }
+            if (dev.transfer.any_copies()) {
+                static const char* const labels[kCopyKindCount] = {"H2D", "D2H", "peer out", "peer in"};
+                std::string line;
+                for (std::size_t kind = 0; kind < kCopyKindCount; ++kind) {
+                    const CopyCounter& copy = dev.transfer.copies[kind];
+                    if (!copy.bytes) continue;
+                    if (!line.empty()) line += ", ";
+                    line += std::string(labels[kind]) + " " + fmt_bytes(copy.bytes) + " / " +
+                            fmt_seconds(copy.modeled_seconds);
+                }
+                std::fprintf(stderr, "   Copies (modeled): %s\n", line.c_str());
             }
 
             if (!dev.compat_events.empty()) {
@@ -423,6 +447,29 @@ private:
                 fprintf(out, "        \"memset\": {\"calls\": %llu, \"bytes\": %llu},\n",
                         (unsigned long long)dev.memset_calls, (unsigned long long)dev.memset_bytes);
                 fprintf(out, "        \"total_bytes\": %llu\n", (unsigned long long)device_total_io_bytes);
+                fprintf(out, "      },\n");
+
+                // Modeled copy time and link use (fakegpu.transfer.v1 counters).
+                fprintf(out, "      \"transfer\": {\n");
+                fprintf(out, "        \"host_link\": \"%s\",\n", dev.transfer.host_link.c_str());
+                fprintf(out, "        \"host_bandwidth_gbps\": %.12g,\n", dev.transfer.host_bandwidth_gbps);
+                fprintf(out, "        \"modeled_seconds\": %.12g,\n", dev.transfer.modeled_seconds());
+                fprintf(out, "        \"copies\": {");
+                for (std::size_t kind = 0; kind < kCopyKindCount; ++kind) {
+                    const CopyCounter& copy = dev.transfer.copies[kind];
+                    fprintf(out, "%s\"%s\": {\"calls\": %llu, \"bytes\": %llu, \"modeled_seconds\": %.12g}",
+                            kind ? ", " : "", copy_kind_name(kind), (unsigned long long)copy.calls,
+                            (unsigned long long)copy.bytes, copy.modeled_seconds);
+                }
+                fprintf(out, "},\n");
+                fprintf(out, "        \"links\": {");
+                for (std::size_t link = 0; link < kTransferLinkCount; ++link) {
+                    const LinkCounter& counter = dev.transfer.links[link];
+                    fprintf(out, "%s\"%s\": {\"tx_bytes\": %llu, \"rx_bytes\": %llu}", link ? ", " : "",
+                            transfer_link_name(link), (unsigned long long)counter.tx_bytes,
+                            (unsigned long long)counter.rx_bytes);
+                }
+                fprintf(out, "}\n");
                 fprintf(out, "      },\n");
 
                 fprintf(out, "      \"compute\": {\n");

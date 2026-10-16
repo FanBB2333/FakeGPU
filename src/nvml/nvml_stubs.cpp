@@ -5,6 +5,8 @@
 #include "../core/hybrid_memory_manager.hpp"
 #include "../core/logging.hpp"
 #include "../monitor/monitor.hpp"
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -133,10 +135,18 @@ static bool modeled_slot(const Device* device, ModeledSlot& result, ModeledDevic
     return true;
 }
 
-// PCIe link to report: the modeled slot, or the profile's own link in bridge mode.
+// PCIe link to report: the modeled slot, the published topology in bridge
+// mode, or the profile's own link.
 static nvmlReturn_t modeled_pcie(nvmlDevice_t device, ModeledPcieLink& current, ModeledPcieLink& gpu_max) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     const Device* dev = reinterpret_cast<const Device*>(device);
+    FakeGpuNvmlLinksV1 published{};
+    if (nvml_bridge::enabled() && nvml_bridge::links(device, &published) == NVML_SUCCESS) {
+        if (!published.pcie_generation) return NVML_ERROR_NOT_SUPPORTED;
+        current = {published.pcie_generation, published.pcie_width};
+        gpu_max = {published.pcie_max_generation, published.pcie_max_width};
+        return NVML_SUCCESS;
+    }
     ModeledSlot slot;
     if (!modeled_slot(dev, slot)) {
         current.generation = dev->profile.pcie_generation > 0 ? static_cast<unsigned int>(dev->profile.pcie_generation) : 4U;
@@ -148,6 +158,41 @@ static nvmlReturn_t modeled_pcie(nvmlDevice_t device, ModeledPcieLink& current, 
     current = slot.pcie;
     gpu_max = slot.gpu_max_pcie();
     return NVML_SUCCESS;
+}
+
+// Modeled copy counters of a physical GPU (MIG instances use their parent's).
+static bool modeled_transfer(const Device* device, DeviceTransferStats& result) {
+    if (nvml_bridge::enabled() || !device) return false;
+    GlobalState& state = GlobalState::instance();
+    const Device* physical = device;
+    if (device->is_mig_device) {
+        physical = state.get_parent_device_for_mig(const_cast<Device*>(device));
+        if (!physical) return false;
+    }
+    result = state.snapshot_device_transfer(physical->index);
+    return true;
+}
+
+// Port count and cumulative NVLink bytes (TX, RX) of a GPU.
+static bool modeled_nvlink_traffic(nvmlDevice_t device, unsigned int& ports, uint64_t& tx, uint64_t& rx) {
+    FakeGpuNvmlLinksV1 published{};
+    if (nvml_bridge::enabled()) {
+        if (nvml_bridge::links(device, &published) != NVML_SUCCESS) return false;
+        ports = published.nvlink_count;
+        tx = published.nvlink_tx_bytes;
+        rx = published.nvlink_rx_bytes;
+        return true;
+    }
+    const Device* dev = reinterpret_cast<const Device*>(device);
+    if (!dev || dev->is_mig_device || dev->index < 0) return false;
+    const ModeledDeviceTopology topology = GlobalState::instance().snapshot_device_topology();
+    const std::size_t index = static_cast<std::size_t>(dev->index);
+    ports = index < topology.nvlink_peers.size() ? static_cast<unsigned int>(topology.nvlink_peers[index].size()) : 0;
+    DeviceTransferStats transfer;
+    if (!modeled_transfer(dev, transfer)) return false;
+    tx = transfer.links[static_cast<int>(TransferLink::NvLink)].tx_bytes;
+    rx = transfer.links[static_cast<int>(TransferLink::NvLink)].rx_bytes;
+    return true;
 }
 
 static void fill_pci_info(const Device& device, nvmlPciInfo_t& pci) {
@@ -1260,11 +1305,24 @@ nvmlReturn_t nvmlDeviceGetRetiredPagesPendingStatus(nvmlDevice_t device, unsigne
 }
 
 // PCIe throughput
+// KB/s over the last second of the modeled link schedule (fakegpu.link_traffic).
 nvmlReturn_t nvmlDeviceGetPcieThroughput(nvmlDevice_t device, unsigned int counter, unsigned int *value) {
-    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
-    if (!device || !value) return NVML_ERROR_INVALID_ARGUMENT;
-    // counter: 0 = TX bytes/s, 1 = RX bytes/s
-    *value = 0;
+    if (!device || !value || counter > 1) return NVML_ERROR_INVALID_ARGUMENT;
+    // counter: 0 = TX (sent by the GPU), 1 = RX
+    ModeledPcieLink current, gpu_max;
+    const nvmlReturn_t result = modeled_pcie(device, current, gpu_max);
+    if (result != NVML_SUCCESS) return result;
+    uint64_t bytes_per_second = 0;
+    FakeGpuNvmlLinksV1 published{};
+    DeviceTransferStats transfer;
+    if (nvml_bridge::enabled()) {
+        if (nvml_bridge::links(device, &published) != NVML_SUCCESS) return NVML_ERROR_NOT_SUPPORTED;
+        bytes_per_second = counter == 0 ? published.pcie_tx_bytes_per_second : published.pcie_rx_bytes_per_second;
+    } else if (modeled_transfer(reinterpret_cast<const Device*>(device), transfer)) {
+        const LinkCounter& pcie = transfer.links[static_cast<int>(TransferLink::Pcie)];
+        bytes_per_second = counter == 0 ? pcie.tx_bytes_per_second : pcie.rx_bytes_per_second;
+    }
+    *value = static_cast<unsigned int>(std::min<uint64_t>(bytes_per_second / 1024, 0xFFFFFFFFull));
     return NVML_SUCCESS;
 }
 
@@ -1657,6 +1715,9 @@ nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvml
     constexpr uint32_t NVML_FI_DEV_POWER_DEFAULT_LIMIT = 189;
     constexpr uint32_t NVML_FI_DEV_POWER_CURRENT_LIMIT = 190;
     constexpr uint32_t NVML_FI_DEV_POWER_REQUESTED_LIMIT = 192;
+    constexpr uint32_t NVML_FI_DEV_NVLINK_LINK_COUNT = 91;
+    constexpr uint32_t NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX = 138;
+    constexpr uint32_t NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_RX = 139;
 
     Device* dev = (Device*)device;
     unsigned int default_limit_mw = dev->profile.typical_power_usage_mw;
@@ -1671,6 +1732,30 @@ nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvml
         entry.valueType = NVML_VALUE_TYPE_UNSIGNED_INT;
         entry.nvmlReturn = NVML_ERROR_NOT_SUPPORTED;
         entry.value.uiVal = 0;
+
+        // NVLink counters take the link index as scope. The modeled traffic
+        // of a GPU is spread evenly over its ports; values are KiB.
+        if (entry.fieldId == NVML_FI_DEV_NVLINK_LINK_COUNT ||
+            entry.fieldId == NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX ||
+            entry.fieldId == NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_RX) {
+            unsigned int ports = 0;
+            uint64_t tx = 0, rx = 0;
+            if (!modeled_nvlink_traffic(device, ports, tx, rx)) continue;
+            entry.timestamp = static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+            if (entry.fieldId == NVML_FI_DEV_NVLINK_LINK_COUNT) {
+                entry.nvmlReturn = NVML_SUCCESS;
+                entry.value.uiVal = ports;
+            } else if (entry.scopeId < ports) {
+                const uint64_t bytes = entry.fieldId == NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX ? tx : rx;
+                entry.valueType = NVML_VALUE_TYPE_UNSIGNED_LONG_LONG;
+                entry.value.ullVal = bytes / ports / 1024;
+                entry.nvmlReturn = NVML_SUCCESS;
+            } else {
+                entry.nvmlReturn = NVML_ERROR_INVALID_ARGUMENT;
+            }
+            continue;
+        }
 
         // Scope handling: nvidia-smi may query non-GPU scopes (e.g., module power).
         // Only scopeId==0 is supported for FakeGPU.

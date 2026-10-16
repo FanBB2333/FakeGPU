@@ -160,12 +160,25 @@ def _dump_terminal_summary() -> None:
         _DEVICE_PROFILES,
         arch_name=_arch_name,
         fmt_bytes=_fmt_bytes,
+        transfers=_transfer_snapshot(),
     )
 
 
 # Initialized later in patch() after _DEVICE_PROFILES is finalized
 _memory_tracker: _DeviceMemoryTracker | None = None
 _smi_publisher: Any = None
+# Modeled host and peer copies (fakegpu.link_traffic.LinkTraffic)
+_link_traffic: Any = None
+
+
+def _transfer_snapshot() -> dict[int, dict[str, Any]]:
+    traffic = _link_traffic
+    if traffic is None:
+        return {}
+    try:
+        return traffic.snapshot()
+    except Exception:
+        return {}
 
 
 def _smi_memory_snapshot() -> dict[str, Any]:
@@ -187,6 +200,10 @@ def _smi_memory_snapshot() -> dict[str, Any]:
         activity = _monitor_activity.snapshot()
         for device in snapshot["devices"]:
             device["activity"] = activity.get(device["index"], _monitor_activity.empty())
+    transfers = _transfer_snapshot()
+    for device in snapshot["devices"]:
+        if device["index"] in transfers:
+            device["transfer"] = transfers[device["index"]]
     snapshot.update(
         {
             "stage": (
@@ -1282,6 +1299,155 @@ def _activate_upstream(num_devices: int, device_name: str) -> Any:
     return upstream
 
 
+def _new_link_traffic() -> Any:
+    from .link_traffic import LinkTraffic
+    from .platforms import topology_from_environment
+
+    profile_ids = [str(profile.get("profile_id") or "") for profile in _DEVICE_PROFILES]
+    return LinkTraffic(lambda: topology_from_environment(profile_ids, os.environ))
+
+
+def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
+    """Record host-device and peer copies in ``_link_traffic``.
+
+    Covers ``Tensor.to/.cuda/.cpu``, ``Module.to/.cuda``,
+    ``torch.tensor``/``torch.as_tensor`` with a CUDA device, ``copy_``
+    between devices, and ``item``/``tolist`` reads. Installing twice
+    keeps a single layer of wrappers.
+    """
+
+    fake_cls = upstream.FakeCudaTensor
+
+    def endpoint(value: Any) -> Any:
+        """GPU index, ``None`` for host memory, ``False`` for anything else."""
+        if isinstance(value, fake_cls):
+            return int(value.device_index)
+        if isinstance(value, torch_mod.Tensor) and value.device.type == "cpu":
+            return None
+        return False
+
+    def record(source: Any, target: Any, tensor: Any) -> None:
+        traffic = _link_traffic
+        if traffic is None or source is False or target is False or source == target:
+            return
+        raw = upstream.unwrap_tensor(tensor)
+        try:
+            nbytes = int(raw.numel()) * int(raw.element_size())
+        except Exception:
+            return
+        traffic.record(source, target, nbytes)
+
+    def module_tensors(module: Any) -> list[Any]:
+        seen: set[int] = set()
+        found = []
+        for tensor in (*module.parameters(), *module.buffers()):
+            if tensor is not None and id(tensor) not in seen:
+                seen.add(id(tensor))
+                found.append(tensor)
+        return found
+
+    def record_module(module: Any, convert: Any) -> Any:
+        before = module_tensors(module)
+        result = convert()
+        for old, new in zip(before, module_tensors(module)):
+            record(endpoint(old), endpoint(new), old)
+        return result
+
+    def marked(function: Any) -> Any:
+        function._fakegpu_transfer = True
+        return function
+
+    if not getattr(upstream._tensor_to, "_fakegpu_transfer", False):
+        tensor_to = upstream._tensor_to
+
+        @functools.wraps(tensor_to)
+        def _counted_tensor_to(self: Any, *args: Any, **kwargs: Any) -> Any:
+            result = tensor_to(self, *args, **kwargs)
+            if result is not self and isinstance(result, torch_mod.Tensor):
+                record(endpoint(self), endpoint(result), self)
+            return result
+
+        upstream._tensor_to = marked(_counted_tensor_to)
+
+    if not getattr(upstream._tensor_cpu, "_fakegpu_transfer", False):
+        tensor_cpu = upstream._tensor_cpu
+
+        @functools.wraps(tensor_cpu)
+        def _counted_tensor_cpu(self: Any, *args: Any, **kwargs: Any) -> Any:
+            result = tensor_cpu(self, *args, **kwargs)
+            if isinstance(self, fake_cls):
+                record(int(self.device_index), None, self)
+            return result
+
+        upstream._tensor_cpu = marked(_counted_tensor_cpu)
+
+    if not getattr(upstream._module_to, "_fakegpu_transfer", False):
+        module_to = upstream._module_to
+        module_cuda = upstream._module_cuda
+
+        @functools.wraps(module_to)
+        def _counted_module_to(self: Any, *args: Any, **kwargs: Any) -> Any:
+            target = kwargs.get("device")
+            if target is None and args:
+                target = args[0]
+            if upstream._normalize_cuda_device(target, allow_none=True) is None:
+                # Moves to the host go through Tensor.to, which records them.
+                return module_to(self, *args, **kwargs)
+            return record_module(self, lambda: module_to(self, *args, **kwargs))
+
+        @functools.wraps(module_cuda)
+        def _counted_module_cuda(self: Any, device: Any = None) -> Any:
+            return record_module(self, lambda: module_cuda(self, device))
+
+        upstream._module_to = marked(_counted_module_to)
+        upstream._module_cuda = marked(_counted_module_cuda)
+
+    torch_mod.Tensor.to = upstream._tensor_to
+    torch_mod.Tensor.cpu = upstream._tensor_cpu
+    torch_mod.nn.Module.to = upstream._module_to
+    torch_mod.nn.Module.cuda = upstream._module_cuda
+
+    for name in ("tensor", "as_tensor"):
+        factory = getattr(torch_mod, name, None)
+        if factory is None or getattr(factory, "_fakegpu_transfer", False):
+            continue
+
+        def _counted_factory(*args: Any, _factory: Any = factory, **kwargs: Any) -> Any:
+            result = _factory(*args, **kwargs)
+            if kwargs.get("device") is not None and isinstance(result, fake_cls):
+                source = endpoint(args[0]) if args and isinstance(args[0], torch_mod.Tensor) else None
+                record(source, int(result.device_index), result)
+            return result
+
+        setattr(torch_mod, name, marked(functools.wraps(factory)(_counted_factory)))
+
+    torch_function = fake_cls.__dict__.get("__torch_function__")
+    inner = getattr(torch_function, "__func__", None)
+    if inner is not None and not getattr(inner, "_fakegpu_transfer", False):
+        copy_ = torch_mod.Tensor.copy_
+        reads = (torch_mod.Tensor.item, torch_mod.Tensor.tolist)
+
+        def _counted_torch_function(
+            cls: Any,
+            func: Any,
+            types: Any,
+            args: tuple[Any, ...] = (),
+            kwargs: dict[str, Any] | None = None,
+        ) -> Any:
+            result = inner(cls, func, types, args, kwargs)
+            if func is copy_ and len(args) >= 2:
+                record(endpoint(args[1]), endpoint(args[0]), args[1])
+            elif args and any(func is read for read in reads):
+                record(endpoint(args[0]), None, args[0])
+            return result
+
+        marked(_counted_torch_function)
+        for attribute in ("_fakegpu_dispatch_tracking",):
+            if hasattr(inner, attribute):
+                setattr(_counted_torch_function, attribute, getattr(inner, attribute))
+        fake_cls.__torch_function__ = classmethod(_counted_torch_function)
+
+
 def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     """Layer FakeGPU enhancements on top of the upstream FakeCudaTensor backend.
 
@@ -1296,7 +1462,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     * Cross-device validation
     * Terminal report on exit
     """
-    global _memory_tracker
+    global _memory_tracker, _link_traffic
 
     import torch.cuda
 
@@ -1482,6 +1648,11 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     torch.cuda.can_device_access_peer = _topology_can_device_access_peer
     upstream.can_device_access_peer = _topology_can_device_access_peer
+
+    # Copies take the modeled time of their route over the platform links
+    # (fakegpu.link_traffic); recorded only, nothing waits.
+    _link_traffic = _new_link_traffic()
+    _install_transfer_recording(upstream, torch_mod)
 
     # Compute-capability-aware bf16 check (upstream always returns True)
     torch.cuda.is_bf16_supported = _stub_is_bf16_supported

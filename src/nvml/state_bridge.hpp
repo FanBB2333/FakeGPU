@@ -29,6 +29,23 @@ struct FakeGpuNvmlDeviceV2 {
     FakeGpuNvmlTelemetryV1 telemetry;
 };
 
+// Modeled links of a device (version 3): PCIe link, NVLink count and the
+// fakegpu.link_traffic counters of the publishers on it.
+struct FakeGpuNvmlLinksV1 {
+    uint32_t valid;  // 0: no modeled topology; fall back to the profile
+    uint32_t pcie_generation, pcie_width;  // 0: no PCIe link
+    uint32_t pcie_max_generation, pcie_max_width;
+    uint32_t nvlink_count;
+    uint64_t pcie_tx_bytes_per_second, pcie_rx_bytes_per_second;
+    uint64_t nvlink_tx_bytes, nvlink_rx_bytes;  // cumulative, never decreasing
+};
+
+struct FakeGpuNvmlDeviceV3 {
+    FakeGpuNvmlDeviceV1 device;
+    FakeGpuNvmlTelemetryV1 telemetry;
+    FakeGpuNvmlLinksV1 links;
+};
+
 struct FakeGpuNvmlProcessV2 {
     FakeGpuNvmlProcessV1 process;
     uint64_t timestamp_us;
@@ -47,6 +64,7 @@ nvmlReturn_t lookup(const char* key, bool by_uuid, nvmlDevice_t* result);
 nvmlReturn_t memory(nvmlDevice_t device, nvmlMemory_t* result);
 nvmlReturn_t processes(nvmlDevice_t device, unsigned int* count, void* infos, bool legacy);
 nvmlReturn_t telemetry(nvmlDevice_t device, FakeGpuNvmlTelemetryV1* result);
+nvmlReturn_t links(nvmlDevice_t device, FakeGpuNvmlLinksV1* result);
 nvmlReturn_t process_utilization(nvmlDevice_t device, void* samples, unsigned int* count,
                                 unsigned long long last_seen);
 } // namespace fake_gpu::nvml_bridge

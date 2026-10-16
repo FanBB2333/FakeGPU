@@ -20,6 +20,7 @@ from ._smi_environment import (
     _nonnegative_int,
 )
 from .link_topology import placement_relation
+from .link_traffic import copies_summary, throughput_summary
 from ._smi_query import (
     QUERY_SCHEMA_VERSION,
     QueryField,
@@ -811,6 +812,11 @@ def render_detail(
                     "GB/s modeled aggregate"
                 ),
                 f"  Slot: {_slot_text(topology)}",
+                f"  Copies (modeled): {_copies_text(item.get('transfer'))}",
+                (
+                    "  Link throughput (modeled): "
+                    f"{_throughput_text(item.get('transfer'), topology)}"
+                ),
                 (
                     "  Health model: "
                     f"{health.get('status') or 'unknown'}, "
@@ -1114,6 +1120,29 @@ def _platform_label(platform_id: str) -> str:
 
     platform = load_platforms().get(platform_id)
     return f"{platform.name} ({platform_id})" if platform else platform_id
+
+
+def _copies_text(transfer: Mapping[str, Any] | None) -> str:
+    if not transfer:
+        return "not recorded"
+    return copies_summary(transfer, _format_bytes)
+
+
+def _throughput_text(
+    transfer: Mapping[str, Any] | None,
+    topology: Mapping[str, Any],
+) -> str:
+    if not transfer:
+        return "not recorded"
+    links = []
+    if topology.get("pcie") or not topology.get("slot"):
+        links.append("pcie")
+    if transfer.get("host_link") == "c2c":
+        links.append("c2c")
+    if (topology.get("nvlink") or {}).get("active_links"):
+        links.append("nvlink")
+    window = transfer.get("window_seconds") or 1
+    return f"{throughput_summary(transfer, links)} (last {window:g} s)"
 
 
 def _slot_text(topology: Mapping[str, Any]) -> str:

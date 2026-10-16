@@ -317,6 +317,7 @@ void GlobalState::record_memcpy_h2d(const void* dst_device_ptr, size_t bytes) {
     if (!stats) return;
     stats->memcpy_h2d_calls += 1;
     saturating_add_u64(stats->memcpy_h2d_bytes, static_cast<uint64_t>(bytes));
+    link_traffic.record(device_topology, -1, device, static_cast<uint64_t>(bytes), monotonic_seconds());
 }
 
 void GlobalState::record_memcpy_d2h(const void* src_device_ptr, size_t bytes) {
@@ -327,6 +328,7 @@ void GlobalState::record_memcpy_d2h(const void* src_device_ptr, size_t bytes) {
     if (!stats) return;
     stats->memcpy_d2h_calls += 1;
     saturating_add_u64(stats->memcpy_d2h_bytes, static_cast<uint64_t>(bytes));
+    link_traffic.record(device_topology, device, -1, static_cast<uint64_t>(bytes), monotonic_seconds());
 }
 
 void GlobalState::record_memcpy_d2d(const void* dst_device_ptr, const void* src_device_ptr, size_t bytes) {
@@ -347,6 +349,7 @@ void GlobalState::record_memcpy_d2d(const void* dst_device_ptr, const void* src_
             dst_stats->memcpy_peer_rx_calls += 1;
             saturating_add_u64(dst_stats->memcpy_peer_rx_bytes, static_cast<uint64_t>(bytes));
         }
+        link_traffic.record(device_topology, src_device, dst_device, static_cast<uint64_t>(bytes), monotonic_seconds());
         return;
     }
 
@@ -371,6 +374,9 @@ void GlobalState::record_memcpy_peer(int dst_device, int src_device, size_t byte
             dst_stats->memcpy_peer_rx_calls += 1;
             saturating_add_u64(dst_stats->memcpy_peer_rx_bytes, static_cast<uint64_t>(bytes));
         }
+    }
+    if (src_device >= 0 && dst_device >= 0) {
+        link_traffic.record(device_topology, src_device, dst_device, static_cast<uint64_t>(bytes), monotonic_seconds());
     }
 }
 
@@ -486,10 +492,20 @@ bool GlobalState::record_unsupported_api(
     return first_occurrence;
 }
 
+DeviceTransferStats GlobalState::snapshot_device_transfer(int device) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    std::vector<DeviceTransferStats> transfers = link_traffic.snapshot(device_topology, monotonic_seconds());
+    if (device < 0 || static_cast<std::size_t>(device) >= transfers.size()) {
+        return DeviceTransferStats{};
+    }
+    return transfers[static_cast<std::size_t>(device)];
+}
+
 std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
     std::lock_guard<std::mutex> lock(mutex);
     std::vector<DeviceReportStats> snapshot;
     snapshot.reserve(devices.size());
+    std::vector<DeviceTransferStats> transfers = link_traffic.snapshot(device_topology, monotonic_seconds());
 
     for (size_t i = 0; i < devices.size(); ++i) {
         const Device& dev = devices[i];
@@ -515,6 +531,9 @@ std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
         entry.total_memory = dev.total_memory;
         entry.used_memory_current = dev.used_memory;
         entry.used_memory_peak = dev.used_memory_peak;
+        if (i < transfers.size()) {
+            entry.transfer = transfers[i];
+        }
 
         if (i < device_stats.size()) {
             const DeviceRuntimeStats& stats = device_stats[i];

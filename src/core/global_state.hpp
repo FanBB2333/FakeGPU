@@ -9,6 +9,7 @@
 #include <tuple>
 #include <utility>
 #include "device.hpp"
+#include "link_traffic.hpp"
 
 namespace fake_gpu {
 
@@ -67,6 +68,9 @@ struct DeviceReportStats {
     std::vector<std::tuple<std::string, std::string, uint64_t>> compat_events;
     std::vector<std::tuple<std::string, std::string, std::string, uint64_t>>
         unsupported_api_events;
+
+    // Modeled copy time and link use (see link_traffic.hpp).
+    DeviceTransferStats transfer;
 };
 
 class GlobalState {
@@ -120,6 +124,7 @@ public:
     // Snapshot for reporting (thread-safe)
     std::vector<DeviceReportStats> snapshot_device_report() const;
     ModeledDeviceTopology snapshot_device_topology() const;
+    DeviceTransferStats snapshot_device_transfer(int device) const;
     ModeledFaultModel snapshot_fault_model() const;
     ModeledMigLayout snapshot_mig_layout() const;
     HostIoStats snapshot_host_io() const;
@@ -188,6 +193,7 @@ private:
     std::vector<Device> devices;
     std::vector<Device> mig_devices;
     ModeledDeviceTopology device_topology;
+    mutable LinkTrafficModel link_traffic;
     ModeledFaultModel fault_model;
     ModeledMigLayout mig_layout;
     std::vector<DeviceRuntimeStats> device_stats;

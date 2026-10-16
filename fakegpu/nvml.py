@@ -64,6 +64,21 @@ class _DeviceV2(ctypes.Structure):
     _fields_ = [("device", _Device), ("telemetry", _Telemetry)]
 
 
+class _Links(ctypes.Structure):
+    _fields_ = [
+        *((name, ctypes.c_uint32) for name in (
+            "valid", "pcie_generation", "pcie_width", "pcie_max_generation", "pcie_max_width", "nvlink_count",
+        )),
+        *((name, ctypes.c_uint64) for name in (
+            "pcie_tx_bytes_per_second", "pcie_rx_bytes_per_second", "nvlink_tx_bytes", "nvlink_rx_bytes",
+        )),
+    ]
+
+
+class _DeviceV3(ctypes.Structure):
+    _fields_ = [("device", _Device), ("telemetry", _Telemetry), ("links", _Links)]
+
+
 class _ProcessV2(ctypes.Structure):
     _fields_ = [("process", _Process), ("timestamp_us", ctypes.c_uint64),
                 ("gpu", ctypes.c_uint32), ("memory", ctypes.c_uint32)]
@@ -133,6 +148,8 @@ class NvmlStateBridge:
         self._thread: threading.Thread | None = None
         self._library: ctypes.CDLL | None = None
         self._set_snapshot = None
+        # uuid -> [TX base, RX base, last TX, last RX] of the NVLink counters
+        self._nvlink_counters: dict[str, list[int]] = {}
 
     def _inventory(self) -> dict:
         now = time.time_ns()
@@ -168,16 +185,44 @@ class NvmlStateBridge:
         ))
         return device_rows, process_rows
 
+    def _links(self, device: dict) -> _Links:
+        """PCIe link, NVLink count and modeled link traffic of a device."""
+        topology = device.get("topology") or {}
+        if not topology.get("slot"):
+            return _Links()
+        pcie = topology.get("pcie") or {}
+        links = _Links(
+            valid=1,
+            pcie_generation=min(6, int(pcie.get("generation") or 0)),
+            pcie_width=min(32, int(pcie.get("width") or 0)),
+            pcie_max_generation=min(6, int(pcie.get("max_generation") or 0)),
+            pcie_max_width=min(32, int(pcie.get("max_width") or 0)),
+            nvlink_count=min(18, int((topology.get("nvlink") or {}).get("active_links") or 0)),
+        )
+        transfer = device.get("transfer")
+        if transfer:
+            pcie_traffic, nvlink_traffic = transfer["links"]["pcie"], transfer["links"]["nvlink"]
+            links.pcie_tx_bytes_per_second = _uint64(pcie_traffic["tx_bytes_per_second"])
+            links.pcie_rx_bytes_per_second = _uint64(pcie_traffic["rx_bytes_per_second"])
+            # The sum over live publishers drops when one exits; keep the
+            # counters NVML reports from going backwards.
+            counters = self._nvlink_counters.setdefault(device["uuid"], [0, 0, 0, 0])
+            for position, value in enumerate((nvlink_traffic["tx_bytes"], nvlink_traffic["rx_bytes"])):
+                if value < counters[2 + position]:
+                    counters[position] += counters[2 + position] - value
+                counters[2 + position] = value
+            links.nvlink_tx_bytes = _uint64(counters[0] + counters[2])
+            links.nvlink_rx_bytes = _uint64(counters[1] + counters[3])
+        return links
+
     def _snapshot_arrays(self, inventory: dict) -> tuple[ctypes.Array, ctypes.Array]:
         devices, processes = self._arrays(inventory)
-        if self._reference is None:
-            return devices, processes
-        sensors, activity = self._reference.sample(inventory)
-        device_rows = (_DeviceV2 * len(devices))()
+        sensors, activity = self._reference.sample(inventory) if self._reference is not None else ({}, {})
+        device_rows = (_DeviceV3 * len(devices))()
         for i, device in enumerate(devices):
             values = sensors.get(device.uuid.decode())
             sample = _Telemetry(valid=1, **values) if values else _Telemetry()
-            device_rows[i] = _DeviceV2(device, sample)
+            device_rows[i] = _DeviceV3(device, sample, self._links(inventory["devices"][i]))
         process_rows = (_ProcessV2 * len(processes))()
         for i, process in enumerate(processes):
             key = (devices[process.device_index].uuid.decode(), process.pid)
@@ -192,8 +237,7 @@ class NvmlStateBridge:
                 raise RuntimeError("NVML bridge is not started")
             try:
                 devices, processes = self._snapshot_arrays(self._inventory())
-                version = 2 if self._reference is not None else 1
-                status = self._set_snapshot(version, len(devices), devices, len(processes), processes)
+                status = self._set_snapshot(3, len(devices), devices, len(processes), processes)
                 if status:
                     raise RuntimeError(f"NVML snapshot rejected (status {status})")
                 self.device_count = len(devices)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from .link_traffic import copies_summary
 from .profile_catalog import architecture_for_compute_capability
 
 
@@ -30,8 +31,13 @@ def render_terminal_summary(
     *,
     arch_name: Any = _arch_name,
     fmt_bytes: Any = _fmt_bytes,
+    transfers: dict[int, dict[str, Any]] | None = None,
 ) -> None:
-    """Write the torch-layer memory summary to stderr."""
+    """Write the torch-layer memory summary to stderr.
+
+    ``transfers`` maps device indices to ``fakegpu.link_traffic`` records;
+    devices with modeled copies get a line with their bytes and time.
+    """
     if tracker is None:
         return
 
@@ -64,6 +70,9 @@ def render_terminal_summary(
             f"({peak_pct:.1f}%)"
         )
         lines.append(f"   Alloc: {alloc} calls | Free: {free} calls")
+        record = (transfers or {}).get(i)
+        if record and any(entry["bytes"] for entry in record["copies"].values()):
+            lines.append(f"   Copies (modeled): {copies_summary(record, fmt_bytes)}")
         lines.append("------------------------------------------------------")
 
     lines.append(" Peak VRAM by GPU:")

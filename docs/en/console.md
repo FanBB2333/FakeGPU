@@ -53,7 +53,7 @@ read the same state, so processes on the machine also appear there.
 |---|---|
 | `1` Overview | Machine summary, a card per GPU (memory, utilization, temperature, power, clocks, P-state), the process table and the latest events |
 | `2` Processes | Every attached process with command line, user, stage, memory and activity per device; recently ended processes |
-| `3` Devices | Per-GPU detail: allocator counters, memory by category, largest allocations, and history sparklines |
+| `3` Devices | Per-GPU detail: slot, modeled copies and link throughput, allocator counters, memory by category, largest allocations, and history sparklines (memory, sensors, PCIe/C2C/NVLink throughput) |
 | `4` Events | The full event log with text and level filters |
 | `5` Machine | Settings form (layout, platform, PCIe slot generation, NVLink bridges, telemetry, background, stale and memory warning thresholds), the slot map and GPU link matrix, daemon and path information |
 | `6` Profiles | The GPU profile catalog; `a` or Enter adds the selected profile to the layout form |

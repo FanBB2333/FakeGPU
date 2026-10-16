@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import signal
 
 import pytest
 
 pytest.importorskip("textual")
 
+from rich.console import Console  # noqa: E402
 from textual.widgets import DataTable, Input, Select, Static  # noqa: E402
 
 from fakegpu.console.app import Confirm, ConsoleApp  # noqa: E402
@@ -49,6 +51,17 @@ def test_console_shows_and_controls_the_machine(service, child):  # noqa: F811
             assert len(app.cards) == 2
             assert app.query_one("#overview-processes", DataTable).row_count == 1
             assert [event["kind"] for event in app.events] == ["process.attached"]
+
+            await pilot.press("3")
+            await pilot.pause()
+            app.show_device_detail()
+            recorder = Console(width=160, record=True, file=io.StringIO())
+            recorder.print(app.query_one("#device-detail", Static).content)
+            detail = recorder.export_text()
+            assert "Copies" in detail and "none recorded" in detail
+            assert "NVLink" in detail  # trend rows follow the HGX board's links
+            await pilot.press("1")
+            await pilot.pause()
 
             await pilot.press("k")
             await pilot.pause()

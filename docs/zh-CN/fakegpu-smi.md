@@ -57,7 +57,8 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 ```
 
 - `-q` 显示 FakeGPU 版本、runtime 策略、软件版本、状态更新时间、profile 目录与
-  原生 API 覆盖、设备标识、显存分类、allocator 活动、dispatch 跟踪和各进程峰值。
+  原生 API 覆盖、设备标识、插槽、建模的拷贝与链路吞吐、显存分类、allocator 活动、
+  dispatch 跟踪和各进程峰值。
 - `-i` 按设备索引、UUID、PCI Bus ID 或 profile ID 筛选。`--json` 输出完整的标准化
   数据。FakeGPU 写入 state schema v2，仍可读取 v1。
 - `--query-runtime` 以 CSV 或 JSON 输出相同的运行时信息。`--help-query-runtime`
@@ -77,7 +78,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   `FAKEGPU_NVLINK_BANDWIDTH_GBPS`（默认 `900`）的链路。`topo -m`（NV#、PIX、PXB、
   PHB、NODE、SYS 和 NUMA affinity）、`nvlink -s`（每条链路每个方向的 GB/s）、
   `topology.*`、`nvlink.*`、`platform`、`slot.type`、`numa.node`、`pcie.link.*`、
-  `host_link.bandwidth` 字段以及原生 NVML 链路查询都基于这个模型。
+  `host_link.bandwidth` 字段以及原生 NVML 链路查询都基于这个模型。拷贝按建模的时间
+  和链路吞吐记录（`copy.*` 和 `*.throughput.*` 字段），见
+  [拷贝时间与吞吐](platforms.md#拷贝时间与吞吐)。
 - **MIG**：`FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."`，例如
   `FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`。每个 GPU Instance
   对应一个 Compute Instance。超出父设备显存、8 个 slice 或 8 个实例的配置会被

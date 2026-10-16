@@ -95,6 +95,42 @@ pair without peer access.
 GPU0  X     NV1   NV1   NV2   NV2   SYS   SYS   SYS   0
 ```
 
+## Copy time and throughput
+
+FakeGPU copies finish at host-memory speed, so a platform never slows a
+program down. Each copy between host memory and a GPU, or between two GPUs,
+is recorded with the time it would take on the modeled links instead:
+
+- Host to GPU and back use the GPU's CPU link: PCIe, NVLink-C2C, or shared
+  memory on DGX Spark and Jetson (time only, no link).
+- GPU to GPU uses NVLink when the pair has NVLinks, PCIe peer-to-peer when it
+  has PCIe peer access, and otherwise is staged through host memory over both
+  CPU links at the slower of the two.
+- Copies on one link and direction run back to back, so a burst keeps the
+  link busy for the sum of their times. Throughput is the data the link
+  delivered in the last second.
+
+FakeCUDA records `Tensor.to/.cuda/.cpu`, `Module.to/.cuda`, `torch.tensor`
+and `torch.as_tensor` with a CUDA device, `copy_` between devices, and
+`item`/`tolist`. Native programs record their `cudaMemcpy*` and `cuMemcpy*`
+transfers. The results appear in:
+
+- `fakegpu nvidia-smi -q`, as `Copies (modeled)` with the bytes and modeled
+  time of each direction and `Link throughput (modeled)` per link, and the
+  query fields `copy.h2d`, `copy.d2h`, `copy.peer` (MiB), `copy.modeled_time`
+  (seconds) and `pcie.throughput.tx/rx`, `nvlink.throughput.tx/rx`,
+  `c2c.throughput.tx/rx` (KB/s).
+- NVML: `nvmlDeviceGetPcieThroughput`, and the NVLink link count and
+  per-link data counters of `nvmlDeviceGetFieldValues`, both for native
+  programs and, through the state bridge, for `fakegpu nvitop` and other NVML
+  clients.
+- The console's `Link I/O` column, and the `Copies` and `Links` lines and
+  PCIe, C2C and NVLink trends of the device detail.
+- The report each process prints at exit (a `Copies (modeled)` line per GPU)
+  and the `transfer` object of each device in the native JSON report.
+
+Without a platform, copies use each GPU's own PCIe link.
+
 ## Configure the machine
 
 The background machine (see the [console guide](console.md)) keeps the
@@ -161,3 +197,7 @@ still gives each pair in a group one link at `FAKEGPU_NVLINK_BANDWIDTH_GBPS`
   rate are not published, so no template uses them.
 - PCIe peer access on GeForce cards other than the RTX 4090 follows the
   socket rule above; NVIDIA documents no per-model policy for them.
+- Copies from one GPU to different peers share its NVLink schedule, so
+  copies over separate direct links run one after the other in the model.
+  GPUs behind one PCIe switch or CPU socket do not share its bandwidth.
+- NVML spreads a GPU's NVLink traffic evenly over its ports.

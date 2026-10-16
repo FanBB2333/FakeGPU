@@ -3,7 +3,9 @@
 
 Run under ``fakegpu run --platform ...``: the launcher exports FAKEGPU_SLOTS and
 FAKEGPU_NVLINK_FABRIC, and every native answer must agree with the Python
-model in ``fakegpu.link_topology`` for each GPU and pair of GPUs.
+model in ``fakegpu.link_topology`` for each GPU and pair of GPUs. Copies
+between the host and the GPUs and from GPU 0 to GPU 1 must be recorded with
+the routes and modeled times of ``fakegpu.link_traffic``.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import time
 from pathlib import Path
 
 from fakegpu._smi_environment import device_topology_record
+from fakegpu.link_traffic import LINK_KINDS, LinkTraffic, normalize_record
 from fakegpu.platforms import device_profiles, topology_from_environment
 
 NVML_SUCCESS = 0
@@ -24,6 +27,21 @@ NVML_NVLINK_DEVICE_TYPE_GPU = 0
 NVML_NVLINK_DEVICE_TYPE_SWITCH = 2
 TOPOLOGY_LEVELS = {"X": 0, "PIX": 10, "PXB": 20, "PHB": 30, "NODE": 40, "SYS": 50}
 P2P_CAPS_NVLINK = 2
+COPY_BYTES = 1 << 20
+FIELD_NVLINK_LINK_COUNT = 91
+FIELD_NVLINK_DATA_TX = 138
+
+
+class _FieldValue(ctypes.Structure):
+    _fields_ = [
+        ("fieldId", ctypes.c_uint32),
+        ("scopeId", ctypes.c_uint32),
+        ("timestamp", ctypes.c_int64),
+        ("latencyUsec", ctypes.c_int64),
+        ("valueType", ctypes.c_int),
+        ("nvmlReturn", ctypes.c_int),
+        ("value", ctypes.c_uint64),
+    ]
 
 
 def _die(message: str) -> None:
@@ -44,6 +62,96 @@ def _uint(function, *args) -> tuple[int, int]:
     value = ctypes.c_uint(0xFFFF)
     result = int(function(*args, ctypes.byref(value)))
     return result, int(value.value)
+
+
+def _copy_and_check_links(nvml, cudart, handles, model, count: int) -> dict:
+    """Copy host->every GPU, GPU 0->GPU 1 and GPU 0->host; check NVML throughput."""
+
+    cudart.cudaMalloc.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t]
+    cudart.cudaMemcpy.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    cudart.cudaMemcpyPeer.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t]
+    host = ctypes.create_string_buffer(COPY_BYTES)
+    clock = [0.0]
+    traffic = LinkTraffic(lambda: model, clock=lambda: clock[0])
+    started = time.monotonic()
+    buffers = []
+    for index in range(count):
+        cudart.cudaSetDevice(index)
+        pointer = ctypes.c_void_p()
+        if int(cudart.cudaMalloc(ctypes.byref(pointer), COPY_BYTES)) != 0:
+            _die(f"cudaMalloc on GPU {index} failed")
+        buffers.append(pointer)
+        if int(cudart.cudaMemcpy(pointer, host, COPY_BYTES, 1)) != 0:
+            _die(f"host to GPU {index} copy failed")
+        traffic.record(None, index, COPY_BYTES)
+    if count > 1:
+        if int(cudart.cudaMemcpyPeer(buffers[1], 1, buffers[0], 0, COPY_BYTES)) != 0:
+            _die("cudaMemcpyPeer 0->1 failed")
+        traffic.record(0, 1, COPY_BYTES)
+    cudart.cudaSetDevice(0)
+    if int(cudart.cudaMemcpy(host, buffers[0], COPY_BYTES, 2)) != 0:
+        _die("GPU 0 to host copy failed")
+    traffic.record(0, None, COPY_BYTES)
+    # Every modeled copy has finished: the reference schedule ran at t=0.
+    clock[0] = 1e-3
+    expected = traffic.snapshot()
+
+    nvml.nvmlDeviceGetFieldValues.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(_FieldValue)]
+    time.sleep(0.01)  # let the modeled copies (tens of microseconds) finish
+    within_window = True
+    for index, handle in enumerate(handles):
+        pcie = expected[index]["links"]["pcie"]
+        for counter, key in ((0, "tx_bytes"), (1, "rx_bytes")):
+            result, value = _uint(nvml.nvmlDeviceGetPcieThroughput, handle, ctypes.c_uint(counter))
+            if model.slots[index].pcie is None:
+                if result != NVML_ERROR_NOT_SUPPORTED:
+                    _die(f"GPU {index} has no PCIe link but PCIe throughput returned {result}")
+                continue
+            within_window = time.monotonic() - started < 0.9
+            if result != NVML_SUCCESS or (within_window and value != pcie[key] // 1024):
+                _die(f"GPU {index} PCIe throughput {counter}: {result}/{value} KB/s, expected {pcie[key] // 1024}")
+        fields = (_FieldValue * 2)(
+            _FieldValue(fieldId=FIELD_NVLINK_LINK_COUNT), _FieldValue(fieldId=FIELD_NVLINK_DATA_TX, scopeId=0)
+        )
+        if int(nvml.nvmlDeviceGetFieldValues(handle, 2, fields)) != NVML_SUCCESS:
+            _die(f"GPU {index} nvmlDeviceGetFieldValues failed")
+        ports = len(model.ports(index))
+        if (fields[0].nvmlReturn, fields[0].value & 0xFFFFFFFF) != (NVML_SUCCESS, ports):
+            _die(f"GPU {index} NVLink link count {fields[0].nvmlReturn}/{fields[0].value}, expected {ports}")
+        if ports:
+            kib = expected[index]["links"]["nvlink"]["tx_bytes"] // ports // 1024
+            if (fields[1].nvmlReturn, fields[1].value) != (NVML_SUCCESS, kib):
+                _die(f"GPU {index} NVLink TX counter {fields[1].nvmlReturn}/{fields[1].value} KiB, expected {kib}")
+    if not within_window:
+        print("[platform_topology] note: throughput checked after the 1 s window; values not compared")
+    return expected
+
+
+def _compare_transfer(position: int, native: dict | None, python: dict) -> None:
+    if native is None:
+        _die(f"GPU {position} SMI state has no transfer record")
+    for key in ("host_link", "host_bandwidth_gbps"):
+        if key == "host_bandwidth_gbps":
+            same = (native[key] is None) == (python[key] is None) and (
+                native[key] is None or abs(native[key] - python[key]) <= 1e-4 * python[key]
+            )
+        else:
+            same = native[key] == python[key]
+        if not same:
+            _die(f"GPU {position} transfer {key}: native {native[key]} != Python {python[key]}")
+    for kind, values in python["copies"].items():
+        other = native["copies"][kind]
+        if (other["calls"], other["bytes"]) != (values["calls"], values["bytes"]) or abs(
+            other["modeled_seconds"] - values["modeled_seconds"]
+        ) > 1e-9 * max(1.0, values["modeled_seconds"]) + 1e-12:
+            _die(f"GPU {position} transfer copies.{kind}: native {other} != Python {values}")
+    for link in LINK_KINDS:
+        for key in ("tx_bytes", "rx_bytes"):
+            if native["links"][link][key] != python["links"][link][key]:
+                _die(
+                    f"GPU {position} transfer links.{link}.{key}: native {native['links'][link][key]} "
+                    f"!= Python {python['links'][link][key]}"
+                )
 
 
 def main() -> int:
@@ -127,6 +235,8 @@ def main() -> int:
                 if int(cudart.cudaDeviceEnablePeerAccess(target, 0)) != 217:
                     _die(f"cudaDeviceEnablePeerAccess({source}->{target}) should be unsupported")
 
+    expected = _copy_and_check_links(nvml, cudart, handles, model, count)
+
     directory = os.environ.get("FAKEGPU_SMI_STATE_DIR")
     if directory:
         path = Path(directory) / f"{os.getpid()}.json"
@@ -140,6 +250,17 @@ def main() -> int:
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
             time.sleep(0.05)
+        while time.monotonic() < deadline:
+            # Wait for a publish that includes the copies.
+            device = next((item for item in state.get("devices", []) if item.get("index") == 0), {})
+            copies = (device.get("transfer") or {}).get("copies", {})
+            if copies.get("host_to_device", {}).get("bytes") == COPY_BYTES:
+                break
+            time.sleep(0.05)
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pass
         topology = state.get("topology") or {}
         expected_matrix = [[model.relation(a, b) for b in range(count)] for a in range(count)]
         if topology.get("schema_version") != "fakegpu.device_topology.v2" or topology.get("matrix") != expected_matrix:
@@ -154,6 +275,7 @@ def main() -> int:
             for key in ("active_links", "peer_count", "link_bandwidth_gbps", "aggregate_bandwidth_gbps", "links", "peers"):
                 if native["nvlink"].get(key) != python["nvlink"][key]:
                     _die(f"GPU {position} SMI nvlink.{key}: native {native['nvlink'].get(key)} != Python {python['nvlink'][key]}")
+            _compare_transfer(position, normalize_record(device.get("transfer")), expected[position])
     print(f"[platform_topology] {model.platform}: {count} GPUs match the Python model")
     return 0
 

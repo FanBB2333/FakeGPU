@@ -374,6 +374,41 @@ void append_optional_gbps(std::ostringstream& out, double value) {
     }
 }
 
+void append_precise(std::ostringstream& out, double value) {
+    const std::streamsize previous = out.precision(12);
+    out << value;
+    out.precision(previous);
+}
+
+// Mirrors the record of fakegpu/link_traffic.py.
+void append_transfer(std::ostringstream& out, const DeviceTransferStats& transfer) {
+    out << ",\"transfer\":{\"schema_version\":\"fakegpu.transfer.v1\"";
+    out << ",\"host_link\":";
+    append_json_string(out, transfer.host_link);
+    out << ",\"host_bandwidth_gbps\":";
+    append_optional_gbps(out, transfer.host_bandwidth_gbps);
+    out << ",\"window_seconds\":" << kTransferWindowSeconds;
+    out << ",\"modeled_seconds\":";
+    append_precise(out, transfer.modeled_seconds());
+    out << ",\"copies\":{";
+    for (std::size_t kind = 0; kind < kCopyKindCount; ++kind) {
+        const CopyCounter& copy = transfer.copies[kind];
+        out << (kind ? "," : "") << '"' << copy_kind_name(kind) << "\":{\"calls\":" << copy.calls
+            << ",\"bytes\":" << copy.bytes << ",\"modeled_seconds\":";
+        append_precise(out, copy.modeled_seconds);
+        out << '}';
+    }
+    out << "},\"links\":{";
+    for (std::size_t link = 0; link < kTransferLinkCount; ++link) {
+        const LinkCounter& counter = transfer.links[link];
+        out << (link ? "," : "") << '"' << transfer_link_name(link) << "\":{\"tx_bytes\":" << counter.tx_bytes
+            << ",\"rx_bytes\":" << counter.rx_bytes
+            << ",\"tx_bytes_per_second\":" << counter.tx_bytes_per_second
+            << ",\"rx_bytes_per_second\":" << counter.rx_bytes_per_second << '}';
+    }
+    out << "}}";
+}
+
 void append_device_topology(
     std::ostringstream& out,
     const DeviceReportStats& device,
@@ -929,6 +964,7 @@ void append_device(
     out << ",\"unsupported_apis\":";
     append_unsupported_apis(out, device, detail_limit);
     out << '}';
+    append_transfer(out, device.transfer);
     append_device_topology(out, device, devices, topology);
     append_device_health(
         out,

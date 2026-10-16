@@ -90,6 +90,25 @@ def test_process_lifecycle_events(service, child):
     assert service.status()["processes"] == []
 
 
+def test_devices_carry_modeled_link_traffic(service, child):
+    from fakegpu.link_traffic import empty_record
+
+    transfer = empty_record("pcie", 31.508)
+    transfer["copies"]["host_to_device"] = {"calls": 1, "bytes": GIB, "modeled_seconds": 0.034}
+    transfer["links"]["pcie"].update(rx_bytes=GIB, rx_bytes_per_second=2 * 10**9)
+    transfer["links"]["nvlink"].update(tx_bytes_per_second=5 * 10**8)
+    publish(service, child.pid)
+    state_path = service.paths.state_dir / f"{child.pid}.json"
+    state = json.loads(state_path.read_text())
+    state["devices"][0]["transfer"] = transfer
+    state_path.write_text(json.dumps(state))
+    service.poll()
+    first, second = service.status()["devices"]
+    assert first["transfer"]["copies"]["host_to_device"]["bytes"] == GIB
+    assert (first["history"]["pcie_gbps"][-1], first["history"]["nvlink_gbps"][-1]) == (2.0, 0.5)
+    assert second["transfer"] is None and second["history"]["pcie_gbps"][-1] is None
+
+
 def test_clean_exit_and_retention(service, child):
     publish(service, child.pid)
     service.poll()

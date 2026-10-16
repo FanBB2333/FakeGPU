@@ -2,6 +2,7 @@ add_library(fake_gpu_core OBJECT
     global_state.cpp
     native_smi.cpp
     device.cpp
+    link_traffic.cpp
     gpu_profile.cpp
 )
 
