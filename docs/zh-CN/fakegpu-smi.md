@@ -68,12 +68,16 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 
 ## 建模 NVLink、MIG 和故障
 
-这些功能默认关闭，需要在工作负载启动前设置。配置无效时不会激活任何内容，只报告
-配置错误。
+这些功能默认关闭（后台机器上的进程会获得机器的平台），需要在工作负载启动前设置。
+配置无效时不会激活任何内容，只报告配置错误。
 
-- **NVLink**：`FAKEGPU_NVLINK_GROUPS="0,1;2,3"` 为每组内的设备建立全连接关系。
-  `FAKEGPU_NVLINK_BANDWIDTH_GBPS` 默认为 `900`。`topo -m`、`nvlink -s`、
-  `topology.*` 和 `nvlink.*` 字段以及原生 NVML 链路查询都基于这个模型。
+- **平台与 NVLink**：`FAKEGPU_PLATFORM`（或后台机器的平台）把 GPU 放进 HGX/DGX、
+  超级芯片或 PCIe 插槽，并连好 NVLink，见[平台与插槽](platforms.md)。也可以用
+  `FAKEGPU_NVLINK_GROUPS="0,1;2,3"` 给组内每对设备一条速率为
+  `FAKEGPU_NVLINK_BANDWIDTH_GBPS`（默认 `900`）的链路。`topo -m`（NV#、PIX、PXB、
+  PHB、NODE、SYS 和 NUMA affinity）、`nvlink -s`（每条链路每个方向的 GB/s）、
+  `topology.*`、`nvlink.*`、`platform`、`slot.type`、`numa.node`、`pcie.link.*`、
+  `host_link.bandwidth` 字段以及原生 NVML 链路查询都基于这个模型。
 - **MIG**：`FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."`，例如
   `FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`。每个 GPU Instance
   对应一个 Compute Instance。超出父设备显存、8 个 slice 或 8 个实例的配置会被

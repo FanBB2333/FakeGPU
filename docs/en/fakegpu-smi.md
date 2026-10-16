@@ -73,13 +73,19 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 
 ## Model NVLink, MIG, and faults
 
-These features are off by default. Set them before the workload starts. Invalid
-input activates nothing and is reported as a configuration error.
+These features are off by default, except that processes on the background
+machine get its platform. Set them before the workload starts. Invalid input
+activates nothing and is reported as a configuration error.
 
-- **NVLink**: `FAKEGPU_NVLINK_GROUPS="0,1;2,3"` creates full-mesh peers within
-  each group. `FAKEGPU_NVLINK_BANDWIDTH_GBPS` defaults to `900`. This drives
-  `topo -m`, `nvlink -s`, the `topology.*` and `nvlink.*` fields, and native
-  NVML link queries.
+- **Platform and NVLink**: `FAKEGPU_PLATFORM` (or the background machine's
+  platform) places the GPUs in HGX/DGX, superchip or PCIe slots and wires
+  their NVLinks; see [Platforms and slots](platforms.md).
+  `FAKEGPU_NVLINK_GROUPS="0,1;2,3"` instead gives each pair in a group one
+  link at `FAKEGPU_NVLINK_BANDWIDTH_GBPS` (default `900`). This drives
+  `topo -m` (NV#, PIX, PXB, PHB, NODE, SYS and NUMA affinity), `nvlink -s`
+  (GB/s per link and direction), the `topology.*`, `nvlink.*`, `platform`,
+  `slot.type`, `numa.node`, `pcie.link.*` and `host_link.bandwidth` fields,
+  and native NVML link queries.
 - **MIG**: `FAKEGPU_MIG_LAYOUT="DEVICE:PROFILE:MEMORY_MIB[:COUNT];..."`, for
   example `FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480"`. Each GPU
   instance owns one compute instance. Layouts that exceed the parent memory,

@@ -20,6 +20,9 @@ tour. The pages below go into detail.
 - [Distributed plans and experiment sweeps](distributed.md)
 - [Background machine and console](console.md): `fakegpu console`, the
   background machine, events, and `fakegpu daemon`
+- [Platforms and slots](platforms.md): HGX/DGX baseboards, Grace superchips,
+  PCIe slots and NVLink bridges, and how they set PCIe links, NVLink and peer
+  access
 - [FakeGPU-SMI and monitoring](fakegpu-smi.md): `nvidia-smi` views, NVLink,
   MIG, and fault modeling, and Prometheus metrics
 - [Native interception](native-interception.md): running unmodified programs

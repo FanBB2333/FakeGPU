@@ -258,7 +258,7 @@ def test_virtual_smi_models_topology_nvlink_views_and_queries(
 
     topology = state["topology"]
     assert topology["schema_version"] == (
-        "fakegpu.device_topology.v1"
+        "fakegpu.device_topology.v2"
     )
     assert topology["source"] == "modeled_environment"
     assert topology["valid"] is True
@@ -285,7 +285,7 @@ def test_virtual_smi_models_topology_nvlink_views_and_queries(
     status = capsys.readouterr().out
     assert "Bandwidth values are configuration inputs" in status
     assert "Link 0: Active -> GPU 1" in status
-    assert "800 Gbps" in status
+    assert "800 GB/s" in status
 
     assert (
         main(

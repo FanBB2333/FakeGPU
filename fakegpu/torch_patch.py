@@ -1467,6 +1467,22 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     torch.cuda.get_device_capability = _profiled_get_device_capability
     torch.cuda.get_device_properties = _profiled_get_device_properties
 
+    # Peer access follows the modeled NVLink/PCIe topology (see
+    # fakegpu.link_topology); without a platform every pair has access.
+    def _topology_can_device_access_peer(device, peer_device):
+        source = _checked_normalize_device_index(device)
+        target = _checked_normalize_device_index(peer_device)
+        from .platforms import topology_from_environment
+
+        topology = topology_from_environment(
+            [str(profile.get("profile_id") or "") for profile in _DEVICE_PROFILES],
+            os.environ,
+        )
+        return topology.can_access_peer(source, target)
+
+    torch.cuda.can_device_access_peer = _topology_can_device_access_peer
+    upstream.can_device_access_peer = _topology_can_device_access_peer
+
     # Compute-capability-aware bf16 check (upstream always returns True)
     torch.cuda.is_bf16_supported = _stub_is_bf16_supported
     _patch_hf_cuda_surface(torch_mod)

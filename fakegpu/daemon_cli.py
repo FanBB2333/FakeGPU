@@ -23,7 +23,23 @@ def _bool(value: str) -> bool:
 
 
 def add_machine_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--devices", help="Device layout, e.g. a100:8 or a100:2,h100:2.")
+    parser.add_argument("--devices", help="Device layout, e.g. a100:8 or l40s:4.")
+    parser.add_argument(
+        "--platform",
+        help="Host platform: auto (by form factor) or an ID from 'fakegpu platform list', e.g. hgx-a100-8.",
+    )
+    parser.add_argument(
+        "--pcie-gen",
+        dest="pcie_generation",
+        type=int,
+        metavar="N",
+        help="PCIe generation of the PCIe slots (0 keeps the platform's).",
+    )
+    parser.add_argument(
+        "--nvlink-bridges",
+        metavar="PAIRS",
+        help="NVLink bridges between PCIe cards, e.g. 0-1,2-3 ('' removes them).",
+    )
     parser.add_argument("--telemetry", choices=TELEMETRY_MODES, help="Sensor model for temperature/power/clocks.")
     parser.add_argument(
         "--background",
@@ -34,7 +50,8 @@ def add_machine_options(parser: argparse.ArgumentParser) -> None:
 
 
 def machine_changes(args: argparse.Namespace) -> dict[str, Any]:
-    changes = {name: getattr(args, name) for name in ("devices", "telemetry", "background")}
+    names = ("devices", "platform", "pcie_generation", "nvlink_bridges", "telemetry", "background")
+    changes = {name: getattr(args, name) for name in names}
     return {name: value for name, value in changes.items() if value is not None}
 
 
@@ -45,6 +62,18 @@ def _gib(value: int) -> str:
 def _uptime(seconds: float) -> str:
     seconds = int(seconds)
     return f"{seconds // 3600}h{seconds // 60 % 60:02d}m" if seconds >= 3600 else f"{seconds // 60}m{seconds % 60:02d}s"
+
+
+def slot_label(slot: dict) -> str:
+    if not slot:
+        return "-"
+    return f"{slot['type']} {slot['slot']}"
+
+
+def link_label(slot: dict) -> str:
+    if not slot:
+        return "-"
+    return slot.get("pcie") or slot.get("host_link") or "-"
 
 
 def format_event(event: dict) -> str:
@@ -59,9 +88,15 @@ def _print_status(status: dict) -> None:
         f"layout {config['devices']}, telemetry {config['telemetry']}, "
         f"background {'on' if config['background'] else 'off'}"
     )
+    platform = status.get("platform") or {}
+    if platform:
+        print(f"Platform: {platform['name']} ({platform['id']}), {platform['slot_layout']}")
     print(f"State directory: {status['paths']['state_dir']}")
     print()
-    print(f"{'GPU':<4}{'Profile':<16}{'Memory GiB':>18}{'Util':>7}{'Temp':>7}{'Power':>9}{'Procs':>7}")
+    print(
+        f"{'GPU':<4}{'Profile':<16}{'Slot':<11}{'Link':<13}{'Memory GiB':>18}{'Util':>7}{'Temp':>7}"
+        f"{'Power':>9}{'Procs':>7}"
+    )
     for device in status["devices"]:
         memory, telemetry = device["memory"], device["telemetry"] or {}
         used = f"{_gib(memory['used_bytes'])}/{_gib(memory['total_bytes'])}"
@@ -69,9 +104,10 @@ def _print_status(status: dict) -> None:
         temp = f"{telemetry['temperature_c']}C" if telemetry else "N/A"
         power = f"{telemetry['power_w']:.0f}W" if telemetry else "N/A"
         marker = "" if device["in_layout"] else " *"
+        slot = device.get("slot") or {}
         print(
-            f"{device['index']:<4}{device['profile_id'] + marker:<16}{used:>18}{util:>7}{temp:>7}"
-            f"{power:>9}{device['process_count']:>7}"
+            f"{device['index']:<4}{device['profile_id'] + marker:<16}{slot_label(slot):<11}"
+            f"{link_label(slot):<13}{used:>18}{util:>7}{temp:>7}{power:>9}{device['process_count']:>7}"
         )
     print()
     if not status["processes"]:

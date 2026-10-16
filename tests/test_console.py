@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("textual")
 
-from textual.widgets import DataTable, Input  # noqa: E402
+from textual.widgets import DataTable, Input, Select, Static  # noqa: E402
 
 from fakegpu.console.app import Confirm, ConsoleApp  # noqa: E402
 from fakegpu.machine.client import MachineError  # noqa: E402
@@ -63,9 +63,16 @@ def test_console_shows_and_controls_the_machine(service, child):  # noqa: F811
             await pilot.press("a")
             await pilot.pause()
             assert app.query_one("#cfg-devices", Input).value.endswith(",h100:1")
+            # A100 and H100 modules need different baseboards.
+            assert "one GPU model" in str(app.query_one("#cfg-devices-check", Static).render())
             await pilot.click("#cfg-apply")
             await pilot.pause()
-            assert service.config.devices == "a100:2,h100:1"
+            assert service.config.devices == "a100:2"
+            app.query_one("#cfg-platform", Select).value = "generic"
+            await pilot.pause()
+            await pilot.click("#cfg-apply")
+            await pilot.pause()
+            assert (service.config.devices, service.config.platform) == ("a100:2,h100:1", "generic")
             assert len(app.cards) == 3
 
             await pilot.press("b")

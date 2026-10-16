@@ -1,0 +1,390 @@
+{
+  "schema": "fakegpu.platforms.v1",
+  "reviewed": "2026-10-16",
+  "notes": [
+    "Bandwidths are decimal GB/s per direction unless a field says otherwise.",
+    "Baseboard and superchip layouts follow NVIDIA DGX/HGX documentation; pcie-server, workstation, desktop and laptop are representative layouts, not specific products.",
+    "A slot's pcie value is what the slot provides; a GPU trains at the lower of its own and the slot's generation and width. \"card\" means the GPU's own link (Gen4 x16 when unknown); no pcie value means the GPU has no PCIe link."
+  ],
+  "pcie_generations": [
+    {"generation": 1, "gt_per_second": 2.5, "encoding": "8b/10b", "lane_gbps": 0.25},
+    {"generation": 2, "gt_per_second": 5, "encoding": "8b/10b", "lane_gbps": 0.5},
+    {"generation": 3, "gt_per_second": 8, "encoding": "128b/130b", "lane_gbps": 0.984615},
+    {"generation": 4, "gt_per_second": 16, "encoding": "128b/130b", "lane_gbps": 1.969231},
+    {"generation": 5, "gt_per_second": 32, "encoding": "128b/130b", "lane_gbps": 3.938462},
+    {"generation": 6, "gt_per_second": 64, "encoding": "PAM4 FLIT, 236 TLP bytes per 256-byte FLIT", "lane_gbps": 7.375}
+  ],
+  "pcie_sources": [
+    "https://pcisig.com/sites/default/files/2026-01/PCI-SIG%20PCIe%207.0%20Webinar_Rev5_FINAL.pdf",
+    "https://pcisig.com/blog/evolution-pci-express-specification-its-sixth-generation-third-decade-and-still-going-strong"
+  ],
+  "nvlink_generations": [
+    {"generation": 1, "link_gbps": 20, "source": "https://developer.nvidia.com/blog/inside-pascal/"},
+    {"generation": 2, "link_gbps": 25, "source": "https://images.nvidia.com/content/pdf/dgx1-v100-system-architecture-whitepaper.pdf"},
+    {"generation": 3, "link_gbps": 25, "source": "https://docs.nvidia.com/cuda/archive/11.1.1/ampere-tuning-guide/index.html"},
+    {"generation": 4, "link_gbps": 25, "source": "https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/"},
+    {"generation": 5, "link_gbps": 50, "source": "https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/"}
+  ],
+  "nvlink_bridge_ways": {
+    "default": [2],
+    "h200-nvl": [2, 4],
+    "source": "https://www.nvidia.com/en-us/data-center/h200/"
+  },
+  "pcie_p2p_unsupported": [
+    {"profile": "rtx4090", "source": "https://forums.developer.nvidia.com/t/standard-nvidia-cuda-tests-fail-with-dual-rtx-4090-linux-box/233202/16"}
+  ],
+  "platforms": [
+    {
+      "id": "hgx-a100-8",
+      "name": "HGX A100 8-GPU",
+      "kind": "baseboard",
+      "summary": "Eight A100 SXM4 modules on six NVSwitch chips (12 NVLinks per GPU); two GPUs per PCIe Gen4 switch, four GPUs per CPU socket as in DGX A100.",
+      "sources": [
+        "https://docs.nvidia.com/datacenter/tesla/fabric-manager-user-guide/index.html",
+        "https://developer.nvidia.com/blog/introducing-hgx-a100-most-powerful-accelerated-server-platform-for-ai-hpc/",
+        "https://docs.nvidia.com/dgx/dgxa100-user-guide/introduction-to-dgxa100.html"
+      ],
+      "accepts": ["a100", "a100-sxm4-40gb", "a800-sxm4-40gb", "a800-sxm4-80gb"],
+      "homogeneous": true,
+      "slots": [
+        {"count": 2, "type": "sxm", "pcie": "4x16", "numa": 0, "bridge": 0, "switch": "0"},
+        {"count": 2, "type": "sxm", "pcie": "4x16", "numa": 0, "bridge": 1, "switch": "1"},
+        {"count": 2, "type": "sxm", "pcie": "4x16", "numa": 1, "bridge": 2, "switch": "2"},
+        {"count": 2, "type": "sxm", "pcie": "4x16", "numa": 1, "bridge": 3, "switch": "3"}
+      ],
+      "nvlink": {"fabric": "nvswitch", "generation": 3, "links_per_gpu": 12, "switch_chips": 6}
+    },
+    {
+      "id": "hgx-a100-4",
+      "name": "HGX A100 4-GPU",
+      "kind": "baseboard",
+      "summary": "Four A100 SXM4 modules wired directly to each other (4 NVLinks per pair, no NVSwitch), each on its own CPU PCIe Gen4 root port.",
+      "sources": [
+        "https://developer.nvidia.com/blog/introducing-hgx-a100-most-powerful-accelerated-server-platform-for-ai-hpc/",
+        "https://developer.nvidia.com/blog/introducing-nvidia-hgx-h100-an-accelerated-server-platform-for-ai-and-high-performance-computing/"
+      ],
+      "accepts": ["a100", "a100-sxm4-40gb", "a800-sxm4-40gb", "a800-sxm4-80gb"],
+      "homogeneous": true,
+      "slots": [
+        {"type": "sxm", "pcie": "4x16", "numa": 0, "bridge": 0},
+        {"type": "sxm", "pcie": "4x16", "numa": 0, "bridge": 1},
+        {"type": "sxm", "pcie": "4x16", "numa": 0, "bridge": 2},
+        {"type": "sxm", "pcie": "4x16", "numa": 0, "bridge": 3}
+      ],
+      "nvlink": {"fabric": "direct", "generation": 3, "pairs": [[0, 1, 4], [0, 2, 4], [0, 3, 4], [1, 2, 4], [1, 3, 4], [2, 3, 4]]}
+    },
+    {
+      "id": "hgx-h100-8",
+      "name": "HGX H100/H200 8-GPU",
+      "kind": "baseboard",
+      "summary": "Eight Hopper SXM5 modules on four NVSwitch chips (18 NVLinks per GPU); NVIDIA's HGX reference puts two GPUs on each PCIe Gen5 switch and four GPUs per CPU socket.",
+      "sources": [
+        "https://docs.nvidia.com/datacenter/tesla/fabric-manager-user-guide/index.html",
+        "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory-h100-h200-b200/latest/components.html",
+        "https://www.nvidia.com/en-us/data-center/h200/"
+      ],
+      "accepts": ["h100", "h100-sxm5-64gb", "h100-sxm5-94gb", "h800-sxm5-80gb", "h20-96gb", "h20-141gb", "h200"],
+      "homogeneous": true,
+      "slots": [
+        {"count": 2, "type": "sxm", "pcie": "5x16", "numa": 0, "bridge": 0, "switch": "0"},
+        {"count": 2, "type": "sxm", "pcie": "5x16", "numa": 0, "bridge": 1, "switch": "1"},
+        {"count": 2, "type": "sxm", "pcie": "5x16", "numa": 1, "bridge": 2, "switch": "2"},
+        {"count": 2, "type": "sxm", "pcie": "5x16", "numa": 1, "bridge": 3, "switch": "3"}
+      ],
+      "nvlink": {"fabric": "nvswitch", "generation": 4, "links_per_gpu": 18, "switch_chips": 4}
+    },
+    {
+      "id": "hgx-h100-4",
+      "name": "HGX H100 4-GPU",
+      "kind": "baseboard",
+      "summary": "Four H100 SXM5 modules wired directly to each other (6 NVLinks per pair, no NVSwitch), each on its own CPU PCIe Gen5 root port.",
+      "sources": [
+        "https://developer.nvidia.com/blog/introducing-nvidia-hgx-h100-an-accelerated-server-platform-for-ai-and-high-performance-computing/"
+      ],
+      "accepts": ["h100", "h100-sxm5-64gb", "h100-sxm5-94gb", "h800-sxm5-80gb"],
+      "homogeneous": true,
+      "slots": [
+        {"type": "sxm", "pcie": "5x16", "numa": 0, "bridge": 0},
+        {"type": "sxm", "pcie": "5x16", "numa": 0, "bridge": 1},
+        {"type": "sxm", "pcie": "5x16", "numa": 1, "bridge": 2},
+        {"type": "sxm", "pcie": "5x16", "numa": 1, "bridge": 3}
+      ],
+      "nvlink": {"fabric": "direct", "generation": 4, "pairs": [[0, 1, 6], [0, 2, 6], [0, 3, 6], [1, 2, 6], [1, 3, 6], [2, 3, 6]]}
+    },
+    {
+      "id": "hgx-b200-8",
+      "name": "HGX B200 8-GPU",
+      "kind": "baseboard",
+      "summary": "Eight B200 modules on two NVSwitch chips (18 fifth-generation NVLinks per GPU); two GPUs per PCIe Gen5 switch, four GPUs per CPU socket.",
+      "sources": [
+        "https://docs.nvidia.com/datacenter/tesla/fabric-manager-user-guide/index.html",
+        "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory-h100-h200-b200/latest/components.html",
+        "https://docs.nvidia.com/dgx/dgxb200-user-guide/introduction-to-dgxb200.html"
+      ],
+      "accepts": ["b200"],
+      "homogeneous": true,
+      "slots": [
+        {"count": 2, "type": "sxm", "pcie": "5x16", "numa": 0, "bridge": 0, "switch": "0"},
+        {"count": 2, "type": "sxm", "pcie": "5x16", "numa": 0, "bridge": 1, "switch": "1"},
+        {"count": 2, "type": "sxm", "pcie": "5x16", "numa": 1, "bridge": 2, "switch": "2"},
+        {"count": 2, "type": "sxm", "pcie": "5x16", "numa": 1, "bridge": 3, "switch": "3"}
+      ],
+      "nvlink": {"fabric": "nvswitch", "generation": 5, "links_per_gpu": 18, "switch_chips": 2}
+    },
+    {
+      "id": "hgx-b300-8",
+      "name": "HGX B300 8-GPU",
+      "kind": "baseboard",
+      "summary": "Eight B300 modules on two NVSwitch chips (18 fifth-generation NVLinks per GPU); each GPU links at PCIe Gen6 x16 to its own ConnectX-8, which reaches the CPU over Gen5 x16.",
+      "sources": [
+        "https://docs.nvidia.com/datacenter/tesla/fabric-manager-user-guide/index.html",
+        "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html",
+        "https://docs.nvidia.com/dgx/dgxb300-user-guide/introduction-to-dgxb300.html"
+      ],
+      "accepts": ["b300"],
+      "homogeneous": true,
+      "slots": [
+        {"type": "sxm", "pcie": "6x16", "host_pcie": "5x16", "numa": 0, "bridge": 0, "switch": "0"},
+        {"type": "sxm", "pcie": "6x16", "host_pcie": "5x16", "numa": 0, "bridge": 1, "switch": "1"},
+        {"type": "sxm", "pcie": "6x16", "host_pcie": "5x16", "numa": 0, "bridge": 2, "switch": "2"},
+        {"type": "sxm", "pcie": "6x16", "host_pcie": "5x16", "numa": 0, "bridge": 3, "switch": "3"},
+        {"type": "sxm", "pcie": "6x16", "host_pcie": "5x16", "numa": 1, "bridge": 4, "switch": "4"},
+        {"type": "sxm", "pcie": "6x16", "host_pcie": "5x16", "numa": 1, "bridge": 5, "switch": "5"},
+        {"type": "sxm", "pcie": "6x16", "host_pcie": "5x16", "numa": 1, "bridge": 6, "switch": "6"},
+        {"type": "sxm", "pcie": "6x16", "host_pcie": "5x16", "numa": 1, "bridge": 7, "switch": "7"}
+      ],
+      "nvlink": {"fabric": "nvswitch", "generation": 5, "links_per_gpu": 18, "switch_chips": 2}
+    },
+    {
+      "id": "dgx-1-p100",
+      "name": "DGX-1 (P100)",
+      "kind": "baseboard",
+      "summary": "Eight P100 SXM2 modules in a hybrid cube-mesh: two fully connected quads plus one link between matching GPUs of each quad; two GPUs per PCIe Gen3 switch.",
+      "sources": [
+        "https://images.nvidia.com/content/pdf/dgx1-system-architecture-whitepaper1.pdf",
+        "https://developer.nvidia.com/blog/inside-pascal/"
+      ],
+      "accepts": ["p100-sxm2-16gb"],
+      "homogeneous": true,
+      "slots": [
+        {"type": "sxm", "pcie": "3x16", "numa": 0, "bridge": 0, "switch": "0"},
+        {"type": "sxm", "pcie": "3x16", "numa": 0, "bridge": 1, "switch": "1"},
+        {"type": "sxm", "pcie": "3x16", "numa": 0, "bridge": 0, "switch": "0"},
+        {"type": "sxm", "pcie": "3x16", "numa": 0, "bridge": 1, "switch": "1"},
+        {"type": "sxm", "pcie": "3x16", "numa": 1, "bridge": 2, "switch": "2"},
+        {"type": "sxm", "pcie": "3x16", "numa": 1, "bridge": 3, "switch": "3"},
+        {"type": "sxm", "pcie": "3x16", "numa": 1, "bridge": 2, "switch": "2"},
+        {"type": "sxm", "pcie": "3x16", "numa": 1, "bridge": 3, "switch": "3"}
+      ],
+      "nvlink": {"fabric": "direct", "generation": 1, "pairs": [
+        [0, 1, 1], [0, 2, 1], [0, 3, 1], [1, 2, 1], [1, 3, 1], [2, 3, 1],
+        [4, 5, 1], [4, 6, 1], [4, 7, 1], [5, 6, 1], [5, 7, 1], [6, 7, 1],
+        [0, 4, 1], [1, 5, 1], [2, 6, 1], [3, 7, 1]
+      ]}
+    },
+    {
+      "id": "dgx-1-v100",
+      "name": "DGX-1 (V100)",
+      "kind": "baseboard",
+      "summary": "Eight V100 SXM2 modules in a hybrid cube-mesh with doubled links on selected pairs (6 NVLinks per GPU); two GPUs per PCIe Gen3 switch.",
+      "sources": [
+        "https://images.nvidia.com/content/pdf/dgx1-v100-system-architecture-whitepaper.pdf"
+      ],
+      "accepts": ["v100", "v100-sxm2-16gb"],
+      "homogeneous": true,
+      "slots": [
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 0, "bridge": 0, "switch": "0"},
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 0, "bridge": 1, "switch": "1"},
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 1, "bridge": 2, "switch": "2"},
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 1, "bridge": 3, "switch": "3"}
+      ],
+      "nvlink": {"fabric": "direct", "generation": 2, "pairs": [
+        [0, 1, 1], [0, 2, 1], [0, 3, 2], [1, 2, 2], [1, 3, 1], [2, 3, 2],
+        [4, 5, 1], [4, 6, 1], [4, 7, 2], [5, 6, 2], [5, 7, 1], [6, 7, 2],
+        [0, 4, 2], [1, 5, 2], [2, 6, 1], [3, 7, 1]
+      ]}
+    },
+    {
+      "id": "dgx-2",
+      "name": "DGX-2",
+      "kind": "baseboard",
+      "summary": "Sixteen V100 SXM3 modules on two baseboards joined through twelve NVSwitch chips (6 NVLinks per GPU); two levels of PCIe Gen3 switches, eight GPUs per CPU socket.",
+      "sources": [
+        "https://docs.nvidia.com/datacenter/tesla/fabric-manager-user-guide/index.html",
+        "https://docs.nvidia.com/gpudirect-storage/configuration-guide/"
+      ],
+      "accepts": ["v100-sxm3-32gb"],
+      "homogeneous": true,
+      "slots": [
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 0, "bridge": 0, "switch": "0.0"},
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 0, "bridge": 0, "switch": "0.1"},
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 0, "bridge": 1, "switch": "1.2"},
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 0, "bridge": 1, "switch": "1.3"},
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 1, "bridge": 2, "switch": "2.4"},
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 1, "bridge": 2, "switch": "2.5"},
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 1, "bridge": 3, "switch": "3.6"},
+        {"count": 2, "type": "sxm", "pcie": "3x16", "numa": 1, "bridge": 3, "switch": "3.7"}
+      ],
+      "nvlink": {"fabric": "nvswitch", "generation": 2, "links_per_gpu": 6, "switch_chips": 12}
+    },
+    {
+      "id": "gh200",
+      "name": "GH200 Grace Hopper Superchip",
+      "kind": "superchip",
+      "summary": "One Hopper GPU joined to a Grace CPU by NVLink-C2C (900 GB/s bidirectional, hardware coherent).",
+      "sources": [
+        "https://developer.nvidia.com/blog/nvidia-grace-hopper-superchip-architecture-in-depth/"
+      ],
+      "accepts": ["gh200-96gb", "gh200-144gb"],
+      "homogeneous": true,
+      "slots": [
+        {"type": "superchip", "pcie": "5x16", "numa": 0, "bridge": 0, "host_link": "c2c", "host_gbps": 450, "p2p": false}
+      ]
+    },
+    {
+      "id": "gb200-nvl72-tray",
+      "name": "GB200 NVL72 compute tray",
+      "kind": "superchip",
+      "summary": "One compute tray: two Grace CPUs, each joined by NVLink-C2C to two Blackwell GPUs; every GPU has 18 NVLinks into the rack's NVLink switch trays.",
+      "sources": [
+        "https://docs.nvidia.com/dgx/dgxgb200-user-guide/hardware.html",
+        "https://developer.nvidia.com/blog/nvidia-gb200-nvl72-delivers-trillion-parameter-llm-training-and-real-time-inference/"
+      ],
+      "accepts": ["gb200"],
+      "homogeneous": true,
+      "notes": "NVIDIA publishes 900 GB/s bidirectional C2C per superchip without saying how its two GPUs share it; each GPU is modeled with the full 450 GB/s per direction.",
+      "slots": [
+        {"count": 2, "type": "superchip", "pcie": "6x16", "numa": 0, "bridge": 0, "host_link": "c2c", "host_gbps": 450, "p2p": false},
+        {"count": 2, "type": "superchip", "pcie": "6x16", "numa": 1, "bridge": 1, "host_link": "c2c", "host_gbps": 450, "p2p": false}
+      ],
+      "nvlink": {"fabric": "nvswitch", "generation": 5, "links_per_gpu": 18, "switch_chips": 18}
+    },
+    {
+      "id": "gb300-nvl72-tray",
+      "name": "GB300 NVL72 compute tray",
+      "kind": "superchip",
+      "summary": "One compute tray: two Grace CPUs, each joined by NVLink-C2C to two Blackwell Ultra GPUs; every GPU has 18 NVLinks into the rack's NVLink switch trays.",
+      "sources": [
+        "https://docs.nvidia.com/dgx/dgxgb200-user-guide/hardware.html",
+        "https://docs.nvidia.com/enterprise-reference-architectures/nvl72-ai-factory/latest/components.html"
+      ],
+      "accepts": ["gb300"],
+      "homogeneous": true,
+      "notes": "NVIDIA publishes 900 GB/s bidirectional C2C per superchip without saying how its two GPUs share it; each GPU is modeled with the full 450 GB/s per direction.",
+      "slots": [
+        {"count": 2, "type": "superchip", "pcie": "6x16", "numa": 0, "bridge": 0, "host_link": "c2c", "host_gbps": 450, "p2p": false},
+        {"count": 2, "type": "superchip", "pcie": "6x16", "numa": 1, "bridge": 1, "host_link": "c2c", "host_gbps": 450, "p2p": false}
+      ],
+      "nvlink": {"fabric": "nvswitch", "generation": 5, "links_per_gpu": 18, "switch_chips": 18}
+    },
+    {
+      "id": "dgx-station-gb300",
+      "name": "DGX Station (GB300)",
+      "kind": "superchip",
+      "summary": "A GB300 superchip (NVLink-C2C, 900 GB/s bidirectional) plus one PCIe Gen5 x16 slot for an additional RTX PRO GPU.",
+      "sources": [
+        "https://www.nvidia.com/en-us/products/workstations/dgx-station/"
+      ],
+      "accepts": ["gb300-dgx-station"],
+      "homogeneous": false,
+      "notes": "NVIDIA does not document peer access between the GB300 and a PCIe GPU, so the pair is modeled without it.",
+      "slots": [
+        {"type": "superchip", "pcie": "5x16", "numa": 0, "bridge": 0, "host_link": "c2c", "host_gbps": 450, "p2p": false},
+        {"type": "pcie", "pcie": "5x16", "numa": 0, "bridge": 1, "p2p": false}
+      ]
+    },
+    {
+      "id": "dgx-spark",
+      "name": "DGX Spark (GB10)",
+      "kind": "superchip",
+      "summary": "A GB10 superchip whose Blackwell GPU shares 128 GB of unified LPDDR5X with the CPU; there is no PCIe GPU link.",
+      "sources": [
+        "https://docs.nvidia.com/dgx/dgx-spark/hardware.html"
+      ],
+      "accepts": ["gb10"],
+      "homogeneous": true,
+      "slots": [
+        {"type": "superchip", "numa": 0, "bridge": 0, "host_link": "unified", "p2p": false}
+      ]
+    },
+    {
+      "id": "jetson",
+      "name": "Jetson module",
+      "kind": "embedded",
+      "summary": "An integrated Jetson GPU that shares system memory with the CPU; there is no PCIe GPU link.",
+      "sources": [],
+      "accepts": [],
+      "homogeneous": true,
+      "slots": [
+        {"type": "embedded", "numa": 0, "bridge": 0, "host_link": "unified", "p2p": false}
+      ]
+    },
+    {
+      "id": "pcie-server",
+      "name": "PCIe server, 8 slots",
+      "kind": "pcie",
+      "summary": "Representative dual-socket server: eight PCIe Gen5 x16 slots behind four PCIe switches, two slots per switch and two switches per socket. NVLink bridges are optional.",
+      "sources": [],
+      "accepts": [],
+      "homogeneous": false,
+      "slots": [
+        {"count": 2, "type": "pcie", "pcie": "5x16", "numa": 0, "bridge": 0, "switch": "0"},
+        {"count": 2, "type": "pcie", "pcie": "5x16", "numa": 0, "bridge": 1, "switch": "1"},
+        {"count": 2, "type": "pcie", "pcie": "5x16", "numa": 1, "bridge": 2, "switch": "2"},
+        {"count": 2, "type": "pcie", "pcie": "5x16", "numa": 1, "bridge": 3, "switch": "3"}
+      ]
+    },
+    {
+      "id": "workstation",
+      "name": "Workstation, 4 slots",
+      "kind": "pcie",
+      "summary": "Representative single-socket workstation: four PCIe Gen5 x16 slots, each on its own CPU root complex. NVLink bridges are optional.",
+      "sources": [],
+      "accepts": [],
+      "homogeneous": false,
+      "slots": [
+        {"type": "pcie", "pcie": "5x16", "numa": 0, "bridge": 0},
+        {"type": "pcie", "pcie": "5x16", "numa": 0, "bridge": 1},
+        {"type": "pcie", "pcie": "5x16", "numa": 0, "bridge": 2},
+        {"type": "pcie", "pcie": "5x16", "numa": 0, "bridge": 3}
+      ]
+    },
+    {
+      "id": "desktop",
+      "name": "Desktop, 2 slots",
+      "kind": "pcie",
+      "summary": "Representative desktop board: the CPU's 16 Gen5 lanes run one card at x16, or two cards at x8 each.",
+      "sources": [],
+      "accepts": [],
+      "homogeneous": false,
+      "slots": [
+        {"type": "pcie", "pcie": "5x16", "numa": 0, "bridge": 0, "shares_lanes_with": [1], "lanes_when_shared": 8},
+        {"type": "pcie", "pcie": "5x8", "numa": 0, "bridge": 0}
+      ]
+    },
+    {
+      "id": "laptop",
+      "name": "Laptop",
+      "kind": "laptop",
+      "summary": "One laptop GPU on the CPU's PCIe lanes; the link is the GPU's own generation and width where known.",
+      "sources": [],
+      "accepts": [],
+      "homogeneous": true,
+      "slots": [
+        {"type": "laptop", "pcie": "5x16", "numa": 0, "bridge": 0}
+      ]
+    },
+    {
+      "id": "generic",
+      "name": "Generic host",
+      "kind": "generic",
+      "summary": "No slot constraints: any number and mix of GPUs, each on a PCIe link at its own generation and width behind one PCIe switch, without NVLink.",
+      "sources": [],
+      "accepts": [],
+      "homogeneous": false,
+      "slots": [
+        {"count": 64, "type": "any", "pcie": "card", "numa": 0, "bridge": 0, "switch": "0"}
+      ]
+    }
+  ]
+}

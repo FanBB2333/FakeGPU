@@ -194,6 +194,7 @@ FakeCUDA 程序會接入這台機器，控制台顯示 GPU、程序與事件，�
 - [Diffusion 訓練](docs/zh-TW/diffusion-training.md)
 - [分散式規劃與實驗批次執行](docs/zh-TW/distributed.md)
 - [FakeGPU-SMI 與監控](docs/zh-TW/fakegpu-smi.md)
+- [平台與插槽](docs/zh-TW/platforms.md)：基板、超級晶片、PCIe 插槽、NVLink 橋
 - [原生函式庫攔截](docs/zh-TW/native-interception.md)
 - [對照實體 GPU 校準](docs/zh-TW/calibration.md)
 - [驗證與可靠性](docs/zh-TW/validation.md)

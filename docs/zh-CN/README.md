@@ -17,6 +17,8 @@
 - [Diffusion 训练](diffusion-training.md)：缓存特征 UNet 训练计划和预算
 - [分布式规划与实验批量运行](distributed.md)
 - [后台机器与控制台](console.md)：`fakegpu console`、后台机器、事件和 `fakegpu daemon`
+- [平台与插槽](platforms.md)：HGX/DGX 基板、Grace 超级芯片、PCIe 插槽和 NVLink 桥，
+  以及它们如何决定 PCIe 链路、NVLink 和 peer access
 - [FakeGPU-SMI 与监控](fakegpu-smi.md)：`nvidia-smi` 视图，NVLink、MIG 和故障
   建模，以及 Prometheus 指标
 - [原生库拦截](native-interception.md)：运行未修改的程序，处理不支持的 API

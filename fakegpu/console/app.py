@@ -30,6 +30,7 @@ from textual.widgets import (
 
 from ..machine.client import MachineError
 from ..machine.config import parse_devices
+from ..platforms import AUTO, load_platforms, resolve_platform
 from ..machine.service import EVENT_BUFFER
 from ..profile_catalog import load_profiles
 from .widgets import (
@@ -47,6 +48,60 @@ from .widgets import (
 
 TABS = ("overview", "processes", "devices", "events", "machine", "profiles")
 TELEMETRY_LABELS = {"reference": "A100 reference (modeled)", "none": "none (sensors N/A)"}
+
+
+def slot_text(slot: dict[str, Any] | None) -> str:
+    if not slot:
+        return "not in the machine layout"
+    parts = [f"{slot['slot_type']} slot {slot['slot']}", slot["pcie"] or "no PCIe link"]
+    if slot["host_bandwidth_gbps"]:
+        parts.append(f"host {slot['host_link']} {slot['host_bandwidth_gbps']:g} GB/s per direction")
+    if slot["nvlink_links"]:
+        parts.append(f"{slot['nvlink_links']} NVLinks, {slot['nvlink_bandwidth_gbps']:g} GB/s")
+    parts.append(f"NUMA {slot['numa_node']}")
+    return ", ".join(parts)
+
+
+def platform_view(platform: dict[str, Any]) -> list[Any]:
+    """Slot map and GPU link matrix of the machine's platform."""
+
+    if not platform:
+        return []
+    slots = Table(box=None, padding=(0, 1), header_style="dim")
+    for label in ("GPU", "Slot", "Profile", "PCIe", "Host link", "NUMA", "NVLinks"):
+        slots.add_column(label, no_wrap=True)
+    for device in platform["devices"]:
+        host = device["host_bandwidth_gbps"]
+        nvlinks = device["nvlink_links"]
+        slots.add_row(
+            str(device["index"]),
+            f"{device['slot']} {device['slot_type']}",
+            device["profile_id"],
+            device["pcie"] or "-",
+            f"{device['host_link']} {host:g} GB/s" if host else device["host_link"],
+            str(device["numa_node"]),
+            f"{nvlinks} ({device['nvlink_bandwidth_gbps']:g} GB/s)" if nvlinks else "-",
+        )
+    matrix = Table(box=None, padding=(0, 1), header_style="dim")
+    count = len(platform["matrix"])
+    matrix.add_column("")
+    for column in range(count):
+        matrix.add_column(f"GPU{column}", no_wrap=True)
+    for row, cells in enumerate(platform["matrix"]):
+        matrix.add_row(f"GPU{row}", *[Text(cell, style="green" if cell.startswith("NV") else "") for cell in cells])
+    parts: list[Any] = [
+        Text("Platform", style="bold"),
+        key_values([
+            ("Platform", f"{platform['name']} ({platform['id']})"),
+            ("Slots", platform["slot_layout"]),
+            ("Wiring", Text(platform["summary"], overflow="fold")),
+        ]),
+        slots,
+    ]
+    if count > 1:
+        parts.extend([Text("GPU links (as nvidia-smi topo -m)", style="dim"), matrix])
+    parts.extend(Text(note, style="yellow", overflow="fold") for note in platform["notes"])
+    return parts
 
 
 class Confirm(ModalScreen[bool]):
@@ -177,8 +232,27 @@ class ConsoleApp(App[str]):
                 with VerticalScroll(id="machine-body"):
                     with Vertical(id="machine-form"):
                         yield Static("Device layout", classes="section")
-                        yield Input(placeholder="a100:8 or a100:4,h100:4", id="cfg-devices")
+                        yield Input(placeholder="a100:8, h100:4 or l40s:2,l4:2", id="cfg-devices")
                         yield Static(id="cfg-devices-check")
+                        with Horizontal(classes="row"):
+                            yield Label("Platform")
+                            yield Select(
+                                [("Auto (by form factor)", AUTO)]
+                                + [(f"{platform.name} ({platform.id})", platform.id)
+                                   for platform in load_platforms().values()],
+                                allow_blank=False,
+                                id="cfg-platform",
+                            )
+                        with Horizontal(classes="row"):
+                            yield Label("PCIe slot generation")
+                            yield Select(
+                                [("Platform default", 0)] + [(f"Gen{gen}", gen) for gen in range(3, 7)],
+                                allow_blank=False,
+                                id="cfg-pcie",
+                            )
+                        with Horizontal(classes="row"):
+                            yield Label("NVLink bridges")
+                            yield Input(placeholder="0-1,2-3 (PCIe cards)", id="cfg-bridges")
                         with Horizontal(classes="row"):
                             yield Label("Sensor model")
                             yield Select(
@@ -407,6 +481,7 @@ class ConsoleApp(App[str]):
             key_values([
                 ("Device", f"GPU {device['index']} {device['name']} ({device['profile_id']})"),
                 ("UUID", device["uuid"]),
+                ("Slot", slot_text(device.get("slot"))),
                 ("Memory", f"{size(memory['used_bytes'])} used, peak {size(memory['peak_bytes'])}, "
                            f"tracked {size(memory['tracked_bytes'])}, reserved {size(memory['reserved_bytes'])}"),
                 ("Allocator", f"{allocator['allocation_count']} allocations in {allocator['segment_count']} segments"),
@@ -419,6 +494,7 @@ class ConsoleApp(App[str]):
 
     def show_machine(self, status: dict[str, Any]) -> None:
         config, daemon, paths = status["config"], status["daemon"], status["paths"]
+        platform = status.get("platform") or {}
         if not self.form_loaded:
             self.load_form(config)
         home = str(Path.home())
@@ -437,6 +513,8 @@ class ConsoleApp(App[str]):
                 ("Joining", "fakegpu.init() joins; FAKEGPU_MACHINE=off opts out"),
             ]),
             Text(),
+            *platform_view(platform),
+            Text(),
             Text("Other views", style="bold"),
             key_values([
                 ("nvitop", "fakegpu nvitop"),
@@ -447,6 +525,9 @@ class ConsoleApp(App[str]):
 
     def load_form(self, config: dict[str, Any]) -> None:
         self.query_one("#cfg-devices", Input).value = config["devices"]
+        self.query_one("#cfg-platform", Select).value = config["platform"]
+        self.query_one("#cfg-pcie", Select).value = config["pcie_generation"]
+        self.query_one("#cfg-bridges", Input).value = config["nvlink_bridges"]
         self.query_one("#cfg-telemetry", Select).value = config["telemetry"]
         self.query_one("#cfg-background", Switch).value = config["background"]
         self.query_one("#cfg-warning", Input).value = f"{config['memory_warning_percent']:g}"
@@ -496,22 +577,37 @@ class ConsoleApp(App[str]):
     # ------------------------------------------------------- machine form
 
     @on(Input.Changed, "#cfg-devices")
-    def check_layout(self, event: Input.Changed) -> None:
+    @on(Input.Changed, "#cfg-bridges")
+    @on(Select.Changed, "#cfg-platform")
+    @on(Select.Changed, "#cfg-pcie")
+    def check_layout(self) -> None:
         check = self.query_one("#cfg-devices-check", Static)
         try:
-            profiles = parse_devices(event.value)
+            profiles = parse_devices(self.query_one("#cfg-devices", Input).value)
+            resolved = resolve_platform(
+                profiles,
+                str(self.query_one("#cfg-platform", Select).value),
+                pcie_generation=int(self.query_one("#cfg-pcie", Select).value),
+                nvlink_bridges=self.query_one("#cfg-bridges", Input).value,
+            )
         except ValueError as exc:
             check.update(Text(str(exc), style="red"))
             return
         catalog = {p.id: p for p in self.profiles}
         total = sum(catalog[p].memory_bytes for p in profiles)
-        check.update(Text(f"{len(profiles)} device(s), {size(total)} in total", style="green"))
+        check.update(Text(
+            f"{len(profiles)} device(s), {size(total)} in total, on {resolved.platform.name}",
+            style="green",
+        ))
 
     @on(Button.Pressed, "#cfg-apply")
     def apply_config(self) -> None:
         try:
             changes = {
                 "devices": self.query_one("#cfg-devices", Input).value.strip(),
+                "platform": self.query_one("#cfg-platform", Select).value,
+                "pcie_generation": self.query_one("#cfg-pcie", Select).value,
+                "nvlink_bridges": self.query_one("#cfg-bridges", Input).value.strip(),
                 "telemetry": self.query_one("#cfg-telemetry", Select).value,
                 "background": self.query_one("#cfg-background", Switch).value,
                 "memory_warning_percent": float(self.query_one("#cfg-warning", Input).value),

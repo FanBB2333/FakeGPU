@@ -117,6 +117,7 @@ class _FakeGpuRuntimeConfig:
     profile: str | None = None
     device_count: int | None = None
     devices: str | Sequence[str] | None = None
+    platform: str | None = None
 
 
 def init(
@@ -133,6 +134,7 @@ def init(
     profile: str | None = None,
     device_count: int | None = None,
     devices: str | Sequence[str] | None = None,
+    platform: str | None = None,
     update_env: bool = True,
     force: bool = False,
 ) -> InitResult:
@@ -146,7 +148,7 @@ def init(
 
     with _state_lock:
         if _initialized and not force:
-            if profile is not None or device_count is not None or devices is not None:
+            if profile is not None or device_count is not None or devices is not None or platform is not None:
                 raise RuntimeError(
                     "fakegpu.init() has already run in this process; GPU preset settings must be provided before the first init()."
                 )
@@ -164,6 +166,7 @@ def init(
             profile=profile,
             device_count=device_count,
             devices=devices,
+            platform=platform,
         )
         if update_env:
             _apply_env_inplace(resolved_dir, config)
@@ -207,6 +210,7 @@ def env(
     profile: str | None = None,
     device_count: int | None = None,
     devices: str | Sequence[str] | None = None,
+    platform: str | None = None,
     base_env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """
@@ -229,6 +233,7 @@ def env(
         profile=profile,
         device_count=device_count,
         devices=devices,
+        platform=platform,
     )
     return _build_env(config, build_dir=build_dir, lib_dir=lib_dir, base_env=base_env)
 
@@ -262,6 +267,7 @@ def run(
     profile: str | None = None,
     device_count: int | None = None,
     devices: str | Sequence[str] | None = None,
+    platform: str | None = None,
     check: bool = True,
     **kwargs,
 ) -> subprocess.CompletedProcess[str]:
@@ -281,6 +287,7 @@ def run(
         profile=profile,
         device_count=device_count,
         devices=devices,
+        platform=platform,
     )
     completed = subprocess.run(
         list(cmd),
@@ -409,6 +416,11 @@ def _apply_config_env(env_map: dict[str, str], config: _FakeGpuRuntimeConfig) ->
         else:
             spec = ",".join(config.devices)
         env_map["FAKEGPU_PROFILES"] = spec
+
+    if config.platform is not None or env_map.get("FAKEGPU_PLATFORM"):
+        from .platforms import export_platform
+
+        export_platform(env_map, config.platform)
 
 
 def _apply_env(env_map: dict[str, str], resolved_dir: Path) -> None:

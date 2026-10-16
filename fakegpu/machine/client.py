@@ -9,6 +9,7 @@ import os
 import socket
 from typing import Any, MutableMapping
 
+from ..platforms import apply_platform_environment
 from .config import MachineConfig, MachinePaths
 
 _ids = itertools.count(1)
@@ -72,7 +73,8 @@ def attach_environment(
     """Point a starting FakeCUDA process at the running machine, if any.
 
     The process publishes its state to the machine and, unless it chose its
-    own devices, uses the machine layout. ``FAKEGPU_MACHINE=off`` opts out.
+    own devices, uses the machine layout and platform (slots, PCIe links and
+    NVLinks). ``FAKEGPU_MACHINE=off`` opts out.
     """
 
     environ = os.environ if environ is None else environ
@@ -87,6 +89,14 @@ def attach_environment(
     layout_variables = ("FAKEGPU_PROFILE", "FAKEGPU_PROFILES", "FAKEGPU_DEVICE_COUNT")
     if not explicit_layout and not any(name in environ for name in layout_variables):
         environ["FAKEGPU_PROFILES"] = config.devices
+        if not environ.get("FAKEGPU_PLATFORM"):
+            apply_platform_environment(
+                environ,
+                config.profiles,
+                config.platform,
+                pcie_generation=config.pcie_generation,
+                nvlink_bridges=config.nvlink_bridges,
+            )
     if config.telemetry == "reference":
         environ.setdefault("FAKEGPU_TELEMETRY", "reference")
     return config

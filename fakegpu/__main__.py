@@ -7,6 +7,7 @@ import sys
 from ._api import env as fakegpu_env
 from ._api import _warn_if_macos_injection_may_be_blocked
 from ._cli import BUILTIN_COMMANDS, load_builtin_handler
+from .platforms import PlatformError
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -82,6 +83,13 @@ def main(argv: list[str] | None = None) -> int:
         "--devices",
         help="Device preset spec, e.g. 'a100:4,h100:4' or 't4,l40s'. Equivalent to setting $FAKEGPU_PROFILES.",
     )
+    parser.add_argument(
+        "--platform",
+        help=(
+            "Host platform whose slots, PCIe links and NVLinks the devices get: auto or an ID from "
+            "'fakegpu platform list'. Equivalent to setting $FAKEGPU_PLATFORM."
+        ),
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command to run")
 
     ns = parser.parse_args(argv)
@@ -94,20 +102,24 @@ def main(argv: list[str] | None = None) -> int:
 
     _warn_if_macos_injection_may_be_blocked(cmd[0])
 
-    child_env = fakegpu_env(
-        build_dir=ns.build_dir,
-        lib_dir=ns.lib_dir,
-        mode=ns.mode,
-        oom_policy=ns.oom_policy,
-        unsupported_api=ns.unsupported_api,
-        dist_mode=ns.dist_mode,
-        cluster_config=ns.cluster_config,
-        coordinator_addr=ns.coordinator_addr,
-        coordinator_transport=ns.coordinator_transport,
-        profile=ns.profile,
-        device_count=ns.device_count,
-        devices=ns.devices,
-    )
+    try:
+        child_env = fakegpu_env(
+            build_dir=ns.build_dir,
+            lib_dir=ns.lib_dir,
+            mode=ns.mode,
+            oom_policy=ns.oom_policy,
+            unsupported_api=ns.unsupported_api,
+            dist_mode=ns.dist_mode,
+            cluster_config=ns.cluster_config,
+            coordinator_addr=ns.coordinator_addr,
+            coordinator_transport=ns.coordinator_transport,
+            profile=ns.profile,
+            device_count=ns.device_count,
+            devices=ns.devices,
+            platform=ns.platform,
+        )
+    except PlatformError as exc:
+        parser.error(str(exc))
     os.execvpe(cmd[0], cmd, child_env)
     return 0
 

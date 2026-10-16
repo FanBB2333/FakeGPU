@@ -164,9 +164,17 @@ def test_attach_requires_a_running_daemon(tmp_path):
         assert environ["FAKEGPU_PROFILES"] == "h100:2"
         assert environ["FAKEGPU_SMI_STATE_DIR"] == str(paths.state_dir)
         assert environ["FAKEGPU_TELEMETRY"] == "reference"
+        # Two H100 SXM modules sit on the 4-GPU HGX board, wired directly.
+        assert environ["FAKEGPU_PLATFORM"] == "hgx-h100-4"
+        assert environ["FAKEGPU_NVLINK_FABRIC"] == "mesh:0,1:6:25"
+        assert environ["FAKEGPU_SLOTS"].count("type=sxm,pcie=5x16") == 2
         own = {"FAKEGPU_HOME": str(tmp_path), "FAKEGPU_PROFILES": "l4:1"}
         attach_environment(own)
         assert own["FAKEGPU_PROFILES"] == "l4:1"
+        assert "FAKEGPU_SLOTS" not in own
+        legacy = {"FAKEGPU_HOME": str(tmp_path), "FAKEGPU_NVLINK_GROUPS": "0,1"}
+        attach_environment(legacy)
+        assert "FAKEGPU_SLOTS" not in legacy and "FAKEGPU_NVLINK_FABRIC" not in legacy
         explicit = {"FAKEGPU_HOME": str(tmp_path)}
         attach_environment(explicit, explicit_layout=True)
         assert "FAKEGPU_PROFILES" not in explicit

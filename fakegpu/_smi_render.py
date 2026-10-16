@@ -19,6 +19,7 @@ from ._smi_environment import (
     _maximum_fault_severity,
     _nonnegative_int,
 )
+from .link_topology import placement_relation
 from ._smi_query import (
     QUERY_SCHEMA_VERSION,
     QueryField,
@@ -180,14 +181,22 @@ def render_topology_matrix(
             if len(devices_by_host) > 1 or lines[-1] != lines[0]:
                 lines.append("")
             lines.append(f"Host: {host}")
+            platforms = sorted(
+                {
+                    str(device["topology"].get("platform") or "")
+                    for device in host_devices
+                }
+                - {""}
+            )
+            for platform in platforms:
+                lines.append(f"Platform: {_platform_label(platform)}")
             labels = _topology_labels(host_devices)
-            rows = [
-                [
-                    "",
-                    *labels,
-                ]
-            ]
+            placed = any(
+                device["topology"].get("slot") for device in host_devices
+            )
+            rows = [["", *labels, *(["NUMA Affinity"] if placed else [])]]
             for row_index, device in enumerate(host_devices):
+                slot = device["topology"].get("slot") or {}
                 rows.append(
                     [
                         labels[row_index],
@@ -195,6 +204,11 @@ def render_topology_matrix(
                             _topology_relation(device, target)
                             for target in host_devices
                         ],
+                        *(
+                            [str(slot.get("numa_node", "N/A")) if slot else "N/A"]
+                            if placed
+                            else []
+                        ),
                     ]
                 )
             widths = [
@@ -235,11 +249,32 @@ def render_topology_matrix(
             [
                 "",
                 "Legend:",
-                "  X    Self",
-                "  NV1  One active modeled NVLink peer relationship",
+                "",
+                "  X    = Self",
                 (
-                    "  PIX  Same host; PCIe hierarchy is not "
-                    "measured"
+                    "  SYS  = Connection traversing PCIe as well as the "
+                    "SMP interconnect between NUMA nodes"
+                ),
+                (
+                    "  NODE = Connection traversing PCIe as well as the "
+                    "interconnect between PCIe Host Bridges within a "
+                    "NUMA node"
+                ),
+                (
+                    "  PHB  = Connection traversing PCIe as well as a "
+                    "PCIe Host Bridge (typically the CPU)"
+                ),
+                (
+                    "  PXB  = Connection traversing multiple PCIe bridges "
+                    "(without traversing the PCIe Host Bridge)"
+                ),
+                (
+                    "  PIX  = Connection traversing at most a single "
+                    "PCIe bridge"
+                ),
+                (
+                    "  NV#  = Connection traversing a bonded set of # "
+                    "NVLinks"
                 ),
             ]
         )
@@ -256,7 +291,10 @@ def render_nvlink_status(
     devices = list(inventory.get("devices") or [])
     lines = [
         "FakeGPU modeled NVLink status",
-        "Bandwidth values are configuration inputs, not measurements.",
+        (
+            "Bandwidth values are configuration inputs, not measurements "
+            "(GB/s per link and direction)."
+        ),
     ]
     if not devices:
         lines.append("No published FakeCUDA GPUs found.")
@@ -270,29 +308,34 @@ def render_nvlink_status(
         )
         lines.append(
             "  Source: "
-            f"{topology.get('source') or 'modeled_none'}"
+            f"{nvlink.get('source') or topology.get('source') or 'modeled_none'}"
         )
         if topology.get("error"):
             lines.append(
                 f"  Configuration error: {topology['error']}"
             )
-        active_peers = [
-            peer
-            for peer in nvlink.get("peers") or []
-            if peer.get("active")
+        active_links = [
+            link
+            for link in nvlink.get("links") or []
+            if link.get("active")
         ]
-        if not active_peers:
-            lines.append("  No active modeled NVLink peers.")
+        if not active_links:
+            lines.append("  No active modeled NVLinks.")
             continue
-        for peer in sorted(
-            active_peers,
+        for link in sorted(
+            active_links,
             key=lambda item: _nonnegative_int(item.get("link")),
         ):
+            if link.get("remote") == "gpu":
+                remote = (
+                    f"GPU {link['index']} ({link['uuid']}, "
+                    f"{link['pci_bus_id']})"
+                )
+            else:
+                remote = f"NVSwitch ({link['pci_bus_id']})"
             lines.append(
-                f"  Link {peer['link']}: Active -> "
-                f"GPU {peer['index']} ({peer['uuid']}, "
-                f"{peer['pci_bus_id']}), "
-                f"{_format_gbps(peer.get('bandwidth_gbps'))} Gbps"
+                f"  Link {link['link']}: Active -> {remote}, "
+                f"{_format_gbps(link.get('bandwidth_gbps'))} GB/s"
             )
     for error in errors:
         lines.append(f"warning: {error}")
@@ -765,8 +808,9 @@ def render_detail(
                     f"{topology.get('source') or 'modeled_none'}, "
                     f"{nvlink.get('active_links', 0)} active NVLinks / "
                     f"{_format_gbps(nvlink.get('aggregate_bandwidth_gbps'))} "
-                    "Gbps modeled aggregate"
+                    "GB/s modeled aggregate"
                 ),
+                f"  Slot: {_slot_text(topology)}",
                 (
                     "  Health model: "
                     f"{health.get('status') or 'unknown'}, "
@@ -1038,11 +1082,8 @@ def _topology_relation(
         return "X"
     target_uuid = str(target.get("uuid") or "")
     target_index = _nonnegative_int(target.get("index"))
-    peers = (
-        source.get("topology", {})
-        .get("nvlink", {})
-        .get("peers", [])
-    )
+    topology = source.get("topology", {})
+    peers = topology.get("nvlink", {}).get("peers", [])
     for peer in peers:
         if not isinstance(peer, Mapping) or not peer.get("active"):
             continue
@@ -1051,16 +1092,58 @@ def _topology_relation(
             peer_uuid
             and peer_uuid != "unknown"
             and peer_uuid == target_uuid
-        ):
-            return "NV1"
-        if (
+        ) or (
             peer_uuid in {"", "unknown"}
             and _nonnegative_int(peer.get("index")) == target_index
         ):
-            return "NV1"
-    if str(source.get("host") or "") == str(target.get("host") or ""):
+            return f"NV{_nonnegative_int(peer.get('links'), default=1)}"
+    if str(source.get("host") or "") != str(target.get("host") or ""):
+        return "SYS"
+    left = topology.get("slot")
+    right = target.get("topology", {}).get("slot")
+    if not left or not right:
         return "PIX"
-    return "SYS"
+    return placement_relation(
+        (left.get("numa_node"), left.get("host_bridge"), left.get("pcie_switch")),
+        (right.get("numa_node"), right.get("host_bridge"), right.get("pcie_switch")),
+    )
+
+
+def _platform_label(platform_id: str) -> str:
+    from .platforms import load_platforms
+
+    platform = load_platforms().get(platform_id)
+    return f"{platform.name} ({platform_id})" if platform else platform_id
+
+
+def _slot_text(topology: Mapping[str, Any]) -> str:
+    slot = topology.get("slot")
+    if not slot:
+        return "not modeled"
+    parts = [str(slot.get("type") or "any")]
+    if topology.get("platform"):
+        parts[0] += f" on {topology['platform']}"
+    pcie = topology.get("pcie")
+    if pcie:
+        text = f"PCIe Gen{pcie['generation']} x{pcie['width']}"
+        if (pcie.get("gpu_max_generation"), pcie.get("gpu_max_width")) != (
+            pcie["generation"],
+            pcie["width"],
+        ):
+            text += (
+                f" (GPU max Gen{pcie['gpu_max_generation']} "
+                f"x{pcie['gpu_max_width']})"
+            )
+        parts.append(text)
+    else:
+        parts.append("no PCIe link")
+    host = topology.get("host_link") or {}
+    if host.get("bandwidth_gbps") is not None:
+        parts.append(
+            f"host {host.get('kind')} {_format_gbps(host['bandwidth_gbps'])} GB/s"
+        )
+    parts.append(f"NUMA {slot.get('numa_node')}")
+    return ", ".join(parts)
 
 
 def _display_value(value: Any) -> str:

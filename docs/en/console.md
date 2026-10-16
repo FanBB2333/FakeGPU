@@ -15,9 +15,12 @@ fakegpu console
 ```
 
 `fakegpu console` starts the machine if it is not running. The first start uses
-eight A100 SXM4 80GB devices with the reference telemetry model; set another
-layout with `--devices` (for example `--devices a100:2,h100:2`) and
-`--telemetry none|reference`. These options also update a running machine.
+eight A100 SXM4 80GB devices on an HGX A100 8-GPU baseboard with the reference
+telemetry model; set another layout with `--devices` (for example
+`--devices h100:8` or `--devices rtx4090:2`), the host platform with
+`--platform`, `--pcie-gen` and `--nvlink-bridges` (see
+[Platforms and slots](platforms.md)), and `--telemetry none|reference`. These
+options also update a running machine.
 
 ## Run workloads on the machine
 
@@ -52,7 +55,7 @@ read the same state, so processes on the machine also appear there.
 | `2` Processes | Every attached process with command line, user, stage, memory and activity per device; recently ended processes |
 | `3` Devices | Per-GPU detail: allocator counters, memory by category, largest allocations, and history sparklines |
 | `4` Events | The full event log with text and level filters |
-| `5` Machine | Settings form (layout, telemetry, background, stale and memory warning thresholds), daemon and path information |
+| `5` Machine | Settings form (layout, platform, PCIe slot generation, NVLink bridges, telemetry, background, stale and memory warning thresholds), the slot map and GPU link matrix, daemon and path information |
 | `6` Profiles | The GPU profile catalog; `a` or Enter adds the selected profile to the layout form |
 
 | Key | Action |
@@ -94,7 +97,7 @@ A process killed from nvitop or with `kill` therefore shows up as
 fakegpu daemon start [--devices a100:8] [--telemetry reference] [--background on]
 fakegpu daemon status [--json]
 fakegpu daemon events [-n 50] [-f] [--json]
-fakegpu daemon config [--devices a100:4] [--json]
+fakegpu daemon config [--devices a100:4] [--platform auto] [--pcie-gen 0] [--nvlink-bridges 0-1] [--json]
 fakegpu daemon stop
 ```
 

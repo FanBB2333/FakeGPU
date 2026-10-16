@@ -309,6 +309,16 @@ def _normalize_native_activity(value: Any) -> dict[str, Any]:
     return result
 
 
+def _finite_float(value: Any, default: float | None = 0.0) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number) or number < 0:
+        return default
+    return number
+
+
 def _normalize_device_topology(value: Any) -> dict[str, Any]:
     raw = dict(value) if isinstance(value, Mapping) else {}
     nvlink_raw = (
@@ -316,14 +326,9 @@ def _normalize_device_topology(value: Any) -> dict[str, Any]:
         if isinstance(raw.get("nvlink"), Mapping)
         else {}
     )
+    source = str(raw.get("source") or "modeled_none")
     peers = []
     for item in _mapping_list(nvlink_raw.get("peers")):
-        try:
-            bandwidth = float(item.get("bandwidth_gbps", 0))
-        except (TypeError, ValueError):
-            bandwidth = 0.0
-        if not math.isfinite(bandwidth) or bandwidth < 0:
-            bandwidth = 0.0
         peers.append(
             {
                 "link": _nonnegative_int(item.get("link")),
@@ -332,43 +337,110 @@ def _normalize_device_topology(value: Any) -> dict[str, Any]:
                 "pci_bus_id": str(
                     item.get("pci_bus_id") or "unknown"
                 ),
-                "bandwidth_gbps": bandwidth,
+                "links": _nonnegative_int(item.get("links"), default=1),
+                "via": str(item.get("via") or "direct"),
+                "bandwidth_gbps": _finite_float(item.get("bandwidth_gbps", 0)),
                 "active": bool(item.get("active", True)),
                 "source": str(
                     item.get("source")
-                    or raw.get("source")
-                    or "modeled_none"
+                    or nvlink_raw.get("source")
+                    or source
                 ),
             }
         )
-    try:
-        aggregate_bandwidth = float(
-            nvlink_raw.get("aggregate_bandwidth_gbps", 0)
+    links = []
+    for item in _mapping_list(nvlink_raw.get("links")):
+        remote = str(item.get("remote") or "gpu")
+        links.append(
+            {
+                "link": _nonnegative_int(item.get("link")),
+                "remote": remote,
+                "index": (
+                    None
+                    if remote != "gpu" or item.get("index") is None
+                    else _nonnegative_int(item.get("index"))
+                ),
+                "uuid": str(item.get("uuid") or ""),
+                "pci_bus_id": str(item.get("pci_bus_id") or "unknown"),
+                "bandwidth_gbps": _finite_float(item.get("bandwidth_gbps", 0)),
+                "active": bool(item.get("active", True)),
+            }
         )
-    except (TypeError, ValueError):
-        aggregate_bandwidth = 0.0
-    if (
-        not math.isfinite(aggregate_bandwidth)
-        or aggregate_bandwidth < 0
-    ):
-        aggregate_bandwidth = 0.0
+    if not links:
+        # Version 1 states list one link per peer.
+        links = [
+            {
+                "link": peer["link"],
+                "remote": "gpu",
+                "index": peer["index"],
+                "uuid": peer["uuid"],
+                "pci_bus_id": peer["pci_bus_id"],
+                "bandwidth_gbps": peer["bandwidth_gbps"],
+                "active": peer["active"],
+            }
+            for peer in peers
+        ]
+    slot_raw = raw.get("slot") if isinstance(raw.get("slot"), Mapping) else None
+    slot = None
+    if slot_raw is not None:
+        slot = {
+            "type": str(slot_raw.get("type") or "any"),
+            "numa_node": _nonnegative_int(slot_raw.get("numa_node")),
+            "host_bridge": _nonnegative_int(slot_raw.get("host_bridge")),
+            "pcie_switch": str(slot_raw.get("pcie_switch") or ""),
+        }
+    pcie_raw = raw.get("pcie") if isinstance(raw.get("pcie"), Mapping) else None
+    pcie = None
+    if pcie_raw is not None:
+        pcie = {
+            key: _nonnegative_int(pcie_raw.get(key))
+            for key in (
+                "generation",
+                "width",
+                "max_generation",
+                "max_width",
+                "gpu_max_generation",
+                "gpu_max_width",
+            )
+        }
+        pcie["bandwidth_gbps"] = _finite_float(pcie_raw.get("bandwidth_gbps"))
+    host_raw = raw.get("host_link") if isinstance(raw.get("host_link"), Mapping) else {}
+    peer_access = raw.get("peer_access")
     return {
-        "source": str(raw.get("source") or "modeled_none"),
+        "source": source,
+        "platform": str(raw.get("platform") or ""),
         "configured": bool(raw.get("configured", False)),
         "valid": bool(raw.get("valid", True)),
         "error": str(raw.get("error") or ""),
+        "slot": slot,
+        "pcie": pcie,
+        "host_link": {
+            "kind": str(host_raw.get("kind") or ("pcie" if pcie else "unknown")),
+            "bandwidth_gbps": _finite_float(host_raw.get("bandwidth_gbps"), None),
+        },
+        "peer_access": (
+            [_nonnegative_int(item) for item in peer_access]
+            if isinstance(peer_access, list)
+            else None
+        ),
         "nvlink": {
+            "source": str(nvlink_raw.get("source") or source),
             "active_links": _nonnegative_int(
                 nvlink_raw.get("active_links"),
-                default=sum(
-                    1 for peer in peers if peer["active"]
-                ),
+                default=sum(1 for link in links if link["active"]),
             ),
             "peer_count": _nonnegative_int(
                 nvlink_raw.get("peer_count"),
                 default=len(peers),
             ),
-            "aggregate_bandwidth_gbps": aggregate_bandwidth,
+            "link_bandwidth_gbps": _finite_float(
+                nvlink_raw.get("link_bandwidth_gbps"),
+                links[0]["bandwidth_gbps"] if links else 0.0,
+            ),
+            "aggregate_bandwidth_gbps": _finite_float(
+                nvlink_raw.get("aggregate_bandwidth_gbps", 0)
+            ),
+            "links": links,
             "peers": peers,
         },
     }

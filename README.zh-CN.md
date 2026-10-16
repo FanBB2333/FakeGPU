@@ -193,6 +193,7 @@ FakeCUDA 进程会接入这台机器，控制台显示 GPU、进程和事件，�
 - [Diffusion 训练](docs/zh-CN/diffusion-training.md)
 - [分布式规划与实验批量运行](docs/zh-CN/distributed.md)
 - [FakeGPU-SMI 与监控](docs/zh-CN/fakegpu-smi.md)
+- [平台与插槽](docs/zh-CN/platforms.md)：基板、超级芯片、PCIe 插槽、NVLink 桥
 - [原生库拦截](docs/zh-CN/native-interception.md)
 - [对照真实 GPU 校准](docs/zh-CN/calibration.md)
 - [验证与可靠性](docs/zh-CN/validation.md)

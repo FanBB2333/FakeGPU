@@ -43,7 +43,22 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
     ),
     "nvlink.bandwidth": QueryField(
         "topology.nvlink.aggregate_bandwidth_gbps",
-        unit="Gbps",
+        unit="GB/s",
+        precision=1,
+    ),
+    "platform": QueryField("topology.platform"),
+    "slot.type": QueryField("topology.slot.type"),
+    "numa.node": QueryField("topology.slot.numa_node"),
+    "pcie.link.gen.current": QueryField("topology.pcie.generation"),
+    "pcie.link.gen.max": QueryField("topology.pcie.max_generation"),
+    "pcie.link.gen.gpumax": QueryField(
+        "topology.pcie.gpu_max_generation"
+    ),
+    "pcie.link.width.current": QueryField("topology.pcie.width"),
+    "pcie.link.width.max": QueryField("topology.pcie.max_width"),
+    "host_link.bandwidth": QueryField(
+        "topology.host_link.bandwidth_gbps",
+        unit="GB/s",
         precision=1,
     ),
     "health.status": QueryField("health.status"),

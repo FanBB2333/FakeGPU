@@ -204,6 +204,8 @@ The detailed guides live in [`docs/`](docs/en/README.md):
 - [Diffusion training](docs/en/diffusion-training.md)
 - [Distributed plans and experiment sweeps](docs/en/distributed.md)
 - [FakeGPU-SMI and monitoring](docs/en/fakegpu-smi.md)
+- [Platforms and slots](docs/en/platforms.md): baseboards, superchips, PCIe
+  slots, NVLink bridges
 - [Native interception](docs/en/native-interception.md)
 - [Calibrating against a real GPU](docs/en/calibration.md)
 - [Validation and reliability](docs/en/validation.md)

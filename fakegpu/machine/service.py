@@ -159,6 +159,7 @@ class MachineService:
         self._oversubscribed: set[str] = set()
         self._history: dict[str, _DeviceHistory] = {}
         self._telemetry = ReferenceTelemetry() if self.config.telemetry == "reference" else None
+        self._platform = self.config.resolved_platform().to_dict()
         self._status: dict[str, Any] = {}
         self._methods: dict[str, Callable[..., Any]] = {
             "hello": self.hello,
@@ -211,6 +212,7 @@ class MachineService:
             return new.to_dict()
         new.save(self.paths.config)
         self.config = new
+        self._platform = new.resolved_platform().to_dict()
         if new.telemetry != old.telemetry:
             self._telemetry = ReferenceTelemetry() if new.telemetry == "reference" else None
         diff = "; ".join(
@@ -219,7 +221,9 @@ class MachineService:
             if getattr(old, name) != getattr(new, name)
         )
         running = sum(process.status in LIVE for process in self._processes.values())
-        note = f" ({running} running process(es) keep their devices)" if new.devices != old.devices and running else ""
+        layout = ("devices", "platform", "pcie_generation", "nvlink_bridges")
+        changed_layout = any(getattr(new, name) != getattr(old, name) for name in layout)
+        note = f" ({running} running process(es) keep their devices)" if changed_layout and running else ""
         self.emit("config.changed", f"machine config changed: {diff}{note}", data={"changes": dict(changes)})
         self.poll()
         return new.to_dict()
@@ -393,6 +397,7 @@ class MachineService:
             "protocol": PROTOCOL,
             "daemon": self._daemon_info(now),
             "config": self.config.to_dict(),
+            "platform": self._platform,
             "paths": {"root": str(self.paths.root), "state_dir": str(self.paths.state_dir)},
             "devices": devices,
             "processes": processes,
@@ -417,11 +422,16 @@ class MachineService:
             if row["memory"].get("used_bytes"):
                 users[row["gpu_uuid"]] = users.get(row["gpu_uuid"], 0) + 1
         rows = []
+        slots = self._platform["devices"]
         for index, profile_id in enumerate(self.config.profiles):
             uuid = _synthetic_uuid(self.host, index, profile_id)
-            rows.append(self._device_row(index, profile_id, uuid, observed.pop(uuid, None), users, True))
+            row = self._device_row(index, profile_id, uuid, observed.pop(uuid, None), users, True)
+            row["slot"] = dict(slots[index]) if index < len(slots) else None
+            rows.append(row)
         for uuid, device in observed.items():
-            rows.append(self._device_row(device["index"], device["profile_id"], uuid, device, users, False))
+            row = self._device_row(device["index"], device["profile_id"], uuid, device, users, False)
+            row["slot"] = None
+            rows.append(row)
         return rows
 
     def _device_row(

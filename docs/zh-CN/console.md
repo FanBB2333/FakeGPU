@@ -11,9 +11,11 @@ FAKEGPU_BUILD_DIR="$PWD/build" python3 -m pip install '.[torch,console]'
 fakegpu console
 ```
 
-如果机器尚未运行，`fakegpu console` 会先启动它。首次启动使用八张 A100 SXM4 80GB，
-并启用参考遥测模型；可以用 `--devices`（例如 `--devices a100:2,h100:2`）和
-`--telemetry none|reference` 指定其他配置。这些选项同样会更新正在运行的机器。
+如果机器尚未运行，`fakegpu console` 会先启动它。首次启动使用 HGX A100 8-GPU 基板上的
+八张 A100 SXM4 80GB，并启用参考遥测模型；可以用 `--devices`（例如 `--devices h100:8`
+或 `--devices rtx4090:2`）指定设备布局，用 `--platform`、`--pcie-gen` 和
+`--nvlink-bridges` 指定主机平台（见[平台与插槽](platforms.md)），用
+`--telemetry none|reference` 指定遥测模型。这些选项同样会更新正在运行的机器。
 
 ## 在机器上运行工作负载
 
@@ -46,7 +48,7 @@ PYTHON
 | `2` Processes | 所有已接入进程的命令行、用户、阶段、各设备显存和活动；最近结束的进程 |
 | `3` Devices | 单卡详情：分配器计数、按类别统计的显存、最大的几次分配，以及历史曲线 |
 | `4` Events | 完整事件日志，可按文本和级别过滤 |
-| `5` Machine | 设置表单（布局、遥测、后台模式、心跳超时和显存告警阈值）、守护进程与路径信息 |
+| `5` Machine | 设置表单（布局、平台、PCIe 插槽代数、NVLink 桥、遥测、后台模式、心跳超时和显存告警阈值）、插槽图和 GPU 链路矩阵、守护进程与路径信息 |
 | `6` Profiles | GPU profile 目录；按 `a` 或 Enter 把选中的 profile 加入布局表单 |
 
 | 按键 | 作用 |
@@ -86,7 +88,7 @@ PYTHON
 fakegpu daemon start [--devices a100:8] [--telemetry reference] [--background on]
 fakegpu daemon status [--json]
 fakegpu daemon events [-n 50] [-f] [--json]
-fakegpu daemon config [--devices a100:4] [--json]
+fakegpu daemon config [--devices a100:4] [--platform auto] [--pcie-gen 0] [--nvlink-bridges 0-1] [--json]
 fakegpu daemon stop
 ```
 

@@ -21,6 +21,7 @@ from pathlib import Path
 import tempfile
 from typing import Any, Mapping
 
+from ..platforms import AUTO, ResolvedPlatform, resolve_platform
 from ..profile_catalog import get_profile
 
 TELEMETRY_MODES = ("none", "reference")
@@ -89,6 +90,14 @@ def parse_devices(spec: str) -> list[str]:
 @dataclass(frozen=True)
 class MachineConfig:
     devices: str = "a100:8"
+    # Host platform from fakegpu.platforms: "auto" picks one by form factor
+    # (SXM modules -> HGX/DGX baseboard, PCIe cards -> server/workstation/
+    # desktop slots, superchips -> their Grace platform).
+    platform: str = AUTO
+    # Overrides the PCIe generation of PCIe slots (0 keeps the template's).
+    pcie_generation: int = 0
+    # NVLink bridges between PCIe cards, e.g. "0-1,2-3" or "0-1-2-3".
+    nvlink_bridges: str = ""
     # The A100 reference model fills temperature/power/clocks from public idle
     # readings plus CPU activity. Other profiles keep those fields empty.
     telemetry: str = "reference"
@@ -99,6 +108,13 @@ class MachineConfig:
 
     def __post_init__(self) -> None:
         parse_devices(self.devices)
+        if not isinstance(self.platform, str):
+            raise ValueError("platform must be a string such as auto or hgx-a100-8")
+        if isinstance(self.pcie_generation, bool) or not isinstance(self.pcie_generation, int):
+            raise ValueError("pcie_generation must be an integer (0 keeps the platform's)")
+        if not isinstance(self.nvlink_bridges, str):
+            raise ValueError("nvlink_bridges must be a string such as 0-1,2-3")
+        self.resolved_platform()
         if self.telemetry not in TELEMETRY_MODES:
             raise ValueError(f"telemetry must be one of {', '.join(TELEMETRY_MODES)}")
         if not 0 < self.stale_after_seconds <= 3600:
@@ -109,6 +125,14 @@ class MachineConfig:
     @property
     def profiles(self) -> list[str]:
         return parse_devices(self.devices)
+
+    def resolved_platform(self) -> ResolvedPlatform:
+        return resolve_platform(
+            self.profiles,
+            self.platform,
+            pcie_generation=int(self.pcie_generation),
+            nvlink_bridges=self.nvlink_bridges,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

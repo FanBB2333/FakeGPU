@@ -42,6 +42,7 @@ def init(
     profile: str | None = None,
     device_count: int | None = None,
     devices: str | Sequence[str] | None = None,
+    platform: str | None = None,
     update_env: bool = True,
     force: bool = False,
 ) -> RuntimeInitResult:
@@ -70,6 +71,7 @@ def init(
             profile=profile,
             device_count=device_count,
             devices=devices,
+            platform=platform,
         )
         return _init_native_runtime(
             config,
@@ -83,6 +85,7 @@ def init(
         device_count=device_count,
         profile=profile,
         devices=devices,
+        platform=platform,
         mode=mode,
         oom_policy=oom_policy,
         unsupported_api=unsupported_api,
@@ -128,6 +131,7 @@ def _init_native_runtime(
         profile=config.profile,
         device_count=config.device_count,
         devices=config.devices,
+        platform=config.platform,
         update_env=update_env,
         force=force,
     )
@@ -139,6 +143,7 @@ def _init_fakecuda_runtime(
     device_count: int | None = None,
     profile: str | None = None,
     devices: str | Sequence[str] | None = None,
+    platform: str | None = None,
     mode: str | None = None,
     oom_policy: str | None = None,
     unsupported_api: str | None = None,
@@ -171,6 +176,10 @@ def _init_fakecuda_runtime(
             os.environ.pop("FAKEGPU_PROFILES", None)
     if devices is not None:
         os.environ["FAKEGPU_PROFILES"] = ",".join(devices) if not isinstance(devices, str) else devices
+    if platform is not None or os.environ.get("FAKEGPU_PLATFORM"):
+        from .platforms import export_platform
+
+        export_platform(os.environ, platform)
 
     effective_device_count = device_count
     if effective_device_count is None:

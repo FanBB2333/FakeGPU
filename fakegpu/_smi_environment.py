@@ -1,8 +1,9 @@
 """Device topology, fault, and MIG models parsed from FAKEGPU_* variables.
 
-Split out of ``smi`` unchanged. These are pure functions over the
-environment: they turn the ``FAKEGPU_NVLINK_GROUPS``,
-``FAKEGPU_FAULT_EVENTS``, and ``FAKEGPU_MIG_LAYOUT`` specs into the modeled
+These are pure functions over the environment: they turn the platform and
+link variables (``FAKEGPU_PLATFORM``, ``FAKEGPU_SLOTS``,
+``FAKEGPU_NVLINK_FABRIC``, ``FAKEGPU_NVLINK_GROUPS``),
+``FAKEGPU_FAULT_EVENTS``, and ``FAKEGPU_MIG_LAYOUT`` into the modeled
 topology, fault, and MIG structures the publisher writes into its state
 file and the readers normalize back out.
 """
@@ -12,15 +13,6 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from typing import Any
-
-
-DEFAULT_NVLINK_BANDWIDTH_GBPS = 900.0
-
-
-MAXIMUM_NVLINK_BANDWIDTH_GBPS = 1_000_000.0
-
-
-MAXIMUM_MODELED_NVLINKS_PER_DEVICE = 18
 
 
 MAXIMUM_MODELED_FAULT_TYPES = 128
@@ -74,189 +66,162 @@ def _synthetic_mig_uuid(
 def _modeled_device_topology(
     devices: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    groups_text = os.environ.get("FAKEGPU_NVLINK_GROUPS")
-    source = "modeled_none"
-    configured = bool(groups_text)
-    valid = True
-    error = ""
-    bandwidth_gbps = DEFAULT_NVLINK_BANDWIDTH_GBPS
-    pairs: set[tuple[int, int]] = set()
-    device_by_index = {
-        _nonnegative_int(device.get("index")): device
-        for device in devices
-    }
+    """Attach each device's slot, PCIe link and NVLinks; return the summary.
 
-    if configured:
-        source = "modeled_environment"
-        bandwidth_text = os.environ.get(
-            "FAKEGPU_NVLINK_BANDWIDTH_GBPS"
-        )
-        if bandwidth_text:
-            try:
-                bandwidth_gbps = float(bandwidth_text)
-            except ValueError:
-                valid = False
-            if not (
-                0 < bandwidth_gbps <= MAXIMUM_NVLINK_BANDWIDTH_GBPS
-            ):
-                valid = False
-            if not valid:
-                error = (
-                    "FAKEGPU_NVLINK_BANDWIDTH_GBPS must be a finite "
-                    "number greater than 0 and no greater than 1000000"
-                )
+    The model comes from ``FAKEGPU_PLATFORM``/``FAKEGPU_SLOTS``/
+    ``FAKEGPU_NVLINK_FABRIC`` (or the older ``FAKEGPU_NVLINK_GROUPS``); see
+    :mod:`fakegpu.link_topology`.
+    """
 
-    if configured and valid:
-        for group_index, group_text in enumerate(
-            str(groups_text).split(";"),
-            start=1,
-        ):
-            group_text = group_text.strip()
-            if not group_text:
-                valid = False
-                error = (
-                    "FAKEGPU_NVLINK_GROUPS contains an empty group"
-                )
-                break
-            members: list[int] = []
-            for member_text in group_text.split(","):
-                member_text = member_text.strip()
-                unsigned_text = (
-                    member_text[1:]
-                    if member_text.startswith("+")
-                    else member_text
-                )
-                if (
-                    not unsigned_text.isascii()
-                    or not unsigned_text.isdigit()
-                ):
-                    valid = False
-                else:
-                    member = int(member_text)
-                    valid = member in device_by_index
-                if not valid:
-                    error = (
-                        f"FAKEGPU_NVLINK_GROUPS group {group_index} "
-                        "contains an invalid device index"
-                    )
-                    break
-                members.append(member)
-            if not valid:
-                break
-            members = sorted(set(members))
-            if len(members) < 2:
-                valid = False
-                error = (
-                    "each FAKEGPU_NVLINK_GROUPS group must contain at "
-                    "least two distinct device indices"
-                )
-                break
-            if (
-                len(members) - 1
-                > MAXIMUM_MODELED_NVLINKS_PER_DEVICE
-            ):
-                valid = False
-                error = (
-                    "an FAKEGPU_NVLINK_GROUPS group exceeds the "
-                    "18-link per-device limit"
-                )
-                break
-            for left_offset, left in enumerate(members):
-                for right in members[left_offset + 1 :]:
-                    pairs.add((left, right))
-        if valid and not pairs:
-            valid = False
-            error = (
-                "FAKEGPU_NVLINK_GROUPS did not define any links"
-            )
+    from .platforms import topology_from_environment
 
-    peers_by_index: dict[int, list[int]] = {
-        index: [] for index in device_by_index
-    }
-    if valid:
-        for left, right in sorted(pairs):
-            peers_by_index[left].append(right)
-            peers_by_index[right].append(left)
-        if any(
-            len(peers) > MAXIMUM_MODELED_NVLINKS_PER_DEVICE
-            for peers in peers_by_index.values()
-        ):
-            valid = False
-            error = (
-                "a device belongs to more than 18 modeled NVLink "
-                "peer relationships"
-            )
-            peers_by_index = {
-                index: [] for index in device_by_index
-            }
-
-    if configured and not valid:
-        source = "modeled_environment_invalid"
-        bandwidth_gbps = DEFAULT_NVLINK_BANDWIDTH_GBPS
-        pairs.clear()
-
-    for index, device in device_by_index.items():
-        peers = []
-        for link, peer_index in enumerate(
-            sorted(peers_by_index[index])
-        ):
-            remote = device_by_index[peer_index]
-            peers.append(
-                {
-                    "link": link,
-                    "index": peer_index,
-                    "uuid": str(remote.get("uuid") or "unknown"),
-                    "pci_bus_id": str(
-                        remote.get("pci_bus_id") or "unknown"
-                    ),
-                    "bandwidth_gbps": bandwidth_gbps,
-                    "active": True,
-                    "source": source,
-                }
-            )
-        device["topology"] = {
-            "source": source,
-            "configured": configured,
-            "valid": valid,
-            "error": error,
-            "nvlink": {
-                "active_links": len(peers),
-                "peer_count": len(peers),
-                "aggregate_bandwidth_gbps": (
-                    len(peers) * bandwidth_gbps
-                ),
-                "peers": peers,
-            },
-        }
-
+    ordered = sorted(devices, key=lambda item: _nonnegative_int(item.get("index")))
+    topology = topology_from_environment(
+        [str(device.get("profile_id") or "") for device in ordered],
+        os.environ,
+    )
+    for position, device in enumerate(ordered):
+        device["topology"] = device_topology_record(topology, position, ordered)
+    count = len(ordered)
     links = []
-    if valid:
-        for left, right in sorted(pairs):
+    for left in range(count):
+        for peer in topology.peers(left):
+            if peer.index <= left:
+                continue
             links.append(
                 {
-                    "source_index": left,
-                    "target_index": right,
-                    "source_uuid": str(
-                        device_by_index[left].get("uuid") or "unknown"
-                    ),
-                    "target_uuid": str(
-                        device_by_index[right].get("uuid") or "unknown"
-                    ),
+                    "source_index": _nonnegative_int(ordered[left].get("index")),
+                    "target_index": _nonnegative_int(ordered[peer.index].get("index")),
+                    "source_uuid": str(ordered[left].get("uuid") or "unknown"),
+                    "target_uuid": str(ordered[peer.index].get("uuid") or "unknown"),
                     "kind": "NVLink",
+                    "via": peer.via,
+                    "links": peer.links,
                     "active": True,
-                    "bandwidth_gbps": bandwidth_gbps,
-                    "source": source,
+                    "bandwidth_gbps": peer.bandwidth_gbps,
+                    "source": topology.nvlink_source,
                 }
             )
+    link_rates = [group.link_gbps for group in topology.nvlink]
     return {
-        "schema_version": "fakegpu.device_topology.v1",
-        "source": source,
-        "configured": configured,
-        "valid": valid,
-        "error": error,
-        "nvlink_bandwidth_gbps": bandwidth_gbps,
+        "schema_version": "fakegpu.device_topology.v2",
+        "source": topology.source,
+        "platform": topology.platform,
+        "configured": topology.configured,
+        "valid": topology.valid,
+        "error": topology.error,
+        "nvlink_bandwidth_gbps": (
+            link_rates[0] if link_rates else topology.legacy_bandwidth_gbps
+        ),
         "link_count": len(links),
         "links": links,
+        "matrix": [
+            [topology.relation(row, column) for column in range(count)]
+            for row in range(count)
+        ],
+    }
+
+
+NVSWITCH_PCI_BUS_ID = "00000000:c0:00.0"
+
+
+def device_topology_record(
+    topology: Any,
+    position: int,
+    devices: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """The ``topology`` block of one device in a published SMI state."""
+
+    slot = topology.slots[position]
+    ports = topology.ports(position)
+    peers = topology.peers(position)
+
+    def identity(index: int | None) -> tuple[str, str]:
+        if index is None:
+            return "", NVSWITCH_PCI_BUS_ID
+        remote = devices[index]
+        return (
+            str(remote.get("uuid") or "unknown"),
+            str(remote.get("pci_bus_id") or "unknown"),
+        )
+
+    pcie = None
+    if slot.pcie is not None:
+        gpu_max = slot.gpu_max_pcie or slot.pcie
+        pcie = {
+            "generation": slot.pcie.generation,
+            "width": slot.pcie.width,
+            "max_generation": slot.pcie.generation,
+            "max_width": slot.pcie.width,
+            "gpu_max_generation": gpu_max.generation,
+            "gpu_max_width": gpu_max.width,
+            "bandwidth_gbps": slot.pcie.bandwidth_gbps,
+        }
+    links = []
+    for port in ports:
+        uuid, bus_id = identity(port.peer)
+        links.append(
+            {
+                "link": port.link,
+                "remote": port.remote,
+                "index": (
+                    None
+                    if port.peer is None
+                    else _nonnegative_int(devices[port.peer].get("index"))
+                ),
+                "uuid": uuid,
+                "pci_bus_id": bus_id,
+                "bandwidth_gbps": port.bandwidth_gbps,
+                "active": True,
+            }
+        )
+    peer_rows = []
+    for peer in peers:
+        uuid, bus_id = identity(peer.index)
+        peer_rows.append(
+            {
+                "link": peer.first_link,
+                "index": _nonnegative_int(devices[peer.index].get("index")),
+                "uuid": uuid,
+                "pci_bus_id": bus_id,
+                "links": peer.links,
+                "via": peer.via,
+                "bandwidth_gbps": peer.bandwidth_gbps,
+                "active": True,
+                "source": topology.nvlink_source,
+            }
+        )
+    return {
+        "source": topology.source,
+        "platform": topology.platform,
+        "configured": topology.configured,
+        "valid": topology.valid,
+        "error": topology.error,
+        "slot": {
+            "type": slot.type,
+            "numa_node": slot.numa,
+            "host_bridge": slot.bridge,
+            "pcie_switch": slot.switch,
+        },
+        "pcie": pcie,
+        "host_link": {
+            "kind": slot.host_link,
+            "bandwidth_gbps": slot.host_bandwidth_gbps,
+        },
+        "peer_access": [
+            _nonnegative_int(devices[index].get("index"))
+            for index in range(len(devices))
+            if topology.can_access_peer(position, index)
+        ],
+        "nvlink": {
+            "source": topology.nvlink_source,
+            "active_links": len(ports),
+            "peer_count": len(peers),
+            "link_bandwidth_gbps": ports[0].bandwidth_gbps if ports else 0.0,
+            "aggregate_bandwidth_gbps": sum(port.bandwidth_gbps for port in ports),
+            "links": links,
+            "peers": peer_rows,
+        },
     }
 
 
