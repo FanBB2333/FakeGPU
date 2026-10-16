@@ -5,9 +5,11 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 
+from fakegpu._finetune_workflow_store import _process_marker
 from fakegpu.experiments import (
     compare_experiments,
     plan_experiments,
@@ -194,8 +196,14 @@ time.sleep(60)
     attempt = next(root.glob("runs/*/attempt-*"))
     assert load_mapping(attempt / "execution.json")["status"] == "timed_out"
     pid = int((attempt / "result.json").read_text())
-    stat = Path(f"/proc/{pid}/stat")
-    assert not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        marker = _process_marker(pid)
+        if marker is None or marker["state"] == "Z":
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("timed-out experiment left a live owned child")
 
 
 def test_separate_workspaces_and_plot(tmp_path):
