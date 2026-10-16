@@ -35,6 +35,17 @@ def test_reader_deduplicates_publisher_and_uses_allocator_memory(tmp_path):
     assert processes[0].pid == os.getpid()
 
 
+def test_processes_appear_only_on_gpus_they_used(tmp_path):
+    state = _state()
+    unused = {"index": 1, "profile_id": "l4", "total_memory": 1000, "reported_memory": 0}
+    released = {**unused, "index": 2, "reported_peak_memory": 50}
+    state["devices"] += [unused, released]
+    (tmp_path / "state.json").write_text(json.dumps(state))
+    devices, processes = NvmlStateBridge(state_dir=tmp_path)._arrays(NvmlStateBridge(state_dir=tmp_path)._inventory())
+    assert len(devices) == 3
+    assert sorted(process.device_index for process in processes) == [0, 2]
+
+
 @pytest.mark.parametrize("change", [
     {"running": False}, {"hostname": "remote-test-host"},
     {"timestamp_ns": 1}, {"timestamp_ns": time.time_ns() + 10**15},

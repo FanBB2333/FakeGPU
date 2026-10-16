@@ -184,6 +184,10 @@ class NvmlStateBridge:
         # the total reported allocation for that process and device.
         processes: dict[tuple[int, int], int] = {}
         for p in inventory["processes"]:
+            # Publishers list every GPU they can see. Like a CUDA context, a
+            # process belongs to a GPU once it has used memory there.
+            if not p["memory"]["used_bytes"] and not p["memory"].get("reported_peak_bytes"):
+                continue
             key = (indices[p["gpu_uuid"]], p["pid"])
             processes[key] = processes.get(key, 0) + p["memory"]["used_bytes"]
         process_rows = (_Process * len(processes))(*(
