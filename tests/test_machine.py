@@ -109,6 +109,15 @@ def test_devices_carry_modeled_link_traffic(service, child):
     assert second["transfer"] is None and second["history"]["pcie_gbps"][-1] is None
 
 
+def test_daemon_status_prints_the_platform_slots(service, capsys):
+    from fakegpu.daemon_cli import _print_status
+
+    _print_status(service.status())
+    output = capsys.readouterr().out
+    assert "Platform: HGX A100 4-GPU" in output
+    assert "a100            sxm 0      Gen4 x16" in output
+
+
 def test_clean_exit_and_retention(service, child):
     publish(service, child.pid)
     service.poll()

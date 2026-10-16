@@ -67,7 +67,7 @@ def _uptime(seconds: float) -> str:
 def slot_label(slot: dict) -> str:
     if not slot:
         return "-"
-    return f"{slot['type']} {slot['slot']}"
+    return f"{slot['slot_type']} {slot['slot']}"
 
 
 def link_label(slot: dict) -> str:
