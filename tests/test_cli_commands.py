@@ -32,22 +32,56 @@ README_PATHS = (
     "README.zh-CN.md",
     "README.zh-TW.md",
 )
+# Each README links to a docs directory in the same language.
+DOC_DIRS = {
+    "README.md": ROOT / "docs" / "en",
+    "README.zh-CN.md": ROOT / "docs" / "zh-CN",
+    "README.zh-TW.md": ROOT / "docs" / "zh-TW",
+}
 MEMORY_EVIDENCE_PATH = (
     ROOT / "tests" / "data" / "memory_validation_evidence.json"
 )
 
 
-def _anchored_readme_section(readme: str, anchor: str) -> str:
+def _language_doc(readme_path: str, name: str) -> str:
+    return (DOC_DIRS[readme_path] / name).read_text(encoding="utf-8")
+
+
+def _language_corpus(readme_path: str) -> str:
+    """Return a README followed by every document in its language."""
+
+    texts = [(ROOT / readme_path).read_text(encoding="utf-8")]
+    texts.extend(
+        path.read_text(encoding="utf-8")
+        for path in sorted(DOC_DIRS[readme_path].glob("*.md"))
+    )
+    return "\n".join(texts)
+
+
+def _anchored_section(text: str, anchor: str) -> str:
+    """Return the body under an anchored heading.
+
+    The body ends at the next heading of the same or a higher level outside
+    fenced code blocks, so it includes any subsections.
+    """
+
     match = re.search(
-        rf'<a id="{re.escape(anchor)}"></a>\n\n'
-        rf"### [^\n]+\n\n"
-        rf"(?P<body>.*?)"
-        rf'(?=\n(?:<a id="[^"]+"></a>\n\n)?### )',
-        readme,
-        flags=re.DOTALL,
+        rf'<a id="{re.escape(anchor)}"></a>\n\n(?P<hashes>#+) [^\n]+\n\n',
+        text,
     )
     assert match is not None, anchor
-    return match.group("body")
+    level = len(match.group("hashes"))
+    body: list[str] = []
+    in_fence = False
+    for line in text[match.end():].splitlines():
+        if line.startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence and re.match(rf"#{{1,{level}}} ", line):
+            break
+        body.append(line)
+    while body and (not body[-1] or body[-1].startswith("<a id=")):
+        body.pop()
+    return "\n".join(body)
 
 
 def _run_fakegpu(*args: str) -> subprocess.CompletedProcess[str]:
@@ -684,15 +718,27 @@ def test_top_level_help_names_builtin_commands(
         assert help_text.startswith(f"usage: fakegpu {command}"), command
 
     for readme_path in README_PATHS:
-        readme = (ROOT / readme_path).read_text(encoding="utf-8")
+        reference = _language_doc(readme_path, "commands.md")
         documented_commands = set(
             re.findall(
                 r"^\| `fakegpu ([a-z0-9-]+)` \|",
-                readme,
+                reference,
                 flags=re.MULTILINE,
             )
         )
         assert documented_commands == set(BUILTIN_COMMANDS), readme_path
+
+
+def test_language_docs_mirror_each_other() -> None:
+    expected = sorted(path.name for path in DOC_DIRS["README.md"].glob("*.md"))
+    assert expected
+    for readme_path, doc_dir in DOC_DIRS.items():
+        assert sorted(path.name for path in doc_dir.glob("*.md")) == expected
+        readme = (ROOT / readme_path).read_text(encoding="utf-8")
+        relative_dir = doc_dir.relative_to(ROOT).as_posix()
+        for name in expected:
+            if name != "README.md":
+                assert f"({relative_dir}/{name}" in readme, (readme_path, name)
 
 
 def test_commands_share_json_and_strict_flag_spellings(
@@ -751,11 +797,7 @@ def test_readmes_document_supported_use_cases() -> None:
                 language_path,
             )
 
-        section = _anchored_readme_section(readme, "use-cases")
-        table_rows = [
-            line for line in section.splitlines() if line.startswith("|")
-        ]
-        assert len(table_rows) == 11, readme_path
+        section = _anchored_section(readme, "use-cases")
         for command in use_case_commands:
             assert re.search(
                 rf"`{re.escape(command)}(?:`| )",
@@ -808,9 +850,9 @@ def test_readmes_match_memory_validation_evidence() -> None:
     }
 
     for readme_path in README_PATHS:
-        readme = (ROOT / readme_path).read_text(encoding="utf-8")
-        section = _anchored_readme_section(
-            readme,
+        validation = _language_doc(readme_path, "validation.md")
+        section = _anchored_section(
+            validation,
             "memory-estimation-evidence",
         )
         evidence_rows = [
@@ -827,7 +869,7 @@ def test_readmes_match_memory_validation_evidence() -> None:
                 f"{revision}/{group['source_path']}"
                 f"#{group['source_anchor']}"
             )
-            assert source_url in readme, (readme_path, group["id"])
+            assert source_url in validation, (readme_path, group["id"])
 
 
 def test_readmes_report_research_reliability_scope() -> None:
@@ -913,12 +955,15 @@ def test_readmes_report_research_reliability_scope() -> None:
     }
 
     for readme_path in README_PATHS:
-        readme = (ROOT / readme_path).read_text(encoding="utf-8")
-        section = _anchored_readme_section(readme, "llm-reliability")
+        section = _anchored_section(
+            _language_doc(readme_path, "validation.md"),
+            "llm-reliability",
+        )
         for term in expected_terms:
             assert term in section, (readme_path, term)
+        monitoring = _language_doc(readme_path, "fakegpu-smi.md")
         for term in smi_terms:
-            assert term in readme, (readme_path, term)
+            assert term in monitoring, (readme_path, term)
 
 
 def test_readmes_report_reproducible_research_scenario_effects() -> None:
@@ -1156,6 +1201,6 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
         *expected_effects,
     }
     for readme_path in README_PATHS:
-        readme = (ROOT / readme_path).read_text(encoding="utf-8")
+        corpus = _language_corpus(readme_path)
         for term in expected_terms:
-            assert term in readme, (readme_path, term)
+            assert term in corpus, (readme_path, term)

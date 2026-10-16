@@ -1,0 +1,61 @@
+# 原生库拦截
+
+[文档索引](README.md) · [English](../en/native-interception.md) ·
+[繁體中文](../zh-TW/native-interception.md)
+
+原生库拦截让未修改的程序加载 FakeGPU 版本的 CUDA 系列动态库。代码改不了，或者
+程序直接从 C++ 调用 CUDA、不经过 PyTorch 时，这种方式很有用。
+
+## FakeGPU 如何运行你的代码
+
+| 路径 | 应用看到的内容 | 实际执行方式 |
+|---|---|---|
+| **Python FakeCUDA** | CUDA 设备、CUDA 风格 tensor、显存 API 和常见训练流程 | 已维护的 PyTorch 运算通过 `FakeCudaTensor` 在 CPU 上执行 |
+| **原生库拦截** | `libcuda`、`libcudart`、`libcublas`、`libnvidia-ml` 和 `libnccl` 入口 | 选定的运算使用主机内存或 CPU 计算。不支持的行为会被分类并写入报告 |
+| **分析与报告** | 显存、FLOP、Roofline、拓扑和通信报告 | 分析 ATen 图、safetensors 元数据、运行 trace、校准数据和 coordinator 事件 |
+
+## 启动程序
+
+先用 `scripts/build.sh` 构建原生库，再让模块启动器设置 `LD_PRELOAD` 或
+`DYLD_INSERT_LIBRARIES`：
+
+```bash
+python3 -m fakegpu --build-dir build --profile a100 \
+  python3 your_script.py
+
+python3 -m fakegpu --build-dir build --devices "a100:2,h100:2" \
+  python3 your_script.py
+
+python3 -m fakegpu --build-dir build \
+  --mode simulate \
+  --unsupported-api error \
+  python3 your_script.py
+```
+
+## 不支持的调用
+
+不支持的原生调用可以记录下来、显示警告，或返回 `cudaErrorNotSupported` 或
+`CUDA_ERROR_NOT_SUPPORTED`。
+
+同一个策略 `FAKEGPU_UNSUPPORTED_API` 也覆盖 cuBLAS 中没有数值实现的算法、
+GEMM/Lt 不支持的 dtype、布局和指针模式，以及跳过 CPU 计算的分支。设为 `warn`
+时记录警告。设为 `error` 时，调用会在写入输出前返回
+`CUBLAS_STATUS_NOT_SUPPORTED`。
+
+想知道覆盖了哪些 API，可以根据能力 manifest 检查源码和已构建库的导出符号：
+
+```bash
+python3 -m fakegpu capabilities --source-root . --build-dir build --strict
+```
+
+## Hybrid 模式
+
+原生 hybrid 模式下，CUDA runtime 和 cuBLAS 保持原生。设置了
+`CUDA_VISIBLE_DEVICES`（按索引或 UUID）时会保留物理 NVML 发现，让框架能正确解析
+这个选择。否则使用建模的 NVML 设备清单。子环境切换模式时，`fakegpu.env()` 会移除
+残留的 FakeGPU preload。
+
+## macOS
+
+macOS System Integrity Protection 可能删除系统程序的 `DYLD_*` 环境变量。原生拦截
+建议使用 Homebrew、conda 或 pyenv 的 Python。

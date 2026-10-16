@@ -90,6 +90,10 @@
   and `bandwidth` report unusable arguments with exit code 2 like every
   other command instead of 1, and `validate` and `workspace-profiles`
   prefix input errors with the command name.
+- Shortened the English, Simplified Chinese, and Traditional Chinese READMEs
+  to an overview, a feature list, and basic usage. Detailed guides, evidence
+  tables, and the command reference moved to `docs/en/`, `docs/zh-CN/`, and
+  `docs/zh-TW/`, and the documentation contract tests now check those pages.
 
 ### Fixed
 

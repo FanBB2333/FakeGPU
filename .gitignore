@@ -68,7 +68,10 @@ test-results/
 tests/output/
 
 # Local design and planning documents
-docs/
+docs/*
+!docs/en/
+!docs/zh-CN/
+!docs/zh-TW/
 README.*.md
 !README.zh-CN.md
 !README.zh-TW.md
