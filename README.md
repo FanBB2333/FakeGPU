@@ -182,9 +182,25 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi
 For pip-installed nvitop on macOS/Linux, use `fakegpu nvitop --state-dir build/smi`; see the [NVML bridge guide](docs/en/fakegpu-smi.md#use-pip-installed-nvitop-on-macos-or-linux).
 
 To keep a simulated machine running in the background, install the `console`
-extra and run `fakegpu console`: FakeCUDA processes join the machine, and the
-console shows GPUs, processes and events. See the
+extra and run `fakegpu console`: FakeCUDA processes join the machine, the
+console charts every GPU's memory, utilization, power and temperature, and you
+can change the model of each GPU from the Devices tab. `fakegpu nvitop` and
+`fakegpu nvidia-smi` read the same machine. See the
 [console guide](docs/en/console.md).
+
+<p align="center">
+  <img src="docs/images/console-overview.png" width="100%"
+       alt="fakegpu console Overview tab: combined charts and a card per GPU for eight simulated A100 GPUs running two demo workloads">
+</p>
+<p align="center">
+  <img src="docs/images/console-devices.png" width="49%"
+       alt="fakegpu console Devices tab: the GPU table with layout editing keys and one-minute charts for the selected GPU">
+  <img src="docs/images/nvitop.png" width="49%"
+       alt="fakegpu nvitop showing the same eight simulated A100 GPUs and both demo processes">
+</p>
+<p align="center"><sub>Eight simulated A100 GPUs running two demo workloads: the console's
+Overview and Devices tabs, and the same machine in <code>fakegpu nvitop</code>. All readings
+are modeled, not hardware measurements.</sub></p>
 
 Run `python3 -m fakegpu --help` for every command, and
 `python3 -m fakegpu <command> --help` for its options.

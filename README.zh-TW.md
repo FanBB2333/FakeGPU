@@ -174,7 +174,22 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi
 macOS/Linux 可用 `fakegpu nvitop --state-dir build/smi` 查看狀態，安裝與雙終端範例見 [NVML 橋接說明](docs/zh-TW/fakegpu-smi.md#在-macos-或-linux-使用-pip-安裝的-nvitop)。
 
 若想讓一台模擬機器在背景持續執行，安裝 `console` 擴充後執行 `fakegpu console`：
-FakeCUDA 程序會接入這台機器，控制台顯示 GPU、程序與事件，詳見[控制台說明](docs/zh-TW/console.md)。
+FakeCUDA 程序會接入這台機器，控制台以曲線呈現每張 GPU 的記憶體、使用率、功耗與溫度，
+也可以在 Devices 分頁逐張更換 GPU 型號。`fakegpu nvitop` 與 `fakegpu nvidia-smi`
+讀取的是同一台機器，詳見[控制台說明](docs/zh-TW/console.md)。
+
+<p align="center">
+  <img src="docs/images/console-overview.png" width="100%"
+       alt="fakegpu console 的 Overview 分頁：8 張模擬 A100 執行兩個示範負載時的彙總曲線與每卡卡片">
+</p>
+<p align="center">
+  <img src="docs/images/console-devices.png" width="49%"
+       alt="fakegpu console 的 Devices 分頁：可編輯配置的 GPU 表格與選取 GPU 最近一分鐘的曲線">
+  <img src="docs/images/nvitop.png" width="49%"
+       alt="fakegpu nvitop 顯示同一台機器的 8 張模擬 A100 與兩個示範程序">
+</p>
+<p align="center"><sub>8 張模擬 A100 執行兩個示範負載：控制台的 Overview 與 Devices 分頁，以及
+<code>fakegpu nvitop</code> 中的同一台機器。所有讀數皆為模型數值，不是硬體測量。</sub></p>
 
 執行 `python3 -m fakegpu --help` 查看所有指令，`python3 -m fakegpu <command> --help`
 查看各指令的選項。

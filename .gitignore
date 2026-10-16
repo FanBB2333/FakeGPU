@@ -76,6 +76,9 @@ docs/*
 !docs/catalog-datacenter-research.md
 !docs/catalog-workstation-research.md
 !docs/catalog-throughput-research.md
+# README screenshots
+!docs/images/
+!docs/images/*.png
 README.*.md
 !README.zh-CN.md
 !README.zh-TW.md
