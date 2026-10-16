@@ -18,6 +18,8 @@ tour. The pages below go into detail.
 - [Diffusion training](diffusion-training.md): cached-feature UNet training
   plans and budgets
 - [Distributed plans and experiment sweeps](distributed.md)
+- [Background machine and console](console.md): `fakegpu console`, the
+  background machine, events, and `fakegpu daemon`
 - [FakeGPU-SMI and monitoring](fakegpu-smi.md): `nvidia-smi` views, NVLink,
   MIG, and fault modeling, and Prometheus metrics
 - [Native interception](native-interception.md): running unmodified programs

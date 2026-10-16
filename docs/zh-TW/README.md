@@ -16,6 +16,7 @@
   LLaMA-Factory 與 Axolotl 的原生執行、校準和驗證
 - [Diffusion 訓練](diffusion-training.md)：快取特徵 UNet 訓練計畫與預算
 - [分散式規劃與實驗批次執行](distributed.md)
+- [背景機器與控制台](console.md)：`fakegpu console`、背景機器、事件與 `fakegpu daemon`
 - [FakeGPU-SMI 與監控](fakegpu-smi.md)：`nvidia-smi` 檢視、NVLink、MIG、故障建模
   與 Prometheus 指標
 - [原生函式庫攔截](native-interception.md)：執行未修改的程式，以及處理不支援的 API

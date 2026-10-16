@@ -99,6 +99,7 @@ BUILTIN_COMMANDS: dict[str, CommandSpec] = {
     "nvidia-smi": CommandSpec(".smi", "main"),
     "nvitop": CommandSpec(".nvitop_cli", "main"),
     "daemon": CommandSpec(".daemon_cli", "main"),
+    "console": CommandSpec(".console_cli", "main"),
     "metrics": CommandSpec(".metrics", "main"),
     "workspace-profiles": CommandSpec(".workspace_cli", "main"),
     "validate": CommandSpec(".validation", "main"),

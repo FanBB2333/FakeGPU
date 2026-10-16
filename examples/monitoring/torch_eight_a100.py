@@ -1,5 +1,9 @@
 """Real CPU-backed torch tensors on eight simulated A100s, with changing usage.
 
+With the background machine (``fakegpu console`` or ``fakegpu daemon start``)
+running, this script joins it; watch it in the console or ``fakegpu nvitop``.
+Without a machine it publishes to /tmp/fakegpu-smi:
+
 Terminal 1: python examples/monitoring/torch_eight_a100.py
 Terminal 2: fakegpu nvitop --state-dir /tmp/fakegpu-smi --telemetry reference
 Use --cycles 1 for a finite run. Ctrl+C stops a continuous demo.
@@ -16,14 +20,18 @@ import time
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--state-dir", default="/tmp/fakegpu-smi")
+    parser.add_argument("--state-dir", help="Default: the running machine, else /tmp/fakegpu-smi.")
     parser.add_argument("--phase-seconds", type=float, default=8)
     parser.add_argument("--cycles", type=int, default=0, help="0 repeats until Ctrl+C.")
     args = parser.parse_args()
     if args.phase_seconds <= 0 or args.cycles < 0:
         parser.error("phase seconds must be positive and cycles nonnegative")
-    os.environ["FAKEGPU_SMI_STATE_DIR"] = args.state_dir
-    os.environ.pop("FAKEGPU_SMI_STATE_PATH", None)
+    from fakegpu.machine.client import daemon_pid
+    from fakegpu.machine.config import MachinePaths
+
+    if args.state_dir or daemon_pid(MachinePaths.from_env()) is None:
+        os.environ["FAKEGPU_SMI_STATE_DIR"] = args.state_dir or "/tmp/fakegpu-smi"
+        os.environ.pop("FAKEGPU_SMI_STATE_PATH", None)
     os.environ["FAKEGPU_TELEMETRY"] = "reference"
     os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
 

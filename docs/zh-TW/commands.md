@@ -84,5 +84,6 @@ JSON 路徑的位置都可以使用 `.json.gz`。壓縮輸出採用原子寫入�
 | `fakegpu calibrate` | 整理 serving 觀測、比較 GPU 記憶體報告並執行可靠性門檻檢查 |
 | `fakegpu nvidia-smi` | 查看裝置、程序、建模拓撲/MIG、健康狀態與可靠性事件 |
 | `fakegpu nvitop` | 透過原生 NVML 橋接，用已安裝的 nvitop 查看本機 FakeGPU 狀態（macOS/Linux） |
+| `fakegpu console` | 開啟背景機器的終端控制台：GPU、程序、事件與設定（[說明](console.md)） |
 | `fakegpu daemon` | 在背景執行一台模擬 GPU 機器，FakeCUDA 程序會自動接入；支援啟動、停止、狀態、事件與設定 |
 | `fakegpu metrics` | 匯出有數量上限的 Prometheus/JSON 指標，並提供短期記憶體歷史 |

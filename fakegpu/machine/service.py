@@ -316,10 +316,12 @@ class MachineService:
                 path.unlink(missing_ok=True)
             return
         info = describe(pid)
+        name = str(state.get("process_name") or "python")
         process = _Process(
             pid=pid,
             start_ticks=marker["start_ticks"],
-            name=str(state.get("process_name") or "python"),
+            # ``python -c`` and ``python -`` report the flag as their script name.
+            name=f"python {name}" if name.startswith("-") else name,
             user=info["user"],
             command=info["command"],
             attached_ns=now,
@@ -408,15 +410,23 @@ class MachineService:
 
     def _devices(self, inventory: dict) -> list[dict[str, Any]]:
         observed = {device["uuid"]: device for device in inventory["devices"]}
+        # Every FakeCUDA process publishes all devices it can see; only the
+        # ones it holds memory on count as its devices.
+        users: dict[str, int] = {}
+        for row in inventory["processes"]:
+            if row["memory"].get("used_bytes"):
+                users[row["gpu_uuid"]] = users.get(row["gpu_uuid"], 0) + 1
         rows = []
         for index, profile_id in enumerate(self.config.profiles):
             uuid = _synthetic_uuid(self.host, index, profile_id)
-            rows.append(self._device_row(index, profile_id, uuid, observed.pop(uuid, None), True))
+            rows.append(self._device_row(index, profile_id, uuid, observed.pop(uuid, None), users, True))
         for uuid, device in observed.items():
-            rows.append(self._device_row(device["index"], device["profile_id"], uuid, device, False))
+            rows.append(self._device_row(device["index"], device["profile_id"], uuid, device, users, False))
         return rows
 
-    def _device_row(self, index: int, profile_id: str, uuid: str, observed: dict | None, in_layout: bool) -> dict:
+    def _device_row(
+        self, index: int, profile_id: str, uuid: str, observed: dict | None, users: dict, in_layout: bool
+    ) -> dict:
         profile = get_profile(profile_id)
         memory = (observed or {}).get("memory") or {}
         allocator = (observed or {}).get("allocator") or {}
@@ -427,7 +437,7 @@ class MachineService:
             "uuid": uuid,
             "profile_id": profile.id,
             "name": profile.torch_name or profile.name,
-            "architecture": profile.architecture,
+            "architecture": profile.architecture.capitalize(),
             "compute_capability": profile.compute_capability_text,
             "in_layout": in_layout,
             "power_limit_w": profile.max_power_limit_mw / 1000 or None,
@@ -439,7 +449,7 @@ class MachineService:
                 "reserved_bytes": int(memory.get("reserved_bytes") or 0),
                 "percent": round(used / total * 100, 2) if total else 0.0,
             },
-            "process_count": int((observed or {}).get("process_count") or 0),
+            "process_count": users.get(uuid, 0),
             "allocator": {
                 "categories": dict(allocator.get("categories") or {}),
                 "stage_peaks": dict(allocator.get("stage_peaks") or {}),

@@ -173,6 +173,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi
 
 macOS/Linux 可用 `fakegpu nvitop --state-dir build/smi` 查看狀態，安裝與雙終端範例見 [NVML 橋接說明](docs/zh-TW/fakegpu-smi.md#在-macos-或-linux-使用-pip-安裝的-nvitop)。
 
+若想讓一台模擬機器在背景持續執行，安裝 `console` 擴充後執行 `fakegpu console`：
+FakeCUDA 程序會接入這台機器，控制台顯示 GPU、程序與事件，詳見[控制台說明](docs/zh-TW/console.md)。
+
 執行 `python3 -m fakegpu --help` 查看所有指令，`python3 -m fakegpu <command> --help`
 查看各指令的選項。
 
