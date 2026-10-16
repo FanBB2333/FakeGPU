@@ -1,0 +1,1362 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FakeGPU: simulated GPUs for CUDA development</title>
+<meta name="description" content="Validate CUDA-facing applications, estimate GPU memory, and simulate distributed GPU workflows without a production GPU cluster.">
+<meta name="theme-color" content="#f3eee6">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Crect x='3' y='5' width='18' height='14' rx='3.5' stroke='%234f6377' stroke-width='1.8'/%3E%3Crect x='8' y='9' width='8' height='6' rx='1.4' stroke='%234f6377' stroke-width='1.8' stroke-dasharray='2.2 1.6'/%3E%3Cpath d='M6 2.5v2.5M10 2.5v2.5M14 2.5v2.5M18 2.5v2.5M6 19v2.5M10 19v2.5M14 19v2.5M18 19v2.5' stroke='%23685f56' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
+<script>
+(function(){
+  var d = document.documentElement;
+  d.classList.add('js');
+  // Light is the default regardless of OS setting; dark only when the visitor chose it.
+  try { var t = localStorage.getItem('fakegpu-theme'); if (t === 'dark' || t === 'light') d.setAttribute('data-theme', t); } catch (e) {}
+})();
+</script>
+<style>
+/* =====================================================================
+   Tokens — warm Morandi palette. Light is the default; dark overrides.
+   Every color used below is a token. Text pairs meet WCAG AA.
+   ===================================================================== */
+:root{
+  color-scheme:light;
+  /* neutrals */
+  --bg:#f3eee6;            /* oat / linen page */
+  --surface:#faf6f0;       /* raised cards, panels */
+  --surface-2:#ece5da;     /* chips, controls, hover */
+  --well:#efe9df;          /* code wells, inset blocks */
+  --sb-bg:#f7f3ec;         /* storyboard canvas */
+  --border:#e2d9cc;
+  --border-strong:#d0c5b5;
+  --text:#2e2925;          /* warm charcoal — 12.5:1 on bg */
+  --text-2:#59514a;        /* body — 6.7:1 */
+  --text-3:#685f56;        /* labels, meta — 5.0:1 on surface-2 */
+  --code:#3d3732;
+  /* primary accent: slate / dusty blue-grey */
+  --accent:#4f6377;        /* text, icons, filled buttons (cream text 5.8:1) */
+  --accent-fill:#8495a5;   /* decorative fills: bars, swatches, dots */
+  --accent-rgb:132 149 165; /* washes and tinted borders */
+  --on-accent:#fbf7f1;
+  /* secondary + semantic */
+  --ok:#4f6846; --ok-fill:#8a9b7e;          /* sage */
+  --warn:#7a5c24; --warn-rgb:176 138 74;    /* muted ochre */
+  --syn-str:#536748;                        /* code strings (sage) */
+  --syn-num:#4f6377;                        /* code numbers (dusty blue-grey) */
+  /* storyboard */
+  --tile-bg:#3b3430; --tile-fg:#f3ece2; --tile-sub:#c9beb1;
+  --cursor-fill:#2e2925; --cursor-line:#fbf7f1;
+  /* overlays, depth */
+  --nav-bg:rgba(243,238,230,.84);
+  --float-bg:rgba(250,246,240,.94);
+  --hover:rgba(74,52,32,.05);
+  --shadow-sm:0 1px 2px rgba(74,52,32,.06);
+  --shadow:0 1px 2px rgba(74,52,32,.05),0 16px 36px -22px rgba(74,52,32,.30);
+  --shadow-lg:0 2px 6px rgba(74,52,32,.05),0 34px 70px -40px rgba(74,52,32,.42);
+  --grid-lg:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Cpath d='M56 .5H.5V56' fill='none' stroke='%237a5f48' stroke-opacity='.10'/%3E%3C/svg%3E");
+  --grid-sm:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M32 .5H.5V32' fill='none' stroke='%237a5f48' stroke-opacity='.09'/%3E%3C/svg%3E");
+
+  --radius:20px;
+  --radius-sm:12px;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#1d1a18;            /* warm charcoal, not black */
+  --surface:#262220;
+  --surface-2:#2e2926;
+  --well:#191715;
+  --sb-bg:#211e1b;
+  --border:#38322e;
+  --border-strong:#4a423d;
+  --text:#ede6dc;          /* 14.0:1 on bg */
+  --text-2:#bfb5a9;        /* 8.6:1 */
+  --text-3:#9d9389;        /* 4.8:1 on surface-2 */
+  --code:#d9d1c6;
+  --accent:#9fb2c2; --accent-fill:#8a9cad; --accent-rgb:138 156 173; --on-accent:#1d1a18;
+  --ok:#a3b896; --ok-fill:#8fa283;
+  --warn:#d3af6e; --warn-rgb:211 175 110;
+  --syn-str:#a3b896; --syn-num:#9fb2c2;
+  --tile-bg:#3a332f; --tile-fg:#ede6dc; --tile-sub:#bfb5a9;
+  --cursor-fill:#ede6dc; --cursor-line:#1d1a18;
+  --nav-bg:rgba(29,26,24,.84);
+  --float-bg:rgba(38,34,32,.94);
+  --hover:rgba(255,240,225,.05);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.3);
+  --shadow:0 1px 2px rgba(0,0,0,.25),0 16px 36px -22px rgba(0,0,0,.6);
+  --shadow-lg:0 2px 6px rgba(0,0,0,.25),0 34px 70px -40px rgba(0,0,0,.75);
+  --grid-lg:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Cpath d='M56 .5H.5V56' fill='none' stroke='%23fff3e6' stroke-opacity='.045'/%3E%3C/svg%3E");
+  --grid-sm:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M32 .5H.5V32' fill='none' stroke='%23fff3e6' stroke-opacity='.04'/%3E%3C/svg%3E");
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;transition:background-color .3s,color .3s}
+::selection{background:rgb(var(--accent-rgb) / .3);color:var(--text)}
+a{color:inherit;text-decoration:none}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:10px}
+code,pre,kbd{font-family:var(--mono)}
+p code,li code,td code,.inline-code{font-size:.86em;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:.08em .38em;color:var(--text);overflow-wrap:anywhere}
+.wrap{width:min(1160px,100% - 32px);margin-inline:auto}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---------- nav ---------- */
+.nav{position:sticky;top:0;z-index:50;background:var(--nav-bg);backdrop-filter:saturate(140%) blur(14px);-webkit-backdrop-filter:saturate(140%) blur(14px);border-bottom:1px solid var(--border)}
+.nav .wrap{display:flex;align-items:center;gap:24px;height:62px}
+.brand{display:flex;align-items:center;gap:10px;font:600 19px/1 var(--serif);letter-spacing:-.01em}
+.brand svg{width:24px;height:24px;flex:none;color:var(--accent)}
+.brand svg .pins{stroke:var(--text-3)}
+.nav-links{display:flex;gap:2px;margin-left:auto}
+.nav-links a{color:var(--text-2);font-size:14px;padding:6px 11px;border-radius:999px;transition:color .15s,background .15s}
+.nav-links a:hover{color:var(--text);background:var(--hover)}
+.nav-tools{display:flex;align-items:center;gap:8px}
+.theme-toggle{display:none;appearance:none;width:38px;height:38px;place-items:center;padding:0;border:1px solid var(--border-strong);border-radius:999px;background:var(--surface);color:var(--text-2);cursor:pointer;transition:color .15s,background .15s,border-color .15s}
+.js .theme-toggle{display:inline-grid}
+.theme-toggle:hover{color:var(--text);background:var(--surface-2)}
+.theme-toggle svg{width:17px;height:17px}
+.theme-toggle .i-sun{display:none}
+:root[data-theme="dark"] .theme-toggle .i-sun{display:block}
+:root[data-theme="dark"] .theme-toggle .i-moon{display:none}
+.nav-gh{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:550;padding:8px 14px;border:1px solid var(--border-strong);border-radius:999px;background:var(--surface);transition:background .15s,border-color .15s}
+.nav-gh:hover{background:var(--surface-2)}
+.nav-gh svg{width:16px;height:16px}
+@media (max-width:860px){.nav-links{display:none}.nav-tools{margin-left:auto}}
+
+/* ---------- hero ---------- */
+.hero{position:relative;overflow:hidden;padding:84px 0 72px;border-bottom:1px solid var(--border)}
+.gridlines{position:absolute;inset:0;pointer-events:none;background-image:var(--grid-lg);background-size:56px 56px;
+  -webkit-mask-image:radial-gradient(ellipse 70% 55% at 50% 0%,#000 30%,transparent 75%);mask-image:radial-gradient(ellipse 70% 55% at 50% 0%,#000 30%,transparent 75%)}
+.hero-copy{position:relative;text-align:center;max-width:880px;margin:0 auto}
+.pill{display:inline-flex;align-items:center;gap:10px;padding:6px 14px 6px 7px;border-radius:999px;border:1px solid var(--border-strong);background:var(--surface);box-shadow:var(--shadow-sm);font-size:13px;color:var(--text-2);transition:border-color .2s,background .2s}
+.pill:hover{border-color:rgb(var(--accent-rgb) / .6)}
+.pill .dot{display:inline-grid;place-items:center;font:600 11.5px/1 var(--sans);color:var(--on-accent);background:var(--accent);border-radius:999px;padding:4px 9px}
+.pill .arr{color:var(--text-3)}
+h1{margin:26px 0 0;font:400 clamp(64px,11vw,128px)/.95 var(--serif);letter-spacing:-.03em}
+h1 .w{color:var(--text)}
+h1 .g{color:var(--accent)}
+.tagline{margin:24px auto 0;max-width:800px;font:400 clamp(20px,2.4vw,27px)/1.36 var(--serif);letter-spacing:-.01em;color:var(--text)}
+.lead{margin:18px auto 0;max-width:680px;color:var(--text-2);font-size:16px}
+.facts-row{list-style:none;margin:28px auto 0;padding:0;display:flex;flex-wrap:wrap;justify-content:center}
+.facts-row li{display:flex}
+.facts-row li+li{border-left:1px solid var(--border-strong)}
+.facts-row a,.facts-row .fr-c{display:flex;align-items:center;gap:10px;padding:3px 22px;color:var(--text-2);text-decoration:none}
+.facts-row a:hover b{color:var(--accent)}
+.facts-row a:hover .fr-i{color:var(--accent)}
+.fr-i{width:20px;height:20px;flex:none;color:var(--text-3);transition:color .15s}
+.fr-t{display:flex;flex-direction:column;align-items:flex-start;text-align:left;line-height:1.2}
+.fr-t b{font-size:14px;font-weight:600;color:var(--text);transition:color .15s}
+.fr-t small{margin-top:3px;font-size:11.5px;color:var(--text-3)}
+@media (max-width:560px){
+  .facts-row{flex-wrap:nowrap}
+  .facts-row a,.facts-row .fr-c{gap:8px;padding:3px 12px}
+}
+.ctas{margin-top:30px;display:flex;flex-wrap:wrap;justify-content:center;gap:12px}
+.btn{display:inline-flex;align-items:center;gap:10px;height:48px;padding:0 22px;border-radius:999px;font-size:15px;font-weight:600;letter-spacing:-.005em;transition:transform .15s,background .15s,box-shadow .2s,border-color .15s}
+.btn svg{width:17px;height:17px}
+.btn-primary{background:var(--accent);color:var(--on-accent);box-shadow:var(--shadow)}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:var(--shadow-lg)}
+.btn-ghost{border:1px solid var(--border-strong);background:var(--surface);color:var(--text);box-shadow:var(--shadow-sm)}
+.btn-ghost:hover{background:var(--surface-2);transform:translateY(-1px)}
+.btn .k{transition:transform .15s}
+.btn:hover .k{transform:translateX(3px)}
+
+/* ---------- storyboard (hero animation) ---------- */
+.sb{position:relative;margin:56px 0 0;border:1px solid var(--border);border-radius:28px;background:var(--sb-bg);box-shadow:var(--shadow-lg);overflow:hidden}
+.sb::before{content:"";position:absolute;inset:0;background-image:var(--grid-sm);background-size:32px 32px;pointer-events:none}
+/* default = static final frame (no JS, or prefers-reduced-motion) */
+.sb-canvas{position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;padding:44px;align-items:center}
+.sb .scene{display:none}
+.sb .scene.keep{display:flex;justify-content:center;min-width:0}
+@media (max-width:760px){.sb-canvas{grid-template-columns:minmax(0,1fr);padding:20px 16px;gap:16px}}
+/* animated mode */
+.sb.anim .sb-canvas{display:block;aspect-ratio:2/1;padding:0}
+@media (max-width:960px){.sb.anim .sb-canvas{aspect-ratio:16/11}}
+@media (max-width:600px){.sb.anim .sb-canvas{aspect-ratio:4/5}}
+.sb.anim .scene{display:flex;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;padding:28px 24px;opacity:0;visibility:hidden;transform:translateY(12px) scale(.985);filter:blur(4px);
+  transition:opacity .6s ease,transform .8s cubic-bezier(.2,.7,.2,1),filter .6s ease,visibility 0s linear .6s}
+.sb.anim .scene.on{opacity:1;visibility:visible;transform:none;filter:none;transition:opacity .6s ease,transform .8s cubic-bezier(.2,.7,.2,1),filter .6s ease,visibility 0s}
+.sb.paused *,.sb.paused *::before,.sb.paused *::after{animation-play-state:paused!important}
+@media (max-width:600px){.sb.anim .scene{padding:20px 16px}}
+
+.sb-ctl{display:none;position:absolute;top:14px;right:14px;z-index:6;appearance:none;width:34px;height:34px;padding:0;place-items:center;border:1px solid var(--border);border-radius:999px;background:var(--float-bg);color:var(--text-2);cursor:pointer;transition:color .15s,border-color .15s}
+.sb.anim .sb-ctl{display:grid}
+.sb-ctl:hover{color:var(--text);border-color:var(--border-strong)}
+.sb-ctl svg{width:14px;height:14px}
+.sb-ctl .i-play{display:none}
+.sb-ctl[aria-pressed="true"] .i-play{display:block}
+.sb-ctl[aria-pressed="true"] .i-pause{display:none}
+
+.sb-mark{display:flex;align-items:center;gap:9px;font:600 20px/1 var(--serif);color:var(--text);margin-bottom:22px}
+.sb-mark svg{width:26px;height:26px;color:var(--accent)}
+.sb-mark svg .pins{stroke:var(--text-3)}
+.sb-headline{margin:0;text-align:center;font:400 clamp(27px,4.3vw,52px)/1.12 var(--serif);letter-spacing:-.02em;color:var(--text);max-width:16em}
+.sb-headline em{font-style:italic;color:var(--accent)}
+@media (max-width:600px){.br-d{display:none}}
+
+/* scene: pick a profile + type a command */
+.pick{width:min(600px,100%)}
+.pick-l{font-size:13px;font-weight:600;color:var(--text-3);margin:0 0 10px 2px}
+.pchips{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+@media (max-width:600px){.pchips{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.pchip{position:relative;display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);box-shadow:var(--shadow-sm);font-size:13.5px;min-width:0;transition:opacity .45s ease,transform .45s cubic-bezier(.2,.7,.2,1),border-color .2s,background .2s}
+.pchip svg{width:16px;height:16px;flex:none;color:var(--text-3)}
+.pc-id{font:600 13.5px/1 var(--mono);color:var(--text)}
+.pc-a{color:var(--text-3);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pc-ck{position:absolute;top:-7px;right:-7px;width:18px;height:18px;border-radius:50%;box-shadow:0 0 0 2px var(--sb-bg);display:grid;place-items:center;background:var(--accent);color:var(--on-accent);opacity:0;transform:scale(.6);transition:opacity .2s,transform .25s cubic-bezier(.3,1.6,.5,1)}
+.pc-ck svg{width:11px;height:11px;color:inherit}
+.pchip.sel{border-color:rgb(var(--accent-rgb) / .7);background:rgb(var(--accent-rgb) / .12)}
+.pchip.sel .pc-ck{opacity:1;transform:none}
+.pchip.sel svg{color:var(--accent)}
+.sb.anim .pchip{opacity:0;transform:translateY(8px)}
+.sb.anim .pchip.in{opacity:1;transform:none}
+.prompt{margin-top:14px;border:1px solid var(--border-strong);border-radius:16px;background:var(--surface);box-shadow:var(--shadow);transition:opacity .5s ease,transform .6s cubic-bezier(.2,.7,.2,1)}
+.sb.anim .prompt{opacity:0;transform:translateY(10px)}
+.sb.anim .prompt.in{opacity:1;transform:none}
+.prompt-in{padding:14px 16px 6px;min-height:58px;font:12.5px/1.65 var(--mono);color:var(--code);white-space:pre-wrap;overflow-wrap:anywhere}
+.prompt-in .ph{color:var(--text-3)}
+.caret{display:inline-block;width:7px;height:1.1em;margin-left:1px;vertical-align:-.18em;background:var(--accent);animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.prompt-f{display:flex;align-items:center;gap:8px;padding:8px 10px 10px 12px}
+.pf-file{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--text-2);background:var(--well)}
+.pf-file svg{width:13px;height:13px;color:var(--text-3)}
+.go{margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:9px;font-size:12.5px;font-weight:600;color:var(--on-accent);background:var(--accent);box-shadow:var(--shadow-sm);transition:transform .12s}
+.go.pressed{transform:scale(.95)}
+
+/* scene: shimmer */
+.shim-row{display:flex;align-items:center;gap:14px}
+.spin{width:26px;height:26px;flex:none;border-radius:50%;border:2px solid var(--border-strong);border-top-color:var(--accent);animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.shim{margin:0;font:italic 400 clamp(26px,3.6vw,40px)/1.1 var(--serif);letter-spacing:-.01em;color:var(--text)}
+.shim span{animation:shim 1.8s ease-in-out infinite;animation-delay:calc(var(--i) * 55ms)}
+@keyframes shim{0%,100%{opacity:.32}45%{opacity:1}}
+
+/* scene: progress card */
+.pcard{width:min(460px,100%);border:1px solid var(--border);border-radius:18px;background:var(--surface);box-shadow:var(--shadow);padding:16px 18px 10px}
+.pcard-h{display:flex;align-items:center;justify-content:space-between;font:600 17px/1.2 var(--serif);color:var(--text);padding-bottom:8px}
+.pcard-h svg{width:16px;height:16px;color:var(--text-3)}
+.steps{list-style:none;margin:0;padding:0}
+.si{display:flex;align-items:flex-start;gap:12px;padding:7px 0;font-size:14px;line-height:1.45;color:var(--text);overflow:hidden;transition:opacity .45s ease,max-height .5s ease,padding .5s ease}
+.si-m{position:relative;width:22px;height:22px;flex:none;border-radius:50%;display:grid;place-items:center;border:1.5px solid var(--border-strong);font:600 11px/1 var(--sans);color:var(--text-3);transition:background .25s,border-color .25s,color .25s}
+.si-m svg{position:absolute;width:12px;height:12px;opacity:0;transform:scale(.5);transition:opacity .2s,transform .3s cubic-bezier(.3,1.6,.5,1)}
+.si-t{padding-top:1px;text-decoration:line-through;text-decoration-color:transparent;transition:text-decoration-color .45s,color .45s}
+.si-t code{font-size:.9em;background:none;border:0;padding:0;color:inherit}
+.si.active .si-m{border-color:var(--accent);border-top-color:transparent;animation:spin 1s linear infinite}
+.si.active .si-m b{animation:spin 1s linear infinite reverse}
+.si.done .si-m{background:var(--accent);border-color:var(--accent);color:transparent;animation:none}
+.si.done .si-m b{opacity:0}
+.si.done .si-m svg{opacity:1;transform:none;color:var(--on-accent)}
+.si.done .si-t{color:var(--text-3);text-decoration-color:currentColor}
+.sb.anim .si{opacity:0;max-height:0;padding:0}
+.sb.anim .si.shown{opacity:1;max-height:64px;padding:7px 0}
+
+/* scene: result */
+.rcard{width:min(540px,100%);border:1px solid var(--border);border-radius:18px;background:var(--surface);box-shadow:var(--shadow);padding:16px}
+.rc-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;color:var(--text-3)}
+.rc-file{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono)}
+.rc-file svg{width:14px;height:14px}
+.rc-tag{margin-left:auto;padding:3px 9px;border:1px dashed var(--border-strong);border-radius:999px;font-size:11.5px;color:var(--text-3)}
+.rc-q{margin:14px 2px 14px;font:400 clamp(20px,2.4vw,26px)/1.2 var(--serif);letter-spacing:-.01em;color:var(--text)}
+.rc-q code{font-size:.82em;background:none;border:0;padding:0;color:var(--accent)}
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.tile{border-radius:12px;background:var(--tile-bg);color:var(--tile-fg);padding:18px 10px 14px;text-align:center;min-width:0;transition:opacity .45s ease,transform .5s cubic-bezier(.2,.7,.2,1)}
+.tile b{display:block;font:400 clamp(21px,3.4vw,38px)/1 var(--serif);letter-spacing:-.02em;white-space:nowrap}
+.tile span{display:block;margin-top:10px;font-size:11.5px;line-height:1.3;color:var(--tile-sub)}
+.sb.anim .tile{opacity:0;transform:translateY(10px) scale(.97)}
+.sb.anim .tile.in{opacity:1;transform:none}
+
+/* scene: devices */
+.dcard{width:min(400px,100%);border:1px solid var(--border);border-radius:18px;background:var(--surface);box-shadow:var(--shadow-lg);padding:18px 18px 10px}
+.dc-h{display:flex;align-items:center;gap:9px;font:600 18px/1.2 var(--serif);color:var(--text)}
+.dc-h svg{width:20px;height:20px;color:var(--accent)}
+.dc-h svg .pins{stroke:var(--text-3)}
+.dc-flag{margin:10px 0 6px;font:12px/1.4 var(--mono);color:var(--text-3)}
+.drows{list-style:none;margin:0;padding:0}
+.drow{display:flex;align-items:center;gap:12px;padding:10px 2px;border-top:1px solid var(--border);font-size:13.5px;color:var(--text-2);transition:opacity .4s ease,transform .45s cubic-bezier(.2,.7,.2,1)}
+.drow code{font:600 12.5px/1 var(--mono);color:var(--text);flex:none}
+.drow span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drow .dot{margin-left:auto;width:8px;height:8px;flex:none;border-radius:50%;background:var(--ok-fill);transition:background .3s}
+.sb.anim .drow{opacity:0;transform:translateX(-8px)}
+.sb.anim .drow.in{opacity:1;transform:none}
+.sb.anim .drow .dot{background:var(--border-strong)}
+.sb.anim .drow.live .dot{background:var(--ok-fill);animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+
+/* scene: end */
+.end-logo{display:flex;align-items:center;gap:12px;font:400 clamp(36px,5vw,56px)/1 var(--serif);letter-spacing:-.02em;color:var(--text)}
+.end-logo svg{width:.9em;height:.9em;color:var(--accent)}
+.end-logo svg .pins{stroke:var(--text-3)}
+.end-sub{margin:12px 0 0;font-size:15px;font-weight:600;color:var(--text-2);text-align:center}
+.sb-cta{margin-top:22px;display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:14.5px;font-weight:600;box-shadow:var(--shadow);transition:transform .15s}
+.sb-cta.pressed{transform:scale(.95)}
+
+/* cursor */
+.sb-cursor{display:none;position:absolute;left:0;top:0;z-index:5;width:24px;height:24px;pointer-events:none;opacity:0;transition:transform .9s cubic-bezier(.45,0,.2,1),opacity .35s ease}
+.sb.anim .sb-cursor{display:block}
+.sb-cursor svg{width:24px;height:24px;transform-origin:3px 3px;transition:transform .12s}
+.sb-cursor .c-fill{fill:var(--cursor-fill);stroke:var(--cursor-line)}
+.sb-cursor.down svg{transform:scale(.82)}
+.sb-cursor i{position:absolute;left:-11px;top:-11px;width:26px;height:26px;border-radius:50%;border:2px solid var(--accent);opacity:0}
+.sb-cursor.ring i{animation:ring .55s ease-out}
+@keyframes ring{0%{opacity:.8;transform:scale(.3)}100%{opacity:0;transform:scale(1.4)}}
+
+/* stage: diagram + code */
+.stage{position:relative;margin-top:20px;display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:20px;align-items:stretch}
+@media (max-width:960px){.stage{grid-template-columns:minmax(0,1fr)}}
+.panel{position:relative;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow);min-width:0}
+.panel-h{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);font-size:12.5px;line-height:1;color:var(--text-3)}
+.lights{display:flex;gap:6px}
+.lights i{width:10px;height:10px;border-radius:50%;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border-strong)}
+
+/* flow diagram */
+.flow{padding:18px;display:flex;flex-direction:column;gap:0}
+.node{border:1px solid var(--border);border-radius:14px;background:var(--well);padding:12px 14px}
+.node-t{display:flex;align-items:center;gap:10px;font-weight:600;font-size:14.5px;letter-spacing:-.005em}
+.node-t svg{width:18px;height:18px;flex:none;color:var(--text-3)}
+.node-s{margin:4px 0 0 28px;font-size:12.5px;color:var(--text-2);line-height:1.45}
+.node.layer{border-color:rgb(var(--accent-rgb) / .55);background:rgb(var(--accent-rgb) / .10)}
+.node.layer .node-t svg{color:var(--accent)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{font:12px/1 var(--mono);padding:6px 8px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);color:var(--text-2);white-space:nowrap}
+.devs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
+.dev{border:1px solid var(--border);border-radius:10px;padding:8px 10px;background:var(--surface);font:12px/1.3 var(--mono);display:flex;justify-content:space-between;gap:8px;align-items:center;min-width:0}
+.dev b{color:var(--text);font-weight:600}
+.dev span{color:var(--accent)}
+.flag{font:11.5px/1.3 var(--mono);color:var(--text-3);margin-top:8px;overflow-wrap:anywhere}
+.link{position:relative;height:26px;margin-left:22px;width:2px;background:var(--border-strong)}
+.link::after{content:"";position:absolute;left:-2px;top:0;width:6px;height:6px;border-radius:50%;background:var(--accent-fill);animation:drop 2.4s cubic-bezier(.5,0,.5,1) infinite}
+.link:nth-of-type(4)::after{animation-delay:.8s}
+.link:nth-of-type(6)::after{animation-delay:1.6s}
+@keyframes drop{0%{top:-4px;opacity:0}20%{opacity:1}80%{opacity:1}100%{top:24px;opacity:0}}
+.node.cpu{display:flex;align-items:flex-start;gap:10px}
+.node.cpu .node-s{margin-left:0}
+
+/* code window */
+.tabs{display:flex;gap:2px;padding:8px 8px 0;border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{appearance:none;background:none;border:0;color:var(--text-3);font:500 13.5px/1 var(--sans);padding:10px 12px 12px;border-radius:10px 10px 0 0;cursor:pointer;position:relative;white-space:nowrap;transition:color .15s,background .15s}
+.tab:hover{color:var(--text);background:var(--hover)}
+.tab[aria-selected="true"]{color:var(--text)}
+.tab[aria-selected="true"]::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:var(--accent)}
+.tabs{display:none}
+.js .tabs{display:flex}
+.code-panel{padding:0}
+.code-panel + .code-panel{border-top:1px solid var(--border)}
+.js .code-panel + .code-panel{border-top:0}
+.cp-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px 0}
+.cp-cap{font-size:13.5px;color:var(--text-2);margin:0}
+.cp-cap b{color:var(--text);font-weight:600}
+.nojs-title{display:block}
+.js .nojs-title{display:none}
+.copy{display:none;appearance:none;border:1px solid var(--border);background:var(--surface);color:var(--text-3);font:500 12px/1 var(--sans);padding:6px 10px;border-radius:999px;cursor:pointer;flex:none;transition:color .15s,border-color .15s}
+.js .copy{display:inline-block}
+.copy:hover{color:var(--text);border-color:var(--border-strong)}
+.copy.done{color:var(--ok);border-color:var(--ok-fill)}
+pre{margin:0;padding:14px 16px 18px;overflow-x:auto;font-size:13px;line-height:1.7;color:var(--code);tab-size:2}
+pre code{white-space:pre}
+@media (max-width:640px){pre{font-size:12px;padding:12px 14px 16px}}
+.t-c{color:var(--text-3);font-style:italic}
+.t-k{color:var(--accent)}
+.t-s{color:var(--syn-str)}
+.t-n{color:var(--syn-num)}
+.t-f{color:var(--text);font-weight:600}
+.t-p{color:var(--text-3);user-select:none}
+.t-o{color:var(--text-3)}
+
+/* ---------- facts ---------- */
+.facts{position:relative;margin-top:20px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface);box-shadow:var(--shadow-sm)}
+.fact{padding:20px 22px;border-left:1px solid var(--border)}
+.fact:first-child{border-left:0}
+.fact-n{font:400 40px/1 var(--serif);letter-spacing:-.02em;color:var(--text)}
+.fact-l{margin-top:8px;font-size:13.5px;color:var(--text-2);line-height:1.4}
+@media (max-width:760px){.facts{grid-template-columns:repeat(2,minmax(0,1fr))}.fact:nth-child(3){border-left:0}.fact:nth-child(n+3){border-top:1px solid var(--border)}.fact{padding:16px}.fact-n{font-size:32px}}
+
+/* ---------- sections ---------- */
+section.sec{padding:104px 0;border-bottom:1px solid var(--border);position:relative}
+@media (max-width:760px){section.sec{padding:72px 0}.hero{padding:56px 0 56px}.sb{margin-top:40px;border-radius:22px}}
+.eyebrow{display:inline-block;font:600 12.5px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+h2{margin:14px 0 0;font:400 clamp(34px,4.8vw,56px)/1.06 var(--serif);letter-spacing:-.02em;max-width:780px}
+h2 .dim{color:var(--text-3)}
+.sec-lead{margin:16px 0 0;max-width:640px;color:var(--text-2);font-size:17px}
+h3{margin:0;font:600 20px/1.28 var(--serif);letter-spacing:-.005em}
+
+/* three ways */
+.ways{margin-top:48px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+@media (max-width:960px){.ways{grid-template-columns:minmax(0,1fr)}}
+.card{position:relative;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow-sm);padding:24px;min-width:0;transition:border-color .2s,box-shadow .25s}
+.card:hover{border-color:var(--border-strong);box-shadow:var(--shadow)}
+.ico{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;border:1px solid var(--border);background:var(--surface-2);color:var(--text-2);transition:color .2s}
+.ico svg{width:20px;height:20px}
+.card:hover .ico{color:var(--accent)}
+.way-n{position:absolute;top:24px;right:24px;font:italic 400 15px/1 var(--serif);color:var(--text-3)}
+.way h3{margin-top:20px}
+.way p{margin:10px 0 0;color:var(--text-2);font-size:15px}
+.entry{margin-top:20px;border:1px solid var(--border);border-radius:12px;background:var(--well)}
+.entry-l{padding:10px 12px 0;font-size:11.5px;font-weight:600;line-height:1;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3)}
+.entry pre{padding:8px 12px 12px;font-size:12px;line-height:1.6}
+.libs{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.footnote{margin-top:22px;display:flex;align-items:center;gap:10px;color:var(--text-2);font-size:14.5px}
+.footnote svg{width:16px;height:16px;flex:none;color:var(--accent)}
+
+/* bento */
+.bento{margin-top:48px;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px}
+.uc{display:flex;flex-direction:column}
+.uc .num{font:italic 400 15px/1 var(--serif);color:var(--text-3)}
+.uc h3{margin-top:12px}
+.uc p{margin:8px 0 0;color:var(--text-2);font-size:14.5px}
+.uc .cmds{margin-top:auto;padding-top:18px;display:flex;flex-wrap:wrap;gap:6px}
+.cmd{font:12.5px/1 var(--mono);padding:7px 10px;border-radius:999px;background:rgb(var(--accent-rgb) / .12);border:1px solid rgb(var(--accent-rgb) / .32);color:var(--accent);white-space:nowrap}
+.uc .snip{margin-top:16px;border:1px solid var(--border);border-radius:12px;background:var(--well)}
+.uc .snip pre{font-size:12px;padding:10px 12px;line-height:1.6}
+.s4{grid-column:span 4}.s3{grid-column:span 3}.s2{grid-column:span 2}
+@media (max-width:960px){.bento{grid-template-columns:repeat(2,minmax(0,1fr))}.s4,.s3,.s2{grid-column:span 1}.s4{grid-column:span 2}.uc.wide-t{grid-column:span 2}}
+@media (max-width:640px){.bento{grid-template-columns:minmax(0,1fr)}.s4,.s3,.s2,.uc.wide-t{grid-column:span 1}}
+.allcmds{margin-top:24px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;color:var(--text-2);font-size:14.5px}
+.arrow-link{display:inline-flex;align-items:center;gap:6px;color:var(--text);font-weight:600;font-size:14.5px;border-bottom:1px solid transparent;transition:border-color .15s,color .15s}
+.arrow-link:hover{border-color:var(--accent)}
+.arrow-link span{transition:transform .15s;color:var(--accent)}
+.arrow-link:hover span{transform:translateX(3px)}
+
+/* quick start */
+.qs{margin-top:48px;display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+.step{display:grid;grid-template-columns:minmax(0,4fr) minmax(0,7fr);gap:28px;align-items:start;border:1px solid var(--border);border-radius:var(--radius);padding:24px;background:var(--surface);box-shadow:var(--shadow-sm)}
+@media (max-width:860px){.step{grid-template-columns:minmax(0,1fr);gap:16px;padding:20px}}
+.step-n{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:999px;font:400 16px/1 var(--serif);color:var(--on-accent);background:var(--accent)}
+.step h3{margin-top:14px}
+.step p{margin:8px 0 0;color:var(--text-2);font-size:15px}
+.req{display:flex;flex-wrap:wrap;gap:8px}
+.req .chip{font:13px/1 var(--sans);padding:9px 12px;border-radius:999px;color:var(--text);background:var(--surface-2);border-color:var(--border)}
+.req-note{margin-top:12px;color:var(--text-2);font-size:13.5px}
+.mini{border:1px solid var(--border);border-radius:14px;background:var(--well);min-width:0}
+.mini .panel-h{padding:10px 14px}
+.mini .panel-h .copy{margin-left:auto}
+.mini pre{font-size:13px}
+
+/* catalog */
+.cat{margin-top:48px;display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:16px}
+@media (max-width:960px){.cat{grid-template-columns:minmax(0,1fr)}}
+.bar{display:flex;gap:3px;height:44px;margin-top:8px}
+.seg{flex-basis:0;min-width:7px;border-radius:8px;position:relative;background:var(--accent-fill);transition:opacity .15s}
+.bar.focus .seg{opacity:.3}
+.bar.focus .seg.on{opacity:1}
+.bar-axis{display:flex;justify-content:space-between;margin-top:10px;font-size:12px;line-height:1;color:var(--text-3)}
+.legend{margin-top:22px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@media (max-width:640px){.legend{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.lg{border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--well);min-width:0;transition:border-color .15s}
+.lg.on{border-color:var(--accent-fill)}
+.lg-h{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600}
+.sw{width:9px;height:9px;border-radius:3px;flex:none;background:var(--accent-fill)}
+.lg-n{margin-left:auto;font:400 15px/1 var(--serif);color:var(--text)}
+.lg-cc{margin-top:8px;font-size:12px;line-height:1.45;color:var(--text-3)}
+.lg-id{margin-top:6px;font:12px/1 var(--mono);color:var(--accent)}
+.cat-note{margin-top:20px;color:var(--text-2);font-size:14.5px}
+.cat-total{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.cat-total b{font:400 52px/1 var(--serif);letter-spacing:-.02em;color:var(--text)}
+.cat-total span{color:var(--text-2);font-size:15px}
+
+/* evidence */
+.ev-stats{margin-top:48px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+@media (max-width:760px){.ev-stats{grid-template-columns:minmax(0,1fr)}}
+.stat{padding:32px 28px;overflow:hidden}
+.stat-k{font-size:12px;font-weight:600;line-height:1;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3)}
+.stat-n{margin-top:18px;font:400 clamp(60px,8.4vw,96px)/.95 var(--serif);letter-spacing:-.03em;color:var(--text);display:inline-block}
+.stat-n small{font-size:.5em;letter-spacing:0;color:var(--accent)}
+.stat-l{margin-top:12px;color:var(--text-2);font-size:16px}
+.ev-quote{margin:28px 0 0;padding:20px 24px;border-left:2px solid var(--accent-fill);border-radius:0 14px 14px 0;background:var(--surface);color:var(--text-2);font:400 18px/1.55 var(--serif);max-width:880px}
+.ev-quote strong{color:var(--text);font-weight:600}
+.tbl-wrap{margin-top:24px;overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow-sm)}
+table{width:100%;border-collapse:collapse;min-width:640px;font-size:14px}
+th,td{text-align:left;padding:14px 18px;border-bottom:1px solid var(--border);vertical-align:top}
+th{font-size:11.5px;font-weight:600;line-height:1.3;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);background:var(--well)}
+tr:last-child td{border-bottom:0}
+td{color:var(--text-2)}
+td:first-child{color:var(--text);font-weight:550}
+td.num{font-family:var(--mono);font-size:13px;color:var(--text);white-space:nowrap}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:var(--hover)}
+.notes{margin:24px 0 0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 28px;max-width:980px}
+@media (max-width:760px){.notes{grid-template-columns:minmax(0,1fr)}}
+.notes li{position:relative;padding-left:18px;color:var(--text-2);font-size:14.5px}
+.notes li::before{content:"";position:absolute;left:2px;top:.6em;width:6px;height:6px;border-radius:50%;background:var(--accent-fill)}
+
+/* limitations (semantic: warn) */
+.limit{margin-top:48px;display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:28px;padding:32px;border-radius:var(--radius);border:1px solid rgb(var(--warn-rgb) / .38);background:rgb(var(--warn-rgb) / .08)}
+@media (max-width:860px){.limit{grid-template-columns:minmax(0,1fr);padding:22px}}
+.warn{display:flex;gap:14px;align-items:flex-start}
+.warn .ico{color:var(--warn);border-color:rgb(var(--warn-rgb) / .45);background:rgb(var(--warn-rgb) / .14);flex:none}
+.warn p{margin:0;color:var(--text);font:400 18px/1.55 var(--serif)}
+.limit ul{margin:0;padding:0;list-style:none;display:grid;gap:12px}
+.limit li{display:flex;gap:12px;color:var(--text-2);font-size:15px;padding-bottom:12px;border-bottom:1px solid rgb(var(--warn-rgb) / .25)}
+.limit li:last-child{border-bottom:0;padding-bottom:0}
+.limit li svg{width:16px;height:16px;flex:none;margin-top:4px;color:var(--warn)}
+.limit .arrow-link{margin-top:18px}
+
+/* cta band */
+.band{position:relative;overflow:hidden;padding:96px 0;text-align:center;border-bottom:1px solid var(--border)}
+.band .gridlines{-webkit-mask-image:radial-gradient(ellipse 60% 80% at 50% 100%,#000 20%,transparent 75%);mask-image:radial-gradient(ellipse 60% 80% at 50% 100%,#000 20%,transparent 75%)}
+.band h2{margin-inline:auto}
+.band .cmdline{position:relative;margin:28px auto 0;display:inline-flex;max-width:100%;align-items:center;gap:12px;border:1px solid var(--border-strong);border-radius:14px;padding:12px 18px;background:var(--surface);box-shadow:var(--shadow-sm);font:13.5px/1.4 var(--mono);color:var(--text);overflow-x:auto}
+.band .cmdline code{white-space:nowrap}
+.band p.sub{position:relative;margin:16px auto 0;max-width:560px;color:var(--text-2)}
+
+/* footer */
+footer{padding:64px 0 40px;color:var(--text-2);font-size:14px}
+.f-grid{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(3,minmax(0,1fr));gap:32px}
+@media (max-width:860px){.f-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.f-brand{grid-column:span 2}}
+.f-brand p{margin:14px 0 0;max-width:340px}
+.f-h{font-size:12px;font-weight:600;line-height:1;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin:0 0 14px}
+footer ul{list-style:none;margin:0;padding:0;display:grid;gap:9px}
+footer ul a{transition:color .15s}
+footer ul a:hover{color:var(--text)}
+.built{margin-top:16px;display:grid;gap:6px;font-size:13.5px}
+.built b{color:var(--text);font-weight:600}
+.f-bottom{margin-top:48px;padding-top:22px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:10px 24px;justify-content:space-between;font-size:13px;color:var(--text-3)}
+.f-bottom a{color:var(--text-2)}
+.f-bottom a:hover{color:var(--text)}
+
+/* gentle scroll reveal (only when JS + motion allowed) */
+.motion .rv{opacity:0;transform:translateY(14px);transition:opacity .7s cubic-bezier(.2,.7,.2,1) var(--d,0ms),transform .7s cubic-bezier(.2,.7,.2,1) var(--d,0ms),border-color .2s,box-shadow .25s}
+.motion .rv.in{opacity:1;transform:none}
+
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="FakeGPU home">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="3" y="5" width="18" height="14" rx="3.5" stroke="currentColor" stroke-width="1.6"/>
+        <rect x="8" y="9" width="8" height="6" rx="1.4" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.2 1.6"/>
+        <path class="pins" d="M6 2.5v2.5M10 2.5v2.5M14 2.5v2.5M18 2.5v2.5M6 19v2.5M10 19v2.5M14 19v2.5M18 19v2.5" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      FakeGPU
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#how">How it works</a>
+      <a href="#use-cases">Use cases</a>
+      <a href="#quick-start">Quick start</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#limitations">Limitations</a>
+    </nav>
+    <div class="nav-tools">
+      <button class="theme-toggle" type="button" aria-label="Dark theme" aria-pressed="false" title="Switch to dark theme">
+        <svg class="i-moon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M16.5 12.2A6.8 6.8 0 0 1 7.8 3.5a6.8 6.8 0 1 0 8.7 8.7Z" stroke-linejoin="round"/></svg>
+        <svg class="i-sun" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 1.8v2M10 16.2v2M1.8 10h2M16.2 10h2M4.2 4.2l1.4 1.4M14.4 14.4l1.4 1.4M4.2 15.8l1.4-1.4M14.4 5.6l1.4-1.4" stroke-linecap="round"/></svg>
+      </button>
+      <a class="nav-gh" href="https://github.com/FanBB2333/FakeGPU">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- ================= HERO ================= -->
+<section class="hero">
+  <div class="gridlines" aria-hidden="true"></div>
+  <div class="wrap">
+    <div class="hero-copy">
+      <a class="pill" href="#profiles"><span class="dot">82</span>GPU profiles, from Maxwell to Blackwell <span class="arr" aria-hidden="true">→</span></a>
+      <h1><span class="w">Fake</span><span class="g">GPU</span></h1>
+      <p class="tagline">Validate CUDA-facing applications, estimate GPU memory, and simulate distributed GPU workflows without a production GPU cluster.</p>
+      <p class="lead">FakeGPU makes a machine without a GPU look like it has one. Applications see configurable NVIDIA-like devices, while the supported operations actually run on the CPU. Along the way, FakeGPU records memory use and communication, so you can check whether code works and whether a workload would fit before you pay for real hardware.</p>
+      <div class="ctas">
+        <a class="btn btn-primary" href="#quick-start">Get started <span class="k" aria-hidden="true">→</span></a>
+        <a class="btn btn-ghost" href="https://github.com/FanBB2333/FakeGPU">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+      <ul class="facts-row" aria-label="Project facts">
+        <li><a href="https://github.com/FanBB2333/FakeGPU/blob/main/LICENSE"><svg class="fr-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 20h10M6 6l6-1 6 1M12 3v17M9 12 6 6l-3 6a3 3 0 0 0 6 0M21 12l-3-6-3 6a3 3 0 0 0 6 0"/></svg><span class="fr-t"><b>MIT</b><small>License</small></span></a></li>
+        <li><span class="fr-c"><svg class="fr-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9H5a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h3M12 15h7a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3M8 9V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-4M11 6v.01M13 18v.01"/></svg><span class="fr-t"><b>3.10+</b><small>Python</small></span></span></li>
+        <li><span class="fr-c"><svg class="fr-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 19h18M6 6h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z"/></svg><span class="fr-t"><b>Linux, macOS</b><small>Platforms</small></span></span></li>
+      </ul>
+    </div>
+
+    <!-- storyboard: animated walkthrough (static final frame without JS or with reduced motion) -->
+    <figure class="sb" id="story" aria-label="Walkthrough of a FakeGPU preflight run">
+      <figcaption class="sr-only">Walkthrough: pick the a100 profile, run python3 -m fakegpu preflight on train.py up to the forward stage, watch the progress steps complete, read the preflight report, then see four simulated devices from --devices "a100:2,h100:2".</figcaption>
+      <button class="sb-ctl" type="button" aria-pressed="false" aria-label="Pause animation">
+        <svg class="i-pause" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><rect x="3" y="2.5" width="2.6" height="9" rx=".8"/><rect x="8.4" y="2.5" width="2.6" height="9" rx=".8"/></svg>
+        <svg class="i-play" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M4 2.6v8.8a.6.6 0 0 0 .9.5l7-4.4a.6.6 0 0 0 0-1L4.9 2.1a.6.6 0 0 0-.9.5Z"/></svg>
+      </button>
+      <div class="sb-canvas" aria-hidden="true">
+
+        <div class="scene s-head" data-s="head">
+          <div class="sb-mark">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3.5" stroke="currentColor" stroke-width="1.6"/><rect x="8" y="9" width="8" height="6" rx="1.4" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.2 1.6"/><path class="pins" d="M6 2.5v2.5M10 2.5v2.5M14 2.5v2.5M18 2.5v2.5M6 19v2.5M10 19v2.5M14 19v2.5M18 19v2.5" stroke-width="1.4" stroke-linecap="round"/></svg>
+            FakeGPU
+          </div>
+          <p class="sb-headline">Make a machine without a GPU <br class="br-d">look like it has one.</p>
+        </div>
+
+        <div class="scene s-pick" data-s="pick">
+          <div class="pick">
+            <p class="pick-l">Choose a target profile</p>
+            <div class="pchips">
+              <div class="pchip" data-id="a100"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="5" width="15" height="10" rx="2"/><rect x="6.5" y="7.8" width="7" height="4.4" rx="1"/></svg><span class="pc-id">a100</span><span class="pc-a">Ampere</span><span class="pc-ck"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              <div class="pchip"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="5" width="15" height="10" rx="2"/><rect x="6.5" y="7.8" width="7" height="4.4" rx="1"/></svg><span class="pc-id">h100</span><span class="pc-a">Hopper</span></div>
+              <div class="pchip"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="5" width="15" height="10" rx="2"/><rect x="6.5" y="7.8" width="7" height="4.4" rx="1"/></svg><span class="pc-id">b200</span><span class="pc-a">Blackwell</span></div>
+              <div class="pchip"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="5" width="15" height="10" rx="2"/><rect x="6.5" y="7.8" width="7" height="4.4" rx="1"/></svg><span class="pc-id">l4</span><span class="pc-a">Ada</span></div>
+              <div class="pchip"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="5" width="15" height="10" rx="2"/><rect x="6.5" y="7.8" width="7" height="4.4" rx="1"/></svg><span class="pc-id">t4</span><span class="pc-a">Turing</span></div>
+              <div class="pchip"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="5" width="15" height="10" rx="2"/><rect x="6.5" y="7.8" width="7" height="4.4" rx="1"/></svg><span class="pc-id">v100</span><span class="pc-a">Volta</span></div>
+            </div>
+            <div class="prompt">
+              <div class="prompt-in"><span class="typed"></span><span class="caret"></span></div>
+              <div class="prompt-f">
+                <span class="pf-file"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 1.8h5.2L12.5 5v9.2H4z" stroke-linejoin="round"/><path d="M9 1.8V5h3.5"/></svg>train.py</span>
+                <span class="go">Run preflight <span aria-hidden="true">→</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="scene s-shim" data-s="shim">
+          <div class="shim-row"><span class="spin"></span><p class="shim">Intercepting CUDA calls…</p></div>
+        </div>
+
+        <div class="scene s-prog keep" data-s="prog">
+          <div class="pcard">
+            <div class="pcard-h"><span>Progress</span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4 6 4 4 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <ol class="steps">
+              <li class="si done"><span class="si-m"><b>1</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Start FakeCUDA with the <code>a100</code> profile</span></li>
+              <li class="si done"><span class="si-m"><b>2</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Run <code>train.py</code> up to the forward stage</span></li>
+              <li class="si done"><span class="si-m"><b>3</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Track memory on the path that actually ran</span></li>
+              <li class="si done"><span class="si-m"><b>4</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Check whether the selected profile fits the workload</span></li>
+              <li class="si done"><span class="si-m"><b>5</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Write reports to <code>build/preflight</code></span></li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="scene s-result keep" data-s="result">
+          <div class="rcard">
+            <div class="rc-top"><span class="rc-file"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.8 4.2h4.4l1.4 1.6h6.6v7.4H1.8z" stroke-linejoin="round"/></svg>build/preflight</span><span class="rc-tag" title="This run is an example, not a measured result.">Example only</span></div>
+            <p class="rc-q">Will <code>train.py</code> fit on an a100?</p>
+            <div class="tiles">
+              <div class="tile"><b>80 GiB</b><span>a100 profile memory</span></div>
+              <div class="tile"><b>forward</b><span>stage reached</span></div>
+              <div class="tile"><b>Fits</b><span>selected profile</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="scene s-line" data-s="line">
+          <p class="sb-headline">It can also fake <br class="br-d"><em>several GPUs</em> at once.</p>
+        </div>
+
+        <div class="scene s-dev" data-s="dev">
+          <div class="dcard">
+            <div class="dc-h"><svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3.5" stroke="currentColor" stroke-width="1.6"/><rect x="8" y="9" width="8" height="6" rx="1.4" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.2 1.6"/><path class="pins" d="M6 2.5v2.5M10 2.5v2.5M14 2.5v2.5M18 2.5v2.5M6 19v2.5M10 19v2.5M14 19v2.5M18 19v2.5" stroke-width="1.4" stroke-linecap="round"/></svg>Simulated devices</div>
+            <div class="dc-flag">--devices "a100:2,h100:2"</div>
+            <ul class="drows">
+              <li class="drow"><code>cuda:0</code><span>NVIDIA A100-SXM4-80GB</span><i class="dot"></i></li>
+              <li class="drow"><code>cuda:1</code><span>NVIDIA A100-SXM4-80GB</span><i class="dot"></i></li>
+              <li class="drow"><code>cuda:2</code><span>NVIDIA H100 80GB HBM3</span><i class="dot"></i></li>
+              <li class="drow"><code>cuda:3</code><span>NVIDIA H100 80GB HBM3</span><i class="dot"></i></li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="scene s-close" data-s="close">
+          <p class="sb-headline">Find out if your code runs and fits <br class="br-d"><em>before</em> you pay for a GPU.</p>
+        </div>
+
+        <div class="scene s-end" data-s="end">
+          <div class="end-logo"><svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3.5" stroke="currentColor" stroke-width="1.6"/><rect x="8" y="9" width="8" height="6" rx="1.4" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.2 1.6"/><path class="pins" d="M6 2.5v2.5M10 2.5v2.5M14 2.5v2.5M18 2.5v2.5M6 19v2.5M10 19v2.5M14 19v2.5M18 19v2.5" stroke-width="1.4" stroke-linecap="round"/></svg>FakeGPU</div>
+          <p class="end-sub">Simulated GPUs for CUDA-facing development</p>
+          <span class="sb-cta">Get started <span>→</span></span>
+        </div>
+
+        <div class="sb-cursor"><svg viewBox="0 0 24 24"><path class="c-fill" d="M3 2.2 3.2 19l4.4-4.3 2.9 6.6 2.8-1.2-2.9-6.5 6.2-.2Z" stroke-width="1.3" stroke-linejoin="round"/></svg><i></i></div>
+      </div>
+    </figure>
+
+    <div class="stage">
+      <!-- flow diagram -->
+      <div class="panel" role="figure" aria-label="How a program sees FakeGPU devices">
+        <div class="panel-h"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span>what your program sees</span></div>
+        <div class="flow">
+          <div class="node">
+            <div class="node-t">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5"/><path d="M2.5 7.5h15M6 11l2 1.5L6 14M10 14h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Your app / PyTorch
+            </div>
+            <div class="node-s">Unmodified program or a script that calls <code class="inline-code">fakegpu.init(...)</code></div>
+          </div>
+          <div class="link" aria-hidden="true"></div>
+          <div class="node layer">
+            <div class="node-t">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 2.5 2.5 6.5 10 10.5l7.5-4L10 2.5Z" stroke-linejoin="round"/><path d="m2.5 10 7.5 4 7.5-4M2.5 13.5l7.5 4 7.5-4" stroke-linejoin="round"/></svg>
+              FakeGPU
+            </div>
+            <div class="node-s">FakeCUDA, or native libraries loaded in place of:</div>
+            <div class="chips">
+              <span class="chip">libcuda</span><span class="chip">libcudart</span><span class="chip">libcublas</span><span class="chip">libnvidia-ml</span><span class="chip">libnccl</span>
+            </div>
+          </div>
+          <div class="link" aria-hidden="true"></div>
+          <div class="node">
+            <div class="node-t">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="2"/><rect x="6.5" y="7.8" width="7" height="4.4" rx="1" stroke-dasharray="1.6 1.2"/><path d="M5 3v2M8.3 3v2M11.7 3v2M15 3v2M5 15v2M8.3 15v2M11.7 15v2M15 15v2" stroke-linecap="round"/></svg>
+              Virtual devices
+            </div>
+            <div class="devs">
+              <div class="dev"><b>cuda:0</b><span>A100</span></div>
+              <div class="dev"><b>cuda:1</b><span>A100</span></div>
+              <div class="dev h"><b>cuda:2</b><span>H100</span></div>
+              <div class="dev h"><b>cuda:3</b><span>H100</span></div>
+            </div>
+            <div class="flag">--devices "a100:2,h100:2"</div>
+          </div>
+          <div class="link" aria-hidden="true"></div>
+          <div class="node cpu">
+            <div>
+              <div class="node-t">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="1.5"/><rect x="8" y="8" width="4" height="4" rx=".6"/><path d="M8 2.5V5M12 2.5V5M8 15v2.5M12 15v2.5M2.5 8H5M2.5 12H5M15 8h2.5M15 12h2.5" stroke-linecap="round"/></svg>
+                Runs on CPU
+              </div>
+              <div class="node-s">The supported operations actually run on your CPU, and FakeGPU records memory use and communication as they go.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- code window -->
+      <div class="panel" id="examples">
+        <div class="panel-h"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span>examples</span></div>
+        <div class="tabs" role="tablist" aria-label="Code examples">
+          <button class="tab" role="tab" id="tab-fc" aria-controls="p-fc" aria-selected="true">FakeCUDA</button>
+          <button class="tab" role="tab" id="tab-nat" aria-controls="p-nat" aria-selected="false" tabindex="-1">Native</button>
+          <button class="tab" role="tab" id="tab-est" aria-controls="p-est" aria-selected="false" tabindex="-1">Estimate</button>
+          <button class="tab" role="tab" id="tab-smi" aria-controls="p-smi" aria-selected="false" tabindex="-1">SMI</button>
+        </div>
+
+        <div class="code-panel" id="p-fc" role="tabpanel" aria-labelledby="tab-fc">
+          <div class="cp-h"><p class="cp-cap"><b class="nojs-title">Run PyTorch code on FakeCUDA. </b>Initialize FakeGPU before importing PyTorch.</p><button class="copy" type="button">Copy</button></div>
+<pre><code><span class="t-k">import</span> fakegpu
+
+fakegpu.<span class="t-f">init</span>(runtime=<span class="t-s">"fakecuda"</span>, profile=<span class="t-s">"a100"</span>, device_count=<span class="t-n">2</span>)
+
+<span class="t-k">import</span> torch
+
+device = torch.<span class="t-f">device</span>(<span class="t-s">"cuda:0"</span>)
+model = torch.nn.<span class="t-f">Linear</span>(<span class="t-n">8</span>, <span class="t-n">4</span>).<span class="t-f">to</span>(device)
+loss = <span class="t-f">model</span>(torch.<span class="t-f">randn</span>(<span class="t-n">2</span>, <span class="t-n">8</span>, device=device)).<span class="t-f">square</span>().<span class="t-f">mean</span>()
+loss.<span class="t-f">backward</span>()
+
+<span class="t-f">print</span>(torch.cuda.<span class="t-f">device_count</span>())      <span class="t-c"># 2</span>
+<span class="t-f">print</span>(torch.cuda.<span class="t-f">get_device_name</span>(<span class="t-n">0</span>))  <span class="t-c"># NVIDIA A100</span></code></pre>
+        </div>
+
+        <div class="code-panel" id="p-nat" role="tabpanel" aria-labelledby="tab-nat">
+          <div class="cp-h"><p class="cp-cap"><b class="nojs-title">Run an unmodified program. </b>The launcher sets up <code class="inline-code">LD_PRELOAD</code> or <code class="inline-code">DYLD_INSERT_LIBRARIES</code> for you.</p><button class="copy" type="button">Copy</button></div>
+<pre><code><span class="t-p">$ </span>python3 -m fakegpu --build-dir build --devices <span class="t-s">"a100:2,h100:2"</span> <span class="t-o">\</span>
+  python3 your_script.py</code></pre>
+        </div>
+
+        <div class="code-panel" id="p-est" role="tabpanel" aria-labelledby="tab-est">
+          <div class="cp-h"><p class="cp-cap"><b class="nojs-title">Estimate. </b>Check memory before a run.</p><button class="copy" type="button">Copy</button></div>
+<pre><code><span class="t-c"># Run train.py up to the forward pass and report whether it fits.</span>
+<span class="t-p">$ </span>python3 -m fakegpu preflight --runtime fakecuda --profile a100 <span class="t-o">\</span>
+  --stage forward --report-dir build/preflight -- python3 train.py
+
+<span class="t-c"># Estimate LLM inference memory from safetensors headers only.</span>
+<span class="t-p">$ </span>python3 -m fakegpu estimate-llm --model-dir /models/example <span class="t-o">\</span>
+  --prompt-tokens <span class="t-n">128</span> --generated-tokens <span class="t-n">32</span> --target-profile a100
+
+<span class="t-c"># Plan an online serving pool.</span>
+<span class="t-p">$ </span>python3 -m fakegpu plan-serving --model-dir /models/example <span class="t-o">\</span>
+  --active-sequences <span class="t-n">16</span> --prompt-tokens <span class="t-n">4096</span> --generated-tokens <span class="t-n">256</span> <span class="t-o">\</span>
+  --target-profile a100</code></pre>
+        </div>
+
+        <div class="code-panel" id="p-smi" role="tabpanel" aria-labelledby="tab-smi">
+          <div class="cp-h"><p class="cp-cap"><b class="nojs-title">SMI. </b>Inspect simulated devices.</p><button class="copy" type="button">Copy</button></div>
+<pre><code><span class="t-p">$ </span><span class="t-k">export</span> FAKEGPU_SMI_STATE_DIR=build/smi
+<span class="t-p">$ </span>python3 your_script.py &amp;
+<span class="t-p">$ </span>python3 -m fakegpu nvidia-smi --state-dir build/smi</code></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="facts">
+      <div class="fact"><div class="fact-n">82</div><div class="fact-l">GPU profiles, from Maxwell to Blackwell</div></div>
+      <div class="fact"><div class="fact-n">15</div><div class="fact-l">compute capabilities</div></div>
+      <div class="fact"><div class="fact-n">5</div><div class="fact-l">intercepted libraries</div></div>
+      <div class="fact"><div class="fact-n">3</div><div class="fact-l">ways to run</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= HOW ================= -->
+<section class="sec" id="how">
+  <div class="wrap">
+    <span class="eyebrow">How it works</span>
+    <h2>There are three ways to use it. <span class="dim">Pick whichever fits your code.</span></h2>
+    <div class="ways">
+      <article class="card way">
+        <span class="way-n">01</span>
+        <div class="ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 6 3 10l4 4M13 6l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/><path d="m11 4-2 12" stroke-linecap="round"/></svg></div>
+        <h3>Python FakeCUDA</h3>
+        <p>Lets PyTorch code use <code>cuda</code> devices while tensors stay on the CPU.</p>
+        <div class="entry"><div class="entry-l">Entry point</div>
+<pre><code>fakegpu.<span class="t-f">init</span>(runtime=<span class="t-s">"fakecuda"</span>, profile=<span class="t-s">"a100"</span>, device_count=<span class="t-n">2</span>)</code></pre></div>
+      </article>
+      <article class="card way">
+        <span class="way-n">02</span>
+        <div class="ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 2.5v4M13 2.5v4M5 6.5h10v3a5 5 0 0 1-10 0v-3ZM10 14.5v3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <h3>Native interception</h3>
+        <p>Loads in place of the CUDA libraries, so unmodified programs can run. The launcher sets up <code>LD_PRELOAD</code> or <code>DYLD_INSERT_LIBRARIES</code> for you.</p>
+        <div class="libs"><span class="chip">libcuda</span><span class="chip">libcudart</span><span class="chip">libcublas</span><span class="chip">libnvidia-ml</span><span class="chip">libnccl</span></div>
+        <div class="entry"><div class="entry-l">Entry point</div>
+<pre><code>python3 -m fakegpu --build-dir build --devices <span class="t-s">"a100:2,h100:2"</span> python3 your_script.py</code></pre></div>
+      </article>
+      <article class="card way">
+        <span class="way-n">03</span>
+        <div class="ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3.5 13.5a6.5 6.5 0 1 1 13 0" stroke-linecap="round"/><path d="m10 13.5 3.2-4.2" stroke-linecap="round"/><circle cx="10" cy="13.5" r="1.2"/><path d="M3 16.5h14" stroke-linecap="round"/></svg></div>
+        <h3>Static estimators</h3>
+        <p>Read model metadata and configs and report memory, FLOPs, and communication without loading weights.</p>
+        <div class="entry"><div class="entry-l">Entry point</div>
+<pre><code>python3 -m fakegpu estimate-llm --model-dir /models/example --target-profile a100</code></pre></div>
+      </article>
+    </div>
+    <p class="footnote"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2V11M8 5h.01" stroke-linecap="round"/></svg>You only need a real GPU for passthrough, hybrid, and calibration runs.</p>
+  </div>
+</section>
+
+<!-- ================= USE CASES ================= -->
+<section class="sec" id="use-cases">
+  <div class="wrap">
+    <span class="eyebrow">Use cases</span>
+    <h2>Things you can do <span class="dim">before paying for a GPU.</span></h2>
+    <div class="bento">
+      <article class="card uc s4 big">
+        <span class="num">01</span>
+        <h3>Choose a GPU before renting one</h3>
+        <p>Estimate checkpoint, KV-cache, activation, and optimizer memory, or run a workload to a chosen stage.</p>
+        <div class="snip"><pre><code><span class="t-p">$ </span>python3 -m fakegpu estimate-llm --model-dir /models/example --target-profile a100</code></pre></div>
+        <div class="cmds"><span class="cmd">estimate-llm</span><span class="cmd">preflight</span></div>
+      </article>
+      <article class="card uc s2">
+        <span class="num">02</span>
+        <h3>Size an LLM service</h3>
+        <p>Check how many chat, RAG, or speculative-decoding requests fit in memory, including a vLLM-style budget.</p>
+        <div class="cmds"><span class="cmd">plan-serving</span></div>
+      </article>
+      <article class="card uc s2">
+        <span class="num">03</span>
+        <h3>Develop CUDA code on a laptop or in CPU-only CI</h3>
+        <p>Call <code>fakegpu.init(...)</code> in your script, or try <code>demo</code> and <code>validate</code>.</p>
+        <div class="cmds"><span class="cmd">fakegpu.init(...)</span><span class="cmd">demo</span><span class="cmd">validate</span></div>
+      </article>
+      <article class="card uc s2">
+        <span class="num">04</span>
+        <h3>Compare training plans</h3>
+        <p>Estimate per-rank memory for full fine-tuning, LoRA, QLoRA, sharding, and offload.</p>
+        <div class="cmds"><span class="cmd">plan-training</span></div>
+      </article>
+      <article class="card uc s2 wide-t">
+        <span class="num">05</span>
+        <h3>Plan diffusion generation</h3>
+        <p>See how resolution, batch size, CFG, VAE tiling, and offload change memory.</p>
+        <div class="cmds"><span class="cmd">estimate-diffusion</span></div>
+      </article>
+      <article class="card uc s3">
+        <span class="num">06</span>
+        <h3>Review an unfamiliar GPU repository</h3>
+        <p>See where a repo touches the GPU, which kernels it ships, and which APIs aren't supported.</p>
+        <div class="cmds"><span class="cmd">analyze-repo</span><span class="cmd">analyze-kernel</span><span class="cmd">capabilities</span></div>
+      </article>
+      <article class="card uc s3">
+        <span class="num">07</span>
+        <h3>Debug distributed workflows</h3>
+        <p>See how collectives get routed, where ranks wait on each other, and whether payloads look right.</p>
+        <div class="cmds"><span class="cmd">simulate-topology</span><span class="cmd">replay-trace</span><span class="cmd">bandwidth</span></div>
+      </article>
+      <article class="card uc s2">
+        <span class="num">08</span>
+        <h3>Watch simulated devices</h3>
+        <p>Show devices and processes and export Prometheus metrics.</p>
+        <div class="cmds"><span class="cmd">nvidia-smi</span><span class="cmd">metrics</span></div>
+      </article>
+      <article class="card uc s4 big2">
+        <span class="num">09</span>
+        <h3>Check estimates against a real GPU</h3>
+        <p>Compare predictions with measured peaks and enforce error limits.</p>
+        <div class="cmds"><span class="cmd">calibrate</span></div>
+      </article>
+    </div>
+    <div class="allcmds">
+      <span>Every command runs as <code>python3 -m fakegpu &lt;command&gt;</code>; <code>python3 -m fakegpu --help</code> lists them all.</span>
+      <a class="arrow-link" href="https://github.com/FanBB2333/FakeGPU/blob/main/docs/en/commands.md">Command reference <span aria-hidden="true">→</span></a>
+    </div>
+  </div>
+</section>
+
+<!-- ================= QUICK START ================= -->
+<section class="sec" id="quick-start">
+  <div class="wrap">
+    <span class="eyebrow">Quick start</span>
+    <h2>Set it up <span class="dim">and get a CUDA device on your CPU.</span></h2>
+    <div class="qs">
+      <div class="step">
+        <div>
+          <span class="step-n">1</span>
+          <h3>Requirements</h3>
+          <p>Linux or macOS, Python 3.10+, CMake 3.14+, a C++17 compiler, and PyTorch for the Python runtime.</p>
+        </div>
+        <div>
+          <div class="req"><span class="chip">Linux or macOS</span><span class="chip">Python 3.10+</span><span class="chip">CMake 3.14+</span><span class="chip">C++17 compiler</span><span class="chip">PyTorch</span></div>
+          <p class="req-note">On Debian or Ubuntu, install <code>build-essential</code>. On macOS, install the Xcode Command Line Tools.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <span class="step-n">2</span>
+          <h3>Build and install</h3>
+          <p>Clone the repository, build the native libraries, and install the Python package.</p>
+        </div>
+        <div class="mini">
+          <div class="panel-h"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span>bash</span><button class="copy" type="button">Copy</button></div>
+<pre><code>git clone https://github.com/FanBB2333/FakeGPU.git
+<span class="t-k">cd</span> FakeGPU
+scripts/build.sh
+FAKEGPU_BUILD_DIR=<span class="t-s">"$PWD/build"</span> python3 -m pip install .</code></pre>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <span class="step-n">3</span>
+          <h3>Check that everything works</h3>
+          <p><code>doctor</code> checks the profile catalog, native libraries, and PyTorch. <code>demo</code> runs a small training step on the CPU while the program sees a CUDA device.</p>
+        </div>
+        <div class="mini">
+          <div class="panel-h"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span>bash</span><button class="copy" type="button">Copy</button></div>
+<pre><code>python3 -m fakegpu doctor --list-profiles
+python3 -m fakegpu demo --profile l4</code></pre>
+        </div>
+      </div>
+    </div>
+    <div class="allcmds">
+      <span>Then run your own code: see the <a class="arrow-link" href="#examples">examples above <span aria-hidden="true">↑</span></a></span>
+      <a class="arrow-link" href="https://github.com/FanBB2333/FakeGPU/blob/main/docs/en/native-interception.md">Native interception <span aria-hidden="true">→</span></a>
+      <a class="arrow-link" href="https://github.com/FanBB2333/FakeGPU/blob/main/docs/en/README.md">Documentation <span aria-hidden="true">→</span></a>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PROFILES ================= -->
+<section class="sec" id="profiles">
+  <div class="wrap">
+    <span class="eyebrow">GPU profile catalog</span>
+    <h2>82 NVIDIA GPUs to choose from, <span class="dim">from Maxwell to Blackwell.</span></h2>
+    <p class="sec-lead">GPU profiles are YAML files in <code>profiles/</code>. Pick one with <code>--profile</code> or <code>FAKEGPU_PROFILE</code>, or pass a mixed list with <code>--devices</code>.</p>
+    <div class="cat">
+      <div class="card">
+        <div class="cat-total"><b>82</b><span>profiles across 8 architectures and 15 compute capabilities</span></div>
+        <div class="bar" role="img" aria-label="Profiles per architecture: Maxwell 1, Pascal 9, Volta 1, Turing 12, Ampere 22, Ada 17, Hopper 2, Blackwell 18">
+          <span class="seg" data-arch="maxwell" style="flex-grow:1" title="Maxwell: 1 profile"></span>
+          <span class="seg" data-arch="pascal" style="flex-grow:9" title="Pascal: 9 profiles"></span>
+          <span class="seg" data-arch="volta" style="flex-grow:1" title="Volta: 1 profile"></span>
+          <span class="seg" data-arch="turing" style="flex-grow:12" title="Turing: 12 profiles"></span>
+          <span class="seg" data-arch="ampere" style="flex-grow:22" title="Ampere: 22 profiles"></span>
+          <span class="seg" data-arch="ada" style="flex-grow:17" title="Ada: 17 profiles"></span>
+          <span class="seg" data-arch="hopper" style="flex-grow:2" title="Hopper: 2 profiles"></span>
+          <span class="seg" data-arch="blackwell" style="flex-grow:18" title="Blackwell: 18 profiles"></span>
+        </div>
+        <div class="bar-axis" aria-hidden="true"><span>Maxwell</span><span>→</span><span>Blackwell</span></div>
+        <div class="legend">
+          <div class="lg" data-arch="maxwell"><div class="lg-h"><i class="sw"></i>Maxwell<span class="lg-n">1</span></div><div class="lg-cc">CC 5.2</div><div class="lg-id">gtx980</div></div>
+          <div class="lg" data-arch="pascal"><div class="lg-h"><i class="sw"></i>Pascal<span class="lg-n">9</span></div><div class="lg-cc">CC 6.0, 6.1</div><div class="lg-id">p100</div></div>
+          <div class="lg" data-arch="volta"><div class="lg-h"><i class="sw"></i>Volta<span class="lg-n">1</span></div><div class="lg-cc">CC 7.0</div><div class="lg-id">v100</div></div>
+          <div class="lg" data-arch="turing"><div class="lg-h"><i class="sw"></i>Turing<span class="lg-n">12</span></div><div class="lg-cc">CC 7.5</div><div class="lg-id">t4</div></div>
+          <div class="lg" data-arch="ampere"><div class="lg-h"><i class="sw"></i>Ampere<span class="lg-n">22</span></div><div class="lg-cc">CC 8.0, 8.6, 8.7</div><div class="lg-id">a100</div></div>
+          <div class="lg" data-arch="ada"><div class="lg-h"><i class="sw"></i>Ada<span class="lg-n">17</span></div><div class="lg-cc">CC 8.9</div><div class="lg-id">l4</div></div>
+          <div class="lg" data-arch="hopper"><div class="lg-h"><i class="sw"></i>Hopper<span class="lg-n">2</span></div><div class="lg-cc">CC 9.0</div><div class="lg-id">h100</div></div>
+          <div class="lg" data-arch="blackwell"><div class="lg-h"><i class="sw"></i>Blackwell<span class="lg-n">18</span></div><div class="lg-cc">CC 10.0, 10.3, 11.0, 12.0, 12.1</div><div class="lg-id">b200</div></div>
+        </div>
+      </div>
+      <div class="mini" style="align-self:start">
+        <div class="panel-h"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span>profiles/ampere/datacenter/a100.yaml</span></div>
+<pre><code><span class="t-f">id</span>: a100
+<span class="t-f">name</span>: <span class="t-s">Fake NVIDIA A100-SXM4-80GB</span>
+<span class="t-f">torch_name</span>: <span class="t-s">NVIDIA A100-SXM4-80GB</span>
+<span class="t-f">architecture</span>: ampere
+<span class="t-f">compute_major</span>: <span class="t-n">8</span>
+<span class="t-f">compute_minor</span>: <span class="t-n">0</span>
+<span class="t-f">memory_bytes</span>: <span class="t-n">85899345920</span>
+<span class="t-f">sm_count</span>: <span class="t-n">108</span>
+<span class="t-f">memory_bus_width_bits</span>: <span class="t-n">5120</span>
+<span class="t-f">l2_cache_bytes</span>: <span class="t-n">41943040</span></code></pre>
+        <p class="cat-note" style="padding:0 16px 16px;margin:0"><a class="arrow-link" href="https://github.com/FanBB2333/FakeGPU/tree/main/profiles">Browse all profiles <span aria-hidden="true">→</span></a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= EVIDENCE ================= -->
+<section class="sec" id="evidence">
+  <div class="wrap">
+    <span class="eyebrow">Validation evidence</span>
+    <h2>We checked the estimates <span class="dim">against a real GPU.</span></h2>
+    <div class="ev-stats">
+      <div class="card stat">
+        <div class="stat-k">Controlled grid</div>
+        <div class="stat-n">0.08<small>%</small></div>
+        <div class="stat-l">maximum error on 26 controlled GPU observations</div>
+      </div>
+      <div class="card stat alt">
+        <div class="stat-k">Qwen SFT</div>
+        <div class="stat-n">1.921<small>%</small></div>
+        <div class="stat-l">maximum error across ten Qwen SFT cases</div>
+      </div>
+    </div>
+    <p class="ev-quote">On the recorded validation workloads, the calibrated memory estimator stayed within <strong>0.08%</strong> on 26 controlled GPU observations and within <strong>1.921%</strong> across ten Qwen SFT cases. <strong>These results cover fixed workloads only.</strong></p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Validated envelope</th><th>Real-GPU reference</th><th>Evidence</th><th>Absolute % error</th></tr></thead>
+        <tbody>
+          <tr><td>Controlled ATen MLP and Transformer grid</td><td>Ampere GPU and Blackwell GPU</td><td>13 workloads, 26 observations</td><td class="num">0.08% maximum</td></tr>
+          <tr><td>Qwen3-8B BF16 SDPA inference</td><td>Blackwell GPU</td><td>Model load and inference peak</td><td class="num">0.0129% load; 0.0672% peak</td></tr>
+          <tr><td>Qwen 0.8B/2B full and LoRA SFT</td><td>Blackwell GPU</td><td>10 training cases</td><td class="num">0.102%–1.921%</td></tr>
+          <tr><td>Qwen 0.8B/2B native NF4 QLoRA</td><td>Blackwell GPU</td><td>10 quantized training cases</td><td class="num">0.628%–1.732%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="notes">
+      <li>Error is <code>|predicted − observed| / observed × 100%</code>.</li>
+      <li>Ranges are the smallest and largest case errors, not averages.</li>
+      <li>Even close agreement doesn't mean you have room to spare, so still leave a safety margin.</li>
+      <li>These numbers only cover the workloads we tested. If you change the model, shapes, backend, kernels, allocator, software versions, or GPU, calibrate again.</li>
+    </ul>
+    <div class="allcmds"><a class="arrow-link" href="https://github.com/FanBB2333/FakeGPU/blob/main/docs/en/validation.md">See Validation and reliability for the full evidence <span aria-hidden="true">→</span></a></div>
+  </div>
+</section>
+
+<!-- ================= LIMITATIONS ================= -->
+<section class="sec" id="limitations">
+  <div class="wrap">
+    <span class="eyebrow">Limitations</span>
+    <h2>What FakeGPU <span class="dim">can and can't do.</span></h2>
+    <div class="limit">
+      <div class="warn">
+        <div class="ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3.2 17.5 16H2.5L10 3.2Z" stroke-linejoin="round"/><path d="M10 8.2v3.6M10 13.9h.01" stroke-linecap="round"/></svg></div>
+        <p>FakeGPU is a development, compatibility-testing, and capacity-planning tool. It does not provide numerical or performance parity for arbitrary CUDA kernels. Passthrough, hybrid, and calibration workflows still require a real CUDA stack.</p>
+      </div>
+      <div>
+        <ul>
+          <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 8h8" stroke-linecap="round"/></svg><span>Native simulation does not run arbitrary CUDA kernels, and FakeCUDA does not cover binary CUDA extensions.</span></li>
+          <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 8h8" stroke-linecap="round"/></svg><span>Memory estimates can miss backend-private allocations, custom operators, and allocator behavior. Calibrate on real hardware before relying on them.</span></li>
+          <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 8h8" stroke-linecap="round"/></svg><span>Timing results from the simulator are not NCCL, NVLink, or kernel benchmarks.</span></li>
+          <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 8h8" stroke-linecap="round"/></svg><span>Hybrid and passthrough modes need a working CUDA stack.</span></li>
+        </ul>
+        <a class="arrow-link" href="https://github.com/FanBB2333/FakeGPU/blob/main/docs/en/limitations.md">The complete list is in Limitations <span aria-hidden="true">→</span></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CTA BAND ================= -->
+<section class="band">
+  <div class="gridlines" aria-hidden="true"></div>
+  <div class="wrap">
+    <span class="eyebrow" style="position:relative">Get started</span>
+    <h2 style="position:relative">Try it on a machine <span class="dim">that has no GPU.</span></h2>
+    <div class="cmdline"><span class="t-p">$</span><code>python3 -m fakegpu demo --profile l4</code></div>
+    <p class="sub"><code>demo</code> runs a small training step on the CPU while the program sees a CUDA device.</p>
+    <div class="ctas" style="position:relative">
+      <a class="btn btn-primary" href="#quick-start">Get started <span class="k" aria-hidden="true">→</span></a>
+      <a class="btn btn-ghost" href="https://github.com/FanBB2333/FakeGPU">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ================= FOOTER ================= -->
+<footer>
+  <div class="wrap">
+    <div class="f-grid">
+      <div class="f-brand">
+        <a class="brand" href="#top">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="14" rx="3.5" stroke="currentColor" stroke-width="1.6"/>
+            <rect x="8" y="9" width="8" height="6" rx="1.4" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.2 1.6"/>
+            <path class="pins" d="M6 2.5v2.5M10 2.5v2.5M14 2.5v2.5M18 2.5v2.5M6 19v2.5M10 19v2.5M14 19v2.5M18 19v2.5" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+          FakeGPU
+        </a>
+        <p>Bug reports, test cases, profile corrections, documentation fixes, and patches are welcome.</p>
+        <div class="built">
+          <span><b>Python 3.10+</b> for the runtime, estimators, and CLI</span>
+          <span><b>C++17 and CMake</b> for the native libraries</span>
+          <span><b>PyTorch</b> for CPU-backed FakeCUDA execution</span>
+        </div>
+      </div>
+      <div>
+        <p class="f-h">Project</p>
+        <ul>
+          <li><a href="https://github.com/FanBB2333/FakeGPU">GitHub</a></li>
+          <li><a href="https://github.com/FanBB2333/FakeGPU/issues">Issues</a></li>
+          <li><a href="https://github.com/FanBB2333/FakeGPU/releases">Releases</a></li>
+          <li><a href="https://github.com/FanBB2333/FakeGPU/blob/main/LICENSE">License</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="f-h">Docs</p>
+        <ul>
+          <li><a href="https://github.com/FanBB2333/FakeGPU/blob/main/docs/en/README.md">Documentation</a></li>
+          <li><a href="https://github.com/FanBB2333/FakeGPU/blob/main/docs/en/commands.md">Command reference</a></li>
+          <li><a href="https://github.com/FanBB2333/FakeGPU/blob/main/docs/en/validation.md">Validation</a></li>
+          <li><a href="https://github.com/FanBB2333/FakeGPU/blob/main/docs/en/limitations.md">Limitations</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="f-h">Languages</p>
+        <ul>
+          <li><a href="https://github.com/FanBB2333/FakeGPU">English</a></li>
+          <li><a href="https://github.com/FanBB2333/FakeGPU/blob/main/README.zh-CN.md" lang="zh-CN">简体中文</a></li>
+          <li><a href="https://github.com/FanBB2333/FakeGPU/blob/main/README.zh-TW.md" lang="zh-TW">繁體中文</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="f-bottom">
+      <span>Distributed under the MIT License.</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var root = document.documentElement;
+  var reduceMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+  // ---------- Theme toggle (light default; choice persisted when storage works) ----------
+  var THEME_KEY = 'fakegpu-theme';
+  var tbtn = document.querySelector('.theme-toggle');
+  var metaTheme = document.querySelector('meta[name="theme-color"]');
+  function applyTheme(t, persist){
+    root.setAttribute('data-theme', t);
+    if (tbtn) {
+      tbtn.setAttribute('aria-pressed', t === 'dark' ? 'true' : 'false');
+      tbtn.title = t === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+    }
+    if (metaTheme) metaTheme.setAttribute('content', t === 'dark' ? '#1d1a18' : '#f3eee6');
+    if (persist) { try { localStorage.setItem(THEME_KEY, t); } catch (e) {} }
+  }
+  applyTheme(root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light', false);
+  if (tbtn) tbtn.addEventListener('click', function(){
+    applyTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark', true);
+  });
+
+  // ---------- Tabs ----------
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
+  function select(t, focus){
+    tabs.forEach(function(x){
+      var on = x === t;
+      x.setAttribute('aria-selected', on ? 'true' : 'false');
+      x.tabIndex = on ? 0 : -1;
+      var p = document.getElementById(x.getAttribute('aria-controls'));
+      if (p) p.hidden = !on;
+    });
+    if (focus) t.focus();
+  }
+  tabs.forEach(function(t, i){
+    t.addEventListener('click', function(){ select(t); });
+    t.addEventListener('keydown', function(e){
+      if (e.key === 'ArrowRight') select(tabs[(i + 1) % tabs.length], true);
+      if (e.key === 'ArrowLeft') select(tabs[(i - 1 + tabs.length) % tabs.length], true);
+    });
+  });
+  if (tabs.length) select(tabs[0]);
+
+  // ---------- Copy buttons ----------
+  document.querySelectorAll('.copy').forEach(function(b){
+    b.addEventListener('click', function(){
+      var host = b.closest('.code-panel, .mini');
+      var pre = host && host.querySelector('pre');
+      if (!pre) return;
+      var text = pre.innerText.replace(/^\$ /gm, '');
+      var done = function(){ b.textContent = 'Copied'; b.classList.add('done'); setTimeout(function(){ b.textContent = 'Copy'; b.classList.remove('done'); }, 1400); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function(){ b.textContent = 'Select & copy'; });
+      } else { b.textContent = 'Select & copy'; }
+    });
+  });
+
+  // ---------- Catalog: link legend items and bar segments on hover ----------
+  var bar = document.querySelector('.bar');
+  var segs = Array.prototype.slice.call(document.querySelectorAll('.seg[data-arch]'));
+  var lgs = Array.prototype.slice.call(document.querySelectorAll('.lg[data-arch]'));
+  function focusArch(a){
+    if (!bar) return;
+    bar.classList.toggle('focus', !!a);
+    segs.forEach(function(s){ s.classList.toggle('on', s.getAttribute('data-arch') === a); });
+    lgs.forEach(function(l){ l.classList.toggle('on', l.getAttribute('data-arch') === a); });
+  }
+  segs.concat(lgs).forEach(function(el){
+    el.addEventListener('mouseenter', function(){ focusArch(el.getAttribute('data-arch')); });
+    el.addEventListener('mouseleave', function(){ focusArch(null); });
+  });
+
+  // ---------- Gentle scroll reveal ----------
+  if (!reduceMotion && 'IntersectionObserver' in window) {
+    var targets = document.querySelectorAll('section.sec .eyebrow, section.sec h2, section.sec .sec-lead, .ways > .card, .bento > .card, .qs > .step, .cat > *, .ev-stats > .card, .ev-quote, .tbl-wrap, .notes, .limit');
+    var counts = new Map();
+    targets.forEach(function(el){
+      var p = el.parentNode, n = counts.get(p) || 0;
+      counts.set(p, n + 1);
+      el.style.setProperty('--d', Math.min(n * 70, 280) + 'ms');
+      el.classList.add('rv');
+    });
+    root.classList.add('motion');
+    var rio = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){ if (en.isIntersecting) { en.target.classList.add('in'); rio.unobserve(en.target); } });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    targets.forEach(function(el){ rio.observe(el); });
+  }
+
+  // ---------- Hero storyboard ----------
+  var sb = document.getElementById('story');
+  if (!sb || reduceMotion || !('IntersectionObserver' in window) || !window.Promise || !window.requestAnimationFrame) return;
+  sb.classList.add('anim');
+
+  var canvas = sb.querySelector('.sb-canvas');
+  var scenes = {};
+  sb.querySelectorAll('.scene').forEach(function(s){ scenes[s.getAttribute('data-s')] = s; });
+  var cursor = sb.querySelector('.sb-cursor');
+  var ctl = sb.querySelector('.sb-ctl');
+  var chips = Array.prototype.slice.call(sb.querySelectorAll('.pchip'));
+  var target = sb.querySelector('.pchip[data-id="a100"]');
+  var prompt = sb.querySelector('.prompt');
+  var typed = sb.querySelector('.typed');
+  var goBtn = sb.querySelector('.go');
+  var stepsEls = Array.prototype.slice.call(sb.querySelectorAll('.si'));
+  var tiles = Array.prototype.slice.call(sb.querySelectorAll('.tile'));
+  var rows = Array.prototype.slice.call(sb.querySelectorAll('.drow'));
+  var cta = sb.querySelector('.sb-cta');
+  var CMD = 'python3 -m fakegpu preflight --runtime fakecuda --profile a100 --stage forward --report-dir build/preflight -- python3 train.py';
+
+  // split shimmer text into letters (opacity wave, no gradient text)
+  var sh = sb.querySelector('.shim');
+  var shText = sh.textContent; sh.textContent = '';
+  Array.prototype.forEach.call(shText, function(ch, i){
+    var s = document.createElement('span'); s.textContent = ch; s.style.setProperty('--i', i); sh.appendChild(s);
+  });
+
+  // pause when off-screen, when the tab is hidden, or when the visitor pauses
+  var userPaused = false, offscreen = true;
+  function paused(){ return userPaused || offscreen || document.hidden; }
+  function sync(){ sb.classList.toggle('paused', paused()); }
+  new IntersectionObserver(function(es){ offscreen = !es[0].isIntersecting; sync(); }, { threshold: 0.2 }).observe(sb);
+  document.addEventListener('visibilitychange', sync);
+  ctl.addEventListener('click', function(){
+    userPaused = !userPaused;
+    ctl.setAttribute('aria-pressed', userPaused ? 'true' : 'false');
+    ctl.setAttribute('aria-label', userPaused ? 'Play animation' : 'Pause animation');
+    sync();
+  });
+
+  // pausable timer
+  function wait(ms){
+    return new Promise(function(resolve){
+      var left = ms, last = null;
+      function tick(t){
+        if (last !== null && !paused()) left -= Math.min(t - last, 100);
+        last = t;
+        if (left <= 0) resolve(); else requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    });
+  }
+  function show(name){
+    Object.keys(scenes).forEach(function(k){ scenes[k].classList.toggle('on', k === name); });
+  }
+  function point(el){
+    var c = canvas.getBoundingClientRect(), r = el.getBoundingClientRect();
+    return { x: r.left - c.left + r.width * 0.55, y: r.top - c.top + r.height * 0.6 };
+  }
+  function placeCursor(x, y){ cursor.style.transform = 'translate(' + (x - 3) + 'px,' + (y - 2) + 'px)'; }
+  async function moveTo(el){ var p = point(el); placeCursor(p.x, p.y); await wait(950); }
+  async function click(){
+    cursor.classList.add('down'); cursor.classList.remove('ring'); void cursor.offsetWidth; cursor.classList.add('ring');
+    await wait(150); cursor.classList.remove('down'); await wait(120);
+  }
+  function cursorIn(){
+    var c = canvas.getBoundingClientRect();
+    cursor.style.transition = 'none';
+    placeCursor(c.width * 0.82, c.height * 0.88);
+    void cursor.offsetWidth;
+    cursor.style.transition = '';
+    cursor.style.opacity = '1';
+  }
+  function cursorOut(){ cursor.style.opacity = '0'; }
+
+  function reset(){
+    chips.forEach(function(c){ c.classList.remove('in', 'sel'); });
+    prompt.classList.remove('in');
+    typed.textContent = '';
+    goBtn.classList.remove('pressed');
+    cta.classList.remove('pressed');
+    stepsEls.forEach(function(s){ s.classList.remove('shown', 'active', 'done'); });
+    tiles.forEach(function(t){ t.classList.remove('in'); });
+    rows.forEach(function(r){ r.classList.remove('in', 'live'); });
+    cursorOut();
+  }
+
+  async function run(){
+    for (;;) {
+      reset();
+      // 1. headline
+      show('head'); await wait(3000);
+      // 2. pick a profile chip
+      show('pick'); await wait(350);
+      for (var i = 0; i < chips.length; i++) { chips[i].classList.add('in'); await wait(70); }
+      await wait(300);
+      cursorIn(); await wait(250);
+      await moveTo(target); await click(); target.classList.add('sel'); await wait(450);
+      // 3. type the preflight command, then press the button
+      prompt.classList.add('in'); await wait(450);
+      for (var k = 1; k <= CMD.length; k++) { typed.textContent = CMD.slice(0, k); await wait(CMD[k - 1] === ' ' ? 34 : 17); }
+      await wait(350);
+      await moveTo(goBtn); await click(); goBtn.classList.add('pressed'); await wait(160); goBtn.classList.remove('pressed');
+      await wait(350); cursorOut();
+      // 4. intercepting shimmer
+      show('shim'); await wait(2600);
+      // 5. progress: tick off steps one by one
+      show('prog'); await wait(500);
+      for (var s = 0; s < stepsEls.length; s++) {
+        stepsEls[s].classList.add('shown', 'active'); await wait(s === 0 ? 900 : 760);
+        stepsEls[s].classList.remove('active'); stepsEls[s].classList.add('done'); await wait(260);
+      }
+      await wait(900);
+      // 6. result tiles
+      show('result'); await wait(450);
+      for (var t = 0; t < tiles.length; t++) { tiles[t].classList.add('in'); await wait(160); }
+      await wait(2800);
+      // 7. many GPUs at once
+      show('line'); await wait(2300);
+      show('dev'); await wait(400);
+      for (var r = 0; r < rows.length; r++) { rows[r].classList.add('in'); await wait(140); }
+      await wait(250);
+      for (var d = 0; d < rows.length; d++) { rows[d].classList.add('live'); await wait(330); }
+      await wait(2200);
+      // 8. closing line, then logo + CTA
+      show('close'); await wait(2800);
+      show('end'); await wait(900);
+      cursorIn(); await wait(200); await moveTo(cta); await click(); cta.classList.add('pressed'); await wait(160); cta.classList.remove('pressed');
+      await wait(1800); cursorOut(); await wait(600);
+    }
+  }
+  run();
+})();
+</script>
+</body>
+</html>
