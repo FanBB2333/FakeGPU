@@ -126,9 +126,10 @@ def _live(execution):
 
 def _stop(process):
     # Descendants may ignore SIGTERM even when their group leader exits.
+    # macOS answers EPERM instead of ESRCH when only zombies remain.
     try:
         os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         process.wait()
         return
     try:
@@ -138,7 +139,7 @@ def _stop(process):
     finally:
         try:
             os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
         process.wait()
 
