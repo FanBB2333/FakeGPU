@@ -37,7 +37,12 @@ from ..platforms import AUTO, load_platforms, resolve_platform
 from ..machine.service import EVENT_BUFFER
 from ..profile_catalog import get_profile, load_profiles
 from .widgets import (
+    ALERT,
     COLORS,
+    NAME,
+    OK,
+    THEME,
+    WARNING,
     Chart,
     GpuCard,
     StatTile,
@@ -263,18 +268,18 @@ def plan_view(plan: LayoutPlan, profile_id: str) -> Group:
     profile = get_profile(profile_id)
     power = f" · {profile.max_power_limit_mw / 1000:.0f} W" if profile.max_power_limit_mw else ""
     heading = Text.assemble(
-        (profile.id, "bold cyan"), "  ",
+        (profile.id, NAME), "  ",
         f"{profile.torch_name or profile.name} · {profile.architecture.capitalize()} · "
         f"{size(profile.memory_bytes)} · CC {profile.compute_capability_text}{power}",
     )
     if plan.error:
-        return Group(heading, Text(f"Cannot build this machine: {plan.error}", style="red"))
+        return Group(heading, Text(f"Cannot build this machine: {plan.error}", style=ALERT))
     total = sum(get_profile(item).memory_bytes for item in plan.profiles)
     rows: list[tuple[str, Any]] = [
         ("Layout", f"{plan.changes['devices']} ({len(plan.profiles)} GPUs, {size(total)})"),
         ("Platform", plan.platform),
     ]
-    rows += [("Also", Text(note, style="yellow", overflow="fold")) for note in plan.notes]
+    rows += [("Also", Text(note, style=WARNING, overflow="fold")) for note in plan.notes]
     return Group(heading, key_values(rows))
 
 
@@ -304,7 +309,7 @@ def platform_view(platform: dict[str, Any]) -> list[Any]:
     for column in range(count):
         matrix.add_column(f"GPU{column}", no_wrap=True)
     for row, cells in enumerate(platform["matrix"]):
-        matrix.add_row(f"GPU{row}", *[Text(cell, style="green" if cell.startswith("NV") else "") for cell in cells])
+        matrix.add_row(f"GPU{row}", *[Text(cell, style=OK if cell.startswith("NV") else "") for cell in cells])
     parts: list[Any] = [
         Text("Platform", style="bold"),
         key_values([
@@ -316,7 +321,7 @@ def platform_view(platform: dict[str, Any]) -> list[Any]:
     ]
     if count > 1:
         parts.extend([Text("GPU links (as nvidia-smi topo -m)", style="dim"), matrix])
-    parts.extend(Text(note, style="yellow", overflow="fold") for note in platform["notes"])
+    parts.extend(Text(note, style=WARNING, overflow="fold") for note in platform["notes"])
     return parts
 
 
@@ -395,7 +400,7 @@ class ProfilePicker(ModalScreen["tuple[str, int] | None"]):
         needle = text.strip().lower()
         sync_rows(self.query_one("#picker-table", DataTable), [
             (p.id, (
-                Text(p.id, style="bold cyan" if p.id == self.current else ""), short(p.torch_name or p.name, 34),
+                Text(p.id, style=NAME if p.id == self.current else ""), short(p.torch_name or p.name, 34),
                 p.architecture, p.form_factor or "-", p.segment, size(p.memory_bytes), p.compute_capability_text,
                 f"{p.max_power_limit_mw / 1000:.0f} W" if p.max_power_limit_mw else "-",
             ))
@@ -425,7 +430,7 @@ class ProfilePicker(ModalScreen["tuple[str, int] | None"]):
         if choice is None:
             preview.update(Text("No profile matches the filter.", style="dim"))
         elif choice[1] < 1:
-            preview.update(Text("Count must be at least 1.", style="red"))
+            preview.update(Text("Count must be at least 1.", style=ALERT))
         else:
             plan = self.preview(*choice)
             preview.update(plan_view(plan, choice[0]))
@@ -646,6 +651,8 @@ class ConsoleApp(App[str]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.register_theme(THEME)
+        self.theme = THEME.name
         columns = {
             "gpu-list": ("GPU", "Model", "Memory", "Utilization", "Power", "Temp", "Procs", "Utilization trend"),
             "overview-processes": ("PID", "Name", "Status", "GPUs", "Memory", "GPU %", "Uptime"),
@@ -730,7 +737,7 @@ class ConsoleApp(App[str]):
             str(summary["process_count"]), f"processes, {summary['stalled_count']} stalled"
         )
         self.query_one("#stat-alerts", StatTile).show(
-            str(summary["alerts"]), "memory alerts", "bold red" if summary["alerts"] else "bold green"
+            str(summary["alerts"]), "memory alerts", f"bold {ALERT}" if summary["alerts"] else f"bold {OK}"
         )
         sensed = [d for d in status["devices"] if d["telemetry"]]
         if sensed:
@@ -802,7 +809,7 @@ class ConsoleApp(App[str]):
         def gpu_percent(process: dict) -> str:
             return "N/A" if process["gpu_percent"] is None else f"{process['gpu_percent']}%"
 
-        status_style = {"running": "green", "stalled": "yellow"}
+        status_style = {"running": OK, "stalled": WARNING}
         sync_rows(self.query_one("#overview-processes", DataTable), [
             (str(p["pid"]), (
                 str(p["pid"]), p["name"], Text(p["status"], style=status_style.get(p["status"], "")), gpus(p),
@@ -818,7 +825,7 @@ class ConsoleApp(App[str]):
             ))
             for p in processes
         ])
-        result_style = {"exited": "green", "terminated": "yellow", "vanished": "red"}
+        result_style = {"exited": OK, "terminated": WARNING, "vanished": ALERT}
         sync_rows(self.query_one("#ended-table", DataTable), [
             (f"{p['pid']}-{p['ended_at']}", (
                 str(p["pid"]), p["name"], Text(p["reason"], style=result_style.get(p["status"], "")),
@@ -834,7 +841,7 @@ class ConsoleApp(App[str]):
             memory, sensors = d["memory"], d["telemetry"] or {}
             # A GPU outside the layout is one a running process still holds
             # from the layout it started with.
-            index = str(d["index"]) if d["in_layout"] else Text(f"{d['index']}*", style="yellow")
+            index = str(d["index"]) if d["in_layout"] else Text(f"{d['index']}*", style=WARNING)
             rows.append((device_key(d), (
                 index, d["profile_id"], d["name"], d["architecture"], d["compute_capability"],
                 size(memory["used_bytes"]), size(memory["total_bytes"]),
@@ -1033,13 +1040,13 @@ class ConsoleApp(App[str]):
                 nvlink_bridges=self.query_one("#cfg-bridges", Input).value,
             )
         except ValueError as exc:
-            check.update(Text(str(exc), style="red"))
+            check.update(Text(str(exc), style=ALERT))
             return
         catalog = {p.id: p for p in self.profiles}
         total = sum(catalog[p].memory_bytes for p in profiles)
         check.update(Text(
             f"{len(profiles)} device(s), {size(total)} in total, on {resolved.platform.name}",
-            style="green",
+            style=OK,
         ))
 
     @on(Button.Pressed, "#cfg-apply")

@@ -59,9 +59,10 @@ layout, idle ones included, and the processes on the machine.
 | `5` Machine | Settings form (layout, platform, PCIe slot generation, NVLink bridges, telemetry, background, stale and memory warning thresholds), the slot map and GPU link matrix, daemon and path information |
 | `6` Profiles | The GPU profile catalog; `a` or Enter adds the selected profile to the layout form |
 
-Every reading keeps one color in the cards, charts and tables: memory purple,
-utilization green, power orange, temperature yellow, and link traffic cyan
-(PCIe) or blue (NVLink). Red values and card borders mark warnings.
+The console uses a muted, low-saturation (Morandi) palette, and every reading
+keeps one color in the cards, charts and tables: memory mauve, utilization
+sage, power clay, temperature sand, and link traffic teal (PCIe) or dusty blue
+(NVLink). Rose values and mustard or rose card borders mark warnings.
 
 | Key | Action |
 |---|---|

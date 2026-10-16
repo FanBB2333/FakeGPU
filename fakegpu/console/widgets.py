@@ -10,24 +10,55 @@ from rich.measure import Measurement
 from rich.table import Table
 from rich.text import Text
 from textual.message import Message
+from textual.theme import Theme
 from textual.widgets import DataTable, Static
 
 SPARK = "▁▂▃▄▅▆▇█"
-LEVEL_STYLE = {"info": "cyan", "warning": "yellow", "error": "bold red"}
-LEVEL_LABEL = {"info": "INFO", "warning": "WARN", "error": "ERROR"}
-# One color per kind of reading, the same in bars, charts and labels. Fixed
-# RGB values keep them apart from the red/yellow/green of warning levels
-# whatever the terminal's ANSI palette is.
-COLORS = {
-    "memory": "#c678dd",
-    "gpu": "#98c379",
-    "temperature": "#e5c07b",
-    "power": "#ff9e64",
-    "pcie": "#56b6c2",
-    "nvlink": "#61afef",
-    "c2c": "#73daca",
-    "link": "#56b6c2",
+# Morandi palette: muted, grey-toned colors, still far enough apart to tell
+# readings from one another. Fixed RGB values do not depend on the
+# terminal's ANSI palette.
+PALETTE = {
+    "sage": "#8fae8b",
+    "mauve": "#a996b8",
+    "sand": "#d2bb8f",
+    "clay": "#c9957a",
+    "teal": "#84a9ab",
+    "blue": "#8aa1bd",
+    "taupe": "#b5a48f",
+    "steel": "#a9bccb",
+    "mustard": "#cfae73",
+    "rose": "#c4807a",
 }
+OK, WARNING, ALERT = PALETTE["sage"], PALETTE["mustard"], PALETTE["rose"]
+NAME = f"bold {PALETTE['steel']}"
+LEVEL_STYLE = {"info": PALETTE["teal"], "warning": WARNING, "error": f"bold {ALERT}"}
+LEVEL_LABEL = {"info": "INFO", "warning": "WARN", "error": "ERROR"}
+# One color per kind of reading, the same in bars, charts and labels.
+COLORS = {
+    "memory": PALETTE["mauve"],
+    "gpu": PALETTE["sage"],
+    "temperature": PALETTE["sand"],
+    "power": PALETTE["clay"],
+    "pcie": PALETTE["teal"],
+    "nvlink": PALETTE["blue"],
+    "c2c": PALETTE["taupe"],
+    "link": PALETTE["teal"],
+}
+# Widgets, borders, tabs and the selected row in the same muted tones.
+THEME = Theme(
+    name="fakegpu-morandi",
+    primary="#6b8197",
+    secondary=PALETTE["mauve"],
+    accent="#c9a98a",
+    success=OK,
+    warning=WARNING,
+    error=ALERT,
+    foreground="#d9d5cd",
+    background="#1d1f22",
+    surface="#24272b",
+    panel="#2e3237",
+    dark=True,
+)
 
 
 def size(value: int | None) -> str:
@@ -57,7 +88,7 @@ def duration(seconds: float | None) -> str:
 
 
 def level_style(percent: float) -> str:
-    return "red" if percent >= 90 else "yellow" if percent >= 70 else "green"
+    return ALERT if percent >= 90 else WARNING if percent >= 70 else OK
 
 
 def number(value: float) -> str:
@@ -230,7 +261,7 @@ def device_key(device: dict[str, Any]) -> str:
 
 def reading(label: str, color: str, percent: float | None, width: int, text: str) -> Text:
     """``LABEL ████░░░░ text`` with the label and bar in the reading's color."""
-    style = "bold red" if percent is not None and percent >= 90 else ""
+    style = f"bold {ALERT}" if percent is not None and percent >= 90 else ""
     return Text.assemble((f"{label:<5}", color), bar(percent, width, color), " ", (text, style))
 
 
@@ -254,15 +285,15 @@ class GpuCard(Static):
         self.set_class(device["process_count"] > 0, "busy")
         self.set_class(percent >= warning_percent, "warn")
         self.set_class(memory["used_bytes"] > memory["total_bytes"], "alert")
-        title = Text.assemble((f"GPU {device['index']} ", "bold"), (device["name"], "bold cyan"))
+        title = Text.assemble((f"GPU {device['index']} ", "bold"), (device["name"], NAME))
         if not device["in_layout"]:
-            title.append("  (not in layout)", style="yellow")
+            title.append("  (not in layout)", style=WARNING)
         processes = device["process_count"]
         lines = [
             title,
             Text.assemble(
                 (f"{device['profile_id']}  {device['architecture']}  CC {device['compute_capability']}  ", "dim"),
-                (f"{processes} process{'es' if processes != 1 else ''}", "bold green" if processes else "dim"),
+                (f"{processes} process{'es' if processes != 1 else ''}", f"bold {OK}" if processes else "dim"),
             ),
             reading(
                 "MEM", COLORS["memory"], percent, self.BAR, memory_pair(memory["used_bytes"], memory["total_bytes"])
