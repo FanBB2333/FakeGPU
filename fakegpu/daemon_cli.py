@@ -77,7 +77,7 @@ def _print_status(status: dict) -> None:
     if not status["processes"]:
         print("No FakeCUDA processes. Scripts that call fakegpu.init() join this machine.")
     for process in status["processes"]:
-        devices = ",".join(str(row["index"]) for row in process["devices"])
+        devices = ",".join(str(row["index"]) for row in process["devices"] if row["used_bytes"])
         print(
             f"{process['pid']:>7}  {process['status']:<8}{_gib(process['memory_bytes']):>7} GiB  "
             f"GPU {devices or '-':<10} {process['command'] or process['name']}"
