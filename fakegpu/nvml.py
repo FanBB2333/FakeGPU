@@ -18,23 +18,20 @@ not switch a running client back to hardware NVML. No system files are changed.
 from __future__ import annotations
 
 import ctypes
-import json
 import math
 import os
 from pathlib import Path
-import socket
 import sys
 import threading
 import time
 from typing import Sequence
 
 from ._api import library_dir
-from ._finetune_workflow_store import _process_marker
 from ._smi_state import (
     DEFAULT_STALE_AFTER_SECONDS,
-    SUPPORTED_SCHEMA_VERSIONS,
     _discover_state_paths,
     build_inventory,
+    load_live_states,
 )
 
 
@@ -89,9 +86,8 @@ class NvmlStateBridge:
     """Expose fresh local publishers through bundled NVML, on macOS or Linux.
 
     Must be started before pynvml loads any library. Only one bridge may be
-    installed per process. Refreshes never patch client query functions.
-    ``errors`` describes unreadable/invalid input; stale, exited and remote
-    publishers are intentionally excluded. A missing directory is an empty view.
+    installed per process. ``errors`` lists unreadable state files; stale,
+    exited and remote publishers are left out. A missing directory is empty.
     """
 
     def __init__(
@@ -140,51 +136,18 @@ class NvmlStateBridge:
 
     def _inventory(self) -> dict:
         now = time.time_ns()
-        host = socket.gethostname()
-        states: dict[int, dict] = {}
-        errors = []
         paths = _discover_state_paths(
             explicit_paths=self.state_paths, state_dir=self.state_dir, fallback_state=None,
         )
-        for path in paths:
-            try:
-                # Publishers cap their files at 64 MiB. Bound the reader too.
-                with path.open("rb") as stream:
-                    data = stream.read(64 * 1024 * 1024 + 1)
-                if len(data) > 64 * 1024 * 1024:
-                    raise ValueError("state file exceeds 64 MiB")
-                state = json.loads(data)
-                if not isinstance(state, dict) or state.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
-                    raise ValueError("unsupported state schema")
-                if state.get("hostname") != host or not state.get("running"):
-                    continue
-                stamp, pid = state.get("timestamp_ns"), state.get("pid")
-                if type(stamp) is not int or type(pid) is not int or not 0 < pid < 2**31:
-                    raise ValueError("invalid publisher timestamp or PID")
-                if not -1 <= (now - stamp) / 1e9 <= self.stale_after_seconds:
-                    continue
-                marker = _process_marker(pid)
-                if not marker or marker["state"] == "Z":
-                    continue
-                devices = state.get("devices")
-                if not isinstance(devices, list) or any(not isinstance(d, dict) for d in devices):
-                    raise ValueError("invalid device list")
-                # Validate each file independently so one bad writer cannot
-                # suppress all the other, healthy publishers.
-                inventory = build_inventory([state], now_ns=now)
-                self._arrays(inventory)
-                if pid not in states or stamp > states[pid]["timestamp_ns"]:
-                    states[pid] = state
-            except (OSError, ValueError, TypeError, KeyError, OverflowError) as exc:
-                errors.append(f"{path.name}: {type(exc).__name__}")
+        states, errors = load_live_states(
+            paths, stale_after_seconds=self.stale_after_seconds, now_ns=now,
+        )
         self.errors = tuple(errors)
-        return build_inventory(list(states.values()), now_ns=now)
+        return build_inventory(states, now_ns=now)
 
     @staticmethod
     def _arrays(inventory: dict) -> tuple[ctypes.Array, ctypes.Array]:
         devices = inventory["devices"]
-        if len(devices) > 4096 or len(inventory["processes"]) > 65536:
-            raise ValueError("NVML snapshot capacity exceeded")
         device_rows = (_Device * len(devices))(*(
             _Device(
                 _text(d["uuid"]), _text(d["name"]), _text(d["profile_id"]),

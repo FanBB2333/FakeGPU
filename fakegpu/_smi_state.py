@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import socket
 import time
 import uuid
 import warnings
@@ -22,6 +23,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from ._process import is_alive
 from ._smi_environment import (
     FAULT_SEVERITY_RANK,
     MAXIMUM_MODELED_FAULT_COUNT,
@@ -84,6 +86,33 @@ def _load_states(
         except (OSError, ValueError) as exc:
             errors.append(f"{path}: {exc}")
     return states, errors
+
+
+def load_live_states(
+    paths: Sequence[Path],
+    *,
+    stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
+    now_ns: int | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Running publishers on this host with a fresh heartbeat and a live PID.
+
+    Only the newest state per PID is kept, so a copied or renamed state file
+    cannot count the same process twice.
+    """
+
+    now = time.time_ns() if now_ns is None else now_ns
+    host = socket.gethostname()
+    states, errors = _load_states(paths, include_exited=False)
+    latest: dict[int, dict[str, Any]] = {}
+    for state in states:
+        stamp, pid = state.get("timestamp_ns"), state.get("pid")
+        if state.get("hostname") != host or type(stamp) is not int or type(pid) is not int:
+            continue
+        if not -1 <= (now - stamp) / 1e9 <= stale_after_seconds or not is_alive(pid):
+            continue
+        if pid not in latest or stamp > latest[pid]["timestamp_ns"]:
+            latest[pid] = state
+    return list(latest.values()), errors
 
 
 def _synthetic_uuid(host: str, index: int, profile_id: str) -> str:

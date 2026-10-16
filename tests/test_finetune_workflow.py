@@ -11,7 +11,7 @@ import time
 import pytest
 
 from fakegpu import finetune_workflow as workflow
-from fakegpu._finetune_workflow_store import _process_marker
+from fakegpu._process import process_marker
 from fakegpu.finetune_workflow import _coverage_and_budget as calculate_budget
 from test_finetune_transfer_plan import transfer_run
 from test_finetune_run_estimator import native_run as native_run
@@ -267,7 +267,7 @@ def test_live_orphan_blocks_resume(workspace_case):
     execution = json.loads(execution_path.read_text())
     execution.update(
         pid=os.getpid(),
-        process_start_ticks=_process_marker(os.getpid())["start_ticks"],
+        process_start_ticks=process_marker(os.getpid())["start_ticks"],
     )
     write_json(execution_path, execution)
     manifest["attempts"][0]["artifacts"] = workflow._attempt_artifacts(launched[0])
@@ -476,7 +476,7 @@ def test_timeout_kills_descendants_even_if_leader_exits(tmp_path):
         _execute([sys.executable, "-c", leader_code], tmp_path, os.environ, 0.3)
     pid = int(child_pid.read_text())
     for _ in range(50):
-        marker = _process_marker(pid)
+        marker = process_marker(pid)
         if marker is None or marker["state"] == "Z":
             break
         time.sleep(0.01)

@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from fakegpu._finetune_workflow_store import _process_marker
+from fakegpu._process import process_marker
 from fakegpu.experiments import (
     compare_experiments,
     plan_experiments,
@@ -198,7 +198,7 @@ time.sleep(60)
     pid = int((attempt / "result.json").read_text())
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        marker = _process_marker(pid)
+        marker = process_marker(pid)
         if marker is None or marker["state"] == "Z":
             break
         time.sleep(0.01)

@@ -293,7 +293,7 @@ def test_phase_sampler_checks_implementation_after_execution(
     after = {"runner.py": {"sha256": "after"}} if source_changed else deepcopy(before)
     identities = iter([before, after])
     monkeypatch.setattr(runner, "_source_identity", lambda: next(identities))
-    monkeypatch.setattr(runner, "_process_marker", lambda _: {"start_ticks": "1"})
+    monkeypatch.setattr(runner, "process_marker", lambda _: {"start_ticks": "1"})
 
     def execute(torch, workload, peaks):
         peaks.phases = deepcopy(base["phases"])

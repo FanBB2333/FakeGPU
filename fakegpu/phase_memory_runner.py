@@ -24,9 +24,9 @@ from ._finetune_workflow_store import (
     _digest,
     _file,
     _now,
-    _process_marker,
     _source_identity,
 )
+from ._process import process_marker
 from .phase_memory import SAMPLE_SCHEMA, _sample
 
 
@@ -376,7 +376,7 @@ def sample_phase_memory(prediction):
         raise ValueError("model input changed during native sampling")
     if _source_identity() != identity["implementation"]:
         raise ValueError("implementation changed during native sampling")
-    marker = _process_marker(os.getpid())
+    marker = process_marker(os.getpid())
     report = {
         "schema_version": SAMPLE_SCHEMA,
         "run_id": str(uuid4()),

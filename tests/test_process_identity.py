@@ -11,6 +11,7 @@ import time
 import pytest
 
 from fakegpu import _finetune_workflow_store as store
+from fakegpu import _process as identity
 
 
 @pytest.mark.skipif(
@@ -19,14 +20,14 @@ from fakegpu import _finetune_workflow_store as store
 def test_child_identity_tracks_live_and_reaped_process():
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
-        marker = store._process_marker(child.pid)
+        marker = identity.process_marker(child.pid)
         execution = {"pid": child.pid, "process_start_ticks": marker["start_ticks"]}
-        assert marker == store._process_marker(child.pid)
+        assert marker == identity.process_marker(child.pid)
         assert store._live(execution)
         assert not store._live({**execution, "process_start_ticks": "older-process"})
         child.terminate()
         child.wait(timeout=5)
-        assert store._process_marker(child.pid) is None
+        assert identity.process_marker(child.pid) is None
         assert not store._live(execution)
     finally:
         if child.poll() is None:
@@ -42,7 +43,7 @@ def test_unreaped_child_does_not_block_workspace_resume():
     try:
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            marker = store._process_marker(child.pid)
+            marker = identity.process_marker(child.pid)
             if marker is None or marker["state"] == "Z":
                 break
             time.sleep(0.01)
@@ -58,7 +59,7 @@ def test_unreaped_child_does_not_block_workspace_resume():
 
 @pytest.mark.parametrize("pid", [None, False, 0, -1, 2**32 + 1, "1"])
 def test_invalid_pid_cannot_alias_an_existing_process(pid):
-    assert store._process_marker(pid) is None
+    assert identity.process_marker(pid) is None
 
 
 def test_darwin_birth_time_preserves_microseconds_and_zombie_state(monkeypatch):
@@ -71,8 +72,8 @@ def test_darwin_birth_time_preserves_microseconds_and_zombie_state(monkeypatch):
         info.pbi_status = 5
         return size
 
-    monkeypatch.setattr(store, "_darwin_pidinfo", lambda: pidinfo)
-    assert store._darwin_process_marker(123) == {
+    monkeypatch.setattr(identity, "_darwin_pidinfo", lambda: pidinfo)
+    assert identity._darwin_process_marker(123) == {
         "start_ticks": "darwin:123456:000007",
         "state": "Z",
     }
@@ -84,9 +85,9 @@ def test_darwin_inspection_errors_do_not_assume_orphan_exited(monkeypatch, error
         ctypes.set_errno(error)
         return 0
 
-    monkeypatch.setattr(store, "_darwin_pidinfo", lambda: pidinfo)
+    monkeypatch.setattr(identity, "_darwin_pidinfo", lambda: pidinfo)
     with pytest.raises(OSError) as failure:
-        store._darwin_process_marker(123)
+        identity._darwin_process_marker(123)
     assert failure.value.errno == error
 
 
@@ -95,20 +96,20 @@ def test_darwin_missing_process_has_no_marker(monkeypatch):
         ctypes.set_errno(errno.ESRCH)
         return 0
 
-    monkeypatch.setattr(store, "_darwin_pidinfo", lambda: pidinfo)
-    assert store._darwin_process_marker(123) is None
+    monkeypatch.setattr(identity, "_darwin_pidinfo", lambda: pidinfo)
+    assert identity._darwin_process_marker(123) is None
 
 
 def test_linux_start_ticks_remain_compatible_with_existing_records(monkeypatch):
-    monkeypatch.setattr(store.sys, "platform", "linux")
+    monkeypatch.setattr(identity.sys, "platform", "linux")
     # A command may contain both spaces and parentheses; field 22 is the start.
     fields = ["S"] + ["0"] * 18 + ["123456"]
     monkeypatch.setattr(
-        store.Path,
+        identity.Path,
         "read_text",
         lambda self: "123 (a (nested) command) " + " ".join(fields),
     )
-    marker = store._process_marker(123)
+    marker = identity.process_marker(123)
     assert marker == {"start_ticks": "123456", "state": "S"}
     assert store._live({"pid": 123, "process_start_ticks": "123456"})
 
@@ -127,7 +128,7 @@ def test_identity_lookup_failure_stops_launched_child(tmp_path, monkeypatch):
         raise PermissionError(errno.EPERM, "identity inspection denied")
 
     monkeypatch.setattr(store.subprocess, "Popen", capture)
-    monkeypatch.setattr(store, "_process_marker", inaccessible)
+    monkeypatch.setattr(store, "process_marker", inaccessible)
     with pytest.raises(PermissionError, match="inspection denied"):
         store._execute(
             [sys.executable, "-c", "import time; time.sleep(30)"],

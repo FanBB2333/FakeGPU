@@ -68,18 +68,18 @@ def test_deleted_file_clears_inventory(tmp_path):
 
 def test_reader_filters_zombies(tmp_path, monkeypatch):
     (tmp_path / "state.json").write_text(json.dumps(_state()))
-    monkeypatch.setattr("fakegpu.nvml._process_marker", lambda pid: {"state": "Z"})
+    monkeypatch.setattr("fakegpu._smi_state.is_alive", lambda pid: False)
     assert NvmlStateBridge(state_dir=tmp_path)._inventory()["process_count"] == 0
 
 
 @pytest.mark.parametrize("field,value", [("total_memory", 2**64), ("uuid", "bad\0id")])
-def test_invalid_native_values_are_not_truncated(tmp_path, field, value):
+def test_invalid_native_values_are_rejected_not_truncated(tmp_path, field, value):
     state = _state()
     state["devices"][0][field] = value
     (tmp_path / "state.json").write_text(json.dumps(state))
     bridge = NvmlStateBridge(state_dir=tmp_path)
-    assert bridge._inventory()["device_count"] == 0
-    assert bridge.errors
+    with pytest.raises(ValueError):
+        bridge._arrays(bridge._inventory())
 
 
 def test_snapshot_failure_clears_previous_usage(tmp_path, monkeypatch):
@@ -108,7 +108,7 @@ def test_snapshot_arrays_have_expected_layout_and_distinct_pids(tmp_path, monkey
     first = _state()
     second = copy.deepcopy(first)
     second["pid"] += 1
-    monkeypatch.setattr("fakegpu.nvml._process_marker", lambda pid: {"state": "R"})
+    monkeypatch.setattr("fakegpu._smi_state.is_alive", lambda pid: True)
     for i, state in enumerate((first, second)):
         (tmp_path / f"{i}.json").write_text(json.dumps(state))
     devices, processes = NvmlStateBridge._arrays(NvmlStateBridge(state_dir=tmp_path)._inventory())
