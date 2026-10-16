@@ -24,7 +24,12 @@ ZeRO/FSDP 與多機 collective 不在目前範圍內。重現入口為 `scripts/
 - `simulate-topology` 模擬 collective 路由與鏈路競爭。
 - `replay-trace` 從 PyTorch Profiler、NCCL 風格或 FakeGPU trace 彙整運算、通訊、
   等待與 GPU 記憶體時間軸。
-- `bandwidth` 檢查模擬 TCP payload 並回報吞吐量。
+- `bandwidth` 檢查模擬 TCP payload 並回報吞吐量。使用 `--listen` 且不提供
+  `--cluster-config` 時，產生的拓撲依每個邏輯節點的平台（`--platform`，預設
+  `auto`，見[平台與插槽](platforms.md)）給出 GPU 之間的頻寬：取經過節點內所有 GPU
+  的最佳環上最慢一跳的頻寬，因為環形 collective 的速度取決於最慢的一跳。例如 8-GPU
+  HGX A100 基板上為每方向 300 GB/s 的 NVLink（2400 Gbit/s），DGX-1 上為 50 GB/s
+  的雙 NVLink。
 - `coordinator` 管理分散式模擬 coordinator。
 
 分散式耗時包含 coordinator、記憶體複製、socket 與程序排程，不能當作 NCCL、

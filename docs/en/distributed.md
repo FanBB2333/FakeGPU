@@ -27,7 +27,14 @@ are out of scope. Reproduce it with `scripts/test.sh cpu` and
 - `simulate-topology` models collective routes and link contention.
 - `replay-trace` summarizes compute, communication, wait, and memory timelines
   from PyTorch Profiler, NCCL-style, or FakeGPU traces.
-- `bandwidth` checks simulated TCP payloads and reports throughput.
+- `bandwidth` checks simulated TCP payloads and reports throughput. With
+  `--listen` and no `--cluster-config`, the generated topology gives each
+  logical node the GPU-to-GPU bandwidth of its platform (`--platform`, default
+  `auto`; see [Platforms and slots](platforms.md)): the slowest hop of the
+  best ring through the node's GPUs, since a ring collective goes at the pace
+  of its slowest hop. For example, an 8-GPU HGX A100 board gets NVLink at
+  300 GB/s per direction (2400 Gbit/s), and DGX-1 its double NVLinks at
+  50 GB/s.
 - `coordinator` manages the distributed simulation coordinator.
 
 Distributed timing includes coordinator work, memory copies, sockets, and

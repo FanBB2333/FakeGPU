@@ -25,7 +25,12 @@ FP32/FP16/BF16 LoRA 与 attention 的 CPU_SIM 用例、tiny Qwen3 MoE 在 CPU �
 - `simulate-topology` 模拟 collective 路由和链路竞争。
 - `replay-trace` 从 PyTorch Profiler、NCCL 风格或 FakeGPU trace 中汇总计算、通信、
   等待和显存时间线。
-- `bandwidth` 验证模拟 TCP payload 并报告吞吐量。
+- `bandwidth` 验证模拟 TCP payload 并报告吞吐量。使用 `--listen` 且不提供
+  `--cluster-config` 时，生成的拓扑按每个逻辑节点的平台（`--platform`，默认
+  `auto`，见[平台与插槽](platforms.md)）给出 GPU 之间的带宽：取经过节点内所有 GPU
+  的最佳环上最慢一跳的带宽，因为环形 collective 的速度取决于最慢的一跳。例如 8-GPU
+  HGX A100 基板上为每方向 300 GB/s 的 NVLink（2400 Gbit/s），DGX-1 上为 50 GB/s
+  的双 NVLink。
 - `coordinator` 管理分布式模拟 coordinator。
 
 分布式耗时包含 coordinator、内存复制、socket 和进程调度，不能当作 NCCL、NVLink

@@ -10,10 +10,12 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Sequence
 
 from ._api import library_dir
+from .platforms import PlatformError
 from ._cli import (
     add_json_path_argument,
     command_prog,
@@ -175,12 +177,102 @@ def _wait_for_coordinator(
     )
 
 
+INTRA_NODE_LATENCY_US = 3.0
+
+
+def _intra_node_fabric(profile: str, ranks_per_node: int, platform: str) -> dict[str, Any]:
+    """The GPU-to-GPU fabric of one logical node on the modeled platform.
+
+    Ring collectives move at the pace of the slowest hop of their ring, and
+    NCCL picks rings over the fastest links, so a node is described by the
+    best ring through its GPUs, each hop taking its route from
+    fakegpu.link_traffic. ``bandwidth_gbps`` is Gbit/s per direction, the
+    unit of the cluster config. ``auto`` falls back to ``generic`` for layouts
+    no platform template holds.
+    """
+
+    from .link_traffic import route
+    from .platforms import AUTO, resolve_platform
+
+    profiles = [profile] * ranks_per_node
+    try:
+        resolved = resolve_platform(profiles, platform)
+    except PlatformError:
+        if platform != AUTO:
+            raise
+        resolved = resolve_platform(profiles, "generic")
+    topology = resolved.topology
+    if ranks_per_node == 1:
+        hops = [route(topology, None, 0)]
+    else:
+        routes = {
+            (source, target): route(topology, source, target)
+            for source in range(ranks_per_node)
+            for target in range(ranks_per_node)
+            if source != target
+        }
+        ring = _best_ring(ranks_per_node, lambda a, b: routes[(a, b)].bandwidth_gbps or 0.0)
+        hops = [routes[(ring[i], ring[(i + 1) % len(ring)])] for i in range(len(ring))]
+    slowest = min(hops, key=lambda item: item.bandwidth_gbps or 0.0)
+    if not slowest.bandwidth_gbps:
+        raise PlatformError(f"no modeled bandwidth between {profile} GPUs on {resolved.platform.id}")
+    links = {hop.source_link or hop.target_link or topology.slots[0].host_link for hop in hops}
+    return {
+        "platform": resolved.platform.id,
+        "type": "nvlink" if links == {"nvlink"} else (slowest.source_link or slowest.target_link or "pcie"),
+        "bandwidth_gbps": round(slowest.bandwidth_gbps * 8, 3),
+        "latency_us": INTRA_NODE_LATENCY_US,
+    }
+
+
+def _best_ring(count: int, bandwidth: Any) -> list[int]:
+    """GPU order of the ring whose slowest hop is fastest.
+
+    Tries bandwidth thresholds from the highest down and returns the first
+    Hamiltonian cycle using only hops at or above it. Above twelve GPUs the
+    search is skipped and GPUs keep their index order.
+    """
+
+    if count <= 2 or count > 12:
+        return list(range(count))
+    thresholds = sorted({bandwidth(a, b) for a in range(count) for b in range(count) if a != b}, reverse=True)
+    for threshold in thresholds:
+        ring = _hamiltonian_cycle(count, lambda a, b: bandwidth(a, b) >= threshold and bandwidth(b, a) >= threshold)
+        if ring is not None:
+            return ring
+    return list(range(count))
+
+
+def _hamiltonian_cycle(count: int, connected: Any) -> list[int] | None:
+    # parent[mask][node]: previous node of a path from 0 covering mask, ending at node.
+    parent: list[dict[int, int]] = [{} for _ in range(1 << count)]
+    parent[1][0] = -1
+    for mask in range(1, 1 << count):
+        if not mask & 1:
+            continue
+        for node in list(parent[mask]):
+            for following in range(1, count):
+                bit = 1 << following
+                if not mask & bit and following not in parent[mask | bit] and connected(node, following):
+                    parent[mask | bit][following] = node
+    full = (1 << count) - 1
+    last = next((node for node in parent[full] if connected(node, 0)), None)
+    if last is None:
+        return None
+    ring, mask, node = [], full, last
+    while node != -1:
+        ring.append(node)
+        node, mask = parent[mask][node], mask & ~(1 << node)
+    return ring[::-1]
+
+
 def _write_local_cluster_config(
     path: Path,
     *,
     nodes: int,
     ranks_per_node: int,
     profile: str,
+    intra_node: Mapping[str, Any],
     interconnect_bandwidth_gbps: float,
     interconnect_latency_us: float,
 ) -> None:
@@ -210,9 +302,9 @@ def _write_local_cluster_config(
         [
             "fabric:",
             "  intra_node:",
-            "    type: nvlink",
-            "    bandwidth_gbps: 300",
-            "    latency_us: 3",
+            f"    type: {intra_node['type']}",
+            f"    bandwidth_gbps: {intra_node['bandwidth_gbps']:g}",
+            f"    latency_us: {intra_node['latency_us']:g}",
             "",
             "  inter_node:",
             "    type: tcp",
@@ -582,6 +674,12 @@ def _print_bandwidth_summary(report: dict[str, Any]) -> None:
     print(
         f"  payload: {_format_bytes(int(report['payload_bytes_per_rank']))} per rank"
     )
+    fabric = report.get("intra_node_fabric")
+    if isinstance(fabric, dict):
+        print(
+            f"  intra-node fabric: {fabric['type']} {fabric['bandwidth_gbps']:g} Gbit/s "
+            f"on {fabric['platform']} (modeled)"
+        )
     if "algorithmic_bandwidth_gbps" in report:
         print(
             "  end-to-end algorithmic bandwidth: "
@@ -645,6 +743,15 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--profile", default="a100")
+    parser.add_argument(
+        "--platform",
+        default="auto",
+        help=(
+            "Platform of each logical node in an auto-generated topology; its "
+            "slowest GPU-to-GPU link sets the intra-node fabric "
+            "(see fakegpu platform list)."
+        ),
+    )
     parser.add_argument("--cluster-config", type=Path)
     parser.add_argument("--cluster-report", type=Path)
     parser.add_argument(
@@ -725,13 +832,23 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
             ) as temp_dir_text:
                 temp_dir = Path(temp_dir_text)
                 cluster_config = args.cluster_config
+                intra_node = None
                 if cluster_config is None:
+                    try:
+                        intra_node = _intra_node_fabric(
+                            args.profile,
+                            args.ranks_per_node,
+                            args.platform,
+                        )
+                    except (PlatformError, KeyError, ValueError) as exc:
+                        parser.error(f"--platform/--profile: {exc}")
                     cluster_config = temp_dir / "cluster.yaml"
                     _write_local_cluster_config(
                         cluster_config,
                         nodes=args.nodes,
                         ranks_per_node=args.ranks_per_node,
                         profile=args.profile,
+                        intra_node=intra_node,
                         interconnect_bandwidth_gbps=(
                             args.interconnect_bandwidth_gbps
                         ),
@@ -817,6 +934,8 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
                         rank_reports=rank_reports,
                         cluster_report=cluster_report,
                     )
+                    if intra_node is not None:
+                        report["intra_node_fabric"] = intra_node
                 finally:
                     if coordinator_process.poll() is None:
                         try:
