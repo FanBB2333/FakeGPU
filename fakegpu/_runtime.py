@@ -160,6 +160,11 @@ def _init_fakecuda_runtime(
     if update_env:
         os.environ.update(configured_env)
     os.environ["FAKEGPU_RUNTIME"] = "fakecuda"
+    from .machine.client import attach_environment
+
+    attach_environment(
+        explicit_layout=profile is not None or devices is not None or device_count is not None
+    )
     if profile is not None:
         os.environ["FAKEGPU_PROFILE"] = str(profile)
         if devices is None:

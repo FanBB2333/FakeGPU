@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 import time
 
+from .profile_catalog import get_profile
+
 
 class ReferenceTelemetry:
     def __init__(self):
@@ -49,8 +51,10 @@ class ReferenceTelemetry:
             uuid = device["uuid"]
             rows = [row for row in inventory["processes"] if row["gpu_uuid"] == uuid]
             keys = [(uuid, row["pid"]) for row in rows]
-            if device["profile_id"] != "a100" or not keys or any(key not in process_values for key in keys):
-                continue  # Never silently apply A100 observations to another profile.
+            # Never apply A100 observations to another profile. A device with
+            # no processes is idle and settles at the observed idle readings.
+            if device["profile_id"] != reference["profile_id"] or any(key not in process_values for key in keys):
+                continue
             active_uuids.add(uuid)
             index = device["index"] % len(reference["observed_idle"]["power_w"])
             idle_power = reference["observed_idle"]["power_w"][index]
@@ -65,8 +69,6 @@ class ReferenceTelemetry:
             alpha = 1 - math.exp(-max(0, current - old_time) / assumptions["thermal_time_constant_seconds"])
             temperature = old_temp + alpha * (target - old_temp)
             self._temperatures[uuid] = (current, temperature)
-            from .profile_catalog import get_profile
-
             profile = get_profile(device["profile_id"])
             device_values[uuid] = {
                 "gpu": gpu, "memory": memory, "temperature": round(temperature),

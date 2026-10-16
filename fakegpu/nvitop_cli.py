@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Sequence
 
 from ._cli import command_prog
+from .machine.client import daemon_pid
+from .machine.config import MachineConfig, MachinePaths
 from .nvml import NvmlStateBridge
 
 
@@ -17,14 +20,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         epilog="Pass nvitop options after --, e.g. -- --once or -- --monitor. Quit the TUI with q.",
         allow_abbrev=False,
     )
-    parser.add_argument("--state-dir", help="Publisher directory (or FAKEGPU_SMI_STATE_DIR).")
+    parser.add_argument(
+        "--state-dir",
+        help="Publisher directory (default: FAKEGPU_SMI_STATE_DIR, else the running fakegpu daemon).",
+    )
     parser.add_argument("--state", action="append", default=[], help="Explicit publisher JSON file; repeatable.")
     parser.add_argument("--refresh-interval", type=float, default=0.25, help="State refresh seconds (default: 0.25).")
     parser.add_argument("--stale-after-seconds", type=float, default=2.0, help="Ignore older heartbeats (default: 2).")
     parser.add_argument("--lib-dir", help="Override bundled FakeGPU native library directory.")
-    parser.add_argument("--telemetry", choices=("none", "reference"), default="none",
-                        help="Opt-in A100 reference sensor model; publisher needs FAKEGPU_TELEMETRY=reference.")
+    parser.add_argument("--telemetry", choices=("none", "reference"),
+                        help="A100 reference sensor model (default: the daemon's setting, else none); "
+                             "publishers need FAKEGPU_TELEMETRY=reference.")
     args, remaining = parser.parse_known_args(argv)
+    if not (args.state_dir or args.state or os.environ.get("FAKEGPU_SMI_STATE_DIR")):
+        paths = MachinePaths.from_env()
+        if daemon_pid(paths) is not None:
+            args.state_dir = str(paths.state_dir)
+            args.telemetry = args.telemetry or MachineConfig.load(paths.config).telemetry
+    args.telemetry = args.telemetry or "none"
     if remaining[:1] == ["--"]:
         remaining = remaining[1:]
     old_argv = sys.argv

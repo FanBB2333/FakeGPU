@@ -6,6 +6,7 @@ import json
 import math
 import os
 import platform
+import signal
 import socket
 import sys
 import tempfile
@@ -147,6 +148,8 @@ class SmiStatePublisher:
         self._last_serialized_bytes = 0
         self._last_error = ""
         self._warned_publish_error: tuple[str, str] | None = None
+        self._write_lock = threading.Lock()
+        self._last_state: dict[str, Any] | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -161,7 +164,44 @@ class SmiStatePublisher:
         self._thread.start()
         if not self._registered:
             atexit.register(self.stop)
+            self._record_termination()
             self._registered = True
+
+    def _record_termination(self) -> None:
+        """Publish SIGTERM as the exit reason, then terminate as before.
+
+        ``kill``, nvitop and process managers stop processes with SIGTERM,
+        whose default action skips ``atexit``. Only the default action is
+        replaced; a handler installed by the program is left alone.
+        """
+
+        if (
+            threading.current_thread() is not threading.main_thread()
+            or signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL
+        ):
+            return
+
+        def terminate(number: int, _frame: Any) -> None:
+            self._stop.set()
+            # The main thread may hold this lock if the signal arrived during
+            # its own publish; write anyway rather than deadlock. Keep the
+            # lock until exit so the publisher thread cannot write afterwards.
+            self._write_lock.acquire(timeout=0.5)
+            if self._last_state is not None:
+                final = {
+                    **self._last_state,
+                    "running": False,
+                    "timestamp_ns": time.time_ns(),
+                    "exit_signal": signal.Signals(number).name,
+                }
+                try:
+                    _atomic_write_json(self.path, final, max_bytes=self.max_state_bytes)
+                except Exception:
+                    pass
+            signal.signal(number, signal.SIG_DFL)
+            os.kill(os.getpid(), number)
+
+        signal.signal(signal.SIGTERM, terminate)
 
     def stop(self) -> None:
         self._stop.set()
@@ -175,6 +215,10 @@ class SmiStatePublisher:
             self._warn_publish_failure(exc, context="final state publish")
 
     def publish_once(self, *, running: bool) -> dict[str, Any]:
+        with self._write_lock:
+            return self._publish_locked(running=running)
+
+    def _publish_locked(self, *, running: bool) -> dict[str, Any]:
         started_ns = time.perf_counter_ns()
         self._attempted_writes += 1
         # Count this write optimistically so the state being published can
@@ -444,6 +488,7 @@ class SmiStatePublisher:
             state,
             max_bytes=self.max_state_bytes,
         )
+        self._last_state = state
         return state, serialized_bytes
 
     def _run(self) -> None:
