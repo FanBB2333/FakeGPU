@@ -31,8 +31,11 @@ def test_roofline_uses_profile_architecture_and_clock_data() -> None:
 def test_roofline_handles_complete_and_partial_reference_profiles() -> None:
     profiles = load_profiles()
     for profile_id, profile in profiles.items():
-        required = {"sm_count", "core_clock_mhz", "memory_bus_width_bits", "memory_clock_mhz"}
-        if required.intersection(profile.unavailable_fields):
+        has_fp32 = "fp32_tflops" in profile.throughput or (profile.sm_count > 0 and profile.core_clock_mhz > 0)
+        has_bandwidth = bool(profile.memory_bandwidth_gbps) or (
+            profile.memory_bus_width_bits > 0 and profile.memory_clock_mhz > 0
+        )
+        if not (has_fp32 and has_bandwidth):
             with pytest.raises(PerformanceModelError, match="no verified throughput specifications"):
                 profile_roofline(profile_id)
             continue
@@ -47,7 +50,9 @@ def test_roofline_handles_complete_and_partial_reference_profiles() -> None:
 
 @pytest.mark.parametrize("field", ["sm_count", "core_clock_mhz", "memory_bus_width_bits", "memory_clock_mhz"])
 def test_roofline_rejects_unknown_throughput_instead_of_dividing_by_zero(monkeypatch, field) -> None:
-    profile = replace(get_profile("gtx980"), **{field: 0})
+    profile = replace(
+        get_profile("gtx980"), throughput={}, throughput_basis={}, memory_bandwidth_gbps=None, **{field: 0}
+    )
     monkeypatch.setattr("fakegpu.performance_model.get_profile", lambda _profile_id: profile)
     with pytest.raises(PerformanceModelError, match=field):
         estimate_roofline(profile_id=profile.id, flops=1, memory_bytes=1)

@@ -1,6 +1,8 @@
 # Public specification reference; not a measured or calibrated device.
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/hopper-h100.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: h100-sxm5-94gb
 name: Fake NVIDIA H100 SXM5 94GB
 torch_name: NVIDIA H100 SXM5 94GB
@@ -29,6 +31,8 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 0
+form_factor: sxm
+mig_max_instances: 7
 supported_types:
   - fp32
   - tf32

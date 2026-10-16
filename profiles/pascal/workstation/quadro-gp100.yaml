@@ -1,6 +1,10 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/580.95.05/README/supportedchips.html
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/302049-NV-DS-Quadro-Pascal-GP100-US-NV-Fnl-WEB.pdf
+# Additional source: https://www.nvidia.com/en-in/drivers/quadro-desktop-gpu-specs/
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: quadro-gp100
 name: Fake NVIDIA Quadro GP100
-torch_name: NVIDIA Quadro GP100
+torch_name: Quadro GP100
 official_model: Quadro GP100
 architecture: pascal
 compute_major: 6
@@ -25,7 +29,23 @@ max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 235000
-pci_device_id: 0
+pci_device_id: 368054494
+memory_type: HBM2
+memory_bandwidth_gbps: 717
+ecc: supported
+form_factor: pcie
+pcie_generation: 3
+pcie_lanes: 16
+nvlink_bandwidth_gbps: 160
+mig_max_instances: 0
+fp64_tflops: 5.2
+fp32_tflops: 10.3
+fp16_tflops: 20.7
+throughput_source: https://www.nvidia.com/en-eu/design-visualization/quadro-desktop-gpus/
 supported_types:
   - fp32
   - fp16
+throughput_published:
+  - fp64_tflops
+  - fp32_tflops
+  - fp16_tflops

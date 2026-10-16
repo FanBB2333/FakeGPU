@@ -29,6 +29,28 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 150000
 pci_device_id: 573968606
+base_clock_mhz: 885
+memory_type: GDDR6
+memory_bandwidth_gbps: 600
+ecc: supported
+form_factor: pcie
+pcie_generation: 4
+pcie_lanes: 16
+mig_max_instances: 0
+fp64_tflops: 0.4882
+fp32_tflops: 31.2
+fp16_tflops: 31.24
+bf16_tflops: 31.24
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 62.5
+tensor_fp16_tflops: 125
+tensor_bf16_tflops: 125
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 250
+tensor_int4_tops: 500
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a10/pdf/datasheet-new/nvidia-a10-datasheet.pdf
 supported_types:
   - fp32
   - tf32
@@ -36,3 +58,18 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

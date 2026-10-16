@@ -117,6 +117,9 @@ Diffusion 估算器的運作方式：
 ## 其他估算器
 
 - `estimate-roofline` 產生與 profile 相關的分析延遲區間，不代表實測的 kernel 延遲。
+  `--compute-precision` 選擇 profile 中某條運算路徑的 dense 峰值，例如 `tensor_bf16`、
+  `tensor_fp8`（預設 `fp32`）；`estimate-llm` 與 `estimate-finetune` 也支援此選項。
+  峰值來自 NVIDIA 公布值，或由架構的每 SM 速率推導，[profile 目錄](../../profiles/README.md)中有標註。
 - `plan-training` 估算分散式訓練的單 rank GPU 記憶體。請參閱
   [分散式規劃與實驗批次執行](distributed.md)。
 - `estimate-finetune` 估算單卡微調的時間與 GPU 記憶體。請參閱

@@ -1,3 +1,4 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx5090d
 name: Fake NVIDIA GeForce RTX 5090 D
 torch_name: NVIDIA GeForce RTX 5090 D
@@ -25,7 +26,9 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
-pci_device_id: 0
+pci_device_id: 730271966
+memory_type: GDDR7
+memory_bandwidth_gbps: 1792
 supported_types:
   - fp32
   - tf32

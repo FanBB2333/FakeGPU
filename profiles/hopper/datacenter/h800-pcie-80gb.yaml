@@ -30,6 +30,8 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 589435102
+form_factor: pcie
+mig_max_instances: 7
 supported_types:
   - fp32
   - tf32

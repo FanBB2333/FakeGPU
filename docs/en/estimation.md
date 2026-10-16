@@ -122,7 +122,11 @@ To train diffusion models, see [Diffusion training](diffusion-training.md).
 ## Other estimators
 
 - `estimate-roofline` produces a profile-aware analytical latency interval.
-  It is not a measured kernel latency.
+  It is not a measured kernel latency. `--compute-precision` selects the
+  profile's dense peak for a path such as `tensor_bf16` or `tensor_fp8`
+  (default `fp32`); `estimate-llm` and `estimate-finetune` accept the same
+  option. Peaks are NVIDIA's published figures or derived from per-SM
+  architecture rates, as marked in the [profile catalog](../../profiles/README.md).
 - `plan-training` estimates rank-local memory for distributed training. See
   [Distributed plans and experiment sweeps](distributed.md).
 - `estimate-finetune` estimates single-GPU fine-tuning time and VRAM. See

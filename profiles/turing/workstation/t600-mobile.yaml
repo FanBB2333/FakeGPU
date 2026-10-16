@@ -1,3 +1,4 @@
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: t600-mobile
 name: Fake NVIDIA T600 Laptop GPU
 torch_name: NVIDIA T600 Laptop GPU
@@ -26,6 +27,16 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 60000
 pci_device_id: 0
+memory_type: GDDR6
+memory_bandwidth_gbps: 192
+form_factor: laptop
+pcie_generation: 4
+mig_max_instances: 0
+min_power_limit_mw: 35000
+fp32_tflops: 3
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/gtcs22/design-visualization/quadro-product-literature/quadro-ampere-linecard-us-nvidia-web.pdf
 supported_types:
   - fp32
   - fp16
+throughput_published:
+  - fp32_tflops

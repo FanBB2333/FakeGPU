@@ -2,6 +2,8 @@
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/nvidia-ampere-architecture-whitepaper.pdf
+# Additional source: https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: a100
 name: Fake NVIDIA A100-SXM4-80GB
 torch_name: NVIDIA A100-SXM4-80GB
@@ -30,6 +32,28 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 400000
 pci_device_id: 548540638
+memory_type: HBM2e
+memory_bandwidth_gbps: 2039
+form_factor: sxm
+pcie_generation: 4
+nvlink_generation: 3
+nvlink_links: 12
+nvlink_bandwidth_gbps: 600
+mig_max_instances: 7
+fp64_tflops: 9.7
+fp32_tflops: 19.5
+fp16_tflops: 77.97
+bf16_tflops: 38.98
+tensor_fp64_tflops: 19.5
+tensor_tf32_tflops: 156
+tensor_fp16_tflops: 312
+tensor_bf16_tflops: 312
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 624
+tensor_int4_tops: 1247
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf
 supported_types:
   - fp32
   - tf32
@@ -37,3 +61,18 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp64_tflops
+  - fp32_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_int8_tops
+throughput_derived:
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int4_tops

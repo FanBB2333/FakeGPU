@@ -1,6 +1,7 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx-pro-5000-blackwell-48gb
 name: Fake NVIDIA RTX PRO 5000 48GB Blackwell
-torch_name: NVIDIA RTX PRO 5000 48GB Blackwell
+torch_name: NVIDIA RTX PRO 5000 Blackwell
 official_model: NVIDIA RTX PRO 5000 Blackwell
 architecture: blackwell
 compute_major: 12
@@ -25,7 +26,16 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 300000
-pci_device_id: 0
+pci_device_id: 733155550
+memory_type: GDDR7
+memory_bandwidth_gbps: 1344
+ecc: supported
+form_factor: pcie
+pcie_generation: 5
+pcie_lanes: 16
+mig_max_instances: 2
+fp32_tflops: 65
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/professional-desktop-gpus/rtx-pro-5000-blackwell/workstation-datasheet-blackwell-rtx-pro-5000-5488550-nvidia.pdf
 supported_types:
   - fp32
   - tf32
@@ -35,3 +45,5 @@ supported_types:
   - int4
   - fp8
   - fp4
+throughput_published:
+  - fp32_tflops

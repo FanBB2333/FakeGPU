@@ -26,7 +26,39 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 50000
 max_power_limit_mw: 50000
 pci_device_id: 0
+base_clock_mhz: 1395
+memory_type: GDDR6
+memory_bandwidth_gbps: 192
+form_factor: laptop
+min_power_limit_mw: 30000
+fp64_tflops: 0.09984
+fp32_tflops: 3.195
+fp16_tflops: 6.39
+bf16_tflops: 0
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 0
+tensor_fp16_tflops: 0
+tensor_bf16_tflops: 0
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 0
+tensor_int4_tops: 0
 supported_types:
   - fp32
   - fp16
   - int8
+throughput_derived:
+  - fp64_tflops
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

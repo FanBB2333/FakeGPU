@@ -1,3 +1,4 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx3050a-laptop
 name: Fake NVIDIA GeForce RTX 3050 A Laptop GPU
 torch_name: NVIDIA GeForce RTX 3050 A Laptop GPU
@@ -25,7 +26,10 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 50000
 max_power_limit_mw: 50000
-pci_device_id: 0
+pci_device_id: 673321182
+memory_type: GDDR6
+form_factor: laptop
+min_power_limit_mw: 35000
 supported_types:
   - fp32
   - tf32

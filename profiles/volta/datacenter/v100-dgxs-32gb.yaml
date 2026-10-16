@@ -2,6 +2,8 @@
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://images.nvidia.com/content/technologies/volta/pdf/volta-v100-datasheet-update-us-1165301-r5.pdf
+# Additional source: https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: v100-dgxs-32gb
 name: Fake NVIDIA Tesla V100-DGXS-32GB
 torch_name: Tesla V100-DGXS-32GB
@@ -15,7 +17,7 @@ compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
 spec_source: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 notes: 32 GiB Volta variant explicitly named in the NVIDIA driver product table; enabled SMs, clocks and power remain unverified. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for sm_count, memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, l2_cache_bytes, max_power_limit_mw.
 memory_bytes: 34359738368
-sm_count: 0
+sm_count: 80
 memory_bus_width_bits: 0
 core_clock_mhz: 0
 memory_clock_mhz: 0
@@ -30,6 +32,12 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 498536670
+nvlink_generation: 2
+mig_max_instances: 0
+tensor_fp16_tflops: 125
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/dgx-station/dgx-station-print-station-32gb-datasheet-a4.pdf
 supported_types:
   - fp32
   - fp16
+throughput_published:
+  - tensor_fp16_tflops

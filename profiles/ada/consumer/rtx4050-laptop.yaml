@@ -1,3 +1,4 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx4050-laptop
 name: Fake NVIDIA GeForce RTX 4050 Laptop GPU
 torch_name: NVIDIA GeForce RTX 4050 Laptop GPU
@@ -25,7 +26,23 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 115000
 max_power_limit_mw: 115000
-pci_device_id: 0
+pci_device_id: 681644254
+memory_type: GDDR6
+form_factor: laptop
+pcie_generation: 4
+min_power_limit_mw: 35000
+fp64_tflops: 0.1896
+fp32_tflops: 12.13
+fp16_tflops: 12.13
+bf16_tflops: 12.13
+tensor_tf32_tflops: 12.13
+tensor_fp16_tflops: 24.27
+tensor_bf16_tflops: 24.27
+tensor_fp8_tflops: 48.54
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 97.08
+tensor_int4_tops: 194.2
 supported_types:
   - fp32
   - tf32
@@ -34,3 +51,16 @@ supported_types:
   - fp8
   - int8
   - int4
+throughput_derived:
+  - fp64_tflops
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3090-3090ti/
 id: rtx3090
 name: Fake NVIDIA GeForce RTX 3090
 torch_name: NVIDIA GeForce RTX 3090
@@ -13,7 +15,7 @@ notes: Reference 24 GB Founders Edition profile using NVIDIA GeForce specificati
 memory_bytes: 25769803776
 sm_count: 82
 memory_bus_width_bits: 384
-core_clock_mhz: 1700
+core_clock_mhz: 1695
 memory_clock_mhz: 9750
 l2_cache_bytes: 6291456
 shared_mem_per_sm: 102400
@@ -25,7 +27,29 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 350000
 max_power_limit_mw: 350000
-pci_device_id: 0
+pci_device_id: 570691806
+base_clock_mhz: 1400
+memory_type: GDDR6X
+memory_bandwidth_gbps: 936
+form_factor: pcie
+pcie_generation: 4
+nvlink_generation: 3
+nvlink_links: 4
+nvlink_bandwidth_gbps: 112.5
+fp64_tflops: 0.556
+fp32_tflops: 35.6
+fp16_tflops: 35.6
+bf16_tflops: 35.6
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 35.6
+tensor_fp16_tflops: 71
+tensor_bf16_tflops: 71
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 284
+tensor_int4_tops: 568
+throughput_source: https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf
 supported_types:
   - fp32
   - tf32
@@ -33,3 +57,18 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - tensor_fp64_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

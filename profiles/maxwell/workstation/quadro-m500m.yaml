@@ -1,6 +1,8 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: quadro-m500m
 name: Fake NVIDIA Quadro M500M
-torch_name: NVIDIA Quadro M500M
+torch_name: Quadro M500M
 official_model: Quadro M500M
 architecture: maxwell
 compute_major: 5
@@ -25,6 +27,13 @@ max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
-pci_device_id: 0
+pci_device_id: 326766814
+memory_bandwidth_gbps: 14.4
+form_factor: laptop
+mig_max_instances: 0
+fp32_tflops: 0.75
+throughput_source: https://images.nvidia.com/content/quadro/gpu-accelerated/pdf/208584-ME-ProGraphicsLineCard-US-FNL-HR.pdf
 supported_types:
   - fp32
+throughput_published:
+  - fp32_tflops

@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3090-3090ti/
 id: rtx3090ti-reference
 name: Fake NVIDIA GeForce RTX 3090 Ti 24 GB Reference
 torch_name: NVIDIA GeForce RTX 3090 Ti 24 GB Reference
@@ -25,7 +27,26 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 450000
 max_power_limit_mw: 450000
-pci_device_id: 0
+pci_device_id: 570626270
+base_clock_mhz: 1560
+memory_type: GDDR6X
+memory_bandwidth_gbps: 1008
+form_factor: pcie
+pcie_generation: 4
+fp64_tflops: 0.625
+fp32_tflops: 40
+fp16_tflops: 40
+bf16_tflops: 40
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 40
+tensor_fp16_tflops: 79.99
+tensor_bf16_tflops: 79.99
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 320
+tensor_int4_tops: 640
+throughput_source: https://www.nvidia.com/en-us/geforce/news/geforce-rtx-3090-ti-out-now/
 supported_types:
   - fp32
   - tf32
@@ -33,3 +54,18 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

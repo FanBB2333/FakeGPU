@@ -1,3 +1,6 @@
+# Additional source: https://web.archive.org/web/20181230215057/https://www.nvidia.com/en-us/geforce/products/10series/geforce-gtx-1080/
+# Additional source: https://www.nvidia.com/content/geforce-gtx/GTX_1080_User_Guide.pdf
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: gtx1080
 name: Fake NVIDIA GeForce GTX 1080
 torch_name: NVIDIA GeForce GTX 1080
@@ -26,7 +29,43 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 180000
 max_power_limit_mw: 180000
 pci_device_id: 0
+base_clock_mhz: 1607
+memory_type: GDDR5X
+memory_bandwidth_gbps: 320
+form_factor: pcie
+pcie_generation: 3
+pcie_lanes: 16
+mig_max_instances: 0
+fp64_tflops: 0.2773
+fp32_tflops: 8.873
+fp16_tflops: 0.1386
+bf16_tflops: 0
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 0
+tensor_fp16_tflops: 0
+tensor_bf16_tflops: 0
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 0
+tensor_int4_tops: 0
+throughput_source: https://international.download.nvidia.com/geforce-com/international/pdfs/GeForce_GTX_1080_Whitepaper_FINAL.pdf
 supported_types:
   - fp32
   - fp16
   - int8
+throughput_published:
+  - fp32_tflops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

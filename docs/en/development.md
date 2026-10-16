@@ -132,6 +132,7 @@ python3 -m fakegpu --build-dir build --devices "t4,a100:2,h100" \
   python3 your_script.py
 python3 scripts/update_nvidia_gpu_catalog.py --check
 python3 scripts/render_gpu_catalog.py --check
+python3 scripts/derive_profile_throughput.py --check
 ```
 
 Set `FAKEGPU_PROFILE` or pass `--profile` to select one profile. Use
@@ -143,6 +144,7 @@ Set `FAKEGPU_PROFILE` or pass `--profile` to select one profile. Use
 - `scripts/test.sh` runs the maintained test suites.
 - `scripts/update_nvidia_gpu_catalog.py` checks or updates the NVIDIA compute-capability snapshot.
 - `scripts/render_gpu_catalog.py` regenerates the public inventory and website statistics from YAML profiles.
+- `scripts/derive_profile_throughput.py` fills derived peak throughput from `fakegpu/data/throughput_rates.json`; run it after changing SM counts, clocks or rates.
 - `scripts/validation/` holds shared report and artifact validators.
 - `scripts/linux/` holds Linux GPU-management helpers.
 - `scripts/macos/` holds macOS-to-Linux-VM helpers.

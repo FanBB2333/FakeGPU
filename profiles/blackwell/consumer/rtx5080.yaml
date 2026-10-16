@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5080/
 id: rtx5080
 name: Fake NVIDIA GeForce RTX 5080
 torch_name: NVIDIA GeForce RTX 5080
@@ -13,7 +15,7 @@ notes: Reference 16 GB Founders Edition profile using NVIDIA GeForce specificati
 memory_bytes: 17179869184
 sm_count: 84
 memory_bus_width_bits: 256
-core_clock_mhz: 2620
+core_clock_mhz: 2617
 memory_clock_mhz: 15000
 l2_cache_bytes: 67108864
 shared_mem_per_sm: 102400
@@ -25,7 +27,25 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 360000
 max_power_limit_mw: 360000
-pci_device_id: 0
+pci_device_id: 738332894
+base_clock_mhz: 2300
+memory_type: GDDR7
+memory_bandwidth_gbps: 960
+form_factor: pcie
+pcie_generation: 5
+nvlink_generation: 0
+fp64_tflops: 0.8793
+fp32_tflops: 56.3
+fp16_tflops: 56.3
+bf16_tflops: 56.3
+tensor_tf32_tflops: 56.3
+tensor_fp16_tflops: 112.6
+tensor_bf16_tflops: 112.6
+tensor_fp8_tflops: 225.1
+tensor_fp4_tflops: 900.4
+tensor_int8_tops: 450.2
+tensor_int4_tops: 0
+throughput_source: https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf
 supported_types:
   - fp32
   - tf32
@@ -35,3 +55,16 @@ supported_types:
   - fp4
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+throughput_derived:
+  - fp64_tflops
+  - tensor_int4_tops

@@ -2,6 +2,9 @@
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 # Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/3km2720jiy76r06ctf8mxg21743p1058.pdf
+# Additional source: https://resources.nvidia.com/en-us-rtx-pro-6000/rtx-pro-6000-server-brief
+# Additional source: https://resources.nvidia.com/en-us-rtx-pro-6000
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: rtx-pro-6000-blackwell-server
 name: Fake NVIDIA RTX PRO 6000 Blackwell Server Edition
 torch_name: NVIDIA RTX PRO 6000 Blackwell Server Edition
@@ -30,6 +33,28 @@ max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 600000
 pci_device_id: 733286622
+base_clock_mhz: 1852
+memory_type: GDDR7
+memory_bandwidth_gbps: 1597
+ecc: supported
+form_factor: pcie
+pcie_generation: 5
+pcie_lanes: 16
+nvlink_generation: 0
+mig_max_instances: 4
+min_power_limit_mw: 300000
+fp64_tflops: 1.827
+fp32_tflops: 120
+fp16_tflops: 117
+bf16_tflops: 117
+tensor_tf32_tflops: 234
+tensor_fp16_tflops: 467.8
+tensor_bf16_tflops: 467.8
+tensor_fp8_tflops: 935.6
+tensor_fp4_tflops: 1871
+tensor_int8_tops: 935.6
+tensor_int4_tops: 0
+throughput_source: https://www.nvidia.com/en-us/data-center/rtx-pro-6000-blackwell-server-edition/
 supported_types:
   - fp32
   - tf32
@@ -39,3 +64,16 @@ supported_types:
   - int4
   - fp8
   - fp4
+throughput_published:
+  - fp32_tflops
+  - tensor_tf32_tflops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

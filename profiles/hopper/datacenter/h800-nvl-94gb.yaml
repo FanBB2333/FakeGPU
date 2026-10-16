@@ -2,6 +2,7 @@
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://docs.nvidia.com/ai-enterprise/release-4/latest/infra-software/vgpu/features.html
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: h800-nvl-94gb
 name: Fake NVIDIA H800 NVL 94GB
 torch_name: NVIDIA H800 NVL 94GB
@@ -29,7 +30,9 @@ max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
-pci_device_id: 0
+pci_device_id: 591007966
+form_factor: pcie
+mig_max_instances: 7
 supported_types:
   - fp32
   - tf32

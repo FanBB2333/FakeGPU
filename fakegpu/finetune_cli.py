@@ -12,6 +12,7 @@ from ._cli import add_json_path_argument, command_prog, usage_error
 from ._local_checkpoint import bind_local_checkpoint
 from .finetune_config import load_finetune_config
 from .finetune_estimator import estimate_finetuning
+from .performance_model import COMPUTE_PRECISIONS
 from .structured_io import emit_json, load_mapping
 
 
@@ -112,6 +113,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=1.0,
         help="Explicit matrix/scalar throughput factor for the uncalibrated roofline model.",
     )
+    parser.add_argument(
+        "--compute-precision",
+        choices=COMPUTE_PRECISIONS,
+        default="fp32",
+        help="Profile peak for the roofline: fp32 (scalar FMA, default) or a tensor path such as tensor_bf16.",
+    )
     add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
@@ -153,6 +160,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             epochs=args.epochs,
             observation=observation,
             compute_acceleration_factor=args.compute_acceleration_factor,
+            compute_precision=args.compute_precision,
         )
         if observation is not None:
             report["checkpoint_identity"] = checkpoint_identity
@@ -182,6 +190,7 @@ def _estimate_native_report(args: argparse.Namespace) -> dict[str, Any]:
             args.dataset_report,
             args.framework != "auto",
             args.compute_acceleration_factor != 1.0,
+            args.compute_precision != "fp32",
         )
     ):
         raise ValueError(

@@ -1,6 +1,7 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx-a2000
 name: Fake NVIDIA RTX A2000
-torch_name: NVIDIA RTX A2000
+torch_name: NVIDIA RTX A2000 12GB
 official_model: NVIDIA RTX A2000
 architecture: ampere
 compute_major: 8
@@ -25,7 +26,27 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 70000
 max_power_limit_mw: 70000
-pci_device_id: 0
+pci_device_id: 628166878
+memory_type: GDDR6
+memory_bandwidth_gbps: 288
+ecc: supported
+form_factor: pcie
+pcie_generation: 4
+pcie_lanes: 16
+fp64_tflops: 0.1248
+fp32_tflops: 8
+fp16_tflops: 7.987
+bf16_tflops: 7.987
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 15.97
+tensor_fp16_tflops: 31.95
+tensor_bf16_tflops: 31.95
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 63.9
+tensor_int4_tops: 127.8
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/nvidia-rtx-a2000-12gb-datasheet.pdf
 supported_types:
   - fp32
   - tf32
@@ -33,3 +54,18 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

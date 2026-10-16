@@ -10,7 +10,7 @@ from ._cli import (
     command_prog,
     usage_error,
 )
-from .profile_catalog import get_profile
+from .profile_catalog import THROUGHPUT_FIELDS, get_profile
 from .structured_io import emit_json
 
 
@@ -42,48 +42,60 @@ _FP32_CORES_PER_SM = {
 }
 
 
+# ``--compute-precision`` names: throughput fields without their unit suffix.
+COMPUTE_PRECISIONS = tuple(name.rsplit("_", 1)[0] for name in THROUGHPUT_FIELDS)
+
+
 class PerformanceModelError(ValueError):
     pass
 
 
 def profile_roofline(profile_id: str) -> dict[str, Any]:
-    """Return a profile-derived scalar compute and memory-bandwidth ceiling."""
+    """Return a profile's peak compute rates and memory-bandwidth ceiling.
+
+    Peaks come from the profile's published or derived throughput; profiles
+    without throughput data fall back to the scalar FP32 FMA rate of the SM
+    count and boost clock. Bandwidth prefers NVIDIA's published figure over
+    bus width times memory clock.
+    """
 
     profile = get_profile(profile_id)
-    required_specs = (
-        "sm_count",
-        "core_clock_mhz",
-        "memory_bus_width_bits",
-        "memory_clock_mhz",
-    )
-    unavailable = [key for key in required_specs if getattr(profile, key) <= 0]
+    peaks = {
+        name.rsplit("_", 1)[0]: {
+            "operations_per_second": int(value * 1e12),
+            "basis": profile.throughput_basis[name],
+        }
+        for name, value in profile.throughput.items()
+        if value > 0
+    }
+    fp32_cores_per_sm = _FP32_CORES_PER_SM.get(profile.compute_capability)
+    if "fp32" not in peaks and fp32_cores_per_sm and profile.sm_count > 0 and profile.core_clock_mhz > 0:
+        peaks["fp32"] = {
+            "operations_per_second": profile.sm_count * fp32_cores_per_sm * 2 * profile.core_clock_mhz * 1_000_000,
+            "basis": "scalar_fma_formula",
+        }
+    if profile.memory_bandwidth_gbps:
+        memory_bandwidth = profile.memory_bandwidth_gbps * 1e9
+        bandwidth_basis = "published"
+    elif profile.memory_bus_width_bits > 0 and profile.memory_clock_mhz > 0:
+        memory_bandwidth = profile.memory_bus_width_bits / 8 * profile.memory_clock_mhz * 1_000_000 * 2
+        bandwidth_basis = "bus_width_and_memory_clock"
+    else:
+        memory_bandwidth = 0.0
+        bandwidth_basis = ""
+    unavailable = []
+    if "fp32" not in peaks:
+        unavailable += ["fp32_tflops"] + [key for key in ("sm_count", "core_clock_mhz") if getattr(profile, key) <= 0]
+    if not memory_bandwidth:
+        unavailable += ["memory_bandwidth_gbps"] + [
+            key for key in ("memory_bus_width_bits", "memory_clock_mhz") if getattr(profile, key) <= 0
+        ]
     if unavailable:
         raise PerformanceModelError(
             f"profile {profile.id!r} has no verified throughput specifications for "
-            f"{', '.join(unavailable)}; use a profile with documented clocks and bus width"
+            f"{', '.join(unavailable)}; use a profile with documented clocks and bandwidth"
         )
-    try:
-        fp32_cores_per_sm = _FP32_CORES_PER_SM[profile.compute_capability]
-    except KeyError as exc:
-        raise PerformanceModelError(
-            "no scalar issue-width model for compute capability "
-            f"{profile.compute_capability_text}"
-        ) from exc
-
-    scalar_fp32_peak = (
-        profile.sm_count
-        * fp32_cores_per_sm
-        * 2
-        * profile.core_clock_mhz
-        * 1_000_000
-    )
-    memory_bandwidth = (
-        profile.memory_bus_width_bits
-        / 8
-        * profile.memory_clock_mhz
-        * 1_000_000
-        * 2
-    )
+    scalar_fp32_peak = peaks["fp32"]["operations_per_second"]
     return {
         "profile_id": profile.id,
         "profile_name": profile.name,
@@ -98,9 +110,12 @@ def profile_roofline(profile_id: str) -> dict[str, Any]:
         "fp32_cores_per_sm": fp32_cores_per_sm,
         "scalar_fp32_peak_flops_per_second": int(scalar_fp32_peak),
         "profile_memory_bandwidth_bytes_per_second": int(memory_bandwidth),
+        "memory_bandwidth_basis": bandwidth_basis,
+        "peak_throughput": peaks,
         "ridge_point_flops_per_byte": scalar_fp32_peak / memory_bandwidth,
         "profile_status": profile.profile_status,
         "spec_source": profile.spec_source,
+        "throughput_source": profile.throughput_source,
     }
 
 
@@ -111,12 +126,13 @@ def estimate_roofline(
     memory_bytes: int,
     launch_count: int = 1,
     compute_acceleration_factor: float = 1.0,
+    compute_precision: str = "fp32",
 ) -> dict[str, Any]:
     """Estimate an analytical latency interval from a GPU profile.
 
-    ``compute_acceleration_factor`` is explicit because tensor-core rates vary
-    by dtype, sparsity, instruction shape, and product segment. A value of one
-    uses only the scalar FP32 FMA ceiling derived from the profile.
+    ``compute_precision`` selects the profile's dense peak for that path, for
+    example ``tensor_bf16``; the default is the scalar FP32 FMA ceiling.
+    ``compute_acceleration_factor`` further scales the selected peak.
     """
 
     if not isinstance(flops, int) or isinstance(flops, bool) or flops < 0:
@@ -149,12 +165,19 @@ def estimate_roofline(
             "compute_acceleration_factor must be finite and positive"
         )
 
+    if compute_precision not in COMPUTE_PRECISIONS:
+        raise PerformanceModelError(
+            f"compute_precision must be one of {', '.join(COMPUTE_PRECISIONS)}"
+        )
+
     assumptions = EFFICIENCY_ASSUMPTIONS
     hardware = profile_roofline(profile_id)
-    compute_ceiling = (
-        hardware["scalar_fp32_peak_flops_per_second"]
-        * compute_acceleration_factor
-    )
+    peak = hardware["peak_throughput"].get(compute_precision)
+    if peak is None:
+        raise PerformanceModelError(
+            f"profile {profile_id!r} has no known {compute_precision} throughput"
+        )
+    compute_ceiling = peak["operations_per_second"] * compute_acceleration_factor
     bandwidth_ceiling = hardware[
         "profile_memory_bandwidth_bytes_per_second"
     ]
@@ -206,7 +229,9 @@ def estimate_roofline(
             "arithmetic_intensity_flops_per_byte": arithmetic_intensity,
         },
         "compute_model": {
-            "basis": "scalar_fp32_fma",
+            "basis": "scalar_fp32_fma" if compute_precision == "fp32" else f"{compute_precision}_peak",
+            "precision": compute_precision,
+            "peak_basis": peak["basis"],
             "compute_acceleration_factor": compute_acceleration_factor,
             "effective_compute_ceiling_flops_per_second": int(
                 compute_ceiling
@@ -223,7 +248,7 @@ def estimate_roofline(
         "limitations": [
             "This is a roofline interval, not a kernel benchmark or scheduler simulation.",
             "Profile clocks and memory clocks are ceilings; power, thermals, occupancy, and contention are not simulated.",
-            "Tensor-core acceleration is included only when the caller supplies an explicit factor.",
+            "Tensor-core rates apply only when a tensor compute precision is selected; derived peaks are architecture rates times SM count and boost clock.",
             "Kernel fusion changes both launch count and memory traffic and must be reflected in the workload inputs.",
         ],
     }
@@ -245,7 +270,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--compute-acceleration-factor",
         type=float,
         default=1.0,
-        help="Explicit matrix/tensor throughput factor over scalar FP32.",
+        help="Explicit factor applied to the selected compute peak.",
+    )
+    parser.add_argument(
+        "--compute-precision",
+        choices=COMPUTE_PRECISIONS,
+        default="fp32",
+        help="Peak to use: fp32 (scalar FMA, default) or a tensor path such as tensor_bf16.",
     )
     add_json_path_argument(parser)
     args = parser.parse_args(argv)
@@ -256,6 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             memory_bytes=args.memory_bytes,
             launch_count=args.launch_count,
             compute_acceleration_factor=args.compute_acceleration_factor,
+            compute_precision=args.compute_precision,
         )
     except (OSError, ValueError) as exc:
         usage_error(parser, exc)

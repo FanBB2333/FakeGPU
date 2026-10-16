@@ -26,6 +26,13 @@ max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 600000
 pci_device_id: 0
+memory_type: GDDR7
+memory_bandwidth_gbps: 1398
+ecc: supported
+form_factor: pcie
+pcie_generation: 5
+pcie_lanes: 16
+mig_max_instances: 2
 supported_types:
   - fp32
   - tf32

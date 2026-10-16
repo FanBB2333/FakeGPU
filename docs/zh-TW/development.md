@@ -121,6 +121,7 @@ python3 -m fakegpu --build-dir build --devices "t4,a100:2,h100" \
   python3 your_script.py
 python3 scripts/update_nvidia_gpu_catalog.py --check
 python3 scripts/render_gpu_catalog.py --check
+python3 scripts/derive_profile_throughput.py --check
 ```
 
 設定 `FAKEGPU_PROFILE` 或傳入 `--profile` 可選擇一個 profile。異質裝置列表使用
@@ -132,6 +133,7 @@ python3 scripts/render_gpu_catalog.py --check
 - `scripts/test.sh`：執行維護中的測試組。
 - `scripts/update_nvidia_gpu_catalog.py`：檢查或更新 NVIDIA compute capability 快照。
 - `scripts/render_gpu_catalog.py`：從 YAML profile 重新產生公開目錄與官網統計。
+- `scripts/derive_profile_throughput.py`：依 `fakegpu/data/throughput_rates.json` 填寫推導的峰值算力；修改 SM 數、時脈或速率表後需要重新執行。
 - `scripts/validation/`：共用的報告與產物驗證工具。
 - `scripts/linux/`：Linux GPU 管理工具。
 - `scripts/macos/`：macOS 到 Linux VM 的輔助工具。

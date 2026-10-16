@@ -3,6 +3,7 @@
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/7n7vya4684sdccfyy6kv37ek5lw702h7.pdf
+# Additional source: https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/hopper-h200.html
 id: h200-nvl
 name: Fake NVIDIA H200 NVL 141GB (one GPU)
 torch_name: NVIDIA H200 NVL 141GB
@@ -31,6 +32,32 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 600000
 pci_device_id: 591073502
+base_clock_mhz: 1230
+memory_type: HBM3e
+memory_bandwidth_gbps: 4813
+ecc: supported
+form_factor: pcie
+pcie_generation: 5
+pcie_lanes: 16
+nvlink_generation: 4
+nvlink_links: 18
+nvlink_bandwidth_gbps: 900
+mig_max_instances: 7
+min_power_limit_mw: 200000
+fp64_tflops: 30
+fp32_tflops: 60
+fp16_tflops: 120.6
+bf16_tflops: 120.6
+tensor_fp64_tflops: 60
+tensor_tf32_tflops: 482.5
+tensor_fp16_tflops: 965.1
+tensor_bf16_tflops: 965.1
+tensor_fp8_tflops: 1930
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 1930
+tensor_int4_tops: 0
+throughput_source: https://dam-cdn.nvd.orangelogic.com/AssetLink/5o2qgy5d2835ve2pm11i62kv8mphqta8.pdf
 supported_types:
   - fp32
   - tf32
@@ -39,3 +66,18 @@ supported_types:
   - int8
   - int4
   - fp8
+throughput_published:
+  - fp64_tflops
+  - fp32_tflops
+  - tensor_fp64_tflops
+throughput_derived:
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

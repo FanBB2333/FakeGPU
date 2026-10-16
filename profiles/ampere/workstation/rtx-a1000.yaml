@@ -1,3 +1,4 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx-a1000
 name: Fake NVIDIA RTX A1000
 torch_name: NVIDIA RTX A1000
@@ -25,7 +26,14 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 50000
-pci_device_id: 0
+pci_device_id: 632295646
+memory_type: GDDR6
+memory_bandwidth_gbps: 192
+form_factor: pcie
+pcie_generation: 4
+pcie_lanes: 8
+fp32_tflops: 6.7
+throughput_source: https://dam-cdn.nvd.orangelogic.com/AssetLink/3go5lvr2vupn73or2e662t7h6g1b36l1.pdf
 supported_types:
   - fp32
   - tf32
@@ -33,3 +41,5 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops

@@ -1,3 +1,4 @@
+# Additional source: https://www.nvidia.com/en-us/geforce/laptops/compare/30-series/
 id: rtx3050-laptop-6gb
 name: Fake NVIDIA GeForce RTX 3050 Laptop GPU 6 GB
 torch_name: NVIDIA GeForce RTX 3050 Laptop GPU 6 GB
@@ -26,6 +27,10 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 0
+memory_type: GDDR6
+form_factor: laptop
+pcie_generation: 4
+min_power_limit_mw: 35000
 supported_types:
   - fp32
   - tf32

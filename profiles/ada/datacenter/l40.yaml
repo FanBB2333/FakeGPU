@@ -1,6 +1,7 @@
 # Public specification reference; not a measured or calibrated device.
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/datasheets/L-40/product-brief-L40.pdf
 id: l40
 name: Fake NVIDIA L40
 torch_name: NVIDIA L40
@@ -16,8 +17,8 @@ notes: 48 GiB GDDR6; 142 enabled SMs and 96 MiB L2. Memory clock rounded from 86
 memory_bytes: 51539607552
 sm_count: 142
 memory_bus_width_bits: 384
-core_clock_mhz: 0
-memory_clock_mhz: 9000
+core_clock_mhz: 2490
+memory_clock_mhz: 9001
 l2_cache_bytes: 100663296
 shared_mem_per_sm: 102400
 shared_mem_per_block: 49152
@@ -29,6 +30,29 @@ max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 300000
 pci_device_id: 649400542
+base_clock_mhz: 735
+memory_type: GDDR6
+memory_bandwidth_gbps: 864
+ecc: supported
+form_factor: pcie
+pcie_generation: 4
+pcie_lanes: 16
+nvlink_generation: 0
+mig_max_instances: 0
+min_power_limit_mw: 100000
+fp64_tflops: 1.414
+fp32_tflops: 90.5
+fp16_tflops: 90.52
+bf16_tflops: 90.52
+tensor_tf32_tflops: 90.5
+tensor_fp16_tflops: 181.05
+tensor_bf16_tflops: 181.05
+tensor_fp8_tflops: 362
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 362
+tensor_int4_tops: 724
+throughput_source: https://images.nvidia.com/content/Solutions/data-center/vgpu-L40-datasheet.pdf
 supported_types:
   - fp32
   - tf32
@@ -37,3 +61,17 @@ supported_types:
   - int8
   - int4
   - fp8
+throughput_published:
+  - fp32_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

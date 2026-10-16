@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: t1000
 name: Fake NVIDIA T1000
 torch_name: NVIDIA T1000
@@ -25,7 +27,17 @@ max_threads_per_multiprocessor: 1024
 max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 50000
-pci_device_id: 0
+pci_device_id: 531632350
+memory_type: GDDR6
+memory_bandwidth_gbps: 160
+form_factor: pcie
+pcie_generation: 3
+pcie_lanes: 16
+mig_max_instances: 0
+fp32_tflops: 2.5
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/nvidia-t1000-datasheet-1987414-r4.pdf
 supported_types:
   - fp32
   - fp16
+throughput_published:
+  - fp32_tflops

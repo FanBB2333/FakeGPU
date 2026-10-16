@@ -1,6 +1,8 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: quadro-p2000-mobile
 name: Fake NVIDIA Quadro P2000 Mobile
-torch_name: NVIDIA Quadro P2000 Mobile
+torch_name: Quadro P2000
 official_model: Quadro P2000
 architecture: pascal
 compute_major: 6
@@ -26,5 +28,14 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 50000
 pci_device_id: 0
+memory_type: GDDR5
+memory_bandwidth_gbps: 96
+form_factor: laptop
+pcie_generation: 3
+mig_max_instances: 0
+fp32_tflops: 2.4
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-rtx-mobile-line-card-us-nvidia-r7-web.pdf
 supported_types:
   - fp32
+throughput_published:
+  - fp32_tflops

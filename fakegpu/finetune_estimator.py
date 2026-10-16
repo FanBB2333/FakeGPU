@@ -142,6 +142,7 @@ def estimate_finetuning(
     sequence_length: int | None = None,
     observation: Mapping[str, Any] | None = None,
     compute_acceleration_factor: float = 1.0,
+    compute_precision: str = "fp32",
     runtime_overhead_bytes: int = 512 * 1024**2,
     parameter_count: int | None = None,
     trainable_parameter_count: int | None = None,
@@ -201,6 +202,7 @@ def estimate_finetuning(
         memory_bytes=memory["persistent_bytes"] * 2 + memory["activation_bytes"] * 3,
         launch_count=model["dimensions"]["num_hidden_layers"] * 30,
         compute_acceleration_factor=compute_acceleration_factor,
+        compute_precision=compute_precision,
     )
     step_interval = roofline["latency_interval_seconds"]
     timing = {

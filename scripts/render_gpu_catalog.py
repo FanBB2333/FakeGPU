@@ -28,6 +28,44 @@ def _number(value: int | float) -> str:
     return f"{value:g}" if value else "—"
 
 
+THROUGHPUT_COLUMNS = (
+    ("FP64", "fp64_tflops"),
+    ("FP32", "fp32_tflops"),
+    ("TF32 TC", "tensor_tf32_tflops"),
+    ("FP16 TC", "tensor_fp16_tflops"),
+    ("BF16 TC", "tensor_bf16_tflops"),
+    ("FP8 TC", "tensor_fp8_tflops"),
+    ("FP4 TC", "tensor_fp4_tflops"),
+    ("INT8 TC", "tensor_int8_tops"),
+)
+
+
+def _peak(profile, key: str) -> str:
+    if key not in profile.throughput:
+        return "—"
+    value = profile.throughput[key]
+    text = f"{value:g}" if value else "0"
+    return f"_{text}_" if profile.throughput_basis.get(key) == "derived" else text
+
+
+def _links(profile) -> str:
+    parts = []
+    if profile.pcie_generation:
+        lanes = f" x{profile.pcie_lanes}" if profile.pcie_lanes else ""
+        parts.append(f"PCIe {profile.pcie_generation}.0{lanes}")
+    if profile.nvlink_generation:
+        bandwidth = f" {profile.nvlink_bandwidth_gbps:g} GB/s" if profile.nvlink_bandwidth_gbps else ""
+        parts.append(f"NVLink {profile.nvlink_generation}{bandwidth}")
+    if profile.c2c_bandwidth_gbps:
+        parts.append(f"C2C {profile.c2c_bandwidth_gbps:g} GB/s")
+    return ", ".join(parts) or "—"
+
+
+def _memory(profile) -> str:
+    bandwidth = f" {profile.memory_bandwidth_gbps:g} GB/s" if profile.memory_bandwidth_gbps else ""
+    return f"{profile.memory_type}{bandwidth}".strip() or "—"
+
+
 def render() -> str:
     profiles = load_profiles()
     summary = catalog_summary(profiles)
@@ -60,6 +98,11 @@ def render() -> str:
         "- Core clocks are reference boost/operating clocks where documented. Mobile power and clocks depend on OEM configuration; "
         "the YAML notes identify reference envelopes. Power limit is a public reference ceiling when known, not measured typical consumption. "
         "CUDA shared-memory limits refer to usable shared memory, not the larger combined L1/shared cache.",
+        "- Peak throughput is dense TFLOPS (TOPS for INT8) per GPU at the boost clock; TC marks Tensor Core paths, "
+        "and FP16/BF16/FP8 Tensor Core rates assume FP32 accumulation. Plain numbers are NVIDIA's published figures "
+        "(`throughput_published`); _italic_ numbers are derived as per-SM architecture rates × SMs × boost clock "
+        "(`throughput_derived`, rates in `fakegpu/data/throughput_rates.json`); 0 means the path is not supported. "
+        "Optional specifications such as memory type, bandwidth, form factor, PCIe, NVLink and MIG are omitted from a YAML when unknown.",
         "",
         "## Coverage / 覆盖范围",
         "",
@@ -80,7 +123,8 @@ def render() -> str:
         "",
         "Research notes: [consumer](../docs/catalog-consumer-research.md), "
         "[data center](../docs/catalog-datacenter-research.md), "
-        "[workstation](../docs/catalog-workstation-research.md). "
+        "[workstation](../docs/catalog-workstation-research.md), "
+        "[throughput and platform](../docs/catalog-throughput-research.md). "
         "They describe source conflicts, derived parameters, and coverage boundaries.",
         "",
         "```bash",
@@ -110,6 +154,18 @@ def render() -> str:
                 cells = " | ".join(_number(value) for value in values)
                 source = f"[spec]({p.spec_source})" if p.spec_source else "—"
                 lines.append(f"| [{p.id}]({p.profile_path}) | {p.compute_capability_text} | {cells} | {source} |")
+            lines.extend([
+                "",
+                "| Profile ID | " + " | ".join(label for label, _ in THROUGHPUT_COLUMNS)
+                + " | Memory | Form | Links | MIG |",
+                "|---|" + "---:|" * len(THROUGHPUT_COLUMNS) + "---|---|---|---:|",
+            ])
+            for p in rows:
+                peaks = " | ".join(_peak(p, key) for _, key in THROUGHPUT_COLUMNS)
+                mig = "—" if p.mig_max_instances is None else str(p.mig_max_instances)
+                lines.append(
+                    f"| {p.id} | {peaks} | {_memory(p)} | {p.form_factor or '—'} | {_links(p)} | {mig} |"
+                )
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

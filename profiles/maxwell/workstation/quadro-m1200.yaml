@@ -1,6 +1,8 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: quadro-m1200
 name: Fake NVIDIA Quadro M1200
-torch_name: NVIDIA Quadro M1200
+torch_name: Quadro M1200
 official_model: Quadro M1200
 architecture: maxwell
 compute_major: 5
@@ -25,6 +27,9 @@ max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
-pci_device_id: 0
+pci_device_id: 330698974
+memory_type: GDDR5
+form_factor: laptop
+mig_max_instances: 0
 supported_types:
   - fp32

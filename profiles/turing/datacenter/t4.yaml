@@ -2,9 +2,13 @@
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://www.nvidia.com/en-us/data-center/tesla-t4/
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/tesla-t4/t4-tensor-core-product-brief.pdf
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/tesla-t4/t4-tensor-core-datasheet-951643.pdf
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: t4
 name: Fake NVIDIA T4
-torch_name: NVIDIA T4
+torch_name: Tesla T4
 official_model: NVIDIA T4
 architecture: turing
 compute_major: 7
@@ -30,8 +34,45 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 70000
 pci_device_id: 515379422
+base_clock_mhz: 585
+memory_type: GDDR6
+memory_bandwidth_gbps: 320
+ecc: supported
+form_factor: pcie
+pcie_generation: 3
+pcie_lanes: 16
+mig_max_instances: 0
+fp64_tflops: 0.2544
+fp32_tflops: 8.1
+fp16_tflops: 16.2
+bf16_tflops: 0
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 0
+tensor_fp16_tflops: 65
+tensor_bf16_tflops: 0
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 130
+tensor_int4_tops: 260
+throughput_source: https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf
 supported_types:
   - fp32
   - fp16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+  - tensor_fp16_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

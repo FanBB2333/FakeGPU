@@ -3,6 +3,7 @@
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 # Additional source: https://github.com/NVIDIA/gpu-operator/blob/main/assets/state-mig-manager/0400_configmap.yaml
+# Additional source: https://developer.nvidia.com/blog/nvidia-grace-hopper-superchip-architecture-in-depth/
 id: gh200-144gb
 name: Fake NVIDIA GH200 144GB (GPU HBM only)
 torch_name: NVIDIA GH200 144GB
@@ -31,6 +32,20 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 591925470
+memory_type: HBM3e
+memory_bandwidth_gbps: 4900
+form_factor: superchip
+nvlink_generation: 4
+c2c_bandwidth_gbps: 900
+fp64_tflops: 34
+fp32_tflops: 67
+tensor_fp64_tflops: 67
+tensor_tf32_tflops: 494
+tensor_fp16_tflops: 990
+tensor_bf16_tflops: 990
+tensor_fp8_tflops: 1979
+tensor_int8_tops: 1979
+throughput_source: https://dam-cdn.nvd.orangelogic.com/AssetLink/tkno03fa645gb7f33w60rf200d330420.pdf
 supported_types:
   - fp32
   - tf32
@@ -39,3 +54,12 @@ supported_types:
   - int8
   - int4
   - fp8
+throughput_published:
+  - fp64_tflops
+  - fp32_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_int8_tops

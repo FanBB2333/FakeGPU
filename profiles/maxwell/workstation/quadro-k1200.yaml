@@ -1,6 +1,8 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: quadro-k1200
 name: Fake NVIDIA Quadro K1200
-torch_name: NVIDIA Quadro K1200
+torch_name: Quadro K1200
 official_model: Quadro K1200
 architecture: maxwell
 compute_major: 5
@@ -25,6 +27,16 @@ max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 45000
-pci_device_id: 0
+pci_device_id: 331092190
+memory_type: GDDR5
+memory_bandwidth_gbps: 80
+form_factor: pcie
+pcie_generation: 2
+pcie_lanes: 16
+mig_max_instances: 0
+fp32_tflops: 1
+throughput_source: https://images.nvidia.com/content/quadro/product-literature/line-card/610177-nvidia-quadro-line-card-us-fnl-hr.pdf
 supported_types:
   - fp32
+throughput_published:
+  - fp32_tflops

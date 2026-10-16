@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.cn/geforce/graphics-cards/compare/
 id: rtx5090d-v2
 name: Fake NVIDIA GeForce RTX 5090 D v2
 torch_name: NVIDIA GeForce RTX 5090 D v2
@@ -25,7 +27,24 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 575000
 max_power_limit_mw: 575000
-pci_device_id: 0
+pci_device_id: 730599646
+base_clock_mhz: 2010
+memory_type: GDDR7
+memory_bandwidth_gbps: 1344
+form_factor: pcie
+pcie_generation: 5
+nvlink_generation: 0
+fp64_tflops: 1.639
+fp32_tflops: 104.9
+fp16_tflops: 104.9
+bf16_tflops: 104.9
+tensor_tf32_tflops: 104.9
+tensor_fp16_tflops: 209.8
+tensor_bf16_tflops: 209.8
+tensor_fp8_tflops: 419.5
+tensor_fp4_tflops: 1678
+tensor_int8_tops: 839.1
+tensor_int4_tops: 0
 supported_types:
   - fp32
   - tf32
@@ -35,3 +54,15 @@ supported_types:
   - fp4
   - int8
   - int4
+throughput_derived:
+  - fp64_tflops
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

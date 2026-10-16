@@ -1,6 +1,8 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: quadro-t1000-mobile
 name: Fake NVIDIA Quadro T1000 Mobile
-torch_name: NVIDIA Quadro T1000 Mobile
+torch_name: Quadro T1000
 official_model: Quadro T1000
 architecture: turing
 compute_major: 7
@@ -26,6 +28,16 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 50000
 pci_device_id: 0
+memory_type: GDDR5
+memory_bandwidth_gbps: 128
+form_factor: laptop
+pcie_generation: 3
+mig_max_instances: 0
+min_power_limit_mw: 40000
+fp32_tflops: 2.6
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-rtx-mobile-line-card-us-nvidia-r7-web.pdf
 supported_types:
   - fp32
   - fp16
+throughput_published:
+  - fp32_tflops

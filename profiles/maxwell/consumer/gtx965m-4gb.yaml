@@ -1,6 +1,9 @@
+# Additional source: https://web.archive.org/web/20180105112848/https://www.geforce.com/hardware/notebook-gpus/geforce-gtx-965m/specifications
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: gtx965m-4gb
 name: Fake NVIDIA GeForce GTX 965M 4 GB
-torch_name: NVIDIA GeForce GTX 965M 4 GB
+torch_name: NVIDIA GeForce GTX 965M
 official_model: GeForce GTX 965M
 architecture: maxwell
 compute_major: 5
@@ -14,7 +17,7 @@ memory_bytes: 4294967296
 sm_count: 8
 memory_bus_width_bits: 128
 core_clock_mhz: 0
-memory_clock_mhz: 0
+memory_clock_mhz: 2500
 l2_cache_bytes: 0
 shared_mem_per_sm: 98304
 shared_mem_per_block: 49152
@@ -26,5 +29,11 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 50000
 max_power_limit_mw: 50000
 pci_device_id: 0
+base_clock_mhz: 944
+memory_type: GDDR5
+memory_bandwidth_gbps: 80
+form_factor: laptop
+pcie_generation: 3
+mig_max_instances: 0
 supported_types:
   - fp32

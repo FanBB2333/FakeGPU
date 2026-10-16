@@ -1,3 +1,4 @@
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4070-family/
 id: rtx4070
 name: Fake NVIDIA GeForce RTX 4070
 torch_name: NVIDIA GeForce RTX 4070
@@ -13,7 +14,7 @@ notes: Reference 12 GB Founders Edition profile using NVIDIA GeForce specificati
 memory_bytes: 12884901888
 sm_count: 46
 memory_bus_width_bits: 192
-core_clock_mhz: 2480
+core_clock_mhz: 2475
 memory_clock_mhz: 10500
 l2_cache_bytes: 37748736
 shared_mem_per_sm: 102400
@@ -26,6 +27,25 @@ max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 200000
 max_power_limit_mw: 200000
 pci_device_id: 0
+base_clock_mhz: 1920
+memory_type: GDDR6X
+memory_bandwidth_gbps: 504
+form_factor: pcie
+pcie_generation: 4
+nvlink_generation: 0
+fp64_tflops: 0.4554
+fp32_tflops: 29.1
+fp16_tflops: 29.1
+bf16_tflops: 29.1
+tensor_tf32_tflops: 29.1
+tensor_fp16_tflops: 58.3
+tensor_bf16_tflops: 58.3
+tensor_fp8_tflops: 116.6
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 233.2
+tensor_int4_tops: 466.3
+throughput_source: https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf
 supported_types:
   - fp32
   - tf32
@@ -34,3 +54,17 @@ supported_types:
   - fp8
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_int8_tops
+throughput_derived:
+  - fp64_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int4_tops

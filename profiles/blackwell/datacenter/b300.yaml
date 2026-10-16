@@ -3,6 +3,8 @@
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/1k0p832eq8r5ca0u5383ie5o4tp3bst1.pdf
 # Additional source: https://developer.nvidia.com/blog/boost-gpu-memory-performance-with-no-code-changes-using-nvidia-cuda-mps/
+# Additional source: https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html
+# Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf
 id: b300
 name: Fake NVIDIA B300 SXM6 AC
 torch_name: NVIDIA B300 SXM6 AC
@@ -31,6 +33,25 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 1100000
 pci_device_id: 830607582
+memory_type: HBM3e
+memory_bandwidth_gbps: 7700
+form_factor: sxm
+pcie_generation: 6
+nvlink_generation: 5
+nvlink_links: 18
+nvlink_bandwidth_gbps: 1800
+mig_max_instances: 7
+fp64_tflops: 1.2
+fp32_tflops: 75
+tensor_fp64_tflops: 1.2
+tensor_tf32_tflops: 1100
+tensor_fp16_tflops: 2250
+tensor_bf16_tflops: 2250
+tensor_fp8_tflops: 4500
+tensor_fp6_tflops: 4500
+tensor_fp4_tflops: 14000
+tensor_int8_tops: 153.5
+throughput_source: https://dam-cdn.nvd.orangelogic.com/AssetLink/1k0p832eq8r5ca0u5383ie5o4tp3bst1.pdf
 supported_types:
   - fp32
   - tf32
@@ -40,3 +61,14 @@ supported_types:
   - int4
   - fp8
   - fp4
+throughput_published:
+  - fp64_tflops
+  - fp32_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops

@@ -411,6 +411,7 @@ def estimate_decoder_inference(
     expert_parallel_size: int = 1,
     target_profile: str | None = None,
     compute_acceleration_factor: float = 1.0,
+    compute_precision: str = "fp32",
     kv_cache_strategy: str = "dynamic",
     kv_cache_bits: int = 4,
     kv_cache_residual_tokens: int = 128,
@@ -750,6 +751,7 @@ def estimate_decoder_inference(
                 forward_steps=1 + decode_step_count,
             ),
             compute_acceleration_factor=compute_acceleration_factor,
+            compute_precision=compute_precision,
         )
 
     model_kind = str(dimensions["model_kind"])
@@ -817,6 +819,7 @@ def estimate_decoder_inference(
             "expert_parallel_size": expert_parallel_size,
             "target_profile": target_profile,
             "compute_acceleration_factor": compute_acceleration_factor,
+            "compute_precision": compute_precision,
             "kv_cache_strategy": kv_cache_strategy,
             "kv_cache_bits": (
                 kv_cache_bits

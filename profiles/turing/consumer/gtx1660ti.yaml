@@ -1,3 +1,4 @@
+# Additional source: https://www.nvidia.com/content/nvidiaGDC/zz/en_ZZ/geforce/graphics-cards/gtx-1660-ti.html
 id: gtx1660ti
 name: Fake NVIDIA GeForce GTX 1660 Ti
 torch_name: NVIDIA GeForce GTX 1660 Ti
@@ -26,7 +27,42 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 120000
 max_power_limit_mw: 120000
 pci_device_id: 0
+base_clock_mhz: 1500
+memory_type: GDDR6
+memory_bandwidth_gbps: 288
+form_factor: pcie
+pcie_generation: 3
+nvlink_generation: 0
+fp64_tflops: 0.1699
+fp32_tflops: 5.5
+fp16_tflops: 11
+bf16_tflops: 0
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 0
+tensor_fp16_tflops: 0
+tensor_bf16_tflops: 0
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 0
+tensor_int4_tops: 0
+throughput_source: https://www.nvidia.com/en-gb/geforce/news/geforce-gtx-1660-ti-advanced-shaders-streaming-multiprocessor/
 supported_types:
   - fp32
   - fp16
   - int8
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+throughput_derived:
+  - fp64_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

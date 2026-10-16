@@ -3,6 +3,7 @@
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/1k0p832eq8r5ca0u5383ie5o4tp3bst1.pdf
 # Additional source: https://docs.nvidia.com/dsx/ncp/software-reference-guide/data-center-architecture
+# Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf
 id: gb300
 name: Fake NVIDIA GB300 (one GPU)
 torch_name: NVIDIA GB300
@@ -31,6 +32,25 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 1400000
 pci_device_id: 834801886
+memory_type: HBM3e
+memory_bandwidth_gbps: 8000
+form_factor: superchip
+pcie_generation: 6
+nvlink_generation: 5
+nvlink_links: 18
+nvlink_bandwidth_gbps: 1800
+mig_max_instances: 7
+fp64_tflops: 1.3
+fp32_tflops: 80
+tensor_fp64_tflops: 1.3
+tensor_tf32_tflops: 1250
+tensor_fp16_tflops: 2500
+tensor_bf16_tflops: 2500
+tensor_fp8_tflops: 5000
+tensor_fp6_tflops: 5000
+tensor_fp4_tflops: 15000
+tensor_int8_tops: 165
+throughput_source: https://dam-cdn.nvd.orangelogic.com/AssetLink/1k0p832eq8r5ca0u5383ie5o4tp3bst1.pdf
 supported_types:
   - fp32
   - tf32
@@ -40,3 +60,14 @@ supported_types:
   - int4
   - fp8
   - fp4
+throughput_published:
+  - fp64_tflops
+  - fp32_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops

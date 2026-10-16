@@ -1,6 +1,8 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: gt1010-ddr4-4gb
 name: Fake NVIDIA GeForce GT 1010 4 GB DDR4 (Colorful LP reference)
-torch_name: NVIDIA GeForce GT 1010 4 GB DDR4 (Colorful LP reference)
+torch_name: NVIDIA GeForce GT 1010
 official_model: GeForce GT 1010
 architecture: pascal
 compute_major: 6
@@ -25,8 +27,36 @@ max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 20000
 max_power_limit_mw: 20000
-pci_device_id: 0
+pci_device_id: 486674654
+mig_max_instances: 0
+fp64_tflops: 0.02206
+fp32_tflops: 0.706
+fp16_tflops: 0.01103
+bf16_tflops: 0
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 0
+tensor_fp16_tflops: 0
+tensor_bf16_tflops: 0
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 0
+tensor_int4_tops: 0
 supported_types:
   - fp32
   - fp16
   - int8
+throughput_derived:
+  - fp64_tflops
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

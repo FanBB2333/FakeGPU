@@ -30,6 +30,16 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 0
+memory_type: HBM3e
+memory_bandwidth_gbps: 7100
+form_factor: superchip
+c2c_bandwidth_gbps: 900
+mig_max_instances: 7
+fp64_tflops: 1.3
+fp32_tflops: 80
+tensor_fp64_tflops: 1.3
+tensor_fp4_tflops: 15000
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/dgx-station/workstation-datasheet-dgx-station-nvidia-us-5543600-web.pdf
 supported_types:
   - fp32
   - tf32
@@ -39,3 +49,8 @@ supported_types:
   - int4
   - fp8
   - fp4
+throughput_published:
+  - fp64_tflops
+  - fp32_tflops
+  - tensor_fp64_tflops
+  - tensor_fp4_tflops

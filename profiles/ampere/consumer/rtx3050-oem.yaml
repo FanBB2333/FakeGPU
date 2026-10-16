@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3050/
 id: rtx3050-oem
 name: Fake NVIDIA GeForce RTX 3050 OEM 8 GB
 torch_name: NVIDIA GeForce RTX 3050 OEM 8 GB
@@ -25,7 +27,25 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
-pci_device_id: 0
+pci_device_id: 621285598
+base_clock_mhz: 1510
+memory_type: GDDR6
+form_factor: pcie
+pcie_generation: 4
+nvlink_generation: 0
+fp64_tflops: 0.1267
+fp32_tflops: 8.11
+fp16_tflops: 8.11
+bf16_tflops: 8.11
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 8.11
+tensor_fp16_tflops: 16.22
+tensor_bf16_tflops: 16.22
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 64.88
+tensor_int4_tops: 129.8
 supported_types:
   - fp32
   - tf32
@@ -33,3 +53,17 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_derived:
+  - fp64_tflops
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

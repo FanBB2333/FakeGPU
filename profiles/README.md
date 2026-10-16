@@ -14,6 +14,7 @@
 - Memory capacity is expressed in GiB (nominal vendor GB is represented as binary capacity unless notes specify otherwise). Multi-GPU boards and superchips are represented per CUDA GPU, not by adding memory across devices.
 - Memory MHz follows the existing analytical convention: half the effective per-pin data rate, so bandwidth in bytes/s = bus bits / 8 × memory MHz × 2,000,000. This may be derived from published bandwidth and is not necessarily the physical DRAM oscillator reported by a monitoring tool. Rounding can slightly change derived bandwidth.
 - Core clocks are reference boost/operating clocks where documented. Mobile power and clocks depend on OEM configuration; the YAML notes identify reference envelopes. Power limit is a public reference ceiling when known, not measured typical consumption. CUDA shared-memory limits refer to usable shared memory, not the larger combined L1/shared cache.
+- Peak throughput is dense TFLOPS (TOPS for INT8) per GPU at the boost clock; TC marks Tensor Core paths, and FP16/BF16/FP8 Tensor Core rates assume FP32 accumulation. Plain numbers are NVIDIA's published figures (`throughput_published`); _italic_ numbers are derived as per-SM architecture rates × SMs × boost clock (`throughput_derived`, rates in `fakegpu/data/throughput_rates.json`); 0 means the path is not supported. Optional specifications such as memory type, bandwidth, form factor, PCIe, NVLink and MIG are omitted from a YAML when unknown.
 
 ## Coverage / 覆盖范围
 
@@ -30,7 +31,7 @@
 
 Compute capability sources: [current NVIDIA table](https://developer.nvidia.com/cuda/gpus), [legacy NVIDIA table](https://developer.nvidia.com/cuda/gpus/legacy). These tables omit some mobile, regional, and memory variants; per-profile notes and source links supply additional evidence. The checked-in table snapshot is kept separate from researched profile specifications.
 
-Research notes: [consumer](../docs/catalog-consumer-research.md), [data center](../docs/catalog-datacenter-research.md), [workstation](../docs/catalog-workstation-research.md). They describe source conflicts, derived parameters, and coverage boundaries.
+Research notes: [consumer](../docs/catalog-consumer-research.md), [data center](../docs/catalog-datacenter-research.md), [workstation](../docs/catalog-workstation-research.md), [throughput and platform](../docs/catalog-throughput-research.md). They describe source conflicts, derived parameters, and coverage boundaries.
 
 ```bash
 python3 -m fakegpu doctor --list-profiles
@@ -46,12 +47,12 @@ python3 scripts/render_gpu_catalog.py --check
 | Profile ID / YAML | CC | GiB | SMs | Bus bits | Core MHz | Memory MHz | Limit W | Source |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | [gtx950](maxwell/consumer/gtx950.yaml) | 5.2 | 2 | 6 | 128 | 1188 | 3300 | 90 | [spec](https://www.nvidia.com/en-us/geforce/900-series/) |
-| [gtx950m](maxwell/consumer/gtx950m.yaml) | 5.0 | 2 | 5 | 128 | — | — | 55 | [spec](https://connecttech.com/pdf/PAR-M3N950M-FN_SpecSheet.pdf) |
+| [gtx950m](maxwell/consumer/gtx950m.yaml) | 5.0 | 2 | 5 | 128 | — | 2500 | 55 | [spec](https://connecttech.com/pdf/PAR-M3N950M-FN_SpecSheet.pdf) |
 | [gtx960](maxwell/consumer/gtx960.yaml) | 5.2 | 2 | 8 | 128 | 1178 | 3500 | 120 | [spec](https://www.nvidia.com/en-us/geforce/900-series/) |
 | [gtx960-4gb](maxwell/consumer/gtx960-4gb.yaml) | 5.2 | 4 | 8 | 128 | 1178 | 3505 | 120 | [spec](https://uk.msi.com/Graphics-Card/GTX-960-GAMING-4G/Specification) |
-| [gtx960m](maxwell/consumer/gtx960m.yaml) | 5.0 | 2 | 5 | — | 1097 | 2500 | — | [spec](https://eurocom.com/EC/release%28294%29ec) |
+| [gtx960m](maxwell/consumer/gtx960m.yaml) | 5.0 | 2 | 5 | 128 | 1097 | 2500 | — | [spec](https://eurocom.com/EC/release%28294%29ec) |
 | [gtx965m](maxwell/consumer/gtx965m.yaml) | 5.2 | 2 | 8 | 128 | 944 | 2500 | 60 | [spec](https://eurocom.com/ec/components%28257%29M5Pro) |
-| [gtx965m-4gb](maxwell/consumer/gtx965m-4gb.yaml) | 5.2 | 4 | 8 | 128 | — | — | 50 | [spec](https://eurocom.com/ec/components%28254%29EUROCOM_X3R2) |
+| [gtx965m-4gb](maxwell/consumer/gtx965m-4gb.yaml) | 5.2 | 4 | 8 | 128 | — | 2500 | 50 | [spec](https://eurocom.com/ec/components%28254%29EUROCOM_X3R2) |
 | [gtx970](maxwell/consumer/gtx970.yaml) | 5.2 | 4 | 13 | 256 | 1178 | 3500 | 145 | [spec](https://www.nvidia.com/en-us/geforce/900-series/) |
 | [gtx970m](maxwell/consumer/gtx970m.yaml) | 5.2 | 6 | 10 | 192 | 924 | 2500 | — | [spec](https://eurocom.com/ec/release%28267%29ec) |
 | [gtx970m-3gb](maxwell/consumer/gtx970m-3gb.yaml) | 5.2 | 3 | 10 | 192 | 924 | 2500 | 60 | [spec](https://eurocom.com/ec/components%28257%29M5Pro) |
@@ -60,6 +61,24 @@ python3 scripts/render_gpu_catalog.py --check
 | [gtx980m-4gb](maxwell/consumer/gtx980m-4gb.yaml) | 5.2 | 4 | 12 | 256 | 1038 | 2500 | 75 | [spec](https://eurocom.com/ec/components%28257%29M5Pro) |
 | [gtx980ti](maxwell/consumer/gtx980ti.yaml) | 5.2 | 6 | 22 | 384 | 1075 | 3500 | 250 | [spec](https://www.nvidia.com/en-us/geforce/900-series/) |
 | [titan-x-maxwell](maxwell/consumer/titan-x-maxwell.yaml) | 5.2 | 12 | 24 | 384 | 1075 | 3500 | 250 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/geforce-gtx-titan-x/specifications/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| gtx950 | _0.05702_ | _1.825_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 105.6 GB/s | pcie | PCIe 3.0 | 0 |
+| gtx950m | — | — | — | — | — | — | — | — | GDDR5 80 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx960 | _0.07539_ | _2.413_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 112 GB/s | pcie | PCIe 3.0 | 0 |
+| gtx960-4gb | _0.07539_ | _2.413_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | — | — | — | 0 |
+| gtx960m | _0.04388_ | _1.404_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 80 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx965m | _0.06042_ | _1.933_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 80 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx965m-4gb | — | — | — | — | — | — | — | — | GDDR5 80 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx970 | _0.1225_ | _3.92_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 224 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| gtx970m | _0.07392_ | _2.365_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 120 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx970m-3gb | _0.07392_ | _2.365_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 120 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx980 | _0.1556_ | 4.981 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 224 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| gtx980m | _0.09965_ | _3.189_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 160 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx980m-4gb | _0.09965_ | _3.189_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 160 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx980ti | _0.1892_ | _6.054_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 336.5 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| titan-x-maxwell | _0.2064_ | 7 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 336.5 GB/s | pcie | PCIe 3.0 x16 | 0 |
 
 ### Pascal
 
@@ -72,28 +91,58 @@ python3 scripts/render_gpu_catalog.py --check
 | [gt1030-ddr4](pascal/consumer/gt1030-ddr4.yaml) | 6.1 | 2 | 3 | 64 | 1379 | 1050 | 20 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/gt-1030/specifications/) |
 | [gtx1050](pascal/consumer/gtx1050.yaml) | 6.1 | 4 | 5 | 128 | 1455 | 3504 | 75 | [spec](https://www.nvidia.com/en-us/geforce/products/) |
 | [gtx1050-2gb](pascal/consumer/gtx1050-2gb.yaml) | 6.1 | 2 | 5 | 128 | 1455 | 3500 | 75 | [spec](https://rog.asus.com/es/articles/news/asus-anuncia-su-gama-de-tarjetas-graficas-basadas-en-las-nuevas-gpus-geforce-gtx-1050-y-gtx-1050-ti/) |
-| [gtx1050-3gb](pascal/consumer/gtx1050-3gb.yaml) | 6.1 | 3 | 6 | 96 | 1582 | 3504 | 75 | [spec](https://www.msi.com/Graphics-Card/GeForce-GTX-1050-3GT-OC/Specification) |
-| [gtx1050-laptop](pascal/consumer/gtx1050-laptop.yaml) | 6.1 | 4 | 5 | — | 1493 | 3500 | — | [spec](https://www.nvidia.com/content/apac/event/au/overwatch-campaign/geforce-gtx-10-series-laptops.html) |
+| [gtx1050-3gb](pascal/consumer/gtx1050-3gb.yaml) | 6.1 | 3 | 6 | 96 | 1518 | 3504 | 75 | [spec](https://www.msi.com/Graphics-Card/GeForce-GTX-1050-3GT-OC/Specification) |
+| [gtx1050-laptop](pascal/consumer/gtx1050-laptop.yaml) | 6.1 | 4 | 5 | 128 | 1493 | 3500 | 53 | [spec](https://www.nvidia.com/content/apac/event/au/overwatch-campaign/geforce-gtx-10-series-laptops.html) |
 | [gtx1050ti](pascal/consumer/gtx1050ti.yaml) | 6.1 | 4 | 6 | 128 | 1392 | 3504 | 75 | [spec](https://www.nvidia.com/en-us/geforce/products/) |
-| [gtx1050ti-laptop](pascal/consumer/gtx1050ti-laptop.yaml) | 6.1 | 4 | 6 | — | 1620 | 3500 | — | [spec](https://www.nvidia.com/content/apac/event/au/overwatch-campaign/geforce-gtx-10-series-laptops.html) |
+| [gtx1050ti-laptop](pascal/consumer/gtx1050ti-laptop.yaml) | 6.1 | 4 | 6 | 128 | 1620 | 3500 | 64 | [spec](https://www.nvidia.com/content/apac/event/au/overwatch-campaign/geforce-gtx-10-series-laptops.html) |
 | [gtx1060-3gb](pascal/consumer/gtx1060-3gb.yaml) | 6.1 | 3 | 9 | 192 | 1708 | 4000 | 120 | [spec](https://www.nvidia.com/content/apac/event/ph/overwatch-campaign/geforce-gtx-1060.html) |
 | [gtx1060-5gb](pascal/consumer/gtx1060-5gb.yaml) | 6.1 | 5 | 10 | 160 | 1708 | 4004 | 120 | [spec](https://www.colorful.cn/home/product?id=1527&mid=102) |
 | [gtx1060-6gb](pascal/consumer/gtx1060-6gb.yaml) | 6.1 | 6 | 10 | 192 | 1708 | 4004 | 120 | [spec](https://www.nvidia.com/en-us/geforce/products/) |
-| [gtx1060-laptop](pascal/consumer/gtx1060-laptop.yaml) | 6.1 | 6 | 10 | — | 1670 | 4000 | — | [spec](https://www.nvidia.com/content/apac/event/en/pascal-notebook-campaign/notebooks.html) |
+| [gtx1060-laptop](pascal/consumer/gtx1060-laptop.yaml) | 6.1 | 6 | 10 | 192 | 1670 | 4000 | 80 | [spec](https://www.nvidia.com/content/apac/event/en/pascal-notebook-campaign/notebooks.html) |
 | [gtx1070](pascal/consumer/gtx1070.yaml) | 6.1 | 8 | 15 | 256 | 1683 | 4004 | 150 | [spec](https://www.nvidia.com/en-us/geforce/products/) |
-| [gtx1070-laptop](pascal/consumer/gtx1070-laptop.yaml) | 6.1 | 8 | 16 | — | 1645 | 4000 | — | [spec](https://www.nvidia.com/content/apac/event/en/pascal-notebook-campaign/notebooks.html) |
+| [gtx1070-laptop](pascal/consumer/gtx1070-laptop.yaml) | 6.1 | 8 | 16 | 256 | 1645 | 4000 | 115 | [spec](https://www.nvidia.com/content/apac/event/en/pascal-notebook-campaign/notebooks.html) |
 | [gtx1070ti](pascal/consumer/gtx1070ti.yaml) | 6.1 | 8 | 19 | 256 | 1683 | 4004 | 180 | [spec](https://www.nvidia.com/en-us/geforce/products/) |
 | [gtx1080](pascal/consumer/gtx1080.yaml) | 6.1 | 8 | 20 | 256 | 1733 | 5005 | 180 | [spec](https://www.nvidia.com/en-us/geforce/news/geforce-gtx-1080-gaming-perfected/) |
-| [gtx1080-laptop](pascal/consumer/gtx1080-laptop.yaml) | 6.1 | 8 | 20 | — | 1733 | 5000 | — | [spec](https://www.nvidia.com/content/apac/event/en/pascal-notebook-campaign/notebooks.html) |
+| [gtx1080-laptop](pascal/consumer/gtx1080-laptop.yaml) | 6.1 | 8 | 20 | 256 | 1733 | 5000 | 150 | [spec](https://www.nvidia.com/content/apac/event/en/pascal-notebook-campaign/notebooks.html) |
 | [gtx1080ti](pascal/consumer/gtx1080ti.yaml) | 6.1 | 11 | 28 | 352 | 1582 | 5505 | 250 | [spec](https://www.nvidia.com/en-us/geforce/news/nvidia-geforce-gtx-1080-ti/) |
-| [titan-x-pascal](pascal/consumer/titan-x-pascal.yaml) | 6.1 | 12 | 28 | — | — | — | — | [spec](https://developer.nvidia.com/pascal) |
+| [titan-x-pascal](pascal/consumer/titan-x-pascal.yaml) | 6.1 | 12 | 28 | 384 | 1531 | 5000 | 250 | [spec](https://developer.nvidia.com/pascal) |
 | [titan-xp](pascal/consumer/titan-xp.yaml) | 6.1 | 12 | 30 | 384 | 1582 | 5700 | 250 | [spec](https://www.nvidia.com/nb-no/titan/titan-xp/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| gt1010 | _0.02349_ | _0.7516_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | — | — | — | 0 |
+| gt1010-ddr4 | _0.02206_ | _0.706_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | — | — | — | 0 |
+| gt1010-ddr4-4gb | _0.02206_ | _0.706_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | — | — | — | 0 |
+| gt1030 | _0.03523_ | _1.127_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 48 GB/s | pcie | PCIe 3.0 | 0 |
+| gt1030-ddr4 | _0.0331_ | _1.059_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | DDR4 16.8 GB/s | pcie | PCIe 3.0 | 0 |
+| gtx1050 | _0.0582_ | _1.862_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | — | — | — | 0 |
+| gtx1050-2gb | _0.0582_ | _1.862_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 112 GB/s | pcie | PCIe 3.0 | 0 |
+| gtx1050-3gb | _0.07286_ | _2.332_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 84 GB/s | pcie | PCIe 3.0 | 0 |
+| gtx1050-laptop | _0.05972_ | _1.911_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 112 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx1050ti | _0.06682_ | _2.138_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 112 GB/s | pcie | PCIe 3.0 | 0 |
+| gtx1050ti-laptop | _0.07776_ | _2.488_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 112 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx1060-3gb | _0.123_ | _3.935_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 192 GB/s | pcie | PCIe 3.0 | 0 |
+| gtx1060-5gb | _0.1366_ | _4.372_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 160 GB/s | pcie | PCIe 3.0 | 0 |
+| gtx1060-6gb | _0.1366_ | _4.372_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 192 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| gtx1060-laptop | _0.1336_ | _4.275_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 192 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx1070 | _0.202_ | _6.463_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 256 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| gtx1070-laptop | _0.2106_ | _6.738_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 256 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx1070ti | _0.2558_ | _8.186_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 256 GB/s | pcie | PCIe 3.0 | 0 |
+| gtx1080 | _0.2773_ | 8.873 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5X 320 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| gtx1080-laptop | _0.2773_ | _8.873_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5X 320 GB/s | laptop | PCIe 3.0 | 0 |
+| gtx1080ti | _0.3544_ | _11.34_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5X 484 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| titan-x-pascal | _0.3429_ | 11 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5X 480 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| titan-xp | _0.3797_ | _12.15_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5X 547.7 GB/s | pcie | PCIe 3.0 x16 | 0 |
 
 ### Volta
 
 | Profile ID / YAML | CC | GiB | SMs | Bus bits | Core MHz | Memory MHz | Limit W | Source |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | [titan-v](volta/consumer/titan-v.yaml) | 7.0 | 12 | 80 | 3072 | 1455 | 850 | 250 | [spec](https://www.nvidia.com/nb-no/titan/titan-v/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| titan-v | _7.45_ | _14.9_ | _0_ | _119.2_ | _0_ | _0_ | _0_ | _0_ | HBM2 652.8 GB/s | pcie | — | — |
 
 ### Turing
 
@@ -111,18 +160,45 @@ python3 scripts/render_gpu_catalog.py --check
 | [gtx1660ti-laptop](turing/consumer/gtx1660ti-laptop.yaml) | 7.5 | 6 | 24 | 192 | 1590 | 6000 | 80 | [spec](https://www.nvidia.com/en-ph/geforce/laptops/30-series/) |
 | [rtx2060](turing/consumer/rtx2060.yaml) | 7.5 | 6 | 30 | 192 | 1680 | 7000 | 160 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx2060-12gb](turing/consumer/rtx2060-12gb.yaml) | 7.5 | 12 | 34 | 192 | 1650 | 7000 | 185 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
-| [rtx2060-laptop](turing/consumer/rtx2060-laptop.yaml) | 7.5 | 6 | 30 | — | — | — | 80 | [spec](https://eurocom.com/ec/data/whitepapers/34.pdf) |
+| [rtx2060-laptop](turing/consumer/rtx2060-laptop.yaml) | 7.5 | 6 | 30 | 192 | 1200 | 7000 | 90 | [spec](https://eurocom.com/ec/data/whitepapers/34.pdf) |
 | [rtx2060-super](turing/consumer/rtx2060-super.yaml) | 7.5 | 8 | 34 | 256 | 1650 | 7000 | 175 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx2070](turing/consumer/rtx2070.yaml) | 7.5 | 8 | 36 | 256 | 1710 | 7000 | 175 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
-| [rtx2070-laptop](turing/consumer/rtx2070-laptop.yaml) | 7.5 | 8 | 36 | — | — | — | 115 | [spec](https://eurocom.com/ec/data/whitepapers/34.pdf) |
+| [rtx2070-laptop](turing/consumer/rtx2070-laptop.yaml) | 7.5 | 8 | 36 | 256 | 1440 | 7000 | 115 | [spec](https://eurocom.com/ec/data/whitepapers/34.pdf) |
 | [rtx2070-super](turing/consumer/rtx2070-super.yaml) | 7.5 | 8 | 40 | 256 | 1770 | 7000 | 215 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx2070-super-laptop](turing/consumer/rtx2070-super-laptop.yaml) | 7.5 | 8 | 40 | — | — | — | — | [spec](https://eurocom.com/ec-components-472-x170sm/) |
 | [rtx2080](turing/consumer/rtx2080.yaml) | 7.5 | 8 | 46 | 256 | 1800 | 7000 | 225 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
-| [rtx2080-laptop](turing/consumer/rtx2080-laptop.yaml) | 7.5 | 8 | 46 | — | — | — | 150 | [spec](https://eurocom.com/ec/data/whitepapers/34.pdf) |
-| [rtx2080-super](turing/consumer/rtx2080-super.yaml) | 7.5 | 8 | 48 | 256 | 1820 | 7750 | 250 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx2080-laptop](turing/consumer/rtx2080-laptop.yaml) | 7.5 | 8 | 46 | 256 | 1590 | 7000 | 150 | [spec](https://eurocom.com/ec/data/whitepapers/34.pdf) |
+| [rtx2080-super](turing/consumer/rtx2080-super.yaml) | 7.5 | 8 | 48 | 256 | 1815 | 7750 | 250 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx2080-super-laptop](turing/consumer/rtx2080-super-laptop.yaml) | 7.5 | 8 | 48 | — | — | — | — | [spec](https://eurocom.com/ec/components%28468%29SkyZ7) |
-| [rtx2080ti](turing/consumer/rtx2080ti.yaml) | 7.5 | 11 | 68 | 352 | 1640 | 7000 | 260 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx2080ti](turing/consumer/rtx2080ti.yaml) | 7.5 | 11 | 68 | 352 | 1635 | 7000 | 260 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [titan-rtx](turing/consumer/titan-rtx.yaml) | 7.5 | 24 | 72 | 384 | 1770 | 7000 | 280 | [spec](https://www.nvidia.com/de-at/titan/titan-rtx/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| gtx1630 | _0.05712_ | _1.828_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR6 | pcie | PCIe 3.0 | — |
+| gtx1650 | _0.09324_ | _2.984_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 128 GB/s | pcie | PCIe 3.0 | — |
+| gtx1650-gddr6 | _0.08904_ | _2.849_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR6 192 GB/s | pcie | PCIe 3.0 | — |
+| gtx1650-laptop | _0.09984_ | _3.195_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR6 192 GB/s | laptop | — | — |
+| gtx1650-super | _0.138_ | _4.416_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR6 192 GB/s | pcie | PCIe 3.0 | — |
+| gtx1650ti-laptop | _0.09504_ | _3.041_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR6 192 GB/s | laptop | — | — |
+| gtx1660 | _0.1571_ | _5.027_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 192 GB/s | pcie | PCIe 3.0 | — |
+| gtx1660-super | _0.1571_ | _5.027_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR6 336 GB/s | pcie | PCIe 3.0 | — |
+| gtx1660ti | _0.1699_ | 5.5 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR6 288 GB/s | pcie | PCIe 3.0 | — |
+| gtx1660ti-laptop | _0.1526_ | _4.884_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR6 288 GB/s | laptop | — | — |
+| rtx2060 | _0.2016_ | _6.451_ | _0_ | _25.8_ | _0_ | _0_ | _0_ | _103.2_ | GDDR6 336 GB/s | pcie | PCIe 3.0 x16 | — |
+| rtx2060-12gb | _0.2244_ | _7.181_ | _0_ | _28.72_ | _0_ | _0_ | _0_ | _114.9_ | GDDR6 | pcie | PCIe 3.0 | — |
+| rtx2060-laptop | _0.144_ | _4.608_ | _0_ | _18.43_ | _0_ | _0_ | _0_ | _73.73_ | GDDR6 336 GB/s | laptop | — | — |
+| rtx2060-super | _0.2244_ | 7 | _0_ | _28.72_ | _0_ | _0_ | _0_ | _114.9_ | GDDR6 448 GB/s | pcie | PCIe 3.0 x16 | — |
+| rtx2070 | _0.2462_ | 7.9 | _0_ | 31.5 | _0_ | _0_ | _0_ | 126 | GDDR6 448 GB/s | pcie | PCIe 3.0 x16 | — |
+| rtx2070-laptop | _0.2074_ | _6.636_ | _0_ | _26.54_ | _0_ | _0_ | _0_ | _106.2_ | GDDR6 448 GB/s | laptop | — | — |
+| rtx2070-super | _0.2832_ | 9.1 | _0_ | 36.3 | _0_ | _0_ | _0_ | 145 | GDDR6 448 GB/s | pcie | PCIe 3.0 x16, NVLink 2 50 GB/s | — |
+| rtx2070-super-laptop | — | — | — | — | — | — | — | — | — | laptop | — | — |
+| rtx2080 | _0.3312_ | 10.6 | _0_ | 42.4 | _0_ | _0_ | _0_ | 169.6 | GDDR6 448 GB/s | pcie | PCIe 3.0 x16, NVLink 2 50 GB/s | — |
+| rtx2080-laptop | _0.2926_ | _9.362_ | _0_ | _37.45_ | _0_ | _0_ | _0_ | _149.8_ | GDDR6 448 GB/s | laptop | — | — |
+| rtx2080-super | _0.3485_ | 11.2 | _0_ | 44.6 | _0_ | _0_ | _0_ | 178.4 | GDDR6 496 GB/s | pcie | PCIe 3.0 x16, NVLink 2 50 GB/s | — |
+| rtx2080-super-laptop | — | — | — | — | — | — | — | — | — | laptop | — | — |
+| rtx2080ti | _0.4447_ | 14.2 | _0_ | 56.9 | _0_ | _0_ | _0_ | 227.7 | GDDR6 616 GB/s | pcie | PCIe 3.0 x16, NVLink 2 100 GB/s | — |
+| titan-rtx | _0.5098_ | 16.3 | _0_ | 130.5 | _0_ | _0_ | _0_ | 261 | GDDR6 672 GB/s | pcie | PCIe 3.0 x16, NVLink 2 100 GB/s | — |
 
 ### Ampere
 
@@ -139,8 +215,8 @@ python3 scripts/render_gpu_catalog.py --check
 | [rtx3060-8gb](ampere/consumer/rtx3060-8gb.yaml) | 8.6 | 8 | 28 | 128 | 1780 | — | 170 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx3060-laptop](ampere/consumer/rtx3060-laptop.yaml) | 8.6 | 6 | 30 | 192 | 1703 | — | 115 | [spec](https://www.nvidia.com/en-ph/geforce/laptops/30-series/) |
 | [rtx3060ti](ampere/consumer/rtx3060ti.yaml) | 8.6 | 8 | 38 | 256 | 1670 | 7000 | 200 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
-| [rtx3060ti-gddr6x](ampere/consumer/rtx3060ti-gddr6x.yaml) | 8.6 | 8 | 38 | 256 | 1670 | — | — | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
-| [rtx3070](ampere/consumer/rtx3070.yaml) | 8.6 | 8 | 46 | 256 | 1730 | 7000 | 220 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx3060ti-gddr6x](ampere/consumer/rtx3060ti-gddr6x.yaml) | 8.6 | 8 | 38 | 256 | 1670 | — | 200 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx3070](ampere/consumer/rtx3070.yaml) | 8.6 | 8 | 46 | 256 | 1725 | 7000 | 220 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx3070-laptop](ampere/consumer/rtx3070-laptop.yaml) | 8.6 | 8 | 40 | 256 | 1620 | — | 125 | [spec](https://www.nvidia.com/en-ph/geforce/laptops/30-series/) |
 | [rtx3070ti](ampere/consumer/rtx3070ti.yaml) | 8.6 | 8 | 48 | 256 | 1770 | 9500 | 290 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx3070ti-laptop](ampere/consumer/rtx3070ti-laptop.yaml) | 8.6 | 8 | 46 | 256 | 1485 | — | 125 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/30-series/) |
@@ -150,8 +226,35 @@ python3 scripts/render_gpu_catalog.py --check
 | [rtx3080-laptop-8gb](ampere/consumer/rtx3080-laptop-8gb.yaml) | 8.6 | 8 | 48 | 256 | 1710 | — | 150 | [spec](https://www.nvidia.com/en-ph/geforce/laptops/30-series/) |
 | [rtx3080ti](ampere/consumer/rtx3080ti.yaml) | 8.6 | 12 | 80 | 384 | 1670 | 9500 | 350 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx3080ti-laptop](ampere/consumer/rtx3080ti-laptop.yaml) | 8.6 | 16 | 58 | 256 | 1590 | — | 150 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/30-series/) |
-| [rtx3090](ampere/consumer/rtx3090.yaml) | 8.6 | 24 | 82 | 384 | 1700 | 9750 | 350 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx3090](ampere/consumer/rtx3090.yaml) | 8.6 | 24 | 82 | 384 | 1695 | 9750 | 350 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx3090ti-reference](ampere/consumer/rtx3090ti-reference.yaml) | 8.6 | 24 | 84 | 384 | 1860 | 10500 | 450 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| rtx2050-laptop | — | — | — | — | — | — | — | — | — | laptop | — | — |
+| rtx3050 | _0.1424_ | _9.114_ | _9.114_ | _18.23_ | _18.23_ | _0_ | _0_ | _72.91_ | GDDR6 | pcie | PCIe 4.0 | — |
+| rtx3050-6gb | _0.1058_ | _6.774_ | _6.774_ | _13.55_ | _13.55_ | _0_ | _0_ | _54.19_ | GDDR6 | pcie | PCIe 4.0 | — |
+| rtx3050-laptop | _0.1114_ | _7.127_ | _7.127_ | _14.25_ | _14.25_ | _0_ | _0_ | _57.02_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx3050-laptop-6gb | — | — | — | — | — | — | — | — | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx3050-oem | _0.1267_ | _8.11_ | _8.11_ | _16.22_ | _16.22_ | _0_ | _0_ | _64.88_ | GDDR6 | pcie | PCIe 4.0 | — |
+| rtx3050ti-laptop | _0.1356_ | _8.678_ | _8.678_ | _17.36_ | _17.36_ | _0_ | _0_ | _69.43_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx3060 | _0.1994_ | 13 | _12.76_ | _25.52_ | _25.52_ | _0_ | _0_ | _102.1_ | GDDR6 360 GB/s | pcie | PCIe 4.0 | — |
+| rtx3060-8gb | _0.1994_ | _12.76_ | _12.76_ | _25.52_ | _25.52_ | _0_ | _0_ | _102.1_ | GDDR6 | pcie | PCIe 4.0 | — |
+| rtx3060-laptop | _0.2044_ | _13.08_ | _13.08_ | _26.16_ | _26.16_ | _0_ | _0_ | _104.6_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx3060ti | _0.2538_ | _16.25_ | _16.25_ | _32.49_ | _32.49_ | _0_ | _0_ | _130_ | GDDR6 | pcie | PCIe 4.0 | — |
+| rtx3060ti-gddr6x | _0.2538_ | _16.25_ | _16.25_ | _32.49_ | _32.49_ | _0_ | _0_ | _130_ | GDDR6X | pcie | PCIe 4.0 | — |
+| rtx3070 | _0.3174_ | 20.3 | 20.3 | 40.6 | 40.6 | _0_ | _0_ | 162.6 | GDDR6 448 GB/s | pcie | PCIe 4.0 | — |
+| rtx3070-laptop | _0.2592_ | _16.59_ | _16.59_ | _33.18_ | _33.18_ | _0_ | _0_ | _132.7_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx3070ti | _0.3398_ | _21.75_ | _21.75_ | _43.5_ | _43.5_ | _0_ | _0_ | _174_ | GDDR6X | pcie | PCIe 4.0 | — |
+| rtx3070ti-laptop | _0.2732_ | _17.49_ | _17.49_ | _34.97_ | _34.97_ | _0_ | _0_ | _139.9_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx3080 | _0.4651_ | 29.8 | 29.8 | 59.5 | 59.5 | _0_ | _0_ | 238 | GDDR6X 760 GB/s | pcie | PCIe 4.0 | — |
+| rtx3080-12gb | _0.4788_ | _30.64_ | _30.64_ | _61.29_ | _61.29_ | _0_ | _0_ | _245.1_ | GDDR6X | pcie | PCIe 4.0 | — |
+| rtx3080-laptop | _0.3283_ | _21.01_ | _21.01_ | _42.02_ | _42.02_ | _0_ | _0_ | _168.1_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx3080-laptop-8gb | _0.3283_ | _21.01_ | _21.01_ | _42.02_ | _42.02_ | _0_ | _0_ | _168.1_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx3080ti | _0.5344_ | 34 | _34.2_ | _68.4_ | _68.4_ | _0_ | _0_ | _273.6_ | GDDR6X | pcie | PCIe 4.0 | — |
+| rtx3080ti-laptop | _0.3689_ | _23.61_ | _23.61_ | _47.22_ | _47.22_ | _0_ | _0_ | _188.9_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx3090 | _0.556_ | 35.6 | 35.6 | 71 | 71 | _0_ | _0_ | 284 | GDDR6X 936 GB/s | pcie | PCIe 4.0, NVLink 3 112.5 GB/s | — |
+| rtx3090ti-reference | _0.625_ | 40 | _40_ | _79.99_ | _79.99_ | _0_ | _0_ | _320_ | GDDR6X 1008 GB/s | pcie | PCIe 4.0 | — |
 
 ### Ada
 
@@ -164,18 +267,40 @@ python3 scripts/render_gpu_catalog.py --check
 | [rtx4060ti](ada/consumer/rtx4060ti.yaml) | 8.9 | 16 | 34 | 128 | 2540 | 9000 | 165 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx4060ti-16gb](ada/consumer/rtx4060ti-16gb.yaml) | 8.9 | 16 | 34 | 128 | 2540 | 9000 | 165 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx4060ti-8gb](ada/consumer/rtx4060ti-8gb.yaml) | 8.9 | 8 | 34 | 128 | 2540 | 9000 | 160 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
-| [rtx4070](ada/consumer/rtx4070.yaml) | 8.9 | 12 | 46 | 192 | 2480 | 10500 | 200 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx4070](ada/consumer/rtx4070.yaml) | 8.9 | 12 | 46 | 192 | 2475 | 10500 | 200 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx4070-gddr6](ada/consumer/rtx4070-gddr6.yaml) | 8.9 | 12 | 46 | 192 | 2480 | — | 200 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx4070-laptop](ada/consumer/rtx4070-laptop.yaml) | 8.9 | 8 | 36 | 128 | 2175 | — | 115 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/) |
 | [rtx4070-super](ada/consumer/rtx4070-super.yaml) | 8.9 | 12 | 56 | 192 | 2480 | 10500 | 220 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx4070ti](ada/consumer/rtx4070ti.yaml) | 8.9 | 12 | 60 | 192 | 2610 | 10500 | 285 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx4070ti-super](ada/consumer/rtx4070ti-super.yaml) | 8.9 | 16 | 66 | 256 | 2610 | 10500 | 285 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
-| [rtx4080](ada/consumer/rtx4080.yaml) | 8.9 | 16 | 76 | 256 | 2510 | 11200 | 320 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx4080](ada/consumer/rtx4080.yaml) | 8.9 | 16 | 76 | 256 | 2505 | 11200 | 320 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx4080-laptop](ada/consumer/rtx4080-laptop.yaml) | 8.9 | 12 | 58 | 192 | 2280 | — | 150 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/) |
 | [rtx4080-super](ada/consumer/rtx4080-super.yaml) | 8.9 | 16 | 80 | 256 | 2550 | 11500 | 320 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx4090](ada/consumer/rtx4090.yaml) | 8.9 | 24 | 128 | 384 | 2520 | 10500 | 450 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx4090-laptop](ada/consumer/rtx4090-laptop.yaml) | 8.9 | 16 | 76 | 256 | 2040 | — | 150 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/) |
 | [rtx4090d](ada/consumer/rtx4090d.yaml) | 8.9 | 24 | 114 | 384 | 2520 | 10500 | 425 | [spec](https://www.nvidia.cn/geforce/graphics-cards/40-series/rtx-4090-d/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| rtx3050a-laptop | — | — | — | — | — | — | — | — | GDDR6 | laptop | — | — |
+| rtx4050-laptop | _0.1896_ | _12.13_ | _12.13_ | _24.27_ | _24.27_ | _48.54_ | _0_ | _97.08_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx4060 | _0.2362_ | 15 | _15.11_ | _30.23_ | _30.23_ | _60.46_ | _0_ | _120.9_ | GDDR6 | pcie | PCIe 4.0 | — |
+| rtx4060-laptop | _0.2275_ | _14.56_ | _14.56_ | _29.12_ | _29.12_ | _58.25_ | _0_ | _116.5_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx4060ti | _0.3454_ | 22 | _22.11_ | _44.22_ | _44.22_ | _88.43_ | _0_ | _176.9_ | GDDR6 288 GB/s | pcie | PCIe 4.0 | — |
+| rtx4060ti-16gb | _0.3454_ | 22 | _22.11_ | _44.22_ | _44.22_ | _88.43_ | _0_ | _176.9_ | GDDR6 288 GB/s | pcie | PCIe 4.0 | — |
+| rtx4060ti-8gb | _0.3454_ | 22 | _22.11_ | _44.22_ | _44.22_ | _88.43_ | _0_ | _176.9_ | GDDR6 288 GB/s | pcie | PCIe 4.0 | — |
+| rtx4070 | _0.4554_ | 29.1 | 29.1 | 58.3 | 58.3 | 116.6 | _0_ | 233.2 | GDDR6X 504 GB/s | pcie | PCIe 4.0 | — |
+| rtx4070-gddr6 | _0.4563_ | 29 | _29.2_ | _58.41_ | _58.41_ | _116.8_ | _0_ | _233.6_ | GDDR6 | pcie | PCIe 4.0 | — |
+| rtx4070-laptop | _0.3132_ | _20.04_ | _20.04_ | _40.09_ | _40.09_ | _80.18_ | _0_ | _160.4_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx4070-super | _0.5555_ | 36 | _35.55_ | _71.11_ | _71.11_ | _142.2_ | _0_ | _284.4_ | GDDR6X | pcie | PCIe 4.0 | — |
+| rtx4070ti | _0.6264_ | 40.1 | 40.1 | 80.2 | 80.2 | 160.4 | _0_ | 320.7 | GDDR6X 504 GB/s | pcie | PCIe 4.0 | — |
+| rtx4070ti-super | _0.689_ | 44 | _44.1_ | _88.2_ | _88.2_ | _176.4_ | _0_ | _352.8_ | GDDR6X 672 GB/s | pcie | PCIe 4.0 | — |
+| rtx4080 | _0.7615_ | 48.7 | 48.7 | 97.5 | 97.5 | 194.9 | _0_ | 389.9 | GDDR6X 716.8 GB/s | pcie | PCIe 4.0 | — |
+| rtx4080-laptop | _0.529_ | _33.85_ | _33.85_ | _67.71_ | _67.71_ | _135.4_ | _0_ | _270.8_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx4080-super | _0.816_ | 52 | _52.22_ | _104.4_ | _104.4_ | _208.9_ | _0_ | _417.8_ | GDDR6X 736 GB/s | pcie | PCIe 4.0 | — |
+| rtx4090 | _1.29_ | 82.6 | 82.6 | 165.2 | 165.2 | 330.3 | _0_ | 660.6 | GDDR6X 1008 GB/s | pcie | PCIe 4.0 | — |
+| rtx4090-laptop | _0.6202_ | _39.69_ | _39.69_ | _79.38_ | _79.38_ | _158.8_ | _0_ | _317.5_ | GDDR6 | laptop | PCIe 4.0 | — |
+| rtx4090d | _1.149_ | 74 | _73.54_ | _147.1_ | _147.1_ | _294.2_ | _0_ | _588.3_ | GDDR6X | pcie | PCIe 4.0 | — |
 
 ### Blackwell
 
@@ -187,17 +312,37 @@ python3 scripts/render_gpu_catalog.py --check
 | [rtx5060-laptop](blackwell/consumer/rtx5060-laptop.yaml) | 12.0 | 8 | 26 | 128 | 2497 | — | 100 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/) |
 | [rtx5060ti](blackwell/consumer/rtx5060ti.yaml) | 12.0 | 16 | 36 | 128 | 2570 | 14000 | 180 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx5060ti-8gb](blackwell/consumer/rtx5060ti-8gb.yaml) | 12.0 | 8 | 36 | 128 | 2570 | 14000 | 180 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
-| [rtx5070](blackwell/consumer/rtx5070.yaml) | 12.0 | 12 | 48 | 192 | 2510 | 14000 | 250 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx5070](blackwell/consumer/rtx5070.yaml) | 12.0 | 12 | 48 | 192 | 2512 | 14000 | 250 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx5070-laptop](blackwell/consumer/rtx5070-laptop.yaml) | 12.0 | 8 | 36 | 128 | 2347 | — | 100 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/) |
 | [rtx5070-laptop-12gb](blackwell/consumer/rtx5070-laptop-12gb.yaml) | 12.0 | 12 | 36 | 128 | 2347 | — | 100 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/) |
-| [rtx5070ti](blackwell/consumer/rtx5070ti.yaml) | 12.0 | 16 | 70 | 256 | 2450 | 14000 | 300 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx5070ti](blackwell/consumer/rtx5070ti.yaml) | 12.0 | 16 | 70 | 256 | 2452 | 14000 | 300 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx5070ti-laptop](blackwell/consumer/rtx5070ti-laptop.yaml) | 12.0 | 12 | 46 | 192 | 2220 | — | 115 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/) |
-| [rtx5080](blackwell/consumer/rtx5080.yaml) | 12.0 | 16 | 84 | 256 | 2620 | 15000 | 360 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx5080](blackwell/consumer/rtx5080.yaml) | 12.0 | 16 | 84 | 256 | 2617 | 15000 | 360 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx5080-laptop](blackwell/consumer/rtx5080-laptop.yaml) | 12.0 | 16 | 60 | 256 | 2287 | — | 150 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/) |
-| [rtx5090](blackwell/consumer/rtx5090.yaml) | 12.0 | 32 | 170 | 512 | 2410 | 14000 | 575 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
+| [rtx5090](blackwell/consumer/rtx5090.yaml) | 12.0 | 32 | 170 | 512 | 2407 | 14000 | 575 | [spec](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/) |
 | [rtx5090-laptop](blackwell/consumer/rtx5090-laptop.yaml) | 12.0 | 24 | 82 | 256 | 2160 | — | 150 | [spec](https://www.nvidia.com/en-us/geforce/laptops/compare/) |
 | [rtx5090d](blackwell/consumer/rtx5090d.yaml) | 12.0 | 32 | 170 | 512 | — | 14000 | — | [spec](https://www.nvidia.cn/geforce/news/rtx-50-series-graphics-cards-gpu-laptop-announcements/) |
 | [rtx5090d-v2](blackwell/consumer/rtx5090d-v2.yaml) | 12.0 | 24 | 170 | 384 | 2410 | 14000 | 575 | [spec](https://www.nvidia.cn/geforce/graphics-cards/50-series/rtx-5090-d-v2/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| rtx5050 | _0.2056_ | _13.16_ | _13.16_ | _26.32_ | _26.32_ | _52.63_ | _210.5_ | _105.3_ | GDDR6 320 GB/s | pcie | PCIe 5.0 | — |
+| rtx5050-laptop | _0.213_ | _13.63_ | _13.63_ | _27.26_ | _27.26_ | _54.52_ | _218.1_ | _109_ | GDDR7 | laptop | PCIe 5.0 | — |
+| rtx5060 | _0.3_ | _19.2_ | _19.2_ | _38.4_ | _38.4_ | _76.8_ | _307.2_ | _153.6_ | GDDR7 448 GB/s | pcie | PCIe 5.0 | — |
+| rtx5060-laptop | _0.2597_ | _16.62_ | _16.62_ | _33.24_ | _33.24_ | _66.48_ | _265.9_ | _133_ | GDDR7 | laptop | PCIe 5.0 | — |
+| rtx5060ti | _0.3701_ | _23.69_ | _23.69_ | _47.37_ | _47.37_ | _94.74_ | _379_ | _189.5_ | GDDR7 448 GB/s | pcie | PCIe 5.0 | — |
+| rtx5060ti-8gb | _0.3701_ | _23.69_ | _23.69_ | _47.37_ | _47.37_ | _94.74_ | _379_ | _189.5_ | GDDR7 448 GB/s | pcie | PCIe 5.0 | — |
+| rtx5070 | _0.4823_ | 30.9 | 30.9 | 61.7 | 61.7 | 123.5 | 493.9 | 246.9 | GDDR7 672 GB/s | pcie | PCIe 5.0 | — |
+| rtx5070-laptop | _0.338_ | _21.63_ | _21.63_ | _43.26_ | _43.26_ | _86.52_ | _346.1_ | _173_ | GDDR7 | laptop | PCIe 5.0 | — |
+| rtx5070-laptop-12gb | _0.338_ | _21.63_ | _21.63_ | _43.26_ | _43.26_ | _86.52_ | _346.1_ | _173_ | GDDR7 | laptop | PCIe 5.0 | — |
+| rtx5070ti | _0.6866_ | 43.9 | 43.9 | 87.9 | 87.9 | 175.8 | 703 | 351.5 | GDDR7 896 GB/s | pcie | PCIe 5.0 | — |
+| rtx5070ti-laptop | _0.4085_ | _26.14_ | _26.14_ | _52.29_ | _52.29_ | _104.6_ | _418.3_ | _209.1_ | GDDR7 | laptop | PCIe 5.0 | — |
+| rtx5080 | _0.8793_ | 56.3 | 56.3 | 112.6 | 112.6 | 225.1 | 900.4 | 450.2 | GDDR7 960 GB/s | pcie | PCIe 5.0 | — |
+| rtx5080-laptop | _0.5489_ | _35.13_ | _35.13_ | _70.26_ | _70.26_ | _140.5_ | _562.1_ | _281_ | GDDR7 | laptop | PCIe 5.0 | — |
+| rtx5090 | _1.637_ | 104.8 | 104.8 | 209.5 | 209.5 | 419 | 1676 | 838 | GDDR7 1792 GB/s | pcie | PCIe 5.0 | — |
+| rtx5090-laptop | _0.7085_ | _45.34_ | _45.34_ | _90.69_ | _90.69_ | _181.4_ | _725.5_ | _362.7_ | GDDR7 | laptop | PCIe 5.0 | — |
+| rtx5090d | — | — | — | — | — | — | — | — | GDDR7 1792 GB/s | — | — | — |
+| rtx5090d-v2 | _1.639_ | _104.9_ | _104.9_ | _209.8_ | _209.8_ | _419.5_ | _1678_ | _839.1_ | GDDR7 1344 GB/s | pcie | PCIe 5.0 | — |
 
 
 ## Tesla / Data center — 数据中心 (67)
@@ -210,8 +355,17 @@ python3 scripts/render_gpu_catalog.py --check
 | [m4](maxwell/datacenter/m4.yaml) | 5.2 | 4 | 8 | 128 | 1072 | 2750 | 75 | [spec](https://developer.nvidia.com/blog/accelerating-hyperscale-datacenter-applications-tesla-gpus/) |
 | [m40](maxwell/datacenter/m40.yaml) | 5.2 | 12 | 24 | 384 | 1114 | 3000 | 250 | [spec](https://developer.nvidia.com/blog/accelerating-hyperscale-datacenter-applications-tesla-gpus/) |
 | [m40-24gb](maxwell/datacenter/m40-24gb.yaml) | 5.2 | 24 | 24 | 384 | 1114 | 3000 | 250 | [spec](https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf) |
-| [m6](maxwell/datacenter/m6.yaml) | 5.2 | 8 | 12 | — | — | — | 100 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/solutions/resources/documents1/nvidia-m6-datasheet.pdf) |
+| [m6](maxwell/datacenter/m6.yaml) | 5.2 | 8 | 12 | 256 | 1051 | 2300 | 100 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/solutions/resources/documents1/nvidia-m6-datasheet.pdf) |
 | [m60](maxwell/datacenter/m60.yaml) | 5.2 | 8 | 16 | 256 | 1178 | 2505 | — | [spec](https://images.nvidia.com/content/pdf/tesla/tesla-m60-product-brief.pdf) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| m10 | _0.04132_ | _1.322_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 83 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| m4 | _0.06861_ | 2.2 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 88 GB/s | pcie | — | 0 |
+| m40 | 0.213 | 6.844 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 288 GB/s | pcie | — | 0 |
+| m40-24gb | 0.213 | 6.844 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 288 GB/s | pcie | — | 0 |
+| m6 | _0.1009_ | _3.229_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 147.2 GB/s | laptop | PCIe 3.0 x16 | 0 |
+| m60 | _0.1508_ | _4.825_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 160 GB/s | pcie | PCIe 3.0 x16 | 0 |
 
 ### Pascal
 
@@ -220,16 +374,25 @@ python3 scripts/render_gpu_catalog.py --check
 | [p100](pascal/datacenter/p100.yaml) | 6.0 | 16 | 56 | 4096 | 1328 | 715 | 250 | [spec](https://images.nvidia.com/content/pdf/tesla/NV-tesla-p100-pcie-PB-08248-001-v01.pdf) |
 | [p100-pcie-12gb](pascal/datacenter/p100-pcie-12gb.yaml) | 6.0 | 12 | 56 | 3072 | 1328 | 715 | 250 | [spec](https://images.nvidia.com/content/pdf/tesla/NV-tesla-p100-pcie-PB-08248-001-v01.pdf) |
 | [p100-sxm2-16gb](pascal/datacenter/p100-sxm2-16gb.yaml) | 6.0 | 16 | 56 | 4096 | 1480 | 715 | 300 | [spec](https://developer.nvidia.com/blog/inside-pascal/) |
-| [p4](pascal/datacenter/p4.yaml) | 6.1 | 8 | 20 | 256 | 1114 | 3000 | 75 | [spec](https://images.nvidia.com/content/pdf/tesla/Tesla-P4-Product-Brief.pdf) |
-| [p40](pascal/datacenter/p40.yaml) | 6.1 | 24 | 30 | — | — | — | 250 | [spec](https://images.nvidia.com/content/pdf/grid/data-sheet/nvidia-p40-datasheet.pdf) |
-| [p6](pascal/datacenter/p6.yaml) | 6.1 | 16 | 16 | — | 1506 | — | 90 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/solutions/resources/documents1/Tesla-P6-Product-Brief.pdf) |
+| [p4](pascal/datacenter/p4.yaml) | 6.1 | 8 | 20 | 256 | 1531 | 3000 | 75 | [spec](https://images.nvidia.com/content/pdf/tesla/Tesla-P4-Product-Brief.pdf) |
+| [p40](pascal/datacenter/p40.yaml) | 6.1 | 24 | 30 | 384 | 1531 | 3615 | 250 | [spec](https://images.nvidia.com/content/pdf/grid/data-sheet/nvidia-p40-datasheet.pdf) |
+| [p6](pascal/datacenter/p6.yaml) | 6.1 | 16 | 16 | 256 | 1506 | 3003 | 90 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/solutions/resources/documents1/Tesla-P6-Product-Brief.pdf) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| p100 | 4.7 | 9.3 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | HBM2 732 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| p100-pcie-12gb | 4.7 | 9.3 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | HBM2 549 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| p100-sxm2-16gb | 5.3 | 10.6 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | HBM2 732 GB/s | sxm | NVLink 1 160 GB/s | 0 |
+| p4 | _0.245_ | 5.5 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 192 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| p40 | _0.3674_ | 12 | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 347 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| p6 | _0.1928_ | _6.169_ | _0_ | _0_ | _0_ | _0_ | _0_ | _0_ | GDDR5 192.2 GB/s | laptop | PCIe 3.0 x16 | 0 |
 
 ### Volta
 
 | Profile ID / YAML | CC | GiB | SMs | Bus bits | Core MHz | Memory MHz | Limit W | Source |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | [v100](volta/datacenter/v100.yaml) | 7.0 | 32 | 80 | 4096 | 1530 | 877 | 300 | [spec](https://www.nvidia.com/en-us/data-center/v100/) |
-| [v100-dgxs-32gb](volta/datacenter/v100-dgxs-32gb.yaml) | 7.0 | 32 | — | — | — | — | — | [spec](https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html) |
+| [v100-dgxs-32gb](volta/datacenter/v100-dgxs-32gb.yaml) | 7.0 | 32 | 80 | — | — | — | — | [spec](https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html) |
 | [v100-fhhl-16gb](volta/datacenter/v100-fhhl-16gb.yaml) | 7.0 | 16 | — | — | — | — | — | [spec](https://docs.nvidia.com/vgpu/packaging-pricing-licensing-guide/latest/) |
 | [v100-pcie-16gb](volta/datacenter/v100-pcie-16gb.yaml) | 7.0 | 16 | 80 | 4096 | 1380 | 877 | 250 | [spec](https://images.nvidia.com/content/tesla/pdf/Tesla-V100-PCIe-Product-Brief.pdf) |
 | [v100-pcie-32gb](volta/datacenter/v100-pcie-32gb.yaml) | 7.0 | 32 | 80 | 4096 | 1380 | 877 | 250 | [spec](https://images.nvidia.com/content/tesla/pdf/Tesla-V100-PCIe-Product-Brief.pdf) |
@@ -237,11 +400,26 @@ python3 scripts/render_gpu_catalog.py --check
 | [v100-sxm3-32gb](volta/datacenter/v100-sxm3-32gb.yaml) | 7.0 | 32 | — | — | — | — | — | [spec](https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html) |
 | [v100s-pcie-32gb](volta/datacenter/v100s-pcie-32gb.yaml) | 7.0 | 32 | 80 | — | — | — | 250 | [spec](https://images.nvidia.com/content/technologies/volta/pdf/volta-v100-datasheet-update-us-1165301-r5.pdf) |
 
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| v100 | 7.8 | 15.7 | _0_ | 125 | _0_ | _0_ | _0_ | _0_ | HBM2 900 GB/s | sxm | NVLink 2 300 GB/s | 0 |
+| v100-dgxs-32gb | — | — | — | 125 | — | — | — | — | — | — | NVLink 2 | 0 |
+| v100-fhhl-16gb | — | — | — | — | — | — | — | — | — | pcie | — | 0 |
+| v100-pcie-16gb | 7 | 14 | _0_ | 112 | _0_ | _0_ | _0_ | _0_ | HBM2 900 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| v100-pcie-32gb | 7 | 14 | _0_ | 112 | _0_ | _0_ | _0_ | _0_ | HBM2 900 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| v100-sxm2-16gb | 7.8 | 15.7 | _0_ | 125 | _0_ | _0_ | _0_ | _0_ | HBM2 900 GB/s | sxm | NVLink 2 300 GB/s | 0 |
+| v100-sxm3-32gb | — | — | — | — | — | — | — | — | — | sxm | — | 0 |
+| v100s-pcie-32gb | 8.2 | 16.4 | — | 130 | — | — | — | — | HBM2 1134 GB/s | pcie | PCIe 3.0 | 0 |
+
 ### Turing
 
 | Profile ID / YAML | CC | GiB | SMs | Bus bits | Core MHz | Memory MHz | Limit W | Source |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | [t4](turing/datacenter/t4.yaml) | 7.5 | 16 | 40 | 256 | 1590 | 5000 | 70 | [spec](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| t4 | _0.2544_ | 8.1 | _0_ | 65 | _0_ | _0_ | _0_ | 130 | GDDR6 320 GB/s | pcie | PCIe 3.0 x16 | 0 |
 
 ### Ampere
 
@@ -256,16 +434,38 @@ python3 scripts/render_gpu_catalog.py --check
 | [a100x](ampere/datacenter/a100x.yaml) | 8.0 | 80 | — | — | — | — | — | [spec](https://docs.nvidia.com/vgpu/18.0/grid-vgpu-user-guide/index.html) |
 | [a10g](ampere/datacenter/a10g.yaml) | 8.6 | 24 | 80 | — | — | — | — | [spec](https://docs.nvidia.com/datascience/deployment/nightly/cloud/aws/) |
 | [a16](ampere/datacenter/a16.yaml) | 8.6 | 16 | 10 | 128 | 1755 | 6250 | — | [spec](https://images.nvidia.com/content/Solutions/data-center/vgpu-a16-product-brief.pdf) |
-| [a2](ampere/datacenter/a2.yaml) | 8.6 | 16 | 10 | — | — | — | 60 | [spec](https://www.nvidia.com/en-us/data-center/products/a2/) |
+| [a2](ampere/datacenter/a2.yaml) | 8.6 | 16 | 10 | 128 | 1770 | 6251 | 60 | [spec](https://www.nvidia.com/en-us/data-center/products/a2/) |
 | [a30](ampere/datacenter/a30.yaml) | 8.0 | 24 | 56 | 3072 | 1440 | 1215 | 165 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/data-center/products/a30-gpu/pdf/a30-product-brief.pdf) |
 | [a30x](ampere/datacenter/a30x.yaml) | 8.0 | 24 | — | — | — | — | — | [spec](https://docs.nvidia.com/vgpu/18.0/grid-vgpu-user-guide/index.html) |
 | [a40](ampere/datacenter/a40.yaml) | 8.6 | 48 | 84 | 384 | 1740 | 7250 | 300 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a40/NVIDIA%20A40%20Product%20Brief.pdf) |
-| [a800-pcie-40gb](ampere/datacenter/a800-pcie-40gb.yaml) | 8.0 | 40 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/ampere-a800.html) |
+| [a800-pcie-40gb](ampere/datacenter/a800-pcie-40gb.yaml) | 8.0 | 40 | 108 | 5120 | — | 1215 | 240 | [spec](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/ampere-a800.html) |
 | [a800-pcie-80gb](ampere/datacenter/a800-pcie-80gb.yaml) | 8.0 | 80 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/ampere-a800.html) |
 | [a800-pcie-80gb-lc](ampere/datacenter/a800-pcie-80gb-lc.yaml) | 8.0 | 80 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/ampere-a800.html) |
 | [a800-sxm4-40gb](ampere/datacenter/a800-sxm4-40gb.yaml) | 8.0 | 40 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/ampere-a800.html) |
 | [a800-sxm4-80gb](ampere/datacenter/a800-sxm4-80gb.yaml) | 8.0 | 80 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/ampere-a800.html) |
 | [ax800](ampere/datacenter/ax800.yaml) | 8.0 | 80 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/ampere-a800.html) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| a10 | _0.4882_ | 31.2 | 62.5 | 125 | 125 | _0_ | _0_ | 250 | GDDR6 600 GB/s | pcie | PCIe 4.0 x16 | 0 |
+| a100 | 9.7 | 19.5 | 156 | 312 | 312 | _0_ | _0_ | 624 | HBM2e 2039 GB/s | sxm | PCIe 4.0, NVLink 3 600 GB/s | 7 |
+| a100-1g | _9.746_ | _19.49_ | _155.9_ | _311.9_ | _311.9_ | _0_ | _0_ | _623.7_ | — | — | — | — |
+| a100-pcie-40gb | 9.7 | 19.5 | 156 | 312 | 312 | _0_ | _0_ | 624 | HBM2 1555 GB/s | pcie | PCIe 4.0 x16, NVLink 3 600 GB/s | 7 |
+| a100-pcie-80gb | 9.7 | 19.5 | 156 | 312 | 312 | _0_ | _0_ | 624 | HBM2e 1935 GB/s | pcie | PCIe 4.0 x16, NVLink 3 600 GB/s | 7 |
+| a100-sxm4-40gb | 9.7 | 19.5 | 156 | 312 | 312 | _0_ | _0_ | 624 | HBM2 1555 GB/s | sxm | PCIe 4.0, NVLink 3 600 GB/s | 7 |
+| a100x | — | — | — | — | — | — | — | — | — | — | — | — |
+| a10g | — | — | — | — | — | — | — | — | — | — | — | — |
+| a16 | _0.0702_ | 4.5 | 9 | 17.9 | _17.97_ | _0_ | _0_ | 35.9 | GDDR6 200 GB/s | pcie | PCIe 4.0 | 0 |
+| a2 | _0.0708_ | 4.5 | 9 | 18 | 18 | _0_ | _0_ | 36 | GDDR6 200 GB/s | pcie | PCIe 4.0 x8 | — |
+| a30 | 5.2 | 10.3 | 82 | 165 | 165 | _0_ | _0_ | 330 | HBM2 933 GB/s | pcie | PCIe 4.0 x16, NVLink 3 200 GB/s | 4 |
+| a30x | — | — | — | — | — | — | — | — | — | — | — | — |
+| a40 | _0.5846_ | 37.4 | 74.8 | 149.7 | 149.7 | _0_ | _0_ | 299.3 | GDDR6 696 GB/s | pcie | PCIe 4.0 x16, NVLink 3 112.5 GB/s | 0 |
+| a800-pcie-40gb | 9.7 | 19.5 | — | — | — | — | — | — | HBM2 1555.2 GB/s | pcie | PCIe 4.0 x16, NVLink 3 400 GB/s | 7 |
+| a800-pcie-80gb | — | — | — | — | — | — | — | — | — | pcie | — | 7 |
+| a800-pcie-80gb-lc | — | — | — | — | — | — | — | — | — | pcie | — | 7 |
+| a800-sxm4-40gb | — | — | — | — | — | — | — | — | — | sxm | — | — |
+| a800-sxm4-80gb | — | — | — | — | — | — | — | — | — | sxm | — | 7 |
+| ax800 | — | — | — | — | — | — | — | — | — | — | — | 7 |
 
 ### Ada
 
@@ -274,9 +474,18 @@ python3 scripts/render_gpu_catalog.py --check
 | [l2](ada/datacenter/l2.yaml) | 8.9 | 24 | — | — | — | — | — | [spec](https://docs.nvidia.com/vgpu/18.0/grid-vgpu-user-guide/index.html) |
 | [l20](ada/datacenter/l20.yaml) | 8.9 | 48 | — | — | — | — | — | [spec](https://docs.nvidia.com/vgpu/18.0/grid-vgpu-user-guide/index.html) |
 | [l20-lc](ada/datacenter/l20-lc.yaml) | 8.9 | 48 | — | — | — | — | — | [spec](https://docs.nvidia.com/vgpu/18.0/grid-vgpu-user-guide/index.html) |
-| [l4](ada/datacenter/l4.yaml) | 8.9 | 24 | 58 | 192 | — | 6250 | 72 | [spec](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf) |
-| [l40](ada/datacenter/l40.yaml) | 8.9 | 48 | 142 | 384 | — | 9000 | 300 | [spec](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf) |
+| [l4](ada/datacenter/l4.yaml) | 8.9 | 24 | 58 | 192 | 2040 | 6251 | 72 | [spec](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf) |
+| [l40](ada/datacenter/l40.yaml) | 8.9 | 48 | 142 | 384 | 2490 | 9001 | 300 | [spec](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf) |
 | [l40s](ada/datacenter/l40s.yaml) | 8.9 | 48 | 142 | 384 | 2520 | 9001 | 350 | [spec](https://www.nvidia.com/en-us/data-center/l40s/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| l2 | — | — | — | — | — | — | — | — | — | — | — | — |
+| l20 | — | — | — | — | — | — | — | — | — | — | — | — |
+| l20-lc | — | — | — | — | — | — | — | — | — | — | — | — |
+| l4 | _0.4733_ | 30.3 | 60 | 121 | 121 | 242 | _0_ | 242 | GDDR6 300 GB/s | pcie | PCIe 4.0 x16 | — |
+| l40 | _1.414_ | 90.5 | 90.5 | 181.05 | 181.05 | 362 | _0_ | 362 | GDDR6 864 GB/s | pcie | PCIe 4.0 x16 | 0 |
+| l40s | _1.431_ | 91.6 | 183 | 362.05 | 362.05 | 733 | _0_ | 733 | GDDR6 864 GB/s | pcie | PCIe 4.0 x16 | 0 |
 
 ### Hopper
 
@@ -286,7 +495,7 @@ python3 scripts/render_gpu_catalog.py --check
 | [gh200-96gb](hopper/datacenter/gh200-96gb.yaml) | 9.0 | 96 | — | — | — | — | — | [spec](https://www.nvidia.com/en-us/data-center/grace-hopper-superchip/) |
 | [h100](hopper/datacenter/h100.yaml) | 9.0 | 80 | 132 | 5120 | 1980 | 2619 | 700 | [spec](https://www.nvidia.com/en-us/data-center/h100/) |
 | [h100-nvl-94gb](hopper/datacenter/h100-nvl-94gb.yaml) | 9.0 | 94 | 132 | 6016 | 1785 | 2619 | 400 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/h100/PB-11773-001_v01.pdf) |
-| [h100-pcie-80gb](hopper/datacenter/h100-pcie-80gb.yaml) | 9.0 | 80 | 114 | 5120 | — | 1593 | 350 | [spec](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/) |
+| [h100-pcie-80gb](hopper/datacenter/h100-pcie-80gb.yaml) | 9.0 | 80 | 114 | 5120 | 1755 | 1593 | 350 | [spec](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/) |
 | [h100-sxm5-64gb](hopper/datacenter/h100-sxm5-64gb.yaml) | 9.0 | 64 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-4/latest/infra-software/vgpu/features.html) |
 | [h100-sxm5-94gb](hopper/datacenter/h100-sxm5-94gb.yaml) | 9.0 | 94 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-4/latest/infra-software/vgpu/features.html) |
 | [h20-141gb](hopper/datacenter/h20-141gb.yaml) | 9.0 | 141 | — | — | — | — | — | [spec](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html) |
@@ -296,6 +505,23 @@ python3 scripts/render_gpu_catalog.py --check
 | [h800-nvl-94gb](hopper/datacenter/h800-nvl-94gb.yaml) | 9.0 | 94 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/hopper-h800.html) |
 | [h800-pcie-80gb](hopper/datacenter/h800-pcie-80gb.yaml) | 9.0 | 80 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/hopper-h800.html) |
 | [h800-sxm5-80gb](hopper/datacenter/h800-sxm5-80gb.yaml) | 9.0 | 80 | — | — | — | — | — | [spec](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/hopper-h800.html) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| gh200-144gb | 34 | 67 | 494 | 990 | 990 | 1979 | — | 1979 | HBM3e 4900 GB/s | superchip | NVLink 4, C2C 900 GB/s | — |
+| gh200-96gb | 34 | 67 | 494 | 990 | 990 | 1979 | — | 1979 | HBM3 4000 GB/s | superchip | NVLink 4, C2C 900 GB/s | 7 |
+| h100 | 33.5 | 66.9 | 494.7 | 989.4 | 989.4 | 1978.9 | _0_ | 1978.9 | HBM3 3352 GB/s | sxm | PCIe 5.0, NVLink 4 900 GB/s | 7 |
+| h100-nvl-94gb | 30 | 60 | _482.5_ | _965.1_ | _965.1_ | _1930_ | _0_ | _1930_ | HBM3 3938 GB/s | pcie | PCIe 5.0 x16, NVLink 4 600 GB/s | 7 |
+| h100-pcie-80gb | 25.6 | 51.2 | 378 | 756 | 756 | 1513 | _0_ | 1513 | HBM2e 2039 GB/s | pcie | PCIe 5.0 x16, NVLink 4 600 GB/s | 7 |
+| h100-sxm5-64gb | — | — | — | — | — | — | — | — | — | sxm | — | 7 |
+| h100-sxm5-94gb | — | — | — | — | — | — | — | — | — | sxm | — | 7 |
+| h20-141gb | — | — | — | — | — | — | — | — | — | sxm | — | 7 |
+| h20-96gb | — | — | — | — | — | — | — | — | — | sxm | — | 7 |
+| h200 | 34 | 67 | _535.3_ | _1071_ | _1071_ | _2141_ | _0_ | _2141_ | HBM3e 4800 GB/s | sxm | PCIe 5.0, NVLink 4 900 GB/s | 7 |
+| h200-nvl | 30 | 60 | _482.5_ | _965.1_ | _965.1_ | _1930_ | _0_ | _1930_ | HBM3e 4813 GB/s | pcie | PCIe 5.0 x16, NVLink 4 900 GB/s | 7 |
+| h800-nvl-94gb | — | — | — | — | — | — | — | — | — | pcie | — | 7 |
+| h800-pcie-80gb | — | — | — | — | — | — | — | — | — | pcie | — | 7 |
+| h800-sxm5-80gb | — | — | — | — | — | — | — | — | — | sxm | — | 7 |
 
 ### Blackwell
 
@@ -308,6 +534,16 @@ python3 scripts/render_gpu_catalog.py --check
 | [gb300](blackwell/datacenter/gb300.yaml) | 10.3 | 279 | — | — | — | — | 1400 | [spec](https://www.nvidia.com/en-us/data-center/gb300-nvl72/) |
 | [rtx-pro-4500-blackwell-server](blackwell/datacenter/rtx-pro-4500-blackwell-server.yaml) | 12.0 | 32 | 82 | 256 | 2415 | 12501 | 165 | [spec](https://www.nvidia.com/en-us/data-center/rtx-pro-4500-blackwell-server-edition/) |
 | [rtx-pro-6000-blackwell-server](blackwell/datacenter/rtx-pro-6000-blackwell-server.yaml) | 12.0 | 96 | 188 | 512 | 2430 | 12481 | 600 | [spec](https://www.nvidia.com/en-us/data-center/rtx-pro-6000-blackwell-server-edition/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| b100 | — | — | — | — | — | — | — | — | — | — | — | — |
+| b200 | 37 | 75 | 1100 | 2250 | 2250 | 4500 | 9000 | 4500 | HBM3e 7700 GB/s | sxm | PCIe 5.0, NVLink 5 1800 GB/s | 7 |
+| b300 | 1.2 | 75 | 1100 | 2250 | 2250 | 4500 | 14000 | 153.5 | HBM3e 7700 GB/s | sxm | PCIe 6.0, NVLink 5 1800 GB/s | 7 |
+| gb200 | 40 | 80 | 1250 | 2500 | 2500 | 5000 | 10000 | 5000 | HBM3e 8000 GB/s | superchip | PCIe 5.0, NVLink 5 1800 GB/s | 7 |
+| gb300 | 1.3 | 80 | 1250 | 2500 | 2500 | 5000 | 15000 | 165 | HBM3e 8000 GB/s | superchip | PCIe 6.0, NVLink 5 1800 GB/s | 7 |
+| rtx-pro-4500-blackwell-server | _0.7921_ | 51 | _101.4_ | _202.8_ | _202.8_ | _405.6_ | _811.1_ | _405.6_ | GDDR7 800 GB/s | pcie | PCIe 5.0 x16 | 2 |
+| rtx-pro-6000-blackwell-server | _1.827_ | 120 | 234 | _467.8_ | _467.8_ | _935.6_ | _1871_ | _935.6_ | GDDR7 1597 GB/s | pcie | PCIe 5.0 x16 | 4 |
 
 
 ## Quadro / Professional RTX — 专业绘图 (114)
@@ -330,11 +566,33 @@ python3 scripts/render_gpu_catalog.py --check
 | [quadro-m5000](maxwell/workstation/quadro-m5000.yaml) | 5.2 | 8 | 16 | 256 | — | 3297 | 150 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/75509_DS_NV_Quadro_M5000_US_NV_HR.pdf) |
 | [quadro-m5000m](maxwell/workstation/quadro-m5000m.yaml) | 5.0 | 8 | 12 | — | — | — | — | [spec](https://images.nvidia.com/content/quadro/product-literature/line-card/ProGraphicsLineCard-M6000-24GB-FEB16-US-fnl-HR.pdf) |
 | [quadro-m500m](maxwell/workstation/quadro-m500m.yaml) | 5.0 | 2 | 3 | — | — | — | — | [spec](https://images.nvidia.com/content/quadro/gpu-accelerated/pdf/208584-ME-ProGraphicsLineCard-US-FNL-HR.pdf) |
-| [quadro-m5500](maxwell/workstation/quadro-m5500.yaml) | 5.2 | 8 | 16 | — | — | — | — | [spec](https://images.nvidia.com/content/virtual-reality/pdf/NVIDIA-Quadro-VR-fnl.pdf) |
+| [quadro-m5500](maxwell/workstation/quadro-m5500.yaml) | 5.2 | 8 | 16 | — | — | — | 100 | [spec](https://images.nvidia.com/content/virtual-reality/pdf/NVIDIA-Quadro-VR-fnl.pdf) |
 | [quadro-m6000](maxwell/workstation/quadro-m6000.yaml) | 5.2 | 12 | 24 | 384 | — | 3302 | 250 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/75509_DS_NV_Quadro_M6000_US_NV_HR.pdf) |
 | [quadro-m6000-24gb](maxwell/workstation/quadro-m6000-24gb.yaml) | 5.2 | 24 | 24 | 384 | — | 3302 | 250 | [spec](https://www.nvidia.com/en-in/drivers/quadro-desktop-gpu-specs/) |
 | [quadro-m600m](maxwell/workstation/quadro-m600m.yaml) | 5.0 | 2 | 3 | — | — | — | — | [spec](https://images.nvidia.com/content/quadro/product-literature/line-card/ProGraphicsLineCard-M6000-24GB-FEB16-US-fnl-HR.pdf) |
 | [quadro-m620](maxwell/workstation/quadro-m620.yaml) | 5.2 | 2 | — | — | — | — | — | [spec](https://images.nvidia.com/content/quadro/industry-solution/pdf/364261-AutodeskAutoCAD-SolutionOverview-US-NV-Fnl-WEB.pdf) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| quadro-k1200 | — | 1 | — | — | — | — | — | — | GDDR5 80 GB/s | pcie | PCIe 2.0 x16 | 0 |
+| quadro-k2200 | — | 1.4 | — | — | — | — | — | — | GDDR5 80 GB/s | pcie | PCIe 2.0 x16 | 0 |
+| quadro-k620 | — | — | — | — | — | — | — | — | DDR3 29 GB/s | pcie | PCIe 2.0 x16 | 0 |
+| quadro-m1000m | — | 1.1 | — | — | — | — | — | — | 80 GB/s | laptop | — | 0 |
+| quadro-m1200 | — | — | — | — | — | — | — | — | GDDR5 | laptop | — | 0 |
+| quadro-m2000 | — | 1.8 | — | — | — | — | — | — | GDDR5 106 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-m2000m | — | 1.5 | — | — | — | — | — | — | 80 GB/s | laptop | — | 0 |
+| quadro-m2200 | — | — | — | — | — | — | — | — | GDDR5 | laptop | — | 0 |
+| quadro-m3000m | — | 1.9 | — | — | — | — | — | — | 160 GB/s | laptop | — | 0 |
+| quadro-m4000 | — | 2.5 | — | — | — | — | — | — | GDDR5 192 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-m4000m | — | 2.6 | — | — | — | — | — | — | 160 GB/s | laptop | — | 0 |
+| quadro-m5000 | — | 4.2 | — | — | — | — | — | — | GDDR5 211 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-m5000m | — | 3.2 | — | — | — | — | — | — | 160 GB/s | laptop | — | 0 |
+| quadro-m500m | — | 0.75 | — | — | — | — | — | — | 14.4 GB/s | laptop | — | 0 |
+| quadro-m5500 | — | 4.7 | — | — | — | — | — | — | GDDR5 211 GB/s | laptop | — | 0 |
+| quadro-m6000 | — | 7 | — | — | — | — | — | — | GDDR5 317 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-m6000-24gb | — | 6.8 | — | — | — | — | — | — | GDDR5 317 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-m600m | — | 0.7 | — | — | — | — | — | — | 80 GB/s | laptop | — | 0 |
+| quadro-m620 | — | — | — | — | — | — | — | — | GDDR5 | laptop | — | 0 |
 
 ### Pascal
 
@@ -355,7 +613,7 @@ python3 scripts/render_gpu_catalog.py --check
 | [quadro-p500-mobile](pascal/workstation/quadro-p500-mobile.yaml) | 6.1 | 2 | 2 | 64 | — | 2500 | 18 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-rtx-mobile-line-card-us-nvidia-r7-web.pdf) |
 | [quadro-p5000](pascal/workstation/quadro-p5000.yaml) | 6.1 | 16 | 20 | 256 | — | 4500 | 180 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/192195-DS-NV-Quadro-P5000-US-12Sept-NV-FNL-WEB.pdf) |
 | [quadro-p5000-mobile](pascal/workstation/quadro-p5000-mobile.yaml) | 6.1 | 16 | — | — | — | — | — | [spec](https://images.nvidia.com/content/quadro/quadro-mobile/pdf/341544-PTC-CREO-SolutionOverview-US-NV-FNL-HR.pdf) |
-| [quadro-p520-mobile](pascal/workstation/quadro-p520-mobile.yaml) | 6.1 | 2 | 3 | 64 | — | 3000 | 18 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-rtx-mobile-line-card-us-nvidia-r7-web.pdf) |
+| [quadro-p520-mobile](pascal/workstation/quadro-p520-mobile.yaml) | 6.1 | 2 | 3 | 64 | — | 3000 | 25 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-rtx-mobile-line-card-us-nvidia-r7-web.pdf) |
 | [quadro-p5200-mobile](pascal/workstation/quadro-p5200-mobile.yaml) | 6.1 | 16 | 20 | 256 | — | 3594 | 150 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-rtx-mobile-line-card-us-nvidia-r7-web.pdf) |
 | [quadro-p600](pascal/workstation/quadro-p600.yaml) | 6.1 | 2 | 3 | 128 | — | 2000 | 40 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/quadro-pascal-p600-data-sheet-us-nv-704532-r1.pdf) |
 | [quadro-p600-mobile](pascal/workstation/quadro-p600-mobile.yaml) | 6.1 | 4 | 3 | 128 | — | 2500 | 25 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-rtx-mobile-line-card-us-nvidia-r7-web.pdf) |
@@ -363,11 +621,40 @@ python3 scripts/render_gpu_catalog.py --check
 | [quadro-p620](pascal/workstation/quadro-p620.yaml) | 6.1 | 2 | 4 | 128 | — | 2500 | 40 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/quadro-pascal-p620-data-sheet-us-nv-704415-r1.pdf) |
 | [quadro-p620-mobile](pascal/workstation/quadro-p620-mobile.yaml) | 6.1 | 4 | 4 | 128 | — | 3000 | 25 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-rtx-mobile-line-card-us-nvidia-r7-web.pdf) |
 
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| quadro-gp100 | 5.2 | 10.3 | — | — | — | — | — | — | HBM2 717 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-p1000 | — | 1.894 | — | — | — | — | — | — | GDDR5 82 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-p1000-mobile | — | 1.6 | — | — | — | — | — | — | GDDR5 96 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-p2000 | — | 3 | — | — | — | — | — | — | GDDR5 140 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-p2000-mobile | — | 2.4 | — | — | — | — | — | — | GDDR5 96 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-p2200 | — | 3.8 | — | — | — | — | — | — | GDDR5X 200 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-p3000-mobile | — | — | — | — | — | — | — | — | GDDR5 | laptop | — | 0 |
+| quadro-p3200-mobile | — | 5.3 | — | — | — | — | — | — | GDDR5 168 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-p400 | — | 0.641 | — | — | — | — | — | — | GDDR5 32 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-p4000 | — | 5.3 | — | — | — | — | — | — | GDDR5 243 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-p4000-mobile | — | — | — | — | — | — | — | — | GDDR5 | laptop | — | 0 |
+| quadro-p4200-mobile | — | 7.6 | — | — | — | — | — | — | GDDR5 224 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-p500-mobile | — | 0.75 | — | — | — | — | — | — | GDDR5 40 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-p5000 | — | 8.9 | — | — | — | — | — | — | GDDR5X 288 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-p5000-mobile | — | — | — | — | — | — | — | — | GDDR5 | laptop | — | 0 |
+| quadro-p520-mobile | — | 1.1 | — | — | — | — | — | — | GDDR5 48 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-p5200-mobile | — | 8.9 | — | — | — | — | — | — | GDDR5 230 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-p600 | — | 1.195 | — | — | — | — | — | — | GDDR5 64 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-p600-mobile | — | 1.2 | — | — | — | — | — | — | GDDR5 80 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-p6000 | — | 12 | — | — | — | — | — | — | GDDR5X 432 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-p620 | — | 1.386 | — | — | — | — | — | — | GDDR5 80 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-p620-mobile | — | 1.5 | — | — | — | — | — | — | GDDR5 96 GB/s | laptop | PCIe 3.0 | 0 |
+
 ### Volta
 
 | Profile ID / YAML | CC | GiB | SMs | Bus bits | Core MHz | Memory MHz | Limit W | Source |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | [quadro-gv100](volta/workstation/quadro-gv100.yaml) | 7.0 | 32 | 80 | 4096 | — | 850 | 250 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/quadro-volta-gv100-data-sheet-us-nvidia-704619-r3-web.pdf) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| quadro-gv100 | 7.4 | 14.8 | — | 118.5 | — | — | — | — | HBM2 870 GB/s | pcie | PCIe 3.0 x16, NVLink 2 200 GB/s | 0 |
 
 ### Turing
 
@@ -395,6 +682,30 @@ python3 scripts/render_gpu_catalog.py --check
 | [t600](turing/workstation/t600.yaml) | 7.5 | 4 | 10 | 128 | — | 5000 | 40 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/proviz-print-nvidia-T600-datasheet-us-nvidia-1670029-r5-web.pdf) |
 | [t600-mobile](turing/workstation/t600-mobile.yaml) | 7.5 | 4 | 14 | 128 | — | 6000 | 60 | [spec](https://www.nvidia.com/content/dam/en-zz/ja/Solutions/design-visualization/documents/ampere-mobile-linecard-master-mar22-jp.pdf) |
 
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| quadro-rtx3000-mobile | — | 5.4 | — | 42.9 | — | — | — | — | GDDR6 336 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-rtx4000 | _0.2225_ | 7.1 | _0_ | 57 | _0_ | _0_ | _0_ | _113.9_ | GDDR6 416 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| quadro-rtx4000-mobile | — | 8 | — | 63.9 | — | — | — | — | GDDR6 448 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-rtx5000 | _0.3485_ | 11.2 | _0_ | 89.2 | _0_ | _0_ | _0_ | 178.4 | GDDR6 448 GB/s | pcie | PCIe 3.0 x16, NVLink 2 50 GB/s | 0 |
+| quadro-rtx5000-mobile | — | 9.4 | — | 75.2 | — | — | — | — | GDDR6 448 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-rtx6000 | _0.5098_ | 16.3 | _0_ | 130.5 | _0_ | _0_ | _0_ | 261 | GDDR6 672 GB/s | pcie | PCIe 3.0 x16, NVLink 2 100 GB/s | 0 |
+| quadro-rtx6000-mobile | — | 14.9 | — | 119.4 | — | — | — | — | GDDR6 672 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-rtx8000 | _0.5098_ | 16.3 | _0_ | 130.5 | _0_ | _0_ | _0_ | _261_ | GDDR6 672 GB/s | pcie | PCIe 3.0 x16, NVLink 2 100 GB/s | 0 |
+| quadro-t1000-mobile | — | 2.6 | — | — | — | — | — | — | GDDR5 128 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-t1000-mobile-gddr6 | — | 2.6 | — | — | — | — | — | — | GDDR6 128 GB/s | laptop | PCIe 3.0 | 0 |
+| quadro-t2000-mobile | — | 3.5 | — | — | — | — | — | — | 128 GB/s | laptop | PCIe 3.0 | 0 |
+| t1000 | — | 2.5 | — | — | — | — | — | — | GDDR6 160 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| t1000-8gb | — | 2.5 | — | — | — | — | — | — | GDDR6 160 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| t1200-mobile | — | 3.7 | — | — | — | — | — | — | GDDR6 192 GB/s | laptop | PCIe 4.0 | 0 |
+| t400 | — | 1.09 | — | — | — | — | — | — | GDDR6 80 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| t400-4gb | — | 1.09 | — | — | — | — | — | — | GDDR6 80 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| t500-4gb-mobile | — | 3 | — | — | — | — | — | — | GDDR6 80 GB/s | laptop | PCIe 4.0 | 0 |
+| t500-mobile | — | 3 | — | — | — | — | — | — | GDDR6 80 GB/s | laptop | PCIe 4.0 | 0 |
+| t550-mobile | — | 3.7 | — | — | — | — | — | — | GDDR6 112 GB/s | laptop | PCIe 4.0 | 0 |
+| t600 | — | 1.7 | — | — | — | — | — | — | GDDR6 160 GB/s | pcie | PCIe 3.0 x16 | 0 |
+| t600-mobile | — | 3 | — | — | — | — | — | — | GDDR6 192 GB/s | laptop | PCIe 4.0 | 0 |
+
 ### Ampere
 
 | Profile ID / YAML | CC | GiB | SMs | Bus bits | Core MHz | Memory MHz | Limit W | Source |
@@ -421,6 +732,30 @@ python3 scripts/render_gpu_catalog.py --check
 | [rtx-a5500-mobile](ampere/workstation/rtx-a5500-mobile.yaml) | 8.6 | 16 | 58 | 256 | — | 8000 | 165 | [spec](https://www.nvidia.com/content/dam/en-zz/ja/Solutions/design-visualization/documents/ampere-mobile-linecard-master-mar22-jp.pdf) |
 | [rtx-a6000](ampere/workstation/rtx-a6000.yaml) | 8.6 | 48 | 84 | 384 | 1800 | 8000 | 300 | [spec](https://www.nvidia.com/en-us/products/workstations/professional-desktop-gpus/) |
 
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| a800-40gb-active | 9.7 | 19.5 | — | — | — | — | — | — | HBM2 1555.2 GB/s | pcie | PCIe 4.0 x16, NVLink 3 400 GB/s | 7 |
+| rtx-a1000 | — | 6.7 | — | — | — | — | — | — | GDDR6 192 GB/s | pcie | PCIe 4.0 x8 | — |
+| rtx-a1000-6gb-mobile | — | 9.3 | — | — | — | — | — | — | 168 GB/s | laptop | — | — |
+| rtx-a1000-mobile | — | 7.5 | — | — | — | — | — | — | GDDR6 224 GB/s | laptop | PCIe 4.0 | — |
+| rtx-a2000 | _0.1248_ | 8 | _15.97_ | _31.95_ | _31.95_ | _0_ | _0_ | _63.9_ | GDDR6 288 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-a2000-6gb | — | 8 | — | — | — | — | — | — | GDDR6 288 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-a2000-8gb-mobile | — | 9.3 | — | — | — | — | — | — | GDDR6 224 GB/s | laptop | PCIe 4.0 | — |
+| rtx-a2000-mobile | — | 9.3 | — | — | — | — | — | — | GDDR6 192 GB/s | laptop | PCIe 4.0 | — |
+| rtx-a3000-12gb-mobile | — | 14.1 | — | — | — | — | — | — | GDDR6 336 GB/s | laptop | PCIe 4.0 | — |
+| rtx-a3000-mobile | — | 12.8 | — | — | — | — | — | — | GDDR6 264 GB/s | laptop | PCIe 4.0 | — |
+| rtx-a400 | — | 2.7 | — | — | — | — | — | — | GDDR6 96 GB/s | pcie | PCIe 4.0 x8 | — |
+| rtx-a4000 | _0.2995_ | 19.2 | _38.34_ | _76.68_ | _76.68_ | _0_ | _0_ | _153.4_ | GDDR6 448 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-a4000-mobile | — | 17.8 | — | — | — | — | — | — | GDDR6 384 GB/s | laptop | PCIe 4.0 | — |
+| rtx-a4500 | _0.3696_ | 23.7 | _47.31_ | _94.62_ | _94.62_ | _0_ | _0_ | _189.2_ | GDDR6 640 GB/s | pcie | PCIe 4.0 x16, NVLink 3 112.5 GB/s | — |
+| rtx-a4500-mobile | — | 18.5 | — | — | — | — | — | — | GDDR6 512 GB/s | laptop | PCIe 4.0 | — |
+| rtx-a500-mobile | — | 7 | — | — | — | — | — | — | GDDR6 112 GB/s | laptop | PCIe 4.0 | — |
+| rtx-a5000 | _0.4339_ | 27.8 | _55.54_ | _111.1_ | _111.1_ | _0_ | _0_ | _222.2_ | GDDR6 768 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-a5000-mobile | — | 21.7 | — | — | — | — | — | — | GDDR6 448 GB/s | laptop | PCIe 4.0 | — |
+| rtx-a5500 | _0.5664_ | 34.1 | _72.5_ | _145_ | _145_ | _0_ | _0_ | _290_ | GDDR6 768 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-a5500-mobile | — | 24.7 | — | — | — | — | — | — | GDDR6 512 GB/s | laptop | PCIe 4.0 | — |
+| rtx-a6000 | _0.6048_ | 38.7 | 77.4 | 154.8 | 154.8 | _0_ | _0_ | 309.7 | GDDR6 768 GB/s | pcie | PCIe 4.0 x16, NVLink 3 112.5 GB/s | — |
+
 ### Ada
 
 | Profile ID / YAML | CC | GiB | SMs | Bus bits | Core MHz | Memory MHz | Limit W | Source |
@@ -438,6 +773,22 @@ python3 scripts/render_gpu_catalog.py --check
 | [rtx-5000-ada](ada/workstation/rtx-5000-ada.yaml) | 8.9 | 32 | 100 | 256 | 2550 | 9000 | 250 | [spec](https://www.nvidia.com/en-us/products/workstations/professional-desktop-gpus/) |
 | [rtx-5000-ada-mobile](ada/workstation/rtx-5000-ada-mobile.yaml) | 8.9 | 16 | 76 | 256 | — | 9000 | 175 | [spec](https://www.nvidia.com/en-us/products/workstations/professional-laptops/compare/) |
 | [rtx-6000-ada](ada/workstation/rtx-6000-ada.yaml) | 8.9 | 48 | 142 | 384 | 2505 | 10000 | 300 | [spec](https://www.nvidia.com/en-us/products/workstations/professional-desktop-gpus/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| rtx-1000-ada-mobile | — | 12.1 | — | — | — | — | — | — | GDDR6 192 GB/s | laptop | PCIe 4.0 | — |
+| rtx-2000-ada | _0.1874_ | 12 | _23.99_ | _47.98_ | _47.98_ | _95.97_ | _0_ | _95.97_ | GDDR6 224 GB/s | pcie | PCIe 4.0 x8 | — |
+| rtx-2000-ada-mobile | — | 14.5 | — | — | — | — | — | — | GDDR6 256 GB/s | laptop | PCIe 4.0 | — |
+| rtx-3000-ada-mobile | — | 19.9 | — | — | — | — | — | — | GDDR6 256 GB/s | laptop | PCIe 4.0 | — |
+| rtx-3500-ada-mobile | — | 23 | — | — | — | — | — | — | GDDR6 432 GB/s | laptop | PCIe 4.0 | — |
+| rtx-4000-ada | _0.4176_ | 26.7 | _53.45_ | _106.9_ | _106.9_ | _213.8_ | _0_ | _213.8_ | GDDR6 360 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-4000-ada-mobile | — | 33.6 | — | — | — | — | — | — | GDDR6 432 GB/s | laptop | PCIe 4.0 | — |
+| rtx-4000-sff-ada | _0.2995_ | 19.2 | _38.34_ | _76.68_ | _76.68_ | _153.4_ | _0_ | _153.4_ | GDDR6 280 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-4500-ada | _0.6192_ | 39.6 | _79.26_ | _158.5_ | _158.5_ | _317_ | _0_ | _317_ | GDDR6 432 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-500-ada-mobile | — | 9.2 | — | — | — | — | — | — | GDDR6 128 GB/s | laptop | PCIe 4.0 | — |
+| rtx-5000-ada | _1.02_ | 65.3 | _130.6_ | _261.1_ | _261.1_ | _522.2_ | _0_ | _522.2_ | GDDR6 576 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-5000-ada-mobile | — | 42.6 | — | — | — | — | — | — | GDDR6 576 GB/s | laptop | PCIe 4.0 | — |
+| rtx-6000-ada | _1.423_ | 91.1 | 182.1 | 364 | 364 | 728.5 | _0_ | 728.5 | GDDR6 960 GB/s | pcie | PCIe 4.0 x16 | — |
 
 ### Blackwell
 
@@ -458,8 +809,28 @@ python3 scripts/render_gpu_catalog.py --check
 | [rtx-pro-5000-blackwell-72gb](blackwell/workstation/rtx-pro-5000-blackwell-72gb.yaml) | 12.0 | 72 | 110 | 384 | — | 14000 | 300 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/professional-desktop-gpus/rtx-pro-5000-blackwell/workstation-datasheet-blackwell-rtx-pro-5000-5488550-nvidia.pdf) |
 | [rtx-pro-5000-blackwell-mobile](blackwell/workstation/rtx-pro-5000-blackwell-mobile.yaml) | 12.0 | 24 | 82 | 256 | — | 14000 | 175 | [spec](https://www.nvidia.com/en-us/products/workstations/professional-laptops/compare/) |
 | [rtx-pro-5500-blackwell](blackwell/workstation/rtx-pro-5500-blackwell.yaml) | 12.0 | 84 | — | — | — | — | 600 | [spec](https://www.nvidia.com/en-us/products/workstations/professional-desktop-gpus/rtx-pro-5500/) |
-| [rtx-pro-6000-blackwell](blackwell/workstation/rtx-pro-6000-blackwell.yaml) | 12.0 | 96 | 188 | 512 | 2600 | 14000 | 600 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/data-center/rtx-pro-6000-blackwell-workstation-edition/workstation-blackwell-rtx-pro-6000-workstation-edition-nvidia-us-3519208-web.pdf) |
-| [rtx-pro-6000-blackwell-max-q](blackwell/workstation/rtx-pro-6000-blackwell-max-q.yaml) | 12.0 | 96 | 188 | 512 | — | 14000 | 300 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/professional-desktop-gpus/rtx-pro-6000-max-q/workstation-datasheet-blackwell-rtx-pro-6000-max-q-nvidia-us-5349650-web.pdf) |
+| [rtx-pro-6000-blackwell](blackwell/workstation/rtx-pro-6000-blackwell.yaml) | 12.0 | 96 | 188 | 512 | 2617 | 14000 | 600 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/data-center/rtx-pro-6000-blackwell-workstation-edition/workstation-blackwell-rtx-pro-6000-workstation-edition-nvidia-us-3519208-web.pdf) |
+| [rtx-pro-6000-blackwell-max-q](blackwell/workstation/rtx-pro-6000-blackwell-max-q.yaml) | 12.0 | 96 | 188 | 512 | 2280 | 14000 | 300 | [spec](https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/professional-desktop-gpus/rtx-pro-6000-max-q/workstation-datasheet-blackwell-rtx-pro-6000-max-q-nvidia-us-5349650-web.pdf) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| gb10 | _0.288_ | _18.43_ | — | — | — | — | — | — | LPDDR5X 273 GB/s | superchip | — | — |
+| gb300-dgx-station | 1.3 | 80 | — | — | — | — | 15000 | — | HBM3e 7100 GB/s | superchip | C2C 900 GB/s | 7 |
+| rtx-pro-1000-blackwell-mobile | — | 13.6 | — | — | — | — | — | — | GDDR7 384 GB/s | laptop | PCIe 5.0 | — |
+| rtx-pro-2000-blackwell | _0.2656_ | 17 | _34_ | _68_ | _68_ | _136_ | _272_ | _136_ | GDDR7 288 GB/s | pcie | PCIe 5.0 x8 | — |
+| rtx-pro-2000-blackwell-mobile | — | 17.7 | — | — | — | — | — | — | GDDR7 384 GB/s | laptop | PCIe 5.0 | — |
+| rtx-pro-3000-blackwell-mobile | — | 29.1 | — | — | — | — | — | — | GDDR7 672 GB/s | laptop | PCIe 5.0 | — |
+| rtx-pro-4000-blackwell | _0.5782_ | 37 | _74.01_ | _148_ | _148_ | _296_ | _592.1_ | _296_ | GDDR7 672 GB/s | pcie | PCIe 5.0 x16 | — |
+| rtx-pro-4000-blackwell-mobile | — | 38.7 | — | — | — | — | — | — | GDDR7 896 GB/s | laptop | PCIe 5.0 | — |
+| rtx-pro-4000-blackwell-sff | _0.378_ | 24 | _48.38_ | _96.77_ | _96.77_ | _193.5_ | _387.1_ | _193.5_ | GDDR7 432 GB/s | pcie | PCIe 5.0 x8 | — |
+| rtx-pro-4500-blackwell | _0.7967_ | 51 | _102_ | _204_ | _204_ | _407.9_ | _815.8_ | _407.9_ | GDDR7 896 GB/s | pcie | PCIe 5.0 x16 | 2 |
+| rtx-pro-500-blackwell-mobile | — | 9.2 | — | — | — | — | — | — | GDDR7 288 GB/s | laptop | PCIe 5.0 | — |
+| rtx-pro-5000-blackwell-48gb | — | 65 | — | — | — | — | — | — | GDDR7 1344 GB/s | pcie | PCIe 5.0 x16 | 2 |
+| rtx-pro-5000-blackwell-72gb | — | 65 | — | — | — | — | — | — | GDDR7 1344 GB/s | pcie | PCIe 5.0 x16 | 2 |
+| rtx-pro-5000-blackwell-mobile | — | 49.8 | — | — | — | — | — | — | GDDR7 896 GB/s | laptop | PCIe 5.0 | — |
+| rtx-pro-5500-blackwell | — | — | — | — | — | — | — | — | GDDR7 1398 GB/s | pcie | PCIe 5.0 x16 | 2 |
+| rtx-pro-6000-blackwell | _1.968_ | 126 | 251.9 | 503.8 | 503.8 | 1007.6 | 2015.2 | 1007.6 | GDDR7 1792 GB/s | pcie | PCIe 5.0 x16 | 4 |
+| rtx-pro-6000-blackwell-max-q | _1.715_ | 109.7 | 219.5 | 438.9 | 438.9 | 877.9 | 1755.7 | 877.9 | GDDR7 1792 GB/s | pcie | PCIe 5.0 x16 | 4 |
 
 
 ## Embedded — 嵌入式 (2)
@@ -470,11 +841,19 @@ python3 scripts/render_gpu_catalog.py --check
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | [jetson-agx-orin-64gb](ampere/embedded/jetson-agx-orin-64gb.yaml) | 8.7 | 64 | 16 | 256 | 1300 | 3200 | 60 | [spec](https://www.nvidia.com/en-gb/autonomous-machines/embedded-systems/jetson-orin/) |
 
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| jetson-agx-orin-64gb | _0.0832_ | 5.32 | — | 42.5 | — | _0_ | _0_ | 85 | LPDDR5 204.8 GB/s | embedded | — | — |
+
 ### Blackwell
 
 | Profile ID / YAML | CC | GiB | SMs | Bus bits | Core MHz | Memory MHz | Limit W | Source |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | [jetson-t5000](blackwell/embedded/jetson-t5000.yaml) | 11.0 | 128 | 20 | 256 | 1575 | 4266 | 130 | [spec](https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-thor/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| jetson-t5000 | _0.126_ | 8.064 | — | 258 | — | 517 | 1035 | 517 | LPDDR5X 273 GB/s | embedded | — | 2 |
 
 
 ## Synthetic — 合成测试 (1)
@@ -484,3 +863,7 @@ python3 scripts/render_gpu_catalog.py --check
 | Profile ID / YAML | CC | GiB | SMs | Bus bits | Core MHz | Memory MHz | Limit W | Source |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | [test-512m](ampere/test/test-512m.yaml) | 8.0 | 0.5 | 108 | 5120 | 1410 | 1215 | 400 | [spec](https://www.nvidia.com/en-us/data-center/a100/) |
+
+| Profile ID | FP64 | FP32 | TF32 TC | FP16 TC | BF16 TC | FP8 TC | FP4 TC | INT8 TC | Memory | Form | Links | MIG |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|
+| test-512m | _9.746_ | _19.49_ | _155.9_ | _311.9_ | _311.9_ | _0_ | _0_ | _623.7_ | — | — | — | — |

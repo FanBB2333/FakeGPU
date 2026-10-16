@@ -1,3 +1,4 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx-pro-4000-blackwell-sff
 name: Fake NVIDIA RTX PRO 4000 Blackwell SFF Edition
 torch_name: NVIDIA RTX PRO 4000 Blackwell SFF Edition
@@ -25,7 +26,25 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 70000
 max_power_limit_mw: 70000
-pci_device_id: 0
+pci_device_id: 741544158
+memory_type: GDDR7
+memory_bandwidth_gbps: 432
+ecc: supported
+form_factor: pcie
+pcie_generation: 5
+pcie_lanes: 8
+fp64_tflops: 0.378
+fp32_tflops: 24
+fp16_tflops: 24.19
+bf16_tflops: 24.19
+tensor_tf32_tflops: 48.38
+tensor_fp16_tflops: 96.77
+tensor_bf16_tflops: 96.77
+tensor_fp8_tflops: 193.5
+tensor_fp4_tflops: 387.1
+tensor_int8_tops: 193.5
+tensor_int4_tops: 0
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/professional-desktop-gpus/rtx-pro-4000-sff/workstation-datasheet-blackwell-rtx-pro-4000-sff-nvidia-us-4016700.pdf
 supported_types:
   - fp32
   - tf32
@@ -35,3 +54,16 @@ supported_types:
   - fp4
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

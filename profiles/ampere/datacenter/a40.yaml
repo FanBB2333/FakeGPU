@@ -2,6 +2,7 @@
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf
+# Additional source: https://images.nvidia.com/content/Solutions/data-center/a40/nvidia-a40-datasheet.pdf
 id: a40
 name: Fake NVIDIA A40
 torch_name: NVIDIA A40
@@ -30,6 +31,32 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 300000
 pci_device_id: 573903070
+base_clock_mhz: 1305
+memory_type: GDDR6
+memory_bandwidth_gbps: 696
+ecc: supported
+form_factor: pcie
+pcie_generation: 4
+pcie_lanes: 16
+nvlink_generation: 3
+nvlink_links: 4
+nvlink_bandwidth_gbps: 112.5
+mig_max_instances: 0
+min_power_limit_mw: 100000
+fp64_tflops: 0.5846
+fp32_tflops: 37.4
+fp16_tflops: 37.4
+bf16_tflops: 37.4
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 74.8
+tensor_fp16_tflops: 149.7
+tensor_bf16_tflops: 149.7
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 299.3
+tensor_int4_tops: 598.7
+throughput_source: https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf
 supported_types:
   - fp32
   - tf32
@@ -37,3 +64,18 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - tensor_fp64_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

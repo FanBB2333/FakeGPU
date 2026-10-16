@@ -1,3 +1,4 @@
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3070-3070ti/
 id: rtx3070
 name: Fake NVIDIA GeForce RTX 3070
 torch_name: NVIDIA GeForce RTX 3070
@@ -13,7 +14,7 @@ notes: Reference 8 GB Founders Edition profile using NVIDIA GeForce specificatio
 memory_bytes: 8589934592
 sm_count: 46
 memory_bus_width_bits: 256
-core_clock_mhz: 1730
+core_clock_mhz: 1725
 memory_clock_mhz: 7000
 l2_cache_bytes: 4194304
 shared_mem_per_sm: 102400
@@ -26,6 +27,26 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 220000
 max_power_limit_mw: 220000
 pci_device_id: 0
+base_clock_mhz: 1500
+memory_type: GDDR6
+memory_bandwidth_gbps: 448
+form_factor: pcie
+pcie_generation: 4
+nvlink_generation: 0
+fp64_tflops: 0.3174
+fp32_tflops: 20.3
+fp16_tflops: 20.3
+bf16_tflops: 20.3
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 20.3
+tensor_fp16_tflops: 40.6
+tensor_bf16_tflops: 40.6
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 162.6
+tensor_int4_tops: 325.2
+throughput_source: https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf
 supported_types:
   - fp32
   - tf32
@@ -33,3 +54,18 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - tensor_fp64_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

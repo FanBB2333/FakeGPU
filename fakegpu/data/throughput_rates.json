@@ -1,0 +1,1990 @@
+{
+ "schema": "fakegpu.throughput_rates.v1",
+ "unit": "dense operations per clock per SM; FMA = 2",
+ "rates": [
+  {
+   "compute_capability": "5.0",
+   "class": "all",
+   "applies_to": "Maxwell GM107/GM108 (GTX 950M/960M, Quadro K620/K1200/K2200, Quadro M500M-M5000M, Tesla M10)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 8,
+    "fp32_tflops": 256,
+    "fp16_tflops": 0,
+    "bf16_tflops": 0,
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html",
+    "tensor_fp64_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_tf32_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp16_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_bf16_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp8_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp6_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp4_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_int8_tops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+   },
+   "notes": "Non-tensor rates from the CUDA 12.9.1 Programming Guide Table 7 column '5.0, 5.2' (results per clock per SM: FP32 add/mul/FMA 128, FP64 4, FP16 'N/A'), doubled because an FMA counts as 2 operations. CC 5.x was removed from the current guide; 12.9.1 is the last version listing it. FP16 arithmetic is native only from CC 5.3, so 0 here (FP16 storage/conversion still works). BF16 arithmetic is native only from CC 8.x (CUDA feature table). No Tensor Cores before Volta (Volta whitepaper: Tensor Cores are new in GV100)."
+  },
+  {
+   "compute_capability": "5.2",
+   "class": "all",
+   "applies_to": "Maxwell GM200/GM204/GM206 (GTX 950-980 Ti, GTX 965M-980M, TITAN X (Maxwell), Tesla M4/M6/M40/M60, Quadro M2000-M6000, M620/M1200/M2200)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 8,
+    "fp32_tflops": 256,
+    "fp16_tflops": 0,
+    "bf16_tflops": 0,
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html",
+    "tensor_fp64_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_tf32_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp16_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_bf16_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp8_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp6_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp4_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_int8_tops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+   },
+   "notes": "Same table column as CC 5.0 (FP32 128 results, FP64 4 results, FP16 N/A). Check: Tesla M40 24 SMs x 1114 MHz x 256 = 6.85 TFLOPS vs Volta whitepaper 6.8; FP64 x 8 = 0.214 vs 0.21. Maxwell GM200 FP64 is 1/32 of FP32 on every product, including Quadro M6000 and TITAN X."
+  },
+  {
+   "compute_capability": "6.0",
+   "class": "all",
+   "applies_to": "Pascal GP100 (Tesla P100 PCIe/SXM2, Quadro GP100)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 64,
+    "fp32_tflops": 128,
+    "fp16_tflops": 256,
+    "bf16_tflops": 0,
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html",
+    "tensor_fp64_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_tf32_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp16_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_bf16_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp8_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp6_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp4_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_int8_tops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+   },
+   "notes": "CUDA 12.9.1 Table 7 column 6.0: FP16 128 results (half2 math, counted per half), FP32 64, FP64 32; x2 for FMA. Check: P100 SXM2 56 SMs x 1480 MHz gives FP32 10.61, FP64 5.30, FP16 21.2 TFLOPS, matching the Volta/GA100 whitepaper P100 columns. Quadro GP100 shares GP100 and needs no override (half-rate FP64 applies to it too)."
+  },
+  {
+   "compute_capability": "6.1",
+   "class": "all",
+   "applies_to": "Pascal GP102/GP104/GP106/GP107/GP108 (GT 1010/1030, GTX 1050-1080 Ti, TITAN X (Pascal), TITAN Xp, Tesla P4/P6/P40, Quadro P400-P6000 and mobile)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 8,
+    "fp32_tflops": 256,
+    "fp16_tflops": 4,
+    "bf16_tflops": 0,
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html",
+    "tensor_fp64_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_tf32_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp16_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_bf16_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp8_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp6_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_fp4_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_int8_tops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+   },
+   "notes": "CUDA 12.9.1 Table 7 column 6.1: FP32 128 results, FP64 4, FP16 2 (FP16 arithmetic is 1/64 of FP32 on GP10x); x2 for FMA. Checks: GTX 1080 20 SMs x 1733 MHz x 256 = 8.87 TFLOPS (Turing whitepaper 8.9); GTX 1080 Ti 28 x 1582 = 11.34 (11.3). No Tensor Cores, so tensor_int8 is 0; CC 6.1 has the non-tensor DP4A 8-bit dot product, which gives 1024 INT8 ops/clk/SM (Tesla P4: 20 SMs x 1063 MHz x 1024 = 21.8 vs Turing whitepaper 'Peak INT8 Tensor TOPS 22' for P4, which NVIDIA lists under the tensor row although P4 has no Tensor Cores). The schema has no non-tensor INT8 field; a simulator that wants DP4A throughput can use 1024."
+  },
+  {
+   "compute_capability": "7.0",
+   "class": "all",
+   "applies_to": "Volta GV100 (Tesla V100 PCIe/SXM2/SXM3/FHHL/DGXS, V100S, Quadro GV100, TITAN V)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 64,
+    "fp32_tflops": 128,
+    "fp16_tflops": 256,
+    "bf16_tflops": 0,
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 1024,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html",
+    "tensor_fp64_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_tf32_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_fp16_tflops": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf",
+    "tensor_bf16_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_fp8_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp6_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp4_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_int8_tops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_int4_tops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+   },
+   "notes": "Non-tensor: CUDA 12.9.1 Table 7 column 7.x (FP16 128, FP32 64, FP64 32 results; footnote '2 for compute capability 7.5' applies only to 7.5). Tensor: Volta whitepaper 'each Tensor Core performs 64 floating point FMA operations per clock, and eight Tensor Cores in an SM perform a total of 512 FMA operations (or 1024 individual floating point operations) per clock'; FP16 input with FP16 or FP32 accumulate at the same rate. Check V100 SXM2 80 x 1530 MHz x 1024 = 125.3 TFLOPS (125). INT8/INT4 were added with Turing and TF32/BF16 with Ampere (GA102 whitepaper), FP64 MMA needs sm_80 and FP8 needs sm_89 (PTX ISA). All CC 7.0 products in the catalog (Tesla V100 variants, Quadro GV100, TITAN V) use full-rate FP64 and FP32-accumulate tensor math, so there is one class and no override for TITAN V or Quadro GV100."
+  },
+  {
+   "compute_capability": "7.5",
+   "class": "professional",
+   "applies_to": "Turing TU102/TU104/TU106 professional and data-center parts (Tesla T4, Quadro RTX 3000-8000 desktop and mobile); also TITAN RTX via override",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 128,
+    "fp16_tflops": 256,
+    "bf16_tflops": 0,
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 1024,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 2048,
+    "tensor_int4_tops": 4096
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_fp64_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_tf32_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_fp16_tflops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf",
+    "tensor_bf16_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_fp8_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp6_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp4_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_int8_tops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+   },
+   "notes": "Non-tensor from the CUDA Best Practices Guide Table 5 column 7.5: f16x2 64 results (=128 halves), FP32 64, FP64 2; x2 for FMA. BF16 has footnote 'multiple instructions for __nv_bfloat16' (no native BF16 arithmetic), recorded as 0. Tensor: Turing whitepaper 'Eight Tensor Cores in an SM perform a total of 512 FP16 multiply and accumulate operations per clock, or 1024 total FP operations per clock. The new INT8 precision mode works at double this rate'; INT4 doubles again (Quadro RTX 6000 72 SMs x 1770 MHz: FP16/FP32-acc 130.5, INT8 261, INT4 522 TFLOPS/TOPS -> 1024/2048/4096). Quadro RTX mobile line card ratio (RTX 5000 mobile 9.4 FP32 vs 75.2 tensor TFLOPS = 8x) confirms full rate on mobile Quadro. T4: 40 x 1590 MHz -> 65 / 130 / 260."
+  },
+  {
+   "compute_capability": "7.5",
+   "class": "geforce",
+   "applies_to": "Turing GeForce RTX 20 desktop and laptop (TU102/TU104/TU106); GTX 16 and TU117 workstation parts have no Tensor Cores (see overrides)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 128,
+    "fp16_tflops": 256,
+    "bf16_tflops": 0,
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 512,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 2048,
+    "tensor_int4_tops": 4096
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_fp64_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_tf32_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_fp16_tflops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf",
+    "tensor_bf16_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_fp8_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp6_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp4_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_int8_tops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+   },
+   "notes": "GeForce RTX 20 runs FP16 MMA with FP32 accumulate at half rate: Turing whitepaper RTX 2080 Ti FE (68 SMs, 1635 MHz) 'Peak FP16 Tensor TFLOPS with FP16 Accumulate 113.8' vs 'with FP32 Accumulate 56.9' -> 1024 vs 512. INT8 (227.7) and INT4 (455.4) are full rate (2048/4096). The FP16-accumulate rate is 1024 if a simulator needs it. Non-tensor rates as in the professional class."
+  },
+  {
+   "compute_capability": "8.0",
+   "class": "all",
+   "applies_to": "Ampere GA100 (A100 PCIe/SXM4 40/80GB, A100X, A30, A30X, A800 PCIe/SXM4, AX800, A800 40GB Active)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 64,
+    "fp32_tflops": 128,
+    "fp16_tflops": 512,
+    "bf16_tflops": 256,
+    "tensor_fp64_tflops": 128,
+    "tensor_tf32_tflops": 1024,
+    "tensor_fp16_tflops": 2048,
+    "tensor_bf16_tflops": 2048,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 4096,
+    "tensor_int4_tops": 8192
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_fp64_tflops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf",
+    "tensor_tf32_tflops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf",
+    "tensor_fp16_tflops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf",
+    "tensor_bf16_tflops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf",
+    "tensor_fp8_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp6_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp4_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_int8_tops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+   },
+   "notes": "Non-tensor: Best Practices Guide column 8.0: f16x2 128 results (=256 halves), footnote '64 for __nv_bfloat16', FP32 64, FP64 32; x2 for FMA. Tensor: GA100 whitepaper 'each SM in A100 delivers 1024 FP16 FMA operations per clock (or 2048 individual FP16 floating point operations per clock)'; other types from the A100 table at 108 SMs x 1410 MHz: FP64 Tensor 19.5 -> 128, TF32 156 -> 1024, BF16 312 -> 2048, INT8 624 -> 4096, INT4 1248 -> 8192 (dense). The same table gives FP16 non-tensor 78 (=512) and BF16 non-tensor 39 (=256), matching the CUDA guide. FP8 MMA needs sm_89 (PTX ISA)."
+  },
+  {
+   "compute_capability": "8.6",
+   "class": "professional",
+   "applies_to": "Ampere GA102/GA104/GA106/GA107 professional and data-center parts (RTX A400-A6000 desktop, RTX A500-A5500 laptop, A2, A10, A10G, A16, A40)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 256,
+    "fp16_tflops": 256,
+    "bf16_tflops": 256,
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 512,
+    "tensor_fp16_tflops": 1024,
+    "tensor_bf16_tflops": 1024,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 2048,
+    "tensor_int4_tops": 4096
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_fp64_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_tf32_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_fp16_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_bf16_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_fp8_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf",
+    "tensor_fp6_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp4_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf",
+    "tensor_int8_tops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_int4_tops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+   },
+   "notes": "Non-tensor: Best Practices Guide column '8.6 / 8.9': f16x2 64 (=128 halves), FP32 128, FP64 2 results; x2 for FMA (FP16 = BF16 = FP32 rate). The older 12.9.1 table listed 256 halves for 8.6, which contradicts the GA102 whitepaper (RTX 3090 FP16 non-tensor 35.6 = FP32 35.6); the current table is used. Tensor: GA102 whitepaper RTX A6000 (84 SMs x 1800 MHz): FP16/BF16 dense 154.8 -> 1024, TF32 77.4 -> 512, INT8 309.7 -> 2048, INT4 619.3 -> 4096; A40 (84 x 1740) gives the same per-SM rates. GA102 whitepaper: 'GA10x GPUs do not include Tensor Core acceleration for double-precision (FP64)'. FP8 is 'N/A' for RTX 3090 Ti in the Ada whitepaper and FP4 'N/A' for RTX 3090 in the RTX Blackwell whitepaper. Ampere mobile line card ratio (RTX A5500 laptop 24.7 FP32 vs 197.8 sparse tensor TFLOPS -> 1024 dense) confirms full rate on professional laptops."
+  },
+  {
+   "compute_capability": "8.6",
+   "class": "geforce",
+   "applies_to": "Ampere GeForce RTX 30 desktop and laptop (GA102-GA107), RTX 2050 laptop",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 256,
+    "fp16_tflops": 256,
+    "bf16_tflops": 256,
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 256,
+    "tensor_fp16_tflops": 512,
+    "tensor_bf16_tflops": 512,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 2048,
+    "tensor_int4_tops": 4096
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_fp64_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_tf32_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_fp16_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_bf16_tflops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_fp8_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf",
+    "tensor_fp6_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp4_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf",
+    "tensor_int8_tops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+    "tensor_int4_tops": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+   },
+   "notes": "GA102 whitepaper RTX 3080 (68 SMs x 1710 MHz): FP16 tensor with FP16 accumulate 119 (=1024) but with FP32 accumulate 59.5 (=512), BF16 59.5 (=512), TF32 29.8 (=256), INT8 238 (=2048), INT4 476 (=4096). So GeForce halves FP32-accumulate FP16/BF16 and TF32 relative to professional parts; integer rates are equal."
+  },
+  {
+   "compute_capability": "8.7",
+   "class": "all",
+   "applies_to": "Ampere GA10B (Jetson AGX Orin, Orin NX, Orin Nano)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 256,
+    "fp16_tflops": 512,
+    "tensor_fp16_tflops": 2048,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 4096
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html",
+    "fp32_tflops": "https://www.nvidia.com/content/dam/en-zz/Solutions/gtcf21/jetson-orin/nvidia-jetson-agx-orin-technical-brief.pdf",
+    "fp16_tflops": "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/",
+    "tensor_fp16_tflops": "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/",
+    "tensor_fp8_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp6_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp4_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_int8_tops": "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/"
+   },
+   "notes": "CC 8.7 is not a column in the CUDA throughput table. Derived from NVIDIA's Jetson Orin page for AGX Orin 64GB (16 SMs per the technical brief, 1.3 GHz max GPU frequency, 20.8e9 SM-cycles/s): '5.3 FP32 TFLOPs | 10.6 FP16 TFLOPs' (CUDA cores) -> 255 / 510 => 256 / 512; '43 DENSE FP16 TFLOPs' tensor -> 2067 => 2048; '85 DENSE INT8 TOPs' -> 4087 => 4096. So Orin Tensor Cores run at the GA100 per-SM rate (twice GA10x) and CUDA-core FP16 is 2x FP32, unlike GA10x. FP64 is 1/64 of FP32 per the compute-capability table (8.7 '64:1'). Unknown (omitted): BF16 non-tensor, TF32/BF16/INT4/FP64 tensor rates; NVIDIA does not publish them for Orin. FP8/FP6/FP4 MMA need sm_89/sm_100+/sm_120 (PTX ISA)."
+  },
+  {
+   "compute_capability": "8.9",
+   "class": "professional",
+   "applies_to": "Ada AD102-AD107 professional and data-center parts (RTX 2000-6000 Ada desktop, RTX 500-5000 Ada laptop, L2, L4, L20, L40S; L40 has an override)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 256,
+    "fp16_tflops": 256,
+    "bf16_tflops": 256,
+    "tensor_tf32_tflops": 512,
+    "tensor_fp16_tflops": 1024,
+    "tensor_bf16_tflops": 1024,
+    "tensor_fp8_tflops": 2048,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 2048,
+    "tensor_int4_tops": 4096
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_tf32_tflops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_fp16_tflops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_bf16_tflops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_fp8_tflops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_fp6_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp4_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf",
+    "tensor_int8_tops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+   },
+   "notes": "Non-tensor: Best Practices Guide column '8.6 / 8.9' (FP16 = BF16 = FP32 = 256 flops/clk/SM, FP64 4). Tensor: RTX PRO Blackwell whitepaper table, RTX 6000 Ada (142 SMs x 2505 MHz = 355.7e9): FP16 and BF16 with FP32 accumulate 364 -> 1023 => 1024, TF32 182.1 -> 512, FP8 with FP32 accumulate 728.5 -> 2048, INT8 728.5 -> 2048. INT4 from the Ada whitepaper L4 table: 484 TOPS dense at FP32 30.3 TFLOPS -> 16 x the FP32 rate => 4096. FP64 Tensor Core: Ada whitepaper says the 2 FP64 cores per SM run 'FP64 Tensor Core code' for correctness; no rate is published, so it is omitted. FP4/FP6 are 'N/A' for RTX 4090 in the RTX Blackwell whitepaper and need sm_120a (PTX ISA)."
+  },
+  {
+   "compute_capability": "8.9",
+   "class": "geforce",
+   "applies_to": "Ada GeForce RTX 40 desktop and laptop (AD102-AD107), RTX 4090 D, RTX 3050 A laptop",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 256,
+    "fp16_tflops": 256,
+    "bf16_tflops": 256,
+    "tensor_tf32_tflops": 256,
+    "tensor_fp16_tflops": 512,
+    "tensor_bf16_tflops": 512,
+    "tensor_fp8_tflops": 1024,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 2048,
+    "tensor_int4_tops": 4096
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_tf32_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf",
+    "tensor_fp16_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf",
+    "tensor_bf16_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf",
+    "tensor_fp8_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf",
+    "tensor_fp6_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp4_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf",
+    "tensor_int8_tops": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+   },
+   "notes": "Ada whitepaper RTX 4090 (128 SMs x 2520 MHz = 322.6e9): FP16 with FP16 accumulate 330.3 (=1024) vs FP32 accumulate 165.2 (=512), BF16 165.2 (=512), TF32 82.6 (=256), FP8 with FP16 accumulate 660.6 (=2048) vs FP32 accumulate 330.3 (=1024, value corrected in whitepaper v2.02), INT8 660.6 (=2048), INT4 1321.2 (=4096). Recorded FP8 uses FP32 accumulate per schema; the FP16-accumulate FP8 rate is 2048."
+  },
+  {
+   "compute_capability": "9.0",
+   "class": "all",
+   "applies_to": "Hopper GH100 (H100 PCIe/SXM5/NVL, H200 SXM/NVL, H800, H20, GH200)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 128,
+    "fp32_tflops": 256,
+    "fp16_tflops": 512,
+    "bf16_tflops": 512,
+    "tensor_fp64_tflops": 256,
+    "tensor_tf32_tflops": 2048,
+    "tensor_fp16_tflops": 4096,
+    "tensor_bf16_tflops": 4096,
+    "tensor_fp8_tflops": 8192,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 8192,
+    "tensor_int4_tops": 0
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_fp64_tflops": "https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/",
+    "tensor_tf32_tflops": "https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/",
+    "tensor_fp16_tflops": "https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/",
+    "tensor_bf16_tflops": "https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/",
+    "tensor_fp8_tflops": "https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/",
+    "tensor_fp6_tflops": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html",
+    "tensor_fp4_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_int8_tops": "https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/",
+    "tensor_int4_tops": "https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/"
+   },
+   "notes": "Non-tensor: Best Practices Guide column 9.0 (f16x2 128 = 256 halves, FP32 128, FP64 64 results; x2). Tensor: NVIDIA Hopper blog 'the H100 SM ... doubles the A100 raw SM computational power on all previous Tensor Core, FP32, and FP64 data types, clock-for-clock' and 'quadruples ... due to the introduction of FP8', applied to the A100 per-SM rates (FP64 tensor 128->256, TF32 1024->2048, FP16/BF16 2048->4096, INT8 4096->8192, FP8 = 4 x A100 FP16 = 8192). The blog lists 'FP8, FP16, BF16, TF32, FP64, and INT8 MMA data types' (no INT4), and FP6/FP4 arrive with Blackwell, so those are 0. CLOCK CAVEAT: NVIDIA's published H100 tensor peaks use a lower clock than the boost clock used for FP32/FP64. H100 SXM (H100 page): FP32 67 TF = 132 x 256 x 1980 MHz, but dense FP16 989.5 TF (half of 1,979 sparse) = 132 x 4096 x 1830 MHz (factor 0.924). H100 NVL: FP32 60 TF = 132 x 256 x 1785 MHz (product brief PB-11773 boost 1,785 MHz), but dense FP16 835.5 TF = 132 x 4096 x ~1545 MHz (factor 0.866). Deriving tensor peaks with the boost clock therefore overstates NVIDIA's figures by about 8% (SXM) to 15% (NVL); multiply tensor results by these factors to reproduce NVIDIA's numbers. FP32/FP64/FP64-tensor figures match the boost clock."
+  },
+  {
+   "compute_capability": "10.0",
+   "class": "all",
+   "applies_to": "Blackwell GB100/B200 (B100, HGX/DGX B200, GB200)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 128,
+    "fp32_tflops": 256,
+    "fp16_tflops": 256,
+    "bf16_tflops": 256,
+    "tensor_fp64_tflops": 128,
+    "tensor_tf32_tflops": 4096,
+    "tensor_fp16_tflops": 8192,
+    "tensor_bf16_tflops": 8192,
+    "tensor_fp8_tflops": 16384,
+    "tensor_fp6_tflops": 16384,
+    "tensor_fp4_tflops": 32768,
+    "tensor_int8_tops": 16384,
+    "tensor_int4_tops": 0
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_fp64_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_tf32_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_fp16_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_bf16_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_fp8_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_fp6_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_fp4_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_int8_tops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_int4_tops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf"
+   },
+   "notes": "Non-tensor: Best Practices Guide column 10.0 (f16x2 64 = 128 halves, FP32 128, FP64 64 results; x2): FP16/BF16 non-tensor equal FP32 on Blackwell (H100 was 2x). Tensor: NVIDIA publishes no per-SM rate or boost clock for B200. Ratios in the Blackwell technical brief HGX B200 per-GPU column (FP32 75 TF; TF32 1.1, FP16/BF16 2.2 (datasheet 2.25), FP8/FP6 4.5, FP4 9, INT8 4.5 dense PF; 'FP64 Tensor Core | FP64 37 TF' combined row) relative to the FP32 rate of 256 give, at the FP32 clock, TF32 ~3755-3840, FP16 ~7680, FP8 ~15360, FP4 ~30720, INT8 ~15360, FP64 tensor ~126 => the power-of-two architectural rates above with a tensor clock 15/16 of the FP32 clock (with 148 SMs: FP32 at ~1980 MHz, tensor at ~1856 MHz). The same 5th-generation rates (FP16 8192, FP8 16384, FP4 32768 dense per SM per clock) are reproduced exactly by Jetson Thor at its single published 1.57 GHz (see CC 11.0). GB200 per-GPU figures (FP32 80, FP16 2.5 PF) imply a tensor/FP32 clock factor of ~0.98. The FP64 tensor rate equals the non-tensor FP64 rate (combined row). INT4 is absent from the Blackwell supported data-type table (FP64, FP32, TF32, FP16, BF16, FP8, INT8, FP6, FP4), so 0."
+  },
+  {
+   "compute_capability": "10.3",
+   "class": "all",
+   "applies_to": "Blackwell Ultra GB110/B300 (HGX/DGX B300, GB300, DGX Station GB300)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 256,
+    "fp16_tflops": 256,
+    "bf16_tflops": 256,
+    "tensor_fp64_tflops": 4,
+    "tensor_tf32_tflops": 4096,
+    "tensor_fp16_tflops": 8192,
+    "tensor_bf16_tflops": 8192,
+    "tensor_fp8_tflops": 16384,
+    "tensor_fp6_tflops": 16384,
+    "tensor_fp4_tflops": 49152,
+    "tensor_int8_tops": 512,
+    "tensor_int4_tops": 0
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_fp64_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_tf32_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_fp16_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_bf16_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_fp8_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_fp6_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_fp4_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_int8_tops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf",
+    "tensor_int4_tops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf"
+   },
+   "notes": "Non-tensor: Best Practices Guide column 10.3 (f16x2 64, FP32 128, FP64 2 results; x2): FP64 is 1/64 of FP32 (CC table '64:1'). Tensor: Blackwell technical brief HGX B300 per-GPU column has the same TF32 (1.1), FP16/BF16 (2.2), FP8/FP6 (4.5 PF) and FP32 (75 TF) as HGX B200, so those per-SM rates are the CC 10.0 ones; FP4 dense 14 PF vs FP16 2.2-2.25 PF (GB300: 15 vs 2.5) is 6 x FP16 => 49152 (Blackwell Ultra blog: 1.5x Blackwell dense NVFP4). 'FP64 Tensor Core | FP64 1.2 TF' (combined row) -> 1.2/75 x 256 = 4.1 => 4. INT8 dense 0.15 POPS vs FP32 75 TF -> 2 x FP32 => 512 ops/clk/SM, derived at the FP32 clock (GB300 NVL72 rack: 12 PF INT8 / 72 GPUs vs 80 TF FP32 -> ~533; DGX Station lists 330 TOPS sparse). Same tensor-clock caveat as CC 10.0. INT4 not in the supported-type table."
+  },
+  {
+   "compute_capability": "11.0",
+   "class": "all",
+   "applies_to": "Blackwell Jetson Thor (Jetson T5000, T4000)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 256,
+    "tensor_fp16_tflops": 8192,
+    "tensor_fp8_tflops": 16384,
+    "tensor_fp4_tflops": 32768,
+    "tensor_int8_tops": 16384
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html",
+    "fp32_tflops": "https://dam-cdn.nvd.orangelogic.com/AssetLink/x20v2h2y15uh0ne54rpb73xh4x7s0m1s.pdf",
+    "tensor_fp16_tflops": "https://developer.nvidia.com/blog/introducing-nvidia-jetson-thor-the-ultimate-platform-for-physical-ai/",
+    "tensor_fp8_tflops": "https://developer.nvidia.com/blog/introducing-nvidia-jetson-thor-the-ultimate-platform-for-physical-ai/",
+    "tensor_fp4_tflops": "https://developer.nvidia.com/blog/introducing-nvidia-jetson-thor-the-ultimate-platform-for-physical-ai/",
+    "tensor_int8_tops": "https://developer.nvidia.com/blog/introducing-nvidia-jetson-thor-the-ultimate-platform-for-physical-ai/"
+   },
+   "notes": "CC 11.0 is not a column in the CUDA throughput table. FP32: Thor datasheet '2560-core' GPU with 10 TPCs -> 20 SMs x 128 FP32 cores -> 256 flops/clk/SM (CUDA-core definition, no NVIDIA FP32 TFLOPS figure). FP64: CC table 11.0 '64:1' -> 4. Tensor: NVIDIA Thor blog table for T5000 (1.57 GHz max GPU, 20 SMs = 31.4e9 SM-cycles/s): '1035 TFLOPS (Dense FP4 | Sparse FP8 | Sparse INT8)' and '517 TFLOPs (Dense FP8 | Sparse FP16)' -> FP4 dense 32962, FP8 dense 16465, INT8 dense 16481, FP16 dense 8232 => 32768 / 16384 / 16384 / 8192 (FP16 and INT8 dense taken as half of the sparse figures). T4000 (1536 cores = 12 SMs, datasheet 1.53 GHz): 12 x 32768 x 1.53 GHz = 601.6 TF vs NVIDIA 600 TF dense FP4. The blog also states '96 fifth-generation Tensor Core' for T5000, which does not equal 4 x 20 SMs; the per-SM rates assume 20 SMs. Unknown (omitted): FP16/BF16 non-tensor, TF32, BF16, FP6, INT4 and FP64 tensor rates."
+  },
+  {
+   "compute_capability": "12.0",
+   "class": "professional",
+   "applies_to": "RTX Blackwell GB202-GB207 professional and data-center parts (RTX PRO 2000-6000 Blackwell desktop incl. Max-Q/SFF, RTX PRO 500-5000 Blackwell laptop, RTX PRO 4500/6000 Blackwell Server Edition)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 256,
+    "fp16_tflops": 256,
+    "bf16_tflops": 256,
+    "tensor_tf32_tflops": 512,
+    "tensor_fp16_tflops": 1024,
+    "tensor_bf16_tflops": 1024,
+    "tensor_fp8_tflops": 2048,
+    "tensor_fp4_tflops": 4096,
+    "tensor_int8_tops": 2048,
+    "tensor_int4_tops": 0
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_tf32_tflops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_fp16_tflops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_bf16_tflops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_fp8_tflops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_fp4_tflops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_int8_tops": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+   },
+   "notes": "Non-tensor: Best Practices Guide column '12.0 / 12.1' (f16x2 64, FP32 128, FP64 2 results; x2); RTX PRO whitepaper lists FP16 and BF16 non-tensor equal to FP32 (126.0 TF). Tensor: RTX PRO Blackwell whitepaper, RTX PRO 6000 Blackwell Workstation Edition (188 SMs x 2617 MHz = 492.0e9): FP4 with FP32 accumulate 2015.2 -> 4096, FP8 with FP16 or FP32 accumulate 1007.6 -> 2048, FP16/BF16 with FP32 accumulate 503.8 -> 1024, TF32 251.9 -> 512, INT8 1007.6 -> 2048; the Max-Q column (2280 MHz) gives the same per-SM rates. FP6 is supported (whitepaper: 'adds new support for FP4 and FP6 Tensor Core operations') but no rate is published -> omitted. FP64 Tensor Cores exist only 'for program correctness' ('a very minimal number of FP64 Tensor Cores'), no rate -> omitted. INT4 is not in the whitepaper's supported tensor type list (FP16, BF16, TF32, INT8, FP8, FP4, FP6) -> 0."
+  },
+  {
+   "compute_capability": "12.0",
+   "class": "geforce",
+   "applies_to": "RTX Blackwell GeForce RTX 50 desktop and laptop (GB202-GB207), RTX 5090 D / D v2",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 256,
+    "fp16_tflops": 256,
+    "bf16_tflops": 256,
+    "tensor_tf32_tflops": 256,
+    "tensor_fp16_tflops": 512,
+    "tensor_bf16_tflops": 512,
+    "tensor_fp8_tflops": 1024,
+    "tensor_fp4_tflops": 4096,
+    "tensor_int8_tops": 2048,
+    "tensor_int4_tops": 0
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "tensor_tf32_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf",
+    "tensor_fp16_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf",
+    "tensor_bf16_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf",
+    "tensor_fp8_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf",
+    "tensor_fp4_tflops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf",
+    "tensor_int8_tops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf",
+    "tensor_int4_tops": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+   },
+   "notes": "RTX Blackwell whitepaper RTX 5090 (170 SMs x 2407 MHz = 409.2e9): FP4 with FP32 accumulate 1676 -> 4096 (same as professional), FP8 with FP16 accumulate 838 (=2048) vs FP32 accumulate 419 (=1024), FP16 with FP16 accumulate 419 (=1024) vs FP32 accumulate 209.5 (=512), BF16 209.5 (=512), TF32 104.8 (=256), INT8 838 (=2048). RTX 5080/5070 Ti/5070 columns give the same per-SM rates. FP6, FP64 tensor unknown (omitted); INT4 0 as for the professional class."
+  },
+  {
+   "compute_capability": "12.1",
+   "class": "all",
+   "applies_to": "Blackwell GB10 (DGX Spark and GB10 OEM systems)",
+   "per_sm_per_clock": {
+    "fp64_tflops": 4,
+    "fp32_tflops": 256,
+    "fp16_tflops": 256,
+    "bf16_tflops": 256
+   },
+   "sources": {
+    "fp64_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp32_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "fp16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions",
+    "bf16_tflops": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#arithmetic-instructions-throughput-native-arithmetic-instructions"
+   },
+   "notes": "Non-tensor rates from the Best Practices Guide column '12.0 / 12.1'. Tensor rates are left unknown: NVIDIA publishes only 'up to 1 PFLOP (petaFLOP) at FP4 precision with sparsity' and '1,000 TOPS' for GB10 (DGX Spark hardware page) and no boost clock; an NVIDIA developer blog table lists '48' SMs and 'SM frequency 2.14 GHz'. 1 PF sparse FP4 / (48 x 2.14 GHz) = 4868 dense FP4 ops/clk/SM, which matches neither the GeForce/professional 12.0 rate (4096 -> 841 TF sparse) nor 2x it, so no per-SM tensor rate can be stated without guessing."
+  }
+ ],
+ "overrides": [
+  {
+   "profile_id": "titan-rtx",
+   "per_sm_per_clock": {
+    "tensor_fp16_tflops": 1024
+   },
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf",
+   "reason": "GeForce-branded TITAN RTX uses the professional Turing rate for FP16 with FP32 accumulate: GA102 whitepaper Table 9 'NVIDIA TITAN RTX' (72 SMs, 1770 MHz) 'Peak FP16 Tensor TFLOPS with FP32 Accumulate 130.5' = 72 x 1770 MHz x 1024. Equivalent to class professional for CC 7.5."
+  },
+  {
+   "profile_id": "gtx1630",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/en-us/geforce/graphics-cards/compare/",
+   "reason": "GeForce GTX 16 desktop: NVIDIA compare page '16 Series Specs' row 'Tensor Cores' is '-' for GTX 1660 Ti/1660 Super/1660/1650 Super/1650 (G5)/1650 (G6)/1630. Non-tensor FP16 stays at the CC 7.5 rate."
+  },
+  {
+   "profile_id": "gtx1650",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/en-us/geforce/graphics-cards/compare/",
+   "reason": "GeForce GTX 16 desktop: NVIDIA compare page '16 Series Specs' row 'Tensor Cores' is '-' for GTX 1660 Ti/1660 Super/1660/1650 Super/1650 (G5)/1650 (G6)/1630. Non-tensor FP16 stays at the CC 7.5 rate."
+  },
+  {
+   "profile_id": "gtx1650-gddr6",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/en-us/geforce/graphics-cards/compare/",
+   "reason": "GeForce GTX 16 desktop: NVIDIA compare page '16 Series Specs' row 'Tensor Cores' is '-' for GTX 1660 Ti/1660 Super/1660/1650 Super/1650 (G5)/1650 (G6)/1630. Non-tensor FP16 stays at the CC 7.5 rate."
+  },
+  {
+   "profile_id": "gtx1650-super",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/en-us/geforce/graphics-cards/compare/",
+   "reason": "GeForce GTX 16 desktop: NVIDIA compare page '16 Series Specs' row 'Tensor Cores' is '-' for GTX 1660 Ti/1660 Super/1660/1650 Super/1650 (G5)/1650 (G6)/1630. Non-tensor FP16 stays at the CC 7.5 rate."
+  },
+  {
+   "profile_id": "gtx1660",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/en-us/geforce/graphics-cards/compare/",
+   "reason": "GeForce GTX 16 desktop: NVIDIA compare page '16 Series Specs' row 'Tensor Cores' is '-' for GTX 1660 Ti/1660 Super/1660/1650 Super/1650 (G5)/1650 (G6)/1630. Non-tensor FP16 stays at the CC 7.5 rate."
+  },
+  {
+   "profile_id": "gtx1660-super",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/en-us/geforce/graphics-cards/compare/",
+   "reason": "GeForce GTX 16 desktop: NVIDIA compare page '16 Series Specs' row 'Tensor Cores' is '-' for GTX 1660 Ti/1660 Super/1660/1650 Super/1650 (G5)/1650 (G6)/1630. Non-tensor FP16 stays at the CC 7.5 rate."
+  },
+  {
+   "profile_id": "gtx1660ti",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/en-us/geforce/graphics-cards/compare/",
+   "reason": "GeForce GTX 16 desktop: NVIDIA compare page '16 Series Specs' row 'Tensor Cores' is '-' for GTX 1660 Ti/1660 Super/1660/1650 Super/1650 (G5)/1650 (G6)/1630. Non-tensor FP16 stays at the CC 7.5 rate."
+  },
+  {
+   "profile_id": "gtx1650-laptop",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/en-ph/geforce/laptops/30-series/",
+   "reason": "GeForce GTX 16 laptop: NVIDIA's GTX gaming-laptop spec table lists CUDA cores and 'Hardware Accelerated Ray Tracing: No' and has no Tensor Core row, while the RTX laptop tables on the same page list Tensor Cores; same TU116/TU117 silicon as the desktop GTX 16 parts marked '-'. Evidence is by omission."
+  },
+  {
+   "profile_id": "gtx1650ti-laptop",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/en-ph/geforce/laptops/30-series/",
+   "reason": "GeForce GTX 16 laptop: NVIDIA's GTX gaming-laptop spec table lists CUDA cores and 'Hardware Accelerated Ray Tracing: No' and has no Tensor Core row, while the RTX laptop tables on the same page list Tensor Cores; same TU116/TU117 silicon as the desktop GTX 16 parts marked '-'. Evidence is by omission."
+  },
+  {
+   "profile_id": "gtx1660ti-laptop",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/en-ph/geforce/laptops/30-series/",
+   "reason": "GeForce GTX 16 laptop: NVIDIA's GTX gaming-laptop spec table lists CUDA cores and 'Hardware Accelerated Ray Tracing: No' and has no Tensor Core row, while the RTX laptop tables on the same page list Tensor Cores; same TU116/TU117 silicon as the desktop GTX 16 parts marked '-'. Evidence is by omission."
+  },
+  {
+   "profile_id": "quadro-t1000-mobile",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-rtx-mobile-line-card-us-nvidia-r7-web.pdf",
+   "reason": "NVIDIA Quadro RTX mobile line card: Quadro T2000/T1000 rows give no RT Core or Tensor Core count and no 'Tensor Performance (TOPS, Peak)' value, whereas Quadro RTX 3000/5000 rows list 240/384 Tensor Cores and 42.9/75.2 tensor TFLOPS."
+  },
+  {
+   "profile_id": "quadro-t2000-mobile",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-rtx-mobile-line-card-us-nvidia-r7-web.pdf",
+   "reason": "NVIDIA Quadro RTX mobile line card: Quadro T2000/T1000 rows give no RT Core or Tensor Core count and no 'Tensor Performance (TOPS, Peak)' value, whereas Quadro RTX 3000/5000 rows list 240/384 Tensor Cores and 42.9/75.2 tensor TFLOPS."
+  },
+  {
+   "profile_id": "t1200-mobile",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/content/dam/en-zz/ja/Solutions/design-visualization/documents/ampere-mobile-linecard-master-mar22-jp.pdf",
+   "reason": "NVIDIA professional laptop line card (Mar 2022, JP): T1200/T600/T550 rows give no RT Core or Tensor Core count and no tensor TFLOPS, while RTX A-series rows list 3rd-generation Tensor Cores."
+  },
+  {
+   "profile_id": "t600-mobile",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/content/dam/en-zz/ja/Solutions/design-visualization/documents/ampere-mobile-linecard-master-mar22-jp.pdf",
+   "reason": "NVIDIA professional laptop line card (Mar 2022, JP): T1200/T600/T550 rows give no RT Core or Tensor Core count and no tensor TFLOPS, while RTX A-series rows list 3rd-generation Tensor Cores."
+  },
+  {
+   "profile_id": "t550-mobile",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/content/dam/en-zz/ja/Solutions/design-visualization/documents/ampere-mobile-linecard-master-mar22-jp.pdf",
+   "reason": "NVIDIA professional laptop line card (Mar 2022, JP): T1200/T600/T550 rows give no RT Core or Tensor Core count and no tensor TFLOPS, while RTX A-series rows list 3rd-generation Tensor Cores."
+  },
+  {
+   "profile_id": "t400",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/proviz-print-nvidia-T400-datasheet-us-nvidia-1670004-r5-web.pdf",
+   "reason": "NVIDIA T400/T600/T1000 datasheets (Turing, TU117 class) list CUDA cores (384/640/896) and no Tensor Cores, while RTX-class datasheets list Tensor Cores. Evidence is by omission."
+  },
+  {
+   "profile_id": "t400-4gb",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/proviz-print-nvidia-T400-datasheet-us-nvidia-1670004-r5-web.pdf",
+   "reason": "NVIDIA T400/T600/T1000 datasheets (Turing, TU117 class) list CUDA cores (384/640/896) and no Tensor Cores, while RTX-class datasheets list Tensor Cores. Evidence is by omission."
+  },
+  {
+   "profile_id": "t600",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/proviz-print-nvidia-T600-datasheet-us-nvidia-1670029-r5-web.pdf",
+   "reason": "NVIDIA T400/T600/T1000 datasheets (Turing, TU117 class) list CUDA cores (384/640/896) and no Tensor Cores, while RTX-class datasheets list Tensor Cores. Evidence is by omission."
+  },
+  {
+   "profile_id": "t1000",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/nvidia-t1000-datasheet-1987414-r4.pdf",
+   "reason": "NVIDIA T400/T600/T1000 datasheets (Turing, TU117 class) list CUDA cores (384/640/896) and no Tensor Cores, while RTX-class datasheets list Tensor Cores. Evidence is by omission."
+  },
+  {
+   "profile_id": "t1000-8gb",
+   "per_sm_per_clock": {
+    "tensor_fp64_tflops": 0,
+    "tensor_tf32_tflops": 0,
+    "tensor_fp16_tflops": 0,
+    "tensor_bf16_tflops": 0,
+    "tensor_fp8_tflops": 0,
+    "tensor_fp6_tflops": 0,
+    "tensor_fp4_tflops": 0,
+    "tensor_int8_tops": 0,
+    "tensor_int4_tops": 0
+   },
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/nvidia-t1000-datasheet-1987414-r4.pdf",
+   "reason": "NVIDIA T400/T600/T1000 datasheets (Turing, TU117 class) list CUDA cores (384/640/896) and no Tensor Cores, while RTX-class datasheets list Tensor Cores. Evidence is by omission."
+  },
+  {
+   "profile_id": "l40",
+   "per_sm_per_clock": {
+    "tensor_tf32_tflops": 256,
+    "tensor_fp16_tflops": 512,
+    "tensor_bf16_tflops": 512,
+    "tensor_fp8_tflops": 1024,
+    "tensor_int8_tops": 1024,
+    "tensor_int4_tops": 2048
+   },
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf",
+   "reason": "NVIDIA publishes L40 tensor figures at half the professional Ada per-SM rate: Ada whitepaper Table 4 NVIDIA L40 (142 SMs): FP32 90.5, TF32 90.5 | 181, BF16 181 | 362, FP16 181 | 362, FP8 362 | 724, INT8 362 | 724, INT4 724 | 1448 (dense | sparse). Relative to the FP32 rate of 256 these are TF32 256, FP16/BF16 512, FP8 1024, INT8 1024, INT4 2048 per SM per clock, i.e. half of RTX 6000 Ada / L40S on the same AD102 configuration. NVIDIA does not explain the difference; values follow NVIDIA's published L40 figures."
+  }
+ ],
+ "checks": [
+  {
+   "profile_id": "v100-sxm2-16gb",
+   "field": "fp32_tflops",
+   "published": 15.7,
+   "derived": 15.67,
+   "source": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "v100-sxm2-16gb",
+   "field": "fp64_tflops",
+   "published": 7.8,
+   "derived": 7.83,
+   "source": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "v100-sxm2-16gb",
+   "field": "tensor_fp16_tflops",
+   "published": 125,
+   "derived": 125.34,
+   "source": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "p100-sxm2-16gb",
+   "field": "fp32_tflops",
+   "published": 10.6,
+   "derived": 10.61,
+   "source": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "p100-sxm2-16gb",
+   "field": "fp64_tflops",
+   "published": 5.3,
+   "derived": 5.3,
+   "source": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "p100-sxm2-16gb",
+   "field": "fp16_tflops",
+   "published": 21.2,
+   "derived": 21.22,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "m40",
+   "field": "fp32_tflops",
+   "published": 6.8,
+   "derived": 6.84,
+   "source": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "m40",
+   "field": "fp64_tflops",
+   "published": 0.21,
+   "derived": 0.21,
+   "source": "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "gtx1080ti",
+   "field": "fp32_tflops",
+   "published": 11.3,
+   "derived": 11.34,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "gtx1080",
+   "field": "fp32_tflops",
+   "published": 8.9,
+   "derived": 8.87,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "gtx1070",
+   "field": "fp32_tflops",
+   "published": 6.5,
+   "derived": 6.46,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "p4",
+   "field": "fp32_tflops",
+   "published": 5.5,
+   "derived": 5.7,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "t4",
+   "field": "fp32_tflops",
+   "published": 8.1,
+   "derived": 8.14,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "t4",
+   "field": "fp16_tflops",
+   "published": 16.2,
+   "derived": 16.28,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "t4",
+   "field": "tensor_fp16_tflops",
+   "published": 65,
+   "derived": 65.13,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "t4",
+   "field": "tensor_int8_tops",
+   "published": 130,
+   "derived": 130.25,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "t4",
+   "field": "tensor_int4_tops",
+   "published": 260,
+   "derived": 260.51,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "quadro-rtx6000",
+   "field": "fp32_tflops",
+   "published": 16.3,
+   "derived": 16.31,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "quadro-rtx6000",
+   "field": "fp16_tflops",
+   "published": 32.6,
+   "derived": 32.62,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "quadro-rtx6000",
+   "field": "tensor_fp16_tflops",
+   "published": 130.5,
+   "derived": 130.5,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "quadro-rtx6000",
+   "field": "tensor_int8_tops",
+   "published": 261.0,
+   "derived": 261.0,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "quadro-rtx6000",
+   "field": "tensor_int4_tops",
+   "published": 522.0,
+   "derived": 521.99,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "quadro-rtx5000",
+   "field": "fp32_tflops",
+   "published": 11.2,
+   "derived": 11.15,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "quadro-rtx5000",
+   "field": "tensor_fp16_tflops",
+   "published": 89.2,
+   "derived": 89.21,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "quadro-rtx5000",
+   "field": "tensor_int8_tops",
+   "published": 178.4,
+   "derived": 178.42,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "quadro-rtx5000",
+   "field": "tensor_int4_tops",
+   "published": 356.8,
+   "derived": 356.84,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2080ti",
+   "field": "fp32_tflops",
+   "published": 14.2,
+   "derived": 14.27,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2080ti",
+   "field": "fp16_tflops",
+   "published": 28.5,
+   "derived": 28.55,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2080ti",
+   "field": "tensor_fp16_tflops",
+   "published": 56.9,
+   "derived": 57.1,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2080ti",
+   "field": "tensor_int8_tops",
+   "published": 227.7,
+   "derived": 228.39,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2080ti",
+   "field": "tensor_int4_tops",
+   "published": 455.4,
+   "derived": 456.79,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2080",
+   "field": "fp32_tflops",
+   "published": 10.6,
+   "derived": 10.6,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2080",
+   "field": "tensor_fp16_tflops",
+   "published": 42.4,
+   "derived": 42.39,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2080",
+   "field": "tensor_int8_tops",
+   "published": 169.6,
+   "derived": 169.57,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2070",
+   "field": "fp32_tflops",
+   "published": 7.9,
+   "derived": 7.88,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2070",
+   "field": "tensor_fp16_tflops",
+   "published": 31.5,
+   "derived": 31.52,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx2070",
+   "field": "tensor_int8_tops",
+   "published": 126,
+   "derived": 126.07,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  },
+  {
+   "profile_id": "titan-rtx",
+   "field": "fp32_tflops",
+   "published": 16.3,
+   "derived": 16.31,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "titan-rtx",
+   "field": "tensor_fp16_tflops",
+   "published": 130.5,
+   "derived": 130.5,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "titan-rtx",
+   "field": "tensor_int8_tops",
+   "published": 261,
+   "derived": 261.0,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "titan-rtx",
+   "field": "tensor_int4_tops",
+   "published": 522,
+   "derived": 521.99,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "a100-sxm4-40gb",
+   "field": "fp64_tflops",
+   "published": 9.7,
+   "derived": 9.75,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "a100-sxm4-40gb",
+   "field": "tensor_fp64_tflops",
+   "published": 19.5,
+   "derived": 19.49,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "a100-sxm4-40gb",
+   "field": "fp32_tflops",
+   "published": 19.5,
+   "derived": 19.49,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "a100-sxm4-40gb",
+   "field": "fp16_tflops",
+   "published": 78,
+   "derived": 77.97,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "a100-sxm4-40gb",
+   "field": "bf16_tflops",
+   "published": 39,
+   "derived": 38.98,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "a100-sxm4-40gb",
+   "field": "tensor_tf32_tflops",
+   "published": 156,
+   "derived": 155.93,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "a100-sxm4-40gb",
+   "field": "tensor_fp16_tflops",
+   "published": 312,
+   "derived": 311.87,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "a100-sxm4-40gb",
+   "field": "tensor_bf16_tflops",
+   "published": 312,
+   "derived": 311.87,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "a100-sxm4-40gb",
+   "field": "tensor_int8_tops",
+   "published": 624,
+   "derived": 623.74,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "a100-sxm4-40gb",
+   "field": "tensor_int4_tops",
+   "published": 1248,
+   "derived": 1247.48,
+   "source": "https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf"
+  },
+  {
+   "profile_id": "rtx3080",
+   "field": "fp32_tflops",
+   "published": 29.8,
+   "derived": 29.77,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx3080",
+   "field": "fp16_tflops",
+   "published": 29.8,
+   "derived": 29.77,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx3080",
+   "field": "tensor_fp16_tflops",
+   "published": 59.5,
+   "derived": 59.54,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx3080",
+   "field": "tensor_tf32_tflops",
+   "published": 29.8,
+   "derived": 29.77,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx3080",
+   "field": "tensor_int8_tops",
+   "published": 238,
+   "derived": 238.14,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx3080",
+   "field": "tensor_int4_tops",
+   "published": 476,
+   "derived": 476.28,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx3090",
+   "field": "fp32_tflops",
+   "published": 35.6,
+   "derived": 35.69,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx3090",
+   "field": "tensor_fp16_tflops",
+   "published": 71.2,
+   "derived": 71.37,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx3090",
+   "field": "tensor_bf16_tflops",
+   "published": 71.2,
+   "derived": 71.37,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx3090",
+   "field": "tensor_tf32_tflops",
+   "published": 35.6,
+   "derived": 35.69,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx3090",
+   "field": "tensor_int8_tops",
+   "published": 284.7,
+   "derived": 285.49,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx-a6000",
+   "field": "fp32_tflops",
+   "published": 38.7,
+   "derived": 38.71,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx-a6000",
+   "field": "tensor_fp16_tflops",
+   "published": 154.8,
+   "derived": 154.83,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx-a6000",
+   "field": "tensor_tf32_tflops",
+   "published": 77.4,
+   "derived": 77.41,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx-a6000",
+   "field": "tensor_int8_tops",
+   "published": 309.7,
+   "derived": 309.66,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx-a6000",
+   "field": "tensor_int4_tops",
+   "published": 619.3,
+   "derived": 619.32,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "a40",
+   "field": "fp32_tflops",
+   "published": 37.4,
+   "derived": 37.42,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "a40",
+   "field": "tensor_tf32_tflops",
+   "published": 74.8,
+   "derived": 74.83,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "a40",
+   "field": "tensor_fp16_tflops",
+   "published": 149.7,
+   "derived": 149.67,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "a40",
+   "field": "tensor_int4_tops",
+   "published": 598.7,
+   "derived": 598.67,
+   "source": "https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf"
+  },
+  {
+   "profile_id": "rtx3070ti",
+   "field": "fp32_tflops",
+   "published": 21.7,
+   "derived": 21.75,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx3070ti",
+   "field": "tensor_fp16_tflops",
+   "published": 43.5,
+   "derived": 43.5,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx3070",
+   "field": "fp32_tflops",
+   "published": 20.3,
+   "derived": 20.37,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx3070",
+   "field": "tensor_fp16_tflops",
+   "published": 40.6,
+   "derived": 40.74,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx3090ti-reference",
+   "field": "fp32_tflops",
+   "published": 40,
+   "derived": 40.0,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx3090ti-reference",
+   "field": "tensor_fp16_tflops",
+   "published": 80,
+   "derived": 79.99,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx3090ti-reference",
+   "field": "tensor_tf32_tflops",
+   "published": 40,
+   "derived": 40.0,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "jetson-agx-orin-64gb",
+   "field": "fp32_tflops",
+   "published": 5.3,
+   "derived": 5.32,
+   "source": "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/"
+  },
+  {
+   "profile_id": "jetson-agx-orin-64gb",
+   "field": "fp16_tflops",
+   "published": 10.6,
+   "derived": 10.65,
+   "source": "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/"
+  },
+  {
+   "profile_id": "jetson-agx-orin-64gb",
+   "field": "tensor_fp16_tflops",
+   "published": 43,
+   "derived": 42.6,
+   "source": "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/"
+  },
+  {
+   "profile_id": "jetson-agx-orin-64gb",
+   "field": "tensor_int8_tops",
+   "published": 85,
+   "derived": 85.2,
+   "source": "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/"
+  },
+  {
+   "profile_id": "rtx4090",
+   "field": "fp32_tflops",
+   "published": 82.6,
+   "derived": 82.58,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4090",
+   "field": "fp16_tflops",
+   "published": 82.6,
+   "derived": 82.58,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4090",
+   "field": "tensor_fp16_tflops",
+   "published": 165.2,
+   "derived": 165.15,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4090",
+   "field": "tensor_bf16_tflops",
+   "published": 165.2,
+   "derived": 165.15,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4090",
+   "field": "tensor_tf32_tflops",
+   "published": 82.6,
+   "derived": 82.58,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4090",
+   "field": "tensor_fp8_tflops",
+   "published": 330.3,
+   "derived": 330.3,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4090",
+   "field": "tensor_int8_tops",
+   "published": 660.6,
+   "derived": 660.6,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4090",
+   "field": "tensor_int4_tops",
+   "published": 1321.2,
+   "derived": 1321.21,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4080",
+   "field": "fp32_tflops",
+   "published": 48.7,
+   "derived": 48.83,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4080",
+   "field": "tensor_fp16_tflops",
+   "published": 97.5,
+   "derived": 97.67,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4080",
+   "field": "tensor_int4_tops",
+   "published": 779.8,
+   "derived": 781.35,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4070ti",
+   "field": "fp32_tflops",
+   "published": 40.1,
+   "derived": 40.09,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4070ti",
+   "field": "tensor_fp8_tflops",
+   "published": 160.4,
+   "derived": 160.36,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4070",
+   "field": "fp32_tflops",
+   "published": 29.1,
+   "derived": 29.2,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx4070",
+   "field": "tensor_fp16_tflops",
+   "published": 58.3,
+   "derived": 58.41,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx-6000-ada",
+   "field": "fp32_tflops",
+   "published": 91.1,
+   "derived": 91.06,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "rtx-6000-ada",
+   "field": "tensor_fp16_tflops",
+   "published": 364,
+   "derived": 364.25,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "rtx-6000-ada",
+   "field": "tensor_tf32_tflops",
+   "published": 182.1,
+   "derived": 182.12,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "rtx-6000-ada",
+   "field": "tensor_fp8_tflops",
+   "published": 728.5,
+   "derived": 728.49,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "rtx-6000-ada",
+   "field": "tensor_int8_tops",
+   "published": 728.5,
+   "derived": 728.49,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "h100",
+   "field": "fp64_tflops",
+   "published": 34,
+   "derived": 33.45,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "h100",
+   "field": "tensor_fp64_tflops",
+   "published": 67,
+   "derived": 66.91,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "h100",
+   "field": "fp32_tflops",
+   "published": 67,
+   "derived": 66.91,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "h100",
+   "field": "tensor_tf32_tflops",
+   "published": 494.5,
+   "derived": 535.27,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "h100",
+   "field": "tensor_fp16_tflops",
+   "published": 989.5,
+   "derived": 1070.53,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "h100",
+   "field": "tensor_fp8_tflops",
+   "published": 1979,
+   "derived": 2141.06,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "h100",
+   "field": "tensor_int8_tops",
+   "published": 1979,
+   "derived": 2141.06,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "h100-nvl-94gb",
+   "field": "fp64_tflops",
+   "published": 30,
+   "derived": 30.16,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "h100-nvl-94gb",
+   "field": "tensor_fp64_tflops",
+   "published": 60,
+   "derived": 60.32,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "h100-nvl-94gb",
+   "field": "fp32_tflops",
+   "published": 60,
+   "derived": 60.32,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "h100-nvl-94gb",
+   "field": "tensor_fp16_tflops",
+   "published": 835.5,
+   "derived": 965.1,
+   "source": "https://www.nvidia.com/en-us/data-center/h100/"
+  },
+  {
+   "profile_id": "jetson-t5000",
+   "field": "tensor_fp4_tflops",
+   "published": 1035,
+   "derived": 1032.19,
+   "source": "https://developer.nvidia.com/blog/introducing-nvidia-jetson-thor-the-ultimate-platform-for-physical-ai/"
+  },
+  {
+   "profile_id": "jetson-t5000",
+   "field": "tensor_fp8_tflops",
+   "published": 517,
+   "derived": 516.1,
+   "source": "https://developer.nvidia.com/blog/introducing-nvidia-jetson-thor-the-ultimate-platform-for-physical-ai/"
+  },
+  {
+   "profile_id": "jetson-t5000",
+   "field": "tensor_fp16_tflops",
+   "published": 258.5,
+   "derived": 258.05,
+   "source": "https://developer.nvidia.com/blog/introducing-nvidia-jetson-thor-the-ultimate-platform-for-physical-ai/"
+  },
+  {
+   "profile_id": "jetson-t5000",
+   "field": "tensor_int8_tops",
+   "published": 517.5,
+   "derived": 516.1,
+   "source": "https://developer.nvidia.com/blog/introducing-nvidia-jetson-thor-the-ultimate-platform-for-physical-ai/"
+  },
+  {
+   "profile_id": "rtx5090",
+   "field": "fp32_tflops",
+   "published": 104.8,
+   "derived": 104.88,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5090",
+   "field": "fp16_tflops",
+   "published": 104.8,
+   "derived": 104.88,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5090",
+   "field": "tensor_fp16_tflops",
+   "published": 209.5,
+   "derived": 209.77,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5090",
+   "field": "tensor_tf32_tflops",
+   "published": 104.8,
+   "derived": 104.88,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5090",
+   "field": "tensor_fp8_tflops",
+   "published": 419,
+   "derived": 419.53,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5090",
+   "field": "tensor_fp4_tflops",
+   "published": 1676,
+   "derived": 1678.13,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5090",
+   "field": "tensor_int8_tops",
+   "published": 838,
+   "derived": 839.07,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5080",
+   "field": "fp32_tflops",
+   "published": 56.3,
+   "derived": 56.34,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5080",
+   "field": "tensor_fp16_tflops",
+   "published": 112.6,
+   "derived": 112.68,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5080",
+   "field": "tensor_fp4_tflops",
+   "published": 900.4,
+   "derived": 901.45,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5070ti",
+   "field": "fp32_tflops",
+   "published": 43.9,
+   "derived": 43.9,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5070ti",
+   "field": "tensor_fp4_tflops",
+   "published": 703,
+   "derived": 702.46,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5070",
+   "field": "fp32_tflops",
+   "published": 30.9,
+   "derived": 30.84,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx5070",
+   "field": "tensor_fp4_tflops",
+   "published": 493.9,
+   "derived": 493.49,
+   "source": "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
+  },
+  {
+   "profile_id": "rtx-pro-6000-blackwell",
+   "field": "fp32_tflops",
+   "published": 126.0,
+   "derived": 125.13,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "rtx-pro-6000-blackwell",
+   "field": "tensor_fp16_tflops",
+   "published": 503.8,
+   "derived": 500.53,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "rtx-pro-6000-blackwell",
+   "field": "tensor_tf32_tflops",
+   "published": 251.9,
+   "derived": 250.27,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "rtx-pro-6000-blackwell",
+   "field": "tensor_fp8_tflops",
+   "published": 1007.6,
+   "derived": 1001.06,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "rtx-pro-6000-blackwell",
+   "field": "tensor_fp4_tflops",
+   "published": 2015.2,
+   "derived": 2002.12,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "rtx-pro-6000-blackwell",
+   "field": "tensor_int8_tops",
+   "published": 1007.6,
+   "derived": 1001.06,
+   "source": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf"
+  },
+  {
+   "profile_id": "rtx-pro-6000-blackwell-server",
+   "field": "fp32_tflops",
+   "published": 120,
+   "derived": 116.95,
+   "source": "https://www.nvidia.com/en-us/data-center/rtx-pro-6000-blackwell-server-edition/"
+  },
+  {
+   "profile_id": "rtx-pro-6000-blackwell-server",
+   "field": "tensor_tf32_tflops",
+   "published": 234,
+   "derived": 233.9,
+   "source": "https://www.nvidia.com/en-us/data-center/rtx-pro-6000-blackwell-server-edition/"
+  }
+ ]
+}

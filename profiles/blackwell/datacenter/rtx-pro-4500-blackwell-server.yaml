@@ -2,6 +2,7 @@
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 # Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/01tvyd8cpqd0u5p7205px0f8438hw3ur.pdf
+# Additional source: https://resources.nvidia.com/en-us-rtx-pro-6000/data-center-rtx-pro-4500
 id: rtx-pro-4500-blackwell-server
 name: Fake NVIDIA RTX PRO 4500 Blackwell Server Edition
 torch_name: NVIDIA RTX PRO 4500 Blackwell Server Edition
@@ -30,6 +31,28 @@ max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 165000
 pci_device_id: 742002910
+base_clock_mhz: 1215
+memory_type: GDDR7
+memory_bandwidth_gbps: 800
+ecc: supported
+form_factor: pcie
+pcie_generation: 5
+pcie_lanes: 16
+nvlink_generation: 0
+mig_max_instances: 2
+min_power_limit_mw: 100000
+fp64_tflops: 0.7921
+fp32_tflops: 51
+fp16_tflops: 50.7
+bf16_tflops: 50.7
+tensor_tf32_tflops: 101.4
+tensor_fp16_tflops: 202.8
+tensor_bf16_tflops: 202.8
+tensor_fp8_tflops: 405.6
+tensor_fp4_tflops: 811.1
+tensor_int8_tops: 405.6
+tensor_int4_tops: 0
+throughput_source: https://resources.nvidia.com/en-us-rtx-pro-6000/data-center-datasheet-rtx-pro-4500
 supported_types:
   - fp32
   - tf32
@@ -39,3 +62,16 @@ supported_types:
   - int4
   - fp8
   - fp4
+throughput_published:
+  - fp32_tflops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

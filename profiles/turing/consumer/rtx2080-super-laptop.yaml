@@ -1,3 +1,4 @@
+# Additional source: https://www.nvidia.com/en-us/geforce/news/geforce-rtx-super-laptops/
 id: rtx2080-super-laptop
 name: Fake NVIDIA GeForce RTX 2080 SUPER Laptop GPU
 torch_name: NVIDIA GeForce RTX 2080 SUPER Laptop GPU
@@ -26,6 +27,7 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 0
+form_factor: laptop
 supported_types:
   - fp32
   - fp16

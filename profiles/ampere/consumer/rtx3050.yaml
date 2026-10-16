@@ -1,3 +1,4 @@
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3050/
 id: rtx3050
 name: Fake NVIDIA GeForce RTX 3050
 torch_name: NVIDIA GeForce RTX 3050
@@ -26,6 +27,24 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 130000
 max_power_limit_mw: 130000
 pci_device_id: 0
+base_clock_mhz: 1550
+memory_type: GDDR6
+form_factor: pcie
+pcie_generation: 4
+nvlink_generation: 0
+fp64_tflops: 0.1424
+fp32_tflops: 9.114
+fp16_tflops: 9.114
+bf16_tflops: 9.114
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 9.114
+tensor_fp16_tflops: 18.23
+tensor_bf16_tflops: 18.23
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 72.91
+tensor_int4_tops: 145.8
 supported_types:
   - fp32
   - tf32
@@ -33,3 +52,17 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_derived:
+  - fp64_tflops
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

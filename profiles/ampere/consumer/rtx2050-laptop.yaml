@@ -26,6 +26,7 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 0
+form_factor: laptop
 supported_types:
   - fp32
   - tf32

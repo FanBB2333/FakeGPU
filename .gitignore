@@ -75,6 +75,7 @@ docs/*
 !docs/catalog-consumer-research.md
 !docs/catalog-datacenter-research.md
 !docs/catalog-workstation-research.md
+!docs/catalog-throughput-research.md
 README.*.md
 !README.zh-CN.md
 !README.zh-TW.md

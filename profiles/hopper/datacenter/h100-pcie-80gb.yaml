@@ -2,6 +2,7 @@
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://www.nvidia.com/en-us/data-center/h100/
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/gtcs22/data-center/h100/PB-11133-001_v01.pdf
 id: h100-pcie-80gb
 name: Fake NVIDIA H100 PCIe 80GB
 torch_name: NVIDIA H100 PCIe 80GB
@@ -17,7 +18,7 @@ notes: PCIe 80 GiB HBM2e variant; 114 enabled SMs and 2 TB/s rather than the SXM
 memory_bytes: 85899345920
 sm_count: 114
 memory_bus_width_bits: 5120
-core_clock_mhz: 0
+core_clock_mhz: 1755
 memory_clock_mhz: 1593
 l2_cache_bytes: 52428800
 shared_mem_per_sm: 233472
@@ -30,6 +31,32 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 350000
 pci_device_id: 590418142
+base_clock_mhz: 1125
+memory_type: HBM2e
+memory_bandwidth_gbps: 2039
+ecc: supported
+form_factor: pcie
+pcie_generation: 5
+pcie_lanes: 16
+nvlink_generation: 4
+nvlink_links: 12
+nvlink_bandwidth_gbps: 600
+mig_max_instances: 7
+min_power_limit_mw: 200000
+fp64_tflops: 25.6
+fp32_tflops: 51.2
+fp16_tflops: 102.4
+bf16_tflops: 102.4
+tensor_fp64_tflops: 51.2
+tensor_tf32_tflops: 378
+tensor_fp16_tflops: 756
+tensor_bf16_tflops: 756
+tensor_fp8_tflops: 1513
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 1513
+tensor_int4_tops: 0
+throughput_source: https://dam-cdn.nvd.orangelogic.com/AssetLink/705n6ur546g0uk43w0117r17n8042d73.pdf
 supported_types:
   - fp32
   - tf32
@@ -38,3 +65,18 @@ supported_types:
   - int8
   - int4
   - fp8
+throughput_published:
+  - fp64_tflops
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_int8_tops
+throughput_derived:
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int4_tops

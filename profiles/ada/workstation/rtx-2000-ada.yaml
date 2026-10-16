@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.cn/content/dam/en-zz/Solutions/design-visualization/rtx-2000/proviz-rtx-2000-ada-datasheet-zhCN-3169852-print.pdf
 id: rtx-2000-ada
 name: Fake NVIDIA RTX 2000 Ada Generation
 torch_name: NVIDIA RTX 2000 Ada Generation
@@ -25,7 +27,26 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 70000
 max_power_limit_mw: 70000
-pci_device_id: 0
+pci_device_id: 682627294
+memory_type: GDDR6
+memory_bandwidth_gbps: 224
+ecc: supported
+form_factor: pcie
+pcie_generation: 4
+pcie_lanes: 8
+fp64_tflops: 0.1874
+fp32_tflops: 12
+fp16_tflops: 12
+bf16_tflops: 12
+tensor_tf32_tflops: 23.99
+tensor_fp16_tflops: 47.98
+tensor_bf16_tflops: 47.98
+tensor_fp8_tflops: 95.97
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 95.97
+tensor_int4_tops: 191.9
+throughput_source: https://www.nvidia.com/en-us/products/workstations/rtx-2000/
 supported_types:
   - fp32
   - tf32
@@ -34,3 +55,17 @@ supported_types:
   - fp8
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

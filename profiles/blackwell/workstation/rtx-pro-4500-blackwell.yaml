@@ -1,6 +1,8 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: rtx-pro-4500-blackwell
 name: Fake NVIDIA RTX PRO 4500 Blackwell Workstation Edition
-torch_name: NVIDIA RTX PRO 4500 Blackwell Workstation Edition
+torch_name: NVIDIA RTX PRO 4500 Blackwell
 official_model: NVIDIA RTX PRO 4500 Blackwell Workstation Edition
 architecture: blackwell
 compute_major: 12
@@ -25,7 +27,26 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 200000
 max_power_limit_mw: 200000
-pci_device_id: 0
+pci_device_id: 741413086
+memory_type: GDDR7
+memory_bandwidth_gbps: 896
+ecc: supported
+form_factor: pcie
+pcie_generation: 5
+pcie_lanes: 16
+mig_max_instances: 2
+fp64_tflops: 0.7967
+fp32_tflops: 51
+fp16_tflops: 50.99
+bf16_tflops: 50.99
+tensor_tf32_tflops: 102
+tensor_fp16_tflops: 204
+tensor_bf16_tflops: 204
+tensor_fp8_tflops: 407.9
+tensor_fp4_tflops: 815.8
+tensor_int8_tops: 407.9
+tensor_int4_tops: 0
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/data-center/rtx-pro-4500-blackwell/workstation-datasheet-blackwell-rtx-pro-4500-we-nvidia-us-5108623-web.pdf
 supported_types:
   - fp32
   - tf32
@@ -35,3 +56,16 @@ supported_types:
   - fp4
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

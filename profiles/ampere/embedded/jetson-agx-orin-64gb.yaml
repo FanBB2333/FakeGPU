@@ -1,3 +1,5 @@
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/gtcf21/jetson-orin/nvidia-jetson-agx-orin-technical-brief.pdf
+# Additional source: https://forums.developer.nvidia.com/t/whether-tflops-on-tensor-cores-is-sparse-tflops-or-dense-tflops/248630
 id: jetson-agx-orin-64gb
 name: Fake NVIDIA Jetson AGX Orin 64GB
 torch_name: NVIDIA Jetson AGX Orin 64GB
@@ -26,6 +28,19 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 60000
 max_power_limit_mw: 60000
 pci_device_id: 0
+memory_type: LPDDR5
+memory_bandwidth_gbps: 204.8
+form_factor: embedded
+min_power_limit_mw: 15000
+fp64_tflops: 0.0832
+fp32_tflops: 5.32
+fp16_tflops: 10.65
+tensor_fp16_tflops: 42.5
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 85
+throughput_source: https://developer.nvidia.com/downloads/assets/embedded/secure/jetson/thor/docs/jetson-orin-thor-migration-application-note_da.pdf
 supported_types:
   - fp32
   - tf32
@@ -33,3 +48,13 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - tensor_fp16_tflops
+  - tensor_int8_tops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

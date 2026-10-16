@@ -1,3 +1,4 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx-2000-ada-mobile
 name: Fake NVIDIA RTX 2000 Ada Generation Laptop GPU
 torch_name: NVIDIA RTX 2000 Ada Generation Laptop GPU
@@ -25,7 +26,14 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 140000
-pci_device_id: 0
+pci_device_id: 683151582
+memory_type: GDDR6
+memory_bandwidth_gbps: 256
+form_factor: laptop
+pcie_generation: 4
+min_power_limit_mw: 35000
+fp32_tflops: 14.5
+throughput_source: https://www.nvidia.com/en-us/products/workstations/professional-laptops/compare/
 supported_types:
   - fp32
   - tf32
@@ -34,3 +42,5 @@ supported_types:
   - int8
   - int4
   - fp8
+throughput_published:
+  - fp32_tflops

@@ -1,6 +1,9 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/580.95.05/README/supportedchips.html
+# Additional source: https://www.nvidia.com/en-in/drivers/quadro-desktop-gpu-specs/
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: quadro-p5000
 name: Fake NVIDIA Quadro P5000
-torch_name: NVIDIA Quadro P5000
+torch_name: Quadro P5000
 official_model: Quadro P5000
 architecture: pascal
 compute_major: 6
@@ -26,5 +29,16 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 180000
 pci_device_id: 0
+memory_type: GDDR5X
+memory_bandwidth_gbps: 288
+ecc: supported
+form_factor: pcie
+pcie_generation: 3
+pcie_lanes: 16
+mig_max_instances: 0
+fp32_tflops: 8.9
+throughput_source: https://www.nvidia.com/en-eu/design-visualization/quadro-desktop-gpus/
 supported_types:
   - fp32
+throughput_published:
+  - fp32_tflops

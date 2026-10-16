@@ -1,3 +1,4 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx-a3000-mobile
 name: Fake NVIDIA RTX A3000 Laptop GPU
 torch_name: NVIDIA RTX A3000 Laptop GPU
@@ -25,7 +26,14 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 130000
-pci_device_id: 0
+pci_device_id: 616042718
+memory_type: GDDR6
+memory_bandwidth_gbps: 264
+form_factor: laptop
+pcie_generation: 4
+min_power_limit_mw: 60000
+fp32_tflops: 12.8
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/documents/quadro-line-card-for-mobile-workstation.pdf
 supported_types:
   - fp32
   - tf32
@@ -33,3 +41,5 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops

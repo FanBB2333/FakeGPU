@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/nvidia-a800-40gb-active-datasheet.pdf
 id: a800-40gb-active
 name: Fake NVIDIA A800 40GB Active
 torch_name: NVIDIA A800 40GB Active
@@ -25,7 +27,18 @@ max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 240000
-pci_device_id: 0
+pci_device_id: 552997086
+memory_type: HBM2
+memory_bandwidth_gbps: 1555.2
+form_factor: pcie
+pcie_generation: 4
+pcie_lanes: 16
+nvlink_generation: 3
+nvlink_bandwidth_gbps: 400
+mig_max_instances: 7
+fp64_tflops: 9.7
+fp32_tflops: 19.5
+throughput_source: https://www.nvidia.com/en-us/products/workstations/a800/
 supported_types:
   - fp32
   - tf32
@@ -33,3 +46,6 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp64_tflops
+  - fp32_tflops

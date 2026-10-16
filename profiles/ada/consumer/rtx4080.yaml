@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4080-family/
 id: rtx4080
 name: Fake NVIDIA GeForce RTX 4080
 torch_name: NVIDIA GeForce RTX 4080
@@ -13,7 +15,7 @@ notes: Reference 16 GB Founders Edition profile using NVIDIA GeForce specificati
 memory_bytes: 17179869184
 sm_count: 76
 memory_bus_width_bits: 256
-core_clock_mhz: 2510
+core_clock_mhz: 2505
 memory_clock_mhz: 11200
 l2_cache_bytes: 67108864
 shared_mem_per_sm: 102400
@@ -25,7 +27,26 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 320000
 max_power_limit_mw: 320000
-pci_device_id: 0
+pci_device_id: 654577886
+base_clock_mhz: 2210
+memory_type: GDDR6X
+memory_bandwidth_gbps: 716.8
+form_factor: pcie
+pcie_generation: 4
+nvlink_generation: 0
+fp64_tflops: 0.7615
+fp32_tflops: 48.7
+fp16_tflops: 48.7
+bf16_tflops: 48.7
+tensor_tf32_tflops: 48.7
+tensor_fp16_tflops: 97.5
+tensor_bf16_tflops: 97.5
+tensor_fp8_tflops: 194.9
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 389.9
+tensor_int4_tops: 779.8
+throughput_source: https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf
 supported_types:
   - fp32
   - tf32
@@ -34,3 +55,17 @@ supported_types:
   - fp8
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

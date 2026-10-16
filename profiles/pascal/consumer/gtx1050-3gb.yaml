@@ -1,6 +1,9 @@
+# Additional source: https://web.archive.org/web/20181231061712/https://www.nvidia.com/en-us/geforce/products/10series/geforce-gtx-1050/
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: gtx1050-3gb
-name: Fake NVIDIA GeForce GTX 1050 3 GB (MSI OC reference)
-torch_name: NVIDIA GeForce GTX 1050 3 GB (MSI OC reference)
+name: Fake NVIDIA GeForce GTX 1050 3 GB
+torch_name: NVIDIA GeForce GTX 1050
 official_model: GeForce GTX 1050
 architecture: pascal
 compute_major: 6
@@ -9,11 +12,11 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus/legacy
 spec_source: https://www.msi.com/Graphics-Card/GeForce-GTX-1050-3GT-OC/Specification
-notes: 3 GB / 768-core / 96-bit variant. Uses the explicitly named MSI 3GT OC board specification, not a claimed NVIDIA reference clock. SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
+notes: 3 GB / 768-core / 96-bit variant. Base and boost clocks are NVIDIA's reference values (1392/1518 MHz); memory and board power follow the MSI 3GT OC board specification. SM count is derived from published CUDA cores per architecture. CUDA resource limits follow https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html . Zero fields mean unverified or unspecified, not absent hardware; power fields use board/subsystem rating as a reference envelope rather than measured draw. memory_clock_mhz stores half the effective data rate.
 memory_bytes: 3221225472
 sm_count: 6
 memory_bus_width_bits: 96
-core_clock_mhz: 1582
+core_clock_mhz: 1518
 memory_clock_mhz: 3504
 l2_cache_bytes: 0
 shared_mem_per_sm: 98304
@@ -26,7 +29,40 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 75000
 max_power_limit_mw: 75000
 pci_device_id: 0
+base_clock_mhz: 1392
+memory_type: GDDR5
+memory_bandwidth_gbps: 84
+form_factor: pcie
+pcie_generation: 3
+mig_max_instances: 0
+fp64_tflops: 0.07286
+fp32_tflops: 2.332
+fp16_tflops: 0.03643
+bf16_tflops: 0
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 0
+tensor_fp16_tflops: 0
+tensor_bf16_tflops: 0
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 0
+tensor_int4_tops: 0
 supported_types:
   - fp32
   - fp16
   - int8
+throughput_derived:
+  - fp64_tflops
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

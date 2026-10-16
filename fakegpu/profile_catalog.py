@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass
+from dataclasses import field as dataclass_field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
@@ -74,6 +75,47 @@ _REFERENCE_SPEC_FIELDS = (
     "max_power_limit_mw",
     "pci_device_id",
 )
+# Optional public specifications. Unlike the fields above, an absent key means
+# unknown; an explicit 0 for NVLink or MIG means the product has none.
+_OPTIONAL_INTEGER_FIELDS = (
+    "base_clock_mhz",
+    "pcie_generation",
+    "pcie_lanes",
+    "nvlink_generation",
+    "nvlink_links",
+    "mig_max_instances",
+    "min_power_limit_mw",
+)
+_OPTIONAL_NUMBER_FIELDS = (
+    "memory_bandwidth_gbps",
+    "nvlink_bandwidth_gbps",
+    "c2c_bandwidth_gbps",
+)
+# Dense peak rates per GPU in TFLOPS (TOPS for integers) at the boost clock.
+# Tensor FP16/BF16/FP8 rates assume FP32 accumulation.
+THROUGHPUT_FIELDS = (
+    "fp64_tflops",
+    "fp32_tflops",
+    "fp16_tflops",
+    "bf16_tflops",
+    "tensor_fp64_tflops",
+    "tensor_tf32_tflops",
+    "tensor_fp16_tflops",
+    "tensor_bf16_tflops",
+    "tensor_fp8_tflops",
+    "tensor_fp6_tflops",
+    "tensor_fp4_tflops",
+    "tensor_int8_tops",
+    "tensor_int4_tops",
+)
+THROUGHPUT_BASES = {"throughput_published": "published", "throughput_derived": "derived"}
+_MEMORY_TYPES = {
+    "GDDR5", "GDDR5X", "GDDR6", "GDDR6X", "GDDR7",
+    "HBM2", "HBM2e", "HBM3", "HBM3e",
+    "LPDDR4", "LPDDR4X", "LPDDR5", "LPDDR5X", "DDR3", "DDR4",
+}
+_ECC_VALUES = {"supported", "unsupported"}
+_FORM_FACTORS = {"sxm", "pcie", "superchip", "laptop", "embedded"}
 
 
 class ProfileCatalogError(ValueError):
@@ -113,6 +155,22 @@ class GpuProfile:
     compute_capability_source: str
     spec_source: str
     notes: str
+    base_clock_mhz: int | None = None
+    memory_type: str = ""
+    memory_bandwidth_gbps: float | None = None
+    ecc: str = ""
+    form_factor: str = ""
+    pcie_generation: int | None = None
+    pcie_lanes: int | None = None
+    nvlink_generation: int | None = None
+    nvlink_links: int | None = None
+    nvlink_bandwidth_gbps: float | None = None
+    c2c_bandwidth_gbps: float | None = None
+    mig_max_instances: int | None = None
+    min_power_limit_mw: int | None = None
+    throughput: dict[str, float] = dataclass_field(default_factory=dict)
+    throughput_basis: dict[str, str] = dataclass_field(default_factory=dict)
+    throughput_source: str = ""
 
     @property
     def compute_capability(self) -> tuple[int, int]:
@@ -343,6 +401,8 @@ def validate_catalog(
                     f"does not match NVIDIA table value {official_cc}"
                 )
 
+        errors.extend(_optional_spec_errors(profile, prefix))
+
         for field in ("compute_capability_source", "spec_source"):
             value = getattr(profile, field)
             hostname = (urlparse(value).hostname or "").lower()
@@ -354,6 +414,33 @@ def validate_catalog(
                 warnings.append(f"{prefix} {field} is not an NVIDIA URL")
 
     return CatalogValidation(errors=tuple(errors), warnings=tuple(warnings))
+
+
+def _optional_spec_errors(profile: GpuProfile, prefix: str) -> list[str]:
+    errors = []
+    if profile.memory_type and profile.memory_type not in _MEMORY_TYPES:
+        errors.append(f"{prefix} unknown memory_type {profile.memory_type!r}")
+    if profile.ecc and profile.ecc not in _ECC_VALUES:
+        errors.append(f"{prefix} ecc must be supported or unsupported")
+    if profile.form_factor and profile.form_factor not in _FORM_FACTORS:
+        errors.append(f"{prefix} unknown form_factor {profile.form_factor!r}")
+    numbers = {key: getattr(profile, key) for key in _OPTIONAL_INTEGER_FIELDS + _OPTIONAL_NUMBER_FIELDS}
+    numbers.update(profile.throughput)
+    for key, value in numbers.items():
+        if value is not None and (value < 0 or value != value):
+            errors.append(f"{prefix} {key} must not be negative")
+    if profile.nvlink_generation == 0 and (profile.nvlink_links or profile.nvlink_bandwidth_gbps):
+        errors.append(f"{prefix} nvlink_generation 0 (none) contradicts NVLink links or bandwidth")
+    if profile.base_clock_mhz and profile.core_clock_mhz and profile.base_clock_mhz > profile.core_clock_mhz:
+        errors.append(f"{prefix} base_clock_mhz exceeds the boost clock core_clock_mhz")
+    if (
+        profile.min_power_limit_mw and profile.max_power_limit_mw
+        and profile.min_power_limit_mw > profile.max_power_limit_mw
+    ):
+        errors.append(f"{prefix} min_power_limit_mw exceeds max_power_limit_mw")
+    if profile.throughput_basis and "published" in profile.throughput_basis.values() and not profile.throughput_source:
+        errors.append(f"{prefix} published throughput needs throughput_source")
+    return errors
 
 
 def catalog_summary(
@@ -408,6 +495,36 @@ def _profile_from_mapping(
         except ValueError as exc:
             raise ProfileCatalogError(f"{path}: invalid integer {key}={value!r}") from exc
 
+    optional: dict[str, Any] = {}
+    for key in _OPTIONAL_INTEGER_FIELDS + _OPTIONAL_NUMBER_FIELDS + THROUGHPUT_FIELDS:
+        value = raw.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ProfileCatalogError(f"{path}: {key!r} must be a scalar")
+        try:
+            optional[key] = int(value, 0) if key in _OPTIONAL_INTEGER_FIELDS else float(value)
+        except ValueError as exc:
+            raise ProfileCatalogError(f"{path}: invalid number {key}={value!r}") from exc
+    throughput = {key: optional.pop(key) for key in THROUGHPUT_FIELDS if key in optional}
+    throughput_basis: dict[str, str] = {}
+    for list_key, basis in THROUGHPUT_BASES.items():
+        names = raw.get(list_key, [])
+        if not isinstance(names, list):
+            raise ProfileCatalogError(f"{path}: {list_key} must be a list")
+        for name in names:
+            if name not in throughput:
+                raise ProfileCatalogError(f"{path}: {list_key} names {name!r} without a value")
+            if name in throughput_basis:
+                raise ProfileCatalogError(f"{path}: {name!r} is both published and derived")
+            throughput_basis[name] = basis
+    unlabeled = sorted(set(throughput) - set(throughput_basis))
+    if unlabeled:
+        raise ProfileCatalogError(
+            f"{path}: throughput values need a throughput_published or throughput_derived entry: "
+            + ", ".join(unlabeled)
+        )
+
     supported_types_raw = raw.get("supported_types")
     if not isinstance(supported_types_raw, list) or not all(
         isinstance(item, str) for item in supported_types_raw
@@ -453,7 +570,14 @@ def _profile_from_mapping(
         compute_capability_source=optional_text("compute_capability_source"),
         spec_source=optional_text("spec_source"),
         notes=optional_text("notes"),
+        memory_type=optional_text("memory_type"),
+        ecc=optional_text("ecc").lower(),
+        form_factor=optional_text("form_factor").lower(),
+        throughput=throughput,
+        throughput_basis=throughput_basis,
+        throughput_source=optional_text("throughput_source"),
         **integers,
+        **optional,
     )
 
 

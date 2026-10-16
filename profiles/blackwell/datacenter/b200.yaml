@@ -4,6 +4,8 @@
 # Additional source: https://developer.nvidia.com/blog/scaling-autonomous-ai-agents-and-workloads-with-nvidia-dgx-spark/
 # Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/y441155802qub41q118b2852i557jem5.pdf
 # Additional source: https://developer.nvidia.com/blog/boost-gpu-memory-performance-with-no-code-changes-using-nvidia-cuda-mps/
+# Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: b200
 name: Fake NVIDIA B200
 torch_name: NVIDIA B200
@@ -32,6 +34,25 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 1000000
 pci_device_id: 687935710
+memory_type: HBM3e
+memory_bandwidth_gbps: 7700
+form_factor: sxm
+pcie_generation: 5
+nvlink_generation: 5
+nvlink_links: 18
+nvlink_bandwidth_gbps: 1800
+mig_max_instances: 7
+fp64_tflops: 37
+fp32_tflops: 75
+tensor_fp64_tflops: 37
+tensor_tf32_tflops: 1100
+tensor_fp16_tflops: 2250
+tensor_bf16_tflops: 2250
+tensor_fp8_tflops: 4500
+tensor_fp6_tflops: 4500
+tensor_fp4_tflops: 9000
+tensor_int8_tops: 4500
+throughput_source: https://dam-cdn.nvd.orangelogic.com/AssetLink/y441155802qub41q118b2852i557jem5.pdf
 supported_types:
   - fp32
   - tf32
@@ -41,3 +62,14 @@ supported_types:
   - int4
   - fp8
   - fp4
+throughput_published:
+  - fp64_tflops
+  - fp32_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops

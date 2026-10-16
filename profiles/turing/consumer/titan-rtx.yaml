@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf
 id: titan-rtx
 name: Fake NVIDIA TITAN RTX
 torch_name: NVIDIA TITAN RTX
@@ -25,9 +27,47 @@ max_threads_per_multiprocessor: 1024
 max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 280000
 max_power_limit_mw: 280000
-pci_device_id: 0
+pci_device_id: 503451870
+base_clock_mhz: 1350
+memory_type: GDDR6
+memory_bandwidth_gbps: 672
+form_factor: pcie
+pcie_generation: 3
+pcie_lanes: 16
+nvlink_generation: 2
+nvlink_links: 2
+nvlink_bandwidth_gbps: 100
+fp64_tflops: 0.5098
+fp32_tflops: 16.3
+fp16_tflops: 32.6
+bf16_tflops: 0
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 0
+tensor_fp16_tflops: 130.5
+tensor_bf16_tflops: 0
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 261
+tensor_int4_tops: 522
+throughput_source: https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf
 supported_types:
   - fp32
   - fp16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+  - tensor_fp16_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

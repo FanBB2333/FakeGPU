@@ -1,3 +1,5 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5050/
 id: rtx5050
 name: Fake NVIDIA GeForce RTX 5050
 torch_name: NVIDIA GeForce RTX 5050
@@ -25,7 +27,24 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 130000
 max_power_limit_mw: 130000
-pci_device_id: 0
+pci_device_id: 763564254
+base_clock_mhz: 2310
+memory_type: GDDR6
+memory_bandwidth_gbps: 320
+form_factor: pcie
+pcie_generation: 5
+nvlink_generation: 0
+fp64_tflops: 0.2056
+fp32_tflops: 13.16
+fp16_tflops: 13.16
+bf16_tflops: 13.16
+tensor_tf32_tflops: 13.16
+tensor_fp16_tflops: 26.32
+tensor_bf16_tflops: 26.32
+tensor_fp8_tflops: 52.63
+tensor_fp4_tflops: 210.5
+tensor_int8_tops: 105.3
+tensor_int4_tops: 0
 supported_types:
   - fp32
   - tf32
@@ -35,3 +54,15 @@ supported_types:
   - fp4
   - int8
   - int4
+throughput_derived:
+  - fp64_tflops
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

@@ -1,3 +1,4 @@
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3080-3080ti/
 id: rtx3080
 name: Fake NVIDIA GeForce RTX 3080
 torch_name: NVIDIA GeForce RTX 3080
@@ -26,6 +27,26 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 320000
 max_power_limit_mw: 320000
 pci_device_id: 0
+base_clock_mhz: 1440
+memory_type: GDDR6X
+memory_bandwidth_gbps: 760
+form_factor: pcie
+pcie_generation: 4
+nvlink_generation: 0
+fp64_tflops: 0.4651
+fp32_tflops: 29.8
+fp16_tflops: 29.8
+bf16_tflops: 29.8
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 29.8
+tensor_fp16_tflops: 59.5
+tensor_bf16_tflops: 59.5
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 238
+tensor_int4_tops: 476
+throughput_source: https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf
 supported_types:
   - fp32
   - tf32
@@ -33,3 +54,18 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - tensor_fp64_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

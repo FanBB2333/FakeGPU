@@ -2,6 +2,7 @@
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://docs.nvidia.com/ai-enterprise/release-4/latest/infra-software/vgpu/features.html
+# Additional source: https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/hopper-h20.html
 id: h20-141gb
 name: Fake NVIDIA H20 141GB
 torch_name: NVIDIA H20 141GB
@@ -30,6 +31,8 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 590090462
+form_factor: sxm
+mig_max_instances: 7
 supported_types:
   - fp32
   - tf32

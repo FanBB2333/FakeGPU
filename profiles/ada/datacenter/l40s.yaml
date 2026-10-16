@@ -30,6 +30,27 @@ max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 350000
 pci_device_id: 649662686
+memory_type: GDDR6
+memory_bandwidth_gbps: 864
+ecc: supported
+form_factor: pcie
+pcie_generation: 4
+pcie_lanes: 16
+nvlink_generation: 0
+mig_max_instances: 0
+fp64_tflops: 1.431
+fp32_tflops: 91.6
+fp16_tflops: 91.61
+bf16_tflops: 91.61
+tensor_tf32_tflops: 183
+tensor_fp16_tflops: 362.05
+tensor_bf16_tflops: 362.05
+tensor_fp8_tflops: 733
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 733
+tensor_int4_tops: 733
+throughput_source: https://www.nvidia.com/en-us/data-center/l40s/
 supported_types:
   - fp32
   - tf32
@@ -38,3 +59,17 @@ supported_types:
   - int8
   - int4
   - fp8
+throughput_published:
+  - fp32_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

@@ -1,6 +1,8 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: quadro-p5000-mobile
 name: Fake NVIDIA Quadro P5000 Mobile
-torch_name: NVIDIA Quadro P5000 Mobile
+torch_name: Quadro P5000
 official_model: Quadro P5000
 architecture: pascal
 compute_major: 6
@@ -26,5 +28,8 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 0
+memory_type: GDDR5
+form_factor: laptop
+mig_max_instances: 0
 supported_types:
   - fp32

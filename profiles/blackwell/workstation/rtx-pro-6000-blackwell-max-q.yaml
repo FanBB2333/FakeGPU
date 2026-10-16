@@ -15,7 +15,7 @@ notes: Reference desktop-board configuration. SM count derived from NVIDIA 24064
 memory_bytes: 103079215104
 sm_count: 188
 memory_bus_width_bits: 512
-core_clock_mhz: 0
+core_clock_mhz: 2280
 memory_clock_mhz: 14000
 l2_cache_bytes: 134217728
 shared_mem_per_sm: 102400
@@ -28,6 +28,25 @@ max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 300000
 pci_device_id: 733221086
+memory_type: GDDR7
+memory_bandwidth_gbps: 1792
+ecc: supported
+form_factor: pcie
+pcie_generation: 5
+pcie_lanes: 16
+mig_max_instances: 4
+fp64_tflops: 1.715
+fp32_tflops: 109.7
+fp16_tflops: 109.7
+bf16_tflops: 109.7
+tensor_tf32_tflops: 219.5
+tensor_fp16_tflops: 438.9
+tensor_bf16_tflops: 438.9
+tensor_fp8_tflops: 877.9
+tensor_fp4_tflops: 1755.7
+tensor_int8_tops: 877.9
+tensor_int4_tops: 0
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf
 supported_types:
   - fp32
   - tf32
@@ -37,3 +56,16 @@ supported_types:
   - int4
   - fp8
   - fp4
+throughput_published:
+  - fp32_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+throughput_derived:
+  - fp64_tflops
+  - tensor_int4_tops

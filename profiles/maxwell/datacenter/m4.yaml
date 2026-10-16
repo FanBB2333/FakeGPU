@@ -1,6 +1,7 @@
 # Public specification reference; not a measured or calibrated device.
 # Architecture limits: https://docs.nvidia.com/cuda/maxwell-tuning-guide/index.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: m4
 name: Fake NVIDIA Tesla M4
 torch_name: Tesla M4
@@ -29,5 +30,40 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 75000
 pci_device_id: 338759902
+base_clock_mhz: 872
+memory_type: GDDR5
+memory_bandwidth_gbps: 88
+form_factor: pcie
+mig_max_instances: 0
+min_power_limit_mw: 50000
+fp64_tflops: 0.06861
+fp32_tflops: 2.2
+fp16_tflops: 0
+bf16_tflops: 0
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 0
+tensor_fp16_tflops: 0
+tensor_bf16_tflops: 0
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 0
+tensor_int4_tops: 0
+throughput_source: https://developer.nvidia.com/blog/accelerating-hyperscale-datacenter-applications-tesla-gpus/
 supported_types:
   - fp32
+throughput_published:
+  - fp32_tflops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

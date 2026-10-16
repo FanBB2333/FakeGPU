@@ -1,3 +1,4 @@
+# Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/v686u306w26ftuk863xjeimilimtx55e.pdf
 id: jetson-t5000
 name: Fake NVIDIA Jetson T5000
 torch_name: NVIDIA Jetson T5000
@@ -26,6 +27,19 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 120000
 max_power_limit_mw: 130000
 pci_device_id: 0
+memory_type: LPDDR5X
+memory_bandwidth_gbps: 273
+ecc: supported
+form_factor: embedded
+mig_max_instances: 2
+min_power_limit_mw: 40000
+fp64_tflops: 0.126
+fp32_tflops: 8.064
+tensor_fp16_tflops: 258
+tensor_fp8_tflops: 517
+tensor_fp4_tflops: 1035
+tensor_int8_tops: 517
+throughput_source: https://developer.nvidia.com/downloads/assets/embedded/secure/jetson/thor/docs/jetson-thor-series-modules-datasheet_ds-11945-001.pdf
 supported_types:
   - fp32
   - tf32
@@ -35,3 +49,11 @@ supported_types:
   - int4
   - fp8
   - fp4
+throughput_published:
+  - fp32_tflops
+  - tensor_fp16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+throughput_derived:
+  - fp64_tflops

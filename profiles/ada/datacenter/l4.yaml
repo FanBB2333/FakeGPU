@@ -1,6 +1,7 @@
 # Public specification reference; not a measured or calibrated device.
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/l4/PB-11316-001_v01.pdf
 id: l4
 name: Fake NVIDIA L4
 torch_name: NVIDIA L4
@@ -16,8 +17,8 @@ notes: 24 GiB GDDR6; 58 enabled SMs, 48 MiB L2, 300 GB/s and 72 W. Memory clock 
 memory_bytes: 25769803776
 sm_count: 58
 memory_bus_width_bits: 192
-core_clock_mhz: 0
-memory_clock_mhz: 6250
+core_clock_mhz: 2040
+memory_clock_mhz: 6251
 l2_cache_bytes: 50331648
 shared_mem_per_sm: 102400
 shared_mem_per_block: 49152
@@ -29,6 +30,27 @@ max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 72000
 pci_device_id: 666374366
+base_clock_mhz: 795
+memory_type: GDDR6
+memory_bandwidth_gbps: 300
+ecc: supported
+form_factor: pcie
+pcie_generation: 4
+pcie_lanes: 16
+min_power_limit_mw: 40000
+fp64_tflops: 0.4733
+fp32_tflops: 30.3
+fp16_tflops: 30.29
+bf16_tflops: 30.29
+tensor_tf32_tflops: 60
+tensor_fp16_tflops: 121
+tensor_bf16_tflops: 121
+tensor_fp8_tflops: 242
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 242
+tensor_int4_tops: 484
+throughput_source: https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf
 supported_types:
   - fp32
   - tf32
@@ -37,3 +59,17 @@ supported_types:
   - int8
   - int4
   - fp8
+throughput_published:
+  - fp32_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops

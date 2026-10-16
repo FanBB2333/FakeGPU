@@ -9,6 +9,7 @@ from ._cli import (
     usage_error,
 )
 from .llm_estimator import VISION_ESTIMATE_WARNING, estimate_decoder_inference
+from .performance_model import COMPUTE_PRECISIONS
 from .structured_io import emit_json
 
 
@@ -88,7 +89,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--compute-acceleration-factor",
         type=float,
         default=1.0,
-        help="Explicit matrix/tensor throughput factor over scalar FP32.",
+        help="Explicit factor applied to the selected compute peak.",
+    )
+    parser.add_argument(
+        "--compute-precision",
+        choices=COMPUTE_PRECISIONS,
+        default="fp32",
+        help="Profile peak for the roofline: fp32 (scalar FMA, default) or a tensor path such as tensor_bf16.",
     )
     add_json_path_argument(parser)
     args = parser.parse_args(argv)
@@ -109,6 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expert_parallel_size=args.expert_parallel_size,
             target_profile=args.target_profile,
             compute_acceleration_factor=args.compute_acceleration_factor,
+            compute_precision=args.compute_precision,
             kv_cache_strategy=args.kv_cache_strategy,
             kv_cache_bits=args.kv_cache_bits,
             kv_cache_residual_tokens=args.kv_cache_residual_tokens,

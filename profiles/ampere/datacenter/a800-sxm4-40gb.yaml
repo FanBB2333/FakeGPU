@@ -3,6 +3,7 @@
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
 # Additional source: https://docs.nvidia.com/datacenter/tesla/tesla-release-notes-517-88/index.html
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: a800-sxm4-40gb
 name: Fake NVIDIA A800-SXM4-40GB
 torch_name: NVIDIA A800-SXM4-40GB
@@ -31,6 +32,7 @@ max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
 pci_device_id: 549261534
+form_factor: sxm
 supported_types:
   - fp32
   - tf32

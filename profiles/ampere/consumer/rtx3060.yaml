@@ -1,3 +1,5 @@
+# Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3060-3060ti/
+# Additional source: https://www.nvidia.com/en-gb/geforce/news/game-on-you-asked-we-answered-qa/
 id: rtx3060
 name: Fake NVIDIA GeForce RTX 3060
 torch_name: NVIDIA GeForce RTX 3060
@@ -26,6 +28,26 @@ max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 170000
 max_power_limit_mw: 170000
 pci_device_id: 0
+base_clock_mhz: 1320
+memory_type: GDDR6
+memory_bandwidth_gbps: 360
+form_factor: pcie
+pcie_generation: 4
+nvlink_generation: 0
+fp64_tflops: 0.1994
+fp32_tflops: 13
+fp16_tflops: 12.76
+bf16_tflops: 12.76
+tensor_fp64_tflops: 0
+tensor_tf32_tflops: 12.76
+tensor_fp16_tflops: 25.52
+tensor_bf16_tflops: 25.52
+tensor_fp8_tflops: 0
+tensor_fp6_tflops: 0
+tensor_fp4_tflops: 0
+tensor_int8_tops: 102.1
+tensor_int4_tops: 204.1
+throughput_source: https://nvidianews.nvidia.com/news/nvidia-introduces-geforce-rtx-3060-next-generation-of-the-worlds-most-popular-gpu
 supported_types:
   - fp32
   - tf32
@@ -33,3 +55,18 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
+throughput_derived:
+  - fp64_tflops
+  - fp16_tflops
+  - bf16_tflops
+  - tensor_fp64_tflops
+  - tensor_tf32_tflops
+  - tensor_fp16_tflops
+  - tensor_bf16_tflops
+  - tensor_fp8_tflops
+  - tensor_fp6_tflops
+  - tensor_fp4_tflops
+  - tensor_int8_tops
+  - tensor_int4_tops

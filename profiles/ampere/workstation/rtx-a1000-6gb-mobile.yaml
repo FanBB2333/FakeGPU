@@ -1,6 +1,7 @@
+# Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx-a1000-6gb-mobile
 name: Fake NVIDIA RTX A1000 Laptop GPU 6GB configuration
-torch_name: NVIDIA RTX A1000 Laptop GPU
+torch_name: NVIDIA RTX A1000 6GB Laptop GPU
 official_model: NVIDIA RTX A1000
 architecture: ampere
 compute_major: 8
@@ -25,7 +26,11 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 16
 typical_power_usage_mw: 0
 max_power_limit_mw: 0
-pci_device_id: 0
+pci_device_id: 633082078
+memory_bandwidth_gbps: 168
+form_factor: laptop
+fp32_tflops: 9.3
+throughput_source: https://www.nvidia.com/content/dam/en-zz/Solutions/gtcs22/design-visualization/quadro-product-literature/rtx-6000-l40-linecard-nvidia-us-2653097-r7-web.pdf
 supported_types:
   - fp32
   - tf32
@@ -33,3 +38,5 @@ supported_types:
   - bf16
   - int8
   - int4
+throughput_published:
+  - fp32_tflops
