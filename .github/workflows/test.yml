@@ -61,6 +61,46 @@ jobs:
             --report-dir build/validation-research \
             --strict
 
+  macos-python:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio PyYAML jsonschema numpy torch 'pyte>=0.8,<0.9'
+          python -m pip install 'nvitop>=1.7.1,<2' 'nvidia-ml-py>=13.595.45,<14'
+          python -m pip install 'transformers==5.6.0' 'accelerate==1.11.0' \
+            'peft==0.21.2' 'datasets==5.1.0' 'matplotlib==3.11.2'
+
+      - name: Build and install wheel
+        run: |
+          python -m pip wheel --no-deps --wheel-dir build/macos-wheel .
+          python -m pip install --no-deps build/macos-wheel/fakegpu-*.whl
+
+      - name: Test
+        env:
+          FAKEGPU_TERMINAL_REPORT: "0"
+          HF_HUB_OFFLINE: "1"
+          HF_DATASETS_OFFLINE: "1"
+        run: scripts/test.sh python
+
+      - name: Verify installed package outside checkout
+        run: |
+          profile_count=$(python -c 'from pathlib import Path; print(sum(1 for _ in Path("profiles").rglob("*.yaml")))')
+          unset PYTHONPATH FAKEGPU_BUILD_DIR FAKEGPU_LIB_DIR FAKEGPU_PROFILE_DIR
+          cd "$(mktemp -d)"
+          python -I "$GITHUB_WORKSPACE/tests/support/installed_package_smoke.py" \
+            --expected-profile-count "$profile_count"
+          python -I "$GITHUB_WORKSPACE/tests/support/nvml_bridge_smoke.py" --tui
+          python -I "$GITHUB_WORKSPACE/tests/support/a100_monitor_smoke.py"
+
   native:
     strategy:
       fail-fast: false
@@ -84,6 +124,17 @@ jobs:
 
       - name: Native smoke test
         run: scripts/test.sh smoke
+
+      - name: NVML state bridge on Linux
+        if: runner.os == 'Linux'
+        env:
+          PYTHONPATH: .
+          FAKEGPU_TERMINAL_REPORT: "0"
+        run: |
+          python -m pip install numpy 'nvitop>=1.7.1,<2' 'nvidia-ml-py>=13.595.45,<14' 'pyte>=0.8,<0.9'
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python tests/support/nvml_bridge_smoke.py --lib-dir build
+          python tests/support/a100_monitor_smoke.py --lib-dir build
 
       - name: CPU simulation test
         run: scripts/test.sh cpu

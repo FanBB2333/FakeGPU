@@ -6,9 +6,69 @@
 ## Work from a checkout
 
 ```bash
-python3 -m pip install pytest PyYAML jsonschema ruff
+python3 -m pip install '.[torch,dev,monitoring]'
 export PYTHONPATH="$PWD"
 ```
+
+## macOS Conda environment
+
+Install the Xcode Command Line Tools (`xcode-select --install`) if needed, then
+run these commands from the checkout with a native macOS Conda installation:
+
+```bash
+conda env create -f environment.macos.yml
+conda activate fakegpu
+python -m fakegpu doctor
+python -m fakegpu demo --profile l4
+FAKEGPU_PYTHON="$CONDA_PREFIX/bin/python" scripts/test.sh all
+```
+
+If `fakegpu` already exists, use `conda env update -n fakegpu -f
+environment.macos.yml` in place of `conda env create`. The environment uses
+Python 3.12, CMake, native macOS PyTorch, and the development dependencies,
+including Hugging Face, PEFT, datasets, and plotting integrations. Transformers
+5.6.0 and Accelerate 1.11.0 match the native sampler planner's validated pair.
+Installing the package compiles and bundles the macOS dynamic libraries and
+coordinator; it does not need a separate Linux VM or CUDA installation.
+
+`fakegpu.init()` selects CPU-backed FakeCUDA on macOS, so ordinary PyTorch
+CUDA-device code can run for compatibility testing. Computation runs on the
+CPU. The native runtime separately simulates CUDA/NVML/cuBLAS/NCCL APIs; it
+does not add NVIDIA CUDA support to the macOS PyTorch build.
+
+After changing Python or C++ sources, reinstall with
+`python -m pip install '.[torch,dev,monitoring]'`. To check the installed package
+independently of the checkout:
+
+```bash
+FAKEGPU_CHECKOUT="$PWD"
+(
+  unset PYTHONPATH FAKEGPU_BUILD_DIR FAKEGPU_LIB_DIR FAKEGPU_PROFILE_DIR
+  cd "${TMPDIR:-/tmp}"
+  python -I "$FAKEGPU_CHECKOUT/tests/support/installed_package_smoke.py"
+)
+```
+
+Validated on 2026-10-16 with macOS arm64, Python 3.12.15, and PyTorch 2.14.1:
+1,879 Python tests passed with no skips, all 306 profile checks passed, the native
+smoke and CPU numerical suites passed, and both strict validation manifests
+passed all 46 executions. The installed wheel also passed the isolated check
+above. The optional native test requiring CUDA-enabled PyTorch is skipped on
+macOS; CPU-backed FakeCUDA training is tested separately.
+
+
+The installed NVML bridge was also verified outside the checkout with
+`nvitop 1.7.1` and `nvidia-ml-py 13.595.45`: two publishers on two synthetic
+devices, memory/process queries, allocation release and process exit cleanup,
+`--once`, and the interactive TUI (including `q` to exit). See the
+[monitoring guide](fakegpu-smi.md#use-pip-installed-nvitop-on-macos-or-linux).
+
+
+The eight-device A100 reference monitor also passed an installed-wheel test:
+real torch allocations grew from 32–60 MiB to 96–124 MiB per synthetic device,
+then returned to their baseline and zero. A terminal emulator verified each
+phase in the same nvitop TUI. Modeled sensor values use documented public idle
+observations and CPU activity assumptions, not physical GPU measurements.
 
 ## Build
 

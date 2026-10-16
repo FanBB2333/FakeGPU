@@ -1,0 +1,16 @@
+name: fakegpu
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - pip
+  - cmake>=3.14
+  - pip:
+      - ".[torch,dev,monitoring]"
+      # Match the Hugging Face sampler planner's validated version pair.
+      - transformers==5.6.0
+      - accelerate==1.11.0
+      - peft==0.21.2
+      - datasets==5.1.0
+      - matplotlib==3.11.2

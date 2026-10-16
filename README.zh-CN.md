@@ -94,7 +94,7 @@ Xcode Command Line Tools。
 git clone https://github.com/FanBB2333/FakeGPU.git
 cd FakeGPU
 scripts/build.sh
-FAKEGPU_BUILD_DIR="$PWD/build" python3 -m pip install .
+FAKEGPU_BUILD_DIR="$PWD/build" python3 -m pip install '.[torch]'
 ```
 
 检查安装是否正常：
@@ -106,6 +106,9 @@ python3 -m fakegpu demo --profile l4
 
 `doctor` 检查 profile 目录、原生库和 PyTorch。`demo` 在 CPU 上执行一个小型训练
 步骤，同时让程序看到 CUDA 设备。
+
+原生 macOS Conda 环境的安装方法见
+[macOS 环境说明](docs/zh-CN/development.md#macos-conda-环境)。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -166,6 +169,8 @@ export FAKEGPU_SMI_STATE_DIR=build/smi
 python3 your_script.py &
 python3 -m fakegpu nvidia-smi --state-dir build/smi
 ```
+
+macOS/Linux 上可用 `fakegpu nvitop --state-dir build/smi` 查看状态，安装与双终端示例见 [NVML 桥接说明](docs/zh-CN/fakegpu-smi.md#在-macos-或-linux-上使用-pip-安装的-nvitop)。
 
 运行 `python3 -m fakegpu --help` 查看所有命令，运行
 `python3 -m fakegpu <command> --help` 查看某个命令的选项。

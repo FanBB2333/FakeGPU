@@ -103,7 +103,7 @@ PyTorch for the Python runtime. On Debian or Ubuntu, install
 git clone https://github.com/FanBB2333/FakeGPU.git
 cd FakeGPU
 scripts/build.sh
-FAKEGPU_BUILD_DIR="$PWD/build" python3 -m pip install .
+FAKEGPU_BUILD_DIR="$PWD/build" python3 -m pip install '.[torch]'
 ```
 
 Check that everything works:
@@ -115,6 +115,9 @@ python3 -m fakegpu demo --profile l4
 
 `doctor` checks the profile catalog, native libraries, and PyTorch. `demo` runs
 a small training step on the CPU while the program sees a CUDA device.
+
+For a native macOS Conda environment, follow the
+[macOS setup instructions](docs/en/development.md#macos-conda-environment).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -175,6 +178,8 @@ export FAKEGPU_SMI_STATE_DIR=build/smi
 python3 your_script.py &
 python3 -m fakegpu nvidia-smi --state-dir build/smi
 ```
+
+For pip-installed nvitop on macOS/Linux, use `fakegpu nvitop --state-dir build/smi`; see the [NVML bridge guide](docs/en/fakegpu-smi.md#use-pip-installed-nvitop-on-macos-or-linux).
 
 Run `python3 -m fakegpu --help` for every command, and
 `python3 -m fakegpu <command> --help` for its options.

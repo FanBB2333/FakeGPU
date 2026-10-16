@@ -6,9 +6,62 @@
 ## 直接從原始碼目錄開發
 
 ```bash
-python3 -m pip install pytest PyYAML jsonschema ruff
+python3 -m pip install '.[torch,dev,monitoring]'
 export PYTHONPATH="$PWD"
 ```
+
+## macOS Conda 環境
+
+如尚未安裝 Xcode Command Line Tools，先執行 `xcode-select --install`。使用原生
+macOS Conda，在專案根目錄執行：
+
+```bash
+conda env create -f environment.macos.yml
+conda activate fakegpu
+python -m fakegpu doctor
+python -m fakegpu demo --profile l4
+FAKEGPU_PYTHON="$CONDA_PREFIX/bin/python" scripts/test.sh all
+```
+
+如果 `fakegpu` 環境已存在，將建立指令替換為
+`conda env update -n fakegpu -f environment.macos.yml`。此環境包含 Python 3.12、
+CMake、原生 macOS PyTorch 與開發依賴，包括 Hugging Face、PEFT、datasets 與繪圖
+整合。Transformers 5.6.0 與 Accelerate 1.11.0 對應原生取樣規劃器已驗證的版本組合。
+安裝 Python 套件時會編譯並封裝 macOS 動態函式庫及 coordinator，無需 Linux VM 或
+CUDA 安裝。
+
+macOS 上的 `fakegpu.init()` 預設使用由 CPU 支撐的 FakeCUDA，讓一般 PyTorch
+CUDA 裝置程式碼能執行相容性測試，實際運算發生在 CPU。原生 runtime 另外模擬
+CUDA/NVML/cuBLAS/NCCL API，不會為 macOS PyTorch 增加 NVIDIA CUDA 支援。
+
+修改 Python 或 C++ 原始碼後，用 `python -m pip install '.[torch,dev,monitoring]'` 重新安裝。
+可執行以下檢查，確認安裝後的套件能獨立於原始碼目錄運作：
+
+```bash
+FAKEGPU_CHECKOUT="$PWD"
+(
+  unset PYTHONPATH FAKEGPU_BUILD_DIR FAKEGPU_LIB_DIR FAKEGPU_PROFILE_DIR
+  cd "${TMPDIR:-/tmp}"
+  python -I "$FAKEGPU_CHECKOUT/tests/support/installed_package_smoke.py"
+)
+```
+
+2026-10-16 已在 macOS arm64、Python 3.12.15、PyTorch 2.14.1 環境驗證：
+1879 項 Python 測試全部通過，無略過；306 個 profile 檢查、原生 smoke 與 CPU 數值
+測試全部通過；兩個嚴格驗證清單的 46 次執行全部通過。安裝後的 wheel 也通過上述
+隔離檢查。依賴 CUDA 版 PyTorch 的選用原生測試在 macOS 上略過，由 CPU 支撐的
+FakeCUDA 訓練另有實際驗證。
+
+
+另已在原始碼目錄外驗證安裝後的 NVML 橋接，使用 `nvitop 1.7.1` 與
+`nvidia-ml-py 13.595.45`：兩個發布程序、兩個模擬裝置、記憶體及程序查詢、釋放
+記憶體與程序結束後的清理均通過；`--once` 與互動介面也通過，按 `q` 可正常結束。
+用法見 [監控文件](fakegpu-smi.md#在-macos-或-linux-使用-pip-安裝的-nvitop)。
+
+
+8 卡 A100 參考監控也通過安裝後驗證：真實 torch 配置讓每張模擬卡從 32–60 MiB
+增至 96–124 MiB，再回到初始值與零。終端解析器確認同一個 nvitop 互動介面顯示
+各階段。遙測數值使用有來源的公開閒置讀數與 CPU 活躍度模型，並非物理 GPU 實測。
 
 ## 建置
 
