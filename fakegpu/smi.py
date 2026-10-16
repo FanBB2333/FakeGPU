@@ -303,6 +303,7 @@ class SmiStatePublisher:
                     "compiler_target": profile.get("compiler_target"),
                     "total_memory": total,
                     "free_memory": free,
+                    "activity": dict(item.get("activity") or {}),
                     "tracked_memory": current,
                     "peak_tracked_memory": peak,
                     "reserved_memory": reserved,

@@ -130,3 +130,126 @@ curl http://127.0.0.1:9400/api/v1/history
 - The server binds to `127.0.0.1` without authentication. Put it behind an
   authenticated proxy before exposing it. Exported values keep FakeGPU-SMI's
   distinction between modeled and observed data.
+
+## Use pip-installed nvitop on macOS or Linux
+
+Install the optional monitoring dependencies from the checkout, then keep the
+workload running in terminal 1:
+
+```bash
+conda activate fakegpu
+python -m pip install '.[monitoring]'
+FAKEGPU_SMI_STATE_DIR=/tmp/fakegpu-smi python - <<'PYTHON'
+import time
+import fakegpu
+fakegpu.init(profile="l4", device_count=1)  # Synthetic profile.
+import torch
+x = torch.ones((2048, 2048), device="cuda:0")
+time.sleep(600)
+PYTHON
+```
+
+In terminal 2:
+
+```bash
+conda activate fakegpu
+fakegpu nvitop --state-dir /tmp/fakegpu-smi
+# Print once without entering the interactive monitor:
+fakegpu nvitop --state-dir /tmp/fakegpu-smi -- --once
+```
+
+Press `q` to exit nvitop; stop the workload with Ctrl+C. The separate
+`fakegpu nvidia-smi -l 1` loop exits with Ctrl+C, not `q`.
+
+The wrapper runs the installed, unmodified nvitop. It explicitly loads bundled
+`libnvidia-ml.dylib` on macOS (`libnvidia-ml.so.1` on Linux) and refreshes an
+atomic native NVML snapshot every 0.25 seconds. Calling plain `nvitop` does not
+enable this bridge. No NVIDIA driver, system NVML replacement, or shell alias
+is installed. The workload still computes on the CPU with FakeCUDA.
+
+Device names, synthetic UUIDs, total memory, reported memory, PIDs and per-process
+memory come from the published state. Reported memory includes allocator
+reservations and any configured runtime overhead, so freeing tensors may require
+`torch.cuda.empty_cache()` before the displayed allocation decreases. Workers
+with the same synthetic GPU UUID are aggregated. By default, temperature, power draw, GPU
+utilization and process GPU utilization are unavailable (`N/A`). Modeled MIG and
+NVLink views remain available through `fakegpu nvidia-smi`, not this bridge.
+
+Only fresh, running publishers on this host are included; the default heartbeat
+expiry is two seconds (`--stale-after-seconds`). Exited/dead processes and invalid
+files are excluded. Duplicate files for one PID use the newest snapshot. Devices
+already discovered keep stable NVML handles and show zero usage after their last
+publisher exits. Restart nvitop after adding a new device/profile, because nvitop
+selects its device list at startup. With no live publishers the wrapper prints
+startup guidance and exits with status 1; it does not invent a device inventory.
+
+Python NVML clients can use `fakegpu.nvml.NvmlStateBridge` as a context manager
+in a dedicated monitor process, before loading NVML. Initialize/shutdown pynvml
+normally inside that context. Closing the bridge stops refreshes and clears
+usage; its library selection and handles remain process-local until exit.
+
+The regression probe uses two real FakeCUDA worker processes and checks NVML
+memory/process queries (including v1/v2/v3 buffer sizes), nvitop's API and
+`--once` output, memory release, graceful exit, abrupt termination and empty-state
+guidance. Run it outside the checkout after installing the wheel:
+
+```bash
+FAKEGPU_CHECKOUT="$PWD"
+(cd /tmp && python -I "$FAKEGPU_CHECKOUT/tests/support/nvml_bridge_smoke.py" --tui)
+```
+
+
+## Eight A100s with reference telemetry and a real torch workload
+
+From the checkout, run terminal 1:
+
+```bash
+conda activate fakegpu
+python examples/monitoring/torch_eight_a100.py
+```
+
+In terminal 2:
+
+```bash
+conda activate fakegpu
+fakegpu nvitop --state-dir /tmp/fakegpu-smi --telemetry reference
+```
+
+The program creates eight synthetic A100 SXM4 80GB devices and real CPU-backed
+PyTorch tensors. Each cycle allocates 32–60 MiB per device, adds another 64 MiB
+per device (96–124 MiB), releases the added tensors, then releases everything.
+It calls `empty_cache()` at phase boundaries. The default phase lasts eight
+seconds; Ctrl+C stops the loop. For one finite cycle use `--cycles 1`.
+Actual host allocations stay around 1 GiB, not eight times 80 GiB.
+
+`--telemetry reference` enables the opt-in A100 display model. For another
+workload, set `FAKEGPU_TELEMETRY=reference` before `fakegpu.init()` and initialize
+with `profile="a100", device_count=8`. The observer records per-device CPU torch
+operator duration and estimated tensor I/O bytes. The viewer exposes GPU and
+memory-engine utilization, per-process activity, temperature, power, power cap,
+P-state and clocks through NVML. Tensor residency alone does not imply activity.
+
+The [reference configuration](../../fakegpu/data/a100_monitor_reference.json)
+separates its sources and assumptions:
+
+- [NVIDIA specifications](https://www.nvidia.com/en-us/data-center/a100/) supply
+  the standard SXM power cap and HBM bandwidth.
+- A [public user-reported snapshot in NVIDIA/nccl-tests](https://github.com/NVIDIA/nccl-tests/issues/228)
+  supplies eight idle temperature/power observations (26–30°C, 56–60W, P0).
+  Only those numbers are retained; no machine identity, UUID or serial is copied.
+- Busy percentages use **CPU dispatch duty cycle as a simulation input**. Power
+  is interpolated toward the specification cap; temperature follows an explicit
+  thermal response model. Memory-engine utilization uses observed tensor I/O
+  against reference bandwidth, not allocated-capacity percentage. Loaded curves
+  are assumptions, not measured A100 behavior or a performance calibration.
+
+The model currently matches only the `a100` SXM4 80GB profile. Other profiles or
+publishers without activity observations retain `N/A`. The GPU-local fan remains
+`N/A`, matching the public snapshot; CUDA-driver and unsupported video/PCIe
+telemetry also remain unavailable. The default `--telemetry none` retains the
+original behavior. No NVIDIA CUDA driver is installed on macOS.
+
+The maintained test `tests/support/a100_monitor_smoke.py` launches this torch
+program and the real nvitop TUI, reconstructs terminal updates with pyte, checks
+all eight memory values through growth and release, checks modeled sensors, and
+verifies process cleanup. It prints only numeric summaries.

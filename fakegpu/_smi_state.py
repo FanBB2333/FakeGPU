@@ -573,6 +573,7 @@ def _normalize_device(
         "pci_bus_id": str(
             raw.get("pci_bus_id") or _synthetic_pci_bus_id(index)
         ),
+        "activity": dict(raw["activity"]) if isinstance(raw.get("activity"), Mapping) else {},
         "identity_source": str(
             raw.get("identity_source") or "synthetic"
         ),
@@ -1047,6 +1048,7 @@ def build_inventory(
                 "memory": dict(device["memory"]),
                 "fakegpu": dict(fakegpu),
                 "software": dict(software),
+                "activity": dict(device["activity"]),
                 "dispatch_tracking": dispatch_tracking,
                 "native_activity": dict(device["native_activity"]),
             }

@@ -1,5 +1,6 @@
 add_library(fake_gpu_nvml OBJECT
     nvml_stubs.cpp
+    state_bridge.cpp
 )
 
 target_include_directories(fake_gpu_nvml PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

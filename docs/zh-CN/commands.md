@@ -83,4 +83,5 @@
 |---|---|
 | `fakegpu calibrate` | 整理 serving 观测、对比显存报告并执行可靠性门槛检查 |
 | `fakegpu nvidia-smi` | 查看设备、进程、建模拓扑/MIG、健康状态和可靠性事件 |
+| `fakegpu nvitop` | 通过原生 NVML 桥接，用已安装的 nvitop 查看本机 FakeGPU 状态（macOS/Linux） |
 | `fakegpu metrics` | 导出有数量上限的 Prometheus/JSON 指标，并提供短期内存历史 |

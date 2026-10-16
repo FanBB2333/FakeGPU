@@ -118,3 +118,109 @@ curl http://127.0.0.1:9400/api/v1/history
 - 資料只保存在記憶體中。長期保留請使用 Prometheus 或其他收集系統。
 - 服務只監聽 `127.0.0.1`，不提供身分驗證。對外開放前請放在帶身分驗證的 proxy
   後面。匯出資料沿用 FakeGPU-SMI 對建模值與觀測值的區分。
+
+## 在 macOS 或 Linux 使用 pip 安裝的 nvitop
+
+先從原始碼目錄安裝監控依賴，再於第一個終端保持工作負載執行：
+
+```bash
+conda activate fakegpu
+python -m pip install '.[monitoring]'
+FAKEGPU_SMI_STATE_DIR=/tmp/fakegpu-smi python - <<'PYTHON'
+import time
+import fakegpu
+fakegpu.init(profile="l4", device_count=1)  # 模擬 profile。
+import torch
+x = torch.ones((2048, 2048), device="cuda:0")
+time.sleep(600)
+PYTHON
+```
+
+第二個終端執行：
+
+```bash
+conda activate fakegpu
+fakegpu nvitop --state-dir /tmp/fakegpu-smi
+# 只輸出一次，不進入互動介面：
+fakegpu nvitop --state-dir /tmp/fakegpu-smi -- --once
+```
+
+在 nvitop 中按 `q` 結束；工作負載用 Ctrl+C 停止。另一個指令
+`fakegpu nvidia-smi -l 1` 的更新迴圈要用 Ctrl+C 結束，`q` 不生效。
+
+此入口執行已安裝、未修改的 nvitop，明確載入專案內附的
+`libnvidia-ml.dylib`（Linux 為 `libnvidia-ml.so.1`），每 0.25 秒更新原生
+NVML 快照。直接執行一般的 `nvitop` 不會啟用橋接。無需安裝 NVIDIA 驅動、替換系統
+NVML 或設定 shell 別名；FakeCUDA 的運算仍由 CPU 執行。
+
+裝置名稱、合成 UUID、總 GPU 記憶體、報告用量、PID 與各程序用量來自狀態檔。
+報告用量包含配置器預留與設定的 runtime 開銷，因此釋放張量後，可能需要呼叫
+`torch.cuda.empty_cache()` 才會看到用量下降。相同合成 GPU UUID 的多個程序會
+彙總顯示。預設模式下，溫度、功耗、GPU 使用率及程序 GPU 使用率顯示 `N/A`；建模的 MIG、
+NVLink 資訊仍透過 `fakegpu nvidia-smi` 查看，不透過此橋接呈現。
+
+只讀取本機仍在執行且心跳有效的發布者，預設兩秒過期，可用
+`--stale-after-seconds` 調整。已結束、已消失的程序與無效檔案不會參與統計；相同
+PID 的重複檔案只保留最新快照。已發現的裝置保留穩定 NVML 句柄，最後一個程序
+結束後顯示零用量。新增裝置或 profile 後需重新啟動 nvitop，因為它於啟動時選擇
+裝置清單。沒有活動發布者時，入口提示如何啟動工作負載並回傳狀態碼 1，不會產生預設裝置。
+
+其他 Python NVML 用戶端可在獨立監控程序中、載入 NVML 之前，使用
+`fakegpu.nvml.NvmlStateBridge` 上下文管理器，並在上下文內正常初始化與關閉
+pynvml。關閉橋接會停止更新並清空用量；動態函式庫選擇及句柄保留到程序結束。
+
+端到端回歸啟動兩個真實 FakeCUDA 工作程序，檢查 NVML 記憶體、程序查詢與
+v1/v2/v3 緩衝區邊界、nvitop API 和 `--once` 輸出、釋放記憶體、正常結束、強制
+終止及空狀態提示。安裝 wheel 後，可在原始碼目錄外重現：
+
+```bash
+FAKEGPU_CHECKOUT="$PWD"
+(cd /tmp && python -I "$FAKEGPU_CHECKOUT/tests/support/nvml_bridge_smoke.py" --tui)
+```
+
+
+## 8 卡 A100：真實 torch 配置與參考遙測
+
+在原始碼目錄啟動第一個終端：
+
+```bash
+conda activate fakegpu
+python examples/monitoring/torch_eight_a100.py
+```
+
+第二個終端：
+
+```bash
+conda activate fakegpu
+fakegpu nvitop --state-dir /tmp/fakegpu-smi --telemetry reference
+```
+
+程式建立 8 張模擬 A100 SXM4 80GB，實際配置 CPU 支撐的 PyTorch 張量。每輪先在
+各卡配置 32–60 MiB，再各增加 64 MiB，達到 96–124 MiB；接著釋放新增張量，
+最後全部釋放。階段切換時呼叫 `empty_cache()`，預設每階段 8 秒，Ctrl+C 停止。
+`--cycles 1` 只執行一輪。主機實際配置量約 1 GiB，不會配置 8 × 80 GiB。
+
+`--telemetry reference` 明確啟用 A100 顯示模型。用於其他程式時，在
+`fakegpu.init()` 前設定 `FAKEGPU_TELEMETRY=reference`，並初始化
+`profile="a100", device_count=8`。觀察器記錄各裝置 CPU torch 算子的執行時間及
+估算的張量 I/O 位元組數，透過 NVML 提供 GPU/記憶體引擎使用率、各程序活躍度、
+溫度、功耗、功率上限、P-state 與時脈。僅持有張量不會被當作運算負載。
+
+[參考設定](../../fakegpu/data/a100_monitor_reference.json)明確區分來源與假設：
+
+- [NVIDIA 官方規格](https://www.nvidia.com/en-us/data-center/a100/)提供標準 SXM
+  功率上限與 HBM 頻寬。
+- [NVIDIA/nccl-tests 中使用者公開的實機快照](https://github.com/NVIDIA/nccl-tests/issues/228)
+  提供 8 卡閒置溫度、功耗與 P0 讀數，範圍為 26–30°C、56–60W。
+  只保留這些數值，不複製機器身分、UUID 或序號。
+- 動態使用率以 **CPU 算子執行占空比作為模擬輸入**，功耗向規格上限插值，溫度
+  依明確的熱響應模型變化。記憶體引擎使用率依張量 I/O 與參考頻寬計算，並非
+  記憶體容量使用率。負載曲線屬於模型假設，不是 A100 實測或效能校準結果。
+
+模型目前只匹配 `a100`（SXM4 80GB）；其他 profile 或缺少活躍度觀測的發布者仍
+保留 `N/A`。GPU 風扇與公開快照一致，繼續顯示 `N/A`；CUDA 驅動及未支援的影片、
+PCIe 遙測也不會虛構。預設 `--telemetry none` 維持原行為，macOS 無需 NVIDIA 驅動。
+
+維護的 `tests/support/a100_monitor_smoke.py` 會啟動此 torch 程式與原版 nvitop
+互動介面，以 pyte 還原終端更新，檢查 8 卡記憶體增加與釋放、模型遙測及程序結束
+清理，輸出只包含數值摘要。

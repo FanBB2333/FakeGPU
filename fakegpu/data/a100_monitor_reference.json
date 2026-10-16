@@ -1,0 +1,38 @@
+{
+  "schema_version": "fakegpu.monitor_reference.v1",
+  "profile_id": "a100",
+  "description": "Public A100 SXM4 80GB idle observations plus explicit, uncalibrated simulation assumptions. Not maintainer hardware or a performance calibration.",
+  "sources": [
+    {
+      "url": "https://github.com/NVIDIA/nccl-tests/issues/228",
+      "date": "2024-06-25",
+      "kind": "public_user_reported_nvidia_smi_snapshot",
+      "scope": "Eight idle A100 SXM4 80GB devices. Only numeric sensor observations retained; no hardware identities."
+    },
+    {
+      "url": "https://www.nvidia.com/en-us/data-center/a100/",
+      "kind": "manufacturer_specification",
+      "scope": "Standard 80GB SXM: 400W TDP and 2039 GB/s memory bandwidth."
+    }
+  ],
+  "observed_idle": {
+    "temperature_c": [29, 27, 27, 30, 29, 28, 26, 30],
+    "power_w": [56, 59, 60, 59, 56, 58, 57, 59],
+    "gpu_utilization_percent": 0,
+    "pstate": 0,
+    "fan_available": false
+  },
+  "specification": {
+    "power_limit_w": 400,
+    "memory_bandwidth_gb_s": 2039
+  },
+  "simulation_assumptions": {
+    "activity_source": "CPU dispatch execution duty cycle, not measured or predicted A100 execution time",
+    "power_curve": "idle + (power_limit - idle) * activity_fraction",
+    "temperature_rise_at_full_activity_c": 45,
+    "thermal_time_constant_seconds": 10,
+    "idle_sm_clock_mhz": 210,
+    "loaded_clocks": "profile nominal clocks",
+    "memory_utilization_source": "estimated tensor input/output bytes per second divided by reference HBM bandwidth; not memory capacity percentage"
+  }
+}

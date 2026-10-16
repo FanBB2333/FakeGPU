@@ -1,4 +1,5 @@
 #include "nvml_defs.hpp"
+#include "state_bridge.hpp"
 #include "../core/backend_config.hpp"
 #include "../core/global_state.hpp"
 #include "../core/hybrid_memory_manager.hpp"
@@ -93,6 +94,7 @@ static bool modeled_nvlink_peer(
     unsigned int link,
     ModeledNvLinkPeer& result) {
     if (
+        nvml_bridge::enabled() ||
         !device ||
         device->is_mig_device ||
         device->index < 0) {
@@ -158,25 +160,26 @@ nvmlReturn_t nvmlInternalGetExportTable(void **ppExportTable, const void *pExpor
 
 nvmlReturn_t nvmlInit() {
     FGPU_LOG("[FakeNVML] nvmlInit called\n");
-    GlobalState::instance().initialize();
+    if (!nvml_bridge::enabled()) GlobalState::instance().initialize();
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlInitWithFlags(unsigned int flags) {
     FGPU_LOG("[FakeNVML] nvmlInitWithFlags called with flags=%u\n", flags);
-    GlobalState::instance().initialize();
+    if (!nvml_bridge::enabled()) GlobalState::instance().initialize();
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlShutdown() {
     FGPU_LOG("[FakeNVML] nvmlShutdown called\n");
     // Dump the monitor report before shutdown
-    dump_monitor_report();
+    if (!nvml_bridge::enabled()) dump_monitor_report();
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetCount(unsigned int *deviceCount) {
     if (!deviceCount) return NVML_ERROR_INVALID_ARGUMENT;
+    if (nvml_bridge::enabled()) return nvml_bridge::count(deviceCount);
     *deviceCount = GlobalState::instance().get_device_count();
     FGPU_LOG("[FakeNVML] nvmlDeviceGetCount returning %d\n", *deviceCount);
     return NVML_SUCCESS;
@@ -184,6 +187,7 @@ nvmlReturn_t nvmlDeviceGetCount(unsigned int *deviceCount) {
 
 nvmlReturn_t nvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
+    if (nvml_bridge::enabled()) return nvml_bridge::handle(index, device);
     if (index >= GlobalState::instance().get_device_count()) {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
@@ -217,6 +221,7 @@ nvmlReturn_t nvmlDeviceGetAddressingMode(nvmlDevice_t device, nvmlDeviceAddressi
 
 nvmlReturn_t nvmlDeviceGetMemoryInfo(nvmlDevice_t device, nvmlMemory_t *memory) {
     if (!device || !memory) return NVML_ERROR_INVALID_ARGUMENT;
+    if (nvml_bridge::enabled()) return nvml_bridge::memory(device, memory);
     Device* dev = (Device*)device;
     if (dev->is_mig_device) {
         memory->total = dev->total_memory;
@@ -248,6 +253,19 @@ nvmlReturn_t nvmlDeviceGetMemoryInfo(nvmlDevice_t device, nvmlMemory_t *memory) 
 
 nvmlReturn_t nvmlDeviceGetMemoryInfo_v2(nvmlDevice_t device, nvmlMemory_v2_t *memory) {
     if (!device || !memory) return NVML_ERROR_INVALID_ARGUMENT;
+    if (nvml_bridge::enabled()) {
+        nvmlMemory_t snapshot{};
+        const auto status = nvml_bridge::memory(device, &snapshot);
+        if (status != NVML_SUCCESS) return status;
+        memory->version = nvmlMemory_v2;
+        memory->total = snapshot.total;
+        memory->used = snapshot.used;
+        memory->free = snapshot.free;
+        // Allocator reservations are already included in used; this field is
+        // NVML driver/firmware reservation, not the PyTorch caching allocator.
+        memory->reserved = 0;
+        return NVML_SUCCESS;
+    }
     Device* dev = (Device*)device;
     memory->version = nvmlMemory_v2;
     memory->reserved = 0;
@@ -353,6 +371,13 @@ nvmlReturn_t nvmlDeviceGetTupleIndex(nvmlDevice_t device, unsigned int *tupleInd
 }
 
 nvmlReturn_t nvmlDeviceGetUtilizationRates(nvmlDevice_t device, nvmlUtilization_t *utilization) {
+    if (nvml_bridge::enabled()) {
+        if (!utilization) return NVML_ERROR_INVALID_ARGUMENT;
+        FakeGpuNvmlTelemetryV1 sample{};
+        const auto status = nvml_bridge::telemetry(device, &sample);
+        if (status == NVML_SUCCESS) { utilization->gpu = sample.gpu; utilization->memory = sample.memory; }
+        return status;
+    }
     if (!device || !utilization) return NVML_ERROR_INVALID_ARGUMENT;
 
     // Return fake utilization rates
@@ -364,6 +389,7 @@ nvmlReturn_t nvmlDeviceGetUtilizationRates(nvmlDevice_t device, nvmlUtilization_
 }
 
 nvmlReturn_t nvmlDeviceGetJpgUtilization(nvmlDevice_t device, unsigned int *utilization, unsigned int *samplingPeriodUs) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !utilization || !samplingPeriodUs) return NVML_ERROR_INVALID_ARGUMENT;
     *utilization = 0;
     *samplingPeriodUs = 1000000;
@@ -371,6 +397,7 @@ nvmlReturn_t nvmlDeviceGetJpgUtilization(nvmlDevice_t device, unsigned int *util
 }
 
 nvmlReturn_t nvmlDeviceGetOfaUtilization(nvmlDevice_t device, unsigned int *utilization, unsigned int *samplingPeriodUs) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !utilization || !samplingPeriodUs) return NVML_ERROR_INVALID_ARGUMENT;
     *utilization = 0;
     *samplingPeriodUs = 1000000;
@@ -378,6 +405,13 @@ nvmlReturn_t nvmlDeviceGetOfaUtilization(nvmlDevice_t device, unsigned int *util
 }
 
 nvmlReturn_t nvmlDeviceGetPowerUsage(nvmlDevice_t device, unsigned int *power) {
+    if (nvml_bridge::enabled()) {
+        if (!power) return NVML_ERROR_INVALID_ARGUMENT;
+        FakeGpuNvmlTelemetryV1 sample{};
+        const auto status = nvml_bridge::telemetry(device, &sample);
+        if (status == NVML_SUCCESS) *power = sample.power_mw;
+        return status;
+    }
     if (!device || !power) return NVML_ERROR_INVALID_ARGUMENT;
     if (std::getenv("FAKEGPU_NVML_TRACE_POWER")) {
         std::fprintf(stderr, "[FakeNVML] nvmlDeviceGetPowerUsage(dev=%p)\n", device);
@@ -403,6 +437,11 @@ nvmlReturn_t nvmlDeviceGetPowerManagementLimit(nvmlDevice_t device, unsigned int
     }
 
     Device* dev = (Device*)device;
+    if (nvml_bridge::enabled()) {
+        if (!dev->profile.max_power_limit_mw) return NVML_ERROR_NOT_SUPPORTED;
+        *limit = dev->profile.max_power_limit_mw;
+        return NVML_SUCCESS;
+    }
     unsigned int default_limit_mw = dev->profile.typical_power_usage_mw;
     if (default_limit_mw > dev->profile.max_power_limit_mw) default_limit_mw = dev->profile.max_power_limit_mw;
     *limit = default_limit_mw;
@@ -411,6 +450,13 @@ nvmlReturn_t nvmlDeviceGetPowerManagementLimit(nvmlDevice_t device, unsigned int
 }
 
 nvmlReturn_t nvmlDeviceGetTemperature(nvmlDevice_t device, unsigned int sensorType, unsigned int *temp) {
+    if (nvml_bridge::enabled()) {
+        if (!temp) return NVML_ERROR_INVALID_ARGUMENT;
+        FakeGpuNvmlTelemetryV1 sample{};
+        const auto status = nvml_bridge::telemetry(device, &sample);
+        if (status == NVML_SUCCESS) *temp = sample.temperature;
+        return status;
+    }
     if (!device || !temp) return NVML_ERROR_INVALID_ARGUMENT;
 
     FGPU_LOG("[FakeNVML] nvmlDeviceGetTemperature sensor=%u\n", sensorType);
@@ -462,11 +508,27 @@ nvmlReturn_t nvmlDeviceGetMarginTemperature(nvmlDevice_t device, nvmlMarginTempe
 // The real signature takes a versioned struct pointer; we return NOT_SUPPORTED
 // so callers fall back to the basic nvmlDeviceGetTemperature path.
 nvmlReturn_t nvmlDeviceGetTemperatureV(nvmlDevice_t device, void *tempInfo) {
+    if (nvml_bridge::enabled()) {
+        struct Temperature { unsigned int version, sensor; int temperature; };
+        auto* value = static_cast<Temperature*>(tempInfo);
+        if (!value || value->version != 0x100000C || value->sensor != 0) return NVML_ERROR_INVALID_ARGUMENT;
+        unsigned int temperature = 0;
+        const auto status = nvmlDeviceGetTemperature(device, value->sensor, &temperature);
+        if (status == NVML_SUCCESS) value->temperature = static_cast<int>(temperature);
+        return status;
+    }
     FGPU_LOG("[FakeNVML] nvmlDeviceGetTemperatureV (unsupported path)\n");
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {
+    if (nvml_bridge::enabled()) {
+        if (!clock || type > 2) return NVML_ERROR_INVALID_ARGUMENT;
+        FakeGpuNvmlTelemetryV1 sample{};
+        const auto status = nvml_bridge::telemetry(device, &sample);
+        if (status == NVML_SUCCESS) *clock = type == 2 ? sample.memory_clock : sample.sm_clock;
+        return status;
+    }
     if (!device || !clock) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
 
@@ -491,6 +553,7 @@ nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsi
 }
 
 nvmlReturn_t nvmlDeviceGetClock(nvmlDevice_t device, unsigned int clockType, unsigned int clockId, unsigned int *clockMHz) {
+    if (nvml_bridge::enabled() && clockId == 0) return nvmlDeviceGetClockInfo(device, clockType, clockMHz);
     if (!device || !clockMHz) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
 
@@ -539,6 +602,7 @@ nvmlReturn_t nvmlDeviceGetMaxClockInfo(nvmlDevice_t device, unsigned int type, u
 }
 
 nvmlReturn_t nvmlDeviceGetFanSpeed(nvmlDevice_t device, unsigned int *speed) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !speed) return NVML_ERROR_INVALID_ARGUMENT;
 
     // Return fake fan speed percentage
@@ -548,6 +612,13 @@ nvmlReturn_t nvmlDeviceGetFanSpeed(nvmlDevice_t device, unsigned int *speed) {
 }
 
 nvmlReturn_t nvmlDeviceGetPerformanceState(nvmlDevice_t device, unsigned int *pState) {
+    if (nvml_bridge::enabled()) {
+        if (!pState) return NVML_ERROR_INVALID_ARGUMENT;
+        FakeGpuNvmlTelemetryV1 sample{};
+        const auto status = nvml_bridge::telemetry(device, &sample);
+        if (status == NVML_SUCCESS) *pState = sample.pstate;
+        return status;
+    }
     if (!device || !pState) return NVML_ERROR_INVALID_ARGUMENT;
 
     // Return fake performance state (P0 = maximum performance)
@@ -557,6 +628,7 @@ nvmlReturn_t nvmlDeviceGetPerformanceState(nvmlDevice_t device, unsigned int *pS
 }
 
 nvmlReturn_t nvmlDeviceGetEncoderUtilization(nvmlDevice_t device, unsigned int *utilization, unsigned int *samplingPeriodUs) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !utilization || !samplingPeriodUs) return NVML_ERROR_INVALID_ARGUMENT;
 
     // Return fake encoder utilization
@@ -567,6 +639,7 @@ nvmlReturn_t nvmlDeviceGetEncoderUtilization(nvmlDevice_t device, unsigned int *
 }
 
 nvmlReturn_t nvmlDeviceGetDecoderUtilization(nvmlDevice_t device, unsigned int *utilization, unsigned int *samplingPeriodUs) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !utilization || !samplingPeriodUs) return NVML_ERROR_INVALID_ARGUMENT;
 
     // Return fake decoder utilization
@@ -631,19 +704,20 @@ nvmlReturn_t nvmlDeviceGetHandleByIndex_v2(unsigned int index, nvmlDevice_t *dev
 // System query functions
 nvmlReturn_t nvmlSystemGetDriverVersion(char *version, unsigned int length) {
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "570.195.03");
+    snprintf(version, length, "%s", nvml_bridge::enabled() ? "FakeGPU" : "570.195.03");
     FGPU_LOG("[FakeNVML] nvmlSystemGetDriverVersion returning: %s\n", version);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlSystemGetNVMLVersion(char *version, unsigned int length) {
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "12.570.195");
+    snprintf(version, length, "%s", nvml_bridge::enabled() ? "FakeGPU state bridge v1" : "12.570.195");
     FGPU_LOG("[FakeNVML] nvmlSystemGetNVMLVersion returning: %s\n", version);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlSystemGetCudaDriverVersion(int *cudaDriverVersion) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!cudaDriverVersion) return NVML_ERROR_INVALID_ARGUMENT;
     *cudaDriverVersion = 12080;  // CUDA 12.8
     FGPU_LOG("[FakeNVML] nvmlSystemGetCudaDriverVersion returning: %d\n", *cudaDriverVersion);
@@ -688,6 +762,7 @@ nvmlReturn_t nvmlDeviceGetTotalEccErrors(nvmlDevice_t device, unsigned int error
 }
 
 nvmlReturn_t nvmlDeviceGetMigMode(nvmlDevice_t device, unsigned int *currentMode, unsigned int *pendingMode) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     const unsigned int enabled =
@@ -778,6 +853,7 @@ nvmlReturn_t nvmlDeviceGetGspFirmwareVersion(nvmlDevice_t device, char *version)
 }
 
 nvmlReturn_t nvmlDeviceGetCurrentClocksThrottleReasons(nvmlDevice_t device, unsigned long long *reasons) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !reasons) return NVML_ERROR_INVALID_ARGUMENT;
     *reasons = 0x1ULL;
     return NVML_SUCCESS;
@@ -806,16 +882,31 @@ nvmlReturn_t nvmlDeviceGetVirtualizationMode(nvmlDevice_t device, nvmlGpuVirtual
 
 nvmlReturn_t nvmlDeviceGetComputeRunningProcesses(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
     if (!device || !infoCount) return NVML_ERROR_INVALID_ARGUMENT;
+    if (nvml_bridge::enabled()) return nvml_bridge::processes(device, infoCount, infos, true);
     *infoCount = 0;  // No running compute processes
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetComputeRunningProcesses_v2(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    if (!device || !infoCount) return NVML_ERROR_INVALID_ARGUMENT;
+    if (nvml_bridge::enabled()) return nvml_bridge::processes(device, infoCount, infos, false);
     return nvmlDeviceGetComputeRunningProcesses(device, infoCount, infos);
 }
 
 nvmlReturn_t nvmlDeviceGetComputeRunningProcesses_v3(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    if (!device || !infoCount) return NVML_ERROR_INVALID_ARGUMENT;
+    if (nvml_bridge::enabled()) return nvml_bridge::processes(device, infoCount, infos, false);
     return nvmlDeviceGetComputeRunningProcesses(device, infoCount, infos);
+}
+
+nvmlReturn_t nvmlDeviceGetRunningProcessDetailList(nvmlDevice_t device, void* details) {
+    return NVML_ERROR_NOT_SUPPORTED;
+}
+
+nvmlReturn_t nvmlDeviceGetProcessUtilization(nvmlDevice_t device, void* samples,
+                                           unsigned int* count, unsigned long long lastSeen) {
+    if (nvml_bridge::enabled()) return nvml_bridge::process_utilization(device, samples, count, lastSeen);
+    return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetGraphicsRunningProcesses(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
@@ -1124,6 +1215,7 @@ nvmlReturn_t nvmlDeviceGetRetiredPagesPendingStatus(nvmlDevice_t device, unsigne
 
 // PCIe throughput
 nvmlReturn_t nvmlDeviceGetPcieThroughput(nvmlDevice_t device, unsigned int counter, unsigned int *value) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !value) return NVML_ERROR_INVALID_ARGUMENT;
     // counter: 0 = TX bytes/s, 1 = RX bytes/s
     *value = 0;
@@ -1178,6 +1270,7 @@ nvmlReturn_t nvmlDeviceGetDisplayMode(nvmlDevice_t device, unsigned int *display
 // Handle by UUID and PCI Bus ID
 nvmlReturn_t nvmlDeviceGetHandleByUUID(const char *uuid, nvmlDevice_t *device) {
     if (!uuid || !device) return NVML_ERROR_INVALID_ARGUMENT;
+    if (nvml_bridge::enabled()) return nvml_bridge::lookup(uuid, true, device);
     GlobalState& state = GlobalState::instance();
     const int count = state.get_device_count();
     for (int index = 0; index < count; ++index) {
@@ -1205,6 +1298,7 @@ nvmlReturn_t nvmlDeviceGetHandleByUUID(const char *uuid, nvmlDevice_t *device) {
 
 nvmlReturn_t nvmlDeviceGetHandleByPciBusId(const char *pciBusId, nvmlDevice_t *device) {
     if (!pciBusId || !device) return NVML_ERROR_INVALID_ARGUMENT;
+    if (nvml_bridge::enabled()) return nvml_bridge::lookup(pciBusId, false, device);
     // For simplicity, return device 0
     Device& dev = GlobalState::instance().get_device(0);
     *device = (nvmlDevice_t)&dev;
@@ -1255,6 +1349,7 @@ nvmlReturn_t nvmlDeviceGetAccountingPids(nvmlDevice_t device, unsigned int *coun
 
 // MIG-related functions
 nvmlReturn_t nvmlDeviceGetMaxMigDeviceCount(nvmlDevice_t device, unsigned int *count) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     if (dev->is_mig_device) {
@@ -1266,6 +1361,7 @@ nvmlReturn_t nvmlDeviceGetMaxMigDeviceCount(nvmlDevice_t device, unsigned int *c
 }
 
 nvmlReturn_t nvmlDeviceGetMigDeviceHandleByIndex(nvmlDevice_t device, unsigned int index, nvmlDevice_t *migDevice) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !migDevice) return NVML_ERROR_INVALID_ARGUMENT;
     Device* parent = (Device*)device;
     if (parent->is_mig_device) {
@@ -1306,6 +1402,7 @@ nvmlReturn_t nvmlDeviceIsMigDeviceHandle(nvmlDevice_t device, unsigned int *isMi
 }
 
 nvmlReturn_t nvmlDeviceGetDeviceHandleFromMigDeviceHandle(nvmlDevice_t migDevice, nvmlDevice_t *device) {
+    if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!migDevice || !device) return NVML_ERROR_INVALID_ARGUMENT;
     Device* mig = (Device*)migDevice;
     Device* parent =
@@ -1348,6 +1445,13 @@ nvmlReturn_t nvmlDeviceGetComputeInstanceId(
 
 // Additional power functions
 nvmlReturn_t nvmlDeviceGetPowerState(nvmlDevice_t device, unsigned int *pState) {
+    if (nvml_bridge::enabled()) {
+        if (!pState) return NVML_ERROR_INVALID_ARGUMENT;
+        FakeGpuNvmlTelemetryV1 sample{};
+        const auto status = nvml_bridge::telemetry(device, &sample);
+        if (status == NVML_SUCCESS) *pState = sample.pstate;
+        return status;
+    }
     if (!device || !pState) return NVML_ERROR_INVALID_ARGUMENT;
     *pState = 0;  // P0
     return NVML_SUCCESS;

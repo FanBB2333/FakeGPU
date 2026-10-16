@@ -42,6 +42,7 @@ import dataclasses
 import functools
 import importlib
 import os
+import time
 import traceback
 import types
 import weakref
@@ -49,6 +50,8 @@ import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
+
+from . import _monitor_activity
 
 from ._allocator import (
     _DeviceMemoryTracker,
@@ -180,6 +183,10 @@ def _smi_memory_snapshot() -> dict[str, Any]:
             "devices": [],
         }
     snapshot = tracker.snapshot(_DEVICE_PROFILES)
+    if _monitor_activity.enabled():
+        activity = _monitor_activity.snapshot()
+        for device in snapshot["devices"]:
+            device["activity"] = activity.get(device["index"], _monitor_activity.empty())
     snapshot.update(
         {
             "stage": (
@@ -465,7 +472,18 @@ def _install_upstream_dispatch_memory_tracking(
             args: tuple[Any, ...] = (),
             kwargs: dict[str, Any] | None = None,
         ) -> Any:
+            observe = _monitor_activity.enabled()
+            started = time.perf_counter_ns() if observe else 0
             result = func(*args, **(kwargs or {}))
+            if observe:
+                elapsed = time.perf_counter_ns() - started
+                # CPU execution is a load proxy, not an A100 kernel duration.
+                # Views/allocations alone do not imply an active GPU engine.
+                name = str(func).split(".")[1]
+                if name not in {"empty", "empty_strided", "view", "reshape", "detach", "alias", "as_strided"}:
+                    tensors = list(_iter_tensors((args, kwargs or {}, result)))
+                    io_bytes = sum(int(t.numel()) * int(t.element_size()) for t in tensors)
+                    _monitor_activity.record(self.device_index, elapsed, io_bytes)
             tracker = _memory_tracker
             operator = str(func)
             output_tensors = 0

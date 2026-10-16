@@ -97,6 +97,7 @@ BUILTIN_COMMANDS: dict[str, CommandSpec] = {
     "simulate-topology": CommandSpec(".topology", "main"),
     "replay-trace": CommandSpec(".trace_replay", "main"),
     "nvidia-smi": CommandSpec(".smi", "main"),
+    "nvitop": CommandSpec(".nvitop_cli", "main"),
     "metrics": CommandSpec(".metrics", "main"),
     "workspace-profiles": CommandSpec(".workspace_cli", "main"),
     "validate": CommandSpec(".validation", "main"),
