@@ -4,10 +4,13 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 
 from setuptools import Distribution, setup
 from setuptools.command.build_py import build_py as _build_py
+from setuptools.command.sdist import sdist as _sdist
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 
@@ -100,6 +103,27 @@ class build_py(_build_py):
         _copy_profile_catalog(package_profiles)
 
 
+class sdist(_sdist):
+    def make_archive(self, *args, **kwargs):
+        archive = super().make_archive(*args, **kwargs)
+        if archive.endswith(".tar.gz"):
+            # Tar headers otherwise expose the local builder's account name
+            # and numeric user/group IDs even when file contents are clean.
+            path = Path(archive)
+            with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tar.gz") as temp:
+                with tarfile.open(path, "r:gz") as source, tarfile.open(temp.name, "w:gz") as target:
+                    for entry in source:
+                        entry.uid = entry.gid = 0
+                        entry.uname = entry.gname = ""
+                        if entry.isfile():
+                            with source.extractfile(entry) as stream:
+                                target.addfile(entry, stream)
+                        else:
+                            target.addfile(entry)
+                shutil.copyfile(temp.name, path)
+        return archive
+
+
 class BinaryDistribution(Distribution):
     def has_ext_modules(self) -> bool:
         # Force installation into platlib so wheels containing ELF .so files are
@@ -119,7 +143,7 @@ class bdist_wheel(_bdist_wheel):
         return ("py3", "none", plat)
 
 
-cmdclass = {"build_py": build_py, "bdist_wheel": bdist_wheel}
+cmdclass = {"build_py": build_py, "bdist_wheel": bdist_wheel, "sdist": sdist}
 
 
 setup(cmdclass=cmdclass, distclass=BinaryDistribution)

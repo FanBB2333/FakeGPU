@@ -42,6 +42,9 @@ jobs:
       - name: Lint
         run: python -m ruff check fakegpu scripts/validation tests
 
+      - name: Check release privacy
+        run: python scripts/validation/check_release_privacy.py
+
       - name: Test
         env:
           FAKEGPU_TERMINAL_REPORT: "0"

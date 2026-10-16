@@ -1,5 +1,5 @@
 {
-"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
+"privacy_redaction":{"personal_identity":"Personal home directories are replaced with <home>; original digests and byte counts are unchanged.","hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
   "artifact_root": "/tmp/fakegpu-research-validation-20261015",
   "audit": {
     "errors": [],
@@ -569,7 +569,7 @@
       "python": "3.12.13 | packaged by Anaconda, Inc. | (main, Jul  9 2026, 14:38:16) [GCC 14.3.0]"
     },
     "core": {
-      "executable": "/home/l1ght/anaconda3/envs/fakegpu/bin/python",
+      "executable": "<home>/anaconda3/envs/fakegpu/bin/python",
       "packages": {
         "accelerate": "1.12.0",
         "peft": "0.19.1",
@@ -604,7 +604,7 @@
       "python": "3.12.12 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 20:16:04) [GCC 11.2.0]"
     },
     "vllm": {
-      "executable": "/home/l1ght/anaconda3/envs/vllm-new/bin/python",
+      "executable": "<home>/anaconda3/envs/vllm-new/bin/python",
       "packages": {
         "torch": "2.10.0",
         "transformers": "5.6.0",

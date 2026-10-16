@@ -68,6 +68,13 @@ test-results/
 tests/output/
 
 # Local design and planning documents
+field-test-c11.md
+refactor-infra.md
+.agents/
+.codex/
+.aws/
+.env
+.env.*
 docs/*
 !docs/en/
 !docs/zh-CN/

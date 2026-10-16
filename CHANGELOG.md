@@ -1,9 +1,21 @@
 # Changelog
 
-## Unreleased
+## v1.6.0 - 2026-10-17
 
 ### Added
 
+- Native macOS Python/Conda development support, installed-wheel CI, and a
+  state-file-to-NVML bridge for the standard `nvitop` interface.
+- A background simulated GPU machine with a control API, process events,
+  idle-device monitoring, and an interactive Textual console with per-device
+  editing and memory, utilization, power, temperature, and link charts.
+- A catalog of 307 public-reference GPU configurations spanning Maxwell
+  through Blackwell, including GeForce, data-center, and workstation cards.
+- Per-precision throughput specifications, host platforms, GPU slots, PCIe
+  and NVLink topology, and modeled transfer time and link throughput.
+- Reference telemetry for every profile and an eight-device synthetic A100
+  PyTorch example whose live allocations appear in `nvitop`. Sensor values
+  are modeled; the example does not require physical A100 hardware.
 - `fakegpu estimate-llm --exclude-decode-steps` (and the
   `include_decode_steps=False` argument on `estimate_decoder_inference`)
   to summarize decode FLOPs in closed form instead of embedding one
@@ -74,6 +86,13 @@
 
 ### Changed
 
+- Removed the two hardware-measured GPU profiles from the public catalog.
+  Configurations that depended on a removed profile must select a supported
+  public-reference profile; these profiles are not calibration equivalents.
+- Redacted remaining personal home-directory paths from public review
+  records while retaining their original-digest provenance. Added release
+  privacy checks, neutral source-archive ownership metadata, and explicit
+  exclusions for private local notes.
 - Expanded CI with a full Python regression job, Linux/macOS native builds,
   and installed-wheel checks for bundled profiles and native libraries.
 - Updated runtime, preflight, report, memory-estimation, and distributed
@@ -139,25 +158,11 @@
 
 ### Validation
 
-- Current maintained local verification: 223 Python tests, 7 smoke-manifest
-  executions, 39 research-manifest executions, native smoke checks, and all
-  8 CPU numerical groups passed; CUDA-enabled PyTorch matmul was unavailable
-  on the CPU-only host.
-- The built-in Transformers serving sampler completed three isolated prefill
-  and decode samples for Qwen/Qwen3-0.6B on an Blackwell GPU with
-  PyTorch 2.11.0+cu128 and Transformers 5.14.1; the report reached
-  `ready_for_comparison` without claiming a prediction-accuracy result.
-- CI-equivalent PyTorch 2.13, Transformers 5.14, Accelerate 1.14, and PEFT
-  0.19 environment: 418 passed and 10 optional skips; the maintained CPU
-  matrix passed 133 tests and all six declarative validation cases.
-- Native smoke, all three unsupported-API policies, strict classification of
-  818 exports across five native libraries, CPU-backed cuBLAS/cuBLASLt
-  numerics, and combined IO/FLOP/no-op reporting passed on macOS.
-- The built wheel contains all 82 profiles, the native capability manifest,
-  the repository and performance analyzers, and no stale bytecode from an
-  incremental build.
-- Strict bilingual MkDocs generation and analytical roofline coverage for all
-  82 GPU profiles passed.
+- The release is checked with Python regressions, Linux/macOS native tests,
+  declarative validation manifests, and installed-package monitoring probes.
+- Privacy review covers tracked source, decompressed review archives,
+  documentation screenshots, and distribution contents. Historical source
+  digests still describe private originals, not the redacted public copies.
 
 ## v1.5.5 - 2026-07-23
 

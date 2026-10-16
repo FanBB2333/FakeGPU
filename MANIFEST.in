@@ -6,3 +6,8 @@ recursive-include fakegpu/data *.json
 recursive-include profiles *.yaml
 recursive-include examples *.yaml
 recursive-include src CMakeLists.txt *.cpp *.hpp
+exclude field-test-c11.md refactor-infra.md
+prune .agents
+prune .codex
+prune .aws
+global-exclude .env .env.* *.py[cod]

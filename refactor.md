@@ -949,7 +949,7 @@ CUDA_VISIBLE_DEVICES=1 python tests/native/finetune_matrix.py \
 
 ### P3 框架真实执行的环境准备审计
 
-只读核对本地 `/home/l1ght/repos/LLaMA-Factory`：工作区干净，`main` 为 `820ed764c47ede8f6ae56da89dc48aadc1b000ba`（2025-05-16），版本 **0.9.3.dev0**；该快照已有 Qwen3 模板，未包含 Qwen3.5 支持。其依赖上限为 Transformers **4.51.3**、PEFT **0.15.1**、Accelerate **1.6.0**，与现有用于本轮验证的环境不兼容。`fakegpu` 与 `torch` 两个 conda 环境均未安装 LLaMA-Factory、Axolotl 或 TRL；现有 Transformers 分别为 **4.57.3** 和 **5.12.1**。
+只读核对本地 `<home>/repos/LLaMA-Factory`：工作区干净，`main` 为 `820ed764c47ede8f6ae56da89dc48aadc1b000ba`（2025-05-16），版本 **0.9.3.dev0**；该快照已有 Qwen3 模板，未包含 Qwen3.5 支持。其依赖上限为 Transformers **4.51.3**、PEFT **0.15.1**、Accelerate **1.6.0**，与现有用于本轮验证的环境不兼容。`fakegpu` 与 `torch` 两个 conda 环境均未安装 LLaMA-Factory、Axolotl 或 TRL；现有 Transformers 分别为 **4.57.3** 和 **5.12.1**。
 
 因此 P3 的下一项交付是建立支持 Qwen3.5 的现代框架隔离环境、锁定依赖与版本，再接入真实训练入口和同工作量观测协议。不能通过关闭版本校验强行运行旧快照，并将配置适配测试报告为框架执行通过。本轮没有改动该旧 LLaMA-Factory 仓库或现有环境的依赖约束。
 
@@ -1048,7 +1048,7 @@ P4 的 diffusion 与多机工作在 P2 协议稳定后可并行；P5 中实验�
 
 ### 基线选择
 
-在 `/home/l1ght/repos/fakeGPU` 执行 `git pull --ff-only origin main` 后确认分叉：本地独有 `8b7a7ec3`，远端独有 107 个提交，远端顶端为 `3ba1dcaf`。本地提交是较早的快照合入，远端已经有模块拆分、功能扩展和后续 CUDA/cuBLAS 修复，因此以 `origin/main` 为基线更合理。
+在 `<home>/repos/fakeGPU` 执行 `git pull --ff-only origin main` 后确认分叉：本地独有 `8b7a7ec3`，远端独有 107 个提交，远端顶端为 `3ba1dcaf`。本地提交是较早的快照合入，远端已经有模块拆分、功能扩展和后续 CUDA/cuBLAS 修复，因此以 `origin/main` 为基线更合理。
 
 先创建 `backup/406-main-before-refactor-20261013` 保存本地原始提交，再 rebase。冲突处保留远端已经演进的实现，本地独有且仍适用的运行时配置回归测试迁移到 `tests/test_runtime_config.py`，形成 `e6f15727`。没有把旧快照覆盖回新代码，也没有推送远端。旧目录下本机已有的 Shakespeare 数据保留在原处，不纳入提交。
 
