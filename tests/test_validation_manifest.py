@@ -218,6 +218,19 @@ def test_research_fixtures_can_reuse_report_directory(tmp_path: Path, case: str)
         assert report["counts"]["failed"] == 0
 
 
+def test_builtin_smoke_runtime_query_matches_loaded_catalog(tmp_path: Path) -> None:
+    pytest.importorskip("yaml")
+    root = Path(__file__).resolve().parents[1]
+    code, report = run_validation_manifest(
+        root / "tests" / "data" / "validation_smoke.yaml",
+        report_dir=tmp_path / "report",
+        selected_cases=["runtime-query"],
+        strict=True,
+    )
+    assert code == 0, [item["failures"] for item in report["executions"]]
+    assert report["counts"]["passed"] == 1
+
+
 def test_checked_in_yaml_manifest_loads() -> None:
     pytest.importorskip("yaml")
     root = Path(__file__).resolve().parents[1]

@@ -70,17 +70,21 @@ cases:
       - -c
       - >-
         import os,pathlib;
+        from fakegpu.profile_catalog import load_profiles;
         from fakegpu.smi import SmiStatePublisher,main;
         path=pathlib.Path(os.environ["STATE"]);
         snapshot=lambda:dict(runtime_backend="upstream",dispatch_tracking=dict(enabled=True,operator_calls=3),devices=[dict(index=0,name="FakeGPU Validation",profile_id="test-512m",total_memory=512*2**20,current_memory=64*2**20)]);
-        SmiStatePublisher(path,snapshot).publish_once(running=True);
+        state=SmiStatePublisher(path,snapshot).publish_once(running=True);
+        assert state["fakegpu"]["profile_catalog"]["profile_count"]==len(load_profiles());
+        print("catalog-count-ok");
         raise SystemExit(main(["--state",str(path),"--query-runtime","fakegpu.version,runtime.backend,tracking.dispatch,catalog.profiles,catalog.native_apis,dispatch.calls,publisher.successful_writes,status","--format","json"]))
     expect:
       stdout_contains:
         - '"query": "runtime"'
         - '"runtime.backend": "upstream"'
         - '"tracking.dispatch": true'
-        - '"catalog.profiles": 82'
+        - '"catalog.profiles":'
+        - 'catalog-count-ok'
         - '"catalog.native_apis": 104'
         - '"dispatch.calls": 3'
         - '"publisher.successful_writes": 1'
