@@ -46,7 +46,7 @@ from .._process import describe, process_marker
 from .._smi_state import _load_states, _synthetic_uuid, build_inventory
 from .._version import __version__
 from ..profile_catalog import get_profile
-from .config import MachineConfig, MachinePaths
+from .config import MachineConfig, MachinePaths, layout_text
 
 PROTOCOL = "fakegpu.machine.v1"
 EVENT_BUFFER = 1000
@@ -82,16 +82,6 @@ def _duration(seconds: float) -> str:
     return f"{seconds // 3600}h{seconds // 60 % 60:02d}m"
 
 
-def _layout_text(profiles: list[str]) -> str:
-    groups: list[list] = []
-    for profile in profiles:
-        if groups and groups[-1][0] == profile:
-            groups[-1][1] += 1
-        else:
-            groups.append([profile, 1])
-    return ",".join(f"{name}:{count}" for name, count in groups)
-
-
 @dataclass
 class _Process:
     pid: int
@@ -124,7 +114,7 @@ class _Process:
             "attached_at": _iso(self.attached_ns),
             "ended_at": _iso(self.ended_ns) if self.ended_ns else None,
             "runtime_seconds": round(((self.ended_ns or now_ns) - self.attached_ns) / 1e9, 1),
-            "layout": _layout_text(self.device_profiles()),
+            "layout": layout_text(self.device_profiles()),
             "peak_bytes": self.peak_bytes(),
         }
 
@@ -337,7 +327,7 @@ class MachineService:
             state=state,
         )
         self._processes[pid] = process
-        layout = _layout_text(process.device_profiles())
+        layout = layout_text(process.device_profiles())
         note = ""
         if layout and process.device_profiles() != self.config.profiles[: len(process.device_profiles())]:
             note = f" (machine layout is {self.config.devices})"

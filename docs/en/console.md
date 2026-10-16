@@ -52,15 +52,21 @@ layout, idle ones included, and the processes on the machine.
 
 | Tab | Shows |
 |---|---|
-| `1` Overview | Machine summary, a card per GPU (memory, utilization, temperature, power, clocks, P-state), the process table and the latest events |
+| `1` Overview | Charts that combine all GPUs (memory, utilization, power, temperature, link I/O); a card per GPU (memory, utilization, power, temperature, clocks, P-state, recent memory and utilization) or, after `v`, one line per GPU; the process table and the latest events. Click a card, or press Enter on a line, to open that GPU on the Devices tab |
 | `2` Processes | Every attached process with command line, user, stage, memory and activity per device; recently ended processes |
-| `3` Devices | Per-GPU detail: slot, modeled copies and link throughput, allocator counters, memory by category, largest allocations, and history sparklines (memory, sensors, PCIe/C2C/NVLink throughput) |
+| `3` Devices | The GPUs of the layout, which you can change one by one (see below), and per-GPU detail: slot, modeled copies and link throughput, allocator counters, memory by category, largest allocations, and charts of the last minute (memory, utilization, temperature, power, PCIe/C2C/NVLink throughput) |
 | `4` Events | The full event log with text and level filters |
 | `5` Machine | Settings form (layout, platform, PCIe slot generation, NVLink bridges, telemetry, background, stale and memory warning thresholds), the slot map and GPU link matrix, daemon and path information |
 | `6` Profiles | The GPU profile catalog; `a` or Enter adds the selected profile to the layout form |
 
+Every reading keeps one color in the cards, charts and tables: memory purple,
+utilization green, power orange, temperature yellow, and link traffic cyan
+(PCIe) or blue (NVLink). Red values and card borders mark warnings.
+
 | Key | Action |
 |---|---|
+| `1` to `6` | Switch tabs |
+| `v` | Overview: switch between GPU cards and one line per GPU |
 | `k` / `K` / `i` | Send SIGTERM / SIGKILL / SIGINT to the selected process (asks first) |
 | `b` | Turn background mode on or off |
 | `q` | Leave the console |
@@ -70,6 +76,25 @@ layout, idle ones included, and the processes on the machine.
 With background mode on (the default), `q` leaves the machine running; reopen
 it with `fakegpu console`. With background mode off, leaving the console also
 stops the machine. Stopping the machine does not stop running workloads.
+
+### Change the GPUs on the Devices tab
+
+| Key | Action |
+|---|---|
+| `e`, Enter, or a click on the selected row | Replace the selected GPU with another profile |
+| `E` | Replace every GPU: pick one profile and a count |
+| `a` | Add GPUs after the last one, starting from the selected GPU's profile |
+| `x` / Delete | Remove the selected GPU (asks first) |
+
+The buttons above the table do the same. The profile picker filters the
+catalog as you type and previews the new layout, its total memory and its
+platform before you apply it. When the configured platform cannot hold the new
+layout (an HGX board holds one GPU model, for example), the console sets the
+platform to `auto`, or to `generic` when no template fits, and drops NVLink
+bridges that no longer apply; the preview lists these changes. The Machine tab
+edits the same layout as text. New processes use the new layout; running
+processes keep their devices, which the Devices tab marks with `*` until those
+processes exit.
 
 ## Events
 

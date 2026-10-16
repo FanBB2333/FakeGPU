@@ -87,6 +87,18 @@ def parse_devices(spec: str) -> list[str]:
     return profiles
 
 
+def layout_text(profiles: list[str]) -> str:
+    """Collapse one profile ID per device back into ``"a100:2,h100:2"``."""
+
+    groups: list[list] = []
+    for profile in profiles:
+        if groups and groups[-1][0] == profile:
+            groups[-1][1] += 1
+        else:
+            groups.append([profile, 1])
+    return ",".join(f"{name}:{count}" for name, count in groups)
+
+
 @dataclass(frozen=True)
 class MachineConfig:
     devices: str = "a100:8"
