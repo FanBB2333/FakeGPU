@@ -1,0 +1,41 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/3km2720jiy76r06ctf8mxg21743p1058.pdf
+id: rtx-pro-6000-blackwell-server
+name: Fake NVIDIA RTX PRO 6000 Blackwell Server Edition
+torch_name: NVIDIA RTX PRO 6000 Blackwell Server Edition
+official_model: NVIDIA RTX PRO 6000 Blackwell Server Edition
+architecture: blackwell
+compute_major: 12
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/data-center/rtx-pro-6000-blackwell-server-edition/
+notes: Passive data-center PCIe board. NVIDIA product brief SP-12355-001 lists 24064 CUDA cores (188 SMs at 128 cores per SM), 96 GB GDDR7 with ECC, 512-bit bus, 12481 MHz memory clock (1597 GB/s), 2430 MHz boost, 600 W maximum board power (configurable down to 300 W). L2 cache is not published for this SKU and is not copied from the workstation board. Typical workload power is unknown (0). Unverified fields are 0 for l2_cache_bytes.
+memory_bytes: 103079215104
+sm_count: 188
+memory_bus_width_bits: 512
+core_clock_mhz: 2430
+memory_clock_mhz: 12481
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 0
+max_power_limit_mw: 600000
+pci_device_id: 733286622
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8
+  - fp4

@@ -1,6 +1,6 @@
 # NVIDIA data-center catalog research
 
-Research date: **2026-10-16**. The data-center directory contains **65 selectable profiles**, including the existing synthetic `a100-1g` and archival provisional `b100`. This expansion adds **49 profiles**. Specifications describe public product configurations; they do not identify a maintainer's hardware or establish measured performance or calibration compatibility.
+Research date: **2026-10-16**. The data-center directory contains **67 selectable profiles**, including the existing synthetic `a100-1g` and archival provisional `b100`. This expansion adds **49 profiles**. Specifications describe public product configurations; they do not identify a maintainer's hardware or establish measured performance or calibration compatibility.
 
 | Architecture | Profiles | Product coverage |
 | --- | ---: | --- |
@@ -11,7 +11,7 @@ Research date: **2026-10-16**. The data-center directory contains **65 selectabl
 | Ampere | 19 | A2, A10/A10G, A16, A30/A30X, A40, A100 PCIe/SXM4 40/80 GB, A100X, regional A800 variants and AX800; synthetic A100 validation profile |
 | Ada | 6 | L2, L4, L20 air/liquid, L40, L40S |
 | Hopper | 14 | H100 PCIe/SXM/NVL memory variants, H200 SXM/NVL, H20 96/141 GB, H800 PCIe/SXM/NVL, GH200 96/144 GB |
-| Blackwell | 5 | B200, B300, GB200, GB300; archival B100 |
+| Blackwell | 7 | B200, B300, GB200, GB300, RTX PRO 6000/4500 Blackwell Server Edition; archival B100 |
 
 ## Device and unit conventions
 
@@ -58,6 +58,22 @@ The existing IDs remain available. Corrections include V100 SXM2's PCI ID and bo
 
 The H100 NVL brief publishes a **6016-bit active memory bus**, 2619 MHz memory, and 3938 GB/s. The H200 NVL brief publishes **6016 bits**, 3201 MHz, and 4813 GB/s. A full-chip 6144-bit assumption is therefore not substituted for active product width. H200 SXM bus and memory clock remain unverified. B200 uses the documented 148-SM configuration; the former 160-SM value represented full silicon rather than this product configuration.
 
-**Zero means unknown**, including a `0` enabled-SM count in 27 reference profiles. Regional variants, special V100 form factors, converged accelerators, and Blackwell SKUs often have verified identity and memory but incomplete internal specifications. These profiles support selecting CUDA compatibility and nominal memory; missing throughput inputs prevent performance modeling. P100 PCIe 12 GB L2 remains `0` because the generic NVIDIA comparison lists 4 MiB while a [published SKU-specific benchmark](https://pub.hpc-technologies.co.jp/wp-content/uploads/2022/08/p100_12G_PCIe_ro.pdf) reports 3 MiB. Cache sizes are not copied between related SKUs, and board TDP is not passed off as typical workload power. All public reference profiles use `typical_power_usage_mw: 0`.
+**Zero means unknown**, including a `0` enabled-SM count in 26 reference profiles. Regional variants, special V100 form factors, converged accelerators, and Blackwell SKUs often have verified identity and memory but incomplete internal specifications. These profiles support selecting CUDA compatibility and nominal memory; missing throughput inputs prevent performance modeling. P100 PCIe 12 GB L2 remains `0` because the generic NVIDIA comparison lists 4 MiB while a [published SKU-specific benchmark](https://pub.hpc-technologies.co.jp/wp-content/uploads/2022/08/p100_12G_PCIe_ro.pdf) reports 3 MiB. Cache sizes are not copied between related SKUs, and board TDP is not passed off as typical workload power. All public reference profiles use `typical_power_usage_mw: 0`.
 
 `b100` is retained for compatibility with an explicit archival/provisional note. Its pre-existing nominal 192 GiB capacity has not been reconfirmed as a shipping configuration; its former unsourced SM, bus, clocks, cache, power, and PCI values are now `0`. No claim is made that this catalog is exhaustive: A10M, T4G, OEM-only or restricted configurations, and additional cooling/board revisions still need sufficiently specific primary evidence. Rubin is outside this Maxwell-through-Blackwell expansion. The synthetic `a100-1g` remains explicitly synthetic and is not counted as a physical NVIDIA product.
+
+## Blackwell update (2026-10-16)
+
+Current NVIDIA datasheets replace the earlier reference-architecture capacities. Per-GPU values follow the [Blackwell datasheet](https://dam-cdn.nvd.orangelogic.com/AssetLink/y441155802qub41q118b2852i557jem5.pdf), the [Blackwell Ultra datasheet](https://dam-cdn.nvd.orangelogic.com/AssetLink/1k0p832eq8r5ca0u5383ie5o4tp3bst1.pdf), and the [NVIDIA driver supported-chips list](https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html):
+
+| Profile | Memory | Max power | Other changes |
+| --- | --- | --- | --- |
+| `b200` | 180 GB (unchanged) | 1,000 W | 148 SMs confirmed by the [CUDA MPS blog](https://developer.nvidia.com/blog/boost-gpu-memory-performance-with-no-code-changes-using-nvidia-cuda-mps/) |
+| `gb200` | 186 GB (was 180) | 1,200 W | GB200 NVL72 page states 372 GB per two-GPU Superchip |
+| `b300` | 270 GB (was 288) | 1,100 W | Device name `NVIDIA B300 SXM6 AC` and PCI ID 0x3182 from the driver list; 148 SMs |
+| `gb300` | 279 GB (was 288) | 1,400 W | PCI ID 0x31C2 |
+| `rtx-pro-6000-blackwell-server` | 96 GB GDDR7 | 600 W | New; 188 SMs, 512-bit, 2430 MHz boost, 12481 MHz memory clock from product brief SP-12355-001 |
+| `rtx-pro-4500-blackwell-server` | 32 GB GDDR7 | 165 W | New; 82 SMs, 256-bit, 2415 MHz boost, 12501 MHz memory clock from product brief PB-12790-001 |
+
+Conflicts remain in NVIDIA's own material: the DSX compute-tray page states 180 GB for GB200 and 288 GB for GB300, and the HGX components table and DGX B300 user guide state 288 GB for B300. The 288 GB figure is the full Blackwell Ultra capacity, which NVIDIA says varies by SKU; profiles use the current per-product datasheet values. The 8,192-bit Blackwell Ultra HBM interface describes the full GPU, so active bus width stays unknown. Boost clocks for HBM Blackwell GPUs are published only by third parties and remain `0`, as do L2 sizes other than GB200's 126 MB and SM counts for GB200 and GB300.
+

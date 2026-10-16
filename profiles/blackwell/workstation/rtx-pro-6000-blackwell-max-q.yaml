@@ -1,3 +1,5 @@
+# Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/pdf/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1_1.pdf
+# PCI device IDs: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: rtx-pro-6000-blackwell-max-q
 name: Fake NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition
 torch_name: NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition
@@ -9,13 +11,13 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
 spec_source: https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/professional-desktop-gpus/rtx-pro-6000-max-q/workstation-datasheet-blackwell-rtx-pro-6000-max-q-nvidia-us-5349650-web.pdf
-notes: Reference desktop-board configuration. SM count derived from NVIDIA 24064 CUDA cores and 128 cores per SM. Core clock, L2 cache, typical power, and PCI device ID are unverified and zero. Max-Q is a 300 W desktop workstation board, distinct from laptop Max-Q operating points. Memory clock is an equivalent half-data-rate value derived from NVIDIA 1792 GB/s and 512-bit bus, rounded to MHz; it is not a measured oscillator clock.
+notes: Reference desktop-board configuration. SM count derived from NVIDIA 24064 CUDA cores and 128 cores per SM. Core clock and typical power are unverified and zero. 128 MiB L2 per the RTX Blackwell PRO architecture whitepaper; PCI ID from the NVIDIA driver supported-chips list. Max-Q is a 300 W desktop workstation board, distinct from laptop Max-Q operating points. Memory clock is an equivalent half-data-rate value derived from NVIDIA 1792 GB/s and 512-bit bus, rounded to MHz; it is not a measured oscillator clock.
 memory_bytes: 103079215104
 sm_count: 188
 memory_bus_width_bits: 512
 core_clock_mhz: 0
 memory_clock_mhz: 14000
-l2_cache_bytes: 0
+l2_cache_bytes: 134217728
 shared_mem_per_sm: 102400
 shared_mem_per_block: 49152
 shared_mem_per_block_optin: 101376
@@ -25,7 +27,7 @@ max_threads_per_multiprocessor: 1536
 max_blocks_per_multiprocessor: 24
 typical_power_usage_mw: 0
 max_power_limit_mw: 300000
-pci_device_id: 0
+pci_device_id: 733221086
 supported_types:
   - fp32
   - tf32

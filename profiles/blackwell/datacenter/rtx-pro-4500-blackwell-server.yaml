@@ -1,0 +1,41 @@
+# Public specification reference; not a measured or calibrated device.
+# Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
+# PCI device IDs: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/01tvyd8cpqd0u5p7205px0f8438hw3ur.pdf
+id: rtx-pro-4500-blackwell-server
+name: Fake NVIDIA RTX PRO 4500 Blackwell Server Edition
+torch_name: NVIDIA RTX PRO 4500 Blackwell Server Edition
+official_model: NVIDIA RTX PRO 4500 Blackwell Server Edition
+architecture: blackwell
+compute_major: 12
+compute_minor: 0
+memory_kind: dedicated
+profile_status: reference
+compute_capability_source: https://developer.nvidia.com/cuda/gpus
+spec_source: https://www.nvidia.com/en-us/data-center/rtx-pro-4500-blackwell-server-edition/
+notes: Data-center PCIe board (GB203). NVIDIA product brief PB-12790-001 lists 10496 CUDA cores (82 SMs at 128 cores per SM), 32 GB GDDR7, 256-bit bus, 12501 MHz memory clock (800 GB/s), 2415 MHz boost, 165 W maximum board power. L2 cache is not published for this SKU. Typical workload power is unknown (0). Unverified fields are 0 for l2_cache_bytes.
+memory_bytes: 34359738368
+sm_count: 82
+memory_bus_width_bits: 256
+core_clock_mhz: 2415
+memory_clock_mhz: 12501
+l2_cache_bytes: 0
+shared_mem_per_sm: 102400
+shared_mem_per_block: 49152
+shared_mem_per_block_optin: 101376
+regs_per_block: 65536
+regs_per_multiprocessor: 65536
+max_threads_per_multiprocessor: 1536
+max_blocks_per_multiprocessor: 24
+typical_power_usage_mw: 0
+max_power_limit_mw: 165000
+pci_device_id: 742002910
+supported_types:
+  - fp32
+  - tf32
+  - fp16
+  - bf16
+  - int8
+  - int4
+  - fp8
+  - fp4

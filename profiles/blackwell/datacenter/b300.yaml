@@ -1,9 +1,11 @@
 # Public specification reference; not a measured or calibrated device.
 # Architecture limits: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html
 # PCI device IDs: https://download.nvidia.com/solaris/580.95.05/README/supportedchips.html
+# Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/1k0p832eq8r5ca0u5383ie5o4tp3bst1.pdf
+# Additional source: https://developer.nvidia.com/blog/boost-gpu-memory-performance-with-no-code-changes-using-nvidia-cuda-mps/
 id: b300
-name: Fake NVIDIA B300
-torch_name: NVIDIA B300
+name: Fake NVIDIA B300 SXM6 AC
+torch_name: NVIDIA B300 SXM6 AC
 official_model: NVIDIA B300
 architecture: blackwell
 compute_major: 10
@@ -11,10 +13,10 @@ compute_minor: 3
 memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
-spec_source: https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory/latest/components.html
-notes: 288 GiB nominal HBM3e per exposed GPU. Enabled SM count is SKU-dependent and is not the full-die 160 SM count. Board power is not inferred from a complete HGX system. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for sm_count, memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, l2_cache_bytes, max_power_limit_mw, pci_device_id.
-memory_bytes: 309237645312
-sm_count: 0
+spec_source: https://www.nvidia.com/en-us/data-center/hgx/
+notes: HGX B300 (Blackwell Ultra SXM) with 270 GB HBM3e and 7.7 TB/s per GPU per the Blackwell Ultra datasheet and HGX/DGX B300 material (2.1 TB per 8-GPU system); some reference-architecture pages state the full 288 GB. Device name and PCI ID follow the NVIDIA driver supported-chips list. 148 enabled SMs per the NVIDIA CUDA MPS technical blog for DGX B200 and B300; an MPS documentation example shows 128. Max TDP configurable up to 1,100 W. The 8192-bit figure describes the full Blackwell Ultra HBM interface, not this SKU's active width. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, l2_cache_bytes.
+memory_bytes: 289910292480
+sm_count: 148
 memory_bus_width_bits: 0
 core_clock_mhz: 0
 memory_clock_mhz: 0
@@ -27,8 +29,8 @@ regs_per_multiprocessor: 65536
 max_threads_per_multiprocessor: 2048
 max_blocks_per_multiprocessor: 32
 typical_power_usage_mw: 0
-max_power_limit_mw: 0
-pci_device_id: 0
+max_power_limit_mw: 1100000
+pci_device_id: 830607582
 supported_types:
   - fp32
   - tf32

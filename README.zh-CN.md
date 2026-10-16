@@ -200,7 +200,7 @@ FakeCUDA 进程会接入这台机器，控制台显示 GPU、进程和事件，�
 - [限制](docs/zh-CN/limitations.md)
 
 GPU profile 是 [`profiles/`](profiles/) 中的 YAML 文件。目录收录了从 Maxwell 到
-Blackwell 的 304 个可选配置，涵盖桌面、笔记本、不同显存与板卡版本。
+Blackwell 的 307 个可选配置，涵盖桌面、笔记本、不同显存与板卡版本。
 型号、参数和来源见[完整目录](profiles/README.md)。用 `--profile` 或 `FAKEGPU_PROFILE` 选择一个，或用
 `--devices` 传入混合列表。面向物理设备的示例使用 `TARGET_GPU_PROFILE`，请把它设为
 `python3 -m fakegpu doctor --list-profiles` 列出的某个目录 ID。

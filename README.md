@@ -210,7 +210,7 @@ The detailed guides live in [`docs/`](docs/en/README.md):
 - [Development and testing](docs/en/development.md)
 - [Limitations](docs/en/limitations.md)
 
-GPU profiles are YAML files in [`profiles/`](profiles/). The catalog has 304
+GPU profiles are YAML files in [`profiles/`](profiles/). The catalog has 307
 selectable configurations from Maxwell through Blackwell, including desktop,
 laptop, memory-capacity, and board variants. See the [full inventory and sources](profiles/README.md). Pick one with `--profile` or
 `FAKEGPU_PROFILE`, or pass a mixed list with `--devices`. Examples that target
