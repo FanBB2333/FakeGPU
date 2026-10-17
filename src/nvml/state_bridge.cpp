@@ -73,8 +73,10 @@ extern "C" nvmlReturn_t fakegpuNvmlSetSnapshot(
                 telemetry[i] = row.telemetry;
                 links[i] = row.links;
                 const auto& t = row.telemetry;
+                // Power uses NVML's unsigned milliwatt ABI. Catalog devices
+                // can exceed 1 kW, so do not impose a lower display-only cap.
                 if (t.valid > 1 || t.gpu > 100 || t.memory > 100 || t.temperature > 120 ||
-                    t.pstate > 15 || t.power_mw > 1000000 || t.sm_clock > 10000 || t.memory_clock > 100000)
+                    t.pstate > 15 || t.sm_clock > 10000 || t.memory_clock > 100000)
                     return NVML_ERROR_INVALID_ARGUMENT;
                 const auto& l = row.links;
                 if (l.valid > 1 || l.pcie_generation > 6 || l.pcie_width > 32 || l.pcie_max_generation > 6 ||

@@ -15,7 +15,7 @@ def inventory(*, profile="a100", busy=0, io_bytes=0, timestamp=10**9, used=2**30
         "devices": [{"uuid": "synthetic-test", "profile_id": profile, "index": 0,
                      "memory": {"used_bytes": used}}],
         "processes": [{"gpu_uuid": "synthetic-test", "pid": 123, "profile_id": profile,
-                       "timestamp_ns": timestamp, "activity": {
+                       "status": "running", "timestamp_ns": timestamp, "activity": {
                            "source": "cpu_dispatch_proxy", "busy_ns": busy, "io_bytes": io_bytes,
                        }}],
     }
@@ -106,6 +106,17 @@ def test_counter_restart_does_not_create_negative_utilization():
     model.sample(inventory(busy=10**9))
     devices, _ = model.sample(inventory(busy=0, timestamp=2 * 10**9))
     assert devices["synthetic-test"]["gpu"] == 0
+
+
+def test_stale_heartbeat_does_not_keep_full_load_sensors_forever():
+    model = ReferenceTelemetry()
+    model.sample(inventory(), now=0)
+    active = inventory(busy=10**9, timestamp=2 * 10**9)
+    assert model.sample(active, now=1)[0]["synthetic-test"]["gpu"] == 100
+    active["processes"][0]["status"] = "stale"
+    assert model.sample(active, now=10) == ({}, {})
+    active["processes"][0].update(status="running", timestamp_ns=3 * 10**9)
+    assert model.sample(active, now=11)[0]["synthetic-test"]["gpu"] == 0
 
 
 def test_version_two_snapshot_layout_matches_native_abi():

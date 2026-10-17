@@ -31,9 +31,14 @@ TELEMETRY_MODES = ("none", "reference")
 class MachinePaths:
     root: Path
 
+    def __post_init__(self) -> None:
+        # The background child runs from /, so resolve caller-relative paths
+        # before launching it or deriving its socket path.
+        object.__setattr__(self, "root", self.root.expanduser().resolve())
+
     @classmethod
     def from_env(cls, environ: Mapping[str, str] = os.environ) -> MachinePaths:
-        home = Path(environ.get("FAKEGPU_HOME") or "~/.fakegpu").expanduser()
+        home = Path(environ.get("FAKEGPU_HOME") or "~/.fakegpu")
         return cls(home / "machine")
 
     @property

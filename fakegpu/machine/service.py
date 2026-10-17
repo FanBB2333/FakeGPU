@@ -248,6 +248,10 @@ class MachineService:
         seen: dict[int, tuple[Path, dict]] = {}
         for path in sorted(self.paths.state_dir.glob("*.json")):
             states, errors = _load_states([path], include_exited=True)
+            if not errors:
+                stamp = states[0].get("timestamp_ns")
+                if type(stamp) is not int or stamp <= 0 or stamp > now + 10**9:
+                    errors = ["invalid heartbeat timestamp"]
             if errors:
                 if self._invalid.get(path) != errors[0]:
                     self._invalid[path] = errors[0]
@@ -256,7 +260,7 @@ class MachineService:
             self._invalid.pop(path, None)
             state = states[0]
             pid = state.get("pid")
-            if type(pid) is not int or state.get("hostname") != self.host:
+            if type(pid) is not int or pid <= 0 or state.get("hostname") != self.host:
                 continue
             if pid not in seen or state.get("timestamp_ns", 0) > seen[pid][1].get("timestamp_ns", 0):
                 seen[pid] = (path, state)
@@ -376,6 +380,10 @@ class MachineService:
             now_ns=now,
         )
         devices = self._devices(inventory)
+        active_uuids = {device["uuid"] for device in devices}
+        self._high_memory.intersection_update(active_uuids)
+        self._oversubscribed.intersection_update(active_uuids)
+        self._history = {uuid: history for uuid, history in self._history.items() if uuid in active_uuids}
         sensors, activity = ({}, {})
         if self._telemetry is not None:
             sensors, activity = self._telemetry.sample({"devices": devices, "processes": inventory["processes"]})

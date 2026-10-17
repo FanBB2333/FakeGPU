@@ -130,3 +130,78 @@ def test_snapshot_arrays_have_expected_layout_and_distinct_pids(tmp_path, monkey
     assert len(devices) == 1 and len(processes) == 2
     assert devices[0].used_memory == 400
     assert {p.pid for p in processes} == {first["pid"], second["pid"]}
+
+
+def test_nvlink_counters_survive_an_idle_layout_and_a_new_publisher(tmp_path):
+    from fakegpu.link_traffic import empty_record
+
+    bridge = NvmlStateBridge(state_dir=tmp_path)
+    transfer = empty_record()
+    transfer["links"]["nvlink"].update(tx_bytes=1000, rx_bytes=2000)
+    device = {"uuid": "synthetic-links", "topology": {"slot": {"slot": 0}}, "transfer": transfer}
+
+    def counters():
+        links = bridge._links(device)
+        return links.nvlink_tx_bytes, links.nvlink_rx_bytes
+
+    assert counters() == (1000, 2000)
+    device["transfer"] = None
+    assert counters() == (1000, 2000)
+    assert counters() == (1000, 2000)
+    transfer["links"]["nvlink"].update(tx_bytes=100, rx_bytes=200)
+    device["transfer"] = transfer
+    assert counters() == (1100, 2200)
+
+
+@pytest.mark.parametrize("selection,telemetry", [
+    ("default", "reference"), ("argument", "reference"), ("environment", "reference"),
+    ("single-file", "none"), ("disabled", "none"),
+])
+def test_nvitop_state_selection_and_machine_telemetry(tmp_path, monkeypatch, selection, telemetry):
+    import sys
+    from types import SimpleNamespace
+
+    from fakegpu import nvitop_cli
+    from fakegpu.machine.config import MachineConfig, MachinePaths
+
+    monkeypatch.setenv("FAKEGPU_HOME", str(tmp_path))
+    monkeypatch.delenv("FAKEGPU_SMI_STATE_DIR", raising=False)
+    monkeypatch.delenv("FAKEGPU_SMI_STATE_PATH", raising=False)
+    paths = MachinePaths.from_env()
+    paths.create()
+    MachineConfig(telemetry="reference").save(paths.config)
+    monkeypatch.setattr(nvitop_cli, "daemon_pid", lambda _: 12345)
+    monkeypatch.setattr(nvitop_cli, "is_machine_state_dir", lambda directory, _: (
+        directory is not None and os.fspath(directory) == str(paths.state_dir)
+    ))
+    captured = {}
+
+    class Bridge:
+        device_count = 1
+
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+    monkeypatch.setattr(nvitop_cli, "NvmlStateBridge", Bridge)
+    monkeypatch.setitem(sys.modules, "nvitop.cli", SimpleNamespace(main=lambda: 0))
+    arguments = []
+    if selection in {"argument", "disabled"}:
+        arguments += ["--state-dir", str(paths.state_dir)]
+    if selection == "disabled":
+        arguments += ["--telemetry", "none"]
+    if selection == "environment":
+        monkeypatch.setenv("FAKEGPU_SMI_STATE_DIR", str(paths.state_dir))
+    if selection == "single-file":
+        monkeypatch.setenv("FAKEGPU_SMI_STATE_PATH", str(tmp_path / "publisher.json"))
+    assert nvitop_cli.main(arguments) == 0
+    assert captured["telemetry"] == telemetry
+    if selection == "single-file":
+        assert captured["state_dir"] is None and captured["layout"] is None
+    else:
+        assert captured["state_dir"] == str(paths.state_dir)

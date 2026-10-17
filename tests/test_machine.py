@@ -10,12 +10,13 @@ import socket
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
-from fakegpu.machine.client import MachineClient, attach_environment, daemon_pid
+from fakegpu.machine.client import MachineClient, MachineError, attach_environment, daemon_pid
 from fakegpu.machine.config import MachineConfig, MachinePaths, parse_devices
 from fakegpu.machine.daemon import start_daemon, stop_daemon
 from fakegpu.machine.service import ENDED_RETENTION_SECONDS, MachineService
@@ -200,6 +201,20 @@ def test_memory_alerts(service, child):
     assert kinds(service).count("memory.normal") == 2
 
 
+def test_removed_device_alerts_and_history_expire_when_its_process_exits(service, child):
+    publish(service, child.pid, used=81 * GIB)
+    service.poll()
+    old_uuids = {device["uuid"] for device in service.status()["devices"]}
+    assert service.status()["summary"]["alerts"] == 4
+    service.update_config({"devices": "h100:2"})
+    # Old devices remain while their workload is alive, with their alerts.
+    assert service.status()["summary"]["alerts"] == 4
+    publish(service, child.pid, running=False)
+    service.poll()
+    assert service.status()["summary"]["alerts"] == 0
+    assert not old_uuids.intersection(service._history)
+
+
 def test_dispatch_controls(service, child):
     assert service.dispatch({"id": 1, "method": "nope"})["error"]["code"] == "unknown_method"
     bad = service.dispatch({"method": "config.update", "params": {"changes": {"devices": "no-such-gpu"}}})
@@ -217,6 +232,45 @@ def test_dispatch_controls(service, child):
     assert sent["ok"]
     assert child.wait(timeout=5) == -signal.SIGTERM
     assert kinds(service)[-1] == "process.signal_sent"
+
+
+@pytest.mark.parametrize("stamp", [None, "bad", True, -1, 10**30])
+def test_invalid_heartbeat_does_not_crash_the_machine(service, child, stamp):
+    publish(service, child.pid)
+    path = service.paths.state_dir / "invalid.json"
+    state = json.loads((service.paths.state_dir / f"{child.pid}.json").read_text())
+    state["timestamp_ns"] = stamp
+    path.write_text(json.dumps(state))
+    service.poll()
+    assert len(service.status()["processes"]) == 1
+    assert kinds(service).count("state.invalid") == 1
+    service.poll()
+    assert kinds(service).count("state.invalid") == 1
+
+
+def test_client_timeout_is_recoverable_by_the_console(tmp_path):
+    paths = MachinePaths(tmp_path)
+    paths.create()
+    done = threading.Event()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(paths.socket))
+        server.listen(1)
+
+        def stall():
+            with server.accept()[0] as connection:
+                connection.recv(65536)
+                done.wait(5)
+
+        worker = threading.Thread(target=stall)
+        worker.start()
+        try:
+            with pytest.raises(MachineError) as caught:
+                MachineClient(paths, timeout=0.05).call("status")
+            assert caught.value.code == "timeout"
+        finally:
+            done.set()
+            worker.join(timeout=5)
+        assert not worker.is_alive()
 
 
 def test_events_survive_a_restart(tmp_path):
@@ -323,3 +377,22 @@ def test_daemon_watches_a_fakecuda_process(tmp_path, monkeypatch):
         assert stop_daemon(paths)
     assert daemon_pid(paths) is None
     assert not paths.socket.exists()
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_daemon_uses_explicit_paths_instead_of_the_inherited_home(tmp_path, monkeypatch, relative):
+    # Both homes are private to this test; a regression must never start or
+    # reconfigure the user's default daemon.
+    monkeypatch.setenv("FAKEGPU_HOME", str(tmp_path / "inherited"))
+    monkeypatch.chdir(tmp_path)
+    paths = MachinePaths(Path("selected") if relative else tmp_path / "selected")
+    inherited = MachinePaths.from_env()
+    try:
+        pid = start_daemon(paths, changes={"devices": "l4:1"}, timeout=5)
+        assert paths.root.is_absolute()
+        assert daemon_pid(paths) == pid
+        assert MachineClient(paths).call("status")["config"]["devices"] == "l4:1"
+        assert daemon_pid(inherited) is None
+    finally:
+        stop_daemon(paths)
+        stop_daemon(inherited)

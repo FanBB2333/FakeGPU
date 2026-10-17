@@ -88,6 +88,10 @@ class ReferenceTelemetry:
         process_values = {}
         device_values = {}
         for row in inventory["processes"]:
+            # A stale heartbeat gives no evidence that the last observed
+            # activity is still running. Keep its memory, not its old load.
+            if row["status"] != "running":
+                continue
             activity = row.get("activity") or {}
             model = self._model(row["profile_id"])
             if model is None or activity.get("source") != "cpu_dispatch_proxy":

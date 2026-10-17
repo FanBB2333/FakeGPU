@@ -35,20 +35,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                              "publishers need FAKEGPU_TELEMETRY=reference.")
     args, remaining = parser.parse_known_args(argv)
     paths = MachinePaths.from_env()
-    if not (args.state_dir or args.state or os.environ.get("FAKEGPU_SMI_STATE_DIR")):
-        if daemon_pid(paths) is not None:
-            args.state_dir = str(paths.state_dir)
-            args.telemetry = args.telemetry or MachineConfig.load(paths.config).telemetry
-    args.telemetry = args.telemetry or "none"
     state_dir = args.state_dir or os.environ.get("FAKEGPU_SMI_STATE_DIR")
+    if not (state_dir or args.state or os.environ.get("FAKEGPU_SMI_STATE_PATH")):
+        if daemon_pid(paths) is not None:
+            state_dir = str(paths.state_dir)
     # The machine lists its GPUs even when no process uses them.
-    layout = (lambda: layout_state(paths)) if is_machine_state_dir(state_dir, paths) else None
+    uses_machine = is_machine_state_dir(state_dir, paths)
+    layout = (lambda: layout_state(paths)) if uses_machine else None
+    if args.telemetry is None:
+        args.telemetry = MachineConfig.load(paths.config).telemetry if uses_machine else "none"
     if remaining[:1] == ["--"]:
         remaining = remaining[1:]
     old_argv = sys.argv
     try:
         with NvmlStateBridge(
-            state_dir=args.state_dir, state_paths=args.state,
+            state_dir=state_dir, state_paths=args.state,
             refresh_interval=args.refresh_interval, stale_after_seconds=args.stale_after_seconds,
             lib_dir=args.lib_dir, telemetry=args.telemetry, layout=layout,
         ) as bridge:

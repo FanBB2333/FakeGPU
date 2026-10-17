@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import sys
 import time
 from typing import Any, Sequence
@@ -141,10 +142,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = actions.add_parser("config", help="Show or change the machine settings.")
     add_machine_options(config)
     config.add_argument("--json", action="store_true", help="Print settings as JSON.")
-    actions.add_parser("run", help="Run the daemon in the foreground.")
+    run = actions.add_parser("run", help="Run the daemon in the foreground.")
+    run.add_argument("--machine-root", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
-    paths = MachinePaths.from_env()
+    if args.action == "run" and args.machine_root is not None:
+        paths = MachinePaths(args.machine_root)
+    else:
+        paths = MachinePaths.from_env()
     client = MachineClient(paths)
     try:
         if args.action == "run":

@@ -46,18 +46,24 @@ class MachineClient:
     def call(self, method: str, **params: Any) -> Any:
         request = {"v": 1, "id": next(_ids), "method": method, "params": params}
         data = bytearray()
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(self.timeout)
-            try:
+        connected = False
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(self.timeout)
                 sock.connect(str(self.paths.socket))
-            except OSError as exc:
-                raise MachineError("not_running", "the FakeGPU machine daemon is not running") from exc
-            sock.sendall(json.dumps(request).encode() + b"\n")
-            while not data.endswith(b"\n"):
-                chunk = sock.recv(1 << 16)
-                if not chunk:
-                    raise MachineError("disconnected", "the daemon closed the connection")
-                data += chunk
+                connected = True
+                sock.sendall(json.dumps(request).encode() + b"\n")
+                while not data.endswith(b"\n"):
+                    chunk = sock.recv(1 << 16)
+                    if not chunk:
+                        raise MachineError("disconnected", "the daemon closed the connection")
+                    data += chunk
+        except TimeoutError as exc:
+            raise MachineError("timeout", "the FakeGPU machine daemon did not respond in time") from exc
+        except OSError as exc:
+            if connected:
+                raise MachineError("disconnected", "the connection to the machine daemon was lost") from exc
+            raise MachineError("not_running", "the FakeGPU machine daemon is not running") from exc
         response = json.loads(data)
         if not response.get("ok"):
             error = response.get("error") or {}

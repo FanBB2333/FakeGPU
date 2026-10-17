@@ -211,19 +211,23 @@ class NvmlStateBridge:
             nvlink_count=min(18, int((topology.get("nvlink") or {}).get("active_links") or 0)),
         )
         transfer = device.get("transfer")
+        # Keep the last cumulative count even when the last publisher exits
+        # and only the idle machine layout remains.
+        counters = self._nvlink_counters.setdefault(device["uuid"], [0, 0, 0, 0])
+        totals = (0, 0)
         if transfer:
             pcie_traffic, nvlink_traffic = transfer["links"]["pcie"], transfer["links"]["nvlink"]
             links.pcie_tx_bytes_per_second = _uint64(pcie_traffic["tx_bytes_per_second"])
             links.pcie_rx_bytes_per_second = _uint64(pcie_traffic["rx_bytes_per_second"])
             # The sum over live publishers drops when one exits; keep the
             # counters NVML reports from going backwards.
-            counters = self._nvlink_counters.setdefault(device["uuid"], [0, 0, 0, 0])
-            for position, value in enumerate((nvlink_traffic["tx_bytes"], nvlink_traffic["rx_bytes"])):
-                if value < counters[2 + position]:
-                    counters[position] += counters[2 + position] - value
-                counters[2 + position] = value
-            links.nvlink_tx_bytes = _uint64(counters[0] + counters[2])
-            links.nvlink_rx_bytes = _uint64(counters[1] + counters[3])
+            totals = (nvlink_traffic["tx_bytes"], nvlink_traffic["rx_bytes"])
+        for position, value in enumerate(totals):
+            if value < counters[2 + position]:
+                counters[position] += counters[2 + position] - value
+            counters[2 + position] = value
+        links.nvlink_tx_bytes = _uint64(counters[0] + counters[2])
+        links.nvlink_rx_bytes = _uint64(counters[1] + counters[3])
         return links
 
     def _snapshot_arrays(self, inventory: dict) -> tuple[ctypes.Array, ctypes.Array]:

@@ -48,6 +48,11 @@ While the daemon runs, `fakegpu nvitop` and `fakegpu nvidia-smi` read the
 machine without options. Like on a real host they list every GPU of the
 layout, idle ones included, and the processes on the machine.
 
+After changing the device layout or sensor mode, quit and reopen `fakegpu
+nvitop`: its device list and sensor mode are selected at startup. The console
+updates its device list immediately. Selecting the machine's state directory
+explicitly also inherits its sensor mode unless `--telemetry` overrides it.
+
 ## The console
 
 | Tab | Shows |

@@ -116,7 +116,7 @@ def start_daemon(
     )
     with paths.log.open("ab") as log:
         subprocess.Popen(
-            [sys.executable, "-m", "fakegpu", "daemon", "run"],
+            [sys.executable, "-m", "fakegpu", "daemon", "run", "--machine-root", str(paths.root)],
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=log,
