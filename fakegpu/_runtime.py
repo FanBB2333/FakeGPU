@@ -157,7 +157,7 @@ def _init_fakecuda_runtime(
         unsupported_api=unsupported_api,
         dist_mode=dist_mode,
     )
-    configured_env = dict(os.environ)
+    configured_env: dict[str, str] = {}
     from ._api import _apply_config_env
 
     _apply_config_env(configured_env, config)
@@ -176,16 +176,21 @@ def _init_fakecuda_runtime(
             os.environ.pop("FAKEGPU_PROFILES", None)
     if devices is not None:
         os.environ["FAKEGPU_PROFILES"] = ",".join(devices) if not isinstance(devices, str) else devices
-    if platform is not None or os.environ.get("FAKEGPU_PLATFORM"):
-        from .platforms import export_platform
-
-        export_platform(os.environ, platform)
 
     effective_device_count = device_count
     if effective_device_count is None:
         effective_device_count = _infer_device_count_from_devices(
             devices if devices is not None else os.environ.get("FAKEGPU_PROFILES")
         )
+    if effective_device_count is not None:
+        os.environ["FAKEGPU_DEVICE_COUNT"] = str(effective_device_count)
+
+    # Resolve topology only after the daemon and explicit arguments have
+    # selected the devices; an inherited platform must see that final layout.
+    if platform is not None or os.environ.get("FAKEGPU_PLATFORM"):
+        from .platforms import export_platform
+
+        export_platform(os.environ, platform)
 
     patch_result = patch_torch(num_devices=effective_device_count)
     return RuntimeInitResult(runtime="fakecuda", backend=patch_result.backend)

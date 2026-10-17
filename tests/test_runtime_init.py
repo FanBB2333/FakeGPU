@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -194,6 +196,38 @@ assert os.environ["FAKEGPU_DIST_MODE"] == "simulate"
 print("fakecuda runtime options passed")
 """
     _assert_ok(_run(code), "fakecuda runtime options")
+
+
+@pytest.mark.parametrize("inherited_platform", [False, True])
+@pytest.mark.parametrize("layout", [{"profile": "l4", "device_count": 2}, {"devices": "l4:2"}])
+def test_fakecuda_platform_uses_the_selected_devices(inherited_platform, layout) -> None:
+    options = dict(layout)
+    if not inherited_platform:
+        options["platform"] = "desktop"
+    code = f"""
+import os
+import fakegpu
+
+for name in list(os.environ):
+    if name.startswith("FAKEGPU_"):
+        del os.environ[name]
+os.environ.update(FAKEGPU_MACHINE="off", FAKEGPU_TERMINAL_REPORT="0")
+if {inherited_platform!r}:
+    os.environ["FAKEGPU_PLATFORM"] = "desktop"
+
+fakegpu.init(**{options!r})
+
+import torch
+from fakegpu.platforms import topology_from_environment
+
+assert torch.cuda.device_count() == 2
+assert all(torch.cuda.get_device_properties(i).name == "NVIDIA L4" for i in range(2))
+topology = topology_from_environment(["l4", "l4"], os.environ)
+assert topology.valid and topology.platform == "desktop"
+assert len(topology.slots) == 2
+assert torch.ones(2, device="cuda:1").sum().item() == 2
+"""
+    _assert_ok(_run(code), "fakecuda platform initialization")
 
 
 def test_inplace_hybrid_env_removes_stale_library_path(monkeypatch) -> None:

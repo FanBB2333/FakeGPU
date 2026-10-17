@@ -26,6 +26,7 @@ from fakegpu.platforms import resolve_platform
 from fakegpu.smi import SmiStatePublisher, main
 
 ROOT = Path(__file__).resolve().parents[1]
+BUILD_DIR = Path(os.environ.get("FAKEGPU_BUILD_DIR", ROOT / "build"))
 GEN4_X16 = 31.508  # per direction, as fakegpu.link_topology rounds it
 GEN5_X16 = 63.015
 
@@ -220,7 +221,7 @@ def test_fakecuda_records_copies_over_the_platform_links() -> None:
 
 def _library(name: str) -> Path:
     suffix = {"darwin": ".dylib"}.get(sys.platform, ".so.1")
-    return ROOT / "build" / f"{name}{suffix}"
+    return BUILD_DIR / f"{name}{suffix}"
 
 
 @pytest.mark.skipif(not _library("libnvidia-ml").exists(), reason="native libraries are not built")
@@ -244,7 +245,7 @@ def test_nvml_bridge_reports_modeled_links(tmp_path: Path) -> None:
         f"""
         import ctypes, json
         from fakegpu.nvml import NvmlStateBridge
-        with NvmlStateBridge(state_dir={str(tmp_path)!r}, lib_dir={str(ROOT / "build")!r}):
+        with NvmlStateBridge(state_dir={str(tmp_path)!r}, lib_dir={str(BUILD_DIR)!r}):
             import pynvml
             pynvml.nvmlInit()
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)

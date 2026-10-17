@@ -72,11 +72,14 @@ def check_process_abi(library, handle, expected_pids):
 
 
 def check_tui(command, env, pids):
+    import codecs
     import fcntl
     import pty
     import select
     import struct
     import termios
+
+    import pyte
 
     master, slave = pty.openpty()
     viewer = None
@@ -88,14 +91,27 @@ def check_tui(command, env, pids):
             env=dict(env, TERM="xterm-256color"), start_new_session=True,
         )
         output = bytearray()
+        screen = pyte.Screen(160, 40)
+        terminal = pyte.Stream(screen)
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        first_clock = None
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline and viewer.poll() is None:
             if select.select([master], [], [], 0.2)[0]:
-                output.extend(os.read(master, 65536))
-            if all(str(pid).encode() in output for pid in pids) and b"\x1b[?1049h" in output:
-                break
+                data = os.read(master, 65536)
+                output.extend(data)
+                terminal.feed(decoder.decode(data))
+            if all(str(pid) in "\n".join(screen.display) for pid in pids) and b"\x1b[?1049h" in output:
+                # nvitop's initial mouse event flushes pending input. Wait for
+                # a later redraw before sending q, which would otherwise be lost.
+                clock = screen.display[0][:24]
+                if first_clock is None:
+                    first_clock = clock
+                elif clock != first_clock:
+                    break
         assert b"\x1b[?1049h" in output, "nvitop did not enter its interactive screen"
-        assert all(str(pid).encode() in output for pid in pids), "TUI omitted a publisher"
+        assert all(str(pid) in "\n".join(screen.display) for pid in pids), "TUI omitted a publisher"
+        assert first_clock is not None and screen.display[0][:24] != first_clock, "nvitop did not refresh its clock"
         os.write(master, b"q")
         deadline = time.monotonic() + 10
         # Keep draining while curses paints/restores the screen. Waiting with
