@@ -239,7 +239,7 @@ scripts/test.sh all       # 所有維護中的測試組
 
 ## 限制
 
-- Linux 原生模擬可在 CPU 上執行受支援的 PTX 核心；純 SASS 映像與不支援的指令會
+- Linux 原生模擬可在 CPU 上執行受支援的 PTX 與相容的 cubin/SASS 核心；不相容的映像與指令會
   明確失敗。FakeCUDA 不支援二進位 CUDA 擴充。詳見[核心支援](docs/zh-TW/frameworks.md)。
 - 記憶體估算可能遺漏 backend 私有配置、自訂 operator 與 allocator 行為。正式依賴
   估算前，請先在真實硬體上校準。

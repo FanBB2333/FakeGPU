@@ -253,8 +253,8 @@ Build options, test suites, and the project layout are described in
 
 ## Limitations
 
-- Linux native simulation executes supported PTX kernels on CPU; SASS-only
-  binaries and unsupported instructions fail explicitly. FakeCUDA does not
+- Linux native simulation executes supported PTX and compatible cubin/SASS
+  kernels on CPU; unsupported instructions and incompatible images fail explicitly. FakeCUDA does not
   support binary CUDA extensions. See [kernel support](docs/en/frameworks.md).
 - Memory estimates can miss backend-private allocations, custom operators, and
   allocator behavior. Calibrate on real hardware before relying on them.

@@ -1,6 +1,6 @@
-# PantheonSim PTX execution core
+# PantheonSim kernel execution core
 
-FakeGPU links the PTX parser, CPU interpreter and memory model from
+FakeGPU links the PTX parser, cubin loader, PTX/SASS CPU interpreters and memory model from
 [PantheonSim](https://github.com/pantheongpu/pantheonsim), under the
 [Apache License 2.0](LICENSE).
 

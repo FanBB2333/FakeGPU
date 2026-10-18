@@ -21,6 +21,7 @@ typedef enum CUresult_enum {
     CUDA_ERROR_INVALID_DEVICE = 101,
     CUDA_ERROR_INVALID_IMAGE = 200,
     CUDA_ERROR_INVALID_CONTEXT = 201,
+    CUDA_ERROR_NO_BINARY_FOR_GPU = 209,
     CUDA_ERROR_PEER_ACCESS_UNSUPPORTED = 217,
     CUDA_ERROR_INVALID_PTX = 218,
     CUDA_ERROR_FILE_NOT_FOUND = 301,
@@ -201,6 +202,8 @@ CUresult cuMemFree(CUdeviceptr dptr);
 CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount);
 CUresult cuMemcpyHtoD(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount);
 CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteCount);
+CUresult cuMemcpy(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount);
+CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char value, size_t count);
 CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flags);
 CUresult cuMemAllocHost(void **pp, size_t bytesize);
 CUresult cuMemFreeHost(void *p);

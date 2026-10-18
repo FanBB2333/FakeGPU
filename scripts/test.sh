@@ -75,18 +75,28 @@ run_smoke() {
   fi
 
   if "$ptx_enabled" && command -v nvcc >/dev/null 2>&1; then
-    local kernel_probe="$BUILD_DIR/cuda_kernel_launch"
     nvcc -arch=sm_80 --cudart shared -Xcompiler -pthread \
-      tests/native/cuda_kernel_launch.cu -o "$kernel_probe"
-    local policy
-    for policy in allow warn error; do
-      FAKEGPU_REPORT_PATH="$BUILD_DIR/cuda_kernel_${policy}_report.json" \
-        run_fakegpu "$BUILD_DIR" --devices a100:2 --mode simulate --unsupported-api "$policy" \
-          "$kernel_probe"
-      "$PYTHON_BIN" scripts/validation/check_report.py \
-        --path "$BUILD_DIR/cuda_kernel_${policy}_report.json" \
-        --expect-io
+      tests/native/cuda_kernel_launch.cu -o "$BUILD_DIR/cuda_kernel_ptx"
+    nvcc -gencode arch=compute_80,code=sm_80 --cudart shared -Xcompiler -pthread \
+      tests/native/cuda_kernel_launch.cu -o "$BUILD_DIR/cuda_kernel_sass"
+    local variant policy
+    for variant in ptx sass; do
+      for policy in allow warn error; do
+        FAKEGPU_REPORT_PATH="$BUILD_DIR/cuda_kernel_${variant}_${policy}_report.json" \
+          run_fakegpu "$BUILD_DIR" --devices a100:2 --mode simulate --unsupported-api "$policy" \
+            "$BUILD_DIR/cuda_kernel_$variant"
+        "$PYTHON_BIN" scripts/validation/check_report.py \
+          --path "$BUILD_DIR/cuda_kernel_${variant}_${policy}_report.json" --expect-io
+      done
     done
+    nvcc -rdc=true -gencode arch=compute_80,code=sm_80 --cudart shared \
+      tests/native/cuda_child_launch.cu -o "$BUILD_DIR/cuda_child_launch"
+    FAKEGPU_REPORT_PATH="$BUILD_DIR/cuda_child_launch_report.json" \
+      run_fakegpu "$BUILD_DIR" --devices a100:2 --mode simulate --unsupported-api error \
+        "$BUILD_DIR/cuda_child_launch"
+    "$PYTHON_BIN" scripts/validation/check_report.py \
+      --path "$BUILD_DIR/cuda_child_launch_report.json" --expect-io
+    "$PYTHON_BIN" tests/native/cubin_execution.py --build-dir "$BUILD_DIR"
   else
     echo "nvcc or PTX execution unavailable; skipped compiled CUDA kernel validation."
   fi

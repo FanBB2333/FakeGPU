@@ -3,8 +3,8 @@
 [文件索引](README.md) · [English](../en/limitations.md) ·
 [简体中文](../zh-CN/limitations.md)
 
-- Linux 原生模擬可在 CPU 上執行受支援的 PTX 指令；純 SASS cubin、不支援的指令與
-  啟動特性會明確失敗。macOS 尚不執行 PTX。詳見[框架相容性](frameworks.md)。
+- Linux 原生模擬可在 CPU 上執行受支援的 PTX 與相容的 cubin/SASS 指令；不支援的指令與
+  啟動特性會明確失敗。macOS 尚不執行這些核心。詳見[框架相容性](frameworks.md)。
 - FakeCUDA 涵蓋專案維護的 Python 與 PyTorch 行為，不支援二進位 CUDA 擴充。
 - 靜態分析無法解析所有動態 import、生成式 kernel、執行階段 shape 或依賴資料的
   分支。

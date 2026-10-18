@@ -1,10 +1,10 @@
-# Only the PTX parser, interpreter and memory model are linked. The upstream
+# Only the PTX/SASS interpreters and memory model are linked. The upstream
 # CUDA shims, device catalog and machine-management runtime are not built.
 set(_fakegpu_ptx_default OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(_fakegpu_ptx_default ON)
 endif()
-option(ENABLE_FAKEGPU_PTX_EXECUTION "Execute custom PTX kernels on CPU (Linux)" ${_fakegpu_ptx_default})
+option(ENABLE_FAKEGPU_PTX_EXECUTION "Execute PTX and cubin kernels on CPU (Linux)" ${_fakegpu_ptx_default})
 if(ENABLE_FAKEGPU_PTX_EXECUTION AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "ENABLE_FAKEGPU_PTX_EXECUTION currently requires Linux")
 endif()
@@ -26,7 +26,7 @@ if(ENABLE_FAKEGPU_PTX_EXECUTION AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     " FAKEGPU_HAS_CONSTEXPR_VARIANT)
     set(CMAKE_CXX_STANDARD 17)
     if(NOT FAKEGPU_HAS_CONSTEXPR_VARIANT)
-        message(FATAL_ERROR "PTX execution needs a C++20 standard library with constexpr std::variant (for example GCC 12+). Select a newer CMAKE_CXX_COMPILER or set ENABLE_FAKEGPU_PTX_EXECUTION=OFF.")
+        message(FATAL_ERROR "PTX/SASS execution needs a C++20 standard library with constexpr std::variant (for example GCC 12+). Select a newer CMAKE_CXX_COMPILER or set ENABLE_FAKEGPU_PTX_EXECUTION=OFF.")
     endif()
     include(FetchContent)
     FetchContent_Declare(pantheonsim
@@ -53,6 +53,11 @@ if(ENABLE_FAKEGPU_PTX_EXECUTION AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/exec/interpreter.cpp
         src/exec/devrt.cpp
         src/exec/worker_pool.cpp
+        src/sass/decode.cpp
+        src/sass/cubin.cpp
+        src/sass/module.cpp
+        src/sass/exec.cpp
+        src/sass/tier.cpp
     )
     list(TRANSFORM _ptx_sources PREPEND "${pantheonsim_SOURCE_DIR}/")
     add_library(fake_gpu_ptx STATIC ${_ptx_sources})
@@ -67,8 +72,8 @@ if(ENABLE_FAKEGPU_PTX_EXECUTION AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_property(TARGET fake_gpu_kernel PROPERTY CXX_STANDARD 20)
     target_compile_definitions(fake_gpu_kernel PRIVATE FAKEGPU_PTX_EXECUTION=1)
     target_link_libraries(fake_gpu_kernel PRIVATE fake_gpu_ptx)
-    message(STATUS "FakeGPU PTX execution: ENABLED (PantheonSim)")
+    message(STATUS "FakeGPU PTX/SASS execution: ENABLED (PantheonSim)")
 else()
     target_compile_definitions(fake_gpu_kernel PRIVATE FAKEGPU_PTX_EXECUTION=0)
-    message(STATUS "FakeGPU PTX execution: DISABLED")
+    message(STATUS "FakeGPU PTX/SASS execution: DISABLED")
 endif()

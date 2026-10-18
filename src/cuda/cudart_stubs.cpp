@@ -1,5 +1,6 @@
 #include "cudart_defs.hpp"
 #include "cuda_driver_defs.hpp"
+#include "kernel_executor.hpp"
 #include "../core/global_state.hpp"
 #include "../core/logging.hpp"
 #include "../core/unsupported_api.hpp"
@@ -140,6 +141,8 @@ static cudaError_t convertDriverError(CUresult result) {
             return cudaErrorPeerAccessUnsupported;
         case CUDA_ERROR_INVALID_IMAGE:
             return cudaErrorInvalidKernelImage;
+        case CUDA_ERROR_NO_BINARY_FOR_GPU:
+            return cudaErrorNoKernelImageForDevice;
         case CUDA_ERROR_INVALID_PTX:
             return cudaErrorInvalidPtx;
         case CUDA_ERROR_INVALID_HANDLE:
@@ -452,6 +455,9 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, cudaMemcpyKind 
         case cudaMemcpyDeviceToDevice:
             result = cuMemcpyDtoD((CUdeviceptr)dst, (CUdeviceptr)src, count);
             break;
+        case cudaMemcpyDefault:
+            result = cuMemcpy((CUdeviceptr)dst, (CUdeviceptr)src, count);
+            break;
         case cudaMemcpyHostToHost:
             memcpy(dst, src, count);
             fake_gpu::GlobalState::instance().record_memcpy_h2h(count);
@@ -484,6 +490,9 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count, cudaMemcpy
         case cudaMemcpyDeviceToDevice:
             result = cuMemcpyDtoD((CUdeviceptr)dst, (CUdeviceptr)src, count);
             break;
+        case cudaMemcpyDefault:
+            result = cuMemcpy((CUdeviceptr)dst, (CUdeviceptr)src, count);
+            break;
         case cudaMemcpyHostToHost:
             memcpy(dst, src, count);
             fake_gpu::GlobalState::instance().record_memcpy_h2h(count);
@@ -502,9 +511,8 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count, cudaMemcpy
 }
 
 cudaError_t cudaMemcpyPeer(void *dst, int dstDevice, const void *src, int srcDevice, size_t count) {
-    // Simplified: just do memory copy
-    memcpy(dst, src, count);
-    last_error = cudaSuccess;
+    last_error = convertDriverError(static_cast<CUresult>(fake_gpu::kernel::copy(dst, src, count)));
+    if (last_error != cudaSuccess) return last_error;
     fake_gpu::GlobalState::instance().record_memcpy_peer(dstDevice, srcDevice, count);
     FGPU_LOG("[FakeCUDART] cudaMemcpyPeer count=%zu from device %d to device %d\n", count, srcDevice, dstDevice);
     return last_error;
@@ -515,9 +523,8 @@ cudaError_t cudaMemcpyPeerAsync(void *dst, int dstDevice, const void *src, int s
         return last_error;
     }
 
-    // Simplified: just do memory copy after validating the stream handle.
-    memcpy(dst, src, count);
-    last_error = cudaSuccess;
+    last_error = convertDriverError(static_cast<CUresult>(fake_gpu::kernel::copy(dst, src, count)));
+    if (last_error != cudaSuccess) return last_error;
     fake_gpu::GlobalState::instance().record_memcpy_peer(dstDevice, srcDevice, count);
     if (!submitAsyncStreamOperation(stream)) {
         return last_error;
@@ -527,9 +534,7 @@ cudaError_t cudaMemcpyPeerAsync(void *dst, int dstDevice, const void *src, int s
 }
 
 cudaError_t cudaMemset(void *devPtr, int value, size_t count) {
-    memset(devPtr, value, count);
-    last_error = cudaSuccess;
-    fake_gpu::GlobalState::instance().record_memset(devPtr, count);
+    last_error = convertDriverError(cuMemsetD8((CUdeviceptr)devPtr, static_cast<unsigned char>(value), count));
     FGPU_LOG("[FakeCUDART] cudaMemset ptr=%p value=%d count=%zu\n", devPtr, value, count);
     return last_error;
 }
@@ -539,10 +544,8 @@ cudaError_t cudaMemsetAsync(void *devPtr, int value, size_t count, cudaStream_t 
         return last_error;
     }
 
-    // Simplified: just do synchronous memset after validating the stream handle.
-    memset(devPtr, value, count);
-    last_error = cudaSuccess;
-    fake_gpu::GlobalState::instance().record_memset(devPtr, count);
+    last_error = convertDriverError(cuMemsetD8((CUdeviceptr)devPtr, static_cast<unsigned char>(value), count));
+    if (last_error != cudaSuccess) return last_error;
     if (!submitAsyncStreamOperation(stream)) {
         return last_error;
     }
@@ -698,6 +701,8 @@ const char* cudaGetErrorString(cudaError_t error) {
             return "invalid device symbol";
         case cudaErrorInvalidKernelImage:
             return "invalid kernel image";
+        case cudaErrorNoKernelImageForDevice:
+            return "no kernel image is available for execution on the device";
         case cudaErrorInvalidPtx:
             return "invalid PTX";
         case cudaErrorInvalidResourceHandle:
@@ -739,6 +744,8 @@ const char* cudaGetErrorName(cudaError_t error) {
             return "cudaErrorInvalidSymbol";
         case cudaErrorInvalidKernelImage:
             return "cudaErrorInvalidKernelImage";
+        case cudaErrorNoKernelImageForDevice:
+            return "cudaErrorNoKernelImageForDevice";
         case cudaErrorInvalidPtx:
             return "cudaErrorInvalidPtx";
         case cudaErrorInvalidResourceHandle:
@@ -1302,7 +1309,8 @@ cudaError_t cudaMemcpy2D(void *dst, size_t dpitch, const void *src, size_t spitc
     for (size_t i = 0; i < height; i++) {
         const char *srcRow = (const char*)src + i * spitch;
         char *dstRow = (char*)dst + i * dpitch;
-        memcpy(dstRow, srcRow, width);
+        const auto result = cudaMemcpy(dstRow, srcRow, width, kind);
+        if (result != cudaSuccess) return result;
     }
 
     last_error = cudaSuccess;

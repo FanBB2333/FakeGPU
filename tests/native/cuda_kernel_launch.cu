@@ -1,5 +1,5 @@
-// Compile with nvcc --cudart shared; the default compressed fatbin contains PTX.
-// These kernels validate execution of compiler-generated PTX, without a GPU.
+// Compile with nvcc --cudart shared. The runner also builds SASS-only images.
+// Both image formats must execute the same numerical suite without a GPU.
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -75,6 +75,33 @@ extern "C" __global__ void volume_coordinates(unsigned int* output) {
     const unsigned int width = gridDim.x * blockDim.x;
     const unsigned int height = gridDim.y * blockDim.y;
     output[(z * height + y) * width + x] = x + 10 * y + 100 * z;
+}
+
+extern "C" __global__ void double_transform(double* output, const double* input,
+                                            double scale, int count) {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < count) output[index] = input[index] * scale + 0.125;
+}
+
+extern "C" __global__ void warp_exchange(unsigned int* output, unsigned int* masks) {
+    const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+    const unsigned int mask = __ballot_sync(0xffffffffu, index % 3 == 0);
+    masks[index] = mask;
+    output[index] = __shfl_xor_sync(0xffffffffu, index, 1) + 1000 * __popc(mask);
+}
+
+struct TransformArguments {
+    int count;
+    const float* input;
+    float scale;
+    float* output;
+};
+
+extern "C" __global__ void structured_transform(TransformArguments arguments) {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < arguments.count) {
+        arguments.output[index] = arguments.input[index] * arguments.scale - 2;
+    }
 }
 
 void check(bool condition, const char* operation) {
@@ -220,6 +247,55 @@ void test_3d_launch() {
     }
 }
 
+void test_double_precision() {
+    constexpr int count = 19;
+    std::vector<double> input(count);
+    for (int i = 0; i < count; ++i) input[i] = (i - 7) * 0.25;
+    double* source = upload(input);
+    double* output = upload(std::vector<double>(count, -999));
+    double_transform<<<2, 16>>>(output, source, 1.5, count);
+    const auto result = download(output, count);
+    for (int i = 0; i < count; ++i) {
+        check(result[i] == input[i] * 1.5 + 0.125, "double precision arithmetic and scalar arguments");
+    }
+    CUDA_CHECK(cudaFree(source));
+}
+
+void test_warp_intrinsics() {
+    constexpr int count = 192;
+    unsigned int* output = upload(std::vector<unsigned int>(count, 0));
+    unsigned int* masks = upload(std::vector<unsigned int>(count, 0));
+    warp_exchange<<<3, 64>>>(output, masks);
+    const auto values = download(output, count);
+    const auto ballots = download(masks, count);
+    for (int i = 0; i < count; ++i) {
+        unsigned int expected_mask = 0, expected_count = 0;
+        const int warp_start = (i / 32) * 32;
+        for (int lane = 0; lane < 32; ++lane) {
+            if ((warp_start + lane) % 3 == 0) {
+                expected_mask |= 1u << lane;
+                ++expected_count;
+            }
+        }
+        check(ballots[i] == expected_mask, "warp ballot mask");
+        check(values[i] == (i ^ 1) + 1000 * expected_count, "warp shuffle and population count");
+    }
+}
+
+void test_struct_arguments() {
+    constexpr int count = 23;
+    std::vector<float> input(count);
+    for (int i = 0; i < count; ++i) input[i] = (i - 9) * 0.25f;
+    float* source = upload(input);
+    float* output = upload(std::vector<float>(count, -999));
+    structured_transform<<<2, 16>>>(TransformArguments{count, source, -1.5f, output});
+    const auto result = download(output, count);
+    for (int i = 0; i < count; ++i) {
+        check(result[i] == input[i] * -1.5f - 2, "structure arguments with aligned pointers and scalars");
+    }
+    CUDA_CHECK(cudaFree(source));
+}
+
 void test_device_symbols_and_isolation() {
     int devices = 0;
     CUDA_CHECK(cudaGetDeviceCount(&devices));
@@ -286,7 +362,10 @@ int main() {
     test_shared_reduction();
     test_atomics();
     test_3d_launch();
+    test_double_precision();
+    test_warp_intrinsics();
+    test_struct_arguments();
     test_device_symbols_and_isolation();
     test_host_thread_devices();
-    std::puts("nvcc CUDA: PTX numerics, device calls, symbols and per-device module isolation passed");
+    std::puts("nvcc CUDA: kernel numerics, device calls, symbols and per-device module isolation passed");
 }

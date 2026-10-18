@@ -10,9 +10,9 @@ python3 -m pip install '.[torch,dev,monitoring]'
 export PYTHONPATH="$PWD"
 ```
 
-## 原生 PTX 後端
+## 原生 PTX/SASS 後端
 
-Linux 建置的 PTX 執行核心要求支援 constexpr `std::variant` 的 C++20 編譯器與
+Linux 建置的 PTX/SASS 執行核心要求支援 constexpr `std::variant` 的 C++20 編譯器與
 標準函式庫（例如 GCC 12+）。CMake 下載固定提交的 PantheonSim，
 並校驗封存檔 SHA-256；建置與執行解譯器不需要 CUDA 或 LLVM。此 Apache-2.0 依賴
 連結進現有 CUDA 函式庫，發行套件包含其授權。離線建置可指定已解壓縮的固定版本原始碼：
@@ -21,9 +21,12 @@ Linux 建置的 PTX 執行核心要求支援 constexpr `std::variant` 的 C++20 
 scripts/build.sh -- -DFETCHCONTENT_SOURCE_DIR_PANTHEONSIM=/path/to/pantheonsim
 ```
 
-`-DENABLE_FAKEGPU_PTX_EXECUTION=OFF` 可停用此依賴，PTX 載入會回傳不支援。
+`-DENABLE_FAKEGPU_PTX_EXECUTION=OFF` 可停用此依賴，PTX/cubin 載入會回傳不支援。
 macOS 目前使用此設定。核心執行測試要求 Linux；編譯 `.cu` 測試額外需要 `nvcc`，
 直接載入 PTX 的測試不需要 CUDA 工具包。
+
+cubin 全域變數使用 Linux 4.17+ 的固定位址非覆蓋映射，讓 CPU 數值函式庫共用同一指標。
+位址空間衝突會使模組載入失敗，不會覆蓋既有映射。
 
 ## macOS Conda 環境
 

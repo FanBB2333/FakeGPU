@@ -2,14 +2,21 @@
 
 ## Unreleased
 
-- Execute custom PTX kernels on CPU through Linux CUDA Driver and Runtime
+- Execute custom PTX and compatible cubin/SASS kernels on CPU through Linux CUDA Driver and Runtime
   interception, using a pinned PantheonSim interpreter. Module globals,
   constants, device functions and compressed `nvcc` fatbins are supported.
+  Pure cubins and SASS-only fatbins no longer require embedded PTX. Fatbin
+  selection prefers compatible PTX, then a compatible cubin.
 - Reject unsupported kernel launches under every compatibility policy instead
-  of returning success without computing results. SASS-only binaries and
-  macOS PTX execution remain unsupported.
+  of returning success without computing results. macOS kernel execution
+  remains unsupported.
 - Validate numerical kernel results through direct PTX and compiled CUDA C++,
-  including shared memory, barriers and atomics, in native Linux CI.
+  including shared memory, barriers, atomics, FP64, warp intrinsics and
+  structured parameters, in native Linux CI. Cubin tests also check globals,
+  relocations, pointer copies and architecture selection.
+- Execute nested device-side child launches through direct PTX and linked
+  SASS modules; accept nvcc linked fatbin wrapper v2. Cubin globals share
+  their CUDA address with host backing for CPU library interoperability.
 
 ## v1.6.0 - 2026-10-17
 

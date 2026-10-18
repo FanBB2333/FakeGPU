@@ -29,11 +29,15 @@ namespace {
 CUresult load_kernel_image(CUmodule* module, const void* image, size_t size = 0) {
     if (!module) return CUDA_ERROR_INVALID_VALUE;
     *module = nullptr;
-    std::string ptx;
-    const int extracted = kernel::extract_ptx(image, ptx, size);
+    auto& state = GlobalState::instance();
+    state.initialize();
+    const auto& profile = state.get_device(state.get_current_device()).profile;
+    const unsigned cc = profile.compute_major * 10 + profile.compute_minor;
+    std::string code;
+    const int extracted = kernel::extract_image(image, code, cc, size);
     if (extracted != CUDA_SUCCESS) return static_cast<CUresult>(extracted);
     void* loaded = nullptr;
-    const int result = kernel::load(ptx, &loaded);
+    const int result = kernel::load(code, &loaded);
     if (result == CUDA_SUCCESS) *module = static_cast<CUmodule>(loaded);
     return static_cast<CUresult>(result);
 }
@@ -1461,7 +1465,8 @@ CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount) {
         return CudaDriverPassthrough::instance().cuMemcpyDtoH(dstHost, srcDevice, ByteCount);
     }
 
-    memcpy(dstHost, (void*)srcDevice, ByteCount);
+    const auto result = static_cast<CUresult>(kernel::copy(dstHost, (void*)srcDevice, ByteCount));
+    if (result != CUDA_SUCCESS) return result;
     GlobalState::instance().record_memcpy_d2h((void*)srcDevice, ByteCount);
     FGPU_LOG("[FakeCUDA-Driver] cuMemcpyDtoH copied %zu bytes\n", ByteCount);
     return CUDA_SUCCESS;
@@ -1496,7 +1501,8 @@ CUresult cuMemcpyHtoD(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCou
         return CudaDriverPassthrough::instance().cuMemcpyHtoD(dstDevice, srcHost, ByteCount);
     }
 
-    memcpy((void*)dstDevice, srcHost, ByteCount);
+    const auto result = static_cast<CUresult>(kernel::copy((void*)dstDevice, srcHost, ByteCount));
+    if (result != CUDA_SUCCESS) return result;
     GlobalState::instance().record_memcpy_h2d((void*)dstDevice, ByteCount);
     FGPU_LOG("[FakeCUDA-Driver] cuMemcpyHtoD copied %zu bytes\n", ByteCount);
     return CUDA_SUCCESS;
@@ -1549,7 +1555,8 @@ CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteC
         return CudaDriverPassthrough::instance().cuMemcpyDtoD(dstDevice, srcDevice, ByteCount);
     }
 
-    memcpy((void*)dstDevice, (void*)srcDevice, ByteCount);
+    const auto result = static_cast<CUresult>(kernel::copy((void*)dstDevice, (void*)srcDevice, ByteCount));
+    if (result != CUDA_SUCCESS) return result;
     GlobalState::instance().record_memcpy_d2d((void*)dstDevice, (void*)srcDevice, ByteCount);
     FGPU_LOG("[FakeCUDA-Driver] cuMemcpyDtoD copied %zu bytes\n", ByteCount);
     return CUDA_SUCCESS;
@@ -1781,6 +1788,9 @@ CUresult cuGetErrorString(CUresult error, const char **pStr) {
                 break;
             case CUDA_ERROR_INVALID_IMAGE:
                 *pStr = "CUDA_ERROR_INVALID_IMAGE";
+                break;
+            case CUDA_ERROR_NO_BINARY_FOR_GPU:
+                *pStr = "CUDA_ERROR_NO_BINARY_FOR_GPU";
                 break;
             case CUDA_ERROR_INVALID_CONTEXT:
                 *pStr = "CUDA_ERROR_INVALID_CONTEXT";
@@ -2786,7 +2796,8 @@ CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char uc, size_t N) {
         }
     }
 
-    memset((void*)dstDevice, uc, N);
+    const auto result = static_cast<CUresult>(kernel::fill((void*)dstDevice, uc, N, 1));
+    if (result != CUDA_SUCCESS) return result;
     GlobalState::instance().record_memset((void*)dstDevice, N);
     return CUDA_SUCCESS;
 }
@@ -2821,8 +2832,8 @@ CUresult cuMemsetD16(CUdeviceptr dstDevice, unsigned short us, size_t N) {
         }
     }
 
-    unsigned short *p = (unsigned short*)dstDevice;
-    for (size_t i = 0; i < N; i++) p[i] = us;
+    const auto result = static_cast<CUresult>(kernel::fill((void*)dstDevice, us, N, sizeof(us)));
+    if (result != CUDA_SUCCESS) return result;
     GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned short));
     return CUDA_SUCCESS;
 }
@@ -2857,8 +2868,8 @@ CUresult cuMemsetD32(CUdeviceptr dstDevice, unsigned int ui, size_t N) {
         }
     }
 
-    unsigned int *p = (unsigned int*)dstDevice;
-    for (size_t i = 0; i < N; i++) p[i] = ui;
+    const auto result = static_cast<CUresult>(kernel::fill((void*)dstDevice, ui, N, sizeof(ui)));
+    if (result != CUDA_SUCCESS) return result;
     GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned int));
     return CUDA_SUCCESS;
 }
@@ -2895,6 +2906,29 @@ CUresult cuMemsetD8Async(CUdeviceptr dstDevice, unsigned char uc, size_t N, CUst
     }
 
     return cuMemsetD8(dstDevice, uc, N);
+}
+
+CUresult cuMemsetD16Async(CUdeviceptr dstDevice, unsigned short value, size_t count, CUstream stream) {
+    const BackendConfig& config = BackendConfig::instance();
+    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+        HybridAllocation allocation;
+        if (config.mode() == FakeGpuMode::Hybrid &&
+            HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, allocation) &&
+            (allocation.type == HybridAllocation::Type::MappedHost ||
+             allocation.type == HybridAllocation::Type::SpilledCpu)) {
+            return cuMemsetD16(dstDevice, value, count);
+        }
+        using fn_t = CUresult (*)(CUdeviceptr, unsigned short, size_t, CUstream);
+        static fn_t real_fn = reinterpret_cast<fn_t>(
+            CudaDriverPassthrough::instance().getRealFunction("cuMemsetD16Async"));
+        if (real_fn) {
+            CUresult result = real_fn(dstDevice, value, count, stream);
+            if (result == CUDA_SUCCESS)
+                GlobalState::instance().record_memset((void*)dstDevice, count * sizeof(value));
+            return result;
+        }
+    }
+    return cuMemsetD16(dstDevice, value, count);
 }
 
 CUresult cuMemsetD32Async(CUdeviceptr dstDevice, unsigned int ui, size_t N, CUstream hStream) {
@@ -3015,7 +3049,8 @@ CUresult cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount, CUstr
         return result;
     }
 
-    memcpy((void*)dst, (void*)src, ByteCount);
+    const auto result = static_cast<CUresult>(kernel::copy((void*)dst, (void*)src, ByteCount));
+    if (result != CUDA_SUCCESS) return result;
     GlobalState::instance().record_memcpy_d2d((void*)dst, (void*)src, ByteCount);
     return CUDA_SUCCESS;
 }
@@ -3151,7 +3186,8 @@ CUresult cuMemcpyPeer(CUdeviceptr dstDevice, CUcontext dstContext, CUdeviceptr s
         return result;
     }
 
-    memcpy((void*)dstDevice, (void*)srcDevice, ByteCount);
+    const auto result = static_cast<CUresult>(kernel::copy((void*)dstDevice, (void*)srcDevice, ByteCount));
+    if (result != CUDA_SUCCESS) return result;
     const int dst_device = dstContext ? (static_cast<int>(reinterpret_cast<uintptr_t>(dstContext)) - 1) : current_context_device;
     const int src_device = srcContext ? (static_cast<int>(reinterpret_cast<uintptr_t>(srcContext)) - 1) : current_context_device;
     GlobalState::instance().record_memcpy_peer(dst_device, src_device, ByteCount);
@@ -3940,6 +3976,14 @@ CUresult cuMemsetD8_v2(CUdeviceptr dstDevice, unsigned char value, size_t count)
     return cuMemsetD8(dstDevice, value, count);
 }
 
+CUresult cuMemsetD16_v2(CUdeviceptr dstDevice, unsigned short value, size_t count) {
+    return cuMemsetD16(dstDevice, value, count);
+}
+
+CUresult cuMemsetD32_v2(CUdeviceptr dstDevice, unsigned int value, size_t count) {
+    return cuMemsetD32(dstDevice, value, count);
+}
+
 CUresult cuMemPrefetchAsync(CUdeviceptr ptr, size_t count, CUdevice dstDevice, CUstream stream) {
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
@@ -4332,6 +4376,7 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     MAP_FUNC(cuMemsetD16)
     MAP_FUNC(cuMemsetD32)
     MAP_FUNC(cuMemsetD8Async)
+    MAP_FUNC(cuMemsetD16Async)
     MAP_FUNC(cuMemsetD32Async)
 
     // Stream management
@@ -4419,6 +4464,8 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     MAP_FUNC(cuMemAllocPitch)
     MAP_FUNC(cuMemcpy2DAsync_v2)
     MAP_FUNC(cuMemsetD8_v2)
+    MAP_FUNC(cuMemsetD16_v2)
+    MAP_FUNC(cuMemsetD32_v2)
     MAP_FUNC(cuMemPrefetchAsync)
     MAP_FUNC(cuStreamWaitValue32)
     MAP_FUNC(cuStreamBatchMemOp)

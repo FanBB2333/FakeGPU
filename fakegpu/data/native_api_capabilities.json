@@ -41,8 +41,8 @@
     {
       "api": "cudaLaunchKernel",
       "library": "cudart",
-      "classification": "cpu_ptx_execution",
-      "simulate_behavior": "Linux builds execute supported PTX instructions synchronously on CPU. Missing PTX, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
+      "classification": "cpu_kernel_execution",
+      "simulate_behavior": "Linux builds execute supported PTX and compatible cubin/SASS instructions synchronously on CPU. Incompatible images, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
       "policy_enforced": false
     },
     {
@@ -69,8 +69,8 @@
     {
       "api": "cudaLaunchKernelExC",
       "library": "cudart",
-      "classification": "cpu_ptx_execution",
-      "simulate_behavior": "Linux builds execute supported PTX instructions synchronously on CPU. Missing PTX, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
+      "classification": "cpu_kernel_execution",
+      "simulate_behavior": "Linux builds execute supported PTX and compatible cubin/SASS instructions synchronously on CPU. Incompatible images, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
       "policy_enforced": false
     },
     {
@@ -188,15 +188,15 @@
     {
       "api": "cuLaunchKernel",
       "library": "cuda_driver",
-      "classification": "cpu_ptx_execution",
-      "simulate_behavior": "Linux builds execute supported PTX instructions synchronously on CPU. Missing PTX, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
+      "classification": "cpu_kernel_execution",
+      "simulate_behavior": "Linux builds execute supported PTX and compatible cubin/SASS instructions synchronously on CPU. Incompatible images, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
       "policy_enforced": false
     },
     {
       "api": "cuLaunchKernelEx",
       "library": "cuda_driver",
-      "classification": "cpu_ptx_execution",
-      "simulate_behavior": "Linux builds execute supported PTX instructions synchronously on CPU. Missing PTX, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
+      "classification": "cpu_kernel_execution",
+      "simulate_behavior": "Linux builds execute supported PTX and compatible cubin/SASS instructions synchronously on CPU. Incompatible images, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
       "policy_enforced": false
     },
     {

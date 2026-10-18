@@ -26,16 +26,22 @@ PTX = b""".version 8.0
 
 
 def fatbin(payload: bytes, *, kind: int = 1, expanded: int = 0,
-           compression: int = 0x2000, header_size: int = 64) -> bytes:
+           compression: int = 0x2000, header_size: int = 64, architecture: int = 0) -> bytes:
     entry = bytearray(header_size)
     padded = payload + b"\0" * (-len(payload) % 8)
     struct.pack_into("<HHIQ", entry, 0, kind, 0x101, len(entry), len(padded))
+    struct.pack_into("<I", entry, 28, architecture)
     if expanded:
         struct.pack_into("<I", entry, 16, len(payload))
         struct.pack_into("<Q", entry, 40, compression)
         if header_size >= 64:
             struct.pack_into("<Q", entry, 56, expanded)
     return struct.pack("<IHHQ", 0xBA55ED50, 1, 16, len(entry) + len(padded)) + entry + padded
+
+
+def combine_images(*images: bytes) -> bytes:
+    payload = b"".join(image[16:] for image in images)
+    return struct.pack("<IHHQ", 0xBA55ED50, 1, 16, len(payload)) + payload
 
 
 def bind(library: ct.CDLL, name: str, arguments: list, result=ct.c_int):
@@ -105,7 +111,10 @@ def validate(build_dir: Path) -> None:
     zstd_payload = buffer.raw[:compressed_size]
     zstd_image = fatbin(zstd_payload, expanded=len(zstd_source), compression=0x8000)
     zstd_short_header = fatbin(zstd_payload, expanded=len(zstd_source), compression=0x8000, header_size=48)
-    for image in (PTX, raw_image, compressed_image, zstd_image, zstd_short_header):
+    preferred_ptx = combine_images(fatbin(b"\x7fELF", kind=2), raw_image)
+    high_ptx = PTX.replace(b"sm_80", b"sm_90").replace(b"set_value", b"set_high")
+    multiarch_ptx = combine_images(fatbin(high_ptx, architecture=90), fatbin(PTX, architecture=80))
+    for image in (PTX, raw_image, compressed_image, zstd_image, zstd_short_header, preferred_ptx, multiarch_ptx):
         module = pointer()
         assert load(ct.byref(module), image) == 0
         function = pointer()
@@ -118,9 +127,10 @@ def validate(build_dir: Path) -> None:
     assert load(ct.byref(module), ct.byref(wrapper)) == 0
     assert unload(module) == 0
     wrapper.version = 2
+    assert load(ct.byref(module), ct.byref(wrapper)) == 0
+    assert unload(module) == 0
+    wrapper.version = 3
     assert load(ct.byref(module), ct.byref(wrapper)) == 801
-    assert load(ct.byref(module), fatbin(b"\x7fELF", kind=2)) == 801
-    assert load(ct.byref(module), b"\x7fELF") == 801
 
     malformed = [
         raw_image[:8],                           # incomplete fatbin header
@@ -132,6 +142,10 @@ def validate(build_dir: Path) -> None:
         fatbin(b"invalid frame", expanded=1, compression=0x8000),
         fatbin(zstd_payload[:-1], expanded=len(zstd_source), compression=0x8000),
         fatbin(compressed, expanded=11 + len(tail), header_size=48),
+        b"\x7fELF",                                # incomplete ELF header
+        fatbin(b"\x7fELF", kind=2),                 # incomplete embedded cubin
+        fatbin(b"", kind=2),                        # empty bounded cubin
+        struct.pack("<IIQQ", 0x466243B1, 1, 1, 0),  # runtime pointers are not file images
     ]
     with tempfile.TemporaryDirectory(prefix="fakegpu-kernel-images-") as directory:
         path = Path(directory) / "module.fatbin"
@@ -169,10 +183,21 @@ def validate(build_dir: Path) -> None:
     selected = ct.c_int()
     assert pop_context(ct.byref(popped)) == 201
     assert push_context(None) == 400
-    assert push_context(pointer(3)) == 400
+    assert push_context(pointer(4)) == 400
+    assert push_context(pointer(3)) == 0
+    specific_ptx = fatbin(high_ptx.replace(b"sm_90", b"sm_90a"), architecture=90)
+    assert load(ct.byref(other_module), specific_ptx) == 209
+    generic_ptx = combine_images(specific_ptx, fatbin(high_ptx, architecture=90))
+    assert load(ct.byref(other_module), generic_ptx) == 0
+    assert unload(other_module) == 0
+    assert pop_context(ct.byref(popped)) == 0 and popped.value == 3
     assert push_context(pointer(2)) == 0
     assert context_device(ct.byref(selected)) == 0 and selected.value == 1
     assert load(ct.byref(other_module), PTX.replace(b"sm_80", b"sm_90")) == 0
+    high_module, high_function = pointer(), pointer()
+    assert load(ct.byref(high_module), multiarch_ptx) == 0
+    assert get_function(ct.byref(high_function), high_module, b"set_high") == 0
+    assert unload(high_module) == 0
     assert push_context(pointer(1)) == 0
     assert pop_context(ct.byref(popped)) == 0 and popped.value == 1
     assert context_device(ct.byref(selected)) == 0 and selected.value == 1
@@ -239,7 +264,7 @@ def main() -> None:
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
     args = parser.parse_args()
     os.environ["FAKEGPU_MODE"] = "simulate"
-    os.environ["FAKEGPU_PROFILES"] = "a100,h100"
+    os.environ["FAKEGPU_PROFILES"] = "a100,h100,b200"
     os.environ["FAKEGPU_REPORT_PATH"] = os.devnull
     os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
     validate(args.build_dir.resolve())

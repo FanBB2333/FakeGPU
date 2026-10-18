@@ -3,9 +3,9 @@
 [Documentation index](README.md) · [简体中文](../zh-CN/limitations.md) ·
 [繁體中文](../zh-TW/limitations.md)
 
-- Linux native simulation executes supported PTX instructions on CPU. SASS-only
-  cubins, unsupported instructions and launch features fail explicitly. macOS
-  does not yet execute PTX. See [framework compatibility](frameworks.md).
+- Linux native simulation executes supported PTX and compatible cubin/SASS
+  instructions on CPU. Unsupported instructions and launch features fail explicitly.
+  macOS does not yet execute these kernels. See [framework compatibility](frameworks.md).
 - FakeCUDA covers maintained Python and PyTorch behavior. Binary CUDA
   extensions are not covered.
 - Static analysis cannot resolve every dynamic import, generated kernel,

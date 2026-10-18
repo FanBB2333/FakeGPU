@@ -21,7 +21,7 @@ def test_capability_catalog_classifies_high_risk_native_apis() -> None:
     catalog = load_native_capabilities()
     entries = {item["api"]: item for item in catalog["apis"]}
     for api in ("cudaLaunchKernel", "cudaLaunchKernelExC", "cuLaunchKernel", "cuLaunchKernelEx"):
-        assert entries[api]["classification"] == "cpu_ptx_execution"
+        assert entries[api]["classification"] == "cpu_kernel_execution"
         assert entries[api]["policy_enforced"] is False
     assert entries["cudaStreamAddCallback"]["classification"] == (
         "callback_not_registered"
