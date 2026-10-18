@@ -211,6 +211,7 @@ FakeCUDA 程序會接入這台機器，控制台以曲線呈現每張 GPU 的記
 - [FakeGPU-SMI 與監控](docs/zh-TW/fakegpu-smi.md)
 - [平台與插槽](docs/zh-TW/platforms.md)：基板、超級晶片、PCIe 插槽、NVLink 橋
 - [原生函式庫攔截](docs/zh-TW/native-interception.md)
+- [框架相容性](docs/zh-TW/frameworks.md)：TensorFlow、scikit-learn 與 CUDA C/C++
 - [對照實體 GPU 校準](docs/zh-TW/calibration.md)
 - [驗證與可靠性](docs/zh-TW/validation.md)
 - [開發與測試](docs/zh-TW/development.md)

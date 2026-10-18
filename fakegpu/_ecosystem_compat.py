@@ -120,6 +120,44 @@ def _patch_upstream_fakecuda_tensor_compat(upstream: Any, torch_mod: Any) -> Non
     fake_tensor_cls.is_cpu = property(lambda self: False)
     fake_tensor_cls._fakegpu_set_patched = True
 
+    # Array API consumers (including scikit-learn) use torch.asarray, which
+    # does not dispatch through FakeCudaTensor.__torch_function__.
+    original_asarray = torch_mod.asarray
+
+    @functools.wraps(original_asarray)
+    def _asarray(obj, *, dtype=None, device=None, copy=None, requires_grad=False):
+        from torch.overrides import _get_current_function_mode_stack
+        from torch.utils._device import DeviceContext
+
+        source = obj.device if isinstance(obj, torch_mod.Tensor) else torch_mod.device("cpu")
+        # Like torch.get_default_device, inspect the active device context, but
+        # preserve the input device when no default was explicitly selected.
+        if device is None:
+            device = next((
+                mode.device for mode in reversed(_get_current_function_mode_stack())
+                if isinstance(mode, DeviceContext)
+            ), source)
+        normalized = upstream._normalize_cuda_device(device, allow_none=True)
+        target = normalized if normalized is not None else torch_mod.device(device)
+        changes_device = source.type != target.type or (
+            source.type == "cuda" and source.index != target.index
+        )
+        if copy is False and changes_device:
+            raise ValueError("cannot share memory between different devices")
+        result = original_asarray(
+            upstream.unwrap_tensor(obj),
+            dtype=dtype,
+            device="cpu" if normalized is not None else target,
+            copy=True if changes_device else copy,
+            requires_grad=requires_grad,
+        )
+        return (
+            upstream.wrap_tensor(result, device_index=normalized.index)
+            if normalized is not None else result
+        )
+
+    torch_mod.asarray = _asarray
+
 
 def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
     if getattr(upstream, "_fakegpu_all_gather_object_patched", False):

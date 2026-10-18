@@ -22,6 +22,7 @@
 - [FakeGPU-SMI 与监控](fakegpu-smi.md)：`nvidia-smi` 视图，NVLink、MIG 和故障
   建模，以及 Prometheus 指标
 - [原生库拦截](native-interception.md)：运行未修改的程序，处理不支持的 API
+- [框架兼容性](frameworks.md)：TensorFlow、scikit-learn 与 CUDA C/C++ 验证
 
 ## 准确性
 

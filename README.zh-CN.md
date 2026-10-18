@@ -210,6 +210,7 @@ FakeCUDA 进程会接入这台机器，控制台用曲线展示每张 GPU 的显
 - [FakeGPU-SMI 与监控](docs/zh-CN/fakegpu-smi.md)
 - [平台与插槽](docs/zh-CN/platforms.md)：基板、超级芯片、PCIe 插槽、NVLink 桥
 - [原生库拦截](docs/zh-CN/native-interception.md)
+- [框架兼容性](docs/zh-CN/frameworks.md)：TensorFlow、scikit-learn 与 CUDA C/C++
 - [对照真实 GPU 校准](docs/zh-CN/calibration.md)
 - [验证与可靠性](docs/zh-CN/validation.md)
 - [开发与测试](docs/zh-CN/development.md)

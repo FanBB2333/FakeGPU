@@ -1311,7 +1311,7 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
     """Record host-device and peer copies in ``_link_traffic``.
 
     Covers ``Tensor.to/.cuda/.cpu``, ``Module.to/.cuda``,
-    ``torch.tensor``/``torch.as_tensor`` with a CUDA device, ``copy_``
+    ``torch.tensor``/``torch.as_tensor``/``torch.asarray``, ``copy_``
     between devices, and ``item``/``tolist`` reads. Installing twice
     keeps a single layer of wrappers.
     """
@@ -1407,16 +1407,17 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
     torch_mod.nn.Module.to = upstream._module_to
     torch_mod.nn.Module.cuda = upstream._module_cuda
 
-    for name in ("tensor", "as_tensor"):
+    for name in ("tensor", "as_tensor", "asarray"):
         factory = getattr(torch_mod, name, None)
         if factory is None or getattr(factory, "_fakegpu_transfer", False):
             continue
 
         def _counted_factory(*args: Any, _factory: Any = factory, **kwargs: Any) -> Any:
             result = _factory(*args, **kwargs)
-            if kwargs.get("device") is not None and isinstance(result, fake_cls):
-                source = endpoint(args[0]) if args and isinstance(args[0], torch_mod.Tensor) else None
-                record(source, int(result.device_index), result)
+            if isinstance(result, torch_mod.Tensor):
+                data = args[0] if args else kwargs.get("data", kwargs.get("obj"))
+                source = endpoint(data) if isinstance(data, torch_mod.Tensor) else None
+                record(source, endpoint(result), result)
             return result
 
         setattr(torch_mod, name, marked(functools.wraps(factory)(_counted_factory)))

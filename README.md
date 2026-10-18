@@ -223,6 +223,7 @@ The detailed guides live in [`docs/`](docs/en/README.md):
 - [Platforms and slots](docs/en/platforms.md): baseboards, superchips, PCIe
   slots, NVLink bridges
 - [Native interception](docs/en/native-interception.md)
+- [Framework compatibility](docs/en/frameworks.md): TensorFlow, scikit-learn and CUDA C/C++
 - [Calibrating against a real GPU](docs/en/calibration.md)
 - [Validation and reliability](docs/en/validation.md)
 - [Development and testing](docs/en/development.md)

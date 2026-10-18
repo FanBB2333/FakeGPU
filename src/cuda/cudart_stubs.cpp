@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // Thread-local error tracking
 static __thread cudaError_t last_error = cudaSuccess;
@@ -123,6 +124,65 @@ static bool submitAsyncStreamOperation(cudaStream_t stream) {
     return true;
 }
 
+template <typename Properties>
+static cudaError_t getDeviceProperties(Properties *prop, int device) {
+    if (!prop) {
+        last_error = cudaErrorInvalidValue;
+        return last_error;
+    }
+
+    // Zero out the structure
+    memset(prop, 0, sizeof(Properties));
+
+    // Get device name
+    char name[256];
+    CUresult result = cuDeviceGetName(name, 256, device);
+    if (result != CUDA_SUCCESS) {
+        last_error = convertDriverError(result);
+        return last_error;
+    }
+    strncpy(prop->name, name, 256);
+
+    // Get total memory
+    size_t totalMem;
+    result = cuDeviceTotalMem(&totalMem, device);
+    if (result == CUDA_SUCCESS) {
+        prop->totalGlobalMem = totalMem;
+    }
+
+    // Get compute capability
+    int major, minor;
+    cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device);
+    cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device);
+    prop->major = major;
+    prop->minor = minor;
+
+    // Get other attributes
+    cuDeviceGetAttribute(&prop->multiProcessorCount, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
+    cuDeviceGetAttribute(&prop->maxThreadsPerBlock, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK, device);
+    cuDeviceGetAttribute(&prop->maxThreadsDim[0], CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X, device);
+    cuDeviceGetAttribute(&prop->maxThreadsDim[1], CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y, device);
+    cuDeviceGetAttribute(&prop->maxThreadsDim[2], CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z, device);
+    cuDeviceGetAttribute(&prop->maxGridSize[0], CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X, device);
+    cuDeviceGetAttribute(&prop->maxGridSize[1], CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Y, device);
+    cuDeviceGetAttribute(&prop->maxGridSize[2], CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z, device);
+    cuDeviceGetAttribute(&prop->maxThreadsPerMultiProcessor, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR, device);
+    cuDeviceGetAttribute(&prop->warpSize, CU_DEVICE_ATTRIBUTE_WARP_SIZE, device);
+    cuDeviceGetAttribute(&prop->clockRate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device);
+    cuDeviceGetAttribute(&prop->memoryClockRate, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device);
+    cuDeviceGetAttribute(&prop->memoryBusWidth, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device);
+    cuDeviceGetAttribute(&prop->l2CacheSize, CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, device);
+    cuDeviceGetAttribute((int*)&prop->sharedMemPerBlock, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, device);
+    cuDeviceGetAttribute(&prop->regsPerBlock, CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, device);
+    cuDeviceGetAttribute(&prop->pciBusID, CU_DEVICE_ATTRIBUTE_PCI_BUS_ID, device);
+    cuDeviceGetAttribute(&prop->pciDeviceID, CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID, device);
+    cuDeviceGetAttribute(&prop->pciDomainID, CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID, device);
+
+    last_error = cudaSuccess;
+    FGPU_LOG("[FakeCUDART] cudaGetDeviceProperties(%d)\n", device);
+    return last_error;
+}
+
 extern "C" {
 
 // ============================================================================
@@ -193,61 +253,18 @@ cudaError_t cudaGetDevice(int *device) {
 }
 
 cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
-    if (!prop) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    return getDeviceProperties(prop, device);
+}
 
-    // Zero out the structure
-    memset(prop, 0, sizeof(cudaDeviceProp));
-
-    // Get device name
-    char name[256];
-    CUresult result = cuDeviceGetName(name, 256, device);
-    if (result != CUDA_SUCCESS) {
-        last_error = convertDriverError(result);
-        return last_error;
-    }
-    strncpy(prop->name, name, 256);
-
-    // Get total memory
-    size_t totalMem;
-    result = cuDeviceTotalMem(&totalMem, device);
-    if (result == CUDA_SUCCESS) {
-        prop->totalGlobalMem = totalMem;
-    }
-
-    // Get compute capability
-    int major, minor;
-    cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device);
-    cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device);
-    prop->major = major;
-    prop->minor = minor;
-
-    // Get other attributes
-    cuDeviceGetAttribute(&prop->multiProcessorCount, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
-    cuDeviceGetAttribute(&prop->maxThreadsPerBlock, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK, device);
-    cuDeviceGetAttribute(&prop->maxThreadsDim[0], CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X, device);
-    cuDeviceGetAttribute(&prop->maxThreadsDim[1], CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y, device);
-    cuDeviceGetAttribute(&prop->maxThreadsDim[2], CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z, device);
-    cuDeviceGetAttribute(&prop->maxGridSize[0], CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X, device);
-    cuDeviceGetAttribute(&prop->maxGridSize[1], CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Y, device);
-    cuDeviceGetAttribute(&prop->maxGridSize[2], CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z, device);
-    cuDeviceGetAttribute(&prop->maxThreadsPerMultiProcessor, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR, device);
-    cuDeviceGetAttribute(&prop->warpSize, CU_DEVICE_ATTRIBUTE_WARP_SIZE, device);
-    cuDeviceGetAttribute(&prop->clockRate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device);
-    cuDeviceGetAttribute(&prop->memoryClockRate, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device);
-    cuDeviceGetAttribute(&prop->memoryBusWidth, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device);
-    cuDeviceGetAttribute(&prop->l2CacheSize, CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, device);
-    cuDeviceGetAttribute((int*)&prop->sharedMemPerBlock, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, device);
-    cuDeviceGetAttribute(&prop->regsPerBlock, CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, device);
-    cuDeviceGetAttribute(&prop->pciBusID, CU_DEVICE_ATTRIBUTE_PCI_BUS_ID, device);
-    cuDeviceGetAttribute(&prop->pciDeviceID, CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID, device);
-    cuDeviceGetAttribute(&prop->pciDomainID, CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID, device);
-
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGetDeviceProperties(%d)\n", device);
-    return last_error;
+cudaError_t cudaGetDeviceProperties_v2(cudaDevicePropV2 *prop, int device) {
+    const cudaError_t result = getDeviceProperties(prop, device);
+    if (result != cudaSuccess) return result;
+    int shared_mem = 0;
+    cuDeviceGetAttribute(&shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device);
+    prop->sharedMemPerBlockOptin = shared_mem;
+    cuDeviceGetAttribute(&prop->hostRegisterSupported, CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED, device);
+    cuDeviceGetAttribute(&prop->memoryPoolsSupported, CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED, device);
+    return cudaSuccess;
 }
 
 cudaError_t cudaDeviceReset(void) {
@@ -1855,11 +1872,6 @@ cudaError_t cudaStreamGetCaptureInfo_v2(cudaStream_t stream, int *captureStatus,
     return last_error;
 }
 
-cudaError_t cudaGetDeviceProperties_v2(cudaDeviceProp *prop, int device) {
-    // Alias to cudaGetDeviceProperties
-    return cudaGetDeviceProperties(prop, device);
-}
-
 // ============================================================================
 // Texture and Surface Object API
 // ============================================================================
@@ -2166,15 +2178,22 @@ cudaError_t cudaProfilerStop(void) {
 // ============================================================================
 
 void __cudaRegisterFunction(void **fatCubinHandle, const char *hostFun, char *deviceFun, const char *deviceName, int thread_limit, void *tid, void *bid, void *bDim, void *gDim, int *wSize) {
-    FGPU_LOG("[FakeCUDART] __cudaRegisterFunction hostFun=%s deviceName=%s\n", hostFun ? hostFun : "NULL", deviceName ? deviceName : "NULL");
+    FGPU_LOG("[FakeCUDART] __cudaRegisterFunction hostFun=%p deviceName=%s\n", hostFun, deviceName ? deviceName : "NULL");
 }
 
 void __cudaRegisterVar(void **fatCubinHandle, char *hostVar, char *deviceAddress, const char *deviceName, int ext, size_t size, int constant, int global) {
     FGPU_LOG("[FakeCUDART] __cudaRegisterVar deviceName=%s size=%zu constant=%d global=%d\n", deviceName ? deviceName : "NULL", size, constant, global);
 }
 
-void __cudaRegisterFatBinary(void *fatCubin) {
+void** __cudaRegisterFatBinary(void *fatCubin) {
     FGPU_LOG("[FakeCUDART] __cudaRegisterFatBinary\n");
+    return new void*(fatCubin);
+}
+
+char __cudaInitModule(void **fatCubinHandle) {
+    // nvcc's registration stub calls this before main; device code remains
+    // subject to the unsupported-kernel policy when it is launched.
+    return 1;
 }
 
 void __cudaRegisterFatBinaryEnd(void **fatCubinHandle) {
@@ -2183,6 +2202,7 @@ void __cudaRegisterFatBinaryEnd(void **fatCubinHandle) {
 
 void __cudaUnregisterFatBinary(void **fatCubinHandle) {
     FGPU_LOG("[FakeCUDART] __cudaUnregisterFatBinary\n");
+    delete fatCubinHandle;
 }
 
 void** __cudaRegisterFatBinaryEnd_v2(void **fatCubinHandle) {
@@ -2190,24 +2210,28 @@ void** __cudaRegisterFatBinaryEnd_v2(void **fatCubinHandle) {
     return fatCubinHandle;
 }
 
-static dim3 saved_gridDim;
-static dim3 saved_blockDim;
-static size_t saved_sharedMem;
-static void *saved_stream;
+struct LaunchConfiguration {
+    dim3 grid;
+    dim3 block;
+    size_t shared_mem;
+    void* stream;
+};
+
+static thread_local std::vector<LaunchConfiguration> launch_configurations;
 
 cudaError_t __cudaPushCallConfiguration(dim3 gridDim, dim3 blockDim, size_t sharedMem, void *stream) {
-    saved_gridDim = gridDim;
-    saved_blockDim = blockDim;
-    saved_sharedMem = sharedMem;
-    saved_stream = stream;
+    launch_configurations.push_back({gridDim, blockDim, sharedMem, stream});
     return cudaSuccess;
 }
 
 cudaError_t __cudaPopCallConfiguration(dim3 *gridDim, dim3 *blockDim, size_t *sharedMem, void **stream) {
-    if (gridDim) *gridDim = saved_gridDim;
-    if (blockDim) *blockDim = saved_blockDim;
-    if (sharedMem) *sharedMem = saved_sharedMem;
-    if (stream) *stream = saved_stream;
+    if (launch_configurations.empty()) return cudaErrorInvalidValue;
+    const LaunchConfiguration config = launch_configurations.back();
+    launch_configurations.pop_back();
+    if (gridDim) *gridDim = config.grid;
+    if (blockDim) *blockDim = config.block;
+    if (sharedMem) *sharedMem = config.shared_mem;
+    if (stream) *stream = config.stream;
     return cudaSuccess;
 }
 

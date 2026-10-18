@@ -57,6 +57,30 @@ run_smoke() {
   FAKEGPU_REPORT_PATH="$BUILD_DIR/collective_executor_report.json" \
     run_fakegpu "$BUILD_DIR" "$collective_probe"
 
+  local cpp_probe="$BUILD_DIR/cuda_cpp_sim"
+  c++ -std=c++17 -pthread tests/native/cuda_cpp_sim.cpp -o "$cpp_probe" \
+    -L "$BUILD_DIR" -lcublas -lcudart -lcuda -lnvidia-ml
+  FAKEGPU_REPORT_PATH="$BUILD_DIR/cuda_cpp_sim_report.json" \
+    run_fakegpu "$BUILD_DIR" --mode simulate --unsupported-api error "$cpp_probe"
+  "$PYTHON_BIN" scripts/validation/check_report.py \
+    --path "$BUILD_DIR/cuda_cpp_sim_report.json" --expect-io --expect-flops
+
+  if command -v nvcc >/dev/null 2>&1; then
+    local kernel_probe="$BUILD_DIR/cuda_kernel_launch"
+    nvcc --cudart shared tests/native/cuda_kernel_launch.cu -o "$kernel_probe"
+    local policy
+    for policy in allow warn error; do
+      FAKEGPU_REPORT_PATH="$BUILD_DIR/cuda_kernel_${policy}_report.json" \
+        run_fakegpu "$BUILD_DIR" --devices a100:1 --mode simulate --unsupported-api "$policy" \
+          "$kernel_probe" "$policy"
+      "$PYTHON_BIN" scripts/validation/check_report.py \
+        --path "$BUILD_DIR/cuda_kernel_${policy}_report.json" \
+        --expect-io --expect-unsupported-api
+    done
+  else
+    echo "nvcc not found; skipped compiled CUDA kernel launch validation."
+  fi
+
   local preload_probe="$BUILD_DIR/verify_preload"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     cc tests/native/verify_preload.c -o "$preload_probe"
