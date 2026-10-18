@@ -29,7 +29,8 @@ Exit codes
 from __future__ import annotations
 
 import importlib
-from argparse import ArgumentParser, _ActionsContainer
+import re
+from argparse import ArgumentParser, ArgumentTypeError, _ActionsContainer
 from dataclasses import dataclass
 from typing import Callable, NoReturn, Sequence
 
@@ -42,6 +43,20 @@ ArgumentTarget = _ActionsContainer
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
 EXIT_USAGE = 2
+
+
+def parse_byte_count(value: str) -> int:
+    """Positive whole bytes, with decimal or binary units through TB/TiB."""
+
+    match = re.fullmatch(r"([0-9]+)([kmgt]i?b|b)?", value.strip(), re.IGNORECASE)
+    if not match:
+        raise ArgumentTypeError("expected a byte count such as 65536, 64KiB, or 4MiB")
+    suffix = (match[2] or "").lower()
+    power = "kmgt".index(suffix[0]) + 1 if len(suffix) > 1 else 0
+    size = int(match[1]) * (1024 if "i" in suffix else 1000) ** power
+    if size <= 0:
+        raise ArgumentTypeError("size must be greater than zero")
+    return size
 
 
 @dataclass(frozen=True, slots=True)

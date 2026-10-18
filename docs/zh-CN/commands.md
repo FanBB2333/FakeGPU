@@ -86,5 +86,5 @@
 | `fakegpu nvitop` | 通过原生 NVML 桥接，用已安装的 nvitop 查看本机 FakeGPU 状态（macOS/Linux） |
 | `fakegpu console` | 打开后台机器的终端控制台：GPU、进程、事件和设置（[说明](console.md)） |
 | `fakegpu daemon` | 在后台运行一台模拟 GPU 机器，FakeCUDA 进程会自动接入；支持启动、停止、状态、事件及配置导入导出（[说明](console.md)） |
-| `fakegpu platform` | 列出主机平台，并显示一个设备布局得到的插槽、PCIe 链路和 NVLink（[说明](platforms.md)） |
+| `fakegpu platform` | 列出主机平台、显示设备链路，并解释拷贝路径、瓶颈和建模耗时（[说明](platforms.md)） |
 | `fakegpu metrics` | 导出有数量上限的 Prometheus/JSON 指标，并提供短期内存历史 |

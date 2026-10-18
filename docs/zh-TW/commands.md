@@ -86,5 +86,5 @@ JSON 路徑的位置都可以使用 `.json.gz`。壓縮輸出採用原子寫入�
 | `fakegpu nvitop` | 透過原生 NVML 橋接，用已安裝的 nvitop 查看本機 FakeGPU 狀態（macOS/Linux） |
 | `fakegpu console` | 開啟背景機器的終端控制台：GPU、程序、事件與設定（[說明](console.md)） |
 | `fakegpu daemon` | 在背景執行一台模擬 GPU 機器，FakeCUDA 程序會自動接入；支援啟動、停止、狀態、事件與設定匯入匯出（[說明](console.md)） |
-| `fakegpu platform` | 列出主機平台，並顯示一個裝置配置得到的插槽、PCIe 鏈路與 NVLink（[說明](platforms.md)） |
+| `fakegpu platform` | 列出主機平台、顯示裝置鏈路，並解釋拷貝路徑、瓶頸與建模耗時（[說明](platforms.md)） |
 | `fakegpu metrics` | 匯出有數量上限的 Prometheus/JSON 指標，並提供短期記憶體歷史 |

@@ -46,11 +46,13 @@ class Route:
     ``source_link`` is the link the sending GPU transmits on and
     ``target_link`` the link the receiving GPU receives on; ``None`` for the
     host side or a copy that uses no link.
+    ``kind`` identifies the routing decision for human-readable explanations.
     """
 
     source_link: str | None
     target_link: str | None
     bandwidth_gbps: float | None
+    kind: str
 
 
 def _host_link(topology: LinkTopology, index: int) -> str | None:
@@ -62,18 +64,21 @@ def route(topology: LinkTopology, source: int | None, target: int | None) -> Rou
     """The route of a copy; ``None`` stands for host memory."""
 
     if source is None and target is None:
-        return Route(None, None, None)
+        return Route(None, None, None, "local")
     if source is None or target is None:
         index = target if source is None else source
         link = _host_link(topology, index)
         bandwidth = topology.host_bandwidth_gbps(index)
-        return Route(None if source is None else link, None if target is None else link, bandwidth)
+        return Route(
+            None if source is None else link, None if target is None else link,
+            bandwidth, "unified" if link is None else "host",
+        )
     if source == target:
-        return Route(None, None, None)
+        return Route(None, None, None, "local")
     if topology.nvlink_links(source, target):
-        return Route("nvlink", "nvlink", topology.peer_bandwidth_gbps(source, target))
+        return Route("nvlink", "nvlink", topology.peer_bandwidth_gbps(source, target), "nvlink")
     if topology.can_access_peer(source, target):
-        return Route("pcie", "pcie", topology.peer_bandwidth_gbps(source, target))
+        return Route("pcie", "pcie", topology.peer_bandwidth_gbps(source, target), "pcie_peer")
     bandwidths = [
         value
         for value in (topology.host_bandwidth_gbps(source), topology.host_bandwidth_gbps(target))
@@ -83,6 +88,7 @@ def route(topology: LinkTopology, source: int | None, target: int | None) -> Rou
         _host_link(topology, source),
         _host_link(topology, target),
         min(bandwidths) if bandwidths else None,
+        "host_staged",
     )
 
 
@@ -90,6 +96,91 @@ def modeled_seconds(nbytes: int, bandwidth_gbps: float | None) -> float:
     if not bandwidth_gbps or bandwidth_gbps <= 0 or nbytes <= 0:
         return 0.0
     return nbytes / (bandwidth_gbps * 1e9)
+
+
+def explain_route(
+    topology: LinkTopology, source: int | None, target: int | None, nbytes: int,
+) -> dict[str, Any]:
+    """Explain one isolated transfer using the same route as the runtime."""
+
+    for index in (source, target):
+        if index is not None and not 0 <= index < len(topology.slots):
+            raise ValueError(f"GPU index {index} is outside the {len(topology.slots)}-GPU layout")
+    if source == target:
+        raise ValueError("source and target must differ; local copies have no modeled interconnect")
+    if nbytes <= 0:
+        raise ValueError("size must be greater than zero")
+
+    selected = route(topology, source, target)
+    links: list[dict[str, Any]] = []
+    notes = [
+        "Time = bytes / (bandwidth in GB/s * 1e9); this is modeled time, not measured execution time.",
+        "One isolated copy: no queueing, launch latency or shared-switch contention is included.",
+    ]
+    relation = topology.relation(source, target) if source is not None and target is not None else None
+    path = ["host" if index is None else f"GPU{index}" for index in (source, target)]
+
+    def add_link(name: str, kind: str, bandwidth: float | None) -> None:
+        links.append({
+            "name": name, "kind": kind, "bandwidth_gbps": bandwidth,
+            "bottleneck": bandwidth is not None and bandwidth == selected.bandwidth_gbps,
+        })
+
+    def host_link(index: int) -> None:
+        slot = topology.slots[index]
+        label = {"pcie": "PCIe", "c2c": "NVLink-C2C", "unified": "shared memory"}[slot.host_link]
+        if slot.host_link == "pcie" and slot.pcie is not None:
+            label += f" {slot.pcie.label}"
+            if slot.host_pcie is not None:
+                label += f", host uplink {slot.host_pcie.label}"
+        add_link(f"GPU{index} {label}", slot.host_link, topology.host_bandwidth_gbps(index))
+
+    if selected.kind == "nvlink":
+        peer = next(peer for peer in topology.peers(source) if peer.index == target)
+        via = {"direct": "NVLink", "nvswitch": "NVSwitch", "direct+nvswitch": "NVLink + NVSwitch"}[peer.via]
+        path.insert(1, via)
+        add_link(f"{via}: {peer.links} NVLinks per GPU to this peer", "nvlink", peer.bandwidth_gbps)
+    elif selected.kind == "pcie_peer":
+        path.insert(1, f"PCIe peer fabric ({relation})")
+        for index in (source, target):
+            if relation == "PIX":
+                link = topology.slots[index].pcie
+                add_link(f"GPU{index} PCIe {link.label}", "pcie", link.bandwidth_gbps)
+            else:
+                host_link(index)
+        notes.append("PCIe peer access is available; the copy does not stage through host memory.")
+    elif selected.kind == "host_staged":
+        path.insert(1, "host memory")
+        host_link(source)
+        host_link(target)
+        notes.append(
+            "Peer access is unavailable; both CPU links are used. The runtime models staging at "
+            "the minimum known link bandwidth, not the sum of two sequential transfer times."
+        )
+    else:
+        index = target if source is None else source
+        host_link(index)
+        if selected.kind == "unified":
+            notes.append("Shared-memory copies use modeled memory bandwidth and consume no interconnect.")
+
+    if selected.bandwidth_gbps is None:
+        notes.append("Bandwidth is unspecified, so transfer time cannot be estimated.")
+    elif any(link["bandwidth_gbps"] is None for link in links):
+        for link in links:
+            link["bottleneck"] = False
+        notes.append(
+            "The runtime estimates time using only known link capacities. "
+            "The path bottleneck is unknown because a link's bandwidth is unspecified."
+        )
+    return {
+        "schema_version": "fakegpu.copy_route.v1",
+        "source": source, "target": target, "bytes": nbytes,
+        "route": selected.kind, "relation": relation, "path": path, "links": links,
+        "bandwidth_gbps": selected.bandwidth_gbps,
+        "modeled_seconds": modeled_seconds(nbytes, selected.bandwidth_gbps)
+        if selected.bandwidth_gbps is not None else None,
+        "notes": notes,
+    }
 
 
 class _LinkSchedule:

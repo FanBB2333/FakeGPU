@@ -37,30 +37,31 @@ def _topology(profiles: list[str], platform: str = "auto", **options) -> LinkTop
 
 def test_routes_follow_nvlink_pcie_peer_access_and_host_links() -> None:
     board = _topology(["a100"] * 8)
-    assert route(board, 0, 1) == Route("nvlink", "nvlink", pytest.approx(12 * 25.0))
-    assert route(board, None, 3) == Route(None, "pcie", pytest.approx(GEN4_X16))
-    assert route(board, 3, None) == Route("pcie", None, pytest.approx(GEN4_X16))
-    assert route(board, 2, 2) == Route(None, None, None)
+    assert route(board, 0, 1) == Route("nvlink", "nvlink", pytest.approx(12 * 25.0), "nvlink")
+    assert route(board, None, 3) == Route(None, "pcie", pytest.approx(GEN4_X16), "host")
+    assert route(board, 3, None) == Route("pcie", None, pytest.approx(GEN4_X16), "host")
+    assert route(board, 2, 2) == Route(None, None, None, "local")
 
     server = _topology(["a100-pcie-80gb"] * 8)
     assert server.pcie_relation(0, 1) == "PIX"
-    assert route(server, 0, 1) == Route("pcie", "pcie", pytest.approx(GEN4_X16))
+    assert route(server, 0, 1) == Route("pcie", "pcie", pytest.approx(GEN4_X16), "pcie_peer")
     # Across sockets there is no peer access: the copy is staged through host
     # memory over both CPU links.
     assert not server.can_access_peer(0, 7)
-    assert route(server, 0, 7) == Route("pcie", "pcie", pytest.approx(GEN4_X16))
+    assert route(server, 0, 7) == Route("pcie", "pcie", pytest.approx(GEN4_X16), "host_staged")
 
     # NVIDIA disables PCIe peer access on the RTX 4090; x8/x8 halves the link.
     desktop = _topology(["rtx4090"] * 2)
-    assert route(desktop, 0, 1) == Route("pcie", "pcie", 15.754)
+    assert route(desktop, 0, 1) == Route("pcie", "pcie", 15.754, "host_staged")
 
     station = _topology(["gb300-dgx-station", "rtx-pro-6000-blackwell"])
-    assert route(station, None, 0) == Route(None, "c2c", 450.0)
-    assert route(station, 0, 1) == Route("c2c", "pcie", pytest.approx(GEN5_X16))
+    assert route(station, None, 0) == Route(None, "c2c", 450.0, "host")
+    assert route(station, 0, 1) == Route("c2c", "pcie", pytest.approx(GEN5_X16), "host_staged")
 
     spark = _topology(["gb10"])
     unified = route(spark, None, 0)
     assert (unified.source_link, unified.target_link) == (None, None)
+    assert unified.kind == "unified"
     assert unified.bandwidth_gbps and unified.bandwidth_gbps > 0
 
 

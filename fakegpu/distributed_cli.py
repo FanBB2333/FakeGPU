@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import secrets
 import socket
 import subprocess
@@ -19,37 +18,14 @@ from .platforms import PlatformError
 from ._cli import (
     add_json_path_argument,
     command_prog,
+    parse_byte_count,
     usage_error,
 )
 from .structured_io import emit_json
 
 
-_SIZE_PATTERN = re.compile(r"^([0-9]+)([kmgt]?i?b)?$", re.IGNORECASE)
-_SIZE_MULTIPLIERS = {
-    "": 1,
-    "b": 1,
-    "kb": 1_000,
-    "mb": 1_000_000,
-    "gb": 1_000_000_000,
-    "tb": 1_000_000_000_000,
-    "kib": 1 << 10,
-    "mib": 1 << 20,
-    "gib": 1 << 30,
-    "tib": 1 << 40,
-}
-
-
 def parse_size(value: str) -> int:
-    match = _SIZE_PATTERN.fullmatch(value.strip())
-    if not match:
-        raise argparse.ArgumentTypeError(
-            "expected a byte count such as 65536, 64KiB, or 4MiB"
-        )
-    amount = int(match.group(1))
-    suffix = (match.group(2) or "").lower()
-    size = amount * _SIZE_MULTIPLIERS[suffix]
-    if size <= 0:
-        raise argparse.ArgumentTypeError("size must be greater than zero")
+    size = parse_byte_count(value)
     if size % 4 != 0:
         raise argparse.ArgumentTypeError(
             "size must be a multiple of 4 for the float32 benchmark"
