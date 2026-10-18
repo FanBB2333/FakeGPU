@@ -141,6 +141,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     events.add_argument("--json", action="store_true", help="One JSON object per line.")
     config = actions.add_parser("config", help="Show or change the machine settings.")
     add_machine_options(config)
+    config.add_argument(
+        "--from", dest="from_file", type=Path, metavar="FILE",
+        help="Import settings from a JSON object; explicit options override file values.",
+    )
     config.add_argument("--json", action="store_true", help="Print settings as JSON.")
     run = actions.add_parser("run", help="Run the daemon in the foreground.")
     run.add_argument("--machine-root", type=Path, help=argparse.SUPPRESS)
@@ -170,7 +174,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("FakeGPU machine stopped." if stop_daemon(paths) else "FakeGPU machine is not running.")
             return EXIT_SUCCESS
         if args.action == "config":
-            changes = machine_changes(args)
+            changes = {}
+            if args.from_file is not None:
+                changes = json.loads(args.from_file.expanduser().read_text(encoding="utf-8"))
+                if not isinstance(changes, dict):
+                    raise ValueError("machine configuration must be a JSON object")
+            changes.update(machine_changes(args))
             if daemon_pid(paths) is not None:
                 settings = client.call("config.update", changes=changes) if changes else client.call("config.get")
             else:
@@ -208,7 +217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except MachineError as exc:
         print(f"fakegpu daemon: {exc}", file=sys.stderr)
         return EXIT_FAILURE
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         print(f"fakegpu daemon: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except KeyboardInterrupt:

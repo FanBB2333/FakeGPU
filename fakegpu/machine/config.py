@@ -78,6 +78,8 @@ class MachinePaths:
 def parse_devices(spec: str) -> list[str]:
     """Expand ``"a100:2,h100:2"`` into one catalog profile ID per device."""
 
+    if not isinstance(spec, str):
+        raise ValueError("devices must be a string, e.g. a100:8")
     profiles: list[str] = []
     for item in spec.split(","):
         name, _, count = item.strip().partition(":")
@@ -135,10 +137,12 @@ class MachineConfig:
         self.resolved_platform()
         if self.telemetry not in TELEMETRY_MODES:
             raise ValueError(f"telemetry must be one of {', '.join(TELEMETRY_MODES)}")
-        if not 0 < self.stale_after_seconds <= 3600:
-            raise ValueError("stale_after_seconds must be in (0, 3600]")
-        if not 0 < self.memory_warning_percent <= 100:
-            raise ValueError("memory_warning_percent must be in (0, 100]")
+        if not isinstance(self.background, bool):
+            raise ValueError("background must be a boolean")
+        for name, maximum in (("stale_after_seconds", 3600), ("memory_warning_percent", 100)):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= maximum:
+                raise ValueError(f"{name} must be a number in (0, {maximum}]")
 
     @property
     def profiles(self) -> list[str]:

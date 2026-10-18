@@ -113,9 +113,24 @@ Machine 标签页以文本形式编辑同一个布局。新进程使用新布局
 fakegpu daemon start [--devices a100:8] [--telemetry reference] [--background on]
 fakegpu daemon status [--json]
 fakegpu daemon events [-n 50] [-f] [--json]
-fakegpu daemon config [--devices a100:4] [--platform auto] [--pcie-gen 0] [--nvlink-bridges 0-1] [--json]
+fakegpu daemon config [--from machine.json] [--devices a100:4] [--platform auto] [--pcie-gen 0] [--nvlink-bridges 0-1] [--json]
 fakegpu daemon stop
 ```
+
+可以在 Linux 或 macOS 上导出、导入同一份模拟机器配置：
+
+```bash
+fakegpu daemon config --json > machine.json
+fakegpu daemon config --from machine.json
+fakegpu daemon config --from machine.json --telemetry none
+```
+
+输入必须是 JSON 对象，字段名与导出结果一致，也可以只包含需要修改的设置。
+未提供的字段保留当前值，首次使用时采用默认值；显式命令行参数优先于文件中的值。
+无效输入不会修改配置。守护进程运行时会立即更新配置，新工作负载采用新配置，
+正在运行的工作负载保留原来的设备；守护进程停止时则保存配置，供下次启动使用。
+
+导出文件只包含模拟机器设置，不含宿主路径、进程 ID 或机器身份，可用于分享和复现配置。
 
 `fakegpu daemon run` 在前台运行机器。机器文件位于 `~/.fakegpu/machine`
 （`config.json`、`events.jsonl`、`daemon.log` 和 `state/` 目录）；设置 `FAKEGPU_HOME` 可以改变位置。

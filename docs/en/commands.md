@@ -86,6 +86,6 @@ output is written atomically and reproducibly.
 | `fakegpu nvidia-smi` | Inspect devices, processes, modeled topology/MIG, health status, and reliability events |
 | `fakegpu nvitop` | Run installed nvitop against live local FakeGPU state through bundled NVML (macOS/Linux) |
 | `fakegpu console` | Open the terminal console for the background machine: GPUs, processes, events, settings ([guide](console.md)) |
-| `fakegpu daemon` | Run a simulated GPU machine in the background that FakeCUDA processes join; start, stop, status, events, config |
+| `fakegpu daemon` | Run a simulated GPU machine in the background that FakeCUDA processes join; start, stop, status, events, config import/export ([guide](console.md)) |
 | `fakegpu platform` | List host platforms and show the slots, PCIe links and NVLinks a device layout gets ([guide](platforms.md)) |
 | `fakegpu metrics` | Export bounded Prometheus/JSON metrics and serve short in-memory history |
