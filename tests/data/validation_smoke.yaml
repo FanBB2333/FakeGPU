@@ -85,7 +85,7 @@ cases:
         - '"tracking.dispatch": true'
         - '"catalog.profiles":'
         - 'catalog-count-ok'
-        - '"catalog.native_apis": 104'
+        - '"catalog.native_apis": 106'
         - '"dispatch.calls": 3'
         - '"publisher.successful_writes": 1'
         - '"status": "running"'

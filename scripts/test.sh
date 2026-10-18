@@ -65,20 +65,30 @@ run_smoke() {
   "$PYTHON_BIN" scripts/validation/check_report.py \
     --path "$BUILD_DIR/cuda_cpp_sim_report.json" --expect-io --expect-flops
 
-  if command -v nvcc >/dev/null 2>&1; then
+  local ptx_enabled=false
+  if grep -q '^ENABLE_FAKEGPU_PTX_EXECUTION:BOOL=ON$' "$BUILD_DIR/CMakeCache.txt"; then
+    ptx_enabled=true
+    "$PYTHON_BIN" tests/native/ptx_execution.py --build-dir "$BUILD_DIR"
+    "$PYTHON_BIN" tests/native/kernel_images.py --build-dir "$BUILD_DIR"
+  else
+    "$PYTHON_BIN" tests/native/ptx_execution.py --build-dir "$BUILD_DIR" --expect-unavailable
+  fi
+
+  if "$ptx_enabled" && command -v nvcc >/dev/null 2>&1; then
     local kernel_probe="$BUILD_DIR/cuda_kernel_launch"
-    nvcc --cudart shared tests/native/cuda_kernel_launch.cu -o "$kernel_probe"
+    nvcc -arch=sm_80 --cudart shared -Xcompiler -pthread \
+      tests/native/cuda_kernel_launch.cu -o "$kernel_probe"
     local policy
     for policy in allow warn error; do
       FAKEGPU_REPORT_PATH="$BUILD_DIR/cuda_kernel_${policy}_report.json" \
-        run_fakegpu "$BUILD_DIR" --devices a100:1 --mode simulate --unsupported-api "$policy" \
-          "$kernel_probe" "$policy"
+        run_fakegpu "$BUILD_DIR" --devices a100:2 --mode simulate --unsupported-api "$policy" \
+          "$kernel_probe"
       "$PYTHON_BIN" scripts/validation/check_report.py \
         --path "$BUILD_DIR/cuda_kernel_${policy}_report.json" \
-        --expect-io --expect-unsupported-api
+        --expect-io
     done
   else
-    echo "nvcc not found; skipped compiled CUDA kernel launch validation."
+    echo "nvcc or PTX execution unavailable; skipped compiled CUDA kernel validation."
   fi
 
   local preload_probe="$BUILD_DIR/verify_preload"
@@ -137,8 +147,7 @@ run_cpu() {
     --path "$CPU_BUILD_DIR/fake_gpu_report.json" \
     --smi-state "$smi_state" \
     --expect-io \
-    --expect-flops \
-    --expect-unsupported-api
+    --expect-flops
 
   FAKEGPU_REPORT_PATH="$CPU_BUILD_DIR/research_numerics_native.json" \
     FAKEGPU_UNSUPPORTED_API=error FAKEGPU_CPU_GEMM_MODE=naive \

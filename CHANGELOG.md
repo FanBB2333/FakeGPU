@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Execute custom PTX kernels on CPU through Linux CUDA Driver and Runtime
+  interception, using a pinned PantheonSim interpreter. Module globals,
+  constants, device functions and compressed `nvcc` fatbins are supported.
+- Reject unsupported kernel launches under every compatibility policy instead
+  of returning success without computing results. SASS-only binaries and
+  macOS PTX execution remain unsupported.
+- Validate numerical kernel results through direct PTX and compiled CUDA C++,
+  including shared memory, barriers and atomics, in native Linux CI.
+
 ## v1.6.0 - 2026-10-17
 
 ### Added

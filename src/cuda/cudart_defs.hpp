@@ -17,9 +17,17 @@ typedef enum cudaError_enum {
     cudaErrorInitializationError = 3,
     cudaErrorCudartUnloading = 4,
     cudaErrorProfilerDisabled = 5,
+    cudaErrorInvalidSymbol = 13,
     cudaErrorNotReady = 600,
     cudaErrorNotSupported = 801,
     cudaErrorInvalidDevice = 101,
+    cudaErrorInvalidDeviceFunction = 98,
+    cudaErrorInvalidKernelImage = 200,
+    cudaErrorInvalidPtx = 218,
+    cudaErrorInvalidResourceHandle = 400,
+    cudaErrorIllegalAddress = 700,
+    cudaErrorLaunchOutOfResources = 701,
+    cudaErrorLaunchFailure = 719,
     cudaErrorPeerAccessUnsupported = 217,
     cudaErrorInvalidMemcpyDirection = 21,
     cudaErrorUnknown = 999
@@ -337,6 +345,8 @@ cudaError_t cudaMemcpy3D(const void *p);
 cudaError_t cudaMemcpy3DAsync(const void *p, cudaStream_t stream);
 cudaError_t cudaMemcpyToSymbol(const void *symbol, const void *src, size_t count, size_t offset, cudaMemcpyKind kind);
 cudaError_t cudaMemcpyFromSymbol(void *dst, const void *symbol, size_t count, size_t offset, cudaMemcpyKind kind);
+cudaError_t cudaGetSymbolAddress(void** pointer, const void* symbol);
+cudaError_t cudaGetSymbolSize(size_t* size, const void* symbol);
 cudaError_t cudaMemAdvise(const void *devPtr, size_t count, int advice, int device);
 cudaError_t cudaMemPrefetchAsync(const void *devPtr, size_t count, int dstDevice, cudaStream_t stream);
 cudaError_t cudaMemRangeGetAttribute(void *data, size_t dataSize, int attribute, const void *devPtr, size_t count);

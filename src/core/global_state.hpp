@@ -97,6 +97,7 @@ public:
     bool release_host_allocation(void* ptr, size_t& size, int& device);
     bool get_allocation_info(void* ptr, size_t& size, int& device) const;
     bool get_allocation_info_ex(void* ptr, size_t& size, int& device, AllocationKind& kind) const;
+    std::vector<std::pair<void*, size_t>> snapshot_allocations() const;
 
     int resolve_device_for_ptr(const void* ptr, int fallback_device) const;
 
@@ -202,7 +203,7 @@ private:
     mutable std::mutex smi_mutex;
     void* native_smi_publisher = nullptr;
 
-    int current_device = 0;
+    static thread_local int current_device;
 
     struct AllocationRecord {
         size_t size = 0;

@@ -136,7 +136,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-24.04
           - macos-latest
     runs-on: ${{ matrix.os }}
     steps:
@@ -151,6 +151,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake
+
+      - name: Install CUDA compiler for kernel validation
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSLo /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i /tmp/cuda-keyring.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cuda-nvcc-12-8 cuda-cudart-dev-12-8
+          echo /usr/local/cuda-12.8/bin >> "$GITHUB_PATH"
 
       - name: Native smoke test
         run: scripts/test.sh smoke
@@ -178,9 +187,12 @@ jobs:
             --expected-profile-count "$profile_count"
 
       - name: CPU simulation test
+        env:
+          CPU_BUILD_DIR: build
         run: scripts/test.sh cpu
 
       - name: cuBLAS policy without CPU execution
         run: |
-          scripts/build.sh --build-dir build-no-cpu --no-cpu-simulation
+          scripts/build.sh --build-dir build-no-cpu --no-cpu-simulation -- -DENABLE_FAKEGPU_PTX_EXECUTION=OFF
           python tests/native/cublas_policy.py --build-dir build-no-cpu --no-cpu-simulation
+          python tests/native/ptx_execution.py --build-dir build-no-cpu --expect-unavailable

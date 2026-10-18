@@ -10,6 +10,24 @@ python3 -m pip install '.[torch,dev,monitoring]'
 export PYTHONPATH="$PWD"
 ```
 
+## Native PTX backend
+
+Linux builds require a C++20 compiler and standard library with constexpr
+`std::variant` (for example GCC 12+) for the PTX execution core. CMake downloads
+PantheonSim at a fixed commit and verifies its archive SHA-256; CUDA and LLVM
+are not required to build or run the interpreter. The Apache-2.0 dependency is
+linked into the existing CUDA libraries. Its license accompanies distributions.
+For an offline build, supply an extracted copy of the pinned source:
+
+```bash
+scripts/build.sh -- -DFETCHCONTENT_SOURCE_DIR_PANTHEONSIM=/path/to/pantheonsim
+```
+
+`-DENABLE_FAKEGPU_PTX_EXECUTION=OFF` disables this dependency and makes PTX
+loading return unsupported. macOS currently uses that configuration. Kernel
+execution tests require Linux; the compiled `.cu` tests additionally require
+`nvcc`, while direct PTX tests do not.
+
 ## macOS Conda environment
 
 Install the Xcode Command Line Tools (`xcode-select --install`) if needed, then

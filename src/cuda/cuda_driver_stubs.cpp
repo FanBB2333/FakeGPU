@@ -1,5 +1,7 @@
 #include "cuda_driver_defs.hpp"
 #include "cuda_driver_passthrough.hpp"
+#include "kernel_executor.hpp"
+#include "kernel_image.hpp"
 #include "../core/backend_config.hpp"
 #include "../core/version.hpp"
 #include "../core/global_state.hpp"
@@ -10,16 +12,32 @@
 #include <atomic>
 #include <cstring>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 using namespace fake_gpu;
 
 // Track current context (simplified - just track device)
-static int current_context_device = 0;
+static thread_local int current_context_device = 0;
+static thread_local std::vector<int> context_stack;
 static bool driver_initialized = false;
 
 namespace {
+CUresult load_kernel_image(CUmodule* module, const void* image, size_t size = 0) {
+    if (!module) return CUDA_ERROR_INVALID_VALUE;
+    *module = nullptr;
+    std::string ptx;
+    const int extracted = kernel::extract_ptx(image, ptx, size);
+    if (extracted != CUDA_SUCCESS) return static_cast<CUresult>(extracted);
+    void* loaded = nullptr;
+    const int result = kernel::load(ptx, &loaded);
+    if (result == CUDA_SUCCESS) *module = static_cast<CUmodule>(loaded);
+    return static_cast<CUresult>(result);
+}
+
 uint64_t saturating_add_u64(uint64_t a, uint64_t b) {
     const uint64_t max_value = std::numeric_limits<uint64_t>::max();
     if (a >= max_value - b) return max_value;
@@ -1661,8 +1679,7 @@ CUresult cuDevicePrimaryCtxReset(CUdevice dev) {
         return CUDA_ERROR_INVALID_DEVICE;
     }
 
-    FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxReset for device %d\n", dev);
-    return CUDA_SUCCESS;
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 // Context stack management
@@ -1677,18 +1694,24 @@ CUresult cuCtxPushCurrent(CUcontext ctx) {
         }();
         if (!real_fn) return CUDA_ERROR_NOT_INITIALIZED;
         CUresult result = real_fn(ctx);
-        if (result == CUDA_SUCCESS) {
+        if (result == CUDA_SUCCESS && config.virtualize_device_info()) {
             const int mapped = lookup_context_mapping(ctx);
-            if (mapped >= 0) current_context_device = mapped;
+            if (mapped >= 0) {
+                current_context_device = mapped;
+                GlobalState::instance().set_current_device(mapped);
+            }
         }
         return result;
     }
 
-    if (ctx == nullptr) {
-        current_context_device = 0;
-    } else {
-        current_context_device = (int)(uintptr_t)ctx - 1;
-    }
+    auto& state = GlobalState::instance();
+    state.initialize();
+    const auto handle = reinterpret_cast<uintptr_t>(ctx);
+    if (!handle || handle > static_cast<uintptr_t>(state.get_device_count()))
+        return CUDA_ERROR_INVALID_HANDLE;
+    context_stack.push_back(current_context_device);
+    current_context_device = static_cast<int>(handle - 1);
+    state.set_current_device(current_context_device);
     FGPU_LOG("[FakeCUDA-Driver] cuCtxPushCurrent(%p) -> device %d\n", ctx, current_context_device);
     return CUDA_SUCCESS;
 }
@@ -1705,10 +1728,25 @@ CUresult cuCtxPopCurrent(CUcontext *pctx) {
             return reinterpret_cast<fn_t>(fn);
         }();
         if (!real_fn) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_fn(pctx);
+        const CUresult result = real_fn(pctx);
+        if (result == CUDA_SUCCESS && config.virtualize_device_info()) {
+            CUcontext current = nullptr;
+            if (CudaDriverPassthrough::instance().cuCtxGetCurrent(&current) == CUDA_SUCCESS) {
+                const int mapped = lookup_context_mapping(current);
+                if (mapped >= 0) {
+                    current_context_device = mapped;
+                    GlobalState::instance().set_current_device(mapped);
+                }
+            }
+        }
+        return result;
     }
 
+    if (context_stack.empty()) return CUDA_ERROR_INVALID_CONTEXT;
     *pctx = (CUcontext)(uintptr_t)(current_context_device + 1);
+    current_context_device = context_stack.back();
+    context_stack.pop_back();
+    GlobalState::instance().set_current_device(current_context_device);
     FGPU_LOG("[FakeCUDA-Driver] cuCtxPopCurrent returning context %p\n", *pctx);
     return CUDA_SUCCESS;
 }
@@ -1740,6 +1778,33 @@ CUresult cuGetErrorString(CUresult error, const char **pStr) {
                 break;
             case CUDA_ERROR_PEER_ACCESS_UNSUPPORTED:
                 *pStr = "CUDA_ERROR_PEER_ACCESS_UNSUPPORTED";
+                break;
+            case CUDA_ERROR_INVALID_IMAGE:
+                *pStr = "CUDA_ERROR_INVALID_IMAGE";
+                break;
+            case CUDA_ERROR_INVALID_CONTEXT:
+                *pStr = "CUDA_ERROR_INVALID_CONTEXT";
+                break;
+            case CUDA_ERROR_INVALID_PTX:
+                *pStr = "CUDA_ERROR_INVALID_PTX";
+                break;
+            case CUDA_ERROR_FILE_NOT_FOUND:
+                *pStr = "CUDA_ERROR_FILE_NOT_FOUND";
+                break;
+            case CUDA_ERROR_INVALID_HANDLE:
+                *pStr = "CUDA_ERROR_INVALID_HANDLE";
+                break;
+            case CUDA_ERROR_NOT_FOUND:
+                *pStr = "CUDA_ERROR_NOT_FOUND";
+                break;
+            case CUDA_ERROR_ILLEGAL_ADDRESS:
+                *pStr = "CUDA_ERROR_ILLEGAL_ADDRESS";
+                break;
+            case CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES:
+                *pStr = "CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES";
+                break;
+            case CUDA_ERROR_LAUNCH_FAILED:
+                *pStr = "CUDA_ERROR_LAUNCH_FAILED";
                 break;
             default:
                 *pStr = "CUDA_ERROR_UNKNOWN";
@@ -2252,16 +2317,17 @@ CUresult cuDeviceGetByPCIBusId(CUdevice *dev, const char *pciBusId) {
 }
 
 CUresult cuModuleLoad(CUmodule *module, const char *fname) {
-    if (!module) return CUDA_ERROR_INVALID_VALUE;
+    if (!module || !fname) return CUDA_ERROR_INVALID_VALUE;
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuModuleLoad(module, fname);
     }
 
-    *module = (CUmodule)(uintptr_t)1;
-    FGPU_LOG("[FakeCUDA-Driver] cuModuleLoad (fake)\n");
-    return CUDA_SUCCESS;
+    std::ifstream file(fname, std::ios::binary);
+    if (!file) return CUDA_ERROR_FILE_NOT_FOUND;
+    const std::string image((std::istreambuf_iterator<char>(file)), {});
+    return load_kernel_image(module, image.c_str(), image.size());
 }
 
 CUresult cuModuleLoadData(CUmodule *module, const void *image) {
@@ -2272,8 +2338,7 @@ CUresult cuModuleLoadData(CUmodule *module, const void *image) {
         return CudaDriverPassthrough::instance().cuModuleLoadData(module, image);
     }
 
-    *module = (CUmodule)(uintptr_t)1;
-    return CUDA_SUCCESS;
+    return load_kernel_image(module, image);
 }
 
 CUresult cuModuleLoadDataEx(CUmodule *module, const void *image, unsigned int numOptions, void *options, void **optionValues) {
@@ -2291,8 +2356,7 @@ CUresult cuModuleLoadDataEx(CUmodule *module, const void *image, unsigned int nu
         return CudaDriverPassthrough::instance().cuModuleLoadData(module, image);
     }
 
-    *module = (CUmodule)(uintptr_t)1;
-    return CUDA_SUCCESS;
+    return load_kernel_image(module, image);
 }
 
 CUresult cuModuleLoadFatBinary(CUmodule *module, const void *fatCubin) {
@@ -2310,8 +2374,7 @@ CUresult cuModuleLoadFatBinary(CUmodule *module, const void *fatCubin) {
         return CudaDriverPassthrough::instance().cuModuleLoadData(module, fatCubin);
     }
 
-    *module = (CUmodule)(uintptr_t)1;
-    return CUDA_SUCCESS;
+    return load_kernel_image(module, fatCubin);
 }
 
 CUresult cuModuleUnload(CUmodule hmod) {
@@ -2319,7 +2382,7 @@ CUresult cuModuleUnload(CUmodule hmod) {
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         return CudaDriverPassthrough::instance().cuModuleUnload(hmod);
     }
-    return CUDA_SUCCESS;
+    return static_cast<CUresult>(kernel::unload(hmod));
 }
 
 CUresult cuModuleGetFunction(CUfunction *hfunc, CUmodule hmod, const char *name) {
@@ -2330,8 +2393,10 @@ CUresult cuModuleGetFunction(CUfunction *hfunc, CUmodule hmod, const char *name)
         return CudaDriverPassthrough::instance().cuModuleGetFunction(hfunc, hmod, name);
     }
 
-    *hfunc = (CUfunction)(uintptr_t)1;
-    return CUDA_SUCCESS;
+    void* function = nullptr;
+    const int result = kernel::function(hmod, name, &function);
+    *hfunc = static_cast<CUfunction>(function);
+    return static_cast<CUresult>(result);
 }
 
 CUresult cuModuleGetGlobal(CUdeviceptr *dptr, size_t *bytes, CUmodule hmod, const char *name) {
@@ -2348,9 +2413,10 @@ CUresult cuModuleGetGlobal(CUdeviceptr *dptr, size_t *bytes, CUmodule hmod, cons
         }
         return CUDA_ERROR_NOT_INITIALIZED;
     }
-    if (dptr) *dptr = 0;
-    if (bytes) *bytes = 0;
-    return CUDA_SUCCESS;
+    void* pointer = nullptr;
+    const int result = kernel::global(hmod, name, &pointer, bytes);
+    if (dptr) *dptr = reinterpret_cast<CUdeviceptr>(pointer);
+    return static_cast<CUresult>(result);
 }
 
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ,
@@ -2361,14 +2427,17 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
         return CudaDriverPassthrough::instance().cuLaunchKernel(
             f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
     }
-    FGPU_LOG("[FakeCUDA-Driver] cuLaunchKernel (no-op)\n");
+    if (!fake_gpu::cuda::is_stream_handle_live(hStream)) return CUDA_ERROR_INVALID_VALUE;
     GlobalState& state = GlobalState::instance();
     state.initialize();
-    state.record_kernel_launch("cuLaunchKernel");
-    if (record_unsupported_api(state, "cuLaunchKernel")) {
-        return CUDA_ERROR_NOT_SUPPORTED;
-    }
-    return CUDA_SUCCESS;
+    const std::string name = kernel::function_name(f);
+    if (name.empty()) return CUDA_ERROR_INVALID_HANDLE;
+    state.record_kernel_launch(name);
+    const unsigned grid[] = {gridDimX, gridDimY, gridDimZ};
+    const unsigned block[] = {blockDimX, blockDimY, blockDimZ};
+    const int result = kernel::launch(f, grid, block, sharedMemBytes, kernelParams, extra);
+    if (result != CUDA_SUCCESS) return static_cast<CUresult>(result);
+    return fake_gpu::cuda::submit_stream_operation(hStream);
 }
 
 CUresult cuFuncGetAttribute(int *pi, int attrib, CUfunction hfunc) {
@@ -3711,7 +3780,9 @@ CUresult cuKernelGetFunction(CUfunction *pFunc, void *kernel) {
             CudaDriverPassthrough::instance().getRealFunction("cuKernelGetFunction"));
         if (real_fn) return real_fn(pFunc, kernel);
     }
-    if (pFunc) *pFunc = reinterpret_cast<CUfunction>(uintptr_t{1});
+    if (!pFunc) return CUDA_ERROR_INVALID_VALUE;
+    if (fake_gpu::kernel::function_name(kernel).empty()) return CUDA_ERROR_INVALID_HANDLE;
+    *pFunc = static_cast<CUfunction>(kernel);
     return CUDA_SUCCESS;
 }
 
@@ -3756,8 +3827,7 @@ CUresult cuLibraryGetKernel(void **pKernel, void *library, const char *name) {
             CudaDriverPassthrough::instance().getRealFunction("cuLibraryGetKernel"));
         if (real_fn) return real_fn(pKernel, library, name);
     }
-    if (pKernel) *pKernel = reinterpret_cast<void*>(uintptr_t{1});
-    return CUDA_SUCCESS;
+    return static_cast<CUresult>(kernel::function(library, name, pKernel));
 }
 
 CUresult cuLibraryLoadData(
@@ -3786,8 +3856,23 @@ CUresult cuLibraryLoadData(
                 numLibraryOptions);
         }
     }
-    if (library) *library = reinterpret_cast<void*>(uintptr_t{1});
-    return CUDA_SUCCESS;
+    if (!library) return CUDA_ERROR_INVALID_VALUE;
+    CUmodule module = nullptr;
+    const CUresult result = load_kernel_image(&module, code);
+    *library = module;
+    return result;
+}
+
+CUresult cuLibraryUnload(void* library) {
+    const BackendConfig& config = BackendConfig::instance();
+    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+        using fn_t = CUresult (*)(void*);
+        auto real_fn = reinterpret_cast<fn_t>(
+            CudaDriverPassthrough::instance().getRealFunction("cuLibraryUnload"));
+        if (real_fn) return real_fn(library);
+        return CUDA_ERROR_NOT_SUPPORTED;
+    }
+    return static_cast<CUresult>(kernel::unload(library));
 }
 
 CUresult cuLaunchKernelEx(const void *config, CUfunction f, void **kernelParams, void **extra) {
@@ -3798,13 +3883,20 @@ CUresult cuLaunchKernelEx(const void *config, CUfunction f, void **kernelParams,
             CudaDriverPassthrough::instance().getRealFunction("cuLaunchKernelEx"));
         if (real_fn) return real_fn(config, f, kernelParams, extra);
     }
-    GlobalState& state = GlobalState::instance();
-    state.initialize();
-    state.record_kernel_launch("cuLaunchKernelEx");
-    if (record_unsupported_api(state, "cuLaunchKernelEx")) {
-        return CUDA_ERROR_NOT_SUPPORTED;
-    }
-    return CUDA_SUCCESS;
+    struct LaunchConfig {
+        unsigned grid[3];
+        unsigned block[3];
+        unsigned shared_bytes;
+        CUstream stream;
+        const void* attributes;
+        unsigned num_attributes;
+    };
+    if (!config) return CUDA_ERROR_INVALID_VALUE;
+    const auto& launch = *static_cast<const LaunchConfig*>(config);
+    if (launch.num_attributes) return CUDA_ERROR_NOT_SUPPORTED;
+    return cuLaunchKernel(f, launch.grid[0], launch.grid[1], launch.grid[2],
+                          launch.block[0], launch.block[1], launch.block[2],
+                          launch.shared_bytes, launch.stream, kernelParams, extra);
 }
 
 CUresult cuOccupancyMaxActiveBlocksPerMultiprocessor(
@@ -4047,10 +4139,8 @@ CUresult cuGraphLaunch(void *graphExec, CUstream stream) {
     }
     GlobalState& state = GlobalState::instance();
     state.initialize();
-    if (record_unsupported_api(state, "cuGraphLaunch")) {
-        return CUDA_ERROR_NOT_SUPPORTED;
-    }
-    return CUDA_SUCCESS;
+    state.record_unsupported_api(state.get_current_device(), "cuGraphLaunch", "not_executed", "error");
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 CUresult cuGraphDestroy(void *graph) {
@@ -4286,6 +4376,7 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     MAP_FUNC(cuKernelSetAttribute)
     MAP_FUNC(cuLibraryGetKernel)
     MAP_FUNC(cuLibraryLoadData)
+    MAP_FUNC(cuLibraryUnload)
     MAP_FUNC(cuLinkCreate)
     MAP_FUNC(cuLinkCreate_v2)
     MAP_FUNC(cuLinkAddData)

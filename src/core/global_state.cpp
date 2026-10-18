@@ -144,6 +144,8 @@ extern "C" GlobalState* fakegpu_process_global_state_v1() {
     return &GlobalState::instance();
 }
 
+thread_local int GlobalState::current_device = 0;
+
 GlobalState::GlobalState() {
 }
 
@@ -307,6 +309,16 @@ bool GlobalState::get_allocation_info_ex(void* ptr, size_t& size, int& device, A
     device = it->second.device;
     kind = it->second.kind;
     return true;
+}
+
+std::vector<std::pair<void*, size_t>> GlobalState::snapshot_allocations() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    std::vector<std::pair<void*, size_t>> result;
+    result.reserve(allocations.size());
+    for (const auto& [pointer, allocation] : allocations) {
+        result.emplace_back(pointer, allocation.size);
+    }
+    return result;
 }
 
 void GlobalState::record_memcpy_h2d(const void* dst_device_ptr, size_t bytes) {

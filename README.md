@@ -253,8 +253,9 @@ Build options, test suites, and the project layout are described in
 
 ## Limitations
 
-- Native simulation does not run arbitrary CUDA kernels, and FakeCUDA does not
-  cover binary CUDA extensions.
+- Linux native simulation executes supported PTX kernels on CPU; SASS-only
+  binaries and unsupported instructions fail explicitly. FakeCUDA does not
+  support binary CUDA extensions. See [kernel support](docs/en/frameworks.md).
 - Memory estimates can miss backend-private allocations, custom operators, and
   allocator behavior. Calibrate on real hardware before relying on them.
 - Timing results from the simulator are not NCCL, NVLink, or kernel

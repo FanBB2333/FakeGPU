@@ -3,7 +3,8 @@
 [文档索引](README.md) · [English](../en/limitations.md) ·
 [繁體中文](../zh-TW/limitations.md)
 
-- 原生模拟不能执行任意 CUDA kernel。
+- Linux 原生模拟可在 CPU 上执行受支持的 PTX 指令；纯 SASS cubin、不支持的指令和
+  启动特性会明确失败。macOS 尚不执行 PTX。详见[框架兼容性](frameworks.md)。
 - FakeCUDA 覆盖项目维护的 Python 和 PyTorch 行为。二进制 CUDA 扩展不在覆盖
   范围内。
 - 静态分析无法解析所有动态 import、生成式 kernel、运行时 shape 或依赖数据的

@@ -137,6 +137,7 @@ add_subdirectory(src/cuda)
 add_subdirectory(src/monitor)
 add_subdirectory(src/distributed)
 add_subdirectory(src/nccl)
+include(cmake/PtxBackend.cmake)
 
 # Main Shared Library for NVML
 # We link the OBJECT libraries from subdirectories to create one single shared library
@@ -158,6 +159,7 @@ add_library(fake_cuda SHARED
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 fakegpu_link_common_system_libs(fake_cuda)
+target_link_libraries(fake_cuda PRIVATE fake_gpu_kernel)
 
 # CUDA Runtime Library (libcudart.so.12)
 # This library intercepts CUDA Runtime API calls and uses fake_cuda Driver API internally
@@ -170,6 +172,7 @@ add_library(fake_cudart SHARED
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 fakegpu_link_common_system_libs(fake_cudart)
+target_link_libraries(fake_cudart PRIVATE fake_gpu_kernel)
 target_include_directories(fake_cudart PRIVATE src/cuda src/core)
 
 # cuBLAS Library (libcublas.so.12)

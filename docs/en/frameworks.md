@@ -13,7 +13,7 @@ that every GPU backend or arbitrary CUDA kernel is implemented.
 | Ordinary scikit-learn | Normal CPU execution | Preprocessing, regression and classification pipelines |
 | TensorFlow CPU adapter | Explicit GPU device scopes redirected to CPU | Eager matmul, gradients, traced training and Keras training |
 | CUDA C/C++ + native libraries | Host-backed allocation, copies, streams/events and selected CPU cuBLAS operations | Compiled C++ GEMM pipeline, allocation cleanup, module registration and host-thread launch configuration |
-| `nvcc` device kernels | Registration and launch policy; arbitrary kernel computation is unsupported | A compiled `.cu` program verifies launch errors and unchanged output when a kernel is skipped |
+| CUDA kernels with PTX (Linux) | General CPU interpretation through native Driver/Runtime APIs | Compiled CUDA C++ plus direct PTX: arithmetic, branches, grids, local/shared memory, barriers, atomics, globals and device functions |
 
 ## scikit-learn with simulated CUDA tensors
 
@@ -81,14 +81,38 @@ scripts/test.sh smoke
 ```
 
 The manifest runs actual numerical assertions. Missing dependencies are
-reported as skipped and fail with `--strict`. CI installs the versions above
-and runs all three framework cases. Native smoke runs the compiled C++
-pipeline on Linux and macOS. With a CUDA 12 toolkit (`nvcc`, verified with
-12.4), it additionally builds
-`tests/native/cuda_kernel_launch.cu` with `--cudart shared` and verifies the
-`allow`, `warn` and `error` policies. Without `nvcc`, that check reports a skip.
+reported as skipped and fail with `--strict`. CI runs all three framework cases
+and the native C++ pipeline on Linux and macOS. Linux additionally executes
+`tests/native/ptx_execution.py` without requiring a CUDA toolkit. With `nvcc`,
+smoke compiles `tests/native/cuda_kernel_launch.cu` and checks actual results
+under all three unsupported-API policies. Linux CI installs the CUDA compiler
+so this path cannot silently skip.
 
-Use `--unsupported-api error` when validating native numerical workloads:
-unsupported launches then fail instead of silently leaving output unchanged.
-See [native interception](native-interception.md) for launching an application.
-These checks do not establish CUDA-kernel numerical or timing parity.
+## Custom CUDA kernels on CPU
+
+Linux builds enable a pinned [PantheonSim](https://github.com/pantheongpu/pantheonsim)
+PTX interpreter. It executes device instructions without dispatching on kernel
+names. Both PTX modules loaded through the Driver API and Runtime-registered
+fatbins are supported, including LZ4 and Zstandard compressed PTX emitted by `nvcc`.
+Zstandard images require the system `libzstd.so.1` at runtime.
+For example, compile a program with PTX retained and a shared CUDA runtime:
+
+```bash
+nvcc -arch=sm_80 --cudart shared your_program.cu -o your_program
+python -m fakegpu --build-dir build --mode simulate --unsupported-api error ./your_program
+```
+
+Kernel launches execute synchronously on the CPU. Module globals and constants
+persist between launches. Unsupported instructions or images without PTX
+return an error under every policy. Invalid handles and out-of-bounds accesses
+also fail; kernel errors can occur after partial writes. The interpreter does
+not supply GPU performance, complete CUDA compatibility, SASS-only cubin
+execution, CUDA graphs, cooperative launches, textures, or device-side child
+launches. Contexts remain simplified; device resource reset returns unsupported.
+A framework still needs its other CUDA API dependencies supported.
+The TensorFlow adapter above remains a separate CPU execution path.
+
+PTX execution currently requires Linux; macOS retains the existing native
+simulation and Python adapters, with PTX loads explicitly unsupported. See
+[development](development.md) for build dependencies and
+[native interception](native-interception.md) for application launching.

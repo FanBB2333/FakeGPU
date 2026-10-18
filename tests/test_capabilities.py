@@ -20,8 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_capability_catalog_classifies_high_risk_native_apis() -> None:
     catalog = load_native_capabilities()
     entries = {item["api"]: item for item in catalog["apis"]}
-    assert entries["cudaLaunchKernel"]["classification"] == "not_executed"
-    assert entries["cudaLaunchKernel"]["policy_enforced"] is True
+    for api in ("cudaLaunchKernel", "cudaLaunchKernelExC", "cuLaunchKernel", "cuLaunchKernelEx"):
+        assert entries[api]["classification"] == "cpu_ptx_execution"
+        assert entries[api]["policy_enforced"] is False
     assert entries["cudaStreamAddCallback"]["classification"] == (
         "callback_not_registered"
     )
@@ -93,9 +94,7 @@ def test_capability_cli_filters_and_writes_json(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["source_audit"]["status"] == "passed"
     assert {item["api"] for item in payload["apis"]} == {
-        "cuGraphLaunch",
-        "cuLaunchKernel",
-        "cuLaunchKernelEx",
+        "cuGraphLaunch", "cuDevicePrimaryCtxReset",
     }
 
 

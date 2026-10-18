@@ -12,7 +12,7 @@
 | 一般 scikit-learn | 正常 CPU 執行 | 前處理、迴歸與分類 pipeline |
 | TensorFlow CPU 適配器 | 明確的 GPU device scope 重新導向 CPU | eager 矩陣乘、梯度、圖訓練與 Keras 訓練 |
 | CUDA C/C++ + 原生函式庫 | 主機記憶體支援的配置、拷貝、stream/event 與部分 CPU cuBLAS 運算 | 編譯後的 C++ GEMM 流程、記憶體釋放、模組註冊與主機執行緒啟動設定 |
-| `nvcc` 裝置核心 | 支援註冊與啟動策略；不支援任意核心計算 | 編譯 `.cu` 程式，檢查啟動錯誤及略過核心後輸出不變 |
+| 包含 PTX 的 CUDA 核心（Linux） | 透過原生 Driver/Runtime API 在 CPU 上解譯執行 | 編譯 CUDA C++ 及直接載入 PTX，驗證算術、分支、網格、區域/共享記憶體、屏障、原子操作、全域變數與裝置函式 |
 
 ## scikit-learn 使用模擬 CUDA 張量
 
@@ -76,11 +76,30 @@ scripts/test.sh smoke
 ```
 
 驗證矩陣實際執行數值斷言。缺少依賴會標記為略過，`--strict` 會將其判為失敗。
-CI 安裝上述版本並執行全部三個框架案例。原生 smoke 在 Linux/macOS 編譯並執行 C++
-流程；裝有 CUDA 12 工具包（`nvcc`，已驗證 12.4）時，額外以 `--cudart shared` 編譯
-`tests/native/cuda_kernel_launch.cu`，驗證 `allow`、`warn`、`error` 三種策略。
-沒有 `nvcc` 時明確回報略過。
+CI 執行三個框架案例以及 Linux/macOS 原生 C++ 流程。Linux 額外執行不需 CUDA
+工具包的 `tests/native/ptx_execution.py`；有 `nvcc` 時編譯
+`tests/native/cuda_kernel_launch.cu`，檢查三種不支援 API 策略下的實際計算結果。
+Linux CI 安裝 CUDA 編譯器，確保此路徑持續驗證。
 
-驗證原生數值工作負載時使用 `--unsupported-api error`，讓不支援的核心啟動回傳錯誤，
-避免把未改變的輸出當成正確計算。應用啟動方式見[原生函式庫攔截](native-interception.md)。
-這些檢查不構成任意 CUDA 核心的數值或耗時一致性保證。
+## 在 CPU 上執行自訂 CUDA 核心
+
+Linux 建置預設啟用固定版本的 [PantheonSim](https://github.com/pantheongpu/pantheonsim)
+PTX 解譯器，按裝置指令執行，不依賴預設核心名稱。支援 Driver API 載入的 PTX
+模組及 Runtime 註冊的 fatbin，包括 `nvcc` 的 LZ4 與 Zstandard 壓縮 PTX。
+載入 Zstandard 映像時，系統需要提供 `libzstd.so.1`。
+編譯時保留 PTX，並使用動態 CUDA runtime，例如：
+
+```bash
+nvcc -arch=sm_80 --cudart shared your_program.cu -o your_program
+python -m fakegpu --build-dir build --mode simulate --unsupported-api error ./your_program
+```
+
+核心在 CPU 上同步執行，全域變數與常數在多次啟動間保留。
+不支援的指令、缺少 PTX 的映像在所有策略下都回傳錯誤，無效控制代碼與越界存取也會失敗；
+執行錯誤可能發生在部分寫入之後。此路徑不提供 GPU 效能或完整 CUDA 相容性，
+暫不支援純 SASS cubin、CUDA Graph、協作式啟動、紋理及裝置端子核心啟動。
+上下文仍採用簡化模型，裝置資源重設會回傳不支援。
+框架仍需要其依賴的其他 CUDA API 已受支援；上述 TensorFlow 配接器仍是獨立的 CPU 路徑。
+
+PTX 執行目前要求 Linux；macOS 保留現有原生模擬與 Python 配接器，載入 PTX 會明確
+回傳不支援。建置要求見[開發與測試](development.md)，啟動方式見[原生函式庫攔截](native-interception.md)。

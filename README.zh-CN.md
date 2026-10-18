@@ -238,7 +238,8 @@ scripts/test.sh all       # 所有维护中的测试
 
 ## 限制
 
-- 原生模拟不能执行任意 CUDA kernel，FakeCUDA 也不支持二进制 CUDA 扩展。
+- Linux 原生模拟可在 CPU 上执行受支持的 PTX 内核；纯 SASS 镜像和不支持的指令会
+  明确失败。FakeCUDA 不支持二进制 CUDA 扩展。详见[内核支持](docs/zh-CN/frameworks.md)。
 - 显存估算可能遗漏 backend 私有分配、自定义 operator 和 allocator 行为。依赖这些
   估算之前，请先在真实硬件上校准。
 - 模拟器给出的耗时不是 NCCL、NVLink 或 kernel benchmark。

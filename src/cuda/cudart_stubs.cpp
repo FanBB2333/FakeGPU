@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
-#include <dlfcn.h>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -17,6 +17,53 @@
 static __thread cudaError_t last_error = cudaSuccess;
 
 namespace {
+
+struct LoadedModule {
+    CUmodule module = nullptr;
+    CUresult status = CUDA_SUCCESS;
+};
+
+struct RegisteredModule {
+    const void* image;
+    std::unordered_map<int, LoadedModule> devices;
+};
+
+struct RegisteredEntry {
+    RegisteredModule* owner;
+    std::string name;
+};
+
+struct RuntimeRegistry {
+    std::mutex mutex;
+    std::unordered_map<const void*, RegisteredEntry> functions;
+    std::unordered_map<const void*, RegisteredEntry> symbols;
+};
+
+RuntimeRegistry& runtimeRegistry() {
+    static RuntimeRegistry registry;
+    return registry;
+}
+
+// The caller holds the registry lock; CUDA globals belong to each device's module.
+LoadedModule& currentModule(RegisteredModule& registered) {
+    auto& state = fake_gpu::GlobalState::instance();
+    state.initialize();
+    auto [entry, inserted] = registered.devices.try_emplace(state.get_current_device());
+    if (inserted)
+        entry->second.status = cuModuleLoadData(&entry->second.module, registered.image);
+    return entry->second;
+}
+
+CUresult lookupSymbol(const void* symbol, CUdeviceptr& pointer, size_t& size) {
+    auto& registry = runtimeRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    const auto found = registry.symbols.find(symbol);
+    if (found == registry.symbols.end()) return CUDA_ERROR_NOT_FOUND;
+    const auto& entry = found->second;
+    const auto& loaded = currentModule(*entry.owner);
+    if (loaded.status != CUDA_SUCCESS) return loaded.status;
+    return cuModuleGetGlobal(&pointer, &size, loaded.module, entry.name.c_str());
+}
 
 struct CaptureState {
     bool active = false;
@@ -91,9 +138,27 @@ static cudaError_t convertDriverError(CUresult result) {
             return cudaErrorNotSupported;
         case CUDA_ERROR_PEER_ACCESS_UNSUPPORTED:
             return cudaErrorPeerAccessUnsupported;
+        case CUDA_ERROR_INVALID_IMAGE:
+            return cudaErrorInvalidKernelImage;
+        case CUDA_ERROR_INVALID_PTX:
+            return cudaErrorInvalidPtx;
+        case CUDA_ERROR_INVALID_HANDLE:
+            return cudaErrorInvalidResourceHandle;
+        case CUDA_ERROR_NOT_FOUND:
+            return cudaErrorInvalidDeviceFunction;
+        case CUDA_ERROR_ILLEGAL_ADDRESS:
+            return cudaErrorIllegalAddress;
+        case CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES:
+            return cudaErrorLaunchOutOfResources;
+        case CUDA_ERROR_LAUNCH_FAILED:
+            return cudaErrorLaunchFailure;
         default:
             return cudaErrorUnknown;
     }
+}
+
+static cudaError_t convertSymbolError(CUresult result) {
+    return result == CUDA_ERROR_NOT_FOUND ? cudaErrorInvalidSymbol : convertDriverError(result);
 }
 
 static bool validateStreamArgument(cudaStream_t stream) {
@@ -113,6 +178,14 @@ static bool rejectUnsupportedApi(
     }
     last_error = cudaSuccess;
     return false;
+}
+
+static cudaError_t rejectKernelApi(const char* operation) {
+    auto& state = fake_gpu::GlobalState::instance();
+    state.initialize();
+    state.record_unsupported_api(state.get_current_device(), operation, "not_executed", "error");
+    last_error = cudaErrorNotSupported;
+    return last_error;
 }
 
 static bool submitAsyncStreamOperation(cudaStream_t stream) {
@@ -268,17 +341,14 @@ cudaError_t cudaGetDeviceProperties_v2(cudaDevicePropV2 *prop, int device) {
 }
 
 cudaError_t cudaDeviceReset(void) {
-    // Get current device
-    CUcontext context;
-    cuCtxGetCurrent(&context);
-
-    if (context) {
+    CUcontext context = nullptr;
+    CUresult result = cuCtxGetCurrent(&context);
+    if (result == CUDA_SUCCESS && context) {
         CUdevice device;
-        cuCtxGetDevice(&device);
-        cuDevicePrimaryCtxReset(device);
+        result = cuCtxGetDevice(&device);
+        if (result == CUDA_SUCCESS) result = cuDevicePrimaryCtxReset(device);
     }
-
-    last_error = cudaSuccess;
+    last_error = convertDriverError(result);
     FGPU_LOG("[FakeCUDART] cudaDeviceReset()\n");
     return last_error;
 }
@@ -622,6 +692,22 @@ const char* cudaGetErrorString(cudaError_t error) {
             return "operation not supported";
         case cudaErrorPeerAccessUnsupported:
             return "peer access is not supported between these two devices";
+        case cudaErrorInvalidDeviceFunction:
+            return "invalid device function";
+        case cudaErrorInvalidSymbol:
+            return "invalid device symbol";
+        case cudaErrorInvalidKernelImage:
+            return "invalid kernel image";
+        case cudaErrorInvalidPtx:
+            return "invalid PTX";
+        case cudaErrorInvalidResourceHandle:
+            return "invalid resource handle";
+        case cudaErrorIllegalAddress:
+            return "an illegal memory access was encountered";
+        case cudaErrorLaunchOutOfResources:
+            return "too many resources requested for launch";
+        case cudaErrorLaunchFailure:
+            return "kernel execution failed";
         default:
             return "unknown error";
     }
@@ -647,6 +733,22 @@ const char* cudaGetErrorName(cudaError_t error) {
             return "cudaErrorNotSupported";
         case cudaErrorPeerAccessUnsupported:
             return "cudaErrorPeerAccessUnsupported";
+        case cudaErrorInvalidDeviceFunction:
+            return "cudaErrorInvalidDeviceFunction";
+        case cudaErrorInvalidSymbol:
+            return "cudaErrorInvalidSymbol";
+        case cudaErrorInvalidKernelImage:
+            return "cudaErrorInvalidKernelImage";
+        case cudaErrorInvalidPtx:
+            return "cudaErrorInvalidPtx";
+        case cudaErrorInvalidResourceHandle:
+            return "cudaErrorInvalidResourceHandle";
+        case cudaErrorIllegalAddress:
+            return "cudaErrorIllegalAddress";
+        case cudaErrorLaunchOutOfResources:
+            return "cudaErrorLaunchOutOfResources";
+        case cudaErrorLaunchFailure:
+            return "cudaErrorLaunchFailure";
         default:
             return "cudaErrorUnknown";
     }
@@ -681,7 +783,7 @@ cudaError_t cudaDriverGetVersion(int *driverVersion) {
 }
 
 // ============================================================================
-// Kernel Launch (stubs - no actual computation)
+// Kernel Launch
 // ============================================================================
 
 cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
@@ -689,28 +791,21 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
-    fake_gpu::GlobalState::instance().initialize();
-    std::string kernel_name;
-    Dl_info info;
-    if (func && dladdr(func, &info) && info.dli_sname) {
-        kernel_name = info.dli_sname;
-    }
-    if (kernel_name.empty()) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "kernel_%p", func);
-        kernel_name = buf;
-    }
-    FGPU_LOG("[FakeCUDART] cudaLaunchKernel (stub) '%s' Grid(%d,%d,%d) Block(%d,%d,%d)\n",
-           kernel_name.c_str(), gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
-    fake_gpu::GlobalState::instance().record_kernel_launch(kernel_name);
-
-    // No actual kernel execution
-    if (rejectUnsupportedApi("cudaLaunchKernel")) {
-        return last_error;
-    }
-    if (!submitAsyncStreamOperation(stream)) {
-        return last_error;
-    }
+    if (isCaptureActive(stream)) return rejectKernelApi("cudaLaunchKernel.capture");
+    auto& registry = runtimeRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    const auto found = registry.functions.find(func);
+    if (found == registry.functions.end()) return last_error = cudaErrorInvalidDeviceFunction;
+    const auto& entry = found->second;
+    const auto& loaded = currentModule(*entry.owner);
+    if (loaded.status != CUDA_SUCCESS) return last_error = convertDriverError(loaded.status);
+    CUfunction function = nullptr;
+    const CUresult resolved = cuModuleGetFunction(&function, loaded.module, entry.name.c_str());
+    if (resolved != CUDA_SUCCESS) return last_error = convertDriverError(resolved);
+    if (sharedMem > std::numeric_limits<unsigned>::max()) return last_error = cudaErrorInvalidValue;
+    last_error = convertDriverError(cuLaunchKernel(
+        function, gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z,
+        static_cast<unsigned>(sharedMem), stream, args, nullptr));
     return last_error;
 }
 
@@ -736,15 +831,22 @@ cudaError_t cudaSetupArgument(const void *arg, size_t size, size_t offset) {
 }
 
 cudaError_t cudaLaunch(const void *func) {
-    FGPU_LOG("[FakeCUDART] cudaLaunch (stub)\n");
-    rejectUnsupportedApi("cudaLaunch");
-    return last_error;
+    return rejectKernelApi("cudaLaunch");
 }
 
 cudaError_t cudaLaunchKernelExC(const void *config, const void *func, void **args) {
-    FGPU_LOG("[FakeCUDART] cudaLaunchKernelExC (stub)\n");
-    rejectUnsupportedApi("cudaLaunchKernelExC");
-    return last_error;
+    struct LaunchConfig {
+        dim3 grid;
+        dim3 block;
+        size_t shared_bytes;
+        cudaStream_t stream;
+        const void* attributes;
+        unsigned num_attributes;
+    };
+    if (!config) return last_error = cudaErrorInvalidValue;
+    const auto& launch = *static_cast<const LaunchConfig*>(config);
+    if (launch.num_attributes) return rejectKernelApi("cudaLaunchKernelExC.attributes");
+    return cudaLaunchKernel(func, launch.grid, launch.block, args, launch.shared_bytes, launch.stream);
 }
 
 cudaError_t cudaLaunchHostFunc(cudaStream_t stream, void (*fn)(void *userData), void *userData) {
@@ -1243,14 +1345,40 @@ cudaError_t cudaMemcpy3DAsync(const void *p, cudaStream_t stream) {
 }
 
 cudaError_t cudaMemcpyToSymbol(const void *symbol, const void *src, size_t count, size_t offset, cudaMemcpyKind kind) {
-    // Simplified: just succeed
-    last_error = cudaSuccess;
-    return last_error;
+    if (kind != cudaMemcpyHostToDevice && kind != cudaMemcpyDeviceToDevice && kind != cudaMemcpyDefault)
+        return last_error = cudaErrorInvalidMemcpyDirection;
+    CUdeviceptr pointer = 0;
+    size_t size = 0;
+    last_error = convertSymbolError(lookupSymbol(symbol, pointer, size));
+    if (last_error != cudaSuccess) return last_error;
+    if (offset > size || count > size - offset) return last_error = cudaErrorInvalidValue;
+    return cudaMemcpy(reinterpret_cast<void*>(pointer + offset), src, count, kind);
 }
 
 cudaError_t cudaMemcpyFromSymbol(void *dst, const void *symbol, size_t count, size_t offset, cudaMemcpyKind kind) {
-    // Simplified: just succeed
-    last_error = cudaSuccess;
+    if (kind != cudaMemcpyDeviceToHost && kind != cudaMemcpyDeviceToDevice && kind != cudaMemcpyDefault)
+        return last_error = cudaErrorInvalidMemcpyDirection;
+    CUdeviceptr pointer = 0;
+    size_t size = 0;
+    last_error = convertSymbolError(lookupSymbol(symbol, pointer, size));
+    if (last_error != cudaSuccess) return last_error;
+    if (offset > size || count > size - offset) return last_error = cudaErrorInvalidValue;
+    return cudaMemcpy(dst, reinterpret_cast<void*>(pointer + offset), count, kind);
+}
+
+cudaError_t cudaGetSymbolAddress(void** pointer, const void* symbol) {
+    if (!pointer) return last_error = cudaErrorInvalidValue;
+    CUdeviceptr address = 0;
+    size_t size = 0;
+    last_error = convertSymbolError(lookupSymbol(symbol, address, size));
+    if (last_error == cudaSuccess) *pointer = reinterpret_cast<void*>(address);
+    return last_error;
+}
+
+cudaError_t cudaGetSymbolSize(size_t* size, const void* symbol) {
+    if (!size) return last_error = cudaErrorInvalidValue;
+    CUdeviceptr address = 0;
+    last_error = convertSymbolError(lookupSymbol(symbol, address, *size));
     return last_error;
 }
 
@@ -1741,14 +1869,7 @@ cudaError_t cudaGraphLaunch(cudaGraphExec_t graphExec, cudaStream_t stream) {
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
-    if (rejectUnsupportedApi("cudaGraphLaunch")) {
-        return last_error;
-    }
-    if (!submitAsyncStreamOperation(stream)) {
-        return last_error;
-    }
-    FGPU_LOG("[FakeCUDART] cudaGraphLaunch (stub)\n");
-    return last_error;
+    return rejectKernelApi("cudaGraphLaunch");
 }
 
 cudaError_t cudaGraphUpload(cudaGraphExec_t graphExec, cudaStream_t stream) {
@@ -1963,16 +2084,11 @@ cudaError_t cudaGetSurfaceObjectResourceDesc(cudaResourceDesc *pResDesc, cudaSur
 // ============================================================================
 
 cudaError_t cudaLaunchCooperativeKernel(const void *func, dim3 gridDim, dim3 blockDim, void **args, size_t sharedMem, cudaStream_t stream) {
-    FGPU_LOG("[FakeCUDART] cudaLaunchCooperativeKernel (stub) Grid(%d,%d,%d) Block(%d,%d,%d)\n",
-           gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z);
-    rejectUnsupportedApi("cudaLaunchCooperativeKernel");
-    return last_error;
+    return rejectKernelApi("cudaLaunchCooperativeKernel");
 }
 
 cudaError_t cudaLaunchCooperativeKernelMultiDevice(void *launchParamsList, unsigned int numDevices, unsigned int flags) {
-    FGPU_LOG("[FakeCUDART] cudaLaunchCooperativeKernelMultiDevice (stub) numDevices=%u\n", numDevices);
-    rejectUnsupportedApi("cudaLaunchCooperativeKernelMultiDevice");
-    return last_error;
+    return rejectKernelApi("cudaLaunchCooperativeKernelMultiDevice");
 }
 
 // ============================================================================
@@ -2178,21 +2294,24 @@ cudaError_t cudaProfilerStop(void) {
 // ============================================================================
 
 void __cudaRegisterFunction(void **fatCubinHandle, const char *hostFun, char *deviceFun, const char *deviceName, int thread_limit, void *tid, void *bid, void *bDim, void *gDim, int *wSize) {
-    FGPU_LOG("[FakeCUDART] __cudaRegisterFunction hostFun=%p deviceName=%s\n", hostFun, deviceName ? deviceName : "NULL");
+    auto& registry = runtimeRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.functions[hostFun] = {reinterpret_cast<RegisteredModule*>(fatCubinHandle), deviceName};
 }
 
 void __cudaRegisterVar(void **fatCubinHandle, char *hostVar, char *deviceAddress, const char *deviceName, int ext, size_t size, int constant, int global) {
-    FGPU_LOG("[FakeCUDART] __cudaRegisterVar deviceName=%s size=%zu constant=%d global=%d\n", deviceName ? deviceName : "NULL", size, constant, global);
+    auto& registry = runtimeRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.symbols[hostVar] = {reinterpret_cast<RegisteredModule*>(fatCubinHandle), deviceName};
 }
 
 void** __cudaRegisterFatBinary(void *fatCubin) {
-    FGPU_LOG("[FakeCUDART] __cudaRegisterFatBinary\n");
-    return new void*(fatCubin);
+    auto* module = new RegisteredModule{fatCubin, {}};
+    return reinterpret_cast<void**>(module);
 }
 
 char __cudaInitModule(void **fatCubinHandle) {
-    // nvcc's registration stub calls this before main; device code remains
-    // subject to the unsupported-kernel policy when it is launched.
+    // Device code is loaded lazily for the selected device's context.
     return 1;
 }
 
@@ -2201,8 +2320,20 @@ void __cudaRegisterFatBinaryEnd(void **fatCubinHandle) {
 }
 
 void __cudaUnregisterFatBinary(void **fatCubinHandle) {
-    FGPU_LOG("[FakeCUDART] __cudaUnregisterFatBinary\n");
-    delete fatCubinHandle;
+    auto* module = reinterpret_cast<RegisteredModule*>(fatCubinHandle);
+    auto& registry = runtimeRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    for (auto it = registry.functions.begin(); it != registry.functions.end();) {
+        if (it->second.owner == module) it = registry.functions.erase(it);
+        else ++it;
+    }
+    for (auto it = registry.symbols.begin(); it != registry.symbols.end();) {
+        if (it->second.owner == module) it = registry.symbols.erase(it);
+        else ++it;
+    }
+    for (const auto& [device, loaded] : module->devices)
+        if (loaded.status == CUDA_SUCCESS) cuModuleUnload(loaded.module);
+    delete module;
 }
 
 void** __cudaRegisterFatBinaryEnd_v2(void **fatCubinHandle) {
