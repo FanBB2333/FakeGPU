@@ -129,22 +129,15 @@ def _collect(profile_id: str) -> dict[str, Any]:
                     ),
                 )
             )
-            if torch_info["real_cuda_available"]:
-                checks.append(
-                    _check(
-                        "info",
-                        "real CUDA",
-                        f"{torch_info['real_cuda_device_count']} CUDA device(s) visible",
-                    )
+            checks.append(
+                _check(
+                    "info",
+                    "real CUDA",
+                    f"{torch_info['real_cuda_device_count']} CUDA device(s) visible"
+                    if torch_info["real_cuda_available"]
+                    else "no real CUDA device visible; this is valid for fakecuda",
                 )
-            else:
-                checks.append(
-                    _check(
-                        "info",
-                        "real CUDA",
-                        "no real CUDA device visible; this is valid for fakecuda",
-                    )
-                )
+            )
         except Exception as exc:
             checks.append(
                 _check("warn", "PyTorch", f"import failed: {type(exc).__name__}: {exc}")
@@ -194,15 +187,9 @@ def _print_plain(payload: dict[str, Any], *, list_profiles: bool) -> None:
         f"FakeGPU {payload['fakegpu_version']} doctor "
         f"(Python {payload['python']['version']})"
     )
-    labels = {
-        "pass": "PASS",
-        "warn": "WARN",
-        "info": "INFO",
-        "fail": "FAIL",
-    }
     for item in payload["checks"]:
         print(
-            f"[{labels[item['status']]:4}] "
+            f"[{item['status'].upper():4}] "
             f"{item['name']}: {item['detail']}"
         )
 
@@ -238,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         _print_plain(payload, list_profiles=args.list_profiles)
 
-    has_failure = any(item["status"] == "fail" for item in payload["checks"])
+    has_failure = not payload["ok"]
     has_warning = any(item["status"] == "warn" for item in payload["checks"])
     return 1 if has_failure or (args.strict and has_warning) else 0
 
