@@ -10,6 +10,8 @@
   `torch.cuda.amp.autocast(enabled, dtype, cache_enabled)` signature work.
 - Module buffers moved with `Module.to`/`.cuda` are reported in the `buffer`
   memory category again instead of `tensor`.
+- Calling `patch_torch()` again with more devices now records copies on the
+  added devices; transfer counters restart with the new topology.
 
 ## v1.6.0 - 2026-10-17
 

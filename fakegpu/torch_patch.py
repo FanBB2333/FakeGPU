@@ -1895,7 +1895,8 @@ def patch(
         _NUM_DEVICES, \
         _DEVICE_NAME, \
         _patch_result, \
-        _memory_tracker
+        _memory_tracker, \
+        _link_traffic
 
     os.environ["FAKEGPU_RUNTIME"] = "fakecuda"
     import torch
@@ -1916,6 +1917,7 @@ def patch(
         _reset_dispatch_tracking_stats(
             enabled=bool(_MEMORY_TRACKING and _DISPATCH_MEMORY_TRACKING)
         )
+        _link_traffic = _new_link_traffic()
         _refresh_smi_publisher()
         _patch_transformers_utils()
         _patch_accelerate_utils()

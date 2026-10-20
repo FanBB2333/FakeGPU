@@ -218,6 +218,37 @@ def test_fakecuda_records_copies_over_the_platform_links() -> None:
     assert snapshot[0]["links"]["nvlink"]["tx_bytes"] == mib
 
 
+def test_fakecuda_repatch_records_copies_on_new_devices() -> None:
+    code = textwrap.dedent(
+        """
+        import json, os
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+        import fakegpu
+        fakegpu.patch_torch(num_devices=2)
+        import torch
+        from fakegpu import torch_patch
+
+        torch.tensor([1.0], device="cuda:0")
+        fakegpu.patch_torch(num_devices=4)
+        torch.ones(256, dtype=torch.float32).to("cuda:3").to("cuda:0")
+        print(json.dumps(torch_patch._transfer_snapshot()))
+        """
+    )
+    env = dict(os.environ, PYTHONPATH=str(ROOT))
+    for name in ("FAKEGPU_PLATFORM", "FAKEGPU_SLOTS", "FAKEGPU_NVLINK_FABRIC", "FAKEGPU_NVLINK_GROUPS"):
+        env.pop(name, None)
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, env=env, text=True, capture_output=True, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    snapshot = {int(key): value for key, value in json.loads(completed.stdout.strip().splitlines()[-1]).items()}
+    third = snapshot[3]["copies"]
+    assert (third["host_to_device"]["calls"], third["host_to_device"]["bytes"]) == (1, 1024)
+    assert third["peer_send"]["bytes"] == snapshot[0]["copies"]["peer_receive"]["bytes"] == 1024
+    # Counters restart with the re-patched topology, like the memory tracker.
+    assert snapshot[0]["copies"]["host_to_device"]["calls"] == 0
+
+
 def _library(name: str) -> Path:
     suffix = {"darwin": ".dylib"}.get(sys.platform, ".so.1")
     return ROOT / "build" / f"{name}{suffix}"
