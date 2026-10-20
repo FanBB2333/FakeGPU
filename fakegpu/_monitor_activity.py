@@ -17,14 +17,12 @@ def enabled() -> bool:
 def record(device: int, elapsed_ns: int, io_bytes: int) -> None:
     with _lock:
         row = _counters.setdefault(device, {"busy_ns": 0, "io_bytes": 0, "operations": 0})
-        row["busy_ns"] += max(0, elapsed_ns)
-        row["io_bytes"] += max(0, io_bytes)
+        row["busy_ns"] += elapsed_ns
+        row["io_bytes"] += io_bytes
         row["operations"] += 1
 
 
 def snapshot() -> dict[int, dict]:
-    if not enabled():
-        return {}
     with _lock:
         return {index: {"source": "cpu_dispatch_proxy", **row} for index, row in _counters.items()}
 
