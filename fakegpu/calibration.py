@@ -8,7 +8,7 @@ import os
 import statistics
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ from ._calibration_protocol import (
     _normalize_runner_command,
     _parse_peak_samples,
     _parse_serving_runner_sample,
+    _phase_set_mismatch,
     _runner_diagnostic,
     _serving_plan_observation_context,
     _serving_sample_plan_path,
@@ -67,6 +68,12 @@ def compare_memory_reports(
         )
 
     comparisons = []
+    absolute_errors: list[int] = []
+    signed_errors: list[int] = []
+    mape_values: list[float] = []
+    underestimates_percent: list[float] = []
+    interval_results: list[bool] = []
+    ratios: list[float] = []
     for phase, predicted_point, observed_point in pairs:
         predicted_bytes = int(predicted_point["bytes"])
         observed_bytes = int(observed_point["bytes"])
@@ -79,6 +86,17 @@ def compare_memory_reports(
             upper = interval.get("upper")
             if lower is not None and upper is not None:
                 within_interval = int(lower) <= observed_bytes <= int(upper)
+        signed_errors.append(signed_error)
+        absolute_errors.append(absolute_error)
+        if observed_bytes > 0:
+            mape_values.append(absolute_error / observed_bytes)
+            underestimates_percent.append(
+                max(0.0, (observed_bytes - predicted_bytes) / observed_bytes * 100)
+            )
+        if within_interval is not None:
+            interval_results.append(within_interval)
+        if predicted_bytes > 0:
+            ratios.append(observed_bytes / predicted_bytes)
         comparisons.append(
             {
                 "phase": phase,
@@ -105,39 +123,7 @@ def compare_memory_reports(
             }
         )
 
-    absolute_errors = [
-        int(item["absolute_error_bytes"]) for item in comparisons
-    ]
-    observed_values = [int(item["observed_bytes"]) for item in comparisons]
-    signed_errors = [int(item["signed_error_bytes"]) for item in comparisons]
-    mape_values = [
-        float(item["absolute_percentage_error"])
-        for item in comparisons
-        if item["absolute_percentage_error"] is not None
-    ]
-    underestimates_percent = [
-        max(
-            0.0,
-            (
-                int(item["observed_bytes"]) - int(item["predicted_bytes"])
-            )
-            / int(item["observed_bytes"])
-            * 100,
-        )
-        for item in comparisons
-        if int(item["observed_bytes"]) > 0
-    ]
-    interval_results = [
-        bool(item["observation_within_prediction_interval"])
-        for item in comparisons
-        if item["observation_within_prediction_interval"] is not None
-    ]
     recommended_margin = max(0, max(-value for value in signed_errors))
-    ratios = [
-        observed_value / int(item["predicted_bytes"])
-        for item, observed_value in zip(comparisons, observed_values)
-        if int(item["predicted_bytes"]) > 0
-    ]
     recommended_factor = max([1.0, *ratios])
     attribution = _attribute_error(
         prediction=prediction,
@@ -249,19 +235,12 @@ def build_serving_memory_observation(
                 f"duplicate observation phase {normalized_name!r}"
             )
         normalized_phase_samples[normalized_name] = samples
-    supplied_phases = set(normalized_phase_samples)
-    expected_phases = set(planned_phases)
-    if supplied_phases != expected_phases:
-        missing = sorted(expected_phases - supplied_phases)
-        unexpected = sorted(supplied_phases - expected_phases)
-        details = []
-        if missing:
-            details.append(f"missing phases: {', '.join(missing)}")
-        if unexpected:
-            details.append(
-                f"unexpected phases: {', '.join(unexpected)}"
-            )
-        raise CalibrationError("; ".join(details))
+    mismatch = _phase_set_mismatch(
+        set(planned_phases),
+        set(normalized_phase_samples),
+    )
+    if mismatch:
+        raise CalibrationError(mismatch)
 
     observed_phases: list[dict[str, Any]] = []
     phase_sample_counts: dict[str, int] = {}
@@ -631,7 +610,6 @@ def verify_calibration_reports(
             report.get("dimensions")
         )
         dimension_mismatch_count += len(dimension_mismatches)
-        valid_comparison_count = 0
         for item in raw_comparisons:
             if not isinstance(item, Mapping):
                 raise CalibrationError(
@@ -647,7 +625,6 @@ def verify_calibration_reports(
                 "observed_bytes",
                 label=label,
             )
-            valid_comparison_count += 1
             if observed_bytes > 0:
                 absolute_percentage_errors.append(
                     abs(predicted_bytes - observed_bytes)
@@ -684,7 +661,7 @@ def verify_calibration_reports(
             {
                 "id": label,
                 "workload": report.get("workload"),
-                "comparison_count": valid_comparison_count,
+                "comparison_count": len(raw_comparisons),
                 "dimension_mismatches": dimension_mismatches,
             }
         )
@@ -1117,6 +1094,27 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _emit(
+    args: argparse.Namespace,
+    report: Mapping[str, Any],
+    label: str,
+    printer: Callable[[Mapping[str, Any]], None],
+) -> None:
+    if args.json_path:
+        output = emit_json(args.json_path, report)
+        if output is not None:
+            print(f"{label}: {output}")
+    else:
+        printer(report)
+
+
+def _load_reports(
+    values: Sequence[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    paths = [Path(value).expanduser().resolve() for value in values]
+    return [load_mapping(path) for path in paths], [path.stem for path in paths]
+
+
 def _dispatch(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
@@ -1182,12 +1180,7 @@ def _dispatch(
                 env={"FAKEGPU_SERVING_PLAN_PATH": str(plan_path)},
                 source=args.source,
             )
-            if args.json_path:
-                output = emit_json(args.json_path, report)
-                if output is not None:
-                    print(f"Serving observation: {output}")
-            else:
-                _print_serving_observation(report)
+            _emit(args, report, "Serving observation", _print_serving_observation)
             if (
                 args.strict
                 and report["evidence_status"] != "ready_for_comparison"
@@ -1214,12 +1207,7 @@ def _dispatch(
                 ),
                 source=args.source,
             )
-            if args.json_path:
-                output = emit_json(args.json_path, report)
-                if output is not None:
-                    print(f"Serving observation: {output}")
-            else:
-                _print_serving_observation(report)
+            _emit(args, report, "Serving observation", _print_serving_observation)
             if (
                 args.strict
                 and report["evidence_status"] != "ready_for_comparison"
@@ -1235,23 +1223,14 @@ def _dispatch(
                 observation,
                 workload=args.workload,
             )
-            if args.json_path:
-                output = emit_json(args.json_path, report)
-                if output is not None:
-                    print(f"Calibration comparison: {output}")
-            else:
-                _print_comparison(report)
+            _emit(args, report, "Calibration comparison", _print_comparison)
             return 0
 
         if args.action == "verify":
-            paths = [
-                Path(value).expanduser().resolve()
-                for value in args.reports
-            ]
-            reports = [load_mapping(path) for path in paths]
+            reports, labels = _load_reports(args.reports)
             report = verify_calibration_reports(
                 reports,
-                labels=[path.stem for path in paths],
+                labels=labels,
                 max_underestimate_percent=args.max_underestimate_percent,
                 max_absolute_percentage_error_percent=(
                     args.max_absolute_percentage_error_percent
@@ -1266,20 +1245,11 @@ def _dispatch(
                     not args.allow_dimension_mismatch
                 ),
             )
-            if args.json_path:
-                output = emit_json(args.json_path, report)
-                if output is not None:
-                    print(f"Calibration verification: {output}")
-            else:
-                _print_verification(report)
+            _emit(args, report, "Calibration verification", _print_verification)
             return 0 if report["status"] == "passed" else 1
 
-        paths = [Path(value).expanduser().resolve() for value in args.reports]
-        reports = [load_mapping(path) for path in paths]
-        bundle = build_workload_calibration_bundle(
-            reports,
-            labels=[path.stem for path in paths],
-        )
+        reports, labels = _load_reports(args.reports)
+        bundle = build_workload_calibration_bundle(reports, labels=labels)
         output = write_json(args.output, bundle)
         print(f"Calibration bundle: {output}")
         return 0
@@ -1384,26 +1354,29 @@ def _memory_points(
 def _static_memory_points(
     report: Mapping[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    fields = {
-        "first_step": "first_step_estimated_peak_bytes",
-        "steady_state": "steady_state_estimated_peak_bytes",
-        "graph": "graph_phase_peak_bytes",
-        "optimizer": "optimizer_phase_peak_bytes",
-    }
     points: dict[str, dict[str, Any]] = {}
-    for phase, field in fields.items():
+    for phase, field, interval_field in (
+        (
+            "first_step",
+            "first_step_estimated_peak_bytes",
+            "first_step_estimated_peak_interval_bytes",
+        ),
+        (
+            "steady_state",
+            "steady_state_estimated_peak_bytes",
+            "estimated_peak_interval_bytes",
+        ),
+        ("graph", "graph_phase_peak_bytes", "graph_phase_peak_interval_bytes"),
+        ("optimizer", "optimizer_phase_peak_bytes", None),
+    ):
         value = report.get(field)
         if isinstance(value, int) and not isinstance(value, bool):
             point: dict[str, Any] = {
                 "bytes": value,
                 "source": field,
             }
-            interval = report.get(
-                {
-                    "first_step": "first_step_estimated_peak_interval_bytes",
-                    "steady_state": "estimated_peak_interval_bytes",
-                    "graph": "graph_phase_peak_interval_bytes",
-                }.get(phase, "")
+            interval = (
+                report.get(interval_field) if interval_field is not None else None
             )
             if isinstance(interval, Mapping):
                 point["interval"] = dict(interval)
@@ -1438,14 +1411,16 @@ def _llm_memory_points(
     return result
 
 
-def _real_calibration_points(
+def _select_calibration_workload(
     report: Mapping[str, Any],
-    *,
     workload: str | None,
-) -> dict[str, dict[str, Any]]:
+    *,
+    no_workloads: str,
+    multiple: str,
+) -> Mapping[str, Any]:
     workloads = report.get("workloads")
     if not isinstance(workloads, list):
-        raise CalibrationError("real-GPU calibration report has no workloads")
+        raise CalibrationError(no_workloads)
     selected = [
         item
         for item in workloads
@@ -1460,12 +1435,24 @@ def _real_calibration_points(
         )
     ]
     if workload is None and len(selected) != 1:
-        raise CalibrationError(
-            "calibration report contains multiple workloads; pass --workload"
-        )
+        raise CalibrationError(multiple)
     if len(selected) != 1:
         raise CalibrationError(f"workload {workload!r} was not found uniquely")
-    real = selected[0].get("real_cuda")
+    return selected[0]
+
+
+def _real_calibration_points(
+    report: Mapping[str, Any],
+    *,
+    workload: str | None,
+) -> dict[str, dict[str, Any]]:
+    selected = _select_calibration_workload(
+        report,
+        workload,
+        no_workloads="real-GPU calibration report has no workloads",
+        multiple="calibration report contains multiple workloads; pass --workload",
+    )
+    real = selected.get("real_cuda")
     if not isinstance(real, Mapping):
         raise CalibrationError("selected workload has no real_cuda section")
 
@@ -1492,29 +1479,13 @@ def _bundle_points(
     *,
     workload: str | None,
 ) -> dict[str, dict[str, Any]]:
-    workloads = report.get("workloads")
-    if not isinstance(workloads, list):
-        raise CalibrationError("calibration bundle has no workloads")
-    selected = [
-        item
-        for item in workloads
-        if isinstance(item, Mapping)
-        and (
-            workload is None
-            or workload
-            in {
-                str(item.get("name") or ""),
-                str(item.get("workload_signature") or ""),
-            }
-        )
-    ]
-    if workload is None and len(selected) != 1:
-        raise CalibrationError(
-            "calibration bundle contains multiple workloads; pass --workload"
-        )
-    if len(selected) != 1:
-        raise CalibrationError(f"workload {workload!r} was not found uniquely")
-    observations = selected[0].get("observations")
+    selected = _select_calibration_workload(
+        report,
+        workload,
+        no_workloads="calibration bundle has no workloads",
+        multiple="calibration bundle contains multiple workloads; pass --workload",
+    )
+    observations = selected.get("observations")
     if not isinstance(observations, list):
         raise CalibrationError("bundle workload has no observations")
     values = [
