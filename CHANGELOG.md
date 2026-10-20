@@ -12,6 +12,9 @@
   memory category again instead of `tensor`.
 - Calling `patch_torch()` again with more devices now records copies on the
   added devices; transfer counters restart with the new topology.
+- FakeCUDA `torch.cuda.get_device_properties()` reports the profile's SM
+  count, threads per multiprocessor, and register limits instead of A100
+  values for every profile, matching the native runtime.
 
 ## v1.6.0 - 2026-10-17
 

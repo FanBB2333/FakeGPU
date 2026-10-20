@@ -1015,13 +1015,16 @@ class _FakeDeviceProperties:
         self.major = prof.get("compute_major", _COMPUTE_MAJOR)
         self.minor = prof.get("compute_minor", _COMPUTE_MINOR)
         self.total_memory = prof.get("total_memory", _TOTAL_MEMORY)
-        self.multi_processor_count = 108
+        # Reference profiles without a published SM count keep the A100 value.
+        self.multi_processor_count = prof.get("sm_count") or 108
         self.is_multi_gpu_board = False
         self.is_integrated = False
-        self.max_threads_per_multi_processor = 2048
+        self.max_threads_per_multi_processor = prof.get(
+            "max_threads_per_multiprocessor", 2048
+        )
         self.max_threads_per_block = 1024
-        self.regs_per_block = 65536
-        self.regs_per_multiprocessor = 65536
+        self.regs_per_block = prof.get("regs_per_block", 65536)
+        self.regs_per_multiprocessor = prof.get("regs_per_multiprocessor", 65536)
         self.warp_size = 32
         self.gcnArchName = ""
 

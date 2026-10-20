@@ -84,12 +84,21 @@ def _resolve_total_memory() -> int:
 
 def _profile_entry(profile_id: str) -> dict[str, Any]:
     major, minor = _PROFILE_CC.get(profile_id, (8, 0))
+    profile = _PROFILE_CATALOG.get(profile_id)
     return {
         "profile_id": profile_id,
         "name": _PROFILE_NAMES.get(profile_id, "NVIDIA A100-SXM4-80GB"),
         "total_memory": _PROFILE_TOTAL_MEMORY.get(profile_id, 80 * 1024**3),
         "compute_major": major,
         "compute_minor": minor,
+        "sm_count": profile.sm_count if profile else 108,
+        "max_threads_per_multiprocessor": (
+            profile.max_threads_per_multiprocessor if profile else 2048
+        ),
+        "regs_per_block": profile.regs_per_block if profile else 65536,
+        "regs_per_multiprocessor": (
+            profile.regs_per_multiprocessor if profile else 65536
+        ),
     }
 
 
@@ -99,7 +108,9 @@ def _resolve_per_device_profiles(
     """Resolve per-device profile info from FAKEGPU_PROFILES.
 
     Returns a list of dicts, one per device, each with keys:
-      'profile_id', 'name', 'total_memory', 'compute_major', 'compute_minor'
+      'profile_id', 'name', 'total_memory', 'compute_major', 'compute_minor',
+      'sm_count', 'max_threads_per_multiprocessor', 'regs_per_block',
+      'regs_per_multiprocessor'
     """
     profiles_env = os.environ.get("FAKEGPU_PROFILES", "")
     target_count = int(

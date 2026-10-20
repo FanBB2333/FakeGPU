@@ -181,6 +181,36 @@ print("autocast defaults passed")
         _assert_ok(_run(code), f"autocast defaults ({profile})")
 
 
+def test_fakecuda_device_properties_follow_the_profile() -> None:
+    code = f"""
+from pathlib import Path
+import sys
+
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root))
+
+import fakegpu
+from fakegpu.profile_catalog import get_profile
+
+fakegpu.init(runtime="fakecuda", devices="h100,v100")
+
+import torch
+
+for index, profile_id in enumerate(("h100", "v100")):
+    expected = get_profile(profile_id)
+    properties = torch.cuda.get_device_properties(index)
+    assert properties.multi_processor_count == expected.sm_count, properties
+    assert (
+        properties.max_threads_per_multi_processor
+        == expected.max_threads_per_multiprocessor
+    )
+    assert properties.regs_per_block == expected.regs_per_block
+    assert properties.regs_per_multiprocessor == expected.regs_per_multiprocessor
+print("device properties passed")
+"""
+    _assert_ok(_run(code), "device properties")
+
+
 def test_native_mode_preload_boundaries() -> None:
     from fakegpu._api import _preload_libs_for_mode
 
