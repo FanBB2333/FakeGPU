@@ -1383,8 +1383,9 @@ cublasStatus_t cublasSgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     const size_t a_max_idx = static_cast<size_t>(a_rows - 1) + static_cast<size_t>(a_cols - 1) * static_cast<size_t>(lda);
     const size_t b_max_idx = static_cast<size_t>(b_rows - 1) + static_cast<size_t>(b_cols - 1) * static_cast<size_t>(ldb);
     const size_t c_max_idx = static_cast<size_t>(m - 1) + static_cast<size_t>(n - 1) * static_cast<size_t>(ldc);
-    if (!ensure_allocation_at_least(A, (a_max_idx + 1) * sizeof(float)) ||
-        !ensure_allocation_at_least(B, (b_max_idx + 1) * sizeof(float)) ||
+    // With k == 0 no element of A or B is read.
+    if ((k > 0 && (!ensure_allocation_at_least(A, (a_max_idx + 1) * sizeof(float)) ||
+                   !ensure_allocation_at_least(B, (b_max_idx + 1) * sizeof(float)))) ||
         !ensure_allocation_at_least(C, (c_max_idx + 1) * sizeof(float))) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
@@ -1448,8 +1449,9 @@ cublasStatus_t cublasDgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     const size_t a_max_idx = static_cast<size_t>(a_rows - 1) + static_cast<size_t>(a_cols - 1) * static_cast<size_t>(lda);
     const size_t b_max_idx = static_cast<size_t>(b_rows - 1) + static_cast<size_t>(b_cols - 1) * static_cast<size_t>(ldb);
     const size_t c_max_idx = static_cast<size_t>(m - 1) + static_cast<size_t>(n - 1) * static_cast<size_t>(ldc);
-    if (!ensure_allocation_at_least(A, (a_max_idx + 1) * sizeof(double)) ||
-        !ensure_allocation_at_least(B, (b_max_idx + 1) * sizeof(double)) ||
+    // With k == 0 no element of A or B is read.
+    if ((k > 0 && (!ensure_allocation_at_least(A, (a_max_idx + 1) * sizeof(double)) ||
+                   !ensure_allocation_at_least(B, (b_max_idx + 1) * sizeof(double)))) ||
         !ensure_allocation_at_least(C, (c_max_idx + 1) * sizeof(double))) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
@@ -1833,8 +1835,9 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
     const size_t a_max_idx = static_cast<size_t>(a_rows - 1) + static_cast<size_t>(a_cols - 1) * static_cast<size_t>(lda);
     const size_t b_max_idx = static_cast<size_t>(b_rows - 1) + static_cast<size_t>(b_cols - 1) * static_cast<size_t>(ldb);
     const size_t c_max_idx = static_cast<size_t>(m - 1) + static_cast<size_t>(n - 1) * static_cast<size_t>(ldc);
-    if (!ensure_allocation_at_least(A, (a_max_idx + 1) * getDataTypeSize(Atype)) ||
-        !ensure_allocation_at_least(B, (b_max_idx + 1) * getDataTypeSize(Btype)) ||
+    // With k == 0 no element of A or B is read.
+    if ((k > 0 && (!ensure_allocation_at_least(A, (a_max_idx + 1) * getDataTypeSize(Atype)) ||
+                   !ensure_allocation_at_least(B, (b_max_idx + 1) * getDataTypeSize(Btype)))) ||
         !ensure_allocation_at_least(C, (c_max_idx + 1) * getDataTypeSize(Ctype))) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }

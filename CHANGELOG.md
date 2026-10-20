@@ -112,6 +112,9 @@
   returning device 0.
 - Builds without CPU simulation now count `cublasLtMatmul` calls and FLOPs
   in the report, like `cublasGemmEx` already did.
+- With CPU simulation, `cublasSgemm_v2`, `cublasDgemm_v2` and `cublasGemmEx`
+  accept `k = 0` with padded leading dimensions and scale C by beta instead
+  of returning `CUBLAS_STATUS_INVALID_VALUE`.
 
 ## v1.6.0 - 2026-10-17
 
