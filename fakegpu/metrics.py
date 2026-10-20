@@ -18,8 +18,10 @@ from ._cli import (
     add_json_flag_argument,
     command_prog,
 )
+from ._smi_environment import FAULT_SEVERITY_RANK
 from ._smi_state import (
     DEFAULT_STALE_AFTER_SECONDS,
+    NATIVE_ACTIVITY_COUNTERS,
     _discover_state_paths,
     _load_states,
     _state_sources,
@@ -42,6 +44,159 @@ PROMETHEUS_CONTENT_TYPE = (
     "text/plain; version=0.0.4; charset=utf-8"
 )
 JSON_CONTENT_TYPE = "application/json; charset=utf-8"
+DEVICE_MEMORY_KINDS = (
+    "total",
+    "used",
+    "free",
+    "reported_peak",
+    "tracked",
+    "tracked_peak",
+    "reserved",
+    "reserved_peak",
+    "inactive_split",
+    "headroom",
+)
+PROCESS_MEMORY_KINDS = (
+    "used",
+    "reported_peak",
+    "tracked",
+    "tracked_peak",
+    "reserved",
+    "reserved_peak",
+)
+
+# Each family is (name, help, samples); samples(record) returns the
+# (extra labels, value) pairs of one device, process, or runtime record.
+DEVICE_FAMILIES = (
+    (
+        "fakegpu_device_memory_bytes",
+        "Current and peak device memory values from FakeGPU state.",
+        lambda device: [
+            ({"kind": kind}, device["memory"][f"{kind}_bytes"])
+            for kind in DEVICE_MEMORY_KINDS
+        ],
+    ),
+    (
+        "fakegpu_device_processes",
+        "Published process count by device and state.",
+        lambda device: [
+            ({"status": status}, device[key])
+            for status, key in (
+                ("all", "process_count"),
+                ("stale", "stale_process_count"),
+                ("exited", "exited_process_count"),
+            )
+        ],
+    ),
+    (
+        "fakegpu_device_state_age_seconds",
+        "Maximum age of contributing process state for a device.",
+        lambda device: [({}, device["age_seconds"])],
+    ),
+    (
+        "fakegpu_device_health_severity",
+        "Modeled health severity rank from zero to four.",
+        lambda device: [
+            ({}, _severity_rank(device["health"]["max_severity"]))
+        ],
+    ),
+    (
+        "fakegpu_device_health_events",
+        "Modeled health event occurrences and distinct event types.",
+        lambda device: [
+            ({"kind": "occurrences"}, device["health"]["event_count"]),
+            ({"kind": "types"}, device["health"]["event_types_total"]),
+        ],
+    ),
+    (
+        "fakegpu_device_mig_instances",
+        "Number of modeled MIG compute instances.",
+        lambda device: [({}, device["mig"]["instance_count"])],
+    ),
+    (
+        "fakegpu_device_mig_memory_bytes",
+        "Modeled MIG memory capacity allocation.",
+        lambda device: [
+            ({"kind": "allocated"}, device["mig"]["allocated_memory_bytes"]),
+            (
+                {"kind": "unallocated"},
+                device["mig"]["unallocated_memory_bytes"],
+            ),
+        ],
+    ),
+    (
+        "fakegpu_device_nvlink",
+        "Modeled NVLink relationships and configured bandwidth.",
+        lambda device: [
+            ({"kind": kind}, device["topology"]["nvlink"][kind])
+            for kind in (
+                "active_links",
+                "peer_count",
+                "aggregate_bandwidth_gbps",
+            )
+        ],
+    ),
+    (
+        "fakegpu_device_native_activity",
+        "Aggregated native runtime activity; values may reset.",
+        lambda device: [
+            ({"kind": kind}, device["native_activity"][kind])
+            for kind in NATIVE_ACTIVITY_COUNTERS
+        ],
+    ),
+)
+PROCESS_FAMILIES = (
+    (
+        "fakegpu_process_memory_bytes",
+        "Memory values for bounded retained process series.",
+        lambda process: [
+            ({"kind": kind}, process["memory"][f"{kind}_bytes"])
+            for kind in PROCESS_MEMORY_KINDS
+        ],
+    ),
+    (
+        "fakegpu_process_state_age_seconds",
+        "Age of the state file backing a retained process series.",
+        lambda process: [({}, process["age_seconds"])],
+    ),
+)
+RUNTIME_FAMILIES = (
+    (
+        "fakegpu_publisher_writes",
+        "Publisher write attempts, successes, and failures.",
+        lambda runtime: [
+            ({"result": result}, runtime["publisher"]["health"][key])
+            for result, key in (
+                ("attempted", "attempted_writes"),
+                ("successful", "successful_writes"),
+                ("failed", "failed_writes"),
+            )
+        ],
+    ),
+    (
+        "fakegpu_publisher_duration_microseconds",
+        "Last and maximum state publisher duration.",
+        lambda runtime: [
+            ({"kind": kind}, runtime["publisher"]["health"][key])
+            for kind, key in (
+                ("last", "last_duration_us"),
+                ("maximum", "max_duration_us"),
+            )
+        ],
+    ),
+    (
+        "fakegpu_publisher_state_bytes",
+        "Serialized byte size reported by the state publisher.",
+        lambda runtime: [
+            ({}, runtime["publisher"]["health"]["last_serialized_bytes"])
+        ],
+    ),
+    (
+        "fakegpu_runtime_state_age_seconds",
+        "Age of a FakeGPU publisher runtime state.",
+        lambda runtime: [({}, runtime["age_seconds"])],
+    ),
+)
 
 
 def build_metrics_snapshot(
@@ -191,11 +346,7 @@ def render_prometheus(
         ],
     )
 
-    devices = [
-        item
-        for item in snapshot.get("devices") or []
-        if isinstance(item, Mapping)
-    ]
+    devices = snapshot["devices"]
     _metric_family(
         output,
         "fakegpu_device_info",
@@ -204,209 +355,26 @@ def render_prometheus(
             (
                 {
                     **_device_labels(device),
-                    "name": _text(device.get("name")),
-                    "architecture": _text(
-                        device.get("architecture")
-                    ),
-                    "compute_capability": _text(
-                        device.get("compute_capability")
-                    ),
-                    "state": _text(device.get("status")),
-                    "health": _text(
-                        _mapping(device.get("health")).get("status")
-                    ),
-                    "mig_mode": _text(
-                        _mapping(device.get("mig")).get("mode")
-                    ),
+                    "name": device["name"],
+                    "architecture": device["architecture"],
+                    "compute_capability": device["compute_capability"],
+                    "state": device["status"],
+                    "health": device["health"]["status"],
+                    "mig_mode": device["mig"]["mode"],
                 },
                 1,
             )
             for device in devices
         ],
     )
-    memory_samples = []
-    process_count_samples = []
-    state_age_samples = []
-    health_severity_samples = []
-    health_event_samples = []
-    mig_instance_samples = []
-    mig_memory_samples = []
-    nvlink_samples = []
-    native_samples = []
-    for device in devices:
-        labels = _device_labels(device)
-        memory = _mapping(device.get("memory"))
-        for kind in (
-            "total",
-            "used",
-            "free",
-            "reported_peak",
-            "tracked",
-            "tracked_peak",
-            "reserved",
-            "reserved_peak",
-            "inactive_split",
-            "headroom",
-        ):
-            memory_samples.append(
-                (
-                    {**labels, "kind": kind},
-                    _number(memory.get(f"{kind}_bytes")),
-                )
-            )
-        for status, key in (
-            ("all", "process_count"),
-            ("stale", "stale_process_count"),
-            ("exited", "exited_process_count"),
-        ):
-            process_count_samples.append(
-                (
-                    {**labels, "status": status},
-                    _number(device.get(key)),
-                )
-            )
-        state_age_samples.append(
-            (labels, _number(device.get("age_seconds")))
-        )
-
-        health = _mapping(device.get("health"))
-        health_severity_samples.append(
-            (
-                labels,
-                _severity_rank(health.get("max_severity")),
-            )
-        )
-        health_event_samples.extend(
-            [
-                (
-                    {**labels, "kind": "occurrences"},
-                    _number(health.get("event_count")),
-                ),
-                (
-                    {**labels, "kind": "types"},
-                    _number(health.get("event_types_total")),
-                ),
-            ]
-        )
-
-        mig = _mapping(device.get("mig"))
-        mig_instance_samples.append(
-            (labels, _number(mig.get("instance_count")))
-        )
-        mig_memory_samples.extend(
-            [
-                (
-                    {**labels, "kind": "allocated"},
-                    _number(mig.get("allocated_memory_bytes")),
-                ),
-                (
-                    {**labels, "kind": "unallocated"},
-                    _number(mig.get("unallocated_memory_bytes")),
-                ),
-            ]
-        )
-
-        topology = _mapping(device.get("topology"))
-        nvlink = _mapping(topology.get("nvlink"))
-        nvlink_samples.extend(
-            [
-                (
-                    {**labels, "kind": "active_links"},
-                    _number(nvlink.get("active_links")),
-                ),
-                (
-                    {**labels, "kind": "peer_count"},
-                    _number(nvlink.get("peer_count")),
-                ),
-                (
-                    {
-                        **labels,
-                        "kind": "aggregate_bandwidth_gbps",
-                    },
-                    _number(
-                        nvlink.get("aggregate_bandwidth_gbps")
-                    ),
-                ),
-            ]
-        )
-
-        native = _mapping(device.get("native_activity"))
-        for kind in (
-            "io_calls",
-            "io_bytes",
-            "kernel_launches",
-            "gemm_calls",
-            "gemm_flops",
-            "compatibility_events",
-            "unsupported_api_calls",
-        ):
-            native_samples.append(
-                (
-                    {**labels, "kind": kind},
-                    _number(native.get(kind)),
-                )
-            )
-
-    _metric_family(
+    _entity_families(
         output,
-        "fakegpu_device_memory_bytes",
-        "Current and peak device memory values from FakeGPU state.",
-        memory_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_device_processes",
-        "Published process count by device and state.",
-        process_count_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_device_state_age_seconds",
-        "Maximum age of contributing process state for a device.",
-        state_age_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_device_health_severity",
-        "Modeled health severity rank from zero to four.",
-        health_severity_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_device_health_events",
-        "Modeled health event occurrences and distinct event types.",
-        health_event_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_device_mig_instances",
-        "Number of modeled MIG compute instances.",
-        mig_instance_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_device_mig_memory_bytes",
-        "Modeled MIG memory capacity allocation.",
-        mig_memory_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_device_nvlink",
-        "Modeled NVLink relationships and configured bandwidth.",
-        nvlink_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_device_native_activity",
-        "Aggregated native runtime activity; values may reset.",
-        native_samples,
+        DEVICE_FAMILIES,
+        devices,
+        [_device_labels(device) for device in devices],
     )
 
-    processes = [
-        item
-        for item in snapshot.get("processes") or []
-        if isinstance(item, Mapping)
-    ]
+    processes = snapshot["processes"]
     _metric_family(
         output,
         "fakegpu_process_info",
@@ -415,58 +383,24 @@ def render_prometheus(
             (
                 {
                     **_process_labels(process),
-                    "stage": _text(process.get("stage")),
-                    "state": _text(process.get("status")),
-                    "runtime": _text(process.get("runtime")),
-                    "backend": _text(process.get("backend")),
+                    "stage": process["stage"],
+                    "state": process["status"],
+                    "runtime": process["runtime"],
+                    "backend": process["backend"],
                 },
                 1,
             )
             for process in processes
         ],
     )
-    process_memory_samples = []
-    for process in processes:
-        labels = _process_labels(process)
-        memory = _mapping(process.get("memory"))
-        for kind in (
-            "used",
-            "reported_peak",
-            "tracked",
-            "tracked_peak",
-            "reserved",
-            "reserved_peak",
-        ):
-            process_memory_samples.append(
-                (
-                    {**labels, "kind": kind},
-                    _number(memory.get(f"{kind}_bytes")),
-                )
-            )
-    _metric_family(
+    _entity_families(
         output,
-        "fakegpu_process_memory_bytes",
-        "Memory values for bounded retained process series.",
-        process_memory_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_process_state_age_seconds",
-        "Age of the state file backing a retained process series.",
-        [
-            (
-                _process_labels(process),
-                _number(process.get("age_seconds")),
-            )
-            for process in processes
-        ],
+        PROCESS_FAMILIES,
+        processes,
+        [_process_labels(process) for process in processes],
     )
 
-    runtimes = [
-        item
-        for item in snapshot.get("runtimes") or []
-        if isinstance(item, Mapping)
-    ]
+    runtimes = snapshot["runtimes"]
     _metric_family(
         output,
         "fakegpu_runtime_info",
@@ -475,74 +409,18 @@ def render_prometheus(
             (
                 {
                     **_runtime_labels(runtime),
-                    "state": _text(runtime.get("status")),
+                    "state": runtime["status"],
                 },
                 1,
             )
             for runtime in runtimes
         ],
     )
-    publisher_write_samples = []
-    publisher_duration_samples = []
-    publisher_size_samples = []
-    runtime_age_samples = []
-    for runtime in runtimes:
-        labels = _runtime_labels(runtime)
-        publisher = _mapping(runtime.get("publisher"))
-        health = _mapping(publisher.get("health"))
-        for result, key in (
-            ("attempted", "attempted_writes"),
-            ("successful", "successful_writes"),
-            ("failed", "failed_writes"),
-        ):
-            publisher_write_samples.append(
-                (
-                    {**labels, "result": result},
-                    _number(health.get(key)),
-                )
-            )
-        for kind, key in (
-            ("last", "last_duration_us"),
-            ("maximum", "max_duration_us"),
-        ):
-            publisher_duration_samples.append(
-                (
-                    {**labels, "kind": kind},
-                    _number(health.get(key)),
-                )
-            )
-        publisher_size_samples.append(
-            (
-                labels,
-                _number(health.get("last_serialized_bytes")),
-            )
-        )
-        runtime_age_samples.append(
-            (labels, _number(runtime.get("age_seconds")))
-        )
-    _metric_family(
+    _entity_families(
         output,
-        "fakegpu_publisher_writes",
-        "Publisher write attempts, successes, and failures.",
-        publisher_write_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_publisher_duration_microseconds",
-        "Last and maximum state publisher duration.",
-        publisher_duration_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_publisher_state_bytes",
-        "Serialized byte size reported by the state publisher.",
-        publisher_size_samples,
-    )
-    _metric_family(
-        output,
-        "fakegpu_runtime_state_age_seconds",
-        "Age of a FakeGPU publisher runtime state.",
-        runtime_age_samples,
+        RUNTIME_FAMILIES,
+        runtimes,
+        [_runtime_labels(runtime) for runtime in runtimes],
     )
     return "\n".join(output) + "\n"
 
@@ -615,10 +493,7 @@ class MetricsCollector:
             0.001,
             float(stale_after_seconds),
         )
-        self.max_process_series = min(
-            MAXIMUM_PROCESS_SERIES,
-            max(0, int(max_process_series)),
-        )
+        self.max_process_series = max_process_series
         self.history = MetricsHistory(history_size)
         self._lock = threading.Lock()
 
@@ -644,7 +519,7 @@ class MetricsCollector:
                     now_ns=generated_at_ns,
                 )
             except (KeyError, TypeError, ValueError) as exc:
-                inventory = _empty_inventory()
+                inventory = build_inventory([])
                 errors.append(
                     "inventory: "
                     f"{type(exc).__name__}: "
@@ -1008,19 +883,8 @@ def _device_record(item: Mapping[str, Any]) -> dict[str, Any]:
             item.get("exited_process_count")
         ),
         "memory": {
-            key: _number(memory.get(key))
-            for key in (
-                "total_bytes",
-                "used_bytes",
-                "free_bytes",
-                "reported_peak_bytes",
-                "tracked_bytes",
-                "tracked_peak_bytes",
-                "reserved_bytes",
-                "reserved_peak_bytes",
-                "inactive_split_bytes",
-                "headroom_bytes",
-            )
+            f"{kind}_bytes": _number(memory.get(f"{kind}_bytes"))
+            for kind in DEVICE_MEMORY_KINDS
         },
         "health": {
             "status": _text(
@@ -1068,15 +932,7 @@ def _device_record(item: Mapping[str, Any]) -> dict[str, Any]:
         },
         "native_activity": {
             key: _number(native.get(key))
-            for key in (
-                "io_calls",
-                "io_bytes",
-                "kernel_launches",
-                "gemm_calls",
-                "gemm_flops",
-                "compatibility_events",
-                "unsupported_api_calls",
-            )
+            for key in NATIVE_ACTIVITY_COUNTERS
         },
     }
 
@@ -1097,15 +953,8 @@ def _process_record(item: Mapping[str, Any]) -> dict[str, Any]:
         "runtime": _text(fakegpu.get("runtime")),
         "backend": _text(fakegpu.get("backend")),
         "memory": {
-            key: _number(memory.get(key))
-            for key in (
-                "used_bytes",
-                "reported_peak_bytes",
-                "tracked_bytes",
-                "tracked_peak_bytes",
-                "reserved_bytes",
-                "reserved_peak_bytes",
-            )
+            f"{kind}_bytes": _number(memory.get(f"{kind}_bytes"))
+            for kind in PROCESS_MEMORY_KINDS
         },
     }
 
@@ -1154,14 +1003,33 @@ def _metric_family(
         output.append(f"{name}{suffix} {_format_number(value)}")
 
 
+def _entity_families(
+    output: list[str],
+    families: Sequence[tuple[str, str, Any]],
+    items: Sequence[Mapping[str, Any]],
+    label_sets: Sequence[Mapping[str, str]],
+) -> None:
+    for name, help_text, samples in families:
+        _metric_family(
+            output,
+            name,
+            help_text,
+            [
+                ({**labels, **extra}, value)
+                for item, labels in zip(items, label_sets)
+                for extra, value in samples(item)
+            ],
+        )
+
+
 def _device_labels(
     device: Mapping[str, Any],
 ) -> dict[str, str]:
     return {
-        "host": _text(device.get("host")),
-        "gpu_index": str(_number(device.get("index"))),
-        "gpu_uuid": _text(device.get("uuid")),
-        "profile_id": _text(device.get("profile_id")),
+        "host": device["host"],
+        "gpu_index": str(device["index"]),
+        "gpu_uuid": device["uuid"],
+        "profile_id": device["profile_id"],
     }
 
 
@@ -1169,11 +1037,11 @@ def _process_labels(
     process: Mapping[str, Any],
 ) -> dict[str, str]:
     return {
-        "host": _text(process.get("host")),
-        "gpu_index": str(_number(process.get("gpu_index"))),
-        "gpu_uuid": _text(process.get("gpu_uuid")),
-        "pid": str(_number(process.get("pid"))),
-        "process_name": _text(process.get("process_name")),
+        "host": process["host"],
+        "gpu_index": str(process["gpu_index"]),
+        "gpu_uuid": process["gpu_uuid"],
+        "pid": str(process["pid"]),
+        "process_name": process["process_name"],
     }
 
 
@@ -1181,11 +1049,11 @@ def _runtime_labels(
     runtime: Mapping[str, Any],
 ) -> dict[str, str]:
     return {
-        "host": _text(runtime.get("host")),
-        "pid": str(_number(runtime.get("pid"))),
-        "process_name": _text(runtime.get("process_name")),
-        "runtime": _text(runtime.get("runtime")),
-        "backend": _text(runtime.get("backend")),
+        "host": runtime["host"],
+        "pid": str(runtime["pid"]),
+        "process_name": runtime["process_name"],
+        "runtime": runtime["runtime"],
+        "backend": runtime["backend"],
     }
 
 
@@ -1243,29 +1111,11 @@ def _text(
     limit: int = MAXIMUM_LABEL_LENGTH,
 ) -> str:
     text = str(value) if value is not None else default
-    return text[: max(0, int(limit))]
+    return text[:limit]
 
 
 def _severity_rank(value: Any) -> int:
-    return {
-        "none": 0,
-        "info": 1,
-        "warning": 2,
-        "error": 3,
-        "critical": 4,
-    }.get(_text(value).lower(), 0)
-
-
-def _empty_inventory() -> dict[str, Any]:
-    return {
-        "device_count": 0,
-        "mig_instance_count": 0,
-        "process_count": 0,
-        "runtime_count": 0,
-        "devices": [],
-        "processes": [],
-        "runtimes": [],
-    }
+    return FAULT_SEVERITY_RANK.get(_text(value).lower(), 0)
 
 
 def _positive_float(value: str) -> float:
