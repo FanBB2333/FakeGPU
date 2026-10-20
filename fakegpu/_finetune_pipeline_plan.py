@@ -26,6 +26,12 @@ from .finetune_window_estimator import _DENSE_MODELS
 
 SCHEMA_VERSION = "fakegpu.finetune_pipeline_plan.v1"
 _WORK_KINDS = {"optimizer_update", "evaluation", "checkpoint"}
+_NATIVE_PACKING_FIELDS = (
+    "microsteps_per_epoch",
+    "batch_sampler",
+    "native_drop_last",
+    "row_logical_sequences",
+)
 _PREPROCESSING_FIELDS = (
     "overwrite_cache",
     "tokenized_path",
@@ -559,16 +565,9 @@ def pipeline_plan_from_run(run: Mapping[str, Any]) -> dict[str, Any]:
         signature.get("sampler_observation_version")
         == "fakegpu.finetune_sampler_plan.v3"
     ):
-        sampling = run.get("sampling_plan", {})
-        packing = sampling.get("packing", {})
+        packing = run["sampling_plan"]["packing"]
         plan["setup_workload"]["native_packing"] = {
-            key: deepcopy(packing[key])
-            for key in (
-                "microsteps_per_epoch",
-                "batch_sampler",
-                "native_drop_last",
-                "row_logical_sequences",
-            )
+            key: deepcopy(packing[key]) for key in _NATIVE_PACKING_FIELDS
         }
     return validate_pipeline_plan(plan)
 

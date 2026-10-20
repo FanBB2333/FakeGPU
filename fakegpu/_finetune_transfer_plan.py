@@ -15,6 +15,7 @@ import math
 from ._finetune_model import native_config_signature, native_execution_signature
 from ._finetune_pipeline_plan import (
     SCHEMA_VERSION as PIPELINE_SCHEMA,
+    _NATIVE_PACKING_FIELDS,
     _describe_components,
     _digest,
     pipeline_plan_from_run,
@@ -145,17 +146,7 @@ def validate_transfer_plan(plan):
             raise FinetuneEstimateError(
                 "packed source seed or execution flag differs from its signature"
             )
-        native = {
-            key: value
-            for key, value in sampling["packing"].items()
-            if key
-            in {
-                "microsteps_per_epoch",
-                "batch_sampler",
-                "native_drop_last",
-                "row_logical_sequences",
-            }
-        }
+        native = {key: sampling["packing"][key] for key in _NATIVE_PACKING_FIELDS}
         if plan["setup_workload"].get("native_packing") != native:
             raise FinetuneEstimateError(
                 "packed setup epoch counts differ from the sampled bins"

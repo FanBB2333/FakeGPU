@@ -719,19 +719,11 @@ def validate_sampling_verification(plan, updates, verification):
 class NativeBatchMatcher:
     """Compare consumed native inputs against a precomputed target or prefix."""
 
-    def __init__(self, plan, *, expected_updates=None):
+    def __init__(self, plan):
         self.plan = validate_sampler_plan(plan)
-        count = self.plan["workload"]["optimizer_steps"]
-        if expected_updates is None:
-            expected_updates = count
-        _integer(expected_updates, "expected_updates")
-        if expected_updates > count:
-            raise FinetuneEstimateError("native matcher prefix exceeds planned updates")
-        self.expected_updates = expected_updates
+        self.expected_updates = self.plan["workload"]["optimizer_steps"]
         self.batches = [
-            batch
-            for update in self.plan["updates"][:expected_updates]
-            for batch in update["batches"]
+            batch for update in self.plan["updates"] for batch in update["batches"]
         ]
         self.consumed = 0
         self.actual_hashes = []
