@@ -94,6 +94,11 @@ int map_virtual_device_to_real(int virtual_device) {
     return mapped;
 }
 
+bool is_virtual_device(CUdevice dev) {
+    GlobalState::instance().initialize();
+    return dev >= 0 && dev < GlobalState::instance().get_device_count();
+}
+
 // Device ordinal to pass to the real driver: virtual devices map onto the
 // physical ones in hybrid mode; passthrough already uses physical ordinals.
 CUdevice real_device(CUdevice dev) {
@@ -261,6 +266,56 @@ int lookup_context_mapping(CUcontext ctx) {
     auto it = g_ctx_to_virtual_device.find(ctx);
     if (it == g_ctx_to_virtual_device.end()) return -1;
     return it->second;
+}
+
+// Simulated contexts encode the device ordinal + 1 so that no context is NULL.
+CUcontext fake_context(int dev) {
+    return (CUcontext)(uintptr_t)(dev + 1);
+}
+
+int fake_context_device(CUcontext ctx) {
+    return static_cast<int>(reinterpret_cast<uintptr_t>(ctx) - 1);
+}
+
+void make_fake_context_current(CUcontext ctx) {
+    current_context_device = ctx == nullptr ? 0 : fake_context_device(ctx);
+    GlobalState::instance().set_current_device(current_context_device);
+}
+
+// Shared by cuCtxCreate and cuDevicePrimaryCtxRetain.  real_call(device)
+// creates or retains the real context for a physical device ordinal.
+template <class RealCall>
+CUresult bind_context(CUcontext* pctx, CUdevice dev, const char* api_name, RealCall real_call) {
+    const BackendConfig& config = BackendConfig::instance();
+
+    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
+        CUresult result = real_call(dev);
+        if (result == CUDA_SUCCESS) {
+            current_context_device = dev;
+            track_context_mapping(*pctx, dev);
+        }
+        return result;
+    }
+
+    if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
+
+    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
+        HybridMemoryManager::instance().initialize();
+        CUresult result = real_call(map_virtual_device_to_real(dev));
+        if (result == CUDA_SUCCESS) {
+            current_context_device = dev;
+            GlobalState::instance().set_current_device(dev);
+            track_context_mapping(*pctx, dev);
+        }
+        return result;
+    }
+
+    // Simulate mode
+    *pctx = fake_context(dev);
+    current_context_device = dev;
+    GlobalState::instance().set_current_device(dev);
+    FGPU_LOG("[FakeCUDA-Driver] %s for device %d, context=%p\n", api_name, dev, *pctx);
+    return CUDA_SUCCESS;
 }
 
 bool lookup_stream_flags(CUstream stream, unsigned int& flags) {
@@ -571,11 +626,7 @@ CUresult cuDeviceGet(CUdevice *device, int ordinal) {
         return CudaDriverPassthrough::instance().cuDeviceGet(device, ordinal);
     }
 
-    GlobalState::instance().initialize();
-    int count = GlobalState::instance().get_device_count();
-    if (ordinal < 0 || ordinal >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
+    if (!is_virtual_device(ordinal)) return CUDA_ERROR_INVALID_DEVICE;
 
     *device = ordinal;
     FGPU_LOG("[FakeCUDA-Driver] cuDeviceGet(%d) returning device %d\n", ordinal, *device);
@@ -590,11 +641,7 @@ CUresult cuDeviceGetName(char *name, int len, CUdevice dev) {
         return CudaDriverPassthrough::instance().cuDeviceGetName(name, len, dev);
     }
 
-    GlobalState::instance().initialize();
-    int count = GlobalState::instance().get_device_count();
-    if (dev < 0 || dev >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
+    if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
 
     Device& device = GlobalState::instance().get_device(dev);
     strncpy(name, device.name.c_str(), len - 1);
@@ -616,12 +663,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
         return CudaDriverPassthrough::instance().cuDeviceGetAttribute(pi, attrib, real_device(dev));
     }
 
-    GlobalState::instance().initialize();
-
-    int count = GlobalState::instance().get_device_count();
-    if (dev < 0 || dev >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
+    if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
 
     Device& device = GlobalState::instance().get_device(dev);
 
@@ -854,12 +896,7 @@ CUresult cuDeviceTotalMem(size_t *bytes, CUdevice dev) {
         return CudaDriverPassthrough::instance().cuDeviceTotalMem(bytes, dev);
     }
 
-    GlobalState::instance().initialize();
-
-    int count = GlobalState::instance().get_device_count();
-    if (dev < 0 || dev >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
+    if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
 
     Device& device = GlobalState::instance().get_device(dev);
     size_t total = device.total_memory;
@@ -883,12 +920,7 @@ CUresult cuDeviceGetUuid(CUuuid *uuid, CUdevice dev) {
         return CudaDriverPassthrough::instance().cuDeviceGetUuid(uuid, real_device(dev));
     }
 
-    GlobalState::instance().initialize();
-
-    int count = GlobalState::instance().get_device_count();
-    if (dev < 0 || dev >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
+    if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
 
     memset(uuid->bytes, 0, sizeof(uuid->bytes));
     memcpy(uuid->bytes, &dev, std::min(sizeof(dev), sizeof(uuid->bytes)));
@@ -898,42 +930,9 @@ CUresult cuDeviceGetUuid(CUuuid *uuid, CUdevice dev) {
 // Context management (simplified - we don't really need contexts)
 CUresult cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev) {
     if (!pctx) return CUDA_ERROR_INVALID_VALUE;
-
-    const BackendConfig& config = BackendConfig::instance();
-
-    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        CUresult result = CudaDriverPassthrough::instance().cuCtxCreate(pctx, flags, dev);
-        if (result == CUDA_SUCCESS) {
-            current_context_device = dev;
-            track_context_mapping(*pctx, dev);
-        }
-        return result;
-    }
-
-    GlobalState::instance().initialize();
-    int count = GlobalState::instance().get_device_count();
-    if (dev < 0 || dev >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
-
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
-        HybridMemoryManager::instance().initialize();
-        const int real_dev = map_virtual_device_to_real(dev);
-        CUresult result = CudaDriverPassthrough::instance().cuCtxCreate(pctx, flags, real_dev);
-        if (result == CUDA_SUCCESS) {
-            current_context_device = dev;
-            GlobalState::instance().set_current_device(dev);
-            track_context_mapping(*pctx, dev);
-        }
-        return result;
-    }
-
-    // Simulate mode - Return a fake context pointer (just use device number + 1 to avoid NULL)
-    *pctx = (CUcontext)(uintptr_t)(dev + 1);
-    current_context_device = dev;
-    GlobalState::instance().set_current_device(dev);
-    FGPU_LOG("[FakeCUDA-Driver] cuCtxCreate for device %d, context=%p\n", dev, *pctx);
-    return CUDA_SUCCESS;
+    return bind_context(pctx, dev, "cuCtxCreate", [&](CUdevice device) {
+        return CudaDriverPassthrough::instance().cuCtxCreate(pctx, flags, device);
+    });
 }
 
 CUresult cuCtxDestroy(CUcontext ctx) {
@@ -964,12 +963,7 @@ CUresult cuCtxSetCurrent(CUcontext ctx) {
         return result;
     }
 
-    if (ctx == nullptr) {
-        current_context_device = 0;
-    } else {
-        current_context_device = (int)(uintptr_t)ctx - 1;
-    }
-    GlobalState::instance().set_current_device(current_context_device);
+    make_fake_context_current(ctx);
     FGPU_LOG("[FakeCUDA-Driver] cuCtxSetCurrent(%p) -> device %d\n", ctx, current_context_device);
     return CUDA_SUCCESS;
 }
@@ -979,7 +973,7 @@ CUresult cuCtxGetCurrent(CUcontext *pctx) {
     if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuCtxGetCurrent(pctx);
     }
-    *pctx = (CUcontext)(uintptr_t)(current_context_device + 1);
+    *pctx = fake_context(current_context_device);
     return CUDA_SUCCESS;
 }
 
@@ -1176,42 +1170,9 @@ CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteC
 // Primary context management
 CUresult cuDevicePrimaryCtxRetain(CUcontext *pctx, CUdevice dev) {
     if (!pctx) return CUDA_ERROR_INVALID_VALUE;
-
-    const BackendConfig& config = BackendConfig::instance();
-
-    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        CUresult result = CudaDriverPassthrough::instance().cuDevicePrimaryCtxRetain(pctx, dev);
-        if (result == CUDA_SUCCESS) {
-            current_context_device = dev;
-            track_context_mapping(*pctx, dev);
-        }
-        return result;
-    }
-
-    GlobalState::instance().initialize();
-    int count = GlobalState::instance().get_device_count();
-    if (dev < 0 || dev >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
-
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
-        HybridMemoryManager::instance().initialize();
-        const int real_dev = map_virtual_device_to_real(dev);
-        CUresult result = CudaDriverPassthrough::instance().cuDevicePrimaryCtxRetain(pctx, real_dev);
-        if (result == CUDA_SUCCESS) {
-            current_context_device = dev;
-            GlobalState::instance().set_current_device(dev);
-            track_context_mapping(*pctx, dev);
-        }
-        return result;
-    }
-
-    // Simulate mode: Return a fake context pointer (just use device number + 1 to avoid NULL)
-    *pctx = (CUcontext)(uintptr_t)(dev + 1);
-    current_context_device = dev;
-    GlobalState::instance().set_current_device(dev);
-    FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxRetain for device %d, context=%p\n", dev, *pctx);
-    return CUDA_SUCCESS;
+    return bind_context(pctx, dev, "cuDevicePrimaryCtxRetain", [&](CUdevice device) {
+        return CudaDriverPassthrough::instance().cuDevicePrimaryCtxRetain(pctx, device);
+    });
 }
 
 CUresult cuDevicePrimaryCtxRelease(CUdevice dev) {
@@ -1221,11 +1182,7 @@ CUresult cuDevicePrimaryCtxRelease(CUdevice dev) {
         return CudaDriverPassthrough::instance().cuDevicePrimaryCtxRelease(dev);
     }
 
-    GlobalState::instance().initialize();
-    int count = GlobalState::instance().get_device_count();
-    if (dev < 0 || dev >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
+    if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
 
     if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
         const int real_dev = map_virtual_device_to_real(dev);
@@ -1244,12 +1201,7 @@ CUresult cuDevicePrimaryCtxGetState(CUdevice dev, unsigned int *flags, int *acti
         return real_fn(real_device(dev), flags, active);
     }
 
-    GlobalState::instance().initialize();
-
-    int count = GlobalState::instance().get_device_count();
-    if (dev < 0 || dev >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
+    if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
 
     if (flags) *flags = 0;
     if (active) *active = 1;  // Always report as active
@@ -1265,11 +1217,7 @@ CUresult cuDevicePrimaryCtxSetFlags(CUdevice dev, unsigned int flags) {
         if (real_fn) return real_fn(real_dev, flags);
     }
 
-    GlobalState::instance().initialize();
-    int count = GlobalState::instance().get_device_count();
-    if (dev < 0 || dev >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
+    if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
 
     FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxSetFlags for device %d, flags=%u\n", dev, flags);
     return CUDA_SUCCESS;
@@ -1280,11 +1228,7 @@ CUresult cuDevicePrimaryCtxReset(CUdevice dev) {
         return CudaDriverPassthrough::instance().cuDevicePrimaryCtxReset(real_device(dev));
     }
 
-    GlobalState::instance().initialize();
-    int count = GlobalState::instance().get_device_count();
-    if (dev < 0 || dev >= count) {
-        return CUDA_ERROR_INVALID_DEVICE;
-    }
+    if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
 
     FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxReset for device %d\n", dev);
     return CUDA_SUCCESS;
@@ -1307,12 +1251,7 @@ CUresult cuCtxPushCurrent(CUcontext ctx) {
         return result;
     }
 
-    if (ctx == nullptr) {
-        current_context_device = 0;
-    } else {
-        current_context_device = (int)(uintptr_t)ctx - 1;
-    }
-    GlobalState::instance().set_current_device(current_context_device);
+    make_fake_context_current(ctx);
     FGPU_LOG("[FakeCUDA-Driver] cuCtxPushCurrent(%p) -> device %d\n", ctx, current_context_device);
     return CUDA_SUCCESS;
 }
@@ -1326,7 +1265,7 @@ CUresult cuCtxPopCurrent(CUcontext *pctx) {
         return real_fn(pctx);
     }
 
-    *pctx = (CUcontext)(uintptr_t)(current_context_device + 1);
+    *pctx = fake_context(current_context_device);
     FGPU_LOG("[FakeCUDA-Driver] cuCtxPopCurrent returning context %p\n", *pctx);
     return CUDA_SUCCESS;
 }
@@ -1475,7 +1414,7 @@ CUresult cuStreamGetCtx(CUstream hStream, CUcontext *pctx) {
     if (!lookup_stream_flags(hStream, flags)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    if (pctx) *pctx = (CUcontext)(uintptr_t)(current_context_device + 1);
+    if (pctx) *pctx = fake_context(current_context_device);
     return CUDA_SUCCESS;
 }
 
@@ -1731,7 +1670,7 @@ CUresult cuCtxEnablePeerAccess(CUcontext peerContext, unsigned int Flags) {
     const CUresult result = cuDeviceCanAccessPeer(
         &can_access,
         current_context_device,
-        static_cast<CUdevice>(reinterpret_cast<uintptr_t>(peerContext) - 1));
+        fake_context_device(peerContext));
     if (result != CUDA_SUCCESS) return result;
     return can_access ? CUDA_SUCCESS : CUDA_ERROR_PEER_ACCESS_UNSUPPORTED;
 }
@@ -2056,7 +1995,7 @@ CUresult cuPointerGetAttribute(void *data, CUpointer_attribute attribute, CUdevi
 
     switch (attribute) {
         case CU_POINTER_ATTRIBUTE_CONTEXT:
-            *(CUcontext*)data = (CUcontext)(uintptr_t)(alloc_device + 1);
+            *(CUcontext*)data = fake_context(alloc_device);
             break;
         case CU_POINTER_ATTRIBUTE_MEMORY_TYPE:
             *(CUmemorytype*)data = mem_type;
@@ -2283,8 +2222,8 @@ CUresult cuMemcpyPeer(CUdeviceptr dstDevice, CUcontext dstContext, CUdeviceptr s
     }
 
     memcpy((void*)dstDevice, (void*)srcDevice, ByteCount);
-    const int dst_device = dstContext ? (static_cast<int>(reinterpret_cast<uintptr_t>(dstContext)) - 1) : current_context_device;
-    const int src_device = srcContext ? (static_cast<int>(reinterpret_cast<uintptr_t>(srcContext)) - 1) : current_context_device;
+    const int dst_device = dstContext ? fake_context_device(dstContext) : current_context_device;
+    const int src_device = srcContext ? fake_context_device(srcContext) : current_context_device;
     GlobalState::instance().record_memcpy_peer(dst_device, src_device, ByteCount);
     return CUDA_SUCCESS;
 }
