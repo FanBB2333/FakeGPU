@@ -71,6 +71,9 @@
   inverted.
 - `cuGetProcAddress_v2` with a NULL `pfn` and a non-NULL `symbolStatus` now
   returns `CUDA_ERROR_INVALID_VALUE` with status 1 instead of crashing.
+- `cuCtxPushCurrent` now also switches the Runtime's current device, as
+  `cuCtxSetCurrent` does, so pinned host allocations and peer-access checks
+  use the pushed context's device.
 
 ## v1.6.0 - 2026-10-17
 

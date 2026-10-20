@@ -73,6 +73,25 @@ def check_get_proc_address_v2_rejects_null_output(driver: ctypes.CDLL) -> None:
     )
 
 
+def check_context_push_switches_runtime_device(runtime: ctypes.CDLL) -> None:
+    # libcudart carries its own copy of the Driver API, so push through it.
+    runtime.cuCtxPushCurrent.argtypes = [c_void_p]
+    runtime.cuCtxPopCurrent.argtypes = [ctypes.POINTER(c_void_p)]
+    _check(runtime.cudaSetDevice(0) == 0, "cudaSetDevice(0) failed")
+    # Simulated contexts encode device ordinal + 1, so context 2 belongs to device 1.
+    _check(runtime.cuCtxPushCurrent(c_void_p(2)) == CUDA_SUCCESS, "cuCtxPushCurrent failed")
+    device = ctypes.c_int(-1)
+    runtime.cudaGetDevice(ctypes.byref(device))
+    _check(device.value == 1, f"cudaGetDevice after cuCtxPushCurrent returned {device.value}")
+    # Peer access from the pushed device 1 to device 0 is allowed; 0 -> 0 is not.
+    result = runtime.cudaDeviceEnablePeerAccess(0, 0)
+    _check(result == 0, f"cudaDeviceEnablePeerAccess(0) after cuCtxPushCurrent returned {result}")
+    runtime.cudaDeviceDisablePeerAccess(0)
+    popped = c_void_p()
+    runtime.cuCtxPopCurrent(ctypes.byref(popped))
+    runtime.cudaSetDevice(0)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -95,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     check_failed_event_record_keeps_stream_idle(driver)
     check_driver_entry_point_status(runtime)
     check_get_proc_address_v2_rejects_null_output(driver)
+    check_context_push_switches_runtime_device(runtime)
     print("CUDA API contract validation passed")
     return 0
 

@@ -1684,6 +1684,9 @@ CUresult cuCtxPushCurrent(CUcontext ctx) {
         if (result == CUDA_SUCCESS) {
             const int mapped = lookup_context_mapping(ctx);
             if (mapped >= 0) current_context_device = mapped;
+            if (config.virtualize_device_info()) {
+                GlobalState::instance().set_current_device(current_context_device);
+            }
         }
         return result;
     }
@@ -1693,6 +1696,7 @@ CUresult cuCtxPushCurrent(CUcontext ctx) {
     } else {
         current_context_device = (int)(uintptr_t)ctx - 1;
     }
+    GlobalState::instance().set_current_device(current_context_device);
     FGPU_LOG("[FakeCUDA-Driver] cuCtxPushCurrent(%p) -> device %d\n", ctx, current_context_device);
     return CUDA_SUCCESS;
 }
