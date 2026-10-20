@@ -67,14 +67,14 @@ def _real_cuda_environment(
     framework_version: str,
     software: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    cuda = getattr(torch_module, "cuda", None)
-    if cuda is None or not cuda.is_available():
+    cuda = torch_module.cuda
+    if not cuda.is_available():
         raise CalibrationError(
             "building a CUDA serving sample requires an available real "
             "CUDA device"
         )
     _reject_simulated_cuda_environment(torch_module)
-    cuda_version = str(getattr(torch_module.version, "cuda", "") or "")
+    cuda_version = str(torch_module.version.cuda or "")
     if not cuda_version:
         raise CalibrationError("PyTorch does not report a CUDA runtime version")
     device_index = int(cuda.current_device())
@@ -145,19 +145,8 @@ def _real_cuda_environment(
         if isinstance(gpu_uuid, bytes):
             gpu_uuid = gpu_uuid.decode("utf-8", errors="replace")
         environment["gpu_uuid"] = str(gpu_uuid)
-    allocator_reader = getattr(cuda, "get_allocator_backend", None)
-    if callable(allocator_reader):
-        environment["allocator"] = str(allocator_reader())
+    environment["allocator"] = str(cuda.get_allocator_backend())
     return environment
-
-
-def _transformers_torch_dtype(torch_module: Any, dtype: str) -> Any:
-    try:
-        return getattr(torch_module, dtype)
-    except AttributeError as exc:
-        raise CalibrationError(
-            f"installed PyTorch does not expose dtype {dtype!r}"
-        ) from exc
 
 
 def _synthetic_token_id(config: Any) -> int:
@@ -432,8 +421,8 @@ def measure_transformers_serving_sample(
         "transformers",
         purpose="measuring Transformers serving memory",
     )
-    cuda = getattr(torch_module, "cuda", None)
-    if cuda is None or not cuda.is_available():
+    cuda = torch_module.cuda
+    if not cuda.is_available():
         raise CalibrationError(
             "Transformers serving measurement requires an available real "
             "CUDA device"
@@ -442,7 +431,7 @@ def measure_transformers_serving_sample(
     device_index = int(cuda.current_device())
     cuda.set_device(device_index)
     device = f"cuda:{device_index}"
-    dtype = _transformers_torch_dtype(torch_module, workload["dtype"])
+    dtype = getattr(torch_module, workload["dtype"])
 
     load_kwargs: dict[str, Any] = {
         "attn_implementation": workload["attention_implementation"],
@@ -498,7 +487,7 @@ def measure_transformers_serving_sample(
         cuda.synchronize(device_index)
         cuda.empty_cache()
         _reset_cuda_phase_peak(cuda, device_index)
-        for _ in range(max(0, workload["generated_tokens"] - 1)):
+        for _ in range(workload["generated_tokens"] - 1):
             decode_output = model(
                 input_ids=next_token,
                 past_key_values=past_key_values,
