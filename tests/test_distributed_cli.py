@@ -28,12 +28,31 @@ def test_bandwidth_summary_does_not_print_pass_for_error(capsys) -> None:
             "rank_reports": [
                 {"rank": 0, "algorithmic_bandwidth_gbps": 0.0}
             ],
-        }
+        },
+        show_cluster_report=False,
     )
 
     output = capsys.readouterr().out
     assert "FakeGPU TCP bandwidth benchmark: FAIL" in output
     assert "benchmark: PASS" not in output
+
+
+def test_bandwidth_summary_prints_cluster_report_only_when_kept(capsys) -> None:
+    report = {
+        "status": "success",
+        "endpoint": "127.0.0.1:1234",
+        "world_size": 1,
+        "local_ranks": [0],
+        "payload_bytes_per_rank": 1024,
+        "rank_reports": [{"rank": 0, "algorithmic_bandwidth_gbps": 1.0}],
+        "cluster_report": {"cluster": {"markdown_report_path": "/tmp/r/cluster_report.md"}},
+    }
+
+    _print_bandwidth_summary(report, show_cluster_report=False)
+    assert "cluster communication report" not in capsys.readouterr().out
+
+    _print_bandwidth_summary(report, show_cluster_report=True)
+    assert "cluster communication report: /tmp/r/cluster_report.md" in capsys.readouterr().out
 
 
 def test_local_topology_takes_the_node_fabric_from_the_platform(tmp_path) -> None:

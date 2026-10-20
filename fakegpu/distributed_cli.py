@@ -659,7 +659,9 @@ def _format_bytes(size: int) -> str:
     return f"{size} B"
 
 
-def _print_bandwidth_summary(report: dict[str, Any]) -> None:
+def _print_bandwidth_summary(
+    report: dict[str, Any], *, show_cluster_report: bool
+) -> None:
     status = str(report.get("status") or "error").lower()
     label = "PASS" if status == "success" else "FAIL"
     print(f"FakeGPU TCP bandwidth benchmark: {label}")
@@ -696,7 +698,8 @@ def _print_bandwidth_summary(report: dict[str, Any]) -> None:
                 f"{rank_report['algorithmic_bandwidth_gbps']:.3f} Gbit/s"
             )
     cluster_report = report.get("cluster_report")
-    if isinstance(cluster_report, dict):
+    # Without --cluster-report the report lives in a deleted temp directory.
+    if show_cluster_report and isinstance(cluster_report, dict):
         cluster = cluster_report.get("cluster")
         if isinstance(cluster, dict) and cluster.get("markdown_report_path"):
             print(
@@ -999,7 +1002,9 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
 
         if args.json_path:
             emit_json(args.json_path, report)
-        _print_bandwidth_summary(report)
+        _print_bandwidth_summary(
+            report, show_cluster_report=args.cluster_report is not None
+        )
         return 0
     except (
             argparse.ArgumentTypeError,
