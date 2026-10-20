@@ -268,6 +268,20 @@ def test_malformed_state_fields_do_not_crash_the_machine(service, child, device,
     assert len(service.status()["processes"]) == 1
 
 
+@pytest.mark.parametrize("profile_id", ["custom-gpu", None])
+def test_devices_outside_the_catalog_do_not_crash_the_machine(service, child, profile_id):
+    publish(service, child.pid)
+    path = service.paths.state_dir / f"{child.pid}.json"
+    state = json.loads(path.read_text())
+    state["devices"][1]["profile_id"] = profile_id
+    path.write_text(json.dumps(state))
+    service.poll()
+    device = service.status()["devices"][-1]
+    assert device["in_layout"] is False
+    assert device["profile_id"] == (profile_id or "unknown")
+    assert device["power_limit_w"] is None
+
+
 def test_client_timeout_is_recoverable_by_the_console(tmp_path):
     paths = MachinePaths(tmp_path)
     paths.create()

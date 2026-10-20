@@ -46,7 +46,7 @@ from .._process import describe, process_marker
 from .._smi_environment import _nonnegative_int
 from .._smi_state import _load_states, _synthetic_uuid, build_inventory
 from .._version import __version__
-from ..profile_catalog import get_profile
+from ..profile_catalog import ProfileCatalogError, get_profile
 from .config import MachineConfig, MachinePaths, layout_text
 
 PROTOCOL = "fakegpu.machine.v1"
@@ -440,20 +440,43 @@ class MachineService:
     def _device_row(
         self, index: int, profile_id: str, uuid: str, observed: dict | None, users: dict, in_layout: bool
     ) -> dict:
-        profile = get_profile(profile_id)
+        try:
+            profile = get_profile(profile_id)
+        except ProfileCatalogError:
+            # Only devices brought in by a process can use a profile outside this
+            # daemon's catalog (parse_devices checks the layout), so describe them
+            # by what that process published.
+            identity = (
+                profile_id,
+                observed["name"],
+                str(observed["architecture"] or "unknown"),
+                str(observed["compute_capability"] or "-"),
+                None,
+                0,
+            )
+        else:
+            identity = (
+                profile.id,
+                profile.torch_name or profile.name,
+                profile.architecture,
+                profile.compute_capability_text,
+                profile.max_power_limit_mw / 1000 or None,
+                profile.memory_bytes,
+            )
+        profile_id, name, architecture, capability, power_limit, catalog_memory = identity
         memory = (observed or {}).get("memory") or {}
         allocator = (observed or {}).get("allocator") or {}
-        total = int(memory.get("total_bytes") or profile.memory_bytes)
+        total = int(memory.get("total_bytes") or catalog_memory)
         used = int(memory.get("used_bytes") or 0)
         return {
             "index": index,
             "uuid": uuid,
-            "profile_id": profile.id,
-            "name": profile.torch_name or profile.name,
-            "architecture": profile.architecture.capitalize(),
-            "compute_capability": profile.compute_capability_text,
+            "profile_id": profile_id,
+            "name": name,
+            "architecture": architecture.capitalize(),
+            "compute_capability": capability,
             "in_layout": in_layout,
-            "power_limit_w": profile.max_power_limit_mw / 1000 or None,
+            "power_limit_w": power_limit,
             "memory": {
                 "total_bytes": total,
                 "used_bytes": used,
