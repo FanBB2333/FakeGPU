@@ -100,6 +100,128 @@ CUdevice real_device(CUdevice dev) {
     return BackendConfig::instance().mode() == FakeGpuMode::Hybrid ? map_virtual_device_to_real(dev) : dev;
 }
 
+// Allocates for a hybrid-mode virtual device according to the memory manager's
+// decision.  alloc_real(CUdeviceptr*) performs the real device allocation.
+template <class RealAlloc>
+CUresult hybrid_allocate(
+    CUdeviceptr* dptr,
+    size_t bytesize,
+    int virtual_device,
+    HybridMemoryManager::AllocationDecision decision,
+    RealAlloc&& alloc_real) {
+    constexpr unsigned int kManagedAttachGlobal = 1; // CU_MEM_ATTACH_GLOBAL
+    constexpr unsigned int kHostAllocDevicemap = 2;  // CU_MEMHOSTALLOC_DEVICEMAP
+
+    CUresult result = CUDA_SUCCESS;
+    HybridAllocation::Type alloc_type = HybridAllocation::Type::RealDevice;
+    void* backing_ptr = nullptr;
+    CUdeviceptr out_ptr = 0;
+
+    switch (decision) {
+        case HybridMemoryManager::AllocationDecision::UseReal: {
+            result = alloc_real(&out_ptr);
+            alloc_type = HybridAllocation::Type::RealDevice;
+            break;
+        }
+        case HybridMemoryManager::AllocationDecision::UseManaged: {
+            result = CudaDriverPassthrough::instance().cuMemAllocManaged(&out_ptr, bytesize, kManagedAttachGlobal);
+            alloc_type = HybridAllocation::Type::Managed;
+            break;
+        }
+        case HybridMemoryManager::AllocationDecision::UseMappedHost: {
+            void* host_ptr = nullptr;
+            result = CudaDriverPassthrough::instance().cuMemHostAlloc(&host_ptr, bytesize, kHostAllocDevicemap);
+            if (result != CUDA_SUCCESS) return result;
+            CUdeviceptr device_ptr = 0;
+            result = CudaDriverPassthrough::instance().cuMemHostGetDevicePointer(&device_ptr, host_ptr, 0);
+            if (result != CUDA_SUCCESS) {
+                CudaDriverPassthrough::instance().cuMemFreeHost(host_ptr);
+                return result;
+            }
+            backing_ptr = host_ptr;
+            out_ptr = device_ptr;
+            alloc_type = HybridAllocation::Type::MappedHost;
+            break;
+        }
+        case HybridMemoryManager::AllocationDecision::SpillToCpu: {
+            void* ptr = malloc(bytesize);
+            if (!ptr) return CUDA_ERROR_OUT_OF_MEMORY;
+            out_ptr = (CUdeviceptr)ptr;
+            alloc_type = HybridAllocation::Type::SpilledCpu;
+            break;
+        }
+        case HybridMemoryManager::AllocationDecision::Fail:
+            return CUDA_ERROR_OUT_OF_MEMORY;
+    }
+
+    if (result != CUDA_SUCCESS) return result;
+
+    bool registered = false;
+    if (alloc_type == HybridAllocation::Type::Managed) {
+        registered = GlobalState::instance().register_managed_allocation((void*)out_ptr, bytesize, virtual_device);
+    } else {
+        registered = GlobalState::instance().register_allocation((void*)out_ptr, bytesize, virtual_device);
+    }
+
+    if (!registered) {
+        switch (alloc_type) {
+            case HybridAllocation::Type::RealDevice:
+            case HybridAllocation::Type::Managed:
+                CudaDriverPassthrough::instance().cuMemFree(out_ptr);
+                break;
+            case HybridAllocation::Type::MappedHost:
+                if (backing_ptr) {
+                    CudaDriverPassthrough::instance().cuMemFreeHost(backing_ptr);
+                }
+                break;
+            case HybridAllocation::Type::SpilledCpu:
+                free((void*)out_ptr);
+                break;
+        }
+        return CUDA_ERROR_OUT_OF_MEMORY;
+    }
+
+    *dptr = out_ptr;
+    HybridMemoryManager::instance().record_allocation((void*)out_ptr, bytesize, virtual_device, alloc_type, backing_ptr);
+    return CUDA_SUCCESS;
+}
+
+// Host memory behind a hybrid allocation that lives outside device memory
+// (mapped host or CPU spill); nullptr for real device memory and untracked pointers.
+void* hybrid_host_view(CUdeviceptr ptr) {
+    HybridAllocation alloc;
+    if (!HybridMemoryManager::instance().get_allocation_info((void*)ptr, alloc)) return nullptr;
+    if (alloc.type == HybridAllocation::Type::MappedHost) return alloc.backing_ptr;
+    if (alloc.type == HybridAllocation::Type::SpilledCpu) return (void*)ptr;
+    return nullptr;
+}
+
+// Fills n elements of host memory and records an n * sizeof(T) byte memset of dst.
+template <class T>
+CUresult fill_and_record(void* host, CUdeviceptr dst, T value, size_t n) {
+    if constexpr (sizeof(T) == 1) {
+        memset(host, value, n);
+    } else {
+        T* p = static_cast<T*>(host);
+        for (size_t i = 0; i < n; ++i) p[i] = value;
+    }
+    GlobalState::instance().record_memset((void*)dst, n * sizeof(T));
+    return CUDA_SUCCESS;
+}
+
+CUresult record_memset_if_ok(CUresult result, CUdeviceptr dst, size_t bytes) {
+    if (result == CUDA_SUCCESS) GlobalState::instance().record_memset((void*)dst, bytes);
+    return result;
+}
+
+// Stream-ordered real allocation; falls back to a synchronous cuMemAlloc when
+// the driver lacks cuMemAllocAsync.  Call only once real_driver_available().
+CUresult real_mem_alloc_async(CUdeviceptr* dptr, size_t bytesize, CUstream stream) {
+    static const auto real_fn = real_entry<CUresult (*)(CUdeviceptr*, size_t, CUstream)>("cuMemAllocAsync");
+    if (real_fn) return real_fn(dptr, bytesize, stream);
+    return CudaDriverPassthrough::instance().cuMemAlloc(dptr, bytesize);
+}
+
 std::mutex g_ctx_mutex;
 std::unordered_map<CUcontext, int> g_ctx_to_virtual_device;
 std::atomic<std::uintptr_t> g_next_stream_handle{1};
@@ -884,83 +1006,12 @@ CUresult cuMemAlloc(CUdeviceptr *dptr, size_t bytesize) {
         HybridMemoryManager::instance().initialize();
 
         const int virtual_device = current_context_device;
-        auto decision = HybridMemoryManager::instance().decide_allocation(virtual_device, bytesize);
-
-        constexpr unsigned int kManagedAttachGlobal = 1; // CU_MEM_ATTACH_GLOBAL
-        constexpr unsigned int kHostAllocDevicemap = 2;  // CU_MEMHOSTALLOC_DEVICEMAP
-
-        CUresult result = CUDA_SUCCESS;
-        HybridAllocation::Type alloc_type = HybridAllocation::Type::RealDevice;
-        void* backing_ptr = nullptr;
-        CUdeviceptr out_ptr = 0;
-
-        switch (decision) {
-            case HybridMemoryManager::AllocationDecision::UseReal: {
-                result = CudaDriverPassthrough::instance().cuMemAlloc(&out_ptr, bytesize);
-                alloc_type = HybridAllocation::Type::RealDevice;
-                break;
-            }
-            case HybridMemoryManager::AllocationDecision::UseManaged: {
-                result = CudaDriverPassthrough::instance().cuMemAllocManaged(&out_ptr, bytesize, kManagedAttachGlobal);
-                alloc_type = HybridAllocation::Type::Managed;
-                break;
-            }
-            case HybridMemoryManager::AllocationDecision::UseMappedHost: {
-                void* host_ptr = nullptr;
-                result = CudaDriverPassthrough::instance().cuMemHostAlloc(&host_ptr, bytesize, kHostAllocDevicemap);
-                if (result != CUDA_SUCCESS) return result;
-                CUdeviceptr device_ptr = 0;
-                result = CudaDriverPassthrough::instance().cuMemHostGetDevicePointer(&device_ptr, host_ptr, 0);
-                if (result != CUDA_SUCCESS) {
-                    CudaDriverPassthrough::instance().cuMemFreeHost(host_ptr);
-                    return result;
-                }
-                backing_ptr = host_ptr;
-                out_ptr = device_ptr;
-                alloc_type = HybridAllocation::Type::MappedHost;
-                break;
-            }
-            case HybridMemoryManager::AllocationDecision::SpillToCpu: {
-                void* ptr = malloc(bytesize);
-                if (!ptr) return CUDA_ERROR_OUT_OF_MEMORY;
-                out_ptr = (CUdeviceptr)ptr;
-                alloc_type = HybridAllocation::Type::SpilledCpu;
-                break;
-            }
-            case HybridMemoryManager::AllocationDecision::Fail:
-                return CUDA_ERROR_OUT_OF_MEMORY;
-        }
-
-        if (result != CUDA_SUCCESS) return result;
-
-        bool registered = false;
-        if (alloc_type == HybridAllocation::Type::Managed) {
-            registered = GlobalState::instance().register_managed_allocation((void*)out_ptr, bytesize, virtual_device);
-        } else {
-            registered = GlobalState::instance().register_allocation((void*)out_ptr, bytesize, virtual_device);
-        }
-
-        if (!registered) {
-            switch (alloc_type) {
-                case HybridAllocation::Type::RealDevice:
-                case HybridAllocation::Type::Managed:
-                    CudaDriverPassthrough::instance().cuMemFree(out_ptr);
-                    break;
-                case HybridAllocation::Type::MappedHost:
-                    if (backing_ptr) {
-                        CudaDriverPassthrough::instance().cuMemFreeHost(backing_ptr);
-                    }
-                    break;
-                case HybridAllocation::Type::SpilledCpu:
-                    free((void*)out_ptr);
-                    break;
-            }
-            return CUDA_ERROR_OUT_OF_MEMORY;
-        }
-
-        *dptr = out_ptr;
-        HybridMemoryManager::instance().record_allocation((void*)out_ptr, bytesize, virtual_device, alloc_type, backing_ptr);
-        return CUDA_SUCCESS;
+        return hybrid_allocate(
+            dptr,
+            bytesize,
+            virtual_device,
+            HybridMemoryManager::instance().decide_allocation(virtual_device, bytesize),
+            [&](CUdeviceptr* out) { return CudaDriverPassthrough::instance().cuMemAlloc(out, bytesize); });
     }
 
     // Simulate mode: allocate in host memory.
@@ -1039,20 +1090,12 @@ CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount) {
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
-        HybridAllocation alloc;
-        if (HybridMemoryManager::instance().get_allocation_info((void*)srcDevice, alloc)) {
-            if (alloc.type == HybridAllocation::Type::MappedHost && alloc.backing_ptr) {
-                memcpy(dstHost, alloc.backing_ptr, ByteCount);
-                GlobalState::instance().record_memcpy_d2h((void*)srcDevice, ByteCount);
-                return CUDA_SUCCESS;
-            }
-            if (alloc.type == HybridAllocation::Type::SpilledCpu) {
-                memcpy(dstHost, (void*)srcDevice, ByteCount);
-                GlobalState::instance().record_memcpy_d2h((void*)srcDevice, ByteCount);
-                return CUDA_SUCCESS;
-            }
+        CUresult result = CUDA_SUCCESS;
+        if (void* host = hybrid_host_view(srcDevice)) {
+            memcpy(dstHost, host, ByteCount);
+        } else {
+            result = CudaDriverPassthrough::instance().cuMemcpyDtoH(dstHost, srcDevice, ByteCount);
         }
-        CUresult result = CudaDriverPassthrough::instance().cuMemcpyDtoH(dstHost, srcDevice, ByteCount);
         if (result == CUDA_SUCCESS) {
             GlobalState::instance().record_memcpy_d2h((void*)srcDevice, ByteCount);
         }
@@ -1074,20 +1117,12 @@ CUresult cuMemcpyHtoD(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCou
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
-        HybridAllocation alloc;
-        if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
-            if (alloc.type == HybridAllocation::Type::MappedHost && alloc.backing_ptr) {
-                memcpy(alloc.backing_ptr, srcHost, ByteCount);
-                GlobalState::instance().record_memcpy_h2d((void*)dstDevice, ByteCount);
-                return CUDA_SUCCESS;
-            }
-            if (alloc.type == HybridAllocation::Type::SpilledCpu) {
-                memcpy((void*)dstDevice, srcHost, ByteCount);
-                GlobalState::instance().record_memcpy_h2d((void*)dstDevice, ByteCount);
-                return CUDA_SUCCESS;
-            }
+        CUresult result = CUDA_SUCCESS;
+        if (void* host = hybrid_host_view(dstDevice)) {
+            memcpy(host, srcHost, ByteCount);
+        } else {
+            result = CudaDriverPassthrough::instance().cuMemcpyHtoD(dstDevice, srcHost, ByteCount);
         }
-        CUresult result = CudaDriverPassthrough::instance().cuMemcpyHtoD(dstDevice, srcHost, ByteCount);
         if (result == CUDA_SUCCESS) {
             GlobalState::instance().record_memcpy_h2d((void*)dstDevice, ByteCount);
         }
@@ -1109,38 +1144,19 @@ CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteC
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
-        auto host_ptr_for = [&](CUdeviceptr ptr) -> void* {
-            HybridAllocation alloc;
-            if (!HybridMemoryManager::instance().get_allocation_info((void*)ptr, alloc)) return nullptr;
-            if (alloc.type == HybridAllocation::Type::MappedHost) return alloc.backing_ptr;
-            if (alloc.type == HybridAllocation::Type::SpilledCpu) return (void*)ptr;
-            return nullptr;
-        };
+        void* dst_host = hybrid_host_view(dstDevice);
+        void* src_host = hybrid_host_view(srcDevice);
 
-        void* dst_host = host_ptr_for(dstDevice);
-        void* src_host = host_ptr_for(srcDevice);
-
+        CUresult result = CUDA_SUCCESS;
         if (dst_host && src_host) {
             memcpy(dst_host, src_host, ByteCount);
-            GlobalState::instance().record_memcpy_d2d((void*)dstDevice, (void*)srcDevice, ByteCount);
-            return CUDA_SUCCESS;
+        } else if (dst_host) {
+            result = CudaDriverPassthrough::instance().cuMemcpyDtoH(dst_host, srcDevice, ByteCount);
+        } else if (src_host) {
+            result = CudaDriverPassthrough::instance().cuMemcpyHtoD(dstDevice, src_host, ByteCount);
+        } else {
+            result = CudaDriverPassthrough::instance().cuMemcpyDtoD(dstDevice, srcDevice, ByteCount);
         }
-        if (dst_host && !src_host) {
-            CUresult result = CudaDriverPassthrough::instance().cuMemcpyDtoH(dst_host, srcDevice, ByteCount);
-            if (result == CUDA_SUCCESS) {
-                GlobalState::instance().record_memcpy_d2d((void*)dstDevice, (void*)srcDevice, ByteCount);
-            }
-            return result;
-        }
-        if (!dst_host && src_host) {
-            CUresult result = CudaDriverPassthrough::instance().cuMemcpyHtoD(dstDevice, src_host, ByteCount);
-            if (result == CUDA_SUCCESS) {
-                GlobalState::instance().record_memcpy_d2d((void*)dstDevice, (void*)srcDevice, ByteCount);
-            }
-            return result;
-        }
-
-        CUresult result = CudaDriverPassthrough::instance().cuMemcpyDtoD(dstDevice, srcDevice, ByteCount);
         if (result == CUDA_SUCCESS) {
             GlobalState::instance().record_memcpy_d2d((void*)dstDevice, (void*)srcDevice, ByteCount);
         }
@@ -2090,165 +2106,60 @@ CUresult cuPointerGetAttributes(unsigned int numAttributes, CUpointer_attribute 
 }
 
 CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char uc, size_t N) {
-    const BackendConfig& config = BackendConfig::instance();
     if (real_driver_available()) {
-        if (config.mode() == FakeGpuMode::Hybrid) {
-            HybridAllocation alloc;
-            if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
-                if (alloc.type == HybridAllocation::Type::MappedHost && alloc.backing_ptr) {
-                    memset(alloc.backing_ptr, uc, N);
-                    GlobalState::instance().record_memset((void*)dstDevice, N);
-                    return CUDA_SUCCESS;
-                }
-                if (alloc.type == HybridAllocation::Type::SpilledCpu) {
-                    memset((void*)dstDevice, uc, N);
-                    GlobalState::instance().record_memset((void*)dstDevice, N);
-                    return CUDA_SUCCESS;
-                }
-            }
+        if (BackendConfig::instance().mode() == FakeGpuMode::Hybrid) {
+            if (void* host = hybrid_host_view(dstDevice)) return fill_and_record(host, dstDevice, uc, N);
         }
-
         static const auto real_fn = real_entry<decltype(&cuMemsetD8)>("cuMemsetD8");
-        if (real_fn) {
-            CUresult result = real_fn(dstDevice, uc, N);
-            if (result == CUDA_SUCCESS) {
-                GlobalState::instance().record_memset((void*)dstDevice, N);
-            }
-            return result;
-        }
+        if (real_fn) return record_memset_if_ok(real_fn(dstDevice, uc, N), dstDevice, N);
     }
 
-    memset((void*)dstDevice, uc, N);
-    GlobalState::instance().record_memset((void*)dstDevice, N);
-    return CUDA_SUCCESS;
+    return fill_and_record((void*)dstDevice, dstDevice, uc, N);
 }
 
 CUresult cuMemsetD16(CUdeviceptr dstDevice, unsigned short us, size_t N) {
-    const BackendConfig& config = BackendConfig::instance();
     if (real_driver_available()) {
-        if (config.mode() == FakeGpuMode::Hybrid) {
-            HybridAllocation alloc;
-            if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
-                void* host_ptr = nullptr;
-                if (alloc.type == HybridAllocation::Type::MappedHost) host_ptr = alloc.backing_ptr;
-                if (alloc.type == HybridAllocation::Type::SpilledCpu) host_ptr = (void*)dstDevice;
-                if (host_ptr) {
-                    unsigned short* p = static_cast<unsigned short*>(host_ptr);
-                    for (size_t i = 0; i < N; i++) p[i] = us;
-                    GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned short));
-                    return CUDA_SUCCESS;
-                }
-            }
+        if (BackendConfig::instance().mode() == FakeGpuMode::Hybrid) {
+            if (void* host = hybrid_host_view(dstDevice)) return fill_and_record(host, dstDevice, us, N);
         }
-
         static const auto real_fn = real_entry<decltype(&cuMemsetD16)>("cuMemsetD16");
-        if (real_fn) {
-            CUresult result = real_fn(dstDevice, us, N);
-            if (result == CUDA_SUCCESS) {
-                GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned short));
-            }
-            return result;
-        }
+        if (real_fn) return record_memset_if_ok(real_fn(dstDevice, us, N), dstDevice, N * sizeof(us));
     }
 
-    unsigned short *p = (unsigned short*)dstDevice;
-    for (size_t i = 0; i < N; i++) p[i] = us;
-    GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned short));
-    return CUDA_SUCCESS;
+    return fill_and_record((void*)dstDevice, dstDevice, us, N);
 }
 
 CUresult cuMemsetD32(CUdeviceptr dstDevice, unsigned int ui, size_t N) {
-    const BackendConfig& config = BackendConfig::instance();
     if (real_driver_available()) {
-        if (config.mode() == FakeGpuMode::Hybrid) {
-            HybridAllocation alloc;
-            if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
-                void* host_ptr = nullptr;
-                if (alloc.type == HybridAllocation::Type::MappedHost) host_ptr = alloc.backing_ptr;
-                if (alloc.type == HybridAllocation::Type::SpilledCpu) host_ptr = (void*)dstDevice;
-                if (host_ptr) {
-                    unsigned int* p = static_cast<unsigned int*>(host_ptr);
-                    for (size_t i = 0; i < N; i++) p[i] = ui;
-                    GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned int));
-                    return CUDA_SUCCESS;
-                }
-            }
+        if (BackendConfig::instance().mode() == FakeGpuMode::Hybrid) {
+            if (void* host = hybrid_host_view(dstDevice)) return fill_and_record(host, dstDevice, ui, N);
         }
-
         static const auto real_fn = real_entry<decltype(&cuMemsetD32)>("cuMemsetD32");
-        if (real_fn) {
-            CUresult result = real_fn(dstDevice, ui, N);
-            if (result == CUDA_SUCCESS) {
-                GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned int));
-            }
-            return result;
-        }
+        if (real_fn) return record_memset_if_ok(real_fn(dstDevice, ui, N), dstDevice, N * sizeof(ui));
     }
 
-    unsigned int *p = (unsigned int*)dstDevice;
-    for (size_t i = 0; i < N; i++) p[i] = ui;
-    GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned int));
-    return CUDA_SUCCESS;
+    return fill_and_record((void*)dstDevice, dstDevice, ui, N);
 }
 
 CUresult cuMemsetD8Async(CUdeviceptr dstDevice, unsigned char uc, size_t N, CUstream hStream) {
-    const BackendConfig& config = BackendConfig::instance();
     if (real_driver_available()) {
-        if (config.mode() == FakeGpuMode::Hybrid) {
-            HybridAllocation alloc;
-            if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
-                if (alloc.type == HybridAllocation::Type::MappedHost && alloc.backing_ptr) {
-                    memset(alloc.backing_ptr, uc, N);
-                    GlobalState::instance().record_memset((void*)dstDevice, N);
-                    return CUDA_SUCCESS;
-                }
-                if (alloc.type == HybridAllocation::Type::SpilledCpu) {
-                    memset((void*)dstDevice, uc, N);
-                    GlobalState::instance().record_memset((void*)dstDevice, N);
-                    return CUDA_SUCCESS;
-                }
-            }
+        if (BackendConfig::instance().mode() == FakeGpuMode::Hybrid) {
+            if (void* host = hybrid_host_view(dstDevice)) return fill_and_record(host, dstDevice, uc, N);
         }
-
         static const auto real_fn = real_entry<decltype(&cuMemsetD8Async)>("cuMemsetD8Async");
-        if (real_fn) {
-            CUresult result = real_fn(dstDevice, uc, N, hStream);
-            if (result == CUDA_SUCCESS) {
-                GlobalState::instance().record_memset((void*)dstDevice, N);
-            }
-            return result;
-        }
+        if (real_fn) return record_memset_if_ok(real_fn(dstDevice, uc, N, hStream), dstDevice, N);
     }
 
     return cuMemsetD8(dstDevice, uc, N);
 }
 
 CUresult cuMemsetD32Async(CUdeviceptr dstDevice, unsigned int ui, size_t N, CUstream hStream) {
-    const BackendConfig& config = BackendConfig::instance();
     if (real_driver_available()) {
-        if (config.mode() == FakeGpuMode::Hybrid) {
-            HybridAllocation alloc;
-            if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
-                void* host_ptr = nullptr;
-                if (alloc.type == HybridAllocation::Type::MappedHost) host_ptr = alloc.backing_ptr;
-                if (alloc.type == HybridAllocation::Type::SpilledCpu) host_ptr = (void*)dstDevice;
-                if (host_ptr) {
-                    unsigned int* p = static_cast<unsigned int*>(host_ptr);
-                    for (size_t i = 0; i < N; i++) p[i] = ui;
-                    GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned int));
-                    return CUDA_SUCCESS;
-                }
-            }
+        if (BackendConfig::instance().mode() == FakeGpuMode::Hybrid) {
+            if (void* host = hybrid_host_view(dstDevice)) return fill_and_record(host, dstDevice, ui, N);
         }
-
         static const auto real_fn = real_entry<decltype(&cuMemsetD32Async)>("cuMemsetD32Async");
-        if (real_fn) {
-            CUresult result = real_fn(dstDevice, ui, N, hStream);
-            if (result == CUDA_SUCCESS) {
-                GlobalState::instance().record_memset((void*)dstDevice, N * sizeof(unsigned int));
-            }
-            return result;
-        }
+        if (real_fn) return record_memset_if_ok(real_fn(dstDevice, ui, N, hStream), dstDevice, N * sizeof(ui));
     }
 
     return cuMemsetD32(dstDevice, ui, N);
@@ -2257,72 +2168,30 @@ CUresult cuMemsetD32Async(CUdeviceptr dstDevice, unsigned int ui, size_t N, CUst
 CUresult cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount, CUstream hStream) {
     if (!dst || !src) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
     if (real_driver_available()) {
-        auto host_ptr_for = [&](CUdeviceptr ptr) -> void* {
-            if (config.mode() != FakeGpuMode::Hybrid) return nullptr;
-            HybridAllocation alloc;
-            if (!HybridMemoryManager::instance().get_allocation_info((void*)ptr, alloc)) return nullptr;
-            if (alloc.type == HybridAllocation::Type::MappedHost) return alloc.backing_ptr;
-            if (alloc.type == HybridAllocation::Type::SpilledCpu) return (void*)ptr;
-            return nullptr;
-        };
+        const bool hybrid = BackendConfig::instance().mode() == FakeGpuMode::Hybrid;
+        void* dst_host = hybrid ? hybrid_host_view(dst) : nullptr;
+        void* src_host = hybrid ? hybrid_host_view(src) : nullptr;
 
-        void* dst_host = host_ptr_for(dst);
-        void* src_host = host_ptr_for(src);
-
+        // Without the async entry points fall back to synchronous copies.
+        CUresult result = CUDA_SUCCESS;
         if (dst_host && src_host) {
             memcpy(dst_host, src_host, ByteCount);
-            GlobalState::instance().record_memcpy_d2d((void*)dst, (void*)src, ByteCount);
-            return CUDA_SUCCESS;
-        }
-
-        if (dst_host && !src_host) {
+        } else if (dst_host) {
             static const auto real_fn =
                 real_entry_v2<CUresult (*)(void*, CUdeviceptr, size_t, CUstream)>("cuMemcpyDtoHAsync");
-            if (!real_fn) {
-                // Fall back to sync copy if async is unavailable.
-                CUresult result = CudaDriverPassthrough::instance().cuMemcpyDtoH(dst_host, src, ByteCount);
-                if (result == CUDA_SUCCESS) {
-                    GlobalState::instance().record_memcpy_d2d((void*)dst, (void*)src, ByteCount);
-                }
-                return result;
-            }
-            CUresult result = real_fn(dst_host, src, ByteCount, hStream);
-            if (result == CUDA_SUCCESS) {
-                GlobalState::instance().record_memcpy_d2d((void*)dst, (void*)src, ByteCount);
-            }
-            return result;
-        }
-
-        if (!dst_host && src_host) {
+            result = real_fn ? real_fn(dst_host, src, ByteCount, hStream)
+                             : CudaDriverPassthrough::instance().cuMemcpyDtoH(dst_host, src, ByteCount);
+        } else if (src_host) {
             static const auto real_fn =
                 real_entry_v2<CUresult (*)(CUdeviceptr, const void*, size_t, CUstream)>("cuMemcpyHtoDAsync");
-            if (!real_fn) {
-                CUresult result = CudaDriverPassthrough::instance().cuMemcpyHtoD(dst, src_host, ByteCount);
-                if (result == CUDA_SUCCESS) {
-                    GlobalState::instance().record_memcpy_d2d((void*)dst, (void*)src, ByteCount);
-                }
-                return result;
-            }
-            CUresult result = real_fn(dst, src_host, ByteCount, hStream);
-            if (result == CUDA_SUCCESS) {
-                GlobalState::instance().record_memcpy_d2d((void*)dst, (void*)src, ByteCount);
-            }
-            return result;
+            result = real_fn ? real_fn(dst, src_host, ByteCount, hStream)
+                             : CudaDriverPassthrough::instance().cuMemcpyHtoD(dst, src_host, ByteCount);
+        } else {
+            static const auto real_fn = real_entry<decltype(&cuMemcpyAsync)>("cuMemcpyAsync");
+            result = real_fn ? real_fn(dst, src, ByteCount, hStream)
+                             : CudaDriverPassthrough::instance().cuMemcpyDtoD(dst, src, ByteCount);
         }
-
-        static const auto real_fn = real_entry<decltype(&cuMemcpyAsync)>("cuMemcpyAsync");
-        if (!real_fn) {
-            // Fallback: use sync D2D.
-            CUresult result = CudaDriverPassthrough::instance().cuMemcpyDtoD(dst, src, ByteCount);
-            if (result == CUDA_SUCCESS) {
-                GlobalState::instance().record_memcpy_d2d((void*)dst, (void*)src, ByteCount);
-            }
-            return result;
-        }
-
-        CUresult result = real_fn(dst, src, ByteCount, hStream);
         if (result == CUDA_SUCCESS) {
             GlobalState::instance().record_memcpy_d2d((void*)dst, (void*)src, ByteCount);
         }
@@ -2339,18 +2208,10 @@ CUresult cuMemcpyDtoHAsync(void *dstHost, CUdeviceptr srcDevice, size_t ByteCoun
 
     if (real_driver_available()) {
         const bool hybrid = BackendConfig::instance().mode() == FakeGpuMode::Hybrid;
-        HybridAllocation alloc;
-        if (hybrid && HybridMemoryManager::instance().get_allocation_info((void*)srcDevice, alloc)) {
-            if (alloc.type == HybridAllocation::Type::MappedHost && alloc.backing_ptr) {
-                memcpy(dstHost, alloc.backing_ptr, ByteCount);
-                GlobalState::instance().record_memcpy_d2h((void*)srcDevice, ByteCount);
-                return CUDA_SUCCESS;
-            }
-            if (alloc.type == HybridAllocation::Type::SpilledCpu) {
-                memcpy(dstHost, (void*)srcDevice, ByteCount);
-                GlobalState::instance().record_memcpy_d2h((void*)srcDevice, ByteCount);
-                return CUDA_SUCCESS;
-            }
+        if (void* host = hybrid ? hybrid_host_view(srcDevice) : nullptr) {
+            memcpy(dstHost, host, ByteCount);
+            GlobalState::instance().record_memcpy_d2h((void*)srcDevice, ByteCount);
+            return CUDA_SUCCESS;
         }
 
         static const auto real_fn = real_entry_v2<decltype(&cuMemcpyDtoHAsync)>("cuMemcpyDtoHAsync");
@@ -2371,18 +2232,10 @@ CUresult cuMemcpyHtoDAsync(CUdeviceptr dstDevice, const void *srcHost, size_t By
 
     if (real_driver_available()) {
         const bool hybrid = BackendConfig::instance().mode() == FakeGpuMode::Hybrid;
-        HybridAllocation alloc;
-        if (hybrid && HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
-            if (alloc.type == HybridAllocation::Type::MappedHost && alloc.backing_ptr) {
-                memcpy(alloc.backing_ptr, srcHost, ByteCount);
-                GlobalState::instance().record_memcpy_h2d((void*)dstDevice, ByteCount);
-                return CUDA_SUCCESS;
-            }
-            if (alloc.type == HybridAllocation::Type::SpilledCpu) {
-                memcpy((void*)dstDevice, srcHost, ByteCount);
-                GlobalState::instance().record_memcpy_h2d((void*)dstDevice, ByteCount);
-                return CUDA_SUCCESS;
-            }
+        if (void* host = hybrid ? hybrid_host_view(dstDevice) : nullptr) {
+            memcpy(host, srcHost, ByteCount);
+            GlobalState::instance().record_memcpy_h2d((void*)dstDevice, ByteCount);
+            return CUDA_SUCCESS;
         }
 
         static const auto real_fn = real_entry_v2<decltype(&cuMemcpyHtoDAsync)>("cuMemcpyHtoDAsync");
@@ -2577,101 +2430,20 @@ CUresult cuMemPoolDestroy(CUmemoryPool pool) {
 CUresult cuMemAllocAsync(CUdeviceptr *dptr, size_t bytesize, CUstream hStream) {
     if (!dptr) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
+    if (real_driver_available()) {
+        auto alloc_real = [&](CUdeviceptr* out) { return real_mem_alloc_async(out, bytesize, hStream); };
+        if (BackendConfig::instance().mode() == FakeGpuMode::Passthrough) return alloc_real(dptr);
 
-    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        static const auto real_fn = real_entry<decltype(&cuMemAllocAsync)>("cuMemAllocAsync");
-        if (real_fn) return real_fn(dptr, bytesize, hStream);
-        return CudaDriverPassthrough::instance().cuMemAlloc(dptr, bytesize);
-    }
-
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
         GlobalState::instance().initialize();
         HybridMemoryManager::instance().initialize();
 
         const int virtual_device = current_context_device;
-        auto decision = HybridMemoryManager::instance().decide_allocation(virtual_device, bytesize);
-
-        constexpr unsigned int kManagedAttachGlobal = 1; // CU_MEM_ATTACH_GLOBAL
-        constexpr unsigned int kHostAllocDevicemap = 2;  // CU_MEMHOSTALLOC_DEVICEMAP
-
-        CUresult result = CUDA_SUCCESS;
-        HybridAllocation::Type alloc_type = HybridAllocation::Type::RealDevice;
-        void* backing_ptr = nullptr;
-        CUdeviceptr out_ptr = 0;
-
-        switch (decision) {
-            case HybridMemoryManager::AllocationDecision::UseReal: {
-                static const auto real_fn = real_entry<decltype(&cuMemAllocAsync)>("cuMemAllocAsync");
-                if (real_fn) {
-                    result = real_fn(&out_ptr, bytesize, hStream);
-                } else {
-                    result = CudaDriverPassthrough::instance().cuMemAlloc(&out_ptr, bytesize);
-                }
-                alloc_type = HybridAllocation::Type::RealDevice;
-                break;
-            }
-            case HybridMemoryManager::AllocationDecision::UseManaged: {
-                result = CudaDriverPassthrough::instance().cuMemAllocManaged(&out_ptr, bytesize, kManagedAttachGlobal);
-                alloc_type = HybridAllocation::Type::Managed;
-                break;
-            }
-            case HybridMemoryManager::AllocationDecision::UseMappedHost: {
-                void* host_ptr = nullptr;
-                result = CudaDriverPassthrough::instance().cuMemHostAlloc(&host_ptr, bytesize, kHostAllocDevicemap);
-                if (result != CUDA_SUCCESS) return result;
-                CUdeviceptr device_ptr = 0;
-                result = CudaDriverPassthrough::instance().cuMemHostGetDevicePointer(&device_ptr, host_ptr, 0);
-                if (result != CUDA_SUCCESS) {
-                    CudaDriverPassthrough::instance().cuMemFreeHost(host_ptr);
-                    return result;
-                }
-                backing_ptr = host_ptr;
-                out_ptr = device_ptr;
-                alloc_type = HybridAllocation::Type::MappedHost;
-                break;
-            }
-            case HybridMemoryManager::AllocationDecision::SpillToCpu: {
-                void* ptr = malloc(bytesize);
-                if (!ptr) return CUDA_ERROR_OUT_OF_MEMORY;
-                out_ptr = (CUdeviceptr)ptr;
-                alloc_type = HybridAllocation::Type::SpilledCpu;
-                break;
-            }
-            case HybridMemoryManager::AllocationDecision::Fail:
-                return CUDA_ERROR_OUT_OF_MEMORY;
-        }
-
-        if (result != CUDA_SUCCESS) return result;
-
-        bool registered = false;
-        if (alloc_type == HybridAllocation::Type::Managed) {
-            registered = GlobalState::instance().register_managed_allocation((void*)out_ptr, bytesize, virtual_device);
-        } else {
-            registered = GlobalState::instance().register_allocation((void*)out_ptr, bytesize, virtual_device);
-        }
-
-        if (!registered) {
-            switch (alloc_type) {
-                case HybridAllocation::Type::RealDevice:
-                case HybridAllocation::Type::Managed:
-                    CudaDriverPassthrough::instance().cuMemFree(out_ptr);
-                    break;
-                case HybridAllocation::Type::MappedHost:
-                    if (backing_ptr) {
-                        CudaDriverPassthrough::instance().cuMemFreeHost(backing_ptr);
-                    }
-                    break;
-                case HybridAllocation::Type::SpilledCpu:
-                    free((void*)out_ptr);
-                    break;
-            }
-            return CUDA_ERROR_OUT_OF_MEMORY;
-        }
-
-        *dptr = out_ptr;
-        HybridMemoryManager::instance().record_allocation((void*)out_ptr, bytesize, virtual_device, alloc_type, backing_ptr);
-        return CUDA_SUCCESS;
+        return hybrid_allocate(
+            dptr,
+            bytesize,
+            virtual_device,
+            HybridMemoryManager::instance().decide_allocation(virtual_device, bytesize),
+            alloc_real);
     }
 
     // Simulate mode: treat async alloc as sync alloc.
