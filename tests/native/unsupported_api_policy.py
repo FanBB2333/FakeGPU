@@ -83,6 +83,17 @@ driver_results = [
     )
     for _ in range(2)
 ]
+driver.cuStreamAddCallback.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_uint,
+]
+driver.cuStreamAddCallback.restype = ctypes.c_int
+callback_results = [
+    driver.cuStreamAddCallback(None, None, None, 0)
+    for _ in range(2)
+]
 driver_error_name = ctypes.c_char_p()
 driver_name_result = driver.cuGetErrorName(
     driver_results[-1],
@@ -96,6 +107,7 @@ print(json.dumps({
     "driver_results": driver_results,
     "driver_name_result": driver_name_result,
     "driver_error_name": driver_error_name.value.decode("utf-8"),
+    "callback_results": callback_results,
 }))
 """
 
@@ -161,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
                 if expected_result == 0
                 else "CUDA_ERROR_NOT_SUPPORTED"
             ),
+            "callback_results": [expected_result, expected_result],
         }:
             raise AssertionError(
                 f"policy {policy} returned {payload!r}, expected "
@@ -172,16 +185,20 @@ def main(argv: list[str] | None = None) -> int:
         driver_warning_count = completed.stderr.count(
             "[FakeGPU] warning: cuLaunchKernel"
         )
+        callback_warning_count = completed.stderr.count(
+            "[FakeGPU] warning: cuStreamAddCallback"
+        )
         expected_warning_count = 1 if policy == "warn" else 0
         if (
             runtime_warning_count != expected_warning_count
             or driver_warning_count != expected_warning_count
+            or callback_warning_count != expected_warning_count
         ):
             raise AssertionError(
-                f"policy {policy} emitted runtime/driver warning counts "
-                f"{runtime_warning_count}/{driver_warning_count}, expected "
-                f"{expected_warning_count}/{expected_warning_count}: "
-                f"{completed.stderr!r}"
+                f"policy {policy} emitted runtime/driver/callback warning "
+                f"counts {runtime_warning_count}/{driver_warning_count}/"
+                f"{callback_warning_count}, expected "
+                f"{expected_warning_count} each: {completed.stderr!r}"
             )
 
     print("unsupported API policy validation passed")

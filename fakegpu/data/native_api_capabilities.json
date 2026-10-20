@@ -116,6 +116,13 @@
       "policy_enforced": true
     },
     {
+      "api": "cuStreamAddCallback",
+      "library": "cuda_driver",
+      "classification": "callback_not_registered",
+      "simulate_behavior": "The callback is not registered or invoked.",
+      "policy_enforced": true
+    },
+    {
       "api": "cudaStreamUpdateCaptureDependencies",
       "library": "cudart",
       "classification": "state_not_materialized",

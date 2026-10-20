@@ -3137,6 +3137,9 @@ CUresult cuStreamAddCallback(CUstream hStream, void *callback, void *userData, u
     if (!lookup_stream_flags(hStream, stream_flags)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
+    if (record_unsupported_api("cuStreamAddCallback", "callback_not_registered")) {
+        return CUDA_ERROR_NOT_SUPPORTED;
+    }
     return CUDA_SUCCESS;
 }
 

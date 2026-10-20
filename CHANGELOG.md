@@ -76,6 +76,9 @@
   use the pushed context's device.
 - `cudaMemPoolGetAttribute` writes 4 bytes for the int-valued reuse-policy
   attributes instead of overwriting 8 bytes of caller memory.
+- `cuStreamAddCallback` follows `FAKEGPU_UNSUPPORTED_API` like
+  `cudaStreamAddCallback`: it records the unregistered callback, warns once
+  under `warn` and returns `CUDA_ERROR_NOT_SUPPORTED` under `error`.
 
 ## v1.6.0 - 2026-10-17
 

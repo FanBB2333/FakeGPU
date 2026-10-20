@@ -68,7 +68,7 @@ Blackwell GPU（PyTorch 2.11.0+cu128、Transformers 5.14.1）上執行過。
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
 | FakeGPU-SMI 診斷 | 有上限的狀態發布、拓撲/NVLink/MIG 檢視、NVML peer/MIG 查詢、健康欄位與事件報告 | **通過** |
 | 監控 exporter | Prometheus/JSON 快照、歷史與序列數量限制、異常狀態降級及 HTTP 介面 | **通過** |
-| 原生能力清單（2026-09-05 更新） | 5 個能力群組、104 個明確 API、102 個強制執行策略的 API | **通過** |
+| 原生能力清單（2026-10-21 更新） | 5 個能力群組、105 個明確 API、103 個強制執行策略的 API | **通過** |
 | GPU profile 目錄 | 307 個 profile，涵蓋 16 種 compute capability（目錄更新於 2026-10-16） | **通過** |
 | CPU 數值模擬 | GEMM、cuBLASLt、批次 GEMM、BLAS1/2 與 FP16，共 8 組測試 | **通過** |
 | CUDA 版 PyTorch 原生矩陣乘法 | 需要含 CUDA 的 PyTorch | **這台 CPU-only 主機未執行** |
