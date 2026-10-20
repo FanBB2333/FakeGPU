@@ -8,31 +8,15 @@ from __future__ import annotations
 
 import heapq
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from ._serving_kv import (
     _effective_tokens,
-    _normalize_serving_requests,
     _transient_bytes,
     estimate_serving_kv_pool,
     estimate_serving_request_kv_pool,
 )
 from ._serving_speculative import _select_larger_transient, _speculative_report
-
-@dataclass(frozen=True, slots=True)
-class _ServingMemoryBreakdown:
-    """Phase peaks and the memory section both pool models report."""
-
-    prefill_peak: int
-    decode_peak: int
-    peak_phase: str
-    phases: list[dict[str, Any]]
-    memory: dict[str, Any]
-
-    @property
-    def peak_bytes(self) -> int:
-        return max(self.prefill_peak, self.decode_peak)
 
 
 def _serving_memory_breakdown(
@@ -53,7 +37,7 @@ def _serving_memory_breakdown(
     target_verification_transient: Mapping[str, Any] | None,
     draft_proposal_transient: Mapping[str, Any] | None,
     memory_extra: Mapping[str, Any] | None = None,
-) -> _ServingMemoryBreakdown:
+) -> dict[str, Any]:
     """Add up one phase peak per phase from the resident and transient parts.
 
     Both pool models resolve their own KV pool, transients, and input bytes;
@@ -74,80 +58,47 @@ def _serving_memory_breakdown(
         else 0
     )
     combined_parameter_bytes = parameter_bytes + draft_parameter_bytes
-    target_prefill_kv_bytes = int(kv_cache["prefill"]["allocated_bytes"])
-    target_decode_kv_bytes = int(kv_cache["decode"]["allocated_bytes"])
-    draft_prefill_kv_bytes = (
-        int(draft_kv_cache["prefill"]["allocated_bytes"])
-        if draft_kv_cache is not None
-        else 0
-    )
-    draft_decode_kv_bytes = (
-        int(draft_kv_cache["decode"]["allocated_bytes"])
-        if draft_kv_cache is not None
-        else 0
-    )
-    combined_prefill_kv_bytes = (
-        target_prefill_kv_bytes + draft_prefill_kv_bytes
-    )
-    combined_decode_kv_bytes = (
-        target_decode_kv_bytes + draft_decode_kv_bytes
-    )
-    prefill_peak = (
-        combined_parameter_bytes
-        + combined_prefill_kv_bytes
-        + int(prefill_transient["peak_bytes"])
-        + prefill_input_bytes
-        + fixed_overhead_bytes
-    )
-    decode_peak = (
-        combined_parameter_bytes
-        + combined_decode_kv_bytes
-        + int(decode_transient["peak_bytes"])
-        + decode_input_bytes
-        + fixed_overhead_bytes
-    )
-    phases = [
-        {
-            "phase": "prefill",
-            "peak_bytes": prefill_peak,
-            "components": {
-                "parameters": combined_parameter_bytes,
-                "target_parameters": parameter_bytes,
-                "draft_parameters": draft_parameter_bytes,
-                "inputs": prefill_input_bytes,
-                "kv_cache": combined_prefill_kv_bytes,
-                "target_kv_cache": target_prefill_kv_bytes,
-                "draft_kv_cache": draft_prefill_kv_bytes,
-                "transient": int(prefill_transient["peak_bytes"]),
-                "runtime_overhead": runtime_overhead_bytes,
-                "scheduler_overhead": scheduler_overhead_bytes,
-            },
-        },
-        {
-            "phase": "decode",
-            "peak_bytes": decode_peak,
-            "components": {
-                "parameters": combined_parameter_bytes,
-                "target_parameters": parameter_bytes,
-                "draft_parameters": draft_parameter_bytes,
-                "inputs": decode_input_bytes,
-                "kv_cache": combined_decode_kv_bytes,
-                "target_kv_cache": target_decode_kv_bytes,
-                "draft_kv_cache": draft_decode_kv_bytes,
-                "transient": int(decode_transient["peak_bytes"]),
-                "runtime_overhead": runtime_overhead_bytes,
-                "scheduler_overhead": scheduler_overhead_bytes,
-            },
-        },
-    ]
-    return _ServingMemoryBreakdown(
-        prefill_peak=prefill_peak,
-        decode_peak=decode_peak,
-        peak_phase=(
-            "prefill" if prefill_peak >= decode_peak else "decode"
-        ),
-        phases=phases,
-        memory={
+    phases = []
+    for phase, input_bytes, transient in (
+        ("prefill", prefill_input_bytes, prefill_transient),
+        ("decode", decode_input_bytes, decode_transient),
+    ):
+        target_kv_bytes = int(kv_cache[phase]["allocated_bytes"])
+        draft_kv_bytes = (
+            int(draft_kv_cache[phase]["allocated_bytes"])
+            if draft_kv_cache is not None
+            else 0
+        )
+        transient_bytes = int(transient["peak_bytes"])
+        phases.append(
+            {
+                "phase": phase,
+                "peak_bytes": (
+                    combined_parameter_bytes
+                    + target_kv_bytes
+                    + draft_kv_bytes
+                    + transient_bytes
+                    + input_bytes
+                    + fixed_overhead_bytes
+                ),
+                "components": {
+                    "parameters": combined_parameter_bytes,
+                    "target_parameters": parameter_bytes,
+                    "draft_parameters": draft_parameter_bytes,
+                    "inputs": input_bytes,
+                    "kv_cache": target_kv_bytes + draft_kv_bytes,
+                    "target_kv_cache": target_kv_bytes,
+                    "draft_kv_cache": draft_kv_bytes,
+                    "transient": transient_bytes,
+                    "runtime_overhead": runtime_overhead_bytes,
+                    "scheduler_overhead": scheduler_overhead_bytes,
+                },
+            }
+        )
+    prefill_peak = phases[0]["peak_bytes"]
+    decode_peak = phases[1]["peak_bytes"]
+    return {
+        "memory": {
             "parameter_bytes": combined_parameter_bytes,
             "target_parameter_bytes": parameter_bytes,
             "draft_parameter_bytes": draft_parameter_bytes,
@@ -162,12 +113,12 @@ def _serving_memory_breakdown(
             **(memory_extra or {}),
             "estimated_prefill_peak_bytes": prefill_peak,
             "estimated_decode_peak_bytes": decode_peak,
-            "estimated_process_peak_bytes": max(
-                prefill_peak,
-                decode_peak,
-            ),
+            "estimated_process_peak_bytes": max(prefill_peak, decode_peak),
         },
-    )
+        "phases": phases,
+        "peak_bytes": max(prefill_peak, decode_peak),
+        "peak_phase": "prefill" if prefill_peak >= decode_peak else "decode",
+    }
 
 
 def _serving_batch_memory(
@@ -199,44 +150,19 @@ def _serving_batch_memory(
     cache_generation_tokens = (
         generated_tokens + effective_speculative_tokens
     )
-    kv_cache = estimate_serving_kv_pool(
-        num_hidden_layers=int(dimensions["num_hidden_layers"]),
-        num_key_value_heads=int(dimensions["num_key_value_heads"]),
-        head_dim=int(dimensions["head_dim"]),
-        active_sequences=active_sequences,
-        prompt_tokens=prompt_tokens,
-        generated_tokens=cache_generation_tokens,
-        element_bytes=element_bytes,
-        strategy=kv_cache_strategy,
-        shared_prefix_tokens=shared_prefix_tokens,
-        quantized_bits=kv_cache_bits,
-        quantized_residual_tokens=kv_cache_residual_tokens,
-        block_tokens=kv_cache_block_tokens,
-        max_cache_tokens=kv_cache_max_tokens,
-        window_tokens=kv_cache_window_tokens,
-        elements_per_token_per_layer=int(
-            dimensions["kv_cache_elements_per_token_per_layer"]
-        ),
-        cache_layout=str(dimensions["kv_cache_layout"]),
-    )
-    draft_kv_cache = None
-    draft_dimensions = None
-    draft_element_bytes = None
-    if speculative is not None:
-        draft_dimensions = dict(speculative["model"])
-        draft_element_bytes = int(speculative["element_bytes"])
-        draft_kv_cache = estimate_serving_kv_pool(
-            num_hidden_layers=int(
-                draft_dimensions["num_hidden_layers"]
-            ),
-            num_key_value_heads=int(
-                draft_dimensions["num_key_value_heads"]
-            ),
-            head_dim=int(draft_dimensions["head_dim"]),
+
+    def kv_pool(
+        model: Mapping[str, Any],
+        model_element_bytes: int,
+    ) -> dict[str, Any]:
+        return estimate_serving_kv_pool(
+            num_hidden_layers=int(model["num_hidden_layers"]),
+            num_key_value_heads=int(model["num_key_value_heads"]),
+            head_dim=int(model["head_dim"]),
             active_sequences=active_sequences,
             prompt_tokens=prompt_tokens,
             generated_tokens=cache_generation_tokens,
-            element_bytes=draft_element_bytes,
+            element_bytes=model_element_bytes,
             strategy=kv_cache_strategy,
             shared_prefix_tokens=shared_prefix_tokens,
             quantized_bits=kv_cache_bits,
@@ -245,12 +171,27 @@ def _serving_batch_memory(
             max_cache_tokens=kv_cache_max_tokens,
             window_tokens=kv_cache_window_tokens,
             elements_per_token_per_layer=int(
-                draft_dimensions[
-                    "kv_cache_elements_per_token_per_layer"
-                ]
+                model["kv_cache_elements_per_token_per_layer"]
             ),
-            cache_layout=str(draft_dimensions["kv_cache_layout"]),
+            cache_layout=str(model["kv_cache_layout"]),
         )
+
+    def transient(
+        model: Mapping[str, Any],
+        model_element_bytes: int,
+        query_tokens: int,
+        key_tokens: int,
+    ) -> dict[str, int]:
+        return _transient_bytes(
+            model,
+            batch_size=active_sequences,
+            query_tokens=query_tokens,
+            key_tokens=key_tokens,
+            element_bytes=model_element_bytes,
+            attention_implementation=attention_implementation,
+        )
+
+    kv_cache = kv_pool(dimensions, element_bytes)
     uncached_prompt_tokens = prompt_tokens - shared_prefix_tokens
     effective_chunk_tokens = (
         min(prefill_chunk_tokens, uncached_prompt_tokens)
@@ -262,53 +203,59 @@ def _serving_batch_memory(
         window_tokens=kv_cache_window_tokens,
     )
     decode_key_tokens = _effective_tokens(
-        prompt_tokens
-        + max(0, generated_tokens - 1)
-        + effective_speculative_tokens,
+        prompt_tokens + generated_tokens - 1 + effective_speculative_tokens,
         window_tokens=kv_cache_window_tokens,
     )
-    target_prefill_transient = _transient_bytes(
+    target_prefill_transient = transient(
         dimensions,
-        batch_size=active_sequences,
-        query_tokens=effective_chunk_tokens,
-        key_tokens=prefill_key_tokens,
-        element_bytes=element_bytes,
-        attention_implementation=attention_implementation,
+        element_bytes,
+        effective_chunk_tokens,
+        prefill_key_tokens,
     )
     unchunked_prefill_transient = (
         target_prefill_transient
         if prefill_chunk_tokens is None
-        else _transient_bytes(
+        else transient(
             dimensions,
-            batch_size=active_sequences,
-            query_tokens=uncached_prompt_tokens,
-            key_tokens=prefill_key_tokens,
-            element_bytes=element_bytes,
-            attention_implementation=attention_implementation,
+            element_bytes,
+            uncached_prompt_tokens,
+            prefill_key_tokens,
         )
     )
-    draft_prefill_transient = None
-    draft_unchunked_prefill_transient = None
-    target_verification_transient = None
-    draft_proposal_transient = None
-    if speculative is not None:
-        assert draft_dimensions is not None
-        assert draft_element_bytes is not None
-        draft_prefill_transient = _transient_bytes(
-            draft_dimensions,
-            batch_size=active_sequences,
-            query_tokens=effective_chunk_tokens,
-            key_tokens=prefill_key_tokens,
-            element_bytes=draft_element_bytes,
-            attention_implementation=attention_implementation,
+    if speculative is None:
+        draft_kv_cache = None
+        draft_prefill_transient = None
+        target_verification_transient = None
+        draft_proposal_transient = None
+        prefill_transient = target_prefill_transient
+        decode_transient = transient(
+            dimensions,
+            element_bytes,
+            1,
+            decode_key_tokens,
         )
-        draft_unchunked_prefill_transient = _transient_bytes(
+        speculative_report = {"enabled": False}
+    else:
+        draft_dimensions = speculative["model"]
+        draft_element_bytes = int(speculative["element_bytes"])
+        draft_kv_cache = kv_pool(draft_dimensions, draft_element_bytes)
+        draft_prefill_transient = transient(
             draft_dimensions,
-            batch_size=active_sequences,
-            query_tokens=uncached_prompt_tokens,
-            key_tokens=prefill_key_tokens,
-            element_bytes=draft_element_bytes,
-            attention_implementation=attention_implementation,
+            draft_element_bytes,
+            effective_chunk_tokens,
+            prefill_key_tokens,
+        )
+        target_verification_transient = transient(
+            dimensions,
+            element_bytes,
+            effective_speculative_tokens,
+            decode_key_tokens,
+        )
+        draft_proposal_transient = transient(
+            draft_dimensions,
+            draft_element_bytes,
+            1,
+            decode_key_tokens,
         )
         prefill_transient = _select_larger_transient(
             target_prefill_transient,
@@ -316,37 +263,28 @@ def _serving_batch_memory(
         )
         unchunked_prefill_transient = _select_larger_transient(
             unchunked_prefill_transient,
-            draft_unchunked_prefill_transient,
-        )
-        target_verification_transient = _transient_bytes(
-            dimensions,
-            batch_size=active_sequences,
-            query_tokens=effective_speculative_tokens,
-            key_tokens=decode_key_tokens,
-            element_bytes=element_bytes,
-            attention_implementation=attention_implementation,
-        )
-        draft_proposal_transient = _transient_bytes(
-            draft_dimensions,
-            batch_size=active_sequences,
-            query_tokens=1,
-            key_tokens=decode_key_tokens,
-            element_bytes=draft_element_bytes,
-            attention_implementation=attention_implementation,
+            transient(
+                draft_dimensions,
+                draft_element_bytes,
+                uncached_prompt_tokens,
+                prefill_key_tokens,
+            ),
         )
         decode_transient = _select_larger_transient(
             target_verification_transient,
             draft_proposal_transient,
         )
-    else:
-        prefill_transient = target_prefill_transient
-        decode_transient = _transient_bytes(
-            dimensions,
-            batch_size=active_sequences,
-            query_tokens=1,
-            key_tokens=decode_key_tokens,
-            element_bytes=element_bytes,
-            attention_implementation=attention_implementation,
+        speculative_report = _speculative_report(
+            speculative=speculative,
+            effective_proposal_tokens={
+                "homogeneous_pool": effective_speculative_tokens,
+            },
+            target_kv_cache=kv_cache,
+            draft_kv_cache=draft_kv_cache,
+            target_prefill_transient=target_prefill_transient,
+            draft_prefill_transient=draft_prefill_transient,
+            target_verification_transient=target_verification_transient,
+            draft_proposal_transient=draft_proposal_transient,
         )
     breakdown = _serving_memory_breakdown(
         kv_cache=kv_cache,
@@ -367,26 +305,6 @@ def _serving_batch_memory(
         target_prefill_transient=target_prefill_transient,
         draft_prefill_transient=draft_prefill_transient,
         target_verification_transient=target_verification_transient,
-        draft_proposal_transient=draft_proposal_transient,
-    )
-    speculative_report = _speculative_report(
-        speculative=speculative,
-        effective_proposal_tokens=(
-            {"homogeneous_pool": effective_speculative_tokens}
-            if speculative is not None
-            else {}
-        ),
-        target_kv_cache=kv_cache if speculative is not None else None,
-        draft_kv_cache=draft_kv_cache,
-        target_prefill_transient=(
-            target_prefill_transient
-            if speculative is not None
-            else None
-        ),
-        draft_prefill_transient=draft_prefill_transient,
-        target_verification_transient=(
-            target_verification_transient
-        ),
         draft_proposal_transient=draft_proposal_transient,
     )
     return {
@@ -430,10 +348,7 @@ def _serving_batch_memory(
                 ),
             },
         },
-        "memory": breakdown.memory,
-        "phases": breakdown.phases,
-        "peak_bytes": breakdown.peak_bytes,
-        "peak_phase": breakdown.peak_phase,
+        **breakdown,
     }
 
 
@@ -526,61 +441,38 @@ def _serving_request_set_memory(
     scheduler_overhead_bytes_per_sequence: int,
     speculative: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    normalized = _normalize_serving_requests(requests)
     effective_proposal_tokens = {
-        str(request["id"]): min(
+        request["id"]: min(
             int(speculative["speculative_tokens"]),
-            int(request["generated_tokens"]),
+            request["generated_tokens"],
         )
-        for request in normalized
+        for request in requests
     } if speculative is not None else {}
     cache_requests = (
         [
             {
                 **request,
                 "generated_tokens": (
-                    int(request["generated_tokens"])
-                    + effective_proposal_tokens[str(request["id"])]
+                    request["generated_tokens"]
+                    + effective_proposal_tokens[request["id"]]
                 ),
             }
-            for request in normalized
+            for request in requests
         ]
         if speculative is not None
-        else normalized
+        else requests
     )
-    kv_cache = estimate_serving_request_kv_pool(
-        cache_requests,
-        num_hidden_layers=int(dimensions["num_hidden_layers"]),
-        num_key_value_heads=int(dimensions["num_key_value_heads"]),
-        head_dim=int(dimensions["head_dim"]),
-        element_bytes=element_bytes,
-        strategy=kv_cache_strategy,
-        quantized_bits=kv_cache_bits,
-        quantized_residual_tokens=kv_cache_residual_tokens,
-        block_tokens=kv_cache_block_tokens,
-        max_cache_tokens=kv_cache_max_tokens,
-        window_tokens=kv_cache_window_tokens,
-        elements_per_token_per_layer=int(
-            dimensions["kv_cache_elements_per_token_per_layer"]
-        ),
-        cache_layout=str(dimensions["kv_cache_layout"]),
-    )
-    draft_kv_cache = None
-    draft_dimensions = None
-    draft_element_bytes = None
-    if speculative is not None:
-        draft_dimensions = dict(speculative["model"])
-        draft_element_bytes = int(speculative["element_bytes"])
-        draft_kv_cache = estimate_serving_request_kv_pool(
+
+    def kv_pool(
+        model: Mapping[str, Any],
+        model_element_bytes: int,
+    ) -> dict[str, Any]:
+        return estimate_serving_request_kv_pool(
             cache_requests,
-            num_hidden_layers=int(
-                draft_dimensions["num_hidden_layers"]
-            ),
-            num_key_value_heads=int(
-                draft_dimensions["num_key_value_heads"]
-            ),
-            head_dim=int(draft_dimensions["head_dim"]),
-            element_bytes=draft_element_bytes,
+            num_hidden_layers=int(model["num_hidden_layers"]),
+            num_key_value_heads=int(model["num_key_value_heads"]),
+            head_dim=int(model["head_dim"]),
+            element_bytes=model_element_bytes,
             strategy=kv_cache_strategy,
             quantized_bits=kv_cache_bits,
             quantized_residual_tokens=kv_cache_residual_tokens,
@@ -588,18 +480,35 @@ def _serving_request_set_memory(
             max_cache_tokens=kv_cache_max_tokens,
             window_tokens=kv_cache_window_tokens,
             elements_per_token_per_layer=int(
-                draft_dimensions[
-                    "kv_cache_elements_per_token_per_layer"
-                ]
+                model["kv_cache_elements_per_token_per_layer"]
             ),
-            cache_layout=str(draft_dimensions["kv_cache_layout"]),
+            cache_layout=str(model["kv_cache_layout"]),
         )
 
+    def transient(
+        model: Mapping[str, Any],
+        model_element_bytes: int,
+        query_tokens: int,
+        key_tokens: int,
+    ) -> dict[str, int]:
+        return _transient_bytes(
+            model,
+            batch_size=1,
+            query_tokens=query_tokens,
+            key_tokens=key_tokens,
+            element_bytes=model_element_bytes,
+            attention_implementation=attention_implementation,
+        )
+
+    kv_cache = kv_pool(dimensions, element_bytes)
+    if speculative is not None:
+        draft_dimensions = speculative["model"]
+        draft_element_bytes = int(speculative["element_bytes"])
+
     request_details: list[dict[str, Any]] = []
-    for request in normalized:
-        request_id = str(request["id"])
+    for request in requests:
         request_speculative_tokens = effective_proposal_tokens.get(
-            request_id,
+            request["id"],
             0,
         )
         uncached_prompt_tokens = (
@@ -617,7 +526,8 @@ def _serving_request_set_memory(
         )
         decode_key_tokens = _effective_tokens(
             request["prompt_tokens"]
-            + max(0, request["generated_tokens"] - 1)
+            + request["generated_tokens"]
+            - 1
             + request_speculative_tokens,
             window_tokens=kv_cache_window_tokens,
         )
@@ -628,65 +538,51 @@ def _serving_request_set_memory(
             "effective_prefill_query_tokens": effective_chunk_tokens,
             "prefill_key_tokens": prefill_key_tokens,
             "decode_key_tokens": decode_key_tokens,
-            "target_prefill_transient": _transient_bytes(
+            "target_prefill_transient": transient(
                 dimensions,
-                batch_size=1,
-                query_tokens=effective_chunk_tokens,
-                key_tokens=prefill_key_tokens,
-                element_bytes=element_bytes,
-                attention_implementation=attention_implementation,
+                element_bytes,
+                effective_chunk_tokens,
+                prefill_key_tokens,
             ),
-            "target_unchunked_prefill_transient": _transient_bytes(
+            "target_unchunked_prefill_transient": transient(
                 dimensions,
-                batch_size=1,
-                query_tokens=uncached_prompt_tokens,
-                key_tokens=prefill_key_tokens,
-                element_bytes=element_bytes,
-                attention_implementation=attention_implementation,
+                element_bytes,
+                uncached_prompt_tokens,
+                prefill_key_tokens,
             ),
-            "target_decode_transient": _transient_bytes(
+            "target_decode_transient": transient(
                 dimensions,
-                batch_size=1,
-                query_tokens=(request_speculative_tokens or 1),
-                key_tokens=decode_key_tokens,
-                element_bytes=element_bytes,
-                attention_implementation=attention_implementation,
+                element_bytes,
+                request_speculative_tokens or 1,
+                decode_key_tokens,
             ),
         }
         if speculative is not None:
-            assert draft_dimensions is not None
-            assert draft_element_bytes is not None
             detail.update(
-                draft_prefill_transient=_transient_bytes(
+                draft_prefill_transient=transient(
                     draft_dimensions,
-                    batch_size=1,
-                    query_tokens=effective_chunk_tokens,
-                    key_tokens=prefill_key_tokens,
-                    element_bytes=draft_element_bytes,
-                    attention_implementation=attention_implementation,
+                    draft_element_bytes,
+                    effective_chunk_tokens,
+                    prefill_key_tokens,
                 ),
-                draft_unchunked_prefill_transient=_transient_bytes(
+                draft_unchunked_prefill_transient=transient(
                     draft_dimensions,
-                    batch_size=1,
-                    query_tokens=uncached_prompt_tokens,
-                    key_tokens=prefill_key_tokens,
-                    element_bytes=draft_element_bytes,
-                    attention_implementation=attention_implementation,
+                    draft_element_bytes,
+                    uncached_prompt_tokens,
+                    prefill_key_tokens,
                 ),
-                draft_proposal_transient=_transient_bytes(
+                draft_proposal_transient=transient(
                     draft_dimensions,
-                    batch_size=1,
-                    query_tokens=1,
-                    key_tokens=decode_key_tokens,
-                    element_bytes=draft_element_bytes,
-                    attention_implementation=attention_implementation,
+                    draft_element_bytes,
+                    1,
+                    decode_key_tokens,
                 ),
             )
         request_details.append(detail)
 
     effective_prefill_concurrency = min(
         prefill_concurrency,
-        len(normalized),
+        len(requests),
     )
     target_prefill_transient = _worst_concurrent_transient(
         request_details,
@@ -702,21 +598,22 @@ def _serving_request_set_memory(
         request_details,
         field="target_decode_transient",
     )
-    draft_prefill_transient = None
-    draft_unchunked_prefill_transient = None
-    draft_proposal_transient = None
-    if speculative is not None:
+    if speculative is None:
+        draft_kv_cache = None
+        draft_prefill_transient = None
+        draft_proposal_transient = None
+        prefill_transient = target_prefill_transient
+        unchunked_prefill_transient = (
+            target_unchunked_prefill_transient
+        )
+        decode_transient = target_decode_transient
+        speculative_report = {"enabled": False}
+    else:
+        draft_kv_cache = kv_pool(draft_dimensions, draft_element_bytes)
         draft_prefill_transient = _worst_concurrent_transient(
             request_details,
             field="draft_prefill_transient",
             concurrency=effective_prefill_concurrency,
-        )
-        draft_unchunked_prefill_transient = (
-            _worst_concurrent_transient(
-                request_details,
-                field="draft_unchunked_prefill_transient",
-                concurrency=effective_prefill_concurrency,
-            )
         )
         draft_proposal_transient = _sum_request_transients(
             request_details,
@@ -728,40 +625,46 @@ def _serving_request_set_memory(
         )
         unchunked_prefill_transient = _select_larger_transient(
             target_unchunked_prefill_transient,
-            draft_unchunked_prefill_transient,
+            _worst_concurrent_transient(
+                request_details,
+                field="draft_unchunked_prefill_transient",
+                concurrency=effective_prefill_concurrency,
+            ),
         )
         decode_transient = _select_larger_transient(
             target_decode_transient,
             draft_proposal_transient,
         )
-    else:
-        prefill_transient = target_prefill_transient
-        unchunked_prefill_transient = (
-            target_unchunked_prefill_transient
+        speculative_report = _speculative_report(
+            speculative=speculative,
+            effective_proposal_tokens=effective_proposal_tokens,
+            target_kv_cache=kv_cache,
+            draft_kv_cache=draft_kv_cache,
+            target_prefill_transient=target_prefill_transient,
+            draft_prefill_transient=draft_prefill_transient,
+            target_verification_transient=target_decode_transient,
+            draft_proposal_transient=draft_proposal_transient,
         )
-        decode_transient = target_decode_transient
 
     prefill_input_requests = sorted(
         request_details,
-        key=lambda item: int(
-            item["effective_prefill_query_tokens"]
-        ),
+        key=lambda item: item["effective_prefill_query_tokens"],
         reverse=True,
     )[:effective_prefill_concurrency]
     prefill_input_bytes = sum(
-        int(request["effective_prefill_query_tokens"]) * 8
+        request["effective_prefill_query_tokens"] * 8
         for request in prefill_input_requests
     )
     decode_input_bytes = sum(
-        effective_proposal_tokens.get(str(request["id"]), 1)
-        for request in normalized
+        effective_proposal_tokens.get(request["id"], 1)
+        for request in requests
     ) * 8
     breakdown = _serving_memory_breakdown(
         kv_cache=kv_cache,
         draft_kv_cache=draft_kv_cache,
         speculative=speculative,
         parameter_bytes=parameter_bytes,
-        sequence_count=len(normalized),
+        sequence_count=len(requests),
         runtime_overhead_bytes=runtime_overhead_bytes,
         scheduler_overhead_bytes_per_sequence=(
             scheduler_overhead_bytes_per_sequence
@@ -778,49 +681,29 @@ def _serving_request_set_memory(
         draft_proposal_transient=draft_proposal_transient,
         memory_extra={"request_details": request_details},
     )
-    prompt_lengths = [
-        int(request["prompt_tokens"]) for request in normalized
-    ]
+    prompt_lengths = [request["prompt_tokens"] for request in requests]
     generation_lengths = [
-        int(request["generated_tokens"]) for request in normalized
+        request["generated_tokens"] for request in requests
     ]
     prefix_groups = {
-        str(request["prefix_group"])
-        for request in normalized
+        request["prefix_group"]
+        for request in requests
         if request["prefix_group"] is not None
     }
     chunking_enabled = any(
         prefill_chunk_tokens is not None
-        and int(request["effective_prefill_query_tokens"])
-        < int(request["uncached_prompt_tokens"])
+        and request["effective_prefill_query_tokens"]
+        < request["uncached_prompt_tokens"]
         for request in request_details
-    )
-    speculative_report = _speculative_report(
-        speculative=speculative,
-        effective_proposal_tokens=effective_proposal_tokens,
-        target_kv_cache=kv_cache if speculative is not None else None,
-        draft_kv_cache=draft_kv_cache,
-        target_prefill_transient=(
-            target_prefill_transient
-            if speculative is not None
-            else None
-        ),
-        draft_prefill_transient=draft_prefill_transient,
-        target_verification_transient=(
-            target_decode_transient
-            if speculative is not None
-            else None
-        ),
-        draft_proposal_transient=draft_proposal_transient,
     )
     return {
         "kv_cache": kv_cache,
         "speculative_decoding": speculative_report,
         "optimizations": {
             "continuous_batching": {
-                "active_sequences": len(normalized),
+                "active_sequences": len(requests),
                 "request_ids": [
-                    request["id"] for request in normalized
+                    request["id"] for request in requests
                 ],
                 "request_shapes": {
                     "prompt_tokens": {
@@ -863,7 +746,7 @@ def _serving_request_set_memory(
                 "group_ids": sorted(prefix_groups),
                 "request_count": sum(
                     request["prefix_group"] is not None
-                    for request in normalized
+                    for request in requests
                 ),
                 "prefill_savings_bytes": int(
                     kv_cache["prefill"]["prefix_cache_savings_bytes"]
@@ -873,10 +756,7 @@ def _serving_request_set_memory(
                 ),
             },
         },
-        "memory": breakdown.memory,
-        "phases": breakdown.phases,
-        "peak_bytes": breakdown.peak_bytes,
-        "peak_phase": breakdown.peak_phase,
+        **breakdown,
     }
 
 

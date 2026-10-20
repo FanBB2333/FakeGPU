@@ -21,14 +21,7 @@ from ._serving_kv import (
     estimate_serving_request_kv_pool,
     load_serving_requests,
 )
-from ._serving_memory import (
-    _ServingMemoryBreakdown,  # noqa: F401 - preserve the historical private import
-    _serving_batch_memory,
-    _serving_memory_breakdown,  # noqa: F401 - preserve the historical private import
-    _serving_request_set_memory,
-    _sum_request_transients,  # noqa: F401 - preserve historical private imports
-    _worst_concurrent_transient,  # noqa: F401 - preserve historical private imports
-)
+from ._serving_memory import _serving_batch_memory, _serving_request_set_memory
 from ._serving_speculative import (
     DEFAULT_SPECULATIVE_TOKENS,
     _load_speculative_draft,
