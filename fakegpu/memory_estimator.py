@@ -606,7 +606,7 @@ def analyze_graph_memory(
 
     nodes = list(graph_module.graph.nodes)
     node_index = {node: index for index, node in enumerate(nodes)}
-    node_storages: dict[Any, set[int]] = {}
+    node_storages: dict[Any, dict[int, None]] = {}
     storage_records: dict[int, dict[str, Any]] = {}
     warnings: list[str] = []
     categories = list(placeholder_categories or [])
@@ -623,7 +623,7 @@ def analyze_graph_memory(
         elif node.op == "get_attr":
             category = "constant"
 
-        keys: set[int] = set()
+        keys: dict[int, None] = {}
         for tensor in _iter_tensor_leaves(node.meta.get("val")):
             try:
                 key, nbytes = _tensor_storage_identity(tensor)
@@ -632,7 +632,7 @@ def analyze_graph_memory(
                 continue
             if nbytes <= 0:
                 continue
-            keys.add(key)
+            keys[key] = None
             record = storage_records.get(key)
             if record is None:
                 storage_records[key] = {
@@ -657,7 +657,7 @@ def analyze_graph_memory(
     for node in nodes:
         consumer_index = node_index[node]
         for referenced_node in _iter_node_references((node.args, node.kwargs), Node):
-            for key in node_storages.get(referenced_node, set()):
+            for key in node_storages.get(referenced_node, {}):
                 storage_records[key]["last_use_index"] = max(
                     int(storage_records[key]["last_use_index"]),
                     consumer_index,
@@ -671,7 +671,7 @@ def analyze_graph_memory(
     )
     output_keys: set[int] = set()
     for output_position, referenced_node in enumerate(output_references):
-        keys = node_storages.get(referenced_node, set())
+        keys = node_storages.get(referenced_node, {})
         output_keys.update(keys)
         output_category = (
             "gradient"
@@ -878,7 +878,7 @@ def analyze_graph_memory(
                     "dtype": storage_records[key]["dtype"],
                     "shape": storage_records[key]["shape"],
                 }
-                for key in sorted(node_storages.get(node, set()))
+                for key in node_storages.get(node, {})
             ],
         }
         for node in nodes
