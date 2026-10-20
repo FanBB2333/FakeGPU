@@ -230,7 +230,11 @@ def architecture_for_compute_capability(major: int, minor: int) -> str:
 
 
 def profile_directory() -> Path:
-    override = os.environ.get("FAKEGPU_PROFILE_DIR")
+    return _profile_directory(os.environ.get("FAKEGPU_PROFILE_DIR"))
+
+
+@lru_cache(maxsize=8)
+def _profile_directory(override: str | None) -> Path:
     candidates = []
     if override:
         candidates.append(Path(override))
