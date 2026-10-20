@@ -10,9 +10,6 @@ from typing import Any, Mapping
 from urllib.parse import urlparse
 
 
-CURRENT_COMPUTE_CAPABILITY_SOURCE = "https://developer.nvidia.com/cuda/gpus"
-LEGACY_COMPUTE_CAPABILITY_SOURCE = "https://developer.nvidia.com/cuda/gpus/legacy"
-
 _SUPPORTED_ARCHITECTURES = {
     "maxwell",
     "pascal",

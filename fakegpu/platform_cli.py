@@ -38,9 +38,7 @@ def _resolve(args: argparse.Namespace) -> ResolvedPlatform:
 
 def _print_list() -> None:
     rows = [(p.id, p.kind, str(p.capacity), p.name) for p in load_platforms().values()]
-    widths = [max(len(row[column]) for row in rows + [("ID", "Kind", "GPUs", "Name")]) for column in range(4)]
-    for row in [("ID", "Kind", "GPUs", "Name"), *rows]:
-        print("  ".join(value.ljust(widths[column]) for column, value in enumerate(row)).rstrip())
+    _print_rows([("ID", "Kind", "GPUs", "Name"), *rows])
     print()
     print("auto picks a platform by form factor: SXM modules go on the HGX/DGX baseboard built for them,")
     print("superchips on their Grace platform, and PCIe cards in desktop, workstation or server slots.")
