@@ -153,16 +153,16 @@ private:
 
     void dump_cluster_report_internal(const BackendConfig& config) {
         const char* cluster_report_path = std::getenv("FAKEGPU_CLUSTER_REPORT_PATH");
+        if (!cluster_report_path || !*cluster_report_path) {
+            if (!config.distributed_enabled()) {
+                return;
+            }
+            cluster_report_path = "fake_gpu_cluster_report.json";
+        }
         const distributed::ClusterReportSnapshot cluster_snapshot =
             distributed::snapshot_cluster_report();
-        if ((!cluster_report_path || !*cluster_report_path) && !config.distributed_enabled()) {
-            return;
-        }
         if (!cluster_snapshot.has_data) {
             return;
-        }
-        if (!cluster_report_path || !*cluster_report_path) {
-            cluster_report_path = "fake_gpu_cluster_report.json";
         }
 
         const distributed::DistributedConfig& dist_config = config.distributed_config();
