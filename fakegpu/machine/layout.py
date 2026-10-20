@@ -15,7 +15,6 @@ from typing import Any
 
 from .._smi_environment import _modeled_device_topology
 from .._smi_state import LAYOUT_ONLY_KEY, SCHEMA_VERSION, _synthetic_pci_bus_id, _synthetic_uuid
-from ..platforms import PlatformError
 from ..profile_catalog import get_profile
 from .client import daemon_pid
 from .config import MachineConfig, MachinePaths
@@ -44,10 +43,10 @@ def layout_state(paths: MachinePaths | None = None) -> dict[str, Any] | None:
         return None
     try:
         config = MachineConfig.load(paths.config)
-        environment = config.resolved_platform().environment()
-        profiles = [get_profile(profile_id) for profile_id in config.profiles]
-    except (OSError, ValueError, KeyError, PlatformError):
+    except (OSError, ValueError):
         return None
+    environment = config.resolved_platform().environment()
+    profiles = [get_profile(profile_id) for profile_id in config.profiles]
     host = socket.gethostname()
     devices = [
         {

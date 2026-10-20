@@ -252,7 +252,7 @@ def plan_layout(config: Mapping[str, Any], profiles: Sequence[str]) -> LayoutPla
         except ValueError as exc:
             reason = reason or str(exc)
             continue
-        changes: dict[str, Any] = {"devices": layout_text(list(profiles))}
+        changes: dict[str, Any] = {"devices": layout_text(profiles)}
         notes = []
         if candidate != platform:
             changes["platform"] = candidate
