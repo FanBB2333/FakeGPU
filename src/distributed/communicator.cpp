@@ -1123,13 +1123,6 @@ bool point_to_point_requests_match(
             ", got " + std::to_string(actual.timeout_ms);
         return false;
     }
-    if (expected.payload_bytes != actual.payload_bytes) {
-        error_code = "payload_bytes_mismatch";
-        error_detail =
-            "expected payload_bytes=" + std::to_string(expected.payload_bytes) +
-            ", got " + std::to_string(actual.payload_bytes);
-        return false;
-    }
     return true;
 }
 
@@ -2164,7 +2157,8 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
     }
     if (request.transport == BufferTransport::SocketPayload &&
         request.type == PointToPointType::Send &&
-        request.payload.size() != request.payload_bytes) {
+        (request.payload.size() != request.payload_bytes ||
+         request.payload_bytes != request.bytes)) {
         return make_point_to_point_error("socket_payload_size_mismatch", "point-to-point socket payload size did not match bytes");
     }
     if (request.timeout_ms <= 0) {

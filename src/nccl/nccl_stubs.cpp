@@ -2077,8 +2077,7 @@ ncclResult_t submit_point_to_point(
     if (buffer_transport == fake_gpu::distributed::BufferTransport::SharedMemory) {
         request << " staging_name=" << staging_name;
     } else {
-        request << " payload_bytes="
-                << (p2p_type == fake_gpu::distributed::PointToPointType::Send ? bytes : bytes);
+        request << " payload_bytes=" << request_payload.size();
     }
 
     fake_gpu::distributed::CoordinatorResponse response;

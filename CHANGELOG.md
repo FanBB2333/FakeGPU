@@ -90,6 +90,9 @@
   duplicate split ranks or split timeout mismatches as `ncclInvalidUsage`,
   matching `ncclCommShrink`, instead of `ncclInternalError`. Ranks that
   disagree on explicit all-to-all splits also get `ncclInvalidUsage`.
+- Complete `ncclSend`/`ncclRecv` pairs over the TCP coordinator. The receiver
+  no longer declares a socket payload it never sends, so the coordinator stops
+  waiting for it and the sender no longer times out.
 
 ## v1.6.0 - 2026-10-17
 
