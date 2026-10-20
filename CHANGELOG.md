@@ -8,6 +8,8 @@
   bfloat16 default, so `torch.amp.autocast("cuda")` no longer fails on
   pre-Ampere profiles; the positional `dtype` form and the legacy
   `torch.cuda.amp.autocast(enabled, dtype, cache_enabled)` signature work.
+- Module buffers moved with `Module.to`/`.cuda` are reported in the `buffer`
+  memory category again instead of `tensor`.
 
 ## v1.6.0 - 2026-10-17
 

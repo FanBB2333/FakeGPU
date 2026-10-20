@@ -1588,6 +1588,11 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     upstream.wrap_tensor = _hooked_wrap_tensor
     _install_upstream_dispatch_memory_tracking(upstream, torch_mod)
+    # Copies take the modeled time of their route over the platform links
+    # (fakegpu.link_traffic); recorded only, nothing waits.  Installed before
+    # the category hooks so they wrap the recording Module.to/cuda.
+    _link_traffic = _new_link_traffic()
+    _install_transfer_recording(upstream, torch_mod)
     _install_upstream_memory_category_hooks(upstream, torch_mod)
     _patch_upstream_fakecuda_tensor_compat(upstream, torch_mod)
     _patch_upstream_all_gather_object(upstream, torch_mod)
@@ -1681,11 +1686,6 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     torch.cuda.can_device_access_peer = _topology_can_device_access_peer
     upstream.can_device_access_peer = _topology_can_device_access_peer
-
-    # Copies take the modeled time of their route over the platform links
-    # (fakegpu.link_traffic); recorded only, nothing waits.
-    _link_traffic = _new_link_traffic()
-    _install_transfer_recording(upstream, torch_mod)
 
     # Compute-capability-aware bf16 check (upstream always returns True)
     torch.cuda.is_bf16_supported = _stub_is_bf16_supported
