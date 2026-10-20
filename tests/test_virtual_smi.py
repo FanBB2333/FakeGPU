@@ -769,6 +769,20 @@ def test_native_smi_publisher_waits_out_a_huge_interval(tmp_path: Path) -> None:
     assert state["publisher"]["health"]["attempted_writes"] == 2
 
 
+def test_native_smi_limits_clamp_negative_values_like_python(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    environment = {
+        "FAKEGPU_SMI_DETAIL_LIMIT": "-1",
+        "FAKEGPU_SMI_MAX_STATE_BYTES": "-5",
+    }
+    native = _native_smi_state(tmp_path, environment)["publisher"]["limits"]
+    python = _python_smi_state(tmp_path, monkeypatch, environment)["publisher"]["limits"]
+
+    assert native == python == {"detail_entries": 0, "max_state_bytes": 65536}
+
+
 def test_virtual_smi_process_query_filters_and_marks_stale_state(
     tmp_path: Path,
     capsys,

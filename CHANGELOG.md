@@ -133,6 +133,10 @@
 - A huge `FAKEGPU_SMI_INTERVAL_MS` (such as `1e300`) no longer makes the
   native SMI publisher rewrite its state file thousands of times a second;
   the interval is capped at 10^12 ms.
+- Negative native `FAKEGPU_SMI_DETAIL_LIMIT` and `FAKEGPU_SMI_MAX_STATE_BYTES`
+  values clamp to the minimum, and values beyond the 64-bit range clamp
+  instead of falling back to the default, as in the Python publisher;
+  `-1` used to wrap to the maximum.
 
 ## v1.6.0 - 2026-10-17
 

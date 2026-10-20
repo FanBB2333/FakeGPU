@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -127,11 +126,14 @@ std::size_t configured_size_limit(
     if (!value || !*value) {
         return fallback;
     }
-    errno = 0;
+    // strtoll saturates out-of-range values, which then clamp like Python's int().
     char* end = nullptr;
-    const unsigned long long parsed = std::strtoull(value, &end, 10);
-    if (errno != 0 || end == value || !end || *end != '\0') {
+    const long long parsed = std::strtoll(value, &end, 10);
+    if (end == value || *end != '\0') {
         return fallback;
+    }
+    if (parsed < 0) {
+        return minimum;
     }
     return static_cast<std::size_t>(
         std::min<unsigned long long>(
