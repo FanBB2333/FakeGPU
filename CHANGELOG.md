@@ -96,6 +96,9 @@
 - Release each finished coordinator connection thread instead of keeping
   every handler until shutdown, so coordinator memory no longer grows with
   the number of requests.
+- Reject `nan` and `inf` fabric bandwidth, latency, and oversubscription
+  values in cluster YAML files instead of writing them into the cluster report
+  as invalid JSON.
 
 ## v1.6.0 - 2026-10-17
 

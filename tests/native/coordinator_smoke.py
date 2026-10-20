@@ -18,6 +18,35 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BUILD_DIR = Path(os.environ.get("FAKEGPU_BUILD_DIR", REPO_ROOT / "build"))
 COORDINATOR_BIN = BUILD_DIR / "fakegpu-coordinator"
 
+TWO_NODE_CLUSTER_YAML = """version: 1
+cluster:
+  name: smoke
+  default_backend: nccl
+nodes:
+  - id: node0
+    host: h0
+    ranks: [0, 1]
+    gpus:
+      - profile: a100
+      - profile: a100
+  - id: node1
+    host: h1
+    ranks: [2, 3]
+    gpus:
+      - profile: a100
+      - profile: a100
+fabric:
+  intra_node:
+    type: nvlink
+    bandwidth_gbps: 100
+    latency_us: 1
+  inter_node:
+    type: tcp
+    bandwidth_gbps: {inter_node_bandwidth}
+    latency_us: 5
+"""
+
+
 def request(socket_path: str, payload: str) -> str:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.connect(socket_path)
@@ -211,6 +240,29 @@ def check_finished_client_threads_are_released(tmpdir: str) -> None:
         proc.wait(timeout=2.0)
 
 
+def check_non_finite_fabric_value_rejected(tmpdir: str) -> None:
+    config_path = Path(tmpdir) / "cluster.yaml"
+    config_path.write_text(
+        TWO_NODE_CLUSTER_YAML.format(inter_node_bandwidth="nan"),
+        encoding="utf-8",
+    )
+    report_path = Path(tmpdir) / "nan-report.json"
+    socket_path = os.path.join(tmpdir, "coordinator.sock")
+    with running_coordinator(
+        tmpdir,
+        {
+            "FAKEGPU_DIST_MODE": "simulate",
+            "FAKEGPU_COORDINATOR_TRANSPORT": "unix",
+            "FAKEGPU_COORDINATOR_ADDR": socket_path,
+            "FAKEGPU_CLUSTER_CONFIG": str(config_path),
+            "FAKEGPU_CLUSTER_REPORT_PATH": str(report_path),
+        },
+    ) as (socket_path, proc):
+        request(socket_path, "SHUTDOWN")
+        proc.wait(timeout=2.0)
+    json.loads(report_path.read_text(encoding="utf-8"))
+
+
 def main() -> int:
     if not COORDINATOR_BIN.exists():
         print(f"missing coordinator binary: {COORDINATOR_BIN}", file=sys.stderr)
@@ -220,6 +272,7 @@ def main() -> int:
         check_empty_report,
         check_socket_point_to_point,
         check_finished_client_threads_are_released,
+        check_non_finite_fabric_value_rejected,
     )
     for check in checks:
         with tempfile.TemporaryDirectory(prefix="fgpu-coord-", dir="/tmp") as tmpdir:

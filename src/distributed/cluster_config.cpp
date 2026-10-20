@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -109,7 +110,7 @@ bool parse_double(const std::string& text, double& out) {
     try {
         std::size_t consumed = 0;
         out = std::stod(text, &consumed);
-        return consumed == text.size();
+        return consumed == text.size() && std::isfinite(out);
     } catch (...) {
         return false;
     }
