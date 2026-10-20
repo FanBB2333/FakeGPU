@@ -4,7 +4,6 @@ import argparse
 import copy
 import json
 import math
-import os
 import sys
 import threading
 import time
@@ -23,6 +22,7 @@ from ._smi_state import (
     DEFAULT_STALE_AFTER_SECONDS,
     _discover_state_paths,
     _load_states,
+    _state_sources,
     build_inventory,
 )
 
@@ -908,26 +908,9 @@ def _run(
     if args.serve and args.json:
         parser.error("--json cannot be combined with --serve")
 
-    explicit_paths = [
-        Path(value).expanduser().resolve() for value in args.state
-    ]
-    state_dir_text = (
-        args.state_dir or os.environ.get("FAKEGPU_SMI_STATE_DIR")
-    )
-    state_dir = (
-        Path(state_dir_text).expanduser().resolve()
-        if state_dir_text
-        else None
-    )
-    fallback_state_text = None
-    if not explicit_paths and state_dir is None:
-        fallback_state_text = os.environ.get(
-            "FAKEGPU_SMI_STATE_PATH"
-        )
-    fallback_state = (
-        Path(fallback_state_text).expanduser().resolve()
-        if fallback_state_text
-        else None
+    explicit_paths, state_dir, fallback_state = _state_sources(
+        args.state,
+        args.state_dir,
     )
     if (
         not explicit_paths

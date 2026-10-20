@@ -52,6 +52,7 @@ from ._smi_state import (
     _load_states,
     _mapping_list,
     _profile_metadata,
+    _state_sources,
     _synthetic_pci_bus_id,
     _synthetic_uuid,
     build_inventory,
@@ -65,6 +66,27 @@ MAXIMUM_PUBLISHER_DETAIL_LIMIT = 1024
 DEFAULT_MAX_STATE_BYTES = 1024 * 1024
 MINIMUM_MAX_STATE_BYTES = 64 * 1024
 MAXIMUM_MAX_STATE_BYTES = 64 * 1024 * 1024
+# (query kind, query argument, help argument, fields, inventory key), in the
+# order --help-query-* options take precedence.
+_QUERIES = (
+    ("gpu", "query_gpu", "help_query_gpu", GPU_QUERY_FIELDS, "devices"),
+    (
+        "compute-apps",
+        "query_compute_apps",
+        "help_query_compute_apps",
+        PROCESS_QUERY_FIELDS,
+        "processes",
+    ),
+    (
+        "runtime",
+        "query_runtime",
+        "help_query_runtime",
+        RUNTIME_QUERY_FIELDS,
+        "runtimes",
+    ),
+)
+
+
 def configured_state_path() -> Path | None:
     explicit = os.environ.get("FAKEGPU_SMI_STATE_PATH")
     if explicit:
@@ -504,7 +526,7 @@ class SmiStatePublisher:
                 )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=command_prog(__name__),
         description=(
@@ -637,17 +659,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=_positive_int,
         help="Stop after this many refreshes; requires --loop.",
     )
-    args = parser.parse_args(argv)
+    return parser
 
-    if args.help_query_gpu:
-        print(_render_query_help("gpu", GPU_QUERY_FIELDS))
-        return 0
-    if args.help_query_compute_apps:
-        print(_render_query_help("compute-apps", PROCESS_QUERY_FIELDS))
-        return 0
-    if args.help_query_runtime:
-        print(_render_query_help("runtime", RUNTIME_QUERY_FIELDS))
-        return 0
+
+def _check_view_arguments(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
     if args.count is not None and args.loop is None:
         parser.error("--count requires --loop")
     if args.matrix and args.view != "topo":
@@ -678,48 +696,44 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--format requires --query-gpu, --query-compute-apps, "
             "or --query-runtime"
         )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    for query_kind, _attr, help_attr, available, _key in _QUERIES:
+        if getattr(args, help_attr):
+            print(_render_query_help(query_kind, available))
+            return 0
+    _check_view_arguments(args, parser)
     query_format = _parse_query_format(
         args.format or "csv",
         parser=parser,
     )
-    gpu_query_fields = _parse_query_fields(
-        args.query_gpu,
-        available=GPU_QUERY_FIELDS,
-        parser=parser,
-    )
-    process_query_fields = _parse_query_fields(
-        args.query_compute_apps,
-        available=PROCESS_QUERY_FIELDS,
-        parser=parser,
-    )
-    runtime_query_fields = _parse_query_fields(
-        args.query_runtime,
-        available=RUNTIME_QUERY_FIELDS,
-        parser=parser,
-    )
+    query = None
+    for query_kind, attr, _help_attr, available, key in _QUERIES:
+        value = getattr(args, attr)
+        if value is not None:
+            fields = _parse_query_fields(value, available=available, parser=parser)
+            query = (query_kind, available, key, fields)
+            break
     selectors = _device_selectors(args.id)
 
-    explicit_paths = [Path(value).expanduser().resolve() for value in args.state]
-    state_dir_text = args.state_dir or os.environ.get("FAKEGPU_SMI_STATE_DIR")
-    state_dir = Path(state_dir_text).expanduser().resolve() if state_dir_text else None
-    fallback_state_text = None
-    if not explicit_paths and state_dir is None:
-        fallback_state_text = os.environ.get("FAKEGPU_SMI_STATE_PATH")
-    fallback_state = (
-        Path(fallback_state_text).expanduser().resolve()
-        if fallback_state_text
-        else None
+    explicit_paths, state_dir, fallback_state = _state_sources(
+        args.state,
+        args.state_dir,
     )
     from .machine.layout import is_machine_state_dir, layout_state, machine_state_dir
 
-    if not explicit_paths and state_dir is None and fallback_state is None:
+    if not (explicit_paths or state_dir or fallback_state):
         # Like nvidia-smi on a real host: show the background machine.
         state_dir = machine_state_dir()
-    if not explicit_paths and state_dir is None and fallback_state is None:
-        parser.error(
-            "provide --state, --state-dir, or FAKEGPU_SMI_STATE_PATH, "
-            "or start the background machine with 'fakegpu daemon start'"
-        )
+        if state_dir is None:
+            parser.error(
+                "provide --state, --state-dir, or FAKEGPU_SMI_STATE_PATH, "
+                "or start the background machine with 'fakegpu daemon start'"
+            )
     # The machine lists its GPUs even when no process uses them.
     show_layout = is_machine_state_dir(state_dir)
 
@@ -787,33 +801,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ),
                     )
                 )
-            elif gpu_query_fields:
+            elif query is not None:
+                query_kind, available, key, fields = query
                 print(
                     render_query(
-                        inventory["devices"],
-                        fields=gpu_query_fields,
-                        available=GPU_QUERY_FIELDS,
-                        query_kind="gpu",
-                        output_format=query_format,
-                    )
-                )
-            elif process_query_fields:
-                print(
-                    render_query(
-                        inventory["processes"],
-                        fields=process_query_fields,
-                        available=PROCESS_QUERY_FIELDS,
-                        query_kind="compute-apps",
-                        output_format=query_format,
-                    )
-                )
-            elif runtime_query_fields:
-                print(
-                    render_query(
-                        inventory["runtimes"],
-                        fields=runtime_query_fields,
-                        available=RUNTIME_QUERY_FIELDS,
-                        query_kind="runtime",
+                        inventory[key],
+                        fields=fields,
+                        available=available,
+                        query_kind=query_kind,
                         output_format=query_format,
                     )
                 )

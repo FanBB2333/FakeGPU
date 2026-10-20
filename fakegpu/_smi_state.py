@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import socket
 import time
 import uuid
@@ -67,6 +68,24 @@ def _discover_state_paths(
     if fallback_state is not None:
         paths.append(fallback_state)
     return list(dict.fromkeys(paths))
+
+
+def _state_sources(
+    state_args: Sequence[str],
+    state_dir_arg: str | None,
+) -> tuple[list[Path], Path | None, Path | None]:
+    explicit_paths = [Path(value).expanduser().resolve() for value in state_args]
+    state_dir_text = state_dir_arg or os.environ.get("FAKEGPU_SMI_STATE_DIR")
+    state_dir = Path(state_dir_text).expanduser().resolve() if state_dir_text else None
+    fallback_state_text = None
+    if not explicit_paths and state_dir is None:
+        fallback_state_text = os.environ.get("FAKEGPU_SMI_STATE_PATH")
+    fallback_state = (
+        Path(fallback_state_text).expanduser().resolve()
+        if fallback_state_text
+        else None
+    )
+    return explicit_paths, state_dir, fallback_state
 
 
 def _load_states(
