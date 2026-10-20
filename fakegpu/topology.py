@@ -279,12 +279,12 @@ class Topology:
         *,
         flow_id: str = "",
     ) -> list[Link]:
-        if src_rank == dst_rank:
-            return []
         if src_rank not in self.ranks or dst_rank not in self.ranks:
             raise TopologyError(
                 f"route references unknown rank {src_rank}->{dst_rank}"
             )
+        if src_rank == dst_rank:
+            return []
         if payload_bytes < 0:
             raise TopologyError("payload_bytes must be non-negative")
         candidates = []

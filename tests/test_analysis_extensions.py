@@ -31,7 +31,12 @@ from fakegpu.operator_profiles import (
     match_operator_profile,
 )
 from fakegpu.repository_analyzer import analyze_repository
-from fakegpu.topology import Topology, TopologyError, simulate_collective
+from fakegpu.topology import (
+    Topology,
+    TopologyError,
+    simulate_collective,
+    simulate_point_to_point,
+)
 from fakegpu.trace_replay import _resilience_summary, replay_trace
 from fakegpu.training_plan import (
     estimate_training_plan,
@@ -1206,6 +1211,12 @@ def test_topology_keeps_parallel_links_distinct_and_rejects_duplicate_nics() -> 
     }
     with pytest.raises(TopologyError, match="duplicate NIC id"):
         Topology.from_mapping(duplicate_nic_config)
+
+
+def test_point_to_point_rejects_an_unknown_rank_sent_to_itself() -> None:
+    topology = Topology.from_mapping(_topology_config())
+    with pytest.raises(TopologyError, match="unknown rank 7->7"):
+        simulate_point_to_point(topology, src_rank=7, dst_rank=7, payload_bytes=1)
 
 
 def test_trace_replay_reports_overlap_pairs_memory_and_recovery() -> None:

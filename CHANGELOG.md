@@ -23,6 +23,8 @@
   error instead of crashing with `KeyError`.
 - `fakegpu bandwidth --listen` without `--cluster-report` no longer prints the
   path of a cluster report inside an already deleted temporary directory.
+- `fakegpu simulate-topology` reports an unknown rank used as both source and
+  destination as a usage error instead of crashing with `KeyError`.
 
 ## v1.6.0 - 2026-10-17
 
