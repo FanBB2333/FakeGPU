@@ -182,53 +182,51 @@ def estimate_finetuning_memory(
         ),
         "oom_safety_verified": False,
     }
-    return deepcopy(
-        {
-            "schema_version": SCHEMA_VERSION,
-            "scope": "covered_native_process_allocator_peak_envelope",
-            **{field: plan[field] for field in _COMPATIBILITY_FIELDS},
-            "target_plan": {
-                "source": plan["source"],
-                "sha256": _digest(plan),
-                "workload": plan["workload"],
-            },
-            "calibration_runs": [
-                {
-                    **sample["identity"],
-                    **sample["peaks"],
-                    "evidence_sha256": sample["evidence_sha256"],
-                    "workload": sample["plan"]["workload"],
-                }
-                for sample in samples
-            ],
-            "coverage": {
-                "target_components": len(components),
-                "target_component_groups": len(grouped),
-                "minimum_samples_per_group_per_calibration_run": 1,
-                "includes_warmup_and_first_occurrences": True,
-                "complete": True,
-            },
-            "component_groups": list(grouped.values()),
-            "memory": envelope,
-            "budget": budget,
-            "limitations": [
-                "The min/max range contains observed complete-run CUDA allocator peaks; "
-                "it is not a confidence interval or a bound on future allocations.",
-                "All target semantic components must be observed in every calibration "
-                "run; window or event peaks are neither inferred nor summed.",
-                "The allocated and reserved peaks can occur at different times. "
-                "Reserved memory includes allocator caching and is not a minimum "
-                "memory requirement.",
-                "CUDA allocator statistics exclude allocations by other processes, "
-                "the driver and libraries outside the PyTorch allocator.",
-                "Matching shapes, event and epoch contexts does not prove identical "
-                "allocator state, fragmentation or memory growth in longer runs.",
-                "A requested budget comparison or caller-selected reserve does not "
-                "establish physical-GPU OOM safety; actual OOM requires a separate "
-                "failed execution with an observed CUDA allocation error.",
-            ],
-        }
-    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "scope": "covered_native_process_allocator_peak_envelope",
+        **{field: plan[field] for field in _COMPATIBILITY_FIELDS},
+        "target_plan": {
+            "source": plan["source"],
+            "sha256": _digest(plan),
+            "workload": plan["workload"],
+        },
+        "calibration_runs": [
+            {
+                **sample["identity"],
+                **sample["peaks"],
+                "evidence_sha256": sample["evidence_sha256"],
+                "workload": sample["plan"]["workload"],
+            }
+            for sample in samples
+        ],
+        "coverage": {
+            "target_components": len(components),
+            "target_component_groups": len(grouped),
+            "minimum_samples_per_group_per_calibration_run": 1,
+            "includes_warmup_and_first_occurrences": True,
+            "complete": True,
+        },
+        "component_groups": list(grouped.values()),
+        "memory": envelope,
+        "budget": budget,
+        "limitations": [
+            "The min/max range contains observed complete-run CUDA allocator peaks; "
+            "it is not a confidence interval or a bound on future allocations.",
+            "All target semantic components must be observed in every calibration "
+            "run; window or event peaks are neither inferred nor summed.",
+            "The allocated and reserved peaks can occur at different times. "
+            "Reserved memory includes allocator caching and is not a minimum "
+            "memory requirement.",
+            "CUDA allocator statistics exclude allocations by other processes, "
+            "the driver and libraries outside the PyTorch allocator.",
+            "Matching shapes, event and epoch contexts does not prove identical "
+            "allocator state, fragmentation or memory growth in longer runs.",
+            "A requested budget comparison or caller-selected reserve does not "
+            "establish physical-GPU OOM safety; actual OOM requires a separate "
+            "failed execution with an observed CUDA allocation error.",
+        ],
+    }
 
 
 def compare_finetuning_memory(
