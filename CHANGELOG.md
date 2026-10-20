@@ -17,6 +17,8 @@
   values for every profile, matching the native runtime.
 - The first virtual-SMI state written by a FakeCUDA process reports the
   `upstream` backend instead of `unknown`.
+- Under FakeCUDA, `torch.get_float32_matmul_precision()` returns `medium`
+  after `torch.set_float32_matmul_precision("medium")` instead of `high`.
 
 ## v1.6.0 - 2026-10-17
 

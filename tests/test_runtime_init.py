@@ -133,6 +133,14 @@ loss = model(torch.ones(1, 2, device="cuda")).sum()
 loss.backward()
 optimizer.step()
 
+torch.set_float32_matmul_precision("medium")
+assert torch.get_float32_matmul_precision() == "medium"
+torch.set_float32_matmul_precision("high")
+assert torch.get_float32_matmul_precision() == "high"
+torch.set_float32_matmul_precision("highest")
+torch.backends.cuda.matmul.allow_tf32 = True
+assert torch.get_float32_matmul_precision() == "high"
+
 print("torch accelerator compatibility passed")
 """
     _assert_ok(_run(code), "torch accelerator compatibility")

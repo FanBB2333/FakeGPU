@@ -1162,8 +1162,11 @@ def _patch_hf_cuda_surface(torch_mod: Any) -> None:
         _real_get = torch_mod.get_float32_matmul_precision
 
         def _synced_get() -> str:
-            tf32_val = getattr(matmul_backend, "allow_tf32", False)
-            return _tf32_to_precision.get(tf32_val, "highest")
+            stored = _matmul_precision["value"]
+            tf32 = bool(matmul_backend.allow_tf32)
+            if _precision_to_tf32[stored] == tf32:
+                return stored
+            return _tf32_to_precision[tf32]
 
         torch_mod.get_float32_matmul_precision = _synced_get
 
