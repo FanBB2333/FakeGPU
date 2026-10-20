@@ -164,6 +164,21 @@ def _schedule_calls(run, steps, updates_per_epoch):
     return calls, resolved
 
 
+def _target_steps(epochs, max_steps, per_epoch):
+    if (epochs is None) == (max_steps is None):
+        raise FinetuneEstimateError("provide exactly one of epochs or max_steps")
+    if max_steps is not None:
+        return _integer(max_steps, "max_steps")
+    if (
+        isinstance(epochs, bool)
+        or not isinstance(epochs, (int, float))
+        or not math.isfinite(epochs)
+        or epochs <= 0
+    ):
+        raise FinetuneEstimateError("epochs must be finite and positive")
+    return math.ceil(epochs * per_epoch)
+
+
 def plan_finetuning_pipeline(run, *, epochs=None, max_steps=None, num_samples=None):
     """Project a sequential native dataset onto future epochs or optimizer steps.
 
@@ -178,20 +193,8 @@ def plan_finetuning_pipeline(run, *, epochs=None, max_steps=None, num_samples=No
         raise FinetuneEstimateError(
             "changed dataset size requires matching native dataset calibration"
         )
-    if (epochs is None) == (max_steps is None):
-        raise FinetuneEstimateError("provide exactly one of epochs or max_steps")
     per_epoch = math.ceil(len(template) / accumulation)
-    if max_steps is not None:
-        steps = _integer(max_steps, "max_steps")
-    else:
-        if (
-            isinstance(epochs, bool)
-            or not isinstance(epochs, (int, float))
-            or not math.isfinite(epochs)
-            or epochs <= 0
-        ):
-            raise FinetuneEstimateError("epochs must be finite and positive")
-        steps = math.ceil(epochs * per_epoch)
+    steps = _target_steps(epochs, max_steps, per_epoch)
     planned_updates = []
     for step in range(1, steps + 1):
         epoch, position = divmod(step - 1, per_epoch)
