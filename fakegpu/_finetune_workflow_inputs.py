@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
 from pathlib import Path
 import subprocess
@@ -17,15 +16,13 @@ def _prepare_inputs(config_path, framework, *, workspace=None):
     workspace = (
         Path(workspace).expanduser().resolve() if workspace is not None else None
     )
-    raw = load_mapping(source)
-    config = deepcopy(raw)
+    config = load_mapping(source)
     inputs = {str(source): _file(source)}
 
     def local(value, *, existing=True, record=True):
         if not isinstance(value, str) or not value or "://" in value:
             raise ValueError("calibration workflows require explicit local input paths")
-        path = Path(value).expanduser()
-        path = (source.parent / path if not path.is_absolute() else path).resolve()
+        path = (source.parent / Path(value).expanduser()).resolve()
         if existing and not path.exists():
             raise ValueError(f"local calibration input does not exist: {path}")
         if record and path.exists():
@@ -166,11 +163,7 @@ print(json.dumps({"python_version": sys.version, "prefix": sys.prefix, "versions
     identity = json.loads(result.stdout)
     if not identity["package_path"]:
         raise ValueError("native interpreter cannot locate the fakegpu package")
-    root = Path(identity["package_path"]).parent
-    identity["source"] = {
-        path.relative_to(root).as_posix(): _file(path)
-        for path in sorted(root.rglob("*.py"))
-    }
+    identity["source"] = _source_identity(Path(identity["package_path"]).parent)
     if identity["source"] != _source_identity():
         raise ValueError("native interpreter loads a different fakegpu implementation")
     return identity

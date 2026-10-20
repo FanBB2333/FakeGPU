@@ -80,8 +80,7 @@ def _tree(root):
     return result
 
 
-def _source_identity():
-    root = Path(__file__).parent
+def _source_identity(root=Path(__file__).parent):
     return {
         path.relative_to(root).as_posix(): _file(path)
         for path in sorted(root.rglob("*.py"))
@@ -159,7 +158,7 @@ def _execute(
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
-                **({"cwd": cwd} if cwd is not None else {}),
+                cwd=cwd,
             )
         except OSError as exc:
             execution.update(status="failed", error=str(exc), finished_at_utc=_now())
