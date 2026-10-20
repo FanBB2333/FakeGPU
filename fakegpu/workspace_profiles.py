@@ -21,6 +21,16 @@ SUPPORTED_FORMULAS = {
     "linear_io",
     "tiled_tensor",
 }
+SUPPORTED_MATCH_FIELDS = {
+    "device_types",
+    "profile_ids",
+    "architectures",
+    "compute_capabilities",
+    "torch_versions",
+    "cuda_versions",
+    "input_dtypes",
+    "input_shapes",
+}
 
 
 class WorkspaceProfileError(ValueError):
@@ -256,6 +266,14 @@ def _validate_profile(
     match = profile.get("match", {})
     if not isinstance(match, Mapping):
         raise WorkspaceProfileError(f"{prefix}: match must be an object")
+    unknown_match_keys = sorted(set(match) - SUPPORTED_MATCH_FIELDS)
+    if unknown_match_keys:
+        raise WorkspaceProfileError(
+            f"{prefix}: unsupported match fields: {', '.join(unknown_match_keys)}"
+        )
+    for key, value in match.items():
+        if value is not None and not isinstance(value, list):
+            raise WorkspaceProfileError(f"{prefix}: match.{key} must be a list")
     profile["match"] = dict(match)
 
     formula = profile.get("formula")
