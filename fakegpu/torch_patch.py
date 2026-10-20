@@ -77,10 +77,9 @@ from ._torch_reporting import (
     render_terminal_summary as _render_terminal_summary,
 )
 from ._profiles import (
-    _resolve_compute_capability,
-    _resolve_device_name,
+    _profile_entry,
     _resolve_per_device_profiles,
-    _resolve_total_memory,
+    _resolve_profile_id,
 )
 _patched = False
 _patch_result: "PatchResult | None" = None
@@ -93,9 +92,11 @@ _upstream_mod: Any = None  # Set when upstream FakeCudaTensor backend is active
 _NUM_DEVICES = int(os.environ.get("FAKEGPU_DEVICE_COUNT", "8"))
 _DEVICE_PROFILES: list[dict[str, Any]] = _resolve_per_device_profiles(_NUM_DEVICES)
 
-_DEVICE_NAME = _resolve_device_name()
-_COMPUTE_MAJOR, _COMPUTE_MINOR = _resolve_compute_capability()
-_TOTAL_MEMORY = _resolve_total_memory()
+_default_profile = _profile_entry(_resolve_profile_id() or "")
+_DEVICE_NAME = os.environ.get("FAKEGPU_DEVICE_NAME") or _default_profile["name"]
+_COMPUTE_MAJOR = _default_profile["compute_major"]
+_COMPUTE_MINOR = _default_profile["compute_minor"]
+_TOTAL_MEMORY = _default_profile["total_memory"]
 
 
 def _refresh_runtime_profile_state(
@@ -122,11 +123,8 @@ def _refresh_runtime_profile_state(
         _COMPUTE_MAJOR = first["compute_major"]
         _COMPUTE_MINOR = first["compute_minor"]
         _TOTAL_MEMORY = first["total_memory"]
-        if device_name is None:
-            _DEVICE_NAME = first["name"]
-        else:
-            _DEVICE_NAME = device_name
-    elif device_name is not None:
+        _DEVICE_NAME = first["name"]
+    if device_name is not None:
         _DEVICE_NAME = device_name
 
 
@@ -157,8 +155,6 @@ def _dump_terminal_summary() -> None:
     _render_terminal_summary(
         _memory_tracker,
         _DEVICE_PROFILES,
-        arch_name=_arch_name,
-        fmt_bytes=_fmt_bytes,
         transfers=_transfer_snapshot(),
     )
 
@@ -919,26 +915,23 @@ def _install_torch_accelerator_compat(torch_mod: Any) -> None:
 class _FakeDeviceProperties:
     """Mimics ``torch.cuda.get_device_properties()`` return value.
 
-    Reads per-device profile data from ``_DEVICE_PROFILES`` when available,
-    falling back to the module-level scalar defaults.
+    Reads per-device profile data from ``_DEVICE_PROFILES``.
     """
 
     def __init__(self, index: int = 0):
-        prof = _DEVICE_PROFILES[index] if index < len(_DEVICE_PROFILES) else {}
-        self.name = prof.get("name", _DEVICE_NAME)
-        self.major = prof.get("compute_major", _COMPUTE_MAJOR)
-        self.minor = prof.get("compute_minor", _COMPUTE_MINOR)
-        self.total_memory = prof.get("total_memory", _TOTAL_MEMORY)
+        prof = _DEVICE_PROFILES[index]
+        self.name = prof["name"]
+        self.major = prof["compute_major"]
+        self.minor = prof["compute_minor"]
+        self.total_memory = prof["total_memory"]
         # Reference profiles without a published SM count keep the A100 value.
-        self.multi_processor_count = prof.get("sm_count") or 108
+        self.multi_processor_count = prof["sm_count"] or 108
         self.is_multi_gpu_board = False
         self.is_integrated = False
-        self.max_threads_per_multi_processor = prof.get(
-            "max_threads_per_multiprocessor", 2048
-        )
+        self.max_threads_per_multi_processor = prof["max_threads_per_multiprocessor"]
         self.max_threads_per_block = 1024
-        self.regs_per_block = prof.get("regs_per_block", 65536)
-        self.regs_per_multiprocessor = prof.get("regs_per_multiprocessor", 65536)
+        self.regs_per_block = prof["regs_per_block"]
+        self.regs_per_multiprocessor = prof["regs_per_multiprocessor"]
         self.warp_size = 32
         self.gcnArchName = ""
 
@@ -1494,17 +1487,14 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     def _profiled_get_device_name(device=None):
         idx = _normalize_device_index(device)
         if idx < len(_DEVICE_PROFILES):
-            return _DEVICE_PROFILES[idx].get("name", _DEVICE_NAME)
+            return _DEVICE_PROFILES[idx]["name"]
         return _DEVICE_NAME
 
     def _profiled_get_device_capability(device=None):
         idx = _normalize_device_index(device)
         if idx < len(_DEVICE_PROFILES):
             prof = _DEVICE_PROFILES[idx]
-            return (
-                prof.get("compute_major", _COMPUTE_MAJOR),
-                prof.get("compute_minor", _COMPUTE_MINOR),
-            )
+            return (prof["compute_major"], prof["compute_minor"])
         return (_COMPUTE_MAJOR, _COMPUTE_MINOR)
 
     def _profiled_get_device_properties(device=None):
