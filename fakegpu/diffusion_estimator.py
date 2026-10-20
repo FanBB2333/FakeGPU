@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import json
 import math
@@ -56,7 +55,7 @@ def _vae_decode_precision(
     attention_backend: str,
     loaded_weight_bytes: int,
 ) -> dict[str, Any]:
-    vae = _mapping(profile["vae"])
+    vae = profile["vae"]
     upcast = (
         profile["pipeline_class"] == "StableDiffusionXLPipeline"
         and dtype == "float16"
@@ -78,15 +77,15 @@ def _vae_decode_precision(
                     "SDXL FP16 upcasting with SDPA requires "
                     "vae.sdpa_low_precision_parameter_count from checkpoint headers"
                 )
-            retained_parameters = int(vae["sdpa_low_precision_parameter_count"])
+            retained_parameters = vae["sdpa_low_precision_parameter_count"]
             input_dtype = "float16"
         decode_weight_bytes = _runtime_checkpoint_bytes(
-            parameter_count=int(vae["parameter_count"]),
+            parameter_count=vae["parameter_count"],
             dtype_bytes=_mapping(vae.get("checkpoint_dtype_bytes", {})),
             runtime_float_bytes=4,
         ) - 2 * retained_parameters
     return {
-        "force_upcast_applied": bool(upcast),
+        "force_upcast_applied": upcast,
         "loaded_dtype": dtype,
         "decode_input_dtype": input_dtype,
         "decoder_up_blocks_dtype": decode_dtype,
@@ -136,7 +135,7 @@ def estimate_diffusion_generation(
             model_dir,
             weight_variant=weight_variant,
         )
-        profile = copy.deepcopy(_mapping(inspection["profile"]))
+        profile = inspection["profile"]
         selected_model_id = Path(model_dir).expanduser().resolve().name
         model_source_kind = "local_diffusers_pipeline"
     else:
@@ -152,7 +151,7 @@ def estimate_diffusion_generation(
         selected_model_id = str(model_profile)
         model_source_kind = "reference_profile"
 
-    defaults = _mapping(profile["default_generation"])
+    defaults = profile["default_generation"]
     image_height = _generation_dimension(
         height,
         defaults.get("height"),
@@ -193,9 +192,9 @@ def estimate_diffusion_generation(
         "runtime_overhead_bytes",
     )
 
-    latent = _mapping(profile["latent"])
-    latent_scale = int(latent["scale_factor"])
-    latent_channels = int(latent["channels"])
+    latent = profile["latent"]
+    latent_scale = latent["scale_factor"]
+    latent_channels = latent["channels"]
     if image_height % latent_scale != 0 or image_width % latent_scale != 0:
         raise DiffusionEstimateError(
             "height and width must be divisible by the latent scale "
@@ -204,9 +203,9 @@ def estimate_diffusion_generation(
     latent_height = image_height // latent_scale
     latent_width = image_width // latent_scale
 
-    conditioning = _mapping(profile["conditioning"])
+    conditioning = profile["conditioning"]
     conditioning_enabled = bool(conditioning.get("enabled", True))
-    maximum_tokens = int(conditioning["max_tokens"])
+    maximum_tokens = conditioning["max_tokens"]
     if conditioning_enabled:
         selected_tokens = (
             _positive_integer(text_tokens, "text_tokens")
@@ -226,44 +225,28 @@ def estimate_diffusion_generation(
         selected_tokens = 0
 
     element_bytes = SUPPORTED_DTYPES[selected_dtype]
-    denoiser_profile = _mapping(profile["denoiser"])
+    denoiser_profile = profile["denoiser"]
     guidance_mode = str(denoiser_profile.get("guidance_mode") or "classifier_free")
     classifier_free_guidance = (
         guidance_mode == "classifier_free" and selected_guidance > 1.0
     )
     denoiser_batch = image_batch * (2 if classifier_free_guidance else 1)
+    components = ("conditioning", "denoiser", "vae")
     component_parameter_counts = {
-        "conditioning": int(conditioning["parameter_count"]),
-        "denoiser": int(denoiser_profile["parameter_count"]),
-        "vae": int(_mapping(profile["vae"])["parameter_count"]),
+        name: profile[name]["parameter_count"] for name in components
     }
     component_checkpoint_bytes = {
         name: int(
-            _mapping(profile[profile_key]).get(
+            profile[name].get(
                 "checkpoint_bytes",
                 component_parameter_counts[name] * element_bytes,
             )
         )
-        for name, profile_key in (
-            ("conditioning", "conditioning"),
-            ("denoiser", "denoiser"),
-            ("vae", "vae"),
-        )
+        for name in components
     }
     component_checkpoint_dtype_bytes = {
-        name: copy.deepcopy(
-            dict(
-                _mapping(profile[profile_key]).get(
-                    "checkpoint_dtype_bytes",
-                    {},
-                )
-            )
-        )
-        for name, profile_key in (
-            ("conditioning", "conditioning"),
-            ("denoiser", "denoiser"),
-            ("vae", "vae"),
-        )
+        name: dict(_mapping(profile[name].get("checkpoint_dtype_bytes", {})))
+        for name in components
     }
     component_weight_bytes = {
         name: _runtime_checkpoint_bytes(
@@ -287,7 +270,7 @@ def estimate_diffusion_generation(
     )
     denoiser_latent_bytes = latent_bytes * (2 if classifier_free_guidance else 1)
     conditioning_output_bytes = (
-        denoiser_batch * selected_tokens * int(conditioning["width"]) * element_bytes
+        denoiser_batch * selected_tokens * conditioning["width"] * element_bytes
     )
     text_activation = _text_encoder_activation(
         batch_size=denoiser_batch,
@@ -306,7 +289,7 @@ def estimate_diffusion_generation(
         attention_slicing=attention_slicing,
     )
     vae_activation = _vae_decode_activation(
-        profile=_mapping(profile["vae"]),
+        profile=profile["vae"],
         height=image_height,
         width=image_width,
         batch_size=image_batch,
@@ -410,7 +393,7 @@ def estimate_diffusion_generation(
             "pipeline_class": profile["pipeline_class"],
             "status": profile["status"],
             "source_kind": model_source_kind,
-            "source": copy.deepcopy(profile["source"]),
+            "source": profile["source"],
         },
         "architecture": {
             "denoiser_family": denoiser_profile["architecture"],
@@ -471,11 +454,7 @@ def estimate_diffusion_generation(
         },
         "vae_precision": vae_precision,
         "pipeline_inspection": (
-            {
-                key: copy.deepcopy(value)
-                for key, value in inspection.items()
-                if key != "profile"
-            }
+            {key: value for key, value in inspection.items() if key != "profile"}
             if inspection is not None
             else None
         ),
@@ -673,10 +652,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
-        profiles = load_diffusion_profiles()
         if args.list_profiles:
+            profiles = load_diffusion_profiles()
             for profile_id, profile in sorted(profiles.items()):
-                defaults = _mapping(profile["default_generation"])
+                defaults = profile["default_generation"]
                 print(
                     f"{profile_id}\t{profile['display_name']}\t"
                     f"{defaults['height']}x{defaults['width']}"
@@ -725,16 +704,12 @@ def _generation_dimension(
 ) -> int:
     if requested is not None:
         return _positive_integer(requested, name)
-    if (
-        isinstance(configured, int)
-        and not isinstance(configured, bool)
-        and configured > 0
-    ):
-        return configured
-    raise DiffusionEstimateError(
-        f"{name} is required because the local denoiser config has no "
-        "positive sample_size"
-    )
+    if configured is None:
+        raise DiffusionEstimateError(
+            f"{name} is required because the local denoiser config has no "
+            "positive sample_size"
+        )
+    return configured
 
 
 def _positive_argument(value: str) -> int:
@@ -779,17 +754,17 @@ def _format_bytes(value: int) -> str:
 
 
 def _print_report(report: Mapping[str, Any]) -> None:
-    model = _mapping(report["model_profile"])
-    timeline = _mapping(report["memory_timeline"])
+    model = report["model_profile"]
+    timeline = report["memory_timeline"]
     print("FakeGPU diffusion generation estimate")
     print(f"  model profile: {model['id']} ({model['display_name']})")
     print(f"  validation status: {report['validation_status']}")
     print(f"  peak phase: {timeline['peak_phase']}")
-    print(f"  estimated peak: {_format_bytes(int(timeline['peak_bytes']))}")
+    print(f"  estimated peak: {_format_bytes(timeline['peak_bytes'])}")
     for phase in timeline["phases"]:
-        print(f"  {phase['phase']}: {_format_bytes(int(phase['peak_bytes']))}")
+        print(f"  {phase['phase']}: {_format_bytes(phase['peak_bytes'])}")
     fit = report.get("fit")
-    if isinstance(fit, Mapping):
+    if fit is not None:
         print(
             f"  target: {fit['target_profile']} "
             f"({'fits' if fit['fits'] else 'does not fit'})"
