@@ -1183,11 +1183,6 @@ private:
         }
         std::filesystem::rename(temporary, path_, error);
         if (error) {
-            std::filesystem::remove(path_, error);
-            error.clear();
-            std::filesystem::rename(temporary, path_, error);
-        }
-        if (error) {
             FGPU_LOG(
                 "[NativeSMI] Failed to replace state file: %s\n",
                 error.message().c_str());
