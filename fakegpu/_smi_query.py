@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ._smi_environment import _nonnegative_int
+from ._smi_state import NATIVE_ACTIVITY_COUNTERS
 
 
 QUERY_SCHEMA_VERSION = "fakegpu.smi_query.v1"
@@ -475,15 +475,4 @@ def _query_csv_value(
 
 
 def _has_native_activity(activity: Mapping[str, Any]) -> bool:
-    return any(
-        _nonnegative_int(activity.get(key))
-        for key in (
-            "io_calls",
-            "io_bytes",
-            "kernel_launches",
-            "gemm_calls",
-            "gemm_flops",
-            "compatibility_events",
-            "unsupported_api_calls",
-        )
-    )
+    return any(activity[key] for key in NATIVE_ACTIVITY_COUNTERS)
