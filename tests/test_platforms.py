@@ -289,5 +289,17 @@ def test_platform_command_lists_shows_and_exports(tmp_path, monkeypatch, capsys)
     assert "holds one GPU model" in capsys.readouterr().err
 
 
+def test_platform_command_reports_an_invalid_machine_config(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FAKEGPU_HOME", str(tmp_path))
+    (tmp_path / "machine").mkdir()
+    (tmp_path / "machine" / "config.json").write_text(
+        json.dumps({"devices": "rtx4090:2", "platform": "desktop", "bogus_key": 1}), encoding="utf-8"
+    )
+    assert platform_main(["show"]) == 2
+    captured = capsys.readouterr()
+    assert "fakegpu platform:" in captured.err
+    assert "HGX A100" not in captured.out
+
+
 def test_nvlink_group_encoding_accepts_ranges():
     assert NvlinkGroup.decode("switch:0-3,6:12:25").members == (0, 1, 2, 3, 6)

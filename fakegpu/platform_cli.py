@@ -22,11 +22,7 @@ def _add_layout_options(parser: argparse.ArgumentParser) -> None:
 
 
 def _resolve(args: argparse.Namespace) -> ResolvedPlatform:
-    config = MachineConfig()
-    try:
-        config = MachineConfig.load(MachinePaths.from_env().config)
-    except ValueError:
-        pass
+    config = MachineConfig.load(MachinePaths.from_env().config)
     devices = args.devices or config.devices
     explicit_devices = args.devices is not None
     platform = args.platform or (AUTO if explicit_devices else config.platform)

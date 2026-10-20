@@ -30,6 +30,8 @@
 - Modeled link traffic drops copy segments older than the rate window when a
   copy is recorded, so its memory no longer grows with every copy in
   processes that do not publish SMI state.
+- `fakegpu platform show`/`env` report an invalid machine configuration with
+  exit code 2 instead of silently showing the default HGX A100 machine.
 
 ## v1.6.0 - 2026-10-17
 
