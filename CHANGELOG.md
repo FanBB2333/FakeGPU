@@ -50,6 +50,9 @@
   execution-policy validation instead of producing a plan.
 - Retried experiment attempts no longer carry the previous attempt's
   `finished_at_utc` in `state.json` while running or after an interruption.
+- The Hugging Face native runner now names the first unsupported option in
+  sorted order when a configuration sets several, instead of a
+  hash-seed-dependent one.
 
 ## v1.6.0 - 2026-10-17
 

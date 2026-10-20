@@ -128,7 +128,7 @@ def _argument_options(raw, normalized, argument_type):
             "unsupported Hugging Face native configuration fields: "
             + ", ".join(sorted(unknown))
         )
-    for key in _UNSUPPORTED_ARGUMENTS:
+    for key in sorted(_UNSUPPORTED_ARGUMENTS):
         if raw.get(key):
             raise ValueError(f"Hugging Face native runner does not support {key}")
     if raw.get("do_train") is False:
