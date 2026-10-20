@@ -631,6 +631,32 @@ def test_virtual_smi_rejects_invalid_fault_config_without_events(
     assert "XID_79" not in rendered
 
 
+@pytest.mark.parametrize("health", [[1], 5, "x"])
+def test_virtual_smi_events_ignore_non_object_publisher_health(
+    tmp_path: Path,
+    capsys,
+    health: object,
+) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "timestamp_ns": time.time_ns(),
+                "pid": 42,
+                "running": True,
+                "publisher": {"health": health},
+                "devices": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["events", "--state", str(path)]) == 0
+    rendered = capsys.readouterr().out
+    assert "No modeled fault or runtime reliability events found." in rendered
+
+
 def test_virtual_smi_process_query_filters_and_marks_stale_state(
     tmp_path: Path,
     capsys,

@@ -580,11 +580,9 @@ def _health_event_records(
             )
     for runtime in inventory.get("runtimes") or []:
         publisher = runtime.get("publisher") or {}
-        health = (
-            publisher.get("health") or {}
-            if isinstance(publisher, Mapping)
-            else {}
-        )
+        health = publisher.get("health")
+        if not isinstance(health, Mapping):
+            health = {}
         failures = _nonnegative_int(health.get("failed_writes"))
         if failures:
             records.append(
