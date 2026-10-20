@@ -126,17 +126,13 @@ class sdist(_sdist):
 
 class BinaryDistribution(Distribution):
     def has_ext_modules(self) -> bool:
+        # We ship ELF .so files as package data; the wheel is not "pure".
         # Force installation into platlib so wheels containing ELF .so files are
         # platlib-compliant (required by auditwheel).
         return True
 
 
 class bdist_wheel(_bdist_wheel):
-    def finalize_options(self) -> None:
-        super().finalize_options()
-        # We ship ELF .so files as package data; the wheel is not "pure".
-        self.root_is_pure = False
-
     def get_tag(self) -> tuple[str, str, str]:
         _python, _abi, plat = super().get_tag()
         # The Python wrapper is pure; only the platform tag matters.
