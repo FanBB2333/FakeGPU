@@ -33,6 +33,7 @@ from ._smi_environment import (
     MAXIMUM_MODELED_MIG_INSTANCES_PER_DEVICE,
     _maximum_fault_severity,
     _modeled_health_status,
+    _modeled_mig_mode,
     _nonnegative_int,
 )
 
@@ -548,13 +549,7 @@ def _normalize_device_mig(
         "disabled",
         "configuration_error",
     }:
-        mode = (
-            "configuration_error"
-            if not valid
-            else "enabled"
-            if instances
-            else "disabled"
-        )
+        mode = _modeled_mig_mode(valid=valid, has_instances=bool(instances))
     return {
         "source": str(raw.get("source") or "modeled_none"),
         "configured": bool(raw.get("configured", False)),
