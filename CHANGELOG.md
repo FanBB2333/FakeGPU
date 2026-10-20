@@ -48,6 +48,8 @@
   `logging_steps` against the planned duration for every logging strategy.
   With `logging_strategy: no`, a longer plan previously failed its own
   execution-policy validation instead of producing a plan.
+- Retried experiment attempts no longer carry the previous attempt's
+  `finished_at_utc` in `state.json` while running or after an interruption.
 
 ## v1.6.0 - 2026-10-17
 

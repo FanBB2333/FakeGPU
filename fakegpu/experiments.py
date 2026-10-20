@@ -405,9 +405,8 @@ def run_experiments(config, workspace, *, resume=False, retry_failed=False):
                 attempts=[*state["attempts"], name],
                 started_at_utc=_now(),
             )
-            state.pop("error", None)
-            state.pop("artifacts", None)
-            state.pop("metrics", None)
+            for key in ("error", "artifacts", "metrics", "finished_at_utc"):
+                state.pop(key, None)
             _write(state_path, state)
             context = {
                 **job["parameters"],
