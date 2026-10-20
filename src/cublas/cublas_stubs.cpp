@@ -77,6 +77,23 @@ uint64_t gemm_flops_u64(uint64_t m, uint64_t n, uint64_t k, uint64_t batch_count
     return clamp_u128_to_u64(flops);
 }
 
+void record_gemm(const void* out, int m, int n, int k, int batch = 1, bool complex = false) {
+    if (m > 0 && n > 0 && k > 0 && batch > 0) {
+        fake_gpu::GlobalState::instance().record_cublas_gemm(
+            out, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k),
+                                static_cast<uint64_t>(batch), complex));
+    }
+}
+
+void record_gemm_typed(const void* out, int m, int n, int k, int batch, int dtype) {
+    if (m > 0 && n > 0 && k > 0 && batch > 0) {
+        fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
+            out, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k),
+                                static_cast<uint64_t>(batch)),
+            dtype);
+    }
+}
+
 bool ascii_iequals(const char* a, const char* b) {
     while (*a && *b) {
         const unsigned char ca = static_cast<unsigned char>(*a);
@@ -1282,11 +1299,6 @@ cublasStatus_t cublasSgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     cublasStatus_t status = gemm_col_major("cublasSgemm_v2", transa, transb, m, n, k, a, A, 0, lda, B, 0, ldb, b, C, 0, ldc);
     if (status != CUBLAS_STATUS_SUCCESS) return status;
     FGPU_LOG("[FakeCUBLAS] cublasSgemm_v2 m=%d n=%d k=%d (cpu)\n", m, n, k);
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1));
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #else
     if (fake_gpu::record_unsupported_api("cublasSgemm_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1296,12 +1308,9 @@ cublasStatus_t cublasSgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     fillRandom(C, total_elements);
 
     FGPU_LOG("[FakeCUBLAS] cublasSgemm_v2 m=%d n=%d k=%d (output %zu elements)\n", m, n, k, total_elements);
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1));
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #endif
+    record_gemm(C, m, n, k);
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasDgemm_v2(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const double *alpha, const double *A, int lda, const double *B, int ldb, const double *beta, double *C, int ldc) {
@@ -1340,11 +1349,6 @@ cublasStatus_t cublasDgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     cublasStatus_t status = gemm_col_major("cublasDgemm_v2", transa, transb, m, n, k, a, A, 1, lda, B, 1, ldb, b, C, 1, ldc);
     if (status != CUBLAS_STATUS_SUCCESS) return status;
     FGPU_LOG("[FakeCUBLAS] cublasDgemm_v2 m=%d n=%d k=%d (cpu)\n", m, n, k);
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1));
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #else
     if (fake_gpu::record_unsupported_api("cublasDgemm_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1353,12 +1357,9 @@ cublasStatus_t cublasDgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     fillRandom(C, total_elements);
 
     FGPU_LOG("[FakeCUBLAS] cublasDgemm_v2 m=%d n=%d k=%d (output %zu elements)\n", m, n, k, total_elements);
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1));
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #endif
+    record_gemm(C, m, n, k);
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasHgemm(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const __half *alpha, const __half *A, int lda, const __half *B, int ldb, const __half *beta, __half *C, int ldc) {
@@ -1387,10 +1388,7 @@ cublasStatus_t cublasHgemm(cublasHandle_t handle, cublasOperation_t transa, cubl
 
     FGPU_LOG("[FakeCUBLAS] cublasHgemm m=%d n=%d k=%d\n", m, n, k);
 #endif
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1));
-    }
+    record_gemm(C, m, n, k);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1416,11 +1414,6 @@ cublasStatus_t cublasSgemmStridedBatched(cublasHandle_t handle, cublasOperation_
         if (status != CUBLAS_STATUS_SUCCESS) return status;
     }
     FGPU_LOG("[FakeCUBLAS] cublasSgemmStridedBatched m=%d n=%d k=%d batchCount=%d (cpu)\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)));
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #else
     if (fake_gpu::record_unsupported_api("cublasSgemmStridedBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1429,12 +1422,9 @@ cublasStatus_t cublasSgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     fillRandom(C, total_elements);
 
     FGPU_LOG("[FakeCUBLAS] cublasSgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)));
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #endif
+    record_gemm(C, m, n, k, batchCount);
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasDgemmStridedBatched(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const double *alpha, const double *A, int lda, long long int strideA, const double *B, int ldb, long long int strideB, const double *beta, double *C, int ldc, long long int strideC, int batchCount) {
@@ -1455,11 +1445,6 @@ cublasStatus_t cublasDgemmStridedBatched(cublasHandle_t handle, cublasOperation_
         if (status != CUBLAS_STATUS_SUCCESS) return status;
     }
     FGPU_LOG("[FakeCUBLAS] cublasDgemmStridedBatched m=%d n=%d k=%d batchCount=%d (cpu)\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)));
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #else
     if (fake_gpu::record_unsupported_api("cublasDgemmStridedBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1468,12 +1453,9 @@ cublasStatus_t cublasDgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     fillRandom(C, total_elements);
 
     FGPU_LOG("[FakeCUBLAS] cublasDgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)));
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #endif
+    record_gemm(C, m, n, k, batchCount);
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasHgemmStridedBatched(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const __half *alpha, const __half *A, int lda, long long int strideA, const __half *B, int ldb, long long int strideB, const __half *beta, __half *C, int ldc, long long int strideC, int batchCount) {
@@ -1507,10 +1489,7 @@ cublasStatus_t cublasHgemmStridedBatched(cublasHandle_t handle, cublasOperation_
 
     FGPU_LOG("[FakeCUBLAS] cublasHgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
 #endif
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)));
-    }
+    record_gemm(C, m, n, k, batchCount);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1536,14 +1515,6 @@ cublasStatus_t cublasSgemmBatched(cublasHandle_t handle, cublasOperation_t trans
         if (status != CUBLAS_STATUS_SUCCESS) return status;
     }
     FGPU_LOG("[FakeCUBLAS] cublasSgemmBatched m=%d n=%d k=%d batchCount=%d (cpu)\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        const void* out_ptr = first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount);
-        if (out_ptr) {
-            fake_gpu::GlobalState::instance().record_cublas_gemm(
-                out_ptr, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)));
-        }
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #else
     if (fake_gpu::record_unsupported_api("cublasSgemmBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1556,15 +1527,9 @@ cublasStatus_t cublasSgemmBatched(cublasHandle_t handle, cublasOperation_t trans
     }
 
     FGPU_LOG("[FakeCUBLAS] cublasSgemmBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        const void* out_ptr = first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount);
-        if (out_ptr) {
-            fake_gpu::GlobalState::instance().record_cublas_gemm(
-                out_ptr, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)));
-        }
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #endif
+    record_gemm(first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount), m, n, k, batchCount);
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasDgemmBatched(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const double *alpha, const double *const Aarray[], int lda, const double *const Barray[], int ldb, const double *beta, double *const Carray[], int ldc, int batchCount) {
@@ -1585,14 +1550,6 @@ cublasStatus_t cublasDgemmBatched(cublasHandle_t handle, cublasOperation_t trans
         if (status != CUBLAS_STATUS_SUCCESS) return status;
     }
     FGPU_LOG("[FakeCUBLAS] cublasDgemmBatched m=%d n=%d k=%d batchCount=%d (cpu)\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        const void* out_ptr = first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount);
-        if (out_ptr) {
-            fake_gpu::GlobalState::instance().record_cublas_gemm(
-                out_ptr, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)));
-        }
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #else
     if (fake_gpu::record_unsupported_api("cublasDgemmBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1605,15 +1562,9 @@ cublasStatus_t cublasDgemmBatched(cublasHandle_t handle, cublasOperation_t trans
     }
 
     FGPU_LOG("[FakeCUBLAS] cublasDgemmBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        const void* out_ptr = first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount);
-        if (out_ptr) {
-            fake_gpu::GlobalState::instance().record_cublas_gemm(
-                out_ptr, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)));
-        }
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #endif
+    record_gemm(first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount), m, n, k, batchCount);
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 // ============================================================================
@@ -1649,12 +1600,7 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
             return CUBLAS_STATUS_NOT_SUPPORTED;
         }
         FGPU_LOG("[FakeCUBLAS] cublasGemmEx unsupported types A=%d B=%d C=%d; skipping cpu compute\n", Atype, Btype, Ctype);
-        if (m > 0 && n > 0 && k > 0) {
-            fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-                C,
-                gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1),
-                Atype);
-        }
+        record_gemm_typed(C, m, n, k, 1, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
     if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
@@ -1695,13 +1641,6 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
     if (status != CUBLAS_STATUS_SUCCESS) return status;
     FGPU_LOG("[FakeCUBLAS] cublasGemmEx m=%d n=%d k=%d Atype=%d Btype=%d Ctype=%d computeType=%d (cpu)\n",
            m, n, k, Atype, Btype, Ctype, computeType);
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-            C,
-            gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1),
-            Atype);
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #else
     if (fake_gpu::record_unsupported_api("cublasGemmEx", "not_executed")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1711,14 +1650,9 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
 
     FGPU_LOG("[FakeCUBLAS] cublasGemmEx m=%d n=%d k=%d Atype=%d Btype=%d Ctype=%d computeType=%d\n",
            m, n, k, Atype, Btype, Ctype, computeType);
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-            C,
-            gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1),
-            Atype);
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #endif
+    record_gemm_typed(C, m, n, k, 1, Atype);
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasGemmStridedBatchedEx(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const void *alpha, const void *A, int Atype, int lda, long long int strideA, const void *B, int Btype, int ldb, long long int strideB, const void *beta, void *C, int Ctype, int ldc, long long int strideC, int batchCount, int computeType, cublasGemmAlgo_t algo) {
@@ -1731,10 +1665,7 @@ cublasStatus_t cublasGemmStridedBatchedEx(cublasHandle_t handle, cublasOperation
             return CUBLAS_STATUS_NOT_SUPPORTED;
         }
         FGPU_LOG("[FakeCUBLAS] cublasGemmStridedBatchedEx unsupported types A=%d B=%d C=%d; skipping cpu compute\n", Atype, Btype, Ctype);
-        if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-            fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-                C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)), Atype);
-        }
+        record_gemm_typed(C, m, n, k, batchCount, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
     if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
@@ -1762,11 +1693,6 @@ cublasStatus_t cublasGemmStridedBatchedEx(cublasHandle_t handle, cublasOperation
         if (status != CUBLAS_STATUS_SUCCESS) return status;
     }
     FGPU_LOG("[FakeCUBLAS] cublasGemmStridedBatchedEx m=%d n=%d k=%d batchCount=%d (cpu)\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)), Atype);
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #else
     if (fake_gpu::record_unsupported_api("cublasGemmStridedBatchedEx", "not_executed")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1775,12 +1701,9 @@ cublasStatus_t cublasGemmStridedBatchedEx(cublasHandle_t handle, cublasOperation
     // can corrupt its internal state. Just return success to let PyTorch continue.
 
     FGPU_LOG("[FakeCUBLAS] cublasGemmStridedBatchedEx m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)), Atype);
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #endif
+    record_gemm_typed(C, m, n, k, batchCount, Atype);
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasGemmBatchedEx(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const void *alpha, const void *const Aarray[], int Atype, int lda, const void *const Barray[], int Btype, int ldb, const void *beta, void *const Carray[], int Ctype, int ldc, int batchCount, int computeType, cublasGemmAlgo_t algo) {
@@ -1793,13 +1716,7 @@ cublasStatus_t cublasGemmBatchedEx(cublasHandle_t handle, cublasOperation_t tran
             return CUBLAS_STATUS_NOT_SUPPORTED;
         }
         FGPU_LOG("[FakeCUBLAS] cublasGemmBatchedEx unsupported types A=%d B=%d C=%d; skipping cpu compute\n", Atype, Btype, Ctype);
-        if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-            const void* out_ptr = first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount);
-            if (out_ptr) {
-                fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-                    out_ptr, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)), Atype);
-            }
-        }
+        record_gemm_typed(first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount), m, n, k, batchCount, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
     const int scale_type = gemm_scale_type(computeType);
@@ -1823,14 +1740,6 @@ cublasStatus_t cublasGemmBatchedEx(cublasHandle_t handle, cublasOperation_t tran
         if (status != CUBLAS_STATUS_SUCCESS) return status;
     }
     FGPU_LOG("[FakeCUBLAS] cublasGemmBatchedEx m=%d n=%d k=%d batchCount=%d (cpu)\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        const void* out_ptr = first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount);
-        if (out_ptr) {
-            fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-                out_ptr, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)), Atype);
-        }
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #else
     if (fake_gpu::record_unsupported_api("cublasGemmBatchedEx", "not_executed")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1839,15 +1748,9 @@ cublasStatus_t cublasGemmBatchedEx(cublasHandle_t handle, cublasOperation_t tran
     // can corrupt its internal state. Just return success to let PyTorch continue.
 
     FGPU_LOG("[FakeCUBLAS] cublasGemmBatchedEx m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        const void* out_ptr = first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount);
-        if (out_ptr) {
-            fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-                out_ptr, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount)), Atype);
-        }
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #endif
+    record_gemm_typed(first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount), m, n, k, batchCount, Atype);
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 // ============================================================================
@@ -2170,10 +2073,7 @@ cublasStatus_t cublasCgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
         ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
     }
     FGPU_LOG("[FakeCUBLAS] cublasCgemm_v2 m=%d n=%d k=%d\n", m, n, k);
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1, /*complex=*/true));
-    }
+    record_gemm(C, m, n, k, 1, /*complex=*/true);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -2190,10 +2090,7 @@ cublasStatus_t cublasZgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
         ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
     }
     FGPU_LOG("[FakeCUBLAS] cublasZgemm_v2 m=%d n=%d k=%d\n", m, n, k);
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1, /*complex=*/true));
-    }
+    record_gemm(C, m, n, k, 1, /*complex=*/true);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -2211,10 +2108,7 @@ cublasStatus_t cublasCgemmStridedBatched(cublasHandle_t handle, cublasOperation_
         ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
     }
     FGPU_LOG("[FakeCUBLAS] cublasCgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount), /*complex=*/true));
-    }
+    record_gemm(C, m, n, k, batchCount, /*complex=*/true);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -2231,10 +2125,7 @@ cublasStatus_t cublasZgemmStridedBatched(cublasHandle_t handle, cublasOperation_
         ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
     }
     FGPU_LOG("[FakeCUBLAS] cublasZgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
-    if (m > 0 && n > 0 && k > 0 && batchCount > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), static_cast<uint64_t>(batchCount), /*complex=*/true));
-    }
+    record_gemm(C, m, n, k, batchCount, /*complex=*/true);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -2524,10 +2415,7 @@ cublasStatus_t cublasSgemmEx(cublasHandle_t handle, cublasOperation_t transa, cu
             return CUBLAS_STATUS_NOT_SUPPORTED;
         }
         FGPU_LOG("[FakeCUBLAS] cublasSgemmEx unsupported types A=%d B=%d C=%d; skipping cpu compute\n", Atype, Btype, Ctype);
-        if (m > 0 && n > 0 && k > 0) {
-            fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-                C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1), Atype);
-        }
+        record_gemm_typed(C, m, n, k, 1, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
     if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
@@ -2541,23 +2429,15 @@ cublasStatus_t cublasSgemmEx(cublasHandle_t handle, cublasOperation_t transa, cu
     cublasStatus_t status = gemm_col_major("cublasSgemmEx", transa, transb, m, n, k, a, A, Atype, lda, B, Btype, ldb, b, C, Ctype, ldc);
     if (status != CUBLAS_STATUS_SUCCESS) return status;
     FGPU_LOG("[FakeCUBLAS] cublasSgemmEx m=%d n=%d k=%d (cpu)\n", m, n, k);
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1), Atype);
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #else
     if (fake_gpu::record_unsupported_api("cublasSgemmEx", "not_executed")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
     // Leave output buffer untouched; FakeGPU only needs to report success
     FGPU_LOG("[FakeCUBLAS] cublasSgemmEx m=%d n=%d k=%d\n", m, n, k);
-    if (m > 0 && n > 0 && k > 0) {
-        fake_gpu::GlobalState::instance().record_cublas_gemm_typed(
-            C, gemm_flops_u64(static_cast<uint64_t>(m), static_cast<uint64_t>(n), static_cast<uint64_t>(k), 1), Atype);
-    }
-    return CUBLAS_STATUS_SUCCESS;
 #endif
+    record_gemm_typed(C, m, n, k, 1, Atype);
+    return CUBLAS_STATUS_SUCCESS;
 }
 
 cublasStatus_t cublasGemmEx_v2(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const void *alpha, const void *A, int Atype, int lda, const void *B, int Btype, int ldb, const void *beta, void *C, int Ctype, int ldc, int computeType, cublasGemmAlgo_t algo) {
