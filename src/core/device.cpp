@@ -818,7 +818,15 @@ ModeledFaultModel build_modeled_fault_model(
         while (std::getline(field_stream, field, ':')) {
             fields.push_back(trim_copy(field));
         }
-        if (fields.size() < 3 || fields.size() > 4) {
+        if (
+            fields.size() < 3 ||
+            fields.size() > 4 ||
+            std::any_of(
+                fields.begin(),
+                fields.end(),
+                [](const std::string& value) {
+                    return value.empty();
+                })) {
             return invalid_fault_model(
                 "FAKEGPU_FAULT_EVENTS event " +
                 std::to_string(event_index) +

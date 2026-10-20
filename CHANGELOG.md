@@ -125,6 +125,9 @@
   `FAKEGPU_NVLINK_GROUPS` integers with a `-` sign (such as device `-0` or
   count `-18446744073709551615`) are rejected, as in the Python model,
   instead of being accepted as 0 or wrapped values.
+- A native `FAKEGPU_FAULT_EVENTS` event with an empty field, such as
+  `0::critical`, reports the Python model's `must use
+  DEVICE:CODE:SEVERITY[:COUNT]` error instead of a code or severity error.
 
 ## v1.6.0 - 2026-10-17
 
