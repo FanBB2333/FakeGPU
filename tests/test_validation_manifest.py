@@ -166,6 +166,64 @@ def test_validation_manifest_records_command_that_cannot_start(
     assert (tmp_path / "report" / "validation_report.json").is_file()
 
 
+@pytest.mark.parametrize(
+    ("case_fields", "defaults", "message"),
+    [
+        ({"timeout_seconds": None}, None, "timeout_seconds must be positive"),
+        ({}, {"timeout_seconds": "soon"}, "defaults.timeout_seconds must be a number"),
+        ({}, {"env": ["A"]}, "defaults.env must be an object"),
+        ({}, {"expect": 5}, "defaults.expect must be an object"),
+    ],
+)
+def test_validation_manifest_rejects_unusable_values_before_running(
+    tmp_path: Path, case_fields: dict, defaults: dict | None, message: str
+) -> None:
+    marker = tmp_path / "ran"
+    manifest = _write_manifest(
+        tmp_path / "manifest.json",
+        [
+            {
+                "name": "case",
+                "command": [sys.executable, "-c", f"open({str(marker)!r}, 'w')"],
+                **case_fields,
+            }
+        ],
+        defaults,
+    )
+    with pytest.raises(ValidationManifestError, match=message):
+        run_validation_manifest(manifest, report_dir=tmp_path / "report")
+    assert not marker.exists()
+
+
+def test_validation_manifest_rejects_unreadable_manifest(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_bytes(b"\xff\xfe{}")
+    with pytest.raises(ValidationManifestError, match="cannot read manifest"):
+        load_validation_manifest(manifest)
+
+
+def test_validation_manifest_records_non_numeric_expectations(
+    tmp_path: Path,
+) -> None:
+    manifest = _write_manifest(
+        tmp_path / "manifest.json",
+        [
+            {
+                "name": "case",
+                "command": [sys.executable, "-c", "pass"],
+                "expect": {"exit_code": "zero", "duration_seconds_max": "soon"},
+            }
+        ],
+    )
+    code, report = run_validation_manifest(manifest, report_dir=tmp_path / "report")
+    assert code == 1
+    assert report["executions"][0]["failures"] == [
+        "expect.exit_code must be an integer",
+        "expect.duration_seconds_max must be a number",
+    ]
+    assert (tmp_path / "report" / "validation_report.json").is_file()
+
+
 def test_validation_manifest_dry_run_and_case_selection(tmp_path: Path) -> None:
     manifest = _write_manifest(
         tmp_path / "manifest.json",

@@ -49,6 +49,11 @@ def load_validation_manifest(path: str | os.PathLike[str]) -> dict[str, Any]:
     defaults = manifest.get("defaults", {})
     if not isinstance(defaults, Mapping):
         raise ValidationManifestError("defaults must be an object")
+    for key in ("env", "requires", "expect"):
+        try:
+            dict(defaults.get(key) or {})
+        except (TypeError, ValueError) as exc:
+            raise ValidationManifestError(f"defaults.{key} must be an object") from exc
     cases = manifest.get("cases")
     if not isinstance(cases, list) or not cases:
         raise ValidationManifestError("cases must be a non-empty list")
@@ -316,7 +321,9 @@ def _validate_case(case: dict[str, Any], *, index: int) -> dict[str, Any]:
         if not isinstance(value, Mapping):
             raise ValidationManifestError(f"{prefix}.{key} must be an object")
     timeout = case.get("timeout_seconds")
-    if timeout is not None and (not isinstance(timeout, (int, float)) or timeout <= 0):
+    if "timeout_seconds" in case and (
+        not isinstance(timeout, (int, float)) or timeout <= 0
+    ):
         raise ValidationManifestError(f"{prefix}.timeout_seconds must be positive")
     return case
 
@@ -367,12 +374,17 @@ def _materialize_case(
         },
         context,
     )
-    timeout = float(
-        case.get(
-            "timeout_seconds",
-            defaults.get("timeout_seconds", 300),
+    try:
+        timeout = float(
+            case.get(
+                "timeout_seconds",
+                defaults.get("timeout_seconds", 300),
+            )
         )
-    )
+    except (TypeError, ValueError) as exc:
+        raise ValidationManifestError(
+            "defaults.timeout_seconds must be a number"
+        ) from exc
     return {
         "id": execution_id,
         "case": str(case["name"]),
@@ -515,9 +527,13 @@ def _expectation_failures(
 ) -> list[str]:
     expect = dict(execution.get("expect") or {})
     failures = []
-    expected_exit = int(expect.get("exit_code", 0))
-    if exit_code != expected_exit:
-        failures.append(f"exit code {exit_code}, expected {expected_exit}")
+    try:
+        expected_exit = int(expect.get("exit_code", 0))
+    except (TypeError, ValueError):
+        failures.append("expect.exit_code must be an integer")
+    else:
+        if exit_code != expected_exit:
+            failures.append(f"exit code {exit_code}, expected {expected_exit}")
     for value in _string_list(expect.get("stdout_contains")):
         if value not in stdout:
             failures.append(f"stdout does not contain {value!r}")
@@ -531,8 +547,16 @@ def _expectation_failures(
         if value in stderr:
             failures.append(f"stderr unexpectedly contains {value!r}")
     duration_max = expect.get("duration_seconds_max")
-    if duration_max is not None and duration > float(duration_max):
-        failures.append(f"duration {duration:.6f}s exceeds {float(duration_max):.6f}s")
+    if duration_max is not None:
+        try:
+            duration_limit = float(duration_max)
+        except (TypeError, ValueError):
+            failures.append("expect.duration_seconds_max must be a number")
+        else:
+            if duration > duration_limit:
+                failures.append(
+                    f"duration {duration:.6f}s exceeds {duration_limit:.6f}s"
+                )
     cwd = Path(str(execution["cwd"]))
     for path_text in _string_list(expect.get("files_exist")):
         path = Path(path_text)
@@ -632,7 +656,10 @@ def _compare_value(
 
 
 def _read_structured_file(path: Path) -> Any:
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValidationManifestError(f"cannot read manifest: {exc}") from exc
     suffix = path.suffix.lower()
     if suffix == ".json":
         try:

@@ -56,6 +56,11 @@
 - `fakegpu validate` records a case whose command cannot be started (missing
   executable or working directory) as failed and still writes the report,
   instead of aborting the run with a traceback.
+- `fakegpu validate` reports unreadable manifests and unusable values (a null
+  `timeout_seconds`, non-object `defaults.env`/`requires`/`expect`, a
+  non-numeric `defaults.timeout_seconds`) as manifest errors (exit 2) before
+  running any command; a non-numeric `expect.exit_code` or
+  `expect.duration_seconds_max` is recorded as a case failure.
 
 ## v1.6.0 - 2026-10-17
 
