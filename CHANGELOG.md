@@ -27,6 +27,9 @@
   destination as a usage error instead of crashing with `KeyError`.
 - `fakegpu replay-trace` accepts `"links": null` in generic and FakeGPU
   cluster timeline events instead of crashing with `TypeError`.
+- Modeled link traffic drops copy segments older than the rate window when a
+  copy is recorded, so its memory no longer grows with every copy in
+  processes that do not publish SMI state.
 
 ## v1.6.0 - 2026-10-17
 

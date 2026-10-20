@@ -102,7 +102,8 @@ class _LinkSchedule:
         self.busy_until = 0.0
         self.bytes = 0
 
-    def add(self, now: float, nbytes: int, seconds: float) -> None:
+    def add(self, now: float, nbytes: int, seconds: float, window: float) -> None:
+        self._prune(now, window)
         self.bytes += nbytes
         if seconds <= 0:
             return
@@ -202,7 +203,7 @@ class LinkTraffic:
         schedule = self._links.get((device, link, direction))
         if schedule is None:
             schedule = self._links[(device, link, direction)] = _LinkSchedule()
-        schedule.add(now, nbytes, seconds)
+        schedule.add(now, nbytes, seconds, self._window)
 
     def record(self, source: int | None, target: int | None, nbytes: int) -> float:
         """Record one copy; ``None`` stands for host memory.

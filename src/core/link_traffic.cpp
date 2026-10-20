@@ -85,6 +85,9 @@ TransferRoute route_transfer(const ModeledDeviceTopology& topology, int source, 
 }
 
 void LinkTrafficModel::Schedule::add(double now, uint64_t amount, double seconds) {
+    while (!segments.empty() && segments.front().end <= now - kTransferWindowSeconds) {
+        segments.pop_front();
+    }
     bytes += amount;
     if (seconds <= 0.0) return;
     const double start = std::max(now, busy_until);

@@ -108,6 +108,20 @@ def test_copies_on_one_link_run_back_to_back() -> None:
     assert snapshot[1]["copies"]["peer_receive"]["modeled_seconds"] == pytest.approx(1 / GEN4_X16)
 
 
+def test_idle_separated_copies_keep_only_the_window_of_segments() -> None:
+    clock = [0.0]
+    topology = LinkTopology((GpuSlot(host_gbps=10.0),))
+    traffic = LinkTraffic(lambda: topology, clock=lambda: clock[0])
+
+    for index in range(1000):
+        clock[0] = index * 0.01
+        traffic.record(None, 0, 1 << 20)
+    (schedule,) = traffic._links.values()
+    assert len(schedule.segments) <= 101
+    clock[0] = 20.0
+    assert traffic.snapshot()[0]["links"]["pcie"]["rx_bytes"] == 1000 << 20
+
+
 def test_records_normalize_merge_and_format() -> None:
     record = empty_record("c2c", 450.0)
     record["copies"]["host_to_device"] = {"calls": 1, "bytes": 3 * 2**30, "modeled_seconds": 0.007}
