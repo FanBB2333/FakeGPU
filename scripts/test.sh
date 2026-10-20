@@ -49,6 +49,8 @@ run_smoke() {
     --build-dir "$BUILD_DIR"
   "$PYTHON_BIN" tests/native/cublas_policy.py \
     --build-dir "$BUILD_DIR"
+  "$PYTHON_BIN" tests/native/cuda_api_contracts.py \
+    --build-dir "$BUILD_DIR"
   "$PYTHON_BIN" tests/native/monitor_telemetry.py --lib-dir "$BUILD_DIR"
 
   local collective_probe="$BUILD_DIR/collective_executor"

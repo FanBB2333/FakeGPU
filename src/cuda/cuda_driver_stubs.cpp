@@ -649,6 +649,10 @@ std::uint64_t stream_completed_tick(CUstream stream) {
 }
 
 bool mark_event_recorded(CUevent event, CUstream stream) {
+    EventState existing;
+    if (!lookup_event_state(event, existing)) {
+        return false;
+    }
     std::uint64_t tick = 0;
     bool auto_complete = false;
     {

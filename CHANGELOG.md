@@ -64,6 +64,8 @@
 - `fakegpu preflight` rejects an invalid `--memory-safety-margin` with a usage
   error (exit 2) before running the workload, instead of failing afterwards
   without writing a report.
+- `cuEventRecord` with an unknown or NULL event no longer advances the
+  stream timeline, so the stream stays idle for `cuStreamQuery`.
 
 ## v1.6.0 - 2026-10-17
 
