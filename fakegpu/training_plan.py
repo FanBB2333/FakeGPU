@@ -105,9 +105,6 @@ def estimate_training_plan(
             )
     else:
         shard_group_size = ranks
-    shard_factor = (
-        shard_group_size if strategy == "hybrid_shard" else ranks
-    )
     shard_gradients = (
         full_shard or strategy == "shard_grad_op" or zero_stage >= 2
     )
@@ -144,7 +141,7 @@ def estimate_training_plan(
 
     def partition_bytes(total):
         if parameter_layout is None:
-            return _ceil_div(total, shard_factor)
+            return _ceil_div(total, shard_group_size)
         return _ceil_div(total * max(local_bytes), parameter_bytes) if parameter_bytes else 0
 
     rank_parameter_storage_bytes = (
@@ -261,7 +258,7 @@ def estimate_training_plan(
     )
     if shard_gradients and reduce_bucket == 0:
         reduce_bucket = default_bucket
-    if (full_shard or zero_stage >= 3) and allgather_bucket == 0:
+    if full_shard and allgather_bucket == 0:
         allgather_bucket = default_bucket
     communication_workspace_bytes = max(
         reduce_bucket,
@@ -279,50 +276,14 @@ def estimate_training_plan(
         if offload_parameters
         else 0
     )
-    forward_peak = (
-        gpu_parameter_bytes
-        + retained_activation_bytes
-        + gathered_parameter_window
-        + communication_workspace_bytes
-    )
-    backward_peak = (
-        gpu_parameter_bytes
-        + retained_activation_bytes
-        + gpu_gradient_bytes
-        + gathered_parameter_window
-        + communication_workspace_bytes
-    )
     optimizer_temporary_bytes = (
         gpu_gradient_bytes
         if optimizer in {"adam", "adamw"} and not offload_optimizer
         else 0
     )
-    optimizer_peak = (
-        gpu_parameter_bytes
-        + gpu_gradient_bytes
-        + gpu_optimizer_state_bytes
-        + gpu_master_parameter_bytes
-        + optimizer_temporary_bytes
-        + (reduce_bucket if shard_gradients else 0)
-    )
-    model_load_peak = gpu_parameter_bytes + (
-        gathered_parameter_window if offload_parameters else 0
-    )
-    peak = max(model_load_peak, forward_peak, backward_peak, optimizer_peak)
-    peak_phase = max(
-        (
-            ("model_load", model_load_peak),
-            ("forward", forward_peak),
-            ("backward", backward_peak),
-            ("optimizer_step", optimizer_peak),
-        ),
-        key=lambda item: item[1],
-    )[0]
-
     timeline = [
         _phase(
             "model_load",
-            model_load_peak,
             {
                 "parameters": gpu_parameter_bytes,
                 "parameter_staging": (
@@ -332,7 +293,6 @@ def estimate_training_plan(
         ),
         _phase(
             "forward",
-            forward_peak,
             {
                 "parameters": gpu_parameter_bytes,
                 "activations": retained_activation_bytes,
@@ -342,7 +302,6 @@ def estimate_training_plan(
         ),
         _phase(
             "backward",
-            backward_peak,
             {
                 "parameters": gpu_parameter_bytes,
                 "activations": retained_activation_bytes,
@@ -353,7 +312,6 @@ def estimate_training_plan(
         ),
         _phase(
             "optimizer_step",
-            optimizer_peak,
             {
                 "parameters": gpu_parameter_bytes,
                 "gradients": gpu_gradient_bytes,
@@ -366,6 +324,8 @@ def estimate_training_plan(
             },
         ),
     ]
+    peak_entry = max(timeline, key=lambda phase: phase["peak_bytes"])
+    peak, peak_phase = peak_entry["peak_bytes"], peak_entry["phase"]
 
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -581,17 +541,14 @@ def _normalize_deepspeed(config: Mapping[str, Any]) -> dict[str, Any]:
         "contiguous_gradients": _bool_value(
             zero_config.get("contiguous_gradients", False)
         ),
-        "reduce_bucket_elements": _int_or_default(
+        "reduce_bucket_elements": _int_or_zero(
             zero_config.get("reduce_bucket_size"),
-            0,
         ),
-        "allgather_bucket_elements": _int_or_default(
+        "allgather_bucket_elements": _int_or_zero(
             zero_config.get("allgather_bucket_size"),
-            0,
         ),
-        "stage3_prefetch_bucket_elements": _int_or_default(
+        "stage3_prefetch_bucket_elements": _int_or_zero(
             zero_config.get("stage3_prefetch_bucket_size"),
-            0,
         ),
     }
 
@@ -609,7 +566,7 @@ def _normalize_accelerate(config: Mapping[str, Any]) -> dict[str, Any]:
         merged = dict(nested)
         if "zero_optimization" not in merged and "zero_stage" in merged:
             merged["zero_optimization"] = {
-                "stage": _int_or_default(merged.get("zero_stage"), 0),
+                "stage": _int_or_zero(merged.get("zero_stage")),
                 "offload_optimizer": {
                     "device": str(
                         merged.get("offload_optimizer_device") or "none"
@@ -737,13 +694,11 @@ def _normalize_fsdp(
                 )
             )
         ),
-        "reduce_bucket_bytes": _int_or_default(
+        "reduce_bucket_bytes": _int_or_zero(
             config.get("reduce_bucket_bytes"),
-            0,
         ),
-        "allgather_bucket_bytes": _int_or_default(
+        "allgather_bucket_bytes": _int_or_zero(
             config.get("allgather_bucket_bytes"),
-            0,
         ),
         "forward_prefetch": _bool_value(
             config.get("forward_prefetch")
@@ -803,9 +758,9 @@ def _positive_int(value: Any, name: str) -> int:
     return parsed
 
 
-def _int_or_default(value: Any, default: int) -> int:
+def _int_or_zero(value: Any) -> int:
     if value is None or str(value).strip().lower() == "auto":
-        return default
+        return 0
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
@@ -863,19 +818,17 @@ def _ceil_div(value: int, divisor: int) -> int:
 
 def _phase(
     name: str,
-    peak_bytes: int,
     components: Mapping[str, int],
 ) -> dict[str, Any]:
     normalized = {
-        key: int(value)
-        for key, value in components.items()
-        if int(value) > 0
+        key: value for key, value in components.items() if value > 0
     }
+    total = sum(normalized.values())
     return {
         "phase": name,
-        "peak_bytes": int(peak_bytes),
+        "peak_bytes": total,
         "components": normalized,
-        "component_sum_bytes": sum(normalized.values()),
+        "component_sum_bytes": total,
     }
 
 
