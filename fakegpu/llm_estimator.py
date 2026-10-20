@@ -1244,26 +1244,31 @@ def _moe_layer_count(
     layer_count: int,
 ) -> int:
     mlp_only_layers = config.get("mlp_only_layers")
-    if isinstance(mlp_only_layers, list):
-        dense_layers = {
-            int(value)
+    dense_layers = (
+        {
+            value
             for value in mlp_only_layers
             if isinstance(value, int)
             and not isinstance(value, bool)
             and 0 <= value < layer_count
         }
-        return layer_count - len(dense_layers)
-
+        if isinstance(mlp_only_layers, list)
+        else set()
+    )
     sparse_step = config.get("decoder_sparse_step")
     if sparse_step is None:
-        return layer_count
-    if (
+        sparse_step = 1
+    elif (
         not isinstance(sparse_step, int)
         or isinstance(sparse_step, bool)
         or sparse_step <= 0
     ):
         raise ValueError("decoder_sparse_step must be a positive integer")
-    return layer_count // sparse_step
+    return sum(
+        1
+        for index in range(layer_count)
+        if index not in dense_layers and (index + 1) % sparse_step == 0
+    )
 
 
 def _normalize_dtype(dtype: str, *, config: dict[str, Any]) -> str:

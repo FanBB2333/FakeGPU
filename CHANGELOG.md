@@ -32,6 +32,11 @@
   processes that do not publish SMI state.
 - `fakegpu platform show`/`env` report an invalid machine configuration with
   exit code 2 instead of silently showing the default HGX A100 machine.
+- Count MoE layers with both `mlp_only_layers` and `decoder_sparse_step`, as
+  Transformers' Qwen MoE models do. Saved Qwen MoE configs always list
+  `mlp_only_layers`, so a sparse step above one was ignored and every
+  non-listed layer was counted as MoE in LLM, serving, and fine-tuning
+  estimates.
 
 ## v1.6.0 - 2026-10-17
 

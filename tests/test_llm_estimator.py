@@ -782,6 +782,33 @@ def test_moe_flops_memory_and_expert_parallel_traffic_are_modeled(
     assert report["communication"]["total_bytes"] > 0
 
 
+@pytest.mark.parametrize(
+    ("mlp_only_layers", "moe_layer_count"),
+    [([], 2), ([1], 1), ([0, 3], 1)],
+)
+def test_moe_layer_count_applies_mlp_only_layers_and_sparse_step(
+    tmp_path: Path,
+    mlp_only_layers: list[int],
+    moe_layer_count: int,
+) -> None:
+    model_dir = tmp_path / "moe"
+    _write_model(
+        model_dir,
+        config_overrides={
+            "num_hidden_layers": 4,
+            "num_experts": 4,
+            "num_experts_per_tok": 2,
+            "decoder_sparse_step": 2,
+            "mlp_only_layers": mlp_only_layers,
+        },
+    )
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=4)
+
+    assert report["model"]["moe_layer_count"] == moe_layer_count
+    assert report["model"]["dense_layer_count"] == 4 - moe_layer_count
+
+
 def test_quantized_checkpoint_uses_exact_payload_storage(
     tmp_path: Path,
 ) -> None:
