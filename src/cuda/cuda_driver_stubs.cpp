@@ -10,6 +10,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 using namespace fake_gpu;
@@ -23,6 +24,30 @@ bool real_driver_available() {
     if (config.mode() == FakeGpuMode::Simulate) return false;
     return CudaDriverPassthrough::instance().initialize();
 }
+
+// Optional real Driver entry points are resolved lazily and cached in a
+// function-local static.  Resolve only after real_driver_available() returned
+// true: before the passthrough is initialized every lookup yields nullptr.
+template <class Fn>
+Fn real_entry(const char* name) {
+    return reinterpret_cast<Fn>(CudaDriverPassthrough::instance().getRealFunction(name));
+}
+
+// Prefers the 64-bit name##_v2 entry point and falls back to the legacy name.
+template <class Fn>
+Fn real_entry_v2(const char* name) {
+    const std::string v2_name = std::string(name) + "_v2";
+    if (Fn fn = real_entry<Fn>(v2_name.c_str())) return fn;
+    return real_entry<Fn>(name);
+}
+
+// Forwards the enclosing API to the real entry point of the same name when a
+// real driver is loaded; otherwise execution continues with the simulation.
+#define FORWARD_TO_REAL(name, ...)                                          \
+    if (real_driver_available()) {                                          \
+        static const auto real_fn = real_entry<decltype(&name)>(#name);     \
+        if (real_fn) return real_fn(__VA_ARGS__);                           \
+    }
 
 // CUDA 12.8 resolves most Driver API entry points through cuGetProcAddress.
 // Hybrid mode only needs to interpose the surfaces that virtualize device
@@ -67,6 +92,12 @@ int map_virtual_device_to_real(int virtual_device) {
     int mapped = virtual_device % info.device_count;
     if (mapped < 0) mapped += info.device_count;
     return mapped;
+}
+
+// Device ordinal to pass to the real driver: virtual devices map onto the
+// physical ones in hybrid mode; passthrough already uses physical ordinals.
+CUdevice real_device(CUdevice dev) {
+    return BackendConfig::instance().mode() == FakeGpuMode::Hybrid ? map_virtual_device_to_real(dev) : dev;
 }
 
 std::mutex g_ctx_mutex;
@@ -311,8 +342,7 @@ bool mark_event_recorded(CUevent event, CUstream stream) {
 namespace fake_gpu::cuda {
 
 bool is_stream_handle_live(CUstream stream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return true;
     }
     unsigned int flags = 0;
@@ -320,8 +350,7 @@ bool is_stream_handle_live(CUstream stream) {
 }
 
 CUresult submit_stream_operation(CUstream stream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CUDA_SUCCESS;
     }
     std::lock_guard<std::mutex> lock(g_stream_mutex);
@@ -330,8 +359,7 @@ CUresult submit_stream_operation(CUstream stream) {
 }
 
 CUresult mark_stream_synchronized(CUstream stream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CUDA_SUCCESS;
     }
     std::lock_guard<std::mutex> lock(g_stream_mutex);
@@ -339,8 +367,7 @@ CUresult mark_stream_synchronized(CUstream stream) {
 }
 
 CUresult mark_stream_host_function_complete(CUstream stream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CUDA_SUCCESS;
     }
 
@@ -372,7 +399,7 @@ CUresult cuInit(unsigned int Flags) {
     // Always initialize the fake state: hybrid/simulate virtualize device info using GlobalState.
     GlobalState::instance().initialize();
 
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         if (config.mode() == FakeGpuMode::Hybrid) {
             HybridMemoryManager::instance().initialize();
         }
@@ -457,22 +484,14 @@ CUresult cuDeviceGetName(char *name, int len, CUdevice dev) {
 CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) {
     if (!pi) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        return CudaDriverPassthrough::instance().cuDeviceGetAttribute(pi, attrib, dev);
-    }
-
     // The real CUDA Runtime validates a large set of low-level attributes for
     // internal consistency.  Returning simulated defaults for newer attributes
     // can make CUDA 12.8+ reject an otherwise valid device with error 103
     // ("integrity checks failed").  Hybrid mode executes real kernels, so use
     // the backing device's execution attributes and virtualize only the
     // user-facing identity/memory surfaces.
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
-        return CudaDriverPassthrough::instance().cuDeviceGetAttribute(
-            pi,
-            attrib,
-            map_virtual_device_to_real(dev));
+    if (real_driver_available()) {
+        return CudaDriverPassthrough::instance().cuDeviceGetAttribute(pi, attrib, real_device(dev));
     }
 
     GlobalState::instance().initialize();
@@ -738,12 +757,8 @@ CUresult cuDeviceTotalMem(size_t *bytes, CUdevice dev) {
 CUresult cuDeviceGetUuid(CUuuid *uuid, CUdevice dev) {
     if (!uuid) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        const int real_dev = config.mode() == FakeGpuMode::Hybrid
-            ? map_virtual_device_to_real(dev)
-            : dev;
-        return CudaDriverPassthrough::instance().cuDeviceGetUuid(uuid, real_dev);
+    if (real_driver_available()) {
+        return CudaDriverPassthrough::instance().cuDeviceGetUuid(uuid, real_device(dev));
     }
 
     GlobalState::instance().initialize();
@@ -800,8 +815,7 @@ CUresult cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev) {
 }
 
 CUresult cuCtxDestroy(CUcontext ctx) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuCtxDestroy(ctx);
     }
     FGPU_LOG("[FakeCUDA-Driver] cuCtxDestroy(%p)\n", ctx);
@@ -810,7 +824,7 @@ CUresult cuCtxDestroy(CUcontext ctx) {
 
 CUresult cuCtxSetCurrent(CUcontext ctx) {
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         CUresult result = CudaDriverPassthrough::instance().cuCtxSetCurrent(ctx);
         if (result == CUDA_SUCCESS) {
             if (ctx == nullptr) {
@@ -840,8 +854,7 @@ CUresult cuCtxSetCurrent(CUcontext ctx) {
 
 CUresult cuCtxGetCurrent(CUcontext *pctx) {
     if (!pctx) return CUDA_ERROR_INVALID_VALUE;
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuCtxGetCurrent(pctx);
     }
     *pctx = (CUcontext)(uintptr_t)(current_context_device + 1);
@@ -849,8 +862,7 @@ CUresult cuCtxGetCurrent(CUcontext *pctx) {
 }
 
 CUresult cuCtxSynchronize(void) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuCtxSynchronize();
     }
     FGPU_LOG("[FakeCUDA-Driver] cuCtxSynchronize (no-op)\n");
@@ -1209,16 +1221,11 @@ CUresult cuDevicePrimaryCtxRelease(CUdevice dev) {
 }
 
 CUresult cuDevicePrimaryCtxGetState(CUdevice dev, unsigned int *flags, int *active) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdevice, unsigned int*, int*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuDevicePrimaryCtxGetState"));
+    if (real_driver_available()) {
+        static const auto real_fn =
+            real_entry<decltype(&cuDevicePrimaryCtxGetState)>("cuDevicePrimaryCtxGetState");
         if (!real_fn) return CUDA_ERROR_NOT_INITIALIZED;
-        const int real_dev = config.mode() == FakeGpuMode::Hybrid
-            ? map_virtual_device_to_real(dev)
-            : dev;
-        return real_fn(real_dev, flags, active);
+        return real_fn(real_device(dev), flags, active);
     }
 
     GlobalState::instance().initialize();
@@ -1235,15 +1242,11 @@ CUresult cuDevicePrimaryCtxGetState(CUdevice dev, unsigned int *flags, int *acti
 }
 
 CUresult cuDevicePrimaryCtxSetFlags(CUdevice dev, unsigned int flags) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        const CUdevice real_dev = (config.mode() == FakeGpuMode::Hybrid) ? map_virtual_device_to_real(dev) : dev;
-        void* fn = CudaDriverPassthrough::instance().getRealFunction("cuDevicePrimaryCtxSetFlags_v2");
-        if (!fn) fn = CudaDriverPassthrough::instance().getRealFunction("cuDevicePrimaryCtxSetFlags");
-        if (fn) {
-            typedef CUresult (*fn_t)(CUdevice, unsigned int);
-            return ((fn_t)fn)(real_dev, flags);
-        }
+    if (real_driver_available()) {
+        const CUdevice real_dev = real_device(dev);
+        static const auto real_fn =
+            real_entry_v2<decltype(&cuDevicePrimaryCtxSetFlags)>("cuDevicePrimaryCtxSetFlags");
+        if (real_fn) return real_fn(real_dev, flags);
     }
 
     GlobalState::instance().initialize();
@@ -1257,10 +1260,8 @@ CUresult cuDevicePrimaryCtxSetFlags(CUdevice dev, unsigned int flags) {
 }
 
 CUresult cuDevicePrimaryCtxReset(CUdevice dev) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        const CUdevice real_dev = (config.mode() == FakeGpuMode::Hybrid) ? map_virtual_device_to_real(dev) : dev;
-        return CudaDriverPassthrough::instance().cuDevicePrimaryCtxReset(real_dev);
+    if (real_driver_available()) {
+        return CudaDriverPassthrough::instance().cuDevicePrimaryCtxReset(real_device(dev));
     }
 
     GlobalState::instance().initialize();
@@ -1276,13 +1277,8 @@ CUresult cuDevicePrimaryCtxReset(CUdevice dev) {
 // Context stack management
 CUresult cuCtxPushCurrent(CUcontext ctx) {
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUcontext);
-        static fn_t real_fn = []() -> fn_t {
-            void* fn = CudaDriverPassthrough::instance().getRealFunction("cuCtxPushCurrent_v2");
-            if (!fn) fn = CudaDriverPassthrough::instance().getRealFunction("cuCtxPushCurrent");
-            return reinterpret_cast<fn_t>(fn);
-        }();
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry_v2<decltype(&cuCtxPushCurrent)>("cuCtxPushCurrent");
         if (!real_fn) return CUDA_ERROR_NOT_INITIALIZED;
         CUresult result = real_fn(ctx);
         if (result == CUDA_SUCCESS) {
@@ -1308,14 +1304,8 @@ CUresult cuCtxPushCurrent(CUcontext ctx) {
 CUresult cuCtxPopCurrent(CUcontext *pctx) {
     if (!pctx) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUcontext*);
-        static fn_t real_fn = []() -> fn_t {
-            void* fn = CudaDriverPassthrough::instance().getRealFunction("cuCtxPopCurrent_v2");
-            if (!fn) fn = CudaDriverPassthrough::instance().getRealFunction("cuCtxPopCurrent");
-            return reinterpret_cast<fn_t>(fn);
-        }();
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry_v2<decltype(&cuCtxPopCurrent)>("cuCtxPopCurrent");
         if (!real_fn) return CUDA_ERROR_NOT_INITIALIZED;
         return real_fn(pctx);
     }
@@ -1369,8 +1359,7 @@ CUresult cuGetErrorName(CUresult error, const char **pStr) {
 CUresult cuStreamCreate(CUstream *phStream, unsigned int Flags) {
     if (!phStream) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamCreate(phStream, Flags);
     }
 
@@ -1382,8 +1371,7 @@ CUresult cuStreamCreate(CUstream *phStream, unsigned int Flags) {
 }
 
 CUresult cuStreamDestroy(CUstream hStream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamDestroy(hStream);
     }
     if (!erase_stream_handle(hStream)) {
@@ -1394,8 +1382,7 @@ CUresult cuStreamDestroy(CUstream hStream) {
 }
 
 CUresult cuStreamSynchronize(CUstream hStream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamSynchronize(hStream);
     }
     if (fake_gpu::cuda::mark_stream_synchronized(hStream) != CUDA_SUCCESS) {
@@ -1406,8 +1393,7 @@ CUresult cuStreamSynchronize(CUstream hStream) {
 }
 
 CUresult cuStreamQuery(CUstream hStream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamQuery(hStream);
     }
     std::lock_guard<std::mutex> lock(g_stream_mutex);
@@ -1419,8 +1405,7 @@ CUresult cuStreamQuery(CUstream hStream) {
 }
 
 CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamWaitEvent(hStream, hEvent, Flags);
     }
     std::lock_guard<std::mutex> stream_lock(g_stream_mutex);
@@ -1446,14 +1431,7 @@ CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags)
 }
 
 CUresult cuStreamGetPriority(CUstream hStream, int *priority) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        void* fn = CudaDriverPassthrough::instance().getRealFunction("cuStreamGetPriority");
-        if (fn) {
-            typedef CUresult (*fn_t)(CUstream, int*);
-            return ((fn_t)fn)(hStream, priority);
-        }
-    }
+    FORWARD_TO_REAL(cuStreamGetPriority, hStream, priority);
     unsigned int flags = 0;
     if (!lookup_stream_flags(hStream, flags)) {
         return CUDA_ERROR_INVALID_VALUE;
@@ -1463,8 +1441,7 @@ CUresult cuStreamGetPriority(CUstream hStream, int *priority) {
 }
 
 CUresult cuStreamGetFlags(CUstream hStream, unsigned int *flags) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamGetFlags(hStream, flags);
     }
     unsigned int stream_flags = 0;
@@ -1477,14 +1454,7 @@ CUresult cuStreamGetFlags(CUstream hStream, unsigned int *flags) {
 }
 
 CUresult cuStreamGetCtx(CUstream hStream, CUcontext *pctx) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        void* fn = CudaDriverPassthrough::instance().getRealFunction("cuStreamGetCtx");
-        if (fn) {
-            typedef CUresult (*fn_t)(CUstream, CUcontext*);
-            return ((fn_t)fn)(hStream, pctx);
-        }
-    }
+    FORWARD_TO_REAL(cuStreamGetCtx, hStream, pctx);
     unsigned int flags = 0;
     if (!lookup_stream_flags(hStream, flags)) {
         return CUDA_ERROR_INVALID_VALUE;
@@ -1497,8 +1467,7 @@ CUresult cuStreamGetCtx(CUstream hStream, CUcontext *pctx) {
 CUresult cuEventCreate(CUevent *phEvent, unsigned int Flags) {
     if (!phEvent) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventCreate(phEvent, Flags);
     }
 
@@ -1509,8 +1478,7 @@ CUresult cuEventCreate(CUevent *phEvent, unsigned int Flags) {
 }
 
 CUresult cuEventDestroy(CUevent hEvent) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventDestroy(hEvent);
     }
     if (!erase_event_handle(hEvent)) {
@@ -1521,8 +1489,7 @@ CUresult cuEventDestroy(CUevent hEvent) {
 }
 
 CUresult cuEventRecord(CUevent hEvent, CUstream hStream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventRecord(hEvent, hStream);
     }
     if (!fake_gpu::cuda::is_stream_handle_live(hStream)) {
@@ -1535,8 +1502,7 @@ CUresult cuEventRecord(CUevent hEvent, CUstream hStream) {
 }
 
 CUresult cuEventSynchronize(CUevent hEvent) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventSynchronize(hEvent);
     }
     EventState state;
@@ -1557,8 +1523,7 @@ CUresult cuEventSynchronize(CUevent hEvent) {
 }
 
 CUresult cuEventQuery(CUevent hEvent) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventQuery(hEvent);
     }
     EventState state;
@@ -1573,8 +1538,7 @@ CUresult cuEventQuery(CUevent hEvent) {
 }
 
 CUresult cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUevent hEnd) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuEventElapsedTime(pMilliseconds, hStart, hEnd);
     }
     EventState start_state;
@@ -1600,7 +1564,7 @@ CUresult cuCtxGetDevice(CUdevice *device) {
     if (!device) return CUDA_ERROR_INVALID_VALUE;
 
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         CUresult result = CudaDriverPassthrough::instance().cuCtxGetDevice(device);
         if (result == CUDA_SUCCESS && config.mode() == FakeGpuMode::Hybrid) {
             *device = current_context_device;
@@ -1613,26 +1577,14 @@ CUresult cuCtxGetDevice(CUdevice *device) {
 }
 
 CUresult cuCtxGetFlags(unsigned int *flags) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(unsigned int*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxGetFlags"));
-        if (real_fn) return real_fn(flags);
-    }
+    FORWARD_TO_REAL(cuCtxGetFlags, flags);
     if (flags) *flags = 0;
     return CUDA_SUCCESS;
 }
 
 CUresult cuCtxGetLimit(size_t *pvalue, CUlimit limit) {
     if (!pvalue) return CUDA_ERROR_INVALID_VALUE;
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(size_t*, CUlimit);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxGetLimit"));
-        if (real_fn) return real_fn(pvalue, limit);
-    }
+    FORWARD_TO_REAL(cuCtxGetLimit, pvalue, limit);
     switch (limit) {
         case CU_LIMIT_STACK_SIZE:
             *pvalue = 8192;
@@ -1651,38 +1603,20 @@ CUresult cuCtxGetLimit(size_t *pvalue, CUlimit limit) {
 }
 
 CUresult cuCtxSetLimit(CUlimit limit, size_t value) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUlimit, size_t);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxSetLimit"));
-        if (real_fn) return real_fn(limit, value);
-    }
+    FORWARD_TO_REAL(cuCtxSetLimit, limit, value);
     FGPU_LOG("[FakeCUDA-Driver] cuCtxSetLimit (no-op)\n");
     return CUDA_SUCCESS;
 }
 
 CUresult cuCtxGetStreamPriorityRange(int *leastPriority, int *greatestPriority) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int*, int*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxGetStreamPriorityRange"));
-        if (real_fn) return real_fn(leastPriority, greatestPriority);
-    }
+    FORWARD_TO_REAL(cuCtxGetStreamPriorityRange, leastPriority, greatestPriority);
     if (leastPriority) *leastPriority = 0;
     if (greatestPriority) *greatestPriority = -1;
     return CUDA_SUCCESS;
 }
 
 CUresult cuCtxGetApiVersion(CUcontext ctx, unsigned int *version) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUcontext, unsigned int*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxGetApiVersion"));
-        if (real_fn) return real_fn(ctx, version);
-    }
+    FORWARD_TO_REAL(cuCtxGetApiVersion, ctx, version);
     if (version) *version = 12000;
     return CUDA_SUCCESS;
 }
@@ -1726,14 +1660,9 @@ CUresult cuMemGetInfo(size_t *free, size_t *total) {
 
 // Device UUID (v2)
 CUresult cuDeviceGetUuid_v2(CUuuid *uuid, CUdevice dev) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        const int real_dev = config.mode() == FakeGpuMode::Hybrid
-            ? map_virtual_device_to_real(dev)
-            : dev;
-        using fn_t = CUresult (*)(CUuuid*, CUdevice);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuDeviceGetUuid_v2"));
+    if (real_driver_available()) {
+        const CUdevice real_dev = real_device(dev);
+        static const auto real_fn = real_entry<decltype(&cuDeviceGetUuid_v2)>("cuDeviceGetUuid_v2");
         if (real_fn) return real_fn(uuid, real_dev);
         return CudaDriverPassthrough::instance().cuDeviceGetUuid(uuid, real_dev);
     }
@@ -1767,21 +1696,7 @@ CUresult cuDevicePrimaryCtxSetFlags_v2(CUdevice dev, unsigned int flags) {
 
 // Additional stub functions needed by CUDA runtime
 CUresult cuDeviceCanAccessPeer(int *canAccessPeer, CUdevice dev, CUdevice peerDev) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int*, CUdevice, CUdevice);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuDeviceCanAccessPeer"));
-        if (real_fn) {
-            const CUdevice real_dev = config.mode() == FakeGpuMode::Hybrid
-                ? map_virtual_device_to_real(dev)
-                : dev;
-            const CUdevice real_peer = config.mode() == FakeGpuMode::Hybrid
-                ? map_virtual_device_to_real(peerDev)
-                : peerDev;
-            return real_fn(canAccessPeer, real_dev, real_peer);
-        }
-    }
+    FORWARD_TO_REAL(cuDeviceCanAccessPeer, canAccessPeer, real_device(dev), real_device(peerDev));
     if (!canAccessPeer) return CUDA_ERROR_INVALID_VALUE;
     GlobalState& state = GlobalState::instance();
     state.initialize();
@@ -1794,13 +1709,7 @@ CUresult cuDeviceCanAccessPeer(int *canAccessPeer, CUdevice dev, CUdevice peerDe
 }
 
 CUresult cuCtxEnablePeerAccess(CUcontext peerContext, unsigned int Flags) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUcontext, unsigned int);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxEnablePeerAccess"));
-        if (real_fn) return real_fn(peerContext, Flags);
-    }
+    FORWARD_TO_REAL(cuCtxEnablePeerAccess, peerContext, Flags);
     if (!peerContext) return CUDA_ERROR_INVALID_CONTEXT;
     int can_access = 0;
     const CUresult result = cuDeviceCanAccessPeer(
@@ -1812,29 +1721,17 @@ CUresult cuCtxEnablePeerAccess(CUcontext peerContext, unsigned int Flags) {
 }
 
 CUresult cuCtxDisablePeerAccess(CUcontext peerContext) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUcontext);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxDisablePeerAccess"));
-        if (real_fn) return real_fn(peerContext);
-    }
+    FORWARD_TO_REAL(cuCtxDisablePeerAccess, peerContext);
     return CUDA_SUCCESS;
 }
 
 CUresult cuDeviceGetPCIBusId(char *pciBusId, int len, CUdevice dev) {
     if (!pciBusId || len <= 0) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(char*, int, CUdevice);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuDeviceGetPCIBusId"));
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry<decltype(&cuDeviceGetPCIBusId)>("cuDeviceGetPCIBusId");
         if (!real_fn) return CUDA_ERROR_NOT_INITIALIZED;
-        const int real_dev = config.mode() == FakeGpuMode::Hybrid
-            ? map_virtual_device_to_real(dev)
-            : dev;
-        return real_fn(pciBusId, len, real_dev);
+        return real_fn(pciBusId, len, real_device(dev));
     }
 
     snprintf(pciBusId, len, "0000:%02x:00.0", dev);
@@ -1844,11 +1741,8 @@ CUresult cuDeviceGetPCIBusId(char *pciBusId, int len, CUdevice dev) {
 CUresult cuDeviceGetByPCIBusId(CUdevice *dev, const char *pciBusId) {
     if (!dev || !pciBusId) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdevice*, const char*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuDeviceGetByPCIBusId"));
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry<decltype(&cuDeviceGetByPCIBusId)>("cuDeviceGetByPCIBusId");
         if (!real_fn) return CUDA_ERROR_NOT_INITIALIZED;
         return real_fn(dev, pciBusId);
     }
@@ -1860,8 +1754,7 @@ CUresult cuDeviceGetByPCIBusId(CUdevice *dev, const char *pciBusId) {
 CUresult cuModuleLoad(CUmodule *module, const char *fname) {
     if (!module) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuModuleLoad(module, fname);
     }
 
@@ -1873,8 +1766,7 @@ CUresult cuModuleLoad(CUmodule *module, const char *fname) {
 CUresult cuModuleLoadData(CUmodule *module, const void *image) {
     if (!module) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuModuleLoadData(module, image);
     }
 
@@ -1885,11 +1777,8 @@ CUresult cuModuleLoadData(CUmodule *module, const void *image) {
 CUresult cuModuleLoadDataEx(CUmodule *module, const void *image, unsigned int numOptions, void *options, void **optionValues) {
     if (!module) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUmodule*, const void*, unsigned int, void*, void**);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuModuleLoadDataEx"));
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry<decltype(&cuModuleLoadDataEx)>("cuModuleLoadDataEx");
         if (real_fn) {
             return real_fn(module, image, numOptions, options, optionValues);
         }
@@ -1904,11 +1793,8 @@ CUresult cuModuleLoadDataEx(CUmodule *module, const void *image, unsigned int nu
 CUresult cuModuleLoadFatBinary(CUmodule *module, const void *fatCubin) {
     if (!module) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUmodule*, const void*);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuModuleLoadFatBinary"));
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry<decltype(&cuModuleLoadFatBinary)>("cuModuleLoadFatBinary");
         if (real_fn) {
             return real_fn(module, fatCubin);
         }
@@ -1921,8 +1807,7 @@ CUresult cuModuleLoadFatBinary(CUmodule *module, const void *fatCubin) {
 }
 
 CUresult cuModuleUnload(CUmodule hmod) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuModuleUnload(hmod);
     }
     return CUDA_SUCCESS;
@@ -1931,8 +1816,7 @@ CUresult cuModuleUnload(CUmodule hmod) {
 CUresult cuModuleGetFunction(CUfunction *hfunc, CUmodule hmod, const char *name) {
     if (!hfunc) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuModuleGetFunction(hfunc, hmod, name);
     }
 
@@ -1941,14 +1825,8 @@ CUresult cuModuleGetFunction(CUfunction *hfunc, CUmodule hmod, const char *name)
 }
 
 CUresult cuModuleGetGlobal(CUdeviceptr *dptr, size_t *bytes, CUmodule hmod, const char *name) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdeviceptr*, size_t*, CUmodule, const char*);
-        static fn_t real_fn = []() -> fn_t {
-            void* fn = CudaDriverPassthrough::instance().getRealFunction("cuModuleGetGlobal_v2");
-            if (!fn) fn = CudaDriverPassthrough::instance().getRealFunction("cuModuleGetGlobal");
-            return reinterpret_cast<fn_t>(fn);
-        }();
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry_v2<decltype(&cuModuleGetGlobal)>("cuModuleGetGlobal");
         if (real_fn) {
             return real_fn(dptr, bytes, hmod, name);
         }
@@ -1962,8 +1840,7 @@ CUresult cuModuleGetGlobal(CUdeviceptr *dptr, size_t *bytes, CUmodule hmod, cons
 CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ,
                         unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ,
                         unsigned int sharedMemBytes, CUstream hStream, void **kernelParams, void **extra) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuLaunchKernel(
             f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, sharedMemBytes, hStream, kernelParams, extra);
     }
@@ -1978,82 +1855,40 @@ CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDi
 }
 
 CUresult cuFuncGetAttribute(int *pi, int attrib, CUfunction hfunc) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int*, int, CUfunction);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuFuncGetAttribute"));
-        if (real_fn) return real_fn(pi, attrib, hfunc);
-    }
+    FORWARD_TO_REAL(cuFuncGetAttribute, pi, attrib, hfunc);
     if (pi) *pi = 0;
     return CUDA_SUCCESS;
 }
 
 CUresult cuFuncSetAttribute(CUfunction hfunc, int attrib, int value) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUfunction, int, int);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuFuncSetAttribute"));
-        if (real_fn) return real_fn(hfunc, attrib, value);
-    }
+    FORWARD_TO_REAL(cuFuncSetAttribute, hfunc, attrib, value);
     return CUDA_SUCCESS;
 }
 
 CUresult cuFuncSetCacheConfig(CUfunction hfunc, int config) {
-    const BackendConfig& cfg = BackendConfig::instance();
-    if (cfg.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUfunction, int);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuFuncSetCacheConfig"));
-        if (real_fn) return real_fn(hfunc, config);
-    }
+    FORWARD_TO_REAL(cuFuncSetCacheConfig, hfunc, config);
     return CUDA_SUCCESS;
 }
 
 CUresult cuCtxGetCacheConfig(int *pconfig) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxGetCacheConfig"));
-        if (real_fn) return real_fn(pconfig);
-    }
+    FORWARD_TO_REAL(cuCtxGetCacheConfig, pconfig);
     if (pconfig) *pconfig = 0;
     return CUDA_SUCCESS;
 }
 
 CUresult cuCtxSetCacheConfig(int config) {
-    const BackendConfig& backend = BackendConfig::instance();
-    if (backend.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxSetCacheConfig"));
-        if (real_fn) return real_fn(config);
-    }
+    FORWARD_TO_REAL(cuCtxSetCacheConfig, config);
     return CUDA_SUCCESS;
 }
 
 CUresult cuCtxGetSharedMemConfig(int *pConfig) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxGetSharedMemConfig"));
-        if (real_fn) return real_fn(pConfig);
-    }
+    FORWARD_TO_REAL(cuCtxGetSharedMemConfig, pConfig);
     if (pConfig) *pConfig = 0;
     return CUDA_SUCCESS;
 }
 
 CUresult cuCtxSetSharedMemConfig(int config) {
-    const BackendConfig& backend = BackendConfig::instance();
-    if (backend.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxSetSharedMemConfig"));
-        if (real_fn) return real_fn(config);
-    }
+    FORWARD_TO_REAL(cuCtxSetSharedMemConfig, config);
     return CUDA_SUCCESS;
 }
 
@@ -2106,8 +1941,7 @@ CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flag
 CUresult cuMemAllocHost(void **pp, size_t bytesize) {
     if (!pp) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuMemAllocHost(pp, bytesize);
     }
 
@@ -2119,8 +1953,7 @@ CUresult cuMemAllocHost(void **pp, size_t bytesize) {
 }
 
 CUresult cuMemFreeHost(void *p) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuMemFreeHost(p);
     }
 
@@ -2134,8 +1967,7 @@ CUresult cuMemFreeHost(void *p) {
 CUresult cuMemHostAlloc(void **pp, size_t bytesize, unsigned int Flags) {
     if (!pp) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuMemHostAlloc(pp, bytesize, Flags);
     }
 
@@ -2143,32 +1975,19 @@ CUresult cuMemHostAlloc(void **pp, size_t bytesize, unsigned int Flags) {
 }
 
 CUresult cuMemHostRegister(void *p, size_t bytesize, unsigned int Flags) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, size_t, unsigned int);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemHostRegister"));
-        if (real_fn) return real_fn(p, bytesize, Flags);
-    }
+    FORWARD_TO_REAL(cuMemHostRegister, p, bytesize, Flags);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemHostUnregister(void *p) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemHostUnregister"));
-        if (real_fn) return real_fn(p);
-    }
+    FORWARD_TO_REAL(cuMemHostUnregister, p);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemHostGetDevicePointer(CUdeviceptr *pdptr, void *p, unsigned int Flags) {
     if (!pdptr) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuMemHostGetDevicePointer(pdptr, p, Flags);
     }
 
@@ -2177,13 +1996,7 @@ CUresult cuMemHostGetDevicePointer(CUdeviceptr *pdptr, void *p, unsigned int Fla
 }
 
 CUresult cuMemHostGetFlags(unsigned int *pFlags, void *p) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(unsigned int*, void*);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemHostGetFlags"));
-        if (real_fn) return real_fn(pFlags, p);
-    }
+    FORWARD_TO_REAL(cuMemHostGetFlags, pFlags, p);
     if (pFlags) *pFlags = 0;
     return CUDA_SUCCESS;
 }
@@ -2192,20 +2005,12 @@ CUresult cuPointerGetAttribute(void *data, CUpointer_attribute attribute, CUdevi
     if (!data) return CUDA_ERROR_INVALID_VALUE;
 
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, CUpointer_attribute, CUdeviceptr);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuPointerGetAttribute"));
-        if (real_fn) return real_fn(data, attribute, ptr);
-    }
-
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, CUpointer_attribute, CUdeviceptr);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuPointerGetAttribute"));
+    // Hybrid falls back to the simulated answer for pointers the real driver rejects.
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry<decltype(&cuPointerGetAttribute)>("cuPointerGetAttribute");
         if (real_fn) {
             CUresult result = real_fn(data, attribute, ptr);
-            if (result == CUDA_SUCCESS) return result;
+            if (config.mode() != FakeGpuMode::Hybrid || result == CUDA_SUCCESS) return result;
         }
     }
 
@@ -2269,20 +2074,12 @@ CUresult cuPointerGetAttributes(unsigned int numAttributes, CUpointer_attribute 
     if (!attributes || !data) return CUDA_ERROR_INVALID_VALUE;
 
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        using fn_t = CUresult (*)(unsigned int, CUpointer_attribute*, void**, CUdeviceptr);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuPointerGetAttributes"));
-        if (real_fn) return real_fn(numAttributes, attributes, data, ptr);
-    }
-
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
-        using fn_t = CUresult (*)(unsigned int, CUpointer_attribute*, void**, CUdeviceptr);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuPointerGetAttributes"));
+    // Hybrid falls back to the simulated answer for pointers the real driver rejects.
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry<decltype(&cuPointerGetAttributes)>("cuPointerGetAttributes");
         if (real_fn) {
             CUresult result = real_fn(numAttributes, attributes, data, ptr);
-            if (result == CUDA_SUCCESS) return result;
+            if (config.mode() != FakeGpuMode::Hybrid || result == CUDA_SUCCESS) return result;
         }
     }
 
@@ -2294,7 +2091,7 @@ CUresult cuPointerGetAttributes(unsigned int numAttributes, CUpointer_attribute 
 
 CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char uc, size_t N) {
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         if (config.mode() == FakeGpuMode::Hybrid) {
             HybridAllocation alloc;
             if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
@@ -2311,9 +2108,7 @@ CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char uc, size_t N) {
             }
         }
 
-        using fn_t = CUresult (*)(CUdeviceptr, unsigned char, size_t);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemsetD8"));
+        static const auto real_fn = real_entry<decltype(&cuMemsetD8)>("cuMemsetD8");
         if (real_fn) {
             CUresult result = real_fn(dstDevice, uc, N);
             if (result == CUDA_SUCCESS) {
@@ -2330,7 +2125,7 @@ CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char uc, size_t N) {
 
 CUresult cuMemsetD16(CUdeviceptr dstDevice, unsigned short us, size_t N) {
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         if (config.mode() == FakeGpuMode::Hybrid) {
             HybridAllocation alloc;
             if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
@@ -2346,9 +2141,7 @@ CUresult cuMemsetD16(CUdeviceptr dstDevice, unsigned short us, size_t N) {
             }
         }
 
-        using fn_t = CUresult (*)(CUdeviceptr, unsigned short, size_t);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemsetD16"));
+        static const auto real_fn = real_entry<decltype(&cuMemsetD16)>("cuMemsetD16");
         if (real_fn) {
             CUresult result = real_fn(dstDevice, us, N);
             if (result == CUDA_SUCCESS) {
@@ -2366,7 +2159,7 @@ CUresult cuMemsetD16(CUdeviceptr dstDevice, unsigned short us, size_t N) {
 
 CUresult cuMemsetD32(CUdeviceptr dstDevice, unsigned int ui, size_t N) {
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         if (config.mode() == FakeGpuMode::Hybrid) {
             HybridAllocation alloc;
             if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
@@ -2382,9 +2175,7 @@ CUresult cuMemsetD32(CUdeviceptr dstDevice, unsigned int ui, size_t N) {
             }
         }
 
-        using fn_t = CUresult (*)(CUdeviceptr, unsigned int, size_t);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemsetD32"));
+        static const auto real_fn = real_entry<decltype(&cuMemsetD32)>("cuMemsetD32");
         if (real_fn) {
             CUresult result = real_fn(dstDevice, ui, N);
             if (result == CUDA_SUCCESS) {
@@ -2402,7 +2193,7 @@ CUresult cuMemsetD32(CUdeviceptr dstDevice, unsigned int ui, size_t N) {
 
 CUresult cuMemsetD8Async(CUdeviceptr dstDevice, unsigned char uc, size_t N, CUstream hStream) {
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         if (config.mode() == FakeGpuMode::Hybrid) {
             HybridAllocation alloc;
             if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
@@ -2419,9 +2210,7 @@ CUresult cuMemsetD8Async(CUdeviceptr dstDevice, unsigned char uc, size_t N, CUst
             }
         }
 
-        using fn_t = CUresult (*)(CUdeviceptr, unsigned char, size_t, CUstream);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemsetD8Async"));
+        static const auto real_fn = real_entry<decltype(&cuMemsetD8Async)>("cuMemsetD8Async");
         if (real_fn) {
             CUresult result = real_fn(dstDevice, uc, N, hStream);
             if (result == CUDA_SUCCESS) {
@@ -2436,7 +2225,7 @@ CUresult cuMemsetD8Async(CUdeviceptr dstDevice, unsigned char uc, size_t N, CUst
 
 CUresult cuMemsetD32Async(CUdeviceptr dstDevice, unsigned int ui, size_t N, CUstream hStream) {
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         if (config.mode() == FakeGpuMode::Hybrid) {
             HybridAllocation alloc;
             if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
@@ -2452,9 +2241,7 @@ CUresult cuMemsetD32Async(CUdeviceptr dstDevice, unsigned int ui, size_t N, CUst
             }
         }
 
-        using fn_t = CUresult (*)(CUdeviceptr, unsigned int, size_t, CUstream);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemsetD32Async"));
+        static const auto real_fn = real_entry<decltype(&cuMemsetD32Async)>("cuMemsetD32Async");
         if (real_fn) {
             CUresult result = real_fn(dstDevice, ui, N, hStream);
             if (result == CUDA_SUCCESS) {
@@ -2471,7 +2258,7 @@ CUresult cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount, CUstr
     if (!dst || !src) return CUDA_ERROR_INVALID_VALUE;
 
     const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         auto host_ptr_for = [&](CUdeviceptr ptr) -> void* {
             if (config.mode() != FakeGpuMode::Hybrid) return nullptr;
             HybridAllocation alloc;
@@ -2491,12 +2278,8 @@ CUresult cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount, CUstr
         }
 
         if (dst_host && !src_host) {
-            using fn_t = CUresult (*)(void*, CUdeviceptr, size_t, CUstream);
-            static fn_t real_fn = []() -> fn_t {
-                void* fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyDtoHAsync_v2");
-                if (!fn) fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyDtoHAsync");
-                return reinterpret_cast<fn_t>(fn);
-            }();
+            static const auto real_fn =
+                real_entry_v2<CUresult (*)(void*, CUdeviceptr, size_t, CUstream)>("cuMemcpyDtoHAsync");
             if (!real_fn) {
                 // Fall back to sync copy if async is unavailable.
                 CUresult result = CudaDriverPassthrough::instance().cuMemcpyDtoH(dst_host, src, ByteCount);
@@ -2513,12 +2296,8 @@ CUresult cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount, CUstr
         }
 
         if (!dst_host && src_host) {
-            using fn_t = CUresult (*)(CUdeviceptr, const void*, size_t, CUstream);
-            static fn_t real_fn = []() -> fn_t {
-                void* fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyHtoDAsync_v2");
-                if (!fn) fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyHtoDAsync");
-                return reinterpret_cast<fn_t>(fn);
-            }();
+            static const auto real_fn =
+                real_entry_v2<CUresult (*)(CUdeviceptr, const void*, size_t, CUstream)>("cuMemcpyHtoDAsync");
             if (!real_fn) {
                 CUresult result = CudaDriverPassthrough::instance().cuMemcpyHtoD(dst, src_host, ByteCount);
                 if (result == CUDA_SUCCESS) {
@@ -2533,9 +2312,7 @@ CUresult cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount, CUstr
             return result;
         }
 
-        using fn_t = CUresult (*)(CUdeviceptr, CUdeviceptr, size_t, CUstream);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemcpyAsync"));
+        static const auto real_fn = real_entry<decltype(&cuMemcpyAsync)>("cuMemcpyAsync");
         if (!real_fn) {
             // Fallback: use sync D2D.
             CUresult result = CudaDriverPassthrough::instance().cuMemcpyDtoD(dst, src, ByteCount);
@@ -2560,10 +2337,10 @@ CUresult cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount, CUstr
 CUresult cuMemcpyDtoHAsync(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount, CUstream hStream) {
     if (!dstHost || !srcDevice) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
+    if (real_driver_available()) {
+        const bool hybrid = BackendConfig::instance().mode() == FakeGpuMode::Hybrid;
         HybridAllocation alloc;
-        if (HybridMemoryManager::instance().get_allocation_info((void*)srcDevice, alloc)) {
+        if (hybrid && HybridMemoryManager::instance().get_allocation_info((void*)srcDevice, alloc)) {
             if (alloc.type == HybridAllocation::Type::MappedHost && alloc.backing_ptr) {
                 memcpy(dstHost, alloc.backing_ptr, ByteCount);
                 GlobalState::instance().record_memcpy_d2h((void*)srcDevice, ByteCount);
@@ -2576,30 +2353,14 @@ CUresult cuMemcpyDtoHAsync(void *dstHost, CUdeviceptr srcDevice, size_t ByteCoun
             }
         }
 
-        using fn_t = CUresult (*)(void*, CUdeviceptr, size_t, CUstream);
-        static fn_t real_fn = []() -> fn_t {
-            void* fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyDtoHAsync_v2");
-            if (!fn) fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyDtoHAsync");
-            return reinterpret_cast<fn_t>(fn);
-        }();
+        static const auto real_fn = real_entry_v2<decltype(&cuMemcpyDtoHAsync)>("cuMemcpyDtoHAsync");
         if (real_fn) {
             CUresult result = real_fn(dstHost, srcDevice, ByteCount, hStream);
-            if (result == CUDA_SUCCESS) {
+            if (hybrid && result == CUDA_SUCCESS) {
                 GlobalState::instance().record_memcpy_d2h((void*)srcDevice, ByteCount);
             }
             return result;
         }
-    }
-
-    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, CUdeviceptr, size_t, CUstream);
-        static fn_t real_fn = []() -> fn_t {
-            void* fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyDtoHAsync_v2");
-            if (!fn) fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyDtoHAsync");
-            return reinterpret_cast<fn_t>(fn);
-        }();
-        if (real_fn) return real_fn(dstHost, srcDevice, ByteCount, hStream);
-        return CudaDriverPassthrough::instance().cuMemcpyDtoH(dstHost, srcDevice, ByteCount);
     }
 
     return cuMemcpyDtoH(dstHost, srcDevice, ByteCount);
@@ -2608,10 +2369,10 @@ CUresult cuMemcpyDtoHAsync(void *dstHost, CUdeviceptr srcDevice, size_t ByteCoun
 CUresult cuMemcpyHtoDAsync(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount, CUstream hStream) {
     if (!dstDevice || !srcHost) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
+    if (real_driver_available()) {
+        const bool hybrid = BackendConfig::instance().mode() == FakeGpuMode::Hybrid;
         HybridAllocation alloc;
-        if (HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
+        if (hybrid && HybridMemoryManager::instance().get_allocation_info((void*)dstDevice, alloc)) {
             if (alloc.type == HybridAllocation::Type::MappedHost && alloc.backing_ptr) {
                 memcpy(alloc.backing_ptr, srcHost, ByteCount);
                 GlobalState::instance().record_memcpy_h2d((void*)dstDevice, ByteCount);
@@ -2624,30 +2385,14 @@ CUresult cuMemcpyHtoDAsync(CUdeviceptr dstDevice, const void *srcHost, size_t By
             }
         }
 
-        using fn_t = CUresult (*)(CUdeviceptr, const void*, size_t, CUstream);
-        static fn_t real_fn = []() -> fn_t {
-            void* fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyHtoDAsync_v2");
-            if (!fn) fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyHtoDAsync");
-            return reinterpret_cast<fn_t>(fn);
-        }();
+        static const auto real_fn = real_entry_v2<decltype(&cuMemcpyHtoDAsync)>("cuMemcpyHtoDAsync");
         if (real_fn) {
             CUresult result = real_fn(dstDevice, srcHost, ByteCount, hStream);
-            if (result == CUDA_SUCCESS) {
+            if (hybrid && result == CUDA_SUCCESS) {
                 GlobalState::instance().record_memcpy_h2d((void*)dstDevice, ByteCount);
             }
             return result;
         }
-    }
-
-    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdeviceptr, const void*, size_t, CUstream);
-        static fn_t real_fn = []() -> fn_t {
-            void* fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyHtoDAsync_v2");
-            if (!fn) fn = CudaDriverPassthrough::instance().getRealFunction("cuMemcpyHtoDAsync");
-            return reinterpret_cast<fn_t>(fn);
-        }();
-        if (real_fn) return real_fn(dstDevice, srcHost, ByteCount, hStream);
-        return CudaDriverPassthrough::instance().cuMemcpyHtoD(dstDevice, srcHost, ByteCount);
     }
 
     return cuMemcpyHtoD(dstDevice, srcHost, ByteCount);
@@ -2656,8 +2401,7 @@ CUresult cuMemcpyHtoDAsync(CUdeviceptr dstDevice, const void *srcHost, size_t By
 CUresult cuMemcpyDtoDAsync(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteCount, CUstream hStream) {
     if (!dstDevice || !srcDevice) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
+    if (real_driver_available()) {
         // Reuse the same mixed-pointer handling as cuMemcpyAsync (Hybrid spill/mapped host).
         return cuMemcpyAsync(dstDevice, srcDevice, ByteCount, hStream);
     }
@@ -2672,11 +2416,8 @@ CUresult cuMemcpy(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount) {
 CUresult cuMemcpyPeer(CUdeviceptr dstDevice, CUcontext dstContext, CUdeviceptr srcDevice, CUcontext srcContext, size_t ByteCount) {
     if (!dstDevice || !srcDevice) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdeviceptr, CUcontext, CUdeviceptr, CUcontext, size_t);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemcpyPeer"));
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry<decltype(&cuMemcpyPeer)>("cuMemcpyPeer");
         if (!real_fn) {
             // Fallback: treat as regular device copy.
             return CudaDriverPassthrough::instance().cuMemcpyDtoD(dstDevice, srcDevice, ByteCount);
@@ -2698,11 +2439,8 @@ CUresult cuMemcpyPeer(CUdeviceptr dstDevice, CUcontext dstContext, CUdeviceptr s
 CUresult cuMemcpyPeerAsync(CUdeviceptr dstDevice, CUcontext dstContext, CUdeviceptr srcDevice, CUcontext srcContext, size_t ByteCount, CUstream hStream) {
     if (!dstDevice || !srcDevice) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdeviceptr, CUcontext, CUdeviceptr, CUcontext, size_t, CUstream);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemcpyPeerAsync"));
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry<decltype(&cuMemcpyPeerAsync)>("cuMemcpyPeerAsync");
         if (!real_fn) {
             // Fallback: do sync peer copy.
             return cuMemcpyPeer(dstDevice, dstContext, srcDevice, srcContext, ByteCount);
@@ -2809,65 +2547,30 @@ CUresult cuIpcOpenEventHandle(CUevent *phEvent, void *handle) {
 
 // Memory pool functions
 CUresult cuDeviceGetDefaultMemPool(CUmemoryPool *pool_out, CUdevice dev) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUmemoryPool*, CUdevice);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuDeviceGetDefaultMemPool"));
-        if (real_fn) {
-            const CUdevice real_dev = (config.mode() == FakeGpuMode::Hybrid) ? map_virtual_device_to_real(dev) : dev;
-            return real_fn(pool_out, real_dev);
-        }
-    }
+    FORWARD_TO_REAL(cuDeviceGetDefaultMemPool, pool_out, real_device(dev));
     if (pool_out) *pool_out = (CUmemoryPool)(uintptr_t)(dev + 1);
     return CUDA_SUCCESS;
 }
 
 CUresult cuDeviceGetMemPool(CUmemoryPool *pool, CUdevice dev) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUmemoryPool*, CUdevice);
-        static fn_t real_fn = reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuDeviceGetMemPool"));
-        if (real_fn) {
-            const CUdevice real_dev = (config.mode() == FakeGpuMode::Hybrid) ? map_virtual_device_to_real(dev) : dev;
-            return real_fn(pool, real_dev);
-        }
-    }
+    FORWARD_TO_REAL(cuDeviceGetMemPool, pool, real_device(dev));
     if (pool) *pool = (CUmemoryPool)(uintptr_t)(dev + 1);
     return CUDA_SUCCESS;
 }
 
 CUresult cuDeviceSetMemPool(CUdevice dev, CUmemoryPool pool) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdevice, CUmemoryPool);
-        static fn_t real_fn = reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuDeviceSetMemPool"));
-        if (real_fn) {
-            const CUdevice real_dev = (config.mode() == FakeGpuMode::Hybrid) ? map_virtual_device_to_real(dev) : dev;
-            return real_fn(real_dev, pool);
-        }
-    }
+    FORWARD_TO_REAL(cuDeviceSetMemPool, real_device(dev), pool);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemPoolCreate(CUmemoryPool *pool, const void *poolProps) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUmemoryPool*, const void*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemPoolCreate"));
-        if (real_fn) return real_fn(pool, poolProps);
-    }
+    FORWARD_TO_REAL(cuMemPoolCreate, pool, poolProps);
     if (pool) *pool = (CUmemoryPool)(uintptr_t)1;
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemPoolDestroy(CUmemoryPool pool) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUmemoryPool);
-        static fn_t real_fn = reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemPoolDestroy"));
-        if (real_fn) return real_fn(pool);
-    }
+    FORWARD_TO_REAL(cuMemPoolDestroy, pool);
     return CUDA_SUCCESS;
 }
 
@@ -2877,8 +2580,7 @@ CUresult cuMemAllocAsync(CUdeviceptr *dptr, size_t bytesize, CUstream hStream) {
     const BackendConfig& config = BackendConfig::instance();
 
     if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdeviceptr*, size_t, CUstream);
-        static fn_t real_fn = reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemAllocAsync"));
+        static const auto real_fn = real_entry<decltype(&cuMemAllocAsync)>("cuMemAllocAsync");
         if (real_fn) return real_fn(dptr, bytesize, hStream);
         return CudaDriverPassthrough::instance().cuMemAlloc(dptr, bytesize);
     }
@@ -2900,9 +2602,7 @@ CUresult cuMemAllocAsync(CUdeviceptr *dptr, size_t bytesize, CUstream hStream) {
 
         switch (decision) {
             case HybridMemoryManager::AllocationDecision::UseReal: {
-                using fn_t = CUresult (*)(CUdeviceptr*, size_t, CUstream);
-                static fn_t real_fn =
-                    reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemAllocAsync"));
+                static const auto real_fn = real_entry<decltype(&cuMemAllocAsync)>("cuMemAllocAsync");
                 if (real_fn) {
                     result = real_fn(&out_ptr, bytesize, hStream);
                 } else {
@@ -2979,30 +2679,17 @@ CUresult cuMemAllocAsync(CUdeviceptr *dptr, size_t bytesize, CUstream hStream) {
 }
 
 CUresult cuMemFreeAsync(CUdeviceptr dptr, CUstream hStream) {
-    const BackendConfig& config = BackendConfig::instance();
-
-    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdeviceptr, CUstream);
-        static fn_t real_fn = reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemFreeAsync"));
-        if (real_fn) return real_fn(dptr, hStream);
-        return CudaDriverPassthrough::instance().cuMemFree(dptr);
-    }
-
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
+    if (real_driver_available()) {
         HybridAllocation alloc;
-        if (HybridMemoryManager::instance().release_allocation((void*)dptr, alloc)) {
+        if (BackendConfig::instance().mode() == FakeGpuMode::Hybrid &&
+            HybridMemoryManager::instance().release_allocation((void*)dptr, alloc)) {
             size_t size = 0;
             int device = -1;
             GlobalState::instance().release_allocation((void*)dptr, size, device);
 
             switch (alloc.type) {
-                case HybridAllocation::Type::RealDevice: {
-                    using fn_t = CUresult (*)(CUdeviceptr, CUstream);
-                    static fn_t real_fn =
-                        reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemFreeAsync"));
-                    if (real_fn) return real_fn(dptr, hStream);
-                    return CudaDriverPassthrough::instance().cuMemFree(dptr);
-                }
+                case HybridAllocation::Type::RealDevice:
+                    break;
                 case HybridAllocation::Type::Managed:
                     // Managed allocations are freed with cuMemFree.
                     return CudaDriverPassthrough::instance().cuMemFree(dptr);
@@ -3013,9 +2700,8 @@ CUresult cuMemFreeAsync(CUdeviceptr dptr, CUstream hStream) {
                     return CUDA_SUCCESS;
             }
         }
-        // Not tracked: try real async free if available.
-        using fn_t = CUresult (*)(CUdeviceptr, CUstream);
-        static fn_t real_fn = reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemFreeAsync"));
+        // Real device memory, passthrough and untracked pointers: real async free if available.
+        static const auto real_fn = real_entry<decltype(&cuMemFreeAsync)>("cuMemFreeAsync");
         if (real_fn) return real_fn(dptr, hStream);
         return CudaDriverPassthrough::instance().cuMemFree(dptr);
     }
@@ -3026,17 +2712,13 @@ CUresult cuMemFreeAsync(CUdeviceptr dptr, CUstream hStream) {
 CUresult cuMemAllocFromPoolAsync(CUdeviceptr *dptr, size_t bytesize, CUmemoryPool pool, CUstream hStream) {
     if (!dptr) return CUDA_ERROR_INVALID_VALUE;
 
-    const BackendConfig& config = BackendConfig::instance();
+    if (real_driver_available()) {
+        static const auto real_fn = real_entry<decltype(&cuMemAllocFromPoolAsync)>("cuMemAllocFromPoolAsync");
+        if (BackendConfig::instance().mode() == FakeGpuMode::Passthrough) {
+            if (real_fn) return real_fn(dptr, bytesize, pool, hStream);
+            return cuMemAllocAsync(dptr, bytesize, hStream);
+        }
 
-    if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdeviceptr*, size_t, CUmemoryPool, CUstream);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemAllocFromPoolAsync"));
-        if (real_fn) return real_fn(dptr, bytesize, pool, hStream);
-        return cuMemAllocAsync(dptr, bytesize, hStream);
-    }
-
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
         GlobalState::instance().initialize();
         HybridMemoryManager::instance().initialize();
 
@@ -3044,9 +2726,6 @@ CUresult cuMemAllocFromPoolAsync(CUdeviceptr *dptr, size_t bytesize, CUmemoryPoo
         auto decision = HybridMemoryManager::instance().decide_allocation(virtual_device, bytesize);
 
         if (decision == HybridMemoryManager::AllocationDecision::UseReal) {
-            using fn_t = CUresult (*)(CUdeviceptr*, size_t, CUmemoryPool, CUstream);
-            static fn_t real_fn =
-                reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemAllocFromPoolAsync"));
             if (real_fn) {
                 CUresult result = real_fn(dptr, bytesize, pool, hStream);
                 if (result == CUDA_SUCCESS) {
@@ -3069,57 +2748,27 @@ CUresult cuMemAllocFromPoolAsync(CUdeviceptr *dptr, size_t bytesize, CUmemoryPoo
 }
 
 CUresult cuMemPoolSetAttribute(CUmemoryPool pool, int attr, void *value) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUmemoryPool, int, void*);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemPoolSetAttribute"));
-        if (real_fn) return real_fn(pool, attr, value);
-    }
+    FORWARD_TO_REAL(cuMemPoolSetAttribute, pool, attr, value);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemPoolGetAttribute(CUmemoryPool pool, int attr, void *value) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUmemoryPool, int, void*);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemPoolGetAttribute"));
-        if (real_fn) return real_fn(pool, attr, value);
-    }
+    FORWARD_TO_REAL(cuMemPoolGetAttribute, pool, attr, value);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemPoolTrimTo(CUmemoryPool pool, size_t minBytesToKeep) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUmemoryPool, size_t);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemPoolTrimTo"));
-        if (real_fn) return real_fn(pool, minBytesToKeep);
-    }
+    FORWARD_TO_REAL(cuMemPoolTrimTo, pool, minBytesToKeep);
     return CUDA_SUCCESS;
 }
 
 CUresult cuCtxResetPersistingL2Cache(void) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxResetPersistingL2Cache"));
-        if (real_fn) return real_fn();
-    }
+    FORWARD_TO_REAL(cuCtxResetPersistingL2Cache);
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemGetAddressRange(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dptr) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdeviceptr*, size_t*, CUdeviceptr);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuMemGetAddressRange"));
-        if (real_fn) return real_fn(pbase, psize, dptr);
-    }
+    FORWARD_TO_REAL(cuMemGetAddressRange, pbase, psize, dptr);
     if (pbase) *pbase = dptr;
     if (psize) *psize = 0;
     return CUDA_SUCCESS;
@@ -3134,21 +2783,7 @@ CUresult cuMemAllocPitch(CUdeviceptr *dptr, size_t *pPitch, size_t WidthInBytes,
 }
 
 CUresult cuDeviceGetP2PAttribute(int *value, int attrib, CUdevice srcDevice, CUdevice dstDevice) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int*, int, CUdevice, CUdevice);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuDeviceGetP2PAttribute"));
-        if (real_fn) {
-            const CUdevice real_src = config.mode() == FakeGpuMode::Hybrid
-                ? map_virtual_device_to_real(srcDevice)
-                : srcDevice;
-            const CUdevice real_dst = config.mode() == FakeGpuMode::Hybrid
-                ? map_virtual_device_to_real(dstDevice)
-                : dstDevice;
-            return real_fn(value, attrib, real_src, real_dst);
-        }
-    }
+    FORWARD_TO_REAL(cuDeviceGetP2PAttribute, value, attrib, real_device(srcDevice), real_device(dstDevice));
     if (!value) return CUDA_ERROR_INVALID_VALUE;
     GlobalState& state = GlobalState::instance();
     state.initialize();
@@ -3177,29 +2812,17 @@ CUresult cuDeviceGetP2PAttribute(int *value, int attrib, CUdevice srcDevice, CUd
 }
 
 CUresult cuCtxDetach(CUcontext ctx) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUcontext);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuCtxDetach"));
-        if (real_fn) return real_fn(ctx);
-    }
+    FORWARD_TO_REAL(cuCtxDetach, ctx);
     return CUDA_SUCCESS;
 }
 
 CUresult cuDeviceGetTexture1DLinearMaxWidth(size_t *maxWidthInElements, int format, unsigned numChannels, CUdevice dev) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(size_t*, int, unsigned int, CUdevice);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuDeviceGetTexture1DLinearMaxWidth"));
-        if (real_fn) {
-            const CUdevice real_dev = config.mode() == FakeGpuMode::Hybrid
-                ? map_virtual_device_to_real(dev)
-                : dev;
-            return real_fn(maxWidthInElements, format, numChannels, real_dev);
-        }
-    }
+    FORWARD_TO_REAL(
+        cuDeviceGetTexture1DLinearMaxWidth,
+        maxWidthInElements,
+        format,
+        numChannels,
+        real_device(dev));
     if (maxWidthInElements) *maxWidthInElements = 134217728;
     return CUDA_SUCCESS;
 }
@@ -3211,13 +2834,7 @@ CUresult cuDeviceGetTexture1DLinearMaxWidth(size_t *maxWidthInElements, int form
 // own Runtime/cuBLAS libraries do not execute real kernels.
 
 CUresult cuLinkCreate_v2(unsigned int numOptions, int *options, void **optionValues, void **stateOut) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(unsigned int, int*, void**, void**);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuLinkCreate_v2"));
-        if (real_fn) return real_fn(numOptions, options, optionValues, stateOut);
-    }
+    FORWARD_TO_REAL(cuLinkCreate_v2, numOptions, options, optionValues, stateOut);
     if (stateOut) *stateOut = reinterpret_cast<void*>(uintptr_t{1});
     return CUDA_SUCCESS;
 }
@@ -3235,13 +2852,7 @@ CUresult cuLinkAddData_v2(
     unsigned int numOptions,
     int *options,
     void **optionValues) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, int, void*, size_t, const char*, unsigned int, int*, void**);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuLinkAddData_v2"));
-        if (real_fn) return real_fn(state, type, data, size, name, numOptions, options, optionValues);
-    }
+    FORWARD_TO_REAL(cuLinkAddData_v2, state, type, data, size, name, numOptions, options, optionValues);
     return CUDA_SUCCESS;
 }
 
@@ -3264,13 +2875,7 @@ CUresult cuLinkAddFile_v2(
     unsigned int numOptions,
     int *options,
     void **optionValues) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, int, const char*, unsigned int, int*, void**);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuLinkAddFile_v2"));
-        if (real_fn) return real_fn(state, type, path, numOptions, options, optionValues);
-    }
+    FORWARD_TO_REAL(cuLinkAddFile_v2, state, type, path, numOptions, options, optionValues);
     return CUDA_SUCCESS;
 }
 
@@ -3285,26 +2890,14 @@ CUresult cuLinkAddFile(
 }
 
 CUresult cuLinkComplete(void *state, void **cubinOut, size_t *sizeOut) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, void**, size_t*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuLinkComplete"));
-        if (real_fn) return real_fn(state, cubinOut, sizeOut);
-    }
+    FORWARD_TO_REAL(cuLinkComplete, state, cubinOut, sizeOut);
     if (cubinOut) *cubinOut = nullptr;
     if (sizeOut) *sizeOut = 0;
     return CUDA_SUCCESS;
 }
 
 CUresult cuLinkDestroy(void *state) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuLinkDestroy"));
-        if (real_fn) return real_fn(state);
-    }
+    FORWARD_TO_REAL(cuLinkDestroy, state);
     return CUDA_SUCCESS;
 }
 
@@ -3313,58 +2906,24 @@ CUresult cuModuleGetGlobal_v2(CUdeviceptr *dptr, size_t *bytes, CUmodule hmod, c
 }
 
 CUresult cuKernelGetFunction(CUfunction *pFunc, void *kernel) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUfunction*, void*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuKernelGetFunction"));
-        if (real_fn) return real_fn(pFunc, kernel);
-    }
+    FORWARD_TO_REAL(cuKernelGetFunction, pFunc, kernel);
     if (pFunc) *pFunc = reinterpret_cast<CUfunction>(uintptr_t{1});
     return CUDA_SUCCESS;
 }
 
 CUresult cuKernelGetAttribute(int *value, int attribute, void *kernel, CUdevice device) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int*, int, void*, CUdevice);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuKernelGetAttribute"));
-        if (real_fn) {
-            const CUdevice real_device = config.mode() == FakeGpuMode::Hybrid
-                ? map_virtual_device_to_real(device)
-                : device;
-            return real_fn(value, attribute, kernel, real_device);
-        }
-    }
+    FORWARD_TO_REAL(cuKernelGetAttribute, value, attribute, kernel, real_device(device));
     if (value) *value = 0;
     return CUDA_SUCCESS;
 }
 
 CUresult cuKernelSetAttribute(int attribute, int value, void *kernel, CUdevice device) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int, int, void*, CUdevice);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuKernelSetAttribute"));
-        if (real_fn) {
-            const CUdevice real_device = config.mode() == FakeGpuMode::Hybrid
-                ? map_virtual_device_to_real(device)
-                : device;
-            return real_fn(attribute, value, kernel, real_device);
-        }
-    }
+    FORWARD_TO_REAL(cuKernelSetAttribute, attribute, value, kernel, real_device(device));
     return CUDA_SUCCESS;
 }
 
 CUresult cuLibraryGetKernel(void **pKernel, void *library, const char *name) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void**, void*, const char*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuLibraryGetKernel"));
-        if (real_fn) return real_fn(pKernel, library, name);
-    }
+    FORWARD_TO_REAL(cuLibraryGetKernel, pKernel, library, name);
     if (pKernel) *pKernel = reinterpret_cast<void*>(uintptr_t{1});
     return CUDA_SUCCESS;
 }
@@ -3378,35 +2937,22 @@ CUresult cuLibraryLoadData(
     int *libraryOptions,
     void **libraryOptionValues,
     unsigned int numLibraryOptions) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void**, const void*, int*, void**, unsigned int, int*, void**, unsigned int);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuLibraryLoadData"));
-        if (real_fn) {
-            return real_fn(
-                library,
-                code,
-                jitOptions,
-                jitOptionValues,
-                numJitOptions,
-                libraryOptions,
-                libraryOptionValues,
-                numLibraryOptions);
-        }
-    }
+    FORWARD_TO_REAL(
+        cuLibraryLoadData,
+        library,
+        code,
+        jitOptions,
+        jitOptionValues,
+        numJitOptions,
+        libraryOptions,
+        libraryOptionValues,
+        numLibraryOptions);
     if (library) *library = reinterpret_cast<void*>(uintptr_t{1});
     return CUDA_SUCCESS;
 }
 
 CUresult cuLaunchKernelEx(const void *config, CUfunction f, void **kernelParams, void **extra) {
-    const BackendConfig& backend = BackendConfig::instance();
-    if (backend.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(const void*, CUfunction, void**, void**);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuLaunchKernelEx"));
-        if (real_fn) return real_fn(config, f, kernelParams, extra);
-    }
+    FORWARD_TO_REAL(cuLaunchKernelEx, config, f, kernelParams, extra);
     GlobalState& state = GlobalState::instance();
     state.initialize();
     state.record_kernel_launch("cuLaunchKernelEx");
@@ -3418,38 +2964,25 @@ CUresult cuLaunchKernelEx(const void *config, CUfunction f, void **kernelParams,
 
 CUresult cuOccupancyMaxActiveBlocksPerMultiprocessor(
     int *numBlocks, CUfunction func, int blockSize, size_t dynamicSMemSize) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int*, CUfunction, int, size_t);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuOccupancyMaxActiveBlocksPerMultiprocessor"));
-        if (real_fn) return real_fn(numBlocks, func, blockSize, dynamicSMemSize);
-    }
+    FORWARD_TO_REAL(cuOccupancyMaxActiveBlocksPerMultiprocessor, numBlocks, func, blockSize, dynamicSMemSize);
     if (numBlocks) *numBlocks = 1;
     return CUDA_SUCCESS;
 }
 
 CUresult cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
     int *numBlocks, CUfunction func, int blockSize, size_t dynamicSMemSize, unsigned int flags) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int*, CUfunction, int, size_t, unsigned int);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction(
-                "cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags"));
-        if (real_fn) return real_fn(numBlocks, func, blockSize, dynamicSMemSize, flags);
-    }
+    FORWARD_TO_REAL(
+        cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags,
+        numBlocks,
+        func,
+        blockSize,
+        dynamicSMemSize,
+        flags);
     return cuOccupancyMaxActiveBlocksPerMultiprocessor(numBlocks, func, blockSize, dynamicSMemSize);
 }
 
 CUresult cuMemcpy2DAsync_v2(const void *copy, CUstream stream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(const void*, CUstream);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuMemcpy2DAsync_v2"));
-        if (real_fn) return real_fn(copy, stream);
-    }
+    FORWARD_TO_REAL(cuMemcpy2DAsync_v2, copy, stream);
     return CUDA_SUCCESS;
 }
 
@@ -3458,96 +2991,43 @@ CUresult cuMemsetD8_v2(CUdeviceptr dstDevice, unsigned char value, size_t count)
 }
 
 CUresult cuMemPrefetchAsync(CUdeviceptr ptr, size_t count, CUdevice dstDevice, CUstream stream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUdeviceptr, size_t, CUdevice, CUstream);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuMemPrefetchAsync"));
-        if (real_fn) {
-            const CUdevice real_dev = config.mode() == FakeGpuMode::Hybrid
-                ? map_virtual_device_to_real(dstDevice)
-                : dstDevice;
-            return real_fn(ptr, count, real_dev, stream);
-        }
-    }
+    FORWARD_TO_REAL(cuMemPrefetchAsync, ptr, count, real_device(dstDevice), stream);
     return CUDA_SUCCESS;
 }
 
 CUresult cuStreamWaitValue32(CUstream stream, CUdeviceptr addr, uint32_t value, unsigned int flags) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUstream, CUdeviceptr, uint32_t, unsigned int);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuStreamWaitValue32"));
-        if (real_fn) return real_fn(stream, addr, value, flags);
-    }
+    FORWARD_TO_REAL(cuStreamWaitValue32, stream, addr, value, flags);
     return CUDA_SUCCESS;
 }
 
 CUresult cuStreamBatchMemOp(CUstream stream, unsigned int count, void *params, unsigned int flags) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUstream, unsigned int, void*, unsigned int);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuStreamBatchMemOp"));
-        if (real_fn) return real_fn(stream, count, params, flags);
-    }
+    FORWARD_TO_REAL(cuStreamBatchMemOp, stream, count, params, flags);
     return CUDA_SUCCESS;
 }
 
 CUresult cuStreamBeginCapture(CUstream stream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUstream);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuStreamBeginCapture"));
-        if (real_fn) return real_fn(stream);
-    }
+    FORWARD_TO_REAL(cuStreamBeginCapture, stream);
     return CUDA_SUCCESS;
 }
 
 CUresult cuStreamBeginCapture_v2(CUstream stream, int mode) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUstream, int);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuStreamBeginCapture_v2"));
-        if (real_fn) return real_fn(stream, mode);
-    }
+    FORWARD_TO_REAL(cuStreamBeginCapture_v2, stream, mode);
     return CUDA_SUCCESS;
 }
 
 CUresult cuThreadExchangeStreamCaptureMode(int *mode) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(int*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuThreadExchangeStreamCaptureMode"));
-        if (real_fn) return real_fn(mode);
-    }
+    FORWARD_TO_REAL(cuThreadExchangeStreamCaptureMode, mode);
     return CUDA_SUCCESS;
 }
 
 CUresult cuStreamEndCapture(CUstream stream, void **graph) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUstream, void**);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuStreamEndCapture"));
-        if (real_fn) return real_fn(stream, graph);
-    }
+    FORWARD_TO_REAL(cuStreamEndCapture, stream, graph);
     if (graph) *graph = reinterpret_cast<void*>(uintptr_t{1});
     return CUDA_SUCCESS;
 }
 
 CUresult cuStreamIsCapturing(CUstream stream, int *status) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUstream, int*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuStreamIsCapturing"));
-        if (real_fn) return real_fn(stream, status);
-    }
+    FORWARD_TO_REAL(cuStreamIsCapturing, stream, status);
     if (status) *status = 0;
     return CUDA_SUCCESS;
 }
@@ -3559,13 +3039,7 @@ CUresult cuStreamGetCaptureInfo_v2(
     void **graph,
     const void ***dependencies,
     size_t *dependencyCount) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(CUstream, int*, uint64_t*, void**, const void***, size_t*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuStreamGetCaptureInfo_v2"));
-        if (real_fn) return real_fn(stream, status, id, graph, dependencies, dependencyCount);
-    }
+    FORWARD_TO_REAL(cuStreamGetCaptureInfo_v2, stream, status, id, graph, dependencies, dependencyCount);
     if (status) *status = 0;
     if (id) *id = 0;
     if (graph) *graph = nullptr;
@@ -3587,73 +3061,40 @@ CUresult cuTensorMapEncodeTiled(
     int swizzle,
     int l2Promotion,
     int oobFill) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(
-            void*, int, uint32_t, void*, const uint64_t*, const uint64_t*,
-            const uint32_t*, const uint32_t*, int, int, int, int);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuTensorMapEncodeTiled"));
-        if (real_fn) {
-            return real_fn(
-                tensorMap,
-                tensorDataType,
-                tensorRank,
-                globalAddress,
-                globalDim,
-                globalStrides,
-                boxDim,
-                elementStrides,
-                interleave,
-                swizzle,
-                l2Promotion,
-                oobFill);
-        }
-    }
+    FORWARD_TO_REAL(
+        cuTensorMapEncodeTiled,
+        tensorMap,
+        tensorDataType,
+        tensorRank,
+        globalAddress,
+        globalDim,
+        globalStrides,
+        boxDim,
+        elementStrides,
+        interleave,
+        swizzle,
+        l2Promotion,
+        oobFill);
     return CUDA_SUCCESS;
 }
 
 CUresult cuGraphKernelNodeGetParams(void *node, void *params) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, void*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuGraphKernelNodeGetParams"));
-        if (real_fn) return real_fn(node, params);
-    }
+    FORWARD_TO_REAL(cuGraphKernelNodeGetParams, node, params);
     return CUDA_SUCCESS;
 }
 
 CUresult cuGraphExecKernelNodeSetParams(void *graphExec, void *node, const void *params) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, void*, const void*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuGraphExecKernelNodeSetParams"));
-        if (real_fn) return real_fn(graphExec, node, params);
-    }
+    FORWARD_TO_REAL(cuGraphExecKernelNodeSetParams, graphExec, node, params);
     return CUDA_SUCCESS;
 }
 
 CUresult cuGraphExecDestroy(void *graphExec) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuGraphExecDestroy"));
-        if (real_fn) return real_fn(graphExec);
-    }
+    FORWARD_TO_REAL(cuGraphExecDestroy, graphExec);
     return CUDA_SUCCESS;
 }
 
 CUresult cuGraphLaunch(void *graphExec, CUstream stream) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, CUstream);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuGraphLaunch"));
-        if (real_fn) return real_fn(graphExec, stream);
-    }
+    FORWARD_TO_REAL(cuGraphLaunch, graphExec, stream);
     GlobalState& state = GlobalState::instance();
     state.initialize();
     if (record_unsupported_api(state, "cuGraphLaunch")) {
@@ -3663,49 +3104,25 @@ CUresult cuGraphLaunch(void *graphExec, CUstream stream) {
 }
 
 CUresult cuGraphDestroy(void *graph) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuGraphDestroy"));
-        if (real_fn) return real_fn(graph);
-    }
+    FORWARD_TO_REAL(cuGraphDestroy, graph);
     return CUDA_SUCCESS;
 }
 
 CUresult cuGraphInstantiate(
     void **graphExec, void *graph, void **errorNode, char *logBuffer, size_t bufferSize) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void**, void*, void**, char*, size_t);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuGraphInstantiate"));
-        if (real_fn) return real_fn(graphExec, graph, errorNode, logBuffer, bufferSize);
-    }
+    FORWARD_TO_REAL(cuGraphInstantiate, graphExec, graph, errorNode, logBuffer, bufferSize);
     if (graphExec) *graphExec = reinterpret_cast<void*>(uintptr_t{1});
     return CUDA_SUCCESS;
 }
 
 CUresult cuGraphGetNodes(void *graph, void **nodes, size_t *numNodes) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, void**, size_t*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuGraphGetNodes"));
-        if (real_fn) return real_fn(graph, nodes, numNodes);
-    }
+    FORWARD_TO_REAL(cuGraphGetNodes, graph, nodes, numNodes);
     if (numNodes) *numNodes = 0;
     return CUDA_SUCCESS;
 }
 
 CUresult cuGraphNodeGetType(void *node, int *type) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(void*, int*);
-        static fn_t real_fn = reinterpret_cast<fn_t>(
-            CudaDriverPassthrough::instance().getRealFunction("cuGraphNodeGetType"));
-        if (real_fn) return real_fn(node, type);
-    }
+    FORWARD_TO_REAL(cuGraphNodeGetType, node, type);
     if (type) *type = 0;
     return CUDA_SUCCESS;
 }
@@ -3715,15 +3132,7 @@ CUresult cuGraphNodeGetType(void *node, int *type) {
 // WARNING: Returning NULL causes the real libcudart to crash!
 // We need to either provide a real export table or avoid being used with real libcudart
 CUresult cuGetExportTable(const void **ppExportTable, const void *pExportTableId) {
-    const BackendConfig& config = BackendConfig::instance();
-    if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
-        using fn_t = CUresult (*)(const void**, const void*);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuGetExportTable"));
-        if (real_fn) {
-            return real_fn(ppExportTable, pExportTableId);
-        }
-    }
+    FORWARD_TO_REAL(cuGetExportTable, ppExportTable, pExportTableId);
 
     // FGPU_LOG("[FakeCUDA-Driver] cuGetExportTable called with tableId=%p\n", pExportTableId);
 
@@ -3752,6 +3161,7 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     if (config.mode() == FakeGpuMode::Hybrid &&
         real_driver_available() &&
         !hybrid_should_interpose_symbol(symbol)) {
+        // Allow CUDA runtime / frameworks to resolve extra driver entry points without us stubbing them all.
         if (void* fn = real_driver_symbol(symbol, cudaVersion, flags)) {
             *pfn = fn;
             return CUDA_SUCCESS;
@@ -3963,14 +3373,6 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
 
     #undef MAP_FUNC
 
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
-        // Allow CUDA runtime / frameworks to resolve extra driver entry points without us stubbing them all.
-        if (void* fn = real_driver_symbol(symbol, cudaVersion, flags)) {
-            *pfn = fn;
-            return CUDA_SUCCESS;
-        }
-    }
-
     // For unknown symbols, return NULL but success (some symbols are optional).
     // FGPU_LOG("[FakeCUDA-Driver] cuGetProcAddress: symbol '%s' NOT FOUND\n", symbol);
     *pfn = NULL;
@@ -3980,9 +3382,7 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
 CUresult cuGetProcAddress_v2(const char *symbol, void **pfn, int cudaVersion, unsigned long long flags, void *symbolStatus) {
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
-        using fn_t = CUresult (*)(const char*, void**, int, unsigned long long, void*);
-        static fn_t real_fn =
-            reinterpret_cast<fn_t>(CudaDriverPassthrough::instance().getRealFunction("cuGetProcAddress_v2"));
+        static const auto real_fn = real_entry<decltype(&cuGetProcAddress_v2)>("cuGetProcAddress_v2");
         if (real_fn) return real_fn(symbol, pfn, cudaVersion, flags, symbolStatus);
         return CudaDriverPassthrough::instance().cuGetProcAddress(symbol, pfn, cudaVersion, flags);
     }
