@@ -682,6 +682,28 @@ ncclResult_t map_response_error(const std::string& error_code) {
     return ncclInternalError;
 }
 
+ncclResult_t fail_with_response(
+    ncclComm_t comm,
+    const fake_gpu::distributed::CoordinatorResponse& response) {
+    return fail_with(
+        comm,
+        map_response_error(response.error_code),
+        response.error_detail.empty() ? response.error_code : response.error_detail);
+}
+
+bool response_echoes(
+    const fake_gpu::distributed::CoordinatorResponse& response,
+    const ncclComm& comm,
+    const char* seqno_key,
+    std::uint64_t seqno) {
+    int response_comm_id = -1;
+    std::uint64_t response_seqno = 0;
+    return parse_int_field(response, "comm_id", response_comm_id) &&
+           parse_u64_field(response, seqno_key, response_seqno) &&
+           response_comm_id == comm.comm_id &&
+           response_seqno == seqno;
+}
+
 std::string make_staging_name(
     const ncclComm& comm,
     std::uint64_t seqno,
@@ -782,12 +804,7 @@ ncclResult_t maybe_inject_collective_failure(
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
-        return fail_with(
-            comm,
-            map_response_error(response.error_code),
-            response.error_detail.empty()
-                ? response.error_code
-                : response.error_detail);
+        return fail_with_response(comm, response);
     }
 
     return fail_with(
@@ -865,18 +882,10 @@ ncclResult_t submit_proxy_collective_record(
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
-        return fail_with(
-            comm,
-            map_response_error(response.error_code),
-            response.error_detail.empty() ? response.error_code : response.error_detail);
+        return fail_with_response(comm, response);
     }
 
-    int response_comm_id = -1;
-    std::uint64_t response_seqno = 0;
-    if (!parse_int_field(response, "comm_id", response_comm_id) ||
-        !parse_u64_field(response, "seqno", response_seqno) ||
-        response_comm_id != comm->comm_id ||
-        response_seqno != comm->next_seqno) {
+    if (!response_echoes(response, *comm, "seqno", comm->next_seqno)) {
         return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent response");
     }
 
@@ -1320,18 +1329,10 @@ ncclResult_t prepare_group_batch(
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
-        return fail_with(
-            comm,
-            map_response_error(response.error_code),
-            response.error_detail.empty() ? response.error_code : response.error_detail);
+        return fail_with_response(comm, response);
     }
 
-    int response_comm_id = -1;
-    std::uint64_t response_seqno = 0;
-    if (!parse_int_field(response, "comm_id", response_comm_id) ||
-        !parse_u64_field(response, "base_seqno", response_seqno) ||
-        response_comm_id != comm->comm_id ||
-        response_seqno != comm->next_seqno) {
+    if (!response_echoes(response, *comm, "base_seqno", comm->next_seqno)) {
         return fail_with(comm, ncclInternalError, "group prepare response was inconsistent");
     }
 
@@ -1835,18 +1836,10 @@ ncclResult_t submit_collective_chunk(
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
-        return fail_with(
-            comm,
-            map_response_error(response.error_code),
-            response.error_detail.empty() ? response.error_code : response.error_detail);
+        return fail_with_response(comm, response);
     }
 
-    int response_comm_id = -1;
-    std::uint64_t response_seqno = 0;
-    if (!parse_int_field(response, "comm_id", response_comm_id) ||
-        !parse_u64_field(response, "seqno", response_seqno) ||
-        response_comm_id != comm->comm_id ||
-        response_seqno != seqno) {
+    if (!response_echoes(response, *comm, "seqno", seqno)) {
         return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent response");
     }
 
@@ -2351,18 +2344,10 @@ ncclResult_t submit_point_to_point(
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
-        return fail_with(
-            comm,
-            map_response_error(response.error_code),
-            response.error_detail.empty() ? response.error_code : response.error_detail);
+        return fail_with_response(comm, response);
     }
 
-    int response_comm_id = -1;
-    std::uint64_t response_seqno = 0;
-    if (!parse_int_field(response, "comm_id", response_comm_id) ||
-        !parse_u64_field(response, "seqno", response_seqno) ||
-        response_comm_id != comm->comm_id ||
-        response_seqno != seqno) {
+    if (!response_echoes(response, *comm, "seqno", seqno)) {
         return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent point-to-point response");
     }
 
@@ -2441,10 +2426,7 @@ ncclResult_t do_destroy(ncclComm_t comm, bool allow_missing) {
         } else if (!response.ok &&
                    !(allow_missing && response.error_code == "unknown_comm_id")) {
             if (!allow_missing) {
-                return fail_with(
-                    comm,
-                    map_response_error(response.error_code),
-                    response.error_detail.empty() ? response.error_code : response.error_detail);
+                return fail_with_response(comm, response);
             }
         }
     } else if (requires_coordinator(comm->dist_mode) && !allow_missing) {
@@ -2673,12 +2655,7 @@ ncclResult_t flush_grouped_alltoallv(
     }
     if (!response.ok) {
         handled = true;
-        return fail_with(
-            comm,
-            map_response_error(response.error_code),
-            response.error_detail.empty()
-                ? response.error_code
-                : response.error_detail);
+        return fail_with_response(comm, response);
     }
 
     std::vector<char> host_output(output_bytes, '\0');
@@ -2966,10 +2943,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
             return fail_with(nullptr, ncclSystemError, error);
         }
         if (!response.ok) {
-            return fail_with(
-                nullptr,
-                map_response_error(response.error_code),
-                response.error_detail.empty() ? response.error_code : response.error_detail);
+            return fail_with_response(nullptr, response);
         }
         if (!parse_int_field(response, "comm_id", coordinator_comm_id) || coordinator_comm_id <= 0) {
             return fail_with(nullptr, ncclInternalError, "coordinator did not return a valid comm_id");
@@ -3169,10 +3143,7 @@ ncclResult_t ncclCommSplit(
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
-        return fail_with(
-            comm,
-            map_response_error(response.error_code),
-            response.error_detail.empty() ? response.error_code : response.error_detail);
+        return fail_with_response(comm, response);
     }
 
     int response_comm_id = -1;
@@ -3319,12 +3290,7 @@ ncclResult_t ncclCommShrink(
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
-        return fail_with(
-            comm,
-            map_response_error(response.error_code),
-            response.error_detail.empty()
-                ? response.error_code
-                : response.error_detail);
+        return fail_with_response(comm, response);
     }
 
     int response_comm_id = -1;
