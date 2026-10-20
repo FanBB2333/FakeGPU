@@ -134,8 +134,6 @@ struct Device {
     unsigned int mig_device_index = 0;
     unsigned int gpu_instance_id = 0;
     unsigned int compute_instance_id = 0;
-    unsigned int mig_slice_count = 0;
-    std::string mig_profile;
 
     Device(int idx, const GpuProfile& profile);
 };

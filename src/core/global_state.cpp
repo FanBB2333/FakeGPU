@@ -186,8 +186,6 @@ void GlobalState::initialize() {
                 instance.gpu_instance_id;
             mig_device.compute_instance_id =
                 instance.compute_instance_id;
-            mig_device.mig_slice_count = instance.slice_count;
-            mig_device.mig_profile = instance.profile;
         }
         device_stats.resize(devices.size());
         initialized = true;
@@ -237,9 +235,6 @@ bool GlobalState::register_host_allocation(void* ptr, size_t size, int device) {
     if (device < 0 || device >= static_cast<int>(devices.size())) {
         device = current_device;
     }
-    if (device < 0 || device >= static_cast<int>(devices.size())) {
-        device = 0;
-    }
     if (allocations.find(ptr) != allocations.end()) return false;
 
     AllocationRecord rec;
@@ -260,18 +255,10 @@ bool GlobalState::release_allocation(void* ptr, size_t& size, int& device) {
     device = it->second.device;
     allocations.erase(it);
 
-    if (device >= 0 && device < static_cast<int>(devices.size())) {
-        Device& dev = devices[device];
-        if (dev.used_memory >= size) {
-            dev.used_memory -= size;
-        } else {
-            dev.used_memory = 0;
-        }
-        if (DeviceRuntimeStats* stats = stats_for_device_nolock(device)) {
-            stats->free_calls += 1;
-            saturating_add_u64(stats->free_bytes, static_cast<uint64_t>(size));
-        }
-    }
+    devices[device].used_memory -= size;
+    DeviceRuntimeStats& stats = device_stats[device];
+    stats.free_calls += 1;
+    saturating_add_u64(stats.free_bytes, static_cast<uint64_t>(size));
     return true;
 }
 
@@ -363,17 +350,13 @@ void GlobalState::record_memcpy_d2d(const void* dst_device_ptr, const void* src_
 void GlobalState::record_memcpy_peer(int dst_device, int src_device, size_t bytes) {
     if (bytes == 0) return;
     std::lock_guard<std::mutex> lock(mutex);
-    if (src_device >= 0) {
-        if (DeviceRuntimeStats* src_stats = stats_for_device_nolock(src_device)) {
-            src_stats->memcpy_peer_tx_calls += 1;
-            saturating_add_u64(src_stats->memcpy_peer_tx_bytes, static_cast<uint64_t>(bytes));
-        }
+    if (DeviceRuntimeStats* src_stats = stats_for_device_nolock(src_device)) {
+        src_stats->memcpy_peer_tx_calls += 1;
+        saturating_add_u64(src_stats->memcpy_peer_tx_bytes, static_cast<uint64_t>(bytes));
     }
-    if (dst_device >= 0) {
-        if (DeviceRuntimeStats* dst_stats = stats_for_device_nolock(dst_device)) {
-            dst_stats->memcpy_peer_rx_calls += 1;
-            saturating_add_u64(dst_stats->memcpy_peer_rx_bytes, static_cast<uint64_t>(bytes));
-        }
+    if (DeviceRuntimeStats* dst_stats = stats_for_device_nolock(dst_device)) {
+        dst_stats->memcpy_peer_rx_calls += 1;
+        saturating_add_u64(dst_stats->memcpy_peer_rx_bytes, static_cast<uint64_t>(bytes));
     }
     if (src_device >= 0 && dst_device >= 0) {
         link_traffic.record(device_topology, src_device, dst_device, static_cast<uint64_t>(bytes), monotonic_seconds());
@@ -531,50 +514,25 @@ std::vector<DeviceReportStats> GlobalState::snapshot_device_report() const {
         entry.total_memory = dev.total_memory;
         entry.used_memory_current = dev.used_memory;
         entry.used_memory_peak = dev.used_memory_peak;
-        if (i < transfers.size()) {
-            entry.transfer = transfers[i];
-        }
+        entry.transfer = transfers[i];
 
-        if (i < device_stats.size()) {
-            const DeviceRuntimeStats& stats = device_stats[i];
-            entry.alloc_calls = stats.alloc_calls;
-            entry.alloc_bytes = stats.alloc_bytes;
-            entry.free_calls = stats.free_calls;
-            entry.free_bytes = stats.free_bytes;
-            entry.memcpy_h2d_calls = stats.memcpy_h2d_calls;
-            entry.memcpy_h2d_bytes = stats.memcpy_h2d_bytes;
-            entry.memcpy_d2h_calls = stats.memcpy_d2h_calls;
-            entry.memcpy_d2h_bytes = stats.memcpy_d2h_bytes;
-            entry.memcpy_d2d_calls = stats.memcpy_d2d_calls;
-            entry.memcpy_d2d_bytes = stats.memcpy_d2d_bytes;
-            entry.memcpy_peer_tx_calls = stats.memcpy_peer_tx_calls;
-            entry.memcpy_peer_tx_bytes = stats.memcpy_peer_tx_bytes;
-            entry.memcpy_peer_rx_calls = stats.memcpy_peer_rx_calls;
-            entry.memcpy_peer_rx_bytes = stats.memcpy_peer_rx_bytes;
-            entry.memset_calls = stats.memset_calls;
-            entry.memset_bytes = stats.memset_bytes;
-            entry.cublas_gemm_calls = stats.cublas_gemm_calls;
-            entry.cublas_gemm_flops = stats.cublas_gemm_flops;
-            entry.cublaslt_matmul_calls = stats.cublaslt_matmul_calls;
-            entry.cublaslt_matmul_flops = stats.cublaslt_matmul_flops;
-            entry.kernel_launches = stats.kernel_launches;
-            entry.kernel_launch_total = stats.kernel_launch_total;
-            for (const auto& [dtype_int, dtype_stats] : stats.gemm_by_dtype) {
-                entry.gemm_by_dtype[cuda_dtype_name(dtype_int)] = {
-                    dtype_stats.calls,
-                    dtype_stats.flops,
-                };
-            }
-            for (const auto& [key, evt] : stats.compat_events) {
-                entry.compat_events.emplace_back(evt.operation, evt.dtype, evt.count);
-            }
-            for (const auto& [key, evt] : stats.unsupported_api_events) {
-                entry.unsupported_api_events.emplace_back(
-                    evt.operation,
-                    evt.behavior,
-                    evt.policy,
-                    evt.count);
-            }
+        const DeviceRuntimeStats& stats = device_stats[i];
+        static_cast<DeviceCounters&>(entry) = stats;
+        for (const auto& [dtype_int, dtype_stats] : stats.gemm_by_dtype) {
+            entry.gemm_by_dtype[cuda_dtype_name(dtype_int)] = {
+                dtype_stats.calls,
+                dtype_stats.flops,
+            };
+        }
+        for (const auto& [key, evt] : stats.compat_events) {
+            entry.compat_events.emplace_back(evt.operation, evt.dtype, evt.count);
+        }
+        for (const auto& [key, evt] : stats.unsupported_api_events) {
+            entry.unsupported_api_events.emplace_back(
+                evt.operation,
+                evt.behavior,
+                evt.policy,
+                evt.count);
         }
 
         snapshot.push_back(std::move(entry));
