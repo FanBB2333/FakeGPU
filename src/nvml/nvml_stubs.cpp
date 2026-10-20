@@ -25,15 +25,6 @@ nvmlReturn_t nvmlDeviceGetBoardPartNumber(nvmlDevice_t device, char *partNumber,
 }
 
 namespace {
-bool g_report_dump_registered = false;
-
-void ensure_report_dump_registered() {
-    if (!g_report_dump_registered) {
-        std::atexit(fake_gpu::dump_monitor_report);
-        g_report_dump_registered = true;
-    }
-}
-
 // Export table layout expected by the nvidia-smi build shipped alongside driver 570.195.03.
 // The table size (0x858) is discovered by observing the system NVML export table and is used
 // as a feature probe by nvidia-smi before it falls back to the public entry points.
@@ -56,19 +47,12 @@ static FakeNvmlExportTable_v570& export_table_v570() {
         // for all queries. Provide the subset we implement that nvidia-smi
         // depends on for stable XML output.
         //
-        // Table indices are in pointer-sized words from the start of the table.
-        // The first three words are the header: size + 2 reserved pointers.
-        auto set_word = [&](size_t index, void* fn) {
-            if (index < 3) return;
-            const size_t fn_index = index - 3;
-            if (fn_index >= (sizeof(t.functions) / sizeof(t.functions[0]))) return;
-            t.functions[fn_index] = fn;
-        };
-
+        // Table indices are in pointer-sized words from the start of the table;
+        // the first three words are the header (size + 2 reserved pointers).
         // Power management and power limits.
-        set_word(46, reinterpret_cast<void*>(&nvmlDeviceGetPowerManagementLimitConstraints));
-        set_word(47, reinterpret_cast<void*>(&nvmlDeviceGetPowerManagementDefaultLimit));
-        set_word(108, reinterpret_cast<void*>(&nvmlDeviceGetEnforcedPowerLimit));
+        t.functions[46 - 3] = reinterpret_cast<void*>(&nvmlDeviceGetPowerManagementLimitConstraints);
+        t.functions[47 - 3] = reinterpret_cast<void*>(&nvmlDeviceGetPowerManagementDefaultLimit);
+        t.functions[108 - 3] = reinterpret_cast<void*>(&nvmlDeviceGetEnforcedPowerLimit);
 
         // Keep other function pointers null so callers fall back to public NVML symbols
         // exported by this library when possible.
@@ -78,28 +62,13 @@ static FakeNvmlExportTable_v570& export_table_v570() {
 }
 } // namespace
 
-// Version strings that nvidia-smi may search for
-extern "C" {
-const char nvml_version_string[] = "12.570.195.03";
-const char driver_version_string[] = "570.195.03";
-}
-
-// Helper to check init
-static bool check_init() {
-    ensure_report_dump_registered();
-    // In a real implementation we would check a flag, but GlobalState handles itself
-    return true; 
-}
+static constexpr char kDriverVersion[] = "570.195.03";
 
 static bool modeled_nvlink_peer(
     const Device* device,
     unsigned int link,
     ModeledNvLinkPeer& result) {
-    if (
-        nvml_bridge::enabled() ||
-        !device ||
-        device->is_mig_device ||
-        device->index < 0) {
+    if (nvml_bridge::enabled() || device->is_mig_device) {
         return false;
     }
     const ModeledDeviceTopology topology =
@@ -118,7 +87,7 @@ static bool modeled_nvlink_peer(
 
 // Slot of a physical GPU (MIG instances use their parent's); null in bridge mode.
 static bool modeled_slot(const Device* device, ModeledSlot& result, ModeledDeviceTopology* topology_out = nullptr) {
-    if (nvml_bridge::enabled() || !device) {
+    if (nvml_bridge::enabled()) {
         return false;
     }
     GlobalState& state = GlobalState::instance();
@@ -138,7 +107,6 @@ static bool modeled_slot(const Device* device, ModeledSlot& result, ModeledDevic
 // PCIe link to report: the modeled slot, the published topology in bridge
 // mode, or the profile's own link.
 static nvmlReturn_t modeled_pcie(nvmlDevice_t device, ModeledPcieLink& current, ModeledPcieLink& gpu_max) {
-    if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     const Device* dev = reinterpret_cast<const Device*>(device);
     FakeGpuNvmlLinksV1 published{};
     if (nvml_bridge::enabled() && nvml_bridge::links(device, &published) == NVML_SUCCESS) {
@@ -162,7 +130,7 @@ static nvmlReturn_t modeled_pcie(nvmlDevice_t device, ModeledPcieLink& current, 
 
 // Modeled copy counters of a physical GPU (MIG instances use their parent's).
 static bool modeled_transfer(const Device* device, DeviceTransferStats& result) {
-    if (nvml_bridge::enabled() || !device) return false;
+    if (nvml_bridge::enabled()) return false;
     GlobalState& state = GlobalState::instance();
     const Device* physical = device;
     if (device->is_mig_device) {
@@ -184,7 +152,7 @@ static bool modeled_nvlink_traffic(nvmlDevice_t device, unsigned int& ports, uin
         return true;
     }
     const Device* dev = reinterpret_cast<const Device*>(device);
-    if (!dev || dev->is_mig_device || dev->index < 0) return false;
+    if (dev->is_mig_device || dev->index < 0) return false;
     const ModeledDeviceTopology topology = GlobalState::instance().snapshot_device_topology();
     const std::size_t index = static_cast<std::size_t>(dev->index);
     ports = index < topology.nvlink_peers.size() ? static_cast<unsigned int>(topology.nvlink_peers[index].size()) : 0;
@@ -785,7 +753,7 @@ nvmlReturn_t nvmlDeviceGetHandleByIndex_v2(unsigned int index, nvmlDevice_t *dev
 // System query functions
 nvmlReturn_t nvmlSystemGetDriverVersion(char *version, unsigned int length) {
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "%s", nvml_bridge::enabled() ? "FakeGPU" : "570.195.03");
+    snprintf(version, length, "%s", nvml_bridge::enabled() ? "FakeGPU" : kDriverVersion);
     FGPU_LOG("[FakeNVML] nvmlSystemGetDriverVersion returning: %s\n", version);
     return NVML_SUCCESS;
 }
@@ -929,7 +897,7 @@ nvmlReturn_t nvmlDeviceGetVgpuHeterogeneousMode(nvmlDevice_t device, nvmlVgpuHet
 
 nvmlReturn_t nvmlDeviceGetGspFirmwareVersion(nvmlDevice_t device, char *version) {
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, NVML_GSP_FIRMWARE_VERSION_BUF_SIZE, "%s", driver_version_string);
+    snprintf(version, NVML_GSP_FIRMWARE_VERSION_BUF_SIZE, "%s", kDriverVersion);
     return NVML_SUCCESS;
 }
 

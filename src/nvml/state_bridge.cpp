@@ -212,7 +212,6 @@ nvmlReturn_t processes(nvmlDevice_t device, unsigned int* count, void* infos, bo
     return NVML_SUCCESS;
 }
 nvmlReturn_t telemetry(nvmlDevice_t device, FakeGpuNvmlTelemetryV1* result) {
-    if (!device || !result) return NVML_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(mutex);
     auto* entry = find(device);
     if (!entry) return NVML_ERROR_INVALID_ARGUMENT;
@@ -222,7 +221,6 @@ nvmlReturn_t telemetry(nvmlDevice_t device, FakeGpuNvmlTelemetryV1* result) {
 }
 
 nvmlReturn_t links(nvmlDevice_t device, FakeGpuNvmlLinksV1* result) {
-    if (!device || !result) return NVML_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(mutex);
     auto* entry = find(device);
     if (!entry) return NVML_ERROR_INVALID_ARGUMENT;
@@ -233,7 +231,7 @@ nvmlReturn_t links(nvmlDevice_t device, FakeGpuNvmlLinksV1* result) {
 
 nvmlReturn_t process_utilization(nvmlDevice_t device, void* samples, unsigned int* count,
                                 unsigned long long last_seen) {
-    if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
+    if (!count) return NVML_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(mutex);
     auto* entry = find(device);
     if (!entry) return NVML_ERROR_INVALID_ARGUMENT;
