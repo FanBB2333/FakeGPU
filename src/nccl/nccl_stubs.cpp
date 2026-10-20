@@ -595,21 +595,6 @@ ncclResult_t real_nccl_error(
     return fail_with(comm, result, std::move(error));
 }
 
-bool grouped_operation_supported(ncclComm_t comm, GroupOperationKind kind) {
-    if (!comm) {
-        return true;
-    }
-    if (kind == GroupOperationKind::PointToPoint &&
-        comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
-        fail_with(
-            comm,
-            ncclInvalidUsage,
-            "grouped ncclSend/ncclRecv are only implemented for FAKEGPU_DIST_MODE=simulate");
-        return false;
-    }
-    return true;
-}
-
 ncclResult_t map_response_error(const std::string& error_code) {
     if (error_code == "bad_request" ||
         error_code == "invalid_rank" ||
@@ -1225,14 +1210,31 @@ bool validate_group_stream_binding(
     return true;
 }
 
+ncclResult_t check_group_enqueue(
+    ncclComm_t comm,
+    GroupOperationKind kind,
+    cudaStream_t stream) {
+    if (kind == GroupOperationKind::PointToPoint &&
+        comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
+        return fail_with(
+            comm,
+            ncclInvalidUsage,
+            "grouped ncclSend/ncclRecv are only implemented for FAKEGPU_DIST_MODE=simulate");
+    }
+    if (!validate_stream_handle(comm, stream)) {
+        return ncclInvalidArgument;
+    }
+    if (!validate_group_stream_binding(comm, stream)) {
+        return ncclInvalidUsage;
+    }
+    return ncclSuccess;
+}
+
 ncclResult_t prepare_group_batch(
     ncclComm_t comm,
     const std::vector<GroupOperation>& operations) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "group contains a null communicator");
-    }
-    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
-        return ncclInvalidUsage;
     }
     if (operations.empty()) {
         clear_last_error(comm);
@@ -1334,21 +1336,13 @@ ncclResult_t buffer_group_allreduce(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
-    const ncclResult_t pending_error = surface_async_error(comm);
-    if (pending_error != ncclSuccess) {
-        return pending_error;
-    }
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
-        return ncclInvalidUsage;
-    }
-    if (!validate_stream_handle(comm, stream)) {
-        return ncclInvalidArgument;
-    }
-    if (!validate_group_stream_binding(comm, stream)) {
-        return ncclInvalidUsage;
+    const ncclResult_t enqueue_result =
+        check_group_enqueue(comm, GroupOperationKind::Collective, stream);
+    if (enqueue_result != ncclSuccess) {
+        return enqueue_result;
     }
     if (count == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
@@ -1389,27 +1383,16 @@ ncclResult_t buffer_group_reduce(
     int root,
     ncclComm_t comm,
     cudaStream_t stream) {
-    if (!comm) {
-        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
-    }
-    const ncclResult_t pending_error = surface_async_error(comm);
-    if (pending_error != ncclSuccess) {
-        return pending_error;
-    }
     if (!sendbuff) {
         return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
     }
     if (comm->rank == root && !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "root recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
-        return ncclInvalidUsage;
-    }
-    if (!validate_stream_handle(comm, stream)) {
-        return ncclInvalidArgument;
-    }
-    if (!validate_group_stream_binding(comm, stream)) {
-        return ncclInvalidUsage;
+    const ncclResult_t enqueue_result =
+        check_group_enqueue(comm, GroupOperationKind::Collective, stream);
+    if (enqueue_result != ncclSuccess) {
+        return enqueue_result;
     }
     if (count == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
@@ -1457,24 +1440,13 @@ ncclResult_t buffer_group_broadcast(
     int root,
     ncclComm_t comm,
     cudaStream_t stream) {
-    if (!comm) {
-        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
-    }
-    const ncclResult_t pending_error = surface_async_error(comm);
-    if (pending_error != ncclSuccess) {
-        return pending_error;
-    }
     if (!recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
-        return ncclInvalidUsage;
-    }
-    if (!validate_stream_handle(comm, stream)) {
-        return ncclInvalidArgument;
-    }
-    if (!validate_group_stream_binding(comm, stream)) {
-        return ncclInvalidUsage;
+    const ncclResult_t enqueue_result =
+        check_group_enqueue(comm, GroupOperationKind::Collective, stream);
+    if (enqueue_result != ncclSuccess) {
+        return enqueue_result;
     }
     if (comm->rank == root && !sendbuff) {
         return fail_with(comm, ncclInvalidArgument, "root send buffer must not be null");
@@ -1517,21 +1489,13 @@ ncclResult_t buffer_group_allgather(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
-    const ncclResult_t pending_error = surface_async_error(comm);
-    if (pending_error != ncclSuccess) {
-        return pending_error;
-    }
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
-        return ncclInvalidUsage;
-    }
-    if (!validate_stream_handle(comm, stream)) {
-        return ncclInvalidArgument;
-    }
-    if (!validate_group_stream_binding(comm, stream)) {
-        return ncclInvalidUsage;
+    const ncclResult_t enqueue_result =
+        check_group_enqueue(comm, GroupOperationKind::Collective, stream);
+    if (enqueue_result != ncclSuccess) {
+        return enqueue_result;
     }
     if (count == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
@@ -1569,21 +1533,13 @@ ncclResult_t buffer_group_reducescatter(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
-    const ncclResult_t pending_error = surface_async_error(comm);
-    if (pending_error != ncclSuccess) {
-        return pending_error;
-    }
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
-        return ncclInvalidUsage;
-    }
-    if (!validate_stream_handle(comm, stream)) {
-        return ncclInvalidArgument;
-    }
-    if (!validate_group_stream_binding(comm, stream)) {
-        return ncclInvalidUsage;
+    const ncclResult_t enqueue_result =
+        check_group_enqueue(comm, GroupOperationKind::Collective, stream);
+    if (enqueue_result != ncclSuccess) {
+        return enqueue_result;
     }
     if (recvcount == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
@@ -1625,21 +1581,13 @@ ncclResult_t buffer_group_alltoall(
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
-    const ncclResult_t pending_error = surface_async_error(comm);
-    if (pending_error != ncclSuccess) {
-        return pending_error;
-    }
     if (!sendbuff || !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm, GroupOperationKind::Collective)) {
-        return ncclInvalidUsage;
-    }
-    if (!validate_stream_handle(comm, stream)) {
-        return ncclInvalidArgument;
-    }
-    if (!validate_group_stream_binding(comm, stream)) {
-        return ncclInvalidUsage;
+    const ncclResult_t enqueue_result =
+        check_group_enqueue(comm, GroupOperationKind::Collective, stream);
+    if (enqueue_result != ncclSuccess) {
+        return enqueue_result;
     }
     if (count == 0) {
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
@@ -1673,24 +1621,13 @@ ncclResult_t buffer_group_send(
     int peer,
     ncclComm_t comm,
     cudaStream_t stream) {
-    if (!comm) {
-        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
-    }
-    const ncclResult_t pending_error = surface_async_error(comm);
-    if (pending_error != ncclSuccess) {
-        return pending_error;
-    }
     if (!sendbuff) {
         return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
     }
-    if (!grouped_operation_supported(comm, GroupOperationKind::PointToPoint)) {
-        return ncclInvalidUsage;
-    }
-    if (!validate_stream_handle(comm, stream)) {
-        return ncclInvalidArgument;
-    }
-    if (!validate_group_stream_binding(comm, stream)) {
-        return ncclInvalidUsage;
+    const ncclResult_t enqueue_result =
+        check_group_enqueue(comm, GroupOperationKind::PointToPoint, stream);
+    if (enqueue_result != ncclSuccess) {
+        return enqueue_result;
     }
     if (peer < 0 || peer >= comm->world_size) {
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
@@ -1725,24 +1662,13 @@ ncclResult_t buffer_group_recv(
     int peer,
     ncclComm_t comm,
     cudaStream_t stream) {
-    if (!comm) {
-        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
-    }
-    const ncclResult_t pending_error = surface_async_error(comm);
-    if (pending_error != ncclSuccess) {
-        return pending_error;
-    }
     if (!recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
     }
-    if (!grouped_operation_supported(comm, GroupOperationKind::PointToPoint)) {
-        return ncclInvalidUsage;
-    }
-    if (!validate_stream_handle(comm, stream)) {
-        return ncclInvalidArgument;
-    }
-    if (!validate_group_stream_binding(comm, stream)) {
-        return ncclInvalidUsage;
+    const ncclResult_t enqueue_result =
+        check_group_enqueue(comm, GroupOperationKind::PointToPoint, stream);
+    if (enqueue_result != ncclSuccess) {
+        return enqueue_result;
     }
     if (peer < 0 || peer >= comm->world_size) {
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
