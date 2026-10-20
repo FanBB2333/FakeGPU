@@ -368,9 +368,33 @@ def estimate_finetuning_windows(
         }
         for update in target["trace"]
     ]
+    sampling_policy = {
+        "minimum_calibration_runs": _MINIMUM_RUNS,
+        "minimum_samples_per_window_per_run": _MINIMUM_SAMPLES,
+        "exclude_global_warmup": True,
+    }
+    if not (event_context or epoch_context):
+        sampling_policy["exclude_first_window_occurrence"] = True
+    sampling_policy["aggregation"] = "equal_weight_per_run_window_mean"
+    if event_context:
+        sampling_policy.update(
+            event_context="latest_complete_boundary_per_event_kind",
+            exclude_first_context_window_occurrence=True,
+        )
+    if epoch_context:
+        sampling_policy.update(
+            epoch_context="recorded_epoch_microsteps_per_batch",
+            exclude_first_context_window_occurrence=True,
+        )
+    scope = {
+        (False, False): "recorded_steady_optimizer_window_replay",
+        (True, False): "recorded_event_conditioned_optimizer_window_replay",
+        (False, True): "recorded_epoch_conditioned_optimizer_window_replay",
+        (True, True): "recorded_event_epoch_conditioned_optimizer_window_replay",
+    }[event_context, epoch_context]
     result = {
         "schema_version": SCHEMA_VERSION,
-        "scope": "recorded_steady_optimizer_window_replay",
+        "scope": scope,
         "signature": deepcopy(target["signature"]),
         "calibration_runs": [
             {
@@ -383,13 +407,7 @@ def estimate_finetuning_windows(
             key: deepcopy(target[key])
             for key in ("identity", "evidence_sha256", "sampling")
         },
-        "sampling_policy": {
-            "minimum_calibration_runs": _MINIMUM_RUNS,
-            "minimum_samples_per_window_per_run": _MINIMUM_SAMPLES,
-            "exclude_global_warmup": True,
-            "exclude_first_window_occurrence": True,
-            "aggregation": "equal_weight_per_run_window_mean",
-        },
+        "sampling_policy": sampling_policy,
         "coverage": {
             "target_window_groups": len(groups),
             "target_eligible_updates": target["sampling"]["eligible_updates"],
@@ -413,12 +431,6 @@ def estimate_finetuning_windows(
         ],
     }
     if event_context:
-        result["scope"] = "recorded_event_conditioned_optimizer_window_replay"
-        del result["sampling_policy"]["exclude_first_window_occurrence"]
-        result["sampling_policy"].update(
-            event_context="latest_complete_boundary_per_event_kind",
-            exclude_first_context_window_occurrence=True,
-        )
         result["limitations"].extend(
             [
                 "Event context retains the latest complete ordered boundary containing each event kind and the number of optimizer updates since it; it does not prove that older events, cache state or system load have no remaining effect.",
@@ -426,17 +438,6 @@ def estimate_finetuning_windows(
             ]
         )
     if epoch_context:
-        result["scope"] = (
-            "recorded_event_epoch_conditioned_optimizer_window_replay"
-            if event_context
-            else "recorded_epoch_conditioned_optimizer_window_replay"
-        )
-        if not event_context:
-            del result["sampling_policy"]["exclude_first_window_occurrence"]
-        result["sampling_policy"].update(
-            epoch_context="recorded_epoch_microsteps_per_batch",
-            exclude_first_context_window_occurrence=True,
-        )
         result["limitations"].append(
             "Epoch context uses each batch's recorded one-based microstep within its epoch; it does not include absolute epoch number or infer future epoch boundaries. Matching positions does not establish the cause of timing differences or control sampler, cache and system state."
         )
