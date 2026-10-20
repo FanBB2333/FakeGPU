@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import math
@@ -160,13 +161,9 @@ def estimate_serving_plan(
         acceptance_rate=speculative_acceptance_rate,
     )
 
-    batch_memory_cache: dict[int, dict[str, Any]] = {}
-
+    @functools.cache
     def batch_memory(sequence_count: int) -> dict[str, Any]:
-        cached = batch_memory_cache.get(int(sequence_count))
-        if cached is not None:
-            return cached
-        result = _serving_batch_memory(
+        return _serving_batch_memory(
             dimensions=dimensions,
             parameter_bytes=parameter_bytes,
             active_sequences=sequence_count,
@@ -188,8 +185,6 @@ def estimate_serving_plan(
             ),
             speculative=speculative,
         )
-        batch_memory_cache[int(sequence_count)] = result
-        return result
 
     requested = batch_memory(active_sequences)
     admission = _serving_admission(
@@ -209,11 +204,7 @@ def estimate_serving_plan(
     usable_capacity_bytes = admission.usable_capacity_bytes
     memory_limited_sequences = admission.memory_limited_count
     fits_memory = admission.fits_memory
-    admissible_sequences = (
-        min(max_batch_size, memory_limited_sequences)
-        if memory_limited_sequences is not None
-        else None
-    )
+    admissible_sequences = memory_limited_sequences
     fits_configured_limit = active_sequences <= max_batch_size
     requested_fits = _requested_fits(
         fits_configured_limit=fits_configured_limit,
@@ -226,7 +217,6 @@ def estimate_serving_plan(
     )
     limiting_factor = _serving_limiting_factor(
         fits_configured_limit=fits_configured_limit,
-        runtime=runtime,
         runtime_report=runtime_report,
         fits_memory=fits_memory,
         admissible_count=admissible_sequences,
@@ -264,17 +254,8 @@ def estimate_serving_plan(
         speculative_tokens=speculative_tokens,
         speculative_acceptance_rate=speculative_acceptance_rate,
     )
-    workload_signature = _serving_workload_signature(
-        report_schema_version=SCHEMA_VERSION,
-        model=dimensions,
-        checkpoint=base["checkpoint"],
-        weight_storage=base["weight_storage"],
-        inputs=input_report,
-        speculative=speculative,
-    )
     return _build_serving_report(
         schema_version=SCHEMA_VERSION,
-        workload_signature=workload_signature,
         method_base=(
             "safetensors_headers_plus_decoder_shape_and_serving_pool_model"
         ),
@@ -405,12 +386,13 @@ def estimate_serving_request_set(
     runtime = capacity.runtime
     memory_utilization = capacity.memory_utilization
 
+    max_prompt_tokens = max(
+        request["prompt_tokens"] for request in normalized
+    )
     base = estimate_decoder_inference(
         model_dir,
         batch_size=1,
-        prompt_tokens=max(
-            request["prompt_tokens"] for request in normalized
-        ),
+        prompt_tokens=max_prompt_tokens,
         generated_tokens=1,
         dtype=dtype,
         use_cache=False,
@@ -424,9 +406,7 @@ def estimate_serving_request_set(
     speculative = _load_speculative_draft(
         draft_model_dir=draft_model_dir,
         draft_dtype=draft_dtype,
-        prompt_tokens=max(
-            request["prompt_tokens"] for request in normalized
-        ),
+        prompt_tokens=max_prompt_tokens,
         attention_implementation=attention_implementation,
         target_dimensions=dimensions,
         target_parameter_bytes=parameter_bytes,
@@ -434,13 +414,9 @@ def estimate_serving_request_set(
         acceptance_rate=speculative_acceptance_rate,
     )
 
-    memory_by_request_count: dict[int, dict[str, Any]] = {}
-
+    @functools.cache
     def request_memory(request_count: int) -> dict[str, Any]:
-        cached = memory_by_request_count.get(request_count)
-        if cached is not None:
-            return cached
-        result = _serving_request_set_memory(
+        return _serving_request_set_memory(
             dimensions=dimensions,
             parameter_bytes=parameter_bytes,
             requests=normalized[:request_count],
@@ -460,8 +436,6 @@ def estimate_serving_request_set(
             ),
             speculative=speculative,
         )
-        memory_by_request_count[request_count] = result
-        return result
 
     requested_count = len(normalized)
     requested = request_memory(requested_count)
@@ -494,7 +468,6 @@ def estimate_serving_request_set(
     )
     limiting_factor = _serving_limiting_factor(
         fits_configured_limit=fits_configured_limit,
-        runtime=runtime,
         runtime_report=runtime_report,
         fits_memory=fits_memory,
         admissible_count=admissible_count,
@@ -502,22 +475,18 @@ def estimate_serving_request_set(
         exhausted_factor="request_manifest_exhausted",
     )
 
-    admitted_request_ids = (
-        [
-            request["id"]
-            for request in normalized[:admissible_count]
+    if admissible_count is None:
+        admitted_request_ids = rejected_request_ids = None
+        admitted_request_count = rejected_request_count = None
+    else:
+        admitted_request_ids = [
+            request["id"] for request in normalized[:admissible_count]
         ]
-        if admissible_count is not None
-        else None
-    )
-    rejected_request_ids = (
-        [
-            request["id"]
-            for request in normalized[admissible_count:]
+        rejected_request_ids = [
+            request["id"] for request in normalized[admissible_count:]
         ]
-        if admissible_count is not None
-        else None
-    )
+        admitted_request_count = len(admitted_request_ids)
+        rejected_request_count = len(rejected_request_ids)
 
     input_report = _serving_input_report(
         mode_inputs={
@@ -549,17 +518,8 @@ def estimate_serving_request_set(
         speculative_tokens=speculative_tokens,
         speculative_acceptance_rate=speculative_acceptance_rate,
     )
-    workload_signature = _serving_workload_signature(
-        report_schema_version=REQUEST_SET_SCHEMA_VERSION,
-        model=dimensions,
-        checkpoint=base["checkpoint"],
-        weight_storage=base["weight_storage"],
-        inputs=input_report,
-        speculative=speculative,
-    )
     return _build_serving_report(
         schema_version=REQUEST_SET_SCHEMA_VERSION,
-        workload_signature=workload_signature,
         method_base=(
             "safetensors_headers_plus_decoder_shape_and_heterogeneous_"
             "serving_request_model"
@@ -598,16 +558,8 @@ def estimate_serving_request_set(
             "admissible_active_sequences": admissible_count,
             "admitted_request_ids": admitted_request_ids,
             "rejected_request_ids": rejected_request_ids,
-            "admitted_request_count": (
-                len(admitted_request_ids)
-                if admitted_request_ids is not None
-                else None
-            ),
-            "rejected_request_count": (
-                len(rejected_request_ids)
-                if rejected_request_ids is not None
-                else None
-            ),
+            "admitted_request_count": admitted_request_count,
+            "rejected_request_count": rejected_request_count,
             "available_slots": None,
             "available_slots_reason": (
                 "future_request_shapes_unavailable"
@@ -662,7 +614,6 @@ def estimate_serving_request_set(
 def _build_serving_report(
     *,
     schema_version: str,
-    workload_signature: str,
     method_base: str,
     timeline_source_base: str,
     accuracy_reason: str,
@@ -687,6 +638,14 @@ def _build_serving_report(
     speculative_note: str,
 ) -> dict[str, Any]:
     """Build the shared report envelope for both serving-plan modes."""
+    workload_signature = _serving_workload_signature(
+        report_schema_version=schema_version,
+        model=model,
+        checkpoint=checkpoint,
+        weight_storage=weight_storage,
+        inputs=inputs,
+        speculative=speculative,
+    )
     speculative_suffix = (
         "_with_draft_model_speculative_decoding"
         if speculative is not None
@@ -925,7 +884,6 @@ def _serving_admission(
                 max_count=candidate_count,
                 usable_capacity_bytes=int(kv_cache_capacity_bytes),
                 memory_for_count=memory_for_count,
-                metric=None,
                 value_fn=_logical_kv_peak_bytes,
             )
         return _ServingAdmission(
@@ -941,12 +899,7 @@ def _serving_admission(
             fits_memory=runtime_report["requested_fits_memory"],
         )
 
-    usable_capacity_bytes = (
-        math.floor(int(selected_capacity_bytes) * memory_utilization)
-        if selected_capacity_bytes is not None
-        else None
-    )
-    if usable_capacity_bytes is None:
+    if selected_capacity_bytes is None:
         return _ServingAdmission(
             runtime_report=None,
             requested_for_report=requested,
@@ -954,6 +907,9 @@ def _serving_admission(
             memory_limited_count=None,
             fits_memory=None,
         )
+    usable_capacity_bytes = math.floor(
+        int(selected_capacity_bytes) * memory_utilization
+    )
     return _ServingAdmission(
         runtime_report=None,
         requested_for_report=requested,
@@ -962,7 +918,7 @@ def _serving_admission(
             max_count=candidate_count,
             usable_capacity_bytes=usable_capacity_bytes,
             memory_for_count=memory_for_count,
-            metric="peak_bytes",
+            value_fn=lambda memory: int(memory["peak_bytes"]),
         ),
         fits_memory=int(requested["peak_bytes"]) <= usable_capacity_bytes,
     )
@@ -981,7 +937,6 @@ def _requested_fits(
 def _serving_limiting_factor(
     *,
     fits_configured_limit: bool,
-    runtime: str,
     runtime_report: Mapping[str, Any] | None,
     fits_memory: bool | None,
     admissible_count: int | None,
@@ -997,23 +952,18 @@ def _serving_limiting_factor(
 
     if not fits_configured_limit:
         return "configured_max_batch_size"
-    if runtime == "vllm" and runtime_report is not None:
+    memory_factor = "usable_device_memory"
+    if runtime_report is not None:
         if runtime_report["memory"]["initialization_fits"] is False:
             return "vllm_model_executor_budget"
-        if fits_memory is False:
-            return "vllm_kv_cache_capacity"
-        if fits_memory is None:
-            return "device_capacity_unavailable"
-        if admissible_count == candidate_count:
-            return exhausted_factor
-        return "vllm_kv_cache_capacity"
+        memory_factor = "vllm_kv_cache_capacity"
     if fits_memory is False:
-        return "usable_device_memory"
+        return memory_factor
     if fits_memory is None:
         return "device_capacity_unavailable"
     if admissible_count == candidate_count:
         return exhausted_factor
-    return "usable_device_memory"
+    return memory_factor
 
 
 def _serving_input_report(
@@ -1098,20 +1048,20 @@ def _serving_workload_signature(
     inputs: Mapping[str, Any],
     speculative: Mapping[str, Any] | None,
 ) -> str:
-    portable_inputs = dict(inputs)
-    speculative_inputs = portable_inputs.get("speculative_decoding")
-    if isinstance(speculative_inputs, Mapping):
-        portable_speculative_inputs = dict(speculative_inputs)
-        portable_speculative_inputs.pop("draft_model_dir", None)
-        portable_inputs["speculative_decoding"] = (
-            portable_speculative_inputs
-        )
+    portable_inputs = {
+        **inputs,
+        "speculative_decoding": {
+            key: value
+            for key, value in inputs["speculative_decoding"].items()
+            if key != "draft_model_dir"
+        },
+    }
 
     draft_identity = None
     if speculative is not None:
         draft_identity = {
             "model": _portable_model_identity(speculative["model"]),
-            "checkpoint": dict(speculative["checkpoint"]),
+            "checkpoint": speculative["checkpoint"],
             "weight_storage": _portable_weight_storage(
                 speculative["weight_storage"]
             ),
@@ -1121,7 +1071,7 @@ def _serving_workload_signature(
         "report_schema_version": report_schema_version,
         "target": {
             "model": _portable_model_identity(model),
-            "checkpoint": dict(checkpoint),
+            "checkpoint": checkpoint,
             "weight_storage": _portable_weight_storage(weight_storage),
         },
         "inputs": portable_inputs,
@@ -1151,23 +1101,17 @@ def _portable_model_identity(model: Mapping[str, Any]) -> dict[str, Any]:
 def _portable_weight_storage(
     weight_storage: Mapping[str, Any],
 ) -> dict[str, Any]:
-    portable = {
-        key: value
-        for key, value in weight_storage.items()
-        if key != "adapters"
-    }
-    adapters = weight_storage.get("adapters")
-    if isinstance(adapters, list):
-        portable["adapters"] = [
+    return {
+        **weight_storage,
+        "adapters": [
             {
                 key: value
                 for key, value in adapter.items()
                 if key != "path"
             }
-            for adapter in adapters
-            if isinstance(adapter, Mapping)
-        ]
-    return portable
+            for adapter in weight_storage["adapters"]
+        ],
+    }
 
 
 def _serving_runtime_configuration(
@@ -1440,7 +1384,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.speculative_tokens is None
         else args.speculative_tokens
     )
-    speculative_acceptance_rate = args.speculative_acceptance_rate
+    common = dict(
+        dtype=args.dtype,
+        attention_implementation=args.attention_implementation,
+        prefill_chunk_tokens=args.prefill_chunk_tokens,
+        kv_cache_strategy=args.kv_cache_strategy,
+        kv_cache_bits=args.kv_cache_bits,
+        kv_cache_residual_tokens=args.kv_cache_residual_tokens,
+        kv_cache_block_tokens=args.kv_cache_block_tokens,
+        kv_cache_max_tokens=args.kv_cache_max_tokens,
+        kv_cache_window_tokens=args.kv_cache_window_tokens,
+        runtime_overhead_bytes=args.runtime_overhead_bytes,
+        scheduler_overhead_bytes_per_sequence=(
+            args.scheduler_overhead_bytes_per_sequence
+        ),
+        adapter_dirs=args.adapter_dir,
+        draft_model_dir=args.draft_model_dir,
+        draft_dtype=args.draft_dtype or "auto",
+        speculative_tokens=speculative_tokens,
+        speculative_acceptance_rate=args.speculative_acceptance_rate,
+        target_profile=args.target_profile,
+        device_capacity_bytes=device_capacity_bytes,
+        memory_utilization=args.memory_utilization,
+        runtime=args.runtime,
+        vllm_kv_cache_memory_bytes=args.vllm_kv_cache_memory_bytes,
+        vllm_non_kv_cache_memory_bytes=(
+            args.vllm_non_kv_cache_memory_bytes
+        ),
+    )
 
     try:
         if args.requests:
@@ -1449,43 +1420,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.model_dir,
                 request_manifest["requests"],
                 max_batch_size=args.max_batch_size,
-                dtype=args.dtype,
-                attention_implementation=(
-                    args.attention_implementation
-                ),
-                prefill_chunk_tokens=args.prefill_chunk_tokens,
                 prefill_concurrency=args.prefill_concurrency,
-                kv_cache_strategy=args.kv_cache_strategy,
-                kv_cache_bits=args.kv_cache_bits,
-                kv_cache_residual_tokens=(
-                    args.kv_cache_residual_tokens
-                ),
-                kv_cache_block_tokens=args.kv_cache_block_tokens,
-                kv_cache_max_tokens=args.kv_cache_max_tokens,
-                kv_cache_window_tokens=(
-                    args.kv_cache_window_tokens
-                ),
-                runtime_overhead_bytes=args.runtime_overhead_bytes,
-                scheduler_overhead_bytes_per_sequence=(
-                    args.scheduler_overhead_bytes_per_sequence
-                ),
-                adapter_dirs=args.adapter_dir,
-                draft_model_dir=args.draft_model_dir,
-                draft_dtype=args.draft_dtype or "auto",
-                speculative_tokens=speculative_tokens,
-                speculative_acceptance_rate=(
-                    speculative_acceptance_rate
-                ),
-                target_profile=args.target_profile,
-                device_capacity_bytes=device_capacity_bytes,
-                memory_utilization=args.memory_utilization,
-                runtime=args.runtime,
-                vllm_kv_cache_memory_bytes=(
-                    args.vllm_kv_cache_memory_bytes
-                ),
-                vllm_non_kv_cache_memory_bytes=(
-                    args.vllm_non_kv_cache_memory_bytes
-                ),
+                **common,
             )
             report["inputs"]["request_manifest"] = (
                 request_manifest["source"]
@@ -1501,47 +1437,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if args.generated_tokens is None
                     else args.generated_tokens
                 ),
-                dtype=args.dtype,
-                attention_implementation=(
-                    args.attention_implementation
-                ),
-                prefill_chunk_tokens=args.prefill_chunk_tokens,
                 shared_prefix_tokens=(
                     0
                     if args.shared_prefix_tokens is None
                     else args.shared_prefix_tokens
                 ),
-                kv_cache_strategy=args.kv_cache_strategy,
-                kv_cache_bits=args.kv_cache_bits,
-                kv_cache_residual_tokens=(
-                    args.kv_cache_residual_tokens
-                ),
-                kv_cache_block_tokens=args.kv_cache_block_tokens,
-                kv_cache_max_tokens=args.kv_cache_max_tokens,
-                kv_cache_window_tokens=(
-                    args.kv_cache_window_tokens
-                ),
-                runtime_overhead_bytes=args.runtime_overhead_bytes,
-                scheduler_overhead_bytes_per_sequence=(
-                    args.scheduler_overhead_bytes_per_sequence
-                ),
-                adapter_dirs=args.adapter_dir,
-                draft_model_dir=args.draft_model_dir,
-                draft_dtype=args.draft_dtype or "auto",
-                speculative_tokens=speculative_tokens,
-                speculative_acceptance_rate=(
-                    speculative_acceptance_rate
-                ),
-                target_profile=args.target_profile,
-                device_capacity_bytes=device_capacity_bytes,
-                memory_utilization=args.memory_utilization,
-                runtime=args.runtime,
-                vllm_kv_cache_memory_bytes=(
-                    args.vllm_kv_cache_memory_bytes
-                ),
-                vllm_non_kv_cache_memory_bytes=(
-                    args.vllm_non_kv_cache_memory_bytes
-                ),
+                **common,
             )
     except (
             OSError,
@@ -1620,16 +1521,9 @@ def _maximum_fitting(
     max_count: int,
     usable_capacity_bytes: int,
     memory_for_count: Any,
-    metric: str | None,
-    value_fn: Any | None = None,
+    value_fn: Any,
 ) -> int:
     """Return the largest monotonically fitting count via one binary search."""
-    if value_fn is None:
-        if metric is None:  # pragma: no cover - internal misuse guard
-            raise ValueError("metric or value_fn is required")
-
-        def value_fn(memory: Mapping[str, Any]) -> int:
-            return int(memory[metric])
     low = 0
     high = int(max_count)
     while low < high:
