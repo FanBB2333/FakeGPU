@@ -120,6 +120,21 @@ def test_console_survives_a_stopped_machine(service):
     assert app.return_value == "stop"
 
 
+@pytest.mark.parametrize(("platform", "pcie_generation"), [(" Auto ", 0), ("auto", 1), ("auto", 2)])
+def test_console_loads_any_valid_machine_config(tmp_path, platform, pcie_generation):
+    config = MachineConfig(devices="a100:2", platform=platform, pcie_generation=pcie_generation)
+    app = ConsoleApp(LocalClient(MachineService(MachinePaths(tmp_path), config)), interval=0.1)
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app.form_loaded
+            assert app.query_one("#cfg-platform", Select).value == "auto"
+            assert app.query_one("#cfg-pcie", Select).value == pcie_generation
+
+    asyncio.run(scenario())
+
+
 def text(renderable, width=160):
     recorder = Console(width=width, record=True, color_system=None, file=io.StringIO())
     recorder.print(renderable)
