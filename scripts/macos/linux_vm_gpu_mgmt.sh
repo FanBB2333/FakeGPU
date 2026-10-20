@@ -60,7 +60,7 @@ EOF
       if [[ -n "${FAKEGPU_ORB_USER:-}" ]]; then
         args+=(-u "$FAKEGPU_ORB_USER")
       fi
-      orb "${args[@]}" bash -lc "$cmd"
+      orb ${args[@]+"${args[@]}"} bash -lc "$cmd"
       ;;
     *)
       echo "error: unknown backend: $VM_BACKEND" >&2
