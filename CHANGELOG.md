@@ -99,6 +99,11 @@
 - Reject `nan` and `inf` fabric bandwidth, latency, and oversubscription
   values in cluster YAML files instead of writing them into the cluster report
   as invalid JSON.
+- Apply `FAKEGPU_CLUSTER_CONFIG` to a directly started `fakegpu-coordinator`
+  even when `FAKEGPU_DIST_MODE` and `FAKEGPU_COORDINATOR_ADDR` are unset. The
+  cluster report previously named the config path but reported no nodes or
+  link estimates; an unreadable or invalid config is now reported on stderr
+  at startup and omitted from the report.
 
 ## v1.6.0 - 2026-10-17
 

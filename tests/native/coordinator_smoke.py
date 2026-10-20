@@ -263,6 +263,49 @@ def check_non_finite_fabric_value_rejected(tmpdir: str) -> None:
     json.loads(report_path.read_text(encoding="utf-8"))
 
 
+def check_cluster_config_without_distributed_env(tmpdir: str) -> None:
+    config_path = Path(tmpdir) / "cluster.yaml"
+    config_path.write_text(
+        TWO_NODE_CLUSTER_YAML.format(inter_node_bandwidth="25"),
+        encoding="utf-8",
+    )
+    report_path = Path(tmpdir) / "config-report.json"
+    with running_coordinator(
+        tmpdir,
+        {
+            "FAKEGPU_CLUSTER_CONFIG": str(config_path),
+            "FAKEGPU_CLUSTER_REPORT_PATH": str(report_path),
+        },
+    ) as (socket_path, proc):
+        concurrent_requests(
+            *(
+                lambda rank=rank: request_packet(
+                    socket_path,
+                    f"INIT_COMM unique_id=cfg world_size=4 rank={rank} timeout_ms=3000",
+                )
+                for rank in range(4)
+            )
+        )
+        allreduce = concurrent_requests(
+            *(
+                lambda rank=rank: request_packet(
+                    socket_path,
+                    f"ALLREDUCE comm_id=1 rank={rank} seqno=1 count=256 bytes=1024 "
+                    "root=-1 timeout_ms=3000 proxy_only=1 dtype=float32 reduce_op=sum",
+                )
+                for rank in range(4)
+            )
+        )
+        if any(not header.startswith("OK") for header, _ in allreduce):
+            raise AssertionError(f"unexpected allreduce responses: {allreduce}")
+        request(socket_path, "SHUTDOWN")
+        proc.wait(timeout=2.0)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    cluster = report.get("cluster", {})
+    if cluster.get("name") != "smoke" or cluster.get("node_count") != 2 or not report.get("links"):
+        raise AssertionError(f"cluster config was not applied: {report}")
+
+
 def main() -> int:
     if not COORDINATOR_BIN.exists():
         print(f"missing coordinator binary: {COORDINATOR_BIN}", file=sys.stderr)
@@ -273,6 +316,7 @@ def main() -> int:
         check_socket_point_to_point,
         check_finished_client_threads_are_released,
         check_non_finite_fabric_value_rejected,
+        check_cluster_config_without_distributed_env,
     )
     for check in checks:
         with tempfile.TemporaryDirectory(prefix="fgpu-coord-", dir="/tmp") as tmpdir:

@@ -574,7 +574,6 @@ DistributedConfig parse_distributed_config_from_env() {
     }
 
     config.cluster_config_path = env_or_empty("FAKEGPU_CLUSTER_CONFIG");
-    config.cluster_config.source_path = config.cluster_config_path;
     config.coordinator_address = env_or_empty("FAKEGPU_COORDINATOR_ADDR");
 
     if (!config.enabled()) {
