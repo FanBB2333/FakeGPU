@@ -73,22 +73,14 @@ def library_dir(*, build_dir: str | os.PathLike[str] | None = None, lib_dir: str
             candidates.append(parent / "build_asan")
             break
 
-    seen: set[Path] = set()
-    ordered_unique: list[Path] = []
-    for p in candidates:
-        p = p.resolve()
-        if p in seen:
-            continue
-        seen.add(p)
-        ordered_unique.append(p)
+    ordered_unique = list(dict.fromkeys(p.resolve() for p in candidates))
 
     for cand in ordered_unique:
-        ok, _missing = _check_dir(cand)
-        if ok:
+        if not _missing_libs(cand):
             return cand
 
     details = "\n".join(
-        f"- {p} (missing: {', '.join(_check_dir(p)[1])})" for p in ordered_unique if p.exists()
+        f"- {p} (missing: {', '.join(_missing_libs(p))})" for p in ordered_unique if p.exists()
     )
     raise FileNotFoundError(
         "FakeGPU shared libraries not found.\n"
@@ -152,7 +144,7 @@ def init(
                 raise RuntimeError(
                     "fakegpu.init() has already run in this process; GPU preset settings must be provided before the first init()."
                 )
-            return InitResult(lib_dir=_loaded_dir or library_dir(build_dir=build_dir, lib_dir=lib_dir), handles=dict(_handles))
+            return InitResult(lib_dir=_loaded_dir, handles=dict(_handles))
 
         resolved_dir = library_dir(build_dir=build_dir, lib_dir=lib_dir)
         config = _FakeGpuRuntimeConfig(
@@ -299,37 +291,29 @@ def run(
     return completed
 
 
-def _check_dir(path: Path) -> tuple[bool, list[str]]:
+def _missing_libs(path: Path) -> list[str]:
     if not path.is_dir():
-        return False, list(_PRELOAD_LIBS)
-    missing = [lib for lib in _PRELOAD_LIBS if not (path / lib).exists() and not (path / _fallback_name(lib)).exists()]
-    return len(missing) == 0, missing
+        return list(_PRELOAD_LIBS)
+    return [lib for lib in _PRELOAD_LIBS if not (path / lib).exists() and not (path / _fallback_name(lib)).exists()]
+
+
+# Best-effort mapping from versioned soname to common unversioned filename.
+_UNVERSIONED_LIB_NAMES = {
+    "libcublas.so.12": "libcublas.so",
+    "libcudart.so.12": "libcudart.so",
+    "libcuda.so.1": "libcuda.so",
+    "libnvidia-ml.so.1": "libnvidia-ml.so",
+    "libnccl.so.2": "libnccl.so",
+    "libcublas.dylib": "libcublas.12.dylib",
+    "libcudart.dylib": "libcudart.12.dylib",
+    "libcuda.dylib": "libcuda.1.dylib",
+    "libnvidia-ml.dylib": "libnvidia-ml.1.dylib",
+    "libnccl.dylib": "libnccl.2.dylib",
+}
 
 
 def _fallback_name(libname: str) -> str:
-    # Best-effort mapping from versioned soname to common unversioned filename.
-    if libname == "libcublas.so.12":
-        return "libcublas.so"
-    if libname == "libcudart.so.12":
-        return "libcudart.so"
-    if libname == "libcuda.so.1":
-        return "libcuda.so"
-    if libname == "libnvidia-ml.so.1":
-        return "libnvidia-ml.so"
-    if libname == "libnccl.so.2":
-        return "libnccl.so"
-
-    if libname == "libcublas.dylib":
-        return "libcublas.12.dylib"
-    if libname == "libcudart.dylib":
-        return "libcudart.12.dylib"
-    if libname == "libcuda.dylib":
-        return "libcuda.1.dylib"
-    if libname == "libnvidia-ml.dylib":
-        return "libnvidia-ml.1.dylib"
-    if libname == "libnccl.dylib":
-        return "libnccl.2.dylib"
-    return libname
+    return _UNVERSIONED_LIB_NAMES.get(libname, libname)
 
 
 def _preload_libs_for_mode(
@@ -433,7 +417,7 @@ def _apply_env(env_map: dict[str, str], resolved_dir: Path) -> None:
     if mode_norm == "simulate":
         # In simulate mode we want FakeGPU to win any later dlopen("libcuda.so.1"/"libcublas.so"...)
         # resolution, so we intentionally put the build dir first.
-        env_map[_LIBRARY_PATH_VAR] = _prepend_path(dir_str, existing_lib_path)
+        env_map[_LIBRARY_PATH_VAR] = ":".join(filter(None, (dir_str, existing_lib_path)))
     else:
         # In passthrough/hybrid we avoid shadowing real CUDA libraries (cuBLAS/cuDNN/etc).
         # LD_PRELOAD uses absolute paths, so we do not need to add FakeGPU to the library search path.
@@ -459,15 +443,6 @@ def _apply_env(env_map: dict[str, str], resolved_dir: Path) -> None:
     }
     retained_paths = [path for path in previous_paths if path and path not in fakegpu_paths]
     env_map[_PRELOAD_VAR] = ":".join(preload_paths + retained_paths)
-
-
-def _prepend_path(prefix: str, existing: str) -> str:
-    if not existing:
-        return prefix
-    parts = [p for p in existing.split(":") if p]
-    if parts and parts[0] == prefix:
-        return existing
-    return ":".join([prefix] + parts)
 
 
 def _remove_path(prefix: str, existing: str) -> str:
