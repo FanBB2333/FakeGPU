@@ -24,6 +24,7 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
     skip_gemm = not cpu_simulation or os.environ["FAKEGPU_CPU_GEMM_MODE"] == "skip"
     unsupported: Counter[str] = Counter()
     lt_matmuls = 0
+    typed_gemms = 0
 
     def bind(name, types):
         func = getattr(lib, name)
@@ -35,9 +36,9 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
     assert bind("cublasCreate_v2", [P])(ct.byref(handle)) == 0
 
     def check(name, types, args, outputs, *, fallback=True, value=None, call_handle=None, reject=False,
-              unchanged=False, synthetic_value=False):
+              unchanged=False, synthetic_value=False, typed=False):
         func = bind(name, [P, *types])
-        nonlocal lt_matmuls
+        nonlocal lt_matmuls, typed_gemms
         snapshots = [bytes(output) for output in outputs]
         expected = 15 if reject or (strict and fallback) else 0  # CUBLAS_STATUS_NOT_SUPPORTED
         for _ in range(2):
@@ -47,6 +48,8 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
             assert status == expected, (name, status, expected)
             if name == "cublasLtMatmul" and status == 0:
                 lt_matmuls += 1
+            if typed and status == 0:
+                typed_gemms += 1
             if unchanged or reject or (strict and fallback):
                 assert [bytes(output) for output in outputs] == snapshots, name
             if value is not None and expected == 0 and (not fallback or synthetic_value):
@@ -150,16 +153,16 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
         fallback = skip_gemm or dtype == 3
         check("cublasGemmEx", [Int] * 5 + [P, P, Int, Int, P, Int, Int, P, P, Int, Int, Int, Int],
               [0, 0, 1, 1, 1, alpha, a, dtype, 1, b, dtype, 1, beta, c, dtype, 1, 68, -1],
-              [c], fallback=fallback, value=6)
+              [c], fallback=fallback, value=6, typed=True)
         check("cublasSgemmEx", [Int] * 5 + [P, P, Int, Int, P, Int, Int, P, P, Int, Int],
               [0, 0, 1, 1, 1, alpha, a, dtype, 1, b, dtype, 1, beta, c, dtype, 1],
-              [c], fallback=fallback, value=6)
+              [c], fallback=fallback, value=6, typed=True)
         check("cublasGemmBatchedEx", [Int] * 5 + [P, P, Int, Int, P, Int, Int, P, P, Int, Int, Int, Int, Int],
               [0, 0, 1, 1, 1, alpha, aa, dtype, 1, bb, dtype, 1, beta, cc, dtype, 1, 1, 68, -1],
-              [c], fallback=fallback, value=6)
+              [c], fallback=fallback, value=6, typed=True)
         check("cublasGemmStridedBatchedEx", [Int] * 5 + [P, P, Int, Int, L, P, Int, Int, L, P, P, Int, Int, L, Int, Int, Int],
               [0, 0, 1, 1, 1, alpha, a, dtype, 1, 1, b, dtype, 1, 1, beta, c, dtype, 1, 1, 1, 68, -1],
-              [c], fallback=fallback, value=6)
+              [c], fallback=fallback, value=6, typed=True)
 
     # Scale storage follows computeType, not the matrix/output dtype.
     for compute_type, dtype in ((64, 2), (65, 2), (68, 2), (70, 1), (71, 1),
@@ -176,16 +179,18 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
             sa, sb = (scale_scalar * 1)(1.5), (scale_scalar * 1)(-0.5)
         pa, pb, pc = ((P * 1)(ct.addressof(buf)) for buf in (ma, mb, mc))
         fallback = skip_gemm or compute_type == 999
+        # CPU builds return early for an unsupported compute type, before recording.
+        recorded = not cpu_simulation or compute_type != 999
         expected = 0x4700 if dtype == 2 else 7
         check("cublasGemmEx", [Int] * 5 + [P, P, Int, Int, P, Int, Int, P, P, Int, Int, Int, Int],
               [0, 0, 1, 1, 1, sa, ma, dtype, 1, mb, dtype, 1, sb, mc, dtype, 1, compute_type, -1],
-              [mc], fallback=fallback, value=expected, unchanged=compute_type == 999)
+              [mc], fallback=fallback, value=expected, unchanged=compute_type == 999, typed=recorded)
         check("cublasGemmBatchedEx", [Int] * 5 + [P, P, Int, Int, P, Int, Int, P, P, Int, Int, Int, Int, Int],
               [0, 0, 1, 1, 1, sa, pa, dtype, 1, pb, dtype, 1, sb, pc, dtype, 1, 1, compute_type, -1],
-              [mc], fallback=fallback, value=expected, unchanged=compute_type == 999)
+              [mc], fallback=fallback, value=expected, unchanged=compute_type == 999, typed=recorded)
         check("cublasGemmStridedBatchedEx", [Int] * 5 + [P, P, Int, Int, L, P, Int, Int, L, P, P, Int, Int, L, Int, Int, Int],
               [0, 0, 1, 1, 1, sa, ma, dtype, 1, 1, mb, dtype, 1, 1, sb, mc, dtype, 1, 1, 1, compute_type, -1],
-              [mc], fallback=fallback, value=expected, unchanged=compute_type == 999)
+              [mc], fallback=fallback, value=expected, unchanged=compute_type == 999, typed=recorded)
 
     c[0], beta[0] = float("inf"), -0.0
     check("cublasSgemm_v2", [Int] * 5 + [P, P, Int, P, Int, P, P, Int],
@@ -266,7 +271,7 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
     assert bind("cublasLtMatmulDescDestroy", [P])(descriptor) == 0
     assert bind("cublasLtDestroy", [P])(lt_handle) == 0
     assert bind("cublasDestroy_v2", [P])(handle) == 0
-    return {"unsupported": dict(unsupported), "lt_matmuls": lt_matmuls}
+    return {"unsupported": dict(unsupported), "lt_matmuls": lt_matmuls, "typed_gemms": typed_gemms}
 
 
 def main() -> int:
@@ -313,10 +318,14 @@ def main() -> int:
                         observed[event["operation"]] += event["count"]
                         warnings[event["operation"]] += 1
                 assert dict(observed) == expected, (mode, policy, observed, expected)
+                lt_recorded = sum(device["compute"]["cublaslt_matmul"]["calls"] for device in report["devices"])
                 if args.no_cpu_simulation:
                     # Without CPU execution every accepted cuBLASLt matmul is still counted.
-                    lt_calls = sum(device["compute"]["cublaslt_matmul"]["calls"] for device in report["devices"])
-                    assert lt_calls == child["lt_matmuls"], (policy, lt_calls, child["lt_matmuls"])
+                    assert lt_recorded == child["lt_matmuls"], (policy, lt_recorded, child["lt_matmuls"])
+                # Every dtype-parameterised GEMM is broken down by dtype, as is every cuBLASLt matmul.
+                by_dtype = sum(stats["calls"] for device in report["devices"]
+                               for stats in device.get("gemm_by_dtype", {}).values())
+                assert by_dtype == child["typed_gemms"] + lt_recorded, (mode, policy, by_dtype, child["typed_gemms"])
                 for api in expected:
                     count = completed.stderr.count(f"[FakeGPU] warning: {api} is ")
                     assert count == (warnings[api] if policy == "warn" else 0), (mode, policy, api, count)

@@ -118,6 +118,9 @@
 - Without CPU simulation, the synthetic `cublasI[sd]amax_v2` and
   `cublasI[sd]amin_v2` results are 1-based like cuBLAS instead of possibly
   returning the invalid index 0.
+- The report's `gemm_by_dtype` breakdown now includes
+  `cublasGemmStridedBatchedEx`, `cublasGemmBatchedEx` and `cublasSgemmEx`
+  calls, not only `cublasGemmEx` and `cublasLtMatmul`.
 
 ## v1.6.0 - 2026-10-17
 
