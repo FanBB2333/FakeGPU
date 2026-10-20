@@ -725,6 +725,44 @@ std::string make_staging_name(
 #endif
 }
 
+bool open_request_staging(
+    const fake_gpu::distributed::DistributedConfig& config,
+    const ncclComm& comm,
+    std::uint64_t seqno,
+    const std::string& staging_name,
+    fake_gpu::distributed::CollectiveDataType dtype,
+    std::size_t bytes,
+    std::vector<std::size_t> shape,
+    fake_gpu::distributed::StagingBufferHandle& handle,
+    fake_gpu::distributed::BufferTransport& buffer_transport,
+    std::string& error) {
+    buffer_transport = fake_gpu::distributed::BufferTransport::SharedMemory;
+    if (config.coordinator_transport ==
+        fake_gpu::distributed::CoordinatorTransport::Tcp) {
+        // TCP endpoints may be on another host, where POSIX shared memory is
+        // not visible. Carry both input and output through the socket so the
+        // same path works for loopback and physical multi-host runs.
+        buffer_transport = fake_gpu::distributed::BufferTransport::SocketPayload;
+        return true;
+    }
+
+    fake_gpu::distributed::StagingBufferMetadata metadata;
+    metadata.name = staging_name;
+    metadata.dtype = fake_gpu::distributed::collective_data_type_name(dtype);
+    metadata.bytes = bytes;
+    metadata.shape = std::move(shape);
+    metadata.owner_rank = comm.rank;
+    metadata.staging_id = seqno;
+    if (fake_gpu::distributed::StagingBufferManager().create(metadata, true, handle, error)) {
+        return true;
+    }
+    if (!fake_gpu::distributed::is_staging_transport_unavailable_error(error)) {
+        return false;
+    }
+    buffer_transport = fake_gpu::distributed::BufferTransport::SocketPayload;
+    return true;
+}
+
 bool validate_runtime_config(
     ncclComm_t comm,
     fake_gpu::distributed::DistributedConfig& config,
@@ -1771,40 +1809,29 @@ ncclResult_t submit_collective_chunk(
         return fault_result;
     }
     const std::string staging_name = make_staging_name(*comm, seqno, command);
-    fake_gpu::distributed::BufferTransport buffer_transport =
-        fake_gpu::distributed::BufferTransport::SharedMemory;
-    std::vector<char> request_payload;
-    fake_gpu::distributed::StagingBufferHandle handle;
-
-    fake_gpu::distributed::StagingBufferMetadata metadata;
-    metadata.name = staging_name;
-    metadata.dtype = fake_gpu::distributed::collective_data_type_name(mapped_dtype);
-    metadata.bytes = staging_bytes;
-    if (collective_type == fake_gpu::distributed::CollectiveType::AllGather ||
+    const bool per_rank_shape =
+        collective_type == fake_gpu::distributed::CollectiveType::AllGather ||
         collective_type == fake_gpu::distributed::CollectiveType::ReduceScatter ||
-        collective_type == fake_gpu::distributed::CollectiveType::AllToAll) {
-        metadata.shape = {static_cast<std::size_t>(comm->world_size), count};
-    } else {
-        metadata.shape = {count};
+        collective_type == fake_gpu::distributed::CollectiveType::AllToAll;
+    fake_gpu::distributed::BufferTransport buffer_transport;
+    fake_gpu::distributed::StagingBufferHandle handle;
+    if (!open_request_staging(
+            config,
+            *comm,
+            seqno,
+            staging_name,
+            mapped_dtype,
+            staging_bytes,
+            per_rank_shape
+                ? std::vector<std::size_t>{static_cast<std::size_t>(comm->world_size), count}
+                : std::vector<std::size_t>{count},
+            handle,
+            buffer_transport,
+            error)) {
+        return fail_with(comm, ncclSystemError, error);
     }
-    metadata.owner_rank = comm->rank;
-    metadata.staging_id = seqno;
-
-    fake_gpu::distributed::StagingBufferManager manager;
-    if (config.coordinator_transport ==
-        fake_gpu::distributed::CoordinatorTransport::Tcp) {
-        // TCP endpoints may be on another host, where POSIX shared memory is
-        // not visible. Carry both input and output through the socket so the
-        // same path works for loopback and physical multi-host runs.
-        buffer_transport = fake_gpu::distributed::BufferTransport::SocketPayload;
-        request_payload.assign(
-            static_cast<const char*>(local_input),
-            static_cast<const char*>(local_input) + input_bytes);
-    } else if (!manager.create(metadata, true, handle, error)) {
-        if (!fake_gpu::distributed::is_staging_transport_unavailable_error(error)) {
-            return fail_with(comm, ncclSystemError, error);
-        }
-        buffer_transport = fake_gpu::distributed::BufferTransport::SocketPayload;
+    std::vector<char> request_payload;
+    if (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload) {
         request_payload.assign(
             static_cast<const char*>(local_input),
             static_cast<const char*>(local_input) + input_bytes);
@@ -2279,29 +2306,22 @@ ncclResult_t submit_point_to_point(
     const std::size_t bytes = count * dtype_size;
     const std::uint64_t seqno = comm->next_seqno;
     const std::string staging_name = make_staging_name(*comm, seqno, command);
-    fake_gpu::distributed::BufferTransport buffer_transport =
-        fake_gpu::distributed::BufferTransport::SharedMemory;
-    std::vector<char> request_payload;
-
-    fake_gpu::distributed::StagingBufferMetadata metadata;
-    metadata.name = staging_name;
-    metadata.dtype = fake_gpu::distributed::collective_data_type_name(mapped_dtype);
-    metadata.bytes = bytes;
-    metadata.shape = {count};
-    metadata.owner_rank = comm->rank;
-    metadata.staging_id = seqno;
-
-    fake_gpu::distributed::StagingBufferManager manager;
+    fake_gpu::distributed::BufferTransport buffer_transport;
     fake_gpu::distributed::StagingBufferHandle handle;
-    if (config.coordinator_transport ==
-        fake_gpu::distributed::CoordinatorTransport::Tcp) {
-        buffer_transport = fake_gpu::distributed::BufferTransport::SocketPayload;
-    } else if (!manager.create(metadata, true, handle, error)) {
-        if (!fake_gpu::distributed::is_staging_transport_unavailable_error(error)) {
-            return fail_with(comm, ncclSystemError, error);
-        }
-        buffer_transport = fake_gpu::distributed::BufferTransport::SocketPayload;
+    if (!open_request_staging(
+            config,
+            *comm,
+            seqno,
+            staging_name,
+            mapped_dtype,
+            bytes,
+            {count},
+            handle,
+            buffer_transport,
+            error)) {
+        return fail_with(comm, ncclSystemError, error);
     }
+    std::vector<char> request_payload;
 
     if (p2p_type == fake_gpu::distributed::PointToPointType::Send) {
         std::vector<char> host_input;
@@ -2588,33 +2608,25 @@ ncclResult_t flush_grouped_alltoallv(
         *comm,
         seqno,
         "ALLTOALLV");
-    fake_gpu::distributed::BufferTransport buffer_transport =
-        fake_gpu::distributed::BufferTransport::SharedMemory;
-    fake_gpu::distributed::StagingBufferManager manager;
+    fake_gpu::distributed::BufferTransport buffer_transport;
     fake_gpu::distributed::StagingBufferHandle handle;
+    if (!open_request_staging(
+            config,
+            *comm,
+            seqno,
+            staging_name,
+            mapped_dtype,
+            staging_bytes,
+            {staging_bytes / dtype_size},
+            handle,
+            buffer_transport,
+            error)) {
+        handled = true;
+        return fail_with(comm, ncclSystemError, error);
+    }
     std::vector<char> request_payload;
-
-    fake_gpu::distributed::StagingBufferMetadata metadata;
-    metadata.name = staging_name;
-    metadata.dtype =
-        fake_gpu::distributed::collective_data_type_name(mapped_dtype);
-    metadata.bytes = staging_bytes;
-    metadata.shape = {staging_bytes / dtype_size};
-    metadata.owner_rank = comm->rank;
-    metadata.staging_id = seqno;
-
-    if (config.coordinator_transport ==
-        fake_gpu::distributed::CoordinatorTransport::Tcp) {
-        buffer_transport =
-            fake_gpu::distributed::BufferTransport::SocketPayload;
-        request_payload = host_input;
-    } else if (!manager.create(metadata, true, handle, error)) {
-        if (!fake_gpu::distributed::is_staging_transport_unavailable_error(error)) {
-            handled = true;
-            return fail_with(comm, ncclSystemError, error);
-        }
-        buffer_transport =
-            fake_gpu::distributed::BufferTransport::SocketPayload;
+    if (buffer_transport ==
+        fake_gpu::distributed::BufferTransport::SocketPayload) {
         request_payload = host_input;
     } else {
         std::memcpy(handle.data(), host_input.data(), input_bytes);
