@@ -1406,6 +1406,31 @@ def test_trace_replay_accepts_native_cluster_timeline_shape() -> None:
     assert all(item["explicit_wait_us"] == 5 for item in report["rank_summary"])
 
 
+def test_trace_replay_accepts_null_links() -> None:
+    generic = replay_trace(
+        {"events": [{"name": "x", "duration_us": 1, "links": None}]}
+    )
+    assert [event["links"] for event in generic["events"]] == [[]]
+
+    cluster = replay_trace(
+        {
+            "operation_timeline": {
+                "entries": [
+                    {
+                        "kind": "collective",
+                        "operation": "all_reduce",
+                        "ranks": [0, 1],
+                        "logical_payload_bytes": 8,
+                        "execution_time_us": 2,
+                        "links": None,
+                    }
+                ]
+            }
+        }
+    )
+    assert [event["links"] for event in cluster["events"]] == [[], []]
+
+
 def test_operator_profile_catalog_matches_exact_shape(tmp_path: Path) -> None:
     path = tmp_path / "operators.json"
     path.write_text(

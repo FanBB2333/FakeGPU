@@ -283,7 +283,7 @@ def _normalize_generic_events(
                 "allocated_bytes": _optional_int(raw.get("allocated_bytes")),
                 "reserved_bytes": _optional_int(raw.get("reserved_bytes")),
                 "generation": _optional_int(raw.get("generation")),
-                "links": [str(value) for value in raw.get("links", [])],
+                "links": [str(value) for value in raw.get("links") or []],
             }
         )
     return events
@@ -398,7 +398,7 @@ def _normalize_cluster_events(
                     "reserved_bytes": None,
                     "generation": _optional_int(raw.get("generation")),
                     "links": [
-                        str(value) for value in raw.get("links", [])
+                        str(value) for value in raw.get("links") or []
                     ],
                 }
             )

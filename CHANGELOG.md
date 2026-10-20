@@ -25,6 +25,8 @@
   path of a cluster report inside an already deleted temporary directory.
 - `fakegpu simulate-topology` reports an unknown rank used as both source and
   destination as a usage error instead of crashing with `KeyError`.
+- `fakegpu replay-trace` accepts `"links": null` in generic and FakeGPU
+  cluster timeline events instead of crashing with `TypeError`.
 
 ## v1.6.0 - 2026-10-17
 
