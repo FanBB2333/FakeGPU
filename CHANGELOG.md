@@ -137,6 +137,8 @@
   values clamp to the minimum, and values beyond the 64-bit range clamp
   instead of falling back to the default, as in the Python publisher;
   `-1` used to wrap to the maximum.
+- Hybrid mode on hosts with more than 16 real GPUs maps virtual devices onto
+  the first 16 instead of indexing past the 16-entry real-GPU tables.
 
 ## v1.6.0 - 2026-10-17
 

@@ -126,13 +126,15 @@ public:
     }
 
     // Query real GPU information
+    static constexpr int kMaxRealGpus = 16;
+
     struct RealGpuInfo {
-        int device_count = 0;
-        size_t total_memory[16] = {0};  // Per-device total memory
-        size_t free_memory[16] = {0};   // Per-device free memory
-        int compute_major[16] = {0};
-        int compute_minor[16] = {0};
-        char name[16][256] = {{0}};
+        int device_count = 0;  // At most kMaxRealGpus
+        size_t total_memory[kMaxRealGpus] = {0};  // Per-device total memory
+        size_t free_memory[kMaxRealGpus] = {0};   // Per-device free memory
+        int compute_major[kMaxRealGpus] = {0};
+        int compute_minor[kMaxRealGpus] = {0};
+        char name[kMaxRealGpus][256] = {{0}};
         bool valid = false;
     };
 
@@ -276,9 +278,13 @@ private:
         }
 
         FGPU_LOG("[RealCudaLoader] Found %d real GPU(s)\n", real_gpu_info_.device_count);
+        if (real_gpu_info_.device_count > kMaxRealGpus) {
+            FGPU_LOG("[RealCudaLoader] Using the first %d real GPUs\n", kMaxRealGpus);
+            real_gpu_info_.device_count = kMaxRealGpus;
+        }
 
         // Query each device
-        for (int i = 0; i < real_gpu_info_.device_count && i < 16; ++i) {
+        for (int i = 0; i < real_gpu_info_.device_count; ++i) {
             if (cuDeviceTotalMem) {
                 cuDeviceTotalMem(&real_gpu_info_.total_memory[i], i);
             }
