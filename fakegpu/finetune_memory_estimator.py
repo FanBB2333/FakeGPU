@@ -51,7 +51,9 @@ def _byte_count(value: Any, name: str, *, allow_zero: bool = False) -> int:
 def _native_sample(run: Mapping[str, Any]) -> dict[str, Any]:
     plan = pipeline_plan_from_run(run)
     observation = run["observation"]
-    peaks = {field: _byte_count(observation[field], field) for field in _MEMORY_FIELDS}
+    peaks = {
+        field: _byte_count(observation.get(field), field) for field in _MEMORY_FIELDS
+    }
     if peaks["peak_reserved_bytes"] < peaks["peak_allocated_bytes"]:
         raise FinetuneEstimateError("reserved allocator peak must cover allocated peak")
     if peaks["peak_reserved_bytes"] > plan["hardware"]["total_memory_bytes"]:
