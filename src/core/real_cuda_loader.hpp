@@ -77,10 +77,8 @@ public:
     struct RealGpuInfo {
         int device_count = 0;  // At most kMaxRealGpus
         size_t total_memory[kMaxRealGpus] = {0};  // Per-device total memory
-        size_t free_memory[kMaxRealGpus] = {0};   // Per-device free memory
         int compute_major[kMaxRealGpus] = {0};
         int compute_minor[kMaxRealGpus] = {0};
-        char name[kMaxRealGpus][256] = {{0}};
         bool valid = false;
     };
 
@@ -191,11 +189,7 @@ private:
         typedef int (*cuInit_t)(unsigned int);
         typedef int (*cuDeviceGetCount_t)(int*);
         typedef int (*cuDeviceTotalMem_t)(size_t*, int);
-        typedef int (*cuDeviceGetName_t)(char*, int, int);
         typedef int (*cuDeviceGetAttribute_t)(int*, int, int);
-        typedef int (*cuMemGetInfo_t)(size_t*, size_t*);
-        typedef int (*cuCtxCreate_t)(void**, unsigned int, int);
-        typedef int (*cuCtxDestroy_t)(void*);
 
         const dlsym_fn real_dlsym = resolve_real_dlsym();
         if (!real_dlsym) {
@@ -207,11 +201,7 @@ private:
         auto cuInit = (cuInit_t)real_dlsym(cuda_driver_handle_, "cuInit");
         auto cuDeviceGetCount = (cuDeviceGetCount_t)real_dlsym(cuda_driver_handle_, "cuDeviceGetCount");
         auto cuDeviceTotalMem = (cuDeviceTotalMem_t)real_dlsym(cuda_driver_handle_, "cuDeviceTotalMem_v2");
-        auto cuDeviceGetName = (cuDeviceGetName_t)real_dlsym(cuda_driver_handle_, "cuDeviceGetName");
         auto cuDeviceGetAttribute = (cuDeviceGetAttribute_t)real_dlsym(cuda_driver_handle_, "cuDeviceGetAttribute");
-        auto cuMemGetInfo = (cuMemGetInfo_t)real_dlsym(cuda_driver_handle_, "cuMemGetInfo_v2");
-        auto cuCtxCreate = (cuCtxCreate_t)real_dlsym(cuda_driver_handle_, "cuCtxCreate_v2");
-        auto cuCtxDestroy = (cuCtxDestroy_t)real_dlsym(cuda_driver_handle_, "cuCtxDestroy_v2");
 
         if (!cuInit || !cuDeviceGetCount) {
             FGPU_LOG("[RealCudaLoader] Missing required CUDA driver functions\n");
@@ -247,10 +237,6 @@ private:
                 cuDeviceTotalMem(&real_gpu_info_.total_memory[i], i);
             }
 
-            if (cuDeviceGetName) {
-                cuDeviceGetName(real_gpu_info_.name[i], 256, i);
-            }
-
             if (cuDeviceGetAttribute) {
                 // CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR = 75
                 // CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR = 76
@@ -258,21 +244,9 @@ private:
                 cuDeviceGetAttribute(&real_gpu_info_.compute_minor[i], 76, i);
             }
 
-            // Get free memory (requires context)
-            if (cuCtxCreate && cuMemGetInfo && cuCtxDestroy) {
-                void* ctx = nullptr;
-                if (cuCtxCreate(&ctx, 0, i) == 0) {
-                    size_t free_mem = 0, total_mem = 0;
-                    cuMemGetInfo(&free_mem, &total_mem);
-                    real_gpu_info_.free_memory[i] = free_mem;
-                    cuCtxDestroy(ctx);
-                }
-            }
-
-            FGPU_LOG("[RealCudaLoader] GPU %d: %s, %zu MB total, %zu MB free, CC %d.%d\n",
-                    i, real_gpu_info_.name[i],
+            FGPU_LOG("[RealCudaLoader] GPU %d: %zu MB total, CC %d.%d\n",
+                    i,
                     real_gpu_info_.total_memory[i] / (1024 * 1024),
-                    real_gpu_info_.free_memory[i] / (1024 * 1024),
                     real_gpu_info_.compute_major[i], real_gpu_info_.compute_minor[i]);
         }
 
