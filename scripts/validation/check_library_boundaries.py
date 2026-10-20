@@ -80,7 +80,7 @@ def main() -> int:
     ):
         _require(nccl_symbols, symbol, nccl)
     for dependency in nccl_dependencies:
-        if dependency == "libcuda.so.1" or dependency.startswith("libcuda."):
+        if dependency.startswith("libcuda."):
             raise SystemExit(
                 f"{nccl}: fake NCCL must not depend on {dependency}; "
                 "hybrid mode needs the process to retain its real CUDA driver"
