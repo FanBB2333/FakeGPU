@@ -147,7 +147,7 @@ def _require(symbols: set[str], symbol: str, path: Path) -> None:
 
 def _forbid(symbols: set[str], symbol: str, path: Path) -> None:
     if symbol in symbols:
-        raise SystemExit(f"{path}: Runtime symbol {symbol} leaked into CUDA Driver library")
+        raise SystemExit(f"{path}: forbidden symbol {symbol} is exported")
 
 
 if __name__ == "__main__":
