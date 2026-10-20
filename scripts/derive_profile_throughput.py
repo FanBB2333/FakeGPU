@@ -10,14 +10,12 @@ clock are removed so stale derivations cannot survive a profile correction.
 from __future__ import annotations
 
 import argparse
-import sys
 
-from profile_yaml import ROOT, read_block, write_block
+from profile_yaml import read_block, write_block
 
-sys.path.insert(0, str(ROOT))
-
-from fakegpu.profile_catalog import THROUGHPUT_FIELDS, load_profiles, profile_directory  # noqa: E402
-from fakegpu.throughput import derive_throughput  # noqa: E402
+# Importing profile_yaml has put the repository root on sys.path.
+from fakegpu.profile_catalog import THROUGHPUT_FIELDS, load_profiles, profile_directory
+from fakegpu.throughput import derive_throughput
 
 
 def main() -> int:
