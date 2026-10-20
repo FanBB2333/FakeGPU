@@ -79,6 +79,8 @@
 - `cuStreamAddCallback` follows `FAKEGPU_UNSUPPORTED_API` like
   `cudaStreamAddCallback`: it records the unregistered callback, warns once
   under `warn` and returns `CUDA_ERROR_NOT_SUPPORTED` under `error`.
+- Hybrid `cuGetProcAddress` no longer returns the caller's stale `*pfn` when
+  the real driver resolves a symbol to NULL and `dlsym` also misses it.
 
 ## v1.6.0 - 2026-10-17
 

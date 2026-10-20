@@ -386,25 +386,12 @@ bool hybrid_should_interpose_symbol(const char* symbol) {
     return false;
 }
 
-CUresult resolve_real_driver_symbol(
-    const char* symbol,
-    void** pfn,
-    int cuda_version,
-    unsigned long long flags) {
+void* real_driver_symbol(const char* symbol, int cuda_version, unsigned long long flags) {
     void* real_fn = nullptr;
     CUresult result = CudaDriverPassthrough::instance().cuGetProcAddress(
         symbol, &real_fn, cuda_version, flags);
-    if (result == CUDA_SUCCESS && real_fn) {
-        *pfn = real_fn;
-        return CUDA_SUCCESS;
-    }
-
-    real_fn = CudaDriverPassthrough::instance().getRealFunction(symbol);
-    if (real_fn) {
-        *pfn = real_fn;
-        return CUDA_SUCCESS;
-    }
-    return result;
+    if (result == CUDA_SUCCESS && real_fn) return real_fn;
+    return CudaDriverPassthrough::instance().getRealFunction(symbol);
 }
 
 int map_virtual_device_to_real(int virtual_device) {
@@ -4154,8 +4141,10 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     if (config.mode() == FakeGpuMode::Hybrid &&
         real_driver_available() &&
         !hybrid_should_interpose_symbol(symbol)) {
-        CUresult result = resolve_real_driver_symbol(symbol, pfn, cudaVersion, flags);
-        if (result == CUDA_SUCCESS && *pfn) return CUDA_SUCCESS;
+        if (void* fn = real_driver_symbol(symbol, cudaVersion, flags)) {
+            *pfn = fn;
+            return CUDA_SUCCESS;
+        }
     }
 
     // Reduce log spam - only log if not found
@@ -4365,8 +4354,10 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
 
     if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
         // Allow CUDA runtime / frameworks to resolve extra driver entry points without us stubbing them all.
-        CUresult result = resolve_real_driver_symbol(symbol, pfn, cudaVersion, flags);
-        if (result == CUDA_SUCCESS && *pfn) return CUDA_SUCCESS;
+        if (void* fn = real_driver_symbol(symbol, cudaVersion, flags)) {
+            *pfn = fn;
+            return CUDA_SUCCESS;
+        }
     }
 
     // For unknown symbols, return NULL but success (some symbols are optional).
