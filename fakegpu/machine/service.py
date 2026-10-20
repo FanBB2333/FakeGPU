@@ -31,7 +31,7 @@ Methods:
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
@@ -53,6 +53,11 @@ PROTOCOL = "fakegpu.machine.v1"
 EVENT_BUFFER = 1000
 EVENT_LOG_MAX_BYTES = 5 * 1024 * 1024
 HISTORY_SAMPLES = 120
+HISTORY_SERIES = (
+    "time", "memory_percent", "gpu", "temperature", "power_w",
+    # Modeled link throughput, TX plus RX, in GB/s
+    "pcie_gbps", "c2c_gbps", "nvlink_gbps",
+)
 # Ended processes stay in the process list this long before their state file
 # is removed, so ``fakegpu nvidia-smi --include-exited`` can still show them.
 ENDED_RETENTION_SECONDS = 30
@@ -98,7 +103,7 @@ class _Process:
     ended_ns: int = 0
 
     def device_profiles(self) -> list[str]:
-        devices = sorted(self.state.get("devices") or [], key=lambda d: _nonnegative_int(d.get("index")))
+        devices = sorted(self.state["devices"], key=lambda d: _nonnegative_int(d.get("index")))
         return [str(device.get("profile_id", "")) for device in devices]
 
     def peak_bytes(self) -> int:
@@ -120,22 +125,6 @@ class _Process:
         }
 
 
-@dataclass
-class _DeviceHistory:
-    time: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
-    memory_percent: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
-    gpu: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
-    temperature: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
-    power_w: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
-    # Modeled link throughput, TX plus RX, in GB/s
-    pcie_gbps: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
-    c2c_gbps: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
-    nvlink_gbps: deque = field(default_factory=lambda: deque(maxlen=HISTORY_SAMPLES))
-
-    def to_dict(self) -> dict[str, list]:
-        return {name: list(getattr(self, name)) for name in self.__dataclass_fields__}
-
-
 class MachineService:
     def __init__(self, paths: MachinePaths, config: MachineConfig | None = None):
         self.paths = paths
@@ -152,7 +141,7 @@ class MachineService:
         self._invalid: dict[Path, str] = {}
         self._high_memory: set[str] = set()
         self._oversubscribed: set[str] = set()
-        self._history: dict[str, _DeviceHistory] = {}
+        self._history: dict[str, dict[str, deque]] = {}
         self._telemetry = ReferenceTelemetry() if self.config.telemetry == "reference" else None
         self._platform = self.config.resolved_platform().to_dict()
         self._status: dict[str, Any] = {}
@@ -263,7 +252,7 @@ class MachineService:
             pid = state.get("pid")
             if type(pid) is not int or pid <= 0 or state.get("hostname") != self.host:
                 continue
-            if pid not in seen or state.get("timestamp_ns", 0) > seen[pid][1].get("timestamp_ns", 0):
+            if pid not in seen or stamp > seen[pid][1]["timestamp_ns"]:
                 seen[pid] = (path, state)
         for pid, (path, state) in seen.items():
             self._observe(pid, path, state, now)
@@ -275,7 +264,7 @@ class MachineService:
 
     def _observe(self, pid: int, path: Path, state: dict, now: int) -> None:
         process = self._processes.get(pid)
-        age = (now - int(state.get("timestamp_ns") or 0)) / 1e9
+        age = (now - state["timestamp_ns"]) / 1e9
         if process is None:
             self._discover(pid, path, state, age, now)
             return
@@ -332,9 +321,10 @@ class MachineService:
             state=state,
         )
         self._processes[pid] = process
-        layout = layout_text(process.device_profiles())
+        profiles = process.device_profiles()
+        layout = layout_text(profiles)
         note = ""
-        if layout and process.device_profiles() != self.config.profiles[: len(process.device_profiles())]:
+        if layout and profiles != self.config.profiles[: len(profiles)]:
             note = f" (machine layout is {self.config.devices})"
         self.emit(
             "process.attached",
@@ -422,14 +412,14 @@ class MachineService:
         # ones it holds memory on count as its devices.
         users: dict[str, int] = {}
         for row in inventory["processes"]:
-            if row["memory"].get("used_bytes"):
+            if row["memory"]["used_bytes"]:
                 users[row["gpu_uuid"]] = users.get(row["gpu_uuid"], 0) + 1
         rows = []
         slots = self._platform["devices"]
         for index, profile_id in enumerate(self.config.profiles):
             uuid = _synthetic_uuid(self.host, index, profile_id)
             row = self._device_row(index, profile_id, uuid, observed.pop(uuid, None), users, True)
-            row["slot"] = dict(slots[index]) if index < len(slots) else None
+            row["slot"] = dict(slots[index])
             rows.append(row)
         for uuid, device in observed.items():
             row = self._device_row(device["index"], device["profile_id"], uuid, device, users, False)
@@ -464,10 +454,10 @@ class MachineService:
                 profile.memory_bytes,
             )
         profile_id, name, architecture, capability, power_limit, catalog_memory = identity
-        memory = (observed or {}).get("memory") or {}
-        allocator = (observed or {}).get("allocator") or {}
-        total = int(memory.get("total_bytes") or catalog_memory)
-        used = int(memory.get("used_bytes") or 0)
+        memory = observed["memory"] if observed else {}
+        allocator = observed["allocator"] if observed else {}
+        total = memory.get("total_bytes") or catalog_memory
+        used = memory.get("used_bytes", 0)
         return {
             "index": index,
             "uuid": uuid,
@@ -480,24 +470,24 @@ class MachineService:
             "memory": {
                 "total_bytes": total,
                 "used_bytes": used,
-                "peak_bytes": int(memory.get("reported_peak_bytes") or 0),
-                "tracked_bytes": int(memory.get("tracked_bytes") or 0),
-                "reserved_bytes": int(memory.get("reserved_bytes") or 0),
+                "peak_bytes": memory.get("reported_peak_bytes", 0),
+                "tracked_bytes": memory.get("tracked_bytes", 0),
+                "reserved_bytes": memory.get("reserved_bytes", 0),
                 "percent": round(used / total * 100, 2) if total else 0.0,
             },
             "process_count": users.get(uuid, 0),
-            "transfer": (observed or {}).get("transfer"),
+            "transfer": observed["transfer"] if observed else None,
             "allocator": {
-                "categories": dict(allocator.get("categories") or {}),
-                "stage_peaks": dict(allocator.get("stage_peaks") or {}),
-                "largest_allocations": list(allocator.get("largest_allocations") or []),
-                "allocation_count": int(allocator.get("allocation_count") or 0),
-                "segment_count": int(allocator.get("segment_count") or 0),
+                "categories": dict(allocator.get("categories", {})),
+                "stage_peaks": dict(allocator.get("stage_peaks", {})),
+                "largest_allocations": list(allocator.get("largest_allocations", [])),
+                "allocation_count": allocator.get("allocation_count", 0),
+                "segment_count": allocator.get("segment_count", 0),
             },
         }
 
     def _device_telemetry(self, device: dict, values: dict | None) -> dict[str, Any] | None:
-        if not values or self._telemetry is None:
+        if not values:
             return None
         return {
             "source": self._telemetry.source(device["profile_id"]),
@@ -511,21 +501,23 @@ class MachineService:
         }
 
     def _record_history(self, device: dict, now: int) -> None:
-        history = self._history.setdefault(device["uuid"], _DeviceHistory())
+        history = self._history.setdefault(
+            device["uuid"], {name: deque(maxlen=HISTORY_SAMPLES) for name in HISTORY_SERIES}
+        )
         telemetry = device["telemetry"] or {}
-        history.time.append(round(now / 1e9, 1))
-        history.memory_percent.append(device["memory"]["percent"])
-        history.gpu.append(telemetry.get("gpu_percent"))
-        history.temperature.append(telemetry.get("temperature_c"))
-        history.power_w.append(telemetry.get("power_w"))
+        history["time"].append(round(now / 1e9, 1))
+        history["memory_percent"].append(device["memory"]["percent"])
+        history["gpu"].append(telemetry.get("gpu_percent"))
+        history["temperature"].append(telemetry.get("temperature_c"))
+        history["power_w"].append(telemetry.get("power_w"))
         transfer = device["transfer"]
         for link in ("pcie", "c2c", "nvlink"):
             rate = None
             if transfer is not None:
                 entry = transfer["links"][link]
                 rate = round((entry["tx_bytes_per_second"] + entry["rx_bytes_per_second"]) / 1e9, 3)
-            getattr(history, f"{link}_gbps").append(rate)
-        device["history"] = history.to_dict()
+            history[f"{link}_gbps"].append(rate)
+        device["history"] = {name: list(values) for name, values in history.items()}
 
     def _check_memory(self, device: dict) -> None:
         uuid, memory = device["uuid"], device["memory"]
@@ -564,17 +556,15 @@ class MachineService:
                 "stage": str(state.get("stage") or "unknown"),
                 "backend": str(fakegpu.get("backend") or "unknown") if isinstance(fakegpu, Mapping) else "unknown",
                 "tracking_confidence": str(state.get("tracking_confidence") or "unknown"),
-                "heartbeat_age_seconds": round((now - int(state.get("timestamp_ns") or 0)) / 1e9, 1),
+                "heartbeat_age_seconds": round((now - state["timestamp_ns"]) / 1e9, 1),
                 "software": dict(software) if isinstance(software, Mapping) else {},
                 "devices": [],
                 "memory_bytes": 0,
                 "gpu_percent": None,
             }
         for row in inventory["processes"]:
-            target = rows.get(row["pid"])
-            if target is None:
-                continue
-            used = int(row["memory"].get("used_bytes") or 0)
+            target = rows[row["pid"]]
+            used = row["memory"]["used_bytes"]
             target["devices"].append({"index": row["gpu_index"], "profile_id": row["profile_id"], "used_bytes": used})
             target["memory_bytes"] += used
             sample = activity.get((row["gpu_uuid"], row["pid"]))
