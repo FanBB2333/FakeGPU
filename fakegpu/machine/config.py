@@ -104,6 +104,10 @@ def layout_text(profiles: list[str]) -> str:
     return ",".join(f"{name}:{count}" for name, count in groups)
 
 
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 @dataclass(frozen=True)
 class MachineConfig:
     devices: str = "a100:8"
@@ -125,6 +129,8 @@ class MachineConfig:
     memory_warning_percent: float = 90.0
 
     def __post_init__(self) -> None:
+        if not isinstance(self.devices, str):
+            raise ValueError("devices must be a string such as a100:8")
         parse_devices(self.devices)
         if not isinstance(self.platform, str):
             raise ValueError("platform must be a string such as auto or hgx-a100-8")
@@ -135,9 +141,9 @@ class MachineConfig:
         self.resolved_platform()
         if self.telemetry not in TELEMETRY_MODES:
             raise ValueError(f"telemetry must be one of {', '.join(TELEMETRY_MODES)}")
-        if not 0 < self.stale_after_seconds <= 3600:
+        if not _number(self.stale_after_seconds) or not 0 < self.stale_after_seconds <= 3600:
             raise ValueError("stale_after_seconds must be in (0, 3600]")
-        if not 0 < self.memory_warning_percent <= 100:
+        if not _number(self.memory_warning_percent) or not 0 < self.memory_warning_percent <= 100:
             raise ValueError("memory_warning_percent must be in (0, 100]")
 
     @property
@@ -166,7 +172,10 @@ class MachineConfig:
     def load(cls, path: Path) -> MachineConfig:
         if not path.exists():
             return cls()
-        return cls().updated(json.loads(path.read_text(encoding="utf-8")))
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(settings, dict):
+            raise ValueError(f"{path} must hold a JSON object")
+        return cls().updated(settings)
 
     def save(self, path: Path) -> None:
         temporary = path.with_suffix(".tmp")

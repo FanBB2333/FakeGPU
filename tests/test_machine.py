@@ -223,6 +223,9 @@ def test_dispatch_controls(service, child):
     assert ok["result"]["devices"] == "h100:4"
     assert MachineConfig.load(service.paths.config).devices == "h100:4"
     assert kinds(service)[-1] == "config.changed"
+    for changes in ({"devices": ["a100:8"]}, {"stale_after_seconds": "2"}):
+        wrong = service.dispatch({"method": "config.update", "params": {"changes": changes}})
+        assert wrong["error"]["code"] == "invalid_params"
 
     missing = service.dispatch({"method": "process.signal", "params": {"pid": child.pid}})
     assert missing["error"]["code"] == "not_found"
@@ -232,6 +235,17 @@ def test_dispatch_controls(service, child):
     assert sent["ok"]
     assert child.wait(timeout=5) == -signal.SIGTERM
     assert kinds(service)[-1] == "process.signal_sent"
+
+
+def test_config_cli_rejects_mistyped_settings(tmp_path, monkeypatch, capsys):
+    from fakegpu import daemon_cli
+
+    monkeypatch.setenv("FAKEGPU_HOME", str(tmp_path))
+    paths = MachinePaths.from_env()
+    paths.create()
+    paths.config.write_text(json.dumps({"devices": ["a100:8"]}))
+    assert daemon_cli.main(["config"]) == 2
+    assert capsys.readouterr().err.startswith("fakegpu daemon: devices must be a string")
 
 
 @pytest.mark.parametrize("stamp", [None, "bad", True, -1, 10**30])
