@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import subprocess
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -20,6 +21,16 @@ from .structured_io import emit_json
 
 
 SCHEMA_VERSION = "fakegpu.native_api_capabilities.v1"
+_API_FUNCTION_PATTERN = re.compile(
+    r"\b((?:__)?(?:cuda|cu|nvml|cublas|nccl)[A-Za-z0-9_]*)\s*\("
+)
+_STUB_MARKER = re.compile(r"\(\s*stub\s*\)", re.IGNORECASE)
+_POLICY_CALL_PATTERN = re.compile(
+    r"(?:rejectUnsupportedApi|record_unsupported_api)\s*\("
+    r".{0,600}?[\"']((?:__)?(?:cuda|cu|nvml|cublas|nccl)"
+    r"[A-Za-z0-9_]*)[\"']",
+    re.DOTALL,
+)
 
 
 class CapabilityCatalogError(ValueError):
@@ -148,29 +159,20 @@ def native_capability_report(
         for entry in catalog["apis"]
         if (
             library is None
-            or str(entry["library"]) == str(library)
+            or entry["library"] == str(library)
         )
         and (
             classification is None
-            or str(entry["classification"]) == str(classification)
+            or entry["classification"] == str(classification)
         )
         and (
             api is None
-            or str(api).lower() in str(entry["api"]).lower()
+            or str(api).lower() in entry["api"].lower()
         )
     ]
     groups = list(catalog["groups"])
-    classifications: dict[str, int] = {}
-    libraries: dict[str, int] = {}
-    for entry in apis:
-        classification_name = str(entry["classification"])
-        library_name = str(entry["library"])
-        classifications[classification_name] = (
-            classifications.get(classification_name, 0) + 1
-        )
-        libraries[library_name] = (
-            libraries.get(library_name, 0) + 1
-        )
+    classifications = Counter(entry["classification"] for entry in apis)
+    libraries = Counter(entry["library"] for entry in apis)
 
     source_audit = (
         audit_native_capability_sources(source_root, catalog=catalog)
@@ -189,7 +191,7 @@ def native_capability_report(
             "group_count": len(groups),
             "explicit_api_count": len(apis),
             "policy_enforced_api_count": sum(
-                bool(entry["policy_enforced"]) for entry in apis
+                entry["policy_enforced"] for entry in apis
             ),
             "classifications": dict(sorted(classifications.items())),
             "libraries": dict(sorted(libraries.items())),
@@ -408,28 +410,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_capability_report(report)
 
     audit_failed = any(
-        str(report[name].get("status")) == "failed"
+        report[name]["status"] == "failed"
         for name in ("source_audit", "export_audit")
     )
     return 2 if args.strict and audit_failed else 0
 
 
 def _policy_api_names(text: str) -> set[str]:
-    pattern = re.compile(
-        r"(?:rejectUnsupportedApi|record_unsupported_api)\s*\("
-        r".{0,600}?[\"']((?:__)?(?:cuda|cu|nvml|cublas|nccl)"
-        r"[A-Za-z0-9_]*)[\"']",
-        re.DOTALL,
-    )
-    return {match.group(1) for match in pattern.finditer(text)}
+    return {match.group(1) for match in _POLICY_CALL_PATTERN.finditer(text)}
 
 
 def _stub_api_names(text: str) -> set[str]:
     lines = text.splitlines()
     results: set[str] = set()
     for index, line in enumerate(lines):
+        stub_marker = _STUB_MARKER.search(line)
         if not (
-            re.search(r"\(\s*stub\s*\)", line, re.IGNORECASE)
+            stub_marker
             or "Just a stub" in line
             or "without actually" in line
         ):
@@ -437,7 +434,7 @@ def _stub_api_names(text: str) -> set[str]:
         stripped = line.strip()
         if (
             stripped.startswith("//")
-            and re.search(r"\(\s*stub\s*\)", line, re.IGNORECASE)
+            and stub_marker
             and "Just a stub" not in line
         ):
             name = _next_api_function(lines, index)
@@ -449,25 +446,19 @@ def _stub_api_names(text: str) -> set[str]:
 
 
 def _nearest_api_function(lines: Sequence[str], index: int) -> str | None:
-    function_pattern = re.compile(
-        r"\b((?:__)?(?:cuda|cu|nvml|cublas|nccl)[A-Za-z0-9_]*)\s*\("
-    )
     for line_index in range(index - 1, max(-1, index - 30), -1):
         line = lines[line_index]
         if "FGPU_LOG" in line or "record_unsupported_api" in line:
             continue
-        match = function_pattern.search(line)
+        match = _API_FUNCTION_PATTERN.search(line)
         if match:
             return match.group(1)
     return None
 
 
 def _next_api_function(lines: Sequence[str], index: int) -> str | None:
-    function_pattern = re.compile(
-        r"\b((?:__)?(?:cuda|cu|nvml|cublas|nccl)[A-Za-z0-9_]*)\s*\("
-    )
     for line_index in range(index + 1, min(len(lines), index + 30)):
-        match = function_pattern.search(lines[line_index])
+        match = _API_FUNCTION_PATTERN.search(lines[line_index])
         if match:
             return match.group(1)
     return None
@@ -578,17 +569,17 @@ def _print_capability_report(report: Mapping[str, Any]) -> None:
     print(f"{'-' * 44} {'-' * 13} {'-' * 28}")
     for item in report["apis"]:
         print(
-            f"{str(item['api']):44} "
-            f"{str(item['library']):13} "
-            f"{str(item['classification'])}"
+            f"{item['api']:44} "
+            f"{item['library']:13} "
+            f"{item['classification']}"
         )
     for name, label in (
         ("source_audit", "source audit"),
         ("export_audit", "export audit"),
     ):
         audit = report[name]
-        if audit.get("status") != "not_requested":
-            print(f"\n  {label}: {audit.get('status')}")
+        if audit["status"] != "not_requested":
+            print(f"\n  {label}: {audit['status']}")
 
 
 __all__ = [
