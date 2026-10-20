@@ -10,7 +10,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -138,7 +137,7 @@ def render_gpu_list(
             f"CC: {item['compute_capability'] or 'N/A'}, "
             f"PCI: {item['pci_bus_id']})"
         )
-        for instance in item.get("mig", {}).get("instances") or []:
+        for instance in item["mig"]["instances"]:
             lines.append(
                 "  MIG "
                 f"{instance['profile']} Device "
@@ -168,17 +167,9 @@ def render_topology_matrix(
     else:
         devices_by_host: dict[str, list[Mapping[str, Any]]] = {}
         for device in devices:
-            devices_by_host.setdefault(
-                str(device.get("host") or "localhost"),
-                [],
-            ).append(device)
+            devices_by_host.setdefault(device["host"], []).append(device)
         for host, host_devices in sorted(devices_by_host.items()):
-            host_devices.sort(
-                key=lambda item: (
-                    _nonnegative_int(item.get("index")),
-                    str(item.get("uuid") or ""),
-                )
-            )
+            host_devices.sort(key=lambda item: (item["index"], item["uuid"]))
             if len(devices_by_host) > 1 or lines[-1] != lines[0]:
                 lines.append("")
             lines.append(f"Host: {host}")
@@ -224,13 +215,7 @@ def render_topology_matrix(
                     ).rstrip()
                 )
             source_values = sorted(
-                {
-                    str(
-                        device["topology"].get("source")
-                        or "modeled_none"
-                    )
-                    for device in host_devices
-                }
+                {device["topology"]["source"] for device in host_devices}
             )
             lines.append(
                 "Topology source: "
@@ -307,27 +292,17 @@ def render_nvlink_status(
             f"GPU {device['index']} @ {device['host']}: "
             f"{device['name']} ({device['uuid']})"
         )
-        lines.append(
-            "  Source: "
-            f"{nvlink.get('source') or topology.get('source') or 'modeled_none'}"
-        )
+        lines.append(f"  Source: {nvlink['source']}")
         if topology.get("error"):
             lines.append(
                 f"  Configuration error: {topology['error']}"
             )
-        active_links = [
-            link
-            for link in nvlink.get("links") or []
-            if link.get("active")
-        ]
+        active_links = [link for link in nvlink["links"] if link["active"]]
         if not active_links:
             lines.append("  No active modeled NVLinks.")
             continue
-        for link in sorted(
-            active_links,
-            key=lambda item: _nonnegative_int(item.get("link")),
-        ):
-            if link.get("remote") == "gpu":
+        for link in sorted(active_links, key=lambda item: item["link"]):
+            if link["remote"] == "gpu":
                 remote = (
                     f"GPU {link['index']} ({link['uuid']}, "
                     f"{link['pci_bus_id']})"
@@ -336,7 +311,7 @@ def render_nvlink_status(
                 remote = f"NVSwitch ({link['pci_bus_id']})"
             lines.append(
                 f"  Link {link['link']}: Active -> {remote}, "
-                f"{_format_gbps(link.get('bandwidth_gbps'))} GB/s"
+                f"{_format_gbps(link['bandwidth_gbps'])} GB/s"
             )
     for error in errors:
         lines.append(f"warning: {error}")
@@ -349,10 +324,6 @@ def render_mig_view(
     errors: Sequence[str] = (),
     instance_kind: str = "all",
 ) -> str:
-    if instance_kind not in {"all", "gpu", "compute"}:
-        raise ValueError(
-            "instance_kind must be all, gpu, or compute"
-        )
     devices = list(inventory.get("devices") or [])
     lines = [
         "FakeGPU modeled MIG instances",
@@ -374,15 +345,15 @@ def render_mig_view(
                 ),
                 (
                     "  MIG mode: "
-                    f"{str(mig.get('mode') or 'disabled').replace('_', ' ').title()} "
-                    f"({mig.get('source') or 'modeled_none'})"
+                    f"{mig['mode'].replace('_', ' ').title()} "
+                    f"({mig['source']})"
                 ),
                 (
                     "  Capacity: "
-                    f"{mig.get('instance_count', 0)} instances, "
-                    f"{_format_bytes(mig.get('allocated_memory_bytes'))} "
+                    f"{mig['instance_count']} instances, "
+                    f"{_format_bytes(mig['allocated_memory_bytes'])} "
                     "allocated / "
-                    f"{_format_bytes(mig.get('unallocated_memory_bytes'))} "
+                    f"{_format_bytes(mig['unallocated_memory_bytes'])} "
                     "unallocated"
                 ),
             ]
@@ -391,7 +362,7 @@ def render_mig_view(
             lines.append(
                 f"  Configuration error: {mig['error']}"
             )
-        instances = list(mig.get("instances") or [])
+        instances = mig["instances"]
         if not instances:
             lines.append("  No modeled MIG instances.")
             continue
@@ -498,69 +469,50 @@ def _health_event_records(
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     configuration_keys: set[tuple[str, str, str]] = set()
+
+    def add_configuration(host: str, code: str, block: Mapping[str, Any]) -> None:
+        if not block["error"]:
+            return
+        detail = block["error"]
+        key = (host, code, detail)
+        if key in configuration_keys:
+            return
+        configuration_keys.add(key)
+        records.append(
+            {
+                "severity": "error",
+                "kind": "configuration",
+                "host": host,
+                "gpu": "N/A",
+                "code": code,
+                "count": 1,
+                "source": block["source"],
+                "detail": detail,
+            }
+        )
+
     for device in inventory.get("devices") or []:
-        host = str(device.get("host") or "localhost")
-        gpu = _nonnegative_int(device.get("index"))
+        host = device["host"]
+        gpu = device["index"]
         health = device["health"]
-        if health.get("error"):
-            detail = str(health["error"])
-            key = (host, "FAULT_CONFIG", detail)
-            if key not in configuration_keys:
-                configuration_keys.add(key)
-                records.append(
-                    {
-                        "severity": "error",
-                        "kind": "configuration",
-                        "host": host,
-                        "gpu": "N/A",
-                        "code": "FAULT_CONFIG",
-                        "count": 1,
-                        "source": health.get("source")
-                        or "modeled_environment_invalid",
-                        "detail": detail,
-                    }
-                )
-        for event in health.get("events") or []:
+        add_configuration(host, "FAULT_CONFIG", health)
+        for event in health["events"]:
             records.append(
                 {
-                    "severity": str(
-                        event.get("severity") or "info"
-                    ),
+                    "severity": event["severity"],
                     "kind": "modeled_fault",
                     "host": host,
                     "gpu": gpu,
-                    "code": str(event.get("code") or "UNKNOWN"),
-                    "count": _nonnegative_int(event.get("count")),
-                    "source": str(
-                        event.get("source") or health.get("source")
-                    ),
+                    "code": event["code"],
+                    "count": event["count"],
+                    "source": event["source"],
                     "detail": (
                         "configured through FAKEGPU_FAULT_EVENTS"
                     ),
                 }
             )
-        topology = device["topology"]
-        if topology.get("error"):
-            detail = str(topology["error"])
-            key = (host, "NVLINK_CONFIG", detail)
-            if key not in configuration_keys:
-                configuration_keys.add(key)
-                records.append(
-                    {
-                        "severity": "error",
-                        "kind": "configuration",
-                        "host": host,
-                        "gpu": "N/A",
-                        "code": "NVLINK_CONFIG",
-                        "count": 1,
-                        "source": topology.get("source")
-                        or "modeled_environment_invalid",
-                        "detail": detail,
-                    }
-                )
-        for event in device["native_activity"].get(
-            "unsupported_apis"
-        ) or []:
+        add_configuration(host, "NVLINK_CONFIG", device["topology"])
+        for event in device["native_activity"]["unsupported_apis"]:
             records.append(
                 {
                     "severity": "warning",
@@ -579,7 +531,7 @@ def _health_event_records(
                 }
             )
     for runtime in inventory.get("runtimes") or []:
-        publisher = runtime.get("publisher") or {}
+        publisher = runtime["publisher"]
         health = publisher.get("health")
         if not isinstance(health, Mapping):
             health = {}
@@ -589,9 +541,7 @@ def _health_event_records(
                 {
                     "severity": "error",
                     "kind": "publisher",
-                    "host": str(
-                        runtime.get("host") or "localhost"
-                    ),
+                    "host": runtime["host"],
                     "gpu": "N/A",
                     "code": str(
                         health.get("last_error")
@@ -602,27 +552,25 @@ def _health_event_records(
                         publisher.get("source") or "publisher"
                     ),
                     "detail": (
-                        f"pid {runtime.get('pid', 0)}; "
+                        f"pid {runtime['pid']}; "
                         f"{health.get('successful_writes', 0)} "
                         "successful writes"
                     ),
                 }
             )
-        if runtime.get("status") == "stale":
+        if runtime["status"] == "stale":
             records.append(
                 {
                     "severity": "warning",
                     "kind": "state",
-                    "host": str(
-                        runtime.get("host") or "localhost"
-                    ),
+                    "host": runtime["host"],
                     "gpu": "N/A",
                     "code": "STALE_STATE",
                     "count": 1,
                     "source": "state_freshness",
                     "detail": (
-                        f"pid {runtime.get('pid', 0)}; age "
-                        f"{_format_age(runtime.get('age_seconds'))}"
+                        f"pid {runtime['pid']}; age "
+                        f"{_format_age(runtime['age_seconds'])}"
                     ),
                 }
             )
@@ -651,354 +599,368 @@ def render_detail(
     if runtimes:
         lines.append("Runtime processes:")
     for item in runtimes:
-        fakegpu = item["fakegpu"]
-        software = item["software"]
-        dispatch = item["dispatch_tracking"]
-        publisher = item["publisher"]
-        publisher_health = (
-            dict(publisher.get("health") or {})
-            if isinstance(publisher.get("health"), Mapping)
-            else {}
-        )
-        publisher_limits = (
-            dict(publisher.get("limits") or {})
-            if isinstance(publisher.get("limits"), Mapping)
-            else {}
-        )
-        publisher_last_size = _format_bytes(
-            publisher_health.get("last_serialized_bytes")
-        )
-        publisher_max_size = _format_bytes(
-            publisher_limits.get("max_state_bytes")
-        )
-        capability = fakegpu.get("native_capabilities") or {}
-        profile_catalog = fakegpu.get("profile_catalog") or {}
-        lines.extend(
-            [
-                (
-                    f"  [{item['host']} pid={item['pid']}] "
-                    f"{item['process_name']}"
-                ),
-                (
-                    "    State: "
-                    f"{item['status']}, age "
-                    f"{_format_age(item['age_seconds'])}, "
-                    f"schema {item['schema_version'] or 'unknown'}"
-                ),
-                (
-                    "    FakeGPU: "
-                    f"{fakegpu.get('version') or 'unknown'}, "
-                    f"runtime {fakegpu.get('runtime') or 'unknown'}, "
-                    f"backend {fakegpu.get('backend') or 'unknown'}, "
-                    f"mode {fakegpu.get('mode') or 'unknown'}"
-                ),
-                (
-                    "    Policies: "
-                    f"OOM {fakegpu.get('oom_policy') or 'unknown'}, "
-                    "unsupported API "
-                    f"{fakegpu.get('unsupported_api_policy') or 'unknown'}, "
-                    "distributed "
-                    f"{fakegpu.get('distributed_mode') or 'unknown'}"
-                ),
-                (
-                    "    Software: "
-                    f"Python {software.get('python_version') or 'N/A'}, "
-                    f"PyTorch {software.get('torch_version') or 'N/A'}, "
-                    f"CUDA {software.get('cuda_version') or 'N/A'}, "
-                    f"driver {software.get('driver_version') or 'N/A'}, "
-                    f"platform {software.get('platform') or 'N/A'}"
-                ),
-                (
-                    "    Tracking: "
-                    f"{item['tracking_confidence']}, allocator "
-                    f"{item['allocator_model']}, "
-                    "memory "
-                    f"{_enabled_text(fakegpu.get('memory_tracking_enabled'))}, "
-                    "dispatch "
-                    f"{_enabled_text(dispatch.get('enabled'))}"
-                ),
-                (
-                    "    Dispatch: "
-                    f"{dispatch.get('operator_calls', 0)} calls, "
-                    f"{dispatch.get('output_tensors', 0)} outputs, "
-                    f"{dispatch.get('new_allocations', 0)} allocations, "
-                    f"{dispatch.get('alias_outputs', 0)} aliases, "
-                    f"{dispatch.get('inaccessible_outputs', 0)} inaccessible"
-                ),
-                (
-                    "    Publisher: "
-                    f"{publisher.get('interval_seconds', 'N/A')}s interval, "
-                    f"{_format_bytes(publisher.get('runtime_overhead_bytes'))} "
-                    "runtime overhead"
-                ),
-                (
-                    "    Publisher health: "
-                    f"{publisher_health.get('successful_writes', 'N/A')} / "
-                    f"{publisher_health.get('attempted_writes', 'N/A')} "
-                    "writes, "
-                    f"{publisher_health.get('failed_writes', 'N/A')} "
-                    "failures, last "
-                    f"{publisher_health.get('last_duration_us', 'N/A')} us / "
-                    f"{publisher_last_size}"
-                ),
-                (
-                    "    Publisher limits: "
-                    f"{publisher_limits.get('detail_entries', 'N/A')} "
-                    "detail entries, "
-                    f"{publisher_max_size} state size"
-                ),
-                (
-                    "    Catalogs: "
-                    f"{profile_catalog.get('profile_count', 'N/A')} "
-                    "profiles; native capabilities "
-                    f"{capability.get('group_count', 'N/A')} groups / "
-                    f"{capability.get('explicit_api_count', 'N/A')} APIs / "
-                    f"{capability.get('policy_enforced_api_count', 'N/A')} "
-                    "policy-enforced"
-                ),
-            ]
-        )
-        if publisher_health.get("last_error"):
-            lines.append(
-                "    Publisher last error: "
-                f"{publisher_health['last_error']}"
-            )
-        operators = dispatch.get("operators")
-        if isinstance(operators, Mapping) and operators:
-            ranked_operators = sorted(
-                operators.items(),
-                key=lambda entry: _nonnegative_int(
-                    entry[1].get("calls")
-                    if isinstance(entry[1], Mapping)
-                    else 0
-                ),
-                reverse=True,
-            )
-            lines.append("    Most-called operators:")
-            for operator, values in ranked_operators[:5]:
-                calls = (
-                    _nonnegative_int(values.get("calls"))
-                    if isinstance(values, Mapping)
-                    else 0
-                )
-                lines.append(f"      - {operator}: {calls} calls")
+        lines.extend(_runtime_detail_lines(item))
 
     devices = list(inventory.get("devices") or [])
     if not devices:
         lines.append("No published FakeCUDA GPUs found.")
     for item in devices:
-        profile = item["profile"]
-        memory = item["memory"]
-        allocator = item["allocator"]
-        native_activity = item["native_activity"]
-        topology = item["topology"]
-        nvlink = topology["nvlink"]
-        health = item["health"]
-        mig = item["mig"]
-        lines.extend(
-            [
-                "",
-                f"GPU {item['index']} @ {item['host']}",
-                f"  Product Name: {item['name']}",
-                f"  UUID: {item['uuid']} (synthetic)",
-                f"  PCI Bus ID: {item['pci_bus_id']} (synthetic)",
-                (
-                    "  Topology: "
-                    f"{topology.get('source') or 'modeled_none'}, "
-                    f"{nvlink.get('active_links', 0)} active NVLinks / "
-                    f"{_format_gbps(nvlink.get('aggregate_bandwidth_gbps'))} "
-                    "GB/s modeled aggregate"
-                ),
-                f"  Slot: {_slot_text(topology)}",
-                f"  Copies (modeled): {_copies_text(item.get('transfer'))}",
-                (
-                    "  Link throughput (modeled): "
-                    f"{_throughput_text(item.get('transfer'), topology)}"
-                ),
-                (
-                    "  Health model: "
-                    f"{health.get('status') or 'unknown'}, "
-                    "hardware "
-                    f"{health.get('hardware_health') or 'unobserved'}, "
-                    "maximum severity "
-                    f"{health.get('max_severity') or 'none'}, "
-                    f"{health.get('event_types_total', 0)} event types / "
-                    f"{health.get('event_count', 0)} occurrences"
-                ),
-                (
-                    "  MIG model: "
-                    f"{mig.get('mode') or 'disabled'}, "
-                    f"{mig.get('instance_count', 0)} instances, "
-                    f"{_format_bytes(mig.get('allocated_memory_bytes'))} "
-                    "allocated / "
-                    f"{_format_bytes(mig.get('unallocated_memory_bytes'))} "
-                    "unallocated"
-                ),
-                (
-                    f"  Profile: {item['profile_id']} "
-                    f"[{profile.get('profile_status') or 'unknown'}]"
-                ),
-                (
-                    "  Architecture: "
-                    f"{item['architecture'] or 'N/A'}, "
-                    f"compute capability "
-                    f"{item['compute_capability'] or 'N/A'}, "
-                    f"target {item['compiler_target'] or 'N/A'}"
-                ),
-                (
-                    "  Compute resources: "
-                    f"{profile.get('sm_count', 'N/A')} SMs, "
-                    f"{profile.get('core_clock_mhz', 'N/A')} MHz core, "
-                    f"{profile.get('memory_clock_mhz', 'N/A')} MHz memory"
-                ),
-                (
-                    "  Memory profile: "
-                    f"{profile.get('memory_kind') or 'N/A'}, "
-                    f"{profile.get('memory_bus_width_bits', 'N/A')} bit bus, "
-                    f"L2 {_format_bytes(profile.get('l2_cache_bytes'))}"
-                ),
-                (
-                    "  Supported types: "
-                    f"{_format_list(profile.get('supported_types'))}"
-                ),
-                (
-                    "  Profile power: "
-                    f"{_format_watts(profile.get('typical_power_usage_mw'))} "
-                    "typical / "
-                    f"{_format_watts(profile.get('max_power_limit_mw'))} max"
-                ),
-                (
-                    "  Memory current: "
-                    f"{_format_bytes(memory['used_bytes'])} simulated, "
-                    f"{_format_bytes(memory['tracked_bytes'])} allocated, "
-                    f"{_format_bytes(memory['reserved_bytes'])} reserved, "
-                    f"{_format_bytes(memory['free_bytes'])} free"
-                ),
-                (
-                    "  Memory peaks: "
-                    f"{_format_bytes(memory['reported_peak_bytes'])} "
-                    "simulated, "
-                    f"{_format_bytes(memory['tracked_peak_bytes'])} "
-                    "allocated, "
-                    f"{_format_bytes(memory['reserved_peak_bytes'])} "
-                    "reserved"
-                ),
-                (
-                    "  Allocator: "
-                    f"{allocator['model']}, "
-                    f"{allocator['segment_count']} segments, "
-                    f"{_format_bytes(memory['inactive_split_bytes'])} "
-                    "inactive split, "
-                    f"{allocator['allocation_count']} allocations / "
-                    f"{allocator['free_count']} frees"
-                ),
-                (
-                    "  Memory categories: "
-                    f"{_format_byte_mapping(allocator['categories'])}"
-                ),
-                (
-                    "  Stage peaks: "
-                    f"{_format_byte_mapping(allocator['stage_peaks'])}"
-                ),
-                (
-                    "  Processes: "
-                    f"{item['process_count']} total, "
-                    f"{item['stale_process_count']} stale, "
-                    f"{item['exited_process_count']} exited"
-                ),
-            ]
-        )
-        if health.get("error"):
-            lines.append(
-                f"  Health configuration error: {health['error']}"
-            )
-        if health.get("events"):
-            lines.append("  Modeled fault events:")
-            for event in health["events"][:5]:
-                lines.append(
-                    "    - "
-                    f"[{event.get('severity') or 'info'}] "
-                    f"{event.get('code') or 'UNKNOWN'}: "
-                    f"{_nonnegative_int(event.get('count'))} "
-                    "occurrences"
-                )
-        if mig.get("error"):
-            lines.append(
-                f"  MIG configuration error: {mig['error']}"
-            )
-        if mig.get("instances"):
-            lines.append("  Modeled MIG instances:")
-            for instance in mig["instances"]:
-                lines.append(
-                    "    - "
-                    f"GI {instance['gpu_instance_id']} / "
-                    f"CI {instance['compute_instance_id']}: "
-                    f"{instance['profile']}, "
-                    f"{_format_bytes(instance['memory_total_bytes'])}, "
-                    f"{instance['uuid']}"
-                )
-        if (
-            str(item["fakegpu"].get("runtime") or "") == "native"
-            or _has_native_activity(native_activity)
-        ):
-            lines.extend(
-                [
-                    (
-                        "  Native activity: "
-                        f"{native_activity['kernel_launches']} kernel launches, "
-                        f"{native_activity['gemm_calls']} GEMM calls / "
-                        f"{native_activity['gemm_flops']} FLOP, "
-                        f"{native_activity['io_calls']} IO calls / "
-                        f"{_format_bytes(native_activity['io_bytes'])}"
-                    ),
-                    (
-                        "  Native compatibility: "
-                        f"{native_activity['compatibility_events']} events, "
-                        f"{native_activity['unsupported_api_calls']} "
-                        "unsupported API calls"
-                    ),
-                ]
-            )
-            kernels = native_activity["kernels"]
-            if kernels:
-                lines.append(
-                    "  Native kernels: "
-                    + ", ".join(
-                        f"{name}={count}"
-                        for name, count in sorted(
-                            kernels.items(),
-                            key=lambda entry: (
-                                -_nonnegative_int(entry[1]),
-                                str(entry[0]),
-                            ),
-                        )[:5]
-                    )
-                )
-            unsupported_apis = native_activity["unsupported_apis"]
-            if unsupported_apis:
-                lines.append("  Unsupported native APIs:")
-                for event in unsupported_apis[:5]:
-                    lines.append(
-                        "    - "
-                        f"{event.get('operation') or 'unknown'}: "
-                        f"{_nonnegative_int(event.get('count'))} calls "
-                        f"[{event.get('behavior') or 'unknown'}, "
-                        f"{event.get('policy') or 'unknown'}]"
-                    )
-        allocations = allocator["largest_allocations"]
-        if allocations:
-            lines.append("  Largest allocations:")
-            for allocation in allocations[:5]:
-                lines.append(
-                    "    - "
-                    f"{_format_bytes(allocation.get('bytes'))} "
-                    f"[{allocation.get('category') or 'unknown'}] "
-                    f"pid={allocation.get('pid', 0)} "
-                    f"{allocation.get('source') or allocation.get('operator') or 'unknown'}"
-                )
+        lines.extend(_device_detail_lines(item))
     for error in errors:
         lines.append(f"warning: {error}")
     return "\n".join(lines)
+
+
+def _runtime_detail_lines(item: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
+    fakegpu = item["fakegpu"]
+    software = item["software"]
+    dispatch = item["dispatch_tracking"]
+    publisher = item["publisher"]
+    publisher_health = publisher.get("health")
+    publisher_health = (
+        dict(publisher_health)
+        if isinstance(publisher_health, Mapping)
+        else {}
+    )
+    publisher_limits = publisher.get("limits")
+    publisher_limits = (
+        dict(publisher_limits)
+        if isinstance(publisher_limits, Mapping)
+        else {}
+    )
+    publisher_last_size = _format_bytes(
+        publisher_health.get("last_serialized_bytes")
+    )
+    publisher_max_size = _format_bytes(
+        publisher_limits.get("max_state_bytes")
+    )
+    capability = fakegpu.get("native_capabilities") or {}
+    profile_catalog = fakegpu.get("profile_catalog") or {}
+    lines.extend(
+        [
+            (
+                f"  [{item['host']} pid={item['pid']}] "
+                f"{item['process_name']}"
+            ),
+            (
+                "    State: "
+                f"{item['status']}, age "
+                f"{_format_age(item['age_seconds'])}, "
+                f"schema {item['schema_version'] or 'unknown'}"
+            ),
+            (
+                "    FakeGPU: "
+                f"{fakegpu.get('version') or 'unknown'}, "
+                f"runtime {fakegpu.get('runtime') or 'unknown'}, "
+                f"backend {fakegpu.get('backend') or 'unknown'}, "
+                f"mode {fakegpu.get('mode') or 'unknown'}"
+            ),
+            (
+                "    Policies: "
+                f"OOM {fakegpu.get('oom_policy') or 'unknown'}, "
+                "unsupported API "
+                f"{fakegpu.get('unsupported_api_policy') or 'unknown'}, "
+                "distributed "
+                f"{fakegpu.get('distributed_mode') or 'unknown'}"
+            ),
+            (
+                "    Software: "
+                f"Python {software.get('python_version') or 'N/A'}, "
+                f"PyTorch {software.get('torch_version') or 'N/A'}, "
+                f"CUDA {software.get('cuda_version') or 'N/A'}, "
+                f"driver {software.get('driver_version') or 'N/A'}, "
+                f"platform {software.get('platform') or 'N/A'}"
+            ),
+            (
+                "    Tracking: "
+                f"{item['tracking_confidence']}, allocator "
+                f"{item['allocator_model']}, "
+                "memory "
+                f"{_enabled_text(fakegpu.get('memory_tracking_enabled'))}, "
+                "dispatch "
+                f"{_enabled_text(dispatch.get('enabled'))}"
+            ),
+            (
+                "    Dispatch: "
+                f"{dispatch.get('operator_calls', 0)} calls, "
+                f"{dispatch.get('output_tensors', 0)} outputs, "
+                f"{dispatch.get('new_allocations', 0)} allocations, "
+                f"{dispatch.get('alias_outputs', 0)} aliases, "
+                f"{dispatch.get('inaccessible_outputs', 0)} inaccessible"
+            ),
+            (
+                "    Publisher: "
+                f"{publisher.get('interval_seconds', 'N/A')}s interval, "
+                f"{_format_bytes(publisher.get('runtime_overhead_bytes'))} "
+                "runtime overhead"
+            ),
+            (
+                "    Publisher health: "
+                f"{publisher_health.get('successful_writes', 'N/A')} / "
+                f"{publisher_health.get('attempted_writes', 'N/A')} "
+                "writes, "
+                f"{publisher_health.get('failed_writes', 'N/A')} "
+                "failures, last "
+                f"{publisher_health.get('last_duration_us', 'N/A')} us / "
+                f"{publisher_last_size}"
+            ),
+            (
+                "    Publisher limits: "
+                f"{publisher_limits.get('detail_entries', 'N/A')} "
+                "detail entries, "
+                f"{publisher_max_size} state size"
+            ),
+            (
+                "    Catalogs: "
+                f"{profile_catalog.get('profile_count', 'N/A')} "
+                "profiles; native capabilities "
+                f"{capability.get('group_count', 'N/A')} groups / "
+                f"{capability.get('explicit_api_count', 'N/A')} APIs / "
+                f"{capability.get('policy_enforced_api_count', 'N/A')} "
+                "policy-enforced"
+            ),
+        ]
+    )
+    if publisher_health.get("last_error"):
+        lines.append(
+            "    Publisher last error: "
+            f"{publisher_health['last_error']}"
+        )
+    operators = dispatch.get("operators")
+    if isinstance(operators, Mapping) and operators:
+        ranked_operators = sorted(
+            operators.items(),
+            key=lambda entry: _nonnegative_int(
+                entry[1].get("calls")
+                if isinstance(entry[1], Mapping)
+                else 0
+            ),
+            reverse=True,
+        )
+        lines.append("    Most-called operators:")
+        for operator, values in ranked_operators[:5]:
+            calls = (
+                _nonnegative_int(values.get("calls"))
+                if isinstance(values, Mapping)
+                else 0
+            )
+            lines.append(f"      - {operator}: {calls} calls")
+    return lines
+
+
+def _device_detail_lines(item: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
+    profile = item["profile"]
+    memory = item["memory"]
+    allocator = item["allocator"]
+    native_activity = item["native_activity"]
+    topology = item["topology"]
+    nvlink = topology["nvlink"]
+    health = item["health"]
+    mig = item["mig"]
+    lines.extend(
+        [
+            "",
+            f"GPU {item['index']} @ {item['host']}",
+            f"  Product Name: {item['name']}",
+            f"  UUID: {item['uuid']} (synthetic)",
+            f"  PCI Bus ID: {item['pci_bus_id']} (synthetic)",
+            (
+                "  Topology: "
+                f"{topology['source']}, "
+                f"{nvlink['active_links']} active NVLinks / "
+                f"{_format_gbps(nvlink['aggregate_bandwidth_gbps'])} "
+                "GB/s modeled aggregate"
+            ),
+            f"  Slot: {_slot_text(topology)}",
+            f"  Copies (modeled): {_copies_text(item['transfer'])}",
+            (
+                "  Link throughput (modeled): "
+                f"{_throughput_text(item['transfer'], topology)}"
+            ),
+            (
+                "  Health model: "
+                f"{health['status']}, "
+                "hardware "
+                f"{health['hardware_health']}, "
+                "maximum severity "
+                f"{health['max_severity']}, "
+                f"{health['event_types_total']} event types / "
+                f"{health['event_count']} occurrences"
+            ),
+            (
+                "  MIG model: "
+                f"{mig['mode']}, "
+                f"{mig['instance_count']} instances, "
+                f"{_format_bytes(mig['allocated_memory_bytes'])} "
+                "allocated / "
+                f"{_format_bytes(mig['unallocated_memory_bytes'])} "
+                "unallocated"
+            ),
+            (
+                f"  Profile: {item['profile_id']} "
+                f"[{profile.get('profile_status') or 'unknown'}]"
+            ),
+            (
+                "  Architecture: "
+                f"{item['architecture'] or 'N/A'}, "
+                f"compute capability "
+                f"{item['compute_capability'] or 'N/A'}, "
+                f"target {item['compiler_target'] or 'N/A'}"
+            ),
+            (
+                "  Compute resources: "
+                f"{profile.get('sm_count', 'N/A')} SMs, "
+                f"{profile.get('core_clock_mhz', 'N/A')} MHz core, "
+                f"{profile.get('memory_clock_mhz', 'N/A')} MHz memory"
+            ),
+            (
+                "  Memory profile: "
+                f"{profile.get('memory_kind') or 'N/A'}, "
+                f"{profile.get('memory_bus_width_bits', 'N/A')} bit bus, "
+                f"L2 {_format_bytes(profile.get('l2_cache_bytes'))}"
+            ),
+            (
+                "  Supported types: "
+                f"{_format_list(profile.get('supported_types'))}"
+            ),
+            (
+                "  Profile power: "
+                f"{_format_watts(profile.get('typical_power_usage_mw'))} "
+                "typical / "
+                f"{_format_watts(profile.get('max_power_limit_mw'))} max"
+            ),
+            (
+                "  Memory current: "
+                f"{_format_bytes(memory['used_bytes'])} simulated, "
+                f"{_format_bytes(memory['tracked_bytes'])} allocated, "
+                f"{_format_bytes(memory['reserved_bytes'])} reserved, "
+                f"{_format_bytes(memory['free_bytes'])} free"
+            ),
+            (
+                "  Memory peaks: "
+                f"{_format_bytes(memory['reported_peak_bytes'])} "
+                "simulated, "
+                f"{_format_bytes(memory['tracked_peak_bytes'])} "
+                "allocated, "
+                f"{_format_bytes(memory['reserved_peak_bytes'])} "
+                "reserved"
+            ),
+            (
+                "  Allocator: "
+                f"{allocator['model']}, "
+                f"{allocator['segment_count']} segments, "
+                f"{_format_bytes(memory['inactive_split_bytes'])} "
+                "inactive split, "
+                f"{allocator['allocation_count']} allocations / "
+                f"{allocator['free_count']} frees"
+            ),
+            (
+                "  Memory categories: "
+                f"{_format_byte_mapping(allocator['categories'])}"
+            ),
+            (
+                "  Stage peaks: "
+                f"{_format_byte_mapping(allocator['stage_peaks'])}"
+            ),
+            (
+                "  Processes: "
+                f"{item['process_count']} total, "
+                f"{item['stale_process_count']} stale, "
+                f"{item['exited_process_count']} exited"
+            ),
+        ]
+    )
+    if health.get("error"):
+        lines.append(
+            f"  Health configuration error: {health['error']}"
+        )
+    if health.get("events"):
+        lines.append("  Modeled fault events:")
+        for event in health["events"][:5]:
+            lines.append(
+                "    - "
+                f"[{event['severity']}] "
+                f"{event['code']}: "
+                f"{event['count']} "
+                "occurrences"
+            )
+    if mig.get("error"):
+        lines.append(
+            f"  MIG configuration error: {mig['error']}"
+        )
+    if mig.get("instances"):
+        lines.append("  Modeled MIG instances:")
+        for instance in mig["instances"]:
+            lines.append(
+                "    - "
+                f"GI {instance['gpu_instance_id']} / "
+                f"CI {instance['compute_instance_id']}: "
+                f"{instance['profile']}, "
+                f"{_format_bytes(instance['memory_total_bytes'])}, "
+                f"{instance['uuid']}"
+            )
+    if (
+        str(item["fakegpu"].get("runtime") or "") == "native"
+        or _has_native_activity(native_activity)
+    ):
+        lines.extend(
+            [
+                (
+                    "  Native activity: "
+                    f"{native_activity['kernel_launches']} kernel launches, "
+                    f"{native_activity['gemm_calls']} GEMM calls / "
+                    f"{native_activity['gemm_flops']} FLOP, "
+                    f"{native_activity['io_calls']} IO calls / "
+                    f"{_format_bytes(native_activity['io_bytes'])}"
+                ),
+                (
+                    "  Native compatibility: "
+                    f"{native_activity['compatibility_events']} events, "
+                    f"{native_activity['unsupported_api_calls']} "
+                    "unsupported API calls"
+                ),
+            ]
+        )
+        kernels = native_activity["kernels"]
+        if kernels:
+            lines.append(
+                "  Native kernels: "
+                + ", ".join(
+                    f"{name}={count}"
+                    for name, count in sorted(
+                        kernels.items(),
+                        key=lambda entry: (
+                            -_nonnegative_int(entry[1]),
+                            str(entry[0]),
+                        ),
+                    )[:5]
+                )
+            )
+        unsupported_apis = native_activity["unsupported_apis"]
+        if unsupported_apis:
+            lines.append("  Unsupported native APIs:")
+            for event in unsupported_apis[:5]:
+                lines.append(
+                    "    - "
+                    f"{event.get('operation') or 'unknown'}: "
+                    f"{_nonnegative_int(event.get('count'))} calls "
+                    f"[{event.get('behavior') or 'unknown'}, "
+                    f"{event.get('policy') or 'unknown'}]"
+                )
+    allocations = allocator["largest_allocations"]
+    if allocations:
+        lines.append("  Largest allocations:")
+        for allocation in allocations[:5]:
+            lines.append(
+                "    - "
+                f"{_format_bytes(allocation.get('bytes'))} "
+                f"[{allocation.get('category') or 'unknown'}] "
+                f"pid={allocation.get('pid', 0)} "
+                f"{allocation.get('source') or allocation.get('operator') or 'unknown'}"
+            )
+    return lines
 
 
 def render_query(
@@ -1064,12 +1026,12 @@ def _topology_labels(
 ) -> list[str]:
     totals: dict[int, int] = {}
     for device in devices:
-        index = _nonnegative_int(device.get("index"))
+        index = device["index"]
         totals[index] = totals.get(index, 0) + 1
     offsets: dict[int, int] = {}
     labels = []
     for device in devices:
-        index = _nonnegative_int(device.get("index"))
+        index = device["index"]
         offsets[index] = offsets.get(index, 0) + 1
         label = f"GPU{index}"
         if totals[index] > 1:
@@ -1084,23 +1046,21 @@ def _topology_relation(
 ) -> str:
     if source is target:
         return "X"
-    target_uuid = str(target.get("uuid") or "")
-    target_index = _nonnegative_int(target.get("index"))
-    topology = source.get("topology", {})
-    peers = topology.get("nvlink", {}).get("peers", [])
-    for peer in peers:
-        if not isinstance(peer, Mapping) or not peer.get("active"):
+    target_uuid = target["uuid"]
+    target_index = target["index"]
+    topology = source["topology"]
+    for peer in topology["nvlink"]["peers"]:
+        if not peer["active"]:
             continue
-        peer_uuid = str(peer.get("uuid") or "")
+        peer_uuid = peer["uuid"]
         if (
-            peer_uuid
-            and peer_uuid != "unknown"
+            peer_uuid != "unknown"
             and peer_uuid == target_uuid
         ) or (
-            peer_uuid in {"", "unknown"}
-            and _nonnegative_int(peer.get("index")) == target_index
+            peer_uuid == "unknown"
+            and peer["index"] == target_index
         ):
-            return f"NV{_nonnegative_int(peer.get('links'), default=1)}"
+            return f"NV{peer['links']}"
     if str(source.get("host") or "") != str(target.get("host") or ""):
         return "SYS"
     left = topology.get("slot")
@@ -1137,9 +1097,9 @@ def _throughput_text(
         links.append("pcie")
     if transfer.get("host_link") == "c2c":
         links.append("c2c")
-    if (topology.get("nvlink") or {}).get("active_links"):
+    if topology["nvlink"]["active_links"]:
         links.append("nvlink")
-    window = transfer.get("window_seconds") or 1
+    window = transfer["window_seconds"]
     return f"{throughput_summary(transfer, links)} (last {window:g} s)"
 
 
@@ -1147,13 +1107,13 @@ def _slot_text(topology: Mapping[str, Any]) -> str:
     slot = topology.get("slot")
     if not slot:
         return "not modeled"
-    parts = [str(slot.get("type") or "any")]
+    parts = [slot["type"]]
     if topology.get("platform"):
         parts[0] += f" on {topology['platform']}"
     pcie = topology.get("pcie")
     if pcie:
         text = f"PCIe Gen{pcie['generation']} x{pcie['width']}"
-        if (pcie.get("gpu_max_generation"), pcie.get("gpu_max_width")) != (
+        if (pcie["gpu_max_generation"], pcie["gpu_max_width"]) != (
             pcie["generation"],
             pcie["width"],
         ):
@@ -1164,29 +1124,17 @@ def _slot_text(topology: Mapping[str, Any]) -> str:
         parts.append(text)
     else:
         parts.append("no PCIe link")
-    host = topology.get("host_link") or {}
-    if host.get("bandwidth_gbps") is not None:
+    host = topology["host_link"]
+    if host["bandwidth_gbps"] is not None:
         parts.append(
-            f"host {host.get('kind')} {_format_gbps(host['bandwidth_gbps'])} GB/s"
+            f"host {host['kind']} {_format_gbps(host['bandwidth_gbps'])} GB/s"
         )
-    parts.append(f"NUMA {slot.get('numa_node')}")
+    parts.append(f"NUMA {slot['numa_node']}")
     return ", ".join(parts)
 
 
-def _display_value(value: Any) -> str:
-    return "N/A" if value is None or value == "" else str(value)
-
-
-def _format_gbps(value: Any) -> str:
-    if value is None:
-        return "N/A"
-    try:
-        bandwidth = float(value)
-    except (TypeError, ValueError):
-        return "N/A"
-    if not math.isfinite(bandwidth) or bandwidth < 0:
-        return "N/A"
-    return f"{bandwidth:g}"
+def _format_gbps(value: float | None) -> str:
+    return "N/A" if value is None else f"{value:g}"
 
 
 def _enabled_text(value: Any) -> str:
