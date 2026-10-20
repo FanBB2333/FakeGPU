@@ -56,6 +56,19 @@ def _positive_plan_integer(payload: Mapping[str, Any], key: str) -> int:
     return int(value)
 
 
+def _target_memory_bytes(context: Mapping[str, Any]) -> int:
+    value = context["profile"].get("memory_bytes")
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value <= 0
+    ):
+        raise CalibrationError(
+            "serving plan target profile has no valid memory_bytes"
+        )
+    return value
+
+
 def _normalize_compute_capability(value: Any, *, label: str) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
@@ -326,7 +339,7 @@ def _normalize_serving_runner_environment(
             f"{label} environment total_memory_bytes must be a positive "
             "integer"
         )
-    expected_memory_bytes = int(context["profile"]["memory_bytes"])
+    expected_memory_bytes = _target_memory_bytes(context)
     capacity_difference_bytes = total_memory_bytes - expected_memory_bytes
     capacity_difference_percent = (
         abs(capacity_difference_bytes) / expected_memory_bytes * 100

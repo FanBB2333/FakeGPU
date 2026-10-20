@@ -26,6 +26,7 @@ from ._calibration_protocol import (
     _runner_diagnostic,
     _serving_plan_observation_context,
     _serving_sample_plan_path,
+    _target_memory_bytes,
     _validate_serving_runner_sample,
 )
 from ._cli import (
@@ -397,15 +398,7 @@ def collect_serving_memory_observation(
         not isinstance(source, str) or not source.strip()
     ):
         raise CalibrationError("source must be a non-empty string")
-    target_memory_bytes = context["profile"].get("memory_bytes")
-    if (
-        not isinstance(target_memory_bytes, int)
-        or isinstance(target_memory_bytes, bool)
-        or target_memory_bytes <= 0
-    ):
-        raise CalibrationError(
-            "serving plan target profile has no valid memory_bytes"
-        )
+    _target_memory_bytes(context)
 
     working_directory = Path(cwd or os.getcwd()).expanduser().resolve()
     if not working_directory.is_dir():

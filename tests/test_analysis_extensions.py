@@ -793,6 +793,22 @@ def test_transformers_runner_measures_phases_and_builds_vllm_sample(
     assert vllm_sample["phases"]["decode"]["peak_bytes"] == 2_400
     assert vllm_sample["environment"]["software"]["framework"] == "vllm"
 
+    for memory_bytes in (None, 0, -5):
+        invalid_plan = _serving_protocol_plan()
+        if memory_bytes is None:
+            del invalid_plan["target"]["profile"]["memory_bytes"]
+        else:
+            invalid_plan["target"]["profile"]["memory_bytes"] = memory_bytes
+        with pytest.raises(CalibrationError, match="no valid memory_bytes"):
+            build_cuda_serving_sample(
+                invalid_plan,
+                phase_peaks={"prefill": 2_000, "decode": 2_400},
+                metric="nvml.process_family_peak_bytes",
+                framework="vllm",
+                framework_version="0.10.2",
+                run_index=5,
+            )
+
     monkeypatch.setenv(
         "FAKEGPU_SERVING_WORKLOAD_SIGNATURE",
         "wrong-signature",
