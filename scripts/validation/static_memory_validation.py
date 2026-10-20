@@ -75,12 +75,10 @@ def main(argv: list[str] | None = None) -> int:
         workload_names=selected_names,
         warmup_runs=ns.warmup_runs,
         repeats=ns.repeats,
-        static_only=bool(ns.static_only),
+        static_only=ns.static_only,
         max_underestimate_percent=ns.max_underestimate_percent,
         min_workspace_coverage=ns.min_workspace_coverage,
-        reject_extrapolated_workspaces=bool(
-            ns.reject_extrapolated_workspaces
-        ),
+        reject_extrapolated_workspaces=ns.reject_extrapolated_workspaces,
     )
 
     output = ns.output.resolve()
@@ -101,17 +99,14 @@ def run_validation(
     repeats: int,
     static_only: bool,
     max_underestimate_percent: float | None,
-    min_workspace_coverage: float | None = None,
-    reject_extrapolated_workspaces: bool = False,
+    min_workspace_coverage: float | None,
+    reject_extrapolated_workspaces: bool,
 ) -> dict[str, Any]:
     import torch
 
     from fakegpu.memory_estimator import estimate_module_memory
 
     available_workloads = _workloads()
-    invalid = [name for name in workload_names if name not in available_workloads]
-    if invalid:
-        raise ValueError(f"unknown workload(s): {', '.join(invalid)}")
 
     has_real_cuda = bool(torch.cuda.is_available()) and not static_only
     backend_calibration = _measure_backend_resident() if has_real_cuda else None
@@ -317,21 +312,14 @@ def _measure_real_cuda(
 
     torch.cuda.empty_cache()
     torch.cuda.manual_seed_all(0)
-    device = torch.device("cuda", 0)
-    model = model.to(device)
-    cuda_args = tuple(_move_to_device(value, device) for value in args)
-    optimizer = torch.optim.AdamW(
-        [parameter for parameter in model.parameters() if parameter.requires_grad],
-        lr=1e-3,
-        foreach=False,
-    )
+    model, cuda_args, optimizer = _cuda_training_setup(model, args)
 
-    for _ in range(max(0, int(warmup_runs))):
+    for _ in range(warmup_runs):
         _training_step(model, cuda_args, optimizer)
     torch.cuda.synchronize()
 
     trials: list[dict[str, Any]] = []
-    for trial_index in range(max(1, int(repeats))):
+    for trial_index in range(repeats):
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.synchronize()
         baseline_allocated = int(torch.cuda.memory_allocated())
@@ -445,7 +433,7 @@ def _measure_real_cuda(
     result = {
         "status": "PASS_MEASURED",
         "trial_count": len(trials),
-        "warmup_runs": max(0, int(warmup_runs)),
+        "warmup_runs": warmup_runs,
         "trials": trials,
         "peak_stage": str(peak_trial["peak_stage"]),
         "peak_requested_stage": (
@@ -510,14 +498,7 @@ def _measure_backend_resident() -> dict[str, Any]:
         dtype="float32",
     )
     model, args = spec.factory()
-    device = torch.device("cuda", 0)
-    model = model.to(device)
-    cuda_args = tuple(_move_to_device(value, device) for value in args)
-    optimizer = torch.optim.AdamW(
-        [parameter for parameter in model.parameters() if parameter.requires_grad],
-        lr=1e-3,
-        foreach=False,
-    )
+    model, cuda_args, optimizer = _cuda_training_setup(model, args)
     _training_step(model, cuda_args, optimizer)
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.synchronize()
@@ -544,15 +525,25 @@ def _measure_backend_resident() -> dict[str, Any]:
     }
 
 
-def _training_step(
+def _cuda_training_setup(
     model: Any,
     args: tuple[Any, ...],
-    optimizer: Any,
-    *,
-    zero_grad: bool = True,
-) -> float:
-    if zero_grad:
-        optimizer.zero_grad(set_to_none=True)
+) -> tuple[Any, tuple[Any, ...], Any]:
+    import torch
+
+    device = torch.device("cuda", 0)
+    model = model.to(device)
+    cuda_args = tuple(value.to(device) for value in args)
+    optimizer = torch.optim.AdamW(
+        [parameter for parameter in model.parameters() if parameter.requires_grad],
+        lr=1e-3,
+        foreach=False,
+    )
+    return model, cuda_args, optimizer
+
+
+def _training_step(model: Any, args: tuple[Any, ...], optimizer: Any) -> float:
+    optimizer.zero_grad(set_to_none=True)
     output = model(*args)
     loss = _training_loss(output)
     loss.backward()
@@ -778,8 +769,6 @@ def _comparison_summary(comparisons: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _sample_summary(values: list[int | float]) -> dict[str, int | float]:
-    if not values:
-        raise ValueError("sample summary requires at least one value")
     ordered = sorted(values)
     return {
         "count": len(ordered),
@@ -800,20 +789,6 @@ def _gpu_fingerprint() -> dict[str, Any]:
         "compute_capability": f"{int(props.major)}.{int(props.minor)}",
         "sm_count": int(props.multi_processor_count),
     }
-
-
-def _move_to_device(value: Any, device: Any) -> Any:
-    import torch
-
-    if isinstance(value, torch.Tensor):
-        return value.to(device)
-    if isinstance(value, dict):
-        return {key: _move_to_device(item, device) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return tuple(_move_to_device(item, device) for item in value)
-    if isinstance(value, list):
-        return [_move_to_device(item, device) for item in value]
-    return value
 
 
 def _workloads() -> dict[str, WorkloadSpec]:
