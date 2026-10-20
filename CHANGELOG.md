@@ -61,6 +61,9 @@
   non-numeric `defaults.timeout_seconds`) as manifest errors (exit 2) before
   running any command; a non-numeric `expect.exit_code` or
   `expect.duration_seconds_max` is recorded as a case failure.
+- `fakegpu preflight` rejects an invalid `--memory-safety-margin` with a usage
+  error (exit 2) before running the workload, instead of failing afterwards
+  without writing a report.
 
 ## v1.6.0 - 2026-10-17
 

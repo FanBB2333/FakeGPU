@@ -103,7 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--memory-safety-margin",
-        default=None,
+        type=_parse_memory_safety_margin,
+        default=0,
         help=(
             "Add a fixed byte margin before fit/OOM classification, e.g. 18089460, 18MiB, or 0.02GiB. "
             "Prefer this when calibration shows a mostly fixed backend workspace gap."
@@ -202,7 +203,7 @@ def build_report(
     raw_report, raw_report_kind = _load_raw_runtime_report(paths)
     devices, tracking_confidence = _normalize_devices(raw_report, raw_report_kind)
     memory_safety_factor = _resolve_memory_safety_factor(ns)
-    memory_safety_margin = _resolve_memory_safety_margin(ns)
+    memory_safety_margin = ns.memory_safety_margin
     if memory_safety_factor > 1.0 or memory_safety_margin > 0:
         devices = _apply_memory_safety_adjustment(devices, memory_safety_factor, memory_safety_margin)
         if memory_safety_factor > 1.0:
@@ -562,11 +563,10 @@ def _resolve_memory_safety_factor(ns: argparse.Namespace) -> float:
     return max(1.0, float(raw_value))
 
 
-def _resolve_memory_safety_margin(ns: argparse.Namespace) -> int:
-    raw_value = ns.memory_safety_margin
-    if raw_value is None or str(raw_value).strip() == "":
+def _parse_memory_safety_margin(value: str) -> int:
+    if value.strip() == "":
         return 0
-    return max(0, _parse_byte_quantity(str(raw_value)))
+    return max(0, _parse_byte_quantity(value))
 
 
 def _parse_byte_quantity(value: str) -> int:

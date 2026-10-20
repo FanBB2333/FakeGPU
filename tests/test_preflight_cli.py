@@ -369,6 +369,23 @@ def test_preflight_memory_safety_margin_can_fail_estimated_oom(tmp_path: Path) -
     assert any("safety margin" in warning.lower() for warning in report["warnings"])
 
 
+def test_preflight_rejects_invalid_memory_safety_margin_before_running(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "ran"
+    report_dir = tmp_path / "preflight-invalid-margin"
+    completed = _run_preflight(
+        [sys.executable, "-c", f"open({str(marker)!r}, 'w')"],
+        report_dir=report_dir,
+        preflight_args=["--memory-safety-margin", "12XB"],
+    )
+
+    assert completed.returncode == 2, completed.stderr
+    assert "invalid byte unit in '12XB'" in completed.stderr
+    assert not marker.exists()
+    assert not (report_dir / "preflight_report.json").exists()
+
+
 def test_preflight_empirical_calibration_uses_repeated_real_gpu_upper_bound(tmp_path: Path) -> None:
     script = tmp_path / "empirical_probe.py"
     script.write_text(
