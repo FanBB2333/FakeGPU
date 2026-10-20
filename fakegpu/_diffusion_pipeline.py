@@ -479,7 +479,7 @@ def _local_unet_profile(
         config.get("dual_cross_attention", False)
         or config.get("attention_type", "default") != "default"
         or any(block not in standard_down for block in down_block_types)
-        or any(block not in standard_up for block in config.get("up_block_types", []))
+        or any(block not in standard_up for block in config.get("up_block_types") or [])
         or config.get("mid_block_type", "UNetMidBlock2DCrossAttn")
         not in {None, "UNetMidBlock2DCrossAttn"}
     ):
@@ -560,6 +560,7 @@ def _local_transformer_profile(
         if has_conditioning
         else "none"
     )
+    mlp_ratio = config.get("mlp_ratio")
     return {
         "architecture": "transformer",
         "model_class": model_class,
@@ -576,7 +577,7 @@ def _local_transformer_profile(
         "attention_head_dim": head_dim,
         "patch_size": patch_size,
         "packing_factor": packing_factor,
-        "mlp_ratio": float(config.get("mlp_ratio", 4.0)),
+        "mlp_ratio": float(4.0 if mlp_ratio is None else mlp_ratio),
         "cross_attention_dim": _optional_positive_config(
             config,
             (

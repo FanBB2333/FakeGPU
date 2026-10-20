@@ -490,6 +490,28 @@ def test_local_patch_and_joint_transformers_use_distinct_shapes(
     assert flux_activation["image_tokens"] == 64
 
 
+@pytest.mark.parametrize(
+    "transformer,field", [(False, "up_block_types"), (True, "mlp_ratio")]
+)
+def test_local_denoiser_null_config_fields_match_missing_keys(
+    tmp_path: Path,
+    transformer: bool,
+    field: str,
+) -> None:
+    model_dir = tmp_path / "local-null-field"
+    _write_pipeline(model_dir, transformer=transformer)
+    baseline = estimate_diffusion_generation(model_dir=model_dir)
+    config_path = model_dir / ("transformer" if transformer else "unet") / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config[field] = None
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    report = estimate_diffusion_generation(model_dir=model_dir)
+
+    assert report["activation_models"] == baseline["activation_models"]
+    assert report["memory_timeline"] == baseline["memory_timeline"]
+
+
 def test_diffusion_estimator_rejects_invalid_inputs_and_profiles(
     tmp_path: Path,
 ) -> None:
