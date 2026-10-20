@@ -81,6 +81,8 @@
   under `warn` and returns `CUDA_ERROR_NOT_SUPPORTED` under `error`.
 - Hybrid `cuGetProcAddress` no longer returns the caller's stale `*pfn` when
   the real driver resolves a symbol to NULL and `dlsym` also misses it.
+- Hybrid `cuMemAllocFromPoolAsync` applies a single allocation decision, so
+  one over-budget request counts once in the report's OOM fallback count.
 
 ## v1.6.0 - 2026-10-17
 

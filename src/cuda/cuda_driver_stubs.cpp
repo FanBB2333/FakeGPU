@@ -2512,8 +2512,10 @@ CUresult cuMemAllocFromPoolAsync(CUdeviceptr *dptr, size_t bytesize, CUmemoryPoo
             }
         }
 
-        // Fallback to the same policy handling as cuMemAllocAsync.
-        return cuMemAllocAsync(dptr, bytesize, hStream);
+        // Apply the same decision with cuMemAllocAsync's policy handling.
+        return hybrid_allocate(dptr, bytesize, virtual_device, decision, [&](CUdeviceptr* out) {
+            return real_mem_alloc_async(out, bytesize, hStream);
+        });
     }
 
     return cuMemAlloc(dptr, bytesize);
