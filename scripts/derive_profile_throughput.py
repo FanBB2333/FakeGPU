@@ -26,7 +26,7 @@ def main() -> int:
     stale = []
     for profile in load_profiles().values():
         path = root / profile.profile_path
-        scalars, _ = read_block(path)
+        scalars = read_block(path)
         basis = {key: value for key, value in profile.throughput_basis.items() if value == "published"}
         values: dict[str, object] = {key: value for key, value in scalars.items() if key not in THROUGHPUT_FIELDS}
         values.update({key: profile.throughput[key] for key in basis})
