@@ -35,7 +35,7 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
     assert bind("cublasCreate_v2", [P])(ct.byref(handle)) == 0
 
     def check(name, types, args, outputs, *, fallback=True, value=None, call_handle=None, reject=False,
-              unchanged=False):
+              unchanged=False, synthetic_value=False):
         func = bind(name, [P, *types])
         nonlocal lt_matmuls
         snapshots = [bytes(output) for output in outputs]
@@ -49,7 +49,7 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
                 lt_matmuls += 1
             if unchanged or reject or (strict and fallback):
                 assert [bytes(output) for output in outputs] == snapshots, name
-            if not fallback and value is not None:
+            if value is not None and expected == 0 and (not fallback or synthetic_value):
                 assert outputs[0][0] == value, (name, outputs[0][0], value)
         for output, snapshot in zip(outputs, snapshots):
             ct.memmove(output, snapshot, len(snapshot))
@@ -110,7 +110,8 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
         for suffix in ("amax_v2", "amin_v2"):
             index = (Int * 1)(123)
             check("cublasI" + prefix.lower() + suffix, [Int, P, Int, P],
-                  [1, a, 1, index], [index], fallback=not cpu_simulation, value=1)
+                  [1, a, 1, index], [index], fallback=not cpu_simulation, value=1,
+                  synthetic_value=True)  # cuBLAS indices are 1-based, so n=1 always gives 1
         check(base + "axpy_v2", [Int, P, P, Int, P, Int], [1, alpha, a, 1, c, 1], [c],
               fallback=not cpu_simulation, value=125)
         check(base + "copy_v2", [Int, P, Int, P, Int], [1, a, 1, c, 1], [c],

@@ -744,7 +744,7 @@ cublasStatus_t cublasIsamax_v2(cublasHandle_t handle, int n, const float *x, int
     if (fake_gpu::record_unsupported_api("cublasIsamax_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    *result = std::uniform_int_distribution<int>(0, n-1)(g_rng);
+    *result = std::uniform_int_distribution<int>(1, n)(g_rng);
     FGPU_LOG("[FakeCUBLAS] cublasIsamax_v2 n=%d result=%d\n", n, *result);
     return CUBLAS_STATUS_SUCCESS;
 #endif
@@ -777,7 +777,7 @@ cublasStatus_t cublasIdamax_v2(cublasHandle_t handle, int n, const double *x, in
     if (fake_gpu::record_unsupported_api("cublasIdamax_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    *result = std::uniform_int_distribution<int>(0, n-1)(g_rng);
+    *result = std::uniform_int_distribution<int>(1, n)(g_rng);
     return CUBLAS_STATUS_SUCCESS;
 #endif
 }
@@ -809,7 +809,7 @@ cublasStatus_t cublasIsamin_v2(cublasHandle_t handle, int n, const float *x, int
     if (fake_gpu::record_unsupported_api("cublasIsamin_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    *result = std::uniform_int_distribution<int>(0, n-1)(g_rng);
+    *result = std::uniform_int_distribution<int>(1, n)(g_rng);
     return CUBLAS_STATUS_SUCCESS;
 #endif
 }
@@ -841,7 +841,7 @@ cublasStatus_t cublasIdamin_v2(cublasHandle_t handle, int n, const double *x, in
     if (fake_gpu::record_unsupported_api("cublasIdamin_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    *result = std::uniform_int_distribution<int>(0, n-1)(g_rng);
+    *result = std::uniform_int_distribution<int>(1, n)(g_rng);
     return CUBLAS_STATUS_SUCCESS;
 #endif
 }

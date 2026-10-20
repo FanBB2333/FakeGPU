@@ -115,6 +115,9 @@
 - With CPU simulation, `cublasSgemm_v2`, `cublasDgemm_v2` and `cublasGemmEx`
   accept `k = 0` with padded leading dimensions and scale C by beta instead
   of returning `CUBLAS_STATUS_INVALID_VALUE`.
+- Without CPU simulation, the synthetic `cublasI[sd]amax_v2` and
+  `cublasI[sd]amin_v2` results are 1-based like cuBLAS instead of possibly
+  returning the invalid index 0.
 
 ## v1.6.0 - 2026-10-17
 
