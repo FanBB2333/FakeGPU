@@ -759,6 +759,16 @@ def test_native_smi_environment_errors_match_python(
     assert native["error"] == python["error"]
 
 
+def test_native_smi_publisher_waits_out_a_huge_interval(tmp_path: Path) -> None:
+    state = _native_smi_state(
+        tmp_path,
+        {"FAKEGPU_SMI_INTERVAL_MS": "1e300"},
+        hold_seconds=0.5,
+    )
+
+    assert state["publisher"]["health"]["attempted_writes"] == 2
+
+
 def test_virtual_smi_process_query_filters_and_marks_stale_state(
     tmp_path: Path,
     capsys,

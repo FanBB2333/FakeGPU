@@ -39,6 +39,8 @@ namespace {
 constexpr const char* kStateSchema = "fakegpu.smi_state.v2";
 constexpr double kDefaultIntervalMs = 250.0;
 constexpr double kMinimumIntervalMs = 50.0;
+// Keeps the steady_clock deadline in wait_for() from overflowing.
+constexpr double kMaximumIntervalMs = 1e12;
 constexpr std::size_t kDefaultDetailLimit = 64;
 constexpr std::size_t kMaximumDetailLimit = 1024;
 constexpr std::size_t kDefaultMaxStateBytes = 1024 * 1024;
@@ -111,7 +113,7 @@ std::chrono::milliseconds configured_interval() {
             milliseconds = parsed;
         }
     }
-    milliseconds = std::max(kMinimumIntervalMs, milliseconds);
+    milliseconds = std::min(kMaximumIntervalMs, std::max(kMinimumIntervalMs, milliseconds));
     return std::chrono::milliseconds(
         static_cast<std::chrono::milliseconds::rep>(milliseconds));
 }

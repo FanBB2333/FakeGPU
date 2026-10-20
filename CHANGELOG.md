@@ -130,6 +130,9 @@
   DEVICE:CODE:SEVERITY[:COUNT]` error instead of a code or severity error.
 - The native `FAKEGPU_NVLINK_FABRIC` error for a group naming a GPU beyond
   the device count includes the group, as in the Python model.
+- A huge `FAKEGPU_SMI_INTERVAL_MS` (such as `1e300`) no longer makes the
+  native SMI publisher rewrite its state file thousands of times a second;
+  the interval is capped at 10^12 ms.
 
 ## v1.6.0 - 2026-10-17
 
