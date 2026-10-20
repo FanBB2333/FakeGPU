@@ -10,7 +10,6 @@
 #include <limits>
 #include <optional>
 #include <sstream>
-#include <stdexcept>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -66,6 +65,16 @@ bool split_key_value(const std::string& text, std::string& key, std::string& val
     return !key.empty();
 }
 
+bool parse_int(const std::string& text, int& out) {
+    try {
+        std::size_t consumed = 0;
+        out = std::stoi(text, &consumed, 10);
+        return consumed == text.size();
+    } catch (...) {
+        return false;
+    }
+}
+
 bool parse_int_list(const std::string& text, std::vector<int>& out, std::string& error) {
     out.clear();
     if (text.size() < 2 || text.front() != '[' || text.back() != ']') {
@@ -86,22 +95,16 @@ bool parse_int_list(const std::string& text, std::vector<int>& out, std::string&
             error = "empty rank entry";
             return false;
         }
-        try {
-            std::size_t consumed = 0;
-            int rank = std::stoi(item, &consumed, 10);
-            if (consumed != item.size()) {
-                error = "rank must be an integer";
-                return false;
-            }
-            if (rank < 0) {
-                error = "rank must be >= 0";
-                return false;
-            }
-            out.push_back(rank);
-        } catch (...) {
+        int rank = 0;
+        if (!parse_int(item, rank)) {
             error = "rank must be an integer";
             return false;
         }
+        if (rank < 0) {
+            error = "rank must be >= 0";
+            return false;
+        }
+        out.push_back(rank);
     }
     return true;
 }
@@ -121,15 +124,7 @@ bool parse_size_value(const std::string& text, std::size_t& out) {
         return false;
     }
     try {
-        std::size_t consumed = 0;
-        const unsigned long long parsed = std::stoull(text, &consumed, 10);
-        if (consumed != text.size()) {
-            return false;
-        }
-        if (parsed > std::numeric_limits<std::size_t>::max()) {
-            return false;
-        }
-        out = static_cast<std::size_t>(parsed);
+        out = static_cast<std::size_t>(std::stoull(text, nullptr, 10));
         return true;
     } catch (...) {
         return false;
@@ -199,10 +194,6 @@ bool validate_cluster_config_model(ClusterConfigModel& model, std::string& error
         error = "fabric bandwidth_gbps must be positive for both intra_node and inter_node";
         return false;
     }
-    if (model.intra_node_fabric.latency_us < 0.0 || model.inter_node_fabric.latency_us < 0.0) {
-        error = "fabric latency_us must be non-negative for both intra_node and inter_node";
-        return false;
-    }
 
     std::unordered_set<std::string> node_ids;
     std::unordered_set<int> seen_ranks;
@@ -246,11 +237,6 @@ bool validate_cluster_config_model(ClusterConfigModel& model, std::string& error
         }
     }
 
-    if (max_rank < 0) {
-        error = "cluster config must define at least one rank";
-        return false;
-    }
-
     const std::size_t expected_world_size = static_cast<std::size_t>(max_rank + 1);
     if (seen_ranks.size() != expected_world_size) {
         error = "ranks must be contiguous from 0 to " + std::to_string(max_rank);
@@ -281,6 +267,10 @@ bool parse_cluster_yaml(std::istream& input, ClusterConfigModel& out, std::strin
     bool node_gpus_active = false;
     std::string line;
     int line_no = 0;
+    auto line_error = [&](const std::string& message) {
+        error = "line " + std::to_string(line_no) + ": " + message;
+        return false;
+    };
 
     auto flush_node = [&]() {
         if (current_node.has_value()) {
@@ -328,45 +318,33 @@ bool parse_cluster_yaml(std::istream& input, ClusterConfigModel& out, std::strin
             std::string key;
             std::string value;
             if (!split_key_value(trimmed, key, value)) {
-                error = "line " + std::to_string(line_no) + ": invalid top-level entry";
-                return false;
+                return line_error("invalid top-level entry");
             }
             if (key == "version") {
-                try {
-                    std::size_t consumed = 0;
-                    out.version = std::stoi(value, &consumed, 10);
-                    if (consumed != value.size()) {
-                        throw std::invalid_argument("trailing");
-                    }
-                } catch (...) {
-                    error = "line " + std::to_string(line_no) + ": version must be an integer";
-                    return false;
+                if (!parse_int(value, out.version)) {
+                    return line_error("version must be an integer");
                 }
                 continue;
             }
 
-            error = "line " + std::to_string(line_no) + ": unsupported top-level key " + key;
-            return false;
+            return line_error("unsupported top-level key " + key);
         }
 
         if (top_level == TopLevelSection::Cluster) {
             if (indent != 2) {
-                error = "line " + std::to_string(line_no) + ": cluster fields must be indented by 2 spaces";
-                return false;
+                return line_error("cluster fields must be indented by 2 spaces");
             }
             std::string key;
             std::string value;
             if (!split_key_value(trimmed, key, value)) {
-                error = "line " + std::to_string(line_no) + ": invalid cluster field";
-                return false;
+                return line_error("invalid cluster field");
             }
             if (key == "name") {
                 out.name = value;
             } else if (key == "default_backend") {
                 out.default_backend = value;
             } else {
-                error = "line " + std::to_string(line_no) + ": unsupported cluster field " + key;
-                return false;
+                return line_error("unsupported cluster field " + key);
             }
             continue;
         }
@@ -379,14 +357,12 @@ bool parse_cluster_yaml(std::istream& input, ClusterConfigModel& out, std::strin
             if (indent == 2) {
                 flush_node();
                 if (trimmed.rfind("- ", 0) != 0) {
-                    error = "line " + std::to_string(line_no) + ": node entries must begin with '- '";
-                    return false;
+                    return line_error("node entries must begin with '- '");
                 }
                 std::string key;
                 std::string value;
                 if (!split_key_value(trim(trimmed.substr(2)), key, value) || key != "id") {
-                    error = "line " + std::to_string(line_no) + ": node entries must start with '- id:'";
-                    return false;
+                    return line_error("node entries must start with '- id:'");
                 }
                 current_node = ClusterNodeConfig{};
                 current_node->id = value;
@@ -395,8 +371,7 @@ bool parse_cluster_yaml(std::istream& input, ClusterConfigModel& out, std::strin
             }
 
             if (!current_node.has_value()) {
-                error = "line " + std::to_string(line_no) + ": node field encountered before any node declaration";
-                return false;
+                return line_error("node field encountered before any node declaration");
             }
 
             if (indent == 4 && trimmed == "gpus:") {
@@ -406,41 +381,35 @@ bool parse_cluster_yaml(std::istream& input, ClusterConfigModel& out, std::strin
 
             if (indent == 6) {
                 if (!node_gpus_active || trimmed.rfind("- ", 0) != 0) {
-                    error = "line " + std::to_string(line_no) + ": unsupported node sub-entry";
-                    return false;
+                    return line_error("unsupported node sub-entry");
                 }
                 std::string key;
                 std::string value;
                 if (!split_key_value(trim(trimmed.substr(2)), key, value) || key != "profile") {
-                    error = "line " + std::to_string(line_no) + ": gpu entries must be '- profile: ...'";
-                    return false;
+                    return line_error("gpu entries must be '- profile: ...'");
                 }
                 current_node->gpu_profiles.push_back(value);
                 continue;
             }
 
             if (indent != 4) {
-                error = "line " + std::to_string(line_no) + ": unsupported node indentation";
-                return false;
+                return line_error("unsupported node indentation");
             }
 
             std::string key;
             std::string value;
             if (!split_key_value(trimmed, key, value)) {
-                error = "line " + std::to_string(line_no) + ": invalid node field";
-                return false;
+                return line_error("invalid node field");
             }
             node_gpus_active = false;
             if (key == "host") {
                 current_node->host = value;
             } else if (key == "ranks") {
                 if (!parse_int_list(value, current_node->ranks, error)) {
-                    error = "line " + std::to_string(line_no) + ": " + error;
-                    return false;
+                    return line_error(error);
                 }
             } else {
-                error = "line " + std::to_string(line_no) + ": unsupported node field " + key;
-                return false;
+                return line_error("unsupported node field " + key);
             }
             continue;
         }
@@ -455,33 +424,28 @@ bool parse_cluster_yaml(std::istream& input, ClusterConfigModel& out, std::strin
                     fabric_section = FabricSection::InterNode;
                     continue;
                 }
-                error = "line " + std::to_string(line_no) + ": unsupported fabric section";
-                return false;
+                return line_error("unsupported fabric section");
             }
 
             if (indent != 4 || fabric_section == FabricSection::None) {
-                error = "line " + std::to_string(line_no) + ": invalid fabric field indentation";
-                return false;
+                return line_error("invalid fabric field indentation");
             }
 
             std::string key;
             std::string value;
             if (!split_key_value(trimmed, key, value)) {
-                error = "line " + std::to_string(line_no) + ": invalid fabric field";
-                return false;
+                return line_error("invalid fabric field");
             }
 
             FabricLinkConfig* target =
                 (fabric_section == FabricSection::IntraNode) ? &out.intra_node_fabric : &out.inter_node_fabric;
             if (!assign_fabric_field(*target, key, value, error)) {
-                error = "line " + std::to_string(line_no) + ": " + error;
-                return false;
+                return line_error(error);
             }
             continue;
         }
 
-        error = "line " + std::to_string(line_no) + ": unexpected content";
-        return false;
+        return line_error("unexpected content");
     }
 
     flush_node();
@@ -573,7 +537,6 @@ DistributedConfig parse_distributed_config_from_env() {
         }
     }
 
-    config.cluster_config_path = env_or_empty("FAKEGPU_CLUSTER_CONFIG");
     config.coordinator_address = env_or_empty("FAKEGPU_COORDINATOR_ADDR");
 
     if (!config.enabled()) {
@@ -614,12 +577,10 @@ DistributedConfig parse_distributed_config_from_env() {
         }
     }
 
-    if (!config.cluster_config_path.empty()) {
-        if (!load_cluster_config_from_yaml_file(config.cluster_config_path, config.cluster_config, config.validation_error)) {
-            return config;
-        }
+    const std::string cluster_config_path = env_or_empty("FAKEGPU_CLUSTER_CONFIG");
+    if (!cluster_config_path.empty()) {
+        load_cluster_config_from_yaml_file(cluster_config_path, config.cluster_config, config.validation_error);
     }
-
     return config;
 }
 
