@@ -232,11 +232,11 @@ def _assemble_schedule(
     steps = len(planned_updates)
     calls, resolved = _schedule_calls(run, steps, per_epoch)
     policy = plan["execution_policy"]
-    if policy["logging_strategy"] == "steps":
-        interval = policy["requested_logging_steps"]
-        policy["resolved_logging_steps"] = (
-            math.ceil(steps * interval) if interval < 1 else int(interval)
-        )
+    # Trainer resolves fractional logging_steps for every logging strategy.
+    interval = policy["requested_logging_steps"]
+    policy["resolved_logging_steps"] = (
+        math.ceil(steps * interval) if interval < 1 else int(interval)
+    )
     # Check the supported schedule against source execution before extrapolating.
     source_calls, _ = _schedule_calls(
         run, plan["workload"]["optimizer_steps"], per_epoch

@@ -133,6 +133,23 @@ def test_future_logging_ratio_cannot_silently_change_log_frequency(native_run):
         plan_finetuning_pipeline(run, max_steps=200)
 
 
+def test_disabled_logging_ratio_resolves_against_future_duration(native_run):
+    run = sequential_run(native_run, 1)
+    run["native_config"]["logging_steps"] = 0.01
+    run["schedule"].update(
+        logging_strategy="no",
+        requested_logging_steps=0.01,
+        resolved_logging_steps=1,
+        logging_first_step=False,
+    )
+    run["observation"]["observed_model"]["training_arguments"].update(
+        logging_strategy="no", logging_steps=0.01, logging_first_step=False
+    )
+    refresh_signature(run)
+    plan = plan_finetuning_pipeline(run, max_steps=200)
+    assert plan["execution_policy"]["resolved_logging_steps"] == 2
+
+
 def test_mixed_schedule_processes_step_events_before_epoch_events():
     run = {
         "schedule": {

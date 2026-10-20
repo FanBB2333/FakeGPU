@@ -44,6 +44,10 @@
 - Report a malformed `model.safetensors.index.json` (non-object index,
   non-object `metadata`, or non-numeric `total_size`) as a usage error
   instead of an uncaught `AttributeError` or `TypeError`.
+- Fine-tuning pipeline and transfer plans now resolve a fractional
+  `logging_steps` against the planned duration for every logging strategy.
+  With `logging_strategy: no`, a longer plan previously failed its own
+  execution-policy validation instead of producing a plan.
 
 ## v1.6.0 - 2026-10-17
 
