@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -1095,6 +1096,49 @@ def test_publisher_background_failure_warns_once(tmp_path: Path) -> None:
         publisher._run()
 
     assert len(caught) == 1
+
+
+@pytest.mark.parametrize("ending", ["exit", "sigterm"])
+def test_replaced_publisher_does_not_overwrite_final_state(
+    tmp_path: Path,
+    ending: str,
+) -> None:
+    path = tmp_path / "state.json"
+    code = "\n".join(
+        [
+            "import os, signal, sys, time",
+            "from fakegpu.smi import SmiStatePublisher",
+            "def snapshot(name):",
+            "    return lambda: {'devices': [{'index': 0, 'name': name}]}",
+            "old = SmiStatePublisher(sys.argv[1], snapshot('old'), interval_seconds=60)",
+            "old.start()",
+            "old.stop()",
+            "new = SmiStatePublisher(sys.argv[1], snapshot('new'), interval_seconds=60)",
+            "new.start()",
+            "new.publish_once(running=True)",
+            "if sys.argv[2] == 'sigterm':",
+            "    os.kill(os.getpid(), signal.SIGTERM)",
+            "    time.sleep(10)",
+        ]
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code, str(path), ending],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    expected_code = -signal.SIGTERM if ending == "sigterm" else 0
+    assert completed.returncode == expected_code, completed.stderr
+    state = json.loads(path.read_text(encoding="utf-8"))
+    assert state["running"] is False
+    assert state["devices"][0]["name"] == "new"
+    assert state["publisher"]["health"]["attempted_writes"] >= 2
+    if ending == "sigterm":
+        assert state["exit_signal"] == "SIGTERM"
+    else:
+        assert "exit_signal" not in state
 
 
 def test_fakecuda_runtime_publishes_profile_stage_and_peak(tmp_path: Path) -> None:

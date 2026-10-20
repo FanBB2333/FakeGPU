@@ -140,6 +140,7 @@ class SmiStatePublisher:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._registered = False
+        self._sigterm_handler: Callable[[int, Any], None] | None = None
         self._attempted_writes = 0
         self._successful_writes = 0
         self._failed_writes = 0
@@ -202,6 +203,7 @@ class SmiStatePublisher:
             os.kill(os.getpid(), number)
 
         signal.signal(signal.SIGTERM, terminate)
+        self._sigterm_handler = terminate
 
     def stop(self) -> None:
         self._stop.set()
@@ -213,6 +215,16 @@ class SmiStatePublisher:
             self.publish_once(running=False)
         except Exception as exc:
             self._warn_publish_failure(exc, context="final state publish")
+        if self._registered:
+            atexit.unregister(self.stop)
+            if (
+                self._sigterm_handler is not None
+                and threading.current_thread() is threading.main_thread()
+                and signal.getsignal(signal.SIGTERM) is self._sigterm_handler
+            ):
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            self._sigterm_handler = None
+            self._registered = False
 
     def publish_once(self, *, running: bool) -> dict[str, Any]:
         with self._write_lock:
