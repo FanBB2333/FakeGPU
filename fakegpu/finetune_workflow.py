@@ -6,7 +6,6 @@ CPU budget reuse never starts a process or requires the training environment.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import datetime, timezone
 import math
 import os
@@ -152,7 +151,7 @@ def _validate_run(report, execution, request, directory):
         )
     versions = request["runtime"]["versions"]
     if any(
-        versions.get(name, value) != value
+        versions[name] != value
         for name, value in report["training_config"]["software_versions"].items()
         if name in versions
     ):
@@ -304,14 +303,11 @@ def _budget(
     root,
     manifest,
     *,
-    epochs,
-    max_steps,
+    duration,
     memory_budget_bytes,
     reserve_bytes,
     reuse_calibration_runs,
 ):
-    duration = _duration(epochs, max_steps)
-    _memory_limits(memory_budget_bytes, reserve_bytes)
     reports = _reports(root, manifest)
     extra_reports = _import_reports(root, manifest, reuse_calibration_runs)
     request = {
@@ -421,11 +417,13 @@ def budget_finetuning_workspace(
     """
     root = Path(workspace).expanduser().resolve()
     with _locked(root):
+        manifest = _read_manifest(root)
+        duration = _duration(epochs, max_steps)
+        _memory_limits(memory_budget_bytes, reserve_bytes)
         return _budget(
             root,
-            _read_manifest(root),
-            epochs=epochs,
-            max_steps=max_steps,
+            manifest,
+            duration=duration,
             memory_budget_bytes=memory_budget_bytes,
             reserve_bytes=reserve_bytes,
             reuse_calibration_runs=reuse_calibration_runs,
@@ -586,25 +584,17 @@ def calibrate_finetuning(
                             "completed calibration artifact SHA256 mismatch; refusing reuse"
                         )
                     continue
-                remaining = (
-                    None
-                    if calibration_budget_seconds is None
-                    else calibration_budget_seconds
-                    - invocation["child_process_seconds"]
-                )
-                if remaining is not None and remaining <= 0:
-                    raise TimeoutError(
-                        "calibration wall-clock budget exhausted before next process"
+                remaining = None
+                if calibration_budget_seconds is not None:
+                    remaining = (
+                        calibration_budget_seconds - invocation["child_process_seconds"]
                     )
-                timeout = (
-                    min(
-                        value
-                        for value in (remaining, timeout_seconds)
-                        if value is not None
-                    )
-                    if remaining is not None or timeout_seconds is not None
-                    else None
-                )
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            "calibration wall-clock budget exhausted before next process"
+                        )
+                limits = [v for v in (remaining, timeout_seconds) if v is not None]
+                timeout = min(limits) if limits else None
                 directory = (
                     root
                     / "attempts"
@@ -620,12 +610,12 @@ def calibrate_finetuning(
                 }
                 manifest["attempts"].append(attempt)
                 manifest["status"] = "calibrating"
-                native = deepcopy(config)
-                native.update(
-                    max_steps=calibration_steps,
-                    output_dir=str(directory / "model"),
-                    logging_dir=str(directory / "logs"),
-                )
+                native = {
+                    **config,
+                    "max_steps": calibration_steps,
+                    "output_dir": str(directory / "model"),
+                    "logging_dir": str(directory / "logs"),
+                }
                 _write(directory / "config.json", native)
                 child_environment = dict(environment)
                 cache_environment = {}
@@ -685,8 +675,7 @@ def calibrate_finetuning(
             return _budget(
                 root,
                 manifest,
-                epochs=epochs,
-                max_steps=max_steps,
+                duration=duration,
                 memory_budget_bytes=memory_budget_bytes,
                 reserve_bytes=reserve_bytes,
                 reuse_calibration_runs=None,

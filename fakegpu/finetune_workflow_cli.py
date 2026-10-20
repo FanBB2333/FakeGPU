@@ -121,11 +121,7 @@ def calibrate_main(argv=None):
             calibration_budget_seconds=args.calibration_budget_seconds,
             resume=args.resume,
             length_grouping_seed=args.length_grouping_seed,
-            **(
-                {"packing_seed": args.packing_seed}
-                if args.packing_seed is not None
-                else {}
-            ),
+            packing_seed=args.packing_seed,
             **_budget_options(args),
         )
         emit_json(args.json_path or "-", result)
