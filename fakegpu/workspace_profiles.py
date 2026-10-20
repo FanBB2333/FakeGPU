@@ -149,13 +149,7 @@ def match_workspace_profile(
         )
     if not matches:
         return None
-    matches.sort(
-        key=lambda item: (
-            int(item.get("priority", 0)),
-            str(item.get("profile", "")),
-        ),
-        reverse=True,
-    )
+    matches.sort(key=lambda item: (item["priority"], item["profile"]), reverse=True)
     selected = matches[0]
     selected["matched_profile_count"] = len(matches)
     selected["shadowed_profiles"] = [str(item["profile"]) for item in matches[1:]]
@@ -165,7 +159,10 @@ def match_workspace_profile(
 def workspace_profile_summary(
     paths: Sequence[str | os.PathLike[str]] | None = None,
 ) -> dict[str, Any]:
-    profiles = load_workspace_profiles(paths)
+    return _catalog_summary(load_workspace_profiles(paths))
+
+
+def _catalog_summary(profiles: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "profile_count": len(profiles),
@@ -436,7 +433,7 @@ def _profile_matches(
     if operator_regex is not None and re.search(str(operator_regex), operator) is None:
         return False
 
-    match = dict(profile.get("match") or {})
+    match = profile["match"]
     scalar_lists = {
         "device_types": "device_type",
         "profile_ids": "profile_id",
@@ -466,14 +463,14 @@ def _profile_matches(
     expected_dtypes = match.get("input_dtypes")
     if expected_dtypes is not None and not _sequence_matches(
         expected_dtypes,
-        signature.get("input_dtypes") or [],
+        signature["input_dtypes"],
         _scalar_pattern_matches,
     ):
         return False
     expected_shapes = match.get("input_shapes")
     if expected_shapes is not None and not _sequence_matches(
         expected_shapes,
-        signature.get("input_shapes") or [],
+        signature["input_shapes"],
         _shape_matches,
     ):
         return False
@@ -558,7 +555,7 @@ def _workspace_bytes(
             "output_bytes": output_bytes,
             "output_bytes_multiplier": output_multiplier,
         }
-    elif kind == "tiled_tensor":
+    else:  # tiled_tensor (kind validated at load)
         tensor_index = int(formula.get("tensor_index", 0))
         if tensor_index < 0 or tensor_index >= len(inputs):
             raise WorkspaceProfileError(
@@ -594,8 +591,6 @@ def _workspace_bytes(
             "tile_size": tile_size,
             "tile_count": tile_count,
         }
-    else:  # pragma: no cover - validation rejects this path
-        raise WorkspaceProfileError(f"unsupported formula kind {kind!r}")
 
     aligned = (raw_bytes + alignment - 1) // alignment * alignment
     calculation["raw_bytes"] = raw_bytes
@@ -610,7 +605,7 @@ def _workspace_bounds(
     expected_bytes: int,
 ) -> dict[str, Any]:
     bounds = profile.get("bounds")
-    if not isinstance(bounds, Mapping):
+    if bounds is None:
         return {
             "lower_bytes": int(expected_bytes),
             "upper_bytes": int(expected_bytes),
