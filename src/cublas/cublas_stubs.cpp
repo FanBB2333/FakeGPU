@@ -429,6 +429,240 @@ double gelu(double x) {
     return 0.5 * x * (1.0 + std::tanh(sqrt_two_over_pi * (x + 0.044715 * x * x * x)));
 }
 
+template<class T>
+T* strided_start(T* x, int n, int inc) {
+    return inc < 0 ? x + static_cast<ptrdiff_t>((1 - n) * inc) : x;
+}
+
+// CPU kernels shared by the S and D entry points. Reductions accumulate in
+// double for both precisions.
+template<class T>
+cublasStatus_t cpu_iamax(int n, const T* x, int incx, int* result, bool largest) {
+    if (!x || incx == 0) return CUBLAS_STATUS_INVALID_VALUE;
+    const T* x0 = strided_start(x, n, incx);
+    int best = 0;
+    T best_val = std::fabs(x0[0]);
+    for (int i = 1; i < n; ++i) {
+        const T v = std::fabs(x0[static_cast<ptrdiff_t>(i) * incx]);
+        if (largest ? v > best_val : v < best_val) {
+            best_val = v;
+            best = i;
+        }
+    }
+    // cuBLAS returns 1-based index.
+    *result = best + 1;
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T>
+cublasStatus_t cpu_asum(int n, const T* x, int incx, T* result) {
+    if (!x || incx == 0) return CUBLAS_STATUS_INVALID_VALUE;
+    const T* x0 = strided_start(x, n, incx);
+    double sum = 0.0;
+    for (int i = 0; i < n; ++i) {
+        sum += std::fabs(static_cast<double>(x0[static_cast<ptrdiff_t>(i) * incx]));
+    }
+    *result = static_cast<T>(sum);
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T>
+cublasStatus_t cpu_axpy(int n, T a, const T* x, int incx, T* y, int incy) {
+    if (incx == 0 || incy == 0) return CUBLAS_STATUS_INVALID_VALUE;
+    const T* x0 = strided_start(x, n, incx);
+    T* y0 = strided_start(y, n, incy);
+    for (int i = 0; i < n; ++i) {
+        y0[static_cast<ptrdiff_t>(i) * incy] = a * x0[static_cast<ptrdiff_t>(i) * incx] + y0[static_cast<ptrdiff_t>(i) * incy];
+    }
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T>
+cublasStatus_t cpu_copy(int n, const T* x, int incx, T* y, int incy) {
+    if (incx == 0 || incy == 0) return CUBLAS_STATUS_INVALID_VALUE;
+    const T* x0 = strided_start(x, n, incx);
+    T* y0 = strided_start(y, n, incy);
+    for (int i = 0; i < n; ++i) {
+        y0[static_cast<ptrdiff_t>(i) * incy] = x0[static_cast<ptrdiff_t>(i) * incx];
+    }
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T>
+cublasStatus_t cpu_dot(int n, const T* x, int incx, const T* y, int incy, T* result) {
+    if (!x || !y || incx == 0 || incy == 0) return CUBLAS_STATUS_INVALID_VALUE;
+    const T* x0 = strided_start(x, n, incx);
+    const T* y0 = strided_start(y, n, incy);
+    double acc = 0.0;
+    for (int i = 0; i < n; ++i) {
+        acc += static_cast<double>(x0[static_cast<ptrdiff_t>(i) * incx]) * static_cast<double>(y0[static_cast<ptrdiff_t>(i) * incy]);
+    }
+    *result = static_cast<T>(acc);
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T>
+cublasStatus_t cpu_nrm2(int n, const T* x, int incx, T* result) {
+    if (!x || incx == 0) return CUBLAS_STATUS_INVALID_VALUE;
+    const T* x0 = strided_start(x, n, incx);
+    double acc = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const double v = static_cast<double>(x0[static_cast<ptrdiff_t>(i) * incx]);
+        acc += v * v;
+    }
+    *result = static_cast<T>(std::sqrt(acc));
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T>
+cublasStatus_t cpu_scal(int n, T a, T* x, int incx) {
+    if (incx == 0) return CUBLAS_STATUS_INVALID_VALUE;
+    T* x0 = strided_start(x, n, incx);
+    for (int i = 0; i < n; ++i) {
+        x0[static_cast<ptrdiff_t>(i) * incx] *= a;
+    }
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T>
+cublasStatus_t cpu_gemv(cublasOperation_t trans, int m, int n, T a, const T* A, int lda, const T* x, int incx,
+                        T b, T* y, int incy) {
+    if (m < 0 || n < 0 || lda < std::max(1, m) || incx == 0 || incy == 0) {
+        return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    const int input_size = trans == CUBLAS_OP_N ? n : m;
+    const int output_size = trans == CUBLAS_OP_N ? m : n;
+    const T* x0 = strided_start(x, input_size, incx);
+    T* y0 = strided_start(y, output_size, incy);
+    for (int output = 0; output < output_size; ++output) {
+        double acc = 0.0;
+        for (int input = 0; input < input_size; ++input) {
+            const int row = trans == CUBLAS_OP_N ? output : input;
+            const int col = trans == CUBLAS_OP_N ? input : output;
+            acc += static_cast<double>(A[col_major_index(row, col, lda)]) *
+                   static_cast<double>(x0[static_cast<ptrdiff_t>(input) * incx]);
+        }
+        T& destination = y0[static_cast<ptrdiff_t>(output) * incy];
+        destination = static_cast<T>(a * acc + b * destination);
+    }
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T>
+cublasStatus_t cpu_ger(int m, int n, T a, const T* x, int incx, const T* y, int incy, T* A, int lda) {
+    if (m < 0 || n < 0 || lda < std::max(1, m) || incx == 0 || incy == 0) {
+        return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    const T* x0 = strided_start(x, m, incx);
+    const T* y0 = strided_start(y, n, incy);
+    for (int col = 0; col < n; ++col) {
+        for (int row = 0; row < m; ++row) {
+            A[col_major_index(row, col, lda)] +=
+                a * x0[static_cast<ptrdiff_t>(row) * incx] *
+                y0[static_cast<ptrdiff_t>(col) * incy];
+        }
+    }
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+// Checks the leading dimensions and, against FakeGPU's tracked allocations,
+// the extent of every operand a column-major GEMM touches.
+cublasStatus_t check_gemm_extents(
+    cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k,
+    const void* A, int lda, size_t a_elem_size,
+    const void* B, int ldb, size_t b_elem_size,
+    const void* C, int ldc, size_t c_elem_size) {
+    const int a_rows = (transa == CUBLAS_OP_N) ? m : k;
+    const int a_cols = (transa == CUBLAS_OP_N) ? k : m;
+    const int b_rows = (transb == CUBLAS_OP_N) ? k : n;
+    const int b_cols = (transb == CUBLAS_OP_N) ? n : k;
+    if (a_rows > lda || b_rows > ldb || m > ldc) {
+        return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    const size_t a_max_idx = static_cast<size_t>(a_rows - 1) + static_cast<size_t>(a_cols - 1) * static_cast<size_t>(lda);
+    const size_t b_max_idx = static_cast<size_t>(b_rows - 1) + static_cast<size_t>(b_cols - 1) * static_cast<size_t>(ldb);
+    const size_t c_max_idx = static_cast<size_t>(m - 1) + static_cast<size_t>(n - 1) * static_cast<size_t>(ldc);
+    // With k == 0 no element of A or B is read.
+    if ((k > 0 && (!ensure_allocation_at_least(A, (a_max_idx + 1) * a_elem_size) ||
+                   !ensure_allocation_at_least(B, (b_max_idx + 1) * b_elem_size))) ||
+        !ensure_allocation_at_least(C, (c_max_idx + 1) * c_elem_size)) {
+        return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T> constexpr int cuda_data_type();
+template<> constexpr int cuda_data_type<float>() { return 0; }   // CUDA_R_32F
+template<> constexpr int cuda_data_type<double>() { return 1; }  // CUDA_R_64F
+
+// CPU paths of the S and D GEMM entry points; `name` is reported in logs
+// and unsupported-API events.
+template<class T>
+cublasStatus_t cpu_gemm(const char* name, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k,
+                        T alpha, const T* A, int lda, const T* B, int ldb, T beta, T* C, int ldc) {
+    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
+        return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (m == 0 || n == 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    const double a = static_cast<double>(alpha);
+    const double b = static_cast<double>(beta);
+    const cublasStatus_t extents = check_gemm_extents(
+        transa, transb, m, n, k, A, lda, sizeof(T), B, ldb, sizeof(T), C, ldc, sizeof(T));
+    if (extents != CUBLAS_STATUS_SUCCESS) return extents;
+
+    constexpr int dtype = cuda_data_type<T>();
+    cublasStatus_t status = gemm_col_major(name, transa, transb, m, n, k, a, A, dtype, lda, B, dtype, ldb, b, C, dtype, ldc);
+    if (status != CUBLAS_STATUS_SUCCESS) return status;
+    FGPU_LOG("[FakeCUBLAS] %s m=%d n=%d k=%d (cpu)\n", name, m, n, k);
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T>
+cublasStatus_t cpu_gemm_strided_batched(
+    const char* name, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, T alpha,
+    const T* A, int lda, long long strideA, const T* B, int ldb, long long strideB,
+    T beta, T* C, int ldc, long long strideC, int batchCount) {
+    if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
+        return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    const double a = static_cast<double>(alpha);
+    const double b = static_cast<double>(beta);
+    constexpr int dtype = cuda_data_type<T>();
+    for (int batch = 0; batch < batchCount; ++batch) {
+        const T* Ab = A + static_cast<ptrdiff_t>(batch) * strideA;
+        const T* Bb = B + static_cast<ptrdiff_t>(batch) * strideB;
+        T* Cb = C + static_cast<ptrdiff_t>(batch) * strideC;
+        cublasStatus_t status = gemm_col_major(name, transa, transb, m, n, k, a, Ab, dtype, lda, Bb, dtype, ldb, b, Cb, dtype, ldc);
+        if (status != CUBLAS_STATUS_SUCCESS) return status;
+    }
+    FGPU_LOG("[FakeCUBLAS] %s m=%d n=%d k=%d batchCount=%d (cpu)\n", name, m, n, k, batchCount);
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+template<class T>
+cublasStatus_t cpu_gemm_batched(
+    const char* name, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, T alpha,
+    const T* const Aarray[], int lda, const T* const Barray[], int ldb,
+    T beta, T* const Carray[], int ldc, int batchCount) {
+    const double a = static_cast<double>(alpha);
+    const double b = static_cast<double>(beta);
+    constexpr int dtype = cuda_data_type<T>();
+    for (int batch = 0; batch < batchCount; ++batch) {
+        const T* Ab = Aarray[batch];
+        const T* Bb = Barray[batch];
+        T* Cb = Carray[batch];
+        if (!Ab || !Bb || !Cb) {
+            return CUBLAS_STATUS_INVALID_VALUE;
+        }
+        cublasStatus_t status = gemm_col_major(name, transa, transb, m, n, k, a, Ab, dtype, lda, Bb, dtype, ldb, b, Cb, dtype, ldc);
+        if (status != CUBLAS_STATUS_SUCCESS) return status;
+    }
+    FGPU_LOG("[FakeCUBLAS] %s m=%d n=%d k=%d batchCount=%d (cpu)\n", name, m, n, k, batchCount);
+    return CUBLAS_STATUS_SUCCESS;
+}
+
 bool is_supported_gemm_datatype(int dataType) {
     switch (dataType) {
         case 0:  // CUDA_R_32F
@@ -686,26 +920,11 @@ cublasStatus_t cublasIsamax_v2(cublasHandle_t handle, int n, const float *x, int
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (!x || incx == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
+    const cublasStatus_t status = cpu_iamax(n, x, incx, result, /*largest=*/true);
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        FGPU_LOG("[FakeCUBLAS] cublasIsamax_v2 n=%d result=%d (cpu)\n", n, *result);
     }
-    const float* x0 = x;
-    if (incx < 0) {
-        x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    }
-    int best = 0;
-    float best_val = std::fabs(x0[0]);
-    for (int i = 1; i < n; ++i) {
-        const float v = std::fabs(x0[static_cast<ptrdiff_t>(i) * incx]);
-        if (v > best_val) {
-            best_val = v;
-            best = i;
-        }
-    }
-    // cuBLAS returns 1-based index.
-    *result = best + 1;
-    FGPU_LOG("[FakeCUBLAS] cublasIsamax_v2 n=%d result=%d (cpu)\n", n, *result);
-    return CUBLAS_STATUS_SUCCESS;
+    return status;
 #else
     if (fake_gpu::record_unsupported_api("cublasIsamax_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -721,24 +940,7 @@ cublasStatus_t cublasIdamax_v2(cublasHandle_t handle, int n, const double *x, in
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (!x || incx == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double* x0 = x;
-    if (incx < 0) {
-        x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    }
-    int best = 0;
-    double best_val = std::fabs(x0[0]);
-    for (int i = 1; i < n; ++i) {
-        const double v = std::fabs(x0[static_cast<ptrdiff_t>(i) * incx]);
-        if (v > best_val) {
-            best_val = v;
-            best = i;
-        }
-    }
-    *result = best + 1;
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_iamax(n, x, incx, result, /*largest=*/true);
 #else
     if (fake_gpu::record_unsupported_api("cublasIdamax_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -753,24 +955,7 @@ cublasStatus_t cublasIsamin_v2(cublasHandle_t handle, int n, const float *x, int
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (!x || incx == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const float* x0 = x;
-    if (incx < 0) {
-        x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    }
-    int best = 0;
-    float best_val = std::fabs(x0[0]);
-    for (int i = 1; i < n; ++i) {
-        const float v = std::fabs(x0[static_cast<ptrdiff_t>(i) * incx]);
-        if (v < best_val) {
-            best_val = v;
-            best = i;
-        }
-    }
-    *result = best + 1;
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_iamax(n, x, incx, result, /*largest=*/false);
 #else
     if (fake_gpu::record_unsupported_api("cublasIsamin_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -785,24 +970,7 @@ cublasStatus_t cublasIdamin_v2(cublasHandle_t handle, int n, const double *x, in
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (!x || incx == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double* x0 = x;
-    if (incx < 0) {
-        x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    }
-    int best = 0;
-    double best_val = std::fabs(x0[0]);
-    for (int i = 1; i < n; ++i) {
-        const double v = std::fabs(x0[static_cast<ptrdiff_t>(i) * incx]);
-        if (v < best_val) {
-            best_val = v;
-            best = i;
-        }
-    }
-    *result = best + 1;
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_iamax(n, x, incx, result, /*largest=*/false);
 #else
     if (fake_gpu::record_unsupported_api("cublasIdamin_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -817,19 +985,7 @@ cublasStatus_t cublasSasum_v2(cublasHandle_t handle, int n, const float *x, int 
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (!x || incx == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const float* x0 = x;
-    if (incx < 0) {
-        x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    }
-    double sum = 0.0;
-    for (int i = 0; i < n; ++i) {
-        sum += std::fabs(static_cast<double>(x0[static_cast<ptrdiff_t>(i) * incx]));
-    }
-    *result = static_cast<float>(sum);
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_asum(n, x, incx, result);
 #else
     if (fake_gpu::record_unsupported_api("cublasSasum_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -844,19 +1000,7 @@ cublasStatus_t cublasDasum_v2(cublasHandle_t handle, int n, const double *x, int
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (!x || incx == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double* x0 = x;
-    if (incx < 0) {
-        x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    }
-    double sum = 0.0;
-    for (int i = 0; i < n; ++i) {
-        sum += std::fabs(x0[static_cast<ptrdiff_t>(i) * incx]);
-    }
-    *result = sum;
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_asum(n, x, incx, result);
 #else
     if (fake_gpu::record_unsupported_api("cublasDasum_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -871,19 +1015,11 @@ cublasStatus_t cublasSaxpy_v2(cublasHandle_t handle, int n, const float *alpha, 
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (incx == 0 || incy == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
+    const cublasStatus_t status = cpu_axpy(n, *alpha, x, incx, y, incy);
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        FGPU_LOG("[FakeCUBLAS] cublasSaxpy_v2 n=%d (cpu)\n", n);
     }
-    const float a = *alpha;
-    const float* x0 = x;
-    float* y0 = y;
-    if (incx < 0) x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    if (incy < 0) y0 = y + static_cast<ptrdiff_t>((1 - n) * incy);
-    for (int i = 0; i < n; ++i) {
-        y0[static_cast<ptrdiff_t>(i) * incy] = a * x0[static_cast<ptrdiff_t>(i) * incx] + y0[static_cast<ptrdiff_t>(i) * incy];
-    }
-    FGPU_LOG("[FakeCUBLAS] cublasSaxpy_v2 n=%d (cpu)\n", n);
-    return CUBLAS_STATUS_SUCCESS;
+    return status;
 #else
     if (fake_gpu::record_unsupported_api("cublasSaxpy_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -900,18 +1036,7 @@ cublasStatus_t cublasDaxpy_v2(cublasHandle_t handle, int n, const double *alpha,
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (incx == 0 || incy == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double a = *alpha;
-    const double* x0 = x;
-    double* y0 = y;
-    if (incx < 0) x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    if (incy < 0) y0 = y + static_cast<ptrdiff_t>((1 - n) * incy);
-    for (int i = 0; i < n; ++i) {
-        y0[static_cast<ptrdiff_t>(i) * incy] = a * x0[static_cast<ptrdiff_t>(i) * incx] + y0[static_cast<ptrdiff_t>(i) * incy];
-    }
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_axpy(n, *alpha, x, incx, y, incy);
 #else
     if (fake_gpu::record_unsupported_api("cublasDaxpy_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -926,17 +1051,7 @@ cublasStatus_t cublasScopy_v2(cublasHandle_t handle, int n, const float *x, int 
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (incx == 0 || incy == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const float* x0 = x;
-    float* y0 = y;
-    if (incx < 0) x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    if (incy < 0) y0 = y + static_cast<ptrdiff_t>((1 - n) * incy);
-    for (int i = 0; i < n; ++i) {
-        y0[static_cast<ptrdiff_t>(i) * incy] = x0[static_cast<ptrdiff_t>(i) * incx];
-    }
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_copy(n, x, incx, y, incy);
 #else
     if (fake_gpu::record_unsupported_api("cublasScopy_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -951,17 +1066,7 @@ cublasStatus_t cublasDcopy_v2(cublasHandle_t handle, int n, const double *x, int
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (incx == 0 || incy == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double* x0 = x;
-    double* y0 = y;
-    if (incx < 0) x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    if (incy < 0) y0 = y + static_cast<ptrdiff_t>((1 - n) * incy);
-    for (int i = 0; i < n; ++i) {
-        y0[static_cast<ptrdiff_t>(i) * incy] = x0[static_cast<ptrdiff_t>(i) * incx];
-    }
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_copy(n, x, incx, y, incy);
 #else
     if (fake_gpu::record_unsupported_api("cublasDcopy_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -976,19 +1081,7 @@ cublasStatus_t cublasSdot_v2(cublasHandle_t handle, int n, const float *x, int i
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (!x || !y || incx == 0 || incy == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const float* x0 = x;
-    const float* y0 = y;
-    if (incx < 0) x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    if (incy < 0) y0 = y + static_cast<ptrdiff_t>((1 - n) * incy);
-    double acc = 0.0;
-    for (int i = 0; i < n; ++i) {
-        acc += static_cast<double>(x0[static_cast<ptrdiff_t>(i) * incx]) * static_cast<double>(y0[static_cast<ptrdiff_t>(i) * incy]);
-    }
-    *result = static_cast<float>(acc);
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_dot(n, x, incx, y, incy, result);
 #else
     if (fake_gpu::record_unsupported_api("cublasSdot_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1003,19 +1096,7 @@ cublasStatus_t cublasDdot_v2(cublasHandle_t handle, int n, const double *x, int 
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (!x || !y || incx == 0 || incy == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double* x0 = x;
-    const double* y0 = y;
-    if (incx < 0) x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    if (incy < 0) y0 = y + static_cast<ptrdiff_t>((1 - n) * incy);
-    double acc = 0.0;
-    for (int i = 0; i < n; ++i) {
-        acc += x0[static_cast<ptrdiff_t>(i) * incx] * y0[static_cast<ptrdiff_t>(i) * incy];
-    }
-    *result = acc;
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_dot(n, x, incx, y, incy, result);
 #else
     if (fake_gpu::record_unsupported_api("cublasDdot_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1030,18 +1111,7 @@ cublasStatus_t cublasSnrm2_v2(cublasHandle_t handle, int n, const float *x, int 
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (!x || incx == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const float* x0 = x;
-    if (incx < 0) x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    double acc = 0.0;
-    for (int i = 0; i < n; ++i) {
-        const double v = static_cast<double>(x0[static_cast<ptrdiff_t>(i) * incx]);
-        acc += v * v;
-    }
-    *result = static_cast<float>(std::sqrt(acc));
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_nrm2(n, x, incx, result);
 #else
     if (fake_gpu::record_unsupported_api("cublasSnrm2_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1056,18 +1126,7 @@ cublasStatus_t cublasDnrm2_v2(cublasHandle_t handle, int n, const double *x, int
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (!x || incx == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double* x0 = x;
-    if (incx < 0) x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
-    double acc = 0.0;
-    for (int i = 0; i < n; ++i) {
-        const double v = x0[static_cast<ptrdiff_t>(i) * incx];
-        acc += v * v;
-    }
-    *result = std::sqrt(acc);
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_nrm2(n, x, incx, result);
 #else
     if (fake_gpu::record_unsupported_api("cublasDnrm2_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1082,15 +1141,7 @@ cublasStatus_t cublasSscal_v2(cublasHandle_t handle, int n, const float *alpha, 
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (incx == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const float a = *alpha;
-    float* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - n) * incx) : x;
-    for (int i = 0; i < n; ++i) {
-        x0[static_cast<ptrdiff_t>(i) * incx] *= a;
-    }
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_scal(n, *alpha, x, incx);
 #else
     if (fake_gpu::record_unsupported_api("cublasSscal_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1105,15 +1156,7 @@ cublasStatus_t cublasDscal_v2(cublasHandle_t handle, int n, const double *alpha,
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (incx == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double a = *alpha;
-    double* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - n) * incx) : x;
-    for (int i = 0; i < n; ++i) {
-        x0[static_cast<ptrdiff_t>(i) * incx] *= a;
-    }
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_scal(n, *alpha, x, incx);
 #else
     if (fake_gpu::record_unsupported_api("cublasDscal_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1132,28 +1175,11 @@ cublasStatus_t cublasSgemv_v2(cublasHandle_t handle, cublasOperation_t trans, in
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (m < 0 || n < 0 || lda < std::max(1, m) || incx == 0 || incy == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
+    const cublasStatus_t status = cpu_gemv(trans, m, n, *alpha, A, lda, x, incx, *beta, y, incy);
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        FGPU_LOG("[FakeCUBLAS] cublasSgemv_v2 trans=%d m=%d n=%d (cpu)\n", trans, m, n);
     }
-    const float a = *alpha;
-    const float b = *beta;
-    const int input_size = trans == CUBLAS_OP_N ? n : m;
-    int output_size = (trans == CUBLAS_OP_N) ? m : n;
-    const float* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - input_size) * incx) : x;
-    float* y0 = incy < 0 ? y + static_cast<ptrdiff_t>((1 - output_size) * incy) : y;
-    for (int output = 0; output < output_size; ++output) {
-        double acc = 0.0;
-        for (int input = 0; input < input_size; ++input) {
-            const int row = trans == CUBLAS_OP_N ? output : input;
-            const int col = trans == CUBLAS_OP_N ? input : output;
-            acc += static_cast<double>(A[col_major_index(row, col, lda)]) *
-                   static_cast<double>(x0[static_cast<ptrdiff_t>(input) * incx]);
-        }
-        float& destination = y0[static_cast<ptrdiff_t>(output) * incy];
-        destination = static_cast<float>(a * acc + b * destination);
-    }
-    FGPU_LOG("[FakeCUBLAS] cublasSgemv_v2 trans=%d m=%d n=%d (cpu)\n", trans, m, n);
-    return CUBLAS_STATUS_SUCCESS;
+    return status;
 #else
     if (fake_gpu::record_unsupported_api("cublasSgemv_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1171,27 +1197,7 @@ cublasStatus_t cublasDgemv_v2(cublasHandle_t handle, cublasOperation_t trans, in
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (m < 0 || n < 0 || lda < std::max(1, m) || incx == 0 || incy == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double a = *alpha;
-    const double b = *beta;
-    const int input_size = trans == CUBLAS_OP_N ? n : m;
-    int output_size = (trans == CUBLAS_OP_N) ? m : n;
-    const double* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - input_size) * incx) : x;
-    double* y0 = incy < 0 ? y + static_cast<ptrdiff_t>((1 - output_size) * incy) : y;
-    for (int output = 0; output < output_size; ++output) {
-        double acc = 0.0;
-        for (int input = 0; input < input_size; ++input) {
-            const int row = trans == CUBLAS_OP_N ? output : input;
-            const int col = trans == CUBLAS_OP_N ? input : output;
-            acc += A[col_major_index(row, col, lda)] *
-                   x0[static_cast<ptrdiff_t>(input) * incx];
-        }
-        double& destination = y0[static_cast<ptrdiff_t>(output) * incy];
-        destination = a * acc + b * destination;
-    }
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_gemv(trans, m, n, *alpha, A, lda, x, incx, *beta, y, incy);
 #else
     if (fake_gpu::record_unsupported_api("cublasDgemv_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1208,20 +1214,7 @@ cublasStatus_t cublasSger_v2(cublasHandle_t handle, int m, int n, const float *a
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (m < 0 || n < 0 || lda < std::max(1, m) || incx == 0 || incy == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const float a = *alpha;
-    const float* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - m) * incx) : x;
-    const float* y0 = incy < 0 ? y + static_cast<ptrdiff_t>((1 - n) * incy) : y;
-    for (int col = 0; col < n; ++col) {
-        for (int row = 0; row < m; ++row) {
-            A[col_major_index(row, col, lda)] +=
-                a * x0[static_cast<ptrdiff_t>(row) * incx] *
-                y0[static_cast<ptrdiff_t>(col) * incy];
-        }
-    }
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_ger(m, n, *alpha, x, incx, y, incy, A, lda);
 #else
     if (fake_gpu::record_unsupported_api("cublasSger_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1236,20 +1229,7 @@ cublasStatus_t cublasDger_v2(cublasHandle_t handle, int m, int n, const double *
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (m < 0 || n < 0 || lda < std::max(1, m) || incx == 0 || incy == 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double a = *alpha;
-    const double* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - m) * incx) : x;
-    const double* y0 = incy < 0 ? y + static_cast<ptrdiff_t>((1 - n) * incy) : y;
-    for (int col = 0; col < n; ++col) {
-        for (int row = 0; row < m; ++row) {
-            A[col_major_index(row, col, lda)] +=
-                a * x0[static_cast<ptrdiff_t>(row) * incx] *
-                y0[static_cast<ptrdiff_t>(col) * incy];
-        }
-    }
-    return CUBLAS_STATUS_SUCCESS;
+    return cpu_ger(m, n, *alpha, x, incx, y, incy, A, lda);
 #else
     if (fake_gpu::record_unsupported_api("cublasDger_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1269,36 +1249,8 @@ cublasStatus_t cublasSgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     }
 
 #if FAKEGPU_CPU_SIMULATION
-    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    if (m == 0 || n == 0) {
-        return CUBLAS_STATUS_SUCCESS;
-    }
-
-    const double a = static_cast<double>(*alpha);
-    const double b = static_cast<double>(*beta);
-
-    const int a_rows = (transa == CUBLAS_OP_N) ? m : k;
-    const int a_cols = (transa == CUBLAS_OP_N) ? k : m;
-    const int b_rows = (transb == CUBLAS_OP_N) ? k : n;
-    const int b_cols = (transb == CUBLAS_OP_N) ? n : k;
-    if (a_rows > lda || b_rows > ldb || m > ldc) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const size_t a_max_idx = static_cast<size_t>(a_rows - 1) + static_cast<size_t>(a_cols - 1) * static_cast<size_t>(lda);
-    const size_t b_max_idx = static_cast<size_t>(b_rows - 1) + static_cast<size_t>(b_cols - 1) * static_cast<size_t>(ldb);
-    const size_t c_max_idx = static_cast<size_t>(m - 1) + static_cast<size_t>(n - 1) * static_cast<size_t>(ldc);
-    // With k == 0 no element of A or B is read.
-    if ((k > 0 && (!ensure_allocation_at_least(A, (a_max_idx + 1) * sizeof(float)) ||
-                   !ensure_allocation_at_least(B, (b_max_idx + 1) * sizeof(float)))) ||
-        !ensure_allocation_at_least(C, (c_max_idx + 1) * sizeof(float))) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-
-    cublasStatus_t status = gemm_col_major("cublasSgemm_v2", transa, transb, m, n, k, a, A, 0, lda, B, 0, ldb, b, C, 0, ldc);
+    const cublasStatus_t status = cpu_gemm("cublasSgemm_v2", transa, transb, m, n, k, *alpha, A, lda, B, ldb, *beta, C, ldc);
     if (status != CUBLAS_STATUS_SUCCESS) return status;
-    FGPU_LOG("[FakeCUBLAS] cublasSgemm_v2 m=%d n=%d k=%d (cpu)\n", m, n, k);
 #else
     if (fake_gpu::record_unsupported_api("cublasSgemm_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1319,36 +1271,8 @@ cublasStatus_t cublasDgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     }
 
 #if FAKEGPU_CPU_SIMULATION
-    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    if (m == 0 || n == 0) {
-        return CUBLAS_STATUS_SUCCESS;
-    }
-
-    const double a = static_cast<double>(*alpha);
-    const double b = static_cast<double>(*beta);
-
-    const int a_rows = (transa == CUBLAS_OP_N) ? m : k;
-    const int a_cols = (transa == CUBLAS_OP_N) ? k : m;
-    const int b_rows = (transb == CUBLAS_OP_N) ? k : n;
-    const int b_cols = (transb == CUBLAS_OP_N) ? n : k;
-    if (a_rows > lda || b_rows > ldb || m > ldc) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const size_t a_max_idx = static_cast<size_t>(a_rows - 1) + static_cast<size_t>(a_cols - 1) * static_cast<size_t>(lda);
-    const size_t b_max_idx = static_cast<size_t>(b_rows - 1) + static_cast<size_t>(b_cols - 1) * static_cast<size_t>(ldb);
-    const size_t c_max_idx = static_cast<size_t>(m - 1) + static_cast<size_t>(n - 1) * static_cast<size_t>(ldc);
-    // With k == 0 no element of A or B is read.
-    if ((k > 0 && (!ensure_allocation_at_least(A, (a_max_idx + 1) * sizeof(double)) ||
-                   !ensure_allocation_at_least(B, (b_max_idx + 1) * sizeof(double)))) ||
-        !ensure_allocation_at_least(C, (c_max_idx + 1) * sizeof(double))) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-
-    cublasStatus_t status = gemm_col_major("cublasDgemm_v2", transa, transb, m, n, k, a, A, 1, lda, B, 1, ldb, b, C, 1, ldc);
+    const cublasStatus_t status = cpu_gemm("cublasDgemm_v2", transa, transb, m, n, k, *alpha, A, lda, B, ldb, *beta, C, ldc);
     if (status != CUBLAS_STATUS_SUCCESS) return status;
-    FGPU_LOG("[FakeCUBLAS] cublasDgemm_v2 m=%d n=%d k=%d (cpu)\n", m, n, k);
 #else
     if (fake_gpu::record_unsupported_api("cublasDgemm_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1401,19 +1325,9 @@ cublasStatus_t cublasSgemmStridedBatched(cublasHandle_t handle, cublasOperation_
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double a = static_cast<double>(*alpha);
-    const double b = static_cast<double>(*beta);
-    for (int batch = 0; batch < batchCount; ++batch) {
-        const float* Ab = A + static_cast<ptrdiff_t>(batch) * strideA;
-        const float* Bb = B + static_cast<ptrdiff_t>(batch) * strideB;
-        float* Cb = C + static_cast<ptrdiff_t>(batch) * strideC;
-        cublasStatus_t status = gemm_col_major("cublasSgemmStridedBatched", transa, transb, m, n, k, a, Ab, 0, lda, Bb, 0, ldb, b, Cb, 0, ldc);
-        if (status != CUBLAS_STATUS_SUCCESS) return status;
-    }
-    FGPU_LOG("[FakeCUBLAS] cublasSgemmStridedBatched m=%d n=%d k=%d batchCount=%d (cpu)\n", m, n, k, batchCount);
+    const cublasStatus_t status = cpu_gemm_strided_batched("cublasSgemmStridedBatched", transa, transb, m, n, k, *alpha,
+        A, lda, strideA, B, ldb, strideB, *beta, C, ldc, strideC, batchCount);
+    if (status != CUBLAS_STATUS_SUCCESS) return status;
 #else
     if (fake_gpu::record_unsupported_api("cublasSgemmStridedBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1432,19 +1346,9 @@ cublasStatus_t cublasDgemmStridedBatched(cublasHandle_t handle, cublasOperation_
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const double a = static_cast<double>(*alpha);
-    const double b = static_cast<double>(*beta);
-    for (int batch = 0; batch < batchCount; ++batch) {
-        const double* Ab = A + static_cast<ptrdiff_t>(batch) * strideA;
-        const double* Bb = B + static_cast<ptrdiff_t>(batch) * strideB;
-        double* Cb = C + static_cast<ptrdiff_t>(batch) * strideC;
-        cublasStatus_t status = gemm_col_major("cublasDgemmStridedBatched", transa, transb, m, n, k, a, Ab, 1, lda, Bb, 1, ldb, b, Cb, 1, ldc);
-        if (status != CUBLAS_STATUS_SUCCESS) return status;
-    }
-    FGPU_LOG("[FakeCUBLAS] cublasDgemmStridedBatched m=%d n=%d k=%d batchCount=%d (cpu)\n", m, n, k, batchCount);
+    const cublasStatus_t status = cpu_gemm_strided_batched("cublasDgemmStridedBatched", transa, transb, m, n, k, *alpha,
+        A, lda, strideA, B, ldb, strideB, *beta, C, ldc, strideC, batchCount);
+    if (status != CUBLAS_STATUS_SUCCESS) return status;
 #else
     if (fake_gpu::record_unsupported_api("cublasDgemmStridedBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1502,19 +1406,9 @@ cublasStatus_t cublasSgemmBatched(cublasHandle_t handle, cublasOperation_t trans
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    const double a = static_cast<double>(*alpha);
-    const double b = static_cast<double>(*beta);
-    for (int batch = 0; batch < batchCount; ++batch) {
-        const float* Ab = Aarray[batch];
-        const float* Bb = Barray[batch];
-        float* Cb = Carray[batch];
-        if (!Ab || !Bb || !Cb) {
-            return CUBLAS_STATUS_INVALID_VALUE;
-        }
-        cublasStatus_t status = gemm_col_major("cublasSgemmBatched", transa, transb, m, n, k, a, Ab, 0, lda, Bb, 0, ldb, b, Cb, 0, ldc);
-        if (status != CUBLAS_STATUS_SUCCESS) return status;
-    }
-    FGPU_LOG("[FakeCUBLAS] cublasSgemmBatched m=%d n=%d k=%d batchCount=%d (cpu)\n", m, n, k, batchCount);
+    const cublasStatus_t status = cpu_gemm_batched("cublasSgemmBatched", transa, transb, m, n, k, *alpha,
+        Aarray, lda, Barray, ldb, *beta, Carray, ldc, batchCount);
+    if (status != CUBLAS_STATUS_SUCCESS) return status;
 #else
     if (fake_gpu::record_unsupported_api("cublasSgemmBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1537,19 +1431,9 @@ cublasStatus_t cublasDgemmBatched(cublasHandle_t handle, cublasOperation_t trans
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    const double a = static_cast<double>(*alpha);
-    const double b = static_cast<double>(*beta);
-    for (int batch = 0; batch < batchCount; ++batch) {
-        const double* Ab = Aarray[batch];
-        const double* Bb = Barray[batch];
-        double* Cb = Carray[batch];
-        if (!Ab || !Bb || !Cb) {
-            return CUBLAS_STATUS_INVALID_VALUE;
-        }
-        cublasStatus_t status = gemm_col_major("cublasDgemmBatched", transa, transb, m, n, k, a, Ab, 1, lda, Bb, 1, ldb, b, Cb, 1, ldc);
-        if (status != CUBLAS_STATUS_SUCCESS) return status;
-    }
-    FGPU_LOG("[FakeCUBLAS] cublasDgemmBatched m=%d n=%d k=%d batchCount=%d (cpu)\n", m, n, k, batchCount);
+    const cublasStatus_t status = cpu_gemm_batched("cublasDgemmBatched", transa, transb, m, n, k, *alpha,
+        Aarray, lda, Barray, ldb, *beta, Carray, ldc, batchCount);
+    if (status != CUBLAS_STATUS_SUCCESS) return status;
 #else
     if (fake_gpu::record_unsupported_api("cublasDgemmBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
@@ -1620,22 +1504,10 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
     const double a = read_scalar_typed(alpha, scale_type);
     const double b = read_scalar_typed(beta, scale_type);
 
-    const int a_rows = (transa == CUBLAS_OP_N) ? m : k;
-    const int a_cols = (transa == CUBLAS_OP_N) ? k : m;
-    const int b_rows = (transb == CUBLAS_OP_N) ? k : n;
-    const int b_cols = (transb == CUBLAS_OP_N) ? n : k;
-    if (a_rows > lda || b_rows > ldb || m > ldc) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
-    const size_t a_max_idx = static_cast<size_t>(a_rows - 1) + static_cast<size_t>(a_cols - 1) * static_cast<size_t>(lda);
-    const size_t b_max_idx = static_cast<size_t>(b_rows - 1) + static_cast<size_t>(b_cols - 1) * static_cast<size_t>(ldb);
-    const size_t c_max_idx = static_cast<size_t>(m - 1) + static_cast<size_t>(n - 1) * static_cast<size_t>(ldc);
-    // With k == 0 no element of A or B is read.
-    if ((k > 0 && (!ensure_allocation_at_least(A, (a_max_idx + 1) * getDataTypeSize(Atype)) ||
-                   !ensure_allocation_at_least(B, (b_max_idx + 1) * getDataTypeSize(Btype)))) ||
-        !ensure_allocation_at_least(C, (c_max_idx + 1) * getDataTypeSize(Ctype))) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
+    const cublasStatus_t extents = check_gemm_extents(
+        transa, transb, m, n, k, A, lda, getDataTypeSize(Atype), B, ldb, getDataTypeSize(Btype),
+        C, ldc, getDataTypeSize(Ctype));
+    if (extents != CUBLAS_STATUS_SUCCESS) return extents;
 
     cublasStatus_t status = gemm_col_major("cublasGemmEx", transa, transb, m, n, k, a, A, Atype, lda, B, Btype, ldb, b, C, Ctype, ldc);
     if (status != CUBLAS_STATUS_SUCCESS) return status;
