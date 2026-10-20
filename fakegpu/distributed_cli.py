@@ -63,27 +63,16 @@ def parse_ranks(value: str) -> list[int]:
         part = raw_part.strip()
         if not part:
             raise argparse.ArgumentTypeError("rank list contains an empty item")
-        if "-" in part:
-            start_text, separator, end_text = part.partition("-")
-            if (
-                separator != "-"
-                or not start_text.isdigit()
-                or not end_text.isdigit()
-            ):
-                raise argparse.ArgumentTypeError(
-                    "expected ranks such as 0,2,3 or 0-3"
-                )
-            start = int(start_text)
-            end = int(end_text)
-            if end < start:
-                raise argparse.ArgumentTypeError("rank ranges must be ascending")
-            ranks.extend(range(start, end + 1))
-        elif part.isdigit():
-            ranks.append(int(part))
-        else:
+        start_text, separator, end_text = part.partition("-")
+        if not start_text.isdigit() or (separator and not end_text.isdigit()):
             raise argparse.ArgumentTypeError(
                 "expected ranks such as 0,2,3 or 0-3"
             )
+        start = int(start_text)
+        end = int(end_text) if separator else start
+        if end < start:
+            raise argparse.ArgumentTypeError("rank ranges must be ascending")
+        ranks.extend(range(start, end + 1))
     if len(set(ranks)) != len(ranks):
         raise argparse.ArgumentTypeError("rank list contains duplicates")
     return ranks

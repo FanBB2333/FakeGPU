@@ -4,7 +4,7 @@ import argparse
 
 import pytest
 
-from fakegpu.distributed_cli import _print_bandwidth_summary, parse_size
+from fakegpu.distributed_cli import _print_bandwidth_summary, parse_ranks, parse_size
 
 
 def test_parse_size_accepts_units_and_rejects_bare_ib() -> None:
@@ -15,6 +15,21 @@ def test_parse_size_accepts_units_and_rejects_bare_ib() -> None:
     for value in ("64ib", "64iB", "64i", "64k"):
         with pytest.raises(argparse.ArgumentTypeError, match="expected a byte count"):
             parse_size(value)
+
+
+def test_parse_ranks_expands_ranges_and_rejects_bad_lists() -> None:
+    assert parse_ranks("0,2-4, 7") == [0, 2, 3, 4, 7]
+    assert parse_ranks("5") == [5]
+    for value, message in (
+        ("0,,1", "empty item"),
+        ("0-", "expected ranks"),
+        ("a", "expected ranks"),
+        ("1-2-3", "expected ranks"),
+        ("3-1", "ascending"),
+        ("0-2,1", "duplicates"),
+    ):
+        with pytest.raises(argparse.ArgumentTypeError, match=message):
+            parse_ranks(value)
 
 
 def test_bandwidth_summary_does_not_print_pass_for_error(capsys) -> None:
