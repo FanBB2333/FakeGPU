@@ -268,36 +268,25 @@ def estimate_occupancy(
     shared_per_block = int(
         ptx_analysis.get("static_shared_memory_bytes", 0) or 0
     )
-    blocks_by_threads = (
-        profile.max_threads_per_multiprocessor // threads_per_block
-    )
-    blocks_by_registers = (
-        profile.regs_per_multiprocessor
-        // (registers_per_thread * threads_per_block)
-        if registers_per_thread > 0
-        else profile.max_blocks_per_multiprocessor
-    )
-    blocks_by_shared = (
-        profile.shared_mem_per_sm // shared_per_block
-        if shared_per_block > 0
-        else profile.max_blocks_per_multiprocessor
-    )
-    resident_blocks = min(
-        profile.max_blocks_per_multiprocessor,
-        blocks_by_threads,
-        blocks_by_registers,
-        blocks_by_shared,
-    )
-    active_threads = resident_blocks * threads_per_block
-    constraints = {
+    block_limits = {
         "architectural_block_limit": profile.max_blocks_per_multiprocessor,
-        "threads": blocks_by_threads,
-        "registers": blocks_by_registers,
-        "shared_memory": blocks_by_shared,
+        "threads": profile.max_threads_per_multiprocessor // threads_per_block,
+        "registers": (
+            profile.regs_per_multiprocessor
+            // (registers_per_thread * threads_per_block)
+            if registers_per_thread > 0
+            else profile.max_blocks_per_multiprocessor
+        ),
+        "shared_memory": (
+            profile.shared_mem_per_sm // shared_per_block
+            if shared_per_block > 0
+            else profile.max_blocks_per_multiprocessor
+        ),
     }
-    minimum = min(constraints.values())
+    resident_blocks = min(block_limits.values())
+    active_threads = resident_blocks * threads_per_block
     limiting = sorted(
-        name for name, value in constraints.items() if value == minimum
+        name for name, value in block_limits.items() if value == resident_blocks
     )
     return {
         "profile_id": profile.id,
@@ -315,7 +304,7 @@ def estimate_occupancy(
             if profile.max_threads_per_multiprocessor > 0
             else 0.0
         ),
-        "block_limits": constraints,
+        "block_limits": block_limits,
         "limiting_resources": limiting,
     }
 
