@@ -129,10 +129,6 @@ def _refresh_runtime_profile_state(
 
 
 # ---------------------------------------------------------------------------
-# Cross-device guards
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Memory tracking: per-device memory accounting.
 # ---------------------------------------------------------------------------
 
@@ -140,10 +136,6 @@ _MEMORY_TRACKING = os.environ.get("FAKEGPU_MEMORY_TRACKING", "1") != "0"
 _DISPATCH_MEMORY_TRACKING = (
     os.environ.get("FAKEGPU_DISPATCH_MEMORY_TRACKING", "1") != "0"
 )
-# ---------------------------------------------------------------------------
-# Architecture name lookup (mirrors C++ gpu_profile.cpp)
-# ---------------------------------------------------------------------------
-
 
 def _dump_terminal_summary() -> None:
     """Print a Report Summary to stderr on process exit.
@@ -861,9 +853,6 @@ def _install_compile_compat_shim(torch_mod: Any) -> None:
     torch_mod.compiler.compile = _fakegpu_compile
 
 
-# ---------------------------------------------------------------------------
-# Fake CUDA Stream / Event
-# ---------------------------------------------------------------------------
 def _install_torch_accelerator_compat(torch_mod: Any) -> None:
     """Route the generic accelerator API through FakeGPU's CUDA surface.
 
@@ -1343,30 +1332,11 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
         fake_cls.__torch_function__ = classmethod(_counted_torch_function)
 
 
-def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
-    """Layer FakeGPU enhancements on top of the upstream FakeCudaTensor backend.
+def _install_device_index_validation(upstream: Any, torch_mod: Any) -> Any:
+    """Raise CUDA's "invalid device ordinal" error for out-of-range devices.
 
-    The upstream ``enable()`` has already patched core CUDA redirection
-    (Tensor.to/cuda, Module.to/cuda, DataParallel, DDP, distributed,
-    factory functions, torch.load).  This function adds:
-
-    * Per-device GPU profile support
-    * Memory tracking with OOM simulation
-    * Autocast dtype validation
-    * GradScaler passthrough
-    * Cross-device validation
-    * Terminal report on exit
+    Returns the bounds-checked replacement for ``upstream._normalize_device_index``.
     """
-    global _memory_tracker, _link_traffic
-
-    import torch.cuda
-
-    # Let analysis helpers distinguish FakeGPU's simulated availability from a
-    # real CUDA runtime.  In particular, PyTorch 2.13 FakeTensor tracing may
-    # initialize a physical CUDA context when is_available() reports true.
-    torch_mod.cuda._fakegpu_simulated = True
-
-    # ---- 0. Device index bounds validation ----
     # The upstream uses a different error message ("Invalid fake CUDA device index N").
     # Replace _normalize_device_index entirely so that all paths (set_device,
     # torch.load, etc.) that call it produce our "invalid device ordinal" message
@@ -1387,7 +1357,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         idx = _checked_normalize_device_index(device)
         upstream._CURRENT_DEVICE = idx
 
-    torch.cuda.set_device = _validated_set_device
+    torch_mod.cuda.set_device = _validated_set_device
     upstream.set_device = _validated_set_device
 
     # Override _normalize_cuda_device to validate bounds for factory functions.
@@ -1400,14 +1370,11 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         return result
 
     upstream._normalize_cuda_device = _bounds_checked_normalize_cuda
+    return _checked_normalize_device_index
 
-    # ---- 1. Memory tracker ----
-    if _MEMORY_TRACKING:
-        per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
-        _memory_tracker = _DeviceMemoryTracker(per_device_bytes)
-        _install_autograd_saved_tensor_tracking()
 
-    # ---- 2. Hook upstream.wrap_tensor for memory tracking ----
+def _install_wrap_tensor_tracking(upstream: Any) -> None:
+    """Hook ``upstream.wrap_tensor`` for bounds checks and memory tracking."""
     _orig_wrap_tensor = upstream.wrap_tensor
 
     def _hooked_wrap_tensor(t, device_index=None):
@@ -1432,17 +1399,9 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         return result
 
     upstream.wrap_tensor = _hooked_wrap_tensor
-    _install_upstream_dispatch_memory_tracking(upstream)
-    # Copies take the modeled time of their route over the platform links
-    # (fakegpu.link_traffic); recorded only, nothing waits.  Installed before
-    # the category hooks so they wrap the recording Module.to/cuda.
-    _link_traffic = _new_link_traffic()
-    _install_transfer_recording(upstream, torch_mod)
-    _install_upstream_memory_category_hooks(upstream, torch_mod)
-    _patch_upstream_fakecuda_tensor_compat(upstream, torch_mod)
-    _patch_upstream_all_gather_object(upstream, torch_mod)
-    _install_torch_accelerator_compat(torch_mod)
 
+
+def _install_dynamo_friendly_tree_map(upstream: Any, torch_mod: Any) -> None:
     def _dynamo_friendly_tree_map(fn, obj):
         # torch.Size is a tuple subclass but must be preserved as-is so that
         # FSDP (and other code) can call .numel() on tensor.size() results.
@@ -1476,14 +1435,12 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     upstream._tree_map = _dynamo_friendly_tree_map
 
-    fake_ddp_cls = torch_mod.nn.parallel.DistributedDataParallel
-    if not hasattr(fake_ddp_cls, "_get_active_ddp_module"):
-        fake_ddp_cls._get_active_ddp_module = staticmethod(lambda: None)
 
-    torch_mod.Tensor.pin_memory = _patched_tensor_pin_memory  # type: ignore[assignment]
-    _install_compile_compat_shim(torch_mod)
+def _install_profiled_device_queries(
+    upstream: Any, torch_mod: Any, checked_normalize_device_index: Any
+) -> None:
+    """Answer device name/capability/properties and peer access per profile."""
 
-    # ---- 3. Per-device GPU profiles ----
     def _profiled_get_device_name(device=None):
         idx = _normalize_device_index(device)
         if idx < len(_DEVICE_PROFILES):
@@ -1506,15 +1463,15 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
             )
         return _FakeDeviceProperties(idx)
 
-    torch.cuda.get_device_name = _profiled_get_device_name
-    torch.cuda.get_device_capability = _profiled_get_device_capability
-    torch.cuda.get_device_properties = _profiled_get_device_properties
+    torch_mod.cuda.get_device_name = _profiled_get_device_name
+    torch_mod.cuda.get_device_capability = _profiled_get_device_capability
+    torch_mod.cuda.get_device_properties = _profiled_get_device_properties
 
     # Peer access follows the modeled NVLink/PCIe topology (see
     # fakegpu.link_topology); without a platform every pair has access.
     def _topology_can_device_access_peer(device, peer_device):
-        source = _checked_normalize_device_index(device)
-        target = _checked_normalize_device_index(peer_device)
+        source = checked_normalize_device_index(device)
+        target = checked_normalize_device_index(peer_device)
         from .platforms import topology_from_environment
 
         topology = topology_from_environment(
@@ -1523,70 +1480,66 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         )
         return topology.can_access_peer(source, target)
 
-    torch.cuda.can_device_access_peer = _topology_can_device_access_peer
+    torch_mod.cuda.can_device_access_peer = _topology_can_device_access_peer
     upstream.can_device_access_peer = _topology_can_device_access_peer
 
-    # Compute-capability-aware bf16 check (upstream always returns True)
-    torch.cuda.is_bf16_supported = _stub_is_bf16_supported
-    _patch_hf_cuda_surface(torch_mod)
 
-    # ---- 4. Tracked memory query functions ----
-    if _memory_tracker is not None:
+def _install_tracked_memory_api(torch_mod: Any) -> None:
+    """Serve the ``torch.cuda`` memory API from ``_memory_tracker``."""
 
-        def _tracked_memory_allocated(device=None):
-            return _memory_tracker.memory_allocated(_normalize_device_index(device))
+    def _tracked_memory_allocated(device=None):
+        return _memory_tracker.memory_allocated(_normalize_device_index(device))
 
-        def _tracked_max_memory_allocated(device=None):
-            return _memory_tracker.max_memory_allocated(_normalize_device_index(device))
+    def _tracked_max_memory_allocated(device=None):
+        return _memory_tracker.max_memory_allocated(_normalize_device_index(device))
 
-        def _tracked_memory_reserved(device=None):
-            return _memory_tracker.memory_reserved(_normalize_device_index(device))
+    def _tracked_memory_reserved(device=None):
+        return _memory_tracker.memory_reserved(_normalize_device_index(device))
 
-        def _tracked_max_memory_reserved(device=None):
-            return _memory_tracker.max_memory_reserved(_normalize_device_index(device))
+    def _tracked_max_memory_reserved(device=None):
+        return _memory_tracker.max_memory_reserved(_normalize_device_index(device))
 
-        def _tracked_mem_get_info(device=None):
-            return _memory_tracker.mem_get_info(_normalize_device_index(device))
+    def _tracked_mem_get_info(device=None):
+        return _memory_tracker.mem_get_info(_normalize_device_index(device))
 
-        def _tracked_empty_cache():
-            _memory_tracker.empty_cache()
+    def _tracked_empty_cache():
+        _memory_tracker.empty_cache()
 
-        def _tracked_reset_peak_memory_stats(device=None):
-            _memory_tracker.reset_peak(_normalize_device_index(device))
+    def _tracked_reset_peak_memory_stats(device=None):
+        _memory_tracker.reset_peak(_normalize_device_index(device))
 
-        def _tracked_reset_accumulated_memory_stats(device=None):
-            _memory_tracker.reset_accumulated(_normalize_device_index(device))
+    def _tracked_reset_accumulated_memory_stats(device=None):
+        _memory_tracker.reset_accumulated(_normalize_device_index(device))
 
-        def _tracked_memory_stats(device=None):
-            return _memory_tracker.memory_stats(_normalize_device_index(device))
+    def _tracked_memory_stats(device=None):
+        return _memory_tracker.memory_stats(_normalize_device_index(device))
 
-        def _tracked_memory_snapshot():
-            return _memory_tracker.allocator_snapshot()
+    def _tracked_memory_snapshot():
+        return _memory_tracker.allocator_snapshot()
 
-        # Both public namespaces must expose the same tracker and aliases.
-        memory_api = {
-            "empty_cache": _tracked_empty_cache,
-            "memory_allocated": _tracked_memory_allocated,
-            "max_memory_allocated": _tracked_max_memory_allocated,
-            "memory_reserved": _tracked_memory_reserved,
-            "max_memory_reserved": _tracked_max_memory_reserved,
-            "memory_cached": _tracked_memory_reserved,
-            "max_memory_cached": _tracked_max_memory_reserved,
-            "mem_get_info": _tracked_mem_get_info,
-            "reset_peak_memory_stats": _tracked_reset_peak_memory_stats,
-            "reset_max_memory_allocated": _tracked_reset_peak_memory_stats,
-            "reset_max_memory_cached": _tracked_reset_peak_memory_stats,
-            "reset_accumulated_memory_stats": _tracked_reset_accumulated_memory_stats,
-            "memory_stats": _tracked_memory_stats,
-            "memory_snapshot": _tracked_memory_snapshot,
-        }
-        for namespace in (torch.cuda, torch.cuda.memory):
-            for name, function in memory_api.items():
-                setattr(namespace, name, function)
+    # Both public namespaces must expose the same tracker and aliases.
+    memory_api = {
+        "empty_cache": _tracked_empty_cache,
+        "memory_allocated": _tracked_memory_allocated,
+        "max_memory_allocated": _tracked_max_memory_allocated,
+        "memory_reserved": _tracked_memory_reserved,
+        "max_memory_reserved": _tracked_max_memory_reserved,
+        "memory_cached": _tracked_memory_reserved,
+        "max_memory_cached": _tracked_max_memory_reserved,
+        "mem_get_info": _tracked_mem_get_info,
+        "reset_peak_memory_stats": _tracked_reset_peak_memory_stats,
+        "reset_max_memory_allocated": _tracked_reset_peak_memory_stats,
+        "reset_max_memory_cached": _tracked_reset_peak_memory_stats,
+        "reset_accumulated_memory_stats": _tracked_reset_accumulated_memory_stats,
+        "memory_stats": _tracked_memory_stats,
+        "memory_snapshot": _tracked_memory_snapshot,
+    }
+    for namespace in (torch_mod.cuda, torch_mod.cuda.memory):
+        for name, function in memory_api.items():
+            setattr(namespace, name, function)
 
-    # ---- 5. Autocast / GradScaler ----
-    _install_fakegpu_autocast(torch_mod)
 
+def _install_fake_grad_scaler(torch_mod: Any) -> None:
     class _FakeGradScaler(torch_mod.amp.GradScaler):
         def __init__(self, *args: Any, **kwargs: Any):
             kwargs.setdefault("enabled", False)
@@ -1595,54 +1548,119 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     torch_mod.cuda.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
     torch_mod.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
 
-    # ---- 6. Cross-device validation ----
+
+def _install_cross_device_checks(torch_mod: Any) -> None:
+    import torch.nn.functional as F
+
+    for op_name in (
+        "matmul",
+        "mm",
+        "bmm",
+        "cat",
+        "stack",
+        "where",
+        "addmm",
+        "addcmul",
+        "addcdiv",
+    ):
+        setattr(
+            torch_mod,
+            op_name,
+            _wrap_multi_tensor_op(getattr(torch_mod, op_name), torch_mod),
+        )
+
+    for op_name in (
+        # losses
+        "cross_entropy",
+        "mse_loss",
+        "nll_loss",
+        "binary_cross_entropy",
+        # layers
+        "linear",
+        "conv1d",
+        "conv2d",
+        "conv3d",
+        "embedding",
+        "batch_norm",
+        "layer_norm",
+    ):
+        setattr(F, op_name, _wrap_multi_tensor_op(getattr(F, op_name), torch_mod))
+
+    for dunder in _BINARY_DUNDER_TORCH_OPS:
+        setattr(
+            torch_mod.Tensor,
+            dunder,
+            _wrap_tensor_binary_op(
+                getattr(torch_mod.Tensor, dunder), dunder, torch_mod
+            ),
+        )
+
+
+def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
+    """Layer FakeGPU enhancements on top of the upstream FakeCudaTensor backend.
+
+    The upstream ``enable()`` has already patched core CUDA redirection
+    (Tensor.to/cuda, Module.to/cuda, DataParallel, DDP, distributed,
+    factory functions, torch.load).  This function adds:
+
+    * Per-device GPU profile support
+    * Memory tracking with OOM simulation
+    * Autocast dtype validation
+    * GradScaler passthrough
+    * Cross-device validation
+    * Terminal report on exit
+    """
+    global _memory_tracker, _link_traffic
+
+    # Let analysis helpers distinguish FakeGPU's simulated availability from a
+    # real CUDA runtime.  In particular, PyTorch 2.13 FakeTensor tracing may
+    # initialize a physical CUDA context when is_available() reports true.
+    torch_mod.cuda._fakegpu_simulated = True
+
+    checked_normalize_device_index = _install_device_index_validation(
+        upstream, torch_mod
+    )
+
+    if _MEMORY_TRACKING:
+        per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
+        _memory_tracker = _DeviceMemoryTracker(per_device_bytes)
+        _install_autograd_saved_tensor_tracking()
+
+    _install_wrap_tensor_tracking(upstream)
+    _install_upstream_dispatch_memory_tracking(upstream)
+    # Copies take the modeled time of their route over the platform links
+    # (fakegpu.link_traffic); recorded only, nothing waits.  Installed before
+    # the category hooks so they wrap the recording Module.to/cuda.
+    _link_traffic = _new_link_traffic()
+    _install_transfer_recording(upstream, torch_mod)
+    _install_upstream_memory_category_hooks(upstream, torch_mod)
+    _patch_upstream_fakecuda_tensor_compat(upstream, torch_mod)
+    _patch_upstream_all_gather_object(upstream, torch_mod)
+    _install_torch_accelerator_compat(torch_mod)
+    _install_dynamo_friendly_tree_map(upstream, torch_mod)
+
+    fake_ddp_cls = torch_mod.nn.parallel.DistributedDataParallel
+    if not hasattr(fake_ddp_cls, "_get_active_ddp_module"):
+        fake_ddp_cls._get_active_ddp_module = staticmethod(lambda: None)
+
+    torch_mod.Tensor.pin_memory = _patched_tensor_pin_memory  # type: ignore[assignment]
+    _install_compile_compat_shim(torch_mod)
+
+    _install_profiled_device_queries(upstream, torch_mod, checked_normalize_device_index)
+
+    # Compute-capability-aware bf16 check (upstream always returns True)
+    torch_mod.cuda.is_bf16_supported = _stub_is_bf16_supported
+    _patch_hf_cuda_surface(torch_mod)
+
+    if _memory_tracker is not None:
+        _install_tracked_memory_api(torch_mod)
+
+    _install_fakegpu_autocast(torch_mod)
+    _install_fake_grad_scaler(torch_mod)
+
     if _CROSS_DEVICE_CHECK:
-        import torch.nn.functional as F
+        _install_cross_device_checks(torch_mod)
 
-        for op_name in (
-            "matmul",
-            "mm",
-            "bmm",
-            "cat",
-            "stack",
-            "where",
-            "addmm",
-            "addcmul",
-            "addcdiv",
-        ):
-            setattr(
-                torch_mod,
-                op_name,
-                _wrap_multi_tensor_op(getattr(torch_mod, op_name), torch_mod),
-            )
-
-        for op_name in (
-            # losses
-            "cross_entropy",
-            "mse_loss",
-            "nll_loss",
-            "binary_cross_entropy",
-            # layers
-            "linear",
-            "conv1d",
-            "conv2d",
-            "conv3d",
-            "embedding",
-            "batch_norm",
-            "layer_norm",
-        ):
-            setattr(F, op_name, _wrap_multi_tensor_op(getattr(F, op_name), torch_mod))
-
-        for dunder in _BINARY_DUNDER_TORCH_OPS:
-            setattr(
-                torch_mod.Tensor,
-                dunder,
-                _wrap_tensor_binary_op(
-                    getattr(torch_mod.Tensor, dunder), dunder, torch_mod
-                ),
-            )
-
-    # ---- 7. RNG state functions (not provided by upstream) ----
     _patch_cuda_rng_surface(torch_mod)
     _patch_nccl_surface(torch_mod)
     _patch_fsdp_device_handling()
@@ -1650,7 +1668,6 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     _patch_transformers_utils()
     _patch_accelerate_utils()
 
-    # ---- 8. Terminal report ----
     atexit.register(_dump_terminal_summary)
 
 
