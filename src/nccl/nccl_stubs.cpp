@@ -1058,16 +1058,30 @@ std::size_t byte_offset_for_elements(std::size_t element_offset, std::size_t dty
     return element_offset * dtype_size;
 }
 
+const char* collective_command(fake_gpu::distributed::CollectiveType type) {
+    switch (type) {
+        case fake_gpu::distributed::CollectiveType::AllReduce:
+            return "ALLREDUCE";
+        case fake_gpu::distributed::CollectiveType::Reduce:
+            return "REDUCE";
+        case fake_gpu::distributed::CollectiveType::Broadcast:
+            return "BROADCAST";
+        case fake_gpu::distributed::CollectiveType::AllGather:
+            return "ALLGATHER";
+        case fake_gpu::distributed::CollectiveType::ReduceScatter:
+            return "REDUCESCATTER";
+        case fake_gpu::distributed::CollectiveType::AllToAll:
+            return "ALLTOALL";
+    }
+    return "UNKNOWN";
+}
+
 char* byte_pointer(void* buffer, std::size_t byte_offset) {
     return static_cast<char*>(buffer) + byte_offset;
 }
 
 const char* byte_pointer(const void* buffer, std::size_t byte_offset) {
     return static_cast<const char*>(buffer) + byte_offset;
-}
-
-void clear_group_operations() {
-    g_group_operations.clear();
 }
 
 bool all_group_operations_share_comm(
@@ -2719,18 +2733,18 @@ ncclResult_t flush_grouped_operations() {
         g_last_error.clear();
         return ncclSuccess;
     }
+    std::vector<GroupOperation> operations = std::move(g_group_operations);
+    g_group_operations.clear();
 
     ncclComm_t comm = nullptr;
-    if (!all_group_operations_share_comm(g_group_operations, comm)) {
-        clear_group_operations();
+    if (!all_group_operations_share_comm(operations, comm)) {
         return fail_with(nullptr, ncclInvalidUsage, "group currently requires all operations to use the same communicator");
     }
 
-    if (all_group_operations_are_collectives(g_group_operations) &&
+    if (all_group_operations_are_collectives(operations) &&
         requires_coordinator(comm->dist_mode)) {
-        ncclResult_t result = prepare_group_batch(comm, g_group_operations);
+        ncclResult_t result = prepare_group_batch(comm, operations);
         if (result != ncclSuccess) {
-            clear_group_operations();
             return result;
         }
     }
@@ -2738,14 +2752,13 @@ ncclResult_t flush_grouped_operations() {
     bool handled_as_alltoall = false;
     ncclResult_t grouped_alltoall_result = flush_grouped_alltoallv(
         comm,
-        g_group_operations,
+        operations,
         handled_as_alltoall);
     if (handled_as_alltoall) {
-        clear_group_operations();
         return grouped_alltoall_result;
     }
 
-    for (GroupOperation& operation : g_group_operations) {
+    for (GroupOperation& operation : operations) {
         ncclResult_t result = ncclSuccess;
         if (operation.kind == GroupOperationKind::PointToPoint) {
             result = submit_point_to_point(
@@ -2758,103 +2771,29 @@ ncclResult_t flush_grouped_operations() {
                 operation.peer,
                 operation.comm,
                 operation.stream);
-        } else if (operation.type == fake_gpu::distributed::CollectiveType::AllReduce) {
-            result = submit_collective(
-                "ALLREDUCE",
-                fake_gpu::distributed::CollectiveType::AllReduce,
-                operation.sendbuff,
-                operation.recvbuff,
-                operation.count,
-                operation.datatype,
-                operation.reduce_op,
-                -1,
-                operation.comm,
-                operation.red_op,
-                operation.stream);
-        } else if (operation.type == fake_gpu::distributed::CollectiveType::Reduce) {
-            void* recv_target = operation.recvbuff;
-            if (!operation.recv_scratch.empty()) {
-                recv_target = operation.recv_scratch.data();
-            }
-            result = submit_collective(
-                "REDUCE",
-                fake_gpu::distributed::CollectiveType::Reduce,
-                operation.sendbuff,
-                recv_target,
-                operation.count,
-                operation.datatype,
-                operation.reduce_op,
-                operation.root,
-                operation.comm,
-                operation.red_op,
-                operation.stream);
-        } else if (operation.type == fake_gpu::distributed::CollectiveType::Broadcast) {
-            const void* local_input = operation.recvbuff;
-            if (operation.comm->rank == operation.root) {
-                local_input = operation.sendbuff;
-            }
-            result = submit_collective(
-                "BROADCAST",
-                fake_gpu::distributed::CollectiveType::Broadcast,
-                local_input,
-                operation.recvbuff,
-                operation.count,
-                operation.datatype,
-                fake_gpu::distributed::CollectiveReduceOp::None,
-                operation.root,
-                operation.comm,
-                ncclSum,
-                operation.stream);
-        } else if (operation.type == fake_gpu::distributed::CollectiveType::AllGather) {
-            result = submit_collective(
-                "ALLGATHER",
-                fake_gpu::distributed::CollectiveType::AllGather,
-                operation.sendbuff,
-                operation.recvbuff,
-                operation.count,
-                operation.datatype,
-                fake_gpu::distributed::CollectiveReduceOp::None,
-                -1,
-                operation.comm,
-                ncclSum,
-                operation.stream);
-        } else if (operation.type == fake_gpu::distributed::CollectiveType::AllToAll) {
-            result = submit_collective(
-                "ALLTOALL",
-                fake_gpu::distributed::CollectiveType::AllToAll,
-                operation.sendbuff,
-                operation.recvbuff,
-                operation.count,
-                operation.datatype,
-                operation.reduce_op,
-                operation.root,
-                operation.comm,
-                ncclSum,
-                operation.stream);
-        } else if (operation.type == fake_gpu::distributed::CollectiveType::ReduceScatter) {
-            result = submit_collective(
-                "REDUCESCATTER",
-                fake_gpu::distributed::CollectiveType::ReduceScatter,
-                operation.sendbuff,
-                operation.recvbuff,
-                operation.count,
-                operation.datatype,
-                operation.reduce_op,
-                -1,
-                operation.comm,
-                operation.red_op,
-                operation.stream);
         } else {
-            result = fail_with(operation.comm, ncclInvalidUsage, "unsupported grouped collective");
+            const bool broadcast_receiver =
+                operation.type == fake_gpu::distributed::CollectiveType::Broadcast &&
+                operation.comm->rank != operation.root;
+            result = submit_collective(
+                collective_command(operation.type),
+                operation.type,
+                broadcast_receiver ? operation.recvbuff : operation.sendbuff,
+                operation.recv_scratch.empty() ? operation.recvbuff : operation.recv_scratch.data(),
+                operation.count,
+                operation.datatype,
+                operation.reduce_op,
+                operation.root,
+                operation.comm,
+                operation.red_op,
+                operation.stream);
         }
 
         if (result != ncclSuccess) {
-            clear_group_operations();
             return result;
         }
     }
 
-    clear_group_operations();
     clear_last_error(comm);
     return ncclSuccess;
 }
@@ -4180,7 +4119,7 @@ ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* sim_info) {
     if (g_group_depth > 0) {
         --g_group_depth;
     }
-    clear_group_operations();
+    g_group_operations.clear();
     g_last_error.clear();
     return ncclSuccess;
 }
