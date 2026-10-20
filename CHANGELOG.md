@@ -69,6 +69,8 @@
 - `cudaGetDriverEntryPointByVersion` reports `driverStatus` 0 (success) for
   resolved symbols and 1 (symbol not found) otherwise; the values were
   inverted.
+- `cuGetProcAddress_v2` with a NULL `pfn` and a non-NULL `symbolStatus` now
+  returns `CUDA_ERROR_INVALID_VALUE` with status 1 instead of crashing.
 
 ## v1.6.0 - 2026-10-17
 

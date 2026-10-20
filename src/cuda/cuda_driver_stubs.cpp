@@ -4381,7 +4381,7 @@ CUresult cuGetProcAddress_v2(const char *symbol, void **pfn, int cudaVersion, un
     CUresult result = cuGetProcAddress(symbol, pfn, cudaVersion, flags);
     if (symbolStatus) {
         // Best-effort: 0 means found, 1 means not found.
-        *static_cast<int*>(symbolStatus) = (*pfn != nullptr) ? 0 : 1;
+        *static_cast<int*>(symbolStatus) = (result == CUDA_SUCCESS && *pfn != nullptr) ? 0 : 1;
     }
     return result;
 }

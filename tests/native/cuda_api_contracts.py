@@ -57,6 +57,22 @@ def check_driver_entry_point_status(runtime: ctypes.CDLL) -> None:
         )
 
 
+def check_get_proc_address_v2_rejects_null_output(driver: ctypes.CDLL) -> None:
+    driver.cuGetProcAddress_v2.argtypes = [
+        ctypes.c_char_p,
+        c_void_p,
+        ctypes.c_int,
+        ctypes.c_ulonglong,
+        ctypes.POINTER(ctypes.c_int),
+    ]
+    status = ctypes.c_int(-1)
+    result = driver.cuGetProcAddress_v2(b"cuInit", None, 12000, 0, ctypes.byref(status))
+    _check(
+        result == CUDA_ERROR_INVALID_VALUE and status.value == 1,
+        f"cuGetProcAddress_v2 with a NULL pfn returned {result} with status {status.value}",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -78,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
 
     check_failed_event_record_keeps_stream_idle(driver)
     check_driver_entry_point_status(runtime)
+    check_get_proc_address_v2_rejects_null_output(driver)
     print("CUDA API contract validation passed")
     return 0
 
