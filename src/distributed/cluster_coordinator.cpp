@@ -223,9 +223,9 @@ ClusterCoordinator::~ClusterCoordinator() {
     }
     {
         std::lock_guard<std::mutex> lock(client_threads_mutex_);
-        for (std::thread& thread : client_threads_) {
-            if (thread.joinable()) {
-                thread.join();
+        for (ClientThread& client : client_threads_) {
+            if (client.thread.joinable()) {
+                client.thread.join();
             }
         }
         client_threads_.clear();
@@ -269,8 +269,21 @@ void ClusterCoordinator::accept_loop() {
         }
 
         std::lock_guard<std::mutex> lock(client_threads_mutex_);
-        client_threads_.emplace_back([this, client_fd]() {
-            handle_client(client_fd);
+        for (auto it = client_threads_.begin(); it != client_threads_.end();) {
+            if (it->done->load()) {
+                it->thread.join();
+                it = client_threads_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        client_threads_.push_back(ClientThread{
+            std::thread([this, client_fd, done]() {
+                handle_client(client_fd);
+                done->store(true);
+            }),
+            done,
         });
     }
 }

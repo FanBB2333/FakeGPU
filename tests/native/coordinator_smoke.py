@@ -66,6 +66,17 @@ def concurrent_requests(*calls) -> list:
     return results
 
 
+def coordinator_rss_kib(pid: int) -> int:
+    return int(
+        subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(pid)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+
+
 @contextlib.contextmanager
 def running_coordinator(tmpdir: str, extra_env: dict[str, str] | None = None):
     socket_path = os.path.join(tmpdir, "coordinator.sock")
@@ -184,6 +195,22 @@ def check_socket_point_to_point(tmpdir: str) -> None:
         proc.wait(timeout=2.0)
 
 
+def check_finished_client_threads_are_released(tmpdir: str) -> None:
+    with running_coordinator(tmpdir) as (socket_path, proc):
+        for _ in range(100):
+            request(socket_path, "PING")
+        rss_before = coordinator_rss_kib(proc.pid)
+        for _ in range(2000):
+            request(socket_path, "PING")
+        growth_kib = coordinator_rss_kib(proc.pid) - rss_before
+        if growth_kib > 10 * 1024:
+            raise AssertionError(
+                f"coordinator RSS grew by {growth_kib} KiB over 2000 requests"
+            )
+        request(socket_path, "SHUTDOWN")
+        proc.wait(timeout=2.0)
+
+
 def main() -> int:
     if not COORDINATOR_BIN.exists():
         print(f"missing coordinator binary: {COORDINATOR_BIN}", file=sys.stderr)
@@ -192,6 +219,7 @@ def main() -> int:
     checks = (
         check_empty_report,
         check_socket_point_to_point,
+        check_finished_client_threads_are_released,
     )
     for check in checks:
         with tempfile.TemporaryDirectory(prefix="fgpu-coord-", dir="/tmp") as tmpdir:

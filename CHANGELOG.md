@@ -93,6 +93,9 @@
 - Complete `ncclSend`/`ncclRecv` pairs over the TCP coordinator. The receiver
   no longer declares a socket payload it never sends, so the coordinator stops
   waiting for it and the sender no longer times out.
+- Release each finished coordinator connection thread instead of keeping
+  every handler until shutdown, so coordinator memory no longer grows with
+  the number of requests.
 
 ## v1.6.0 - 2026-10-17
 
