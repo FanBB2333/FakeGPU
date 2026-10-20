@@ -44,6 +44,13 @@ static void fillRandom(T *data, size_t count) {
     }
 }
 
+static void fillRandomBytes(void *data, size_t bytes) {
+    unsigned char *ptr = static_cast<unsigned char*>(data);
+    for (size_t i = 0; i < bytes; i++) {
+        ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
+    }
+}
+
 // Element sizes of the cudaDataType_t values the CPU paths execute; nothing
 // else ever reaches a size that is used.
 static size_t getDataTypeSize(int dataType) {
@@ -663,6 +670,17 @@ cublasStatus_t cpu_gemm_batched(
     return CUBLAS_STATUS_SUCCESS;
 }
 
+template<class F>
+cublasStatus_t with_handle(cublasHandle_t handle, F&& f) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto it = g_handles.find(handle);
+    if (it == g_handles.end()) {
+        return CUBLAS_STATUS_NOT_INITIALIZED;
+    }
+    f(*it->second);
+    return CUBLAS_STATUS_SUCCESS;
+}
+
 bool is_supported_gemm_datatype(int dataType) {
     switch (dataType) {
         case 0:  // CUDA_R_32F
@@ -776,16 +794,10 @@ cublasStatus_t cublasGetProperty(int type, int *value) {
 // ============================================================================
 
 cublasStatus_t cublasSetStream_v2(cublasHandle_t handle, void *streamId) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-
-    auto it = g_handles.find(handle);
-    if (it == g_handles.end()) {
-        return CUBLAS_STATUS_NOT_INITIALIZED;
-    }
-
-    it->second->stream = streamId;
-    FGPU_LOG("[FakeCUBLAS] cublasSetStream_v2 stream=%p\n", streamId);
-    return CUBLAS_STATUS_SUCCESS;
+    return with_handle(handle, [&](CublasHandle& h) {
+        h.stream = streamId;
+        FGPU_LOG("[FakeCUBLAS] cublasSetStream_v2 stream=%p\n", streamId);
+    });
 }
 
 cublasStatus_t cublasSetStream(cublasHandle_t handle, void *streamId) {
@@ -796,16 +808,7 @@ cublasStatus_t cublasGetStream_v2(cublasHandle_t handle, void **streamId) {
     if (!streamId) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-
-    std::lock_guard<std::mutex> lock(g_mutex);
-
-    auto it = g_handles.find(handle);
-    if (it == g_handles.end()) {
-        return CUBLAS_STATUS_NOT_INITIALIZED;
-    }
-
-    *streamId = it->second->stream;
-    return CUBLAS_STATUS_SUCCESS;
+    return with_handle(handle, [&](const CublasHandle& h) { *streamId = h.stream; });
 }
 
 cublasStatus_t cublasGetStream(cublasHandle_t handle, void **streamId) {
@@ -817,32 +820,17 @@ cublasStatus_t cublasGetStream(cublasHandle_t handle, void **streamId) {
 // ============================================================================
 
 cublasStatus_t cublasSetPointerMode_v2(cublasHandle_t handle, cublasPointerMode_t mode) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-
-    auto it = g_handles.find(handle);
-    if (it == g_handles.end()) {
-        return CUBLAS_STATUS_NOT_INITIALIZED;
-    }
-
-    it->second->pointerMode = mode;
-    FGPU_LOG("[FakeCUBLAS] cublasSetPointerMode_v2 mode=%d\n", mode);
-    return CUBLAS_STATUS_SUCCESS;
+    return with_handle(handle, [&](CublasHandle& h) {
+        h.pointerMode = mode;
+        FGPU_LOG("[FakeCUBLAS] cublasSetPointerMode_v2 mode=%d\n", mode);
+    });
 }
 
 cublasStatus_t cublasGetPointerMode_v2(cublasHandle_t handle, cublasPointerMode_t *mode) {
     if (!mode) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-
-    std::lock_guard<std::mutex> lock(g_mutex);
-
-    auto it = g_handles.find(handle);
-    if (it == g_handles.end()) {
-        return CUBLAS_STATUS_NOT_INITIALIZED;
-    }
-
-    *mode = it->second->pointerMode;
-    return CUBLAS_STATUS_SUCCESS;
+    return with_handle(handle, [&](const CublasHandle& h) { *mode = h.pointerMode; });
 }
 
 // ============================================================================
@@ -850,32 +838,17 @@ cublasStatus_t cublasGetPointerMode_v2(cublasHandle_t handle, cublasPointerMode_
 // ============================================================================
 
 cublasStatus_t cublasSetMathMode(cublasHandle_t handle, cublasMath_t mode) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-
-    auto it = g_handles.find(handle);
-    if (it == g_handles.end()) {
-        return CUBLAS_STATUS_NOT_INITIALIZED;
-    }
-
-    it->second->mathMode = mode;
-    FGPU_LOG("[FakeCUBLAS] cublasSetMathMode mode=%d\n", mode);
-    return CUBLAS_STATUS_SUCCESS;
+    return with_handle(handle, [&](CublasHandle& h) {
+        h.mathMode = mode;
+        FGPU_LOG("[FakeCUBLAS] cublasSetMathMode mode=%d\n", mode);
+    });
 }
 
 cublasStatus_t cublasGetMathMode(cublasHandle_t handle, cublasMath_t *mode) {
     if (!mode) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-
-    std::lock_guard<std::mutex> lock(g_mutex);
-
-    auto it = g_handles.find(handle);
-    if (it == g_handles.end()) {
-        return CUBLAS_STATUS_NOT_INITIALIZED;
-    }
-
-    *mode = it->second->mathMode;
-    return CUBLAS_STATUS_SUCCESS;
+    return with_handle(handle, [&](const CublasHandle& h) { *mode = h.mathMode; });
 }
 
 // ============================================================================
@@ -883,32 +856,17 @@ cublasStatus_t cublasGetMathMode(cublasHandle_t handle, cublasMath_t *mode) {
 // ============================================================================
 
 cublasStatus_t cublasSetAtomicsMode(cublasHandle_t handle, cublasAtomicsMode_t mode) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-
-    auto it = g_handles.find(handle);
-    if (it == g_handles.end()) {
-        return CUBLAS_STATUS_NOT_INITIALIZED;
-    }
-
-    it->second->atomicsMode = mode;
-    FGPU_LOG("[FakeCUBLAS] cublasSetAtomicsMode mode=%d\n", mode);
-    return CUBLAS_STATUS_SUCCESS;
+    return with_handle(handle, [&](CublasHandle& h) {
+        h.atomicsMode = mode;
+        FGPU_LOG("[FakeCUBLAS] cublasSetAtomicsMode mode=%d\n", mode);
+    });
 }
 
 cublasStatus_t cublasGetAtomicsMode(cublasHandle_t handle, cublasAtomicsMode_t *mode) {
     if (!mode) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-
-    std::lock_guard<std::mutex> lock(g_mutex);
-
-    auto it = g_handles.find(handle);
-    if (it == g_handles.end()) {
-        return CUBLAS_STATUS_NOT_INITIALIZED;
-    }
-
-    *mode = it->second->atomicsMode;
-    return CUBLAS_STATUS_SUCCESS;
+    return with_handle(handle, [&](const CublasHandle& h) { *mode = h.atomicsMode; });
 }
 
 // ============================================================================
@@ -1909,10 +1867,7 @@ cublasStatus_t cublasCgemv_v2(cublasHandle_t handle, cublasOperation_t trans, in
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
     int output_size = (trans == CUBLAS_OP_N) ? m : n;
-    unsigned char *ptr = (unsigned char*)y;
-    for (int i = 0; i < output_size * 8; i++) {
-        ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-    }
+    fillRandomBytes(y, static_cast<size_t>(std::max(output_size, 0)) * 8);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1924,10 +1879,7 @@ cublasStatus_t cublasZgemv_v2(cublasHandle_t handle, cublasOperation_t trans, in
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
     int output_size = (trans == CUBLAS_OP_N) ? m : n;
-    unsigned char *ptr = (unsigned char*)y;
-    for (int i = 0; i < output_size * 16; i++) {
-        ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-    }
+    fillRandomBytes(y, static_cast<size_t>(std::max(output_size, 0)) * 16);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -1939,11 +1891,7 @@ cublasStatus_t cublasCgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     if (fake_gpu::record_unsupported_api("cublasCgemm_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    size_t total_bytes = static_cast<size_t>(m) * n * 8;  // complex float = 8 bytes
-    unsigned char *ptr = (unsigned char*)C;
-    for (size_t i = 0; i < total_bytes; i++) {
-        ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-    }
+    fillRandomBytes(C, static_cast<size_t>(m) * n * 8);  // complex float = 8 bytes
     FGPU_LOG("[FakeCUBLAS] cublasCgemm_v2 m=%d n=%d k=%d\n", m, n, k);
     record_gemm(C, m, n, k, 1, /*complex=*/true);
     return CUBLAS_STATUS_SUCCESS;
@@ -1956,11 +1904,7 @@ cublasStatus_t cublasZgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
     if (fake_gpu::record_unsupported_api("cublasZgemm_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    size_t total_bytes = static_cast<size_t>(m) * n * 16;  // complex double = 16 bytes
-    unsigned char *ptr = (unsigned char*)C;
-    for (size_t i = 0; i < total_bytes; i++) {
-        ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-    }
+    fillRandomBytes(C, static_cast<size_t>(m) * n * 16);  // complex double = 16 bytes
     FGPU_LOG("[FakeCUBLAS] cublasZgemm_v2 m=%d n=%d k=%d\n", m, n, k);
     record_gemm(C, m, n, k, 1, /*complex=*/true);
     return CUBLAS_STATUS_SUCCESS;
@@ -1974,11 +1918,7 @@ cublasStatus_t cublasCgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     if (fake_gpu::record_unsupported_api("cublasCgemmStridedBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    size_t total_bytes = static_cast<size_t>(m) * n * batchCount * 8;
-    unsigned char *ptr = (unsigned char*)C;
-    for (size_t i = 0; i < total_bytes; i++) {
-        ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-    }
+    fillRandomBytes(C, static_cast<size_t>(m) * n * batchCount * 8);
     FGPU_LOG("[FakeCUBLAS] cublasCgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     record_gemm(C, m, n, k, batchCount, /*complex=*/true);
     return CUBLAS_STATUS_SUCCESS;
@@ -1991,11 +1931,7 @@ cublasStatus_t cublasZgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     if (fake_gpu::record_unsupported_api("cublasZgemmStridedBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    size_t total_bytes = static_cast<size_t>(m) * n * batchCount * 16;
-    unsigned char *ptr = (unsigned char*)C;
-    for (size_t i = 0; i < total_bytes; i++) {
-        ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-    }
+    fillRandomBytes(C, static_cast<size_t>(m) * n * batchCount * 16);
     FGPU_LOG("[FakeCUBLAS] cublasZgemmStridedBatched m=%d n=%d k=%d batchCount=%d\n", m, n, k, batchCount);
     record_gemm(C, m, n, k, batchCount, /*complex=*/true);
     return CUBLAS_STATUS_SUCCESS;
@@ -2009,11 +1945,7 @@ cublasStatus_t cublasCtrsm_v2(cublasHandle_t handle, cublasSideMode_t side, cubl
     if (fake_gpu::record_unsupported_api("cublasCtrsm_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    size_t total_bytes = static_cast<size_t>(m) * n * 8;
-    unsigned char *ptr = (unsigned char*)B;
-    for (size_t i = 0; i < total_bytes; i++) {
-        ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-    }
+    fillRandomBytes(B, static_cast<size_t>(m) * n * 8);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -2024,11 +1956,7 @@ cublasStatus_t cublasZtrsm_v2(cublasHandle_t handle, cublasSideMode_t side, cubl
     if (fake_gpu::record_unsupported_api("cublasZtrsm_v2", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    size_t total_bytes = static_cast<size_t>(m) * n * 16;
-    unsigned char *ptr = (unsigned char*)B;
-    for (size_t i = 0; i < total_bytes; i++) {
-        ptr[i] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-    }
+    fillRandomBytes(B, static_cast<size_t>(m) * n * 16);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -2040,14 +1968,9 @@ cublasStatus_t cublasCtrsmBatched(cublasHandle_t handle, cublasSideMode_t side, 
     if (fake_gpu::record_unsupported_api("cublasCtrsmBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    size_t matrix_bytes = static_cast<size_t>(m) * n * 8;
+    const size_t matrix_bytes = static_cast<size_t>(m) * n * 8;
     for (int i = 0; i < batchCount; i++) {
-        if (B[i]) {
-            unsigned char *ptr = (unsigned char*)B[i];
-            for (size_t j = 0; j < matrix_bytes; j++) {
-                ptr[j] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-            }
-        }
+        if (B[i]) fillRandomBytes(B[i], matrix_bytes);
     }
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -2059,14 +1982,9 @@ cublasStatus_t cublasZtrsmBatched(cublasHandle_t handle, cublasSideMode_t side, 
     if (fake_gpu::record_unsupported_api("cublasZtrsmBatched", "synthetic_output")) {
         return CUBLAS_STATUS_NOT_SUPPORTED;
     }
-    size_t matrix_bytes = static_cast<size_t>(m) * n * 16;
+    const size_t matrix_bytes = static_cast<size_t>(m) * n * 16;
     for (int i = 0; i < batchCount; i++) {
-        if (B[i]) {
-            unsigned char *ptr = (unsigned char*)B[i];
-            for (size_t j = 0; j < matrix_bytes; j++) {
-                ptr[j] = std::uniform_int_distribution<int>(0, 255)(g_rng);
-            }
-        }
+        if (B[i]) fillRandomBytes(B[i], matrix_bytes);
     }
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -2404,6 +2322,27 @@ int64_t lt_default_batch_stride(const LtMatrixLayoutState& layout) {
     return layout.ld * static_cast<int64_t>(layout.cols);
 }
 
+template<class T>
+cublasStatus_t set_attr(T& field, const void* buf, size_t sizeInBytes) {
+    if (sizeInBytes != sizeof(T)) return CUBLAS_STATUS_INVALID_VALUE;
+    std::memcpy(&field, buf, sizeof(T));
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+// A null buffer of size 0 only queries the attribute size.
+template<class T>
+cublasStatus_t get_attr(const T& field, void* buf, size_t sizeInBytes, size_t* sizeWritten) {
+    if (sizeWritten) *sizeWritten = sizeof(T);
+    if (sizeInBytes == 0) {
+        return buf ? CUBLAS_STATUS_INVALID_VALUE : CUBLAS_STATUS_SUCCESS;
+    }
+    if (!buf || sizeInBytes != sizeof(T)) {
+        return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    std::memcpy(buf, &field, sizeof(T));
+    return CUBLAS_STATUS_SUCCESS;
+}
+
 } // namespace
 
 // Global map to track cuBLASLt handles and descriptors
@@ -2491,60 +2430,21 @@ cublasStatus_t cublasLtMatmulDescSetAttribute(cublasLtMatmulDesc_t matmulDesc, i
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 
+    cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
     switch (attr) {
-        case kLtMatmulDescComputeType: {
-            if (sizeInBytes != sizeof(int32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&desc->computeType, buf, sizeof(int32_t));
-            break;
-        }
-        case kLtMatmulDescScaleType: {
-            if (sizeInBytes != sizeof(int32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&desc->scaleType, buf, sizeof(int32_t));
-            break;
-        }
-        case kLtMatmulDescPointerMode: {
-            if (sizeInBytes != sizeof(int32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&desc->pointerMode, buf, sizeof(int32_t));
-            break;
-        }
-        case kLtMatmulDescTransA: {
-            if (sizeInBytes != sizeof(int32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&desc->transa, buf, sizeof(int32_t));
-            break;
-        }
-        case kLtMatmulDescTransB: {
-            if (sizeInBytes != sizeof(int32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&desc->transb, buf, sizeof(int32_t));
-            break;
-        }
-        case kLtMatmulDescTransC: {
-            if (sizeInBytes != sizeof(int32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&desc->transc, buf, sizeof(int32_t));
-            break;
-        }
-        case kLtMatmulDescEpilogue: {
-            if (sizeInBytes != sizeof(uint32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&desc->epilogue, buf, sizeof(uint32_t));
-            break;
-        }
-        case kLtMatmulDescBiasPointer: {
-            if (sizeInBytes != sizeof(void*)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&desc->biasPointer, buf, sizeof(void*));
-            break;
-        }
-        case kLtMatmulDescBiasBatchStride: {
-            if (sizeInBytes != sizeof(int64_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&desc->biasBatchStride, buf, sizeof(int64_t));
-            break;
-        }
-        case kLtMatmulDescBiasDataType: {
-            if (sizeInBytes != sizeof(int32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&desc->biasDataType, buf, sizeof(int32_t));
-            break;
-        }
-        default:
-            break;
+        case kLtMatmulDescComputeType: status = set_attr(desc->computeType, buf, sizeInBytes); break;
+        case kLtMatmulDescScaleType: status = set_attr(desc->scaleType, buf, sizeInBytes); break;
+        case kLtMatmulDescPointerMode: status = set_attr(desc->pointerMode, buf, sizeInBytes); break;
+        case kLtMatmulDescTransA: status = set_attr(desc->transa, buf, sizeInBytes); break;
+        case kLtMatmulDescTransB: status = set_attr(desc->transb, buf, sizeInBytes); break;
+        case kLtMatmulDescTransC: status = set_attr(desc->transc, buf, sizeInBytes); break;
+        case kLtMatmulDescEpilogue: status = set_attr(desc->epilogue, buf, sizeInBytes); break;
+        case kLtMatmulDescBiasPointer: status = set_attr(desc->biasPointer, buf, sizeInBytes); break;
+        case kLtMatmulDescBiasBatchStride: status = set_attr(desc->biasBatchStride, buf, sizeInBytes); break;
+        case kLtMatmulDescBiasDataType: status = set_attr(desc->biasDataType, buf, sizeInBytes); break;
+        default: break;
     }
+    if (status != CUBLAS_STATUS_SUCCESS) return status;
     FGPU_LOG("[FakeCUBLASLt] cublasLtMatmulDescSetAttribute desc=%p attr=%d size=%zu\n", matmulDesc, attr, sizeInBytes);
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -2561,39 +2461,27 @@ cublasStatus_t cublasLtMatmulDescGetAttribute(cublasLtMatmulDesc_t matmulDesc, i
     }
     const LtMatmulDescState* desc = it->second;
 
-    auto write_out = [&](const void* src, size_t src_size) -> cublasStatus_t {
-        if (sizeWritten) *sizeWritten = src_size;
-        if (sizeInBytes == 0) {
-            return buf ? CUBLAS_STATUS_INVALID_VALUE : CUBLAS_STATUS_SUCCESS;
-        }
-        if (!buf || sizeInBytes != src_size) {
-            return CUBLAS_STATUS_INVALID_VALUE;
-        }
-        std::memcpy(buf, src, src_size);
-        return CUBLAS_STATUS_SUCCESS;
-    };
-
     switch (attr) {
         case kLtMatmulDescComputeType:
-            return write_out(&desc->computeType, sizeof(desc->computeType));
+            return get_attr(desc->computeType, buf, sizeInBytes, sizeWritten);
         case kLtMatmulDescScaleType:
-            return write_out(&desc->scaleType, sizeof(desc->scaleType));
+            return get_attr(desc->scaleType, buf, sizeInBytes, sizeWritten);
         case kLtMatmulDescPointerMode:
-            return write_out(&desc->pointerMode, sizeof(desc->pointerMode));
+            return get_attr(desc->pointerMode, buf, sizeInBytes, sizeWritten);
         case kLtMatmulDescTransA:
-            return write_out(&desc->transa, sizeof(desc->transa));
+            return get_attr(desc->transa, buf, sizeInBytes, sizeWritten);
         case kLtMatmulDescTransB:
-            return write_out(&desc->transb, sizeof(desc->transb));
+            return get_attr(desc->transb, buf, sizeInBytes, sizeWritten);
         case kLtMatmulDescTransC:
-            return write_out(&desc->transc, sizeof(desc->transc));
+            return get_attr(desc->transc, buf, sizeInBytes, sizeWritten);
         case kLtMatmulDescEpilogue:
-            return write_out(&desc->epilogue, sizeof(desc->epilogue));
+            return get_attr(desc->epilogue, buf, sizeInBytes, sizeWritten);
         case kLtMatmulDescBiasPointer:
-            return write_out(&desc->biasPointer, sizeof(desc->biasPointer));
+            return get_attr(desc->biasPointer, buf, sizeInBytes, sizeWritten);
         case kLtMatmulDescBiasBatchStride:
-            return write_out(&desc->biasBatchStride, sizeof(desc->biasBatchStride));
+            return get_attr(desc->biasBatchStride, buf, sizeInBytes, sizeWritten);
         case kLtMatmulDescBiasDataType:
-            return write_out(&desc->biasDataType, sizeof(desc->biasDataType));
+            return get_attr(desc->biasDataType, buf, sizeInBytes, sizeWritten);
         default:
             return CUBLAS_STATUS_SUCCESS;
     }
@@ -2651,50 +2539,19 @@ cublasStatus_t cublasLtMatrixLayoutSetAttribute(cublasLtMatrixLayout_t matLayout
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 
+    cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
     switch (attr) {
-        case kLtMatrixLayoutType: {
-            if (sizeInBytes != sizeof(int32_t) && sizeInBytes != sizeof(uint32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&layout->type, buf, sizeof(int32_t));
-            break;
-        }
-        case kLtMatrixLayoutOrder: {
-            if (sizeInBytes != sizeof(int32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&layout->order, buf, sizeof(int32_t));
-            break;
-        }
-        case kLtMatrixLayoutRows: {
-            if (sizeInBytes != sizeof(uint64_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&layout->rows, buf, sizeof(uint64_t));
-            break;
-        }
-        case kLtMatrixLayoutCols: {
-            if (sizeInBytes != sizeof(uint64_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&layout->cols, buf, sizeof(uint64_t));
-            break;
-        }
-        case kLtMatrixLayoutLd: {
-            if (sizeInBytes != sizeof(int64_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&layout->ld, buf, sizeof(int64_t));
-            break;
-        }
-        case kLtMatrixLayoutBatchCount: {
-            if (sizeInBytes != sizeof(int32_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&layout->batchCount, buf, sizeof(int32_t));
-            break;
-        }
-        case kLtMatrixLayoutStridedBatchOffset: {
-            if (sizeInBytes != sizeof(int64_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&layout->strideBatchOffset, buf, sizeof(int64_t));
-            break;
-        }
-        case kLtMatrixLayoutPlaneOffset: {
-            if (sizeInBytes != sizeof(int64_t)) return CUBLAS_STATUS_INVALID_VALUE;
-            std::memcpy(&layout->planeOffset, buf, sizeof(int64_t));
-            break;
-        }
-        default:
-            break;
+        case kLtMatrixLayoutType: status = set_attr(layout->type, buf, sizeInBytes); break;
+        case kLtMatrixLayoutOrder: status = set_attr(layout->order, buf, sizeInBytes); break;
+        case kLtMatrixLayoutRows: status = set_attr(layout->rows, buf, sizeInBytes); break;
+        case kLtMatrixLayoutCols: status = set_attr(layout->cols, buf, sizeInBytes); break;
+        case kLtMatrixLayoutLd: status = set_attr(layout->ld, buf, sizeInBytes); break;
+        case kLtMatrixLayoutBatchCount: status = set_attr(layout->batchCount, buf, sizeInBytes); break;
+        case kLtMatrixLayoutStridedBatchOffset: status = set_attr(layout->strideBatchOffset, buf, sizeInBytes); break;
+        case kLtMatrixLayoutPlaneOffset: status = set_attr(layout->planeOffset, buf, sizeInBytes); break;
+        default: break;
     }
+    if (status != CUBLAS_STATUS_SUCCESS) return status;
     FGPU_LOG("[FakeCUBLASLt] cublasLtMatrixLayoutSetAttribute layout=%p attr=%d size=%zu\n", matLayout, attr, sizeInBytes);
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -2711,35 +2568,23 @@ cublasStatus_t cublasLtMatrixLayoutGetAttribute(cublasLtMatrixLayout_t matLayout
     }
     const LtMatrixLayoutState* layout = it->second;
 
-    auto write_out = [&](const void* src, size_t src_size) -> cublasStatus_t {
-        if (sizeWritten) *sizeWritten = src_size;
-        if (sizeInBytes == 0) {
-            return buf ? CUBLAS_STATUS_INVALID_VALUE : CUBLAS_STATUS_SUCCESS;
-        }
-        if (!buf || sizeInBytes != src_size) {
-            return CUBLAS_STATUS_INVALID_VALUE;
-        }
-        std::memcpy(buf, src, src_size);
-        return CUBLAS_STATUS_SUCCESS;
-    };
-
     switch (attr) {
         case kLtMatrixLayoutType:
-            return write_out(&layout->type, sizeof(layout->type));
+            return get_attr(layout->type, buf, sizeInBytes, sizeWritten);
         case kLtMatrixLayoutOrder:
-            return write_out(&layout->order, sizeof(layout->order));
+            return get_attr(layout->order, buf, sizeInBytes, sizeWritten);
         case kLtMatrixLayoutRows:
-            return write_out(&layout->rows, sizeof(layout->rows));
+            return get_attr(layout->rows, buf, sizeInBytes, sizeWritten);
         case kLtMatrixLayoutCols:
-            return write_out(&layout->cols, sizeof(layout->cols));
+            return get_attr(layout->cols, buf, sizeInBytes, sizeWritten);
         case kLtMatrixLayoutLd:
-            return write_out(&layout->ld, sizeof(layout->ld));
+            return get_attr(layout->ld, buf, sizeInBytes, sizeWritten);
         case kLtMatrixLayoutBatchCount:
-            return write_out(&layout->batchCount, sizeof(layout->batchCount));
+            return get_attr(layout->batchCount, buf, sizeInBytes, sizeWritten);
         case kLtMatrixLayoutStridedBatchOffset:
-            return write_out(&layout->strideBatchOffset, sizeof(layout->strideBatchOffset));
+            return get_attr(layout->strideBatchOffset, buf, sizeInBytes, sizeWritten);
         case kLtMatrixLayoutPlaneOffset:
-            return write_out(&layout->planeOffset, sizeof(layout->planeOffset));
+            return get_attr(layout->planeOffset, buf, sizeInBytes, sizeWritten);
         default:
             return CUBLAS_STATUS_SUCCESS;
     }
