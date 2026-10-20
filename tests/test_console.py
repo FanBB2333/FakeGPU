@@ -228,6 +228,13 @@ def test_console_edits_the_layout_per_gpu(service):
             assert service.config.devices == "a100:1,h100:3"
             assert selected_key(devices) == "gpu-2"
 
+            await pilot.click("#gpu-add")  # toolbar buttons run the same actions as the keys
+            await pilot.pause()
+            assert isinstance(app.screen, ProfilePicker)
+            await pilot.click("#picker-cancel")
+            await pilot.pause()
+            assert service.config.devices == "a100:1,h100:3"
+
             await pilot.press("x")
             await pilot.pause()
             assert isinstance(app.screen, Confirm)
