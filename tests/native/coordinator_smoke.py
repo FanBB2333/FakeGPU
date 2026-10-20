@@ -306,6 +306,30 @@ def check_cluster_config_without_distributed_env(tmpdir: str) -> None:
         raise AssertionError(f"cluster config was not applied: {report}")
 
 
+def check_long_request_header(tmpdir: str) -> None:
+    op_count = 60
+    ops = "".join(
+        f" op{index}_type=allreduce op{index}_dtype=bfloat16 op{index}_count=1048576"
+        f" op{index}_root=-1 op{index}_reduce_op=sum op{index}_bytes=2097152"
+        for index in range(op_count)
+    )
+    with running_coordinator(tmpdir) as (socket_path, proc):
+        response = request(
+            socket_path,
+            "INIT_COMM unique_id=group world_size=1 rank=0 timeout_ms=1000",
+        )
+        if not response.startswith("OK"):
+            raise AssertionError(f"unexpected init response: {response}")
+        response = request(
+            socket_path,
+            f"GROUP_PREPARE comm_id=1 rank=0 base_seqno=1 timeout_ms=1000 op_count={op_count}{ops}",
+        )
+        if not response.startswith("OK") or f"op_count={op_count}" not in response:
+            raise AssertionError(f"long GROUP_PREPARE header rejected: {response}")
+        request(socket_path, "SHUTDOWN")
+        proc.wait(timeout=2.0)
+
+
 def main() -> int:
     if not COORDINATOR_BIN.exists():
         print(f"missing coordinator binary: {COORDINATOR_BIN}", file=sys.stderr)
@@ -317,6 +341,7 @@ def main() -> int:
         check_finished_client_threads_are_released,
         check_non_finite_fabric_value_rejected,
         check_cluster_config_without_distributed_env,
+        check_long_request_header,
     )
     for check in checks:
         with tempfile.TemporaryDirectory(prefix="fgpu-coord-", dir="/tmp") as tmpdir:

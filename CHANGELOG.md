@@ -104,6 +104,9 @@
   cluster report previously named the config path but reported no nodes or
   link estimates; an unreadable or invalid config is now reported on stderr
   at startup and omitted from the report.
+- Accept coordinator request headers up to 1 MiB, so large NCCL groups and
+  all-to-all-v split lists over many ranks are no longer rejected with
+  `request line is too long` once the header passes about 4 KiB.
 
 ## v1.6.0 - 2026-10-17
 

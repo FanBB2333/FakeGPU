@@ -16,6 +16,8 @@ namespace fake_gpu::distributed {
 
 namespace {
 
+constexpr std::size_t kMaxRequestLineBytes = 1024 * 1024;
+
 std::string trim(const std::string& value) {
     const std::size_t begin = value.find_first_not_of(" \t\r\n");
     if (begin == std::string::npos) {
@@ -331,26 +333,15 @@ bool receive_message_packet(
         const char* chunk_end = buffer.data() + static_cast<std::size_t>(rc);
         const char* newline =
             static_cast<const char*>(std::memchr(chunk_begin, '\n', static_cast<std::size_t>(rc)));
-        if (!newline) {
-            header_bytes.insert(
-                header_bytes.end(),
-                chunk_begin,
-                chunk_end);
-            if (header_bytes.size() > 4096) {
-                error = "request line is too long";
-                return false;
-            }
-            continue;
+        header_bytes.insert(header_bytes.end(), chunk_begin, newline ? newline : chunk_end);
+        if (header_bytes.size() > kMaxRequestLineBytes) {
+            error = "request line is too long";
+            return false;
         }
-
-        const std::size_t header_chunk =
-            static_cast<std::size_t>(newline - chunk_begin);
-        header_bytes.insert(header_bytes.end(), chunk_begin, chunk_begin + header_chunk);
-        spill_bytes.insert(
-            spill_bytes.end(),
-            newline + 1,
-            chunk_end);
-        break;
+        if (newline) {
+            spill_bytes.insert(spill_bytes.end(), newline + 1, chunk_end);
+            break;
+        }
     }
 
     line.assign(header_bytes.begin(), header_bytes.end());
