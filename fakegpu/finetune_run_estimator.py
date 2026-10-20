@@ -11,6 +11,7 @@ from ._finetune_allocator import validate_memory_allocator
 from ._finetune_cache import validate_cache_regime
 from ._finetune_events import validate_event_profile
 from ._finetune_model import native_config_signature, native_execution_signature
+from ._finetune_sampler import PACKED_SCHEMA_VERSION
 from ._finetune_timeline import validate_native_timeline
 from .finetune_data_report import apply_dataset_report
 from .finetune_estimator import (
@@ -47,7 +48,7 @@ def estimate_finetuning_run(
         observation=observation,
     )
     report["dataset"] = run["dataset"]
-    report["limitations"].extend(config.get("dataset_limitations", []))
+    report["limitations"].extend(config["dataset_limitations"])
     report["native_run"] = {
         "framework": run["framework"],
         "observed_timing": run["timing"],
@@ -80,17 +81,15 @@ def validate_native_run(
     ):
         if not isinstance(run.get(key), Mapping):
             raise FinetuneEstimateError(f"native run requires {key}")
-    if (
+    packed = (
         run["training_config"].get("sampler_observation_version")
-        == "fakegpu.finetune_sampler_plan.v3"
-    ):
-        config = apply_dataset_report(
-            run["training_config"],
-            run["dataset"],
-            packed_sampling_plan=run.get("sampling_plan"),
-        )
-    else:
-        config = apply_dataset_report(run["training_config"], run["dataset"])
+        == PACKED_SCHEMA_VERSION
+    )
+    config = apply_dataset_report(
+        run["training_config"],
+        run["dataset"],
+        packed_sampling_plan=run.get("sampling_plan") if packed else None,
+    )
     if config.get("source_framework") != framework:
         raise FinetuneEstimateError(
             "native run framework differs from its training configuration"
@@ -108,8 +107,7 @@ def validate_native_run(
             validate_memory_allocator(observation["memory_allocator"])
     except ValueError as exc:
         raise FinetuneEstimateError(str(exc)) from exc
-    dataset_digest = run["dataset"].get("provenance", {}).get("content_sha256")
-    if not dataset_digest or dataset_digest != config.get("data_signature"):
+    if run["dataset"]["provenance"]["content_sha256"] != config.get("data_signature"):
         raise FinetuneEstimateError(
             "native run dataset identity differs from its training configuration"
         )
@@ -125,7 +123,7 @@ def validate_native_run(
         raise FinetuneEstimateError(
             "dynamic validation requires the native batch observation protocol"
         )
-    if config.get("sampler_observation_version") == "fakegpu.finetune_sampler_plan.v3":
+    if packed:
         from ._finetune_sampler import _integer, validate_sampler_plan
 
         sampling = validate_sampler_plan(run.get("sampling_plan"))
@@ -153,7 +151,9 @@ def validate_native_run(
             raise FinetuneEstimateError(
                 "packed sampler execution identity differs from native configuration"
             )
-    _validate_native_measurements(run, config, require_fixed_shape=require_fixed_shape)
+    _validate_native_measurements(
+        run, config, require_fixed_shape=require_fixed_shape, verified_packing=packed
+    )
     signature = finetune_workload_signature(
         run["model_config"], config, profile_id=run.get("profile_id")
     )
@@ -218,6 +218,7 @@ def _validate_native_measurements(
     config: Mapping[str, Any],
     *,
     require_fixed_shape: bool = True,
+    verified_packing: bool,
 ) -> None:
     """Reconcile redundant counters before treating a run as timing evidence."""
     workload, observation = run["workload"], run["observation"]
@@ -276,11 +277,6 @@ def _validate_native_measurements(
         raise FinetuneEstimateError(
             "native updates must match workload.optimizer_steps"
         )
-    verified_packing = (
-        config.get("packing") is True
-        and config.get("sampler_observation_version")
-        == "fakegpu.finetune_sampler_plan.v3"
-    )
     if verified_packing:
         from ._finetune_sampler import validate_sampling_verification
 
@@ -430,29 +426,16 @@ def _pipeline_projection(
     run: Mapping[str, Any], report: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Preserve measured fixed costs; never scale preprocessing by raw rows."""
-    timing = run["timing"]
-    observed_wall = _nonnegative(timing.get("total_wall_seconds"), "total_wall_seconds")
-    observed_loop = _nonnegative(
-        timing.get("training_loop_seconds"), "training_loop_seconds"
-    )
-    if observed_wall < observed_loop:
-        raise FinetuneEstimateError(
-            "native total wall time must cover its training loop"
-        )
-    measured_microsteps = run["workload"].get("microsteps")
-    if (
-        isinstance(measured_microsteps, bool)
-        or not isinstance(measured_microsteps, int)
-        or measured_microsteps < 1
-    ):
-        raise FinetuneEstimateError("native run microsteps must be a positive integer")
+    # validate_native_run has already checked these measured values.
+    observed_wall = float(run["timing"]["total_wall_seconds"])
+    measured_microsteps = run["workload"]["microsteps"]
     unavailable = []
     source_count = run["dataset"]["training_inputs"]["num_samples"]
     if report["workload"]["num_samples"] != source_count:
         unavailable.append(
             "A different dataset size has unmeasured preprocessing and loading costs."
         )
-    schedule = run.get("schedule", {})
+    schedule = run["schedule"]
     if schedule.get("eval_strategy") != "no" or schedule.get("save_strategy") != "no":
         unavailable.append(
             "Periodic evaluation or checkpoint schedules need their own event-cost model."
