@@ -110,6 +110,8 @@
 - `nvmlDeviceGetHandleByPciBusId` now returns the device with the requested
   PCI bus id and `NVML_ERROR_NOT_FOUND` for an unknown id instead of always
   returning device 0.
+- Builds without CPU simulation now count `cublasLtMatmul` calls and FLOPs
+  in the report, like `cublasGemmEx` already did.
 
 ## v1.6.0 - 2026-10-17
 

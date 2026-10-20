@@ -3286,6 +3286,13 @@ cublasStatus_t cublasLtMatmul(
     }
     FGPU_LOG("[FakeCUBLASLt] cublasLtMatmul A=%p B=%p D=%p workspace=%zu\n",
            A, B, D, workspaceSizeInBytes);
+    const uint64_t k = desc.transa == CUBLAS_OP_N ? a_layout.cols : a_layout.rows;
+    if (d_layout.rows > 0 && d_layout.cols > 0 && k > 0 && d_layout.batchCount > 0) {
+        fake_gpu::GlobalState::instance().record_cublaslt_matmul_typed(
+            D,
+            gemm_flops_u64(d_layout.rows, d_layout.cols, k, static_cast<uint64_t>(d_layout.batchCount)),
+            a_layout.type);
+    }
     return CUBLAS_STATUS_SUCCESS;
 #else
     if (!lt_order_supported(a_layout.order) || !lt_order_supported(b_layout.order) || !lt_order_supported(c_layout.order) || !lt_order_supported(d_layout.order)) {

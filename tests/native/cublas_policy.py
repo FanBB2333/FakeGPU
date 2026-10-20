@@ -23,6 +23,7 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
     strict = os.environ["FAKEGPU_UNSUPPORTED_API"] == "error"
     skip_gemm = not cpu_simulation or os.environ["FAKEGPU_CPU_GEMM_MODE"] == "skip"
     unsupported: Counter[str] = Counter()
+    lt_matmuls = 0
 
     def bind(name, types):
         func = getattr(lib, name)
@@ -36,6 +37,7 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
     def check(name, types, args, outputs, *, fallback=True, value=None, call_handle=None, reject=False,
               unchanged=False):
         func = bind(name, [P, *types])
+        nonlocal lt_matmuls
         snapshots = [bytes(output) for output in outputs]
         expected = 15 if reject or (strict and fallback) else 0  # CUBLAS_STATUS_NOT_SUPPORTED
         for _ in range(2):
@@ -43,6 +45,8 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
                 ct.memmove(output, snapshot, len(snapshot))
             status = func(handle if call_handle is None else call_handle, *args)
             assert status == expected, (name, status, expected)
+            if name == "cublasLtMatmul" and status == 0:
+                lt_matmuls += 1
             if unchanged or reject or (strict and fallback):
                 assert [bytes(output) for output in outputs] == snapshots, name
             if not fallback and value is not None:
@@ -261,7 +265,7 @@ def probe(library: Path, *, cpu_simulation: bool) -> dict[str, int]:
     assert bind("cublasLtMatmulDescDestroy", [P])(descriptor) == 0
     assert bind("cublasLtDestroy", [P])(lt_handle) == 0
     assert bind("cublasDestroy_v2", [P])(handle) == 0
-    return dict(unsupported)
+    return {"unsupported": dict(unsupported), "lt_matmuls": lt_matmuls}
 
 
 def main() -> int:
@@ -297,7 +301,8 @@ def main() -> int:
                     command.append("--no-cpu-simulation")
                 completed = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
                 assert completed.returncode == 0, (mode, policy, completed.stdout, completed.stderr)
-                expected = json.loads(completed.stdout)
+                child = json.loads(completed.stdout)
+                expected = child["unsupported"]
                 report = json.loads(report_path.read_text(encoding="utf-8"))
                 observed: Counter[str] = Counter()
                 warnings: Counter[str] = Counter()
@@ -307,6 +312,10 @@ def main() -> int:
                         observed[event["operation"]] += event["count"]
                         warnings[event["operation"]] += 1
                 assert dict(observed) == expected, (mode, policy, observed, expected)
+                if args.no_cpu_simulation:
+                    # Without CPU execution every accepted cuBLASLt matmul is still counted.
+                    lt_calls = sum(device["compute"]["cublaslt_matmul"]["calls"] for device in report["devices"])
+                    assert lt_calls == child["lt_matmuls"], (policy, lt_calls, child["lt_matmuls"])
                 for api in expected:
                     count = completed.stderr.count(f"[FakeGPU] warning: {api} is ")
                     assert count == (warnings[api] if policy == "warn" else 0), (mode, policy, api, count)
