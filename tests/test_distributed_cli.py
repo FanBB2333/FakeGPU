@@ -1,6 +1,20 @@
 from __future__ import annotations
 
-from fakegpu.distributed_cli import _print_bandwidth_summary
+import argparse
+
+import pytest
+
+from fakegpu.distributed_cli import _print_bandwidth_summary, parse_size
+
+
+def test_parse_size_accepts_units_and_rejects_bare_ib() -> None:
+    assert parse_size("65536") == 65536
+    assert parse_size("64KiB") == 64 << 10
+    assert parse_size("4MiB") == 4 << 20
+    assert parse_size("64kb") == 64_000
+    for value in ("64ib", "64iB", "64i", "64k"):
+        with pytest.raises(argparse.ArgumentTypeError, match="expected a byte count"):
+            parse_size(value)
 
 
 def test_bandwidth_summary_does_not_print_pass_for_error(capsys) -> None:

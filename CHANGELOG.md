@@ -19,6 +19,8 @@
   `upstream` backend instead of `unknown`.
 - Under FakeCUDA, `torch.get_float32_matmul_precision()` returns `medium`
   after `torch.set_float32_matmul_precision("medium")` instead of `high`.
+- `fakegpu bandwidth --size`/`--bytes` rejects a bare `ib` suffix with a usage
+  error instead of crashing with `KeyError`.
 
 ## v1.6.0 - 2026-10-17
 

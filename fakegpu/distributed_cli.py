@@ -24,7 +24,7 @@ from ._cli import (
 from .structured_io import emit_json
 
 
-_SIZE_PATTERN = re.compile(r"^([0-9]+)([kmgt]?i?b)?$", re.IGNORECASE)
+_SIZE_PATTERN = re.compile(r"([0-9]+)((?:[kmgt]i?)?b)?", re.IGNORECASE)
 _SIZE_MULTIPLIERS = {
     "": 1,
     "b": 1,
