@@ -74,9 +74,8 @@ def compare_main(argv=None):
     parser.add_argument("--x", help="Numeric parameter for --plot.")
     parser.add_argument("--metric", help="Recorded metric for --plot.")
     args = parser.parse_args(argv)
-    if bool(args.plot) != bool(args.x and args.metric) or (
-        not args.plot and (args.x or args.metric)
-    ):
+    selected = (args.plot, args.x, args.metric)
+    if any(selected) and not all(selected):
         parser.error("--plot, --x and --metric must be provided together")
     try:
         report = compare_experiments(args.workspace)

@@ -89,6 +89,35 @@ def _verify_inputs(request):
             raise ValueError("declared experiment input changed during sweep")
 
 
+def _job_keys(request_id, spec):
+    parameters = spec.get("parameters", {})
+    keys = sorted(parameters)
+    for values in itertools.product(*(parameters[k] for k in keys)):
+        params = dict(zip(keys, values))
+        for repetition in range(1, spec.get("repetitions", 1) + 1):
+            job_id = _digest(
+                {
+                    "request_id": request_id,
+                    "parameters": params,
+                    "repetition": repetition,
+                }
+            )[:24]
+            yield job_id, params, repetition
+
+
+def _argv(command, executable, parameters, inputs, repetition, run_dir):
+    context = {
+        **parameters,
+        **{k: v["path"] for k, v in inputs.items()},
+        "python": sys.executable,
+        "repetition": repetition,
+        "run_dir": str(run_dir),
+    }
+    argv = [_render(value, context) for value in command]
+    argv[0] = executable
+    return argv
+
+
 def _prepare(config, workspace):
     config = Path(config).expanduser().resolve()
     spec = load_mapping(config)
@@ -218,34 +247,23 @@ def _prepare(config, workspace):
     }
     request_id = _digest(request)
     jobs = []
-    keys = sorted(parameters)
-    for values in itertools.product(*(parameters[k] for k in keys)):
-        params = dict(zip(keys, values))
-        for repetition in range(1, spec.get("repetitions", 1) + 1):
-            job_id = _digest(
-                {
-                    "request_id": request_id,
-                    "parameters": params,
-                    "repetition": repetition,
-                }
-            )[:24]
-            context = {
-                **params,
-                **{k: v["path"] for k, v in resolved_inputs.items()},
-                "python": sys.executable,
+    for job_id, params, repetition in _job_keys(request_id, spec):
+        argv = _argv(
+            command,
+            executable,
+            params,
+            resolved_inputs,
+            repetition,
+            workspace / "runs" / job_id / "attempt-0001",
+        )
+        jobs.append(
+            {
+                "run_id": job_id,
+                "parameters": params,
                 "repetition": repetition,
-                "run_dir": str(workspace / "runs" / job_id / "attempt-0001"),
+                "first_attempt_argv": argv,
             }
-            argv = [_render(value, context) for value in command]
-            argv[0] = executable
-            jobs.append(
-                {
-                    "run_id": job_id,
-                    "parameters": params,
-                    "repetition": repetition,
-                    "first_attempt_argv": argv,
-                }
-            )
+        )
     return {
         "schema_version": SCHEMA,
         "request_id": request_id,
@@ -303,25 +321,7 @@ def _check_manifest(value):
         or _digest(value["request"]) != value["request_id"]
     ):
         raise ValueError("experiment request identity is invalid")
-    expected = []
-    spec = value["request"]["spec"]
-    keys = sorted(spec.get("parameters", {}))
-    for values in itertools.product(*(spec["parameters"][k] for k in keys)):
-        params = dict(zip(keys, values))
-        for repetition in range(1, spec.get("repetitions", 1) + 1):
-            expected.append(
-                (
-                    _digest(
-                        {
-                            "request_id": value["request_id"],
-                            "parameters": params,
-                            "repetition": repetition,
-                        }
-                    )[:24],
-                    params,
-                    repetition,
-                )
-            )
+    expected = list(_job_keys(value["request_id"], value["request"]["spec"]))
     if [
         (j["run_id"], j["parameters"], j["repetition"]) for j in value["jobs"]
     ] != expected:
@@ -408,15 +408,14 @@ def run_experiments(config, workspace, *, resume=False, retry_failed=False):
             for key in ("error", "artifacts", "metrics", "finished_at_utc"):
                 state.pop(key, None)
             _write(state_path, state)
-            context = {
-                **job["parameters"],
-                **{k: v["path"] for k, v in plan["request"]["inputs"].items()},
-                "python": sys.executable,
-                "repetition": job["repetition"],
-                "run_dir": str(attempt),
-            }
-            argv = [_render(value, context) for value in spec["command"]]
-            argv[0] = plan["request"]["executable"]["path"]
+            argv = _argv(
+                spec["command"],
+                plan["request"]["executable"]["path"],
+                job["parameters"],
+                plan["request"]["inputs"],
+                job["repetition"],
+                attempt,
+            )
             environment = dict(os.environ)
             environment.update(spec.get("environment", {}))
             try:
