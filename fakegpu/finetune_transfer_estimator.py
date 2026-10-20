@@ -23,13 +23,18 @@ from ._finetune_transfer_plan import (
     validate_transfer_plan,
 )
 from .finetune_estimator import FinetuneEstimateError
-from .finetune_pipeline_estimator import _comparison, _samples as _pipeline_samples
+from .finetune_pipeline_estimator import (
+    _FIELDS,
+    _attach_comparison,
+    _interval,
+    _samples as _pipeline_samples,
+    _timing,
+)
 
 
 SCHEMA_VERSION = "fakegpu.finetune_transfer_estimate.v1"
 COVERAGE_SCHEMA_VERSION = "fakegpu.finetune_transfer_coverage.v1"
 MEMORY_SCHEMA_VERSION = "fakegpu.finetune_transfer_memory.v1"
-_FIELDS = ("wall_seconds", "instrumentation_seconds", "seconds")
 _DATA_BOUND_KINDS = {"setup", "finalization"}
 _MATCH_FIELDS = ("hardware", "memory_allocator", "execution_policy", "cache_regime")
 
@@ -262,32 +267,10 @@ def _estimate(plan, samples, setup, components, groups):
         group["target_batch_descriptor_distribution"] = _window_distribution(
             plan, groups[group["group_id"]]
         )
-        group["per_component"] = {}
-        for field in _FIELDS:
-            values = [row["mean"][field] for row in processes]
-            group["per_component"][field] = {
-                "min": min(values),
-                "expected": statistics.mean(values),
-                "max": max(values),
-            }
-        group["predicted"] = {
-            field: {
-                name: value * group["target_components"]
-                for name, value in interval.items()
-            }
-            for field, interval in group["per_component"].items()
-        }
+        group["per_component"], group["predicted"] = _interval(
+            processes, group["target_components"]
+        )
     costs = {group["group_id"]: group["per_component"] for group in coverage}
-
-    def totals(selected):
-        return {
-            field: {
-                name: sum(group["predicted"][field][name] for group in selected)
-                for name in ("min", "expected", "max")
-            }
-            for field in _FIELDS
-        }
-
     return {
         "schema_version": SCHEMA_VERSION,
         "scope": "planned_native_execution_span_with_empirical_shape_transfer",
@@ -347,14 +330,7 @@ def _estimate(plan, samples, setup, components, groups):
             }
             for component in components
         ],
-        "timing": {
-            **totals(coverage),
-            "by_kind": {
-                kind: totals([group for group in coverage if group["kind"] == kind])
-                for kind in sorted({component["kind"] for component in components})
-            },
-            "interval_kind": "sum_of_component_process_mean_extrema_not_confidence_interval",
-        },
+        "timing": _timing(coverage, components),
         "limitations": [
             "Execution-shape pooling is an empirical approximation. Different token, mask and supervision distributions can have different costs despite matching tensor shapes.",
             "Every planned component requires eligible measurements from at least two independent processes. Missing groups cannot be filled by a total residual or dataset-size ratio.",
@@ -388,42 +364,7 @@ def compare_finetuning_transfer(
     _unique([*prepared[1], target])
     result = _estimate(*prepared)
     result["scope"] = "recorded_native_execution_span_shape_transfer_replay"
-    result["target_run"] = {
-        field: deepcopy(target[field]) for field in ("identity", "evidence_sha256")
-    }
-    actuals = {
-        component["component_id"]: component["observed"]
-        for component in target["components"]
-    }
-    for component in result["target_components"]:
-        component["observed"] = deepcopy(actuals[component["component_id"]])
-    for group in result["component_groups"]:
-        group["comparison"] = {
-            field: _comparison(
-                group["predicted"][field]["expected"],
-                sum(actuals[index][field] for index in group["target_component_ids"]),
-            )
-            for field in _FIELDS
-        }
-    result["timing"]["comparison"] = {
-        field: _comparison(
-            result["timing"][field]["expected"],
-            sum(values[field] for values in actuals.values()),
-        )
-        for field in _FIELDS
-    }
-    for kind, values in result["timing"]["by_kind"].items():
-        values["comparison"] = {
-            field: _comparison(
-                values[field]["expected"],
-                sum(
-                    row["observed"][field]
-                    for row in target["components"]
-                    if row["kind"] == kind
-                ),
-            )
-            for field in _FIELDS
-        }
+    _attach_comparison(result, target)
     return result
 
 

@@ -9,6 +9,7 @@ import statistics
 from typing import Any
 
 from ._finetune_pipeline_plan import (
+    _WORK_KINDS,
     _digest,
     describe_pipeline_components,
     pipeline_plan_from_run,
@@ -19,7 +20,6 @@ from .finetune_window_estimator import _run_identity
 
 SCHEMA_VERSION = "fakegpu.finetune_pipeline_estimate.v1"
 _FIELDS = ("wall_seconds", "instrumentation_seconds", "seconds")
-_WORK_KINDS = {"optimizer_update", "evaluation", "checkpoint"}
 _MATCH_FIELDS = (
     "signature",
     "hardware",
@@ -114,6 +114,43 @@ def _independent(runs):
         )
 
 
+def _interval(processes, count):
+    per_component = {}
+    for field in _FIELDS:
+        values = [process["mean"][field] for process in processes]
+        per_component[field] = {
+            "min": min(values),
+            "expected": statistics.mean(values),
+            "max": max(values),
+        }
+    predicted = {
+        field: {name: value * count for name, value in interval.items()}
+        for field, interval in per_component.items()
+    }
+    return per_component, predicted
+
+
+def _totals(groups):
+    return {
+        field: {
+            name: sum(group["predicted"][field][name] for group in groups)
+            for name in ("min", "expected", "max")
+        }
+        for field in _FIELDS
+    }
+
+
+def _timing(groups, components):
+    return {
+        **_totals(groups),
+        "by_kind": {
+            kind: _totals([group for group in groups if group["kind"] == kind])
+            for kind in sorted({component["kind"] for component in components})
+        },
+        "interval_kind": "sum_of_component_process_mean_extrema_not_confidence_interval",
+    }
+
+
 def _estimate(calibrations, plan):
     _independent(calibrations)
     for field in _MATCH_FIELDS:
@@ -151,18 +188,7 @@ def _estimate(calibrations, plan):
             )
         if len(per_process) != len(calibrations):
             continue
-        means = {
-            field: [process["mean"][field] for process in per_process]
-            for field in _FIELDS
-        }
-        per_component = {
-            field: {
-                "min": min(values),
-                "expected": statistics.mean(values),
-                "max": max(values),
-            }
-            for field, values in means.items()
-        }
+        per_component, predicted = _interval(per_process, len(target))
         groups.append(
             {
                 "group_id": group_id,
@@ -175,12 +201,7 @@ def _estimate(calibrations, plan):
                     component["component_id"] for component in target
                 ],
                 "per_component": per_component,
-                "predicted": {
-                    field: {
-                        name: value * len(target) for name, value in interval.items()
-                    }
-                    for field, interval in per_component.items()
-                },
+                "predicted": predicted,
             }
         )
     if missing:
@@ -188,14 +209,6 @@ def _estimate(calibrations, plan):
             "insufficient independent pipeline coverage: " + "; ".join(missing)
         )
     costs = {group["group_id"]: group["per_component"] for group in groups}
-    totals = {
-        field: {
-            name: sum(group["predicted"][field][name] for group in groups)
-            for name in ("min", "expected", "max")
-        }
-        for field in _FIELDS
-    }
-    kinds = sorted({component["kind"] for component in components})
     return {
         "schema_version": SCHEMA_VERSION,
         "scope": "planned_native_execution_span",
@@ -244,24 +257,7 @@ def _estimate(calibrations, plan):
             | {"predicted": deepcopy(costs[component["group_id"]])}
             for component in components
         ],
-        "timing": {
-            **totals,
-            "by_kind": {
-                kind: {
-                    field: {
-                        name: sum(
-                            group["predicted"][field][name]
-                            for group in groups
-                            if group["kind"] == kind
-                        )
-                        for name in ("min", "expected", "max")
-                    }
-                    for field in _FIELDS
-                }
-                for kind in kinds
-            },
-            "interval_kind": "sum_of_component_process_mean_extrema_not_confidence_interval",
-        },
+        "timing": _timing(groups, components),
         "limitations": [
             "The native execution span ends after native execution and final synchronization, before report construction and CLI output; it is not process end-to-end time.",
             "wall_seconds includes observation overhead. seconds removes only measured batch, event and callback metadata; checkpoint hashing and unmeasured instrumentation remain included.",
@@ -321,6 +317,11 @@ def compare_finetuning_pipeline(
     _independent([*calibrations, target])
     result = _estimate(calibrations, target["plan"])
     result["scope"] = "recorded_native_execution_span_replay"
+    _attach_comparison(result, target)
+    return result
+
+
+def _attach_comparison(result, target):
     result["target_run"] = {
         field: deepcopy(target[field]) for field in ("identity", "evidence_sha256")
     }
@@ -357,4 +358,3 @@ def compare_finetuning_pipeline(
             )
             for field in _FIELDS
         }
-    return result
