@@ -58,6 +58,7 @@ from ._allocator import (
     _reset_dispatch_tracking_stats,
 )
 from ._cross_device import (
+    _BINARY_DUNDER_TORCH_OPS,
     _CROSS_DEVICE_CHECK,
     _is_fake_tensor,
     _wrap_multi_tensor_op,
@@ -328,39 +329,26 @@ def _capture_allocation_stack_trace() -> list[dict[str, Any]]:
     depth = max(1, min(depth, 32))
 
     frames = traceback.extract_stack()[:-2]
-    public_frames: list[dict[str, Any]] = []
-    for frame in frames:
-        if _is_internal_allocation_frame(frame.filename):
-            continue
-        item: dict[str, Any] = {
-            "file": frame.filename,
-            "line": int(frame.lineno),
-            "function": frame.name,
-        }
-        if frame.line:
-            item["code"] = frame.line.strip()
-        public_frames.append(item)
-
-    if not public_frames:
-        for frame in frames[-depth:]:
-            item = {
-                "file": frame.filename,
-                "line": int(frame.lineno),
-                "function": frame.name,
-            }
-            if frame.line:
-                item["code"] = frame.line.strip()
-            public_frames.append(item)
-
-    return public_frames[-depth:]
+    selected = [
+        frame
+        for frame in frames
+        if not os.path.abspath(frame.filename).startswith(_PACKAGE_PREFIX)
+    ] or frames
+    return [_frame_record(frame) for frame in selected[-depth:]]
 
 
-def _is_internal_allocation_frame(filename: str) -> bool:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.abspath(filename)
-    return path == os.path.abspath(__file__) or path.startswith(
-        current_dir + os.sep
-    )
+_PACKAGE_PREFIX = os.path.dirname(os.path.abspath(__file__)) + os.sep
+
+
+def _frame_record(frame: traceback.FrameSummary) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "file": frame.filename,
+        "line": int(frame.lineno),
+        "function": frame.name,
+    }
+    if frame.line:
+        item["code"] = frame.line.strip()
+    return item
 
 
 def _truthy_env(name: str) -> bool:
@@ -641,26 +629,32 @@ def _unpack_autograd_saved_tensor(value: Any) -> Any:
     return value
 
 
-def _install_autograd_saved_tensor_tracking(torch_mod: Any) -> None:
+def _enter_saved_tensor_hooks() -> None:
     global _saved_tensors_hooks_cm
     try:
-        hooks = torch_mod.autograd.graph.saved_tensors_hooks(
+        import torch
+
+        hooks = torch.autograd.graph.saved_tensors_hooks(
             _pack_autograd_saved_tensor,
             _unpack_autograd_saved_tensor,
         )
         hooks.__enter__()
         _saved_tensors_hooks_cm = hooks
-
-        def _close_hooks() -> None:
-            global _saved_tensors_hooks_cm
-            cm = _saved_tensors_hooks_cm
-            _saved_tensors_hooks_cm = None
-            if cm is not None:
-                cm.__exit__(None, None, None)
-
-        atexit.register(_close_hooks)
     except Exception:
         _saved_tensors_hooks_cm = None
+
+
+def _close_saved_tensor_hooks() -> None:
+    global _saved_tensors_hooks_cm
+    cm = _saved_tensors_hooks_cm
+    _saved_tensors_hooks_cm = None
+    if cm is not None:
+        cm.__exit__(None, None, None)
+
+
+def _install_autograd_saved_tensor_tracking() -> None:
+    _enter_saved_tensor_hooks()
+    atexit.register(_close_saved_tensor_hooks)
 
 
 @contextmanager
@@ -678,17 +672,7 @@ def _suspend_autograd_saved_tensor_tracking():
     try:
         yield
     finally:
-        try:
-            import torch
-
-            restored = torch.autograd.graph.saved_tensors_hooks(
-                _pack_autograd_saved_tensor,
-                _unpack_autograd_saved_tensor,
-            )
-            restored.__enter__()
-            _saved_tensors_hooks_cm = restored
-        except Exception:
-            _saved_tensors_hooks_cm = None
+        _enter_saved_tensor_hooks()
 
 
 def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> None:
@@ -821,6 +805,15 @@ class PatchResult:
 # ---------------------------------------------------------------------------
 # Device helpers
 # ---------------------------------------------------------------------------
+def _checked_ordinal(index: int) -> int:
+    if index < 0 or index >= _NUM_DEVICES:
+        raise RuntimeError(
+            f"CUDA error: invalid device ordinal "
+            f"(requested cuda:{index}, available: {_NUM_DEVICES})"
+        )
+    return index
+
+
 def _normalize_device_index(device: Any) -> int:
     import torch
 
@@ -1099,14 +1092,17 @@ def _build_fake_fork_rng(torch_mod: Any):
 
 
 def _patch_cuda_rng_surface(torch_mod: Any) -> None:
+    """Back CUDA RNG state with the CPU generator (upstream provides none)."""
+    import torch.cuda.random as cuda_random
+
+    for namespace in (torch_mod.cuda, cuda_random):
+        namespace.get_rng_state = _stub_get_rng_state
+        namespace.get_rng_state_all = _stub_get_rng_state_all
+        namespace.set_rng_state = _stub_set_rng_state
+        namespace.set_rng_state_all = _stub_set_rng_state_all
     fake_fork_rng = _build_fake_fork_rng(torch_mod)
     torch_mod.random.fork_rng = fake_fork_rng
-    try:
-        import torch.cuda.random as _random
-
-        _random.fork_rng = fake_fork_rng
-    except Exception:
-        pass
+    cuda_random.fork_rng = fake_fork_rng
 
 
 def _patch_nccl_surface(torch_mod: Any) -> None:
@@ -1389,13 +1385,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         normalized = _orig_normalize_cuda_device(device)
         if normalized is None:
             return upstream._CURRENT_DEVICE
-        index = 0 if normalized.index is None else int(normalized.index)
-        if index < 0 or index >= _NUM_DEVICES:
-            raise RuntimeError(
-                f"CUDA error: invalid device ordinal "
-                f"(requested cuda:{index}, available: {_NUM_DEVICES})"
-            )
-        return index
+        return _checked_ordinal(int(normalized.index))
 
     upstream._normalize_device_index = _checked_normalize_device_index
 
@@ -1412,13 +1402,8 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     # would silently create a tensor on a non-existent device.
     def _bounds_checked_normalize_cuda(device, *, allow_none=False):
         result = _orig_normalize_cuda_device(device, allow_none=allow_none)
-        if result is not None and result.type == "cuda":
-            idx = 0 if result.index is None else int(result.index)
-            if idx < 0 or idx >= _NUM_DEVICES:
-                raise RuntimeError(
-                    f"CUDA error: invalid device ordinal "
-                    f"(requested cuda:{idx}, available: {_NUM_DEVICES})"
-                )
+        if result is not None:
+            _checked_ordinal(result.index)
         return result
 
     upstream._normalize_cuda_device = _bounds_checked_normalize_cuda
@@ -1427,21 +1412,15 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     if _MEMORY_TRACKING:
         per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
         _memory_tracker = _DeviceMemoryTracker(per_device_bytes)
-        _install_autograd_saved_tensor_tracking(torch_mod)
+        _install_autograd_saved_tensor_tracking()
 
     # ---- 2. Hook upstream.wrap_tensor for memory tracking ----
     _orig_wrap_tensor = upstream.wrap_tensor
 
     def _hooked_wrap_tensor(t, device_index=None):
-        # Validate device index bounds
-        actual_idx = (
+        _checked_ordinal(
             upstream._CURRENT_DEVICE if device_index is None else int(device_index)
         )
-        if actual_idx < 0 or actual_idx >= _NUM_DEVICES:
-            raise RuntimeError(
-                f"CUDA error: invalid device ordinal "
-                f"(requested cuda:{actual_idx}, available: {_NUM_DEVICES})"
-            )
         result = _orig_wrap_tensor(t, device_index=device_index)
         if _memory_tracker is not None:
             actual_idx = getattr(result, "device_index", 0)
@@ -1630,7 +1609,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     if _CROSS_DEVICE_CHECK:
         import torch.nn.functional as F
 
-        _MULTI_TENSOR_OPS = [
+        for op_name in (
             "matmul",
             "mm",
             "bmm",
@@ -1640,23 +1619,20 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
             "addmm",
             "addcmul",
             "addcdiv",
-        ]
-        for op_name in _MULTI_TENSOR_OPS:
-            orig = getattr(torch_mod, op_name, None)
-            if orig is not None:
-                setattr(
-                    torch_mod,
-                    op_name,
-                    _wrap_multi_tensor_op(orig, torch_mod),
-                )
+        ):
+            setattr(
+                torch_mod,
+                op_name,
+                _wrap_multi_tensor_op(getattr(torch_mod, op_name), torch_mod),
+            )
 
-        _LOSS_OPS = ["cross_entropy", "mse_loss", "nll_loss", "binary_cross_entropy"]
-        for op_name in _LOSS_OPS:
-            orig = getattr(F, op_name, None)
-            if orig is not None:
-                setattr(F, op_name, _wrap_multi_tensor_op(orig, torch_mod))
-
-        _FUNCTIONAL_OPS = [
+        for op_name in (
+            # losses
+            "cross_entropy",
+            "mse_loss",
+            "nll_loss",
+            "binary_cross_entropy",
+            # layers
             "linear",
             "conv1d",
             "conv2d",
@@ -1664,47 +1640,19 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
             "embedding",
             "batch_norm",
             "layer_norm",
-        ]
-        for op_name in _FUNCTIONAL_OPS:
-            orig = getattr(F, op_name, None)
-            if orig is not None:
-                setattr(F, op_name, _wrap_multi_tensor_op(orig, torch_mod))
+        ):
+            setattr(F, op_name, _wrap_multi_tensor_op(getattr(F, op_name), torch_mod))
 
-        _BINARY_DUNDERS = [
-            "__add__",
-            "__radd__",
-            "__sub__",
-            "__rsub__",
-            "__mul__",
-            "__rmul__",
-            "__truediv__",
-            "__rtruediv__",
-            "__matmul__",
-            "__rmatmul__",
-        ]
-        for dunder in _BINARY_DUNDERS:
-            orig = getattr(torch_mod.Tensor, dunder, None)
-            if orig is not None:
-                setattr(
-                    torch_mod.Tensor,
-                    dunder,
-                    _wrap_tensor_binary_op(orig, dunder, torch_mod),
-                )
+        for dunder in _BINARY_DUNDER_TORCH_OPS:
+            setattr(
+                torch_mod.Tensor,
+                dunder,
+                _wrap_tensor_binary_op(
+                    getattr(torch_mod.Tensor, dunder), dunder, torch_mod
+                ),
+            )
 
     # ---- 7. RNG state functions (not provided by upstream) ----
-    torch.cuda.get_rng_state = _stub_get_rng_state
-    torch.cuda.get_rng_state_all = _stub_get_rng_state_all
-    torch.cuda.set_rng_state = _stub_set_rng_state
-    torch.cuda.set_rng_state_all = _stub_set_rng_state_all
-    try:
-        import torch.cuda.random as _random
-
-        _random.get_rng_state = _stub_get_rng_state
-        _random.get_rng_state_all = _stub_get_rng_state_all
-        _random.set_rng_state = _stub_set_rng_state
-        _random.set_rng_state_all = _stub_set_rng_state_all
-    except Exception:
-        pass
     _patch_cuda_rng_surface(torch_mod)
     _patch_nccl_surface(torch_mod)
     _patch_fsdp_device_handling()

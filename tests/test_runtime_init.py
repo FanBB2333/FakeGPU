@@ -219,6 +219,56 @@ print("device properties passed")
     _assert_ok(_run(code), "device properties")
 
 
+def test_fakecuda_device_checks_and_rng_surface() -> None:
+    code = f"""
+from pathlib import Path
+import sys
+
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root))
+
+from fakegpu.torch_patch import patch
+
+patch(num_devices=2)
+
+import torch
+import torch.cuda.random
+
+
+def raises(call, message):
+    try:
+        call()
+    except RuntimeError as exc:
+        assert message in str(exc), exc
+    else:
+        raise AssertionError(message)
+
+
+raises(
+    lambda: torch.ones(2, device="cuda:0") + torch.ones(2, device="cuda:1"),
+    "Expected all tensors to be on the same device, but found at least two "
+    "devices, cuda:0 and cuda:1!",
+)
+raises(
+    lambda: torch.matmul(torch.ones(2, 2, device="cuda:0"), torch.ones(2, 2, device="cuda:1")),
+    "Expected all tensors to be on the same device",
+)
+ordinal = "CUDA error: invalid device ordinal (requested cuda:99, available: 2)"
+raises(lambda: torch.randn(2, device="cuda:99"), ordinal)
+raises(lambda: torch.cuda.set_device(99), ordinal)
+
+assert len(torch.cuda.get_rng_state_all()) == 2
+assert torch.cuda.random.get_rng_state_all is torch.cuda.get_rng_state_all
+assert torch.cuda.random.fork_rng is torch.random.fork_rng
+state = torch.cuda.get_rng_state()
+first = torch.rand(3)
+torch.cuda.set_rng_state(state)
+assert torch.equal(first, torch.rand(3))
+print("device checks passed")
+"""
+    _assert_ok(_run(code), "device checks")
+
+
 def test_native_mode_preload_boundaries() -> None:
     from fakegpu._api import _preload_libs_for_mode
 
