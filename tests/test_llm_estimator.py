@@ -106,6 +106,39 @@ def test_checkpoint_headers_are_read_without_tensor_materialization(tmp_path: Pa
     assert report["dtype_bytes"] == {"BF16": 640}
 
 
+@pytest.mark.parametrize(
+    ("index", "message"),
+    [
+        ([], "invalid safetensors weight map"),
+        (
+            {"weight_map": {"a": "model.safetensors"}, "metadata": "oops"},
+            "invalid safetensors index metadata",
+        ),
+        (
+            {
+                "weight_map": {"a": "model.safetensors"},
+                "metadata": {"total_size": [1]},
+            },
+            "invalid safetensors index total_size",
+        ),
+    ],
+)
+def test_checkpoint_inspection_rejects_malformed_index(
+    tmp_path: Path,
+    index: object,
+    message: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    (model_dir / "model.safetensors.index.json").write_text(
+        json.dumps(index),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        inspect_safetensors_checkpoint(model_dir)
+
+
 def test_checkpoint_inspection_can_select_an_explicit_file_family(
     tmp_path: Path,
 ) -> None:

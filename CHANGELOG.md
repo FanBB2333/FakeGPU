@@ -41,6 +41,9 @@
   configs as dense. They were counted as MoE layers, so LLM, serving, and
   fine-tuning estimates, serving plans, and workload signatures for these
   models change.
+- Report a malformed `model.safetensors.index.json` (non-object index,
+  non-object `metadata`, or non-numeric `total_size`) as a usage error
+  instead of an uncaught `AttributeError` or `TypeError`.
 
 ## v1.6.0 - 2026-10-17
 

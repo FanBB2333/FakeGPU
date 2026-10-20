@@ -333,11 +333,19 @@ def inspect_safetensors_checkpoint(
         indexed_total = 0
     elif index_path.is_file():
         index = json.loads(index_path.read_text(encoding="utf-8"))
-        weight_map = index.get("weight_map")
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
         if not isinstance(weight_map, dict) or not weight_map:
             raise ValueError(f"invalid safetensors weight map: {index_path}")
         shard_names = sorted({str(value) for value in weight_map.values()})
-        indexed_total = int((index.get("metadata") or {}).get("total_size", 0) or 0)
+        metadata = index.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            raise ValueError(f"invalid safetensors index metadata: {index_path}")
+        try:
+            indexed_total = int(metadata.get("total_size", 0) or 0)
+        except (TypeError, OverflowError) as exc:
+            raise ValueError(
+                f"invalid safetensors index total_size: {index_path}"
+            ) from exc
     else:
         shard_names = [path.name for path in sorted(root.glob("*.safetensors"))]
         indexed_total = 0
