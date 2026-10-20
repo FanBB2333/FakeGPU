@@ -66,6 +66,9 @@
   without writing a report.
 - `cuEventRecord` with an unknown or NULL event no longer advances the
   stream timeline, so the stream stays idle for `cuStreamQuery`.
+- `cudaGetDriverEntryPointByVersion` reports `driverStatus` 0 (success) for
+  resolved symbols and 1 (symbol not found) otherwise; the values were
+  inverted.
 
 ## v1.6.0 - 2026-10-17
 

@@ -878,7 +878,7 @@ cudaError_t cudaGetDriverEntryPointByVersion(const char *symbol, void **funcPtr,
     CUresult result = cuGetProcAddress(symbol, funcPtr, cudaVersion, flags);
 
     if (driverStatus) {
-        *driverStatus = (result == CUDA_SUCCESS) ? 1 : 0;
+        *driverStatus = (result == CUDA_SUCCESS && *funcPtr) ? 0 : 1;
     }
 
     last_error = convertDriverError(result);
