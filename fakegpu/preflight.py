@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -141,8 +142,7 @@ def run_preflight(ns: argparse.Namespace, command: Sequence[str]) -> int:
     try:
         child_env = _build_child_env(ns, paths)
         child_command = _prepare_child_command(ns.runtime, command, warnings)
-        if child_command:
-            _warn_if_macos_injection_may_be_blocked(child_command[0])
+        _warn_if_macos_injection_may_be_blocked(child_command[0])
         completed = subprocess.run(
             child_command,
             cwd=os.getcwd(),
@@ -150,12 +150,16 @@ def run_preflight(ns: argparse.Namespace, command: Sequence[str]) -> int:
             text=True,
             capture_output=True,
         )
-        paths.stdout_log.write_text(completed.stdout or "", encoding="utf-8")
-        paths.stderr_log.write_text(completed.stderr or "", encoding="utf-8")
+        paths.stdout_log.write_text(completed.stdout, encoding="utf-8")
+        paths.stderr_log.write_text(completed.stderr, encoding="utf-8")
     except Exception as exc:
         setup_error = exc
         paths.stdout_log.write_text("", encoding="utf-8")
         paths.stderr_log.write_text(str(exc) + "\n", encoding="utf-8")
+    if completed is not None:
+        stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
+    else:
+        stdout, stderr, exit_code = "", f"{setup_error}\n", 1
 
     duration = time.monotonic() - start
     report = build_report(
@@ -163,7 +167,9 @@ def run_preflight(ns: argparse.Namespace, command: Sequence[str]) -> int:
         command=list(command),
         executed_command=child_command,
         paths=paths,
-        completed=completed,
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=exit_code,
         setup_error=setup_error,
         warnings=warnings,
         duration_seconds=duration,
@@ -181,25 +187,13 @@ def build_report(
     command: list[str],
     executed_command: list[str],
     paths: PreflightPaths,
-    completed: subprocess.CompletedProcess[str] | None,
+    stdout: str,
+    stderr: str,
+    exit_code: int,
     setup_error: Exception | None,
     warnings: list[str],
     duration_seconds: float,
 ) -> dict[str, Any]:
-    if completed is not None:
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
-    else:
-        stdout = (
-            paths.stdout_log.read_text(encoding="utf-8")
-            if paths.stdout_log.exists()
-            else ""
-        )
-        stderr = (
-            paths.stderr_log.read_text(encoding="utf-8")
-            if paths.stderr_log.exists()
-            else ""
-        )
     raw_report, raw_report_kind = _load_raw_runtime_report(paths)
     devices, tracking_confidence = _normalize_devices(raw_report, raw_report_kind)
     memory_safety_factor = _resolve_memory_safety_factor(ns)
@@ -219,8 +213,8 @@ def build_report(
             else "tracked_peak"
         )
     }
-    calibration_path = getattr(ns, "memory_calibration", None)
-    calibration_workload = getattr(ns, "calibration_workload", None)
+    calibration_path = ns.memory_calibration
+    calibration_workload = ns.calibration_workload
     if calibration_path:
         try:
             if not calibration_workload:
@@ -231,11 +225,10 @@ def build_report(
                 workload_selector=str(calibration_workload),
             )
             memory_estimation = empirical
-            calibration_gpu = empirical.get("calibration_gpu")
-            matched = int(empirical.get("matched_device_count", 0) or 0)
-            if devices and matched == len(devices):
+            calibration_gpu = empirical["calibration_gpu"]
+            if devices and empirical["matched_device_count"] == len(devices):
                 tracking_confidence = "C4_real_gpu_calibrated"
-            warnings.extend(str(value) for value in empirical.get("warnings", []))
+            warnings.extend(empirical["warnings"])
         except Exception as exc:
             if setup_error is None:
                 setup_error = ValueError(f"empirical memory calibration failed: {exc}")
@@ -243,7 +236,6 @@ def build_report(
     elif calibration_workload:
         warnings.append("--calibration-workload was ignored because --memory-calibration was not provided.")
 
-    exit_code = completed.returncode if completed is not None else 1
     oom_detected = _looks_like_oom(stdout, stderr, raw_report)
     strict_skip_detected = bool(ns.strict) and _looks_like_skip(stdout, stderr)
     status = _classify_status(
@@ -292,7 +284,7 @@ def build_report(
             "memory_safety_margin_bytes": memory_safety_margin,
             "memory_calibration": str(calibration_path) if calibration_path else None,
             "calibration_workload": str(calibration_workload) if calibration_workload else None,
-            "unsupported_api": getattr(ns, "unsupported_api", None),
+            "unsupported_api": ns.unsupported_api,
         },
         "target_profiles": _target_profiles(ns),
         "calibration_gpu": calibration_gpu,
@@ -349,10 +341,7 @@ def _clear_runtime_artifacts(paths: PreflightPaths) -> None:
         paths.child_report,
         paths.stage_log,
     ):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            continue
+        path.unlink(missing_ok=True)
 
 
 def _build_child_env(ns: argparse.Namespace, paths: PreflightPaths) -> dict[str, str]:
@@ -366,7 +355,9 @@ def _build_child_env(ns: argparse.Namespace, paths: PreflightPaths) -> dict[str,
         base["FAKEGPU_ALLOCATION_STACKS"] = "1"
     effective_device_count = ns.device_count
     if effective_device_count is None and ns.devices:
-        effective_device_count = _infer_device_count_from_devices(str(ns.devices))
+        effective_device_count = max(
+            sum(item["count"] for item in _parse_device_specs(ns.devices)), 1
+        )
     if effective_device_count is not None:
         base["FAKEGPU_DEVICE_COUNT"] = str(int(effective_device_count))
     if ns.profile:
@@ -436,31 +427,21 @@ def _split_python_options(args: Sequence[str]) -> tuple[list[str], list[str]]:
     return passthrough, remaining[index:]
 
 
-def _infer_device_count_from_devices(devices: str) -> int:
-    total = 0
+def _parse_device_specs(devices: str) -> list[dict[str, Any]]:
+    profiles: list[dict[str, Any]] = []
     for spec in devices.split(","):
         spec = spec.strip()
         if not spec:
             continue
-        parts = spec.split(":", 1)
-        if len(parts) == 2 and parts[1].strip().isdigit():
-            total += int(parts[1].strip())
-        else:
-            total += 1
-    return max(total, 1)
+        profile, _, count_text = spec.partition(":")
+        count = int(count_text) if count_text.strip().isdigit() else 1
+        profiles.append({"profile_id": profile.strip(), "count": count})
+    return profiles
 
 
-def _target_profiles(ns: argparse.Namespace) -> list[dict[str, int | str]]:
+def _target_profiles(ns: argparse.Namespace) -> list[dict[str, Any]]:
     if ns.devices:
-        profiles: list[dict[str, int | str]] = []
-        for spec in str(ns.devices).split(","):
-            spec = spec.strip()
-            if not spec:
-                continue
-            profile, _, count_text = spec.partition(":")
-            count = int(count_text) if count_text.strip().isdigit() else 1
-            profiles.append({"profile_id": profile.strip(), "count": count})
-        return profiles
+        return _parse_device_specs(ns.devices)
 
     if ns.profile:
         return [{"profile_id": str(ns.profile), "count": int(ns.device_count or 1)}]
@@ -524,8 +505,6 @@ def _normalize_devices(raw_report: dict[str, Any] | None, raw_report_kind: str |
         }
         alloc = raw.get("alloc", {})
         allocation_count = int(raw.get("allocation_count", alloc.get("calls", 0) if isinstance(alloc, dict) else 0) or 0)
-        headroom = total - peak
-        headroom_percent = (100.0 * headroom / total) if total > 0 else None
         devices.append(
             {
                 "index": int(raw.get("index", len(devices))),
@@ -542,8 +521,7 @@ def _normalize_devices(raw_report: dict[str, Any] | None, raw_report_kind: str |
                 ),
                 "segment_count": int(raw.get("segment_count", 0) or 0),
                 "allocator_model": raw.get("allocator_model"),
-                "headroom_bytes": headroom,
-                "headroom_percent": round(headroom_percent, 3) if headroom_percent is not None else None,
+                **_headroom_fields(total, peak),
                 "allocation_count": allocation_count,
                 "current_bytes_by_category": dict(raw.get("current_bytes_by_category", {}) or {}),
                 "peak_by_stage": peak_by_stage,
@@ -599,28 +577,30 @@ def _parse_byte_quantity(value: str) -> int:
     return int(amount * multipliers[unit])
 
 
+def _headroom_fields(total: int, peak: int) -> dict[str, Any]:
+    headroom = total - peak
+    return {
+        "headroom_bytes": headroom,
+        "headroom_percent": round(100.0 * headroom / total, 3) if total > 0 else None,
+    }
+
+
 def _apply_memory_safety_adjustment(
     devices: list[dict[str, Any]],
     factor: float,
     margin_bytes: int,
 ) -> list[dict[str, Any]]:
-    import math
-
     adjusted: list[dict[str, Any]] = []
     for dev in devices:
         item = dict(dev)
-        tracked_peak = int(item.get("peak_memory", 0) or 0)
+        tracked_peak = item["peak_memory"]
         estimated_peak = int(math.ceil(tracked_peak * factor)) + int(margin_bytes)
-        total = int(item.get("total_memory", 0) or 0)
-        headroom = total - estimated_peak
-        headroom_percent = (100.0 * headroom / total) if total > 0 else None
         item["tracked_peak_memory"] = tracked_peak
         item["peak_memory"] = estimated_peak
         item["estimated_peak_memory"] = estimated_peak
         item["memory_safety_factor"] = round(factor, 6)
         item["memory_safety_margin_bytes"] = int(margin_bytes)
-        item["headroom_bytes"] = headroom
-        item["headroom_percent"] = round(headroom_percent, 3) if headroom_percent is not None else None
+        item.update(_headroom_fields(item["total_memory"], estimated_peak))
         adjusted.append(item)
     return adjusted
 
@@ -644,14 +624,14 @@ def _apply_empirical_memory_calibration(
         candidate = candidates.get(profile)
         if not isinstance(candidate, dict):
             warnings.append(
-                f"No empirical calibration observation matched device {item.get('index', 0)} "
+                f"No empirical calibration observation matched device {item['index']} "
                 f"with profile {profile or '<unknown>'}."
             )
             adjusted.append(item)
             continue
 
-        tracked_peak = int(item.get("tracked_peak_memory", item.get("peak_memory", 0)) or 0)
-        previous_estimate = int(item.get("peak_memory", 0) or 0)
+        tracked_peak = item.get("tracked_peak_memory", item["peak_memory"])
+        previous_estimate = item["peak_memory"]
         allocator_upper_bound = int(candidate["empirical_real_peak_upper_bound_bytes"])
         empirical_upper_bound = int(
             candidate.get("empirical_physical_peak_upper_bound_bytes", allocator_upper_bound)
@@ -660,9 +640,6 @@ def _apply_empirical_memory_calibration(
             candidate.get("empirical_physical_peak_upper_bound_source") or "torch_allocator_peak"
         )
         estimated_peak = max(previous_estimate, empirical_upper_bound)
-        total = int(item.get("total_memory", 0) or 0)
-        headroom = total - estimated_peak
-        headroom_percent = (100.0 * headroom / total) if total > 0 else None
         item.update(
             {
                 "tracked_peak_memory": tracked_peak,
@@ -676,8 +653,7 @@ def _apply_empirical_memory_calibration(
                 "memory_calibration_sample_count": int(candidate.get("sample_count", 0) or 0),
                 "memory_calibration_workload_signature": calibration["workload_signature"],
                 "memory_calibration_profile": profile,
-                "headroom_bytes": headroom,
-                "headroom_percent": round(headroom_percent, 3) if headroom_percent is not None else None,
+                **_headroom_fields(item["total_memory"], estimated_peak),
             }
         )
         adjusted.append(item)
@@ -735,10 +711,12 @@ def _load_empirical_memory_calibration(
     raise ValueError(f"unsupported calibration schema: {schema!r}")
 
 
-def _load_empirical_bundle(payload: dict[str, Any], workload_selector: str) -> dict[str, Any]:
+def _select_workloads(
+    payload: dict[str, Any], workload_selector: str, source: str
+) -> list[dict[str, Any]]:
     workloads = payload.get("workloads")
     if not isinstance(workloads, list):
-        raise ValueError("calibration bundle workloads must be a list")
+        raise ValueError(f"calibration {source} workloads must be a list")
     matches = [
         item
         for item in workloads
@@ -749,7 +727,12 @@ def _load_empirical_bundle(payload: dict[str, Any], workload_selector: str) -> d
         )
     ]
     if not matches:
-        raise ValueError(f"workload {workload_selector!r} was not found in the calibration bundle")
+        raise ValueError(f"workload {workload_selector!r} was not found in the calibration {source}")
+    return matches
+
+
+def _load_empirical_bundle(payload: dict[str, Any], workload_selector: str) -> dict[str, Any]:
+    matches = _select_workloads(payload, workload_selector, "bundle")
     if len(matches) > 1:
         signatures = ", ".join(str(item.get("workload_signature")) for item in matches)
         raise ValueError(
@@ -809,20 +792,7 @@ def _load_empirical_bundle(payload: dict[str, Any], workload_selector: str) -> d
 def _load_empirical_report(payload: dict[str, Any], workload_selector: str) -> dict[str, Any]:
     if payload.get("status") != "PASS_CALIBRATED":
         raise ValueError(f"calibration report status is {payload.get('status')!r}, not PASS_CALIBRATED")
-    workloads = payload.get("workloads")
-    if not isinstance(workloads, list):
-        raise ValueError("calibration report workloads must be a list")
-    matches = [
-        item
-        for item in workloads
-        if isinstance(item, dict)
-        and (
-            str(item.get("name") or "") == workload_selector
-            or str(item.get("workload_signature") or "") == workload_selector
-        )
-    ]
-    if not matches:
-        raise ValueError(f"workload {workload_selector!r} was not found in the calibration report")
+    matches = _select_workloads(payload, workload_selector, "report")
     if len(matches) > 1:
         raise ValueError(f"calibration report contains duplicate workload selector {workload_selector!r}")
     workload = matches[0]
