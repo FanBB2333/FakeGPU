@@ -62,10 +62,6 @@ EOF
       fi
       orb ${args[@]+"${args[@]}"} bash -lc "$cmd"
       ;;
-    *)
-      echo "error: unknown backend: $VM_BACKEND" >&2
-      return 1
-      ;;
   esac
 }
 
