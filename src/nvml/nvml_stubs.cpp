@@ -1480,10 +1480,17 @@ nvmlReturn_t nvmlDeviceGetHandleByUUID(const char *uuid, nvmlDevice_t *device) {
 nvmlReturn_t nvmlDeviceGetHandleByPciBusId(const char *pciBusId, nvmlDevice_t *device) {
     if (!pciBusId || !device) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::lookup(pciBusId, false, device);
-    // For simplicity, return device 0
-    Device& dev = GlobalState::instance().get_device(0);
-    *device = (nvmlDevice_t)&dev;
-    return NVML_SUCCESS;
+    GlobalState& state = GlobalState::instance();
+    const int count = state.get_device_count();
+    for (int index = 0; index < count; ++index) {
+        Device& dev = state.get_device(index);
+        if (dev.pci_bus_id == pciBusId) {
+            *device = (nvmlDevice_t)&dev;
+            return NVML_SUCCESS;
+        }
+    }
+    *device = nullptr;
+    return NVML_ERROR_NOT_FOUND;
 }
 
 nvmlReturn_t nvmlDeviceGetHandleByPciBusId_v2(const char *pciBusId, nvmlDevice_t *device) {
