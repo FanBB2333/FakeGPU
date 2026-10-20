@@ -27,6 +27,10 @@ from ._finetune_allocator import validate_memory_allocator
 PLAN_SCHEMA = "fakegpu.diffusion_training_plan.v1"
 RUN_SCHEMA = "fakegpu.diffusion_training_run.v1"
 TARGETS = ("to_q", "to_k", "to_v", "to_out.0")
+_CACHED_TENSORS = frozenset(
+    {"latents", "noise", "timesteps", "encoder_hidden_states"}
+)
+_TEXT_TIME_TENSORS = frozenset({"pooled_text_embeds", "time_ids"})
 
 
 def _integer(value, name):
@@ -55,6 +59,26 @@ def _sha(value, name):
 
 def _file(path):
     return {"name": Path(path).name, **_file_identity(path)}
+
+
+def _persistent_storage(s):
+    trainable = s["trainable_parameters"]
+    return {
+        "frozen_parameters": s["base_parameters"] * 2 if s["method"] == "lora" else 0,
+        "trainable_parameters": trainable * 4,
+        "gradients": trainable * 4,
+        "adamw_moments": trainable * 8,
+        "ema_parameters": trainable * 4 if s["ema_decay"] is not None else 0,
+    }
+
+
+def _execution_context(run):
+    return {
+        "environment": run["environment"],
+        "implementation_sha256": run["implementation_sha256"],
+        "cache_regime": run["cache_regime"],
+        "memory_allocator": run["memory_allocator"],
+    }
 
 
 def plan_diffusion_training(
@@ -138,9 +162,8 @@ def plan_diffusion_training(
         for k, v in _read_safetensors_header(data_path).items()
         if k != "__metadata__"
     }
-    required = {"latents", "noise", "timesteps", "encoder_hidden_states"}
-    if config.get("addition_embed_type") == "text_time":
-        required |= {"pooled_text_embeds", "time_ids"}
+    text_time = config.get("addition_embed_type") == "text_time"
+    required = _CACHED_TENSORS | _TEXT_TIME_TENSORS if text_time else _CACHED_TENSORS
     if set(header) != required:
         raise ValueError(
             "cached dataset tensors do not match the model conditioning contract"
@@ -181,7 +204,7 @@ def plan_diffusion_training(
     for key, meta in header.items():
         if key != "timesteps" and meta["dtype"] != "F32":
             raise ValueError("cached floating tensors must be FP32")
-    if config.get("addition_embed_type") == "text_time":
+    if text_time:
         pooled = header["pooled_text_embeds"]["shape"]
         time_ids = header["time_ids"]["shape"]
         time_dim = config.get("addition_time_embed_dim")
@@ -198,14 +221,6 @@ def plan_diffusion_training(
                 "text_time pooled embeddings and six time IDs must match the UNet projection"
             )
     trainable = base if method == "full" else adapt
-    frozen = 0 if method == "full" else base * 2
-    state = {
-        "frozen_parameters": frozen,
-        "trainable_parameters": trainable * 4,
-        "gradients": trainable * 4,
-        "adamw_moments": trainable * 8,
-        "ema_parameters": trainable * 4 if ema_decay is not None else 0,
-    }
     manifest = {
         "model": [
             _file(config_path),
@@ -236,6 +251,7 @@ def plan_diffusion_training(
         "base_parameters": base,
         "trainable_parameters": trainable,
     }
+    state = _persistent_storage(signature)
     plan = {
         "schema_version": PLAN_SCHEMA,
         "signature": signature,
@@ -329,7 +345,6 @@ def validate_training_plan(plan):
         or s["attention_backend"] != "sdpa"
         or s["save"] != "model_or_adapter_only"
         or s["learning_rate"] != 2e-5
-        or isinstance(s["seed"], bool)
         or s["seed"] != 42
         or not isinstance(s["gradient_checkpointing"], bool)
     ):
@@ -353,10 +368,9 @@ def validate_training_plan(plan):
             "latent dimensions must be four channels and spatial multiples of eight"
         )
     shapes = s["tensor_shapes"]
-    required = {"latents", "noise", "timesteps", "encoder_hidden_states"}
     if not isinstance(shapes, Mapping) or set(shapes) not in (
-        required,
-        required | {"pooled_text_embeds", "time_ids"},
+        _CACHED_TENSORS,
+        _CACHED_TENSORS | _TEXT_TIME_TENSORS,
     ):
         raise ValueError("cached tensor shape fields are incomplete or unsupported")
     for shape in shapes.values():
@@ -376,21 +390,11 @@ def validate_training_plan(plan):
         pooled = shapes["pooled_text_embeds"]
         if (
             shapes["time_ids"] != [rows, 6]
-            or not isinstance(pooled, list)
             or len(pooled) != 2
             or pooled[0] != rows
         ):
             raise ValueError("cached text_time shapes are inconsistent")
-        _integer(pooled[1], "pooled embedding width")
-    expected = {
-        "frozen_parameters": s["base_parameters"] * 2 if s["method"] == "lora" else 0,
-        "trainable_parameters": s["trainable_parameters"] * 4,
-        "gradients": s["trainable_parameters"] * 4,
-        "adamw_moments": s["trainable_parameters"] * 8,
-        "ema_parameters": s["trainable_parameters"] * 4
-        if s["ema_decay"] is not None
-        else 0,
-    }
+    expected = _persistent_storage(s)
     memory = plan["static_memory"]
     if (
         not isinstance(memory, Mapping)
@@ -444,7 +448,7 @@ def project_diffusion_training(plan, *, epochs):
     result["epochs"] = _integer(epochs, "epochs")
     result.pop("plan_sha256")
     result["plan_sha256"] = _digest(result)
-    return validate_training_plan(result)
+    return result
 
 
 def training_windows(plan):
@@ -537,7 +541,7 @@ def _run(run):
         raise ValueError(
             "training evidence requires real CUDA UUID and software identity"
         )
-    if not {"total_memory_bytes", "software", "gpu_uuid"}.issubset(environment):
+    if "total_memory_bytes" not in environment:
         raise ValueError("native CUDA environment identity is incomplete")
     _integer(environment["total_memory_bytes"], "physical GPU memory")
     if (
@@ -655,12 +659,7 @@ def estimate_diffusion_training(plan, calibration_runs=()):
         identities.add(identity["uuid"])
         evidence.add(pid)
         timings.add(timing_digest)
-        context = {
-            "environment": run["environment"],
-            "implementation_sha256": run["implementation_sha256"],
-            "cache_regime": run["cache_regime"],
-            "memory_allocator": run["memory_allocator"],
-        }
+        context = _execution_context(run)
         if common is not None and context != common:
             raise ValueError(
                 "calibration requires matching GPU, software and implementation"
@@ -671,14 +670,15 @@ def estimate_diffusion_training(plan, calibration_runs=()):
             groups[_digest(row["group"])].append(row["seconds"])
         by_run.append(groups)
     missing = []
+    eligible = {}
     for key, descriptor in descriptors.items():
         minimum = 1 if descriptor["first_window_shape_use"] else 2
-        eligible = [g[key] for g in by_run if len(g[key]) >= minimum]
-        if len(eligible) < 2:
+        eligible[key] = [g[key] for g in by_run if len(g[key]) >= minimum]
+        if len(eligible[key]) < 2:
             missing.append(
                 {
                     "group": descriptor,
-                    "eligible_independent_runs": len(eligible),
+                    "eligible_independent_runs": len(eligible[key]),
                     "required_independent_runs": 2,
                     "minimum_samples_per_run": minimum,
                 }
@@ -697,8 +697,7 @@ def estimate_diffusion_training(plan, calibration_runs=()):
     groups = []
     total = 0.0
     for key, descriptor in descriptors.items():
-        minimum = 1 if descriptor["first_window_shape_use"] else 2
-        means = [statistics.mean(g[key]) for g in by_run if len(g[key]) >= minimum]
+        means = [statistics.mean(samples) for samples in eligible[key]]
         cost = statistics.mean(means) * counts[key]
         total += cost
         groups.append(
@@ -741,13 +740,7 @@ def compare_diffusion_training(calibration_runs, holdout_run):
         raise ValueError(
             "diffusion holdout requires complete prior calibration coverage"
         )
-    actual_context = {
-        "environment": holdout_run["environment"],
-        "implementation_sha256": holdout_run["implementation_sha256"],
-        "cache_regime": holdout_run["cache_regime"],
-        "memory_allocator": holdout_run["memory_allocator"],
-    }
-    if actual_context != prediction["execution_context"]:
+    if _execution_context(holdout_run) != prediction["execution_context"]:
         raise ValueError("holdout requires the same GPU, software and implementation")
     actual_id = holdout_run["identity"]
     for run in runs:
