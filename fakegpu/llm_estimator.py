@@ -1264,9 +1264,18 @@ def _moe_layer_count(
         or sparse_step <= 0
     ):
         raise ValueError("decoder_sparse_step must be a positive integer")
+    first_dense = config.get("first_k_dense_replace")
+    if first_dense is None:
+        first_dense = 0
+    elif (
+        not isinstance(first_dense, int)
+        or isinstance(first_dense, bool)
+        or first_dense < 0
+    ):
+        raise ValueError("first_k_dense_replace must be a non-negative integer")
     return sum(
         1
-        for index in range(layer_count)
+        for index in range(first_dense, layer_count)
         if index not in dense_layers and (index + 1) % sparse_step == 0
     )
 

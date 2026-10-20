@@ -37,6 +37,10 @@
   `mlp_only_layers`, so a sparse step above one was ignored and every
   non-listed layer was counted as MoE in LLM, serving, and fine-tuning
   estimates.
+- Treat the leading `first_k_dense_replace` layers of DeepSeek-style MoE
+  configs as dense. They were counted as MoE layers, so LLM, serving, and
+  fine-tuning estimates, serving plans, and workload signatures for these
+  models change.
 
 ## v1.6.0 - 2026-10-17
 

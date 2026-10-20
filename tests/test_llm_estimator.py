@@ -809,6 +809,50 @@ def test_moe_layer_count_applies_mlp_only_layers_and_sparse_step(
     assert report["model"]["dense_layer_count"] == 4 - moe_layer_count
 
 
+@pytest.mark.parametrize(
+    ("first_k_dense_replace", "moe_layer_count"),
+    [(None, 4), (0, 4), (3, 1), (6, 0)],
+)
+def test_moe_layer_count_skips_first_k_dense_layers(
+    tmp_path: Path,
+    first_k_dense_replace: int | None,
+    moe_layer_count: int,
+) -> None:
+    model_dir = tmp_path / "moe"
+    _write_model(
+        model_dir,
+        config_overrides={
+            "num_hidden_layers": 4,
+            "n_routed_experts": 4,
+            "num_experts_per_tok": 2,
+            "first_k_dense_replace": first_k_dense_replace,
+        },
+    )
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=4)
+
+    assert report["model"]["moe_layer_count"] == moe_layer_count
+    assert report["model"]["dense_layer_count"] == 4 - moe_layer_count
+
+
+def test_moe_layer_count_rejects_invalid_first_k_dense_replace(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "moe"
+    _write_model(
+        model_dir,
+        config_overrides={
+            "num_hidden_layers": 4,
+            "n_routed_experts": 4,
+            "num_experts_per_tok": 2,
+            "first_k_dense_replace": -1,
+        },
+    )
+
+    with pytest.raises(ValueError, match="first_k_dense_replace"):
+        estimate_decoder_inference(model_dir, prompt_tokens=4)
+
+
 def test_quantized_checkpoint_uses_exact_payload_storage(
     tmp_path: Path,
 ) -> None:
