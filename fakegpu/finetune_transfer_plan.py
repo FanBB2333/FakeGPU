@@ -6,11 +6,7 @@ import math
 
 from ._finetune_transfer_plan import transfer_plan_from_run, validate_transfer_plan
 from .finetune_estimator import FinetuneEstimateError
-from .finetune_pipeline_plan import (
-    _assemble_schedule,
-    _integer,
-    _validate_native_schedule_options,
-)
+from .finetune_pipeline_plan import _assemble_schedule, _integer
 
 
 def plan_finetuning_transfer(run, *, epochs=None, max_steps=None):
@@ -20,7 +16,6 @@ def plan_finetuning_transfer(run, *, epochs=None, max_steps=None):
     a new CPU plan and target-specific startup measurements, obtained through the
     native calibration workflow. A complete observed training epoch is unnecessary.
     """
-    _validate_native_schedule_options(run)
     plan = transfer_plan_from_run(run)
     sampling = plan["sampling_plan"]
     per_epoch = sampling["updates_per_epoch"]

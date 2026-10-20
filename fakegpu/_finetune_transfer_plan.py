@@ -95,7 +95,10 @@ def _execution_identity(run, sampling):
 def transfer_plan_from_run(run):
     """Require both native timing evidence and verified consumed input hashes."""
     _validate_native_schedule_options(run)
-    plan = pipeline_plan_from_run(run)
+    return _transfer_plan(run, pipeline_plan_from_run(run))
+
+
+def _transfer_plan(run, plan):
     if plan["signature"].get("sampler_observation_version") not in {
         SAMPLER_SCHEMA,
         LENGTH_SCHEMA_VERSION,
@@ -130,9 +133,7 @@ def validate_transfer_plan(plan):
     """Validate the timing-free protocol and its exact sampled input prefix."""
     if not isinstance(plan, Mapping) or plan.get("schema_version") != SCHEMA_VERSION:
         raise FinetuneEstimateError("unsupported native transfer plan schema")
-    base = deepcopy(dict(plan))
-    base["schema_version"] = PIPELINE_SCHEMA
-    validate_pipeline_plan(base)
+    validate_pipeline_plan({**plan, "schema_version": PIPELINE_SCHEMA})
     sampling = validate_sampler_plan(plan.get("sampling_plan"))
     signature = plan["signature"]
     if sampling["schema_version"] == PACKED_SCHEMA_VERSION:

@@ -17,8 +17,8 @@ from typing import Any
 from ._finetune_batches import _descriptor
 from ._finetune_pipeline_plan import _digest
 from ._finetune_transfer_plan import (
+    _transfer_plan,
     describe_transfer_components,
-    transfer_plan_from_run,
     transfer_signature,
     validate_transfer_plan,
 )
@@ -30,6 +30,7 @@ from .finetune_pipeline_estimator import (
     _samples as _pipeline_samples,
     _timing,
 )
+from .finetune_pipeline_plan import _validate_native_schedule_options
 
 
 SCHEMA_VERSION = "fakegpu.finetune_transfer_estimate.v1"
@@ -48,21 +49,11 @@ def _requires_target_data(component):
 
 def _sample(run):
     recorded = _pipeline_samples(run)
-    plan = transfer_plan_from_run(run)
+    _validate_native_schedule_options(run)
+    plan = _transfer_plan(run, recorded["plan"])
     components = describe_transfer_components(plan)
-    original = recorded["components"]
-    if len(components) != len(original) or any(
-        any(
-            left[field] != right[field]
-            for field in ("component_id", "kind", "reference")
-        )
-        for left, right in zip(components, original)
-    ):
-        raise FinetuneEstimateError(
-            "transfer components must partition the original native timeline"
-        )
     groups = {}
-    for component, measured in zip(components, original):
+    for component, measured in zip(components, recorded["components"]):
         component["observed"] = deepcopy(measured["observed"])
         groups.setdefault(component["group_id"], []).append(component)
     return {
@@ -352,6 +343,13 @@ def estimate_finetuning_transfer(
     return _estimate(*_prepare(calibration_runs, target_plan, setup_calibration_runs))
 
 
+def _holdout(calibration_runs, target_run, setup_calibration_runs):
+    target = _sample(target_run)
+    prepared = _prepare(calibration_runs, target["plan"], setup_calibration_runs)
+    _unique([*prepared[1], target])
+    return target, prepared
+
+
 def compare_finetuning_transfer(
     calibration_runs: Sequence[Mapping[str, Any]],
     target_run: Mapping[str, Any],
@@ -359,9 +357,7 @@ def compare_finetuning_transfer(
     setup_calibration_runs: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Predict an independent holdout before consulting its measured timings."""
-    target = _sample(target_run)
-    prepared = _prepare(calibration_runs, target["plan"], setup_calibration_runs)
-    _unique([*prepared[1], target])
+    target, prepared = _holdout(calibration_runs, target_run, setup_calibration_runs)
     result = _estimate(*prepared)
     result["scope"] = "recorded_native_execution_span_shape_transfer_replay"
     _attach_comparison(result, target)
@@ -388,9 +384,15 @@ def estimate_finetuning_transfer_memory(
     their workloads in another order or running longer can change fragmentation
     or growth; the envelope is not an inferred peak of the combined target run.
     """
-    plan, samples, setup, components, groups = _prepare(
-        calibration_runs, target_plan, setup_calibration_runs
+    return _memory_estimate(
+        _prepare(calibration_runs, target_plan, setup_calibration_runs),
+        memory_budget_bytes=memory_budget_bytes,
+        reserve_bytes=reserve_bytes,
     )
+
+
+def _memory_estimate(prepared, *, memory_budget_bytes, reserve_bytes):
+    plan, samples, setup, components, groups = prepared
     coverage = _coverage(samples, setup, groups)
     if any(not group["covered"] for group in coverage):
         raise FinetuneEstimateError(
@@ -488,15 +490,9 @@ def compare_finetuning_transfer_memory(
     reserve_bytes: int = 0,
 ) -> dict[str, Any]:
     """Check independent target peaks against the pre-existing empirical envelope."""
-    target = _sample(target_run)
-    prepared = _prepare(calibration_runs, target["plan"], setup_calibration_runs)
-    _unique([*prepared[1], target])
-    estimate = estimate_finetuning_transfer_memory(
-        calibration_runs,
-        target["plan"],
-        setup_calibration_runs=setup_calibration_runs,
-        memory_budget_bytes=memory_budget_bytes,
-        reserve_bytes=reserve_bytes,
+    target, prepared = _holdout(calibration_runs, target_run, setup_calibration_runs)
+    estimate = _memory_estimate(
+        prepared, memory_budget_bytes=memory_budget_bytes, reserve_bytes=reserve_bytes
     )
     comparison = {}
     for field, interval in estimate["memory"].items():
