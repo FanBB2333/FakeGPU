@@ -1236,30 +1236,63 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
     class _PatchedAutocast(_OrigAutocast):
         """Autocast wrapper that redirects fake CUDA autocast to CPU."""
 
-        def __init__(self, device_type: str = "cuda", **kwargs):
+        def __init__(
+            self,
+            device_type: str = "cuda",
+            dtype: Any = None,
+            enabled: bool = True,
+            cache_enabled: bool | None = None,
+        ):
             requested_device = device_type
             actual_device = "cpu" if device_type == "cuda" else device_type
             self._fakegpu_requested_device_type = requested_device
             self._fakegpu_actual_device_type = actual_device
-            super().__init__(actual_device, **kwargs)
+            # CPU autocast defaults to bfloat16; keep the CUDA default.
+            if device_type == "cuda" and dtype is None:
+                dtype = torch_mod.get_autocast_dtype("cuda")
+            super().__init__(
+                actual_device,
+                dtype=dtype,
+                enabled=enabled,
+                cache_enabled=cache_enabled,
+            )
 
         def __enter__(self):
-            if (
-                getattr(self, "_fakegpu_requested_device_type", None) == "cuda"
-                and getattr(self, "fast_dtype", None) == torch_mod.bfloat16
-                and _COMPUTE_MAJOR < 8
-            ):
-                raise RuntimeError(
-                    f"Current CUDA Device does not support bfloat16. "
-                    f"Please switch dtype to float16 "
-                    f"(compute capability {_COMPUTE_MAJOR}.{_COMPUTE_MINOR}, "
-                    f"need >= 8.0 for bf16)."
-                )
+            if self._fakegpu_requested_device_type == "cuda":
+                if self.fast_dtype == torch_mod.bfloat16 and _COMPUTE_MAJOR < 8:
+                    raise RuntimeError(
+                        f"Current CUDA Device does not support bfloat16. "
+                        f"Please switch dtype to float16 "
+                        f"(compute capability {_COMPUTE_MAJOR}.{_COMPUTE_MINOR}, "
+                        f"need >= 8.0 for bf16)."
+                    )
+                # Track the CUDA dtype as CUDA autocast does, so a nested
+                # autocast("cuda") without a dtype inherits this one.
+                self._fakegpu_prev_cuda_dtype = torch_mod.get_autocast_dtype("cuda")
+                torch_mod.set_autocast_dtype("cuda", self.fast_dtype)
             return super().__enter__()
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            if self._fakegpu_requested_device_type == "cuda":
+                torch_mod.set_autocast_dtype("cuda", self._fakegpu_prev_cuda_dtype)
+            return super().__exit__(exc_type, exc_val, exc_tb)
+
+    class _PatchedCudaAmpAutocast(_PatchedAutocast):
+        """Legacy ``torch.cuda.amp.autocast(enabled, dtype, cache_enabled)``."""
+
+        def __init__(
+            self,
+            enabled: bool = True,
+            dtype: Any = torch_mod.float16,
+            cache_enabled: bool = True,
+        ):
+            super().__init__(
+                "cuda", dtype=dtype, enabled=enabled, cache_enabled=cache_enabled
+            )
 
     torch_mod.amp.autocast = _PatchedAutocast
     if hasattr(torch_mod.cuda.amp, "autocast"):
-        torch_mod.cuda.amp.autocast = _PatchedAutocast
+        torch_mod.cuda.amp.autocast = _PatchedCudaAmpAutocast
 
 
 def _activate_upstream(num_devices: int, device_name: str) -> Any:

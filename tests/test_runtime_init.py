@@ -138,6 +138,49 @@ print("torch accelerator compatibility passed")
     _assert_ok(_run(code), "torch accelerator compatibility")
 
 
+def test_fakecuda_autocast_keeps_cuda_defaults_and_signatures() -> None:
+    for profile in ("v100", "a100"):
+        code = f"""
+from pathlib import Path
+import sys
+import warnings
+
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root))
+warnings.simplefilter("ignore")
+
+import fakegpu
+
+fakegpu.init(runtime="fakecuda", profile={profile!r}, device_count=1)
+
+import torch
+
+def matmul_dtype(ctx):
+    with ctx:
+        x = torch.ones(2, 2, device="cuda")
+        return (x @ x).dtype
+
+assert matmul_dtype(torch.amp.autocast("cuda")) == torch.float16
+assert matmul_dtype(torch.cuda.amp.autocast()) == torch.float16
+assert matmul_dtype(torch.cuda.amp.autocast(True)) == torch.float16
+assert matmul_dtype(torch.amp.autocast("cuda", torch.float16)) == torch.float16
+if {profile!r} == "v100":
+    try:
+        matmul_dtype(torch.amp.autocast("cuda", dtype=torch.bfloat16))
+    except RuntimeError as exc:
+        assert "does not support bfloat16" in str(exc), exc
+    else:
+        raise AssertionError("bf16 autocast should fail on compute capability 7.0")
+else:
+    assert matmul_dtype(torch.amp.autocast("cuda", torch.bfloat16)) == torch.bfloat16
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        assert matmul_dtype(torch.amp.autocast("cuda")) == torch.bfloat16
+    assert torch.get_autocast_dtype("cuda") == torch.float16
+print("autocast defaults passed")
+"""
+        _assert_ok(_run(code), f"autocast defaults ({profile})")
+
+
 def test_native_mode_preload_boundaries() -> None:
     from fakegpu._api import _preload_libs_for_mode
 
