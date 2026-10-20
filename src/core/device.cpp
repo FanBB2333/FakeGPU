@@ -92,6 +92,21 @@ std::vector<std::string> split_text(const std::string& text, char separator) {
     return parts;
 }
 
+std::vector<std::string> trimmed_fields(const std::string& text) {
+    std::vector<std::string> fields = split_text(text, ':');
+    for (std::string& field : fields) {
+        field = trim_copy(field);
+    }
+    return fields;
+}
+
+bool has_three_or_four_fields(const std::vector<std::string>& fields) {
+    return fields.size() >= 3 && fields.size() <= 4 &&
+        std::none_of(fields.begin(), fields.end(), [](const std::string& field) {
+            return field.empty();
+        });
+}
+
 bool all_digits(const std::string& text) {
     return !text.empty() && std::all_of(text.begin(), text.end(), [](unsigned char c) {
         return c >= '0' && c <= '9';
@@ -807,41 +822,24 @@ ModeledFaultModel build_modeled_fault_model(
     std::map<
         std::tuple<int, std::string, std::string>,
         uint64_t> counts;
-    std::istringstream events_stream(events_text);
-    std::string event_text;
     std::size_t event_index = 0;
-    while (std::getline(events_stream, event_text, ';')) {
-        ++event_index;
-        event_text = trim_copy(event_text);
+    for (const std::string& entry : split_text(events_text, ';')) {
+        const std::string prefix =
+            "FAKEGPU_FAULT_EVENTS event " +
+            std::to_string(++event_index);
+        const std::string event_text = trim_copy(entry);
         if (
             event_text.empty() ||
             event_text.front() == ':' ||
             event_text.back() == ':') {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
-                " must use DEVICE:CODE:SEVERITY[:COUNT]");
+                prefix + " must use DEVICE:CODE:SEVERITY[:COUNT]");
         }
 
-        std::vector<std::string> fields;
-        std::istringstream field_stream(event_text);
-        std::string field;
-        while (std::getline(field_stream, field, ':')) {
-            fields.push_back(trim_copy(field));
-        }
-        if (
-            fields.size() < 3 ||
-            fields.size() > 4 ||
-            std::any_of(
-                fields.begin(),
-                fields.end(),
-                [](const std::string& value) {
-                    return value.empty();
-                })) {
+        const std::vector<std::string> fields = trimmed_fields(event_text);
+        if (!has_three_or_four_fields(fields)) {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
-                " must use DEVICE:CODE:SEVERITY[:COUNT]");
+                prefix + " must use DEVICE:CODE:SEVERITY[:COUNT]");
         }
 
         int device_index = -1;
@@ -850,22 +848,17 @@ ModeledFaultModel build_modeled_fault_model(
                 device_count,
                 device_index)) {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
-                " contains an invalid device index");
+                prefix + " contains an invalid device index");
         }
         const std::string code = uppercase_copy(fields[1]);
         if (!valid_fault_code(code)) {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
-                " contains an invalid code");
+                prefix + " contains an invalid code");
         }
         const std::string severity = lowercase_copy(fields[2]);
         if (modeled_fault_severity_rank(severity) == 0) {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
+                prefix +
                 " severity must be info, warning, error, or critical");
         }
         uint64_t count = 1;
@@ -877,9 +870,7 @@ ModeledFaultModel build_modeled_fault_model(
                 kMaximumModeledFaultCount,
                 count)) {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
-                " count must be between 1 and 1000000000");
+                prefix + " count must be between 1 and 1000000000");
         }
 
         const auto key = std::make_tuple(
@@ -887,11 +878,9 @@ ModeledFaultModel build_modeled_fault_model(
             code,
             severity);
         uint64_t& aggregate = counts[key];
-        aggregate = std::min<uint64_t>(
-            kMaximumModeledFaultCount,
-            aggregate >= kMaximumModeledFaultCount - count
-                ? kMaximumModeledFaultCount
-                : aggregate + count);
+        aggregate = aggregate >= kMaximumModeledFaultCount - count
+            ? kMaximumModeledFaultCount
+            : aggregate + count;
         if (counts.size() > kMaximumModeledFaultTypes) {
             return invalid_fault_model(
                 "FAKEGPU_FAULT_EVENTS exceeds the 128-event-type "
@@ -948,15 +937,12 @@ ModeledMigLayout build_modeled_mig_layout(
     std::vector<std::size_t> allocated_slices(devices.size(), 0);
     std::vector<unsigned int> instance_counts(devices.size(), 0);
 
-    std::istringstream entries(layout_text);
-    std::string entry_text;
     std::size_t entry_index = 0;
-    while (std::getline(entries, entry_text, ';')) {
-        ++entry_index;
-        entry_text = trim_copy(entry_text);
+    for (const std::string& entry : split_text(layout_text, ';')) {
         const std::string prefix =
             "FAKEGPU_MIG_LAYOUT entry " +
-            std::to_string(entry_index);
+            std::to_string(++entry_index);
+        const std::string entry_text = trim_copy(entry);
         if (
             entry_text.empty() ||
             entry_text.front() == ':' ||
@@ -966,21 +952,8 @@ ModeledMigLayout build_modeled_mig_layout(
                 " must use DEVICE:PROFILE:MEMORY_MIB[:COUNT]");
         }
 
-        std::vector<std::string> fields;
-        std::istringstream field_stream(entry_text);
-        std::string field;
-        while (std::getline(field_stream, field, ':')) {
-            fields.push_back(trim_copy(field));
-        }
-        if (
-            fields.size() < 3 ||
-            fields.size() > 4 ||
-            std::any_of(
-                fields.begin(),
-                fields.end(),
-                [](const std::string& value) {
-                    return value.empty();
-                })) {
+        const std::vector<std::string> fields = trimmed_fields(entry_text);
+        if (!has_three_or_four_fields(fields)) {
             return invalid_mig_layout(
                 prefix +
                 " must use DEVICE:PROFILE:MEMORY_MIB[:COUNT]");
@@ -1047,24 +1020,21 @@ ModeledMigLayout build_modeled_mig_layout(
                 " exceeds the 8-instance per-device limit");
         }
         if (
-            slice_count >
-                kMaximumModeledMigSlicesPerDevice ||
             count >
-                (
-                    kMaximumModeledMigSlicesPerDevice -
-                    allocated_slices[parent_index]
-                ) / slice_count) {
+            (
+                kMaximumModeledMigSlicesPerDevice -
+                allocated_slices[parent_index]
+            ) / slice_count) {
             return invalid_mig_layout(
                 prefix +
                 " exceeds the 8-slice per-device limit");
         }
         if (
-            memory_bytes > parent.total_memory ||
             count >
-                (
-                    parent.total_memory -
-                    allocated_memory[parent_index]
-                ) / memory_bytes) {
+            (
+                parent.total_memory -
+                allocated_memory[parent_index]
+            ) / memory_bytes) {
             return invalid_mig_layout(
                 prefix +
                 " allocates more memory than the parent device");
