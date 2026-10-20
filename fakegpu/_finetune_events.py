@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping
-from copy import deepcopy
 import json
 import math
 from pathlib import PurePosixPath
@@ -66,7 +65,7 @@ def _sha256(value: Any, field: str) -> None:
         raise ValueError(f"native event {field} requires a SHA256 digest")
 
 
-def _workload(event: Mapping[str, Any]) -> dict[str, Any]:
+def _workload(event: Mapping[str, Any]) -> None:
     value = event.get("workload")
     if not isinstance(value, Mapping):
         raise ValueError("native event requires a workload mapping")
@@ -154,7 +153,6 @@ def _workload(event: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 "unknown checkpoint inventory requires null total_file_bytes"
             )
-    return deepcopy(dict(value))
 
 
 def summarize_phase_events(events: Any) -> dict[str, Any]:

@@ -127,7 +127,6 @@ def describe_root_events(events: list[Mapping[str, Any]]) -> list[dict[str, Any]
             phase = "final"
         else:
             phase = "repeated" if key in seen else "first"
-        if phase in {"first", "repeated"}:
             seen.add(key)
         descriptor["phase"] = phase
         described.append(

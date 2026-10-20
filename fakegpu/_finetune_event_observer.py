@@ -12,9 +12,6 @@ import time
 from ._finetune_batches import describe_batch
 
 
-SCHEMA_VERSION = "fakegpu.finetune_events.v1"
-
-
 def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -183,18 +180,17 @@ class NativeEventObserver:
                 ]
         # Inspect only top-level files in paths actually passed to save methods.
         # A final model directory may also contain old checkpoint subdirectories.
-        roots = directories
         workload = event["workload"]
-        workload["output_directories"] = [str(path) for path in roots]
-        if not roots or any(not path.is_dir() for path in roots):
+        workload["output_directories"] = [str(path) for path in directories]
+        if not directories or any(not path.is_dir() for path in directories):
             return
         files = []
         try:
-            for index, root in enumerate(roots):
+            for index, root in enumerate(directories):
                 for path in sorted(root.iterdir()):
                     if path.is_file():
                         relative = path.relative_to(root).as_posix()
-                        if len(roots) > 1:
+                        if len(directories) > 1:
                             relative = f"output_{index + 1}/{relative}"
                         files.append({"path": relative, "bytes": path.stat().st_size})
         except OSError:
