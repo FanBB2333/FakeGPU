@@ -14,7 +14,6 @@ import threading
 import time
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +56,7 @@ from ._smi_state import (
     _synthetic_uuid,
     build_inventory,
 )
+from ._version import __version__
 
 
 REPORT_SCHEMA_VERSION = "fakegpu.smi_report.v1"
@@ -75,21 +75,20 @@ def configured_state_path() -> Path | None:
     return None
 
 
-def _configured_size_limit(
-    name: str,
+def _size_limit(
+    value: int | None,
+    env_name: str,
     *,
     default: int,
     minimum: int,
     maximum: int,
 ) -> int:
-    value = os.environ.get(name)
     if value is None:
-        return default
-    try:
-        parsed = int(value)
-    except ValueError:
-        return default
-    return min(maximum, max(minimum, parsed))
+        try:
+            value = int(os.environ.get(env_name, default))
+        except ValueError:
+            value = default
+    return min(maximum, max(minimum, int(value)))
 
 
 class SmiStatePublisher:
@@ -109,31 +108,19 @@ class SmiStatePublisher:
         self.snapshot = snapshot
         self.interval_seconds = max(0.05, float(interval_seconds))
         self.runtime_overhead_bytes = max(0, int(runtime_overhead_bytes))
-        self.detail_limit = (
-            _configured_size_limit(
-                "FAKEGPU_SMI_DETAIL_LIMIT",
-                default=DEFAULT_PUBLISHER_DETAIL_LIMIT,
-                minimum=0,
-                maximum=MAXIMUM_PUBLISHER_DETAIL_LIMIT,
-            )
-            if detail_limit is None
-            else min(
-                MAXIMUM_PUBLISHER_DETAIL_LIMIT,
-                max(0, int(detail_limit)),
-            )
+        self.detail_limit = _size_limit(
+            detail_limit,
+            "FAKEGPU_SMI_DETAIL_LIMIT",
+            default=DEFAULT_PUBLISHER_DETAIL_LIMIT,
+            minimum=0,
+            maximum=MAXIMUM_PUBLISHER_DETAIL_LIMIT,
         )
-        self.max_state_bytes = (
-            _configured_size_limit(
-                "FAKEGPU_SMI_MAX_STATE_BYTES",
-                default=DEFAULT_MAX_STATE_BYTES,
-                minimum=MINIMUM_MAX_STATE_BYTES,
-                maximum=MAXIMUM_MAX_STATE_BYTES,
-            )
-            if max_state_bytes is None
-            else min(
-                MAXIMUM_MAX_STATE_BYTES,
-                max(MINIMUM_MAX_STATE_BYTES, int(max_state_bytes)),
-            )
+        self.max_state_bytes = _size_limit(
+            max_state_bytes,
+            "FAKEGPU_SMI_MAX_STATE_BYTES",
+            default=DEFAULT_MAX_STATE_BYTES,
+            minimum=MINIMUM_MAX_STATE_BYTES,
+            maximum=MAXIMUM_MAX_STATE_BYTES,
         )
         self._software = _software_metadata()
         self._catalogs = _catalog_metadata()
@@ -243,28 +230,21 @@ class SmiStatePublisher:
         except Exception as exc:
             self._successful_writes -= 1
             self._failed_writes += 1
-            self._last_duration_us = max(
-                0,
-                (time.perf_counter_ns() - started_ns) // 1000,
-            )
+            self._last_error = type(exc).__name__
+            raise
+        else:
+            self._last_serialized_bytes = serialized_bytes
+            self._last_error = ""
+            self._warned_publish_error = None
+            return state
+        finally:
+            self._last_duration_us = (
+                time.perf_counter_ns() - started_ns
+            ) // 1000
             self._max_duration_us = max(
                 self._max_duration_us,
                 self._last_duration_us,
             )
-            self._last_error = type(exc).__name__
-            raise
-        self._last_duration_us = max(
-            0,
-            (time.perf_counter_ns() - started_ns) // 1000,
-        )
-        self._max_duration_us = max(
-            self._max_duration_us,
-            self._last_duration_us,
-        )
-        self._last_serialized_bytes = serialized_bytes
-        self._last_error = ""
-        self._warned_publish_error = None
-        return state
 
     def _warn_publish_failure(
         self,
@@ -292,131 +272,13 @@ class SmiStatePublisher:
         hostname = socket.gethostname()
         devices: list[dict[str, Any]] = []
         for item in raw.get("devices") or []:
-            if not isinstance(item, Mapping):
-                continue
-            current = _nonnegative_int(item.get("current_memory"))
-            peak = max(
-                current,
-                _nonnegative_int(
-                    item.get("peak_memory"),
-                    default=current,
-                ),
-            )
-            reserved = max(
-                current,
-                _nonnegative_int(
-                    item.get("current_reserved_memory"),
-                    default=current,
-                ),
-            )
-            reserved_peak = max(
-                reserved,
-                peak,
-                _nonnegative_int(
-                    item.get("peak_reserved_memory"),
-                    default=reserved,
-                ),
-            )
-            total = _nonnegative_int(item.get("total_memory"))
-            reported = reserved + self.runtime_overhead_bytes
-            reported_peak = reserved_peak + self.runtime_overhead_bytes
-            if total:
-                reported = min(total, reported)
-                reported_peak = min(total, reported_peak)
-            index = _nonnegative_int(
-                item.get("index"),
-                default=len(devices),
-            )
-            profile = _profile_metadata(item)
-            free = max(0, total - reported) if total else None
-            headroom = (
-                max(0, total - reported_peak) if total else None
-            )
-            largest_allocations = _mapping_list(
-                item.get("largest_allocations")
-            )
-            largest_allocations_total = len(largest_allocations)
-            largest_allocations = largest_allocations[
-                : self.detail_limit
-            ]
             devices.append(
-                {
-                    "index": index,
-                    "name": str(item.get("name", "Fake NVIDIA GPU")),
-                    "profile_id": str(item.get("profile_id", "")),
-                    "profile": profile,
-                    "uuid": _synthetic_uuid(
-                        hostname,
-                        index,
-                        str(item.get("profile_id", "")),
-                    ),
-                    "pci_bus_id": _synthetic_pci_bus_id(index),
-                    "identity_source": "synthetic",
-                    "architecture": profile.get("architecture"),
-                    "compute_capability": profile.get(
-                        "compute_capability"
-                    ),
-                    "compiler_target": profile.get("compiler_target"),
-                    "total_memory": total,
-                    "free_memory": free,
-                    "activity": dict(item.get("activity") or {}),
-                    **(
-                        {"transfer": item["transfer"]}
-                        if isinstance(item.get("transfer"), Mapping)
-                        else {}
-                    ),
-                    "tracked_memory": current,
-                    "peak_tracked_memory": peak,
-                    "reserved_memory": reserved,
-                    "peak_reserved_memory": reserved_peak,
-                    "inactive_split_bytes": _nonnegative_int(
-                        item.get("inactive_split_bytes")
-                    ),
-                    "segment_count": _nonnegative_int(
-                        item.get("segment_count")
-                    ),
-                    "reported_memory_source": "reserved",
-                    "runtime_overhead_bytes": self.runtime_overhead_bytes,
-                    "reported_memory": reported,
-                    "reported_peak_memory": reported_peak,
-                    "headroom_bytes": headroom,
-                    "headroom_percent": (
-                        round(headroom / total * 100, 3)
-                        if total and headroom is not None
-                        else None
-                    ),
-                    "allocation_count": _nonnegative_int(
-                        item.get("allocation_count")
-                    ),
-                    "free_count": _nonnegative_int(
-                        item.get("free_count")
-                    ),
-                    "allocator_model": str(
-                        item.get("allocator_model")
-                        or raw.get("allocator_model")
-                        or "unknown"
-                    ),
-                    "current_bytes_by_category": _integer_mapping(
-                        item.get("current_bytes_by_category")
-                    ),
-                    "peak_by_stage": _integer_mapping(
-                        item.get("peak_by_stage")
-                    ),
-                    "reserved_peak_by_stage": _integer_mapping(
-                        item.get("reserved_peak_by_stage")
-                    ),
-                    "largest_allocations": largest_allocations,
-                    "largest_allocations_total": (
-                        largest_allocations_total
-                    ),
-                    "largest_allocations_retained": len(
-                        largest_allocations
-                    ),
-                }
+                self._device_state(item, raw, hostname, len(devices))
             )
+        dispatch_tracking = raw.get("dispatch_tracking")
         dispatch_tracking = (
-            dict(raw.get("dispatch_tracking") or {})
-            if isinstance(raw.get("dispatch_tracking"), Mapping)
+            dict(dispatch_tracking)
+            if isinstance(dispatch_tracking, Mapping)
             else {}
         )
         topology = _modeled_device_topology(devices)
@@ -433,7 +295,7 @@ class SmiStatePublisher:
             "process_name": _process_name(),
             "runtime": "fakecuda",
             "fakegpu": {
-                "version": _fakegpu_version(),
+                "version": __version__,
                 "runtime": "fakecuda",
                 "backend": str(
                     raw.get("runtime_backend") or "unknown"
@@ -482,7 +344,7 @@ class SmiStatePublisher:
                     "max_state_bytes": self.max_state_bytes,
                 },
             },
-            "running": bool(running),
+            "running": running,
             "tracking_confidence": raw.get(
                 "tracking_confidence", "C2_torch_tensor_lifetime"
             ),
@@ -508,6 +370,129 @@ class SmiStatePublisher:
         self._last_state = state
         return state, serialized_bytes
 
+    def _device_state(
+        self,
+        item: Mapping[str, Any],
+        raw: Mapping[str, Any],
+        hostname: str,
+        index_default: int,
+    ) -> dict[str, Any]:
+        current = _nonnegative_int(item.get("current_memory"))
+        peak = max(
+            current,
+            _nonnegative_int(
+                item.get("peak_memory"),
+                default=current,
+            ),
+        )
+        reserved = max(
+            current,
+            _nonnegative_int(
+                item.get("current_reserved_memory"),
+                default=current,
+            ),
+        )
+        reserved_peak = max(
+            reserved,
+            peak,
+            _nonnegative_int(
+                item.get("peak_reserved_memory"),
+                default=reserved,
+            ),
+        )
+        total = _nonnegative_int(item.get("total_memory"))
+        reported = reserved + self.runtime_overhead_bytes
+        reported_peak = reserved_peak + self.runtime_overhead_bytes
+        if total:
+            reported = min(total, reported)
+            reported_peak = min(total, reported_peak)
+        index = _nonnegative_int(
+            item.get("index"),
+            default=index_default,
+        )
+        profile_id = str(item.get("profile_id", ""))
+        profile = _profile_metadata(item)
+        free = max(0, total - reported) if total else None
+        headroom = (
+            max(0, total - reported_peak) if total else None
+        )
+        largest_allocations = _mapping_list(
+            item.get("largest_allocations")
+        )
+        largest_allocations_total = len(largest_allocations)
+        largest_allocations = largest_allocations[
+            : self.detail_limit
+        ]
+        return {
+            "index": index,
+            "name": str(item.get("name", "Fake NVIDIA GPU")),
+            "profile_id": profile_id,
+            "profile": profile,
+            "uuid": _synthetic_uuid(hostname, index, profile_id),
+            "pci_bus_id": _synthetic_pci_bus_id(index),
+            "identity_source": "synthetic",
+            "architecture": profile.get("architecture"),
+            "compute_capability": profile.get(
+                "compute_capability"
+            ),
+            "compiler_target": profile.get("compiler_target"),
+            "total_memory": total,
+            "free_memory": free,
+            "activity": dict(item.get("activity") or {}),
+            **(
+                {"transfer": item["transfer"]}
+                if isinstance(item.get("transfer"), Mapping)
+                else {}
+            ),
+            "tracked_memory": current,
+            "peak_tracked_memory": peak,
+            "reserved_memory": reserved,
+            "peak_reserved_memory": reserved_peak,
+            "inactive_split_bytes": _nonnegative_int(
+                item.get("inactive_split_bytes")
+            ),
+            "segment_count": _nonnegative_int(
+                item.get("segment_count")
+            ),
+            "reported_memory_source": "reserved",
+            "runtime_overhead_bytes": self.runtime_overhead_bytes,
+            "reported_memory": reported,
+            "reported_peak_memory": reported_peak,
+            "headroom_bytes": headroom,
+            "headroom_percent": (
+                round(headroom / total * 100, 3)
+                if total
+                else None
+            ),
+            "allocation_count": _nonnegative_int(
+                item.get("allocation_count")
+            ),
+            "free_count": _nonnegative_int(
+                item.get("free_count")
+            ),
+            "allocator_model": str(
+                item.get("allocator_model")
+                or raw.get("allocator_model")
+                or "unknown"
+            ),
+            "current_bytes_by_category": _integer_mapping(
+                item.get("current_bytes_by_category")
+            ),
+            "peak_by_stage": _integer_mapping(
+                item.get("peak_by_stage")
+            ),
+            "reserved_peak_by_stage": _integer_mapping(
+                item.get("reserved_peak_by_stage")
+            ),
+            "largest_allocations": largest_allocations,
+            "largest_allocations_total": (
+                largest_allocations_total
+            ),
+            "largest_allocations_retained": len(
+                largest_allocations
+            ),
+        }
+
     def _run(self) -> None:
         while not self._stop.wait(self.interval_seconds):
             try:
@@ -517,7 +502,6 @@ class SmiStatePublisher:
                     exc,
                     context="background state publish",
                 )
-                continue
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -624,7 +608,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"FakeGPU-SMI {_fakegpu_version()}",
+        version=f"FakeGPU-SMI {__version__}",
     )
     parser.add_argument(
         "--help-query-gpu",
@@ -927,29 +911,13 @@ def _render_query_help(
     return "\n".join(lines)
 
 
-@lru_cache(maxsize=1)
-def _fakegpu_version() -> str:
-    from ._version import __version__
-
-    return __version__
-
-
 def _software_metadata() -> dict[str, Any]:
     torch_module = sys.modules.get("torch")
     torch_version = (
-        str(getattr(torch_module, "__version__", ""))
-        if torch_module is not None
-        else None
-    )
-    torch_version_object = (
-        getattr(torch_module, "version", None)
-        if torch_module is not None
-        else None
+        str(torch_module.__version__) if torch_module is not None else None
     )
     torch_cuda = (
-        getattr(torch_version_object, "cuda", None)
-        if torch_version_object is not None
-        else None
+        torch_module.version.cuda if torch_module is not None else None
     )
     configured_cuda = os.environ.get("FAKEGPU_CUDA_VERSION")
     cuda_version = str(configured_cuda or torch_cuda or "12.1")
