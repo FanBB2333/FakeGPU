@@ -24,8 +24,6 @@ from ._finetune_allocator import capture_memory_allocator
 
 
 def _update_ema(shadows, parameters, decay, *, torch):
-    if len(shadows) != len(parameters):
-        raise ValueError("EMA shadows must match every trainable parameter")
     with torch.no_grad():
         for shadow, parameter in zip(shadows, parameters):
             shadow.lerp_(parameter, 1 - decay)
@@ -37,8 +35,6 @@ def _save_ema(
     from safetensors import safe_open
     from safetensors.torch import save_file
 
-    if len(names) != len(shadows):
-        raise ValueError("EMA export requires all named shadows")
     directory.mkdir()
     state = {name: value.cpu() for name, value in zip(names, shadows)}
     if method == "full":
@@ -72,6 +68,23 @@ def _save_ema(
             "parameters": names,
         },
     )
+
+
+def _microbatch_sha256(batch):
+    digest = hashlib.sha256()
+    for key, tensor in sorted(batch.items()):
+        header = json.dumps(
+            {
+                "name": key,
+                "shape": list(tensor.shape),
+                "dtype": str(tensor.dtype),
+            },
+            sort_keys=True,
+        ).encode()
+        digest.update(len(header).to_bytes(8, "little"))
+        digest.update(header)
+        digest.update(tensor.numpy().tobytes())
+    return digest.hexdigest()
 
 
 def _backward_window(model, scheduler, batches, *, torch, device, autocast=True):
@@ -302,20 +315,7 @@ def run_diffusion_training(plan, *, output_dir, cache_regime="uncontrolled"):
                     key: source.get_slice(key)[indices[0] : indices[-1] + 1]
                     for key in keys
                 }
-                digest = hashlib.sha256()
-                for key, tensor in sorted(batch.items()):
-                    header = json.dumps(
-                        {
-                            "name": key,
-                            "shape": list(tensor.shape),
-                            "dtype": str(tensor.dtype),
-                        },
-                        sort_keys=True,
-                    ).encode()
-                    digest.update(len(header).to_bytes(8, "little"))
-                    digest.update(header)
-                    digest.update(tensor.numpy().tobytes())
-                hashes.append(digest.hexdigest())
+                hashes.append(_microbatch_sha256(batch))
                 batches.append(batch)
             loss = _backward_window(
                 model, scheduler, batches, torch=torch, device=device
@@ -374,13 +374,8 @@ def run_diffusion_training(plan, *, output_dir, cache_regime="uncontrolled"):
         )
     torch.cuda.synchronize()
     peaks = {
-        field: int(
-            getattr(
-                torch.cuda,
-                "max_memory_" + field.removeprefix("peak_").removesuffix("_bytes"),
-            )()
-        )
-        for field in ("peak_allocated_bytes", "peak_reserved_bytes")
+        "peak_allocated_bytes": int(torch.cuda.max_memory_allocated()),
+        "peak_reserved_bytes": int(torch.cuda.max_memory_reserved()),
     }
     files = [
         {**_file(p), "path": str(p.relative_to(destination))}
