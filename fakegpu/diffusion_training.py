@@ -184,12 +184,15 @@ def plan_diffusion_training(
     if config.get("addition_embed_type") == "text_time":
         pooled = header["pooled_text_embeds"]["shape"]
         time_ids = header["time_ids"]["shape"]
+        time_dim = config.get("addition_time_embed_dim")
+        projection = config.get("projection_class_embeddings_input_dim")
         if (
             len(pooled) != 2
             or pooled[0] != count
             or time_ids != [count, 6]
-            or pooled[1] + 6 * config["addition_time_embed_dim"]
-            != config["projection_class_embeddings_input_dim"]
+            or time_dim is None
+            or projection is None
+            or pooled[1] + 6 * time_dim != projection
         ):
             raise ValueError(
                 "text_time pooled embeddings and six time IDs must match the UNet projection"

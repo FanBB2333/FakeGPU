@@ -21,6 +21,7 @@ from fakegpu.diffusion_training import (
     training_windows,
     validate_training_plan,
 )
+from fakegpu.diffusion_training_cli import plan_main
 from fakegpu.structured_io import write_json, load_mapping
 from fakegpu._finetune_cache import capture_cache_regime
 from fakegpu._finetune_allocator import ALLOCATOR_VARIABLES
@@ -311,6 +312,33 @@ def test_resealed_invalid_plans_are_rejected(inputs, field, value):
 def test_ema_decay_is_an_explicit_validated_policy(inputs, decay):
     with pytest.raises(ValueError, match="ema_decay"):
         plan(inputs, ema_decay=decay)
+
+
+def test_text_time_config_without_time_embedding_width_is_a_usage_error(
+    inputs, capsys
+):
+    model, data = inputs
+    config_path = model / "unet/config.json"
+    config = json.loads(config_path.read_text())
+    config.update(
+        addition_embed_type="text_time", projection_class_embeddings_input_dim=10
+    )
+    config_path.write_text(json.dumps(config))
+    safefile(
+        data,
+        {
+            "latents": ("F32", [5, 4, 8, 8]),
+            "noise": ("F32", [5, 4, 8, 8]),
+            "timesteps": ("I64", [5]),
+            "encoder_hidden_states": ("F32", [5, 3, 4]),
+            "pooled_text_embeds": ("F32", [5, 4]),
+            "time_ids": ("F32", [5, 6]),
+        },
+    )
+    with pytest.raises(SystemExit) as error:
+        plan_main(["--model-dir", str(model), "--dataset", str(data), "--epochs", "1"])
+    assert error.value.code == 2
+    assert "six time IDs must match the UNet projection" in capsys.readouterr().err
 
 
 def test_stdlib_cli_budgets_compressed_evidence_after_input_files_are_removed(
