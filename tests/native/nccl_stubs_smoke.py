@@ -9,13 +9,20 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUILD_DIR = Path(os.environ.get("FAKEGPU_BUILD_DIR", REPO_ROOT / "build"))
+COORDINATOR_BIN = BUILD_DIR / "fakegpu-coordinator"
 LIBNCCL = BUILD_DIR / ("libnccl.dylib" if sys.platform == "darwin" else "libnccl.so")
 NCCL_SYSTEM_ERROR = 2
+SPLIT_WORLD = 3
+
+
+class UniqueId(ctypes.Structure):
+    _fields_ = [("internal", ctypes.c_char * 128)]
 
 
 def load_nccl() -> ctypes.CDLL:
@@ -53,13 +60,71 @@ def check_partial_real_nccl() -> None:
             raise AssertionError("a real NCCL library with missing symbols was treated as loaded")
 
 
+def child_split_rank(rank: int) -> int:
+    lib = load_nccl()
+    lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
+    comm = ctypes.c_void_p()
+    unique_id = UniqueId(internal=os.environ["NCCL_SMOKE_UNIQUE_ID"].encode())
+    rc = lib.ncclCommInitRank(ctypes.byref(comm), SPLIT_WORLD, unique_id, rank)
+    if rc != 0:
+        print(f"rank {rank}: ncclCommInitRank returned {rc}", file=sys.stderr)
+        return 1
+    if rank != 0:
+        time.sleep(1.0)
+        return 0
+    newcomm = ctypes.c_void_p()
+    rc = lib.ncclCommSplit(comm, 0, 0, ctypes.byref(newcomm), None)
+    if rc != NCCL_SYSTEM_ERROR:
+        message = lib.ncclGetLastError(comm).decode()
+        print(f"ncclCommSplit without peers returned {rc} ({message})", file=sys.stderr)
+        return 1
+    return 0
+
+
+def check_split_timeout() -> None:
+    with tempfile.TemporaryDirectory(prefix="fgpu-nccl-", dir="/tmp") as tmpdir:
+        socket_path = os.path.join(tmpdir, "coordinator.sock")
+        env = dict(os.environ, FAKEGPU_CLUSTER_REPORT_PATH=os.path.join(tmpdir, "cluster-report.json"))
+        coordinator = subprocess.Popen(
+            [str(COORDINATOR_BIN), "--transport", "unix", "--address", socket_path],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            deadline = time.monotonic() + 5.0
+            while not os.path.exists(socket_path):
+                if time.monotonic() > deadline or coordinator.poll() is not None:
+                    raise AssertionError("coordinator did not create its socket")
+                time.sleep(0.05)
+            env.update(
+                FAKEGPU_DIST_MODE="simulate",
+                FAKEGPU_COORDINATOR_TRANSPORT="unix",
+                FAKEGPU_COORDINATOR_ADDR=socket_path,
+                FAKEGPU_COORDINATOR_TIMEOUT_MS="300",
+                NCCL_SMOKE_UNIQUE_ID=f"nccl-smoke-split-{os.getpid()}",
+            )
+            ranks = [
+                subprocess.Popen([sys.executable, __file__, "--split-rank", str(rank)], env=env)
+                for rank in range(SPLIT_WORLD)
+            ]
+            if any([rank.wait(timeout=30) != 0 for rank in ranks]):
+                raise AssertionError("ncclCommSplit timeout was not reported as ncclSystemError")
+        finally:
+            coordinator.kill()
+            coordinator.wait()
+
+
 def main() -> int:
     if sys.argv[1:] == ["--partial-loader"]:
         return child_partial_loader()
+    if sys.argv[1:2] == ["--split-rank"]:
+        return child_split_rank(int(sys.argv[2]))
     if not LIBNCCL.exists():
         print(f"missing NCCL library: {LIBNCCL}", file=sys.stderr)
         return 2
     check_partial_real_nccl()
+    check_split_timeout()
     print("nccl stubs smoke test passed")
     return 0
 

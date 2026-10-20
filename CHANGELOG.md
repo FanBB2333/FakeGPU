@@ -86,6 +86,10 @@
 - NCCL passthrough no longer treats a real NCCL library with missing
   required symbols as loaded: every later call now fails with
   `ncclSystemError` instead of reaching the partially resolved library.
+- `ncclCommSplit` now reports a coordinator timeout as `ncclSystemError` and
+  duplicate split ranks or split timeout mismatches as `ncclInvalidUsage`,
+  matching `ncclCommShrink`, instead of `ncclInternalError`. Ranks that
+  disagree on explicit all-to-all splits also get `ncclInvalidUsage`.
 
 ## v1.6.0 - 2026-10-17
 

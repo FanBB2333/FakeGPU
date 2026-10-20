@@ -671,6 +671,9 @@ ncclResult_t map_response_error(const std::string& error_code) {
         error_code == "shrink_excluded_ranks_mismatch" ||
         error_code == "shrink_flags_mismatch" ||
         error_code == "shrink_timeout_mismatch" ||
+        error_code == "duplicate_split_rank" ||
+        error_code == "split_timeout_mismatch" ||
+        error_code == "alltoall_split_mode_mismatch" ||
         error_code == "empty_group" ||
         error_code == "unsupported_reduce_op" ||
         error_code == "unsupported_dtype" ||
@@ -683,6 +686,7 @@ ncclResult_t map_response_error(const std::string& error_code) {
         error_code == "timeout_waiting_for_barrier" ||
         error_code == "timeout_waiting_for_group" ||
         error_code == "timeout_waiting_for_shrink" ||
+        error_code == "timeout_waiting_for_split" ||
         error_code == "staging_open_failed") {
         return ncclSystemError;
     }
