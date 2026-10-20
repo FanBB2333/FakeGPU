@@ -30,31 +30,6 @@ std::string trim_copy(const std::string& value) {
     return value.substr(begin, end - begin + 1);
 }
 
-bool parse_device_index(
-    const std::string& value,
-    std::size_t device_count,
-    int& result) {
-    const std::string trimmed = trim_copy(value);
-    if (trimmed.empty()) {
-        return false;
-    }
-    errno = 0;
-    char* end = nullptr;
-    const long parsed = std::strtol(trimmed.c_str(), &end, 10);
-    if (
-        errno != 0 ||
-        end == trimmed.c_str() ||
-        !end ||
-        *end != '\0' ||
-        parsed < 0 ||
-        static_cast<unsigned long>(parsed) >= device_count ||
-        parsed > std::numeric_limits<int>::max()) {
-        return false;
-    }
-    result = static_cast<int>(parsed);
-    return true;
-}
-
 bool parse_bandwidth(double& result) {
     const char* value = std::getenv("FAKEGPU_NVLINK_BANDWIDTH_GBPS");
     if (!value || !*value) {
@@ -121,6 +96,48 @@ bool all_digits(const std::string& text) {
     return !text.empty() && std::all_of(text.begin(), text.end(), [](unsigned char c) {
         return c >= '0' && c <= '9';
     });
+}
+
+// Mirrors the Python model: surrounding whitespace, an optional '+', then
+// ASCII digits only.
+bool parse_decimal(
+    const std::string& value,
+    uint64_t minimum,
+    uint64_t maximum,
+    uint64_t& result) {
+    const char* const whitespace = " \t\r\n\v\f";
+    const std::size_t begin = value.find_first_not_of(whitespace);
+    if (begin == std::string::npos) {
+        return false;
+    }
+    std::string digits =
+        value.substr(begin, value.find_last_not_of(whitespace) - begin + 1);
+    if (digits.front() == '+') {
+        digits.erase(0, 1);
+    }
+    if (!all_digits(digits)) {
+        return false;
+    }
+    errno = 0;
+    const unsigned long long parsed = std::strtoull(digits.c_str(), nullptr, 10);
+    if (errno == ERANGE || parsed < minimum || parsed > maximum) {
+        return false;
+    }
+    result = static_cast<uint64_t>(parsed);
+    return true;
+}
+
+bool parse_device_index(
+    const std::string& value,
+    std::size_t device_count,
+    int& result) {
+    uint64_t parsed = 0;
+    if (!parse_decimal(value, 0, std::numeric_limits<uint64_t>::max(), parsed) ||
+        parsed >= device_count) {
+        return false;
+    }
+    result = static_cast<int>(parsed);
+    return true;
 }
 
 unsigned int parse_unsigned(const std::string& text, const std::string& what) {
@@ -404,28 +421,6 @@ bool valid_fault_code(const std::string& value) {
         });
 }
 
-bool parse_fault_count(const std::string& value, uint64_t& result) {
-    const std::string trimmed = trim_copy(value);
-    if (trimmed.empty()) {
-        return false;
-    }
-    errno = 0;
-    char* end = nullptr;
-    const unsigned long long parsed =
-        std::strtoull(trimmed.c_str(), &end, 10);
-    if (
-        errno != 0 ||
-        end == trimmed.c_str() ||
-        !end ||
-        *end != '\0' ||
-        parsed == 0 ||
-        parsed > kMaximumModeledFaultCount) {
-        return false;
-    }
-    result = static_cast<uint64_t>(parsed);
-    return true;
-}
-
 ModeledFaultModel invalid_fault_model(std::string error) {
     ModeledFaultModel model;
     model.source = "modeled_environment_invalid";
@@ -442,31 +437,6 @@ ModeledMigLayout invalid_mig_layout(std::string error) {
     layout.valid = false;
     layout.error = std::move(error);
     return layout;
-}
-
-bool parse_bounded_positive_integer(
-    const std::string& value,
-    uint64_t maximum,
-    uint64_t& result) {
-    const std::string trimmed = trim_copy(value);
-    if (trimmed.empty() || trimmed.front() == '-') {
-        return false;
-    }
-    errno = 0;
-    char* end = nullptr;
-    const unsigned long long parsed =
-        std::strtoull(trimmed.c_str(), &end, 10);
-    if (
-        errno != 0 ||
-        end == trimmed.c_str() ||
-        !end ||
-        *end != '\0' ||
-        parsed == 0 ||
-        parsed > maximum) {
-        return false;
-    }
-    result = static_cast<uint64_t>(parsed);
-    return true;
 }
 
 bool parse_mig_profile(
@@ -495,8 +465,9 @@ bool parse_mig_profile(
     }
     uint64_t parsed_slices = 0;
     if (
-        !parse_bounded_positive_integer(
+        !parse_decimal(
             profile.substr(0, separator),
+            1,
             kMaximumModeledMigSlicesPerDevice,
             parsed_slices)) {
         return false;
@@ -881,7 +852,11 @@ ModeledFaultModel build_modeled_fault_model(
         uint64_t count = 1;
         if (
             fields.size() == 4 &&
-            !parse_fault_count(fields[3], count)) {
+            !parse_decimal(
+                fields[3],
+                1,
+                kMaximumModeledFaultCount,
+                count)) {
             return invalid_fault_model(
                 "FAKEGPU_FAULT_EVENTS event " +
                 std::to_string(event_index) +
@@ -1018,8 +993,9 @@ ModeledMigLayout build_modeled_mig_layout(
         const uint64_t maximum_mib =
             parent.total_memory / kMebibyte;
         uint64_t memory_mib = 0;
-        if (!parse_bounded_positive_integer(
+        if (!parse_decimal(
                 fields[2],
+                1,
                 maximum_mib,
                 memory_mib)) {
             return invalid_mig_layout(
@@ -1032,8 +1008,9 @@ ModeledMigLayout build_modeled_mig_layout(
         uint64_t count = 1;
         if (
             fields.size() == 4 &&
-            !parse_bounded_positive_integer(
+            !parse_decimal(
                 fields[3],
+                1,
                 kMaximumModeledMigInstancesPerDevice,
                 count)) {
             return invalid_mig_layout(

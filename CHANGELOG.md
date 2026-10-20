@@ -121,6 +121,10 @@
 - The report's `gemm_by_dtype` breakdown now includes
   `cublasGemmStridedBatchedEx`, `cublasGemmBatchedEx` and `cublasSgemmEx`
   calls, not only `cublasGemmEx` and `cublasLtMatmul`.
+- Native `FAKEGPU_FAULT_EVENTS`, `FAKEGPU_MIG_LAYOUT` and
+  `FAKEGPU_NVLINK_GROUPS` integers with a `-` sign (such as device `-0` or
+  count `-18446744073709551615`) are rejected, as in the Python model,
+  instead of being accepted as 0 or wrapped values.
 
 ## v1.6.0 - 2026-10-17
 

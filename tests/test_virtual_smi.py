@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import fakegpu.smi as smi_module
+from fakegpu import library_dir
 from fakegpu.profile_catalog import load_profiles
 from fakegpu.smi import (
     SCHEMA_VERSION,
@@ -656,6 +657,101 @@ def test_virtual_smi_events_ignore_non_object_publisher_health(
     assert main(["events", "--state", str(path)]) == 0
     rendered = capsys.readouterr().out
     assert "No modeled fault or runtime reliability events found." in rendered
+
+
+def _native_smi_state(
+    tmp_path: Path,
+    environment: dict[str, str],
+    *,
+    hold_seconds: float = 0.0,
+) -> dict:
+    try:
+        lib_dir = library_dir()
+    except FileNotFoundError:
+        pytest.skip("native libraries are not built")
+    suffix = ".dylib" if sys.platform == "darwin" else ".so.1"
+    path = tmp_path / "native-state.json"
+    code = (
+        "import ctypes, sys, time\n"
+        "nvml = ctypes.CDLL(sys.argv[1])\n"
+        "assert nvml.nvmlInit_v2() == 0\n"
+        "time.sleep(float(sys.argv[2]))\n"
+        "nvml.nvmlShutdown()\n"
+    )
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("FAKEGPU_")
+    }
+    env.update(
+        FAKEGPU_DEVICE_COUNT="2",
+        FAKEGPU_SMI_STATE_PATH=str(path),
+        FAKEGPU_REPORT_PATH=str(tmp_path / "native-report.json"),
+        FAKEGPU_TERMINAL_REPORT="0",
+        **environment,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(lib_dir / f"libnvidia-ml{suffix}"),
+            str(hold_seconds),
+        ],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        timeout=60,
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _python_smi_state(
+    tmp_path: Path,
+    monkeypatch,
+    environment: dict[str, str],
+) -> dict:
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    return SmiStatePublisher(
+        tmp_path / "python-state.json",
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "profile_id": "a100",
+                    "total_memory": 80 * 2**30,
+                }
+                for index in range(2)
+            ]
+        },
+    ).publish_once(running=True)
+
+
+@pytest.mark.parametrize(
+    ("section", "environment"),
+    [
+        (
+            "faults",
+            {"FAKEGPU_FAULT_EVENTS": "0:XID_79:critical:-18446744073709551615"},
+        ),
+        ("faults", {"FAKEGPU_FAULT_EVENTS": "-0:XID_79:critical"}),
+        ("mig", {"FAKEGPU_MIG_LAYOUT": "-0:1g.10gb:10240"}),
+        ("topology", {"FAKEGPU_NVLINK_GROUPS": "-0,1"}),
+    ],
+)
+def test_native_smi_environment_errors_match_python(
+    tmp_path: Path,
+    monkeypatch,
+    section: str,
+    environment: dict[str, str],
+) -> None:
+    native = _native_smi_state(tmp_path, environment)[section]
+    python = _python_smi_state(tmp_path, monkeypatch, environment)[section]
+
+    assert python["valid"] is False
+    assert native["valid"] is False
+    assert native["error"] == python["error"]
 
 
 def test_virtual_smi_process_query_filters_and_marks_stale_state(
