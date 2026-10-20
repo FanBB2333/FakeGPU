@@ -58,18 +58,17 @@ bool endCapture(cudaStream_t stream, unsigned long long& capture_id) {
     return true;
 }
 
-bool isCaptureActive(cudaStream_t stream) {
-    std::lock_guard<std::mutex> lock(g_capture_mutex);
-    auto it = g_capture_states.find(stream);
-    return it != g_capture_states.end() && it->second.active;
-}
-
 void clearCaptureState(cudaStream_t stream) {
     std::lock_guard<std::mutex> lock(g_capture_mutex);
     g_capture_states.erase(stream);
 }
 
 }  // namespace
+
+static cudaError_t setLastError(cudaError_t error) {
+    last_error = error;
+    return error;
+}
 
 // Helper: Convert CUresult to cudaError_t
 static cudaError_t convertDriverError(CUresult result) {
@@ -114,6 +113,90 @@ static bool rejectUnsupportedApi(
     return false;
 }
 
+// Stores a malloc'ed opaque handle for simulated graphs, graph nodes, execs and pools.
+template <class T>
+static cudaError_t newPlaceholder(T* out) {
+    if (!out) return setLastError(cudaErrorInvalidValue);
+    *out = (T)malloc(sizeof(void*));
+    return setLastError(cudaSuccess);
+}
+
+struct ErrorDescription {
+    cudaError_t code;
+    const char* name;
+    const char* text;
+};
+
+static const ErrorDescription& describeError(cudaError_t error) {
+    static const ErrorDescription kErrors[] = {
+        {cudaSuccess, "cudaSuccess", "no error"},
+        {cudaErrorInvalidValue, "cudaErrorInvalidValue", "invalid argument"},
+        {cudaErrorMemoryAllocation, "cudaErrorMemoryAllocation", "out of memory"},
+        {cudaErrorInitializationError, "cudaErrorInitializationError", "initialization error"},
+        {cudaErrorInvalidDevice, "cudaErrorInvalidDevice", "invalid device ordinal"},
+        {cudaErrorInvalidMemcpyDirection, "cudaErrorInvalidMemcpyDirection", "invalid memcpy direction"},
+        {cudaErrorNotReady, "cudaErrorNotReady", "not ready"},
+        {cudaErrorNotSupported, "cudaErrorNotSupported", "operation not supported"},
+        {cudaErrorPeerAccessUnsupported,
+         "cudaErrorPeerAccessUnsupported",
+         "peer access is not supported between these two devices"},
+    };
+    static const ErrorDescription kUnknown = {cudaErrorUnknown, "cudaErrorUnknown", "unknown error"};
+    for (const ErrorDescription& entry : kErrors) {
+        if (entry.code == error) return entry;
+    }
+    return kUnknown;
+}
+
+static cudaError_t allocDevice(void** out, size_t size) {
+    CUdeviceptr dptr;
+    const CUresult result = cuMemAlloc(&dptr, size);
+    if (result == CUDA_SUCCESS) *out = (void*)dptr;
+    return setLastError(convertDriverError(result));
+}
+
+static cudaError_t allocManaged(void** out, size_t size, unsigned int flags) {
+    CUdeviceptr dptr;
+    const CUresult result = cuMemAllocManaged(&dptr, size, flags);
+    if (result == CUDA_SUCCESS) *out = (void*)dptr;
+    return setLastError(convertDriverError(result));
+}
+
+// Pinned host memory is simulated with regular malloc.
+static cudaError_t allocPinnedHost(void** out, size_t size) {
+    *out = malloc(size);
+    if (!*out) return setLastError(cudaErrorMemoryAllocation);
+    fake_gpu::GlobalState::instance().register_host_allocation(
+        *out, size, fake_gpu::GlobalState::instance().get_current_device());
+    return setLastError(cudaSuccess);
+}
+
+// Performs a synchronous copy in the given direction and sets last_error.
+// Returns false only for an invalid direction.
+static bool copyByKind(void* dst, const void* src, size_t count, cudaMemcpyKind kind) {
+    CUresult result = CUDA_SUCCESS;
+    switch (kind) {
+        case cudaMemcpyHostToDevice:
+            result = cuMemcpyHtoD((CUdeviceptr)dst, src, count);
+            break;
+        case cudaMemcpyDeviceToHost:
+            result = cuMemcpyDtoH(dst, (CUdeviceptr)src, count);
+            break;
+        case cudaMemcpyDeviceToDevice:
+            result = cuMemcpyDtoD((CUdeviceptr)dst, (CUdeviceptr)src, count);
+            break;
+        case cudaMemcpyHostToHost:
+            memcpy(dst, src, count);
+            fake_gpu::GlobalState::instance().record_memcpy_h2h(count);
+            break;
+        default:
+            last_error = cudaErrorInvalidMemcpyDirection;
+            return false;
+    }
+    last_error = convertDriverError(result);
+    return true;
+}
+
 static bool submitAsyncStreamOperation(cudaStream_t stream) {
     const CUresult result = fake_gpu::cuda::submit_stream_operation((CUstream)stream);
     if (result != CUDA_SUCCESS) {
@@ -130,10 +213,7 @@ extern "C" {
 // ============================================================================
 
 cudaError_t cudaGetDeviceCount(int *count) {
-    if (!count) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!count) return setLastError(cudaErrorInvalidValue);
 
     CUresult result = cuDeviceGetCount(count);
     last_error = convertDriverError(result);
@@ -145,18 +225,12 @@ cudaError_t cudaSetDevice(int device) {
     // Get device handle
     CUdevice cuDevice;
     CUresult result = cuDeviceGet(&cuDevice, device);
-    if (result != CUDA_SUCCESS) {
-        last_error = convertDriverError(result);
-        return last_error;
-    }
+    if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
 
     // Retain primary context
     CUcontext context;
     result = cuDevicePrimaryCtxRetain(&context, cuDevice);
-    if (result != CUDA_SUCCESS) {
-        last_error = convertDriverError(result);
-        return last_error;
-    }
+    if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
 
     // Set as current context
     result = cuCtxSetCurrent(context);
@@ -166,37 +240,24 @@ cudaError_t cudaSetDevice(int device) {
 }
 
 cudaError_t cudaGetDevice(int *device) {
-    if (!device) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!device) return setLastError(cudaErrorInvalidValue);
 
     // Get current context
     CUcontext context;
     CUresult result = cuCtxGetCurrent(&context);
-    if (result != CUDA_SUCCESS) {
-        last_error = convertDriverError(result);
-        return last_error;
-    }
+    if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
 
     // Get device from context
     CUdevice cuDevice;
     result = cuCtxGetDevice(&cuDevice);
-    if (result != CUDA_SUCCESS) {
-        last_error = convertDriverError(result);
-        return last_error;
-    }
+    if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
 
     *device = cuDevice;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
-    if (!prop) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!prop) return setLastError(cudaErrorInvalidValue);
 
     // Zero out the structure
     memset(prop, 0, sizeof(cudaDeviceProp));
@@ -204,10 +265,7 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
     // Get device name
     char name[256];
     CUresult result = cuDeviceGetName(name, 256, device);
-    if (result != CUDA_SUCCESS) {
-        last_error = convertDriverError(result);
-        return last_error;
-    }
+    if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
     strncpy(prop->name, name, 256);
 
     // Get total memory
@@ -278,30 +336,16 @@ cudaError_t cudaDeviceSynchronize(void) {
 // ============================================================================
 
 cudaError_t cudaMalloc(void **devPtr, size_t size) {
-    if (!devPtr) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!devPtr) return setLastError(cudaErrorInvalidValue);
 
-    CUdeviceptr dptr;
-    CUresult result = cuMemAlloc(&dptr, size);
-
-    if (result == CUDA_SUCCESS) {
-        *devPtr = (void*)dptr;
-        last_error = cudaSuccess;
+    if (allocDevice(devPtr, size) == cudaSuccess) {
         FGPU_LOG("[FakeCUDART] cudaMalloc allocated %zu bytes at %p\n", size, *devPtr);
-    } else {
-        last_error = convertDriverError(result);
     }
-
     return last_error;
 }
 
 cudaError_t cudaFree(void *devPtr) {
-    if (!devPtr) {
-        last_error = cudaSuccess;
-        return last_error;
-    }
+    if (!devPtr) return setLastError(cudaSuccess);
 
     CUresult result = cuMemFree((CUdeviceptr)devPtr);
     last_error = convertDriverError(result);
@@ -310,26 +354,14 @@ cudaError_t cudaFree(void *devPtr) {
 }
 
 cudaError_t cudaMallocAsync(void **devPtr, size_t size, cudaStream_t stream) {
-    if (!devPtr) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!devPtr) return setLastError(cudaErrorInvalidValue);
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
 
-    CUdeviceptr dptr;
-    CUresult result = cuMemAlloc(&dptr, size);
-    if (result == CUDA_SUCCESS) {
-        *devPtr = (void*)dptr;
-        last_error = cudaSuccess;
+    if (allocDevice(devPtr, size) == cudaSuccess) {
         FGPU_LOG("[FakeCUDART] cudaMallocAsync allocated %zu bytes at %p\n", size, *devPtr);
-    } else {
-        last_error = convertDriverError(result);
-    }
-
-    if (last_error == cudaSuccess && !submitAsyncStreamOperation(stream)) {
-        return last_error;
+        submitAsyncStreamOperation(stream);
     }
     return last_error;
 }
@@ -338,10 +370,7 @@ cudaError_t cudaFreeAsync(void *devPtr, cudaStream_t stream) {
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
-    if (!devPtr) {
-        last_error = cudaSuccess;
-        return last_error;
-    }
+    if (!devPtr) return setLastError(cudaSuccess);
 
     CUresult result = cuMemFree((CUdeviceptr)devPtr);
     last_error = convertDriverError(result);
@@ -353,28 +382,7 @@ cudaError_t cudaFreeAsync(void *devPtr, cudaStream_t stream) {
 }
 
 cudaError_t cudaMemcpy(void *dst, const void *src, size_t count, cudaMemcpyKind kind) {
-    CUresult result = CUDA_SUCCESS;
-
-    switch (kind) {
-        case cudaMemcpyHostToDevice:
-            result = cuMemcpyHtoD((CUdeviceptr)dst, src, count);
-            break;
-        case cudaMemcpyDeviceToHost:
-            result = cuMemcpyDtoH(dst, (CUdeviceptr)src, count);
-            break;
-        case cudaMemcpyDeviceToDevice:
-            result = cuMemcpyDtoD((CUdeviceptr)dst, (CUdeviceptr)src, count);
-            break;
-        case cudaMemcpyHostToHost:
-            memcpy(dst, src, count);
-            fake_gpu::GlobalState::instance().record_memcpy_h2h(count);
-            break;
-        default:
-            last_error = cudaErrorInvalidMemcpyDirection;
-            return last_error;
-    }
-
-    last_error = convertDriverError(result);
+    if (!copyByKind(dst, src, count, kind)) return last_error;
     FGPU_LOG("[FakeCUDART] cudaMemcpy count=%zu kind=%d\n", count, kind);
     return last_error;
 }
@@ -385,31 +393,8 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count, cudaMemcpy
     }
 
     // Simplified: execute synchronously after validating the stream handle.
-    CUresult result = CUDA_SUCCESS;
-
-    switch (kind) {
-        case cudaMemcpyHostToDevice:
-            result = cuMemcpyHtoD((CUdeviceptr)dst, src, count);
-            break;
-        case cudaMemcpyDeviceToHost:
-            result = cuMemcpyDtoH(dst, (CUdeviceptr)src, count);
-            break;
-        case cudaMemcpyDeviceToDevice:
-            result = cuMemcpyDtoD((CUdeviceptr)dst, (CUdeviceptr)src, count);
-            break;
-        case cudaMemcpyHostToHost:
-            memcpy(dst, src, count);
-            fake_gpu::GlobalState::instance().record_memcpy_h2h(count);
-            result = CUDA_SUCCESS;
-            break;
-        default:
-            last_error = cudaErrorInvalidMemcpyDirection;
-            return last_error;
-    }
-
-    last_error = convertDriverError(result);
-    if (last_error == cudaSuccess && !submitAsyncStreamOperation(stream)) {
-        return last_error;
+    if (copyByKind(dst, src, count, kind) && last_error == cudaSuccess) {
+        submitAsyncStreamOperation(stream);
     }
     return last_error;
 }
@@ -456,16 +441,13 @@ cudaError_t cudaMemsetAsync(void *devPtr, int value, size_t count, cudaStream_t 
     memset(devPtr, value, count);
     last_error = cudaSuccess;
     fake_gpu::GlobalState::instance().record_memset(devPtr, count);
-    if (!submitAsyncStreamOperation(stream)) {
-        return last_error;
-    }
+    submitAsyncStreamOperation(stream);
     return last_error;
 }
 
 cudaError_t cudaMemGetInfo(size_t *free, size_t *total) {
     CUresult result = cuMemGetInfo(free, total);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 // ============================================================================
@@ -473,10 +455,7 @@ cudaError_t cudaMemGetInfo(size_t *free, size_t *total) {
 // ============================================================================
 
 cudaError_t cudaStreamCreate(cudaStream_t *pStream) {
-    if (!pStream) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pStream) return setLastError(cudaErrorInvalidValue);
 
     CUresult result = cuStreamCreate((CUstream*)pStream, 0);
     last_error = convertDriverError(result);
@@ -485,10 +464,7 @@ cudaError_t cudaStreamCreate(cudaStream_t *pStream) {
 }
 
 cudaError_t cudaStreamDestroy(cudaStream_t stream) {
-    if (isCaptureActive(stream)) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (lookupCaptureState(stream).active) return setLastError(cudaErrorInvalidValue);
     CUresult result = cuStreamDestroy((CUstream)stream);
     last_error = convertDriverError(result);
     if (last_error == cudaSuccess) {
@@ -507,8 +483,7 @@ cudaError_t cudaStreamSynchronize(cudaStream_t stream) {
 
 cudaError_t cudaStreamQuery(cudaStream_t stream) {
     CUresult result = cuStreamQuery((CUstream)stream);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 // ============================================================================
@@ -516,10 +491,7 @@ cudaError_t cudaStreamQuery(cudaStream_t stream) {
 // ============================================================================
 
 cudaError_t cudaEventCreate(cudaEvent_t *event) {
-    if (!event) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!event) return setLastError(cudaErrorInvalidValue);
 
     CUresult result = cuEventCreate((CUevent*)event, 0);
     last_error = convertDriverError(result);
@@ -536,37 +508,29 @@ cudaError_t cudaEventDestroy(cudaEvent_t event) {
 
 cudaError_t cudaEventRecord(cudaEvent_t event, cudaStream_t stream) {
     CUresult result = cuEventRecord((CUevent)event, (CUstream)stream);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 cudaError_t cudaEventSynchronize(cudaEvent_t event) {
     CUresult result = cuEventSynchronize((CUevent)event);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 cudaError_t cudaEventQuery(cudaEvent_t event) {
     CUresult result = cuEventQuery((CUevent)event);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 cudaError_t cudaEventElapsedTime(float *ms, cudaEvent_t start, cudaEvent_t end) {
-    if (!ms) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!ms) return setLastError(cudaErrorInvalidValue);
 
     CUresult result = cuEventElapsedTime(ms, (CUevent)start, (CUevent)end);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 cudaError_t cudaEventRecordWithFlags(cudaEvent_t event, cudaStream_t stream, unsigned int flags) {
     CUresult result = cuEventRecord((CUevent)event, (CUstream)stream);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 // ============================================================================
@@ -586,53 +550,11 @@ cudaError_t cudaPeekAtLastError(void) {
 }
 
 const char* cudaGetErrorString(cudaError_t error) {
-    switch (error) {
-        case cudaSuccess:
-            return "no error";
-        case cudaErrorInvalidValue:
-            return "invalid argument";
-        case cudaErrorMemoryAllocation:
-            return "out of memory";
-        case cudaErrorInitializationError:
-            return "initialization error";
-        case cudaErrorInvalidDevice:
-            return "invalid device ordinal";
-        case cudaErrorInvalidMemcpyDirection:
-            return "invalid memcpy direction";
-        case cudaErrorNotReady:
-            return "not ready";
-        case cudaErrorNotSupported:
-            return "operation not supported";
-        case cudaErrorPeerAccessUnsupported:
-            return "peer access is not supported between these two devices";
-        default:
-            return "unknown error";
-    }
+    return describeError(error).text;
 }
 
 const char* cudaGetErrorName(cudaError_t error) {
-    switch (error) {
-        case cudaSuccess:
-            return "cudaSuccess";
-        case cudaErrorInvalidValue:
-            return "cudaErrorInvalidValue";
-        case cudaErrorMemoryAllocation:
-            return "cudaErrorMemoryAllocation";
-        case cudaErrorInitializationError:
-            return "cudaErrorInitializationError";
-        case cudaErrorInvalidDevice:
-            return "cudaErrorInvalidDevice";
-        case cudaErrorInvalidMemcpyDirection:
-            return "cudaErrorInvalidMemcpyDirection";
-        case cudaErrorNotReady:
-            return "cudaErrorNotReady";
-        case cudaErrorNotSupported:
-            return "cudaErrorNotSupported";
-        case cudaErrorPeerAccessUnsupported:
-            return "cudaErrorPeerAccessUnsupported";
-        default:
-            return "cudaErrorUnknown";
-    }
+    return describeError(error).name;
 }
 
 // ============================================================================
@@ -640,10 +562,7 @@ const char* cudaGetErrorName(cudaError_t error) {
 // ============================================================================
 
 cudaError_t cudaRuntimeGetVersion(int *runtimeVersion) {
-    if (!runtimeVersion) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!runtimeVersion) return setLastError(cudaErrorInvalidValue);
 
     *runtimeVersion = 12000;  // CUDA 12.0
     last_error = cudaSuccess;
@@ -652,10 +571,7 @@ cudaError_t cudaRuntimeGetVersion(int *runtimeVersion) {
 }
 
 cudaError_t cudaDriverGetVersion(int *driverVersion) {
-    if (!driverVersion) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!driverVersion) return setLastError(cudaErrorInvalidValue);
 
     CUresult result = cuDriverGetVersion(driverVersion);
     last_error = convertDriverError(result);
@@ -691,9 +607,7 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
     if (rejectUnsupportedApi("cudaLaunchKernel")) {
         return last_error;
     }
-    if (!submitAsyncStreamOperation(stream)) {
-        return last_error;
-    }
+    submitAsyncStreamOperation(stream);
     return last_error;
 }
 
@@ -706,10 +620,7 @@ cudaError_t cudaConfigureCall(dim3 gridDim, dim3 blockDim, size_t sharedMem, cud
             "cudaConfigureCall", "launch_configuration_not_materialized")) {
         return last_error;
     }
-    last_error = cudaSuccess;
-    if (!submitAsyncStreamOperation(stream)) {
-        return last_error;
-    }
+    submitAsyncStreamOperation(stream);
     return last_error;
 }
 
@@ -752,21 +663,11 @@ cudaError_t cudaLaunchHostFunc(cudaStream_t stream, void (*fn)(void *userData), 
 // ============================================================================
 
 cudaError_t cudaMallocHost(void **ptr, size_t size) {
-    if (!ptr) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!ptr) return setLastError(cudaErrorInvalidValue);
 
-    // Use regular malloc as fallback
-    *ptr = malloc(size);
-    if (!*ptr) {
-        last_error = cudaErrorMemoryAllocation;
-        return last_error;
+    if (allocPinnedHost(ptr, size) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaMallocHost allocated %zu bytes\n", size);
     }
-    fake_gpu::GlobalState::instance().register_host_allocation(*ptr, size, fake_gpu::GlobalState::instance().get_current_device());
-
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaMallocHost allocated %zu bytes\n", size);
     return last_error;
 }
 
@@ -781,21 +682,11 @@ cudaError_t cudaFreeHost(void *ptr) {
 }
 
 cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags) {
-    if (!pHost) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pHost) return setLastError(cudaErrorInvalidValue);
 
-    // Use regular malloc as fallback
-    *pHost = malloc(size);
-    if (!*pHost) {
-        last_error = cudaErrorMemoryAllocation;
-        return last_error;
+    if (allocPinnedHost(pHost, size) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaHostAlloc allocated %zu bytes\n", size);
     }
-    fake_gpu::GlobalState::instance().register_host_allocation(*pHost, size, fake_gpu::GlobalState::instance().get_current_device());
-
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaHostAlloc allocated %zu bytes\n", size);
     return last_error;
 }
 
@@ -832,19 +723,12 @@ static bool modeled_peer_access(int device, int peerDevice, cudaError_t& error) 
 }
 
 cudaError_t cudaDeviceCanAccessPeer(int *canAccessPeer, int device, int peerDevice) {
-    if (!canAccessPeer) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!canAccessPeer) return setLastError(cudaErrorInvalidValue);
     cudaError_t error = cudaSuccess;
     const bool allowed = modeled_peer_access(device, peerDevice, error);
-    if (error != cudaSuccess) {
-        last_error = error;
-        return last_error;
-    }
+    if (error != cudaSuccess) return setLastError(error);
     *canAccessPeer = allowed ? 1 : 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceEnablePeerAccess(int peerDevice, unsigned int flags) {
@@ -869,10 +753,7 @@ cudaError_t cudaDeviceDisablePeerAccess(int peerDevice) {
 // ============================================================================
 
 cudaError_t cudaGetDriverEntryPointByVersion(const char *symbol, void **funcPtr, unsigned int cudaVersion, unsigned long long flags, int *driverStatus) {
-    if (!symbol || !funcPtr) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!symbol || !funcPtr) return setLastError(cudaErrorInvalidValue);
 
     // Use cuGetProcAddress to get the driver function
     CUresult result = cuGetProcAddress(symbol, funcPtr, cudaVersion, flags);
@@ -881,8 +762,7 @@ cudaError_t cudaGetDriverEntryPointByVersion(const char *symbol, void **funcPtr,
         *driverStatus = (result == CUDA_SUCCESS && *funcPtr) ? 0 : 1;
     }
 
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned long long flags) {
@@ -894,10 +774,7 @@ cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned
 // ============================================================================
 
 cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned int flags) {
-    if (!pStream) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pStream) return setLastError(cudaErrorInvalidValue);
 
     CUresult result = cuStreamCreate((CUstream*)pStream, flags);
     last_error = convertDriverError(result);
@@ -906,10 +783,7 @@ cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned int flags)
 }
 
 cudaError_t cudaStreamCreateWithPriority(cudaStream_t *pStream, unsigned int flags, int priority) {
-    if (!pStream) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pStream) return setLastError(cudaErrorInvalidValue);
 
     // Simplified: ignore priority
     CUresult result = cuStreamCreate((CUstream*)pStream, flags);
@@ -919,31 +793,22 @@ cudaError_t cudaStreamCreateWithPriority(cudaStream_t *pStream, unsigned int fla
 }
 
 cudaError_t cudaStreamGetFlags(cudaStream_t hStream, unsigned int *flags) {
-    if (!flags) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!flags) return setLastError(cudaErrorInvalidValue);
 
     CUresult result = cuStreamGetFlags((CUstream)hStream, flags);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 cudaError_t cudaStreamGetPriority(cudaStream_t hStream, int *priority) {
-    if (!priority) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!priority) return setLastError(cudaErrorInvalidValue);
 
     CUresult result = cuStreamGetPriority((CUstream)hStream, priority);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 cudaError_t cudaStreamWaitEvent(cudaStream_t stream, cudaEvent_t event, unsigned int flags) {
     CUresult result = cuStreamWaitEvent((CUstream)stream, (CUevent)event, flags);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 cudaError_t cudaStreamAddCallback(cudaStream_t stream, void (*callback)(cudaStream_t stream, cudaError_t status, void *userData), void *userData, unsigned int flags) {
@@ -977,10 +842,7 @@ cudaError_t cudaStreamUpdateCaptureDependencies(cudaStream_t stream, cudaGraphNo
 // ============================================================================
 
 cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags) {
-    if (!event) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!event) return setLastError(cudaErrorInvalidValue);
 
     CUresult result = cuEventCreate((CUevent*)event, flags);
     last_error = convertDriverError(result);
@@ -993,15 +855,11 @@ cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags) {
 // ============================================================================
 
 cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessor(int *numBlocks, const void *func, int blockSize, size_t dynamicSMemSize) {
-    if (!numBlocks) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!numBlocks) return setLastError(cudaErrorInvalidValue);
 
     // Simplified: return a reasonable fake value
     *numBlocks = 16;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(int *numBlocks, const void *func, int blockSize, size_t dynamicSMemSize, unsigned int flags) {
@@ -1013,76 +871,53 @@ cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(int *numBlock
 // ============================================================================
 
 cudaError_t cudaDeviceGetAttribute(int *value, int attr, int device) {
-    if (!value) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!value) return setLastError(cudaErrorInvalidValue);
 
     CUresult result = cuDeviceGetAttribute(value, (CUdevice_attribute)attr, device);
-    last_error = convertDriverError(result);
-    return last_error;
+    return setLastError(convertDriverError(result));
 }
 
 cudaError_t cudaDeviceGetLimit(size_t *pValue, int limit) {
-    if (!pValue) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pValue) return setLastError(cudaErrorInvalidValue);
 
     // Simplified: return reasonable defaults
     *pValue = 1024 * 1024 * 1024;  // 1GB
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceSetLimit(int limit, size_t value) {
     // Simplified: just succeed
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceGetCacheConfig(int *pCacheConfig) {
-    if (!pCacheConfig) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pCacheConfig) return setLastError(cudaErrorInvalidValue);
 
     *pCacheConfig = 0;  // cudaFuncCachePreferNone
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceSetCacheConfig(int cacheConfig) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceGetSharedMemConfig(int *pConfig) {
-    if (!pConfig) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pConfig) return setLastError(cudaErrorInvalidValue);
 
     *pConfig = 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceSetSharedMemConfig(int config) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceGetStreamPriorityRange(int *leastPriority, int *greatestPriority) {
-    if (!leastPriority || !greatestPriority) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!leastPriority || !greatestPriority) return setLastError(cudaErrorInvalidValue);
 
     *leastPriority = 0;
     *greatestPriority = 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 // ============================================================================
@@ -1090,81 +925,44 @@ cudaError_t cudaDeviceGetStreamPriorityRange(int *leastPriority, int *greatestPr
 // ============================================================================
 
 cudaError_t cudaMallocPitch(void **devPtr, size_t *pitch, size_t width, size_t height) {
-    if (!devPtr || !pitch) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!devPtr || !pitch) return setLastError(cudaErrorInvalidValue);
 
     // Align pitch to 512 bytes
     *pitch = (width + 511) & ~511;
     size_t size = (*pitch) * height;
 
-    CUdeviceptr dptr;
-    CUresult result = cuMemAlloc(&dptr, size);
-    if (result == CUDA_SUCCESS) {
-        *devPtr = (void*)dptr;
-        last_error = cudaSuccess;
+    if (allocDevice(devPtr, size) == cudaSuccess) {
         FGPU_LOG("[FakeCUDART] cudaMallocPitch allocated %zu bytes (pitch=%zu)\n", size, *pitch);
-    } else {
-        last_error = convertDriverError(result);
     }
-
     return last_error;
 }
 
 cudaError_t cudaMalloc3D(void **devPtr, size_t width, size_t height, size_t depth) {
-    if (!devPtr) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!devPtr) return setLastError(cudaErrorInvalidValue);
 
     size_t size = width * height * depth;
-    CUdeviceptr dptr;
-    CUresult result = cuMemAlloc(&dptr, size);
-    if (result == CUDA_SUCCESS) {
-        *devPtr = (void*)dptr;
-        last_error = cudaSuccess;
+    if (allocDevice(devPtr, size) == cudaSuccess) {
         FGPU_LOG("[FakeCUDART] cudaMalloc3D allocated %zu bytes\n", size);
-    } else {
-        last_error = convertDriverError(result);
     }
-
     return last_error;
 }
 
 cudaError_t cudaMallocManaged(void **devPtr, size_t size, unsigned int flags) {
-    if (!devPtr) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!devPtr) return setLastError(cudaErrorInvalidValue);
 
-    // Simplified: use regular cudaMalloc
-    CUdeviceptr dptr;
-    CUresult result = cuMemAllocManaged(&dptr, size, flags);
-    if (result == CUDA_SUCCESS) {
-        *devPtr = (void*)dptr;
-        last_error = cudaSuccess;
+    if (allocManaged(devPtr, size, flags) == cudaSuccess) {
         FGPU_LOG("[FakeCUDART] cudaMallocManaged allocated %zu bytes\n", size);
-    } else {
-        last_error = convertDriverError(result);
     }
-
     return last_error;
 }
 
 cudaError_t cudaMallocArray(void **array, const void *desc, size_t width, size_t height, unsigned int flags) {
-    if (!array) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!array) return setLastError(cudaErrorInvalidValue);
 
     // Simplified: allocate linear memory
     size_t size = width * height * 4;  // Assume 4 bytes per element
     *array = malloc(size);
-    if (!*array) {
-        last_error = cudaErrorMemoryAllocation;
-        return last_error;
-    }
+    if (!*array) return setLastError(cudaErrorMemoryAllocation);
 
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaMallocArray allocated %zu bytes\n", size);
@@ -1186,8 +984,7 @@ cudaError_t cudaMemcpy2D(void *dst, size_t dpitch, const void *src, size_t spitc
         memcpy(dstRow, srcRow, width);
     }
 
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemcpy2DAsync(void *dst, size_t dpitch, const void *src, size_t spitch, size_t width, size_t height, cudaMemcpyKind kind, cudaStream_t stream) {
@@ -1196,20 +993,14 @@ cudaError_t cudaMemcpy2DAsync(void *dst, size_t dpitch, const void *src, size_t 
     }
 
     // Simplified: do synchronous copy after validating the stream handle.
-    cudaError_t result = cudaMemcpy2D(dst, dpitch, src, spitch, width, height, kind);
-    if (result != cudaSuccess) {
-        return result;
-    }
-    if (!submitAsyncStreamOperation(stream)) {
-        return last_error;
-    }
+    cudaMemcpy2D(dst, dpitch, src, spitch, width, height, kind);
+    submitAsyncStreamOperation(stream);
     return last_error;
 }
 
 cudaError_t cudaMemcpy3D(const void *p) {
     // Simplified: just succeed
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemcpy3DAsync(const void *p, cudaStream_t stream) {
@@ -1219,28 +1010,23 @@ cudaError_t cudaMemcpy3DAsync(const void *p, cudaStream_t stream) {
 
     // Simplified: just succeed after validating the stream handle.
     last_error = cudaSuccess;
-    if (!submitAsyncStreamOperation(stream)) {
-        return last_error;
-    }
+    submitAsyncStreamOperation(stream);
     return last_error;
 }
 
 cudaError_t cudaMemcpyToSymbol(const void *symbol, const void *src, size_t count, size_t offset, cudaMemcpyKind kind) {
     // Simplified: just succeed
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemcpyFromSymbol(void *dst, const void *symbol, size_t count, size_t offset, cudaMemcpyKind kind) {
     // Simplified: just succeed
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemAdvise(const void *devPtr, size_t count, int advice, int device) {
     // Simplified: just succeed
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemPrefetchAsync(const void *devPtr, size_t count, int dstDevice, cudaStream_t stream) {
@@ -1250,22 +1036,18 @@ cudaError_t cudaMemPrefetchAsync(const void *devPtr, size_t count, int dstDevice
 
     // Simplified: just succeed after validating the stream handle.
     last_error = cudaSuccess;
-    if (!submitAsyncStreamOperation(stream)) {
-        return last_error;
-    }
+    submitAsyncStreamOperation(stream);
     return last_error;
 }
 
 cudaError_t cudaMemRangeGetAttribute(void *data, size_t dataSize, int attribute, const void *devPtr, size_t count) {
     // Simplified: just succeed
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemRangeGetAttributes(void **data, size_t *dataSizes, int *attributes, size_t numAttributes, const void *devPtr, size_t count) {
     // Simplified: just succeed
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 // ============================================================================
@@ -1273,13 +1055,11 @@ cudaError_t cudaMemRangeGetAttributes(void **data, size_t *dataSizes, int *attri
 // ============================================================================
 
 cudaError_t cudaMemAttachGlobal(void *devPtr) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemAttach(void *devPtr, unsigned int flags) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 // ============================================================================
@@ -1287,15 +1067,9 @@ cudaError_t cudaMemAttach(void *devPtr, unsigned int flags) {
 // ============================================================================
 
 cudaError_t cudaMemPoolCreate(cudaMemPool_t *memPool, const void *poolProps) {
-    if (!memPool) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(memPool) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaMemPoolCreate\n");
     }
-
-    // Create a dummy memory pool
-    *memPool = (cudaMemPool_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaMemPoolCreate\n");
     return last_error;
 }
 
@@ -1307,45 +1081,27 @@ cudaError_t cudaMemPoolDestroy(cudaMemPool_t memPool) {
 }
 
 cudaError_t cudaMallocFromPoolAsync(void **ptr, size_t size, cudaMemPool_t memPool, cudaStream_t stream) {
-    if (!ptr) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!ptr) return setLastError(cudaErrorInvalidValue);
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
 
-    // Simplified: use regular malloc
-    CUdeviceptr dptr;
-    CUresult result = cuMemAlloc(&dptr, size);
-    if (result == CUDA_SUCCESS) {
-        *ptr = (void*)dptr;
-        last_error = cudaSuccess;
-    } else {
-        last_error = convertDriverError(result);
-    }
-
-    if (last_error == cudaSuccess && !submitAsyncStreamOperation(stream)) {
-        return last_error;
+    if (allocDevice(ptr, size) == cudaSuccess) {
+        submitAsyncStreamOperation(stream);
     }
     return last_error;
 }
 
 cudaError_t cudaMemPoolTrimTo(cudaMemPool_t memPool, size_t minBytesToKeep) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemPoolSetAttribute(cudaMemPool_t memPool, int attr, void *value) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemPoolGetAttribute(cudaMemPool_t memPool, int attr, void *value) {
-    if (!value) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!value) return setLastError(cudaErrorInvalidValue);
 
     // Attributes 1-3 (the reuse policies) are int; the rest are cuuint64_t.
     if (attr >= 1 && attr <= 3) {
@@ -1353,31 +1109,22 @@ cudaError_t cudaMemPoolGetAttribute(cudaMemPool_t memPool, int attr, void *value
     } else {
         *(uint64_t*)value = 0;
     }
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemPoolSetAccess(cudaMemPool_t memPool, const void *descList, size_t count) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaMemPoolGetAccess(void *flags, cudaMemPool_t memPool, void *location) {
-    if (!flags) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!flags) return setLastError(cudaErrorInvalidValue);
 
     *(int*)flags = 1;  // Access granted
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceGetDefaultMemPool(cudaMemPool_t *memPool, int device) {
-    if (!memPool) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!memPool) return setLastError(cudaErrorInvalidValue);
 
     // Return a dummy default pool
     static cudaMemPool_t defaultPool = NULL;
@@ -1385,13 +1132,11 @@ cudaError_t cudaDeviceGetDefaultMemPool(cudaMemPool_t *memPool, int device) {
         defaultPool = (cudaMemPool_t)malloc(sizeof(void*));
     }
     *memPool = defaultPool;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceSetMemPool(int device, cudaMemPool_t memPool) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceGetMemPool(cudaMemPool_t *memPool, int device) {
@@ -1403,10 +1148,7 @@ cudaError_t cudaDeviceGetMemPool(cudaMemPool_t *memPool, int device) {
 // ============================================================================
 
 cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const void *ptr) {
-    if (!attributes || !ptr) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!attributes || !ptr) return setLastError(cudaErrorInvalidValue);
 
     memset(attributes, 0, sizeof(cudaPointerAttributes));
 
@@ -1436,8 +1178,7 @@ cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const vo
     attributes->devicePointer = const_cast<void*>(ptr);
     attributes->hostPointer = const_cast<void*>(ptr);
 
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 // ============================================================================
@@ -1445,28 +1186,23 @@ cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const vo
 // ============================================================================
 
 cudaError_t cudaIpcGetMemHandle(void *handle, void *devPtr) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaIpcOpenMemHandle(void **devPtr, void *handle, unsigned int flags) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaIpcCloseMemHandle(void *devPtr) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaIpcGetEventHandle(void *handle, cudaEvent_t event) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaIpcOpenEventHandle(cudaEvent_t *event, void *handle) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 // ============================================================================
@@ -1474,15 +1210,9 @@ cudaError_t cudaIpcOpenEventHandle(cudaEvent_t *event, void *handle) {
 // ============================================================================
 
 cudaError_t cudaGraphCreate(cudaGraph_t *pGraph, unsigned int flags) {
-    if (!pGraph) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraph) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphCreate\n");
     }
-
-    // Create a dummy graph structure
-    *pGraph = (cudaGraph_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphCreate\n");
     return last_error;
 }
 
@@ -1494,221 +1224,136 @@ cudaError_t cudaGraphDestroy(cudaGraph_t graph) {
 }
 
 cudaError_t cudaGraphAddKernelNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph, const cudaGraphNode_t *pDependencies, size_t numDependencies, const void *pNodeParams) {
-    if (!pGraphNode) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphNode) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphAddKernelNode\n");
     }
-
-    *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphAddKernelNode\n");
     return last_error;
 }
 
 cudaError_t cudaGraphAddMemcpyNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph, const cudaGraphNode_t *pDependencies, size_t numDependencies, const void *pCopyParams) {
-    if (!pGraphNode) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphNode) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphAddMemcpyNode\n");
     }
-
-    *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphAddMemcpyNode\n");
     return last_error;
 }
 
 cudaError_t cudaGraphAddMemsetNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph, const cudaGraphNode_t *pDependencies, size_t numDependencies, const void *pMemsetParams) {
-    if (!pGraphNode) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphNode) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphAddMemsetNode\n");
     }
-
-    *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphAddMemsetNode\n");
     return last_error;
 }
 
 cudaError_t cudaGraphAddHostNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph, const cudaGraphNode_t *pDependencies, size_t numDependencies, const void *pNodeParams) {
-    if (!pGraphNode) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphNode) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphAddHostNode\n");
     }
-
-    *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphAddHostNode\n");
     return last_error;
 }
 
 cudaError_t cudaGraphAddChildGraphNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph, const cudaGraphNode_t *pDependencies, size_t numDependencies, cudaGraph_t childGraph) {
-    if (!pGraphNode) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphNode) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphAddChildGraphNode\n");
     }
-
-    *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphAddChildGraphNode\n");
     return last_error;
 }
 
 cudaError_t cudaGraphAddEmptyNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph, const cudaGraphNode_t *pDependencies, size_t numDependencies) {
-    if (!pGraphNode) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphNode) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphAddEmptyNode\n");
     }
-
-    *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphAddEmptyNode\n");
     return last_error;
 }
 
 cudaError_t cudaGraphAddEventRecordNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph, const cudaGraphNode_t *pDependencies, size_t numDependencies, cudaEvent_t event) {
-    if (!pGraphNode) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphNode) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphAddEventRecordNode\n");
     }
-
-    *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphAddEventRecordNode\n");
     return last_error;
 }
 
 cudaError_t cudaGraphAddEventWaitNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph, const cudaGraphNode_t *pDependencies, size_t numDependencies, cudaEvent_t event) {
-    if (!pGraphNode) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphNode) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphAddEventWaitNode\n");
     }
-
-    *pGraphNode = (cudaGraphNode_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphAddEventWaitNode\n");
     return last_error;
 }
 
 cudaError_t cudaGraphClone(cudaGraph_t *pGraphClone, cudaGraph_t originalGraph) {
-    if (!pGraphClone) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphClone) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphClone\n");
     }
-
-    *pGraphClone = (cudaGraph_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphClone\n");
     return last_error;
 }
 
 cudaError_t cudaGraphNodeFindInClone(cudaGraphNode_t *pNode, cudaGraphNode_t originalNode, cudaGraph_t clonedGraph) {
-    if (!pNode) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pNode) return setLastError(cudaErrorInvalidValue);
 
     *pNode = originalNode;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGraphNodeGetType(cudaGraphNode_t node, cudaGraphNodeType *pType) {
-    if (!pType) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pType) return setLastError(cudaErrorInvalidValue);
 
     *pType = cudaGraphNodeTypeKernel;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGraphGetNodes(cudaGraph_t graph, cudaGraphNode_t *nodes, size_t *numNodes) {
-    if (!numNodes) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!numNodes) return setLastError(cudaErrorInvalidValue);
 
     *numNodes = 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGraphGetRootNodes(cudaGraph_t graph, cudaGraphNode_t *pRootNodes, size_t *pNumRootNodes) {
-    if (!pNumRootNodes) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pNumRootNodes) return setLastError(cudaErrorInvalidValue);
 
     *pNumRootNodes = 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGraphGetEdges(cudaGraph_t graph, cudaGraphNode_t *from, cudaGraphNode_t *to, size_t *numEdges) {
-    if (!numEdges) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!numEdges) return setLastError(cudaErrorInvalidValue);
 
     *numEdges = 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGraphNodeGetDependencies(cudaGraphNode_t node, cudaGraphNode_t *pDependencies, size_t *pNumDependencies) {
-    if (!pNumDependencies) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pNumDependencies) return setLastError(cudaErrorInvalidValue);
 
     *pNumDependencies = 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGraphNodeGetDependentNodes(cudaGraphNode_t node, cudaGraphNode_t *pDependentNodes, size_t *pNumDependentNodes) {
-    if (!pNumDependentNodes) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pNumDependentNodes) return setLastError(cudaErrorInvalidValue);
 
     *pNumDependentNodes = 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGraphAddDependencies(cudaGraph_t graph, const cudaGraphNode_t *from, const cudaGraphNode_t *to, size_t numDependencies) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGraphRemoveDependencies(cudaGraph_t graph, const cudaGraphNode_t *from, const cudaGraphNode_t *to, size_t numDependencies) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGraphInstantiate(cudaGraphExec_t *pGraphExec, cudaGraph_t graph, cudaGraphNode_t *pErrorNode, char *pLogBuffer, size_t bufferSize) {
-    if (!pGraphExec) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphExec) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphInstantiate\n");
     }
-
-    *pGraphExec = (cudaGraphExec_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphInstantiate\n");
     return last_error;
 }
 
 cudaError_t cudaGraphInstantiateWithFlags(cudaGraphExec_t *pGraphExec, cudaGraph_t graph, unsigned long long flags) {
-    if (!pGraphExec) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
+    if (newPlaceholder(pGraphExec) == cudaSuccess) {
+        FGPU_LOG("[FakeCUDART] cudaGraphInstantiateWithFlags flags=%llu\n", flags);
     }
-
-    *pGraphExec = (cudaGraphExec_t)malloc(sizeof(void*));
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaGraphInstantiateWithFlags flags=%llu\n", flags);
     return last_error;
 }
 
@@ -1720,10 +1365,7 @@ cudaError_t cudaGraphExecDestroy(cudaGraphExec_t graphExec) {
 }
 
 cudaError_t cudaGraphLaunch(cudaGraphExec_t graphExec, cudaStream_t stream) {
-    if (!graphExec) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!graphExec) return setLastError(cudaErrorInvalidValue);
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
@@ -1738,10 +1380,7 @@ cudaError_t cudaGraphLaunch(cudaGraphExec_t graphExec, cudaStream_t stream) {
 }
 
 cudaError_t cudaGraphUpload(cudaGraphExec_t graphExec, cudaStream_t stream) {
-    if (!graphExec) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!graphExec) return setLastError(cudaErrorInvalidValue);
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
@@ -1765,29 +1404,20 @@ cudaError_t cudaStreamBeginCapture(cudaStream_t stream, int mode) {
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
-    if (!beginCapture(stream)) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!beginCapture(stream)) return setLastError(cudaErrorInvalidValue);
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaStreamBeginCapture mode=%d\n", mode);
     return last_error;
 }
 
 cudaError_t cudaStreamEndCapture(cudaStream_t stream, cudaGraph_t *pGraph) {
-    if (!pGraph) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pGraph) return setLastError(cudaErrorInvalidValue);
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
 
     unsigned long long capture_id = 0;
-    if (!endCapture(stream, capture_id)) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!endCapture(stream, capture_id)) return setLastError(cudaErrorInvalidValue);
 
     *pGraph = (cudaGraph_t)malloc(sizeof(void*));
     last_error = cudaSuccess;
@@ -1796,25 +1426,18 @@ cudaError_t cudaStreamEndCapture(cudaStream_t stream, cudaGraph_t *pGraph) {
 }
 
 cudaError_t cudaStreamIsCapturing(cudaStream_t stream, int *pCaptureStatus) {
-    if (!pCaptureStatus) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pCaptureStatus) return setLastError(cudaErrorInvalidValue);
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
 
     const CaptureState state = lookupCaptureState(stream);
     *pCaptureStatus = state.active ? 1 : 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaStreamGetCaptureInfo(cudaStream_t stream, int *captureStatus, unsigned long long *id) {
-    if (!captureStatus) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!captureStatus) return setLastError(cudaErrorInvalidValue);
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
@@ -1822,15 +1445,11 @@ cudaError_t cudaStreamGetCaptureInfo(cudaStream_t stream, int *captureStatus, un
     const CaptureState state = lookupCaptureState(stream);
     *captureStatus = state.active ? 1 : 0;
     if (id) *id = state.active ? state.id : 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaThreadExchangeStreamCaptureMode(int *mode) {
-    if (!mode) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!mode) return setLastError(cudaErrorInvalidValue);
 
     // Return current mode (simplified: always relaxed mode)
     int oldMode = *mode;
@@ -1841,10 +1460,7 @@ cudaError_t cudaThreadExchangeStreamCaptureMode(int *mode) {
 }
 
 cudaError_t cudaStreamGetCaptureInfo_v2(cudaStream_t stream, int *captureStatus, unsigned long long *id, cudaGraph_t *graph, const cudaGraphNode_t **dependencies, size_t *numDependencies) {
-    if (!captureStatus) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!captureStatus) return setLastError(cudaErrorInvalidValue);
     if (!validateStreamArgument(stream)) {
         return last_error;
     }
@@ -1854,8 +1470,7 @@ cudaError_t cudaStreamGetCaptureInfo_v2(cudaStream_t stream, int *captureStatus,
     if (id) *id = state.active ? state.id : 0;
     if (graph) *graph = NULL;
     if (numDependencies) *numDependencies = 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGetDeviceProperties_v2(cudaDeviceProp *prop, int device) {
@@ -1868,10 +1483,7 @@ cudaError_t cudaGetDeviceProperties_v2(cudaDeviceProp *prop, int device) {
 // ============================================================================
 
 cudaError_t cudaCreateTextureObject(cudaTextureObject_t *pTexObject, const cudaResourceDesc *pResDesc, const cudaTextureDesc *pTexDesc, const cudaResourceViewDesc *pResViewDesc) {
-    if (!pTexObject) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pTexObject) return setLastError(cudaErrorInvalidValue);
 
     static cudaTextureObject_t nextTexId = 1;
     *pTexObject = nextTexId++;
@@ -1887,43 +1499,28 @@ cudaError_t cudaDestroyTextureObject(cudaTextureObject_t texObject) {
 }
 
 cudaError_t cudaGetTextureObjectResourceDesc(cudaResourceDesc *pResDesc, cudaTextureObject_t texObject) {
-    if (!pResDesc) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pResDesc) return setLastError(cudaErrorInvalidValue);
 
     memset(pResDesc, 0, sizeof(cudaResourceDesc));
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGetTextureObjectTextureDesc(cudaTextureDesc *pTexDesc, cudaTextureObject_t texObject) {
-    if (!pTexDesc) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pTexDesc) return setLastError(cudaErrorInvalidValue);
 
     memset(pTexDesc, 0, sizeof(cudaTextureDesc));
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaGetTextureObjectResourceViewDesc(cudaResourceViewDesc *pResViewDesc, cudaTextureObject_t texObject) {
-    if (!pResViewDesc) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pResViewDesc) return setLastError(cudaErrorInvalidValue);
 
     memset(pResViewDesc, 0, sizeof(cudaResourceViewDesc));
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaCreateSurfaceObject(cudaSurfaceObject_t *pSurfObject, const cudaResourceDesc *pResDesc) {
-    if (!pSurfObject) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pSurfObject) return setLastError(cudaErrorInvalidValue);
 
     static cudaSurfaceObject_t nextSurfId = 1;
     *pSurfObject = nextSurfId++;
@@ -1939,14 +1536,10 @@ cudaError_t cudaDestroySurfaceObject(cudaSurfaceObject_t surfObject) {
 }
 
 cudaError_t cudaGetSurfaceObjectResourceDesc(cudaResourceDesc *pResDesc, cudaSurfaceObject_t surfObject) {
-    if (!pResDesc) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pResDesc) return setLastError(cudaErrorInvalidValue);
 
     memset(pResDesc, 0, sizeof(cudaResourceDesc));
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 // ============================================================================
@@ -1985,30 +1578,23 @@ cudaError_t cudaThreadExit(void) {
 // ============================================================================
 
 cudaError_t cudaFuncGetAttributes(void *attr, const void *func) {
-    if (!attr) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!attr) return setLastError(cudaErrorInvalidValue);
 
     // Simplified: zero out attributes
     memset(attr, 0, 64);  // Assume structure is ~64 bytes
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaFuncSetCacheConfig(const void *func, int cacheConfig) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaFuncSetSharedMemConfig(const void *func, int config) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaFuncSetAttribute(const void *func, int attr, int value) {
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 // ============================================================================
@@ -2016,26 +1602,18 @@ cudaError_t cudaFuncSetAttribute(const void *func, int attr, int value) {
 // ============================================================================
 
 cudaError_t cudaDeviceGetByPCIBusId(int *device, const char *pciBusId) {
-    if (!device || !pciBusId) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!device || !pciBusId) return setLastError(cudaErrorInvalidValue);
 
     // Simplified: always return device 0
     *device = 0;
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 cudaError_t cudaDeviceGetPCIBusId(char *pciBusId, int len, int device) {
-    if (!pciBusId || len < 13) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!pciBusId || len < 13) return setLastError(cudaErrorInvalidValue);
 
     snprintf(pciBusId, len, "0000:00:00.0");
-    last_error = cudaSuccess;
-    return last_error;
+    return setLastError(cudaSuccess);
 }
 
 // ============================================================================
@@ -2043,10 +1621,7 @@ cudaError_t cudaDeviceGetPCIBusId(char *pciBusId, int len, int device) {
 // ============================================================================
 
 cudaError_t cudaImportExternalMemory(void **extMem_out, const void *memHandleDesc) {
-    if (!extMem_out) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!extMem_out) return setLastError(cudaErrorInvalidValue);
 
     if (rejectUnsupportedApi(
             "cudaImportExternalMemory", "synthetic_external_memory_handle")) {
@@ -2059,10 +1634,7 @@ cudaError_t cudaImportExternalMemory(void **extMem_out, const void *memHandleDes
 }
 
 cudaError_t cudaExternalMemoryGetMappedBuffer(void **devPtr, void *extMem, const void *bufferDesc) {
-    if (!devPtr) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!devPtr) return setLastError(cudaErrorInvalidValue);
 
     if (rejectUnsupportedApi(
             "cudaExternalMemoryGetMappedBuffer", "synthetic_fixed_size_buffer")) {
@@ -2086,10 +1658,7 @@ cudaError_t cudaDestroyExternalMemory(void *extMem) {
 }
 
 cudaError_t cudaImportExternalSemaphore(void **extSem_out, const void *semHandleDesc) {
-    if (!extSem_out) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
+    if (!extSem_out) return setLastError(cudaErrorInvalidValue);
 
     if (rejectUnsupportedApi(
             "cudaImportExternalSemaphore", "synthetic_external_semaphore_handle")) {
