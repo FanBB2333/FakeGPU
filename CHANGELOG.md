@@ -83,6 +83,9 @@
   the real driver resolves a symbol to NULL and `dlsym` also misses it.
 - Hybrid `cuMemAllocFromPoolAsync` applies a single allocation decision, so
   one over-budget request counts once in the report's OOM fallback count.
+- NCCL passthrough no longer treats a real NCCL library with missing
+  required symbols as loaded: every later call now fails with
+  `ncclSystemError` instead of reaching the partially resolved library.
 
 ## v1.6.0 - 2026-10-17
 

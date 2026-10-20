@@ -92,6 +92,8 @@ run_smoke() {
   done
   FAKEGPU_BUILD_DIR="$BUILD_DIR" \
     "$PYTHON_BIN" tests/native/coordinator_smoke.py
+  FAKEGPU_BUILD_DIR="$BUILD_DIR" \
+    "$PYTHON_BIN" tests/native/nccl_stubs_smoke.py
 
   if "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
     "$PYTHON_BIN" tests/support/fakecuda_profile_matrix.py
