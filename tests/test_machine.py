@@ -248,6 +248,26 @@ def test_invalid_heartbeat_does_not_crash_the_machine(service, child, stamp):
     assert kinds(service).count("state.invalid") == 1
 
 
+@pytest.mark.parametrize(
+    ("device", "extra"),
+    [
+        ({"reported_peak_memory": "abc"}, {}),
+        ({"index": None}, {}),
+        ({"index": "1"}, {}),
+        ({}, {"fakegpu": "x"}),
+        ({}, {"software": "abc"}),
+    ],
+)
+def test_malformed_state_fields_do_not_crash_the_machine(service, child, device, extra):
+    publish(service, child.pid, **extra)
+    path = service.paths.state_dir / f"{child.pid}.json"
+    state = json.loads(path.read_text())
+    state["devices"][0].update(device)
+    path.write_text(json.dumps(state))
+    service.poll()
+    assert len(service.status()["processes"]) == 1
+
+
 def test_client_timeout_is_recoverable_by_the_console(tmp_path):
     paths = MachinePaths(tmp_path)
     paths.create()

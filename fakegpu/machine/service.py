@@ -43,6 +43,7 @@ from typing import Any, Callable, Mapping
 
 from .._monitor_reference import ReferenceTelemetry
 from .._process import describe, process_marker
+from .._smi_environment import _nonnegative_int
 from .._smi_state import _load_states, _synthetic_uuid, build_inventory
 from .._version import __version__
 from ..profile_catalog import get_profile
@@ -97,11 +98,11 @@ class _Process:
     ended_ns: int = 0
 
     def device_profiles(self) -> list[str]:
-        devices = sorted(self.state.get("devices") or [], key=lambda d: d.get("index", 0))
+        devices = sorted(self.state.get("devices") or [], key=lambda d: _nonnegative_int(d.get("index")))
         return [str(device.get("profile_id", "")) for device in devices]
 
     def peak_bytes(self) -> int:
-        return sum(int(d.get("reported_peak_memory") or 0) for d in self.state.get("devices") or [])
+        return sum(_nonnegative_int(d.get("reported_peak_memory")) for d in self.state["devices"])
 
     def summary(self, now_ns: int) -> dict[str, Any]:
         return {
@@ -534,14 +535,14 @@ class MachineService:
         rows = {}
         for process in live:
             state = process.state
-            fakegpu = state.get("fakegpu") or {}
+            fakegpu, software = state.get("fakegpu"), state.get("software")
             rows[process.pid] = {
                 **process.summary(now),
                 "stage": str(state.get("stage") or "unknown"),
-                "backend": str(fakegpu.get("backend") or "unknown"),
+                "backend": str(fakegpu.get("backend") or "unknown") if isinstance(fakegpu, Mapping) else "unknown",
                 "tracking_confidence": str(state.get("tracking_confidence") or "unknown"),
                 "heartbeat_age_seconds": round((now - int(state.get("timestamp_ns") or 0)) / 1e9, 1),
-                "software": dict(state.get("software") or {}),
+                "software": dict(software) if isinstance(software, Mapping) else {},
                 "devices": [],
                 "memory_bytes": 0,
                 "gpu_percent": None,
