@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import dataclasses
 import functools
+import re
 from typing import Any
 
 
@@ -69,19 +71,22 @@ def _patch_upstream_fakecuda_tensor_compat(upstream: Any, torch_mod: Any) -> Non
     fake_tensor_cls.is_cpu = property(lambda self: False)
 
 
+@functools.lru_cache(maxsize=None)
+def _shard_metadata_types() -> tuple[Any, Any]:
+    """Return (ShardMetadata, ShardedTensorMetadata), or Nones without them."""
+    try:
+        from torch.distributed._shard.metadata import ShardMetadata
+        from torch.distributed._shard.sharded_tensor.metadata import (
+            ShardedTensorMetadata,
+        )
+    except Exception:
+        return None, None
+    return ShardMetadata, ShardedTensorMetadata
+
+
 def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
     def _clone_gathered_object_for_rank(obj: Any, rank: int) -> Any:
-        import copy
-        import re
-
-        try:
-            from torch.distributed._shard.metadata import ShardMetadata
-            from torch.distributed._shard.sharded_tensor.metadata import (
-                ShardedTensorMetadata,
-            )
-        except Exception:
-            ShardMetadata = None
-            ShardedTensorMetadata = None
+        ShardMetadata, ShardedTensorMetadata = _shard_metadata_types()
 
         if ShardMetadata is not None and isinstance(obj, ShardMetadata):
             shard_offsets = list(obj.shard_offsets)
