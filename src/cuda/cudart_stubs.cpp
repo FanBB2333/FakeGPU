@@ -1347,9 +1347,12 @@ cudaError_t cudaMemPoolGetAttribute(cudaMemPool_t memPool, int attr, void *value
         return last_error;
     }
 
-    // Simplified: return default values based on attribute
-    // Most attributes are integers or size_t
-    *(size_t*)value = 0;
+    // Attributes 1-3 (the reuse policies) are int; the rest are cuuint64_t.
+    if (attr >= 1 && attr <= 3) {
+        *(int*)value = 0;
+    } else {
+        *(uint64_t*)value = 0;
+    }
     last_error = cudaSuccess;
     return last_error;
 }

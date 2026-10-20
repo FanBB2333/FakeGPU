@@ -92,6 +92,22 @@ def check_context_push_switches_runtime_device(runtime: ctypes.CDLL) -> None:
     runtime.cudaSetDevice(0)
 
 
+def check_mem_pool_int_attribute_size(runtime: ctypes.CDLL) -> None:
+    class IntWithCanary(ctypes.Structure):
+        _fields_ = [("value", ctypes.c_int), ("canary", ctypes.c_int)]
+
+    runtime.cudaMemPoolGetAttribute.argtypes = [c_void_p, ctypes.c_int, c_void_p]
+    pool = c_void_p()
+    _check(runtime.cudaDeviceGetDefaultMemPool(ctypes.byref(pool), 0) == 0, "cudaDeviceGetDefaultMemPool failed")
+    # cudaMemPoolReuseFollowEventDependencies (1) is an int attribute.
+    pair = IntWithCanary(-1, 0x7777)
+    result = runtime.cudaMemPoolGetAttribute(pool, 1, ctypes.byref(pair))
+    _check(
+        result == 0 and pair.value == 0 and pair.canary == 0x7777,
+        f"cudaMemPoolGetAttribute(int attribute) returned {result}, value {pair.value}, canary {pair.canary:#x}",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -115,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     check_driver_entry_point_status(runtime)
     check_get_proc_address_v2_rejects_null_output(driver)
     check_context_push_switches_runtime_device(runtime)
+    check_mem_pool_int_attribute_size(runtime)
     print("CUDA API contract validation passed")
     return 0
 

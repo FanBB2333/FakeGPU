@@ -74,6 +74,8 @@
 - `cuCtxPushCurrent` now also switches the Runtime's current device, as
   `cuCtxSetCurrent` does, so pinned host allocations and peer-access checks
   use the pushed context's device.
+- `cudaMemPoolGetAttribute` writes 4 bytes for the int-valued reuse-policy
+  attributes instead of overwriting 8 bytes of caller memory.
 
 ## v1.6.0 - 2026-10-17
 
