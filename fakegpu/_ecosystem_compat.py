@@ -36,17 +36,12 @@ def _patch_accelerate_utils() -> None:
 
 
 def _patch_upstream_fakecuda_tensor_compat(upstream: Any, torch_mod: Any) -> None:
-    fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
-    if fake_tensor_cls is None:
-        return
+    fake_tensor_cls = upstream.FakeCudaTensor
 
     # torch.utils.checkpoint groups non-CPU tensors by ``tensor.get_device()``.
     # The subclass stores CPU data internally, so inheriting Tensor.get_device
     # leaks the backing CPU value (-1) and checkpoint tries to enter cuda:-1.
     fake_tensor_cls.get_device = lambda self: int(self.device_index)
-
-    if getattr(fake_tensor_cls, "_fakegpu_set_patched", False):
-        return
 
     def _patched_set_(self, source, storage_offset=0, size=None, stride=None):
         raw_source = upstream.unwrap_tensor(source)
@@ -72,13 +67,9 @@ def _patch_upstream_fakecuda_tensor_compat(upstream: Any, torch_mod: Any) -> Non
     fake_tensor_cls.set_ = _patched_set_
     fake_tensor_cls.record_stream = lambda self, stream: None
     fake_tensor_cls.is_cpu = property(lambda self: False)
-    fake_tensor_cls._fakegpu_set_patched = True
 
 
 def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
-    if getattr(upstream, "_fakegpu_all_gather_object_patched", False):
-        return
-
     def _clone_gathered_object_for_rank(obj: Any, rank: int) -> Any:
         import copy
         import re
@@ -134,7 +125,6 @@ def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
 
     upstream._dist_all_gather_object = _patched_all_gather_object
     torch_mod.distributed.all_gather_object = _patched_all_gather_object
-    upstream._fakegpu_all_gather_object_patched = True
 
 
 def _patch_fsdp_device_handling() -> None:
@@ -200,7 +190,7 @@ def _patch_fsdp_device_handling() -> None:
             _fsdp_mod._get_device_from_device_id = _patched_get_device
 
 
-def _patch_fsdp_runtime_compat(fake_tensor_cls: type | None) -> None:
+def _patch_fsdp_runtime_compat(fake_tensor_cls: type) -> None:
     try:
         import torch
         import torch.distributed.fsdp._runtime_utils as _fsdp_runtime
@@ -208,12 +198,12 @@ def _patch_fsdp_runtime_compat(fake_tensor_cls: type | None) -> None:
         return
 
     _orig_register = getattr(_fsdp_runtime, "_register_post_backward_hook", None)
-    if _orig_register is None or getattr(_orig_register, "_fakegpu_patched", False):
+    if _orig_register is None:
         return
 
     @functools.wraps(_orig_register)
     def _patched_register_post_backward_hook(state, handle):
-        if not handle or fake_tensor_cls is None:
+        if not handle:
             return _orig_register(state, handle)
 
         flat_param = handle.flat_param
@@ -229,18 +219,11 @@ def _patch_fsdp_runtime_compat(fake_tensor_cls: type | None) -> None:
 
         # FakeCudaTensor aliases do not expose the expected AccumulateGrad via
         # ``expand_as(...).grad_fn.next_functions`` after FSDP's internal
-        # storage rebinding. Use the newer post-accumulate hook when available
-        # to avoid asserting during forward.
-        register_hook = getattr(flat_param, "register_post_accumulate_grad_hook", None)
-        if register_hook is not None:
-            hook = functools.partial(_fsdp_runtime._post_backward_hook, state, handle)
-            hook_handle = register_hook(hook)
-            flat_param._post_backward_hook_state = (None, hook_handle)
-            return
-
-        return
-
-    _patched_register_post_backward_hook._fakegpu_patched = True
+        # storage rebinding. Use the post-accumulate hook instead to avoid
+        # asserting during forward.
+        hook = functools.partial(_fsdp_runtime._post_backward_hook, state, handle)
+        hook_handle = flat_param.register_post_accumulate_grad_hook(hook)
+        flat_param._post_backward_hook_state = (None, hook_handle)
     _fsdp_runtime._register_post_backward_hook = _patched_register_post_backward_hook
 
 

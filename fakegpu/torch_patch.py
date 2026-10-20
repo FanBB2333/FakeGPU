@@ -44,7 +44,6 @@ import importlib
 import os
 import time
 import traceback
-import types
 import weakref
 import warnings
 from contextlib import contextmanager
@@ -434,16 +433,8 @@ def _iter_tensors(value: Any):
 
 
 def _install_upstream_dispatch_memory_tracking(upstream: Any) -> None:
-    fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
-    if (
-        fake_tensor_cls is None
-        or not _MEMORY_TRACKING
-        or not _DISPATCH_MEMORY_TRACKING
-    ):
+    if not _MEMORY_TRACKING or not _DISPATCH_MEMORY_TRACKING:
         _reset_dispatch_tracking_stats(enabled=False)
-        return
-    if getattr(fake_tensor_cls, "_fakegpu_dispatch_tracking", False):
-        _reset_dispatch_tracking_stats(enabled=True)
         return
 
     from torch.utils._python_dispatch import TorchDispatchMode
@@ -535,8 +526,7 @@ def _install_upstream_dispatch_memory_tracking(upstream: Any) -> None:
             result,
         )
 
-    fake_tensor_cls.__torch_function__ = _tracked_torch_function
-    fake_tensor_cls._fakegpu_dispatch_tracking = True
+    upstream.FakeCudaTensor.__torch_function__ = _tracked_torch_function
     _reset_dispatch_tracking_stats(enabled=True)
 
 
@@ -705,8 +695,6 @@ def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> No
     module_cls = torch_mod.nn.Module
     for name in ("cuda", "to"):
         original = getattr(module_cls, name)
-        if not callable(original) or getattr(original, "_fakegpu_category_patch", False):
-            continue
 
         @functools.wraps(original)
         def _tracked_module_transfer(self, *args, __original=original, **kwargs):
@@ -714,67 +702,51 @@ def _install_upstream_memory_category_hooks(upstream: Any, torch_mod: Any) -> No
             _mark_module_memory_categories(result)
             return result
 
-        _tracked_module_transfer._fakegpu_category_patch = True  # type: ignore[attr-defined]
         setattr(module_cls, name, _tracked_module_transfer)
 
-    original_register_parameter = getattr(upstream, "register_parameter", None)
-    if callable(original_register_parameter) and not getattr(
-        original_register_parameter, "_fakegpu_category_patch", False
-    ):
+    original_register_parameter = upstream.register_parameter
 
-        @functools.wraps(original_register_parameter)
-        def _tracked_register_parameter(tensor):
-            result = original_register_parameter(tensor)
-            _mark_tensor_memory_category(tensor, "parameter")
-            return result
+    @functools.wraps(original_register_parameter)
+    def _tracked_register_parameter(tensor):
+        result = original_register_parameter(tensor)
+        _mark_tensor_memory_category(tensor, "parameter")
+        return result
 
-        _tracked_register_parameter._fakegpu_category_patch = True  # type: ignore[attr-defined]
-        upstream.register_parameter = _tracked_register_parameter
+    upstream.register_parameter = _tracked_register_parameter
 
-    fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
-    if fake_tensor_cls is not None:
-        original_backward = getattr(fake_tensor_cls, "backward", None)
-        if callable(original_backward) and not getattr(
-            original_backward, "_fakegpu_category_patch", False
-        ):
+    fake_tensor_cls = upstream.FakeCudaTensor
+    original_backward = fake_tensor_cls.backward
 
-            @functools.wraps(original_backward)
-            def _tracked_backward(self, *args, **kwargs):
-                try:
-                    return original_backward(self, *args, **kwargs)
-                finally:
-                    _mark_registered_parameter_grads(upstream)
+    @functools.wraps(original_backward)
+    def _tracked_backward(self, *args, **kwargs):
+        try:
+            return original_backward(self, *args, **kwargs)
+        finally:
+            _mark_registered_parameter_grads(upstream)
 
-            _tracked_backward._fakegpu_category_patch = True  # type: ignore[attr-defined]
-            fake_tensor_cls.backward = _tracked_backward
+    fake_tensor_cls.backward = _tracked_backward
 
-        grad_property = getattr(fake_tensor_cls, "grad", None)
-        if isinstance(grad_property, property) and not getattr(
-            grad_property.fget, "_fakegpu_category_patch", False
-        ):
-            original_get = grad_property.fget
-            original_set = grad_property.fset
+    original_get = fake_tensor_cls.grad.fget
+    original_set = fake_tensor_cls.grad.fset
 
-            def _tracked_grad_get(self):
-                result = original_get(self) if original_get is not None else None
-                if result is not None:
-                    _mark_tensor_memory_category(result, "gradient")
-                return result
+    def _tracked_grad_get(self):
+        result = original_get(self)
+        if result is not None:
+            _mark_tensor_memory_category(result, "gradient")
+        return result
 
-            def _tracked_grad_set(self, value) -> None:
-                if original_set is not None:
-                    original_set(self, value)
-                if value is not None:
-                    _mark_tensor_memory_category(value, "gradient")
+    def _tracked_grad_set(self, value) -> None:
+        original_set(self, value)
+        if value is not None:
+            _mark_tensor_memory_category(value, "gradient")
 
-            _tracked_grad_get._fakegpu_category_patch = True  # type: ignore[attr-defined]
-            fake_tensor_cls.grad = property(_tracked_grad_get, _tracked_grad_set)
+    fake_tensor_cls.grad = property(_tracked_grad_get, _tracked_grad_set)
 
     _install_optimizer_state_category_patch(torch_mod)
 
 
 def _mark_registered_parameter_grads(upstream: Any) -> None:
-    for param in list(getattr(upstream, "_REGISTERED_PARAMETERS", ())):
+    for param in list(upstream._REGISTERED_PARAMETERS):
         _mark_tensor_memory_category(param, "parameter")
         try:
             grad = param.grad
@@ -797,14 +769,11 @@ def _install_optimizer_state_category_patch(torch_mod: Any) -> None:
         "Adadelta",
     )
     for name in class_names:
-        cls = getattr(optim_mod, name, None)
-        if cls is None:
+        cls = getattr(optim_mod, name)
+        # Classes such as AdamW inherit an already wrapped step.
+        if "step" not in vars(cls):
             continue
-        original_step = getattr(cls, "step", None)
-        if not callable(original_step) or getattr(
-            original_step, "_fakegpu_category_patch", False
-        ):
-            continue
+        original_step = cls.step
 
         @functools.wraps(original_step)
         def _tracked_step(self, *args, __orig_step=original_step, **kwargs):
@@ -813,7 +782,6 @@ def _install_optimizer_state_category_patch(torch_mod: Any) -> None:
             finally:
                 _mark_optimizer_state_tensors(self)
 
-        _tracked_step._fakegpu_category_patch = True  # type: ignore[attr-defined]
         cls.step = _tracked_step
 
 
@@ -901,9 +869,7 @@ def _install_compile_compat_shim(torch_mod: Any) -> None:
         return model
 
     torch_mod.compile = _fakegpu_compile
-    compiler_mod = getattr(torch_mod, "compiler", None)
-    if compiler_mod is not None:
-        compiler_mod.compile = _fakegpu_compile
+    torch_mod.compiler.compile = _fakegpu_compile
 
 
 # ---------------------------------------------------------------------------
@@ -918,9 +884,7 @@ def _install_torch_accelerator_compat(torch_mod: Any) -> None:
     ``torch.cuda`` has already been redirected by FakeGPU.
     """
 
-    accelerator = getattr(torch_mod, "accelerator", None)
-    if accelerator is None:
-        return
+    accelerator = torch_mod.accelerator
 
     def _current_accelerator(check_available: bool = False):
         if check_available and not torch_mod.cuda.is_available():
@@ -1038,7 +1002,7 @@ def _stub_set_rng_state_all(new_states: Any) -> None:
 # ---------------------------------------------------------------------------
 def _reported_cuda_version(torch_mod: Any) -> str:
     configured_cuda_version = os.environ.get("FAKEGPU_CUDA_VERSION", "").strip()
-    installed_cuda_version = getattr(torch_mod.version, "cuda", None)
+    installed_cuda_version = torch_mod.version.cuda
     return str(configured_cuda_version or installed_cuda_version or "12.1")
 
 
@@ -1046,24 +1010,13 @@ def _patch_hf_cuda_surface(torch_mod: Any) -> None:
     """Expose CUDA metadata expected by HuggingFace and Accelerate."""
     torch_mod.version.cuda = _reported_cuda_version(torch_mod)
 
-    backends_cuda = getattr(torch_mod.backends, "cuda", None)
-    if backends_cuda is None:
-        backends_cuda = types.SimpleNamespace()
-        torch_mod.backends.cuda = backends_cuda
+    backends_cuda = torch_mod.backends.cuda
     backends_cuda.is_built = lambda: True
 
-    matmul_backend = getattr(backends_cuda, "matmul", None)
-    if matmul_backend is None:
-        matmul_backend = types.SimpleNamespace()
-        backends_cuda.matmul = matmul_backend
+    matmul_backend = backends_cuda.matmul
     matmul_backend.allow_tf32 = False
-    if not hasattr(matmul_backend, "allow_fp16_reduced_precision_reduction"):
-        matmul_backend.allow_fp16_reduced_precision_reduction = True
 
-    cudnn_backend = getattr(torch_mod.backends, "cudnn", None)
-    if cudnn_backend is None:
-        cudnn_backend = types.SimpleNamespace()
-        torch_mod.backends.cudnn = cudnn_backend
+    cudnn_backend = torch_mod.backends.cudnn
     cudnn_backend.is_available = lambda: True
     cudnn_backend.enabled = True
     cudnn_backend.benchmark = False
@@ -1157,11 +1110,7 @@ def _patch_cuda_rng_surface(torch_mod: Any) -> None:
 
 
 def _patch_nccl_surface(torch_mod: Any) -> None:
-    nccl_mod = getattr(torch_mod.cuda, "nccl", None)
-    if nccl_mod is None:
-        nccl_mod = types.SimpleNamespace()
-        torch_mod.cuda.nccl = nccl_mod
-    nccl_mod.version = lambda: (2, 21, 5)
+    torch_mod.cuda.nccl.version = lambda: (2, 21, 5)
 
 
 
@@ -1230,8 +1179,7 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
             )
 
     torch_mod.amp.autocast = _PatchedAutocast
-    if hasattr(torch_mod.cuda.amp, "autocast"):
-        torch_mod.cuda.amp.autocast = _PatchedCudaAmpAutocast
+    torch_mod.cuda.amp.autocast = _PatchedCudaAmpAutocast
 
 
 def _activate_upstream(num_devices: int, device_name: str) -> Any:
@@ -1284,8 +1232,7 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
 
     Covers ``Tensor.to/.cuda/.cpu``, ``Module.to/.cuda``,
     ``torch.tensor``/``torch.as_tensor`` with a CUDA device, ``copy_``
-    between devices, and ``item``/``tolist`` reads. Installing twice
-    keeps a single layer of wrappers.
+    between devices, and ``item``/``tolist`` reads.
     """
 
     fake_cls = upstream.FakeCudaTensor
@@ -1325,54 +1272,47 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
             record(endpoint(old), endpoint(new), old)
         return result
 
-    def marked(function: Any) -> Any:
-        function._fakegpu_transfer = True
-        return function
+    tensor_to = upstream._tensor_to
 
-    if not getattr(upstream._tensor_to, "_fakegpu_transfer", False):
-        tensor_to = upstream._tensor_to
+    @functools.wraps(tensor_to)
+    def _counted_tensor_to(self: Any, *args: Any, **kwargs: Any) -> Any:
+        result = tensor_to(self, *args, **kwargs)
+        if result is not self and isinstance(result, torch_mod.Tensor):
+            record(endpoint(self), endpoint(result), self)
+        return result
 
-        @functools.wraps(tensor_to)
-        def _counted_tensor_to(self: Any, *args: Any, **kwargs: Any) -> Any:
-            result = tensor_to(self, *args, **kwargs)
-            if result is not self and isinstance(result, torch_mod.Tensor):
-                record(endpoint(self), endpoint(result), self)
-            return result
+    upstream._tensor_to = _counted_tensor_to
 
-        upstream._tensor_to = marked(_counted_tensor_to)
+    tensor_cpu = upstream._tensor_cpu
 
-    if not getattr(upstream._tensor_cpu, "_fakegpu_transfer", False):
-        tensor_cpu = upstream._tensor_cpu
+    @functools.wraps(tensor_cpu)
+    def _counted_tensor_cpu(self: Any, *args: Any, **kwargs: Any) -> Any:
+        result = tensor_cpu(self, *args, **kwargs)
+        if isinstance(self, fake_cls):
+            record(int(self.device_index), None, self)
+        return result
 
-        @functools.wraps(tensor_cpu)
-        def _counted_tensor_cpu(self: Any, *args: Any, **kwargs: Any) -> Any:
-            result = tensor_cpu(self, *args, **kwargs)
-            if isinstance(self, fake_cls):
-                record(int(self.device_index), None, self)
-            return result
+    upstream._tensor_cpu = _counted_tensor_cpu
 
-        upstream._tensor_cpu = marked(_counted_tensor_cpu)
+    module_to = upstream._module_to
+    module_cuda = upstream._module_cuda
 
-    if not getattr(upstream._module_to, "_fakegpu_transfer", False):
-        module_to = upstream._module_to
-        module_cuda = upstream._module_cuda
+    @functools.wraps(module_to)
+    def _counted_module_to(self: Any, *args: Any, **kwargs: Any) -> Any:
+        target = kwargs.get("device")
+        if target is None and args:
+            target = args[0]
+        if upstream._normalize_cuda_device(target, allow_none=True) is None:
+            # Moves to the host go through Tensor.to, which records them.
+            return module_to(self, *args, **kwargs)
+        return record_module(self, lambda: module_to(self, *args, **kwargs))
 
-        @functools.wraps(module_to)
-        def _counted_module_to(self: Any, *args: Any, **kwargs: Any) -> Any:
-            target = kwargs.get("device")
-            if target is None and args:
-                target = args[0]
-            if upstream._normalize_cuda_device(target, allow_none=True) is None:
-                # Moves to the host go through Tensor.to, which records them.
-                return module_to(self, *args, **kwargs)
-            return record_module(self, lambda: module_to(self, *args, **kwargs))
+    @functools.wraps(module_cuda)
+    def _counted_module_cuda(self: Any, device: Any = None) -> Any:
+        return record_module(self, lambda: module_cuda(self, device))
 
-        @functools.wraps(module_cuda)
-        def _counted_module_cuda(self: Any, device: Any = None) -> Any:
-            return record_module(self, lambda: module_cuda(self, device))
-
-        upstream._module_to = marked(_counted_module_to)
-        upstream._module_cuda = marked(_counted_module_cuda)
+    upstream._module_to = _counted_module_to
+    upstream._module_cuda = _counted_module_cuda
 
     torch_mod.Tensor.to = upstream._tensor_to
     torch_mod.Tensor.cpu = upstream._tensor_cpu
@@ -1380,9 +1320,7 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
     torch_mod.nn.Module.cuda = upstream._module_cuda
 
     for name in ("tensor", "as_tensor"):
-        factory = getattr(torch_mod, name, None)
-        if factory is None or getattr(factory, "_fakegpu_transfer", False):
-            continue
+        factory = getattr(torch_mod, name)
 
         def _counted_factory(*args: Any, _factory: Any = factory, **kwargs: Any) -> Any:
             result = _factory(*args, **kwargs)
@@ -1391,11 +1329,11 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
                 record(source, int(result.device_index), result)
             return result
 
-        setattr(torch_mod, name, marked(functools.wraps(factory)(_counted_factory)))
+        setattr(torch_mod, name, functools.wraps(factory)(_counted_factory))
 
     torch_function = fake_cls.__dict__.get("__torch_function__")
     inner = getattr(torch_function, "__func__", None)
-    if inner is not None and not getattr(inner, "_fakegpu_transfer", False):
+    if inner is not None:
         copy_ = torch_mod.Tensor.copy_
         reads = (torch_mod.Tensor.item, torch_mod.Tensor.tolist)
 
@@ -1413,7 +1351,6 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
                 record(endpoint(args[0]), None, args[0])
             return result
 
-        marked(_counted_torch_function)
         fake_cls.__torch_function__ = classmethod(_counted_torch_function)
 
 
@@ -1567,8 +1504,8 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     upstream._tree_map = _dynamo_friendly_tree_map
 
-    fake_ddp_cls = getattr(torch_mod.nn.parallel, "DistributedDataParallel", None)
-    if fake_ddp_cls is not None and not hasattr(fake_ddp_cls, "_get_active_ddp_module"):
+    fake_ddp_cls = torch_mod.nn.parallel.DistributedDataParallel
+    if not hasattr(fake_ddp_cls, "_get_active_ddp_module"):
         fake_ddp_cls._get_active_ddp_module = staticmethod(lambda: None)
 
     torch_mod.Tensor.pin_memory = _patched_tensor_pin_memory  # type: ignore[assignment]
@@ -1681,18 +1618,13 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     # ---- 5. Autocast / GradScaler ----
     _install_fakegpu_autocast(torch_mod)
 
-    try:
-        from torch.amp import GradScaler as _RealGradScaler
+    class _FakeGradScaler(torch_mod.amp.GradScaler):
+        def __init__(self, *args: Any, **kwargs: Any):
+            kwargs.setdefault("enabled", False)
+            super().__init__(*args, **kwargs)
 
-        class _FakeGradScaler(_RealGradScaler):
-            def __init__(self, *args: Any, **kwargs: Any):
-                kwargs.setdefault("enabled", False)
-                super().__init__(*args, **kwargs)
-
-        torch_mod.cuda.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
-        torch_mod.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
-    except Exception:
-        pass
+    torch_mod.cuda.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
+    torch_mod.amp.GradScaler = _FakeGradScaler  # type: ignore[attr-defined]
 
     # ---- 6. Cross-device validation ----
     if _CROSS_DEVICE_CHECK:
@@ -1776,7 +1708,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     _patch_cuda_rng_surface(torch_mod)
     _patch_nccl_surface(torch_mod)
     _patch_fsdp_device_handling()
-    _patch_fsdp_runtime_compat(getattr(upstream, "FakeCudaTensor", None))
+    _patch_fsdp_runtime_compat(upstream.FakeCudaTensor)
     _patch_transformers_utils()
     _patch_accelerate_utils()
 
@@ -1826,7 +1758,7 @@ def patch(
     if _patched:
         _upstream_mod._NUM_DEVICES = _NUM_DEVICES
         _upstream_mod._DEVICE_NAME = _DEVICE_NAME
-        if getattr(_upstream_mod, "_CURRENT_DEVICE", 0) >= _NUM_DEVICES:
+        if _upstream_mod._CURRENT_DEVICE >= _NUM_DEVICES:
             _upstream_mod._CURRENT_DEVICE = 0
         torch.cuda._cached_device_count = _NUM_DEVICES
         if _MEMORY_TRACKING:
