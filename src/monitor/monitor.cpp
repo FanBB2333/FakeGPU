@@ -20,6 +20,86 @@ namespace fake_gpu {
 static std::atomic<bool> g_report_dumped{false};
 static std::atomic<bool> g_shutting_down{false};
 
+namespace {
+
+uint64_t saturating_add_u64(uint64_t a, uint64_t b) {
+    const uint64_t max_value = std::numeric_limits<uint64_t>::max();
+    if (a >= max_value - b) return max_value;
+    return a + b;
+}
+
+// One report row: a call counter and its byte or FLOP total.
+struct CounterField {
+    const char* name;
+    uint64_t DeviceCounters::*calls;
+    uint64_t DeviceCounters::*amount;
+};
+
+constexpr CounterField kMemoryCounters[] = {
+    {"alloc", &DeviceCounters::alloc_calls, &DeviceCounters::alloc_bytes},
+    {"free", &DeviceCounters::free_calls, &DeviceCounters::free_bytes},
+};
+
+constexpr CounterField kIoCounters[] = {
+    {"h2d", &DeviceCounters::memcpy_h2d_calls, &DeviceCounters::memcpy_h2d_bytes},
+    {"d2h", &DeviceCounters::memcpy_d2h_calls, &DeviceCounters::memcpy_d2h_bytes},
+    {"d2d", &DeviceCounters::memcpy_d2d_calls, &DeviceCounters::memcpy_d2d_bytes},
+    {"peer_tx", &DeviceCounters::memcpy_peer_tx_calls, &DeviceCounters::memcpy_peer_tx_bytes},
+    {"peer_rx", &DeviceCounters::memcpy_peer_rx_calls, &DeviceCounters::memcpy_peer_rx_bytes},
+    {"memset", &DeviceCounters::memset_calls, &DeviceCounters::memset_bytes},
+};
+
+constexpr CounterField kComputeCounters[] = {
+    {"cublas_gemm", &DeviceCounters::cublas_gemm_calls, &DeviceCounters::cublas_gemm_flops},
+    {"cublaslt_matmul", &DeviceCounters::cublaslt_matmul_calls, &DeviceCounters::cublaslt_matmul_flops},
+};
+
+template <std::size_t N>
+bool any_counter(const CounterField (&fields)[N], const DeviceCounters& stats) {
+    for (const CounterField& field : fields) {
+        if (stats.*field.calls > 0 || stats.*field.amount > 0) return true;
+    }
+    return false;
+}
+
+template <std::size_t N>
+uint64_t total_amount(const CounterField (&fields)[N], const DeviceCounters& stats) {
+    uint64_t total = 0;
+    for (const CounterField& field : fields) {
+        total = saturating_add_u64(total, stats.*field.amount);
+    }
+    return total;
+}
+
+template <std::size_t N>
+void add_counters(const CounterField (&fields)[N], const DeviceCounters& stats, DeviceCounters& totals) {
+    for (const CounterField& field : fields) {
+        totals.*field.calls = saturating_add_u64(totals.*field.calls, stats.*field.calls);
+        totals.*field.amount = saturating_add_u64(totals.*field.amount, stats.*field.amount);
+    }
+}
+
+template <std::size_t N>
+void print_counter_rows(
+    FILE* out,
+    const char* indent,
+    const CounterField (&fields)[N],
+    const DeviceCounters& stats,
+    const char* unit,
+    bool comma_after_last) {
+    for (std::size_t i = 0; i < N; ++i) {
+        fprintf(out, "%s\"%s\": {\"calls\": %llu, \"%s\": %llu}%s\n",
+                indent,
+                fields[i].name,
+                (unsigned long long)(stats.*fields[i].calls),
+                unit,
+                (unsigned long long)(stats.*fields[i].amount),
+                (i + 1 < N || comma_after_last) ? "," : "");
+    }
+}
+
+} // namespace
+
 class ResourceMonitor {
 public:
     static ResourceMonitor& instance() {
@@ -49,12 +129,6 @@ public:
     }
 
 private:
-    static uint64_t saturating_add_u64(uint64_t a, uint64_t b) {
-        const uint64_t max_value = std::numeric_limits<uint64_t>::max();
-        if (a >= max_value - b) return max_value;
-        return a + b;
-    }
-
     static bool snapshot_has_meaningful_activity(
         const std::vector<DeviceReportStats>& devices,
         const HostIoStats& host_io) {
@@ -64,16 +138,11 @@ private:
 
         for (const auto& dev : devices) {
             if (dev.used_memory_current > 0 || dev.used_memory_peak > 0) return true;
-            if (dev.alloc_calls > 0 || dev.alloc_bytes > 0) return true;
-            if (dev.free_calls > 0 || dev.free_bytes > 0) return true;
-            if (dev.memcpy_h2d_calls > 0 || dev.memcpy_h2d_bytes > 0) return true;
-            if (dev.memcpy_d2h_calls > 0 || dev.memcpy_d2h_bytes > 0) return true;
-            if (dev.memcpy_d2d_calls > 0 || dev.memcpy_d2d_bytes > 0) return true;
-            if (dev.memcpy_peer_tx_calls > 0 || dev.memcpy_peer_tx_bytes > 0) return true;
-            if (dev.memcpy_peer_rx_calls > 0 || dev.memcpy_peer_rx_bytes > 0) return true;
-            if (dev.memset_calls > 0 || dev.memset_bytes > 0) return true;
-            if (dev.cublas_gemm_calls > 0 || dev.cublas_gemm_flops > 0) return true;
-            if (dev.cublaslt_matmul_calls > 0 || dev.cublaslt_matmul_flops > 0) return true;
+            if (any_counter(kMemoryCounters, dev) ||
+                any_counter(kIoCounters, dev) ||
+                any_counter(kComputeCounters, dev)) {
+                return true;
+            }
             if (dev.kernel_launch_total > 0) return true;
             if (!dev.compat_events.empty()) return true;
             if (!dev.unsupported_api_events.empty()) return true;
@@ -273,50 +342,11 @@ private:
                 return;
             }
 
-            uint64_t total_alloc_bytes = 0;
-            uint64_t total_free_bytes = 0;
-            uint64_t total_h2d_bytes = 0;
-            uint64_t total_d2h_bytes = 0;
-            uint64_t total_d2d_bytes = 0;
-            uint64_t total_peer_tx_bytes = 0;
-            uint64_t total_peer_rx_bytes = 0;
-            uint64_t total_memset_bytes = 0;
-            uint64_t total_cublas_gemm_flops = 0;
-            uint64_t total_cublaslt_matmul_flops = 0;
-
-            uint64_t total_alloc_calls = 0;
-            uint64_t total_free_calls = 0;
-            uint64_t total_h2d_calls = 0;
-            uint64_t total_d2h_calls = 0;
-            uint64_t total_d2d_calls = 0;
-            uint64_t total_peer_tx_calls = 0;
-            uint64_t total_peer_rx_calls = 0;
-            uint64_t total_memset_calls = 0;
-            uint64_t total_cublas_gemm_calls = 0;
-            uint64_t total_cublaslt_matmul_calls = 0;
-
+            DeviceCounters totals;
             for (const auto& dev : devices) {
-                total_alloc_bytes = saturating_add_u64(total_alloc_bytes, dev.alloc_bytes);
-                total_free_bytes = saturating_add_u64(total_free_bytes, dev.free_bytes);
-                total_h2d_bytes = saturating_add_u64(total_h2d_bytes, dev.memcpy_h2d_bytes);
-                total_d2h_bytes = saturating_add_u64(total_d2h_bytes, dev.memcpy_d2h_bytes);
-                total_d2d_bytes = saturating_add_u64(total_d2d_bytes, dev.memcpy_d2d_bytes);
-                total_peer_tx_bytes = saturating_add_u64(total_peer_tx_bytes, dev.memcpy_peer_tx_bytes);
-                total_peer_rx_bytes = saturating_add_u64(total_peer_rx_bytes, dev.memcpy_peer_rx_bytes);
-                total_memset_bytes = saturating_add_u64(total_memset_bytes, dev.memset_bytes);
-                total_cublas_gemm_flops = saturating_add_u64(total_cublas_gemm_flops, dev.cublas_gemm_flops);
-                total_cublaslt_matmul_flops = saturating_add_u64(total_cublaslt_matmul_flops, dev.cublaslt_matmul_flops);
-
-                total_alloc_calls = saturating_add_u64(total_alloc_calls, dev.alloc_calls);
-                total_free_calls = saturating_add_u64(total_free_calls, dev.free_calls);
-                total_h2d_calls = saturating_add_u64(total_h2d_calls, dev.memcpy_h2d_calls);
-                total_d2h_calls = saturating_add_u64(total_d2h_calls, dev.memcpy_d2h_calls);
-                total_d2d_calls = saturating_add_u64(total_d2d_calls, dev.memcpy_d2d_calls);
-                total_peer_tx_calls = saturating_add_u64(total_peer_tx_calls, dev.memcpy_peer_tx_calls);
-                total_peer_rx_calls = saturating_add_u64(total_peer_rx_calls, dev.memcpy_peer_rx_calls);
-                total_memset_calls = saturating_add_u64(total_memset_calls, dev.memset_calls);
-                total_cublas_gemm_calls = saturating_add_u64(total_cublas_gemm_calls, dev.cublas_gemm_calls);
-                total_cublaslt_matmul_calls = saturating_add_u64(total_cublaslt_matmul_calls, dev.cublaslt_matmul_calls);
+                add_counters(kMemoryCounters, dev, totals);
+                add_counters(kIoCounters, dev, totals);
+                add_counters(kComputeCounters, dev, totals);
             }
 
             fprintf(out, "{\n");
@@ -374,40 +404,20 @@ private:
             fprintf(out, "  },\n");
             fprintf(out, "  \"summary\": {\n");
             fprintf(out, "    \"device_count\": %d,\n", count);
-            fprintf(out, "    \"alloc\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                    (unsigned long long)total_alloc_calls, (unsigned long long)total_alloc_bytes);
-            fprintf(out, "    \"free\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                    (unsigned long long)total_free_calls, (unsigned long long)total_free_bytes);
+            print_counter_rows(out, "    ", kMemoryCounters, totals, "bytes", true);
             fprintf(out, "    \"io\": {\n");
-            fprintf(out, "      \"h2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                    (unsigned long long)total_h2d_calls, (unsigned long long)total_h2d_bytes);
-            fprintf(out, "      \"d2h\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                    (unsigned long long)total_d2h_calls, (unsigned long long)total_d2h_bytes);
-            fprintf(out, "      \"d2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                    (unsigned long long)total_d2d_calls, (unsigned long long)total_d2d_bytes);
-            fprintf(out, "      \"peer_tx\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                    (unsigned long long)total_peer_tx_calls, (unsigned long long)total_peer_tx_bytes);
-            fprintf(out, "      \"peer_rx\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                    (unsigned long long)total_peer_rx_calls, (unsigned long long)total_peer_rx_bytes);
-            fprintf(out, "      \"memset\": {\"calls\": %llu, \"bytes\": %llu}\n",
-                    (unsigned long long)total_memset_calls, (unsigned long long)total_memset_bytes);
+            print_counter_rows(out, "      ", kIoCounters, totals, "bytes", false);
             fprintf(out, "    },\n");
             fprintf(out, "    \"compute\": {\n");
-            fprintf(out, "      \"cublas_gemm\": {\"calls\": %llu, \"flops\": %llu},\n",
-                    (unsigned long long)total_cublas_gemm_calls, (unsigned long long)total_cublas_gemm_flops);
-            fprintf(out, "      \"cublaslt_matmul\": {\"calls\": %llu, \"flops\": %llu}\n",
-                    (unsigned long long)total_cublaslt_matmul_calls, (unsigned long long)total_cublaslt_matmul_flops);
+            print_counter_rows(out, "      ", kComputeCounters, totals, "flops", false);
             fprintf(out, "    }\n");
             fprintf(out, "  },\n");
             fprintf(out, "  \"devices\": [\n");
 
             for (int i = 0; i < count; ++i) {
                 const DeviceReportStats& dev = devices[static_cast<size_t>(i)];
-                const uint64_t device_total_io_bytes = saturating_add_u64(
-                    saturating_add_u64(saturating_add_u64(dev.memcpy_h2d_bytes, dev.memcpy_d2h_bytes),
-                                       saturating_add_u64(dev.memcpy_d2d_bytes, dev.memcpy_peer_tx_bytes)),
-                    saturating_add_u64(saturating_add_u64(dev.memcpy_peer_rx_bytes, dev.memset_bytes), 0));
-                const uint64_t device_total_flops = saturating_add_u64(dev.cublas_gemm_flops, dev.cublaslt_matmul_flops);
+                const uint64_t device_total_io_bytes = total_amount(kIoCounters, dev);
+                const uint64_t device_total_flops = total_amount(kComputeCounters, dev);
 
                 fprintf(out, "    {\n");
                 fprintf(out, "      \"index\": %d,\n", dev.index);
@@ -428,24 +438,10 @@ private:
                 fprintf(out, "      \"used_memory_peak\": %llu,\n", (unsigned long long)dev.used_memory_peak);
                 fprintf(out, "      \"used_memory_current\": %llu,\n", (unsigned long long)dev.used_memory_current);
 
-                fprintf(out, "      \"alloc\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                        (unsigned long long)dev.alloc_calls, (unsigned long long)dev.alloc_bytes);
-                fprintf(out, "      \"free\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                        (unsigned long long)dev.free_calls, (unsigned long long)dev.free_bytes);
+                print_counter_rows(out, "      ", kMemoryCounters, dev, "bytes", true);
 
                 fprintf(out, "      \"io\": {\n");
-                fprintf(out, "        \"h2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                        (unsigned long long)dev.memcpy_h2d_calls, (unsigned long long)dev.memcpy_h2d_bytes);
-                fprintf(out, "        \"d2h\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                        (unsigned long long)dev.memcpy_d2h_calls, (unsigned long long)dev.memcpy_d2h_bytes);
-                fprintf(out, "        \"d2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                        (unsigned long long)dev.memcpy_d2d_calls, (unsigned long long)dev.memcpy_d2d_bytes);
-                fprintf(out, "        \"peer_tx\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                        (unsigned long long)dev.memcpy_peer_tx_calls, (unsigned long long)dev.memcpy_peer_tx_bytes);
-                fprintf(out, "        \"peer_rx\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                        (unsigned long long)dev.memcpy_peer_rx_calls, (unsigned long long)dev.memcpy_peer_rx_bytes);
-                fprintf(out, "        \"memset\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                        (unsigned long long)dev.memset_calls, (unsigned long long)dev.memset_bytes);
+                print_counter_rows(out, "        ", kIoCounters, dev, "bytes", true);
                 fprintf(out, "        \"total_bytes\": %llu\n", (unsigned long long)device_total_io_bytes);
                 fprintf(out, "      },\n");
 
@@ -473,10 +469,7 @@ private:
                 fprintf(out, "      },\n");
 
                 fprintf(out, "      \"compute\": {\n");
-                fprintf(out, "        \"cublas_gemm\": {\"calls\": %llu, \"flops\": %llu},\n",
-                        (unsigned long long)dev.cublas_gemm_calls, (unsigned long long)dev.cublas_gemm_flops);
-                fprintf(out, "        \"cublaslt_matmul\": {\"calls\": %llu, \"flops\": %llu},\n",
-                        (unsigned long long)dev.cublaslt_matmul_calls, (unsigned long long)dev.cublaslt_matmul_flops);
+                print_counter_rows(out, "        ", kComputeCounters, dev, "flops", true);
                 fprintf(out, "        \"total_flops\": %llu\n", (unsigned long long)device_total_flops);
                 fprintf(out, "      },\n");
 
