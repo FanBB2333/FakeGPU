@@ -66,7 +66,6 @@ from ._cross_device import (
 )
 from ._ecosystem_compat import (
     _patch_accelerate_utils,
-    _patch_dist_group_fallback,
     _patch_fsdp_device_handling,
     _patch_fsdp_runtime_compat,
     _patch_upstream_all_gather_object,
@@ -182,20 +181,7 @@ def _transfer_snapshot() -> dict[int, dict[str, Any]]:
 
 
 def _smi_memory_snapshot() -> dict[str, Any]:
-    tracker = _memory_tracker
-    if tracker is None:
-        return {
-            "tracking_confidence": "C0_incomplete",
-            "stage": os.environ.get("FAKEGPU_PREFLIGHT_STAGE") or "unknown",
-            "runtime_backend": (
-                _patch_result.backend
-                if _patch_result is not None
-                else "unknown"
-            ),
-            "memory_tracking_enabled": False,
-            "devices": [],
-        }
-    snapshot = tracker.snapshot(_DEVICE_PROFILES)
+    snapshot = _memory_tracker.snapshot(_DEVICE_PROFILES)
     if _monitor_activity.enabled():
         activity = _monitor_activity.snapshot()
         for device in snapshot["devices"]:
@@ -263,8 +249,6 @@ def _register_tensor_for_memory_tracking(
     storage_info: tuple[Any, int, int] | None = None,
 ) -> bool:
     """Register a tensor's memory and set up GC cleanup via weakref."""
-    if _memory_tracker is None or not _MEMORY_TRACKING:
-        return False
     if _is_fake_tensor(tensor):
         return False
 
@@ -401,12 +385,6 @@ def _infer_tensor_memory_category(tensor: Any, raw: Any) -> str:
         return "parameter"
 
     try:
-        if getattr(raw, "grad_fn", None) is not None:
-            return "activation"
-    except Exception:
-        pass
-
-    try:
         if bool(getattr(raw, "requires_grad", False)):
             return "activation"
     except Exception:
@@ -455,10 +433,7 @@ def _iter_tensors(value: Any):
             yield from _iter_tensors(item)
 
 
-def _install_upstream_dispatch_memory_tracking(
-    upstream: Any,
-    torch_mod: Any,
-) -> None:
+def _install_upstream_dispatch_memory_tracking(upstream: Any) -> None:
     fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
     if (
         fake_tensor_cls is None
@@ -471,11 +446,7 @@ def _install_upstream_dispatch_memory_tracking(
         _reset_dispatch_tracking_stats(enabled=True)
         return
 
-    try:
-        from torch.utils._python_dispatch import TorchDispatchMode
-    except (ImportError, AttributeError):
-        _reset_dispatch_tracking_stats(enabled=False)
-        return
+    from torch.utils._python_dispatch import TorchDispatchMode
 
     class _AllocationTrackingMode(TorchDispatchMode):
         def __init__(self, device_index: int) -> None:
@@ -531,7 +502,7 @@ def _install_upstream_dispatch_memory_tracking(
                 )
                 if allocated:
                     new_allocations += 1
-                elif tracker is not None and tracker.has_allocation(data_ptr):
+                elif tracker.has_allocation(data_ptr):
                     alias_outputs += 1
                 else:
                     inaccessible_outputs += 1
@@ -564,7 +535,6 @@ def _install_upstream_dispatch_memory_tracking(
             result,
         )
 
-    _tracked_torch_function._fakegpu_dispatch_tracking = True  # type: ignore[attr-defined]
     fake_tensor_cls.__torch_function__ = _tracked_torch_function
     fake_tensor_cls._fakegpu_dispatch_tracking = True
     _reset_dispatch_tracking_stats(enabled=True)
@@ -618,8 +588,6 @@ def _active_fake_device_index() -> int:
 
 def _pack_autograd_saved_tensor(tensor: Any) -> Any:
     tracker = _memory_tracker
-    if tracker is None or not _MEMORY_TRACKING:
-        return tensor
     import torch
 
     try:
@@ -685,8 +653,6 @@ def _unpack_autograd_saved_tensor(value: Any) -> Any:
 
 def _install_autograd_saved_tensor_tracking(torch_mod: Any) -> None:
     global _saved_tensors_hooks_cm
-    if _saved_tensors_hooks_cm is not None or _memory_tracker is None:
-        return
     try:
         hooks = torch_mod.autograd.graph.saved_tensors_hooks(
             _pack_autograd_saved_tensor,
@@ -904,10 +870,6 @@ def _normalize_device_index(device: Any) -> int:
     return _get_current()
 
 
-_orig_tensor_pin_memory: Any = None
-_orig_torch_compile: Any = None
-
-
 def _patched_tensor_pin_memory(self: Any, device: Any = None) -> Any:
     """Pinned-memory is a semantic no-op on FakeGPU's CPU-backed runtime."""
     return self
@@ -926,13 +888,8 @@ def _torch_minor_version(torch_mod: Any) -> tuple[int, int]:
 
 def _install_compile_compat_shim(torch_mod: Any) -> None:
     """Install a no-op torch.compile compatibility shim on crash-prone minors."""
-    global _orig_torch_compile
-
     if _torch_minor_version(torch_mod) < (2, 8):
         return
-
-    if _orig_torch_compile is None:
-        _orig_torch_compile = torch_mod.compile
 
     def _fakegpu_compile(model: Any = None, *args: Any, **kwargs: Any) -> Any:
         if model is None:
@@ -1134,41 +1091,17 @@ def _patch_hf_cuda_surface(torch_mod: Any) -> None:
         _matmul_precision["value"] = precision
         matmul_backend.allow_tf32 = _precision_to_tf32[precision]
 
+    # Writes to matmul.allow_tf32 cannot be intercepted, so the getter keeps
+    # the stored precision only while it agrees with the backend flag.
     def _fake_get_float32_matmul_precision() -> str:
-        return _matmul_precision["value"]
+        stored = _matmul_precision["value"]
+        tf32 = bool(matmul_backend.allow_tf32)
+        if _precision_to_tf32[stored] == tf32:
+            return stored
+        return _tf32_to_precision[tf32]
 
     torch_mod.set_float32_matmul_precision = _fake_set_float32_matmul_precision
     torch_mod.get_float32_matmul_precision = _fake_get_float32_matmul_precision
-
-    # Also intercept writes to matmul.allow_tf32 so they stay consistent
-    _orig_matmul_type = type(matmul_backend)
-    if hasattr(_orig_matmul_type, "allow_tf32") and isinstance(
-        getattr(_orig_matmul_type, "allow_tf32", None), property
-    ):
-        # Real cuBLASModule has allow_tf32 as a property — override the class setter
-        _orig_setter = _orig_matmul_type.allow_tf32.fset
-
-        @_orig_matmul_type.allow_tf32.setter  # type: ignore[attr-defined]
-        def _intercept_tf32(self: Any, value: bool) -> None:
-            _matmul_precision["value"] = _tf32_to_precision.get(value, "highest")
-            if _orig_setter is not None:
-                try:
-                    _orig_setter(self, value)
-                except Exception:
-                    pass  # C++ backend unavailable — fine, Python state is authoritative
-    else:
-        # SimpleNamespace or plain object — wrap with a descriptor is overkill;
-        # just sync on get
-        _real_get = torch_mod.get_float32_matmul_precision
-
-        def _synced_get() -> str:
-            stored = _matmul_precision["value"]
-            tf32 = bool(matmul_backend.allow_tf32)
-            if _precision_to_tf32[stored] == tf32:
-                return stored
-            return _tf32_to_precision[tf32]
-
-        torch_mod.get_float32_matmul_precision = _synced_get
 
 
 def _patch_transformers_utils() -> None:
@@ -1481,9 +1414,6 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
             return result
 
         marked(_counted_torch_function)
-        for attribute in ("_fakegpu_dispatch_tracking",):
-            if hasattr(inner, attribute):
-                setattr(_counted_torch_function, attribute, getattr(inner, attribute))
         fake_cls.__torch_function__ = classmethod(_counted_torch_function)
 
 
@@ -1593,7 +1523,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         return result
 
     upstream.wrap_tensor = _hooked_wrap_tensor
-    _install_upstream_dispatch_memory_tracking(upstream, torch_mod)
+    _install_upstream_dispatch_memory_tracking(upstream)
     # Copies take the modeled time of their route over the platform links
     # (fakegpu.link_traffic); recorded only, nothing waits.  Installed before
     # the category hooks so they wrap the recording Module.to/cuda.
@@ -1641,9 +1571,6 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     if fake_ddp_cls is not None and not hasattr(fake_ddp_cls, "_get_active_ddp_module"):
         fake_ddp_cls._get_active_ddp_module = staticmethod(lambda: None)
 
-    global _orig_tensor_pin_memory
-    if _orig_tensor_pin_memory is None:
-        _orig_tensor_pin_memory = torch_mod.Tensor.pin_memory
     torch_mod.Tensor.pin_memory = _patched_tensor_pin_memory  # type: ignore[assignment]
     _install_compile_compat_shim(torch_mod)
 
@@ -1700,48 +1627,35 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     # ---- 4. Tracked memory query functions ----
     if _memory_tracker is not None:
 
-        def _active_tracker():
-            if _memory_tracker is None:
-                raise RuntimeError("FakeGPU memory tracking is not initialized")
-            return _memory_tracker
-
         def _tracked_memory_allocated(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().memory_allocated(idx)
+            return _memory_tracker.memory_allocated(_normalize_device_index(device))
 
         def _tracked_max_memory_allocated(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().max_memory_allocated(idx)
+            return _memory_tracker.max_memory_allocated(_normalize_device_index(device))
 
         def _tracked_memory_reserved(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().memory_reserved(idx)
+            return _memory_tracker.memory_reserved(_normalize_device_index(device))
 
         def _tracked_max_memory_reserved(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().max_memory_reserved(idx)
+            return _memory_tracker.max_memory_reserved(_normalize_device_index(device))
 
         def _tracked_mem_get_info(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().mem_get_info(idx)
+            return _memory_tracker.mem_get_info(_normalize_device_index(device))
 
         def _tracked_empty_cache():
-            _active_tracker().empty_cache()
+            _memory_tracker.empty_cache()
 
         def _tracked_reset_peak_memory_stats(device=None):
-            idx = _normalize_device_index(device)
-            _active_tracker().reset_peak(idx)
+            _memory_tracker.reset_peak(_normalize_device_index(device))
 
         def _tracked_reset_accumulated_memory_stats(device=None):
-            idx = _normalize_device_index(device)
-            _active_tracker().reset_accumulated(idx)
+            _memory_tracker.reset_accumulated(_normalize_device_index(device))
 
         def _tracked_memory_stats(device=None):
-            idx = _normalize_device_index(device)
-            return _active_tracker().memory_stats(idx)
+            return _memory_tracker.memory_stats(_normalize_device_index(device))
 
         def _tracked_memory_snapshot():
-            return _active_tracker().allocator_snapshot()
+            return _memory_tracker.allocator_snapshot()
 
         # Both public namespaces must expose the same tracker and aliases.
         memory_api = {
@@ -1861,7 +1775,6 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
         pass
     _patch_cuda_rng_surface(torch_mod)
     _patch_nccl_surface(torch_mod)
-    _patch_dist_group_fallback(torch_mod)
     _patch_fsdp_device_handling()
     _patch_fsdp_runtime_compat(getattr(upstream, "FakeCudaTensor", None))
     _patch_transformers_utils()

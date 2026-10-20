@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import functools
-import types
 from typing import Any
 
 
@@ -34,51 +33,6 @@ def _patch_accelerate_utils() -> None:
             _au.is_bf16_available = _aui.is_bf16_available
     except (ImportError, AttributeError):
         pass
-
-
-def _patch_dist_group_fallback(torch_mod: Any) -> None:
-    """Ensure ``torch.distributed._get_default_group`` and ``new_group`` are
-    available even when the PyTorch ``fake`` distributed backend fails to init.
-
-    When the ``fake`` backend succeeds (PyTorch ≥ 2.1), these functions are
-    already provided by the real C++ ProcessGroup layer.  This fallback only
-    activates when they are absent or broken, so that downstream code like
-    FSDP can still call ``_get_default_group()`` without crashing.
-    """
-    import torch.distributed as dist
-
-    # ---- _get_default_group fallback ----
-    try:
-        from torch.distributed.distributed_c10d import (
-            _get_default_group as _real_get_default_group,
-        )
-    except ImportError:
-        _real_get_default_group = None
-
-    if _real_get_default_group is None:
-        # Very old PyTorch — provide a simple stub
-        _fake_default_group = types.SimpleNamespace(
-            rank=lambda: 0,
-            size=lambda: 1,
-        )
-
-        def _fallback_get_default_group():
-            return _fake_default_group
-
-        dist._get_default_group = _fallback_get_default_group  # type: ignore[attr-defined]
-
-    # ---- new_group fallback ----
-    if not hasattr(dist, "new_group") or dist.new_group is None:
-
-        def _fallback_new_group(
-            ranks=None, timeout=None, backend=None, pg_options=None
-        ):
-            return types.SimpleNamespace(
-                rank=lambda: 0,
-                size=lambda: len(ranks) if ranks else 1,
-            )
-
-        dist.new_group = _fallback_new_group  # type: ignore[attr-defined]
 
 
 def _patch_upstream_fakecuda_tensor_compat(upstream: Any, torch_mod: Any) -> None:
@@ -292,7 +246,6 @@ def _patch_fsdp_runtime_compat(fake_tensor_cls: type | None) -> None:
 
 __all__ = [
     "_patch_accelerate_utils",
-    "_patch_dist_group_fallback",
     "_patch_fsdp_device_handling",
     "_patch_fsdp_runtime_compat",
     "_patch_upstream_all_gather_object",
