@@ -1128,6 +1128,39 @@ def test_fakecuda_runtime_publishes_profile_stage_and_peak(tmp_path: Path) -> No
     assert state["devices"][0]["reported_peak_memory"] >= 4 * 2**20
 
 
+def test_fakecuda_first_published_state_names_the_backend(tmp_path: Path) -> None:
+    state_path = tmp_path / "runtime-state.json"
+    env = dict(os.environ)
+    env["PYTHONPATH"] = (
+        str(ROOT)
+        if not env.get("PYTHONPATH")
+        else str(ROOT) + os.pathsep + env["PYTHONPATH"]
+    )
+    env["FAKEGPU_SMI_STATE_PATH"] = str(state_path)
+    env["FAKEGPU_SMI_INTERVAL_MS"] = "600000"
+    env["FAKEGPU_TERMINAL_REPORT"] = "0"
+    env["FAKEGPU_MACHINE"] = "off"
+    code = "\n".join(
+        [
+            "import fakegpu",
+            "fakegpu.init(runtime='fakecuda', profile='test-512m', device_count=1)",
+            f"print(open({str(state_path)!r}).read())",
+        ]
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    state = json.loads(completed.stdout)
+    assert state["fakegpu"]["backend"] == "upstream"
+
+
 def test_virtual_smi_count_requires_loop(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["--version"])

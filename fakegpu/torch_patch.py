@@ -1933,13 +1933,14 @@ def patch(
 
     upstream = _activate_upstream(_NUM_DEVICES, _DEVICE_NAME)
     _apply_enhancements_over_upstream(upstream, torch)
-    _refresh_smi_publisher()
-    _patched = True
     _patch_result = PatchResult(
         backend="upstream",
         num_devices=_NUM_DEVICES,
         device_name=_DEVICE_NAME,
     )
+    # The publisher writes its first state synchronously on start().
+    _refresh_smi_publisher()
+    _patched = True
     warnings.warn(
         "fakegpu.torch_patch: enabled upstream FakeCudaTensor backend with "
         "FakeGPU enhancements (memory tracking, GPU profiles, cross-device "

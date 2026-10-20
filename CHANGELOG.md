@@ -15,6 +15,8 @@
 - FakeCUDA `torch.cuda.get_device_properties()` reports the profile's SM
   count, threads per multiprocessor, and register limits instead of A100
   values for every profile, matching the native runtime.
+- The first virtual-SMI state written by a FakeCUDA process reports the
+  `upstream` backend instead of `unknown`.
 
 ## v1.6.0 - 2026-10-17
 
