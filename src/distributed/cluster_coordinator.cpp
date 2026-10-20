@@ -2,11 +2,10 @@
 
 #include "transport.hpp"
 
-#include <cstdint>
 #include <cerrno>
-#include <iostream>
-#include <limits>
-#include <stdexcept>
+#include <cstdint>
+#include <string>
+#include <utility>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <unordered_map>
@@ -16,13 +15,72 @@ namespace fake_gpu::distributed {
 
 namespace {
 
-bool parse_optional_bool_field(
-    const std::unordered_map<std::string, std::string>& fields,
+using MessageFields = std::unordered_map<std::string, std::string>;
+
+static_assert(sizeof(std::size_t) == sizeof(std::uint64_t));
+
+bool parse_int_text(const std::string& text, int& value) {
+    try {
+        std::size_t consumed = 0;
+        const int parsed = std::stoi(text, &consumed, 10);
+        if (consumed != text.size()) {
+            return false;
+        }
+        value = parsed;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_u64_text(const std::string& text, std::uint64_t& value) {
+    try {
+        std::size_t consumed = 0;
+        const std::uint64_t parsed = std::stoull(text, &consumed, 10);
+        if (consumed != text.size()) {
+            return false;
+        }
+        value = parsed;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_size_text(const std::string& text, std::size_t& value) {
+    std::uint64_t parsed = 0;
+    if (!parse_u64_text(text, parsed)) {
+        return false;
+    }
+    value = static_cast<std::size_t>(parsed);
+    return true;
+}
+
+template <typename T, typename ParseItem>
+bool parse_list(const std::string& text, std::vector<T>& values, ParseItem parse_item) {
+    std::size_t begin = 0;
+    while (true) {
+        const std::size_t end = text.find(',', begin);
+        T value{};
+        if (!parse_item(
+                text.substr(begin, end == std::string::npos ? std::string::npos : end - begin),
+                value)) {
+            return false;
+        }
+        values.push_back(value);
+        if (end == std::string::npos) {
+            return true;
+        }
+        begin = end + 1;
+    }
+}
+
+bool read_optional_bool(
+    const MessageFields& fields,
     const char* key,
-    bool default_value,
     bool& value,
     std::string& error) {
-    value = default_value;
+    value = false;
     auto it = fields.find(key);
     if (it == fields.end()) {
         return true;
@@ -32,98 +90,74 @@ bool parse_optional_bool_field(
         return true;
     }
     if (it->second == "0" || it->second == "false") {
-        value = false;
         return true;
     }
     error = std::string("invalid boolean field: ") + key;
     return false;
 }
 
-int parse_required_int(
-    const std::unordered_map<std::string, std::string>& fields,
-    const char* key,
-    bool& ok,
+bool read_int(
+    const MessageFields& fields,
+    const std::string& key,
+    int& value,
     std::string& error) {
     auto it = fields.find(key);
     if (it == fields.end()) {
-        ok = false;
-        error = std::string("missing required field: ") + key;
-        return 0;
+        error = "missing required field: " + key;
+        return false;
     }
-    try {
-        std::size_t consumed = 0;
-        int value = std::stoi(it->second, &consumed, 10);
-        if (consumed != it->second.size()) {
-            throw std::invalid_argument("trailing");
-        }
-        ok = true;
-        return value;
-    } catch (...) {
-        ok = false;
-        error = std::string("invalid integer field: ") + key;
-        return 0;
+    if (!parse_int_text(it->second, value)) {
+        error = "invalid integer field: " + key;
+        return false;
     }
+    return true;
 }
 
-std::uint64_t parse_required_u64(
-    const std::unordered_map<std::string, std::string>& fields,
-    const char* key,
-    bool& ok,
+bool read_u64(
+    const MessageFields& fields,
+    const std::string& key,
+    std::uint64_t& value,
     std::string& error) {
     auto it = fields.find(key);
     if (it == fields.end()) {
-        ok = false;
-        error = std::string("missing required field: ") + key;
-        return 0;
+        error = "missing required field: " + key;
+        return false;
     }
-    try {
-        std::size_t consumed = 0;
-        std::uint64_t value = std::stoull(it->second, &consumed, 10);
-        if (consumed != it->second.size()) {
-            throw std::invalid_argument("trailing");
-        }
-        ok = true;
-        return value;
-    } catch (...) {
-        ok = false;
-        error = std::string("invalid uint64 field: ") + key;
-        return 0;
+    if (!parse_u64_text(it->second, value)) {
+        error = "invalid uint64 field: " + key;
+        return false;
     }
+    return true;
 }
 
-std::size_t parse_required_size(
-    const std::unordered_map<std::string, std::string>& fields,
-    const char* key,
-    bool& ok,
+bool read_size(
+    const MessageFields& fields,
+    const std::string& key,
+    std::size_t& value,
     std::string& error) {
-    const std::uint64_t value = parse_required_u64(fields, key, ok, error);
-    if (!ok) {
-        return 0;
+    std::uint64_t parsed = 0;
+    if (!read_u64(fields, key, parsed, error)) {
+        return false;
     }
-    if (value > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-        ok = false;
-        error = std::string("field is too large: ") + key;
-        return 0;
-    }
-    return static_cast<std::size_t>(value);
+    value = static_cast<std::size_t>(parsed);
+    return true;
 }
 
-std::size_t parse_optional_size(
-    const std::unordered_map<std::string, std::string>& fields,
+bool read_optional_size(
+    const MessageFields& fields,
     const char* key,
     std::size_t default_value,
-    bool& ok,
+    std::size_t& value,
     std::string& error) {
-    auto it = fields.find(key);
-    if (it == fields.end()) {
-        ok = true;
-        return default_value;
+    if (fields.find(key) == fields.end()) {
+        value = default_value;
+        return true;
     }
-    return parse_required_size(fields, key, ok, error);
+    return read_size(fields, key, value, error);
 }
 
-bool parse_optional_size_list(
-    const std::unordered_map<std::string, std::string>& fields,
+bool read_optional_size_list(
+    const MessageFields& fields,
     const char* key,
     std::vector<std::size_t>& values,
     std::string& error) {
@@ -136,36 +170,15 @@ bool parse_optional_size_list(
         error = std::string("empty size list field: ") + key;
         return false;
     }
-
-    std::size_t begin = 0;
-    while (begin <= it->second.size()) {
-        const std::size_t end = it->second.find(',', begin);
-        const std::string item = it->second.substr(
-            begin,
-            end == std::string::npos ? std::string::npos : end - begin);
-        try {
-            std::size_t consumed = 0;
-            const std::uint64_t parsed = std::stoull(item, &consumed, 10);
-            if (consumed != item.size() ||
-                parsed > static_cast<std::uint64_t>(
-                    std::numeric_limits<std::size_t>::max())) {
-                throw std::invalid_argument("invalid size");
-            }
-            values.push_back(static_cast<std::size_t>(parsed));
-        } catch (...) {
-            error = std::string("invalid size list field: ") + key;
-            return false;
-        }
-        if (end == std::string::npos) {
-            break;
-        }
-        begin = end + 1;
+    if (!parse_list(it->second, values, parse_size_text)) {
+        error = std::string("invalid size list field: ") + key;
+        return false;
     }
     return true;
 }
 
-bool parse_required_int_list(
-    const std::unordered_map<std::string, std::string>& fields,
+bool read_int_list(
+    const MessageFields& fields,
     const char* key,
     std::vector<int>& values,
     std::string& error) {
@@ -179,30 +192,413 @@ bool parse_required_int_list(
         error = std::string("empty integer list field: ") + key;
         return false;
     }
-
-    std::size_t begin = 0;
-    while (begin <= it->second.size()) {
-        const std::size_t end = it->second.find(',', begin);
-        const std::string item = it->second.substr(
-            begin,
-            end == std::string::npos ? std::string::npos : end - begin);
-        try {
-            std::size_t consumed = 0;
-            const int parsed = std::stoi(item, &consumed, 10);
-            if (consumed != item.size()) {
-                throw std::invalid_argument("invalid integer");
-            }
-            values.push_back(parsed);
-        } catch (...) {
-            error = std::string("invalid integer list field: ") + key;
-            return false;
-        }
-        if (end == std::string::npos) {
-            break;
-        }
-        begin = end + 1;
+    if (!parse_list(it->second, values, parse_int_text)) {
+        error = std::string("invalid integer list field: ") + key;
+        return false;
     }
     return true;
+}
+
+std::string bad_request(const std::string& detail) {
+    return format_error_response("bad_request", detail);
+}
+
+bool collective_command_type(const std::string& command, CollectiveType& type) {
+    static const std::pair<const char*, CollectiveType> kCollectiveCommands[] = {
+        {"ALLREDUCE", CollectiveType::AllReduce},
+        {"REDUCE", CollectiveType::Reduce},
+        {"BROADCAST", CollectiveType::Broadcast},
+        {"ALLGATHER", CollectiveType::AllGather},
+        {"REDUCESCATTER", CollectiveType::ReduceScatter},
+        {"ALLTOALL", CollectiveType::AllToAll},
+    };
+    for (const auto& [name, command_type] : kCollectiveCommands) {
+        if (command == name) {
+            type = command_type;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string handle_init_comm(CommunicatorRegistry& registry, const CoordinatorMessage& request) {
+    auto unique_it = request.fields.find("unique_id");
+    if (unique_it == request.fields.end()) {
+        return bad_request("missing required field: unique_id");
+    }
+    int world_size = 0;
+    int rank = 0;
+    std::string error;
+    if (!read_int(request.fields, "world_size", world_size, error) ||
+        !read_int(request.fields, "rank", rank, error)) {
+        return bad_request(error);
+    }
+    int timeout_ms = 1000;
+    auto timeout_it = request.fields.find("timeout_ms");
+    if (timeout_it != request.fields.end() && !parse_int_text(timeout_it->second, timeout_ms)) {
+        timeout_ms = -1;
+    }
+
+    CommunicatorRegistrationResult result =
+        registry.init_communicator(unique_it->second, world_size, rank, timeout_ms);
+    if (!result.ok) {
+        return format_error_response(result.error_code, result.error_detail);
+    }
+    return format_ok_response({
+        {"comm_id", std::to_string(result.comm_id)},
+        {"seqno", std::to_string(result.seqno)},
+        {"rank", std::to_string(rank)},
+        {"world_size", std::to_string(world_size)},
+    });
+}
+
+std::string handle_destroy_comm(CommunicatorRegistry& registry, const CoordinatorMessage& request) {
+    int comm_id = 0;
+    int rank = 0;
+    std::string error;
+    if (!read_int(request.fields, "comm_id", comm_id, error) ||
+        !read_int(request.fields, "rank", rank, error)) {
+        return bad_request(error);
+    }
+    CommunicatorDestroyResult result = registry.destroy_communicator(comm_id, rank);
+    if (!result.ok) {
+        return format_error_response(result.error_code, result.error_detail);
+    }
+    return format_ok_response({
+        {"comm_id", std::to_string(comm_id)},
+        {"rank", std::to_string(rank)},
+    });
+}
+
+std::string handle_split_comm(CommunicatorRegistry& registry, const CoordinatorMessage& request) {
+    CommunicatorSplitRequest split_request;
+    std::string error;
+    if (!read_int(request.fields, "comm_id", split_request.comm_id, error) ||
+        !read_int(request.fields, "rank", split_request.rank, error) ||
+        !read_u64(request.fields, "seqno", split_request.seqno, error) ||
+        !read_int(request.fields, "color", split_request.color, error) ||
+        !read_int(request.fields, "key", split_request.key, error) ||
+        !read_int(request.fields, "timeout_ms", split_request.timeout_ms, error)) {
+        return bad_request(error);
+    }
+    CommunicatorSplitResult result = registry.split_communicator(split_request);
+    if (!result.ok) {
+        return format_error_response(result.error_code, result.error_detail);
+    }
+    return format_ok_response({
+        {"comm_id", std::to_string(split_request.comm_id)},
+        {"seqno", std::to_string(result.seqno)},
+        {"rank", std::to_string(split_request.rank)},
+        {"participating", result.participating ? "1" : "0"},
+        {"new_comm_id", std::to_string(result.new_comm_id)},
+        {"new_rank", std::to_string(result.new_rank)},
+        {"new_world_size", std::to_string(result.new_world_size)},
+    });
+}
+
+std::string handle_inject_failure(CommunicatorRegistry& registry, const CoordinatorMessage& request) {
+    CommunicatorFailureRequest failure_request;
+    std::string error;
+    if (!read_int(request.fields, "comm_id", failure_request.comm_id, error) ||
+        !read_int(request.fields, "rank", failure_request.rank, error) ||
+        !read_u64(request.fields, "seqno", failure_request.seqno, error)) {
+        return bad_request(error);
+    }
+    const auto operation_it = request.fields.find("operation");
+    if (operation_it == request.fields.end()) {
+        return bad_request("missing required field: operation");
+    }
+    const auto error_code_it = request.fields.find("error_code");
+    if (error_code_it == request.fields.end()) {
+        return bad_request("missing required field: error_code");
+    }
+    failure_request.operation = operation_it->second;
+    failure_request.error_code = error_code_it->second;
+    if (!read_u64(
+            request.fields,
+            "attempted_payload_bytes",
+            failure_request.attempted_payload_bytes,
+            error)) {
+        return bad_request(error);
+    }
+    CommunicatorFailureResult result = registry.inject_communicator_failure(failure_request);
+    if (!result.ok) {
+        return format_error_response(result.error_code, result.error_detail);
+    }
+    return format_ok_response({
+        {"comm_id", std::to_string(failure_request.comm_id)},
+        {"seqno", std::to_string(failure_request.seqno)},
+        {"rank", std::to_string(failure_request.rank)},
+        {"event_index", std::to_string(result.event_index)},
+    });
+}
+
+std::string handle_shrink_comm(CommunicatorRegistry& registry, const CoordinatorMessage& request) {
+    CommunicatorShrinkRequest shrink_request;
+    std::string error;
+    if (!read_int(request.fields, "comm_id", shrink_request.comm_id, error) ||
+        !read_int(request.fields, "rank", shrink_request.rank, error) ||
+        !read_u64(request.fields, "seqno", shrink_request.seqno, error) ||
+        !read_int_list(request.fields, "excluded_ranks", shrink_request.excluded_ranks, error) ||
+        !read_int(request.fields, "timeout_ms", shrink_request.timeout_ms, error) ||
+        !read_optional_bool(request.fields, "abort_parent", shrink_request.abort_parent, error)) {
+        return bad_request(error);
+    }
+    CommunicatorShrinkResult result = registry.shrink_communicator(shrink_request);
+    if (!result.ok) {
+        return format_error_response(result.error_code, result.error_detail);
+    }
+    return format_ok_response({
+        {"comm_id", std::to_string(shrink_request.comm_id)},
+        {"seqno", std::to_string(result.seqno)},
+        {"rank", std::to_string(shrink_request.rank)},
+        {"new_comm_id", std::to_string(result.new_comm_id)},
+        {"new_rank", std::to_string(result.new_rank)},
+        {"new_world_size", std::to_string(result.new_world_size)},
+    });
+}
+
+std::string handle_point_to_point(
+    CommunicatorRegistry& registry,
+    CoordinatorMessage& request,
+    std::vector<char>& response_payload) {
+    PointToPointSubmitRequest p2p_request;
+    std::string error;
+    if (!read_int(request.fields, "comm_id", p2p_request.comm_id, error) ||
+        !read_int(request.fields, "rank", p2p_request.rank, error) ||
+        !read_u64(request.fields, "seqno", p2p_request.seqno, error) ||
+        !read_int(request.fields, "peer", p2p_request.peer, error) ||
+        !read_size(request.fields, "count", p2p_request.count, error) ||
+        !read_size(request.fields, "bytes", p2p_request.bytes, error) ||
+        !read_int(request.fields, "timeout_ms", p2p_request.timeout_ms, error)) {
+        return bad_request(error);
+    }
+
+    auto staging_it = request.fields.find("staging_name");
+    const auto transport_it = request.fields.find("buffer_transport");
+    const bool socket_transport =
+        transport_it != request.fields.end() &&
+        transport_it->second == "socket";
+    auto dtype_it = request.fields.find("dtype");
+    if (!socket_transport && staging_it == request.fields.end()) {
+        return bad_request("missing required field: staging_name");
+    }
+    if (dtype_it == request.fields.end()) {
+        return bad_request("missing required field: dtype");
+    }
+    if (!parse_collective_data_type(dtype_it->second, p2p_request.dtype)) {
+        return bad_request("unsupported dtype");
+    }
+    if (staging_it != request.fields.end()) {
+        p2p_request.staging_name = staging_it->second;
+    }
+    if (socket_transport) {
+        p2p_request.transport = BufferTransport::SocketPayload;
+    }
+    if (!read_optional_size(
+            request.fields,
+            "payload_bytes",
+            request.payload.size(),
+            p2p_request.payload_bytes,
+            error)) {
+        return bad_request(error);
+    }
+    p2p_request.payload = std::move(request.payload);
+    p2p_request.type = request.command == "SEND"
+        ? PointToPointType::Send
+        : PointToPointType::Recv;
+
+    PointToPointSubmitResult result = registry.submit_point_to_point(p2p_request);
+    if (!result.ok) {
+        return format_error_response(result.error_code, result.error_detail);
+    }
+    response_payload = std::move(result.output_payload);
+    return format_ok_response({
+        {"comm_id", std::to_string(p2p_request.comm_id)},
+        {"seqno", std::to_string(result.seqno)},
+        {"rank", std::to_string(p2p_request.rank)},
+        {"peer", std::to_string(p2p_request.peer)},
+        {"op", request.command == "SEND" ? "send" : "recv"},
+    });
+}
+
+std::string handle_collective(
+    CommunicatorRegistry& registry,
+    CoordinatorMessage& request,
+    CollectiveType type,
+    std::vector<char>& response_payload) {
+    CollectiveSubmitRequest collective_request;
+    std::string error;
+    if (!read_int(request.fields, "comm_id", collective_request.comm_id, error) ||
+        !read_int(request.fields, "rank", collective_request.rank, error) ||
+        !read_u64(request.fields, "seqno", collective_request.seqno, error) ||
+        !read_size(request.fields, "count", collective_request.count, error) ||
+        !read_size(request.fields, "bytes", collective_request.bytes, error) ||
+        !read_int(request.fields, "root", collective_request.root, error) ||
+        !read_int(request.fields, "timeout_ms", collective_request.timeout_ms, error) ||
+        !read_optional_bool(request.fields, "proxy_only", collective_request.proxy_only, error)) {
+        return bad_request(error);
+    }
+
+    auto staging_it = request.fields.find("staging_name");
+    const auto transport_it = request.fields.find("buffer_transport");
+    const bool socket_transport =
+        transport_it != request.fields.end() &&
+        transport_it->second == "socket";
+    if (!collective_request.proxy_only &&
+        !socket_transport &&
+        staging_it == request.fields.end()) {
+        return bad_request("missing required field: staging_name");
+    }
+    if (staging_it != request.fields.end()) {
+        collective_request.staging_name = staging_it->second;
+    }
+    if (socket_transport) {
+        collective_request.transport = BufferTransport::SocketPayload;
+    }
+    if (!read_optional_size(
+            request.fields,
+            "payload_bytes",
+            request.payload.size(),
+            collective_request.payload_bytes,
+            error)) {
+        return bad_request(error);
+    }
+    collective_request.payload = std::move(request.payload);
+
+    const bool has_input_splits =
+        request.fields.find("input_splits") != request.fields.end();
+    const bool has_output_splits =
+        request.fields.find("output_splits") != request.fields.end();
+    if (has_input_splits != has_output_splits) {
+        return bad_request("input_splits and output_splits must be provided together");
+    }
+    if (!read_optional_size_list(request.fields, "input_splits", collective_request.input_splits, error) ||
+        !read_optional_size_list(request.fields, "output_splits", collective_request.output_splits, error) ||
+        !read_optional_size(
+            request.fields,
+            "input_bytes",
+            collective_request.bytes,
+            collective_request.input_bytes,
+            error) ||
+        !read_optional_size(
+            request.fields,
+            "output_bytes",
+            collective_request.bytes,
+            collective_request.output_bytes,
+            error)) {
+        return bad_request(error);
+    }
+
+    auto dtype_it = request.fields.find("dtype");
+    auto reduce_it = request.fields.find("reduce_op");
+    if (dtype_it == request.fields.end()) {
+        return bad_request("missing required field: dtype");
+    }
+    if (reduce_it == request.fields.end()) {
+        return bad_request("missing required field: reduce_op");
+    }
+    if (!parse_collective_data_type(dtype_it->second, collective_request.dtype)) {
+        return bad_request("unsupported dtype");
+    }
+    if (!parse_collective_reduce_op(reduce_it->second, collective_request.reduce_op)) {
+        return bad_request("unsupported reduce_op");
+    }
+    collective_request.type = type;
+
+    CollectiveSubmitResult result = registry.submit_collective(collective_request);
+    if (!result.ok) {
+        return format_error_response(result.error_code, result.error_detail);
+    }
+    response_payload = std::move(result.output_payload);
+    return format_ok_response({
+        {"comm_id", std::to_string(collective_request.comm_id)},
+        {"seqno", std::to_string(result.seqno)},
+        {"rank", std::to_string(collective_request.rank)},
+        {"op", collective_type_name(collective_request.type)},
+    });
+}
+
+std::string handle_barrier(CommunicatorRegistry& registry, const CoordinatorMessage& request) {
+    BarrierSubmitRequest barrier_request;
+    std::string error;
+    if (!read_int(request.fields, "comm_id", barrier_request.comm_id, error) ||
+        !read_int(request.fields, "rank", barrier_request.rank, error) ||
+        !read_u64(request.fields, "seqno", barrier_request.seqno, error) ||
+        !read_int(request.fields, "timeout_ms", barrier_request.timeout_ms, error)) {
+        return bad_request(error);
+    }
+    BarrierSubmitResult result = registry.submit_barrier(barrier_request);
+    if (!result.ok) {
+        return format_error_response(result.error_code, result.error_detail);
+    }
+    return format_ok_response({
+        {"comm_id", std::to_string(barrier_request.comm_id)},
+        {"seqno", std::to_string(result.seqno)},
+        {"rank", std::to_string(barrier_request.rank)},
+        {"op", "barrier"},
+    });
+}
+
+std::string handle_group_prepare(CommunicatorRegistry& registry, const CoordinatorMessage& request) {
+    CollectiveBatchPrepareRequest batch_request;
+    int op_count = 0;
+    std::string error;
+    if (!read_int(request.fields, "comm_id", batch_request.comm_id, error) ||
+        !read_int(request.fields, "rank", batch_request.rank, error) ||
+        !read_u64(request.fields, "base_seqno", batch_request.base_seqno, error) ||
+        !read_int(request.fields, "timeout_ms", batch_request.timeout_ms, error) ||
+        !read_int(request.fields, "op_count", op_count, error)) {
+        return bad_request(error);
+    }
+    if (op_count <= 0) {
+        return bad_request("op_count must be > 0");
+    }
+
+    batch_request.operations.reserve(static_cast<std::size_t>(op_count));
+    for (int index = 0; index < op_count; ++index) {
+        CollectiveBatchPlanItem item;
+        const std::string prefix = "op" + std::to_string(index) + "_";
+
+        auto type_it = request.fields.find(prefix + "type");
+        auto dtype_it = request.fields.find(prefix + "dtype");
+        auto reduce_it = request.fields.find(prefix + "reduce_op");
+        if (type_it == request.fields.end()) {
+            return bad_request("missing required field: " + prefix + "type");
+        }
+        if (dtype_it == request.fields.end()) {
+            return bad_request("missing required field: " + prefix + "dtype");
+        }
+        if (reduce_it == request.fields.end()) {
+            return bad_request("missing required field: " + prefix + "reduce_op");
+        }
+        if (!parse_collective_type(type_it->second, item.type)) {
+            return bad_request("unsupported collective type");
+        }
+        if (!parse_collective_data_type(dtype_it->second, item.dtype)) {
+            return bad_request("unsupported dtype");
+        }
+        if (!parse_collective_reduce_op(reduce_it->second, item.reduce_op)) {
+            return bad_request("unsupported reduce_op");
+        }
+        if (!read_size(request.fields, prefix + "count", item.count, error) ||
+            !read_size(request.fields, prefix + "bytes", item.bytes, error) ||
+            !read_int(request.fields, prefix + "root", item.root, error)) {
+            return bad_request(error);
+        }
+        batch_request.operations.push_back(item);
+    }
+
+    CollectiveBatchPrepareResult result = registry.prepare_collective_batch(batch_request);
+    if (!result.ok) {
+        return format_error_response(result.error_code, result.error_detail);
+    }
+    return format_ok_response({
+        {"comm_id", std::to_string(batch_request.comm_id)},
+        {"base_seqno", std::to_string(result.base_seqno)},
+        {"rank", std::to_string(batch_request.rank)},
+        {"op_count", std::to_string(batch_request.operations.size())},
+    });
 }
 
 }  // namespace
@@ -217,10 +613,6 @@ ClusterCoordinator::ClusterCoordinator(std::string socket_path)
 
 ClusterCoordinator::~ClusterCoordinator() {
     request_shutdown();
-    if (server_fd_ >= 0) {
-        ::close(server_fd_);
-        server_fd_ = -1;
-    }
     {
         std::lock_guard<std::mutex> lock(client_threads_mutex_);
         for (ClientThread& client : client_threads_) {
@@ -236,10 +628,7 @@ ClusterCoordinator::~ClusterCoordinator() {
 }
 
 bool ClusterCoordinator::start(std::string& error) {
-    if (!bind_and_listen(transport_, address_, 64, server_fd_, error)) {
-        return false;
-    }
-    return true;
+    return bind_and_listen(transport_, address_, 64, server_fd_, error);
 }
 
 int ClusterCoordinator::run() {
@@ -315,8 +704,22 @@ void ClusterCoordinator::handle_client(int client_fd) {
     }
     request.payload = std::move(request_payload);
 
+    if (request.command == "SHUTDOWN") {
+        send_message_packet(
+            client_fd,
+            format_ok_response({
+                {"status", "shutting_down"},
+            }),
+            {},
+            transport_error);
+        ::close(client_fd);
+        request_shutdown();
+        return;
+    }
+
     std::string response;
     std::vector<char> response_payload;
+    CollectiveType collective_type = CollectiveType::AllReduce;
     if (request.command == "PING") {
         response = format_ok_response({
             {"status", "ready"},
@@ -329,678 +732,23 @@ void ClusterCoordinator::handle_client(int client_fd) {
             {"version", "1"},
         });
     } else if (request.command == "INIT_COMM") {
-        auto unique_it = request.fields.find("unique_id");
-        if (unique_it == request.fields.end()) {
-            response = format_error_response("bad_request", "missing required field: unique_id");
-        } else {
-            bool ok = false;
-            std::string error;
-            const int world_size = parse_required_int(request.fields, "world_size", ok, error);
-            if (!ok) {
-                response = format_error_response("bad_request", error);
-            } else {
-                const int rank = parse_required_int(request.fields, "rank", ok, error);
-                if (!ok) {
-                    response = format_error_response("bad_request", error);
-                } else {
-                    int timeout_ms = 1000;
-                    auto timeout_it = request.fields.find("timeout_ms");
-                    if (timeout_it != request.fields.end()) {
-                        try {
-                            std::size_t consumed = 0;
-                            timeout_ms = std::stoi(timeout_it->second, &consumed, 10);
-                            if (consumed != timeout_it->second.size()) {
-                                throw std::invalid_argument("trailing");
-                            }
-                        } catch (...) {
-                            timeout_ms = -1;
-                        }
-                    }
-
-                    CommunicatorRegistrationResult result =
-                        communicator_registry_.init_communicator(unique_it->second, world_size, rank, timeout_ms);
-                    if (!result.ok) {
-                        response = format_error_response(result.error_code, result.error_detail);
-                    } else {
-                        response = format_ok_response({
-                            {"comm_id", std::to_string(result.comm_id)},
-                            {"seqno", std::to_string(result.seqno)},
-                            {"rank", std::to_string(rank)},
-                            {"world_size", std::to_string(world_size)},
-                        });
-                    }
-                }
-            }
-        }
+        response = handle_init_comm(communicator_registry_, request);
     } else if (request.command == "DESTROY_COMM") {
-        bool ok = false;
-        std::string error;
-        const int comm_id = parse_required_int(request.fields, "comm_id", ok, error);
-        if (!ok) {
-            response = format_error_response("bad_request", error);
-        } else {
-            const int rank = parse_required_int(request.fields, "rank", ok, error);
-            if (!ok) {
-                response = format_error_response("bad_request", error);
-            } else {
-                CommunicatorDestroyResult result = communicator_registry_.destroy_communicator(comm_id, rank);
-                if (!result.ok) {
-                    response = format_error_response(result.error_code, result.error_detail);
-                } else {
-                    response = format_ok_response({
-                        {"comm_id", std::to_string(comm_id)},
-                        {"rank", std::to_string(rank)},
-                    });
-                }
-            }
-        }
+        response = handle_destroy_comm(communicator_registry_, request);
     } else if (request.command == "SPLIT_COMM") {
-        CommunicatorSplitRequest split_request;
-        bool ok = false;
-        std::string error;
-
-        split_request.comm_id = parse_required_int(request.fields, "comm_id", ok, error);
-        if (!ok) {
-            response = format_error_response("bad_request", error);
-        } else {
-            split_request.rank = parse_required_int(request.fields, "rank", ok, error);
-            if (!ok) {
-                response = format_error_response("bad_request", error);
-            } else {
-                split_request.seqno = parse_required_u64(request.fields, "seqno", ok, error);
-                if (!ok) {
-                    response = format_error_response("bad_request", error);
-                } else {
-                    split_request.color = parse_required_int(request.fields, "color", ok, error);
-                    if (!ok) {
-                        response = format_error_response("bad_request", error);
-                    } else {
-                        split_request.key = parse_required_int(request.fields, "key", ok, error);
-                        if (!ok) {
-                            response = format_error_response("bad_request", error);
-                        } else {
-                            split_request.timeout_ms =
-                                parse_required_int(request.fields, "timeout_ms", ok, error);
-                            if (!ok) {
-                                response = format_error_response("bad_request", error);
-                            } else {
-                                CommunicatorSplitResult result =
-                                    communicator_registry_.split_communicator(split_request);
-                                if (!result.ok) {
-                                    response = format_error_response(result.error_code, result.error_detail);
-                                } else {
-                                    response = format_ok_response({
-                                        {"comm_id", std::to_string(split_request.comm_id)},
-                                        {"seqno", std::to_string(result.seqno)},
-                                        {"rank", std::to_string(split_request.rank)},
-                                        {"participating", result.participating ? "1" : "0"},
-                                        {"new_comm_id", std::to_string(result.new_comm_id)},
-                                        {"new_rank", std::to_string(result.new_rank)},
-                                        {"new_world_size", std::to_string(result.new_world_size)},
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        response = handle_split_comm(communicator_registry_, request);
     } else if (request.command == "INJECT_FAILURE") {
-        CommunicatorFailureRequest failure_request;
-        bool ok = false;
-        std::string error;
-
-        failure_request.comm_id =
-            parse_required_int(request.fields, "comm_id", ok, error);
-        if (!ok) {
-            response = format_error_response("bad_request", error);
-        } else {
-            failure_request.rank =
-                parse_required_int(request.fields, "rank", ok, error);
-            if (!ok) {
-                response = format_error_response("bad_request", error);
-            } else {
-                failure_request.seqno =
-                    parse_required_u64(request.fields, "seqno", ok, error);
-                if (!ok) {
-                    response = format_error_response("bad_request", error);
-                } else {
-                    const auto operation_it = request.fields.find("operation");
-                    const auto error_code_it = request.fields.find("error_code");
-                    if (operation_it == request.fields.end()) {
-                        response = format_error_response(
-                            "bad_request",
-                            "missing required field: operation");
-                    } else if (error_code_it == request.fields.end()) {
-                        response = format_error_response(
-                            "bad_request",
-                            "missing required field: error_code");
-                    } else {
-                        failure_request.operation = operation_it->second;
-                        failure_request.error_code = error_code_it->second;
-                        failure_request.attempted_payload_bytes =
-                            parse_required_size(
-                                request.fields,
-                                "attempted_payload_bytes",
-                                ok,
-                                error);
-                        if (!ok) {
-                            response = format_error_response(
-                                "bad_request",
-                                error);
-                        } else {
-                            CommunicatorFailureResult result =
-                                communicator_registry_.inject_communicator_failure(
-                                    failure_request);
-                            if (!result.ok) {
-                                response = format_error_response(
-                                    result.error_code,
-                                    result.error_detail);
-                            } else {
-                                response = format_ok_response({
-                                    {"comm_id", std::to_string(failure_request.comm_id)},
-                                    {"seqno", std::to_string(failure_request.seqno)},
-                                    {"rank", std::to_string(failure_request.rank)},
-                                    {"event_index", std::to_string(result.event_index)},
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        response = handle_inject_failure(communicator_registry_, request);
     } else if (request.command == "SHRINK_COMM") {
-        CommunicatorShrinkRequest shrink_request;
-        bool ok = false;
-        std::string error;
-
-        shrink_request.comm_id =
-            parse_required_int(request.fields, "comm_id", ok, error);
-        if (!ok) {
-            response = format_error_response("bad_request", error);
-        } else {
-            shrink_request.rank =
-                parse_required_int(request.fields, "rank", ok, error);
-            if (!ok) {
-                response = format_error_response("bad_request", error);
-            } else {
-                shrink_request.seqno =
-                    parse_required_u64(request.fields, "seqno", ok, error);
-                if (!ok) {
-                    response = format_error_response("bad_request", error);
-                } else if (!parse_required_int_list(
-                               request.fields,
-                               "excluded_ranks",
-                               shrink_request.excluded_ranks,
-                               error)) {
-                    response = format_error_response("bad_request", error);
-                } else {
-                    shrink_request.timeout_ms =
-                        parse_required_int(
-                            request.fields,
-                            "timeout_ms",
-                            ok,
-                            error);
-                    if (!ok) {
-                        response = format_error_response("bad_request", error);
-                    } else if (!parse_optional_bool_field(
-                                   request.fields,
-                                   "abort_parent",
-                                   false,
-                                   shrink_request.abort_parent,
-                                   error)) {
-                        response = format_error_response("bad_request", error);
-                    } else {
-                        CommunicatorShrinkResult result =
-                            communicator_registry_.shrink_communicator(
-                                shrink_request);
-                        if (!result.ok) {
-                            response = format_error_response(
-                                result.error_code,
-                                result.error_detail);
-                        } else {
-                            response = format_ok_response({
-                                {"comm_id", std::to_string(shrink_request.comm_id)},
-                                {"seqno", std::to_string(result.seqno)},
-                                {"rank", std::to_string(shrink_request.rank)},
-                                {"new_comm_id", std::to_string(result.new_comm_id)},
-                                {"new_rank", std::to_string(result.new_rank)},
-                                {"new_world_size", std::to_string(result.new_world_size)},
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    } else if (
-        request.command == "SEND" ||
-        request.command == "RECV") {
-        PointToPointSubmitRequest p2p_request;
-        bool ok = false;
-        std::string error;
-
-        p2p_request.comm_id = parse_required_int(request.fields, "comm_id", ok, error);
-        if (!ok) {
-            response = format_error_response("bad_request", error);
-        } else {
-            p2p_request.rank = parse_required_int(request.fields, "rank", ok, error);
-            if (!ok) {
-                response = format_error_response("bad_request", error);
-            } else {
-                p2p_request.seqno = parse_required_u64(request.fields, "seqno", ok, error);
-                if (!ok) {
-                    response = format_error_response("bad_request", error);
-                } else {
-                    p2p_request.peer = parse_required_int(request.fields, "peer", ok, error);
-                    if (!ok) {
-                        response = format_error_response("bad_request", error);
-                    } else {
-                        p2p_request.count = parse_required_size(request.fields, "count", ok, error);
-                        if (!ok) {
-                            response = format_error_response("bad_request", error);
-                        } else {
-                            p2p_request.bytes = parse_required_size(request.fields, "bytes", ok, error);
-                            if (!ok) {
-                                response = format_error_response("bad_request", error);
-                            } else {
-                                p2p_request.timeout_ms =
-                                    parse_required_int(request.fields, "timeout_ms", ok, error);
-                                if (!ok) {
-                                    response = format_error_response("bad_request", error);
-                                } else {
-                                    auto staging_it = request.fields.find("staging_name");
-                                    const auto transport_it = request.fields.find("buffer_transport");
-                                    const bool socket_transport =
-                                        transport_it != request.fields.end() &&
-                                        transport_it->second == "socket";
-                                    auto dtype_it = request.fields.find("dtype");
-                                    if (!socket_transport && staging_it == request.fields.end()) {
-                                        response = format_error_response(
-                                            "bad_request",
-                                            "missing required field: staging_name");
-                                    } else if (dtype_it == request.fields.end()) {
-                                        response = format_error_response(
-                                            "bad_request",
-                                            "missing required field: dtype");
-                                    } else if (!parse_collective_data_type(
-                                                   dtype_it->second,
-                                                   p2p_request.dtype)) {
-                                        response = format_error_response("bad_request", "unsupported dtype");
-                                    } else {
-                                        if (staging_it != request.fields.end()) {
-                                            p2p_request.staging_name = staging_it->second;
-                                        }
-                                        if (socket_transport) {
-                                            p2p_request.transport = BufferTransport::SocketPayload;
-                                        }
-                                        p2p_request.payload_bytes = parse_optional_size(
-                                            request.fields,
-                                            "payload_bytes",
-                                            request.payload.size(),
-                                            ok,
-                                            error);
-                                        if (!ok) {
-                                            response = format_error_response("bad_request", error);
-                                        } else {
-                                            p2p_request.payload = request.payload;
-                                            p2p_request.type = request.command == "SEND"
-                                                ? PointToPointType::Send
-                                                : PointToPointType::Recv;
-
-                                            PointToPointSubmitResult result =
-                                                communicator_registry_.submit_point_to_point(p2p_request);
-                                            if (!result.ok) {
-                                                response = format_error_response(
-                                                    result.error_code,
-                                                    result.error_detail);
-                                            } else {
-                                                response_payload = std::move(result.output_payload);
-                                                response = format_ok_response({
-                                                    {"comm_id", std::to_string(p2p_request.comm_id)},
-                                                    {"seqno", std::to_string(result.seqno)},
-                                                    {"rank", std::to_string(p2p_request.rank)},
-                                                    {"peer", std::to_string(p2p_request.peer)},
-                                                    {"op", request.command == "SEND" ? "send" : "recv"},
-                                                });
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } else if (
-        request.command == "ALLREDUCE" ||
-        request.command == "REDUCE" ||
-        request.command == "BROADCAST" ||
-        request.command == "ALLGATHER" ||
-        request.command == "REDUCESCATTER" ||
-        request.command == "ALLTOALL") {
-        CollectiveSubmitRequest collective_request;
-        bool ok = false;
-        std::string error;
-
-        collective_request.comm_id = parse_required_int(request.fields, "comm_id", ok, error);
-        if (!ok) {
-            response = format_error_response("bad_request", error);
-        } else {
-            collective_request.rank = parse_required_int(request.fields, "rank", ok, error);
-            if (!ok) {
-                response = format_error_response("bad_request", error);
-            } else {
-                collective_request.seqno = parse_required_u64(request.fields, "seqno", ok, error);
-                if (!ok) {
-                    response = format_error_response("bad_request", error);
-                } else {
-                    collective_request.count = parse_required_size(request.fields, "count", ok, error);
-                    if (!ok) {
-                        response = format_error_response("bad_request", error);
-                    } else {
-                        collective_request.bytes = parse_required_size(request.fields, "bytes", ok, error);
-                        if (!ok) {
-                            response = format_error_response("bad_request", error);
-                        } else {
-                            collective_request.root = parse_required_int(request.fields, "root", ok, error);
-                            if (!ok) {
-                                response = format_error_response("bad_request", error);
-                            } else {
-                                collective_request.timeout_ms =
-                                    parse_required_int(request.fields, "timeout_ms", ok, error);
-                                if (!ok) {
-                                    response = format_error_response("bad_request", error);
-                                } else {
-                                    bool proxy_only = false;
-                                    if (!parse_optional_bool_field(
-                                            request.fields,
-                                            "proxy_only",
-                                            false,
-                                            proxy_only,
-                                            error)) {
-                                        response = format_error_response("bad_request", error);
-                                    } else {
-                                        collective_request.proxy_only = proxy_only;
-                                        auto staging_it = request.fields.find("staging_name");
-                                        const auto transport_it = request.fields.find("buffer_transport");
-                                        const bool socket_transport =
-                                            transport_it != request.fields.end() &&
-                                            transport_it->second == "socket";
-                                        if (!collective_request.proxy_only &&
-                                            !socket_transport &&
-                                            staging_it == request.fields.end()) {
-                                            response = format_error_response(
-                                                "bad_request",
-                                                "missing required field: staging_name");
-                                        } else {
-                                            if (staging_it != request.fields.end()) {
-                                                collective_request.staging_name = staging_it->second;
-                                            }
-                                            if (socket_transport) {
-                                                collective_request.transport = BufferTransport::SocketPayload;
-                                            }
-                                            collective_request.payload_bytes = parse_optional_size(
-                                                request.fields,
-                                                "payload_bytes",
-                                                request.payload.size(),
-                                                ok,
-                                                error);
-                                            if (!ok) {
-                                                response = format_error_response("bad_request", error);
-                                            } else {
-                                                collective_request.payload = request.payload;
-                                                const bool has_input_splits =
-                                                    request.fields.find("input_splits") !=
-                                                    request.fields.end();
-                                                const bool has_output_splits =
-                                                    request.fields.find("output_splits") !=
-                                                    request.fields.end();
-                                                if (has_input_splits != has_output_splits) {
-                                                    response = format_error_response(
-                                                        "bad_request",
-                                                        "input_splits and output_splits must be provided together");
-                                                } else if (!parse_optional_size_list(
-                                                               request.fields,
-                                                               "input_splits",
-                                                               collective_request.input_splits,
-                                                               error) ||
-                                                           !parse_optional_size_list(
-                                                               request.fields,
-                                                               "output_splits",
-                                                               collective_request.output_splits,
-                                                               error)) {
-                                                    response = format_error_response(
-                                                        "bad_request", error);
-                                                } else {
-                                                    collective_request.input_bytes = parse_optional_size(
-                                                        request.fields,
-                                                        "input_bytes",
-                                                        collective_request.bytes,
-                                                        ok,
-                                                        error);
-                                                    if (ok) {
-                                                        collective_request.output_bytes = parse_optional_size(
-                                                            request.fields,
-                                                            "output_bytes",
-                                                            collective_request.bytes,
-                                                            ok,
-                                                            error);
-                                                    }
-                                                    auto dtype_it = request.fields.find("dtype");
-                                                    auto reduce_it = request.fields.find("reduce_op");
-                                                    if (!ok) {
-                                                        response = format_error_response(
-                                                            "bad_request", error);
-                                                    } else if (dtype_it == request.fields.end()) {
-                                                        response = format_error_response(
-                                                            "bad_request",
-                                                            "missing required field: dtype");
-                                                    } else if (reduce_it == request.fields.end()) {
-                                                        response = format_error_response(
-                                                            "bad_request",
-                                                            "missing required field: reduce_op");
-                                                    } else if (!parse_collective_data_type(
-                                                                   dtype_it->second,
-                                                                   collective_request.dtype)) {
-                                                        response = format_error_response(
-                                                            "bad_request",
-                                                            "unsupported dtype");
-                                                    } else if (!parse_collective_reduce_op(
-                                                                   reduce_it->second,
-                                                                   collective_request.reduce_op)) {
-                                                        response = format_error_response(
-                                                            "bad_request",
-                                                            "unsupported reduce_op");
-                                                    } else {
-                                                        if (request.command == "ALLREDUCE") {
-                                                            collective_request.type = CollectiveType::AllReduce;
-                                                        } else if (request.command == "REDUCE") {
-                                                            collective_request.type = CollectiveType::Reduce;
-                                                        } else if (request.command == "BROADCAST") {
-                                                            collective_request.type = CollectiveType::Broadcast;
-                                                        } else if (request.command == "ALLGATHER") {
-                                                            collective_request.type = CollectiveType::AllGather;
-                                                        } else if (request.command == "ALLTOALL") {
-                                                            collective_request.type = CollectiveType::AllToAll;
-                                                        } else {
-                                                            collective_request.type = CollectiveType::ReduceScatter;
-                                                        }
-                                                        CollectiveSubmitResult result =
-                                                            communicator_registry_.submit_collective(
-                                                                collective_request);
-                                                        if (!result.ok) {
-                                                            response = format_error_response(
-                                                                result.error_code,
-                                                                result.error_detail);
-                                                        } else {
-                                                            response_payload = std::move(result.output_payload);
-                                                            response = format_ok_response({
-                                                                {"comm_id", std::to_string(collective_request.comm_id)},
-                                                                {"seqno", std::to_string(result.seqno)},
-                                                                {"rank", std::to_string(collective_request.rank)},
-                                                                {"op", collective_type_name(collective_request.type)},
-                                                            });
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        response = handle_shrink_comm(communicator_registry_, request);
+    } else if (request.command == "SEND" || request.command == "RECV") {
+        response = handle_point_to_point(communicator_registry_, request, response_payload);
+    } else if (collective_command_type(request.command, collective_type)) {
+        response = handle_collective(communicator_registry_, request, collective_type, response_payload);
     } else if (request.command == "BARRIER") {
-        BarrierSubmitRequest barrier_request;
-        bool ok = false;
-        std::string error;
-
-        barrier_request.comm_id = parse_required_int(request.fields, "comm_id", ok, error);
-        if (!ok) {
-            response = format_error_response("bad_request", error);
-        } else {
-            barrier_request.rank = parse_required_int(request.fields, "rank", ok, error);
-            if (!ok) {
-                response = format_error_response("bad_request", error);
-            } else {
-                barrier_request.seqno = parse_required_u64(request.fields, "seqno", ok, error);
-                if (!ok) {
-                    response = format_error_response("bad_request", error);
-                } else {
-                    barrier_request.timeout_ms = parse_required_int(request.fields, "timeout_ms", ok, error);
-                    if (!ok) {
-                        response = format_error_response("bad_request", error);
-                    } else {
-                        BarrierSubmitResult result =
-                            communicator_registry_.submit_barrier(barrier_request);
-                        if (!result.ok) {
-                            response = format_error_response(result.error_code, result.error_detail);
-                        } else {
-                            response = format_ok_response({
-                                {"comm_id", std::to_string(barrier_request.comm_id)},
-                                {"seqno", std::to_string(result.seqno)},
-                                {"rank", std::to_string(barrier_request.rank)},
-                                {"op", "barrier"},
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        response = handle_barrier(communicator_registry_, request);
     } else if (request.command == "GROUP_PREPARE") {
-        CollectiveBatchPrepareRequest batch_request;
-        bool ok = false;
-        std::string error;
-
-        batch_request.comm_id = parse_required_int(request.fields, "comm_id", ok, error);
-        if (!ok) {
-            response = format_error_response("bad_request", error);
-        } else {
-            batch_request.rank = parse_required_int(request.fields, "rank", ok, error);
-            if (!ok) {
-                response = format_error_response("bad_request", error);
-            } else {
-                batch_request.base_seqno = parse_required_u64(request.fields, "base_seqno", ok, error);
-                if (!ok) {
-                    response = format_error_response("bad_request", error);
-                } else {
-                    batch_request.timeout_ms = parse_required_int(request.fields, "timeout_ms", ok, error);
-                    if (!ok) {
-                        response = format_error_response("bad_request", error);
-                    } else {
-                        const int op_count = parse_required_int(request.fields, "op_count", ok, error);
-                        if (!ok) {
-                            response = format_error_response("bad_request", error);
-                        } else if (op_count <= 0) {
-                            response = format_error_response("bad_request", "op_count must be > 0");
-                        } else {
-                            batch_request.operations.reserve(static_cast<std::size_t>(op_count));
-                            for (int index = 0; index < op_count && ok; ++index) {
-                                CollectiveBatchPlanItem item;
-                                const std::string prefix = "op" + std::to_string(index) + "_";
-
-                                auto type_it = request.fields.find(prefix + "type");
-                                auto dtype_it = request.fields.find(prefix + "dtype");
-                                auto reduce_it = request.fields.find(prefix + "reduce_op");
-                                if (type_it == request.fields.end()) {
-                                    ok = false;
-                                    error = "missing required field: " + prefix + "type";
-                                    break;
-                                }
-                                if (dtype_it == request.fields.end()) {
-                                    ok = false;
-                                    error = "missing required field: " + prefix + "dtype";
-                                    break;
-                                }
-                                if (reduce_it == request.fields.end()) {
-                                    ok = false;
-                                    error = "missing required field: " + prefix + "reduce_op";
-                                    break;
-                                }
-                                if (!parse_collective_type(type_it->second, item.type)) {
-                                    ok = false;
-                                    error = "unsupported collective type";
-                                    break;
-                                }
-                                if (!parse_collective_data_type(dtype_it->second, item.dtype)) {
-                                    ok = false;
-                                    error = "unsupported dtype";
-                                    break;
-                                }
-                                if (!parse_collective_reduce_op(reduce_it->second, item.reduce_op)) {
-                                    ok = false;
-                                    error = "unsupported reduce_op";
-                                    break;
-                                }
-
-                                item.count = parse_required_size(request.fields, (prefix + "count").c_str(), ok, error);
-                                if (!ok) {
-                                    break;
-                                }
-                                item.bytes = parse_required_size(request.fields, (prefix + "bytes").c_str(), ok, error);
-                                if (!ok) {
-                                    break;
-                                }
-                                item.root = parse_required_int(request.fields, (prefix + "root").c_str(), ok, error);
-                                if (!ok) {
-                                    break;
-                                }
-                                batch_request.operations.push_back(item);
-                            }
-
-                            if (!ok) {
-                                response = format_error_response("bad_request", error);
-                            } else {
-                                CollectiveBatchPrepareResult result =
-                                    communicator_registry_.prepare_collective_batch(batch_request);
-                                if (!result.ok) {
-                                    response = format_error_response(result.error_code, result.error_detail);
-                                } else {
-                                    response = format_ok_response({
-                                        {"comm_id", std::to_string(batch_request.comm_id)},
-                                        {"base_seqno", std::to_string(result.base_seqno)},
-                                        {"rank", std::to_string(batch_request.rank)},
-                                        {"op_count", std::to_string(batch_request.operations.size())},
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } else if (request.command == "SHUTDOWN") {
-        response = format_ok_response({
-            {"status", "shutting_down"},
-        });
-        send_message_packet(client_fd, response, {}, transport_error);
-        ::close(client_fd);
-        request_shutdown();
-        return;
+        response = handle_group_prepare(communicator_registry_, request);
     } else {
         response = format_error_response("unknown_command", request.command);
     }

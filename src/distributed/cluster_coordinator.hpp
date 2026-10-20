@@ -22,8 +22,6 @@ public:
     int run();
     void request_shutdown();
     const std::string& address() const { return address_; }
-    const std::string& socket_path() const { return address_; }
-    CoordinatorTransport transport() const { return transport_; }
 
 private:
     void accept_loop();
