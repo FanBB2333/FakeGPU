@@ -35,10 +35,6 @@ static std::map<cublasHandle_t, CublasHandle*> g_handles;
 static std::mutex g_mutex;
 static std::mt19937 g_rng(std::random_device{}());
 
-#ifndef FAKEGPU_CPU_SIMULATION
-#define FAKEGPU_CPU_SIMULATION 0
-#endif
-
 // Helper: Fill output buffer with random values
 template<typename T>
 static void fillRandom(T *data, size_t count) {
@@ -48,50 +44,14 @@ static void fillRandom(T *data, size_t count) {
     }
 }
 
-// Helper: Get alpha/beta values (handles both host and device pointer modes)
-template<typename T>
-static T getScalar(const T *ptr, cublasPointerMode_t mode) {
-    if (mode == CUBLAS_POINTER_MODE_HOST) {
-        return *ptr;
-    } else {
-        // Device mode: just dereference (we're using system RAM anyway)
-        return *ptr;
-    }
-}
-
-// Map cudaDataType_t enum values to element sizes (in bytes)
+// Element sizes of the cudaDataType_t values the CPU paths execute; nothing
+// else ever reaches a size that is used.
 static size_t getDataTypeSize(int dataType) {
     switch (dataType) {
         case 0: return 4;   // CUDA_R_32F
         case 1: return 8;   // CUDA_R_64F
         case 2: return 2;   // CUDA_R_16F
-        case 3: return 1;   // CUDA_R_8I
-        case 4: return 8;   // CUDA_C_32F (2x float)
-        case 5: return 16;  // CUDA_C_64F (2x double)
-        case 6: return 4;   // CUDA_C_16F (2x half)
-        case 7: return 2;   // CUDA_C_8I  (2x int8)
-        case 8: return 1;   // CUDA_R_8U
-        case 9: return 2;   // CUDA_C_8U  (2x uint8)
-        case 10: return 4;  // CUDA_R_32I
-        case 11: return 8;  // CUDA_C_32I
-        case 12: return 4;  // CUDA_R_32U
-        case 13: return 8;  // CUDA_C_32U
         case 14: return 2;  // CUDA_R_16BF
-        case 15: return 4;  // CUDA_C_16BF
-        case 16: case 17:   // 4-bit types - treat as 1 byte per element
-        case 18: case 19:
-            return 1;
-        case 20: return 2;  // CUDA_R_16I
-        case 21: return 4;  // CUDA_C_16I
-        case 22: return 2;  // CUDA_R_16U
-        case 23: return 4;  // CUDA_C_16U
-        case 24: return 8;  // CUDA_R_64I
-        case 25: return 16; // CUDA_C_64I
-        case 26: return 8;  // CUDA_R_64U
-        case 27: return 16; // CUDA_C_64U
-        case 28: case 29: case 30: // FP8/FP6/FP4 variants
-        case 31: case 32: case 33:
-            return 1;
         default:
             return 4; // fallback to float size
     }
@@ -118,7 +78,6 @@ uint64_t gemm_flops_u64(uint64_t m, uint64_t n, uint64_t k, uint64_t batch_count
 }
 
 bool ascii_iequals(const char* a, const char* b) {
-    if (!a || !b) return false;
     while (*a && *b) {
         const unsigned char ca = static_cast<unsigned char>(*a);
         const unsigned char cb = static_cast<unsigned char>(*b);
@@ -154,7 +113,7 @@ uint64_t cpu_gemm_max_ops() {
         errno = 0;
         char* end = nullptr;
         const unsigned long long parsed = std::strtoull(env, &end, 10);
-        if (errno != 0 || end == env || !end || *end != '\0') return kDefaultMaxOps;
+        if (errno != 0 || end == env || *end != '\0') return kDefaultMaxOps;
         return static_cast<uint64_t>(parsed);
     }();
     return max_ops;
@@ -176,7 +135,6 @@ bool should_skip_cpu_gemm(uint64_t m, uint64_t n, uint64_t k, uint64_t batch_cou
 }
 
 const void* first_nonnull_ptr(const void* const* ptrs, int count) {
-    if (!ptrs || count <= 0) return nullptr;
     for (int i = 0; i < count; ++i) {
         if (ptrs[i]) return ptrs[i];
     }
@@ -185,7 +143,7 @@ const void* first_nonnull_ptr(const void* const* ptrs, int count) {
 
 // Best-effort bounds checking against FakeGPU's tracked allocations.
 bool ensure_allocation_at_least(const void* ptr, size_t required_bytes) {
-    if (!ptr || required_bytes == 0) return true;
+    if (required_bytes == 0) return true;
     size_t size = 0;
     int device = -1;
     if (!fake_gpu::GlobalState::instance().get_allocation_info(const_cast<void*>(ptr), size, device)) {
@@ -211,10 +169,7 @@ float half_to_float(__half h) {
     uint32_t out_mant = 0;
 
     if (exp == 0) {
-        if (mant == 0) {
-            out_exp = 0;
-            out_mant = 0;
-        } else {
+        if (mant != 0) {
             // Subnormal half -> normalized float
             int shift = 0;
             uint16_t m = mant;
@@ -228,15 +183,10 @@ float half_to_float(__half h) {
             out_mant = static_cast<uint32_t>(m) << 13;
         }
     } else if (exp == 0x1F) {
-        // Inf/NaN
+        // Inf/NaN; a NaN is made quiet.
         out_exp = 0xFFu << 23;
         out_mant = static_cast<uint32_t>(mant) << 13;
-        if (out_mant == 0) {
-            // Inf
-        } else {
-            // Ensure it's a quiet NaN
-            out_mant |= 0x400000u;
-        }
+        if (mant) out_mant |= 0x400000u;
     } else {
         const int32_t exp32 = static_cast<int32_t>(exp) + (127 - 15);
         out_exp = static_cast<uint32_t>(exp32) << 23;
@@ -326,7 +276,6 @@ uint16_t float_to_bf16(float f) {
 }
 
 double read_scalar_typed(const void* ptr, int dataType) {
-    if (!ptr) return 0.0;
     switch (dataType) {
         case 0:  // CUDA_R_32F
             return static_cast<double>(*reinterpret_cast<const float*>(ptr));
@@ -908,15 +857,7 @@ cublasStatus_t cublasSaxpy_v2(cublasHandle_t handle, int n, const float *alpha, 
     if (incx == 0 || incy == 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) {
-            mode = it->second->pointerMode;
-        }
-    }
-    const float a = getScalar(alpha, mode);
+    const float a = *alpha;
     const float* x0 = x;
     float* y0 = y;
     if (incx < 0) x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
@@ -945,15 +886,7 @@ cublasStatus_t cublasDaxpy_v2(cublasHandle_t handle, int n, const double *alpha,
     if (incx == 0 || incy == 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) {
-            mode = it->second->pointerMode;
-        }
-    }
-    const double a = getScalar(alpha, mode);
+    const double a = *alpha;
     const double* x0 = x;
     double* y0 = y;
     if (incx < 0) x0 = x + static_cast<ptrdiff_t>((1 - n) * incx);
@@ -1135,13 +1068,7 @@ cublasStatus_t cublasSscal_v2(cublasHandle_t handle, int n, const float *alpha, 
     if (incx == 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) mode = it->second->pointerMode;
-    }
-    const float a = getScalar(alpha, mode);
+    const float a = *alpha;
     float* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - n) * incx) : x;
     for (int i = 0; i < n; ++i) {
         x0[static_cast<ptrdiff_t>(i) * incx] *= a;
@@ -1164,13 +1091,7 @@ cublasStatus_t cublasDscal_v2(cublasHandle_t handle, int n, const double *alpha,
     if (incx == 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) mode = it->second->pointerMode;
-    }
-    const double a = getScalar(alpha, mode);
+    const double a = *alpha;
     double* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - n) * incx) : x;
     for (int i = 0; i < n; ++i) {
         x0[static_cast<ptrdiff_t>(i) * incx] *= a;
@@ -1197,14 +1118,8 @@ cublasStatus_t cublasSgemv_v2(cublasHandle_t handle, cublasOperation_t trans, in
     if (m < 0 || n < 0 || lda < std::max(1, m) || incx == 0 || incy == 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) mode = it->second->pointerMode;
-    }
-    const float a = getScalar(alpha, mode);
-    const float b = getScalar(beta, mode);
+    const float a = *alpha;
+    const float b = *beta;
     const int input_size = trans == CUBLAS_OP_N ? n : m;
     int output_size = (trans == CUBLAS_OP_N) ? m : n;
     const float* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - input_size) * incx) : x;
@@ -1242,14 +1157,8 @@ cublasStatus_t cublasDgemv_v2(cublasHandle_t handle, cublasOperation_t trans, in
     if (m < 0 || n < 0 || lda < std::max(1, m) || incx == 0 || incy == 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) mode = it->second->pointerMode;
-    }
-    const double a = getScalar(alpha, mode);
-    const double b = getScalar(beta, mode);
+    const double a = *alpha;
+    const double b = *beta;
     const int input_size = trans == CUBLAS_OP_N ? n : m;
     int output_size = (trans == CUBLAS_OP_N) ? m : n;
     const double* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - input_size) * incx) : x;
@@ -1285,13 +1194,7 @@ cublasStatus_t cublasSger_v2(cublasHandle_t handle, int m, int n, const float *a
     if (m < 0 || n < 0 || lda < std::max(1, m) || incx == 0 || incy == 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) mode = it->second->pointerMode;
-    }
-    const float a = getScalar(alpha, mode);
+    const float a = *alpha;
     const float* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - m) * incx) : x;
     const float* y0 = incy < 0 ? y + static_cast<ptrdiff_t>((1 - n) * incy) : y;
     for (int col = 0; col < n; ++col) {
@@ -1319,13 +1222,7 @@ cublasStatus_t cublasDger_v2(cublasHandle_t handle, int m, int n, const double *
     if (m < 0 || n < 0 || lda < std::max(1, m) || incx == 0 || incy == 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) mode = it->second->pointerMode;
-    }
-    const double a = getScalar(alpha, mode);
+    const double a = *alpha;
     const double* x0 = incx < 0 ? x + static_cast<ptrdiff_t>((1 - m) * incx) : x;
     const double* y0 = incy < 0 ? y + static_cast<ptrdiff_t>((1 - n) * incy) : y;
     for (int col = 0; col < n; ++col) {
@@ -1362,16 +1259,8 @@ cublasStatus_t cublasSgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
         return CUBLAS_STATUS_SUCCESS;
     }
 
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) {
-            mode = it->second->pointerMode;
-        }
-    }
-    const double a = static_cast<double>(getScalar(alpha, mode));
-    const double b = static_cast<double>(getScalar(beta, mode));
+    const double a = static_cast<double>(*alpha);
+    const double b = static_cast<double>(*beta);
 
     const int a_rows = (transa == CUBLAS_OP_N) ? m : k;
     const int a_cols = (transa == CUBLAS_OP_N) ? k : m;
@@ -1428,16 +1317,8 @@ cublasStatus_t cublasDgemm_v2(cublasHandle_t handle, cublasOperation_t transa, c
         return CUBLAS_STATUS_SUCCESS;
     }
 
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) {
-            mode = it->second->pointerMode;
-        }
-    }
-    const double a = static_cast<double>(getScalar(alpha, mode));
-    const double b = static_cast<double>(getScalar(beta, mode));
+    const double a = static_cast<double>(*alpha);
+    const double b = static_cast<double>(*beta);
 
     const int a_rows = (transa == CUBLAS_OP_N) ? m : k;
     const int a_cols = (transa == CUBLAS_OP_N) ? k : m;
@@ -1525,16 +1406,8 @@ cublasStatus_t cublasSgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) {
-            mode = it->second->pointerMode;
-        }
-    }
-    const double a = static_cast<double>(getScalar(alpha, mode));
-    const double b = static_cast<double>(getScalar(beta, mode));
+    const double a = static_cast<double>(*alpha);
+    const double b = static_cast<double>(*beta);
     for (int batch = 0; batch < batchCount; ++batch) {
         const float* Ab = A + static_cast<ptrdiff_t>(batch) * strideA;
         const float* Bb = B + static_cast<ptrdiff_t>(batch) * strideB;
@@ -1572,16 +1445,8 @@ cublasStatus_t cublasDgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) {
-            mode = it->second->pointerMode;
-        }
-    }
-    const double a = static_cast<double>(getScalar(alpha, mode));
-    const double b = static_cast<double>(getScalar(beta, mode));
+    const double a = static_cast<double>(*alpha);
+    const double b = static_cast<double>(*beta);
     for (int batch = 0; batch < batchCount; ++batch) {
         const double* Ab = A + static_cast<ptrdiff_t>(batch) * strideA;
         const double* Bb = B + static_cast<ptrdiff_t>(batch) * strideB;
@@ -1658,16 +1523,8 @@ cublasStatus_t cublasSgemmBatched(cublasHandle_t handle, cublasOperation_t trans
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) {
-            mode = it->second->pointerMode;
-        }
-    }
-    const double a = static_cast<double>(getScalar(alpha, mode));
-    const double b = static_cast<double>(getScalar(beta, mode));
+    const double a = static_cast<double>(*alpha);
+    const double b = static_cast<double>(*beta);
     for (int batch = 0; batch < batchCount; ++batch) {
         const float* Ab = Aarray[batch];
         const float* Bb = Barray[batch];
@@ -1715,16 +1572,8 @@ cublasStatus_t cublasDgemmBatched(cublasHandle_t handle, cublasOperation_t trans
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    cublasPointerMode_t mode = CUBLAS_POINTER_MODE_HOST;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        auto it = g_handles.find(handle);
-        if (it != g_handles.end()) {
-            mode = it->second->pointerMode;
-        }
-    }
-    const double a = static_cast<double>(getScalar(alpha, mode));
-    const double b = static_cast<double>(getScalar(beta, mode));
+    const double a = static_cast<double>(*alpha);
+    const double b = static_cast<double>(*beta);
     for (int batch = 0; batch < batchCount; ++batch) {
         const double* Ab = Aarray[batch];
         const double* Bb = Barray[batch];
