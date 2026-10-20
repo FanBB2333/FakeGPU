@@ -298,6 +298,16 @@ ModeledNvLinkGroup parse_nvlink_group(const std::string& text) {
     return group;
 }
 
+std::string encode_nvlink_group(const ModeledNvLinkGroup& group) {
+    std::string text = group.nvswitch ? "switch:" : "mesh:";
+    for (std::size_t position = 0; position < group.members.size(); ++position) {
+        text += (position ? "," : "") + std::to_string(group.members[position]);
+    }
+    char gbps[32];
+    std::snprintf(gbps, sizeof(gbps), "%g", group.link_gbps);
+    return text + ":" + std::to_string(group.links) + ":" + gbps;
+}
+
 std::vector<ModeledNvLinkGroup> legacy_nvlink_groups(
     const std::string& groups_value,
     std::size_t device_count,
@@ -726,7 +736,8 @@ ModeledDeviceTopology build_modeled_device_topology(
             for (int member : group.members) {
                 if (member < 0 || static_cast<std::size_t>(member) >= device_count) {
                     throw TopologyError{
-                        "NVLink group names GPU " + std::to_string(member) + ", beyond the " +
+                        "NVLink group " + encode_nvlink_group(group) + " names GPU " +
+                        std::to_string(member) + ", beyond the " +
                         std::to_string(device_count) + " GPUs"};
                 }
             }

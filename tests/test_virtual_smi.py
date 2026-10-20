@@ -741,6 +741,8 @@ def _python_smi_state(
         ("faults", {"FAKEGPU_FAULT_EVENTS": "0:XID: :2"}),
         ("mig", {"FAKEGPU_MIG_LAYOUT": "-0:1g.10gb:10240"}),
         ("topology", {"FAKEGPU_NVLINK_GROUPS": "-0,1"}),
+        ("topology", {"FAKEGPU_NVLINK_FABRIC": "mesh:0-5:1:50"}),
+        ("topology", {"FAKEGPU_NVLINK_FABRIC": "switch:0,1:2:25;mesh:1,3:2:12.5"}),
     ],
 )
 def test_native_smi_environment_errors_match_python(

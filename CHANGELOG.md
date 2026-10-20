@@ -128,6 +128,8 @@
 - A native `FAKEGPU_FAULT_EVENTS` event with an empty field, such as
   `0::critical`, reports the Python model's `must use
   DEVICE:CODE:SEVERITY[:COUNT]` error instead of a code or severity error.
+- The native `FAKEGPU_NVLINK_FABRIC` error for a group naming a GPU beyond
+  the device count includes the group, as in the Python model.
 
 ## v1.6.0 - 2026-10-17
 
