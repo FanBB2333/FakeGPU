@@ -167,6 +167,123 @@ def _execution_policy_from_run(run: Mapping[str, Any]) -> dict[str, Any]:
     return policy
 
 
+def _validate_root_events(roots, update_count):
+    root_by_id = {}
+    seen_events = set()
+    for root in roots:
+        if not isinstance(root, Mapping):
+            raise FinetuneEstimateError("pipeline plan root events must be mappings")
+        event_id = _integer(root.get("event_id"), "event_id", minimum=1)
+        if event_id in root_by_id:
+            raise FinetuneEstimateError("pipeline plan root event IDs must be unique")
+        step = _integer(root.get("optimizer_step"), "event.optimizer_step")
+        descriptor = root.get("descriptor")
+        if step > update_count or not isinstance(descriptor, Mapping):
+            raise FinetuneEstimateError("pipeline plan has an invalid root event")
+        kind = descriptor.get("kind")
+        if _OPERATIONS.get(descriptor.get("operation")) != kind or kind not in {
+            "evaluation",
+            "checkpoint",
+        }:
+            raise FinetuneEstimateError("pipeline plan has an unknown event operation")
+        if not isinstance(descriptor.get("inside_train"), bool):
+            raise FinetuneEstimateError(
+                "pipeline plan event inside_train must be boolean"
+            )
+        if not isinstance(descriptor.get("workload"), Mapping) or not isinstance(
+            descriptor.get("nested_operations"), list
+        ):
+            raise FinetuneEstimateError(
+                "pipeline plan requires complete event descriptors"
+            )
+        base = {key: value for key, value in descriptor.items() if key != "phase"}
+        key = _canonical(base)
+        phase = (
+            "initial"
+            if step == 0
+            else "final"
+            if not descriptor["inside_train"]
+            else "repeated"
+            if key in seen_events
+            else "first"
+        )
+        if descriptor.get("phase") != phase:
+            raise FinetuneEstimateError(
+                "pipeline plan event phase disagrees with call order"
+            )
+        if phase in {"first", "repeated"}:
+            seen_events.add(key)
+        root_by_id[event_id] = root
+    return root_by_id
+
+
+def _validate_operations(operations, updates, roots, root_by_id):
+    state, next_step, consumed_roots, pending = "setup", 1, [], []
+    for operation in operations:
+        if not isinstance(operation, Mapping):
+            raise FinetuneEstimateError("pipeline plan operations must be mappings")
+        kind = operation.get("kind")
+        if kind == "trainer_start" and state == "setup":
+            state = "trainer"
+        elif (
+            kind == "trainer_end"
+            and state == "trainer"
+            and next_step == len(updates) + 1
+        ):
+            state = "finalization"
+        elif kind == "optimizer_update" and state == "trainer":
+            if (
+                _integer(
+                    operation.get("optimizer_step"),
+                    "operation.optimizer_step",
+                    minimum=1,
+                )
+                != next_step
+            ):
+                raise FinetuneEstimateError(
+                    "pipeline plan operation update order is inconsistent"
+                )
+            if updates[next_step - 1]["preceding_event_ids"] != pending:
+                raise FinetuneEstimateError(
+                    "pipeline plan preceding events disagree with operation order"
+                )
+            pending = []
+            next_step += 1
+        elif kind in {"evaluation", "checkpoint"}:
+            event_id = _integer(
+                operation.get("event_id"), "operation.event_id", minimum=1
+            )
+            root = root_by_id.get(event_id)
+            if (
+                root is None
+                or event_id in consumed_roots
+                or root["descriptor"]["kind"] != kind
+            ):
+                raise FinetuneEstimateError(
+                    "pipeline plan operation references an invalid root event"
+                )
+            if (
+                root["descriptor"]["inside_train"] != (state == "trainer")
+                or root["optimizer_step"] != next_step - 1
+            ):
+                raise FinetuneEstimateError(
+                    "pipeline plan event placement disagrees with its step"
+                )
+            consumed_roots.append(event_id)
+            if state == "trainer":
+                pending.append(event_id)
+        else:
+            raise FinetuneEstimateError(
+                "pipeline plan has an invalid operation or Trainer boundary"
+            )
+    if state != "finalization" or consumed_roots != [
+        root["event_id"] for root in roots
+    ]:
+        raise FinetuneEstimateError(
+            "pipeline plan must consume all roots and both Trainer boundaries"
+        )
+
+
 def validate_pipeline_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     """Validate order, counters and references, returning an owned plan copy.
 
@@ -350,52 +467,7 @@ def validate_pipeline_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
                 f"pipeline plan workload.{field} differs from its updates"
             )
 
-    root_by_id = {}
-    seen_events = set()
-    for root in roots:
-        if not isinstance(root, Mapping):
-            raise FinetuneEstimateError("pipeline plan root events must be mappings")
-        event_id = _integer(root.get("event_id"), "event_id", minimum=1)
-        if event_id in root_by_id:
-            raise FinetuneEstimateError("pipeline plan root event IDs must be unique")
-        step = _integer(root.get("optimizer_step"), "event.optimizer_step")
-        descriptor = root.get("descriptor")
-        if step > len(updates) or not isinstance(descriptor, Mapping):
-            raise FinetuneEstimateError("pipeline plan has an invalid root event")
-        kind = descriptor.get("kind")
-        if _OPERATIONS.get(descriptor.get("operation")) != kind or kind not in {
-            "evaluation",
-            "checkpoint",
-        }:
-            raise FinetuneEstimateError("pipeline plan has an unknown event operation")
-        if not isinstance(descriptor.get("inside_train"), bool):
-            raise FinetuneEstimateError(
-                "pipeline plan event inside_train must be boolean"
-            )
-        if not isinstance(descriptor.get("workload"), Mapping) or not isinstance(
-            descriptor.get("nested_operations"), list
-        ):
-            raise FinetuneEstimateError(
-                "pipeline plan requires complete event descriptors"
-            )
-        base = {key: value for key, value in descriptor.items() if key != "phase"}
-        key = _canonical(base)
-        phase = (
-            "initial"
-            if step == 0
-            else "final"
-            if not descriptor["inside_train"]
-            else "repeated"
-            if key in seen_events
-            else "first"
-        )
-        if descriptor.get("phase") != phase:
-            raise FinetuneEstimateError(
-                "pipeline plan event phase disagrees with call order"
-            )
-        if phase in {"first", "repeated"}:
-            seen_events.add(key)
-        root_by_id[event_id] = root
+    root_by_id = _validate_root_events(roots, len(updates))
 
     limit = plan["execution_policy"]["save_total_limit"]
     checkpoints = sum(
@@ -406,70 +478,7 @@ def validate_pipeline_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
             "pipeline checkpoint rotation is not modeled; planned checkpoints exceed save_total_limit"
         )
 
-    state, next_step, consumed_roots, pending = "setup", 1, [], []
-    for operation in operations:
-        if not isinstance(operation, Mapping):
-            raise FinetuneEstimateError("pipeline plan operations must be mappings")
-        kind = operation.get("kind")
-        if kind == "trainer_start" and state == "setup":
-            state = "trainer"
-        elif (
-            kind == "trainer_end"
-            and state == "trainer"
-            and next_step == len(updates) + 1
-        ):
-            state = "finalization"
-        elif kind == "optimizer_update" and state == "trainer":
-            if (
-                _integer(
-                    operation.get("optimizer_step"),
-                    "operation.optimizer_step",
-                    minimum=1,
-                )
-                != next_step
-            ):
-                raise FinetuneEstimateError(
-                    "pipeline plan operation update order is inconsistent"
-                )
-            if updates[next_step - 1]["preceding_event_ids"] != pending:
-                raise FinetuneEstimateError(
-                    "pipeline plan preceding events disagree with operation order"
-                )
-            pending = []
-            next_step += 1
-        elif kind in {"evaluation", "checkpoint"}:
-            event_id = _integer(
-                operation.get("event_id"), "operation.event_id", minimum=1
-            )
-            root = root_by_id.get(event_id)
-            if (
-                root is None
-                or event_id in consumed_roots
-                or root["descriptor"]["kind"] != kind
-            ):
-                raise FinetuneEstimateError(
-                    "pipeline plan operation references an invalid root event"
-                )
-            if (
-                root["descriptor"]["inside_train"] != (state == "trainer")
-                or root["optimizer_step"] != next_step - 1
-            ):
-                raise FinetuneEstimateError(
-                    "pipeline plan event placement disagrees with its step"
-                )
-            consumed_roots.append(event_id)
-            if state == "trainer":
-                pending.append(event_id)
-        else:
-            raise FinetuneEstimateError(
-                "pipeline plan has an invalid operation or Trainer boundary"
-            )
-    if state != "finalization" or consumed_roots != [
-        root["event_id"] for root in roots
-    ]:
-        raise FinetuneEstimateError(
-            "pipeline plan must consume all roots and both Trainer boundaries"
-        )
+    _validate_operations(operations, updates, roots, root_by_id)
     _canonical(plan)
     return deepcopy(dict(plan))
 
