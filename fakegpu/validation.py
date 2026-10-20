@@ -424,6 +424,7 @@ def _run_case(execution: Mapping[str, Any], *, dry_run: bool) -> dict[str, Any]:
     env.update({str(key): str(value) for key, value in execution["env"].items()})
     started = time.monotonic()
     timed_out = False
+    start_error = None
     try:
         completed = subprocess.run(
             list(execution["command"]),
@@ -442,6 +443,11 @@ def _run_case(execution: Mapping[str, Any], *, dry_run: bool) -> dict[str, Any]:
         exit_code = None
         stdout = _decode_timeout_output(exc.stdout)
         stderr = _decode_timeout_output(exc.stderr)
+    except OSError as exc:
+        start_error = exc
+        exit_code = None
+        stdout = ""
+        stderr = str(exc)
     duration = time.monotonic() - started
     Path(base["stdout_log"]).write_text(stdout, encoding="utf-8")
     Path(base["stderr_log"]).write_text(stderr, encoding="utf-8")
@@ -449,6 +455,8 @@ def _run_case(execution: Mapping[str, Any], *, dry_run: bool) -> dict[str, Any]:
     failures = []
     if timed_out:
         failures.append(f"command timed out after {execution['timeout_seconds']:.3f}s")
+    elif start_error is not None:
+        failures.append(f"command could not be started: {start_error}")
     else:
         failures.extend(
             _expectation_failures(

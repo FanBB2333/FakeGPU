@@ -53,6 +53,9 @@
 - The Hugging Face native runner now names the first unsupported option in
   sorted order when a configuration sets several, instead of a
   hash-seed-dependent one.
+- `fakegpu validate` records a case whose command cannot be started (missing
+  executable or working directory) as failed and still writes the report,
+  instead of aborting the run with a traceback.
 
 ## v1.6.0 - 2026-10-17
 

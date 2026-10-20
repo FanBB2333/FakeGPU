@@ -144,6 +144,28 @@ def test_validation_manifest_records_expectation_failure(tmp_path: Path) -> None
     assert Path(result["stdout_log"]).read_text(encoding="utf-8") == "actual\n"
 
 
+def test_validation_manifest_records_command_that_cannot_start(
+    tmp_path: Path,
+) -> None:
+    manifest = _write_manifest(
+        tmp_path / "manifest.json",
+        [
+            {"name": "ok", "command": [sys.executable, "-c", "pass"]},
+            {"name": "missing", "command": ["fakegpu-no-such-binary-xyz"]},
+        ],
+    )
+    code, report = run_validation_manifest(
+        manifest,
+        report_dir=tmp_path / "report",
+    )
+    assert code == 1
+    assert [item["status"] for item in report["executions"]] == ["passed", "failed"]
+    missing = report["executions"][1]
+    assert missing["exit_code"] is None
+    assert missing["failures"][0].startswith("command could not be started:")
+    assert (tmp_path / "report" / "validation_report.json").is_file()
+
+
 def test_validation_manifest_dry_run_and_case_selection(tmp_path: Path) -> None:
     manifest = _write_manifest(
         tmp_path / "manifest.json",
