@@ -51,9 +51,6 @@ CollectiveExecutionResult execute_allreduce_sum(
     }
 
     const std::size_t dtype_size = collective_data_type_size(request.dtype);
-    if (dtype_size == 0) {
-        return collective_error("unsupported_dtype", "unsupported allreduce dtype");
-    }
     if (request.bytes != request.count * dtype_size) {
         return collective_error("invalid_collective_size", "allreduce bytes do not match count * dtype_size");
     }
@@ -94,9 +91,6 @@ CollectiveExecutionResult execute_reduce(
     }
 
     const std::size_t dtype_size = collective_data_type_size(request.dtype);
-    if (dtype_size == 0) {
-        return collective_error("unsupported_dtype", "unsupported reduce dtype");
-    }
     if (request.bytes != request.count * dtype_size) {
         return collective_error("invalid_collective_size", "reduce bytes do not match count * dtype_size");
     }

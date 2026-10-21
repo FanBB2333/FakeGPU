@@ -11,9 +11,6 @@ CollectiveExecutionResult execute_broadcast(
     const CollectiveExecutionRequest& request,
     const std::vector<CollectiveExecutionParticipant>& participants) {
     const std::size_t dtype_size = collective_data_type_size(request.dtype);
-    if (dtype_size == 0) {
-        return collective_error("unsupported_dtype", "unsupported broadcast dtype");
-    }
     if (request.bytes != request.count * dtype_size) {
         return collective_error("invalid_collective_size", "broadcast bytes do not match count * dtype_size");
     }

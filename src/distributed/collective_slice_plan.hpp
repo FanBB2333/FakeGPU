@@ -30,15 +30,9 @@ inline bool build_even_slice_plan(
         return false;
     }
 
-    const std::size_t dtype_size = collective_data_type_size(request.dtype);
-    if (dtype_size == 0) {
-        error = "unsupported dtype";
-        return false;
-    }
-
     out.world_size = world_size;
     out.chunk_elements = request.count;
-    out.chunk_bytes = request.count * dtype_size;
+    out.chunk_bytes = request.count * collective_data_type_size(request.dtype);
     out.total_elements = out.chunk_elements * out.world_size;
     out.total_bytes = out.chunk_bytes * out.world_size;
 

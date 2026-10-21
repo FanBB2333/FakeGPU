@@ -39,10 +39,6 @@ inline bool build_staging_chunk_plan(
     }
 
     const std::size_t dtype_size = collective_data_type_size(dtype);
-    if (dtype_size == 0) {
-        error = "unsupported dtype";
-        return false;
-    }
     if (element_count == 0) {
         error = "count must be > 0";
         return false;
