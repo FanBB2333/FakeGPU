@@ -52,7 +52,6 @@ struct ClusterConfigModel {
 struct DistributedConfig {
     DistributedMode mode = DistributedMode::Disabled;
     CoordinatorTransport coordinator_transport = CoordinatorTransport::Tcp;
-    std::string cluster_config_path;
     std::string coordinator_address;
     std::size_t staging_chunk_bytes = 0;
     ClusterConfigModel cluster_config;

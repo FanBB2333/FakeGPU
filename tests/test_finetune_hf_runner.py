@@ -96,6 +96,10 @@ def test_normalized_training_options_and_official_extras_are_preserved(
         ({"auto_find_batch_size": True}, "does not support auto_find_batch_size"),
         ({"push_to_hub": True}, "does not support push_to_hub"),
         ({"do_predict": True}, "does not support do_predict"),
+        pytest.param(
+            {"push_to_hub": True, "do_predict": True, "auto_find_batch_size": True},
+            "does not support auto_find_batch_size", id="first-unsupported-option",
+        ),
         ({"do_train": False}, "requires training"),
         ({"disable_shuffling": "true"}, "must be boolean"),
         ({"pad_to_multiple_of": 0}, "positive integer"),

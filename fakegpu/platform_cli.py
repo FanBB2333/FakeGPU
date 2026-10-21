@@ -8,7 +8,8 @@ import shlex
 import sys
 from typing import Sequence
 
-from ._cli import EXIT_SUCCESS, EXIT_USAGE, command_prog
+from ._cli import EXIT_SUCCESS, EXIT_USAGE, command_prog, parse_byte_count
+from .link_traffic import explain_route, format_seconds
 from .machine.config import MachineConfig, MachinePaths, parse_devices
 from .platforms import AUTO, PlatformError, ResolvedPlatform, load_platforms, resolve_platform
 
@@ -22,11 +23,7 @@ def _add_layout_options(parser: argparse.ArgumentParser) -> None:
 
 
 def _resolve(args: argparse.Namespace) -> ResolvedPlatform:
-    config = MachineConfig()
-    try:
-        config = MachineConfig.load(MachinePaths.from_env().config)
-    except ValueError:
-        pass
+    config = MachineConfig.load(MachinePaths.from_env().config)
     devices = args.devices or config.devices
     explicit_devices = args.devices is not None
     platform = args.platform or (AUTO if explicit_devices else config.platform)
@@ -42,9 +39,7 @@ def _resolve(args: argparse.Namespace) -> ResolvedPlatform:
 
 def _print_list() -> None:
     rows = [(p.id, p.kind, str(p.capacity), p.name) for p in load_platforms().values()]
-    widths = [max(len(row[column]) for row in rows + [("ID", "Kind", "GPUs", "Name")]) for column in range(4)]
-    for row in [("ID", "Kind", "GPUs", "Name"), *rows]:
-        print("  ".join(value.ljust(widths[column]) for column, value in enumerate(row)).rstrip())
+    _print_rows([("ID", "Kind", "GPUs", "Name"), *rows])
     print()
     print("auto picks a platform by form factor: SXM modules go on the HGX/DGX baseboard built for them,")
     print("superchips on their Grace platform, and PCIe cards in desktop, workstation or server slots.")
@@ -90,6 +85,32 @@ def _print_rows(rows: Sequence[Sequence[str]]) -> None:
         print("  ".join(value.ljust(widths[column]) for column, value in enumerate(row)).rstrip())
 
 
+def _endpoint(value: str) -> int | None:
+    if value.lower() == "host":
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected host or a GPU index such as 0") from exc
+
+
+def _print_route(document: dict) -> None:
+    print(f"Platform: {document['platform']['name']} ({document['platform']['id']})")
+    print(f"Path: {' -> '.join(document['path'])}")
+    print(f"Route: {document['route']}")
+    print(f"Bytes: {document['bytes']:,}")
+    for link in document["links"]:
+        bandwidth = link["bandwidth_gbps"]
+        rate = f"{bandwidth:g} GB/s" if bandwidth is not None else "unknown bandwidth"
+        print(f"  {link['name']}: {rate}")
+    bottlenecks = [link["name"] for link in document["links"] if link["bottleneck"]]
+    print(f"Bottleneck: {', '.join(bottlenecks) or 'unknown'}")
+    seconds = document["modeled_seconds"]
+    print(f"Modeled time: {format_seconds(seconds) if seconds is not None else 'unknown'}")
+    for note in document["notes"]:
+        print(f"note: {note}")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog=command_prog(__name__),
@@ -109,6 +130,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Print shell exports that give a FakeCUDA process this platform's topology.",
     )
     _add_layout_options(env)
+    transfer = actions.add_parser("route", help="Explain a copy's path, bottleneck and modeled time.")
+    _add_layout_options(transfer)
+    transfer.add_argument("--from", dest="source", type=_endpoint, required=True, metavar="host|GPU")
+    transfer.add_argument("--to", dest="target", type=_endpoint, required=True, metavar="host|GPU")
+    transfer.add_argument("--bytes", type=parse_byte_count, required=True, help="Copy size, e.g. 1GiB or 1000000.")
+    transfer.add_argument("--json", action="store_true", help="Print the explanation as JSON.")
     args = parser.parse_args(argv)
 
     if args.action == "list":
@@ -134,6 +161,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_SUCCESS
     try:
         resolved = _resolve(args)
+        if args.action == "route":
+            document = explain_route(resolved.topology, args.source, args.target, args.bytes)
+            document["platform"] = {"id": resolved.platform.id, "name": resolved.platform.name}
+            document["notes"].extend(resolved.notes)
+            if args.json:
+                print(json.dumps(document, indent=2))
+            else:
+                _print_route(document)
+            return EXIT_SUCCESS
     except (PlatformError, ValueError) as exc:
         print(f"fakegpu platform: {exc}", file=sys.stderr)
         return EXIT_USAGE

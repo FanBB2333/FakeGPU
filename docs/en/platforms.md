@@ -97,6 +97,38 @@ GPU0  X     NV1   NV1   NV2   NV2   SYS   SYS   SYS   0
 
 ## Copy time and throughput
 
+`fakegpu platform route` explains one copy without starting the daemon or
+running a GPU workload:
+
+```bash
+fakegpu platform route --devices a100:8 --from 0 --to 1 --bytes 1GiB
+fakegpu platform route --devices a100-pcie-80gb:8 --from 0 --to 7 --bytes 64MiB --json
+fakegpu platform route --devices gb300-dgx-station --from host --to 0 --bytes 1GB
+```
+
+The modeled `a100:8` example shows `GPU0 -> NVSwitch -> GPU1`, a 300 GB/s
+bottleneck and about 3.58 ms for 1 GiB. The other examples show host staging
+across CPU sockets and a host-to-GPU NVLink-C2C copy.
+
+Endpoints are `host` or zero-based GPU indices and must differ. `--bytes`
+accepts positive whole bytes, decimal units (`GB`) and binary units (`GiB`).
+Layout options `--devices`, `--platform`, `--pcie-gen` and `--nvlink-bridges`
+behave like `platform show`. Defaults come from saved machine settings;
+explicit `--devices` selects `auto` and clears saved bridges unless
+`--platform` or `--nvlink-bridges` are also specified.
+The JSON schema `fakegpu.copy_route.v1` includes the platform, endpoints,
+byte count, route kind, topology relation, ordered `path`, and `links` with
+their bandwidth and `bottleneck` flags, plus `bandwidth_gbps`,
+`modeled_seconds` and explanatory `notes`. Unknown bandwidth gives a
+`null` modeled time.
+If only some links have known capacities, time follows the runtime's estimate
+from those links and the path bottleneck remains unknown.
+
+Time uses the runtime's `bytes / (GB/s * 1e9)` model. Host staging uses the
+slower CPU link's bandwidth, without adding two sequential transfer times.
+This estimate describes one isolated copy; it excludes queueing, launch
+latency and shared-switch contention and is not a measured execution time.
+
 FakeGPU copies finish at host-memory speed, so a platform never slows a
 program down. Each copy between host memory and a GPU, or between two GPUs,
 is recorded with the time it would take on the modeled links instead:

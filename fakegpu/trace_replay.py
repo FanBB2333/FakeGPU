@@ -10,6 +10,7 @@ from typing import Any
 from ._cli import (
     add_json_path_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
 from .operator_profiles import (
@@ -17,11 +18,19 @@ from .operator_profiles import (
     load_operator_profiles,
     match_operator_profile,
 )
-from .structured_io import emit_json, load_mapping
+from .structured_io import load_mapping
 from .topology import Topology, simulate_point_to_point
 
 
 SCHEMA_VERSION = "fakegpu.trace_replay.v1"
+# The first present key wins.
+_CLUSTER_DURATION_KEYS = (
+    "execution_time_us",
+    "modeled_time_us",
+    "coordinator_duration_us",
+    "estimated_time_us",
+    "duration_us",
+)
 
 
 class TraceReplayError(ValueError):
@@ -39,20 +48,20 @@ def replay_trace(
     events = _normalize_trace(trace)
     if not events:
         raise TraceReplayError("trace contains no complete replayable events")
-    enriched, _ = _apply_profiles(events, operator_profiles)
-    events = _remove_fusion_double_counts(enriched)
+    _apply_profiles(events, operator_profiles)
+    events = _remove_fusion_double_counts(events)
     profile_summary = _profile_summary(events, len(operator_profiles))
     topology_cache: dict[tuple[int, int, int], Mapping[str, Any]] = {}
     if topology is not None:
         for event in events:
             if event["category"] != "communication":
                 continue
-            src = event.get("src_rank")
-            dst = event.get("dst_rank")
-            payload = int(event.get("bytes", 0) or 0)
+            src = event["src_rank"]
+            dst = event["dst_rank"]
+            payload = event["bytes"]
             if (
-                isinstance(src, int)
-                and isinstance(dst, int)
+                src is not None
+                and dst is not None
                 and src != dst
                 and payload > 0
             ):
@@ -75,7 +84,7 @@ def replay_trace(
 
     events_by_rank: dict[int, list[Mapping[str, Any]]] = defaultdict(list)
     for event in events:
-        events_by_rank[int(event["rank"])].append(event)
+        events_by_rank[event["rank"]].append(event)
     ranks = sorted(events_by_rank)
     rank_summaries = [
         _rank_summary(rank, events_by_rank[rank])
@@ -113,7 +122,7 @@ def replay_trace(
                 if item["category"] == "communication"
             ),
             "communication_bytes": sum(
-                int(item.get("bytes", 0) or 0)
+                item["bytes"]
                 for item in events
                 if item["category"] == "communication"
             ),
@@ -169,9 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             operator_profiles=profiles,
         )
         if args.json_path:
-            output = emit_json(args.json_path, report)
-            if output is not None:
-                print(f"Trace replay: {output}")
+            emit_json_report(args.json_path, report, "Trace replay")
         else:
             _print_report(report)
         return 0
@@ -283,7 +290,7 @@ def _normalize_generic_events(
                 "allocated_bytes": _optional_int(raw.get("allocated_bytes")),
                 "reserved_bytes": _optional_int(raw.get("reserved_bytes")),
                 "generation": _optional_int(raw.get("generation")),
-                "links": [str(value) for value in raw.get("links", [])],
+                "links": [str(value) for value in raw.get("links") or []],
             }
         )
     return events
@@ -300,9 +307,9 @@ def _normalize_cluster_events(
         raw_ranks = raw.get("ranks")
         if isinstance(raw_ranks, list):
             ranks = [
-                int(rank)
-                for rank in raw_ranks
-                if _optional_int(rank) is not None
+                rank
+                for rank in map(_optional_int, raw_ranks)
+                if rank is not None
             ]
         else:
             ranks = [
@@ -311,19 +318,7 @@ def _normalize_cluster_events(
         ranks = sorted(set(ranks)) or [0]
         rendezvous_wait = _number(raw.get("rendezvous_wait_us", 0), 0.0)
         duration = _number(
-            raw.get(
-                "execution_time_us",
-                raw.get(
-                    "modeled_time_us",
-                    raw.get(
-                        "coordinator_duration_us",
-                        raw.get(
-                            "estimated_time_us",
-                            raw.get("duration_us", 0),
-                        ),
-                    ),
-                ),
-            ),
+            next((raw[key] for key in _CLUSTER_DURATION_KEYS if key in raw), 0),
             0.0,
         )
         name = str(raw.get("operation") or raw.get("kind") or "collective")
@@ -334,6 +329,18 @@ def _normalize_cluster_events(
             )
             or 0
         )
+        dtype = raw.get("data_type", raw.get("dtype"))
+        generation = _optional_int(raw.get("generation"))
+        src_rank = _optional_int(raw.get("src_rank"))
+        dst_rank = _optional_int(raw.get("dst_rank"))
+        if (
+            src_rank is None
+            and dst_rank is None
+            and len(ranks) == 2
+            and str(raw.get("kind") or "").lower()
+            in {"point_to_point", "p2p", "send", "recv"}
+        ):
+            src_rank, dst_rank = ranks
         for rank in ranks:
             start = _number(
                 raw.get("start_us", cursor_by_rank[rank]),
@@ -352,13 +359,13 @@ def _normalize_cluster_events(
                         "bytes": 0,
                         "src_rank": None,
                         "dst_rank": None,
-                        "dtype": raw.get("data_type", raw.get("dtype")),
+                        "dtype": dtype,
                         "shape": None,
                         "numel": None,
                         "fusion_id": None,
                         "allocated_bytes": None,
                         "reserved_bytes": None,
-                        "generation": _optional_int(raw.get("generation")),
+                        "generation": generation,
                         "links": [],
                     }
                 )
@@ -367,16 +374,6 @@ def _normalize_cluster_events(
                 cursor_by_rank[rank],
                 communication_start + duration,
             )
-            src_rank = _optional_int(raw.get("src_rank"))
-            dst_rank = _optional_int(raw.get("dst_rank"))
-            if (
-                src_rank is None
-                and dst_rank is None
-                and len(ranks) == 2
-                and str(raw.get("kind") or "").lower()
-                in {"point_to_point", "p2p", "send", "recv"}
-            ):
-                src_rank, dst_rank = ranks
             events.append(
                 {
                     "index": len(events),
@@ -390,15 +387,15 @@ def _normalize_cluster_events(
                     "bytes": payload,
                     "src_rank": src_rank,
                     "dst_rank": dst_rank,
-                    "dtype": raw.get("data_type", raw.get("dtype")),
+                    "dtype": dtype,
                     "shape": None,
                     "numel": None,
                     "fusion_id": None,
                     "allocated_bytes": None,
                     "reserved_bytes": None,
-                    "generation": _optional_int(raw.get("generation")),
+                    "generation": generation,
                     "links": [
-                        str(value) for value in raw.get("links", [])
+                        str(value) for value in raw.get("links") or []
                     ],
                 }
             )
@@ -406,12 +403,10 @@ def _normalize_cluster_events(
 
 
 def _apply_profiles(
-    events: Sequence[Mapping[str, Any]],
+    events: Sequence[dict[str, Any]],
     profiles: Sequence[Mapping[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    output = []
-    for raw in events:
-        event = dict(raw)
+) -> None:
+    for event in events:
         profile = match_operator_profile(
             profiles,
             operator=str(event["name"]),
@@ -430,8 +425,6 @@ def _apply_profiles(
             event["operator_profile"] = evaluated
             if event["duration_us"] <= 0 and "latency_us" in evaluated:
                 event["duration_us"] = float(evaluated["latency_us"])
-        output.append(event)
-    return output, {}
 
 
 def _profile_summary(
@@ -448,7 +441,7 @@ def _profile_summary(
     }
     for event in events:
         profile = event.get("operator_profile")
-        if not isinstance(profile, Mapping):
+        if profile is None:
             continue
         matched_counts[str(profile["profile_id"])] += 1
         for field in modeled_totals:
@@ -463,34 +456,24 @@ def _profile_summary(
 
 
 def _remove_fusion_double_counts(
-    events: Sequence[Mapping[str, Any]],
+    events: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     fused_ids: dict[str, set[str]] = defaultdict(set)
-    for item in events:
-        profile = item.get("operator_profile")
-        if item.get("fusion_id") is None or not isinstance(profile, Mapping):
-            continue
-        fused_ids[str(item["fusion_id"])].update(
-            str(name) for name in profile.get("fused_operators", [])
-        )
-    output = []
-    for raw in events:
-        fusion_id = raw.get("fusion_id")
-        if (
-            fusion_id is not None
-            and str(fusion_id) in fused_ids
-            and str(raw["name"]) in fused_ids[str(fusion_id)]
-        ):
-            # The event's output is already accounted for by the fused
-            # operator profile covering it — drop it from the aggregate.
-            profile = raw.get("operator_profile")
-            if not (
-                isinstance(profile, Mapping)
-                and profile.get("fused_operators")
-            ):
-                continue
-        output.append(dict(raw))
-    return output
+    for event in events:
+        profile = event.get("operator_profile")
+        if event["fusion_id"] is not None and profile is not None:
+            fused_ids[str(event["fusion_id"])].update(
+                str(name) for name in profile["fused_operators"]
+            )
+    # An event already covered by a fused operator profile is dropped from
+    # the aggregate unless it is itself a fused profile.
+    return [
+        event
+        for event in events
+        if event["fusion_id"] is None
+        or str(event["name"]) not in fused_ids.get(str(event["fusion_id"]), ())
+        or event.get("operator_profile", {}).get("fused_operators")
+    ]
 
 
 def _rank_summary(
@@ -518,13 +501,13 @@ def _rank_summary(
         [*compute_intervals, *communication_intervals, *wait_intervals]
     )
     communication_bytes = sum(
-        int(item.get("bytes", 0) or 0)
+        item["bytes"]
         for item in events
         if item["category"] == "communication"
     )
     peak_bandwidth = max(
         [
-            int(item.get("bytes", 0) or 0)
+            item["bytes"]
             * 8
             / (float(item["duration_us"]) * 1_000)
             for item in events
@@ -557,9 +540,9 @@ def _pair_summary(
 ) -> list[dict[str, Any]]:
     pairs: dict[tuple[int, int], dict[str, Any]] = {}
     for event in events:
-        src = event.get("src_rank")
-        dst = event.get("dst_rank")
-        if not isinstance(src, int) or not isinstance(dst, int) or src == dst:
+        src = event["src_rank"]
+        dst = event["dst_rank"]
+        if src is None or dst is None or src == dst:
             continue
         key = tuple(sorted((src, dst)))
         item = pairs.setdefault(
@@ -573,7 +556,7 @@ def _pair_summary(
                 "peak_effective_bandwidth_gbps": 0.0,
             },
         )
-        payload = int(event.get("bytes", 0) or 0)
+        payload = event["bytes"]
         duration = float(event["duration_us"])
         bandwidth = payload * 8 / (duration * 1_000) if duration > 0 else 0.0
         item["total_bytes"] += payload
@@ -604,7 +587,7 @@ def _link_summary(
                     "total_communication_time_us": 0.0,
                 },
             )
-            item["total_bytes"] += int(event.get("bytes", 0) or 0)
+            item["total_bytes"] += event["bytes"]
             item["operation_count"] += 1
             item["total_communication_time_us"] += float(
                 event["duration_us"]
@@ -745,15 +728,7 @@ def _intervals(
 def _interval_union_length(
     intervals: Sequence[tuple[float, float]],
 ) -> float:
-    if not intervals:
-        return 0.0
-    merged = []
-    for start, end in sorted(intervals):
-        if not merged or start > merged[-1][1]:
-            merged.append([start, end])
-        else:
-            merged[-1][1] = max(merged[-1][1], end)
-    return sum(end - start for start, end in merged)
+    return sum((end - start for start, end in _merge_intervals(intervals)), 0.0)
 
 
 def _interval_intersection_length(

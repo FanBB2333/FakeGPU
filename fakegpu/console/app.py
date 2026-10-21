@@ -33,7 +33,7 @@ from textual.widgets import (
 from ..machine.client import MachineError
 from ..machine.config import layout_text, parse_devices
 from ..link_traffic import copies_summary, format_rate, throughput_summary
-from ..platforms import AUTO, load_platforms, resolve_platform
+from ..platforms import AUTO, _pcie_generations, load_platforms, resolve_platform
 from ..machine.service import EVENT_BUFFER
 from ..profile_catalog import get_profile, load_profiles
 from .widgets import (
@@ -132,17 +132,17 @@ def window_text(times: Sequence[float]) -> str:
 
 def device_charts(device: dict[str, Any], height: int = 4) -> list[Chart]:
     """Recent memory, sensor and link readings of one GPU."""
-    history, memory = device.get("history", {}), device["memory"]
-    power = history.get("power_w", [])
+    history, memory = device["history"], device["memory"]
+    power = history["power_w"]
     charts = [
         Chart(
-            "Memory", history.get("memory_percent", []), maximum=100, unit="%", color=COLORS["memory"],
+            "Memory", history["memory_percent"], maximum=100, unit="%", color=COLORS["memory"],
             current=f"{size(memory['used_bytes'])} / {size(memory['total_bytes'])} ({memory['percent']:.1f}%)",
             height=height,
         ),
-        Chart("Utilization", history.get("gpu", []), maximum=100, unit="%", color=COLORS["gpu"], height=height),
+        Chart("Utilization", history["gpu"], maximum=100, unit="%", color=COLORS["gpu"], height=height),
         Chart(
-            "Temperature", history.get("temperature", []), maximum=100, unit="°C",
+            "Temperature", history["temperature"], maximum=100, unit="°C",
             color=COLORS["temperature"], height=height,
         ),
         Chart(
@@ -150,8 +150,8 @@ def device_charts(device: dict[str, Any], height: int = 4) -> list[Chart]:
             maximum=device["power_limit_w"] or nice_ceiling(max([v for v in power if v is not None], default=1)),
         ),
     ]
-    for link, label, bandwidth in device_links(device.get("slot")):
-        values = history.get(f"{link}_gbps", [])
+    for link, label, bandwidth in device_links(device["slot"]):
+        values = history[f"{link}_gbps"]
         peak = max([v for v in values if v is not None], default=1.0)
         charts.append(Chart(
             f"{label} TX+RX", values, unit=" GB/s", color=COLORS[link], height=height,
@@ -164,35 +164,28 @@ def device_charts(device: dict[str, Any], height: int = 4) -> list[Chart]:
 def machine_charts(devices: list[dict[str, Any]], height: int = 3) -> list[Chart]:
     """Readings of every GPU in the layout combined into one chart each."""
     layout = [device for device in devices if device["in_layout"]]
-    length = max((len(device.get("history", {}).get("time", [])) for device in layout), default=0)
+    length = max((len(device["history"]["time"]) for device in layout), default=0)
+
+    def aligned(key: str) -> list[list[float | None]]:
+        # GPUs added later have shorter histories; line them up on the newest sample.
+        return [[None] * (length - len(values)) + values for values in (d["history"][key] for d in layout)]
 
     def samples(key: str) -> list[list[float]]:
-        # GPUs added later have shorter histories; line them up on the newest sample.
-        series = []
-        for device in layout:
-            values = list(device.get("history", {}).get(key, []))
-            series.append([None] * (length - len(values)) + values)
-        return [[value for value in column if value is not None] for column in zip(*series)] if series else []
+        return [[value for value in column if value is not None] for column in zip(*aligned(key))]
 
     totals = [device["memory"]["total_bytes"] for device in layout]
-    memory_series = []
-    for device in layout:
-        values = list(device.get("history", {}).get("memory_percent", []))
-        memory_series.append([None] * (length - len(values)) + values)
+    total = sum(totals)
     memory = [
-        sum((value or 0) * total for value, total in zip(column, totals)) / sum(totals) if sum(totals) else None
-        for column in zip(*memory_series)
+        sum((value or 0) * capacity for value, capacity in zip(column, totals)) / total if total else None
+        for column in zip(*aligned("memory_percent"))
     ]
     utilization = [sum(column) / len(column) if column else None for column in samples("gpu")]
     power = [sum(column) if column else None for column in samples("power_w")]
     temperature = [max(column) if column else None for column in samples("temperature")]
     links = [samples(f"{link}_gbps") for link in ("pcie", "c2c", "nvlink")]
-    traffic = [
-        sum(sum(column) for column in columns) if any(columns) else None for columns in zip(*links)
-    ] if length else []
+    traffic = [sum(sum(column) for column in columns) if any(columns) else None for columns in zip(*links)]
 
     used = sum(device["memory"]["used_bytes"] for device in layout)
-    total = sum(totals)
     sensed = [device for device in layout if device["telemetry"]]
     no_sensors = None if sensed else "N/A"
     readings = [device["telemetry"] for device in sensed]
@@ -258,7 +251,7 @@ def plan_layout(config: Mapping[str, Any], profiles: Sequence[str]) -> LayoutPla
         except ValueError as exc:
             reason = reason or str(exc)
             continue
-        changes: dict[str, Any] = {"devices": layout_text(list(profiles))}
+        changes: dict[str, Any] = {"devices": layout_text(profiles)}
         notes = []
         if candidate != platform:
             changes["platform"] = candidate
@@ -292,8 +285,6 @@ def plan_view(plan: LayoutPlan, profile_id: str) -> Group:
 def platform_view(platform: dict[str, Any]) -> list[Any]:
     """Slot map and GPU link matrix of the machine's platform."""
 
-    if not platform:
-        return []
     slots = Table(box=None, padding=(0, 1), header_style="dim")
     for label in ("GPU", "Slot", "Profile", "PCIe", "Host link", "NUMA", "NVLinks"):
         slots.add_column(label, no_wrap=True)
@@ -587,10 +578,10 @@ class ConsoleApp(App[str]):
                 yield DataTable(id="ended-table", cursor_type="row")
             with TabPane("3 Devices", id="devices"):
                 with Horizontal(id="devices-toolbar"):
-                    yield Button("e Change GPU", id="gpu-change", compact=True)
-                    yield Button("E Replace all", id="gpu-replace", compact=True)
-                    yield Button("a Add GPUs", id="gpu-add", compact=True)
-                    yield Button("x Remove GPU", id="gpu-remove", compact=True)
+                    yield Button("e Change GPU", id="gpu-change", compact=True, action="app.change_gpu")
+                    yield Button("E Replace all", id="gpu-replace", compact=True, action="app.replace_layout")
+                    yield Button("a Add GPUs", id="gpu-add", compact=True, action="app.add_gpu")
+                    yield Button("x Remove GPU", id="gpu-remove", compact=True, action="app.remove_gpu")
                     yield Static(id="devices-layout")
                 yield DataTable(id="devices-table", cursor_type="row")
                 with VerticalScroll(id="device-detail-scroll"):
@@ -623,7 +614,7 @@ class ConsoleApp(App[str]):
                         with Horizontal(classes="row"):
                             yield Label("PCIe slot generation")
                             yield Select(
-                                [("Platform default", 0)] + [(f"Gen{gen}", gen) for gen in range(3, 7)],
+                                [("Platform default", 0)] + [(f"Gen{gen}", gen) for gen in _pcie_generations()],
                                 allow_blank=False,
                                 id="cfg-pcie",
                             )
@@ -649,7 +640,7 @@ class ConsoleApp(App[str]):
                         with Horizontal(classes="buttons"):
                             yield Button("Apply", variant="primary", id="cfg-apply")
                             yield Button("Reload", id="cfg-reload")
-                            yield Button("Stop machine", variant="error", id="stop-machine")
+                            yield Button("Stop machine", variant="error", id="stop-machine", action="app.stop_machine")
                     yield Static(id="machine-info")
             with TabPane("6 Profiles", id="profiles"):
                 yield Input(placeholder="Filter by id, name, architecture or segment; press a to add", id="profile-filter")
@@ -700,6 +691,9 @@ class ConsoleApp(App[str]):
     # ----------------------------------------------------------- refresh
 
     def refresh_machine(self) -> None:
+        # Shutdown removes the widgets before it stops the refresh timer.
+        if not self.is_running:
+            return
         try:
             status = self.client.call("status")
             events = self.client.call("events", after=self.last_seq, limit=EVENT_BUFFER)
@@ -760,7 +754,7 @@ class ConsoleApp(App[str]):
         self.show_processes(status["processes"], status["ended"])
         self.show_devices(status["devices"])
         self.show_machine(status)
-        platform = (status.get("platform") or {}).get("name", "-")
+        platform = status["platform"]["name"]
         held = "" if all(d["in_layout"] for d in status["devices"]) else " · * held by a running process, not in the layout"
         self.query_one("#devices-layout", Static).update(
             f"Layout {config['devices']} on {platform} · Enter or click a selected row to change that GPU{held}"
@@ -769,7 +763,7 @@ class ConsoleApp(App[str]):
     def show_trends(self, devices: list[dict]) -> None:
         panel = self.query_one("#machine-trends", Static)
         layout = [d for d in devices if d["in_layout"]]
-        times = next((d.get("history", {}).get("time", []) for d in layout), [])
+        times = next((d["history"]["time"] for d in layout), [])
         panel.border_title = f"All {len(layout)} GPUs · {window_text(times)} · {sources_text(layout)}"
         panel.update(chart_grid(machine_charts(devices), max(1, (self.size.width - 6) // 32)))
 
@@ -804,7 +798,7 @@ class ConsoleApp(App[str]):
                     f" {memory_pair(memory['used_bytes'], memory['total_bytes'])}",
                 ),
                 utilization, power, temperature, str(d["process_count"]),
-                sparkline(d.get("history", {}).get("gpu", []), 30, color=COLORS["gpu"]),
+                sparkline(d["history"]["gpu"], 30, color=COLORS["gpu"]),
             )))
         sync_rows(self.query_one("#gpu-list", DataTable), rows)
 
@@ -857,7 +851,7 @@ class ConsoleApp(App[str]):
                 Text(f"{sensors['temperature_c']}°C", style=COLORS["temperature"]) if sensors else "N/A",
                 Text(f"{sensors['power_w']:.0f} W", style=COLORS["power"]) if sensors else "N/A",
                 f"{sensors['sm_clock_mhz']} MHz" if sensors else "N/A",
-                link_io_text(d.get("transfer")),
+                link_io_text(d["transfer"]),
             )))
         table = self.query_one("#devices-table", DataTable)
         sync_rows(table, rows)
@@ -910,8 +904,8 @@ class ConsoleApp(App[str]):
             detail.update("")
             return
         memory, allocator = device["memory"], device["allocator"]
-        transfer = device.get("transfer")
-        links = [link for link, _label, _bandwidth in device_links(device.get("slot"))]
+        transfer = device["transfer"]
+        links = [link for link, _label, _bandwidth in device_links(device["slot"])]
         categories = Table.grid(padding=(0, 2))
         for name, value in sorted(allocator["categories"].items(), key=lambda item: -item[1])[:8]:
             share = value / memory["used_bytes"] * 100 if memory["used_bytes"] else 0
@@ -924,12 +918,12 @@ class ConsoleApp(App[str]):
                             f"pid {allocation.get('pid', '-')}")
         if not largest.row_count:
             largest.add_row(Text("No allocations.", style="dim"))
-        times = device.get("history", {}).get("time", [])
+        times = device["history"]["time"]
         detail.update(Group(
             key_values([
                 ("Device", f"GPU {device['index']} {device['name']} ({device['profile_id']})"),
                 ("UUID", device["uuid"]),
-                ("Slot", slot_text(device.get("slot"))),
+                ("Slot", slot_text(device["slot"])),
                 ("Copies", copies_summary(transfer, size) + " (modeled)" if transfer else "none recorded"),
                 ("Links", f"{throughput_summary(transfer, links)} (last {transfer['window_seconds']:g} s)"
                           if transfer else "N/A"),
@@ -949,7 +943,7 @@ class ConsoleApp(App[str]):
 
     def show_machine(self, status: dict[str, Any]) -> None:
         config, daemon, paths = status["config"], status["daemon"], status["paths"]
-        platform = status.get("platform") or {}
+        platform = status["platform"]
         if not self.form_loaded:
             self.load_form(config)
         home = str(Path.home())
@@ -980,7 +974,7 @@ class ConsoleApp(App[str]):
 
     def load_form(self, config: dict[str, Any]) -> None:
         self.query_one("#cfg-devices", Input).value = config["devices"]
-        self.query_one("#cfg-platform", Select).value = config["platform"]
+        self.query_one("#cfg-platform", Select).value = config["platform"].strip().lower()
         self.query_one("#cfg-pcie", Select).value = config["pcie_generation"]
         self.query_one("#cfg-bridges", Input).value = config["nvlink_bridges"]
         self.query_one("#cfg-telemetry", Select).value = config["telemetry"]
@@ -1081,10 +1075,6 @@ class ConsoleApp(App[str]):
         if self.machine:
             self.load_form(self.machine["config"])
 
-    @on(Button.Pressed, "#stop-machine")
-    def stop_button(self) -> None:
-        self.action_stop_machine()
-
     @on(Input.Changed, "#profile-filter")
     def filter_profiles(self, event: Input.Changed) -> None:
         self.show_profiles(event.value)
@@ -1113,21 +1103,8 @@ class ConsoleApp(App[str]):
         table.focus()
 
     @on(DataTable.RowSelected, "#devices-table")
-    @on(Button.Pressed, "#gpu-change")
     def change_selected(self) -> None:
         self.action_change_gpu()
-
-    @on(Button.Pressed, "#gpu-replace")
-    def replace_pressed(self) -> None:
-        self.action_replace_layout()
-
-    @on(Button.Pressed, "#gpu-add")
-    def add_pressed(self) -> None:
-        self.action_add_gpu()
-
-    @on(Button.Pressed, "#gpu-remove")
-    def remove_pressed(self) -> None:
-        self.action_remove_gpu()
 
     def layout(self) -> list[str] | None:
         return parse_devices(self.machine["config"]["devices"]) if self.machine else None
@@ -1161,9 +1138,6 @@ class ConsoleApp(App[str]):
         )
 
     def apply_layout(self, plan: LayoutPlan, message: str, select: str | None = None) -> None:
-        if plan.error:
-            self.notify(f"Not saved: {plan.error}", severity="error")
-            return
         try:
             config = self.client.call("config.update", changes=plan.changes)
         except MachineError as exc:
@@ -1296,8 +1270,8 @@ class ConsoleApp(App[str]):
 
     def action_signal(self, name: str) -> None:
         tab = self.query_one(TabbedContent).active
-        table_id = {"overview": "#overview-processes", "processes": "#processes-table"}.get(tab)
-        pid = selected_key(self.query_one(table_id, DataTable)) if table_id else None
+        table_id = {"overview": "#overview-processes", "processes": "#processes-table"}[tab]
+        pid = selected_key(self.query_one(table_id, DataTable))
         if pid is None or self.machine is None:
             self.notify("Select a process on the Overview or Processes tab first.", severity="warning")
             return
@@ -1314,8 +1288,6 @@ class ConsoleApp(App[str]):
         self.push_screen(Confirm(f"Send {name} to {process['name']} (pid {pid})?"), answer)
 
     def action_add_profile(self) -> None:
-        if self.query_one(TabbedContent).active != "profiles":
-            return
         profile = selected_key(self.query_one("#profiles-table", DataTable))
         if profile is None:
             return

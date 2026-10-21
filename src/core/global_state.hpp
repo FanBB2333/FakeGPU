@@ -18,27 +18,8 @@ struct HostIoStats {
     uint64_t memcpy_bytes = 0;
 };
 
-struct DeviceReportStats {
-    int index = -1;
-    std::string profile_id;
-    std::string name;
-    std::string uuid;
-    std::string pci_bus_id;
-    std::string architecture;
-    int compute_major = 0;
-    int compute_minor = 0;
-    int sm_count = 0;
-    int memory_bus_width_bits = 0;
-    int core_clock_mhz = 0;
-    int memory_clock_mhz = 0;
-    int l2_cache_bytes = 0;
-    unsigned int typical_power_usage_mw = 0;
-    unsigned int max_power_limit_mw = 0;
-    std::vector<std::string> supported_types;
-    uint64_t total_memory = 0;
-    uint64_t used_memory_current = 0;
-    uint64_t used_memory_peak = 0;
-
+// Per-device activity counters shared by the runtime stats and the report.
+struct DeviceCounters {
     uint64_t alloc_calls = 0;
     uint64_t alloc_bytes = 0;
     uint64_t free_calls = 0;
@@ -64,6 +45,29 @@ struct DeviceReportStats {
 
     std::unordered_map<std::string, uint64_t> kernel_launches;
     uint64_t kernel_launch_total = 0;
+};
+
+struct DeviceReportStats : DeviceCounters {
+    int index = -1;
+    std::string profile_id;
+    std::string name;
+    std::string uuid;
+    std::string pci_bus_id;
+    std::string architecture;
+    int compute_major = 0;
+    int compute_minor = 0;
+    int sm_count = 0;
+    int memory_bus_width_bits = 0;
+    int core_clock_mhz = 0;
+    int memory_clock_mhz = 0;
+    int l2_cache_bytes = 0;
+    unsigned int typical_power_usage_mw = 0;
+    unsigned int max_power_limit_mw = 0;
+    std::vector<std::string> supported_types;
+    uint64_t total_memory = 0;
+    uint64_t used_memory_current = 0;
+    uint64_t used_memory_peak = 0;
+
     std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> gemm_by_dtype;
     std::vector<std::tuple<std::string, std::string, uint64_t>> compat_events;
     std::vector<std::tuple<std::string, std::string, std::string, uint64_t>>
@@ -97,6 +101,7 @@ public:
     bool release_host_allocation(void* ptr, size_t& size, int& device);
     bool get_allocation_info(void* ptr, size_t& size, int& device) const;
     bool get_allocation_info_ex(void* ptr, size_t& size, int& device, AllocationKind& kind) const;
+    std::vector<std::pair<void*, size_t>> snapshot_allocations() const;
 
     int resolve_device_for_ptr(const void* ptr, int fallback_device) const;
 
@@ -140,37 +145,12 @@ private:
     GlobalState();
     ~GlobalState() = default;
 
-    struct DeviceRuntimeStats {
-        uint64_t alloc_calls = 0;
-        uint64_t alloc_bytes = 0;
-        uint64_t free_calls = 0;
-        uint64_t free_bytes = 0;
-
-        uint64_t memcpy_h2d_calls = 0;
-        uint64_t memcpy_h2d_bytes = 0;
-        uint64_t memcpy_d2h_calls = 0;
-        uint64_t memcpy_d2h_bytes = 0;
-        uint64_t memcpy_d2d_calls = 0;
-        uint64_t memcpy_d2d_bytes = 0;
-        uint64_t memcpy_peer_tx_calls = 0;
-        uint64_t memcpy_peer_tx_bytes = 0;
-        uint64_t memcpy_peer_rx_calls = 0;
-        uint64_t memcpy_peer_rx_bytes = 0;
-        uint64_t memset_calls = 0;
-        uint64_t memset_bytes = 0;
-
-        uint64_t cublas_gemm_calls = 0;
-        uint64_t cublas_gemm_flops = 0;
-        uint64_t cublaslt_matmul_calls = 0;
-        uint64_t cublaslt_matmul_flops = 0;
-
+    struct DeviceRuntimeStats : DeviceCounters {
         struct GemmDtypeStats {
             uint64_t calls = 0;
             uint64_t flops = 0;
         };
 
-        std::unordered_map<std::string, uint64_t> kernel_launches;
-        uint64_t kernel_launch_total = 0;
         std::unordered_map<int, GemmDtypeStats> gemm_by_dtype;
 
         struct CompatEvent {
@@ -202,7 +182,7 @@ private:
     mutable std::mutex smi_mutex;
     void* native_smi_publisher = nullptr;
 
-    int current_device = 0;
+    static thread_local int current_device;
 
     struct AllocationRecord {
         size_t size = 0;

@@ -14,12 +14,12 @@ import threading
 import time
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from ._cli import (
     add_json_flag_argument,
+    bounded_argument,
     command_prog,
 )
 from ._smi_environment import (
@@ -53,10 +53,12 @@ from ._smi_state import (
     _load_states,
     _mapping_list,
     _profile_metadata,
+    _state_sources,
     _synthetic_pci_bus_id,
     _synthetic_uuid,
     build_inventory,
 )
+from ._version import __version__
 
 
 REPORT_SCHEMA_VERSION = "fakegpu.smi_report.v1"
@@ -65,6 +67,27 @@ MAXIMUM_PUBLISHER_DETAIL_LIMIT = 1024
 DEFAULT_MAX_STATE_BYTES = 1024 * 1024
 MINIMUM_MAX_STATE_BYTES = 64 * 1024
 MAXIMUM_MAX_STATE_BYTES = 64 * 1024 * 1024
+# (query kind, query argument, help argument, fields, inventory key), in the
+# order --help-query-* options take precedence.
+_QUERIES = (
+    ("gpu", "query_gpu", "help_query_gpu", GPU_QUERY_FIELDS, "devices"),
+    (
+        "compute-apps",
+        "query_compute_apps",
+        "help_query_compute_apps",
+        PROCESS_QUERY_FIELDS,
+        "processes",
+    ),
+    (
+        "runtime",
+        "query_runtime",
+        "help_query_runtime",
+        RUNTIME_QUERY_FIELDS,
+        "runtimes",
+    ),
+)
+
+
 def configured_state_path() -> Path | None:
     explicit = os.environ.get("FAKEGPU_SMI_STATE_PATH")
     if explicit:
@@ -75,21 +98,20 @@ def configured_state_path() -> Path | None:
     return None
 
 
-def _configured_size_limit(
-    name: str,
+def _size_limit(
+    value: int | None,
+    env_name: str,
     *,
     default: int,
     minimum: int,
     maximum: int,
 ) -> int:
-    value = os.environ.get(name)
     if value is None:
-        return default
-    try:
-        parsed = int(value)
-    except ValueError:
-        return default
-    return min(maximum, max(minimum, parsed))
+        try:
+            value = int(os.environ.get(env_name, default))
+        except ValueError:
+            value = default
+    return min(maximum, max(minimum, int(value)))
 
 
 class SmiStatePublisher:
@@ -107,39 +129,30 @@ class SmiStatePublisher:
     ):
         self.path = Path(path).expanduser().resolve()
         self.snapshot = snapshot
-        self.interval_seconds = max(0.05, float(interval_seconds))
+        # Capped at 10^12 ms like the native publisher; longer timeouts
+        # overflow Event.wait() and Thread.join().
+        self.interval_seconds = min(1e9, max(0.05, float(interval_seconds)))
         self.runtime_overhead_bytes = max(0, int(runtime_overhead_bytes))
-        self.detail_limit = (
-            _configured_size_limit(
-                "FAKEGPU_SMI_DETAIL_LIMIT",
-                default=DEFAULT_PUBLISHER_DETAIL_LIMIT,
-                minimum=0,
-                maximum=MAXIMUM_PUBLISHER_DETAIL_LIMIT,
-            )
-            if detail_limit is None
-            else min(
-                MAXIMUM_PUBLISHER_DETAIL_LIMIT,
-                max(0, int(detail_limit)),
-            )
+        self.detail_limit = _size_limit(
+            detail_limit,
+            "FAKEGPU_SMI_DETAIL_LIMIT",
+            default=DEFAULT_PUBLISHER_DETAIL_LIMIT,
+            minimum=0,
+            maximum=MAXIMUM_PUBLISHER_DETAIL_LIMIT,
         )
-        self.max_state_bytes = (
-            _configured_size_limit(
-                "FAKEGPU_SMI_MAX_STATE_BYTES",
-                default=DEFAULT_MAX_STATE_BYTES,
-                minimum=MINIMUM_MAX_STATE_BYTES,
-                maximum=MAXIMUM_MAX_STATE_BYTES,
-            )
-            if max_state_bytes is None
-            else min(
-                MAXIMUM_MAX_STATE_BYTES,
-                max(MINIMUM_MAX_STATE_BYTES, int(max_state_bytes)),
-            )
+        self.max_state_bytes = _size_limit(
+            max_state_bytes,
+            "FAKEGPU_SMI_MAX_STATE_BYTES",
+            default=DEFAULT_MAX_STATE_BYTES,
+            minimum=MINIMUM_MAX_STATE_BYTES,
+            maximum=MAXIMUM_MAX_STATE_BYTES,
         )
         self._software = _software_metadata()
         self._catalogs = _catalog_metadata()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._registered = False
+        self._sigterm_handler: Callable[[int, Any], None] | None = None
         self._attempted_writes = 0
         self._successful_writes = 0
         self._failed_writes = 0
@@ -202,6 +215,7 @@ class SmiStatePublisher:
             os.kill(os.getpid(), number)
 
         signal.signal(signal.SIGTERM, terminate)
+        self._sigterm_handler = terminate
 
     def stop(self) -> None:
         self._stop.set()
@@ -213,6 +227,16 @@ class SmiStatePublisher:
             self.publish_once(running=False)
         except Exception as exc:
             self._warn_publish_failure(exc, context="final state publish")
+        if self._registered:
+            atexit.unregister(self.stop)
+            if (
+                self._sigterm_handler is not None
+                and threading.current_thread() is threading.main_thread()
+                and signal.getsignal(signal.SIGTERM) is self._sigterm_handler
+            ):
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            self._sigterm_handler = None
+            self._registered = False
 
     def publish_once(self, *, running: bool) -> dict[str, Any]:
         with self._write_lock:
@@ -231,28 +255,21 @@ class SmiStatePublisher:
         except Exception as exc:
             self._successful_writes -= 1
             self._failed_writes += 1
-            self._last_duration_us = max(
-                0,
-                (time.perf_counter_ns() - started_ns) // 1000,
-            )
+            self._last_error = type(exc).__name__
+            raise
+        else:
+            self._last_serialized_bytes = serialized_bytes
+            self._last_error = ""
+            self._warned_publish_error = None
+            return state
+        finally:
+            self._last_duration_us = (
+                time.perf_counter_ns() - started_ns
+            ) // 1000
             self._max_duration_us = max(
                 self._max_duration_us,
                 self._last_duration_us,
             )
-            self._last_error = type(exc).__name__
-            raise
-        self._last_duration_us = max(
-            0,
-            (time.perf_counter_ns() - started_ns) // 1000,
-        )
-        self._max_duration_us = max(
-            self._max_duration_us,
-            self._last_duration_us,
-        )
-        self._last_serialized_bytes = serialized_bytes
-        self._last_error = ""
-        self._warned_publish_error = None
-        return state
 
     def _warn_publish_failure(
         self,
@@ -280,131 +297,13 @@ class SmiStatePublisher:
         hostname = socket.gethostname()
         devices: list[dict[str, Any]] = []
         for item in raw.get("devices") or []:
-            if not isinstance(item, Mapping):
-                continue
-            current = _nonnegative_int(item.get("current_memory"))
-            peak = max(
-                current,
-                _nonnegative_int(
-                    item.get("peak_memory"),
-                    default=current,
-                ),
-            )
-            reserved = max(
-                current,
-                _nonnegative_int(
-                    item.get("current_reserved_memory"),
-                    default=current,
-                ),
-            )
-            reserved_peak = max(
-                reserved,
-                peak,
-                _nonnegative_int(
-                    item.get("peak_reserved_memory"),
-                    default=reserved,
-                ),
-            )
-            total = _nonnegative_int(item.get("total_memory"))
-            reported = reserved + self.runtime_overhead_bytes
-            reported_peak = reserved_peak + self.runtime_overhead_bytes
-            if total:
-                reported = min(total, reported)
-                reported_peak = min(total, reported_peak)
-            index = _nonnegative_int(
-                item.get("index"),
-                default=len(devices),
-            )
-            profile = _profile_metadata(item)
-            free = max(0, total - reported) if total else None
-            headroom = (
-                max(0, total - reported_peak) if total else None
-            )
-            largest_allocations = _mapping_list(
-                item.get("largest_allocations")
-            )
-            largest_allocations_total = len(largest_allocations)
-            largest_allocations = largest_allocations[
-                : self.detail_limit
-            ]
             devices.append(
-                {
-                    "index": index,
-                    "name": str(item.get("name", "Fake NVIDIA GPU")),
-                    "profile_id": str(item.get("profile_id", "")),
-                    "profile": profile,
-                    "uuid": _synthetic_uuid(
-                        hostname,
-                        index,
-                        str(item.get("profile_id", "")),
-                    ),
-                    "pci_bus_id": _synthetic_pci_bus_id(index),
-                    "identity_source": "synthetic",
-                    "architecture": profile.get("architecture"),
-                    "compute_capability": profile.get(
-                        "compute_capability"
-                    ),
-                    "compiler_target": profile.get("compiler_target"),
-                    "total_memory": total,
-                    "free_memory": free,
-                    "activity": dict(item.get("activity") or {}),
-                    **(
-                        {"transfer": item["transfer"]}
-                        if isinstance(item.get("transfer"), Mapping)
-                        else {}
-                    ),
-                    "tracked_memory": current,
-                    "peak_tracked_memory": peak,
-                    "reserved_memory": reserved,
-                    "peak_reserved_memory": reserved_peak,
-                    "inactive_split_bytes": _nonnegative_int(
-                        item.get("inactive_split_bytes")
-                    ),
-                    "segment_count": _nonnegative_int(
-                        item.get("segment_count")
-                    ),
-                    "reported_memory_source": "reserved",
-                    "runtime_overhead_bytes": self.runtime_overhead_bytes,
-                    "reported_memory": reported,
-                    "reported_peak_memory": reported_peak,
-                    "headroom_bytes": headroom,
-                    "headroom_percent": (
-                        round(headroom / total * 100, 3)
-                        if total and headroom is not None
-                        else None
-                    ),
-                    "allocation_count": _nonnegative_int(
-                        item.get("allocation_count")
-                    ),
-                    "free_count": _nonnegative_int(
-                        item.get("free_count")
-                    ),
-                    "allocator_model": str(
-                        item.get("allocator_model")
-                        or raw.get("allocator_model")
-                        or "unknown"
-                    ),
-                    "current_bytes_by_category": _integer_mapping(
-                        item.get("current_bytes_by_category")
-                    ),
-                    "peak_by_stage": _integer_mapping(
-                        item.get("peak_by_stage")
-                    ),
-                    "reserved_peak_by_stage": _integer_mapping(
-                        item.get("reserved_peak_by_stage")
-                    ),
-                    "largest_allocations": largest_allocations,
-                    "largest_allocations_total": (
-                        largest_allocations_total
-                    ),
-                    "largest_allocations_retained": len(
-                        largest_allocations
-                    ),
-                }
+                self._device_state(item, raw, hostname, len(devices))
             )
+        dispatch_tracking = raw.get("dispatch_tracking")
         dispatch_tracking = (
-            dict(raw.get("dispatch_tracking") or {})
-            if isinstance(raw.get("dispatch_tracking"), Mapping)
+            dict(dispatch_tracking)
+            if isinstance(dispatch_tracking, Mapping)
             else {}
         )
         topology = _modeled_device_topology(devices)
@@ -421,7 +320,7 @@ class SmiStatePublisher:
             "process_name": _process_name(),
             "runtime": "fakecuda",
             "fakegpu": {
-                "version": _fakegpu_version(),
+                "version": __version__,
                 "runtime": "fakecuda",
                 "backend": str(
                     raw.get("runtime_backend") or "unknown"
@@ -470,7 +369,7 @@ class SmiStatePublisher:
                     "max_state_bytes": self.max_state_bytes,
                 },
             },
-            "running": bool(running),
+            "running": running,
             "tracking_confidence": raw.get(
                 "tracking_confidence", "C2_torch_tensor_lifetime"
             ),
@@ -496,6 +395,129 @@ class SmiStatePublisher:
         self._last_state = state
         return state, serialized_bytes
 
+    def _device_state(
+        self,
+        item: Mapping[str, Any],
+        raw: Mapping[str, Any],
+        hostname: str,
+        index_default: int,
+    ) -> dict[str, Any]:
+        current = _nonnegative_int(item.get("current_memory"))
+        peak = max(
+            current,
+            _nonnegative_int(
+                item.get("peak_memory"),
+                default=current,
+            ),
+        )
+        reserved = max(
+            current,
+            _nonnegative_int(
+                item.get("current_reserved_memory"),
+                default=current,
+            ),
+        )
+        reserved_peak = max(
+            reserved,
+            peak,
+            _nonnegative_int(
+                item.get("peak_reserved_memory"),
+                default=reserved,
+            ),
+        )
+        total = _nonnegative_int(item.get("total_memory"))
+        reported = reserved + self.runtime_overhead_bytes
+        reported_peak = reserved_peak + self.runtime_overhead_bytes
+        if total:
+            reported = min(total, reported)
+            reported_peak = min(total, reported_peak)
+        index = _nonnegative_int(
+            item.get("index"),
+            default=index_default,
+        )
+        profile_id = str(item.get("profile_id", ""))
+        profile = _profile_metadata(item)
+        free = max(0, total - reported) if total else None
+        headroom = (
+            max(0, total - reported_peak) if total else None
+        )
+        largest_allocations = _mapping_list(
+            item.get("largest_allocations")
+        )
+        largest_allocations_total = len(largest_allocations)
+        largest_allocations = largest_allocations[
+            : self.detail_limit
+        ]
+        return {
+            "index": index,
+            "name": str(item.get("name", "Fake NVIDIA GPU")),
+            "profile_id": profile_id,
+            "profile": profile,
+            "uuid": _synthetic_uuid(hostname, index, profile_id),
+            "pci_bus_id": _synthetic_pci_bus_id(index),
+            "identity_source": "synthetic",
+            "architecture": profile.get("architecture"),
+            "compute_capability": profile.get(
+                "compute_capability"
+            ),
+            "compiler_target": profile.get("compiler_target"),
+            "total_memory": total,
+            "free_memory": free,
+            "activity": dict(item.get("activity") or {}),
+            **(
+                {"transfer": item["transfer"]}
+                if isinstance(item.get("transfer"), Mapping)
+                else {}
+            ),
+            "tracked_memory": current,
+            "peak_tracked_memory": peak,
+            "reserved_memory": reserved,
+            "peak_reserved_memory": reserved_peak,
+            "inactive_split_bytes": _nonnegative_int(
+                item.get("inactive_split_bytes")
+            ),
+            "segment_count": _nonnegative_int(
+                item.get("segment_count")
+            ),
+            "reported_memory_source": "reserved",
+            "runtime_overhead_bytes": self.runtime_overhead_bytes,
+            "reported_memory": reported,
+            "reported_peak_memory": reported_peak,
+            "headroom_bytes": headroom,
+            "headroom_percent": (
+                round(headroom / total * 100, 3)
+                if total
+                else None
+            ),
+            "allocation_count": _nonnegative_int(
+                item.get("allocation_count")
+            ),
+            "free_count": _nonnegative_int(
+                item.get("free_count")
+            ),
+            "allocator_model": str(
+                item.get("allocator_model")
+                or raw.get("allocator_model")
+                or "unknown"
+            ),
+            "current_bytes_by_category": _integer_mapping(
+                item.get("current_bytes_by_category")
+            ),
+            "peak_by_stage": _integer_mapping(
+                item.get("peak_by_stage")
+            ),
+            "reserved_peak_by_stage": _integer_mapping(
+                item.get("reserved_peak_by_stage")
+            ),
+            "largest_allocations": largest_allocations,
+            "largest_allocations_total": (
+                largest_allocations_total
+            ),
+            "largest_allocations_retained": len(
+                largest_allocations
+            ),
+        }
+
     def _run(self) -> None:
         while not self._stop.wait(self.interval_seconds):
             try:
@@ -505,10 +527,9 @@ class SmiStatePublisher:
                     exc,
                     context="background state publish",
                 )
-                continue
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=command_prog(__name__),
         description=(
@@ -612,7 +633,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"FakeGPU-SMI {_fakegpu_version()}",
+        version=f"FakeGPU-SMI {__version__}",
     )
     parser.add_argument(
         "--help-query-gpu",
@@ -641,17 +662,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=_positive_int,
         help="Stop after this many refreshes; requires --loop.",
     )
-    args = parser.parse_args(argv)
+    return parser
 
-    if args.help_query_gpu:
-        print(_render_query_help("gpu", GPU_QUERY_FIELDS))
-        return 0
-    if args.help_query_compute_apps:
-        print(_render_query_help("compute-apps", PROCESS_QUERY_FIELDS))
-        return 0
-    if args.help_query_runtime:
-        print(_render_query_help("runtime", RUNTIME_QUERY_FIELDS))
-        return 0
+
+def _check_view_arguments(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
     if args.count is not None and args.loop is None:
         parser.error("--count requires --loop")
     if args.matrix and args.view != "topo":
@@ -682,48 +699,44 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--format requires --query-gpu, --query-compute-apps, "
             "or --query-runtime"
         )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    for query_kind, _attr, help_attr, available, _key in _QUERIES:
+        if getattr(args, help_attr):
+            print(_render_query_help(query_kind, available))
+            return 0
+    _check_view_arguments(args, parser)
     query_format = _parse_query_format(
         args.format or "csv",
         parser=parser,
     )
-    gpu_query_fields = _parse_query_fields(
-        args.query_gpu,
-        available=GPU_QUERY_FIELDS,
-        parser=parser,
-    )
-    process_query_fields = _parse_query_fields(
-        args.query_compute_apps,
-        available=PROCESS_QUERY_FIELDS,
-        parser=parser,
-    )
-    runtime_query_fields = _parse_query_fields(
-        args.query_runtime,
-        available=RUNTIME_QUERY_FIELDS,
-        parser=parser,
-    )
+    query = None
+    for query_kind, attr, _help_attr, available, key in _QUERIES:
+        value = getattr(args, attr)
+        if value is not None:
+            fields = _parse_query_fields(value, available=available, parser=parser)
+            query = (query_kind, available, key, fields)
+            break
     selectors = _device_selectors(args.id)
 
-    explicit_paths = [Path(value).expanduser().resolve() for value in args.state]
-    state_dir_text = args.state_dir or os.environ.get("FAKEGPU_SMI_STATE_DIR")
-    state_dir = Path(state_dir_text).expanduser().resolve() if state_dir_text else None
-    fallback_state_text = None
-    if not explicit_paths and state_dir is None:
-        fallback_state_text = os.environ.get("FAKEGPU_SMI_STATE_PATH")
-    fallback_state = (
-        Path(fallback_state_text).expanduser().resolve()
-        if fallback_state_text
-        else None
+    explicit_paths, state_dir, fallback_state = _state_sources(
+        args.state,
+        args.state_dir,
     )
     from .machine.layout import is_machine_state_dir, layout_state, machine_state_dir
 
-    if not explicit_paths and state_dir is None and fallback_state is None:
+    if not (explicit_paths or state_dir or fallback_state):
         # Like nvidia-smi on a real host: show the background machine.
         state_dir = machine_state_dir()
-    if not explicit_paths and state_dir is None and fallback_state is None:
-        parser.error(
-            "provide --state, --state-dir, or FAKEGPU_SMI_STATE_PATH, "
-            "or start the background machine with 'fakegpu daemon start'"
-        )
+        if state_dir is None:
+            parser.error(
+                "provide --state, --state-dir, or FAKEGPU_SMI_STATE_PATH, "
+                "or start the background machine with 'fakegpu daemon start'"
+            )
     # The machine lists its GPUs even when no process uses them.
     show_layout = is_machine_state_dir(state_dir)
 
@@ -791,38 +804,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ),
                     )
                 )
-            elif gpu_query_fields:
-                devices = inventory["devices"]
-                # nvidia-smi repeats the system's GPU count on every row, even with -i.
-                count = len(devices)
-                if selectors and "count" in gpu_query_fields:
-                    count = len(build_inventory(states, stale_after_seconds=args.stale_after_seconds)["devices"])
+            elif query is not None:
+                query_kind, available, key, fields = query
+                records = inventory[key]
+                if query_kind == "gpu":
+                    # nvidia-smi repeats the system's GPU count on every row, even with -i.
+                    count = len(records)
+                    if selectors and "count" in fields:
+                        count = len(build_inventory(states, stale_after_seconds=args.stale_after_seconds)["devices"])
+                    records = [{**device, "count": count} for device in records]
                 print(
                     render_query(
-                        [{**device, "count": count} for device in devices],
-                        fields=gpu_query_fields,
-                        available=GPU_QUERY_FIELDS,
-                        query_kind="gpu",
-                        output_format=query_format,
-                    )
-                )
-            elif process_query_fields:
-                print(
-                    render_query(
-                        inventory["processes"],
-                        fields=process_query_fields,
-                        available=PROCESS_QUERY_FIELDS,
-                        query_kind="compute-apps",
-                        output_format=query_format,
-                    )
-                )
-            elif runtime_query_fields:
-                print(
-                    render_query(
-                        inventory["runtimes"],
-                        fields=runtime_query_fields,
-                        available=RUNTIME_QUERY_FIELDS,
-                        query_kind="runtime",
+                        records,
+                        fields=fields,
+                        available=available,
+                        query_kind=query_kind,
                         output_format=query_format,
                     )
                 )
@@ -920,29 +916,13 @@ def _render_query_help(
     return "\n".join(lines)
 
 
-@lru_cache(maxsize=1)
-def _fakegpu_version() -> str:
-    from ._version import __version__
-
-    return __version__
-
-
 def _software_metadata() -> dict[str, Any]:
     torch_module = sys.modules.get("torch")
     torch_version = (
-        str(getattr(torch_module, "__version__", ""))
-        if torch_module is not None
-        else None
-    )
-    torch_version_object = (
-        getattr(torch_module, "version", None)
-        if torch_module is not None
-        else None
+        str(torch_module.__version__) if torch_module is not None else None
     )
     torch_cuda = (
-        getattr(torch_version_object, "cuda", None)
-        if torch_version_object is not None
-        else None
+        torch_module.version.cuda if torch_module is not None else None
     )
     configured_cuda = os.environ.get("FAKEGPU_CUDA_VERSION")
     cuda_version = str(configured_cuda or torch_cuda or "12.1")
@@ -1015,23 +995,15 @@ def _process_name() -> str:
     return os.path.basename(sys.argv[0])
 
 
-def _positive_float(value: str) -> float:
-    try:
-        parsed = float(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("expected a number") from exc
-    if not math.isfinite(parsed) or parsed <= 0:
-        raise argparse.ArgumentTypeError(
-            "expected a finite number greater than zero"
-        )
-    return parsed
-
-
-def _positive_int(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("expected an integer") from exc
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("value must be greater than zero")
-    return parsed
+_positive_float = bounded_argument(
+    float,
+    lambda v: math.isfinite(v) and v > 0,
+    "expected a finite number greater than zero",
+    parse_message="expected a number",
+)
+_positive_int = bounded_argument(
+    int,
+    lambda v: v > 0,
+    "value must be greater than zero",
+    parse_message="expected an integer",
+)

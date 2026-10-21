@@ -26,6 +26,7 @@ from fakegpu.platforms import resolve_platform
 from fakegpu.smi import SmiStatePublisher, main
 
 ROOT = Path(__file__).resolve().parents[1]
+BUILD_DIR = Path(os.environ.get("FAKEGPU_BUILD_DIR", ROOT / "build"))
 GEN4_X16 = 31.508  # per direction, as fakegpu.link_topology rounds it
 GEN5_X16 = 63.015
 
@@ -36,30 +37,31 @@ def _topology(profiles: list[str], platform: str = "auto", **options) -> LinkTop
 
 def test_routes_follow_nvlink_pcie_peer_access_and_host_links() -> None:
     board = _topology(["a100"] * 8)
-    assert route(board, 0, 1) == Route("nvlink", "nvlink", pytest.approx(12 * 25.0))
-    assert route(board, None, 3) == Route(None, "pcie", pytest.approx(GEN4_X16))
-    assert route(board, 3, None) == Route("pcie", None, pytest.approx(GEN4_X16))
-    assert route(board, 2, 2) == Route(None, None, None)
+    assert route(board, 0, 1) == Route("nvlink", "nvlink", pytest.approx(12 * 25.0), "nvlink")
+    assert route(board, None, 3) == Route(None, "pcie", pytest.approx(GEN4_X16), "host")
+    assert route(board, 3, None) == Route("pcie", None, pytest.approx(GEN4_X16), "host")
+    assert route(board, 2, 2) == Route(None, None, None, "local")
 
     server = _topology(["a100-pcie-80gb"] * 8)
     assert server.pcie_relation(0, 1) == "PIX"
-    assert route(server, 0, 1) == Route("pcie", "pcie", pytest.approx(GEN4_X16))
+    assert route(server, 0, 1) == Route("pcie", "pcie", pytest.approx(GEN4_X16), "pcie_peer")
     # Across sockets there is no peer access: the copy is staged through host
     # memory over both CPU links.
     assert not server.can_access_peer(0, 7)
-    assert route(server, 0, 7) == Route("pcie", "pcie", pytest.approx(GEN4_X16))
+    assert route(server, 0, 7) == Route("pcie", "pcie", pytest.approx(GEN4_X16), "host_staged")
 
     # NVIDIA disables PCIe peer access on the RTX 4090; x8/x8 halves the link.
     desktop = _topology(["rtx4090"] * 2)
-    assert route(desktop, 0, 1) == Route("pcie", "pcie", 15.754)
+    assert route(desktop, 0, 1) == Route("pcie", "pcie", 15.754, "host_staged")
 
     station = _topology(["gb300-dgx-station", "rtx-pro-6000-blackwell"])
-    assert route(station, None, 0) == Route(None, "c2c", 450.0)
-    assert route(station, 0, 1) == Route("c2c", "pcie", pytest.approx(GEN5_X16))
+    assert route(station, None, 0) == Route(None, "c2c", 450.0, "host")
+    assert route(station, 0, 1) == Route("c2c", "pcie", pytest.approx(GEN5_X16), "host_staged")
 
     spark = _topology(["gb10"])
     unified = route(spark, None, 0)
     assert (unified.source_link, unified.target_link) == (None, None)
+    assert unified.kind == "unified"
     assert unified.bandwidth_gbps and unified.bandwidth_gbps > 0
 
 
@@ -106,6 +108,20 @@ def test_copies_on_one_link_run_back_to_back() -> None:
     assert snapshot[0]["copies"]["peer_send"]["bytes"] == 10**9
     assert snapshot[1]["copies"]["peer_receive"]["bytes"] == 10**9
     assert snapshot[1]["copies"]["peer_receive"]["modeled_seconds"] == pytest.approx(1 / GEN4_X16)
+
+
+def test_idle_separated_copies_keep_only_the_window_of_segments() -> None:
+    clock = [0.0]
+    topology = LinkTopology((GpuSlot(host_gbps=10.0),))
+    traffic = LinkTraffic(lambda: topology, clock=lambda: clock[0])
+
+    for index in range(1000):
+        clock[0] = index * 0.01
+        traffic.record(None, 0, 1 << 20)
+    (schedule,) = traffic._links.values()
+    assert len(schedule.segments) <= 101
+    clock[0] = 20.0
+    assert traffic.snapshot()[0]["links"]["pcie"]["rx_bytes"] == 1000 << 20
 
 
 def test_records_normalize_merge_and_format() -> None:
@@ -218,9 +234,40 @@ def test_fakecuda_records_copies_over_the_platform_links() -> None:
     assert snapshot[0]["links"]["nvlink"]["tx_bytes"] == mib
 
 
+def test_fakecuda_repatch_records_copies_on_new_devices() -> None:
+    code = textwrap.dedent(
+        """
+        import json, os
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+        import fakegpu
+        fakegpu.patch_torch(num_devices=2)
+        import torch
+        from fakegpu import torch_patch
+
+        torch.tensor([1.0], device="cuda:0")
+        fakegpu.patch_torch(num_devices=4)
+        torch.ones(256, dtype=torch.float32).to("cuda:3").to("cuda:0")
+        print(json.dumps(torch_patch._transfer_snapshot()))
+        """
+    )
+    env = dict(os.environ, PYTHONPATH=str(ROOT))
+    for name in ("FAKEGPU_PLATFORM", "FAKEGPU_SLOTS", "FAKEGPU_NVLINK_FABRIC", "FAKEGPU_NVLINK_GROUPS"):
+        env.pop(name, None)
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, env=env, text=True, capture_output=True, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    snapshot = {int(key): value for key, value in json.loads(completed.stdout.strip().splitlines()[-1]).items()}
+    third = snapshot[3]["copies"]
+    assert (third["host_to_device"]["calls"], third["host_to_device"]["bytes"]) == (1, 1024)
+    assert third["peer_send"]["bytes"] == snapshot[0]["copies"]["peer_receive"]["bytes"] == 1024
+    # Counters restart with the re-patched topology, like the memory tracker.
+    assert snapshot[0]["copies"]["host_to_device"]["calls"] == 0
+
+
 def _library(name: str) -> Path:
     suffix = {"darwin": ".dylib"}.get(sys.platform, ".so.1")
-    return ROOT / "build" / f"{name}{suffix}"
+    return BUILD_DIR / f"{name}{suffix}"
 
 
 @pytest.mark.skipif(not _library("libnvidia-ml").exists(), reason="native libraries are not built")
@@ -244,7 +291,7 @@ def test_nvml_bridge_reports_modeled_links(tmp_path: Path) -> None:
         f"""
         import ctypes, json
         from fakegpu.nvml import NvmlStateBridge
-        with NvmlStateBridge(state_dir={str(tmp_path)!r}, lib_dir={str(ROOT / "build")!r}):
+        with NvmlStateBridge(state_dir={str(tmp_path)!r}, lib_dir={str(BUILD_DIR)!r}):
             import pynvml
             pynvml.nvmlInit()
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)

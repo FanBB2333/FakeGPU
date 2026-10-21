@@ -19,8 +19,17 @@ typedef enum CUresult_enum {
     CUDA_ERROR_NOT_READY = 600,
     CUDA_ERROR_NO_DEVICE = 100,
     CUDA_ERROR_INVALID_DEVICE = 101,
+    CUDA_ERROR_INVALID_IMAGE = 200,
     CUDA_ERROR_INVALID_CONTEXT = 201,
+    CUDA_ERROR_NO_BINARY_FOR_GPU = 209,
     CUDA_ERROR_PEER_ACCESS_UNSUPPORTED = 217,
+    CUDA_ERROR_INVALID_PTX = 218,
+    CUDA_ERROR_FILE_NOT_FOUND = 301,
+    CUDA_ERROR_INVALID_HANDLE = 400,
+    CUDA_ERROR_NOT_FOUND = 500,
+    CUDA_ERROR_ILLEGAL_ADDRESS = 700,
+    CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES = 701,
+    CUDA_ERROR_LAUNCH_FAILED = 719,
     CUDA_ERROR_NOT_SUPPORTED = 801,
     CUDA_ERROR_UNKNOWN = 999
 } CUresult;
@@ -193,6 +202,8 @@ CUresult cuMemFree(CUdeviceptr dptr);
 CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount);
 CUresult cuMemcpyHtoD(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount);
 CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteCount);
+CUresult cuMemcpy(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount);
+CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char value, size_t count);
 CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flags);
 CUresult cuMemAllocHost(void **pp, size_t bytesize);
 CUresult cuMemFreeHost(void *p);
@@ -267,6 +278,15 @@ CUresult cuGetProcAddress_v2(const char *symbol, void **pfn, int cudaVersion, un
 // Optional FakeGPU integration hook. Libraries such as fake NCCL resolve this
 // symbol dynamically so they do not acquire a hard dependency on libcuda.
 CUresult fakegpuCudaMarkStreamHostFunctionComplete(CUstream stream);
+
+// PTX module loading and execution.
+CUresult cuModuleLoadData(CUmodule* module, const void* image);
+CUresult cuModuleUnload(CUmodule module);
+CUresult cuModuleGetFunction(CUfunction* function, CUmodule module, const char* name);
+CUresult cuModuleGetGlobal(CUdeviceptr* pointer, size_t* bytes, CUmodule module, const char* name);
+CUresult cuLaunchKernel(CUfunction function, unsigned gridX, unsigned gridY, unsigned gridZ,
+                       unsigned blockX, unsigned blockY, unsigned blockZ,
+                       unsigned sharedBytes, CUstream stream, void** arguments, void** extra);
 
 #ifdef __cplusplus
 }

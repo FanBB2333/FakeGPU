@@ -29,9 +29,12 @@ Exit codes
 from __future__ import annotations
 
 import importlib
-from argparse import ArgumentParser, _ActionsContainer
+import re
+from argparse import ArgumentParser, ArgumentTypeError, _ActionsContainer
 from dataclasses import dataclass
-from typing import Callable, NoReturn, Sequence
+from typing import Any, Callable, NoReturn, Sequence
+
+from .structured_io import emit_json
 
 
 # ``ArgumentParser`` and the groups created by ``add_argument_group`` and
@@ -42,6 +45,20 @@ ArgumentTarget = _ActionsContainer
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
 EXIT_USAGE = 2
+
+
+def parse_byte_count(value: str) -> int:
+    """Positive whole bytes, with decimal or binary units through TB/TiB."""
+
+    match = re.fullmatch(r"([0-9]+)([kmgt]i?b|b)?", value.strip(), re.IGNORECASE)
+    if not match:
+        raise ArgumentTypeError("expected a byte count such as 65536, 64KiB, or 4MiB")
+    suffix = (match[2] or "").lower()
+    power = "kmgt".index(suffix[0]) + 1 if len(suffix) > 1 else 0
+    size = int(match[1]) * (1024 if "i" in suffix else 1000) ** power
+    if size <= 0:
+        raise ArgumentTypeError("size must be greater than zero")
+    return size
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,3 +195,32 @@ def usage_error(parser: ArgumentParser, error: object) -> NoReturn:
 
     parser.exit(EXIT_USAGE, f"{parser.prog}: {error}\n")
     raise AssertionError("parser.exit must not return")
+
+
+def bounded_argument(
+    parse: Callable[[str], Any],
+    accept: Callable[[Any], bool],
+    message: str,
+    *,
+    parse_message: str | None = None,
+) -> Callable[[str], Any]:
+    """Build an argparse ``type=`` converter that parses and range-checks."""
+
+    def convert(text: str) -> Any:
+        try:
+            value = parse(text)
+        except ValueError as exc:
+            raise ArgumentTypeError(parse_message or message) from exc
+        if not accept(value):
+            raise ArgumentTypeError(message)
+        return value
+
+    return convert
+
+
+def emit_json_report(target: str, payload: Any, label: str) -> None:
+    """Emit a ``--json`` report and name the file it was written to, if any."""
+
+    output = emit_json(target, payload)
+    if output is not None:
+        print(f"{label}: {output}")

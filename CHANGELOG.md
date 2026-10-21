@@ -18,6 +18,18 @@
   (`oom_events`, `last_oom`).
 - The `count` field for `fakegpu nvidia-smi --query-gpu`, which Accelerate
   reads. It counts every GPU, also when `-i` selects some.
+- Execute custom PTX and compatible cubin/SASS kernels on CPU through Linux CUDA Driver and Runtime
+  interception, using a pinned PantheonSim interpreter. Module globals,
+  constants, device functions and compressed `nvcc` fatbins are supported.
+  Pure cubins and SASS-only fatbins no longer require embedded PTX. Fatbin
+  selection prefers compatible PTX, then a compatible cubin.
+- Validate numerical kernel results through direct PTX and compiled CUDA C++,
+  including shared memory, barriers, atomics, FP64, warp intrinsics and
+  structured parameters, in native Linux CI. Cubin tests also check globals,
+  relocations, pointer copies and architecture selection.
+- Execute nested device-side child launches through direct PTX and linked
+  SASS modules; accept nvcc linked fatbin wrapper v2. Cubin globals share
+  their CUDA address with host backing for CPU library interoperability.
 
 ### Changed
 
@@ -28,6 +40,9 @@
   `Driver Version: FakeGPU (modeled)` with reference telemetry, and
   `fakegpu daemon status` notes that Util, Temp and Power are modeled from CPU
   activity.
+- Reject unsupported kernel launches under every compatibility policy instead
+  of returning success without computing results. macOS kernel execution
+  remains unsupported.
 
 ### Fixed
 
@@ -39,6 +54,198 @@
   Accelerate sees every process. A process that only finds `WORLD_SIZE` and
   `MASTER_ADDR` in its environment keeps the in-process simulation.
   `FAKEGPU_DIST_COLLECTIVES=real` or `simulate` overrides the choice.
+- The console no longer fails with `NoMatches` when its periodic refresh
+  fires while the app is shutting down.
+- FakeCUDA autocast now defaults to float16 like CUDA instead of the CPU
+  bfloat16 default, so `torch.amp.autocast("cuda")` no longer fails on
+  pre-Ampere profiles; the positional `dtype` form and the legacy
+  `torch.cuda.amp.autocast(enabled, dtype, cache_enabled)` signature work.
+- Module buffers moved with `Module.to`/`.cuda` are reported in the `buffer`
+  memory category again instead of `tensor`.
+- Calling `patch_torch()` again with more devices now records copies on the
+  added devices; transfer counters restart with the new topology.
+- FakeCUDA `torch.cuda.get_device_properties()` reports the profile's
+  threads per multiprocessor, register limits, and SM count (when the
+  profile publishes one), as the native runtime does, instead of A100 values
+  for every profile.
+- The first virtual-SMI state written by a FakeCUDA process reports the
+  `upstream` backend instead of `unknown`.
+- Under FakeCUDA, `torch.get_float32_matmul_precision()` returns `medium`
+  after `torch.set_float32_matmul_precision("medium")` instead of `high`.
+- `fakegpu nvidia-smi events` treats a non-object `publisher.health` in a
+  state file as empty, as `-q` and `--query-runtime` already do, instead of
+  crashing.
+- Virtual-SMI state readers (`fakegpu nvidia-smi`, the metrics exporter and
+  the background machine) treat a non-finite number such as `Infinity` in a
+  state file's integer fields as missing instead of crashing with
+  `OverflowError`.
+- A stopped virtual-SMI state publisher releases its exit and `SIGTERM`
+  hooks. After FakeGPU is initialized again, the replaced publisher no longer
+  rewrites the state file at exit, and the new publisher installs its own
+  `SIGTERM` handler.
+- The background machine no longer crashes on a process state with a null
+  or string device `index`, a non-numeric `reported_peak_memory`, or a
+  non-object `fakegpu` or `software` field.
+- The background machine describes a process's devices whose profile is not
+  in its catalog from the state that process published instead of crashing.
+- The console's Machine settings form loads a configuration whose platform
+  name differs in letter case or surrounding spaces (such as `Auto`) or whose
+  PCIe slot generation is 1 or 2, and offers PCIe Gen1 and Gen2.
+- Machine settings of the wrong type, such as a list for `devices` or a
+  string for `stale_after_seconds`, and a settings file that is not a JSON
+  object are reported as invalid settings (exit code 2 from
+  `fakegpu daemon config`, `invalid_params` from the control API) instead of
+  raising `AttributeError` or `TypeError`.
+- `fakegpu bandwidth --size`/`--bytes` rejects a bare `ib` suffix with a usage
+  error instead of crashing with `KeyError`.
+- `fakegpu bandwidth --listen` without `--cluster-report` no longer prints the
+  path of a cluster report inside an already deleted temporary directory.
+- `fakegpu simulate-topology` reports an unknown rank used as both source and
+  destination as a usage error instead of crashing with `KeyError`.
+- `fakegpu replay-trace` accepts `"links": null` in generic and FakeGPU
+  cluster timeline events instead of crashing with `TypeError`.
+- Modeled link traffic drops copy segments older than the rate window when a
+  copy is recorded, so its memory no longer grows with every copy in
+  processes that do not publish SMI state.
+- `fakegpu platform show`/`env` report an invalid machine configuration with
+  exit code 2 instead of silently showing the default HGX A100 machine.
+- Static memory analysis fingerprints the storages of a multi-output graph
+  node in tensor order instead of storage-address order, so the same graph no
+  longer gets a different `graph_fingerprint` between runs and static
+  validation bundles no longer report false fingerprint mismatches.
+- Workspace profile catalogs with an unknown `match` field or a non-list
+  `match` value are rejected when loaded. A misspelled field applied the
+  profile to every stack, and a scalar value made it never match.
+- `build_cuda_serving_sample()` and `fakegpu calibrate emit-serving-sample`
+  reject a serving plan whose target profile has no positive integer
+  `memory_bytes` with `CalibrationError`, as `collect-serving` does, instead
+  of failing with `KeyError` or `ZeroDivisionError` or accepting a negative
+  capacity.
+- Count MoE layers with both `mlp_only_layers` and `decoder_sparse_step`, as
+  Transformers' Qwen MoE models do. Saved Qwen MoE configs always list
+  `mlp_only_layers`, so a sparse step above one was ignored and every
+  non-listed layer was counted as MoE in LLM, serving, and fine-tuning
+  estimates.
+- Treat the leading `first_k_dense_replace` layers of DeepSeek-style MoE
+  configs as dense. They were counted as MoE layers, so LLM, serving, and
+  fine-tuning estimates, serving plans, and workload signatures for these
+  models change.
+- Report a malformed `model.safetensors.index.json` (non-object index,
+  non-object `metadata`, or non-numeric `total_size`) as a usage error
+  instead of an uncaught `AttributeError` or `TypeError`.
+- `fakegpu plan-diffusion-training` reports a `text_time` UNet config without
+  `addition_time_embed_dim` or `projection_class_embeddings_input_dim` as a
+  usage error instead of an uncaught `KeyError`.
+- `fakegpu estimate-diffusion --model-dir` treats a null `up_block_types` or
+  `mlp_ratio` in a local denoiser config as missing, as it already did for
+  `down_block_types`, instead of crashing with `TypeError`.
+- `fakegpu estimate-finetune-pipeline` and `estimate_finetuning_memory()`
+  reject a native calibration run without a recorded `peak_reserved_bytes`
+  (a usage error from the command) instead of failing with an uncaught
+  `KeyError`.
+- Fine-tuning pipeline and transfer plans now resolve a fractional
+  `logging_steps` against the planned duration for every logging strategy.
+  With `logging_strategy: no`, a longer plan previously failed its own
+  execution-policy validation instead of producing a plan.
+- Retried experiment attempts no longer carry the previous attempt's
+  `finished_at_utc` in `state.json` while running or after an interruption.
+- The Hugging Face native runner now names the first unsupported option in
+  sorted order when a configuration sets several, instead of a
+  hash-seed-dependent one.
+- `fakegpu validate` records a case whose command cannot be started (missing
+  executable or working directory) as failed and still writes the report,
+  instead of aborting the run with a traceback.
+- `fakegpu validate` reports unreadable manifests and unusable values (a null
+  `timeout_seconds`, non-object `defaults.env`/`requires`/`expect`, a
+  non-numeric `defaults.timeout_seconds`) as manifest errors (exit 2) before
+  running any command; a non-numeric `expect.exit_code` or
+  `expect.duration_seconds_max` is recorded as a case failure.
+- `fakegpu preflight` rejects an invalid `--memory-safety-margin` with a usage
+  error (exit 2) before running the workload, instead of failing afterwards
+  without writing a report.
+- `cuEventRecord` with an unknown or NULL event no longer advances the
+  stream timeline, so the stream stays idle for `cuStreamQuery`.
+- `cudaGetDriverEntryPointByVersion` reports `driverStatus` 0 (success) for
+  resolved symbols and 1 (symbol not found) otherwise; the values were
+  inverted.
+- `cuGetProcAddress_v2` with a NULL `pfn` and a non-NULL `symbolStatus` now
+  returns `CUDA_ERROR_INVALID_VALUE` with status 1 instead of crashing.
+- `cuCtxPushCurrent` now also switches the Runtime's current device, as
+  `cuCtxSetCurrent` does, so pinned host allocations and peer-access checks
+  use the pushed context's device.
+- `cudaMemPoolGetAttribute` writes 4 bytes for the int-valued reuse-policy
+  attributes instead of overwriting 8 bytes of caller memory.
+- `cuStreamAddCallback` follows `FAKEGPU_UNSUPPORTED_API` like
+  `cudaStreamAddCallback`: it records the unregistered callback, warns once
+  under `warn` and returns `CUDA_ERROR_NOT_SUPPORTED` under `error`.
+- Hybrid `cuGetProcAddress` no longer returns the caller's stale `*pfn` when
+  the real driver resolves a symbol to NULL and `dlsym` also misses it.
+- Hybrid `cuMemAllocFromPoolAsync` applies a single allocation decision, so
+  one over-budget request counts once in the report's OOM fallback count.
+- NCCL passthrough no longer treats a real NCCL library with missing
+  required symbols as loaded: every later call now fails with
+  `ncclSystemError` instead of reaching the partially resolved library.
+- `ncclCommSplit` now reports a coordinator timeout as `ncclSystemError` and
+  duplicate split ranks or split timeout mismatches as `ncclInvalidUsage`,
+  matching `ncclCommShrink`, instead of `ncclInternalError`. Ranks that
+  disagree on explicit all-to-all splits also get `ncclInvalidUsage`.
+- Complete `ncclSend`/`ncclRecv` pairs over the TCP coordinator. The receiver
+  no longer declares a socket payload it never sends, so the coordinator stops
+  waiting for it and the sender no longer times out.
+- `ncclReduce` over the TCP coordinator, or when shared-memory staging is
+  unavailable, no longer fails on non-root ranks with `ncclInternalError`
+  (`coordinator returned an inconsistent socket payload`), which also left
+  their communicator unusable for later operations.
+- Release each finished coordinator connection thread instead of keeping
+  every handler until shutdown, so coordinator memory no longer grows with
+  the number of requests.
+- Reject `nan` and `inf` fabric bandwidth, latency, and oversubscription
+  values in cluster YAML files instead of writing them into the cluster report
+  as invalid JSON.
+- Apply `FAKEGPU_CLUSTER_CONFIG` to a directly started `fakegpu-coordinator`
+  even when `FAKEGPU_DIST_MODE` and `FAKEGPU_COORDINATOR_ADDR` are unset. The
+  cluster report previously named the config path but reported no nodes or
+  link estimates; an unreadable or invalid config is now reported on stderr
+  at startup and omitted from the report.
+- Accept coordinator request headers up to 1 MiB, so large NCCL groups and
+  all-to-all-v split lists over many ranks are no longer rejected with
+  `request line is too long` once the header passes about 4 KiB.
+- `nvmlDeviceGetHandleByPciBusId` now returns the device with the requested
+  PCI bus id and `NVML_ERROR_NOT_FOUND` for an unknown id instead of always
+  returning device 0.
+- Builds without CPU simulation now count `cublasLtMatmul` calls and FLOPs
+  in the report, like `cublasGemmEx` already did.
+- With CPU simulation, `cublasSgemm_v2`, `cublasDgemm_v2` and `cublasGemmEx`
+  accept `k = 0` with padded leading dimensions and scale C by beta instead
+  of returning `CUBLAS_STATUS_INVALID_VALUE`.
+- Without CPU simulation, the synthetic `cublasI[sd]amax_v2` and
+  `cublasI[sd]amin_v2` results are 1-based like cuBLAS instead of possibly
+  returning the invalid index 0.
+- The report's `gemm_by_dtype` breakdown now includes
+  `cublasGemmStridedBatchedEx`, `cublasGemmBatchedEx` and `cublasSgemmEx`
+  calls, not only `cublasGemmEx` and `cublasLtMatmul`.
+- Native `FAKEGPU_FAULT_EVENTS`, `FAKEGPU_MIG_LAYOUT` and
+  `FAKEGPU_NVLINK_GROUPS` integers with a `-` sign (such as device `-0` or
+  count `-18446744073709551615`) are rejected, as in the Python model,
+  instead of being accepted as 0 or wrapped values.
+- A native `FAKEGPU_FAULT_EVENTS` event with an empty field, such as
+  `0::critical`, reports the Python model's `must use
+  DEVICE:CODE:SEVERITY[:COUNT]` error instead of a code or severity error.
+- The native `FAKEGPU_NVLINK_FABRIC` error for a group naming a GPU beyond
+  the device count includes the group, as in the Python model.
+- A huge `FAKEGPU_SMI_INTERVAL_MS` (such as `1e300`) no longer makes the
+  native SMI publisher rewrite its state file thousands of times a second;
+  the interval is capped at 10^12 ms.
+- The FakeCUDA SMI publisher caps `FAKEGPU_SMI_INTERVAL_MS` at 10^12 ms like
+  the native publisher. A larger value such as `1e300` stopped its
+  background updates with `OverflowError` and kept the final
+  `running: false` state from being written at exit.
+- Negative native `FAKEGPU_SMI_DETAIL_LIMIT` and `FAKEGPU_SMI_MAX_STATE_BYTES`
+  values clamp to the minimum, and values beyond the 64-bit range clamp
+  instead of falling back to the default, as in the Python publisher;
+  `-1` used to wrap to the maximum.
+- Hybrid mode on hosts with more than 16 real GPUs maps virtual devices onto
+  the first 16 instead of indexing past the 16-entry real-GPU tables.
 
 ## v1.6.0 - 2026-10-17
 

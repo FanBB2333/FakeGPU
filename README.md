@@ -247,6 +247,7 @@ The detailed guides live in [`docs/`](docs/en/README.md):
 - [Platforms and slots](docs/en/platforms.md): baseboards, superchips, PCIe
   slots, NVLink bridges
 - [Native interception](docs/en/native-interception.md)
+- [Framework compatibility](docs/en/frameworks.md): TensorFlow, scikit-learn and CUDA C/C++
 - [Calibrating against a real GPU](docs/en/calibration.md)
 - [Validation and reliability](docs/en/validation.md)
 - [Development and testing](docs/en/development.md)
@@ -276,8 +277,9 @@ Build options, test suites, and the project layout are described in
 
 ## Limitations
 
-- Native simulation does not run arbitrary CUDA kernels, and FakeCUDA does not
-  cover binary CUDA extensions.
+- Linux native simulation executes supported PTX and compatible cubin/SASS
+  kernels on CPU; unsupported instructions and incompatible images fail explicitly. FakeCUDA does not
+  support binary CUDA extensions. See [kernel support](docs/en/frameworks.md).
 - Memory estimates can miss backend-private allocations, custom operators, and
   allocator behavior. Calibrate on real hardware before relying on them.
 - Timing results from the simulator are not NCCL, NVLink, or kernel

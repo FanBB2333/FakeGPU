@@ -8,7 +8,6 @@ from typing import Any
 
 from ._cli import add_json_path_argument, command_prog, usage_error
 from .finetune_data import profile_finetune_dataset
-from .finetune_data_report import apply_dataset_report as apply_dataset_report
 from .structured_io import emit_json
 
 
@@ -114,4 +113,4 @@ def _print_report(report: dict[str, Any]) -> None:
         print(f"  - {limitation}")
 
 
-__all__ = ["apply_dataset_report", "main"]
+__all__ = ["main"]

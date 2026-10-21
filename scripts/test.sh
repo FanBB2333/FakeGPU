@@ -49,6 +49,8 @@ run_smoke() {
     --build-dir "$BUILD_DIR"
   "$PYTHON_BIN" tests/native/cublas_policy.py \
     --build-dir "$BUILD_DIR"
+  "$PYTHON_BIN" tests/native/cuda_api_contracts.py \
+    --build-dir "$BUILD_DIR"
   "$PYTHON_BIN" tests/native/monitor_telemetry.py --lib-dir "$BUILD_DIR"
 
   local collective_probe="$BUILD_DIR/collective_executor"
@@ -56,6 +58,50 @@ run_smoke() {
     -I src/distributed -L "$BUILD_DIR" -lnvidia-ml
   FAKEGPU_REPORT_PATH="$BUILD_DIR/collective_executor_report.json" \
     run_fakegpu "$BUILD_DIR" "$collective_probe"
+
+  local cpp_probe="$BUILD_DIR/cuda_cpp_sim"
+  c++ -std=c++17 -pthread tests/native/cuda_cpp_sim.cpp -o "$cpp_probe" \
+    -L "$BUILD_DIR" -lcublas -lcudart -lcuda -lnvidia-ml
+  FAKEGPU_REPORT_PATH="$BUILD_DIR/cuda_cpp_sim_report.json" \
+    run_fakegpu "$BUILD_DIR" --mode simulate --unsupported-api error "$cpp_probe"
+  "$PYTHON_BIN" scripts/validation/check_report.py \
+    --path "$BUILD_DIR/cuda_cpp_sim_report.json" --expect-io --expect-flops
+
+  local ptx_enabled=false
+  if grep -q '^ENABLE_FAKEGPU_PTX_EXECUTION:BOOL=ON$' "$BUILD_DIR/CMakeCache.txt"; then
+    ptx_enabled=true
+    "$PYTHON_BIN" tests/native/ptx_execution.py --build-dir "$BUILD_DIR"
+    "$PYTHON_BIN" tests/native/kernel_images.py --build-dir "$BUILD_DIR"
+  else
+    "$PYTHON_BIN" tests/native/ptx_execution.py --build-dir "$BUILD_DIR" --expect-unavailable
+  fi
+
+  if "$ptx_enabled" && command -v nvcc >/dev/null 2>&1; then
+    nvcc -arch=sm_80 --cudart shared -Xcompiler -pthread \
+      tests/native/cuda_kernel_launch.cu -o "$BUILD_DIR/cuda_kernel_ptx"
+    nvcc -gencode arch=compute_80,code=sm_80 --cudart shared -Xcompiler -pthread \
+      tests/native/cuda_kernel_launch.cu -o "$BUILD_DIR/cuda_kernel_sass"
+    local variant policy
+    for variant in ptx sass; do
+      for policy in allow warn error; do
+        FAKEGPU_REPORT_PATH="$BUILD_DIR/cuda_kernel_${variant}_${policy}_report.json" \
+          run_fakegpu "$BUILD_DIR" --devices a100:2 --mode simulate --unsupported-api "$policy" \
+            "$BUILD_DIR/cuda_kernel_$variant"
+        "$PYTHON_BIN" scripts/validation/check_report.py \
+          --path "$BUILD_DIR/cuda_kernel_${variant}_${policy}_report.json" --expect-io
+      done
+    done
+    nvcc -rdc=true -gencode arch=compute_80,code=sm_80 --cudart shared \
+      tests/native/cuda_child_launch.cu -o "$BUILD_DIR/cuda_child_launch"
+    FAKEGPU_REPORT_PATH="$BUILD_DIR/cuda_child_launch_report.json" \
+      run_fakegpu "$BUILD_DIR" --devices a100:2 --mode simulate --unsupported-api error \
+        "$BUILD_DIR/cuda_child_launch"
+    "$PYTHON_BIN" scripts/validation/check_report.py \
+      --path "$BUILD_DIR/cuda_child_launch_report.json" --expect-io
+    "$PYTHON_BIN" tests/native/cubin_execution.py --build-dir "$BUILD_DIR"
+  else
+    echo "nvcc or PTX execution unavailable; skipped compiled CUDA kernel validation."
+  fi
 
   local preload_probe="$BUILD_DIR/verify_preload"
   if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -90,6 +136,8 @@ run_smoke() {
   done
   FAKEGPU_BUILD_DIR="$BUILD_DIR" \
     "$PYTHON_BIN" tests/native/coordinator_smoke.py
+  FAKEGPU_BUILD_DIR="$BUILD_DIR" \
+    "$PYTHON_BIN" tests/native/nccl_stubs_smoke.py
 
   if "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
     "$PYTHON_BIN" tests/support/fakecuda_profile_matrix.py
@@ -113,8 +161,7 @@ run_cpu() {
     --path "$CPU_BUILD_DIR/fake_gpu_report.json" \
     --smi-state "$smi_state" \
     --expect-io \
-    --expect-flops \
-    --expect-unsupported-api
+    --expect-flops
 
   FAKEGPU_REPORT_PATH="$CPU_BUILD_DIR/research_numerics_native.json" \
     FAKEGPU_UNSUPPORTED_API=error FAKEGPU_CPU_GEMM_MODE=naive \

@@ -52,9 +52,8 @@ public:
 
         if (real_info.valid) {
             real_device_count_ = real_info.device_count;
-            for (int i = 0; i < real_device_count_ && i < 16; ++i) {
+            for (int i = 0; i < real_device_count_; ++i) {
                 real_total_memory_[i] = real_info.total_memory[i];
-                real_free_memory_[i] = real_info.free_memory[i];
                 real_used_memory_[i] = 0;
             }
             FGPU_LOG("[HybridMemoryManager] Initialized with %d real GPU(s)\n", real_device_count_);
@@ -70,26 +69,9 @@ public:
                                   size_t& reported_total, size_t& reported_free) {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        const BackendConfig& config = BackendConfig::instance();
-
-        if (config.mode() != FakeGpuMode::Hybrid ||
-            config.oom_policy() != OomPolicy::Clamp) {
-            // Not in clamp mode, return virtual values
-            reported_total = virtual_total;
-            reported_free = (virtual_total > virtual_used) ? (virtual_total - virtual_used) : 0;
-            return;
-        }
-
-        if (real_device_count_ <= 0) {
+        const int real_dev = real_device_for(device);
+        if (real_dev < 0) {
             // No real backing device available; fall back to virtual values.
-            reported_total = virtual_total;
-            reported_free = (virtual_total > virtual_used) ? (virtual_total - virtual_used) : 0;
-            return;
-        }
-
-        // Map virtual device to real device
-        int real_dev = device % real_device_count_;
-        if (real_dev < 0 || real_dev >= real_device_count_) {
             reported_total = virtual_total;
             reported_free = (virtual_total > virtual_used) ? (virtual_total - virtual_used) : 0;
             return;
@@ -119,19 +101,9 @@ public:
     AllocationDecision decide_allocation(int device, size_t size) {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        const BackendConfig& config = BackendConfig::instance();
-
-        if (config.mode() != FakeGpuMode::Hybrid) {
-            return AllocationDecision::UseReal;
-        }
-
-        if (real_device_count_ <= 0) {
+        const int real_dev = real_device_for(device);
+        if (real_dev < 0) {
             // No real GPU available; always spill so callers can continue in a degraded mode.
-            return AllocationDecision::SpillToCpu;
-        }
-
-        int real_dev = device % real_device_count_;
-        if (real_dev < 0 || real_dev >= real_device_count_) {
             return AllocationDecision::SpillToCpu;
         }
 
@@ -146,7 +118,7 @@ public:
         stats_.oom_fallback_count++;
 
         // Not enough real memory, apply OOM policy
-        switch (config.oom_policy()) {
+        switch (BackendConfig::instance().oom_policy()) {
             case OomPolicy::Clamp:
                 // In clamp mode, we should have already reported smaller memory
                 // If we still get here, fail the allocation
@@ -183,11 +155,9 @@ public:
 
         // Update memory tracking
         if (type == HybridAllocation::Type::RealDevice) {
-            if (real_device_count_ > 0) {
-                int real_dev = device % real_device_count_;
-                if (real_dev >= 0 && real_dev < real_device_count_) {
-                    real_used_memory_[real_dev] += size;
-                }
+            const int real_dev = real_device_for(device);
+            if (real_dev >= 0) {
+                real_used_memory_[real_dev] += size;
             }
         }
 
@@ -226,11 +196,8 @@ public:
 
         // Update memory tracking
         if (out_alloc.type == HybridAllocation::Type::RealDevice) {
-            if (real_device_count_ <= 0) {
-                return true;
-            }
-            int real_dev = out_alloc.device % real_device_count_;
-            if (real_dev >= 0 && real_dev < real_device_count_) {
+            const int real_dev = real_device_for(out_alloc.device);
+            if (real_dev >= 0) {
                 if (real_used_memory_[real_dev] >= out_alloc.size) {
                     real_used_memory_[real_dev] -= out_alloc.size;
                 } else {
@@ -287,13 +254,19 @@ public:
 private:
     HybridMemoryManager() = default;
 
+    // Real GPU backing a virtual device, or -1 when there is none.
+    int real_device_for(int device) const {
+        if (real_device_count_ <= 0) return -1;
+        const int real_dev = device % real_device_count_;
+        return real_dev < 0 ? -1 : real_dev;
+    }
+
     mutable std::mutex mutex_;
     bool initialized_ = false;
 
     int real_device_count_ = 0;
-    size_t real_total_memory_[16] = {0};
-    size_t real_free_memory_[16] = {0};
-    size_t real_used_memory_[16] = {0};
+    size_t real_total_memory_[RealCudaLoader::kMaxRealGpus] = {0};
+    size_t real_used_memory_[RealCudaLoader::kMaxRealGpus] = {0};
 
     std::unordered_map<void*, HybridAllocation> allocations_;
     Stats stats_;

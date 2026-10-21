@@ -234,6 +234,7 @@ FakeCUDA 进程以及不带 `--gpu` 的 `fakegpu run` 会接入这台机器，�
 - [FakeGPU-SMI 与监控](docs/zh-CN/fakegpu-smi.md)
 - [平台与插槽](docs/zh-CN/platforms.md)：基板、超级芯片、PCIe 插槽、NVLink 桥
 - [原生库拦截](docs/zh-CN/native-interception.md)
+- [框架兼容性](docs/zh-CN/frameworks.md)：TensorFlow、scikit-learn 与 CUDA C/C++
 - [对照真实 GPU 校准](docs/zh-CN/calibration.md)
 - [验证与可靠性](docs/zh-CN/validation.md)
 - [开发与测试](docs/zh-CN/development.md)
@@ -261,7 +262,8 @@ scripts/test.sh all       # 所有维护中的测试
 
 ## 限制
 
-- 原生模拟不能执行任意 CUDA kernel，FakeCUDA 也不支持二进制 CUDA 扩展。
+- Linux 原生模拟可在 CPU 上执行受支持的 PTX 和兼容的 cubin/SASS 内核；不兼容的镜像和指令会
+  明确失败。FakeCUDA 不支持二进制 CUDA 扩展。详见[内核支持](docs/zh-CN/frameworks.md)。
 - 显存估算可能遗漏 backend 私有分配、自定义 operator 和 allocator 行为。依赖这些
   估算之前，请先在真实硬件上校准。
 - 模拟器给出的耗时不是 NCCL、NVLink 或 kernel benchmark。

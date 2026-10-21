@@ -187,7 +187,8 @@ def _profile_dataset(
     effective_lengths: Counter[int] = Counter()
     stored_lengths: Counter[int] = Counter()
     files: list[dict[str, Any]] = []
-    selected_format = "input_ids" if processed else record_format
+    requested_format = "input_ids" if processed else record_format
+    selected_format = requested_format
     records = raw_tokens = retained_tokens = source_padding = truncated_records = 0
     labeled_records = supervised_tokens = attention_mask_records = 0
 
@@ -200,10 +201,7 @@ def _profile_dataset(
     for location, row in rows:
         try:
             current_format = _record_format(
-                row,
-                "input_ids" if processed else record_format,
-                text_field,
-                messages_field,
+                row, requested_format, text_field, messages_field
             )
             if current_format == "input_ids" and "attention_mask" in row:
                 attention_mask_records += 1
@@ -256,8 +254,6 @@ def _profile_dataset(
             raise FinetuneDataError(f"{location}: {exc}") from exc
     if not records:
         raise FinetuneDataError("dataset contains no records")
-    if selected_format != "input_ids" and tokenizer is None:
-        raise FinetuneDataError("text and messages require a tokenizer")
 
     separator_tokens = records - 1 if separator_token_id is not None else 0
     available_tokens = retained_tokens + separator_tokens
@@ -572,9 +568,10 @@ def _token_list(value: Any, name: str, *, labels: bool = False) -> list[int]:
     return list(value)
 
 
-def _integer(value: Any, name: str, minimum: int = 0) -> None:
+def _integer(value: Any, name: str, minimum: int = 0) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise FinetuneDataError(f"{name} must be an integer >= {minimum}")
+    return value
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

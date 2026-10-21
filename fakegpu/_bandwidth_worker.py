@@ -36,13 +36,8 @@ def _percentile(values: list[float], percentile: float) -> float:
 
 
 def _last_error(lib: ctypes.CDLL, comm: ctypes.c_void_p) -> str:
-    try:
-        value = lib.ncclGetLastError(comm)
-    except Exception:
-        return ""
-    if not value:
-        return ""
-    return value.decode("utf-8", errors="replace")
+    value = lib.ncclGetLastError(comm)
+    return value.decode("utf-8", errors="replace") if value else ""
 
 
 def _require_success(
@@ -188,10 +183,7 @@ def run_worker(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
         if lib is not None and comm.value:
-            try:
-                lib.ncclCommAbort(comm)
-            except Exception:
-                pass
+            lib.ncclCommAbort(comm)
         return report
 
 

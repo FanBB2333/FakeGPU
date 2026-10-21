@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import fakegpu.smi as smi_module
+from fakegpu import library_dir
 from fakegpu.profile_catalog import load_profiles
 from fakegpu.smi import (
     SCHEMA_VERSION,
@@ -59,7 +61,7 @@ def test_publisher_and_virtual_smi_include_process_memory(
     assert state["fakegpu"]["profile_catalog"]["profile_count"] == len(load_profiles())
     assert (
         state["fakegpu"]["native_capabilities"]["explicit_api_count"]
-        == 104
+        == 107
     )
     assert state["software"]["cuda_version"]
     assert state["devices"][0]["reported_memory"] == 3328 * 2**20
@@ -144,7 +146,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
     assert "FakeGPU-SMI detailed report" in detail
     assert "Architecture: ampere, compute capability 8.0" in detail
     assert "108 SMs" in detail
-    assert "native capabilities 5 groups / 104 APIs / 102" in detail
+    assert "native capabilities 5 groups / 107 APIs / 94" in detail
     assert "activation=64.0 MiB" in detail
     assert "memory enabled, dispatch enabled" in detail
     assert "7 calls" in detail
@@ -222,7 +224,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
             "policy.oom": "default",
             "tracking.dispatch": True,
             "catalog.profiles": len(load_profiles()),
-            "catalog.native_apis": 104,
+            "catalog.native_apis": 107,
             "dispatch.calls": 7,
             "publisher.successful_writes": 1,
             "publisher.failed_writes": 0,
@@ -631,6 +633,179 @@ def test_virtual_smi_rejects_invalid_fault_config_without_events(
     assert "XID_79" not in rendered
 
 
+@pytest.mark.parametrize("health", [[1], 5, "x"])
+def test_virtual_smi_events_ignore_non_object_publisher_health(
+    tmp_path: Path,
+    capsys,
+    health: object,
+) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "timestamp_ns": time.time_ns(),
+                "pid": 42,
+                "running": True,
+                "publisher": {"health": health},
+                "devices": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["events", "--state", str(path)]) == 0
+    rendered = capsys.readouterr().out
+    assert "No modeled fault or runtime reliability events found." in rendered
+
+
+def test_virtual_smi_treats_non_finite_device_numbers_as_missing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "timestamp_ns": time.time_ns(),
+                "pid": 42,
+                "running": True,
+                "devices": [{"index": 0, "total_memory": float("inf")}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["--json", "--state", str(path)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["inventory"]["devices"][0]["memory"]["total_bytes"] == 0
+
+
+def _native_smi_state(
+    tmp_path: Path,
+    environment: dict[str, str],
+    *,
+    hold_seconds: float = 0.0,
+) -> dict:
+    try:
+        lib_dir = library_dir()
+    except FileNotFoundError:
+        pytest.skip("native libraries are not built")
+    suffix = ".dylib" if sys.platform == "darwin" else ".so.1"
+    path = tmp_path / "native-state.json"
+    code = (
+        "import ctypes, sys, time\n"
+        "nvml = ctypes.CDLL(sys.argv[1])\n"
+        "assert nvml.nvmlInit_v2() == 0\n"
+        "time.sleep(float(sys.argv[2]))\n"
+        "nvml.nvmlShutdown()\n"
+    )
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("FAKEGPU_")
+    }
+    env.update(
+        FAKEGPU_DEVICE_COUNT="2",
+        FAKEGPU_SMI_STATE_PATH=str(path),
+        FAKEGPU_REPORT_PATH=str(tmp_path / "native-report.json"),
+        FAKEGPU_TERMINAL_REPORT="0",
+        **environment,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(lib_dir / f"libnvidia-ml{suffix}"),
+            str(hold_seconds),
+        ],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        timeout=60,
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _python_smi_state(
+    tmp_path: Path,
+    monkeypatch,
+    environment: dict[str, str],
+) -> dict:
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    return SmiStatePublisher(
+        tmp_path / "python-state.json",
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "profile_id": "a100",
+                    "total_memory": 80 * 2**30,
+                }
+                for index in range(2)
+            ]
+        },
+    ).publish_once(running=True)
+
+
+@pytest.mark.parametrize(
+    ("section", "environment"),
+    [
+        (
+            "faults",
+            {"FAKEGPU_FAULT_EVENTS": "0:XID_79:critical:-18446744073709551615"},
+        ),
+        ("faults", {"FAKEGPU_FAULT_EVENTS": "-0:XID_79:critical"}),
+        ("faults", {"FAKEGPU_FAULT_EVENTS": "0::critical"}),
+        ("faults", {"FAKEGPU_FAULT_EVENTS": "0:XID::5"}),
+        ("faults", {"FAKEGPU_FAULT_EVENTS": "0:XID: :2"}),
+        ("mig", {"FAKEGPU_MIG_LAYOUT": "-0:1g.10gb:10240"}),
+        ("topology", {"FAKEGPU_NVLINK_GROUPS": "-0,1"}),
+        ("topology", {"FAKEGPU_NVLINK_FABRIC": "mesh:0-5:1:50"}),
+        ("topology", {"FAKEGPU_NVLINK_FABRIC": "switch:0,1:2:25;mesh:1,3:2:12.5"}),
+    ],
+)
+def test_native_smi_environment_errors_match_python(
+    tmp_path: Path,
+    monkeypatch,
+    section: str,
+    environment: dict[str, str],
+) -> None:
+    native = _native_smi_state(tmp_path, environment)[section]
+    python = _python_smi_state(tmp_path, monkeypatch, environment)[section]
+
+    assert python["valid"] is False
+    assert native["valid"] is False
+    assert native["error"] == python["error"]
+
+
+def test_native_smi_publisher_waits_out_a_huge_interval(tmp_path: Path) -> None:
+    state = _native_smi_state(
+        tmp_path,
+        {"FAKEGPU_SMI_INTERVAL_MS": "1e300"},
+        hold_seconds=0.5,
+    )
+
+    assert state["publisher"]["health"]["attempted_writes"] == 2
+
+
+def test_native_smi_limits_clamp_negative_values_like_python(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    environment = {
+        "FAKEGPU_SMI_DETAIL_LIMIT": "-1",
+        "FAKEGPU_SMI_MAX_STATE_BYTES": "-5",
+    }
+    native = _native_smi_state(tmp_path, environment)["publisher"]["limits"]
+    python = _python_smi_state(tmp_path, monkeypatch, environment)["publisher"]["limits"]
+
+    assert native == python == {"detail_entries": 0, "max_state_bytes": 65536}
+
+
 def test_virtual_smi_process_query_filters_and_marks_stale_state(
     tmp_path: Path,
     capsys,
@@ -825,7 +1000,7 @@ def test_virtual_smi_reports_native_runtime_activity(
     assert "3 IO calls / 6.0 MiB" in detail
     assert "native_kernel=2" in detail
     assert "cudaLaunchKernel: 2 calls [not_executed, warn]" in detail
-    assert "native capabilities 5 groups / 104 APIs / 102" in detail
+    assert "native capabilities 5 groups / 107 APIs / 94" in detail
 
     assert (
         main(
@@ -1071,6 +1246,62 @@ def test_publisher_background_failure_warns_once(tmp_path: Path) -> None:
     assert len(caught) == 1
 
 
+def test_publisher_caps_a_huge_interval_like_the_native_publisher(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state.json"
+    publisher = SmiStatePublisher(path, _snapshot, interval_seconds=1e297)
+    publisher.start()
+    publisher.stop()
+
+    state = json.loads(path.read_text(encoding="utf-8"))
+    assert state["running"] is False
+    assert state["publisher"]["interval_seconds"] == 1e9
+
+
+@pytest.mark.parametrize("ending", ["exit", "sigterm"])
+def test_replaced_publisher_does_not_overwrite_final_state(
+    tmp_path: Path,
+    ending: str,
+) -> None:
+    path = tmp_path / "state.json"
+    code = "\n".join(
+        [
+            "import os, signal, sys, time",
+            "from fakegpu.smi import SmiStatePublisher",
+            "def snapshot(name):",
+            "    return lambda: {'devices': [{'index': 0, 'name': name}]}",
+            "old = SmiStatePublisher(sys.argv[1], snapshot('old'), interval_seconds=60)",
+            "old.start()",
+            "old.stop()",
+            "new = SmiStatePublisher(sys.argv[1], snapshot('new'), interval_seconds=60)",
+            "new.start()",
+            "new.publish_once(running=True)",
+            "if sys.argv[2] == 'sigterm':",
+            "    os.kill(os.getpid(), signal.SIGTERM)",
+            "    time.sleep(10)",
+        ]
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code, str(path), ending],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    expected_code = -signal.SIGTERM if ending == "sigterm" else 0
+    assert completed.returncode == expected_code, completed.stderr
+    state = json.loads(path.read_text(encoding="utf-8"))
+    assert state["running"] is False
+    assert state["devices"][0]["name"] == "new"
+    assert state["publisher"]["health"]["attempted_writes"] >= 2
+    if ending == "sigterm":
+        assert state["exit_signal"] == "SIGTERM"
+    else:
+        assert "exit_signal" not in state
+
+
 def test_fakecuda_runtime_publishes_profile_stage_and_peak(tmp_path: Path) -> None:
     state_path = tmp_path / "runtime-state.json"
     env = dict(os.environ)
@@ -1126,6 +1357,39 @@ def test_fakecuda_runtime_publishes_profile_stage_and_peak(tmp_path: Path) -> No
     assert state["devices"][0]["tracked_memory"] >= 4 * 2**20
     assert state["devices"][0]["peak_tracked_memory"] >= 4 * 2**20
     assert state["devices"][0]["reported_peak_memory"] >= 4 * 2**20
+
+
+def test_fakecuda_first_published_state_names_the_backend(tmp_path: Path) -> None:
+    state_path = tmp_path / "runtime-state.json"
+    env = dict(os.environ)
+    env["PYTHONPATH"] = (
+        str(ROOT)
+        if not env.get("PYTHONPATH")
+        else str(ROOT) + os.pathsep + env["PYTHONPATH"]
+    )
+    env["FAKEGPU_SMI_STATE_PATH"] = str(state_path)
+    env["FAKEGPU_SMI_INTERVAL_MS"] = "600000"
+    env["FAKEGPU_TERMINAL_REPORT"] = "0"
+    env["FAKEGPU_MACHINE"] = "off"
+    code = "\n".join(
+        [
+            "import fakegpu",
+            "fakegpu.init(runtime='fakecuda', profile='test-512m', device_count=1)",
+            f"print(open({str(state_path)!r}).read())",
+        ]
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    state = json.loads(completed.stdout)
+    assert state["fakegpu"]["backend"] == "upstream"
 
 
 def test_virtual_smi_count_requires_loop(capsys) -> None:

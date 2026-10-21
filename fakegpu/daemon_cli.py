@@ -65,13 +65,13 @@ def _uptime(seconds: float) -> str:
     return f"{seconds // 3600}h{seconds // 60 % 60:02d}m" if seconds >= 3600 else f"{seconds // 60}m{seconds % 60:02d}s"
 
 
-def slot_label(slot: dict) -> str:
+def slot_label(slot: dict | None) -> str:
     if not slot:
         return "-"
     return f"{slot['slot_type']} {slot['slot']}"
 
 
-def link_label(slot: dict) -> str:
+def link_label(slot: dict | None) -> str:
     if not slot:
         return "-"
     return slot.get("pcie") or slot.get("host_link") or "-"
@@ -89,9 +89,8 @@ def _print_status(status: dict) -> None:
         f"layout {config['devices']}, telemetry {config['telemetry']}, "
         f"background {'on' if config['background'] else 'off'}"
     )
-    platform = status.get("platform") or {}
-    if platform:
-        print(f"Platform: {platform['name']} ({platform['id']}), {platform['slot_layout']}")
+    platform = status["platform"]
+    print(f"Platform: {platform['name']} ({platform['id']}), {platform['slot_layout']}")
     print(f"State directory: {status['paths']['state_dir']}")
     print()
     print(
@@ -105,7 +104,7 @@ def _print_status(status: dict) -> None:
         temp = f"{telemetry['temperature_c']}C" if telemetry else "N/A"
         power = f"{telemetry['power_w']:.0f}W" if telemetry else "N/A"
         marker = "" if device["in_layout"] else " *"
-        slot = device.get("slot") or {}
+        slot = device["slot"]
         print(
             f"{device['index']:<4}{device['profile_id'] + marker:<16}{slot_label(slot):<11}"
             f"{link_label(slot):<13}{used:>18}{util:>7}{temp:>7}{power:>9}{device['process_count']:>7}"
@@ -146,6 +145,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     events.add_argument("--json", action="store_true", help="One JSON object per line.")
     config = actions.add_parser("config", help="Show or change the machine settings.")
     add_machine_options(config)
+    config.add_argument(
+        "--from", dest="from_file", type=Path, metavar="FILE",
+        help="Import settings from a JSON object; explicit options override file values.",
+    )
     config.add_argument("--json", action="store_true", help="Print settings as JSON.")
     run = actions.add_parser("run", help="Run the daemon in the foreground.")
     run.add_argument("--machine-root", type=Path, help=argparse.SUPPRESS)
@@ -175,7 +178,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("FakeGPU machine stopped." if stop_daemon(paths) else "FakeGPU machine is not running.")
             return EXIT_SUCCESS
         if args.action == "config":
-            changes = machine_changes(args)
+            changes = {}
+            if args.from_file is not None:
+                changes = json.loads(args.from_file.expanduser().read_text(encoding="utf-8"))
+                if not isinstance(changes, dict):
+                    raise ValueError("machine configuration must be a JSON object")
+            changes.update(machine_changes(args))
             if daemon_pid(paths) is not None:
                 settings = client.call("config.update", changes=changes) if changes else client.call("config.get")
             else:
@@ -213,7 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except MachineError as exc:
         print(f"fakegpu daemon: {exc}", file=sys.stderr)
         return EXIT_FAILURE
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         print(f"fakegpu daemon: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except KeyboardInterrupt:

@@ -26,9 +26,6 @@ def _is_fake_tensor(tensor: Any) -> bool:
 
 def _check_same_device(*tensors: Any) -> None:
     """Raise RuntimeError if tensors span multiple fake CUDA devices."""
-    if not _CROSS_DEVICE_CHECK:
-        return
-
     first_dev: int | None = None
     for t in tensors:
         # FakeCudaTensor carries its device index as an attribute.
@@ -87,6 +84,7 @@ def _wrap_tensor_binary_op(
     torch_mod: Any,
 ) -> Any:
     """Wrap a Tensor binary method to check cross-device with torch-friendly calls."""
+    torch_op = _BINARY_DUNDER_TORCH_OPS[dunder_name]
 
     @functools.wraps(orig_fn)
     def wrapper(self: Any, other: Any) -> Any:
@@ -95,10 +93,7 @@ def _wrap_tensor_binary_op(
             result = orig_fn(self, other)
             if result is not NotImplemented:
                 return result
-            torch_op = _BINARY_DUNDER_TORCH_OPS.get(dunder_name)
-            if torch_op is not None:
-                return torch_op(torch_mod, self, other)
-            return result
+            return torch_op(torch_mod, self, other)
         return orig_fn(self, other)
 
     return wrapper

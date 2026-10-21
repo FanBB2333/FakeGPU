@@ -17,6 +17,7 @@ from typing import Any
 from .llm_estimator import _decoder_dimensions
 from .performance_model import estimate_roofline
 from .profile_catalog import get_profile
+from .structured_io import is_sha256_hex
 
 
 SCHEMA_VERSION = "fakegpu.finetune_estimate.v1"
@@ -245,6 +246,7 @@ def estimate_finetuning(
         limitations.append(
             "LoRA dropout includes FP32 adapter inputs, retained dropout outputs and byte masks; fused dropout and random-number generation costs are not benchmarked."
         )
+    capacity = profile.memory_bytes
     if observation is not None:
         measured = _validate_observation(observation, signature)
         real_probe = measured["verified_probe_metadata"]
@@ -267,9 +269,7 @@ def estimate_finetuning(
                     for key, value in interval.items()
                 },
                 "measurement_count": len(times),
-                "sample_standard_deviation_seconds": statistics.stdev(times)
-                if len(times) > 1
-                else None,
+                "sample_standard_deviation_seconds": statistics.stdev(times),
                 "interval_kind": "observed_min_max_not_confidence_interval",
             }
         )
@@ -287,33 +287,25 @@ def estimate_finetuning(
         limitations.append(
             "Measured extrema describe the probe only; long-run allocator growth and workload drift remain unmeasured."
         )
-    else:
-        memory["selected_peak_bytes"] = memory["peak_bytes"]["expected"]
-        memory["evidence"] = "analytical_scenario_range"
-    capacity = profile.memory_bytes
-    if observation is not None and measured["verified_probe_metadata"]:
-        capacity = min(capacity, measured["hardware"]["total_memory_bytes"])
-    memory["device_capacity_bytes"] = capacity
-    memory["estimated_headroom_bytes"] = capacity - memory["selected_peak_bytes"]
-    if observation is not None:
-        memory["fit_status"] = (
-            (
-                "observed_probe_fits"
-                if measured["verified_probe_metadata"]
-                else "supplied_observation_fits"
-            )
+        if real_probe:
+            capacity = min(capacity, measured["hardware"]["total_memory_bytes"])
+        fit_status = (
+            ("observed_probe_fits" if real_probe else "supplied_observation_fits")
             if memory["selected_peak_bytes"] <= capacity
             else "budget_exceeds_capacity"
         )
-    elif memory["peak_bytes"]["lower"] > profile.memory_bytes:
-        memory["fit_status"] = "estimated_oom"
-    elif (
-        model["coverage"] == "partial"
-        or memory["peak_bytes"]["upper"] > profile.memory_bytes
-    ):
-        memory["fit_status"] = "uncertain"
     else:
-        memory["fit_status"] = "estimated_fit"
+        memory["selected_peak_bytes"] = memory["peak_bytes"]["expected"]
+        memory["evidence"] = "analytical_scenario_range"
+        if memory["peak_bytes"]["lower"] > capacity:
+            fit_status = "estimated_oom"
+        elif model["coverage"] == "partial" or memory["peak_bytes"]["upper"] > capacity:
+            fit_status = "uncertain"
+        else:
+            fit_status = "estimated_fit"
+    memory["device_capacity_bytes"] = capacity
+    memory["estimated_headroom_bytes"] = capacity - memory["selected_peak_bytes"]
+    memory["fit_status"] = fit_status
     return {
         "schema_version": SCHEMA_VERSION,
         "source_framework": config.get("source_framework"),
@@ -411,20 +403,14 @@ def _workload(config: Mapping[str, Any]) -> dict[str, Any]:
     max_steps = config.get("max_steps")
     if max_steps is not None:
         optimizer_steps = _positive_int(max_steps, "max_steps")
-        complete_epochs, remainder = divmod(optimizer_steps, updates_per_epoch)
-        microsteps = complete_epochs * per_epoch + min(
-            remainder * accumulation, per_epoch
-        )
         stop_rule = "max_steps"
     else:
         # Finish optimizer updates rather than stopping halfway through an
         # accumulation window; the last update of each epoch can be shorter.
         optimizer_steps = math.ceil(float(epochs) * updates_per_epoch)
-        complete_epochs, remainder = divmod(optimizer_steps, updates_per_epoch)
-        microsteps = complete_epochs * per_epoch + min(
-            remainder * accumulation, per_epoch
-        )
         stop_rule = "epochs"
+    complete_epochs, remainder = divmod(optimizer_steps, updates_per_epoch)
+    microsteps = complete_epochs * per_epoch + min(remainder * accumulation, per_epoch)
     full_epochs, partial_microsteps = divmod(microsteps, per_epoch)
     samples_per_epoch = min(samples, per_epoch * batch)
     processed_samples = full_epochs * samples_per_epoch + min(
@@ -1091,9 +1077,7 @@ def _validate_observation(
         identity = observation.get("checkpoint_identity", {})
         digest = signature.get("checkpoint_sha256")
         if (
-            not isinstance(digest, str)
-            or len(digest) != 64
-            or any(character not in "0123456789abcdef" for character in digest)
+            not is_sha256_hex(digest)
             or not isinstance(identity, Mapping)
             or identity.get("algorithm") != "sha256_content_manifest_v1"
             or identity.get("sha256") != digest
@@ -1155,11 +1139,7 @@ def _validate_observation(
                 )
             for key in ("data_signature", "native_execution_signature"):
                 digest = signature.get(key)
-                if (
-                    not isinstance(digest, str)
-                    or len(digest) != 64
-                    or any(character not in "0123456789abcdef" for character in digest)
-                ):
+                if not is_sha256_hex(digest):
                     raise FinetuneEstimateError(f"native observation requires {key}")
             if workload.get("sha256") != signature["data_signature"]:
                 raise FinetuneEstimateError(

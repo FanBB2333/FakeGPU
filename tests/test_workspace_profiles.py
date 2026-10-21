@@ -154,6 +154,34 @@ def test_workspace_profile_catalog_rejects_invalid_formula(tmp_path: Path) -> No
         load_workspace_profiles([catalog])
 
 
+@pytest.mark.parametrize(
+    ("match", "message"),
+    [
+        ({"device_type": ["cpu"]}, "unsupported match fields: device_type"),
+        ({"device_types": "cpu"}, "match.device_types must be a list"),
+    ],
+)
+def test_workspace_profile_catalog_rejects_invalid_match(
+    tmp_path: Path,
+    match: dict,
+    message: str,
+) -> None:
+    catalog = _write_catalog(
+        tmp_path / "invalid.json",
+        [
+            {
+                "id": "invalid",
+                "operator": "aten.mm.default",
+                "lifetime": "operator_local",
+                "match": match,
+                "bytes": 4096,
+            }
+        ],
+    )
+    with pytest.raises(WorkspaceProfileError, match=message):
+        load_workspace_profiles([catalog])
+
+
 def test_workspace_profile_cli_reports_validated_catalog(
     tmp_path: Path,
     capsys,

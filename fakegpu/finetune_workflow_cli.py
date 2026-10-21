@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import math
 import subprocess
 
 from ._cli import add_json_path_argument, command_prog, usage_error
+from .finetune_pipeline_cli import _bytes
 from .structured_io import emit_json
 
 
@@ -25,14 +25,6 @@ def _arguments(parser):
         help="Import an existing native report into the work-cost pool; setup remains tied to this workspace.",
     )
     add_json_path_argument(parser)
-
-
-def _bytes(value, field):
-    if value is None:
-        return None
-    if not math.isfinite(value) or value < 0:
-        raise ValueError(f"{field} must be finite and nonnegative")
-    return math.ceil(value * 1024**3)
 
 
 def _budget_options(args):
@@ -121,11 +113,7 @@ def calibrate_main(argv=None):
             calibration_budget_seconds=args.calibration_budget_seconds,
             resume=args.resume,
             length_grouping_seed=args.length_grouping_seed,
-            **(
-                {"packing_seed": args.packing_seed}
-                if args.packing_seed is not None
-                else {}
-            ),
+            packing_seed=args.packing_seed,
             **_budget_options(args),
         )
         emit_json(args.json_path or "-", result)

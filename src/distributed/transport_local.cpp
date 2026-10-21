@@ -16,6 +16,8 @@ namespace fake_gpu::distributed {
 
 namespace {
 
+constexpr std::size_t kMaxRequestLineBytes = 1024 * 1024;
+
 std::string trim(const std::string& value) {
     const std::size_t begin = value.find_first_not_of(" \t\r\n");
     if (begin == std::string::npos) {
@@ -121,23 +123,23 @@ std::string append_payload_header(
     return line + " payload_bytes=" + std::to_string(payload.size());
 }
 
-}  // namespace
-
-bool bind_and_listen_unix_socket(const std::string& path, int backlog, int& server_fd, std::string& error) {
-    server_fd = -1;
-
+bool open_unix_socket(
+    const std::string& path,
+    int& fd,
+    sockaddr_un& addr,
+    std::string& error) {
     if (path.empty() || path.front() != '/') {
         error = "unix socket path must be absolute";
         return false;
     }
 
-    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
         error = "socket() failed: " + std::string(std::strerror(errno));
         return false;
     }
 
-    sockaddr_un addr{};
+    addr = sockaddr_un{};
     addr.sun_family = AF_UNIX;
     if (path.size() >= sizeof(addr.sun_path)) {
         error = "unix socket path is too long";
@@ -146,6 +148,35 @@ bool bind_and_listen_unix_socket(const std::string& path, int backlog, int& serv
     }
 
     std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    return true;
+}
+
+bool parse_fields(
+    std::istringstream& stream,
+    std::unordered_map<std::string, std::string>& fields,
+    std::string& error) {
+    std::string token;
+    while (stream >> token) {
+        const std::size_t equals = token.find('=');
+        if (equals == std::string::npos || equals == 0 || equals + 1 >= token.size()) {
+            error = "invalid token: " + token;
+            return false;
+        }
+        fields[token.substr(0, equals)] = token.substr(equals + 1);
+    }
+    return true;
+}
+
+}  // namespace
+
+bool bind_and_listen_unix_socket(const std::string& path, int backlog, int& server_fd, std::string& error) {
+    server_fd = -1;
+
+    int fd = -1;
+    sockaddr_un addr{};
+    if (!open_unix_socket(path, fd, addr, error)) {
+        return false;
+    }
     ::unlink(path.c_str());
 
     if (::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
@@ -185,26 +216,11 @@ bool request_response_unix_socket(
     std::string& error) {
     response = CoordinatorResponse{};
 
-    if (path.empty() || path.front() != '/') {
-        error = "unix socket path must be absolute";
-        return false;
-    }
-
-    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) {
-        error = "socket() failed: " + std::string(std::strerror(errno));
-        return false;
-    }
-
+    int fd = -1;
     sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    if (path.size() >= sizeof(addr.sun_path)) {
-        error = "unix socket path is too long";
-        ::close(fd);
+    if (!open_unix_socket(path, fd, addr, error)) {
         return false;
     }
-
-    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
     if (::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
         error = "connect() failed: " + std::string(std::strerror(errno));
         ::close(fd);
@@ -331,26 +347,15 @@ bool receive_message_packet(
         const char* chunk_end = buffer.data() + static_cast<std::size_t>(rc);
         const char* newline =
             static_cast<const char*>(std::memchr(chunk_begin, '\n', static_cast<std::size_t>(rc)));
-        if (!newline) {
-            header_bytes.insert(
-                header_bytes.end(),
-                chunk_begin,
-                chunk_end);
-            if (header_bytes.size() > 4096) {
-                error = "request line is too long";
-                return false;
-            }
-            continue;
+        header_bytes.insert(header_bytes.end(), chunk_begin, newline ? newline : chunk_end);
+        if (header_bytes.size() > kMaxRequestLineBytes) {
+            error = "request line is too long";
+            return false;
         }
-
-        const std::size_t header_chunk =
-            static_cast<std::size_t>(newline - chunk_begin);
-        header_bytes.insert(header_bytes.end(), chunk_begin, chunk_begin + header_chunk);
-        spill_bytes.insert(
-            spill_bytes.end(),
-            newline + 1,
-            chunk_end);
-        break;
+        if (newline) {
+            spill_bytes.insert(spill_bytes.end(), newline + 1, chunk_end);
+            break;
+        }
     }
 
     line.assign(header_bytes.begin(), header_bytes.end());
@@ -402,31 +407,21 @@ bool send_message_packet(
 }
 
 bool parse_message_line(const std::string& line, CoordinatorMessage& message, std::string& error) {
-    const std::vector<char> existing_payload = std::move(message.payload);
+    std::vector<char> payload = std::move(message.payload);
     message = CoordinatorMessage{};
-    message.payload = existing_payload;
+    message.payload = std::move(payload);
     std::istringstream stream(line);
     if (!(stream >> message.command)) {
         error = "missing command";
         return false;
     }
-
-    std::string token;
-    while (stream >> token) {
-        const std::size_t equals = token.find('=');
-        if (equals == std::string::npos || equals == 0 || equals + 1 >= token.size()) {
-            error = "invalid token: " + token;
-            return false;
-        }
-        message.fields[token.substr(0, equals)] = token.substr(equals + 1);
-    }
-    return true;
+    return parse_fields(stream, message.fields, error);
 }
 
 bool parse_response_line(const std::string& line, CoordinatorResponse& response, std::string& error) {
-    const std::vector<char> existing_payload = std::move(response.payload);
+    std::vector<char> payload = std::move(response.payload);
     response = CoordinatorResponse{};
-    response.payload = existing_payload;
+    response.payload = std::move(payload);
 
     std::istringstream stream(line);
     std::string status;
@@ -439,14 +434,8 @@ bool parse_response_line(const std::string& line, CoordinatorResponse& response,
         return false;
     }
 
-    std::string token;
-    while (stream >> token) {
-        const std::size_t equals = token.find('=');
-        if (equals == std::string::npos || equals == 0 || equals + 1 >= token.size()) {
-            error = "invalid token: " + token;
-            return false;
-        }
-        response.fields[token.substr(0, equals)] = token.substr(equals + 1);
+    if (!parse_fields(stream, response.fields, error)) {
+        return false;
     }
 
     response.ok = (status == "OK");

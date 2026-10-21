@@ -7,15 +7,16 @@ import itertools
 import math
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ._cli import (
     add_json_path_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
-from .structured_io import emit_json, load_mapping
+from .structured_io import load_mapping
 
 
 SCHEMA_VERSION = "fakegpu.topology_simulation.v1"
@@ -83,17 +84,7 @@ class Topology:
             normalized_id = (
                 base_id if count == 0 else f"{base_id}#{count + 1}"
             )
-            normalized_links.append(
-                Link(
-                    src=link.src,
-                    dst=link.dst,
-                    bandwidth_gbps=link.bandwidth_gbps,
-                    latency_us=link.latency_us,
-                    scope=link.scope,
-                    bidirectional=link.bidirectional,
-                    link_id=normalized_id,
-                )
-            )
+            normalized_links.append(replace(link, link_id=normalized_id))
         self.links = normalized_links
         self.ranks = {
             int(rank): tuple(sorted(set(endpoints)))
@@ -110,13 +101,10 @@ class Topology:
                 raise TopologyError(f"link {link.id} latency must be non-negative")
             self._adjacency[link.src].append((link.dst, link))
             if link.bidirectional:
-                reverse = Link(
+                reverse = replace(
+                    link,
                     src=link.dst,
                     dst=link.src,
-                    bandwidth_gbps=link.bandwidth_gbps,
-                    latency_us=link.latency_us,
-                    scope=link.scope,
-                    bidirectional=True,
                     link_id=_reverse_link_id(link),
                 )
                 self._adjacency[link.dst].append((link.src, reverse))
@@ -252,17 +240,16 @@ class Topology:
             "nvlink_latency_us",
         )
         for endpoints in nvlink_domains.values():
-            for index, src in enumerate(sorted(endpoints)):
-                for dst in sorted(endpoints)[index + 1 :]:
-                    links.append(
-                        Link(
-                            src=src,
-                            dst=dst,
-                            bandwidth_gbps=nvlink_bandwidth,
-                            latency_us=nvlink_latency,
-                            scope="nvlink_domain",
-                        )
+            for src, dst in itertools.combinations(sorted(endpoints), 2):
+                links.append(
+                    Link(
+                        src=src,
+                        dst=dst,
+                        bandwidth_gbps=nvlink_bandwidth,
+                        latency_us=nvlink_latency,
+                        scope="nvlink_domain",
                     )
+                )
         return cls(
             links=links,
             ranks=rank_endpoints,
@@ -279,12 +266,12 @@ class Topology:
         *,
         flow_id: str = "",
     ) -> list[Link]:
-        if src_rank == dst_rank:
-            return []
         if src_rank not in self.ranks or dst_rank not in self.ranks:
             raise TopologyError(
                 f"route references unknown rank {src_rank}->{dst_rank}"
             )
+        if src_rank == dst_rank:
+            return []
         if payload_bytes < 0:
             raise TopologyError("payload_bytes must be non-negative")
         candidates = []
@@ -501,9 +488,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 algorithm=args.algorithm,
             )
         if args.json_path:
-            output = emit_json(args.json_path, report)
-            if output is not None:
-                print(f"Topology simulation: {output}")
+            emit_json_report(args.json_path, report, "Topology simulation")
         else:
             _print_report(report)
         return 0
@@ -520,8 +505,6 @@ def _simulate_flows(
     *,
     operation: Mapping[str, Any],
 ) -> dict[str, Any]:
-    if not flows:
-        raise TopologyError("algorithm produced no communication flows")
     rounds: dict[int, list[Flow]] = defaultdict(list)
     for flow in flows:
         rounds[flow.round_index].append(flow)
@@ -762,34 +745,30 @@ def _ring_flows(
     if collective == "all_reduce":
         round_count = 2 * (rank_count - 1)
         chunk = _ceil_div(payload_bytes, rank_count)
-        phase_boundary = rank_count - 1
     elif collective == "all_gather":
         round_count = rank_count - 1
         chunk = payload_bytes
-        phase_boundary = 0
     else:
         round_count = rank_count - 1
         chunk = _ceil_div(payload_bytes, rank_count)
-        phase_boundary = round_count
     flows = []
     for round_index in range(round_count):
-        phase = (
-            "reduce_scatter"
-            if collective == "all_reduce" and round_index < phase_boundary
-            else "all_gather"
-            if collective == "all_reduce"
-            else collective
-        )
-        for index, src in enumerate(ranks):
-            flows.append(
-                Flow(
-                    src_rank=src,
-                    dst_rank=ranks[(index + 1) % rank_count],
-                    payload_bytes=chunk,
-                    round_index=round_index,
-                    phase=phase,
-                )
+        if collective == "all_reduce":
+            phase = (
+                "reduce_scatter" if round_index < rank_count - 1 else "all_gather"
             )
+        else:
+            phase = collective
+        flows.extend(
+            Flow(
+                src_rank=src,
+                dst_rank=ranks[(index + 1) % rank_count],
+                payload_bytes=chunk,
+                round_index=round_index,
+                phase=phase,
+            )
+            for index, src in enumerate(ranks)
+        )
     return flows
 
 
@@ -802,13 +781,12 @@ def _tree_flows(
     levels: list[list[tuple[int, int]]] = []
     stride = 1
     while stride < len(ranks):
-        edges = []
-        for base in range(0, len(ranks), stride * 2):
-            child = base + stride
-            if child < len(ranks):
-                edges.append((ranks[child], ranks[base]))
-        if edges:
-            levels.append(edges)
+        levels.append(
+            [
+                (ranks[base + stride], ranks[base])
+                for base in range(0, len(ranks) - stride, stride * 2)
+            ]
+        )
         stride *= 2
     flows = []
     round_index = 0
@@ -825,17 +803,11 @@ def _tree_flows(
                 )
             round_index += 1
     if collective in {"all_reduce", "all_gather", "broadcast"}:
-        bytes_for_broadcast = payload_bytes
+        phase = "broadcast" if collective == "broadcast" else "gather"
         for edges in reversed(levels):
-            for parent, child in ((dst, src) for src, dst in edges):
+            for child, parent in edges:
                 flows.append(
-                    Flow(
-                        parent,
-                        child,
-                        bytes_for_broadcast,
-                        round_index,
-                        "broadcast" if collective == "broadcast" else "gather",
-                    )
+                    Flow(parent, child, payload_bytes, round_index, phase)
                 )
             round_index += 1
     return flows
@@ -854,47 +826,34 @@ def _hierarchical_flows(
             collective=collective,
             payload_bytes=payload_bytes,
         )
+    # ``ranks`` is sorted, so each node's first rank is its leader.
     by_node: dict[str, list[int]] = defaultdict(list)
     for rank in ranks:
         by_node[topology.rank_nodes[rank]].append(rank)
-    leaders = [sorted(node_ranks)[0] for _node, node_ranks in sorted(by_node.items())]
-    flows: list[Flow] = []
-    for node_ranks in by_node.values():
-        leader = min(node_ranks)
-        for rank in sorted(node_ranks):
-            if rank != leader:
-                flows.append(
-                    Flow(rank, leader, payload_bytes, 0, "intra_node_reduce")
-                )
-    inter = _tree_flows(
-        leaders,
-        collective="all_reduce",
-        payload_bytes=payload_bytes,
-    ) if len(leaders) > 1 else []
-    for flow in inter:
-        flows.append(
-            Flow(
-                flow.src_rank,
-                flow.dst_rank,
-                flow.payload_bytes,
-                flow.round_index + 1,
-                f"inter_node_{flow.phase}",
-            )
+    leaders = [by_node[node][0] for node in sorted(by_node)]
+    flows = [
+        Flow(rank, members[0], payload_bytes, 0, "intra_node_reduce")
+        for members in by_node.values()
+        for rank in members[1:]
+    ]
+    flows.extend(
+        replace(
+            flow,
+            round_index=flow.round_index + 1,
+            phase=f"inter_node_{flow.phase}",
         )
+        for flow in _tree_flows(
+            leaders,
+            collective="all_reduce",
+            payload_bytes=payload_bytes,
+        )
+    )
     final_round = max((flow.round_index for flow in flows), default=0) + 1
-    for node_ranks in by_node.values():
-        leader = min(node_ranks)
-        for rank in sorted(node_ranks):
-            if rank != leader:
-                flows.append(
-                    Flow(
-                        leader,
-                        rank,
-                        payload_bytes,
-                        final_round,
-                        "intra_node_broadcast",
-                    )
-                )
+    flows.extend(
+        Flow(members[0], rank, payload_bytes, final_round, "intra_node_broadcast")
+        for members in by_node.values()
+        for rank in members[1:]
+    )
     return flows
 
 

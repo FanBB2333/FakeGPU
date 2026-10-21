@@ -41,9 +41,9 @@
     {
       "api": "cudaLaunchKernel",
       "library": "cudart",
-      "classification": "not_executed",
-      "simulate_behavior": "Kernel launch is recorded but arbitrary device code is not executed.",
-      "policy_enforced": true
+      "classification": "cpu_kernel_execution",
+      "simulate_behavior": "Linux builds execute supported PTX and compatible cubin/SASS instructions synchronously on CPU. Incompatible images, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
+      "policy_enforced": false
     },
     {
       "api": "cudaConfigureCall",
@@ -63,22 +63,22 @@
       "api": "cudaLaunch",
       "library": "cudart",
       "classification": "not_executed",
-      "simulate_behavior": "Legacy kernel launch is not executed.",
-      "policy_enforced": true
+      "simulate_behavior": "This launch path is not executed and always returns not supported, independently of the unsupported-API policy.",
+      "policy_enforced": false
     },
     {
       "api": "cudaLaunchKernelExC",
       "library": "cudart",
-      "classification": "not_executed",
-      "simulate_behavior": "Extended kernel launch is not executed.",
-      "policy_enforced": true
+      "classification": "cpu_kernel_execution",
+      "simulate_behavior": "Linux builds execute supported PTX and compatible cubin/SASS instructions synchronously on CPU. Incompatible images, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
+      "policy_enforced": false
     },
     {
       "api": "cudaGraphLaunch",
       "library": "cudart",
       "classification": "not_executed",
-      "simulate_behavior": "Graph execution is recorded as a logical stream operation without executing graph kernels.",
-      "policy_enforced": true
+      "simulate_behavior": "This launch path is not executed and always returns not supported, independently of the unsupported-API policy.",
+      "policy_enforced": false
     },
     {
       "api": "cudaGraphUpload",
@@ -98,19 +98,26 @@
       "api": "cudaLaunchCooperativeKernel",
       "library": "cudart",
       "classification": "not_executed",
-      "simulate_behavior": "Cooperative kernel launch is not executed.",
-      "policy_enforced": true
+      "simulate_behavior": "This launch path is not executed and always returns not supported, independently of the unsupported-API policy.",
+      "policy_enforced": false
     },
     {
       "api": "cudaLaunchCooperativeKernelMultiDevice",
       "library": "cudart",
       "classification": "not_executed",
-      "simulate_behavior": "Multi-device cooperative kernel launch is not executed.",
-      "policy_enforced": true
+      "simulate_behavior": "This launch path is not executed and always returns not supported, independently of the unsupported-API policy.",
+      "policy_enforced": false
     },
     {
       "api": "cudaStreamAddCallback",
       "library": "cudart",
+      "classification": "callback_not_registered",
+      "simulate_behavior": "The callback is not registered or invoked.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cuStreamAddCallback",
+      "library": "cuda_driver",
       "classification": "callback_not_registered",
       "simulate_behavior": "The callback is not registered or invoked.",
       "policy_enforced": true
@@ -188,23 +195,23 @@
     {
       "api": "cuLaunchKernel",
       "library": "cuda_driver",
-      "classification": "not_executed",
-      "simulate_behavior": "Driver kernel launch is recorded but arbitrary device code is not executed.",
-      "policy_enforced": true
+      "classification": "cpu_kernel_execution",
+      "simulate_behavior": "Linux builds execute supported PTX and compatible cubin/SASS instructions synchronously on CPU. Incompatible images, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
+      "policy_enforced": false
     },
     {
       "api": "cuLaunchKernelEx",
       "library": "cuda_driver",
-      "classification": "not_executed",
-      "simulate_behavior": "Extended Driver kernel launch is not executed.",
-      "policy_enforced": true
+      "classification": "cpu_kernel_execution",
+      "simulate_behavior": "Linux builds execute supported PTX and compatible cubin/SASS instructions synchronously on CPU. Incompatible images, unsupported instructions or launch attributes, and unavailable backends return errors under every policy.",
+      "policy_enforced": false
     },
     {
       "api": "cuGraphLaunch",
       "library": "cuda_driver",
       "classification": "not_executed",
-      "simulate_behavior": "Driver graph execution does not execute graph kernels.",
-      "policy_enforced": true
+      "simulate_behavior": "This launch path is not executed and always returns not supported, independently of the unsupported-API policy.",
+      "policy_enforced": false
     },
     {
       "api": "nvmlDeviceGetAccountingMode",
@@ -765,6 +772,20 @@
       "classification": "mixed_numeric_and_compatibility",
       "simulate_behavior": "Supported CPU paths execute numerically; unsupported layouts, data types, pointer modes, epilogues, disabled CPU execution, and skipped computation obey the unsupported-API policy. CPU epilogues support DEFAULT, RELU, BIAS, RELU_BIAS, GELU, and GELU_BIAS; other values skip computation without writing output. Non-identity C transforms are always rejected without writing output, matching the cuBLASLt TRANSC restriction.",
       "policy_enforced": true
+    },
+    {
+      "api": "cudaDeviceReset",
+      "library": "cudart",
+      "classification": "not_executed",
+      "simulate_behavior": "Device resource reset is not implemented and returns not supported; existing resources are retained.",
+      "policy_enforced": false
+    },
+    {
+      "api": "cuDevicePrimaryCtxReset",
+      "library": "cuda_driver",
+      "classification": "not_executed",
+      "simulate_behavior": "Device resource reset is not implemented and returns not supported; existing resources are retained.",
+      "policy_enforced": false
     }
   ]
 }

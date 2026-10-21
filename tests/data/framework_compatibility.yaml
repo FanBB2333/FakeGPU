@@ -1,0 +1,31 @@
+schema_version: fakegpu.validation_manifest.v1
+
+defaults:
+  cwd: ../..
+  timeout_seconds: 120
+  env:
+    CUDA_VISIBLE_DEVICES: ""
+    FAKEGPU_TERMINAL_REPORT: "0"
+    SCIPY_ARRAY_API: "1"
+    TF_CPP_MIN_LOG_LEVEL: "2"
+    TF_NUM_INTEROP_THREADS: "2"
+    TF_NUM_INTRAOP_THREADS: "2"
+  expect:
+    exit_code: 0
+    stdout_contains: '"status": "passed"'
+
+cases:
+  - name: tensorflow-cpu-device-scopes
+    requires:
+      python_modules: [tensorflow]
+    command: ["{python}", tests/support/framework_compatibility.py, --framework, tensorflow]
+
+  - name: sklearn-cpu-pipeline
+    requires:
+      python_modules: [sklearn]
+    command: ["{python}", tests/support/framework_compatibility.py, --framework, sklearn-cpu]
+
+  - name: sklearn-fakecuda-array-api
+    requires:
+      python_modules: [sklearn, torch]
+    command: ["{python}", tests/support/framework_compatibility.py, --framework, sklearn-array-api]

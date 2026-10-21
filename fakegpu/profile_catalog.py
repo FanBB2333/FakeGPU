@@ -10,9 +10,6 @@ from typing import Any, Mapping
 from urllib.parse import urlparse
 
 
-CURRENT_COMPUTE_CAPABILITY_SOURCE = "https://developer.nvidia.com/cuda/gpus"
-LEGACY_COMPUTE_CAPABILITY_SOURCE = "https://developer.nvidia.com/cuda/gpus/legacy"
-
 _SUPPORTED_ARCHITECTURES = {
     "maxwell",
     "pascal",
@@ -233,7 +230,11 @@ def architecture_for_compute_capability(major: int, minor: int) -> str:
 
 
 def profile_directory() -> Path:
-    override = os.environ.get("FAKEGPU_PROFILE_DIR")
+    return _profile_directory(os.environ.get("FAKEGPU_PROFILE_DIR"))
+
+
+@lru_cache(maxsize=8)
+def _profile_directory(override: str | None) -> Path:
     candidates = []
     if override:
         candidates.append(Path(override))
@@ -526,15 +527,10 @@ def _profile_from_mapping(
         )
 
     supported_types_raw = raw.get("supported_types")
-    if not isinstance(supported_types_raw, list) or not all(
-        isinstance(item, str) for item in supported_types_raw
-    ):
+    if not isinstance(supported_types_raw, list):
         raise ProfileCatalogError(f"{path}: supported_types must be a string list")
 
-    try:
-        relative_path = path.relative_to(root)
-    except ValueError as exc:
-        raise ProfileCatalogError(f"profile path is outside catalog root: {path}") from exc
+    relative_path = path.relative_to(root)
 
     parts = relative_path.parts
     if len(parts) == 1:
@@ -564,7 +560,7 @@ def _profile_from_mapping(
         architecture=architecture,
         segment=segment,
         profile_path=relative_path.as_posix(),
-        supported_types=tuple(str(item).lower() for item in supported_types_raw),
+        supported_types=tuple(item.lower() for item in supported_types_raw),
         memory_kind=optional_text("memory_kind", "dedicated").lower(),
         profile_status=optional_text("profile_status", "reference").lower(),
         compute_capability_source=optional_text("compute_capability_source"),

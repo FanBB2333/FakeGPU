@@ -23,6 +23,7 @@ from fakegpu.platforms import device_profiles, topology_from_environment
 
 NVML_SUCCESS = 0
 NVML_ERROR_NOT_SUPPORTED = 3
+NVML_ERROR_NOT_FOUND = 6
 NVML_NVLINK_DEVICE_TYPE_GPU = 0
 NVML_NVLINK_DEVICE_TYPE_SWITCH = 2
 TOPOLOGY_LEVELS = {"X": 0, "PIX": 10, "PXB": 20, "PHB": 30, "NODE": 40, "SYS": 50}
@@ -174,6 +175,19 @@ def main() -> int:
         if int(nvml.nvmlDeviceGetHandleByIndex(ctypes.c_uint(index), ctypes.byref(handle))) != NVML_SUCCESS:
             _die(f"NVML has no GPU {index}")
         handles.append(handle)
+
+    for index, handle in enumerate(handles):
+        pci = ctypes.create_string_buffer(68)
+        if int(nvml.nvmlDeviceGetPciInfo(handle, pci)) != NVML_SUCCESS:
+            _die(f"GPU {index} nvmlDeviceGetPciInfo failed")
+        bus_id = pci.raw[36:68].split(b"\0")[0]
+        found = ctypes.c_void_p()
+        result = int(nvml.nvmlDeviceGetHandleByPciBusId(ctypes.c_char_p(bus_id), ctypes.byref(found)))
+        if (result, found.value) != (NVML_SUCCESS, handle.value):
+            _die(f"GPU {index} lookup by PCI bus id {bus_id.decode()} returned {result}/{found.value}")
+    found = ctypes.c_void_p()
+    if int(nvml.nvmlDeviceGetHandleByPciBusId(b"unknown", ctypes.byref(found))) != NVML_ERROR_NOT_FOUND:
+        _die("an unknown PCI bus id must return NVML_ERROR_NOT_FOUND")
 
     for index, handle in enumerate(handles):
         slot = model.slots[index]

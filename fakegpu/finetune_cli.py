@@ -60,11 +60,7 @@ def _load_inputs(
     args: argparse.Namespace,
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
     training = load_finetune_config(args.config, framework=args.framework)
-    model_path = args.model or training.get("model_name_or_path")
-    if not model_path:
-        raise ValueError(
-            "provide --model or a model path in the framework configuration"
-        )
+    model_path = args.model or training["model_name_or_path"]
     path = Path(model_path).expanduser().resolve()
     config_path = path / "config.json" if path.is_dir() else path
     if not config_path.is_file():

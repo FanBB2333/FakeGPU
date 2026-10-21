@@ -105,6 +105,26 @@ def test_explicit_retry_preserves_failure_and_uses_new_attempt(tmp_path):
         compare_experiments([root])
 
 
+def test_retried_attempt_does_not_keep_previous_finish_time(tmp_path, monkeypatch):
+    import fakegpu.experiments as module
+
+    config, root = fixture(tmp_path, parameters={"size": [1]}, repetitions=1)
+    (tmp_path / "worker.py").write_text("raise SystemExit(1)\n")
+    run_experiments(config, root)
+    states = []
+    execute = module._execute
+
+    def record(argv, attempt, *args, **kwargs):
+        states.append(load_mapping(attempt.parent / "state.json"))
+        return execute(argv, attempt, *args, **kwargs)
+
+    monkeypatch.setattr(module, "_execute", record)
+    run_experiments(config, root, resume=True, retry_failed=True)
+    assert states[0]["attempt"] == "attempt-0002"
+    assert states[0]["status"] == "running"
+    assert "finished_at_utc" not in states[0]
+
+
 def test_changed_input_blocks_resume(tmp_path):
     config, root = fixture(tmp_path)
     run_experiments(config, root)

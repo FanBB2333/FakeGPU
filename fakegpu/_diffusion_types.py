@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 
@@ -59,31 +59,18 @@ def _nonnegative_number(value: Any, name: str) -> float:
     return number
 
 
-def _positive_integer_list(
+def _integer_list(
     value: Any,
     name: str,
+    item: Callable[[Any, str], int],
 ) -> list[int]:
     if not isinstance(value, list) or not value:
         raise DiffusionEstimateError(
             f"{name} must be a non-empty integer array"
         )
     return [
-        _positive_integer(item, f"{name}[{index}]")
-        for index, item in enumerate(value)
-    ]
-
-
-def _nonnegative_integer_list(
-    value: Any,
-    name: str,
-) -> list[int]:
-    if not isinstance(value, list) or not value:
-        raise DiffusionEstimateError(
-            f"{name} must be a non-empty integer array"
-        )
-    return [
-        _nonnegative_integer(item, f"{name}[{index}]")
-        for index, item in enumerate(value)
+        item(entry, f"{name}[{index}]")
+        for index, entry in enumerate(value)
     ]
 
 

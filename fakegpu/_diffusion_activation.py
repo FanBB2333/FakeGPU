@@ -19,13 +19,10 @@ def _phase(
     name: str,
     components: Mapping[str, int],
 ) -> dict[str, Any]:
-    normalized = {
-        str(key): int(value) for key, value in components.items()
-    }
     return {
         "phase": name,
-        "peak_bytes": sum(normalized.values()),
-        "components": normalized,
+        "peak_bytes": sum(components.values()),
+        "components": dict(components),
     }
 
 
@@ -61,23 +58,20 @@ def _denoiser_activation(
     attention_backend: str,
     attention_slicing: bool,
 ) -> dict[str, Any]:
-    architecture = str(profile.get("architecture") or "")
-    kwargs = {
-        "profile": profile,
-        "latent_height": latent_height,
-        "latent_width": latent_width,
-        "batch_size": batch_size,
-        "text_tokens": text_tokens,
-        "element_bytes": element_bytes,
-        "attention_backend": attention_backend,
-        "attention_slicing": attention_slicing,
-    }
-    if architecture == "unet":
-        return _unet_denoiser_activation(**kwargs)
-    if architecture == "transformer":
-        return _transformer_denoiser_activation(**kwargs)
-    raise DiffusionEstimateError(
-        f"unsupported denoiser architecture {architecture!r}"
+    model = (
+        _unet_denoiser_activation
+        if profile["architecture"] == "unet"
+        else _transformer_denoiser_activation
+    )
+    return model(
+        profile=profile,
+        latent_height=latent_height,
+        latent_width=latent_width,
+        batch_size=batch_size,
+        text_tokens=text_tokens,
+        element_bytes=element_bytes,
+        attention_backend=attention_backend,
+        attention_slicing=attention_slicing,
     )
 
 
@@ -201,6 +195,7 @@ def _unet_denoiser_activation(
     standard_attention = uses_geglu and profile.get("standard_transformer_attention", True)
     use_attention_buffers = materialized_attention and standard_attention
     only_cross_by_level = profile.get("only_cross_attention_by_level", [False] * len(channels))
+    upcast_attention = bool(profile.get("upcast_attention", False))
     if use_attention_buffers and (
         not isinstance(only_cross_by_level, (list, tuple))
         or len(only_cross_by_level) != len(channels)
@@ -230,14 +225,6 @@ def _unet_denoiser_activation(
                 # expansion. Its two chunk views retain the 8F projection
                 # while the 4F GELU result and 4F product are both live.
                 feed_forward_bytes = (8 + 4 + 4) * feature_bytes
-            query_bytes = feature_bytes
-            key_value_bytes = (
-                batch_size
-                * text_tokens
-                * channel_count
-                * element_bytes
-                * 2
-            )
             if use_attention_buffers:
                 attention_buffers = _unet_materialized_attention(
                     batch_size=batch_size,
@@ -247,37 +234,26 @@ def _unet_denoiser_activation(
                     heads=heads[level],
                     element_bytes=element_bytes,
                     only_cross_attention=only_cross_by_level[level],
-                    upcast_attention=bool(profile.get("upcast_attention", False)),
+                    upcast_attention=upcast_attention,
                     slicing=attention_slicing,
                 )
                 attention_bytes = attention_buffers["peak_bytes"]
-            elif attention_backend == "eager":
-                score_bytes = (
+            else:
+                workspace = (
                     batch_size
                     * heads[level]
                     * spatial_tokens
                     * text_tokens
                     * element_bytes
+                    if attention_backend == "eager"
+                    else feature_bytes
                 )
                 if attention_slicing:
-                    score_bytes = _ceil_div(
-                        score_bytes,
-                        heads[level],
-                    )
+                    workspace = _ceil_div(workspace, heads[level])
                 attention_bytes = (
-                    query_bytes + key_value_bytes + score_bytes
-                )
-            else:
-                linear_workspace = feature_bytes
-                if attention_slicing:
-                    linear_workspace = _ceil_div(
-                        linear_workspace,
-                        heads[level],
-                    )
-                attention_bytes = (
-                    query_bytes
-                    + key_value_bytes
-                    + linear_workspace
+                    feature_bytes
+                    + 2 * batch_size * text_tokens * channel_count * element_bytes
+                    + workspace
                 )
         retained_residual_bytes += retained_bytes
         maximum_working_bytes = max(
@@ -322,7 +298,7 @@ def _unet_denoiser_activation(
             heads=int(profile["mid_block_attention_heads"]),
             element_bytes=element_bytes,
             only_cross_attention=False,
-            upcast_attention=bool(profile.get("upcast_attention", False)),
+            upcast_attention=upcast_attention,
             slicing=attention_slicing,
         )
         maximum_attention_bytes = max(maximum_attention_bytes, mid_attention["peak_bytes"])
@@ -387,7 +363,7 @@ def _transformer_denoiser_activation(
     attention_slicing: bool,
 ) -> dict[str, Any]:
     patch_size = int(profile["patch_size"])
-    packing_factor = int(profile.get("packing_factor", 1))
+    packing_factor = profile["packing_factor"]
     token_stride = patch_size * packing_factor
     token_height = _ceil_div(latent_height, token_stride)
     token_width = _ceil_div(latent_width, token_stride)
@@ -402,9 +378,7 @@ def _transformer_denoiser_activation(
         * element_bytes
     )
 
-    attention_pattern = str(
-        profile.get("attention_pattern") or "self"
-    )
+    attention_pattern = profile["attention_pattern"]
     projected_text_bytes = (
         batch_size
         * text_tokens
@@ -471,20 +445,15 @@ def _transformer_denoiser_activation(
                     * text_tokens
                     * element_bytes
                 )
-        if attention_slicing:
-            attention_workspace_bytes = _ceil_div(
-                attention_workspace_bytes,
-                heads,
-            )
     else:
         attention_workspace_bytes = (
             2 * image_state_bytes + projected_text_bytes
         )
-        if attention_slicing:
-            attention_workspace_bytes = _ceil_div(
-                attention_workspace_bytes,
-                heads,
-            )
+    if attention_slicing:
+        attention_workspace_bytes = _ceil_div(
+            attention_workspace_bytes,
+            heads,
+        )
 
     return {
         "architecture": "transformer",

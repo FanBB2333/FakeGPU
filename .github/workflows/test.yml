@@ -64,6 +64,33 @@ jobs:
             --report-dir build/validation-research \
             --strict
 
+  frameworks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install framework validation dependencies
+        run: |
+          python -m pip install pytest PyYAML 'numpy==2.2.6' \
+            'tensorflow-cpu==2.20.0' 'scikit-learn==1.8.0'
+          python -m pip install 'torch==2.9.1' --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Validate framework numerics and adapter semantics
+        env:
+          PYTHONPATH: .
+          CUDA_VISIBLE_DEVICES: ""
+          FAKEGPU_TERMINAL_REPORT: "0"
+        run: |
+          python -m pytest -q tests/test_framework_compatibility.py
+          python -m fakegpu validate \
+            --manifest tests/data/framework_compatibility.yaml \
+            --report-dir build/validation-frameworks --strict
+
   macos-python:
     runs-on: macos-latest
     steps:
@@ -109,7 +136,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-24.04
           - macos-latest
     runs-on: ${{ matrix.os }}
     steps:
@@ -125,6 +152,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake
 
+      - name: Install CUDA compiler for kernel validation
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSLo /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i /tmp/cuda-keyring.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cuda-nvcc-12-8 cuda-cudart-dev-12-8
+          echo /usr/local/cuda-12.8/bin >> "$GITHUB_PATH"
+
       - name: Native smoke test
         run: scripts/test.sh smoke
 
@@ -136,13 +172,27 @@ jobs:
         run: |
           python -m pip install numpy 'nvitop>=1.7.1,<2' 'nvidia-ml-py>=13.595.45,<14' 'pyte>=0.8,<0.9'
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-          python tests/support/nvml_bridge_smoke.py --lib-dir build
+          python tests/support/nvml_bridge_smoke.py --lib-dir build --tui
           python tests/support/a100_monitor_smoke.py --lib-dir build
 
+      - name: Verify installed Linux wheel outside checkout
+        if: runner.os == 'Linux'
+        run: |
+          FAKEGPU_BUILD_DIR="$PWD/build" python -m pip wheel --no-deps --wheel-dir build/linux-wheel .
+          python -m pip install --no-deps build/linux-wheel/fakegpu-*.whl
+          profile_count=$(python -c 'from pathlib import Path; print(sum(1 for _ in Path("profiles").rglob("*.yaml")))')
+          unset PYTHONPATH FAKEGPU_BUILD_DIR FAKEGPU_LIB_DIR FAKEGPU_PROFILE_DIR
+          cd "$(mktemp -d)"
+          python -I "$GITHUB_WORKSPACE/tests/support/installed_package_smoke.py" \
+            --expected-profile-count "$profile_count"
+
       - name: CPU simulation test
+        env:
+          CPU_BUILD_DIR: build
         run: scripts/test.sh cpu
 
       - name: cuBLAS policy without CPU execution
         run: |
-          scripts/build.sh --build-dir build-no-cpu --no-cpu-simulation
+          scripts/build.sh --build-dir build-no-cpu --no-cpu-simulation -- -DENABLE_FAKEGPU_PTX_EXECUTION=OFF
           python tests/native/cublas_policy.py --build-dir build-no-cpu --no-cpu-simulation
+          python tests/native/ptx_execution.py --build-dir build-no-cpu --expect-unavailable

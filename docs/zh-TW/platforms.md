@@ -85,6 +85,34 @@ GPU0  X     NV1   NV1   NV2   NV2   SYS   SYS   SYS   0
 
 ## 拷貝時間與吞吐
 
+`fakegpu platform route` 可以解釋一次拷貝，無需啟動背景機器或執行 GPU 工作：
+
+```bash
+fakegpu platform route --devices a100:8 --from 0 --to 1 --bytes 1GiB
+fakegpu platform route --devices a100-pcie-80gb:8 --from 0 --to 7 --bytes 64MiB --json
+fakegpu platform route --devices gb300-dgx-station --from host --to 0 --bytes 1GB
+```
+
+建模配置 `a100:8` 的範例顯示 `GPU0 -> NVSwitch -> GPU1`，瓶頸頻寬為 300 GB/s，
+傳輸 1 GiB 約需 3.58 ms。另外兩個範例分別展示跨 CPU socket 的主機記憶體中轉，以及
+主機到 GPU 的 NVLink-C2C 拷貝。
+
+起點和終點可填 `host` 或從 0 開始的 GPU 索引，兩者必須不同。`--bytes` 接受正整數
+位元組數、十進位單位（`GB`）和二進位單位（`GiB`）。配置選項 `--devices`、
+`--platform`、`--pcie-gen`、`--nvlink-bridges` 與 `platform show` 相同，未指定的
+選項預設沿用儲存的機器設定；明確指定 `--devices` 時，平台預設改為 `auto`，並清除
+儲存的橋接設定，除非同時指定了 `--platform` 或 `--nvlink-bridges`。
+
+JSON schema `fakegpu.copy_route.v1` 包含平台、起終點、位元組數、路由類型、拓撲關係、
+依序排列的 `path`，以及頻寬和 `bottleneck` 標記組成的 `links`，另有
+`bandwidth_gbps`、`modeled_seconds` 和解釋用的 `notes`。頻寬未知時，建模時間
+為 `null`。
+只有部分鏈路頻寬已知時，耗時沿用執行時依已知鏈路的估計，路徑瓶頸仍標為未知。
+
+耗時沿用執行時的 `bytes / (GB/s * 1e9)` 模型。主機記憶體中轉取較慢 CPU 鏈路的頻寬，
+不會把兩段串行傳輸時間相加。這是單次獨立拷貝的估算，不包含排隊、啟動延遲或共用
+switch 的頻寬競爭，也不是實測執行時間。
+
 FakeGPU 的拷貝以主機記憶體的速度完成，平台不會拖慢程式。主機記憶體與 GPU 之間、兩張
 GPU 之間的每次拷貝，都會依它在建模鏈路上所需的時間記錄下來：
 

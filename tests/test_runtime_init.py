@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -133,9 +135,140 @@ loss = model(torch.ones(1, 2, device="cuda")).sum()
 loss.backward()
 optimizer.step()
 
+torch.set_float32_matmul_precision("medium")
+assert torch.get_float32_matmul_precision() == "medium"
+torch.set_float32_matmul_precision("high")
+assert torch.get_float32_matmul_precision() == "high"
+torch.set_float32_matmul_precision("highest")
+torch.backends.cuda.matmul.allow_tf32 = True
+assert torch.get_float32_matmul_precision() == "high"
+
 print("torch accelerator compatibility passed")
 """
     _assert_ok(_run(code), "torch accelerator compatibility")
+
+
+def test_fakecuda_autocast_keeps_cuda_defaults_and_signatures() -> None:
+    for profile in ("v100", "a100"):
+        code = f"""
+from pathlib import Path
+import sys
+import warnings
+
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root))
+warnings.simplefilter("ignore")
+
+import fakegpu
+
+fakegpu.init(runtime="fakecuda", profile={profile!r}, device_count=1)
+
+import torch
+
+def matmul_dtype(ctx):
+    with ctx:
+        x = torch.ones(2, 2, device="cuda")
+        return (x @ x).dtype
+
+assert matmul_dtype(torch.amp.autocast("cuda")) == torch.float16
+assert matmul_dtype(torch.cuda.amp.autocast()) == torch.float16
+assert matmul_dtype(torch.cuda.amp.autocast(True)) == torch.float16
+assert matmul_dtype(torch.amp.autocast("cuda", torch.float16)) == torch.float16
+if {profile!r} == "v100":
+    try:
+        matmul_dtype(torch.amp.autocast("cuda", dtype=torch.bfloat16))
+    except RuntimeError as exc:
+        assert "does not support bfloat16" in str(exc), exc
+    else:
+        raise AssertionError("bf16 autocast should fail on compute capability 7.0")
+else:
+    assert matmul_dtype(torch.amp.autocast("cuda", torch.bfloat16)) == torch.bfloat16
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        assert matmul_dtype(torch.amp.autocast("cuda")) == torch.bfloat16
+    assert torch.get_autocast_dtype("cuda") == torch.float16
+print("autocast defaults passed")
+"""
+        _assert_ok(_run(code), f"autocast defaults ({profile})")
+
+
+def test_fakecuda_device_properties_follow_the_profile() -> None:
+    code = f"""
+from pathlib import Path
+import sys
+
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root))
+
+import fakegpu
+from fakegpu.profile_catalog import get_profile
+
+fakegpu.init(runtime="fakecuda", devices="h100,v100")
+
+import torch
+
+for index, profile_id in enumerate(("h100", "v100")):
+    expected = get_profile(profile_id)
+    properties = torch.cuda.get_device_properties(index)
+    assert properties.multi_processor_count == expected.sm_count, properties
+    assert (
+        properties.max_threads_per_multi_processor
+        == expected.max_threads_per_multiprocessor
+    )
+    assert properties.regs_per_block == expected.regs_per_block
+    assert properties.regs_per_multiprocessor == expected.regs_per_multiprocessor
+print("device properties passed")
+"""
+    _assert_ok(_run(code), "device properties")
+
+
+def test_fakecuda_device_checks_and_rng_surface() -> None:
+    code = f"""
+from pathlib import Path
+import sys
+
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root))
+
+from fakegpu.torch_patch import patch
+
+patch(num_devices=2)
+
+import torch
+import torch.cuda.random
+
+
+def raises(call, message):
+    try:
+        call()
+    except RuntimeError as exc:
+        assert message in str(exc), exc
+    else:
+        raise AssertionError(message)
+
+
+raises(
+    lambda: torch.ones(2, device="cuda:0") + torch.ones(2, device="cuda:1"),
+    "Expected all tensors to be on the same device, but found at least two "
+    "devices, cuda:0 and cuda:1!",
+)
+raises(
+    lambda: torch.matmul(torch.ones(2, 2, device="cuda:0"), torch.ones(2, 2, device="cuda:1")),
+    "Expected all tensors to be on the same device",
+)
+ordinal = "CUDA error: invalid device ordinal (requested cuda:99, available: 2)"
+raises(lambda: torch.randn(2, device="cuda:99"), ordinal)
+raises(lambda: torch.cuda.set_device(99), ordinal)
+
+assert len(torch.cuda.get_rng_state_all()) == 2
+assert torch.cuda.random.get_rng_state_all is torch.cuda.get_rng_state_all
+assert torch.cuda.random.fork_rng is torch.random.fork_rng
+state = torch.cuda.get_rng_state()
+first = torch.rand(3)
+torch.cuda.set_rng_state(state)
+assert torch.equal(first, torch.rand(3))
+print("device checks passed")
+"""
+    _assert_ok(_run(code), "device checks")
 
 
 def test_native_mode_preload_boundaries() -> None:
@@ -194,6 +327,38 @@ assert os.environ["FAKEGPU_DIST_MODE"] == "simulate"
 print("fakecuda runtime options passed")
 """
     _assert_ok(_run(code), "fakecuda runtime options")
+
+
+@pytest.mark.parametrize("inherited_platform", [False, True])
+@pytest.mark.parametrize("layout", [{"profile": "l4", "device_count": 2}, {"devices": "l4:2"}])
+def test_fakecuda_platform_uses_the_selected_devices(inherited_platform, layout) -> None:
+    options = dict(layout)
+    if not inherited_platform:
+        options["platform"] = "desktop"
+    code = f"""
+import os
+import fakegpu
+
+for name in list(os.environ):
+    if name.startswith("FAKEGPU_"):
+        del os.environ[name]
+os.environ.update(FAKEGPU_MACHINE="off", FAKEGPU_TERMINAL_REPORT="0")
+if {inherited_platform!r}:
+    os.environ["FAKEGPU_PLATFORM"] = "desktop"
+
+fakegpu.init(**{options!r})
+
+import torch
+from fakegpu.platforms import topology_from_environment
+
+assert torch.cuda.device_count() == 2
+assert all(torch.cuda.get_device_properties(i).name == "NVIDIA L4" for i in range(2))
+topology = topology_from_environment(["l4", "l4"], os.environ)
+assert topology.valid and topology.platform == "desktop"
+assert len(topology.slots) == 2
+assert torch.ones(2, device="cuda:1").sum().item() == 2
+"""
+    _assert_ok(_run(code), "fakecuda platform initialization")
 
 
 def test_inplace_hybrid_env_removes_stale_library_path(monkeypatch) -> None:

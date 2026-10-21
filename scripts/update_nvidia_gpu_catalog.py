@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -105,7 +105,7 @@ def build_snapshot() -> dict[str, object]:
         models.update(_parse_models(_fetch(url)))
     return {
         "schema_version": "nvidia-compute-capabilities.v1",
-        "retrieved_at": datetime.now(UTC).date().isoformat(),
+        "retrieved_at": datetime.now(timezone.utc).date().isoformat(),
         "sources": list(SOURCES),
         "models": dict(sorted(models.items())),
     }

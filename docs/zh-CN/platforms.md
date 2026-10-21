@@ -84,6 +84,34 @@ GPU0  X     NV1   NV1   NV2   NV2   SYS   SYS   SYS   0
 
 ## 拷贝时间与吞吐
 
+`fakegpu platform route` 可以解释一次拷贝，无需启动后台机器或运行 GPU 任务：
+
+```bash
+fakegpu platform route --devices a100:8 --from 0 --to 1 --bytes 1GiB
+fakegpu platform route --devices a100-pcie-80gb:8 --from 0 --to 7 --bytes 64MiB --json
+fakegpu platform route --devices gb300-dgx-station --from host --to 0 --bytes 1GB
+```
+
+建模布局 `a100:8` 的示例显示 `GPU0 -> NVSwitch -> GPU1`，瓶颈带宽为 300 GB/s，
+传输 1 GiB 约需 3.58 ms。另外两个示例分别展示跨 CPU socket 的主机内存中转，以及
+主机到 GPU 的 NVLink-C2C 拷贝。
+
+起点和终点可填 `host` 或从 0 开始的 GPU 索引，两者必须不同。`--bytes` 接受正整数
+字节数、十进制单位（`GB`）和二进制单位（`GiB`）。布局选项 `--devices`、
+`--platform`、`--pcie-gen`、`--nvlink-bridges` 与 `platform show` 相同，未指定的
+选项默认沿用保存的机器配置；显式指定 `--devices` 时，平台默认改为 `auto`，并清除
+保存的桥接设置，除非同时指定了 `--platform` 或 `--nvlink-bridges`。
+
+JSON schema `fakegpu.copy_route.v1` 包含平台、起终点、字节数、路由类型、拓扑关系、
+按顺序排列的 `path`，以及带宽和 `bottleneck` 标记组成的 `links`，另有
+`bandwidth_gbps`、`modeled_seconds` 和解释用的 `notes`。带宽未知时，建模时间
+为 `null`。
+只有部分链路带宽已知时，耗时沿用运行时基于已知链路的估计，路径瓶颈仍标为未知。
+
+耗时沿用运行时的 `bytes / (GB/s * 1e9)` 模型。主机内存中转取较慢 CPU 链路的带宽，
+不会把两段串行传输时间相加。这是单次独立拷贝的估算，不包含排队、启动延迟或共享
+switch 的带宽竞争，也不是实测执行时间。
+
 FakeGPU 的拷贝以主机内存的速度完成，平台不会拖慢程序。主机内存与 GPU 之间、两块 GPU
 之间的每次拷贝，都会按它在建模链路上所需的时间记录下来：
 

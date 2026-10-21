@@ -10,6 +10,24 @@ python3 -m pip install '.[torch,dev,monitoring]'
 export PYTHONPATH="$PWD"
 ```
 
+## 原生 PTX/SASS 后端
+
+Linux 构建的 PTX/SASS 执行核心要求支持 constexpr `std::variant` 的 C++20 编译器和
+标准库（例如 GCC 12+）。CMake 下载固定提交的 PantheonSim，
+并校验归档 SHA-256；构建和运行解释器不需要 CUDA 或 LLVM。该 Apache-2.0 依赖
+链接进现有 CUDA 库，发行包包含其许可证。离线构建可指定已解压的固定版本源码：
+
+```bash
+scripts/build.sh -- -DFETCHCONTENT_SOURCE_DIR_PANTHEONSIM=/path/to/pantheonsim
+```
+
+`-DENABLE_FAKEGPU_PTX_EXECUTION=OFF` 可禁用该依赖，PTX/cubin 加载会返回不支持。
+macOS 当前使用此配置。内核执行测试要求 Linux；编译 `.cu` 测试额外需要 `nvcc`，
+直接加载 PTX 的测试不需要 CUDA 工具包。
+
+cubin 全局变量使用 Linux 4.17+ 的固定地址非覆盖映射，使 CPU 数值库可共享同一指针。
+地址空间冲突会使模块加载失败，不会覆盖已有映射。
+
 ## macOS Conda 环境
 
 如尚未安装 Xcode Command Line Tools，先运行 `xcode-select --install`。使用原生

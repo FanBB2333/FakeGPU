@@ -15,11 +15,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields, replace
 import hashlib
+from itertools import groupby
 import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ..platforms import AUTO, ResolvedPlatform, resolve_platform
 from ..profile_catalog import get_profile
@@ -78,6 +79,8 @@ class MachinePaths:
 def parse_devices(spec: str) -> list[str]:
     """Expand ``"a100:2,h100:2"`` into one catalog profile ID per device."""
 
+    if not isinstance(spec, str):
+        raise ValueError("devices must be a string, e.g. a100:8")
     profiles: list[str] = []
     for item in spec.split(","):
         name, _, count = item.strip().partition(":")
@@ -92,16 +95,10 @@ def parse_devices(spec: str) -> list[str]:
     return profiles
 
 
-def layout_text(profiles: list[str]) -> str:
+def layout_text(profiles: Sequence[str]) -> str:
     """Collapse one profile ID per device back into ``"a100:2,h100:2"``."""
 
-    groups: list[list] = []
-    for profile in profiles:
-        if groups and groups[-1][0] == profile:
-            groups[-1][1] += 1
-        else:
-            groups.append([profile, 1])
-    return ",".join(f"{name}:{count}" for name, count in groups)
+    return ",".join(f"{name}:{len(list(group))}" for name, group in groupby(profiles))
 
 
 @dataclass(frozen=True)
@@ -125,6 +122,8 @@ class MachineConfig:
     memory_warning_percent: float = 90.0
 
     def __post_init__(self) -> None:
+        if not isinstance(self.devices, str):
+            raise ValueError("devices must be a string such as a100:8")
         parse_devices(self.devices)
         if not isinstance(self.platform, str):
             raise ValueError("platform must be a string such as auto or hgx-a100-8")
@@ -135,10 +134,12 @@ class MachineConfig:
         self.resolved_platform()
         if self.telemetry not in TELEMETRY_MODES:
             raise ValueError(f"telemetry must be one of {', '.join(TELEMETRY_MODES)}")
-        if not 0 < self.stale_after_seconds <= 3600:
-            raise ValueError("stale_after_seconds must be in (0, 3600]")
-        if not 0 < self.memory_warning_percent <= 100:
-            raise ValueError("memory_warning_percent must be in (0, 100]")
+        if not isinstance(self.background, bool):
+            raise ValueError("background must be a boolean")
+        for name, maximum in (("stale_after_seconds", 3600), ("memory_warning_percent", 100)):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= maximum:
+                raise ValueError(f"{name} must be a number in (0, {maximum}]")
 
     @property
     def profiles(self) -> list[str]:
@@ -166,7 +167,10 @@ class MachineConfig:
     def load(cls, path: Path) -> MachineConfig:
         if not path.exists():
             return cls()
-        return cls().updated(json.loads(path.read_text(encoding="utf-8")))
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(settings, dict):
+            raise ValueError(f"{path} must hold a JSON object")
+        return cls().updated(settings)
 
     def save(self, path: Path) -> None:
         temporary = path.with_suffix(".tmp")

@@ -102,18 +102,12 @@ def estimate_serving_kv_pool(
     )
 
     phases: dict[str, dict[str, Any]] = {}
-    phase_tokens = {
-        "prefill": prompt_tokens,
-        "decode": prompt_tokens + max(0, generated_tokens - 1),
-    }
-    baseline_phase_names = {
-        "prefill": "prefill",
-        "decode": "generation",
-    }
-    for phase_name, logical_tokens in phase_tokens.items():
-        baseline_phase = dict(
-            baseline[baseline_phase_names[phase_name]]
-        )
+    for phase_name, baseline_phase_name in (
+        ("prefill", "prefill"),
+        ("decode", "generation"),
+    ):
+        baseline_phase = baseline[baseline_phase_name]
+        logical_tokens = int(baseline_phase["logical_tokens_per_sequence"])
         effective_tokens = int(
             baseline_phase["effective_tokens_per_sequence"]
         )
@@ -320,14 +314,9 @@ def estimate_serving_request_kv_pool(
         private_allocated_bytes = 0
 
         for request in normalized:
-            baseline_phase = dict(
-                baselines[request["id"]][baseline_phase_name]
-            )
-            logical_tokens = (
-                request["prompt_tokens"]
-                if phase_name == "prefill"
-                else request["prompt_tokens"]
-                + max(0, request["generated_tokens"] - 1)
+            baseline_phase = baselines[request["id"]][baseline_phase_name]
+            logical_tokens = int(
+                baseline_phase["logical_tokens_per_sequence"]
             )
             effective_tokens = int(
                 baseline_phase["effective_tokens_per_sequence"]
@@ -561,14 +550,6 @@ def _retained_prefix_tokens(
 ) -> int:
     evicted_tokens = max(0, logical_tokens - effective_tokens)
     return max(0, shared_prefix_tokens - evicted_tokens)
-
-
-def _effective_tokens(
-    tokens: int,
-    *,
-    window_tokens: int | None,
-) -> int:
-    return min(tokens, window_tokens) if window_tokens is not None else tokens
 
 
 def _transient_bytes(

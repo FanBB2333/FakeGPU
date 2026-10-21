@@ -12,13 +12,17 @@ from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import importlib.metadata
-import json
 import math
 import random
 
 from ._finetune_batches import _descriptor, describe_batch
 from .finetune_data import profile_tokenized_records
 from .finetune_estimator import FinetuneEstimateError
+from .structured_io import (
+    canonical_json as _canonical,
+    canonical_sha256 as _digest,
+    is_sha256_hex,
+)
 
 
 SCHEMA_VERSION = "fakegpu.finetune_sampler_plan.v1"
@@ -44,20 +48,8 @@ def _integer(value, name, *, minimum=1):
     return value
 
 
-def _canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-
-
-def _digest(value):
-    return hashlib.sha256(_canonical(value).encode()).hexdigest()
-
-
 def _sha256(value, name):
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(char not in "0123456789abcdef" for char in value)
-    ):
+    if not is_sha256_hex(value):
         raise FinetuneEstimateError(f"{name} must be a SHA256 hex digest")
     return value
 
@@ -719,19 +711,11 @@ def validate_sampling_verification(plan, updates, verification):
 class NativeBatchMatcher:
     """Compare consumed native inputs against a precomputed target or prefix."""
 
-    def __init__(self, plan, *, expected_updates=None):
+    def __init__(self, plan):
         self.plan = validate_sampler_plan(plan)
-        count = self.plan["workload"]["optimizer_steps"]
-        if expected_updates is None:
-            expected_updates = count
-        _integer(expected_updates, "expected_updates")
-        if expected_updates > count:
-            raise FinetuneEstimateError("native matcher prefix exceeds planned updates")
-        self.expected_updates = expected_updates
+        self.expected_updates = self.plan["workload"]["optimizer_steps"]
         self.batches = [
-            batch
-            for update in self.plan["updates"][:expected_updates]
-            for batch in update["batches"]
+            batch for update in self.plan["updates"] for batch in update["batches"]
         ]
         self.consumed = 0
         self.actual_hashes = []

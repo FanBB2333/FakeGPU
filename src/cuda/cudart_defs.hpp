@@ -17,9 +17,18 @@ typedef enum cudaError_enum {
     cudaErrorInitializationError = 3,
     cudaErrorCudartUnloading = 4,
     cudaErrorProfilerDisabled = 5,
+    cudaErrorInvalidSymbol = 13,
     cudaErrorNotReady = 600,
     cudaErrorNotSupported = 801,
     cudaErrorInvalidDevice = 101,
+    cudaErrorInvalidDeviceFunction = 98,
+    cudaErrorInvalidKernelImage = 200,
+    cudaErrorNoKernelImageForDevice = 209,
+    cudaErrorInvalidPtx = 218,
+    cudaErrorInvalidResourceHandle = 400,
+    cudaErrorIllegalAddress = 700,
+    cudaErrorLaunchOutOfResources = 701,
+    cudaErrorLaunchFailure = 719,
     cudaErrorPeerAccessUnsupported = 217,
     cudaErrorInvalidMemcpyDirection = 21,
     cudaErrorUnknown = 999
@@ -123,6 +132,106 @@ typedef struct cudaDeviceProp {
     size_t reservedSharedMemPerBlock;
 } cudaDeviceProp;
 
+// CUDA 12 uses a separate ABI. Preserve the legacy layout above for older callers.
+typedef struct cudaDevicePropV2 {
+    char name[256];
+    char uuid[16];
+    char luid[8];
+    unsigned int luidDeviceNodeMask;
+    size_t totalGlobalMem;
+    size_t sharedMemPerBlock;
+    int regsPerBlock;
+    int warpSize;
+    size_t memPitch;
+    int maxThreadsPerBlock;
+    int maxThreadsDim[3];
+    int maxGridSize[3];
+    int clockRate;
+    size_t totalConstMem;
+    int major;
+    int minor;
+    size_t textureAlignment;
+    size_t texturePitchAlignment;
+    int deviceOverlap;
+    int multiProcessorCount;
+    int kernelExecTimeoutEnabled;
+    int integrated;
+    int canMapHostMemory;
+    int computeMode;
+    int maxTexture1D;
+    int maxTexture1DMipmap;
+    int maxTexture1DLinear;
+    int maxTexture2D[2];
+    int maxTexture2DMipmap[2];
+    int maxTexture2DLinear[3];
+    int maxTexture2DGather[2];
+    int maxTexture3D[3];
+    int maxTexture3DAlt[3];
+    int maxTextureCubemap;
+    int maxTexture1DLayered[2];
+    int maxTexture2DLayered[3];
+    int maxTextureCubemapLayered[2];
+    int maxSurface1D;
+    int maxSurface2D[2];
+    int maxSurface3D[3];
+    int maxSurface1DLayered[2];
+    int maxSurface2DLayered[3];
+    int maxSurfaceCubemap;
+    int maxSurfaceCubemapLayered[2];
+    size_t surfaceAlignment;
+    int concurrentKernels;
+    int ECCEnabled;
+    int pciBusID;
+    int pciDeviceID;
+    int pciDomainID;
+    int tccDriver;
+    int asyncEngineCount;
+    int unifiedAddressing;
+    int memoryClockRate;
+    int memoryBusWidth;
+    int l2CacheSize;
+    int persistingL2CacheMaxSize;
+    int maxThreadsPerMultiProcessor;
+    int streamPrioritiesSupported;
+    int globalL1CacheSupported;
+    int localL1CacheSupported;
+    size_t sharedMemPerMultiprocessor;
+    int regsPerMultiprocessor;
+    int managedMemory;
+    int isMultiGpuBoard;
+    int multiGpuBoardGroupID;
+    int hostNativeAtomicSupported;
+    int singleToDoublePrecisionPerfRatio;
+    int pageableMemoryAccess;
+    int concurrentManagedAccess;
+    int computePreemptionSupported;
+    int canUseHostPointerForRegisteredMem;
+    int cooperativeLaunch;
+    int cooperativeMultiDeviceLaunch;
+    size_t sharedMemPerBlockOptin;
+    int pageableMemoryAccessUsesHostPageTables;
+    int directManagedMemAccessFromHost;
+    int maxBlocksPerMultiProcessor;
+    int accessPolicyMaxWindowSize;
+    size_t reservedSharedMemPerBlock;
+    int hostRegisterSupported;
+    int sparseCudaArraySupported;
+    int hostRegisterReadOnlySupported;
+    int timelineSemaphoreInteropSupported;
+    int memoryPoolsSupported;
+    int gpuDirectRDMASupported;
+    unsigned int gpuDirectRDMAFlushWritesOptions;
+    int gpuDirectRDMAWritesOrdering;
+    unsigned int memoryPoolSupportedHandleTypes;
+    int deferredMappingCudaArraySupported;
+    int ipcEventSupported;
+    int clusterLaunch;
+    int unifiedFunctionPointers;
+    int reserved2[2];
+    int reserved1[1];
+    int reserved[60];
+} cudaDevicePropV2;
+
 // Dim3 structure for kernel launch
 typedef struct dim3 {
     unsigned int x, y, z;
@@ -133,6 +242,7 @@ cudaError_t cudaGetDeviceCount(int *count);
 cudaError_t cudaSetDevice(int device);
 cudaError_t cudaGetDevice(int *device);
 cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device);
+cudaError_t cudaGetDeviceProperties_v2(cudaDevicePropV2 *prop, int device);
 cudaError_t cudaDeviceReset(void);
 cudaError_t cudaDeviceSynchronize(void);
 
@@ -236,6 +346,8 @@ cudaError_t cudaMemcpy3D(const void *p);
 cudaError_t cudaMemcpy3DAsync(const void *p, cudaStream_t stream);
 cudaError_t cudaMemcpyToSymbol(const void *symbol, const void *src, size_t count, size_t offset, cudaMemcpyKind kind);
 cudaError_t cudaMemcpyFromSymbol(void *dst, const void *symbol, size_t count, size_t offset, cudaMemcpyKind kind);
+cudaError_t cudaGetSymbolAddress(void** pointer, const void* symbol);
+cudaError_t cudaGetSymbolSize(size_t* size, const void* symbol);
 cudaError_t cudaMemAdvise(const void *devPtr, size_t count, int advice, int device);
 cudaError_t cudaMemPrefetchAsync(const void *devPtr, size_t count, int dstDevice, cudaStream_t stream);
 cudaError_t cudaMemRangeGetAttribute(void *data, size_t dataSize, int attribute, const void *devPtr, size_t count);
@@ -334,9 +446,6 @@ cudaError_t cudaStreamIsCapturing(cudaStream_t stream, int *pCaptureStatus);
 cudaError_t cudaStreamGetCaptureInfo(cudaStream_t stream, int *captureStatus, unsigned long long *id);
 cudaError_t cudaStreamGetCaptureInfo_v2(cudaStream_t stream, int *captureStatus, unsigned long long *id, cudaGraph_t *graph, const cudaGraphNode_t **dependencies, size_t *numDependencies);
 cudaError_t cudaThreadExchangeStreamCaptureMode(int *mode);
-
-// Device Properties v2 (for newer CUDA versions)
-cudaError_t cudaGetDeviceProperties_v2(cudaDeviceProp *prop, int device);
 
 // Texture and Surface Object API
 typedef unsigned long long cudaTextureObject_t;
@@ -454,7 +563,8 @@ cudaError_t cudaProfilerStop(void);
 // Internal CUDA Runtime functions (for module/variable registration)
 void __cudaRegisterFunction(void **fatCubinHandle, const char *hostFun, char *deviceFun, const char *deviceName, int thread_limit, void *tid, void *bid, void *bDim, void *gDim, int *wSize);
 void __cudaRegisterVar(void **fatCubinHandle, char *hostVar, char *deviceAddress, const char *deviceName, int ext, size_t size, int constant, int global);
-void __cudaRegisterFatBinary(void *fatCubin);
+void** __cudaRegisterFatBinary(void *fatCubin);
+char __cudaInitModule(void **fatCubinHandle);
 void __cudaRegisterFatBinaryEnd(void **fatCubinHandle);
 void __cudaUnregisterFatBinary(void **fatCubinHandle);
 void** __cudaRegisterFatBinaryEnd_v2(void **fatCubinHandle);

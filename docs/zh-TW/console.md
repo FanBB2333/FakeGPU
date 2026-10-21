@@ -125,12 +125,28 @@ Machine 分頁以文字形式編輯同一個配置。新程序使用新配置；
 fakegpu daemon start [--devices a100:8] [--telemetry reference] [--background on]
 fakegpu daemon status [--json]
 fakegpu daemon events [-n 50] [-f] [--json]
-fakegpu daemon config [--devices a100:4] [--platform auto] [--pcie-gen 0] [--nvlink-bridges 0-1] [--json]
+fakegpu daemon config [--from machine.json] [--devices a100:4] [--platform auto] [--pcie-gen 0] [--nvlink-bridges 0-1] [--json]
 fakegpu daemon stop
 ```
 
 使用參考遙測模型時，`fakegpu daemon status` 會在 GPU 表格下方加上一行說明：Util、Temp
 與 Power 依 CPU 活動建模，並非實測。
+
+可以在 Linux 或 macOS 上匯出、匯入同一份模擬機器設定：
+
+```bash
+fakegpu daemon config --json > machine.json
+fakegpu daemon config --from machine.json
+fakegpu daemon config --from machine.json --telemetry none
+```
+
+輸入必須是 JSON 物件，欄位名稱與匯出結果一致，也可以只包含需要修改的設定。
+未提供的欄位保留目前值，首次使用時採用預設值；明確指定的命令列參數優先於檔案中的值。
+無效輸入不會修改設定。常駐程序執行時會立即更新設定，新工作負載採用新設定，
+正在執行的工作負載保留原本的裝置；常駐程序停止時則儲存設定，供下次啟動使用。
+
+匯出檔案只包含模擬機器設定，不含主機路徑、程序 ID 或機器身分，可用於分享和重現設定。
+
 `fakegpu daemon run` 在前景執行機器。機器檔案位於 `~/.fakegpu/machine`
 （`config.json`、`events.jsonl`、`daemon.log` 與 `state/` 目錄）；設定 `FAKEGPU_HOME` 可改變位置。
 

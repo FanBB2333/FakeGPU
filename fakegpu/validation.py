@@ -49,6 +49,11 @@ def load_validation_manifest(path: str | os.PathLike[str]) -> dict[str, Any]:
     defaults = manifest.get("defaults", {})
     if not isinstance(defaults, Mapping):
         raise ValidationManifestError("defaults must be an object")
+    for key in ("env", "requires", "expect"):
+        try:
+            dict(defaults.get(key) or {})
+        except (TypeError, ValueError) as exc:
+            raise ValidationManifestError(f"defaults.{key} must be an object") from exc
     cases = manifest.get("cases")
     if not isinstance(cases, list) or not cases:
         raise ValidationManifestError("cases must be a non-empty list")
@@ -75,19 +80,19 @@ def expand_validation_cases(
     report_dir: str | os.PathLike[str],
 ) -> list[dict[str, Any]]:
     selected = set(selected_cases)
-    known = {str(case["name"]) for case in manifest["cases"]}
+    known = {case["name"] for case in manifest["cases"]}
     unknown = sorted(selected - known)
     if unknown:
         raise ValidationManifestError(f"unknown selected cases: {', '.join(unknown)}")
-    manifest_path = Path(str(manifest["_path"]))
+    manifest_path = Path(manifest["_path"])
     root_report_dir = Path(report_dir).expanduser().resolve()
-    defaults = dict(manifest.get("defaults") or {})
+    defaults = manifest["defaults"]
     expanded: list[dict[str, Any]] = []
     used_ids: set[str] = set()
     for case in manifest["cases"]:
         if selected and case["name"] not in selected:
             continue
-        axes = dict(case.get("matrix") or {})
+        axes = case.get("matrix", {})
         axis_names = list(axes)
         combinations = (
             itertools.product(*(axes[name] for name in axis_names))
@@ -99,7 +104,7 @@ def expand_validation_cases(
             suffix = ",".join(
                 f"{name}={_context_value(matrix[name])}" for name in axis_names
             )
-            execution_id = f"{case['name']}[{suffix}]" if suffix else str(case["name"])
+            execution_id = f"{case['name']}[{suffix}]" if suffix else case["name"]
             slug = _slug(execution_id)
             if slug in used_ids:
                 raise ValidationManifestError(
@@ -108,7 +113,7 @@ def expand_validation_cases(
             used_ids.add(slug)
             execution_report_dir = root_report_dir / "cases" / slug
             context = {
-                "case": str(case["name"]),
+                "case": case["name"],
                 "execution_id": execution_id,
                 "manifest_dir": str(manifest_path.parent),
                 "report_dir": str(execution_report_dir),
@@ -163,7 +168,7 @@ def run_validation_manifest(
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "status": "passed" if success else "failed",
-        "manifest": str(Path(manifest_path).expanduser().resolve()),
+        "manifest": manifest["_path"],
         "report_dir": str(output_dir),
         "strict": bool(strict),
         "dry_run": bool(dry_run),
@@ -193,35 +198,28 @@ def run_validation_manifest(
 
 def render_validation_markdown(report: Mapping[str, Any]) -> str:
     rows = []
-    for item in report.get("executions") or []:
-        matrix = ", ".join(
-            f"{key}={value}" for key, value in dict(item.get("matrix") or {}).items()
-        )
-        detail = "; ".join(
-            [
-                *[str(value) for value in item.get("skip_reasons") or []],
-                *[str(value) for value in item.get("failures") or []],
-            ]
-        )
+    for item in report["executions"]:
+        matrix = ", ".join(f"{key}={value}" for key, value in item["matrix"].items())
+        detail = "; ".join([*item["skip_reasons"], *item["failures"]])
         rows.append(
             f"| `{item['id']}` | `{item['status']}` | "
-            f"{matrix or '-'} | {item.get('duration_seconds', 0):.3f} | "
+            f"{matrix or '-'} | {item['duration_seconds']:.3f} | "
             f"{_markdown_cell(detail or '-')} |"
         )
-    counts = dict(report.get("counts") or {})
+    counts = report["counts"]
     return "\n".join(
         [
             "# FakeGPU Validation Report",
             "",
-            f"**Status:** `{report.get('status', 'unknown')}`",
+            f"**Status:** `{report['status']}`",
             "",
-            f"- Manifest: `{report.get('manifest', '')}`",
-            f"- Git commit: `{report.get('git_commit') or 'unknown'}`",
-            f"- Host: `{(report.get('host') or {}).get('hostname', 'unknown')}`",
-            f"- Passed: {counts.get('passed', 0)}",
-            f"- Failed: {counts.get('failed', 0)}",
-            f"- Skipped: {counts.get('skipped', 0)}",
-            f"- Dry-run: {counts.get('dry_run', 0)}",
+            f"- Manifest: `{report['manifest']}`",
+            f"- Git commit: `{report['git_commit'] or 'unknown'}`",
+            f"- Host: `{report['host']['hostname']}`",
+            f"- Passed: {counts['passed']}",
+            f"- Failed: {counts['failed']}",
+            f"- Skipped: {counts['skipped']}",
+            f"- Dry-run: {counts['dry_run']}",
             "",
             "| Execution | Status | Matrix | Seconds | Details |",
             "|---|---|---|---:|---|",
@@ -316,7 +314,9 @@ def _validate_case(case: dict[str, Any], *, index: int) -> dict[str, Any]:
         if not isinstance(value, Mapping):
             raise ValidationManifestError(f"{prefix}.{key} must be an object")
     timeout = case.get("timeout_seconds")
-    if timeout is not None and (not isinstance(timeout, (int, float)) or timeout <= 0):
+    if "timeout_seconds" in case and (
+        not isinstance(timeout, (int, float)) or timeout <= 0
+    ):
         raise ValidationManifestError(f"{prefix}.timeout_seconds must be positive")
     return case
 
@@ -350,32 +350,37 @@ def _materialize_case(
         },
         **{
             str(key): str(_format_value(value, context))
-            for key, value in dict(case.get("env") or {}).items()
+            for key, value in case.get("env", {}).items()
         },
     }
     requires = _format_value(
         {
             **dict(defaults.get("requires") or {}),
-            **dict(case.get("requires") or {}),
+            **case.get("requires", {}),
         },
         context,
     )
     expect = _format_value(
         {
             **dict(defaults.get("expect") or {}),
-            **dict(case.get("expect") or {}),
+            **case.get("expect", {}),
         },
         context,
     )
-    timeout = float(
-        case.get(
-            "timeout_seconds",
-            defaults.get("timeout_seconds", 300),
+    try:
+        timeout = float(
+            case.get(
+                "timeout_seconds",
+                defaults.get("timeout_seconds", 300),
+            )
         )
-    )
+    except (TypeError, ValueError) as exc:
+        raise ValidationManifestError(
+            "defaults.timeout_seconds must be a number"
+        ) from exc
     return {
         "id": execution_id,
-        "case": str(case["name"]),
+        "case": case["name"],
         "matrix": dict(matrix),
         "command": command,
         "cwd": str(cwd),
@@ -388,15 +393,15 @@ def _materialize_case(
 
 
 def _run_case(execution: Mapping[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    case_dir = Path(str(execution["report_dir"]))
+    case_dir = Path(execution["report_dir"])
     case_dir.mkdir(parents=True, exist_ok=True)
     base = {
         "id": execution["id"],
         "case": execution["case"],
-        "matrix": dict(execution["matrix"]),
-        "command": list(execution["command"]),
+        "matrix": execution["matrix"],
+        "command": execution["command"],
         "cwd": execution["cwd"],
-        "env": dict(execution["env"]),
+        "env": execution["env"],
         "timeout_seconds": execution["timeout_seconds"],
         "stdout_log": str(case_dir / "stdout.log"),
         "stderr_log": str(case_dir / "stderr.log"),
@@ -421,20 +426,21 @@ def _run_case(execution: Mapping[str, Any], *, dry_run: bool) -> dict[str, Any]:
         }
 
     env = dict(os.environ)
-    env.update({str(key): str(value) for key, value in execution["env"].items()})
+    env.update(execution["env"])
     started = time.monotonic()
     timed_out = False
+    start_error = None
     try:
         completed = subprocess.run(
-            list(execution["command"]),
-            cwd=str(execution["cwd"]),
+            execution["command"],
+            cwd=execution["cwd"],
             env=env,
             text=True,
             capture_output=True,
-            timeout=float(execution["timeout_seconds"]),
+            timeout=execution["timeout_seconds"],
             check=False,
         )
-        exit_code = int(completed.returncode)
+        exit_code = completed.returncode
         stdout = completed.stdout
         stderr = completed.stderr
     except subprocess.TimeoutExpired as exc:
@@ -442,6 +448,11 @@ def _run_case(execution: Mapping[str, Any], *, dry_run: bool) -> dict[str, Any]:
         exit_code = None
         stdout = _decode_timeout_output(exc.stdout)
         stderr = _decode_timeout_output(exc.stderr)
+    except OSError as exc:
+        start_error = exc
+        exit_code = None
+        stdout = ""
+        stderr = str(exc)
     duration = time.monotonic() - started
     Path(base["stdout_log"]).write_text(stdout, encoding="utf-8")
     Path(base["stderr_log"]).write_text(stderr, encoding="utf-8")
@@ -449,6 +460,8 @@ def _run_case(execution: Mapping[str, Any], *, dry_run: bool) -> dict[str, Any]:
     failures = []
     if timed_out:
         failures.append(f"command timed out after {execution['timeout_seconds']:.3f}s")
+    elif start_error is not None:
+        failures.append(f"command could not be started: {start_error}")
     else:
         failures.extend(
             _expectation_failures(
@@ -469,8 +482,8 @@ def _run_case(execution: Mapping[str, Any], *, dry_run: bool) -> dict[str, Any]:
 
 
 def _prerequisite_failures(execution: Mapping[str, Any]) -> list[str]:
-    requires = dict(execution.get("requires") or {})
-    cwd = Path(str(execution["cwd"]))
+    requires = execution["requires"]
+    cwd = Path(execution["cwd"])
     reasons = []
     platforms = _string_list(requires.get("platforms"))
     if platforms and sys.platform not in platforms:
@@ -481,7 +494,7 @@ def _prerequisite_failures(execution: Mapping[str, Any]) -> list[str]:
     for module in _string_list(requires.get("python_modules")):
         try:
             available = importlib.util.find_spec(module) is not None
-        except (ImportError, ModuleNotFoundError, ValueError):
+        except (ImportError, ValueError):
             available = False
         if not available:
             reasons.append(f"required Python module not found: {module}")
@@ -505,11 +518,15 @@ def _expectation_failures(
     stderr: str,
     duration: float,
 ) -> list[str]:
-    expect = dict(execution.get("expect") or {})
+    expect = execution["expect"]
     failures = []
-    expected_exit = int(expect.get("exit_code", 0))
-    if exit_code != expected_exit:
-        failures.append(f"exit code {exit_code}, expected {expected_exit}")
+    try:
+        expected_exit = int(expect.get("exit_code", 0))
+    except (TypeError, ValueError):
+        failures.append("expect.exit_code must be an integer")
+    else:
+        if exit_code != expected_exit:
+            failures.append(f"exit code {exit_code}, expected {expected_exit}")
     for value in _string_list(expect.get("stdout_contains")):
         if value not in stdout:
             failures.append(f"stdout does not contain {value!r}")
@@ -523,9 +540,17 @@ def _expectation_failures(
         if value in stderr:
             failures.append(f"stderr unexpectedly contains {value!r}")
     duration_max = expect.get("duration_seconds_max")
-    if duration_max is not None and duration > float(duration_max):
-        failures.append(f"duration {duration:.6f}s exceeds {float(duration_max):.6f}s")
-    cwd = Path(str(execution["cwd"]))
+    if duration_max is not None:
+        try:
+            duration_limit = float(duration_max)
+        except (TypeError, ValueError):
+            failures.append("expect.duration_seconds_max must be a number")
+        else:
+            if duration > duration_limit:
+                failures.append(
+                    f"duration {duration:.6f}s exceeds {duration_limit:.6f}s"
+                )
+    cwd = Path(execution["cwd"])
     for path_text in _string_list(expect.get("files_exist")):
         path = Path(path_text)
         if not path.is_absolute():
@@ -618,13 +643,14 @@ def _compare_value(
         return observed >= expected
     if operator == "contains":
         return expected in observed
-    if operator == "approx":
-        return abs(float(observed) - float(expected)) <= tolerance
-    return False
+    return abs(float(observed) - float(expected)) <= tolerance
 
 
 def _read_structured_file(path: Path) -> Any:
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValidationManifestError(f"cannot read manifest: {exc}") from exc
     suffix = path.suffix.lower()
     if suffix == ".json":
         try:

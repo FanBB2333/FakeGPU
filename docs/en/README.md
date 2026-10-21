@@ -29,6 +29,7 @@ tour. The pages below go into detail.
   MIG, and fault modeling, and Prometheus metrics
 - [Native interception](native-interception.md): running unmodified programs
   and handling unsupported APIs
+- [Framework compatibility](frameworks.md): TensorFlow, scikit-learn and CUDA C/C++ validation
 
 ## Accuracy
 

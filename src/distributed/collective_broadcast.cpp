@@ -11,9 +11,6 @@ CollectiveExecutionResult execute_broadcast(
     const CollectiveExecutionRequest& request,
     const std::vector<CollectiveExecutionParticipant>& participants) {
     const std::size_t dtype_size = collective_data_type_size(request.dtype);
-    if (dtype_size == 0) {
-        return collective_error("unsupported_dtype", "unsupported broadcast dtype");
-    }
     if (request.bytes != request.count * dtype_size) {
         return collective_error("invalid_collective_size", "broadcast bytes do not match count * dtype_size");
     }
@@ -27,24 +24,15 @@ CollectiveExecutionResult execute_broadcast(
         if (participant.bytes != request.bytes) {
             return collective_error(
                 "staging_size_mismatch",
-                "participant rank " + std::to_string(participant.rank) +
-                    " reported bytes=" + std::to_string(participant.bytes) +
-                    ", expected " + std::to_string(request.bytes));
+                participant_size_mismatch(participant, request));
         }
 
         std::string error;
         std::vector<char> buffer;
-        if (!load_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                request.dtype,
-                participant.transport == BufferTransport::SocketPayload
-                    ? participant.payload_bytes
-                    : request.bytes,
+        if (!load_participant_input(
+                request,
+                participant,
                 {request.count},
-                participant.rank,
-                request.seqno,
-                participant.payload,
                 buffer,
                 error)) {
             return collective_error("staging_open_failed", error);
@@ -66,16 +54,13 @@ CollectiveExecutionResult execute_broadcast(
     result.ok = true;
     for (const CollectiveExecutionParticipant& participant : participants) {
         std::string error;
-        if (!store_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                request.dtype,
+        if (!store_participant_output(
+                request,
+                participant,
                 {request.count},
-                participant.rank,
-                request.seqno,
                 root_data.data(),
                 request.bytes,
-                result.output_payloads[participant.rank],
+                result,
                 error)) {
             return collective_error("staging_open_failed", error);
         }

@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
@@ -247,40 +248,8 @@ const ArchProfile* get_arch_profile(GpuArch arch) {
 }
 
 GpuProfile build_profile_from_definition(const ProfileDefinition& def) {
-    if (const ArchProfile* arch_profile = get_arch_profile(def.arch)) {
-        GpuProfile profile = arch_profile->build(def.params);
-        profile.id = def.id;
-        return profile;
-    }
-
-    // Fallback for unknown architecture identifiers
-    GpuProfile profile;
+    GpuProfile profile = get_arch_profile(def.arch)->build(def.params);
     profile.id = def.id;
-    profile.name = def.params.name;
-    profile.architecture = def.arch;
-    profile.compute_major = def.params.compute_major > 0
-        ? def.params.compute_major
-        : static_cast<int>(def.arch);
-    profile.compute_minor = def.params.compute_minor;
-    profile.memory_bytes = def.params.memory_bytes;
-    profile.sm_count = def.params.sm_count;
-    profile.memory_bus_width_bits = def.params.memory_bus_width_bits;
-    profile.core_clock_mhz = def.params.core_clock_mhz;
-    profile.memory_clock_mhz = def.params.memory_clock_mhz;
-    profile.l2_cache_bytes = def.params.l2_cache_bytes;
-    profile.shared_mem_per_sm = def.params.shared_mem_per_sm;
-    profile.shared_mem_per_block = def.params.shared_mem_per_block;
-    profile.shared_mem_per_block_optin = def.params.shared_mem_per_block_optin;
-    profile.regs_per_block = def.params.regs_per_block;
-    profile.regs_per_multiprocessor = def.params.regs_per_multiprocessor;
-    profile.max_threads_per_multiprocessor = def.params.max_threads_per_multiprocessor;
-    profile.max_blocks_per_multiprocessor = def.params.max_blocks_per_multiprocessor;
-    profile.typical_power_usage_mw = def.params.typical_power_usage_mw;
-    profile.max_power_limit_mw = def.params.max_power_limit_mw;
-    profile.pci_device_id = def.params.pci_device_id;
-    profile.pcie_generation = def.params.pcie_generation;
-    profile.pcie_lanes = def.params.pcie_lanes;
-    profile.supported_types = def.params.supported_types.empty() ? std::vector<GpuDataType>{GpuDataType::FP32} : def.params.supported_types;
     return profile;
 }
 
@@ -347,39 +316,30 @@ std::optional<ProfileDefinition> parse_definition(const ProfileYamlBlob& blob) {
         }
     }
 
-    uint64_t numeric_value = 0;
-    if (!parse_required_int(parsed, "memory_bytes", numeric_value, blob.filename)) return std::nullopt;
-    def.params.memory_bytes = numeric_value;
-    if (!parse_required_int(parsed, "sm_count", numeric_value, blob.filename)) return std::nullopt;
-    def.params.sm_count = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "memory_bus_width_bits", numeric_value, blob.filename)) return std::nullopt;
-    def.params.memory_bus_width_bits = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "core_clock_mhz", numeric_value, blob.filename)) return std::nullopt;
-    def.params.core_clock_mhz = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "memory_clock_mhz", numeric_value, blob.filename)) return std::nullopt;
-    def.params.memory_clock_mhz = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "l2_cache_bytes", numeric_value, blob.filename)) return std::nullopt;
-    def.params.l2_cache_bytes = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "shared_mem_per_sm", numeric_value, blob.filename)) return std::nullopt;
-    def.params.shared_mem_per_sm = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "shared_mem_per_block", numeric_value, blob.filename)) return std::nullopt;
-    def.params.shared_mem_per_block = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "shared_mem_per_block_optin", numeric_value, blob.filename)) return std::nullopt;
-    def.params.shared_mem_per_block_optin = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "regs_per_block", numeric_value, blob.filename)) return std::nullopt;
-    def.params.regs_per_block = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "regs_per_multiprocessor", numeric_value, blob.filename)) return std::nullopt;
-    def.params.regs_per_multiprocessor = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "max_threads_per_multiprocessor", numeric_value, blob.filename)) return std::nullopt;
-    def.params.max_threads_per_multiprocessor = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "max_blocks_per_multiprocessor", numeric_value, blob.filename)) return std::nullopt;
-    def.params.max_blocks_per_multiprocessor = static_cast<int>(numeric_value);
-    if (!parse_required_int(parsed, "typical_power_usage_mw", numeric_value, blob.filename)) return std::nullopt;
-    def.params.typical_power_usage_mw = static_cast<unsigned int>(numeric_value);
-    if (!parse_required_int(parsed, "max_power_limit_mw", numeric_value, blob.filename)) return std::nullopt;
-    def.params.max_power_limit_mw = static_cast<unsigned int>(numeric_value);
-    if (!parse_required_int(parsed, "pci_device_id", numeric_value, blob.filename)) return std::nullopt;
-    def.params.pci_device_id = static_cast<uint32_t>(numeric_value);
+    auto require = [&](const char* key, auto& target) {
+        uint64_t value = 0;
+        if (!parse_required_int(parsed, key, value, blob.filename)) return false;
+        target = static_cast<std::remove_reference_t<decltype(target)>>(value);
+        return true;
+    };
+    if (!require("memory_bytes", def.params.memory_bytes) ||
+        !require("sm_count", def.params.sm_count) ||
+        !require("memory_bus_width_bits", def.params.memory_bus_width_bits) ||
+        !require("core_clock_mhz", def.params.core_clock_mhz) ||
+        !require("memory_clock_mhz", def.params.memory_clock_mhz) ||
+        !require("l2_cache_bytes", def.params.l2_cache_bytes) ||
+        !require("shared_mem_per_sm", def.params.shared_mem_per_sm) ||
+        !require("shared_mem_per_block", def.params.shared_mem_per_block) ||
+        !require("shared_mem_per_block_optin", def.params.shared_mem_per_block_optin) ||
+        !require("regs_per_block", def.params.regs_per_block) ||
+        !require("regs_per_multiprocessor", def.params.regs_per_multiprocessor) ||
+        !require("max_threads_per_multiprocessor", def.params.max_threads_per_multiprocessor) ||
+        !require("max_blocks_per_multiprocessor", def.params.max_blocks_per_multiprocessor) ||
+        !require("typical_power_usage_mw", def.params.typical_power_usage_mw) ||
+        !require("max_power_limit_mw", def.params.max_power_limit_mw) ||
+        !require("pci_device_id", def.params.pci_device_id)) {
+        return std::nullopt;
+    }
     for (const auto& [key, target] : {
              std::pair<const char*, int*>{"pcie_generation", &def.params.pcie_generation},
              std::pair<const char*, int*>{"pcie_lanes", &def.params.pcie_lanes}}) {
@@ -447,16 +407,9 @@ std::optional<GpuProfile> profile_from_yaml_id(const std::string& id) {
 GpuProfile build_profile_with_fallback(const std::string& id, GpuArch arch, const GpuProfileParams& params) {
     std::optional<GpuProfile> yaml_profile = profile_from_yaml_id(id);
     if (yaml_profile.has_value()) return yaml_profile.value();
-    if (const ArchProfile* builder = get_arch_profile(arch)) {
-        GpuProfile profile = builder->build(params);
-        profile.id = id;
-        return profile;
-    }
-    ProfileDefinition fallback_def;
-    fallback_def.id = id;
-    fallback_def.arch = arch;
-    fallback_def.params = params;
-    return build_profile_from_definition(fallback_def);
+    GpuProfile profile = get_arch_profile(arch)->build(params);
+    profile.id = id;
+    return profile;
 }
 } // namespace
 

@@ -329,6 +329,40 @@ def _parameter_inventory(model, parameters):
     )
 
 
+def _kernel_implementations(model):
+    kernel_choices = {}
+    for name in (
+        "causal_conv1d_fn",
+        "causal_conv1d_update",
+        "chunk_gated_delta_rule",
+        "fused_recurrent_gated_delta_rule",
+    ):
+        choices = set()
+        for module in model.modules():
+            if hasattr(module, name):
+                implementation = getattr(module, name)
+                choices.add(
+                    None
+                    if implementation is None
+                    else (
+                        getattr(
+                            implementation,
+                            "__module__",
+                            type(implementation).__module__,
+                        )
+                        + "."
+                        + getattr(
+                            implementation,
+                            "__qualname__",
+                            type(implementation).__qualname__,
+                        )
+                    )
+                )
+        if choices:
+            kernel_choices[name] = sorted(choices, key=str)
+    return kernel_choices
+
+
 def actual_training_config(trainer, normalized):
     import torch
 
@@ -446,38 +480,8 @@ def actual_training_config(trainer, normalized):
     result["assumptions"] = [
         "Configuration values are reconciled with the actual native Trainer and model."
     ]
-    kernel_choices = {}
-    for name in (
-        "causal_conv1d_fn",
-        "causal_conv1d_update",
-        "chunk_gated_delta_rule",
-        "fused_recurrent_gated_delta_rule",
-    ):
-        choices = set()
-        for module in model.modules():
-            if hasattr(module, name):
-                implementation = getattr(module, name)
-                choices.add(
-                    None
-                    if implementation is None
-                    else (
-                        getattr(
-                            implementation,
-                            "__module__",
-                            type(implementation).__module__,
-                        )
-                        + "."
-                        + getattr(
-                            implementation,
-                            "__qualname__",
-                            type(implementation).__qualname__,
-                        )
-                    )
-                )
-        if choices:
-            kernel_choices[name] = sorted(choices, key=str)
     native_backend = {
-        "kernel_implementations": kernel_choices,
+        "kernel_implementations": _kernel_implementations(model),
         "collator_class": type(trainer.data_collator).__module__
         + "."
         + type(trainer.data_collator).__name__,
@@ -490,9 +494,7 @@ def actual_training_config(trainer, normalized):
     details = {
         "model_class": type(model).__module__ + "." + type(model).__name__,
         "trainer_class": type(trainer).__module__ + "." + type(trainer).__name__,
-        "collator_class": type(trainer.data_collator).__module__
-        + "."
-        + type(trainer.data_collator).__name__,
+        "collator_class": native_backend["collator_class"],
         "parameter_count": result["parameter_count"],
         "total_parameter_count": total,
         "trainable_parameter_count": result["trainable_parameter_count"],

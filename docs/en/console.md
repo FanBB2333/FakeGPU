@@ -143,12 +143,32 @@ A process killed from nvitop or with `kill` therefore shows up as
 fakegpu daemon start [--devices a100:8] [--telemetry reference] [--background on]
 fakegpu daemon status [--json]
 fakegpu daemon events [-n 50] [-f] [--json]
-fakegpu daemon config [--devices a100:4] [--platform auto] [--pcie-gen 0] [--nvlink-bridges 0-1] [--json]
+fakegpu daemon config [--from machine.json] [--devices a100:4] [--platform auto] [--pcie-gen 0] [--nvlink-bridges 0-1] [--json]
 fakegpu daemon stop
 ```
 
 With reference telemetry, `fakegpu daemon status` adds a note under the GPU
 table that Util, Temp and Power are modeled from CPU activity, not measured.
+
+Export and import the same simulated machine settings on Linux or macOS:
+
+```bash
+fakegpu daemon config --json > machine.json
+fakegpu daemon config --from machine.json
+fakegpu daemon config --from machine.json --telemetry none
+```
+
+The input must be a JSON object using the exported setting names. It may contain
+only the settings you want to change; omitted settings keep their current values
+or the defaults on first use. Explicit command-line options override file values.
+Invalid input leaves the configuration unchanged. A running daemon applies the
+configuration immediately; new workloads use it, while running workloads keep
+their original devices. With the daemon stopped, the configuration is saved for
+its next start.
+
+The exported file contains only simulated machine settings, with no host paths,
+process IDs or machine identity, so you can share it to reproduce the configuration.
+
 `fakegpu daemon run` runs the machine in the foreground. Machine files live in
 `~/.fakegpu/machine` (`config.json`, `events.jsonl`, `daemon.log` and the
 `state/` directory); set `FAKEGPU_HOME` to move them.

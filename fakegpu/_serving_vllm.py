@@ -12,8 +12,6 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from ._serving_types import ServingPlanError
-
 
 VLLM_DEFAULT_GPU_MEMORY_UTILIZATION = 0.92
 
@@ -21,18 +19,13 @@ VLLM_DEFAULT_GPU_MEMORY_UTILIZATION = 0.92
 def _non_kv_phase_bytes(
     memory: Mapping[str, Any],
 ) -> dict[str, int]:
-    phase_bytes: dict[str, int] = {}
-    for phase in memory["phases"]:
-        phase_name = str(phase["phase"])
-        peak_bytes = int(phase["peak_bytes"])
-        kv_cache_bytes = int(phase["components"]["kv_cache"])
-        non_kv_bytes = peak_bytes - kv_cache_bytes
-        if non_kv_bytes < 0:
-            raise ServingPlanError(
-                f"{phase_name} peak is smaller than its KV cache"
-            )
-        phase_bytes[phase_name] = non_kv_bytes
-    return phase_bytes
+    return {
+        str(phase["phase"]): (
+            int(phase["peak_bytes"])
+            - int(phase["components"]["kv_cache"])
+        )
+        for phase in memory["phases"]
+    }
 
 
 def _logical_kv_peak_bytes(memory: Mapping[str, Any]) -> int:
@@ -98,41 +91,37 @@ def _build_vllm_runtime_report(
         kv_cache_source = "device_capacity_unavailable"
         memory_limit_bytes = None
 
-    num_gpu_blocks = (
-        available_before_rounding // block_bytes
-        if available_before_rounding is not None
-        else None
-    )
-    allocatable_kv_cache_bytes = (
-        num_gpu_blocks * block_bytes
-        if num_gpu_blocks is not None
-        else None
-    )
-    block_rounding_tail_bytes = (
-        available_before_rounding - allocatable_kv_cache_bytes
-        if available_before_rounding is not None
-        and allocatable_kv_cache_bytes is not None
-        else None
-    )
-    kv_cache_size_tokens = (
-        num_gpu_blocks * block_tokens
-        if num_gpu_blocks is not None
-        else None
-    )
     logical_requested_kv_cache_bytes = _logical_kv_peak_bytes(
         requested_memory
     )
-    requested_kv_cache_fits = (
-        logical_requested_kv_cache_bytes
-        <= allocatable_kv_cache_bytes
-        if allocatable_kv_cache_bytes is not None
-        else None
-    )
-    initialization_required_bytes = (
-        selected_non_kv_peak + allocatable_kv_cache_bytes
-        if allocatable_kv_cache_bytes is not None
-        else None
-    )
+    if available_before_rounding is None:
+        num_gpu_blocks = None
+        allocatable_kv_cache_bytes = None
+        block_rounding_tail_bytes = None
+        kv_cache_size_tokens = None
+        requested_kv_cache_fits = None
+        initialization_required_bytes = None
+        max_model_len_concurrency = None
+        headroom_bytes = None
+    else:
+        num_gpu_blocks = available_before_rounding // block_bytes
+        allocatable_kv_cache_bytes = num_gpu_blocks * block_bytes
+        block_rounding_tail_bytes = (
+            available_before_rounding - allocatable_kv_cache_bytes
+        )
+        kv_cache_size_tokens = num_gpu_blocks * block_tokens
+        requested_kv_cache_fits = (
+            logical_requested_kv_cache_bytes <= allocatable_kv_cache_bytes
+        )
+        initialization_required_bytes = (
+            selected_non_kv_peak + allocatable_kv_cache_bytes
+        )
+        max_model_len_concurrency = (
+            kv_cache_size_tokens / max_model_len_tokens
+        )
+        headroom_bytes = (
+            allocatable_kv_cache_bytes - logical_requested_kv_cache_bytes
+        )
     if memory_limit_bytes is None:
         initialization_fits = None
     elif not explicit_kv_cache and (
@@ -142,8 +131,6 @@ def _build_vllm_runtime_report(
     else:
         initialization_fits = (
             initialization_required_bytes <= memory_limit_bytes
-            if initialization_required_bytes is not None
-            else None
         )
     if requested_kv_cache_fits is False or initialization_fits is False:
         requested_fits_memory = False
@@ -196,21 +183,12 @@ def _build_vllm_runtime_report(
             "block_rounding_tail_bytes": block_rounding_tail_bytes,
             "num_gpu_blocks": num_gpu_blocks,
             "size_tokens": kv_cache_size_tokens,
-            "max_model_len_concurrency": (
-                kv_cache_size_tokens / max_model_len_tokens
-                if kv_cache_size_tokens is not None
-                else None
-            ),
+            "max_model_len_concurrency": max_model_len_concurrency,
             "logical_requested_peak_bytes": (
                 logical_requested_kv_cache_bytes
             ),
             "logical_requested_fits": requested_kv_cache_fits,
-            "headroom_bytes": (
-                allocatable_kv_cache_bytes
-                - logical_requested_kv_cache_bytes
-                if allocatable_kv_cache_bytes is not None
-                else None
-            ),
+            "headroom_bytes": headroom_bytes,
         },
         "requested_fits_memory": requested_fits_memory,
         "notes": [
