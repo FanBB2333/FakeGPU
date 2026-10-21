@@ -449,11 +449,9 @@ def _transformer_denoiser_activation(
         attention_workspace_bytes = (
             2 * image_state_bytes + projected_text_bytes
         )
-    if attention_slicing:
-        attention_workspace_bytes = _ceil_div(
-            attention_workspace_bytes,
-            heads,
-        )
+    # DiffusionPipeline.set_attention_slice only reaches components that define
+    # set_attention_slice (UNets in Diffusers 0.35). Transformer denoisers keep
+    # their processors, so pipeline attention slicing leaves this unchanged.
 
     return {
         "architecture": "transformer",
@@ -485,6 +483,7 @@ def _transformer_denoiser_activation(
         ),
         "attention_backend": attention_backend,
         "attention_slicing": attention_slicing,
+        "attention_slicing_applied": False,
         "formula": (
             "patch-token residual state + maximum QKV/MLP working set "
             "+ architecture-specific self/cross/joint attention workspace"

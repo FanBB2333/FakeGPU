@@ -711,6 +711,25 @@ def test_reference_unet_attention_levels_match_upstream_config(profile_id: str) 
         assert reference[field] == local[field]
 
 
+@pytest.mark.parametrize("backend", ["eager", "sdpa"])
+def test_pipeline_attention_slicing_leaves_transformer_denoisers_unchanged(
+    backend: str,
+) -> None:
+    # Diffusers 0.35.2 DiffusionPipeline.set_attention_slice only calls
+    # components that define set_attention_slice (UNet2DConditionModel), not
+    # Transformer2DModel, SD3Transformer2DModel or FluxTransformer2DModel.
+    plain = estimate_diffusion_generation(PIXART, attention_backend=backend)
+    sliced = estimate_diffusion_generation(
+        PIXART, attention_backend=backend, attention_slicing=True
+    )
+    denoiser = sliced["activation_models"]["denoiser"]
+    assert denoiser["attention_slicing_applied"] is False
+    assert denoiser["attention_workspace_bytes"] == (
+        plain["activation_models"]["denoiser"]["attention_workspace_bytes"]
+    )
+    assert _phase(sliced, "denoise") == _phase(plain, "denoise")
+
+
 def test_sdxl_first_level_has_no_transformer_blocks() -> None:
     # SDXL's first down/up blocks are DownBlock2D/UpBlock2D: at 1024x1024 the
     # 128x128 level has no attention or GEGLU feed-forward.

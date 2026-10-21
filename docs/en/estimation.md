@@ -116,6 +116,8 @@ How the diffusion estimator works:
   `--vae-tiling` model common Diffusers trade-offs. Without a matching
   real-GPU comparison, reports stay `Modeled` and `uncalibrated`, with no error
   percentage or prediction interval.
+- As in Diffusers, `--attention-slicing` changes only UNet denoisers.
+  Transformer denoisers (PixArt, SD3, Flux) ignore pipeline attention slicing.
 
 To train diffusion models, see [Diffusion training](diffusion-training.md).
 

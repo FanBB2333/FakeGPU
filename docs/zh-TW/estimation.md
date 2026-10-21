@@ -111,6 +111,8 @@ Diffusion 估算器的運作方式：
 - `--offload model`、`--attention-slicing`、`--vae-slicing` 與 `--vae-tiling`
   對應 Diffusers 常見的 GPU 記憶體取捨。沒有相同設定的實體 GPU 比較時，報告保持
   `Modeled` 與 `uncalibrated`，不給出誤差百分比或預測區間。
+- 與 Diffusers 一致，`--attention-slicing` 只影響 UNet 去噪器。Transformer
+  去噪器（PixArt、SD3、Flux）會忽略 pipeline 的 attention slicing。
 
 訓練 diffusion 模型請參閱 [Diffusion 訓練](diffusion-training.md)。
 
