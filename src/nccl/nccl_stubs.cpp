@@ -47,7 +47,6 @@ struct ncclComm {
     std::uint64_t next_seqno = 1;
     void* real_comm = nullptr;
     bool destroyed = false;
-    bool finalized = false;
     bool suspended = false;
     bool fault_injected = false;
     ncclResult_t async_error = ncclSuccess;
@@ -2026,9 +2025,6 @@ ncclResult_t submit_point_to_point(
     }
 
     const std::size_t dtype_size = fake_gpu::distributed::collective_data_type_size(mapped_dtype);
-    if (dtype_size == 0) {
-        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this point-to-point operation");
-    }
     const std::size_t bytes = count * dtype_size;
     const std::uint64_t seqno = comm->next_seqno;
     const std::string staging_name = make_staging_name(*comm, seqno, command);
@@ -2181,7 +2177,6 @@ ncclResult_t do_destroy(ncclComm_t comm, bool allow_missing) {
 
     comm->real_comm = nullptr;
     comm->destroyed = true;
-    comm->finalized = true;
     clear_last_error(comm);
     return ncclSuccess;
 }
@@ -2196,18 +2191,8 @@ bool all_group_operations_are_point_to_point(
     return true;
 }
 
-std::string join_split_counts(const std::vector<std::size_t>& counts) {
-    std::ostringstream output;
-    for (std::size_t index = 0; index < counts.size(); ++index) {
-        if (index > 0) {
-            output << ',';
-        }
-        output << counts[index];
-    }
-    return output.str();
-}
-
-std::string join_int_values(const std::vector<int>& values) {
+template <typename T>
+std::string join_values(const std::vector<T>& values) {
     std::ostringstream output;
     for (std::size_t index = 0; index < values.size(); ++index) {
         if (index > 0) {
@@ -2365,8 +2350,8 @@ ncclResult_t flush_grouped_alltoallv(
             << " bytes=" << staging_bytes
             << " input_bytes=" << input_bytes
             << " output_bytes=" << output_bytes
-            << " input_splits=" << join_split_counts(input_splits)
-            << " output_splits=" << join_split_counts(output_splits)
+            << " input_splits=" << join_values(input_splits)
+            << " output_splits=" << join_values(output_splits)
             << " root=-1 reduce_op=none"
             << " buffer_transport="
             << (buffer_transport ==
@@ -2802,7 +2787,6 @@ ncclResult_t ncclCommFinalize(ncclComm_t comm) {
     if (!comm) {
         return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
     }
-    comm->finalized = true;
     clear_last_error(comm);
     return ncclSuccess;
 }
@@ -2837,9 +2821,6 @@ ncclResult_t ncclCommSplit(
     }
     if (color < NCCL_SPLIT_NOCOLOR) {
         return fail_with(comm, ncclInvalidArgument, "color must be >= 0 or NCCL_SPLIT_NOCOLOR");
-    }
-    if (color == NCCL_SPLIT_NOCOLOR) {
-        // NCCL still treats split as a collective over the parent communicator.
     }
 
     if (comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
@@ -3006,7 +2987,7 @@ ncclResult_t ncclCommShrink(
             << " comm_id=" << comm->comm_id
             << " rank=" << comm->rank
             << " seqno=" << comm->next_seqno
-            << " excluded_ranks=" << join_int_values(excluded_ranks)
+            << " excluded_ranks=" << join_values(excluded_ranks)
             << " abort_parent="
             << (shrink_flags == NCCL_SHRINK_ABORT ? 1 : 0)
             << " timeout_ms=" << coordinator_timeout_ms();
@@ -3364,9 +3345,6 @@ ncclResult_t ncclReduce(
     }
     if (comm->rank == root && !recvbuff) {
         return fail_with(comm, ncclInvalidArgument, "root recv buffer must not be null");
-    }
-    if (count == 0) {
-        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
     }
     if (root < 0 || root >= comm->world_size) {
         return fail_with(comm, ncclInvalidArgument, "reduce root must be within [0, world_size)");
