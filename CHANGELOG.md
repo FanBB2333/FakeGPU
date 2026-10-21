@@ -39,6 +39,32 @@
   threads per multiprocessor, register limits, and SM count (when the
   profile publishes one), as the native runtime does, instead of A100 values
   for every profile.
+- FakeCUDA `Tensor.to(device, dtype)` no longer raises `TypeError`,
+  `Tensor.to(other)` takes `other`'s dtype, and `Module.to(device, dtype)`
+  converts the dtype instead of keeping FP32, which counted FP16 and BF16
+  weights at twice their size.
+- FakeCUDA `Module.cuda()` and `Module.to("cuda")` keep each `Parameter`
+  object, as PyTorch does. An optimizer built before the move (Accelerate's
+  `prepare(model, optimizer)`) now updates the model and its state is
+  counted on the device.
+- `torch.autocast("cuda", ...)` autocasts under FakeCUDA; it previously ran
+  every op in FP32. Inside the block `torch.is_autocast_enabled("cuda")` is
+  true, so `torch.amp.custom_fwd(cast_inputs=...)` casts its inputs.
+- FakeCUDA `torch.cuda.is_bf16_supported()` accepts `including_emulation`,
+  answers for the current device and counts emulated bf16 like PyTorch, so
+  `torch.cuda.is_tf32_supported()` no longer raises and bf16 autocast is no
+  longer rejected on pre-Ampere profiles.
+- FakeCUDA device queries follow `torch.cuda`: an index past the last device
+  raises `AssertionError("Invalid device id")` from `get_device_name` and
+  `get_device_capability` too, `set_device(-1)` and `torch.cuda.device(-1)`
+  do nothing, `_exchange_device` switches devices, and an invalid ordinal
+  raises `torch.AcceleratorError`.
+- FakeCUDA `get_device_properties()` provides the shared-memory, L2 cache,
+  memory bus width and clock-rate fields from the profile.
+- FakeCUDA `Event.elapsed_time` raises `ValueError` without
+  `enable_timing=True` or before both events are recorded; streams have
+  `device`, `device_type` and `priority`, entering a stream makes it current,
+  and `torch.cuda.stream(None)` does nothing.
 - The first virtual-SMI state written by a FakeCUDA process reports the
   `upstream` backend instead of `unknown`.
 - Under FakeCUDA, `torch.get_float32_matmul_precision()` returns `medium`
