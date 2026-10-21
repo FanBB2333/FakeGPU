@@ -1407,7 +1407,10 @@ def _install_module_moves_in_place(upstream: Any, torch_mod: Any) -> None:
     expects) keeps updating the model, and a module already on the target
     device is left as is. The upstream conversion created new parameters.
     """
-    from torch.utils import swap_tensors
+    try:
+        from torch.utils import swap_tensors
+    except ImportError:  # torch < 2.3: a moved module gets new Parameter objects
+        swap_tensors = None
 
     fake_cls = upstream.FakeCudaTensor
 
@@ -1439,12 +1442,13 @@ def _install_module_moves_in_place(upstream: Any, torch_mod: Any) -> None:
                         moved.grad = upstream.wrap_tensor(
                             param.grad.detach(), device_index=index
                         )
-                    try:
-                        # ``param`` becomes the moved parameter in place.
-                        swap_tensors(param, moved)
-                        moved = param
-                    except RuntimeError:
-                        pass  # e.g. weak references: fall back to a new object
+                    if swap_tensors is not None:
+                        try:
+                            # ``param`` becomes the moved parameter in place.
+                            swap_tensors(param, moved)
+                            moved = param
+                        except RuntimeError:
+                            pass  # e.g. weak references: fall back to a new object
                     upstream.register_parameter(moved)
                 _memo["parameters"][id(param)] = moved
             module._parameters[name] = moved
