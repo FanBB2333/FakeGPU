@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import inspect
 import os
 import weakref
 from collections import OrderedDict
@@ -469,12 +470,16 @@ def _dist_init_process_group(
     group_name: str = "",
     pg_options: Any = None,
     device_id: Any = None,
+    **kwargs: Any,
 ) -> None:
     global _DIST_INITIALIZED, _DIST_BACKEND, _DIST_WORLD_SIZE, _DIST_RANK, _DIST_REAL
+    if kwargs and _ORIG_DIST_INIT is not None:
+        inspect.signature(_ORIG_DIST_INIT).bind_partial(**kwargs)  # an unknown keyword fails as in torch
     launch = _real_launch(world_size, rank, init_method, store)
     if launch is not None and _ORIG_DIST_INIT is not None:
         size, index = launch
-        options: dict[str, Any] = {"backend": "gloo", "world_size": size, "rank": index}
+        # Newer arguments, e.g. PyTorch 2.14's enable_reconfigure, go to torch as given.
+        options: dict[str, Any] = {**kwargs, "backend": "gloo", "world_size": size, "rank": index}
         for name, value in (("init_method", init_method), ("store", store), ("timeout", timeout)):
             if value is not None:
                 options[name] = value
@@ -638,9 +643,10 @@ def _done(async_op: bool) -> Any:
     return _FakeAsyncWork() if async_op else None
 
 
-def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = None) -> Any:
+def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = None, timeout: Any = None) -> Any:
     if _DIST_REAL:
-        return _ORIG_DIST["barrier"](group=group, async_op=async_op)
+        options = {"timeout": timeout} if timeout is not None else {}
+        return _ORIG_DIST["barrier"](group=group, async_op=async_op, **options)
     return _FakeAsyncWork() if async_op else None
 
 
@@ -699,9 +705,14 @@ def _copy_collective_tensor(destination: torch.Tensor, source: torch.Tensor) -> 
             flat_dst[offset:end].copy_(flat_src[: end - offset])
 
 
-def _dist_all_gather_object(object_list: list[Any], obj: Any, group: Any = None) -> None:
+def _weights_only(weights_only: bool) -> dict[str, bool]:
+    # PyTorch 2.14 added the argument; pass it only when set, for older versions.
+    return {"weights_only": True} if weights_only else {}
+
+
+def _dist_all_gather_object(object_list: list[Any], obj: Any, group: Any = None, weights_only: bool = False) -> None:
     if _DIST_REAL:
-        return _ORIG_DIST["all_gather_object"](object_list, obj, group=group)
+        return _ORIG_DIST["all_gather_object"](object_list, obj, group=group, **_weights_only(weights_only))
     for index in range(len(object_list)):
         object_list[index] = obj
     return None
@@ -864,11 +875,14 @@ def _dist_broadcast_object_list(
     group: Any = None,
     device: Any = None,
     group_src: Any = None,
+    weights_only: bool = False,
 ) -> None:
     if _DIST_REAL:
         options = {"group_src": group_src} if group_src is not None else {"src": src}
         # The objects travel through gloo on the CPU, whatever device is named.
-        return _ORIG_DIST["broadcast_object_list"](object_list, group=group, **options)
+        return _ORIG_DIST["broadcast_object_list"](
+            object_list, group=group, **options, **_weights_only(weights_only)
+        )
     return None
 
 

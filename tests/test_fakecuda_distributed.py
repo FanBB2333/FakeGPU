@@ -1,0 +1,147 @@
+"""torch.distributed under FakeCUDA, checked against the installed torch and real gloo runs.
+
+Expected values come from running the same calls without FakeGPU: plain
+``torchrun`` with gloo on CPU tensors, torch's own single-process ``fake``
+backend, or the installed torch's source where NCCL differs from gloo.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import textwrap
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.skipif(importlib.util.find_spec("torch") is None, reason="needs torch")
+
+# One simulated process that names an 8-rank job, as a researcher sizing a large run does.
+SIMULATED = """
+import json, os
+for name in ("MASTER_ADDR", "MASTER_PORT", "WORLD_SIZE", "RANK", "TORCHELASTIC_RUN_ID", "FAKEGPU_DIST_COLLECTIVES"):
+    os.environ.pop(name, None)
+os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+import fakegpu
+fakegpu.init(runtime="fakecuda", profile="a100", device_count=8)
+import torch, torch.distributed as dist
+dist.init_process_group("nccl", world_size=8, rank=5)
+torch.cuda.set_device(5)
+results = {}
+def probe(name, fn):
+    try:
+        results[name] = fn()
+    except Exception as exc:
+        results[name] = [type(exc).__name__, str(exc).splitlines()[0] if str(exc) else ""]
+"""
+
+
+def _environment(tmp_path: Path) -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT), env.get("PYTHONPATH")]))
+    env["FAKEGPU_HOME"] = str(tmp_path / "home")
+    for name in ("FAKEGPU_PROFILE", "FAKEGPU_PROFILES", "FAKEGPU_DEVICE_COUNT", "FAKEGPU_RUN_DIR"):
+        env.pop(name, None)
+    return env
+
+
+def _simulate(tmp_path: Path, body: str) -> dict:
+    code = SIMULATED + textwrap.dedent(body) + "\nprint('RESULTS ' + json.dumps(results, sort_keys=True))\n"
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=_environment(tmp_path), text=True,
+        capture_output=True, timeout=240,
+    )
+    assert completed.returncode == 0, completed.stderr[-3000:]
+    line = next(line for line in completed.stdout.splitlines() if line.startswith("RESULTS "))
+    return json.loads(line[len("RESULTS "):])
+
+
+def test_patched_functions_accept_every_argument_of_the_installed_torch(tmp_path: Path) -> None:
+    results = _simulate(tmp_path, """
+        import inspect
+        torch_dist = dist.distributed_c10d
+        for name in ("init_process_group", "barrier", "all_reduce", "broadcast", "all_gather",
+                     "all_gather_into_tensor", "all_gather_object", "reduce", "gather", "scatter",
+                     "reduce_scatter", "reduce_scatter_tensor", "all_to_all", "all_to_all_single",
+                     "broadcast_object_list", "get_rank", "get_world_size", "new_group"):
+            original = inspect.signature(getattr(torch_dist, name)).parameters
+            patched = inspect.signature(getattr(dist, name)).parameters
+            open_ended = any(p.kind is p.VAR_KEYWORD for p in patched.values())
+            results[name] = sorted(set(original) - set(patched)) if not open_ended else []
+        import datetime
+        probe("call_barrier", lambda: dist.barrier(timeout=datetime.timedelta(seconds=5)))
+        probe("call_all_gather_object", lambda: dist.all_gather_object([None] * 8, 1, weights_only=True))
+        probe("call_broadcast_object_list", lambda: dist.broadcast_object_list([1], src=0, weights_only=True))
+        probe("init_typo", lambda: dist.init_process_group("nccl", world_size=8, rank=5, wolrd_size=8))
+    """)
+    names = ("init_process_group", "barrier", "all_reduce", "broadcast", "all_gather", "all_gather_into_tensor",
+             "all_gather_object", "reduce", "gather", "scatter", "reduce_scatter", "reduce_scatter_tensor",
+             "all_to_all", "all_to_all_single", "broadcast_object_list", "get_rank", "get_world_size", "new_group")
+    assert {name: results[name] for name in names} == {name: [] for name in names}
+    assert results["call_barrier"] is None
+    assert results["call_all_gather_object"] is None
+    assert results["call_broadcast_object_list"] is None
+    assert results["init_typo"][0] == "TypeError"
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _torchrun(tmp_path: Path, body: str, nproc: int = 3) -> dict[int, dict]:
+    """Run ``body`` on ``nproc`` FakeCUDA ranks under ``fakegpu run`` and torchrun; return each rank's results."""
+
+    script = tmp_path / "ranks.py"
+    script.write_text(textwrap.dedent("""
+        import datetime, json, os, warnings
+        import torch, torch.distributed as dist
+        dist.init_process_group("nccl")
+        rank, world = dist.get_rank(), dist.get_world_size()
+        torch.cuda.set_device(rank)
+        results = {}
+        def probe(name, fn):
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    results[name] = fn()
+            except Exception as exc:
+                results[name] = [type(exc).__name__, str(exc).splitlines()[0] if str(exc) else ""]
+            dist.barrier()
+        def t(*values):
+            return torch.tensor(values, dtype=torch.float32, device="cuda")
+    """) + textwrap.dedent(body) + textwrap.dedent("""
+        os.write(1, ("RESULTS " + json.dumps([rank, results], sort_keys=True) + "\\n").encode())
+        dist.destroy_process_group()
+    """), encoding="utf-8")
+    completed = subprocess.run(
+        [sys.executable, "-m", "fakegpu", "run", "--gpu", f"a100x{nproc}", "--no-summary", "--",
+         sys.executable, "-m", "torch.distributed.run", "--nproc_per_node", str(nproc),
+         "--master_addr", "127.0.0.1", "--master_port", str(_free_port()), str(script)],
+        cwd=tmp_path, env=_environment(tmp_path), text=True, capture_output=True, timeout=300,
+    )
+    assert completed.returncode == 0, completed.stderr[-3000:]
+    ranks = [json.loads(line[len("RESULTS "):]) for line in completed.stdout.splitlines() if line.startswith("RESULTS ")]
+    return {rank: results for rank, results in ranks}
+
+
+def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
+    ranks = _torchrun(tmp_path, """
+        probe("barrier_timeout", lambda: dist.barrier(timeout=datetime.timedelta(seconds=60)))
+        def objects():
+            gathered = [None] * world
+            dist.all_gather_object(gathered, {"r": rank}, weights_only=True)
+            sent = [{"r": rank}]
+            dist.broadcast_object_list(sent, src=1, weights_only=True)
+            return [gathered, sent]
+        probe("weights_only", objects)
+    """)
+    for rank in range(3):
+        assert ranks[rank]["barrier_timeout"] is None
+        assert ranks[rank]["weights_only"] == [[{"r": 0}, {"r": 1}, {"r": 2}], [{"r": 1}]]

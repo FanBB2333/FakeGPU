@@ -172,11 +172,13 @@ def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
         return copy.deepcopy(obj)
 
     def _patched_all_gather_object(
-        object_list: list[Any], obj: Any, group: Any = None
+        object_list: list[Any], obj: Any, group: Any = None, weights_only: bool = False
     ) -> None:
         if upstream._DIST_REAL:
             # Other processes hold the other ranks' objects.
-            return upstream._ORIG_DIST["all_gather_object"](object_list, obj, group=group)
+            return upstream._ORIG_DIST["all_gather_object"](
+                object_list, obj, group=group, **upstream._weights_only(weights_only)
+            )
         for index in range(len(object_list)):
             object_list[index] = _clone_gathered_object_for_rank(obj, index)
         return None
