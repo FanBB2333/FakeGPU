@@ -67,3 +67,17 @@ def test_architecture_uses_nvml_device_arch_ids(tmp_path: Path) -> None:
         pynvml.NVML_DEVICE_ARCH_HOPPER, pynvml.NVML_DEVICE_ARCH_BLACKWELL,
     ]
 
+
+def test_encoder_stats_write_unsigned_int_outputs(tmp_path: Path) -> None:
+    # nvml.h: nvmlDeviceGetEncoderStats(device, unsigned int*, unsigned int*, unsigned int*).
+    result = _nvml(
+        tmp_path,
+        """
+        values = (ctypes.c_uint * 4)(11, 22, 33, 0xDEADBEEF)
+        rc = lib.nvmlDeviceGetEncoderStats(N.nvmlDeviceGetHandleByIndex(0),
+                                           *(ctypes.byref(values, 4 * i) for i in range(3)))
+        result = [rc, list(values)]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    assert result == [0, [0, 0, 0, 0xDEADBEEF]]

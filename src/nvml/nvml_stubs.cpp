@@ -584,7 +584,7 @@ nvmlReturn_t nvmlDeviceGetDecoderUtilization(nvmlDevice_t device, unsigned int *
     return idle_engine_utilization(device, utilization, samplingPeriodUs);
 }
 
-nvmlReturn_t nvmlDeviceGetEncoderStats(nvmlDevice_t device, unsigned long long *sessionCount, unsigned long long *averageFps, unsigned long long *averageLatency) {
+nvmlReturn_t nvmlDeviceGetEncoderStats(nvmlDevice_t device, unsigned int *sessionCount, unsigned int *averageFps, unsigned int *averageLatency) {
     if (!device || !sessionCount || !averageFps || !averageLatency) return NVML_ERROR_INVALID_ARGUMENT;
     *sessionCount = 0;
     *averageFps = 0;
