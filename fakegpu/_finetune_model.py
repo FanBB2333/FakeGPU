@@ -235,7 +235,9 @@ def _quantized_parameters(model, parameters):
             raise ValueError(
                 "actual 4-bit storage size disagrees with its logical shape"
             )
+        # bitsandbytes.functional.quantize_4bit accepts these block sizes.
         if state.blocksize != parameter.blocksize or state.blocksize not in {
+            32,
             64,
             128,
             256,
