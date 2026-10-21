@@ -31,12 +31,15 @@ FP32/FP16/BF16 LoRA 与 attention 的 CPU_SIM 用例、tiny Qwen3 MoE 在 CPU �
 会算出的值：
 
 - `get_rank()` 和 `get_world_size()` 返回真实的 rank 和 world size。
-  `get_backend()` 仍报告请求的后端，例如 `nccl`。
+  `get_backend()` 仍报告请求的后端，例如 `nccl`；`get_backend(group)` 报告
+  `new_group` 请求的后端。
 - `all_reduce`（包括 `ReduceOp.AVG`）、`broadcast`、`all_gather`、
   `all_gather_into_tensor`、`reduce_scatter`、`reduce_scatter_tensor`、
   `reduce`、`gather`、`scatter`、`all_to_all`、`all_to_all_single`、
   `barrier`、`all_gather_object` 和 `broadcast_object_list` 交换真实的值。
-  对整数 tensor 做 `ReduceOp.AVG` 时向零取整。
+  对整数 tensor 做 `ReduceOp.AVG` 时向零取整。与 NCCL 一致，对 CUDA tensor 使用
+  `BAND`、`BOR`、`BXOR` 会抛出 `ValueError`，对 bool tensor 使用 `AVG` 会抛出
+  `TypeError`，除非该组请求的是 gloo。
 - `DistributedDataParallel` 在构建时广播 rank 0 的参数和 buffer；除非设置
   `broadcast_buffers=False`，每次训练 forward 前还会再次广播 rank 0 的 buffer。
   backward 结束时对梯度做跨 rank 平均；某个 rank 没用到的参数在该 rank 上按零计。

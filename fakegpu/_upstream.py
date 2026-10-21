@@ -53,6 +53,8 @@ _ORIG_DIST_DESTROY: Any = None
 # multi-process launch; see _real_launch().
 _DIST_REAL = False
 _ORIG_DIST: dict[str, Any] = {}
+# Backends that new_group() was asked for, by group.
+_GROUP_BACKENDS: dict[Any, str] = {}
 _REAL_COLLECTIVES = (
     "barrier", "all_reduce", "broadcast", "all_gather", "all_gather_object", "reduce",
     "gather", "scatter", "all_to_all", "all_to_all_single", "broadcast_object_list",
@@ -590,6 +592,10 @@ def _real_launch(world_size: Any, rank: Any, init_method: Any, store: Any) -> tu
 
 def _dist_destroy_process_group(group: Any = None) -> None:
     global _DIST_INITIALIZED, _DIST_WORLD_SIZE, _DIST_RANK, _DIST_REAL
+    if group is None:
+        _GROUP_BACKENDS.clear()
+    else:
+        _GROUP_BACKENDS.pop(group, None)
     if _DIST_REAL:
         _ORIG_DIST_DESTROY(group)
         if group is None:
@@ -608,7 +614,31 @@ def _dist_destroy_process_group(group: Any = None) -> None:
 
 
 def _dist_get_backend(group: Any = None) -> str | None:
-    return _DIST_BACKEND if _DIST_INITIALIZED else None
+    return _requested_backend(group) if _DIST_INITIALIZED else None
+
+
+def _requested_backend(group: Any) -> str:
+    """The backend the script asked for ``group``; subgroups default to the job's."""
+
+    if group is None or group is torch.distributed.GroupMember.WORLD:
+        return _DIST_BACKEND
+    return _GROUP_BACKENDS.get(group, _DIST_BACKEND)
+
+
+def _check_reduce_op(tensor: Any, op: Any, group: Any) -> None:
+    """Reject the reductions ProcessGroupNCCL rejects for a CUDA tensor (getNcclReduceOp)."""
+
+    backend = _requested_backend(group).lower().replace(" ", "")
+    if op is None or not isinstance(tensor, FakeCudaTensor):
+        return
+    if backend != "nccl" and "cuda:nccl" not in backend.split(","):
+        return
+    reduce_op = torch.distributed.ReduceOp
+    for name in ("BAND", "BOR", "BXOR"):
+        if op == getattr(reduce_op, name):
+            raise ValueError(f"Cannot use ReduceOp.{name} with NCCL")
+    if _is_avg(op) and tensor.dtype == torch.bool:
+        raise TypeError("Cannot use ReduceOp.AVG with boolean inputs")
 
 
 def _torch_knows(group: Any) -> bool:
@@ -636,9 +666,12 @@ def _dist_get_rank(group: Any = None) -> int:
 def _dist_new_group(*args: Any, **kwargs: Any) -> Any:
     # Subgroups use the default group's backend, gloo across launched
     # processes or torch's fake backend in a simulated job; NCCL is not there.
-    kwargs.pop("backend", None)
+    backend = kwargs.pop("backend", args[2] if len(args) > 2 else None)
     kwargs.pop("pg_options", None)
-    return _ORIG_DIST["new_group"](*args[:2], **kwargs)
+    group = _ORIG_DIST["new_group"](*args[:2], **kwargs)
+    if backend is not None and not torch.distributed.distributed_c10d._rank_not_in_group(group):
+        _GROUP_BACKENDS[group] = str(backend)
+    return group
 
 
 def _sum_op() -> Any:
@@ -704,6 +737,7 @@ def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = N
 def _dist_all_reduce(tensor: torch.Tensor, op: Any = None, group: Any = None, async_op: bool = False) -> Any:
     if _not_in_group(group, "all_reduce"):
         return None
+    _check_reduce_op(tensor, op, group)
     if _DIST_REAL:
         _real_all_reduce(unwrap_tensor(tensor), op, group)
         return _done(async_op, [tensor])
@@ -805,6 +839,7 @@ def _dist_reduce(
 ) -> Any:
     if _not_in_group(group, "reduce"):
         return None
+    _check_reduce_op(tensor, op, group)
     if _DIST_REAL:
         raw = unwrap_tensor(tensor)
         if group_dst is not None:
@@ -866,6 +901,7 @@ def _dist_reduce_scatter(
 ) -> Any:
     if _not_in_group(group, "reduce_scatter"):
         return None
+    _check_reduce_op(output, op, group)
     if _DIST_REAL:
         stacked = torch.stack([unwrap_tensor(item).reshape(-1) for item in input_list])
         _real_all_reduce(stacked, op, group)
@@ -886,6 +922,7 @@ def _dist_reduce_scatter_tensor(
 ) -> Any:
     if _not_in_group(group, "reduce_scatter_tensor"):
         return None
+    _check_reduce_op(output, op, group)
     if _DIST_REAL:
         reduced = unwrap_tensor(input).clone()
         _real_all_reduce(reduced, op, group)

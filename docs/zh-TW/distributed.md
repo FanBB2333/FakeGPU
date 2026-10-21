@@ -30,12 +30,15 @@ ZeRO/FSDP 與多機 collective 不在目前範圍內。重現入口為 `scripts/
 會產生的數值：
 
 - `get_rank()` 與 `get_world_size()` 回傳真實的 rank 與 world size。
-  `get_backend()` 仍回報要求的 backend，例如 `nccl`。
+  `get_backend()` 仍回報要求的 backend，例如 `nccl`；`get_backend(group)` 回報
+  `new_group` 要求的 backend。
 - `all_reduce`（包括 `ReduceOp.AVG`）、`broadcast`、`all_gather`、
   `all_gather_into_tensor`、`reduce_scatter`、`reduce_scatter_tensor`、`reduce`、
   `gather`、`scatter`、`all_to_all`、`all_to_all_single`、`barrier`、
   `all_gather_object` 與 `broadcast_object_list` 交換真實數值。對整數 tensor 做
-  `ReduceOp.AVG` 時向零取整。
+  `ReduceOp.AVG` 時向零取整。與 NCCL 相同，對 CUDA tensor 使用 `BAND`、`BOR`、
+  `BXOR` 會拋出 `ValueError`，對 bool tensor 使用 `AVG` 會拋出 `TypeError`，除非
+  該 group 要求的是 gloo。
 - `DistributedDataParallel` 建立時會廣播 rank 0 的參數與 buffer；除非設定
   `broadcast_buffers=False`，每次訓練 forward 前還會再廣播一次 rank 0 的 buffer。
   backward 結束時於各 rank 之間對梯度取平均；某個 rank 沒用到的參數在該 rank 上以零計。

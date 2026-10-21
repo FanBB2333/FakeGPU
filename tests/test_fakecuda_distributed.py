@@ -175,6 +175,13 @@ def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
                                 future.wait()[0] is output, output.tolist()])
             return handles
         probe("work", work_handles)
+        probe("band", lambda: dist.all_reduce(torch.tensor([rank + 1], device="cuda"), op=dist.ReduceOp.BAND))
+        everyone = dist.new_group([0, 1, 2], backend="gloo")
+        def gloo_band():
+            flags = torch.tensor([rank + 1, 7], device="cuda")
+            dist.all_reduce(flags, op=dist.ReduceOp.BAND, group=everyone)
+            return flags.tolist()
+        probe("gloo_band", gloo_band)
     """)
     for rank in range(3):
         assert ranks[rank]["barrier_timeout"] is None
@@ -196,6 +203,9 @@ def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
             [True, True, True, True, [0.0, 1.0, 2.0]],
             [True, True, True, True, [3.0 * (rank + 1)]],
         ]
+        # NCCL refuses bitwise reductions; a gloo group computes them (1 & 2 & 3 == 0).
+        assert ranks[rank]["band"] == ["ValueError", "Cannot use ReduceOp.BAND with NCCL"]
+        assert ranks[rank]["gloo_band"] == [0, 7]
 
 
 def test_simulated_subgroups_report_their_own_rank_and_size(tmp_path: Path) -> None:
@@ -240,6 +250,33 @@ def test_simulated_uneven_exchanges_keep_their_shapes(tmp_path: Path) -> None:
     """)
     assert results == {"all_to_all_single": [9],
                         "all_gather": [None, [[1], [2], [3], [4], [5], [6], [7], [8]]]}
+
+
+def test_nccl_rejects_the_reductions_it_lacks(tmp_path: Path) -> None:
+    # torch v2.14.1 ProcessGroupNCCL.cpp getNcclReduceOp: no bitwise ops, no AVG of booleans.
+    results = _simulate(tmp_path, """
+        flags = torch.tensor([1, 2], device="cuda")
+        for name in ("BAND", "BOR", "BXOR"):
+            op = getattr(dist.ReduceOp, name)
+            probe("all_reduce/" + name, lambda: dist.all_reduce(flags, op=op))
+            probe("reduce/" + name, lambda: dist.reduce(flags, dst=0, op=op))
+        probe("reduce_scatter_tensor/BOR", lambda: dist.reduce_scatter_tensor(
+            torch.zeros(1, dtype=torch.int64, device="cuda"), torch.ones(8, dtype=torch.int64, device="cuda"),
+            op=dist.ReduceOp.BOR))
+        probe("all_reduce/AVG/bool", lambda: dist.all_reduce(torch.ones(2, dtype=torch.bool, device="cuda"),
+                                                             op=dist.ReduceOp.AVG))
+        probe("all_reduce/MAX", lambda: dist.all_reduce(flags, op=dist.ReduceOp.MAX))
+        gloo = dist.new_group(list(range(8)), backend="gloo")
+        probe("gloo_group/BAND", lambda: [dist.get_backend(gloo), dist.all_reduce(flags, op=dist.ReduceOp.BAND,
+                                                                                    group=gloo)])
+    """)
+    for name in ("BAND", "BOR", "BXOR"):
+        assert results["all_reduce/" + name] == ["ValueError", f"Cannot use ReduceOp.{name} with NCCL"]
+        assert results["reduce/" + name] == ["ValueError", f"Cannot use ReduceOp.{name} with NCCL"]
+    assert results["reduce_scatter_tensor/BOR"] == ["ValueError", "Cannot use ReduceOp.BOR with NCCL"]
+    assert results["all_reduce/AVG/bool"] == ["TypeError", "Cannot use ReduceOp.AVG with boolean inputs"]
+    assert results["all_reduce/MAX"] is None
+    assert results["gloo_group/BAND"] == ["gloo", None]
 
 
 def test_simulated_async_work_completes_with_its_outputs(tmp_path: Path) -> None:
