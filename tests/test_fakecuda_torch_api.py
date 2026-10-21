@@ -271,3 +271,57 @@ for index, profile_id in enumerate(("a100", "h100")):
 print("device properties passed")
 """
     )
+
+
+def test_streams_and_events_follow_torch_cuda() -> None:
+    # c10/cuda/CUDAEvent.h (v2.14.1) elapsed_time raises ValueError unless
+    # both events time and were recorded; torch.cuda.Event takes ``external``;
+    # torch.Stream has device, device_type and priority, and entering it or
+    # torch.cuda.set_stream selects the stream's device
+    # (THPStream_enter, THCPModule_setStream_wrap); torch.cuda.stream(None)
+    # is a no-op.
+    _run(
+        """
+fakegpu.init(runtime="fakecuda", devices="a100:2")
+import torch
+
+
+def raises(message, call):
+    try:
+        call()
+    except ValueError as exc:
+        assert message in str(exc), exc
+    else:
+        raise AssertionError(message)
+
+
+start, end = torch.cuda.Event(), torch.cuda.Event()
+start.record()
+end.record()
+raises("enable_timing=True", lambda: start.elapsed_time(end))
+start = torch.cuda.Event(enable_timing=True)
+end = torch.cuda.Event(enable_timing=True, external=False)
+assert start.device is None
+raises("must be recorded", lambda: start.elapsed_time(end))
+start.record()
+end.record(torch.cuda.current_stream())
+assert start.device == torch.device("cuda", 0)
+assert isinstance(start.elapsed_time(end), float)
+
+side = torch.cuda.Stream(device=1, priority=-1)
+assert (side.device, side.device_type, side.priority) == (torch.device("cuda", 1), 1, -1)
+assert side.record_event().device == torch.device("cuda", 1)
+
+with torch.cuda.stream(None):
+    assert torch.cuda.current_stream() == torch.cuda.default_stream()
+for enter in (lambda: torch.cuda.stream(side), lambda: side, lambda: torch.cuda.StreamContext(side)):
+    with enter():
+        assert torch.cuda.current_device() == 1
+        assert torch.cuda.current_stream() is side
+    assert torch.cuda.current_device() == 0
+    assert torch.cuda.current_stream(1) is torch.cuda.default_stream(1)
+torch.cuda.set_stream(side)
+assert torch.cuda.current_device() == 1
+print("streams and events passed")
+"""
+    )

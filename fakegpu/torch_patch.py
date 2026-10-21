@@ -1368,6 +1368,107 @@ def _install_to_overloads(upstream: Any, torch_mod: Any) -> None:
     upstream._module_to = _module_to_any_overload
 
 
+def _install_stream_event_semantics(upstream: Any, torch_mod: Any) -> None:
+    """Give fake streams and events the attributes and checks torch has.
+
+    Timing is not modeled, so ``elapsed_time`` stays 0 ms, but it raises the
+    ``ValueError`` CUDA events raise when timing is off or a side was never
+    recorded (c10/cuda/CUDAEvent.h).
+    """
+
+    class _Stream(upstream._FakeStream):
+        device_type = 1  # c10::DeviceType::CUDA
+
+        def __init__(
+            self,
+            device: Any = None,
+            priority: int = 0,
+            stream_id: int | None = None,
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(device, priority, stream_id, **kwargs)
+            self.priority = int(priority)
+            self._fakegpu_context: list[tuple[Any, int]] = []
+
+        @property
+        def device(self) -> Any:
+            return torch_mod.device("cuda", self.device_index)
+
+        def record_event(self, event: Any = None) -> Any:
+            if event is None:
+                event = _Event()
+            event.record(self)
+            return event
+
+        def __enter__(self) -> "_Stream":
+            # torch.Stream.__enter__ makes the stream current on its device
+            # and selects that device until __exit__.
+            previous_device = int(upstream._CURRENT_DEVICE)
+            previous_stream = upstream._current_stream(self.device_index)
+            self._fakegpu_context.append((previous_stream, previous_device))
+            _set_stream(self)
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            previous_stream, previous_device = self._fakegpu_context.pop()
+            _set_stream(previous_stream)
+            upstream._CURRENT_DEVICE = previous_device
+            return None
+
+    def _set_stream(stream: Any) -> None:
+        # torch.cuda.set_stream also selects the stream's device
+        # (THCPModule_setStream_wrap); None is a no-op.
+        if stream is None:
+            return
+        upstream._CURRENT_DEVICE = _checked_ordinal(int(stream.device_index))
+        upstream._set_stream(stream)
+
+    def _stream(stream: Any) -> Any:
+        # The real StreamContext: a no-op for None, restores both devices'
+        # streams on exit.
+        return torch_mod.cuda.StreamContext(stream)
+
+    class _Event(upstream._FakeEvent):
+        def __init__(
+            self,
+            enable_timing: bool = False,
+            blocking: bool = False,
+            interprocess: bool = False,
+            external: bool = False,
+        ) -> None:
+            super().__init__(enable_timing, blocking, interprocess)
+            self._fakegpu_timing = bool(enable_timing)
+            self._fakegpu_device: Any = None
+
+        @property
+        def device(self) -> Any:
+            # None until the event is first recorded.
+            return self._fakegpu_device
+
+        def record(self, stream: Any = None) -> None:
+            if stream is None:
+                stream = torch_mod.cuda.current_stream()
+            self._fakegpu_device = torch_mod.device("cuda", stream.device_index)
+
+        def elapsed_time(self, end_event: Any) -> float:
+            if not (self._fakegpu_timing and getattr(end_event, "_fakegpu_timing", False)):
+                raise ValueError(
+                    "Both events must be created with argument 'enable_timing=True'."
+                )
+            if self._fakegpu_device is None or end_event._fakegpu_device is None:
+                raise ValueError(
+                    "Both events must be recorded before calculating elapsed time."
+                )
+            return 0.0
+
+    upstream._FakeStream = _Stream
+    upstream._FakeEvent = _Event
+    torch_mod.cuda.Stream = _Stream
+    torch_mod.cuda.Event = _Event
+    torch_mod.cuda.set_stream = _set_stream
+    torch_mod.cuda.stream = _stream
+
+
 def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
     """Record host-device and peer copies in ``_link_traffic``.
 
@@ -1785,6 +1886,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     torch_mod.cuda._fakegpu_simulated = True
 
     _install_device_index_validation(upstream, torch_mod)
+    _install_stream_event_semantics(upstream, torch_mod)
 
     if _MEMORY_TRACKING:
         per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
