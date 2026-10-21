@@ -11,12 +11,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ._serving_kv import (
-    _effective_tokens,
     _transient_bytes,
     estimate_serving_kv_pool,
     estimate_serving_request_kv_pool,
 )
 from ._serving_speculative import _select_larger_transient, _speculative_report
+from .llm_estimator import _effective_context_tokens as _effective_tokens
 
 
 def _serving_memory_breakdown(

@@ -552,14 +552,6 @@ def _retained_prefix_tokens(
     return max(0, shared_prefix_tokens - evicted_tokens)
 
 
-def _effective_tokens(
-    tokens: int,
-    *,
-    window_tokens: int | None,
-) -> int:
-    return min(tokens, window_tokens) if window_tokens is not None else tokens
-
-
 def _transient_bytes(
     dimensions: Mapping[str, Any],
     *,

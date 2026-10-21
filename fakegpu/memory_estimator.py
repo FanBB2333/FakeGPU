@@ -14,6 +14,7 @@ from .workspace_profiles import (
     _iter_tensor_leaves,
     _node_input_tensors,
     _resolve_gpu_profile,
+    _tensor_bytes as _tensor_logical_bytes,
     load_workspace_profiles,
     match_workspace_profile,
 )
@@ -1658,10 +1659,6 @@ def _unique_tensors_by_identity(tensors: Iterable[Any]) -> list[Any]:
     for tensor in tensors:
         unique.setdefault(id(tensor), tensor)
     return list(unique.values())
-
-
-def _tensor_logical_bytes(tensor: Any) -> int:
-    return int(tensor.numel()) * int(tensor.element_size())
 
 
 def _unique_tensor_storage_bytes(tensors: Iterable[Any]) -> int:
