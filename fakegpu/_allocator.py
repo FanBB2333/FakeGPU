@@ -141,6 +141,17 @@ def _allocator_segment_size(block_size: int) -> tuple[int, str]:
     return size, "large"
 
 
+def _format_size(size: int) -> str:
+    """Mirror ``c10::CachingAllocator::format_size`` used in OOM messages."""
+    if size <= 1024:
+        return f"{size} bytes"
+    if size <= 1024**2:
+        return f"{size / 1024:.2f} KiB"
+    if size <= 1024**3:
+        return f"{size / 1024**2:.2f} MiB"
+    return f"{size / 1024**3:.2f} GiB"
+
+
 def _allocator_should_split(pool: str, remaining: int) -> bool:
     # CUDACachingAllocator should_split(): a small-pool block keeps any
     # remainder of at least kMinBlockSize as a separate free block; a
@@ -427,17 +438,10 @@ class _DeviceMemoryTracker:
                 )
             if block is None:
                 stats.num_ooms += 1
-                free = max(0, self._total[device] - self._reserved[device])
                 import torch
 
                 raise torch.cuda.OutOfMemoryError(
-                    f"CUDA out of memory. Tried to allocate "
-                    f"{nbytes / 2**20:.2f} MiB. "
-                    f"GPU {device} has a total capacity of "
-                    f"{self._total[device] / 2**30:.2f} GiB "
-                    f"of which {free / 2**30:.2f} GiB is free. "
-                    f"FakeGPU has {self._used[device] / 2**30:.2f} GiB allocated "
-                    f"and {self._reserved[device] / 2**30:.2f} GiB reserved."
+                    self._out_of_memory_message(device, block_size)
                 )
             meta = dict(metadata or {})
             stage = str(
@@ -480,6 +484,28 @@ class _DeviceMemoryTracker:
             self._alloc_calls[device] += 1
             self._record_largest_allocation(data_ptr, device, nbytes, meta)
             return True
+
+    def _out_of_memory_message(self, device: int, block_size: int) -> str:
+        # CUDACachingAllocator::malloc() reports the segment size it tried to
+        # cudaMalloc and the free memory left after releasing cached blocks.
+        # Per-process NVML usage is omitted, as PyTorch does without NVML.
+        alloc_size, _ = _allocator_segment_size(block_size)
+        total = self._total[device]
+        reserved = self._stats[device].total("reserved_bytes").current
+        allocated = self._stats[device].total("allocated_bytes").current
+        free = max(0, total - reserved)
+        return (
+            f"CUDA out of memory. Tried to allocate {_format_size(alloc_size)}. "
+            f"GPU {device} has a total capacity of {_format_size(total)} "
+            f"of which {_format_size(free)} is free. "
+            f"Of the allocated memory {_format_size(allocated)} is allocated "
+            f"by PyTorch, and {_format_size(reserved - allocated)} is reserved "
+            "by PyTorch but unallocated. If reserved but unallocated memory is "
+            "large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True "
+            "to avoid fragmentation.  See documentation for Memory Management  "
+            "(https://docs.pytorch.org/docs/stable/notes/cuda.html"
+            "#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        )
 
     def release(self, data_ptr: int) -> None:
         """Unregister allocation."""

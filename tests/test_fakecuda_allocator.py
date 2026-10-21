@@ -173,6 +173,39 @@ def test_allocator_oom_reports_reserved_state_and_counter() -> None:
     assert stats["allocated_bytes.all.current"] == 2 * MIB
 
 
+def test_allocator_oom_message_matches_cuda_caching_allocator() -> None:
+    # Message layout and sizes from CUDACachingAllocator::malloc() and
+    # c10::CachingAllocator::format_size() (PyTorch v2.14.1).
+    torch = pytest.importorskip("torch")
+    from fakegpu._allocator import _format_size
+
+    assert [
+        _format_size(size)
+        for size in (512, 1024, 1025, MIB, MIB + 1, 1024**3, 2 * 1024**3)
+    ] == [
+        "512 bytes",
+        "1024 bytes",
+        "1.00 KiB",
+        "1024.00 KiB",
+        "1.00 MiB",
+        "1024.00 MiB",
+        "2.00 GiB",
+    ]
+
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 60 * MIB - 100, 0)
+    with pytest.raises(torch.OutOfMemoryError) as excinfo:
+        tracker.allocate(2, 5 * MIB, 0)
+    assert str(excinfo.value).startswith(
+        "CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total "
+        "capacity of 64.00 MiB of which 4.00 MiB is free. Of the allocated "
+        "memory 60.00 MiB is allocated by PyTorch, and 0 bytes is reserved by "
+        "PyTorch but unallocated. If reserved but unallocated memory is large "
+        "try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid "
+        "fragmentation."
+    )
+
+
 def test_allocator_memory_stats_follow_cuda_caching_allocator() -> None:
     # Expected values follow DeviceStats updates in CUDACachingAllocator.cpp
     # and the key layout of torch.cuda.memory_stats() (PyTorch v2.14.1).
