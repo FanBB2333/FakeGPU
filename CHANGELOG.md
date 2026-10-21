@@ -263,6 +263,29 @@
   `-1` used to wrap to the maximum.
 - Hybrid mode on hosts with more than 16 real GPUs maps virtual devices onto
   the first 16 instead of indexing past the 16-entry real-GPU tables.
+- `fakegpu nvidia-smi --query-gpu` and `--query-compute-apps` accept every
+  field and alias nvidia-smi 590 lists, such as `utilization.gpu`,
+  `temperature.gpu`, `gpu_name`, `gpu_bus_id` and `used_memory`, instead of
+  failing the whole query. Fields FakeGPU does not model print nvidia-smi's
+  `[N/A]` (missing values printed `N/A` before), and an alias is headed by
+  nvidia-smi's name, so `clocks.sm` reads `clocks.current.sm [MHz]`.
+- The `timestamp` query field is the time of the query in nvidia-smi's
+  `YYYY/MM/DD HH:MM:SS.msec` format. It was the state file's write time
+  without milliseconds, which parsers expecting nvidia-smi's format rejected.
+- A looping `fakegpu nvidia-smi` CSV query prints its header once and then
+  appends rows, like nvidia-smi, instead of repeating the header after a
+  blank line or clearing the terminal on every refresh. `-lms`/`--loop-ms`
+  sets the interval in milliseconds, and `-l` without a value loops every
+  5 seconds.
+- `fakegpu nvidia-smi --query-gpu=power.default_limit` reports the profile's
+  reference power ceiling, nvidia-smi's default power limit, instead of its
+  typical workload power, which printed `0.0 W` for the 174 profiles where
+  that is unknown, including `a100`. `power.min_limit` reports the catalog's
+  minimum, and specifications the catalog marks unknown (0), such as clocks
+  or SM count, print `[N/A]` instead of 0.
+- `fakegpu nvidia-smi -i` matches a PCI bus ID in every form NVML accepts,
+  such as `0000:02:00.0` from CUDA or `02:00.0`, not only the exact
+  `00000000:02:00.0` spelling.
 
 ## v1.6.0 - 2026-10-17
 

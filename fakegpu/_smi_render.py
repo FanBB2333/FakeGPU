@@ -24,6 +24,7 @@ from ._smi_query import (
     _has_native_activity,
     _query_csv_header,
     _query_csv_value,
+    _query_timestamp,
     _query_value,
 )
 from ._smi_state import DEFAULT_STALE_AFTER_SECONDS, build_inventory
@@ -969,9 +970,15 @@ def render_query(
     query_kind: str,
     output_format: Mapping[str, Any],
 ) -> str:
+    # nvidia-smi stamps every row with the time of the query, not of the data.
+    stamp = _query_timestamp()
     values = [
         {
-            field: _query_value(record, available[field])
+            field: (
+                stamp
+                if available[field].path == "timestamp"
+                else _query_value(record, available[field])
+            )
             for field in fields
         }
         for record in records

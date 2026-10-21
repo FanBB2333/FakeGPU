@@ -78,6 +78,10 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   cells that contain a comma, quote, or newline. `--query-gpu=count` repeats
   the number of GPUs on every row, as Accelerate expects, and still counts
   every GPU when `-i` selects some.
+- `--query-gpu` and `--query-compute-apps` also accept every field and alias
+  of nvidia-smi 590's `--help-query-*` lists, headed by nvidia-smi's column
+  names. Fields FakeGPU does not model, such as `utilization.gpu` or
+  `temperature.gpu`, print `[N/A]`.
 - Native interception also publishes allocation lifetime, transfer volume,
   kernel launches, GEMM calls and FLOPs, compatibility events, and unsupported
   API counts. `FAKEGPU_SMI_DETAIL_LIMIT` and `FAKEGPU_SMI_MAX_STATE_BYTES` limit

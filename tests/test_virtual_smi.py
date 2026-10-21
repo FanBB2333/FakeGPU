@@ -1417,3 +1417,202 @@ def test_virtual_smi_count_requires_loop(capsys) -> None:
         main(["--query-gpu", "unknown.field"])
     assert exc_info.value.code == 2
     assert "unsupported query field" in capsys.readouterr().err
+
+
+def _csv_cells(line: str) -> list[str]:
+    return [cell.strip() for cell in line.split(",")]
+
+
+def test_virtual_smi_accepts_every_nvidia_smi_query_field_and_alias(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    # Field names, aliases and headers from nvidia-smi 590.48.01
+    # --help-query-gpu / --help-query-compute-apps. Fields FakeGPU does not
+    # model print nvidia-smi's [N/A] instead of failing the whole query.
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+
+    # Lightning's get_nvidia_gpu_stats query.
+    assert main([
+        "--state", str(path),
+        "--query-gpu=utilization.gpu,memory.used,memory.free,"
+        "utilization.memory,fan.speed,temperature.gpu,temperature.memory",
+        "--format=csv,nounits,noheader",
+        "--id=0",
+    ]) == 0
+    assert _csv_cells(capsys.readouterr().out.strip()) == [
+        "[N/A]", "3072", "5120", "[N/A]", "[N/A]", "[N/A]", "[N/A]",
+    ]
+
+    # Aliases are headed by the first name nvidia-smi lists.
+    assert main([
+        "--state", str(path),
+        "--query-gpu=gpu_name,gpu_bus_id,gpu_uuid,clocks.sm,clocks.mem,"
+        "gpu.power.max_limit,vbios_version,power.draw",
+        "--format=csv",
+    ]) == 0
+    header, row = capsys.readouterr().out.splitlines()
+    assert _csv_cells(header) == [
+        "name", "pci.bus_id", "uuid", "clocks.current.sm [MHz]",
+        "clocks.current.memory [MHz]", "power.max_limit [W]",
+        "vbios_version", "power.draw [W]",
+    ]
+    cells = _csv_cells(row)
+    assert cells[:2] == ["Fake NVIDIA Test GPU", "00000000:01:00.0"]
+    assert cells[-2:] == ["[N/A]", "[N/A]"]
+
+    assert main([
+        "--state", str(path),
+        "--query-compute-apps=pid,name,used_memory,gpu_bus_id,gpu_serial",
+        "--format=csv",
+    ]) == 0
+    header, row = capsys.readouterr().out.splitlines()
+    assert _csv_cells(header) == [
+        "pid", "process_name", "used_gpu_memory [MiB]", "gpu_bus_id",
+        "gpu_serial",
+    ]
+    assert _csv_cells(row)[2:] == ["3072 MiB", "00000000:01:00.0", "[N/A]"]
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--state", str(path), "--query-gpu", "utilization.gpuu"])
+    assert exc_info.value.code == 2
+
+
+def test_virtual_smi_query_timestamp_is_the_query_time_in_milliseconds(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    import datetime
+
+    import fakegpu._smi_query as smi_query
+
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+    query_ns = time.time_ns() + 123_456_789
+    monkeypatch.setattr(smi_query.time, "time_ns", lambda: query_ns)
+
+    assert main([
+        "--state", str(path),
+        "--query-gpu=timestamp,index",
+        "--format=csv,noheader",
+    ]) == 0
+    stamp = _csv_cells(capsys.readouterr().out.strip())[0]
+    # nvidia-smi --help-query-gpu: "YYYY/MM/DD HH:MM:SS.msec", the time of
+    # the query; parsed as PerfKitBenchmarker's nvidia_power collector does.
+    parsed = datetime.datetime.strptime(stamp, "%Y/%m/%d %H:%M:%S.%f")
+    assert parsed.timestamp() == pytest.approx(query_ns // 10**6 / 1e3)
+
+
+def test_virtual_smi_looping_query_appends_rows_under_one_header(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+    sleeps: list[float] = []
+    monkeypatch.setattr(smi_module.time, "sleep", sleeps.append)
+
+    # nvidia-smi's -lms is -l in milliseconds; a looping CSV query prints the
+    # header once and then only rows, so one csv.DictReader reads the whole
+    # stream (PerfKitBenchmarker's nvidia_power collector relies on this).
+    assert main([
+        "--state", str(path),
+        "--query-gpu=index,memory.used",
+        "--format=csv",
+        "-lms", "250",
+        "--count", "3",
+    ]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert [_csv_cells(line) for line in lines] == [
+        ["index", "memory.used [MiB]"],
+        ["0", "3072 MiB"],
+        ["0", "3072 MiB"],
+        ["0", "3072 MiB"],
+    ]
+    assert sleeps == [0.25, 0.25]
+
+    # -l without a value loops every 5 seconds (nvidia-smi man page).
+    sleeps.clear()
+    assert main([
+        "--state", str(path),
+        "--query-gpu=index",
+        "--format=csv,noheader",
+        "-l",
+        "--count", "2",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines() == ["0", "0"]
+    assert sleeps == [5.0]
+
+
+def test_virtual_smi_reports_the_reference_power_ceiling_and_unknown_specs(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "name": profile_id,
+                    "profile_id": profile_id,
+                    "total_memory": 64 * 2**30,
+                }
+                for index, profile_id in enumerate(("a100", "h100-sxm5-64gb"))
+            ]
+        },
+    ).publish_once(running=True)
+
+    assert main([
+        "--state", str(path),
+        "--query-gpu=index,power.default_limit,power.max_limit,clocks.sm,sm_count",
+        "--format=csv,noheader,nounits",
+    ]) == 0
+    rows = [_csv_cells(line) for line in capsys.readouterr().out.splitlines()]
+    # power.default_limit is nvidia-smi's default power ceiling, equal to the
+    # maximum limit on an SXM part (an H100 SXM reports 700.00 W for both).
+    # The a100 profile's typical workload power is unknown (0); it is not the
+    # ceiling. Specifications the catalog marks unknown print [N/A], not 0.
+    assert rows == [
+        ["0", "400.0", "400.0", "1410", "108"],
+        ["1", "[N/A]", "[N/A]", "[N/A]", "[N/A]"],
+    ]
+
+
+def test_virtual_smi_selects_pci_bus_ids_in_every_nvml_form(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "name": "Fake NVIDIA Test GPU",
+                    "profile_id": "test",
+                    "total_memory": 8 * 2**30,
+                }
+                for index in range(3)
+            ]
+        },
+    ).publish_once(running=True)
+
+    # nvidia-smi -i takes a PCI bus ID as domain:bus:device.function in hex;
+    # nvmlDeviceGetHandleByPciBusId also accepts domain:bus:device and
+    # bus:device.function (nvml.h).
+    for selector in (
+        "00000000:02:00.0", "0000:02:00.0", "02:00.0", "0:2:0", "0:2:0.0",
+    ):
+        assert main([
+            "--state", str(path), "-i", selector,
+            "--query-gpu=index,pci.bus_id", "--format=csv,noheader",
+        ]) == 0
+        assert _csv_cells(capsys.readouterr().out.strip()) == [
+            "1", "00000000:02:00.0",
+        ], selector

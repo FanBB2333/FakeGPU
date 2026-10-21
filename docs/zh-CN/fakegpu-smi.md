@@ -72,6 +72,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 - CSV 输出和 `nvidia-smi` 一样用 `, ` 分隔字段，只有包含逗号、引号或换行的单元格
   才加引号。`--query-gpu=count` 在每一行重复 GPU 数量，符合 Accelerate 的预期；
   用 `-i` 选择部分 GPU 时仍计入全部 GPU。
+- `--query-gpu` 与 `--query-compute-apps` 还接受 nvidia-smi 590 `--help-query-*`
+  列出的全部字段与别名，列名与 nvidia-smi 一致。FakeGPU 未建模的字段（如
+  `utilization.gpu`、`temperature.gpu`）输出 `[N/A]`。
 - 原生拦截还会发布 allocation 生命周期、传输量、kernel launch、GEMM 调用与 FLOP、
   兼容性事件和 unsupported API 次数。`FAKEGPU_SMI_DETAIL_LIMIT` 与
   `FAKEGPU_SMI_MAX_STATE_BYTES` 分别限制保留的明细和状态文件大小。

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import socket
 import time
 import uuid
@@ -834,7 +835,45 @@ def _matches_device(
     for instance in device["mig"]["instances"]:
         candidates.add(instance["uuid"].casefold())
         candidates.add(instance["profile"].casefold())
-    return any(selector in candidates for selector in selectors)
+    bus_id = _pci_bus_id_key(str(device["pci_bus_id"]))
+    return any(
+        selector in candidates
+        or (bus_id is not None and _pci_bus_id_key(selector) == bus_id)
+        for selector in selectors
+    )
+
+
+# The PCI bus ID forms NVML's nvmlDeviceGetHandleByPciBusId accepts, all hex:
+# domain:bus:device.function, domain:bus:device and bus:device.function.
+_PCI_BUS_ID_FORMS = tuple(
+    re.compile(
+        pattern.format(
+            domain=r"(?P<domain>[0-9a-f]+)",
+            bus=r"(?P<bus>[0-9a-f]+)",
+            device=r"(?P<device>[0-9a-f]+)",
+            function=r"(?P<function>[0-9a-f]+)",
+        )
+    )
+    for pattern in (
+        r"{domain}:{bus}:{device}\.{function}",
+        r"{domain}:{bus}:{device}",
+        r"{bus}:{device}\.{function}",
+    )
+)
+
+
+def _pci_bus_id_key(value: str) -> tuple[int, int, int, int] | None:
+    for form in _PCI_BUS_ID_FORMS:
+        match = form.fullmatch(value.casefold())
+        if match:
+            parts = match.groupdict()
+            return (
+                int(parts.get("domain") or "0", 16),
+                int(parts["bus"], 16),
+                int(parts["device"], 16),
+                int(parts.get("function") or "0", 16),
+            )
+    return None
 
 
 def _empty_device_aggregate(
