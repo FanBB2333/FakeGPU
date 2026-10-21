@@ -91,40 +91,18 @@ CollectiveExecutionResult execute_variable_alltoall(
     CollectiveExecutionResult result;
     result.ok = true;
     for (const CollectiveExecutionParticipant& participant : participants) {
-        const std::vector<char>& output =
+        std::vector<char>& output =
             outputs[static_cast<std::size_t>(participant.rank)];
-        if (participant.transport == BufferTransport::SocketPayload) {
-            if (!store_participant_buffer(
-                    participant.transport,
-                    participant.staging_name,
-                    request.dtype,
-                    {participant.output_bytes / dtype_size},
-                    participant.rank,
-                    request.seqno,
-                    output.data(),
-                    participant.output_bytes,
-                    result.output_payloads[participant.rank],
-                    error)) {
-                return collective_error("staging_open_failed", error);
-            }
-            continue;
+        if (participant.transport == BufferTransport::SharedMemory) {
+            output.resize(participant.bytes);
         }
-
-        std::vector<char> staging_output(participant.bytes, '\0');
-        std::memcpy(
-            staging_output.data(),
-            output.data(),
-            participant.output_bytes);
-        if (!store_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                request.dtype,
-                {participant.bytes / dtype_size},
-                participant.rank,
-                request.seqno,
-                staging_output.data(),
-                participant.bytes,
-                result.output_payloads[participant.rank],
+        if (!store_participant_output(
+                request,
+                participant,
+                {output.size() / dtype_size},
+                output.data(),
+                output.size(),
+                result,
                 error)) {
             return collective_error("staging_open_failed", error);
         }
@@ -163,23 +141,14 @@ CollectiveExecutionResult execute_alltoall(
         if (participant.bytes != request.bytes) {
             return collective_error(
                 "staging_size_mismatch",
-                "participant rank " + std::to_string(participant.rank) +
-                    " reported bytes=" + std::to_string(participant.bytes) +
-                    ", expected " + std::to_string(request.bytes));
+                participant_size_mismatch(participant, request));
         }
 
         std::vector<char> buffer;
-        if (!load_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                request.dtype,
-                participant.transport == BufferTransport::SocketPayload
-                    ? participant.payload_bytes
-                    : request.bytes,
+        if (!load_participant_input(
+                request,
+                participant,
                 {plan.world_size, plan.chunk_elements},
-                participant.rank,
-                request.seqno,
-                participant.payload,
                 buffer,
                 error)) {
             return collective_error("staging_open_failed", error);
@@ -205,16 +174,13 @@ CollectiveExecutionResult execute_alltoall(
     CollectiveExecutionResult result;
     result.ok = true;
     for (const CollectiveExecutionParticipant& participant : participants) {
-        if (!store_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                request.dtype,
+        if (!store_participant_output(
+                request,
+                participant,
                 {plan.world_size, plan.chunk_elements},
-                participant.rank,
-                request.seqno,
                 outputs.data() + static_cast<std::size_t>(participant.rank) * plan.total_bytes,
                 plan.total_bytes,
-                result.output_payloads[participant.rank],
+                result,
                 error)) {
             return collective_error("staging_open_failed", error);
         }
