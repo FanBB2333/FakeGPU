@@ -34,7 +34,9 @@ KV segments, runtime overhead, and usable headroom.
 
 - Use `--device-memory-gib` instead of `--target-profile` for a custom
   capacity.
-- Prefix sharing needs a dynamic or paged cache.
+- Prefix sharing needs a dynamic or paged cache. Like vLLM, a paged cache
+  shares only full prefix blocks; a partial last block stays private to
+  each request.
 - Capacity search never goes beyond `--max-batch-size`.
 
 ## Match vLLM's memory reservation

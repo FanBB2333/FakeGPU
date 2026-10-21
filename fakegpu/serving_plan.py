@@ -305,8 +305,9 @@ def estimate_serving_plan(
                 "the final chunk attends to the modeled effective context."
             ),
             (
-                "Prefix caching shares retained prefix KV blocks; paged "
-                "shared and private segments are rounded independently."
+                "Prefix caching shares retained prefix KV; a paged cache "
+                "shares only full prefix blocks and keeps the partial last "
+                "prefix block in each sequence's private segment."
             ),
             (
                 "Admission uses the configured memory-utilization fraction "

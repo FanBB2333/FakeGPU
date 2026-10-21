@@ -32,7 +32,8 @@ python3 -m fakegpu plan-serving \
 開銷與可用餘量。
 
 - 自訂容量可用 `--device-memory-gib` 取代 `--target-profile`。
-- Prefix 共享需要 dynamic 或 paged cache。
+- Prefix 共享需要 dynamic 或 paged cache。與 vLLM 一致，paged cache 只共享
+  填滿的 prefix block，最後一個未填滿的 block 由每個請求各自保存。
 - 容量搜尋不會超過 `--max-batch-size`。
 
 ## 對齊 vLLM 的記憶體預留

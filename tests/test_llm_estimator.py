@@ -1001,27 +1001,48 @@ def test_serving_kv_pool_shares_prefix_across_active_sequences() -> None:
     assert shared["decode"]["allocation_utilization_percent"] == 100
 
 
-def test_serving_prefix_segments_are_rounded_independently() -> None:
+@pytest.mark.parametrize(
+    ("prompt_tokens", "shared_prefix_tokens", "shared_blocks", "private_blocks"),
+    [
+        # A 1-token prefix fills no block, so nothing is shared.
+        (17, 1, 0, 2),
+        # 20 prefix tokens share one full block; each 40-token sequence
+        # still holds cdiv(40, 16) - 1 = 2 blocks of its own.
+        (40, 20, 1, 2),
+    ],
+)
+def test_serving_paged_prefix_shares_only_full_blocks(
+    prompt_tokens: int,
+    shared_prefix_tokens: int,
+    shared_blocks: int,
+    private_blocks: int,
+) -> None:
+    # vLLM v0.32.0 vllm/v1/core/kv_cache_utils.py:980-982 hashes, and so
+    # shares, only full blocks of a prompt prefix.
     report = estimate_serving_kv_pool(
         num_hidden_layers=2,
         num_key_value_heads=1,
         head_dim=4,
         active_sequences=2,
-        prompt_tokens=17,
+        prompt_tokens=prompt_tokens,
         element_bytes=2,
         strategy="paged",
-        shared_prefix_tokens=1,
+        shared_prefix_tokens=shared_prefix_tokens,
         block_tokens=16,
     )
 
+    block_bytes = 16 * 32
     prefill = report["prefill"]
-    assert prefill["shared_segment"]["allocated_tokens_per_sequence"] == 16
+    assert prefill["retained_shared_prefix_tokens"] == 16 * shared_blocks
+    assert prefill["shared_segment"]["allocated_tokens_per_sequence"] == (
+        16 * shared_blocks
+    )
     assert prefill["private_segments"][
         "allocated_tokens_per_sequence"
-    ] == 16
-    assert prefill["without_prefix_cache_bytes"] == 2048
-    assert prefill["allocated_bytes"] == 1536
-    assert prefill["reservation_overhead_bytes"] == 480
+    ] == 16 * private_blocks
+    assert prefill["allocated_bytes"] == block_bytes * (
+        shared_blocks + 2 * private_blocks
+    )
 
 
 def test_serving_prefix_cache_rejects_unsupported_storage() -> None:
