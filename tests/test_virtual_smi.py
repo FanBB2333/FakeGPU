@@ -1503,3 +1503,45 @@ def test_virtual_smi_query_timestamp_is_the_query_time_in_milliseconds(
     # the query; parsed as PerfKitBenchmarker's nvidia_power collector does.
     parsed = datetime.datetime.strptime(stamp, "%Y/%m/%d %H:%M:%S.%f")
     assert parsed.timestamp() == pytest.approx(query_ns // 10**6 / 1e3)
+
+
+def test_virtual_smi_looping_query_appends_rows_under_one_header(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+    sleeps: list[float] = []
+    monkeypatch.setattr(smi_module.time, "sleep", sleeps.append)
+
+    # nvidia-smi's -lms is -l in milliseconds; a looping CSV query prints the
+    # header once and then only rows, so one csv.DictReader reads the whole
+    # stream (PerfKitBenchmarker's nvidia_power collector relies on this).
+    assert main([
+        "--state", str(path),
+        "--query-gpu=index,memory.used",
+        "--format=csv",
+        "-lms", "250",
+        "--count", "3",
+    ]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert [_csv_cells(line) for line in lines] == [
+        ["index", "memory.used [MiB]"],
+        ["0", "3072 MiB"],
+        ["0", "3072 MiB"],
+        ["0", "3072 MiB"],
+    ]
+    assert sleeps == [0.25, 0.25]
+
+    # -l without a value loops every 5 seconds (nvidia-smi man page).
+    sleeps.clear()
+    assert main([
+        "--state", str(path),
+        "--query-gpu=index",
+        "--format=csv,noheader",
+        "-l",
+        "--count", "2",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines() == ["0", "0"]
+    assert sleeps == [5.0]

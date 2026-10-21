@@ -650,12 +650,25 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List supported --query-runtime fields and exit.",
     )
-    parser.add_argument(
+    loop_group = parser.add_mutually_exclusive_group()
+    loop_group.add_argument(
         "-l",
         "--loop",
         type=_positive_float,
+        nargs="?",
+        const=5.0,
         metavar="SECONDS",
-        help="Refresh repeatedly at the given interval; JSON output becomes NDJSON.",
+        help=(
+            "Refresh repeatedly at the given interval (5 seconds when "
+            "omitted); JSON output becomes NDJSON."
+        ),
+    )
+    loop_group.add_argument(
+        "-lms",
+        "--loop-ms",
+        type=_positive_float,
+        metavar="MS",
+        help="Same as --loop but in milliseconds.",
     )
     parser.add_argument(
         "--count",
@@ -704,6 +717,8 @@ def _check_view_arguments(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.loop_ms is not None:
+        args.loop = args.loop_ms / 1000
 
     for query_kind, _attr, help_attr, available, _key in _QUERIES:
         if getattr(args, help_attr):
@@ -763,7 +778,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stale_after_seconds=args.stale_after_seconds,
             )
 
-            if refresh and not args.json and query_format["kind"] != "json":
+            # Like nvidia-smi, a looping query appends rows under one header.
+            if refresh and not args.json and query is None:
                 if sys.stdout.isatty():
                     sys.stdout.write("\x1b[2J\x1b[H")
                 else:
@@ -806,15 +822,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             elif query is not None:
                 query_kind, available, key, fields = query
-                print(
-                    render_query(
-                        inventory[key],
-                        fields=fields,
-                        available=available,
-                        query_kind=query_kind,
-                        output_format=query_format,
-                    )
+                text = render_query(
+                    inventory[key],
+                    fields=fields,
+                    available=available,
+                    query_kind=query_kind,
+                    output_format=(
+                        {**query_format, "noheader": True}
+                        if refresh
+                        else query_format
+                    ),
                 )
+                if text:
+                    print(text)
             else:
                 print(
                     render_table(

@@ -226,6 +226,11 @@
 - The `timestamp` query field is the time of the query in nvidia-smi's
   `YYYY/MM/DD HH:MM:SS.msec` format. It was the state file's write time
   without milliseconds, which parsers expecting nvidia-smi's format rejected.
+- A looping `fakegpu nvidia-smi` CSV query prints its header once and then
+  appends rows, like nvidia-smi, instead of repeating the header after a
+  blank line or clearing the terminal on every refresh. `-lms`/`--loop-ms`
+  sets the interval in milliseconds, and `-l` without a value loops every
+  5 seconds.
 
 ## v1.6.0 - 2026-10-17
 
