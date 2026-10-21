@@ -81,3 +81,25 @@ def test_encoder_stats_write_unsigned_int_outputs(tmp_path: Path) -> None:
         FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
     )
     assert result == [0, [0, 0, 0, 0xDEADBEEF]]
+
+
+def test_pci_bus_ids_use_nvml_formats_and_lookup_accepts_documented_forms(tmp_path: Path) -> None:
+    # nvml.h: busId "%08X:%02X:%02X.0", busIdLegacy "%04X:%02X:%02X.0"; the lookup
+    # accepts %x:%x:%x.%x, %x:%x:%x and %x:%x.%x.
+    result = _nvml(
+        tmp_path,
+        """
+        pci = N.nvmlDeviceGetPciInfo(N.nvmlDeviceGetHandleByIndex(9))
+        found = []
+        for key in (pci.busId, pci.busIdLegacy, "0:a:0", "a:0.0", "00000000:0a:00.0"):
+            found.append(N.nvmlDeviceGetIndex(N.nvmlDeviceGetHandleByPciBusId(key)))
+        try:
+            N.nvmlDeviceGetHandleByPciBusId("0000:7F:00.0")
+            missing = None
+        except N.NVMLError as exc:
+            missing = exc.value
+        result = [pci.busId, pci.busIdLegacy, pci.domain, pci.bus, pci.device, found, missing]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="10",
+    )
+    assert result == ["00000000:0A:00.0", "0000:0A:00.0", 0, 0x0A, 0, [9] * 5, 6]

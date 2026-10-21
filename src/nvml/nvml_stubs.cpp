@@ -1,4 +1,5 @@
 #include "nvml_defs.hpp"
+#include "pci_bus_id.hpp"
 #include "state_bridge.hpp"
 #include "../core/backend_config.hpp"
 #include "../core/global_state.hpp"
@@ -166,22 +167,21 @@ static bool modeled_nvlink_traffic(nvmlDevice_t device, unsigned int& ports, uin
 // Writes only the nvmlPciInfo_t prefix: nvitop loads nvmlDeviceGetPciInfo_v3
 // but allocates nvmlPciInfo_t (68 bytes), so touching the v3 reserved fields
 // would overflow the caller's buffer.
+// Bus ids use nvml.h's formats: busId "%08X:%02X:%02X.0", busIdLegacy "%04X:%02X:%02X.0".
 template<class PciInfo>
 static void fill_pci_info(const Device& device, PciInfo& pci) {
     memset(&pci, 0, sizeof(nvmlPciInfo_t));
-    snprintf(
-        pci.busIdLegacy,
-        sizeof(pci.busIdLegacy),
-        "%s",
-        device.pci_bus_id.c_str());
-    snprintf(
-        pci.busId,
-        sizeof(pci.busId),
-        "%s",
-        device.pci_bus_id.c_str());
-    pci.domain = 0;
-    pci.bus = static_cast<unsigned int>(device.index + 1);
-    pci.device = 0;
+    NvmlPciAddress address;
+    if (parse_nvml_pci_bus_id(device.pci_bus_id.c_str(), address)) {
+        format_nvml_pci_bus_id(address, pci.busId, sizeof(pci.busId), pci.busIdLegacy, sizeof(pci.busIdLegacy));
+    } else {
+        address.bus = static_cast<unsigned int>(device.index + 1);
+        snprintf(pci.busIdLegacy, sizeof(pci.busIdLegacy), "%s", device.pci_bus_id.c_str());
+        snprintf(pci.busId, sizeof(pci.busId), "%s", device.pci_bus_id.c_str());
+    }
+    pci.domain = address.domain;
+    pci.bus = address.bus;
+    pci.device = address.device;
     pci.pciDeviceId = device.profile.pci_device_id;
     pci.pciSubSystemId = device.profile.pci_device_id;
 }
@@ -375,16 +375,18 @@ nvmlReturn_t nvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t *pci) {
 nvmlReturn_t nvmlDeviceGetPciInfoExt(nvmlDevice_t device, nvmlPciInfoExt_v1_t *pci) {
     if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
+    nvmlPciInfo_t info;
+    fill_pci_info(*dev, info);
 
     pci->version = nvmlPciInfoExt_v1;
-    pci->domain = 0;
-    pci->bus = static_cast<unsigned int>(dev->index + 1);
-    pci->device = 0;
-    pci->pciDeviceId = dev->profile.pci_device_id;
-    pci->pciSubSystemId = dev->profile.pci_device_id;
+    pci->domain = info.domain;
+    pci->bus = info.bus;
+    pci->device = info.device;
+    pci->pciDeviceId = info.pciDeviceId;
+    pci->pciSubSystemId = info.pciSubSystemId;
     pci->baseClass = 3;  // Display controller
     pci->subClass = 0;
-    snprintf(pci->busId, sizeof(pci->busId), "%s", dev->pci_bus_id.c_str());
+    memcpy(pci->busId, info.busId, sizeof(pci->busId));
     return NVML_SUCCESS;
 }
 
@@ -1083,9 +1085,12 @@ nvmlReturn_t nvmlDeviceGetNvLinkRemotePciInfo_v2(
     }
     if (peer.peer_index < 0) {
         memset(pci, 0, sizeof(*pci));
-        snprintf(pci->busIdLegacy, sizeof(pci->busIdLegacy), "%s", kNvSwitchPciBusId);
-        snprintf(pci->busId, sizeof(pci->busId), "%s", kNvSwitchPciBusId);
-        pci->bus = 0xc0;
+        NvmlPciAddress address;
+        parse_nvml_pci_bus_id(kNvSwitchPciBusId, address);
+        format_nvml_pci_bus_id(address, pci->busId, sizeof(pci->busId), pci->busIdLegacy, sizeof(pci->busIdLegacy));
+        pci->domain = address.domain;
+        pci->bus = address.bus;
+        pci->device = address.device;
         return NVML_SUCCESS;
     }
     Device& remote =
@@ -1320,7 +1325,7 @@ nvmlReturn_t nvmlDeviceGetHandleByPciBusId(const char *pciBusId, nvmlDevice_t *d
     const int count = state.get_device_count();
     for (int index = 0; index < count; ++index) {
         Device& dev = state.get_device(index);
-        if (dev.pci_bus_id == pciBusId) {
+        if (nvml_pci_bus_id_matches(dev.pci_bus_id.c_str(), pciBusId)) {
             *device = (nvmlDevice_t)&dev;
             return NVML_SUCCESS;
         }
