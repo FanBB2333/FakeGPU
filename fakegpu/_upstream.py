@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import inspect
 import os
 import weakref
 from collections import OrderedDict
@@ -48,10 +49,13 @@ _DIST_WORLD_SIZE = 1
 _DIST_RANK = 0
 _ORIG_DIST_INIT: Any = None
 _ORIG_DIST_DESTROY: Any = None
+_ORIG_DDP: Any = None
 # True while a real gloo process group joins the processes of a
 # multi-process launch; see _real_launch().
 _DIST_REAL = False
 _ORIG_DIST: dict[str, Any] = {}
+# Backends that new_group() was asked for, by group.
+_GROUP_BACKENDS: dict[Any, str] = {}
 _REAL_COLLECTIVES = (
     "barrier", "all_reduce", "broadcast", "all_gather", "all_gather_object", "reduce",
     "gather", "scatter", "all_to_all", "all_to_all_single", "broadcast_object_list",
@@ -251,38 +255,123 @@ def _fake_data_parallel(
     return module(*inputs, **module_kwargs)
 
 
+# DDP's reducer error for parameters without a gradient (torch/csrc/distributed/c10d/reducer.cpp).
+_UNFINISHED_REDUCTION = (
+    "Expected to have finished reduction in the prior iteration before starting a new one. "
+    "This error indicates that your module has parameters that were not used in producing loss. "
+    "You can enable unused parameter detection by passing the keyword argument "
+    "`find_unused_parameters=True` to `torch.nn.parallel.DistributedDataParallel`, and by \n"
+    "making sure all `forward` function outputs participate in calculating loss. \n"
+    "If you already have done the above, then the distributed data parallel module wasn't able to "
+    "locate the output tensors in the return value of your module's `forward` function. Please include "
+    "the loss function and the structure of the return value of `forward` of your module when reporting "
+    "this issue (e.g. list, dict, iterable).\n"
+    "Parameter indices which did not receive grad for rank {rank}: {indices}\n"
+    " In addition, you can set the environment variable TORCH_DISTRIBUTED_DEBUG to either INFO or DETAIL "
+    "to print out information about which particular parameters did not receive gradient on this rank as "
+    "part of this error"
+)
+
+
+def _ddp_arguments(module: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """DDP's arguments, bound the way the installed torch binds them.
+
+    A misspelled keyword then fails, and a positional argument lands in the
+    same parameter, as on real GPUs.
+    """
+
+    if _ORIG_DDP is None:
+        return {**dict(zip(("device_ids", "output_device", "dim"), args)), **kwargs}
+    return dict(inspect.signature(_ORIG_DDP.__init__).bind(None, module, *args, **kwargs).arguments)
+
+
 class _FakeDistributedDataParallel(torch.nn.Module):
-    def __init__(
-        self,
-        module: torch.nn.Module,
-        device_ids: Any = None,
-        output_device: Any = None,
-        dim: int = 0,
-        process_group: Any = None,
-        **kwargs: Any,
-    ) -> None:
+    def __init__(self, module: torch.nn.Module, *args: Any, **kwargs: Any) -> None:
         super().__init__()
+        options = _ddp_arguments(module, args, kwargs)
+        ignored = set(getattr(module, "_ddp_params_and_buffers_to_ignore", ()))
+        self._parameters_to_sync = [
+            parameter for name, parameter in module.named_parameters() if name not in ignored
+        ]
+        if not any(parameter.requires_grad for parameter in self._parameters_to_sync) and not options.get(
+            "delay_all_reduce_named_params"
+        ):
+            raise RuntimeError(
+                "DistributedDataParallel is not needed when a module "
+                "doesn't have any parameter that requires a gradient."
+            )
+        device_ids, output_device = options.get("device_ids"), options.get("output_device")
+        if device_ids is not None and len(device_ids) > 1:
+            raise ValueError("device_ids can only be None or contain a single element.")
         self.module = module
-        self.dim = dim
+        self.dim = options.get("dim", 0)
         self.device_ids = (
             None if device_ids is None else [_normalize_device_index(d) for d in device_ids]
         )
         self.output_device = (
             None if output_device is None else _normalize_device_index(output_device)
         )
-        self.process_group = process_group
-        self.broadcast_buffers = bool(kwargs.get("broadcast_buffers", True))
+        self.process_group = options.get("process_group")
+        self.find_unused_parameters = bool(options.get("find_unused_parameters", False))
+        self.static_graph = bool(options.get("static_graph", False))
+        self.gradient_as_bucket_view = bool(options.get("gradient_as_bucket_view", False))
+        # PyTorch 2.14 adds forward_sync_buffers; broadcast_buffers=False alone
+        # also keeps each rank's buffers when DDP is built.
+        forward_sync_buffers, broadcast_buffers = options.get("forward_sync_buffers"), options.get("broadcast_buffers")
+        if forward_sync_buffers is not None:
+            self.broadcast_buffers, init_buffers = bool(forward_sync_buffers), True
+        else:
+            self.broadcast_buffers = init_buffers = True if broadcast_buffers is None else bool(broadcast_buffers)
         self.require_backward_grad_sync = True
+        # Whether the next forward starts from rank 0's buffers: the first one
+        # does, later ones when the forward before had gradients synced.
+        self.require_forward_param_sync = True
         if _DIST_REAL:
-            self._join_processes()
+            self._join_processes(options.get("init_sync", True), init_buffers)
+        # Trainable parameters whose gradient arrived since the last synced forward.
+        self._trainable = [parameter for parameter in self._parameters_to_sync if parameter.requires_grad]
+        self._marked: set[int] = set()
+        for index, parameter in enumerate(self._trainable):
+            unwrap_tensor(parameter).register_hook(self._marker(index))
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
-        if _DIST_REAL and self.broadcast_buffers and torch.is_grad_enabled() and self.require_backward_grad_sync:
-            # Like DDP, every training forward starts from rank 0's buffers.
+        if torch.is_grad_enabled():
+            self._check_prior_reduction()
+        if _DIST_REAL and self.broadcast_buffers and self.require_forward_param_sync:
             with torch.no_grad():
-                for buffer in self.module.buffers():
+                for buffer in self._buffers_to_sync():
                     _ORIG_DIST["broadcast"](unwrap_tensor(buffer).detach(), src=self._source, group=self.process_group)
-        return self.module(*inputs, **kwargs)
+        output = self.module(*inputs, **kwargs)
+        self.require_forward_param_sync = torch.is_grad_enabled() and self.require_backward_grad_sync
+        if self.require_forward_param_sync:
+            self._marked.clear()
+        return output
+
+    def _marker(self, index: int) -> Any:
+        def mark(grad: torch.Tensor) -> None:
+            if self.require_backward_grad_sync:
+                self._marked.add(index)
+
+        return mark
+
+    def _check_prior_reduction(self) -> None:
+        """Fail like DDP's reducer when the last backward left a parameter without a gradient.
+
+        Without ``find_unused_parameters`` or ``static_graph``, DDP waits for
+        the gradient of every trainable parameter, so on real GPUs the next
+        forward raises.
+        """
+
+        if not self._marked or self.find_unused_parameters or self.static_graph:
+            return
+        unmarked = [index for index in range(len(self._trainable)) if index not in self._marked]
+        if unmarked:
+            rank = torch.distributed.get_rank(self.process_group)
+            raise RuntimeError(_UNFINISHED_REDUCTION.format(rank=rank, indices=" ".join(map(str, unmarked))))
+
+    def _buffers_to_sync(self) -> list[torch.Tensor]:
+        ignored = set(getattr(self.module, "_ddp_params_and_buffers_to_ignore", ()))
+        return [buffer for name, buffer in self.module.named_buffers() if name not in ignored]
 
     @contextlib.contextmanager
     def no_sync(self) -> Any:
@@ -293,22 +382,25 @@ class _FakeDistributedDataParallel(torch.nn.Module):
         finally:
             self.require_backward_grad_sync = previous
 
-    def _join_processes(self) -> None:
+    def _join_processes(self, init_sync: bool, init_buffers: bool) -> None:
         """Start every rank from rank 0's weights and average gradients, like DDP.
 
-        When backward ends, every rank averages the gradients of all its
-        trainable parameters in the same order, a missing gradient counting
-        as zeros, so ranks that took different branches still combine the
-        same parameter. A parameter that no rank used keeps no gradient.
+        With ``init_sync``, every rank starts from rank 0's parameters, and
+        from its buffers too with ``init_buffers``. When backward ends, every
+        rank averages the gradients of all its trainable parameters in the
+        same order, a missing gradient counting as zeros, so ranks that took
+        different branches still combine the same parameter. A parameter that
+        no rank used keeps no gradient.
         """
 
         group = self.process_group
         self._source = 0 if group is None else torch.distributed.distributed_c10d.get_global_rank(group, 0)
+        initial = [*self._parameters_to_sync, *(self._buffers_to_sync() if init_buffers else [])] if init_sync else []
         with torch.no_grad():
-            for tensor in [*self.module.parameters(), *self.module.buffers()]:
+            for tensor in initial:
                 _ORIG_DIST["broadcast"](unwrap_tensor(tensor).detach(), src=self._source, group=group)
         world_size = _ORIG_DIST["get_world_size"](group)
-        parameters = [unwrap_tensor(parameter) for parameter in self.module.parameters() if parameter.requires_grad]
+        parameters = [unwrap_tensor(parameter) for parameter in self._parameters_to_sync if parameter.requires_grad]
         queued = False
 
         def average() -> None:
@@ -348,8 +440,31 @@ class _FakeDistributedDataParallel(torch.nn.Module):
 
 
 class _FakeAsyncWork:
+    """A finished work handle, where torch cannot wrap a future in a real one."""
+
+    def __init__(self, future: Any) -> None:
+        self._future = future
+
     def wait(self, timeout: Any = None) -> bool:
         return True
+
+    def is_completed(self) -> bool:
+        return True
+
+    def is_success(self) -> bool:
+        return True
+
+    def exception(self) -> None:
+        return None
+
+    def synchronize(self) -> None:
+        return None
+
+    def get_future(self) -> Any:
+        return self._future
+
+    def result(self) -> list[torch.Tensor]:
+        return self._future.value()
 
 
 def _split_sizes(total: int, parts: int) -> list[int]:
@@ -469,12 +584,16 @@ def _dist_init_process_group(
     group_name: str = "",
     pg_options: Any = None,
     device_id: Any = None,
+    **kwargs: Any,
 ) -> None:
     global _DIST_INITIALIZED, _DIST_BACKEND, _DIST_WORLD_SIZE, _DIST_RANK, _DIST_REAL
+    if kwargs and _ORIG_DIST_INIT is not None:
+        inspect.signature(_ORIG_DIST_INIT).bind_partial(**kwargs)  # an unknown keyword fails as in torch
     launch = _real_launch(world_size, rank, init_method, store)
     if launch is not None and _ORIG_DIST_INIT is not None:
         size, index = launch
-        options: dict[str, Any] = {"backend": "gloo", "world_size": size, "rank": index}
+        # Newer arguments, e.g. PyTorch 2.14's enable_reconfigure, go to torch as given.
+        options: dict[str, Any] = {**kwargs, "backend": "gloo", "world_size": size, "rank": index}
         for name, value in (("init_method", init_method), ("store", store), ("timeout", timeout)):
             if value is not None:
                 options[name] = value
@@ -562,6 +681,10 @@ def _real_launch(world_size: Any, rank: Any, init_method: Any, store: Any) -> tu
 
 def _dist_destroy_process_group(group: Any = None) -> None:
     global _DIST_INITIALIZED, _DIST_WORLD_SIZE, _DIST_RANK, _DIST_REAL
+    if group is None:
+        _GROUP_BACKENDS.clear()
+    else:
+        _GROUP_BACKENDS.pop(group, None)
     if _DIST_REAL:
         _ORIG_DIST_DESTROY(group)
         if group is None:
@@ -580,29 +703,68 @@ def _dist_destroy_process_group(group: Any = None) -> None:
 
 
 def _dist_get_backend(group: Any = None) -> str | None:
-    return _DIST_BACKEND if _DIST_INITIALIZED else None
+    return _requested_backend(group) if _DIST_INITIALIZED else None
+
+
+def _requested_backend(group: Any) -> str:
+    """The backend the script asked for ``group``; subgroups default to the job's."""
+
+    if group is None or group is torch.distributed.GroupMember.WORLD:
+        return _DIST_BACKEND
+    return _GROUP_BACKENDS.get(group, _DIST_BACKEND)
+
+
+def _nccl_handles(tensor: Any, group: Any) -> bool:
+    """Whether NCCL would run a collective on ``tensor``: a CUDA tensor in a group whose backend is NCCL."""
+
+    backend = _requested_backend(group).lower().replace(" ", "")
+    return isinstance(tensor, FakeCudaTensor) and (backend == "nccl" or "cuda:nccl" in backend.split(","))
+
+
+def _check_reduce_op(tensor: Any, op: Any, group: Any) -> None:
+    """Reject the reductions ProcessGroupNCCL rejects for a CUDA tensor (getNcclReduceOp)."""
+
+    if op is None or not _nccl_handles(tensor, group):
+        return
+    reduce_op = torch.distributed.ReduceOp
+    for name in ("BAND", "BOR", "BXOR"):
+        if op == getattr(reduce_op, name):
+            raise ValueError(f"Cannot use ReduceOp.{name} with NCCL")
+    if _is_avg(op) and tensor.dtype == torch.bool:
+        raise TypeError("Cannot use ReduceOp.AVG with boolean inputs")
+
+
+def _torch_knows(group: Any) -> bool:
+    """Whether torch's own process groups can answer for ``group``.
+
+    A simulated job's subgroups live in torch's ``fake`` backend, which
+    knows each one's ranks.
+    """
+
+    return _DIST_REAL or (group is not None and torch.distributed.distributed_c10d.is_initialized())
 
 
 def _dist_get_world_size(group: Any = None) -> int:
-    if _DIST_REAL:
+    if _torch_knows(group):
         return _ORIG_DIST["get_world_size"](group)
     return _DIST_WORLD_SIZE if _DIST_INITIALIZED else 1
 
 
 def _dist_get_rank(group: Any = None) -> int:
-    if _DIST_REAL:
+    if _torch_knows(group):
         return _ORIG_DIST["get_rank"](group)
     return _DIST_RANK if _DIST_INITIALIZED else 0
 
 
 def _dist_new_group(*args: Any, **kwargs: Any) -> Any:
-    if _DIST_REAL:
-        # Subgroups use the default group's gloo backend; NCCL is not there.
-        kwargs.pop("backend", None)
-        kwargs.pop("pg_options", None)
-        if len(args) > 2:
-            args = args[:2]
-    return _ORIG_DIST["new_group"](*args, **kwargs)
+    # Subgroups use the default group's backend, gloo across launched
+    # processes or torch's fake backend in a simulated job; NCCL is not there.
+    backend = kwargs.pop("backend", args[2] if len(args) > 2 else None)
+    kwargs.pop("pg_options", None)
+    group = _ORIG_DIST["new_group"](*args[:2], **kwargs)
+    if backend is not None and not torch.distributed.distributed_c10d._rank_not_in_group(group):
+        _GROUP_BACKENDS[group] = str(backend)
+    return group
 
 
 def _sum_op() -> Any:
@@ -622,33 +784,57 @@ def _divide(raw: torch.Tensor, count: int) -> None:
         raw.div_(count, rounding_mode="trunc")
 
 
+def _not_in_group(group: Any, name: str) -> bool:
+    """Whether this rank is outside ``group``; torch then warns and skips the collective."""
+
+    c10d = torch.distributed.distributed_c10d
+    if not c10d._rank_not_in_group(group):
+        return False
+    c10d._warn_not_in_group(name)
+    return True
+
+
 def _real_all_reduce(raw: torch.Tensor, op: Any, group: Any) -> None:
     """All-reduce a CPU tensor in place; gloo lacks AVG on older PyTorch."""
 
     if _is_avg(op):
-        if torch.distributed.distributed_c10d._rank_not_in_group(group):
-            return
         _ORIG_DIST["all_reduce"](raw, op=_sum_op(), group=group)
         _divide(raw, _ORIG_DIST["get_world_size"](group))
         return
     _ORIG_DIST["all_reduce"](raw, op=_sum_op() if op is None else op, group=group)
 
 
-def _done(async_op: bool) -> Any:
-    return _FakeAsyncWork() if async_op else None
+def _done(async_op: bool, outputs: list[torch.Tensor] | None = None) -> Any:
+    """The handle of a collective FakeGPU already finished, or None without ``async_op``.
+
+    Like NCCL's work, it is completed and its future holds the output tensors.
+    """
+
+    if not async_op:
+        return None
+    future: Any = torch.futures.Future()
+    future.set_result(list(outputs or []))
+    create = getattr(getattr(torch._C, "_distributed_c10d", None), "_create_work_from_future", None)
+    return _FakeAsyncWork(future) if create is None else create(future)
 
 
-def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = None) -> Any:
+def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = None, timeout: Any = None) -> Any:
+    if _not_in_group(group, "barrier"):
+        return None
     if _DIST_REAL:
-        return _ORIG_DIST["barrier"](group=group, async_op=async_op)
-    return _FakeAsyncWork() if async_op else None
+        options = {"timeout": timeout} if timeout is not None else {}
+        return _ORIG_DIST["barrier"](group=group, async_op=async_op, **options)
+    return _done(async_op)
 
 
 def _dist_all_reduce(tensor: torch.Tensor, op: Any = None, group: Any = None, async_op: bool = False) -> Any:
+    if _not_in_group(group, "all_reduce"):
+        return None
+    _check_reduce_op(tensor, op, group)
     if _DIST_REAL:
         _real_all_reduce(unwrap_tensor(tensor), op, group)
-        return _done(async_op)
-    return _FakeAsyncWork() if async_op else None
+        return _done(async_op, [tensor])
+    return _done(async_op, [tensor])
 
 
 def _dist_broadcast(
@@ -658,10 +844,12 @@ def _dist_broadcast(
     async_op: bool = False,
     group_src: Any = None,
 ) -> Any:
+    if _not_in_group(group, "broadcast"):
+        return None
     if _DIST_REAL:
         options = {"group_src": group_src} if group_src is not None else {"src": src}
         return _ORIG_DIST["broadcast"](unwrap_tensor(tensor), group=group, async_op=async_op, **options)
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [tensor])
 
 
 def _dist_all_gather(
@@ -670,14 +858,16 @@ def _dist_all_gather(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "all_gather"):
+        return None
     if _DIST_REAL:
         return _ORIG_DIST["all_gather"](
             [unwrap_tensor(item) for item in tensor_list], unwrap_tensor(tensor), group=group, async_op=async_op
         )
-    source = unwrap_tensor(tensor)
     for target in tensor_list:
-        unwrap_tensor(target).copy_(source)
-    return _FakeAsyncWork() if async_op else None
+        # Other ranks may contribute tensors of other sizes.
+        _copy_collective_tensor(target, tensor)
+    return _done(async_op, tensor_list)
 
 
 def _copy_collective_tensor(destination: torch.Tensor, source: torch.Tensor) -> None:
@@ -699,9 +889,14 @@ def _copy_collective_tensor(destination: torch.Tensor, source: torch.Tensor) -> 
             flat_dst[offset:end].copy_(flat_src[: end - offset])
 
 
-def _dist_all_gather_object(object_list: list[Any], obj: Any, group: Any = None) -> None:
+def _weights_only(weights_only: bool) -> dict[str, bool]:
+    # PyTorch 2.14 added the argument; pass it only when set, for older versions.
+    return {"weights_only": True} if weights_only else {}
+
+
+def _dist_all_gather_object(object_list: list[Any], obj: Any, group: Any = None, weights_only: bool = False) -> None:
     if _DIST_REAL:
-        return _ORIG_DIST["all_gather_object"](object_list, obj, group=group)
+        return _ORIG_DIST["all_gather_object"](object_list, obj, group=group, **_weights_only(weights_only))
     for index in range(len(object_list)):
         object_list[index] = obj
     return None
@@ -713,6 +908,14 @@ def _dist_all_gather_into_tensor(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "all_gather_into_tensor"):
+        return None
+    if _nccl_handles(output_tensor, group):
+        # ProcessGroupNCCL::all_gather_single checks these.
+        if input_tensor.dtype != output_tensor.dtype:
+            raise TypeError("output tensor must have the same type as input tensor")
+        if input_tensor.numel() * _dist_get_world_size(group) != output_tensor.numel():
+            raise ValueError("output tensor size must be equal to world_size times input tensor size")
     if _DIST_REAL:
         source = unwrap_tensor(input_tensor).contiguous()
         parts = [torch.empty_like(source) for _ in range(_ORIG_DIST["get_world_size"](group))]
@@ -720,9 +923,9 @@ def _dist_all_gather_into_tensor(
         target = unwrap_tensor(output_tensor)
         # Rank-major order covers both the concatenated and the stacked layout.
         target.copy_(torch.cat([part.reshape(-1) for part in parts]).reshape(target.shape))
-        return _done(async_op)
+        return _done(async_op, [output_tensor])
     _copy_collective_tensor(output_tensor, input_tensor)
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [output_tensor])
 
 
 def _dist_reduce(
@@ -733,20 +936,21 @@ def _dist_reduce(
     async_op: bool = False,
     group_dst: Any = None,
 ) -> Any:
+    if _not_in_group(group, "reduce"):
+        return None
+    _check_reduce_op(tensor, op, group)
     if _DIST_REAL:
         raw = unwrap_tensor(tensor)
         if group_dst is not None:
             c10d = torch.distributed.distributed_c10d
             dst = group_dst if group is None else c10d.get_global_rank(group, group_dst)
         if _is_avg(op):
-            if torch.distributed.distributed_c10d._rank_not_in_group(group):
-                return _done(async_op)
             _ORIG_DIST["reduce"](raw, dst=dst, op=_sum_op(), group=group)
             if torch.distributed.distributed_c10d.get_rank() == dst:
                 _divide(raw, _ORIG_DIST["get_world_size"](group))
-            return _done(async_op)
+            return _done(async_op, [tensor])
         return _ORIG_DIST["reduce"](raw, dst=dst, op=_sum_op() if op is None else op, group=group, async_op=async_op)
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [tensor])
 
 
 def _dist_gather(
@@ -757,13 +961,15 @@ def _dist_gather(
     async_op: bool = False,
     group_dst: Any = None,
 ) -> Any:
+    if _not_in_group(group, "gather"):
+        return None
     if _DIST_REAL:
         options = {"group_dst": group_dst} if group_dst is not None else {"dst": dst}
         targets = [unwrap_tensor(item) for item in gather_list] if gather_list else None
         return _ORIG_DIST["gather"](unwrap_tensor(tensor), targets, group=group, async_op=async_op, **options)
     if gather_list:
         unwrap_tensor(gather_list[0]).copy_(unwrap_tensor(tensor))
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, gather_list or [])
 
 
 def _dist_scatter(
@@ -774,13 +980,15 @@ def _dist_scatter(
     async_op: bool = False,
     group_src: Any = None,
 ) -> Any:
+    if _not_in_group(group, "scatter"):
+        return None
     if _DIST_REAL:
         options = {"group_src": group_src} if group_src is not None else {"src": src}
         sources = [unwrap_tensor(item) for item in scatter_list] if scatter_list else None
         return _ORIG_DIST["scatter"](unwrap_tensor(tensor), sources, group=group, async_op=async_op, **options)
     if scatter_list:
         unwrap_tensor(tensor).copy_(unwrap_tensor(scatter_list[0]))
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [tensor])
 
 
 def _dist_reduce_scatter(
@@ -790,15 +998,18 @@ def _dist_reduce_scatter(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "reduce_scatter"):
+        return None
+    _check_reduce_op(output, op, group)
     if _DIST_REAL:
         stacked = torch.stack([unwrap_tensor(item).reshape(-1) for item in input_list])
         _real_all_reduce(stacked, op, group)
         target = unwrap_tensor(output)
         target.copy_(stacked[_ORIG_DIST["get_rank"](group)].reshape(target.shape))
-        return _done(async_op)
+        return _done(async_op, [output])
     if input_list:
         _copy_collective_tensor(output, input_list[0])
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [output])
 
 
 def _dist_reduce_scatter_tensor(
@@ -808,15 +1019,24 @@ def _dist_reduce_scatter_tensor(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "reduce_scatter_tensor"):
+        return None
+    if _nccl_handles(output, group):
+        # ProcessGroupNCCL::reduce_scatter_single checks these.
+        if input.dtype != output.dtype:
+            raise TypeError("input tensor must be the same type as the output tensor.")
+        if input.numel() != output.numel() * _dist_get_world_size(group):
+            raise ValueError("input tensor must be the same size as output size times world size")
+    _check_reduce_op(output, op, group)
     if _DIST_REAL:
         reduced = unwrap_tensor(input).clone()
         _real_all_reduce(reduced, op, group)
         target = unwrap_tensor(output)
         size = _ORIG_DIST["get_world_size"](group)
         target.copy_(reduced.reshape(size, -1)[_ORIG_DIST["get_rank"](group)].reshape(target.shape))
-        return _done(async_op)
+        return _done(async_op, [output])
     _copy_collective_tensor(output, input)
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [output])
 
 
 def _dist_all_to_all(
@@ -825,6 +1045,8 @@ def _dist_all_to_all(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "all_to_all"):
+        return None
     if _DIST_REAL:
         return _ORIG_DIST["all_to_all"](
             [unwrap_tensor(item) for item in output_tensor_list],
@@ -833,8 +1055,8 @@ def _dist_all_to_all(
             async_op=async_op,
         )
     for output, source in zip(output_tensor_list, input_tensor_list):
-        unwrap_tensor(output).copy_(unwrap_tensor(source))
-    return _FakeAsyncWork() if async_op else None
+        _copy_collective_tensor(output, source)
+    return _done(async_op, output_tensor_list)
 
 
 def _dist_all_to_all_single(
@@ -845,6 +1067,8 @@ def _dist_all_to_all_single(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "all_to_all_single"):
+        return None
     if _DIST_REAL:
         return _ORIG_DIST["all_to_all_single"](
             unwrap_tensor(output),
@@ -854,8 +1078,9 @@ def _dist_all_to_all_single(
             group=group,
             async_op=async_op,
         )
-    unwrap_tensor(output).copy_(unwrap_tensor(input))
-    return _FakeAsyncWork() if async_op else None
+    # With uneven splits, e.g. MoE token dispatch, output and input differ in size.
+    _copy_collective_tensor(output, input)
+    return _done(async_op, [output])
 
 
 def _dist_broadcast_object_list(
@@ -864,11 +1089,16 @@ def _dist_broadcast_object_list(
     group: Any = None,
     device: Any = None,
     group_src: Any = None,
+    weights_only: bool = False,
 ) -> None:
+    if _not_in_group(group, "broadcast_object_list"):
+        return None
     if _DIST_REAL:
         options = {"group_src": group_src} if group_src is not None else {"src": src}
         # The objects travel through gloo on the CPU, whatever device is named.
-        return _ORIG_DIST["broadcast_object_list"](object_list, group=group, **options)
+        return _ORIG_DIST["broadcast_object_list"](
+            object_list, group=group, **options, **_weights_only(weights_only)
+        )
     return None
 
 
@@ -1471,9 +1701,10 @@ def enable() -> None:
 
     # Save original dist functions before patching — needed for fake backend
     # delegation so FSDP gets a real ProcessGroup.
-    global _ORIG_DIST_INIT, _ORIG_DIST_DESTROY
+    global _ORIG_DIST_INIT, _ORIG_DIST_DESTROY, _ORIG_DDP
     _ORIG_DIST_INIT = torch.distributed.init_process_group
     _ORIG_DIST_DESTROY = torch.distributed.destroy_process_group
+    _ORIG_DDP = torch.nn.parallel.distributed.DistributedDataParallel
     _ORIG_DIST.update(
         (name, getattr(torch.distributed, name))
         for name in _REAL_COLLECTIVES

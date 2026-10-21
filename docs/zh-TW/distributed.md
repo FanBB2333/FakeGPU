@@ -30,15 +30,24 @@ ZeRO/FSDP 與多機 collective 不在目前範圍內。重現入口為 `scripts/
 會產生的數值：
 
 - `get_rank()` 與 `get_world_size()` 回傳真實的 rank 與 world size。
-  `get_backend()` 仍回報要求的 backend，例如 `nccl`。
+  `get_backend()` 仍回報要求的 backend，例如 `nccl`；`get_backend(group)` 回報
+  `new_group` 要求的 backend。
 - `all_reduce`（包括 `ReduceOp.AVG`）、`broadcast`、`all_gather`、
   `all_gather_into_tensor`、`reduce_scatter`、`reduce_scatter_tensor`、`reduce`、
   `gather`、`scatter`、`all_to_all`、`all_to_all_single`、`barrier`、
   `all_gather_object` 與 `broadcast_object_list` 交換真實數值。對整數 tensor 做
-  `ReduceOp.AVG` 時向零取整。
-- `DistributedDataParallel` 建立時會廣播 rank 0 的參數與 buffer；除非設定
-  `broadcast_buffers=False`，每次訓練 forward 前還會再廣播一次 rank 0 的 buffer。
-  backward 結束時於各 rank 之間對梯度取平均；某個 rank 沒用到的參數在該 rank 上以零計。
+  `ReduceOp.AVG` 時向零取整。與 NCCL 相同，對 CUDA tensor 使用 `BAND`、`BOR`、
+  `BXOR` 會拋出 `ValueError`，對 bool tensor 使用 `AVG` 會拋出 `TypeError`，除非
+  該 group 要求的是 gloo。
+- `DistributedDataParallel` 建立時會廣播 rank 0 的參數與 buffer（設定
+  `broadcast_buffers=False` 時不廣播 buffer，設定 `init_sync=False` 時都不廣播）。
+  除非設定 `broadcast_buffers=False`，它會在第一次 forward 前、以及每次緊接在
+  `no_sync()` 之外的訓練 forward 之後的 forward 前，再廣播一次 rank 0 的 buffer，
+  與 DDP 相同。
+  backward 結束時於各 rank 之間對梯度取平均；設定 `find_unused_parameters=True`
+  時，某個 rank 沒用到的參數在該 rank 上以零計。未設定它或 `static_graph=True` 時，
+  沒有得到梯度的可訓練參數會讓下一次 forward 拋出 DDP 的 “Expected to have
+  finished reduction in the prior iteration” 錯誤，模擬程序中也是如此。
   在 `no_sync()` 內梯度只在本地累積，與真實 DDP 相同。
 - Accelerate 能看到每個程序、它的 rank 與 world size。
 
