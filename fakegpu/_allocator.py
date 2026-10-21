@@ -278,6 +278,10 @@ class _DeviceMemoryTracker:
         self._released_reserved_bytes_total = [0] * len(per_device_bytes)
         self._num_alloc_retries = [0] * len(per_device_bytes)
         self._num_ooms = [0] * len(per_device_bytes)
+        # Unlike ``num_ooms``, not cleared by torch's stat resets: `fakegpu
+        # run` reports every simulated OOM, including ones a script caught.
+        self._oom_events = [0] * len(per_device_bytes)
+        self._last_oom: list[dict[str, int] | None] = [None] * len(per_device_bytes)
         self._peak_by_stage: list[dict[str, int]] = [dict() for _ in per_device_bytes]
         self._reserved_peak_by_stage: list[dict[str, int]] = [
             dict() for _ in per_device_bytes
@@ -346,6 +350,12 @@ class _DeviceMemoryTracker:
                     )
             if block is None:
                 self._num_ooms[device] += 1
+                self._oom_events[device] += 1
+                self._last_oom[device] = {
+                    "requested_bytes": nbytes,
+                    "allocated_bytes": int(self._used[device]),
+                    "reserved_bytes": int(self._reserved[device]),
+                }
                 free = max(0, self._total[device] - self._reserved[device])
                 import torch
 
@@ -645,6 +655,8 @@ class _DeviceMemoryTracker:
                         ),
                         "allocation_count": int(self._alloc_calls[index]),
                         "free_count": int(self._free_calls[index]),
+                        "oom_events": int(self._oom_events[index]),
+                        "last_oom": dict(self._last_oom[index]) if self._last_oom[index] else None,
                         "current_bytes_by_category": self.current_bytes_by_category(
                             index
                         ),

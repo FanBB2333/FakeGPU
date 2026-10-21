@@ -218,6 +218,15 @@ def _smi_memory_snapshot() -> dict[str, Any]:
             "memory_tracking_enabled": bool(_MEMORY_TRACKING),
         }
     )
+    # ``fakegpu run`` lists a process limited by CUDA_VISIBLE_DEVICES under
+    # the run's GPU indices, as nvidia-smi does on a real machine.
+    try:
+        physical = [int(item) for item in os.environ.get("FAKEGPU_PHYSICAL_INDICES", "").split(",") if item]
+    except ValueError:
+        physical = []
+    for device in snapshot["devices"]:
+        if 0 <= device["index"] < len(physical):
+            device["index"] = physical[device["index"]]
     return snapshot
 
 

@@ -125,6 +125,23 @@ def _fakecuda_smoke() -> None:
     print("Installed FakeCUDA runtime: CPU-backed forward, backward, optimizer passed")
 
 
+def _run_command_smoke(env: dict[str, str], cwd: str) -> None:
+    """``fakegpu run`` starts FakeCUDA in an unmodified command from the installed package."""
+
+    code = (
+        "import torch; print(torch.cuda.device_count(), torch.cuda.get_device_name(1), "
+        "torch.ones(4, device='cuda:1').sum().item())"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-m", "fakegpu", "run", "--gpu", "l4x2", "--", sys.executable, "-c", code],
+        env=env, cwd=cwd, text=True, capture_output=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "2 NVIDIA L4 4.0", result.stdout
+    assert "Verdict   Fits." in result.stderr, result.stderr
+    print("Installed fakegpu run: an unmodified PyTorch command saw two simulated GPUs")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-profile-count", type=int)
@@ -153,6 +170,9 @@ def main() -> None:
             if args.expected_profile_count is not None:
                 command.extend(("--expected-profile-count", str(args.expected_profile_count)))
             subprocess.run(command, env=child_env, cwd=temporary, check=True, timeout=90)
+        run_env = {key: value for key, value in child_env.items() if not key.startswith("FAKEGPU_")}
+        run_env["FAKEGPU_HOME"] = str(Path(temporary) / "home")
+        _run_command_smoke(run_env, temporary)
 
 
 if __name__ == "__main__":

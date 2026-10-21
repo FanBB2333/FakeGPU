@@ -51,6 +51,7 @@ class CommandSpec:
 
 
 BUILTIN_COMMANDS: dict[str, CommandSpec] = {
+    "run": CommandSpec(".run_cli", "main"),
     "demo": CommandSpec(".demo", "main"),
     "doctor": CommandSpec(".doctor", "main"),
     "preflight": CommandSpec(".preflight", "main"),
