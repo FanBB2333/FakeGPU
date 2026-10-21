@@ -189,6 +189,31 @@ def test_driver_model_is_not_supported_off_windows(tmp_path: Path) -> None:
     assert result == [3, 3]
 
 
+def test_short_string_buffers_return_insufficient_size(tmp_path: Path) -> None:
+    # nvml.h: NVML_ERROR_INSUFFICIENT_SIZE if length is too small (no truncation).
+    result = _nvml(
+        tmp_path,
+        """
+        h = N.nvmlDeviceGetHandleByIndex(0)
+        name = N.nvmlDeviceGetName(h)
+        def call(fn, *args, length):
+            buffer = ctypes.create_string_buffer(b"x" * length, length)
+            return [fn(*args, buffer, ctypes.c_uint(length)), buffer.value.decode()]
+        result = [
+            call(lib.nvmlDeviceGetName, h, length=8)[0],
+            call(lib.nvmlDeviceGetName, h, length=len(name) + 1) == [0, name],
+            call(lib.nvmlDeviceGetUUID, h, length=N.NVML_DEVICE_UUID_BUFFER_SIZE)[0],
+            call(lib.nvmlDeviceGetSerial, h, length=1)[0],
+            call(lib.nvmlSystemGetDriverVersion, length=4)[0],
+            call(lib.nvmlSystemGetNVMLVersion, length=4)[0],
+            call(lib.nvmlDeviceGetVbiosVersion, h, length=4)[0],
+        ]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    assert result == [7, True, 0, 7, 7, 7, 7]
+
+
 def test_bridge_power_fields_follow_power_queries(tmp_path: Path) -> None:
     # docs/en/fakegpu-smi.md: without reference telemetry the bridge reports
     # power draw as unavailable; the field-value path must agree.

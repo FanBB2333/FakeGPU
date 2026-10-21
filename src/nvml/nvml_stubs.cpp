@@ -225,6 +225,15 @@ static nvmlReturn_t read_telemetry(nvmlDevice_t device, unsigned int* out, uint3
     return status;
 }
 
+// Copies a string into a caller buffer of `length` bytes. Like NVML, a buffer
+// without room for the terminator is NVML_ERROR_INSUFFICIENT_SIZE, not truncated.
+static nvmlReturn_t copy_string(char* out, unsigned int length, const char* value) {
+    const size_t size = std::strlen(value) + 1;
+    if (length < size) return NVML_ERROR_INSUFFICIENT_SIZE;
+    std::memcpy(out, value, size);
+    return NVML_SUCCESS;
+}
+
 // Video and accelerator engines are never busy.
 static nvmlReturn_t idle_engine_utilization(nvmlDevice_t device, unsigned int* utilization, unsigned int* samplingPeriodUs) {
     if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
@@ -301,16 +310,12 @@ nvmlReturn_t nvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device
 
 nvmlReturn_t nvmlDeviceGetName(nvmlDevice_t device, char *name, unsigned int length) {
     if (!device || !name) return NVML_ERROR_INVALID_ARGUMENT;
-    Device* dev = (Device*)device;
-    snprintf(name, length, "%s", dev->name.c_str());
-    return NVML_SUCCESS;
+    return copy_string(name, length, ((Device*)device)->name.c_str());
 }
 
 nvmlReturn_t nvmlDeviceGetUUID(nvmlDevice_t device, char *uuid, unsigned int length) {
     if (!device || !uuid) return NVML_ERROR_INVALID_ARGUMENT;
-    Device* dev = (Device*)device;
-    snprintf(uuid, length, "%s", dev->uuid.c_str());
-    return NVML_SUCCESS;
+    return copy_string(uuid, length, ((Device*)device)->uuid.c_str());
 }
 
 nvmlReturn_t nvmlDeviceGetAddressingMode(nvmlDevice_t device, nvmlDeviceAddressingMode_t *mode) {
@@ -652,16 +657,16 @@ nvmlReturn_t nvmlDeviceGetHandleByIndex_v2(unsigned int index, nvmlDevice_t *dev
 // System query functions
 nvmlReturn_t nvmlSystemGetDriverVersion(char *version, unsigned int length) {
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "%s", nvml_bridge::enabled() ? "FakeGPU" : kDriverVersion);
-    FGPU_LOG("[FakeNVML] nvmlSystemGetDriverVersion returning: %s\n", version);
-    return NVML_SUCCESS;
+    const char* value = nvml_bridge::enabled() ? "FakeGPU" : kDriverVersion;
+    FGPU_LOG("[FakeNVML] nvmlSystemGetDriverVersion returning: %s\n", value);
+    return copy_string(version, length, value);
 }
 
 nvmlReturn_t nvmlSystemGetNVMLVersion(char *version, unsigned int length) {
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "%s", nvml_bridge::enabled() ? "FakeGPU state bridge v1" : "12.570.195");
-    FGPU_LOG("[FakeNVML] nvmlSystemGetNVMLVersion returning: %s\n", version);
-    return NVML_SUCCESS;
+    const char* value = nvml_bridge::enabled() ? "FakeGPU state bridge v1" : "12.570.195";
+    FGPU_LOG("[FakeNVML] nvmlSystemGetNVMLVersion returning: %s\n", value);
+    return copy_string(version, length, value);
 }
 
 nvmlReturn_t nvmlSystemGetCudaDriverVersion(int *cudaDriverVersion) {
@@ -1007,8 +1012,7 @@ nvmlReturn_t nvmlDeviceGetBoardId(nvmlDevice_t device, unsigned int *boardId) {
 
 nvmlReturn_t nvmlDeviceGetSerial(nvmlDevice_t device, char *serial, unsigned int length) {
     if (!device || !serial) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(serial, length, "N/A");
-    return NVML_SUCCESS;
+    return copy_string(serial, length, "N/A");
 }
 
 nvmlReturn_t nvmlDeviceGetBrand(nvmlDevice_t device, unsigned int *type) {
@@ -1020,21 +1024,18 @@ nvmlReturn_t nvmlDeviceGetBrand(nvmlDevice_t device, unsigned int *type) {
 // VBIOS
 nvmlReturn_t nvmlDeviceGetVbiosVersion(nvmlDevice_t device, char *version, unsigned int length) {
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "92.00.00.00.00");
-    return NVML_SUCCESS;
+    return copy_string(version, length, "92.00.00.00.00");
 }
 
 // Info ROM
 nvmlReturn_t nvmlDeviceGetInforomVersion(nvmlDevice_t device, unsigned int object, char *version, unsigned int length) {
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "N/A");
-    return NVML_SUCCESS;
+    return copy_string(version, length, "N/A");
 }
 
 nvmlReturn_t nvmlDeviceGetInforomImageVersion(nvmlDevice_t device, char *version, unsigned int length) {
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "N/A");
-    return NVML_SUCCESS;
+    return copy_string(version, length, "N/A");
 }
 
 nvmlReturn_t nvmlDeviceValidateInforom(nvmlDevice_t device) {
