@@ -45,7 +45,10 @@ FP32/FP16/BF16 LoRA 与 attention 的 CPU_SIM 用例、tiny Qwen3 MoE 在 CPU �
   除非设置 `broadcast_buffers=False`，它会在第一次 forward 前、以及每次紧跟在
   `no_sync()` 之外的训练 forward 之后的 forward 前，再次广播 rank 0 的 buffer，
   与 DDP 一致。
-  backward 结束时对梯度做跨 rank 平均；某个 rank 没用到的参数在该 rank 上按零计。
+  backward 结束时对梯度做跨 rank 平均；设置 `find_unused_parameters=True` 时，
+  某个 rank 没用到的参数在该 rank 上按零计。未设置它或 `static_graph=True` 时，
+  没有得到梯度的可训练参数会让下一次 forward 抛出 DDP 的 “Expected to have
+  finished reduction in the prior iteration” 错误，模拟进程中也是如此。
   在 `no_sync()` 内梯度只在本地累积，与真实 DDP 一致。
 - Accelerate 能看到每个进程、它的 rank 和 world size。
 

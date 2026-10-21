@@ -358,6 +358,78 @@ def test_ddp_validates_its_arguments_like_torch(tmp_path: Path) -> None:
     ]
 
 
+def test_ddp_fails_on_unused_parameters_like_its_reducer(tmp_path: Path) -> None:
+    # Expected outcomes: real DDP over gloo; it raises at the next forward with gradients enabled.
+    results = _simulate(tmp_path, """
+        from torch.nn.parallel import DistributedDataParallel as DDP
+        class Heads(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.a, self.b, self.c = (torch.nn.Linear(2, 1) for _ in range(3))
+            def forward(self, x):
+                return self.b(x)
+        x = torch.ones(1, 2, device="cuda")
+        def steps(count, **options):
+            def run():
+                model = DDP(Heads().cuda(), **options)
+                for _ in range(count):
+                    model(x).sum().backward()
+                return "trained"
+            return run
+        probe("default", steps(2))
+        probe("find_unused_parameters", steps(3, find_unused_parameters=True))
+        probe("static_graph", steps(3, static_graph=True))
+        def evaluate_then_train():
+            model = DDP(Heads().cuda())
+            model(x).sum().backward()
+            with torch.no_grad():
+                model(x)
+            with model.no_sync():
+                try:
+                    model(x)
+                except RuntimeError:
+                    return "failed in no_sync"
+            return "evaluated"
+        probe("evaluate_then_train", evaluate_then_train)
+        def accumulate():
+            model = DDP(Heads().cuda())
+            with model.no_sync():
+                model(x).sum().backward()
+                model(x).sum().backward()
+            model(x).sum().backward()
+            return "accumulated"
+        probe("accumulate", accumulate)
+    """)
+    assert results["default"][0] == "RuntimeError"
+    assert results["default"][1].startswith(
+        "Expected to have finished reduction in the prior iteration before starting a new one.")
+    assert results["find_unused_parameters"] == "trained"
+    assert results["static_graph"] == "trained"
+    assert results["evaluate_then_train"] == "failed in no_sync"
+    assert results["accumulate"] == "accumulated"
+
+
+def test_ddp_names_the_parameters_without_gradients(tmp_path: Path) -> None:
+    results = _simulate(tmp_path, """
+        from torch.nn.parallel import DistributedDataParallel as DDP
+        class Heads(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.a, self.b, self.c = (torch.nn.Linear(2, 1) for _ in range(3))
+            def forward(self, x):
+                return self.b(x)
+        model = DDP(Heads().cuda())
+        model(torch.ones(1, 2, device="cuda")).sum().backward()
+        try:
+            model(torch.ones(1, 2, device="cuda"))
+        except RuntimeError as exc:
+            results["message"] = str(exc)
+    """)
+    # Real gloo DDP with the same module reports "... for rank 0: 0 1 4 5" on rank 0.
+    assert results["message"].startswith("Expected to have finished reduction in the prior iteration")
+    assert "\nParameter indices which did not receive grad for rank 5: 0 1 4 5\n" in results["message"]
+
+
 def test_simulated_async_work_completes_with_its_outputs(tmp_path: Path) -> None:
     results = _simulate(tmp_path, """
         x = torch.ones(2, device="cuda")

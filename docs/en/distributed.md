@@ -47,9 +47,13 @@ every rank sees the values NCCL would produce:
   is built (no buffers with `broadcast_buffers=False`, nothing with
   `init_sync=False`). Unless `broadcast_buffers=False`, it broadcasts rank 0's
   buffers again before the first forward and before every forward that
-  follows a training forward outside `no_sync()`, as DDP does. When backward ends it averages the gradients
-  across ranks; a parameter that one rank did not use counts as zeros there.
-  Inside `no_sync()` gradients accumulate locally, as with real DDP.
+  follows a training forward outside `no_sync()`, as DDP does. When backward
+  ends it averages the gradients across ranks; with
+  `find_unused_parameters=True`, a parameter that one rank did not use counts
+  as zeros there. Without it or `static_graph=True`, a trainable parameter
+  that got no gradient makes the next forward raise DDP's "Expected to have
+  finished reduction in the prior iteration" error, in a simulated process
+  too. Inside `no_sync()` gradients accumulate locally, as with real DDP.
 - Accelerate sees every process, its rank and the world size.
 
 Any other process keeps the in-process simulation, where collectives use

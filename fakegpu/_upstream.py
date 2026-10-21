@@ -255,6 +255,24 @@ def _fake_data_parallel(
     return module(*inputs, **module_kwargs)
 
 
+# DDP's reducer error for parameters without a gradient (torch/csrc/distributed/c10d/reducer.cpp).
+_UNFINISHED_REDUCTION = (
+    "Expected to have finished reduction in the prior iteration before starting a new one. "
+    "This error indicates that your module has parameters that were not used in producing loss. "
+    "You can enable unused parameter detection by passing the keyword argument "
+    "`find_unused_parameters=True` to `torch.nn.parallel.DistributedDataParallel`, and by \n"
+    "making sure all `forward` function outputs participate in calculating loss. \n"
+    "If you already have done the above, then the distributed data parallel module wasn't able to "
+    "locate the output tensors in the return value of your module's `forward` function. Please include "
+    "the loss function and the structure of the return value of `forward` of your module when reporting "
+    "this issue (e.g. list, dict, iterable).\n"
+    "Parameter indices which did not receive grad for rank {rank}: {indices}\n"
+    " In addition, you can set the environment variable TORCH_DISTRIBUTED_DEBUG to either INFO or DETAIL "
+    "to print out information about which particular parameters did not receive gradient on this rank as "
+    "part of this error"
+)
+
+
 def _ddp_arguments(module: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
     """DDP's arguments, bound the way the installed torch binds them.
 
@@ -310,15 +328,46 @@ class _FakeDistributedDataParallel(torch.nn.Module):
         self.require_forward_param_sync = True
         if _DIST_REAL:
             self._join_processes(options.get("init_sync", True), init_buffers)
+        # Trainable parameters whose gradient arrived since the last synced forward.
+        self._trainable = [parameter for parameter in self._parameters_to_sync if parameter.requires_grad]
+        self._marked: set[int] = set()
+        for index, parameter in enumerate(self._trainable):
+            unwrap_tensor(parameter).register_hook(self._marker(index))
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
+        if torch.is_grad_enabled():
+            self._check_prior_reduction()
         if _DIST_REAL and self.broadcast_buffers and self.require_forward_param_sync:
             with torch.no_grad():
                 for buffer in self._buffers_to_sync():
                     _ORIG_DIST["broadcast"](unwrap_tensor(buffer).detach(), src=self._source, group=self.process_group)
         output = self.module(*inputs, **kwargs)
         self.require_forward_param_sync = torch.is_grad_enabled() and self.require_backward_grad_sync
+        if self.require_forward_param_sync:
+            self._marked.clear()
         return output
+
+    def _marker(self, index: int) -> Any:
+        def mark(grad: torch.Tensor) -> None:
+            if self.require_backward_grad_sync:
+                self._marked.add(index)
+
+        return mark
+
+    def _check_prior_reduction(self) -> None:
+        """Fail like DDP's reducer when the last backward left a parameter without a gradient.
+
+        Without ``find_unused_parameters`` or ``static_graph``, DDP waits for
+        the gradient of every trainable parameter, so on real GPUs the next
+        forward raises.
+        """
+
+        if not self._marked or self.find_unused_parameters or self.static_graph:
+            return
+        unmarked = [index for index in range(len(self._trainable)) if index not in self._marked]
+        if unmarked:
+            rank = torch.distributed.get_rank(self.process_group)
+            raise RuntimeError(_UNFINISHED_REDUCTION.format(rank=rank, indices=" ".join(map(str, unmarked))))
 
     def _buffers_to_sync(self) -> list[torch.Tensor]:
         ignored = set(getattr(self.module, "_ddp_params_and_buffers_to_ignore", ()))

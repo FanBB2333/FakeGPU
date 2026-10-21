@@ -44,7 +44,10 @@ ZeRO/FSDP 與多機 collective 不在目前範圍內。重現入口為 `scripts/
   除非設定 `broadcast_buffers=False`，它會在第一次 forward 前、以及每次緊接在
   `no_sync()` 之外的訓練 forward 之後的 forward 前，再廣播一次 rank 0 的 buffer，
   與 DDP 相同。
-  backward 結束時於各 rank 之間對梯度取平均；某個 rank 沒用到的參數在該 rank 上以零計。
+  backward 結束時於各 rank 之間對梯度取平均；設定 `find_unused_parameters=True`
+  時，某個 rank 沒用到的參數在該 rank 上以零計。未設定它或 `static_graph=True` 時，
+  沒有得到梯度的可訓練參數會讓下一次 forward 拋出 DDP 的 “Expected to have
+  finished reduction in the prior iteration” 錯誤，模擬程序中也是如此。
   在 `no_sync()` 內梯度只在本地累積，與真實 DDP 相同。
 - Accelerate 能看到每個程序、它的 rank 與 world size。
 
