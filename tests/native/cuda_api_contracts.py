@@ -110,6 +110,42 @@ def check_mem_pool_int_attribute_size(runtime: ctypes.CDLL) -> None:
     )
 
 
+class PointerAttributes(ctypes.Structure):
+    _fields_ = [
+        ("type", ctypes.c_int),
+        ("device", ctypes.c_int),
+        ("devicePointer", c_void_p),
+        ("hostPointer", c_void_p),
+    ]
+
+
+def check_pointer_attribute_memory_types(runtime: ctypes.CDLL) -> None:
+    # CUDA 12.4 driver_types.h: cudaMemoryTypeUnregistered = 0, Host = 1,
+    # Device = 2, Managed = 3. cuda_runtime_api.h: an alias is NULL when that
+    # side cannot access the memory directly.
+    runtime.cudaPointerGetAttributes.argtypes = [ctypes.POINTER(PointerAttributes), c_void_p]
+    runtime.cudaMalloc.argtypes = [ctypes.POINTER(c_void_p), ctypes.c_size_t]
+    runtime.cudaFree.argtypes = [c_void_p]
+    host = ctypes.create_string_buffer(64)
+    attributes = PointerAttributes()
+    result = runtime.cudaPointerGetAttributes(ctypes.byref(attributes), ctypes.addressof(host))
+    _check(
+        result == 0 and attributes.type == 0 and attributes.devicePointer is None
+        and attributes.hostPointer == ctypes.addressof(host),
+        f"unregistered host memory: result {result}, type {attributes.type}, "
+        f"device alias {attributes.devicePointer}",
+    )
+    device = c_void_p()
+    _check(runtime.cudaMalloc(ctypes.byref(device), 4096) == 0, "cudaMalloc failed")
+    result = runtime.cudaPointerGetAttributes(ctypes.byref(attributes), device)
+    _check(
+        result == 0 and attributes.type == 2 and attributes.devicePointer == device.value
+        and attributes.hostPointer is None,
+        f"device memory: result {result}, type {attributes.type}, host alias {attributes.hostPointer}",
+    )
+    runtime.cudaFree(device)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -134,6 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     check_get_proc_address_v2_rejects_null_output(driver)
     check_context_push_switches_runtime_device(runtime, driver)
     check_mem_pool_int_attribute_size(runtime)
+    check_pointer_attribute_memory_types(runtime)
     print("CUDA API contract validation passed")
     return 0
 

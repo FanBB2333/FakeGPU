@@ -1302,8 +1302,14 @@ cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const vo
         }
         attributes->device = alloc_device;
     }
-    attributes->devicePointer = const_cast<void*>(ptr);
-    attributes->hostPointer = const_cast<void*>(ptr);
+    // Each alias is NULL when that side cannot access the memory directly:
+    // the host cannot dereference device memory, nor the device unregistered memory.
+    if (attributes->type != cudaMemoryTypeUnregistered) {
+        attributes->devicePointer = const_cast<void*>(ptr);
+    }
+    if (attributes->type != cudaMemoryTypeDevice) {
+        attributes->hostPointer = const_cast<void*>(ptr);
+    }
 
     return setLastError(cudaSuccess);
 }

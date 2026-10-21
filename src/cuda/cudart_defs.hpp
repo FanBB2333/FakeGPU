@@ -374,10 +374,10 @@ cudaError_t cudaDeviceGetMemPool(cudaMemPool_t *memPool, int device);
 
 // Pointer Attributes
 typedef enum {
+    cudaMemoryTypeUnregistered = 0,
     cudaMemoryTypeHost = 1,
     cudaMemoryTypeDevice = 2,
-    cudaMemoryTypeManaged = 3,
-    cudaMemoryTypeUnregistered = 4
+    cudaMemoryTypeManaged = 3
 } cudaMemoryType;
 
 typedef struct cudaPointerAttributes {
