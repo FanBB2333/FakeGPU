@@ -191,8 +191,23 @@ static unsigned int profile_clock_mhz(const Device* dev, unsigned int type) {
     return type == 2 ? dev->profile.memory_clock_mhz : dev->profile.core_clock_mhz;
 }
 
+// Power limit the device boots with and enforces, in mW; 0 when the catalog has
+// no power data (a zero catalog field means unknown, not 0 W). The state bridge
+// reports the catalog power cap its reference telemetry is drawn against.
 static unsigned int default_power_limit_mw(const Device* dev) {
-    return std::min(dev->profile.typical_power_usage_mw, dev->profile.max_power_limit_mw);
+    const unsigned int cap = dev->profile.max_power_limit_mw;
+    const unsigned int typical = dev->profile.typical_power_usage_mw;
+    if (nvml_bridge::enabled() || !typical) return cap;
+    return cap ? std::min(typical, cap) : typical;
+}
+
+// The limit must lie within the constraints: [min(100 W, limit), catalog cap].
+static nvmlReturn_t power_limit_constraints_mw(const Device* dev, unsigned int& min_limit, unsigned int& max_limit) {
+    const unsigned int limit = default_power_limit_mw(dev);
+    if (!limit) return NVML_ERROR_NOT_SUPPORTED;
+    min_limit = std::min(100000U, limit);
+    max_limit = std::max(dev->profile.max_power_limit_mw, limit);
+    return NVML_SUCCESS;
 }
 
 static void trace_power(const char* api, nvmlDevice_t device) {
@@ -457,13 +472,9 @@ nvmlReturn_t nvmlDeviceGetPowerManagementLimit(nvmlDevice_t device, unsigned int
     if (!device || !limit) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetPowerManagementLimit", device);
 
-    Device* dev = (Device*)device;
-    if (nvml_bridge::enabled()) {
-        if (!dev->profile.max_power_limit_mw) return NVML_ERROR_NOT_SUPPORTED;
-        *limit = dev->profile.max_power_limit_mw;
-        return NVML_SUCCESS;
-    }
-    *limit = default_power_limit_mw(dev);
+    const unsigned int value = default_power_limit_mw((Device*)device);
+    if (!value) return NVML_ERROR_NOT_SUPPORTED;
+    *limit = value;
     return NVML_SUCCESS;
 }
 
@@ -904,25 +915,29 @@ nvmlReturn_t nvmlDeviceGetDefaultApplicationsClock(nvmlDevice_t device, unsigned
 nvmlReturn_t nvmlDeviceGetEnforcedPowerLimit(nvmlDevice_t device, unsigned int *limit) {
     if (!device || !limit) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetEnforcedPowerLimit", device);
-    *limit = default_power_limit_mw((Device*)device);
+    const unsigned int value = default_power_limit_mw((Device*)device);
+    if (!value) return NVML_ERROR_NOT_SUPPORTED;
+    *limit = value;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementLimitConstraints(nvmlDevice_t device, unsigned int *minLimit, unsigned int *maxLimit) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetPowerManagementLimitConstraints", device);
-    if (minLimit) *minLimit = 100000;   // 100W min
-    if (maxLimit) {
-        Device* dev = (Device*)device;
-        *maxLimit = dev->profile.max_power_limit_mw;
-    }
+    unsigned int min_limit = 0, max_limit = 0;
+    const nvmlReturn_t status = power_limit_constraints_mw((Device*)device, min_limit, max_limit);
+    if (status != NVML_SUCCESS) return status;
+    if (minLimit) *minLimit = min_limit;
+    if (maxLimit) *maxLimit = max_limit;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementDefaultLimit(nvmlDevice_t device, unsigned int *defaultLimit) {
     if (!device || !defaultLimit) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetPowerManagementDefaultLimit", device);
-    *defaultLimit = default_power_limit_mw((Device*)device);
+    const unsigned int value = default_power_limit_mw((Device*)device);
+    if (!value) return NVML_ERROR_NOT_SUPPORTED;
+    *defaultLimit = value;
     return NVML_SUCCESS;
 }
 
@@ -1602,24 +1617,22 @@ nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvml
             continue;
         }
 
+        // Power fields (mW) answer like the matching nvmlDeviceGetPower* calls.
+        unsigned int min_limit_mw = 0, max_limit_mw = 0;
         switch (entry.fieldId) {
             case NVML_FI_DEV_POWER_AVERAGE:
             case NVML_FI_DEV_POWER_INSTANT:
-                entry.nvmlReturn = NVML_SUCCESS;
-                entry.value.uiVal = 1000;  // 1W in mW
+                entry.nvmlReturn = nvmlDeviceGetPowerUsage(device, &entry.value.uiVal);
                 break;
             case NVML_FI_DEV_POWER_MIN_LIMIT:
-                entry.nvmlReturn = NVML_SUCCESS;
-                entry.value.uiVal = 100000;  // 100W in mW
-                break;
             case NVML_FI_DEV_POWER_MAX_LIMIT:
-                entry.nvmlReturn = NVML_SUCCESS;
-                entry.value.uiVal = dev->profile.max_power_limit_mw;
+                entry.nvmlReturn = power_limit_constraints_mw(dev, min_limit_mw, max_limit_mw);
+                entry.value.uiVal = entry.fieldId == NVML_FI_DEV_POWER_MIN_LIMIT ? min_limit_mw : max_limit_mw;
                 break;
             case NVML_FI_DEV_POWER_DEFAULT_LIMIT:
             case NVML_FI_DEV_POWER_CURRENT_LIMIT:
             case NVML_FI_DEV_POWER_REQUESTED_LIMIT:
-                entry.nvmlReturn = NVML_SUCCESS;
+                entry.nvmlReturn = default_limit_mw ? NVML_SUCCESS : NVML_ERROR_NOT_SUPPORTED;
                 entry.value.uiVal = default_limit_mw;
                 break;
             default:

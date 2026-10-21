@@ -103,3 +103,74 @@ def test_pci_bus_ids_use_nvml_formats_and_lookup_accepts_documented_forms(tmp_pa
         FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="10",
     )
     assert result == ["00000000:0A:00.0", "0000:0A:00.0", 0, 0x0A, 0, [9] * 5, 6]
+
+
+def test_power_limits_stay_within_constraints_and_unknown_power_is_not_zero_watts(tmp_path: Path) -> None:
+    # nvml.h: limits are in mW and the enforced/default limit is one of the
+    # "possible values of power management limits" bounded by the constraints.
+    # The a100 and l4 catalogs know only the power cap (400 W, 72 W, matching
+    # fakegpu/data/a100_monitor_reference.json for the a100); l2 knows neither.
+    result = _nvml(
+        tmp_path,
+        """
+        def query(fn, *args):
+            try:
+                return fn(*args)
+            except N.NVMLError as exc:
+                return ["error", exc.value]
+        result = []
+        for i in range(3):
+            h = N.nvmlDeviceGetHandleByIndex(i)
+            fields = N.nvmlDeviceGetFieldValues(h, [
+                N.NVML_FI_DEV_POWER_MIN_LIMIT, N.NVML_FI_DEV_POWER_MAX_LIMIT, N.NVML_FI_DEV_POWER_CURRENT_LIMIT])
+            result.append([
+                query(N.nvmlDeviceGetPowerManagementLimit, h), query(N.nvmlDeviceGetPowerManagementDefaultLimit, h),
+                query(N.nvmlDeviceGetEnforcedPowerLimit, h), query(N.nvmlDeviceGetPowerManagementLimitConstraints, h),
+                [[f.nvmlReturn, f.value.uiVal] for f in fields],
+            ])
+        """,
+        FAKEGPU_PROFILES="a100,l4,l2",
+    )
+    not_supported = ["error", 3]
+    assert result == [
+        [400000, 400000, 400000, [100000, 400000], [[0, 100000], [0, 400000], [0, 400000]]],
+        [72000, 72000, 72000, [72000, 72000], [[0, 72000], [0, 72000], [0, 72000]]],
+        [not_supported, not_supported, not_supported, not_supported, [[3, 0], [3, 0], [3, 0]]],
+    ]
+
+
+def test_bridge_power_fields_follow_power_queries(tmp_path: Path) -> None:
+    # docs/en/fakegpu-smi.md: without reference telemetry the bridge reports
+    # power draw as unavailable; the field-value path must agree.
+    pytest.importorskip("pynvml")
+    from fakegpu.smi import SmiStatePublisher
+
+    SmiStatePublisher(
+        tmp_path / "state" / "state.json",
+        lambda: {"devices": [{"index": 0, "name": "Fake A100", "profile_id": "a100",
+                              "total_memory": 80 * 2**30, "reported_memory": 2**20}]},
+    ).publish_once(running=True)
+    code = textwrap.dedent(
+        f"""
+        import json
+        from fakegpu.nvml import NvmlStateBridge
+        with NvmlStateBridge(state_dir={str(tmp_path / "state")!r}, lib_dir={str(BUILD_DIR)!r}):
+            import pynvml as N
+            N.nvmlInit()
+            h = N.nvmlDeviceGetHandleByIndex(0)
+            try:
+                usage = N.nvmlDeviceGetPowerUsage(h)
+            except N.NVMLError as exc:
+                usage = ["error", exc.value]
+            fields = N.nvmlDeviceGetFieldValues(h, [N.NVML_FI_DEV_POWER_INSTANT, N.NVML_FI_DEV_POWER_CURRENT_LIMIT])
+            print(json.dumps([usage, N.nvmlDeviceGetPowerManagementLimit(h),
+                              [[f.nvmlReturn, f.value.uiVal] for f in fields]]))
+            N.nvmlShutdown()
+        """
+    )
+    env = dict(os.environ, PYTHONPATH=str(ROOT), FAKEGPU_HOME=str(tmp_path), FAKEGPU_MACHINE="off")
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=env, text=True, capture_output=True, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout.strip().splitlines()[-1]) == [["error", 3], 400000, [[3, 0], [0, 400000]]]
