@@ -29,11 +29,8 @@ public:
     StagingBufferHandle(StagingBufferHandle&& other) noexcept;
     StagingBufferHandle& operator=(StagingBufferHandle&& other) noexcept;
 
-    bool valid() const { return mapping_ != nullptr; }
-    const StagingBufferMetadata& metadata() const { return metadata_; }
     void* data() { return mapping_; }
     const void* data() const { return mapping_; }
-    std::size_t size_bytes() const { return metadata_.bytes; }
 
     bool close(std::string& error);
     bool unlink(std::string& error);
@@ -45,7 +42,6 @@ private:
 
     int fd_ = -1;
     void* mapping_ = nullptr;
-    bool read_only_ = false;
     bool unlinked_ = false;
     bool unlink_on_close_ = false;
     StagingBufferMetadata metadata_;
