@@ -270,11 +270,15 @@ typedef struct cublasLtMatmulDescOpaque *cublasLtMatmulDesc_t;
 typedef struct cublasLtMatrixLayoutOpaque *cublasLtMatrixLayout_t;
 typedef struct cublasLtMatmulPreferenceOpaque *cublasLtMatmulPreference_t;
 
-// Algorithm heuristic structures
+// Algorithm heuristic structures, laid out as in cublasLt.h.
 typedef struct {
-    int algo;
+    uint64_t data[8];
+} cublasLtMatmulAlgo_t;
+
+typedef struct {
+    cublasLtMatmulAlgo_t algo;
     size_t workspaceSize;
-    int state;
+    cublasStatus_t state;
     float wavesCount;
     int reserved[4];
 } cublasLtMatmulHeuristicResult_t;

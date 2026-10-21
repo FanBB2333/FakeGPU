@@ -2707,22 +2707,16 @@ cublasStatus_t cublasLtMatmulAlgoGetHeuristic(
     cublasLtMatmulHeuristicResult_t heuristicResultsArray[],
     int *returnAlgoCount
 ) {
-    if (!returnAlgoCount || !heuristicResultsArray) {
+    // cublasLt.h: INVALID_VALUE if requestedAlgoCount is less or equal to zero.
+    if (!returnAlgoCount || !heuristicResultsArray || requestedAlgoCount <= 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 
-    // Return at least one algorithm result
-    int algoCount = (requestedAlgoCount > 0) ? 1 : 0;
-    if (algoCount > 0) {
-        // Fill in a default algorithm
-        heuristicResultsArray[0].algo = 0;  // Default algorithm
-        heuristicResultsArray[0].workspaceSize = 0;  // No workspace needed
-        heuristicResultsArray[0].state = 0;
-        heuristicResultsArray[0].wavesCount = 1.0f;
-        for (int i = 0; i < 4; i++) {
-            heuristicResultsArray[0].reserved[i] = 0;
-        }
-    }
+    // One default algorithm that needs no workspace.
+    const int algoCount = 1;
+    heuristicResultsArray[0] = cublasLtMatmulHeuristicResult_t{};
+    heuristicResultsArray[0].state = CUBLAS_STATUS_SUCCESS;
+    heuristicResultsArray[0].wavesCount = 1.0f;
 
     *returnAlgoCount = algoCount;
 

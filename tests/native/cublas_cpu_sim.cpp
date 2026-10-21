@@ -2,9 +2,11 @@
 #include "../../src/cuda/cudart_defs.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <random>
 #include <vector>
@@ -952,6 +954,51 @@ int main() {
             return 1;
         }
         std::printf("Test9 OK: cublasGetVersion/cublasGetProperty\n");
+    }
+
+    // -------------------------
+    // Test 10: cublasLtMatmulAlgoGetHeuristic fills the cublasLt.h layout
+    // -------------------------
+    {
+        // cublasLt.h: a 64-byte cublasLtMatmulAlgo_t comes first, then
+        // workspaceSize, state, wavesCount and int reserved[4].
+        static_assert(sizeof(cublasLtMatmulAlgo_t) == 64, "cublasLtMatmulAlgo_t size");
+        static_assert(offsetof(cublasLtMatmulHeuristicResult_t, workspaceSize) == 64, "workspaceSize offset");
+        static_assert(offsetof(cublasLtMatmulHeuristicResult_t, state) == 72, "state offset");
+        static_assert(offsetof(cublasLtMatmulHeuristicResult_t, wavesCount) == 76, "wavesCount offset");
+        static_assert(sizeof(cublasLtMatmulHeuristicResult_t) == 96, "heuristic result size");
+        constexpr int32_t CUDA_R_32F = 0;
+
+        cublasLtHandle_t lt = nullptr;
+        check_cublas(cublasLtCreate(&lt), "cublasLtCreate");
+        cublasLtMatmulDesc_t op = nullptr;
+        check_cublas(cublasLtMatmulDescCreate(&op, CUBLAS_COMPUTE_32F, CUDA_R_32F), "cublasLtMatmulDescCreate");
+        cublasLtMatrixLayout_t layout = nullptr;
+        check_cublas(cublasLtMatrixLayoutCreate(&layout, CUDA_R_32F, 4, 4, 4), "cublasLtMatrixLayoutCreate");
+        cublasLtMatmulPreference_t pref = nullptr;
+        check_cublas(cublasLtMatmulPreferenceCreate(&pref), "cublasLtMatmulPreferenceCreate");
+
+        cublasLtMatmulHeuristicResult_t results[2];
+        std::memset(results, 0xff, sizeof(results));
+        int returned = -1;
+        check_cublas(cublasLtMatmulAlgoGetHeuristic(lt, op, layout, layout, layout, layout, pref, 2, results, &returned),
+                     "cublasLtMatmulAlgoGetHeuristic");
+        if (returned < 1 || results[0].state != CUBLAS_STATUS_SUCCESS || results[0].workspaceSize != 0) {
+            std::fprintf(stderr, "Test10 failed: returned=%d state=%d workspaceSize=%zu\n",
+                         returned, static_cast<int>(results[0].state), results[0].workspaceSize);
+            return 1;
+        }
+        if (cublasLtMatmulAlgoGetHeuristic(lt, op, layout, layout, layout, layout, pref, 0, results, &returned) !=
+            CUBLAS_STATUS_INVALID_VALUE) {
+            std::fprintf(stderr, "Test10 failed: requestedAlgoCount=0 was accepted\n");
+            return 1;
+        }
+
+        check_cublas(cublasLtMatmulPreferenceDestroy(pref), "cublasLtMatmulPreferenceDestroy");
+        check_cublas(cublasLtMatrixLayoutDestroy(layout), "cublasLtMatrixLayoutDestroy");
+        check_cublas(cublasLtMatmulDescDestroy(op), "cublasLtMatmulDescDestroy");
+        check_cublas(cublasLtDestroy(lt), "cublasLtDestroy");
+        std::printf("Test10 OK: cublasLtMatmulAlgoGetHeuristic layout\n");
     }
 
     std::printf("All FakeGPU CPU simulation tests passed.\n");
