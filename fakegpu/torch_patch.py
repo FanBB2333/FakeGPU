@@ -1233,15 +1233,24 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
 
         def __enter__(self):
             if self._fakegpu_requested_device_type == "cuda":
-                # Track the CUDA dtype as CUDA autocast does, so a nested
-                # autocast("cuda") without a dtype inherits this one.
-                self._fakegpu_prev_cuda_dtype = torch_mod.get_autocast_dtype("cuda")
+                # Track the CUDA state as CUDA autocast does, so a nested
+                # autocast("cuda") without a dtype inherits this one and
+                # torch.is_autocast_enabled("cuda") answers for the block.
+                # Fake CUDA tensors compute on the CPU, so the CUDA flag
+                # changes no kernel.
+                self._fakegpu_prev_cuda_state = (
+                    torch_mod.is_autocast_enabled("cuda"),
+                    torch_mod.get_autocast_dtype("cuda"),
+                )
+                torch_mod.set_autocast_enabled("cuda", self._enabled)
                 torch_mod.set_autocast_dtype("cuda", self.fast_dtype)
             return super().__enter__()
 
         def __exit__(self, exc_type, exc_val, exc_tb):
             if self._fakegpu_requested_device_type == "cuda":
-                torch_mod.set_autocast_dtype("cuda", self._fakegpu_prev_cuda_dtype)
+                enabled, dtype = self._fakegpu_prev_cuda_state
+                torch_mod.set_autocast_enabled("cuda", enabled)
+                torch_mod.set_autocast_dtype("cuda", dtype)
             return super().__exit__(exc_type, exc_val, exc_tb)
 
     class _PatchedCudaAmpAutocast(_PatchedAutocast):
@@ -1262,6 +1271,8 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
     torch_mod.autocast = _PatchedAutocast
     torch_mod.amp.autocast = _PatchedAutocast
     torch_mod.cuda.amp.autocast = _PatchedCudaAmpAutocast
+    # custom_fwd/custom_bwd enter the module-level name.
+    torch_mod.amp.autocast_mode.autocast = _PatchedAutocast
 
 
 def _activate_upstream(num_devices: int, device_name: str) -> Any:

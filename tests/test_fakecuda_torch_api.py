@@ -370,3 +370,46 @@ assert tied[1].weight is tied[0].weight and tied[0].weight.device == torch.devic
 print("in-place module moves passed")
 """
     )
+
+
+def test_cuda_autocast_state_and_custom_fwd() -> None:
+    # autocast.__enter__ sets torch.is_autocast_enabled(device) for the block,
+    # and torch.amp.custom_fwd(cast_inputs=...) reads that flag, casts the
+    # inputs and runs the forward with autocast disabled
+    # (torch/amp/autocast_mode.py). The CPU device shows the same rules.
+    _run(
+        """
+import torch
+
+
+def make_op(device_type):
+    class Op(torch.autograd.Function):
+        @staticmethod
+        @torch.amp.custom_fwd(device_type=device_type, cast_inputs=torch.float32)
+        def forward(ctx, a, b):
+            return a @ b
+
+        @staticmethod
+        @torch.amp.custom_bwd(device_type=device_type)
+        def backward(ctx, grad):
+            return grad, grad
+
+    return Op
+
+
+def run(device_type):
+    a = torch.ones(2, 2, device=device_type, dtype=torch.float16)
+    with torch.autocast(device_type, dtype=torch.float16):
+        state = (torch.is_autocast_enabled(device_type), torch.get_autocast_dtype(device_type))
+        result = make_op(device_type).apply(a, a)
+    return state, result.dtype, torch.is_autocast_enabled(device_type)
+
+
+expected = run("cpu")
+assert expected == ((True, torch.float16), torch.float32, False), expected
+fakegpu.init(runtime="fakecuda", devices="a100")
+observed = run("cuda")
+assert observed == expected, observed
+print("autocast state passed")
+"""
+    )
