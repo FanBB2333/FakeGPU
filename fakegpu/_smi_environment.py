@@ -44,7 +44,7 @@ def _nonnegative_int(value: Any, *, default: int = 0) -> int:
         return default
     try:
         return max(0, int(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 

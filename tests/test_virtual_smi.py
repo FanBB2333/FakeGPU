@@ -659,6 +659,29 @@ def test_virtual_smi_events_ignore_non_object_publisher_health(
     assert "No modeled fault or runtime reliability events found." in rendered
 
 
+def test_virtual_smi_treats_non_finite_device_numbers_as_missing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "timestamp_ns": time.time_ns(),
+                "pid": 42,
+                "running": True,
+                "devices": [{"index": 0, "total_memory": float("inf")}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["--json", "--state", str(path)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["inventory"]["devices"][0]["memory"]["total_bytes"] == 0
+
+
 def _native_smi_state(
     tmp_path: Path,
     environment: dict[str, str],

@@ -23,6 +23,10 @@
 - `fakegpu nvidia-smi events` treats a non-object `publisher.health` in a
   state file as empty, as `-q` and `--query-runtime` already do, instead of
   crashing.
+- Virtual-SMI state readers (`fakegpu nvidia-smi`, the metrics exporter and
+  the background machine) treat a non-finite number such as `Infinity` in a
+  state file's integer fields as missing instead of crashing with
+  `OverflowError`.
 - A stopped virtual-SMI state publisher releases its exit and `SIGTERM`
   hooks. After FakeGPU is initialized again, the replaced publisher no longer
   rewrites the state file at exit, and the new publisher installs its own
