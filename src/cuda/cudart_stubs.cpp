@@ -1823,7 +1823,7 @@ cudaError_t cudaFuncGetAttributes(void *attr, const void *func) {
     if (!attr) return setLastError(cudaErrorInvalidValue);
 
     // Simplified: zero out attributes
-    memset(attr, 0, 64);  // Assume structure is ~64 bytes
+    memset(attr, 0, sizeof(cudaFuncAttributes));
     return setLastError(cudaSuccess);
 }
 

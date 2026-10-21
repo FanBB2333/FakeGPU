@@ -217,6 +217,17 @@ def check_last_error_survives_successful_calls(runtime: ctypes.CDLL) -> None:
     _check(actual == (101, 0, 101, 101, 0), f"last-error sequence returned {actual}")
 
 
+def check_func_attributes_size(runtime: ctypes.CDLL) -> None:
+    # CUDA 12.4 driver_types.h: sizeof(struct cudaFuncAttributes) == 144 on LP64.
+    runtime.cudaFuncGetAttributes.argtypes = [c_void_p, c_void_p]
+    buffer = (ctypes.c_ubyte * 152)(*([0xA5] * 152))
+    result = runtime.cudaFuncGetAttributes(buffer, c_void_p(1))
+    _check(
+        result == 0 and all(byte == 0 for byte in buffer[:144]) and all(byte == 0xA5 for byte in buffer[144:]),
+        f"cudaFuncGetAttributes returned {result}; struct bytes {bytes(buffer).hex()}",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -245,6 +256,7 @@ def main(argv: list[str] | None = None) -> int:
     check_runtime_error_text(runtime)
     check_driver_error_text(driver)
     check_last_error_survives_successful_calls(runtime)
+    check_func_attributes_size(runtime)
     print("CUDA API contract validation passed")
     return 0
 

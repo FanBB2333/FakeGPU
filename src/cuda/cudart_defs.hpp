@@ -536,7 +536,27 @@ cudaError_t cudaLaunchCooperativeKernelMultiDevice(void *launchParamsList, unsig
 cudaError_t cudaThreadSynchronize(void);
 cudaError_t cudaThreadExit(void);
 
-// Function Attributes
+// Function Attributes (CUDA 12.4 layout, 144 bytes on LP64)
+typedef struct cudaFuncAttributes {
+    size_t sharedSizeBytes;
+    size_t constSizeBytes;
+    size_t localSizeBytes;
+    int maxThreadsPerBlock;
+    int numRegs;
+    int ptxVersion;
+    int binaryVersion;
+    int cacheModeCA;
+    int maxDynamicSharedSizeBytes;
+    int preferredShmemCarveout;
+    int clusterDimMustBeSet;
+    int requiredClusterWidth;
+    int requiredClusterHeight;
+    int requiredClusterDepth;
+    int clusterSchedulingPolicyPreference;
+    int nonPortableClusterSizeAllowed;
+    int reserved[16];
+} cudaFuncAttributes;
+
 cudaError_t cudaFuncGetAttributes(void *attr, const void *func);
 cudaError_t cudaFuncSetCacheConfig(const void *func, int cacheConfig);
 cudaError_t cudaFuncSetSharedMemConfig(const void *func, int config);
