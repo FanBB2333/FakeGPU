@@ -286,6 +286,31 @@ def test_memory_info_v2_keeps_the_nvml_struct_version(tmp_path: Path) -> None:
     assert result == [0x02000028, True]
 
 
+def test_cuda_pci_bus_id_resolves_to_the_same_nvml_device(tmp_path: Path) -> None:
+    # One GPU has one PCI address: the bus id from cuDeviceGetPCIBusId must find the
+    # same device through nvmlDeviceGetHandleByPciBusId (which accepts its
+    # domain:bus:device.function form), and CU_DEVICE_ATTRIBUTE_PCI_BUS_ID (33)
+    # must equal nvmlPciInfo_t.bus.
+    suffix = ".dylib" if sys.platform == "darwin" else ".so.1"
+    result = _nvml(
+        tmp_path,
+        f"""
+        cuda = ctypes.CDLL({str(BUILD_DIR / ("libcuda" + suffix))!r})
+        assert cuda.cuInit(0) == 0
+        result = []
+        for dev in range(3):
+            bus_id = ctypes.create_string_buffer(64)
+            bus = ctypes.c_int(-1)
+            cuda.cuDeviceGetPCIBusId(bus_id, 64, dev)
+            cuda.cuDeviceGetAttribute(ctypes.byref(bus), 33, dev)
+            handle = N.nvmlDeviceGetHandleByPciBusId(bus_id.value)
+            result.append([N.nvmlDeviceGetIndex(handle), bus.value == N.nvmlDeviceGetPciInfo(handle).bus])
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="3",
+    )
+    assert result == [[0, True], [1, True], [2, True]]
+
+
 def test_bridge_power_fields_follow_power_queries(tmp_path: Path) -> None:
     # docs/en/fakegpu-smi.md: without reference telemetry the bridge reports
     # power draw as unavailable; the field-value path must agree.
