@@ -129,7 +129,9 @@ class SmiStatePublisher:
     ):
         self.path = Path(path).expanduser().resolve()
         self.snapshot = snapshot
-        self.interval_seconds = max(0.05, float(interval_seconds))
+        # Capped at 10^12 ms like the native publisher; longer timeouts
+        # overflow Event.wait() and Thread.join().
+        self.interval_seconds = min(1e9, max(0.05, float(interval_seconds)))
         self.runtime_overhead_bytes = max(0, int(runtime_overhead_bytes))
         self.detail_limit = _size_limit(
             detail_limit,

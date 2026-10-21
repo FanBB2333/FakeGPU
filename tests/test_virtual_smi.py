@@ -1223,6 +1223,19 @@ def test_publisher_background_failure_warns_once(tmp_path: Path) -> None:
     assert len(caught) == 1
 
 
+def test_publisher_caps_a_huge_interval_like_the_native_publisher(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state.json"
+    publisher = SmiStatePublisher(path, _snapshot, interval_seconds=1e297)
+    publisher.start()
+    publisher.stop()
+
+    state = json.loads(path.read_text(encoding="utf-8"))
+    assert state["running"] is False
+    assert state["publisher"]["interval_seconds"] == 1e9
+
+
 @pytest.mark.parametrize("ending", ["exit", "sigterm"])
 def test_replaced_publisher_does_not_overwrite_final_state(
     tmp_path: Path,

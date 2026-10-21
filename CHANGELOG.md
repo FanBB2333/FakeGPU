@@ -176,6 +176,10 @@
 - A huge `FAKEGPU_SMI_INTERVAL_MS` (such as `1e300`) no longer makes the
   native SMI publisher rewrite its state file thousands of times a second;
   the interval is capped at 10^12 ms.
+- The FakeCUDA SMI publisher caps `FAKEGPU_SMI_INTERVAL_MS` at 10^12 ms like
+  the native publisher. A larger value such as `1e300` stopped its
+  background updates with `OverflowError` and kept the final
+  `running: false` state from being written at exit.
 - Negative native `FAKEGPU_SMI_DETAIL_LIMIT` and `FAKEGPU_SMI_MAX_STATE_BYTES`
   values clamp to the minimum, and values beyond the 64-bit range clamp
   instead of falling back to the default, as in the Python publisher;
