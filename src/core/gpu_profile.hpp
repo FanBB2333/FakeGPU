@@ -7,19 +7,18 @@
 
 namespace fake_gpu {
 
-// Minimal architecture identifier surfaced through NVML/device properties.
-// Values roughly mirror compute capability/NVML ids; Ampere/Hopper/Ada keep their
-// previous values for compatibility.
+// Architecture identifier. nvmlDeviceGetArchitecture returns the value as-is,
+// so each one is the matching NVML_DEVICE_ARCH_* constant from nvml.h.
 enum class GpuArch : unsigned int {
-    Unknown = 0,
-    Maxwell = 5,
-    Pascal = 6,
-    Volta = 7,
-    Turing = 75,
-    Ampere = 8,
+    Unknown = 0xffffffff,
+    Maxwell = 3,
+    Pascal = 4,
+    Volta = 5,
+    Turing = 6,
+    Ampere = 7,
+    Ada = 8,
     Hopper = 9,
-    Ada = 10,
-    Blackwell = 11,
+    Blackwell = 10,
 };
 
 // Data types supported by a GPU model.
@@ -120,7 +119,7 @@ public:
 struct GpuProfile {
     std::string id;
     std::string name;
-    GpuArch architecture;
+    GpuArch architecture = GpuArch::Unknown;
     int compute_major;
     int compute_minor;
     uint64_t memory_bytes;

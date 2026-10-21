@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+import textwrap
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 import yaml
@@ -128,3 +134,44 @@ def test_throughput_values_require_provenance(tmp_path) -> None:
 def test_catalog_rejects_inconsistent_optional_specifications(changes: dict, message: str) -> None:
     profile = replace(get_profile("gtx980"), **changes)
     assert any(message in error for error in validate_catalog({profile.id: profile}).errors)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BUILD_DIR = Path(os.environ.get("FAKEGPU_BUILD_DIR", ROOT / "build"))
+NVML_LIBRARY = BUILD_DIR / ("libnvidia-ml.dylib" if sys.platform == "darwin" else "libnvidia-ml.so.1")
+
+
+@pytest.mark.skipif(not NVML_LIBRARY.exists(), reason="native libraries are not built")
+def test_nvml_reports_architecture_as_nvml_device_arch_constants(tmp_path) -> None:
+    # NVML_DEVICE_ARCH_* in nvml.h: MAXWELL 3, PASCAL 4, VOLTA 5, TURING 6,
+    # AMPERE 7, ADA 8, HOPPER 9, BLACKWELL 10.
+    expected = {"gtx980": 3, "p100": 4, "v100": 5, "t4": 6, "a100": 7, "l40s": 8, "h100": 9, "b200": 10}
+    code = textwrap.dedent(
+        f"""
+        import ctypes, json
+        nvml = ctypes.CDLL({str(NVML_LIBRARY)!r})
+        nvml.nvmlDeviceGetHandleByIndex_v2.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
+        nvml.nvmlDeviceGetArchitecture.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+        assert nvml.nvmlInit_v2() == 0
+        values = []
+        for index in range({len(expected)}):
+            handle, arch = ctypes.c_void_p(), ctypes.c_uint()
+            assert nvml.nvmlDeviceGetHandleByIndex_v2(index, ctypes.byref(handle)) == 0
+            assert nvml.nvmlDeviceGetArchitecture(handle, ctypes.byref(arch)) == 0
+            values.append(arch.value)
+        nvml.nvmlShutdown()
+        print(json.dumps(values))
+        """
+    )
+    env = dict(
+        os.environ,
+        FAKEGPU_PROFILES=",".join(expected),
+        FAKEGPU_HOME=str(tmp_path),
+        FAKEGPU_MACHINE="off",
+        FAKEGPU_TERMINAL_REPORT="0",
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=env, text=True, capture_output=True, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout.strip().splitlines()[-1]) == list(expected.values())
