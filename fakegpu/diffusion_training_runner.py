@@ -21,6 +21,7 @@ from .diffusion_training import (
 from .structured_io import write_json
 from ._finetune_cache import capture_cache_regime
 from ._finetune_allocator import capture_memory_allocator
+from ._local_checkpoint import _stat_marker
 
 
 def _update_ema(shadows, parameters, decay, *, torch):
@@ -174,17 +175,7 @@ def run_diffusion_training(plan, *, output_dir, cache_regime="uncontrolled"):
         component = "scheduler" if entry["name"] == "scheduler_config.json" else "unet"
         inputs.append(Path(plan["model_dir"]) / component / entry["name"])
 
-    def marker(path):
-        stat = path.stat()
-        return (
-            stat.st_dev,
-            stat.st_ino,
-            stat.st_size,
-            stat.st_mtime_ns,
-            stat.st_ctime_ns,
-        )
-
-    input_markers = {path: marker(path) for path in inputs}
+    input_markers = {path: _stat_marker(path.stat()) for path in inputs}
     import torch
     import diffusers
     from safetensors import safe_open
@@ -382,7 +373,10 @@ def run_diffusion_training(plan, *, output_dir, cache_regime="uncontrolled"):
         for p in sorted(destination.rglob("*"))
         if p.is_file()
     ]
-    if any(marker(path) != identity for path, identity in input_markers.items()):
+    if any(
+        _stat_marker(path.stat()) != identity
+        for path, identity in input_markers.items()
+    ):
         raise ValueError("training input files changed during native execution")
     end = time.perf_counter()
     final = end - boundary

@@ -16,6 +16,7 @@ from ._finetune_timeline import validate_native_timeline
 from .finetune_data_report import apply_dataset_report
 from .finetune_estimator import (
     FinetuneEstimateError,
+    _positive_int as _positive_integer,
     _validate_observation,
     estimate_finetuning,
     finetune_workload_signature,
@@ -199,12 +200,6 @@ def _nonnegative(value: Any, field: str) -> float:
     ):
         raise FinetuneEstimateError(f"{field} must be finite and non-negative")
     return float(value)
-
-
-def _positive_integer(value: Any, field: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise FinetuneEstimateError(f"{field} must be a positive integer")
-    return value
 
 
 def _matching_seconds(value: Any, expected: float, field: str) -> None:

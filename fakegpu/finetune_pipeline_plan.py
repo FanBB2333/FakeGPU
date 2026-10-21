@@ -13,6 +13,7 @@ import math
 
 from ._finetune_batches import _descriptor
 from ._finetune_pipeline_plan import pipeline_plan_from_run, validate_pipeline_plan
+from ._finetune_sampler import _integer
 from .finetune_estimator import FinetuneEstimateError
 
 
@@ -21,12 +22,6 @@ _NATIVE_SCHEDULES = {
     "llamafactory": ("0.9.5", "5.6.0", "disable_shuffling"),
     "axolotl": ("0.18.0", "5.14.1", "curriculum_sampling"),
 }
-
-
-def _integer(value, field, minimum=1):
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise FinetuneEstimateError(f"{field} must be an integer >= {minimum}")
-    return value
 
 
 def _epoch_template(run):

@@ -9,7 +9,7 @@ import json
 import math
 from typing import Any
 
-from .finetune_data import SCHEMA_VERSION, FinetuneDataError
+from .finetune_data import SCHEMA_VERSION, FinetuneDataError, _integer
 from .structured_io import is_sha256_hex
 
 
@@ -333,12 +333,6 @@ def _mapping(parent: Mapping[str, Any], name: str) -> Mapping[str, Any]:
     value = parent.get(name)
     if not isinstance(value, Mapping):
         raise FinetuneDataError(f"dataset report {name} must be a mapping")
-    return value
-
-
-def _integer(value: Any, name: str, minimum: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise FinetuneDataError(f"{name} must be an integer >= {minimum}")
     return value
 
 

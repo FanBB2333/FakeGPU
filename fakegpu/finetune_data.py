@@ -568,9 +568,10 @@ def _token_list(value: Any, name: str, *, labels: bool = False) -> list[int]:
     return list(value)
 
 
-def _integer(value: Any, name: str, minimum: int = 0) -> None:
+def _integer(value: Any, name: str, minimum: int = 0) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise FinetuneDataError(f"{name} must be an integer >= {minimum}")
+    return value
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

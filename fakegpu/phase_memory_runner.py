@@ -25,6 +25,7 @@ from ._finetune_workflow_store import (
     _now,
     _source_identity,
 )
+from ._local_checkpoint import _stat_marker
 from ._process import process_marker
 from .phase_memory import SAMPLE_SCHEMA, _sample
 from .structured_io import canonical_sha256 as _digest
@@ -112,11 +113,6 @@ def _model_inputs(plan):
                 "checkpoint inputs must stay inside the declared model directory"
             )
     return kind, workload, root, sorted(files)
-
-
-def _marker(path):
-    stat = path.stat()
-    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
 
 
 class _Peaks:
@@ -332,7 +328,7 @@ def sample_phase_memory(prediction):
     torch.set_num_threads(1)
     kind, workload, root, paths = _model_inputs(prediction)
     model_files = {str(path.relative_to(root)): _file(path) for path in paths}
-    markers = {path: _marker(path) for path in paths}
+    markers = {path: _stat_marker(path.stat()) for path in paths}
     software = {"transformers": transformers.__version__}
     version = transformers.__version__
     if kind == "diffusers":
@@ -372,7 +368,7 @@ def sample_phase_memory(prediction):
     )
     if kind == "diffusers":
         identity["execution"]["diffusion"] = execution["runtime"]
-    if any(_marker(path) != marker for path, marker in markers.items()):
+    if any(_stat_marker(path.stat()) != marker for path, marker in markers.items()):
         raise ValueError("model input changed during native sampling")
     if _source_identity() != identity["implementation"]:
         raise ValueError("implementation changed during native sampling")

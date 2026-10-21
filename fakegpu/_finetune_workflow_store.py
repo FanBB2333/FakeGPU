@@ -13,6 +13,7 @@ import subprocess
 import time
 from uuid import uuid4
 
+from ._local_checkpoint import _stat_marker
 from ._process import process_marker
 
 
@@ -43,16 +44,8 @@ def _file(path):
             digest.update(chunk)
         after = os.fstat(stream.fileno())
 
-    def marker(value):
-        return (
-            value.st_dev,
-            value.st_ino,
-            value.st_size,
-            value.st_mtime_ns,
-            value.st_ctime_ns,
-        )
-
-    if marker(before) != marker(after) or marker(before) != marker(path.stat()):
+    marker = _stat_marker(before)
+    if marker != _stat_marker(after) or marker != _stat_marker(path.stat()):
         raise ValueError(f"file changed while hashing: {path}")
     return {"bytes": before.st_size, "sha256": digest.hexdigest()}
 

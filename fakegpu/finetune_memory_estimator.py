@@ -17,6 +17,7 @@ from ._finetune_pipeline_plan import (
     pipeline_plan_from_run,
     validate_pipeline_plan,
 )
+from ._finetune_sampler import _integer as _byte_count
 from .finetune_estimator import FinetuneEstimateError
 from .finetune_window_estimator import _run_identity
 from .structured_io import canonical_sha256 as _digest
@@ -33,13 +34,6 @@ _COMPATIBILITY_FIELDS = (
     "memory_allocator",
     "execution_policy",
 )
-
-
-def _byte_count(value: Any, name: str, *, allow_zero: bool = False) -> int:
-    minimum = 0 if allow_zero else 1
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise FinetuneEstimateError(f"{name} must be an integer >= {minimum}")
-    return value
 
 
 def _native_sample(run: Mapping[str, Any]) -> dict[str, Any]:
@@ -88,7 +82,7 @@ def estimate_finetuning_memory(
         or len(calibration_runs) < 2
     ):
         raise FinetuneEstimateError("memory calibration requires two independent runs")
-    reserve_bytes = _byte_count(reserve_bytes, "reserve_bytes", allow_zero=True)
+    reserve_bytes = _byte_count(reserve_bytes, "reserve_bytes", minimum=0)
     plan = validate_pipeline_plan(target_plan)
     physical_bytes = _byte_count(
         plan["hardware"].get("total_memory_bytes"), "hardware.total_memory_bytes"

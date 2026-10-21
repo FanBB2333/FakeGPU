@@ -16,6 +16,7 @@ from typing import Any
 
 from ._finetune_batches import _descriptor
 from ._finetune_pipeline_plan import _digest
+from ._finetune_sampler import _integer as _byte_count
 from ._finetune_transfer_plan import (
     _transfer_plan,
     describe_transfer_components,
@@ -362,12 +363,6 @@ def compare_finetuning_transfer(
     result["scope"] = "recorded_native_execution_span_shape_transfer_replay"
     _attach_comparison(result, target)
     return result
-
-
-def _byte_count(value, field, *, minimum=1):
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise FinetuneEstimateError(f"{field} must be an integer >= {minimum}")
-    return value
 
 
 def estimate_finetuning_transfer_memory(
