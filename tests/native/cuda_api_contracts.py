@@ -162,6 +162,25 @@ def check_pointer_attribute_memory_types(runtime: ctypes.CDLL) -> None:
     runtime.cudaFree(device)
 
 
+def check_runtime_error_text(runtime: ctypes.CDLL) -> None:
+    # Values returned by libcudart.so.12 (CUDA 12.4); cuda_runtime_api.h
+    # documents "unrecognized error code" for unknown codes.
+    runtime.cudaGetErrorName.restype = ctypes.c_char_p
+    runtime.cudaGetErrorName.argtypes = [ctypes.c_int]
+    runtime.cudaGetErrorString.restype = ctypes.c_char_p
+    runtime.cudaGetErrorString.argtypes = [ctypes.c_int]
+    expected = {
+        21: (b"cudaErrorInvalidMemcpyDirection", b"invalid copy direction for memcpy"),
+        100: (b"cudaErrorNoDevice", b"no CUDA-capable device is detected"),
+        600: (b"cudaErrorNotReady", b"device not ready"),
+        719: (b"cudaErrorLaunchFailure", b"unspecified launch failure"),
+        12345: (b"unrecognized error code", b"unrecognized error code"),
+    }
+    for code, (name, text) in expected.items():
+        actual = (runtime.cudaGetErrorName(code), runtime.cudaGetErrorString(code))
+        _check(actual == (name, text), f"cudaGetErrorName/String({code}) returned {actual}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -187,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     check_context_push_switches_runtime_device(runtime, driver)
     check_mem_pool_int_attribute_size(runtime)
     check_pointer_attribute_memory_types(runtime)
+    check_runtime_error_text(runtime)
     print("CUDA API contract validation passed")
     return 0
 
