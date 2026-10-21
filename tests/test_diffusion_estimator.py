@@ -730,6 +730,45 @@ def test_pipeline_attention_slicing_leaves_transformer_denoisers_unchanged(
     assert _phase(sliced, "denoise") == _phase(plain, "denoise")
 
 
+def test_vae_tiling_defaults_to_the_vae_config_sample_size() -> None:
+    # Diffusers 0.35.2 AutoencoderKL.__init__ sets tile_sample_min_size to
+    # config.sample_size (SDXL VAE: 1024) and _decode tiles only when the
+    # latent exceeds tile_latent_min_size, so enable_vae_tiling() does not tile
+    # a 1024x1024 SDXL decode.
+    assert load_diffusion_profiles()[SDXL]["vae"]["sample_size"] == 1024
+    untiled = estimate_diffusion_generation(SDXL)
+    tiled = estimate_diffusion_generation(SDXL, vae_tiling=True)
+    assert tiled["inputs"]["vae_tile_size"] == 1024
+    buffers = tiled["activation_models"]["vae_decode"]["output_buffers"]
+    assert buffers["native_tiling_active"] is False
+    assert _phase(tiled, "vae_decode")["peak_bytes"] == (
+        _phase(untiled, "vae_decode")["peak_bytes"]
+    )
+    # The SD 1.5 VAE config uses sample_size 512, so 1024x1024 decodes tile.
+    sd15 = estimate_diffusion_generation(SD15, height=1024, width=1024, vae_tiling=True)
+    assert sd15["inputs"]["vae_tile_size"] == 512
+    assert sd15["activation_models"]["vae_decode"]["output_buffers"][
+        "native_tiling_active"
+    ] is True
+
+
+def test_local_vae_sample_size_sets_the_default_tile(tmp_path: Path) -> None:
+    model_dir = tmp_path / "local-unet"
+    _write_pipeline(model_dir, transformer=False)
+    vae_config_path = model_dir / "vae" / "config.json"
+    vae_config = json.loads(vae_config_path.read_text(encoding="utf-8"))
+    vae_config["sample_size"] = 128
+    vae_config_path.write_text(json.dumps(vae_config), encoding="utf-8")
+
+    report = estimate_diffusion_generation(
+        model_dir=model_dir, height=256, width=256, text_tokens=32, vae_tiling=True
+    )
+    assert report["inputs"]["vae_tile_size"] == 128
+    assert report["activation_models"]["vae_decode"]["output_buffers"][
+        "native_tiling_active"
+    ] is True
+
+
 def test_sdxl_first_level_has_no_transformer_blocks() -> None:
     # SDXL's first down/up blocks are DownBlock2D/UpBlock2D: at 1024x1024 the
     # 128x128 level has no attention or GEGLU feed-forward.

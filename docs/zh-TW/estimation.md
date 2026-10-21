@@ -113,6 +113,9 @@ Diffusion 估算器的運作方式：
   `Modeled` 與 `uncalibrated`，不給出誤差百分比或預測區間。
 - 與 Diffusers 一致，`--attention-slicing` 只影響 UNet 去噪器。Transformer
   去噪器（PixArt、SD3、Flux）會忽略 pipeline 的 attention slicing。
+- `--vae-tile-size` 預設取 VAE config 的 `sample_size`，即
+  `enable_vae_tiling()` 實際使用的 tile（SDXL 為 1024，因此 1024x1024 解碼不會
+  分塊）。config 沒有該欄位時退回 512。
 
 訓練 diffusion 模型請參閱 [Diffusion 訓練](diffusion-training.md)。
 

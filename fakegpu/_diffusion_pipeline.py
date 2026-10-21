@@ -737,6 +737,13 @@ def _local_profile(
             "checkpoint_dtype_bytes": vae_stats["dtype_bytes"],
             "block_out_channels": vae_channels,
             "layers_per_block": _layers_per_block(vae_config),
+            # AutoencoderKL.enable_tiling() tiles at config.sample_size.
+            **(
+                {"sample_size": vae_config["sample_size"]}
+                if type(vae_config.get("sample_size")) is int
+                and vae_config["sample_size"] > 0
+                else {}
+            ),
             "model_class": str(
                 vae_config.get("_class_name")
                 or vae_component["class_name"]
@@ -795,6 +802,8 @@ def _validate_profile(
     vae = _mapping(profile["vae"])
     if "force_upcast" in vae and not isinstance(vae["force_upcast"], bool):
         raise DiffusionEstimateError("vae.force_upcast must be a boolean")
+    if "sample_size" in vae:
+        _positive_integer(vae["sample_size"], "vae.sample_size")
     if "sdpa_low_precision_parameter_count" in vae:
         retained_parameters = _nonnegative_integer(
             vae["sdpa_low_precision_parameter_count"],
