@@ -21,13 +21,13 @@ from ._diffusion_pipeline import (
 )
 from ._finetune_allocator import capture_memory_allocator
 from ._finetune_workflow_store import (
-    _digest,
     _file,
     _now,
     _source_identity,
 )
 from ._process import process_marker
 from .phase_memory import SAMPLE_SCHEMA, _sample
+from .structured_io import canonical_sha256 as _digest
 
 
 def _model_inputs(plan):

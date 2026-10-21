@@ -10,8 +10,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-import hashlib
-import json
 from typing import Any
 
 from ._finetune_pipeline_plan import (
@@ -21,6 +19,7 @@ from ._finetune_pipeline_plan import (
 )
 from .finetune_estimator import FinetuneEstimateError
 from .finetune_window_estimator import _run_identity
+from .structured_io import canonical_sha256 as _digest
 
 
 SCHEMA_VERSION = "fakegpu.finetune_memory_estimate.v1"
@@ -34,11 +33,6 @@ _COMPATIBILITY_FIELDS = (
     "memory_allocator",
     "execution_policy",
 )
-
-
-def _digest(value: Any) -> str:
-    content = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(content.encode()).hexdigest()
 
 
 def _byte_count(value: Any, name: str, *, allow_zero: bool = False) -> int:

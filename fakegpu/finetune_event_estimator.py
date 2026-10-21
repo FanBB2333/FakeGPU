@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 import hashlib
-import json
 import statistics
 from typing import Any
 
@@ -14,16 +13,9 @@ from ._finetune_events import SCHEMA_VERSION as EVENT_SCHEMA
 from .finetune_estimator import FinetuneEstimateError
 from .finetune_run_estimator import validate_native_run
 from .finetune_window_estimator import _DENSE_MODELS, _comparison, _run_identity
+from .structured_io import canonical_json as _canonical, canonical_sha256 as _digest
 
 SCHEMA_VERSION = "fakegpu.finetune_event_estimate.v1"
-
-
-def _canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-
-
-def _digest(value: Any) -> str:
-    return hashlib.sha256(_canonical(value).encode()).hexdigest()
 
 
 def _samples(run: Mapping[str, Any]) -> dict[str, Any]:

@@ -16,10 +16,9 @@ from uuid import UUID, uuid4
 
 from ._finetune_cache import CACHE_VARIABLES, capture_cache_regime
 from ._finetune_transfer_plan import transfer_plan_from_run
-from .structured_io import load_mapping
+from .structured_io import canonical_sha256 as _digest, load_mapping
 from ._finetune_workflow_inputs import _prepare_inputs, _runtime_identity
 from ._finetune_workflow_store import (
-    _digest,
     _now,
     _write,
     _file,

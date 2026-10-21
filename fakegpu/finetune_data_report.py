@@ -10,6 +10,7 @@ import math
 from typing import Any
 
 from .finetune_data import SCHEMA_VERSION, FinetuneDataError
+from .structured_io import is_sha256_hex
 
 
 def apply_dataset_report(
@@ -352,11 +353,7 @@ def _number_equal(value: Any, expected: float, name: str) -> None:
 
 
 def _digest(value: Any, name: str) -> None:
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(char not in "0123456789abcdef" for char in value)
-    ):
+    if not is_sha256_hex(value):
         raise FinetuneDataError(
             f"dataset report {name} must be a lowercase SHA-256 digest"
         )

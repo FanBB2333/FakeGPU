@@ -11,10 +11,11 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 from copy import deepcopy
-import json
 import math
 import statistics
 from typing import Any
+
+from .structured_io import canonical_json
 
 
 SCHEMA_VERSION = "fakegpu.finetune_batches.v1"
@@ -314,7 +315,7 @@ def execution_batch_shape(batch):
 
 def _canonical(value: Any) -> str:
     try:
-        return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        return canonical_json(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(
             "native batch profile must contain finite JSON values"

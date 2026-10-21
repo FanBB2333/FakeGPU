@@ -16,14 +16,6 @@ from uuid import uuid4
 from ._process import process_marker
 
 
-def _canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-
-
-def _digest(value):
-    return hashlib.sha256(_canonical(value).encode()).hexdigest()
-
-
 def _now():
     return datetime.now(timezone.utc).isoformat()
 

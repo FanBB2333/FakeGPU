@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping
-import json
 import math
 from pathlib import PurePosixPath
 from typing import Any
 
 from ._finetune_batches import _descriptor
+from .structured_io import canonical_json as _canonical, is_sha256_hex
 
 SCHEMA_VERSION = "fakegpu.finetune_events.v1"
 _OPERATIONS = {
@@ -23,10 +23,6 @@ _OPERATIONS = {
     "save_model": "checkpoint",
     "save_pretrained": "checkpoint",
 }
-
-
-def _canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def _integer(value: Any, field: str, minimum: int = 0) -> int:
@@ -57,11 +53,7 @@ def _optional_bool(value: Any, field: str) -> None:
 
 
 def _sha256(value: Any, field: str) -> None:
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(char not in "0123456789abcdef" for char in value)
-    ):
+    if not is_sha256_hex(value):
         raise ValueError(f"native event {field} requires a SHA256 digest")
 
 

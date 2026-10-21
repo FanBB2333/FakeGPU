@@ -17,6 +17,7 @@ from typing import Any
 from .llm_estimator import _decoder_dimensions
 from .performance_model import estimate_roofline
 from .profile_catalog import get_profile
+from .structured_io import is_sha256_hex
 
 
 SCHEMA_VERSION = "fakegpu.finetune_estimate.v1"
@@ -1076,9 +1077,7 @@ def _validate_observation(
         identity = observation.get("checkpoint_identity", {})
         digest = signature.get("checkpoint_sha256")
         if (
-            not isinstance(digest, str)
-            or len(digest) != 64
-            or any(character not in "0123456789abcdef" for character in digest)
+            not is_sha256_hex(digest)
             or not isinstance(identity, Mapping)
             or identity.get("algorithm") != "sha256_content_manifest_v1"
             or identity.get("sha256") != digest
@@ -1140,11 +1139,7 @@ def _validate_observation(
                 )
             for key in ("data_signature", "native_execution_signature"):
                 digest = signature.get(key)
-                if (
-                    not isinstance(digest, str)
-                    or len(digest) != 64
-                    or any(character not in "0123456789abcdef" for character in digest)
-                ):
+                if not is_sha256_hex(digest):
                     raise FinetuneEstimateError(f"native observation requires {key}")
             if workload.get("sha256") != signature["data_signature"]:
                 raise FinetuneEstimateError(

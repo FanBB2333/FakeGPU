@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import json
 import re
 from typing import Any
 
 from ._finetune_batches import _descriptor
 from .finetune_estimator import FinetuneEstimateError
-
-
-def _canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+from .structured_io import canonical_json as _canonical
 
 
 def _workload_key(event: Mapping[str, Any]) -> dict[str, Any]:

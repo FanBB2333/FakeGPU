@@ -10,7 +10,6 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timedelta
 import hashlib
-import json
 import statistics
 from typing import Any
 from uuid import UUID
@@ -20,20 +19,13 @@ from ._finetune_event_context import describe_root_events
 from ._finetune_events import SCHEMA_VERSION as EVENT_SCHEMA
 from .finetune_estimator import FinetuneEstimateError
 from .finetune_run_estimator import validate_native_run
+from .structured_io import canonical_json as _canonical, canonical_sha256 as _digest
 
 
 SCHEMA_VERSION = "fakegpu.finetune_window_estimate.v1"
 _DENSE_MODELS = {"llama", "mistral", "qwen2", "qwen3", "qwen3_5_text"}
 _MINIMUM_RUNS = 2
 _MINIMUM_SAMPLES = 2
-
-
-def _canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-
-
-def _digest(value: Any) -> str:
-    return hashlib.sha256(_canonical(value).encode()).hexdigest()
 
 
 def _run_identity(run: Mapping[str, Any]) -> dict[str, Any]:

@@ -17,8 +17,6 @@ from string import Formatter
 import sys
 
 from ._finetune_workflow_store import (
-    _canonical,
-    _digest,
     _execute,
     _file,
     _live,
@@ -28,7 +26,11 @@ from ._finetune_workflow_store import (
     _tree,
     _write,
 )
-from .structured_io import load_mapping
+from .structured_io import (
+    canonical_json as _canonical,
+    canonical_sha256 as _digest,
+    load_mapping,
+)
 
 
 SCHEMA = "fakegpu.experiment_matrix.v1"

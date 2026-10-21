@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -23,6 +22,7 @@ from .llm_estimator import _read_safetensors_header, inspect_safetensors_checkpo
 from ._finetune_workflow_store import _file as _file_identity
 from ._finetune_cache import validate_cache_regime
 from ._finetune_allocator import validate_memory_allocator
+from .structured_io import canonical_sha256 as _digest, is_sha256_hex
 
 PLAN_SCHEMA = "fakegpu.diffusion_training_plan.v1"
 RUN_SCHEMA = "fakegpu.diffusion_training_run.v1"
@@ -39,20 +39,8 @@ def _integer(value, name):
     return value
 
 
-def _canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-
-
-def _digest(value):
-    return hashlib.sha256(_canonical(value).encode()).hexdigest()
-
-
 def _sha(value, name):
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(c not in "0123456789abcdef" for c in value)
-    ):
+    if not is_sha256_hex(value):
         raise ValueError(f"{name} must be a SHA256 hex digest")
     return value
 

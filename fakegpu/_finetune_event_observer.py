@@ -5,15 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextlib import contextmanager
 import hashlib
-import json
 from pathlib import Path
 import time
 
 from ._finetune_batches import describe_batch
-
-
-def _canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+from .structured_io import canonical_json as _canonical
 
 
 def _dataset_identity(dataset):
