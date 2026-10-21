@@ -174,3 +174,69 @@ assert accelerate.utils.is_bf16_available(True) is True
 print("bf16 probe passed")
 """
     )
+
+
+def test_device_selection_and_queries_follow_torch_cuda() -> None:
+    # torch/cuda/__init__.py (2.14): set_device, device and device_of ignore a
+    # negative index; get_device_name/capability read get_device_properties,
+    # which raises AssertionError("Invalid device id") out of range;
+    # _get_device_index rejects non-CUDA devices and, for set_device, a CUDA
+    # device without an index.
+    _run(
+        """
+fakegpu.init(runtime="fakecuda", devices="a100,v100")
+import torch
+
+
+def raises(kind, message, call):
+    try:
+        call()
+    except kind as exc:
+        assert message in str(exc), exc
+    else:
+        raise AssertionError(f"expected {kind.__name__}: {message}")
+
+
+for query in (
+    torch.cuda.get_device_properties,
+    torch.cuda.get_device_name,
+    torch.cuda.get_device_capability,
+):
+    raises(AssertionError, "Invalid device id", lambda: query(2))
+    raises(AssertionError, "Invalid device id", lambda: query(-1))
+    raises(ValueError, "Expected a cuda device, but got: cpu", lambda: query("cpu"))
+assert torch.cuda.get_device_capability("cuda:1") == (7, 0)
+raises(AssertionError, "Invalid peer device id", lambda: torch.cuda.can_device_access_peer(0, 2))
+
+torch.cuda.set_device(1)
+torch.cuda.set_device(-1)
+assert torch.cuda.current_device() == 1
+raises(ValueError, "Expected a torch.device with a specified index", lambda: torch.cuda.set_device("cuda"))
+raises(ValueError, "Expected a cuda device, but got: cpu", lambda: torch.cuda.set_device("cpu"))
+raises(RuntimeError, "invalid device ordinal", lambda: torch.cuda.set_device(2))
+raises(RuntimeError, "invalid device ordinal", lambda: torch.cuda.synchronize(2))
+
+for no_op in (-1, None):
+    with torch.cuda.device(no_op):
+        assert torch.cuda.current_device() == 1
+with torch.cuda.device_of(torch.ones(1)):
+    assert torch.cuda.current_device() == 1
+with torch.cuda.device_of(torch.ones(1, device="cuda:0")):
+    assert torch.cuda.current_device() == 0
+assert torch.cuda.current_device() == 1
+
+# The previous device is taken when the block is entered.
+selector = torch.cuda.device(0)
+torch.cuda.set_device(1)
+with selector:
+    assert torch.cuda.current_device() == 0
+assert torch.cuda.current_device() == 1
+
+assert torch.cuda._exchange_device(0) == 1
+assert torch.cuda.current_device() == 0
+with torch.cuda._DeviceGuard(1):
+    assert torch.cuda.current_device() == 1
+assert torch.cuda.current_device() == 0
+print("device selection passed")
+"""
+    )

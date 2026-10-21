@@ -819,6 +819,73 @@ def _normalize_device_index(device: Any) -> int:
     return _get_current()
 
 
+def _cuda_device_index(device: Any, *, optional: bool = False) -> int:
+    """``torch.cuda._utils._get_device_index`` for fake devices.
+
+    Integers pass through unchanged (negative ones included), non-CUDA
+    devices raise ``ValueError``, and a device without an index resolves to
+    the current device only when ``optional``.
+    """
+    import torch
+
+    if isinstance(device, int):
+        return device
+    if isinstance(device, str):
+        device = torch.device(device)
+    if isinstance(device, torch.device):
+        if device.type != "cuda":
+            raise ValueError(f"Expected a cuda device, but got: {device}")
+        if device.index is not None:
+            return int(device.index)
+    if isinstance(device, _CudaDevice):
+        return device.idx
+    if optional:
+        return int(_upstream_mod._CURRENT_DEVICE)
+    raise ValueError(
+        "Expected a torch.device with a specified index or an integer, "
+        f"but got:{device}"
+    )
+
+
+def _exchange_device(device: int) -> int:
+    """``torch.cuda._exchange_device``: select ``device``, return the previous one."""
+    if device < 0:
+        return -1
+    previous = int(_upstream_mod._CURRENT_DEVICE)
+    _upstream_mod._CURRENT_DEVICE = _checked_ordinal(int(device))
+    return previous
+
+
+class _CudaDevice:
+    """``torch.cuda.device``: a no-op for ``None`` or a negative index."""
+
+    def __init__(self, device: Any):
+        self.idx = _cuda_device_index(device, optional=True)
+        self.prev_idx = -1
+
+    def __enter__(self):
+        self.prev_idx = _exchange_device(self.idx)
+
+    def __exit__(self, type: Any, value: Any, traceback: Any):
+        self.idx = _exchange_device(self.prev_idx)
+        return False
+
+
+class _CudaDeviceOf(_CudaDevice):
+    """``torch.cuda.device_of``: a no-op for objects not on a CUDA device."""
+
+    def __init__(self, obj: Any):
+        idx = obj.get_device() if obj.is_cuda else -1
+        super().__init__(idx)
+
+
+def _set_device(device: Any) -> None:
+    """``torch.cuda.set_device``: a no-op for a negative index."""
+    index = _cuda_device_index(device)
+    if index >= 0:
+        _upstream_mod._CURRENT_DEVICE = _checked_ordinal(index)
+
+
 def _patched_tensor_pin_memory(self: Any, device: Any = None) -> Any:
     """Pinned-memory is a semantic no-op on FakeGPU's CPU-backed runtime."""
     return self
@@ -1440,13 +1507,21 @@ def _install_device_index_validation(upstream: Any, torch_mod: Any) -> Any:
 
     upstream._normalize_device_index = _checked_normalize_device_index
 
-    # Also override set_device to use our bounds-checked normalize
-    def _validated_set_device(device):
-        idx = _checked_normalize_device_index(device)
-        upstream._CURRENT_DEVICE = idx
+    # Device selection follows torch.cuda: set_device, device and device_of
+    # ignore negative indices, and _exchange_device switches the device.
+    torch_mod.cuda.set_device = _set_device
+    upstream.set_device = _set_device
+    torch_mod.cuda.device = _CudaDevice
+    torch_mod.cuda.device_of = _CudaDeviceOf
+    torch_mod.cuda._exchange_device = _exchange_device
+    torch_mod.cuda._maybe_exchange_device = _exchange_device
 
-    torch_mod.cuda.set_device = _validated_set_device
-    upstream.set_device = _validated_set_device
+    def _synchronize(device: Any = None) -> None:
+        # torch.cuda.synchronize enters torch.cuda.device(device) first.
+        with _CudaDevice(device):
+            return None
+
+    torch_mod.cuda.synchronize = _synchronize
 
     # Override _normalize_cuda_device to validate bounds for factory functions.
     # The upstream version doesn't check _NUM_DEVICES, so torch.randn(device="cuda:99")
@@ -1524,31 +1599,22 @@ def _install_dynamo_friendly_tree_map(upstream: Any, torch_mod: Any) -> None:
     upstream._tree_map = _dynamo_friendly_tree_map
 
 
-def _install_profiled_device_queries(
-    upstream: Any, torch_mod: Any, checked_normalize_device_index: Any
-) -> None:
+def _install_profiled_device_queries(upstream: Any, torch_mod: Any) -> None:
     """Answer device name/capability/properties and peer access per profile."""
 
+    # As in torch.cuda, name and capability come from the properties, and an
+    # index outside the devices fails with AssertionError("Invalid device id").
     def _profiled_get_device_name(device=None):
-        idx = _normalize_device_index(device)
-        if idx < len(_DEVICE_PROFILES):
-            return _DEVICE_PROFILES[idx]["name"]
-        return _DEVICE_NAME
+        return _profiled_get_device_properties(device).name
 
     def _profiled_get_device_capability(device=None):
-        idx = _normalize_device_index(device)
-        if idx < len(_DEVICE_PROFILES):
-            prof = _DEVICE_PROFILES[idx]
-            return (prof["compute_major"], prof["compute_minor"])
-        return (_COMPUTE_MAJOR, _COMPUTE_MINOR)
+        properties = _profiled_get_device_properties(device)
+        return properties.major, properties.minor
 
     def _profiled_get_device_properties(device=None):
-        idx = _normalize_device_index(device)
+        idx = _cuda_device_index(device, optional=True)
         if idx < 0 or idx >= _NUM_DEVICES:
-            raise RuntimeError(
-                f"CUDA error: invalid device ordinal "
-                f"(requested {idx}, available: {_NUM_DEVICES})"
-            )
+            raise AssertionError("Invalid device id")
         return _FakeDeviceProperties(idx)
 
     torch_mod.cuda.get_device_name = _profiled_get_device_name
@@ -1558,8 +1624,12 @@ def _install_profiled_device_queries(
     # Peer access follows the modeled NVLink/PCIe topology (see
     # fakegpu.link_topology); without a platform every pair has access.
     def _topology_can_device_access_peer(device, peer_device):
-        source = checked_normalize_device_index(device)
-        target = checked_normalize_device_index(peer_device)
+        source = _cuda_device_index(device, optional=True)
+        target = _cuda_device_index(peer_device)
+        if source < 0 or source >= _NUM_DEVICES:
+            raise AssertionError("Invalid device id")
+        if target < 0 or target >= _NUM_DEVICES:
+            raise AssertionError("Invalid peer device id")
         from .platforms import topology_from_environment
 
         topology = topology_from_environment(
@@ -1705,9 +1775,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     # initialize a physical CUDA context when is_available() reports true.
     torch_mod.cuda._fakegpu_simulated = True
 
-    checked_normalize_device_index = _install_device_index_validation(
-        upstream, torch_mod
-    )
+    _install_device_index_validation(upstream, torch_mod)
 
     if _MEMORY_TRACKING:
         per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
@@ -1736,7 +1804,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     torch_mod.Tensor.pin_memory = _patched_tensor_pin_memory  # type: ignore[assignment]
     _install_compile_compat_shim(torch_mod)
 
-    _install_profiled_device_queries(upstream, torch_mod, checked_normalize_device_index)
+    _install_profiled_device_queries(upstream, torch_mod)
 
     # Compute-capability-aware bf16 check (upstream always returns True)
     torch_mod.cuda.is_bf16_supported = _stub_is_bf16_supported
