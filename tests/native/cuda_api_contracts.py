@@ -181,6 +181,29 @@ def check_runtime_error_text(runtime: ctypes.CDLL) -> None:
         _check(actual == (name, text), f"cudaGetErrorName/String({code}) returned {actual}")
 
 
+def check_driver_error_text(driver: ctypes.CDLL) -> None:
+    # Values returned by libcuda.so (r550, CUDA 12.4). cuda.h: an unrecognized
+    # code returns CUDA_ERROR_INVALID_VALUE and sets the string to NULL.
+    for function in (driver.cuGetErrorName, driver.cuGetErrorString):
+        function.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_char_p)]
+    expected = {
+        2: (b"CUDA_ERROR_OUT_OF_MEMORY", b"out of memory"),
+        100: (b"CUDA_ERROR_NO_DEVICE", b"no CUDA-capable device is detected"),
+        719: (b"CUDA_ERROR_LAUNCH_FAILED", b"unspecified launch failure"),
+        12345: (None, None),
+    }
+    for code, (name, text) in expected.items():
+        status = CUDA_SUCCESS if name else CUDA_ERROR_INVALID_VALUE
+        name_out, text_out = ctypes.c_char_p(b"x"), ctypes.c_char_p(b"x")
+        actual = (
+            driver.cuGetErrorName(code, ctypes.byref(name_out)),
+            name_out.value,
+            driver.cuGetErrorString(code, ctypes.byref(text_out)),
+            text_out.value,
+        )
+        _check(actual == (status, name, status, text), f"cuGetErrorName/String({code}) returned {actual}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -207,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     check_mem_pool_int_attribute_size(runtime)
     check_pointer_attribute_memory_types(runtime)
     check_runtime_error_text(runtime)
+    check_driver_error_text(driver)
     print("CUDA API contract validation passed")
     return 0
 
