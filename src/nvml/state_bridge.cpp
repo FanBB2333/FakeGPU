@@ -1,4 +1,5 @@
 #include "state_bridge.hpp"
+#include "pci_bus_id.hpp"
 #include "../core/device.hpp"
 
 #include <atomic>
@@ -165,7 +166,8 @@ nvmlReturn_t handle(unsigned int index, nvmlDevice_t* result) {
 nvmlReturn_t lookup(const char* key, bool by_uuid, nvmlDevice_t* result) {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto& entry : entries) {
-        if ((by_uuid ? entry.device->uuid : entry.device->pci_bus_id) == key) {
+        if (by_uuid ? entry.device->uuid == key
+                    : nvml_pci_bus_id_matches(entry.device->pci_bus_id.c_str(), key)) {
             *result = reinterpret_cast<nvmlDevice_t>(entry.device.get());
             return NVML_SUCCESS;
         }

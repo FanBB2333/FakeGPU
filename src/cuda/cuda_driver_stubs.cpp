@@ -755,7 +755,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 1;
             break;
         case CU_DEVICE_ATTRIBUTE_PCI_BUS_ID:
-            *pi = dev;  // Use device index as bus ID
+            *pi = dev + 1;  // The synthetic bus NVML and the SMI state report (index + 1)
             break;
         case CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID:
             *pi = static_cast<int>(device.profile.pci_device_id);
@@ -1764,7 +1764,8 @@ CUresult cuDeviceGetPCIBusId(char *pciBusId, int len, CUdevice dev) {
         return real_fn(pciBusId, len, real_device(dev));
     }
 
-    snprintf(pciBusId, len, "0000:%02x:00.0", dev);
+    // Same synthetic bus as NVML and the SMI state (index + 1).
+    snprintf(pciBusId, len, "0000:%02x:00.0", dev + 1);
     return CUDA_SUCCESS;
 }
 

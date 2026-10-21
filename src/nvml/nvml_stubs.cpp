@@ -1,4 +1,5 @@
 #include "nvml_defs.hpp"
+#include "pci_bus_id.hpp"
 #include "state_bridge.hpp"
 #include "../core/backend_config.hpp"
 #include "../core/global_state.hpp"
@@ -166,22 +167,21 @@ static bool modeled_nvlink_traffic(nvmlDevice_t device, unsigned int& ports, uin
 // Writes only the nvmlPciInfo_t prefix: nvitop loads nvmlDeviceGetPciInfo_v3
 // but allocates nvmlPciInfo_t (68 bytes), so touching the v3 reserved fields
 // would overflow the caller's buffer.
+// Bus ids use nvml.h's formats: busId "%08X:%02X:%02X.0", busIdLegacy "%04X:%02X:%02X.0".
 template<class PciInfo>
 static void fill_pci_info(const Device& device, PciInfo& pci) {
     memset(&pci, 0, sizeof(nvmlPciInfo_t));
-    snprintf(
-        pci.busIdLegacy,
-        sizeof(pci.busIdLegacy),
-        "%s",
-        device.pci_bus_id.c_str());
-    snprintf(
-        pci.busId,
-        sizeof(pci.busId),
-        "%s",
-        device.pci_bus_id.c_str());
-    pci.domain = 0;
-    pci.bus = static_cast<unsigned int>(device.index + 1);
-    pci.device = 0;
+    NvmlPciAddress address;
+    if (parse_nvml_pci_bus_id(device.pci_bus_id.c_str(), address)) {
+        format_nvml_pci_bus_id(address, pci.busId, sizeof(pci.busId), pci.busIdLegacy, sizeof(pci.busIdLegacy));
+    } else {
+        address.bus = static_cast<unsigned int>(device.index + 1);
+        snprintf(pci.busIdLegacy, sizeof(pci.busIdLegacy), "%s", device.pci_bus_id.c_str());
+        snprintf(pci.busId, sizeof(pci.busId), "%s", device.pci_bus_id.c_str());
+    }
+    pci.domain = address.domain;
+    pci.bus = address.bus;
+    pci.device = address.device;
     pci.pciDeviceId = device.profile.pci_device_id;
     pci.pciSubSystemId = device.profile.pci_device_id;
 }
@@ -191,8 +191,23 @@ static unsigned int profile_clock_mhz(const Device* dev, unsigned int type) {
     return type == 2 ? dev->profile.memory_clock_mhz : dev->profile.core_clock_mhz;
 }
 
+// Power limit the device boots with and enforces, in mW; 0 when the catalog has
+// no power data (a zero catalog field means unknown, not 0 W). The state bridge
+// reports the catalog power cap its reference telemetry is drawn against.
 static unsigned int default_power_limit_mw(const Device* dev) {
-    return std::min(dev->profile.typical_power_usage_mw, dev->profile.max_power_limit_mw);
+    const unsigned int cap = dev->profile.max_power_limit_mw;
+    const unsigned int typical = dev->profile.typical_power_usage_mw;
+    if (nvml_bridge::enabled() || !typical) return cap;
+    return cap ? std::min(typical, cap) : typical;
+}
+
+// The limit must lie within the constraints: [min(100 W, limit), catalog cap].
+static nvmlReturn_t power_limit_constraints_mw(const Device* dev, unsigned int& min_limit, unsigned int& max_limit) {
+    const unsigned int limit = default_power_limit_mw(dev);
+    if (!limit) return NVML_ERROR_NOT_SUPPORTED;
+    min_limit = std::min(100000U, limit);
+    max_limit = std::max(dev->profile.max_power_limit_mw, limit);
+    return NVML_SUCCESS;
 }
 
 static void trace_power(const char* api, nvmlDevice_t device) {
@@ -208,6 +223,15 @@ static nvmlReturn_t read_telemetry(nvmlDevice_t device, unsigned int* out, uint3
     const auto status = nvml_bridge::telemetry(device, &sample);
     if (status == NVML_SUCCESS) *out = sample.*field;
     return status;
+}
+
+// Copies a string into a caller buffer of `length` bytes. Like NVML, a buffer
+// without room for the terminator is NVML_ERROR_INSUFFICIENT_SIZE, not truncated.
+static nvmlReturn_t copy_string(char* out, unsigned int length, const char* value) {
+    const size_t size = std::strlen(value) + 1;
+    if (length < size) return NVML_ERROR_INSUFFICIENT_SIZE;
+    std::memcpy(out, value, size);
+    return NVML_SUCCESS;
 }
 
 // Video and accelerator engines are never busy.
@@ -286,16 +310,12 @@ nvmlReturn_t nvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device
 
 nvmlReturn_t nvmlDeviceGetName(nvmlDevice_t device, char *name, unsigned int length) {
     if (!device || !name) return NVML_ERROR_INVALID_ARGUMENT;
-    Device* dev = (Device*)device;
-    snprintf(name, length, "%s", dev->name.c_str());
-    return NVML_SUCCESS;
+    return copy_string(name, length, ((Device*)device)->name.c_str());
 }
 
 nvmlReturn_t nvmlDeviceGetUUID(nvmlDevice_t device, char *uuid, unsigned int length) {
     if (!device || !uuid) return NVML_ERROR_INVALID_ARGUMENT;
-    Device* dev = (Device*)device;
-    snprintf(uuid, length, "%s", dev->uuid.c_str());
-    return NVML_SUCCESS;
+    return copy_string(uuid, length, ((Device*)device)->uuid.c_str());
 }
 
 nvmlReturn_t nvmlDeviceGetAddressingMode(nvmlDevice_t device, nvmlDeviceAddressingMode_t *mode) {
@@ -375,16 +395,18 @@ nvmlReturn_t nvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t *pci) {
 nvmlReturn_t nvmlDeviceGetPciInfoExt(nvmlDevice_t device, nvmlPciInfoExt_v1_t *pci) {
     if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
+    nvmlPciInfo_t info;
+    fill_pci_info(*dev, info);
 
     pci->version = nvmlPciInfoExt_v1;
-    pci->domain = 0;
-    pci->bus = static_cast<unsigned int>(dev->index + 1);
-    pci->device = 0;
-    pci->pciDeviceId = dev->profile.pci_device_id;
-    pci->pciSubSystemId = dev->profile.pci_device_id;
+    pci->domain = info.domain;
+    pci->bus = info.bus;
+    pci->device = info.device;
+    pci->pciDeviceId = info.pciDeviceId;
+    pci->pciSubSystemId = info.pciSubSystemId;
     pci->baseClass = 3;  // Display controller
     pci->subClass = 0;
-    snprintf(pci->busId, sizeof(pci->busId), "%s", dev->pci_bus_id.c_str());
+    memcpy(pci->busId, info.busId, sizeof(pci->busId));
     return NVML_SUCCESS;
 }
 
@@ -455,13 +477,9 @@ nvmlReturn_t nvmlDeviceGetPowerManagementLimit(nvmlDevice_t device, unsigned int
     if (!device || !limit) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetPowerManagementLimit", device);
 
-    Device* dev = (Device*)device;
-    if (nvml_bridge::enabled()) {
-        if (!dev->profile.max_power_limit_mw) return NVML_ERROR_NOT_SUPPORTED;
-        *limit = dev->profile.max_power_limit_mw;
-        return NVML_SUCCESS;
-    }
-    *limit = default_power_limit_mw(dev);
+    const unsigned int value = default_power_limit_mw((Device*)device);
+    if (!value) return NVML_ERROR_NOT_SUPPORTED;
+    *limit = value;
     return NVML_SUCCESS;
 }
 
@@ -514,21 +532,17 @@ nvmlReturn_t nvmlDeviceGetMarginTemperature(nvmlDevice_t device, nvmlMarginTempe
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
-// Newer temperature query variant used by some tools (e.g., nvidia-smi)
-// The real signature takes a versioned struct pointer; we return NOT_SUPPORTED
-// so callers fall back to the basic nvmlDeviceGetTemperature path.
+// Versioned temperature query (nvmlTemperature_v1_t, version nvmlTemperature_v1).
+// It reports the same reading as nvmlDeviceGetTemperature; nvitop prefers it
+// whenever the symbol exists.
 nvmlReturn_t nvmlDeviceGetTemperatureV(nvmlDevice_t device, void *tempInfo) {
-    if (nvml_bridge::enabled()) {
-        struct Temperature { unsigned int version, sensor; int temperature; };
-        auto* value = static_cast<Temperature*>(tempInfo);
-        if (!value || value->version != 0x100000C || value->sensor != 0) return NVML_ERROR_INVALID_ARGUMENT;
-        unsigned int temperature = 0;
-        const auto status = nvmlDeviceGetTemperature(device, value->sensor, &temperature);
-        if (status == NVML_SUCCESS) value->temperature = static_cast<int>(temperature);
-        return status;
-    }
-    FGPU_LOG("[FakeNVML] nvmlDeviceGetTemperatureV (unsupported path)\n");
-    return NVML_ERROR_NOT_SUPPORTED;
+    struct Temperature { unsigned int version, sensor; int temperature; };
+    auto* value = static_cast<Temperature*>(tempInfo);
+    if (!value || value->version != 0x100000C || value->sensor != 0) return NVML_ERROR_INVALID_ARGUMENT;
+    unsigned int temperature = 0;
+    const auto status = nvmlDeviceGetTemperature(device, value->sensor, &temperature);
+    if (status == NVML_SUCCESS) value->temperature = static_cast<int>(temperature);
+    return status;
 }
 
 nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {
@@ -584,7 +598,7 @@ nvmlReturn_t nvmlDeviceGetDecoderUtilization(nvmlDevice_t device, unsigned int *
     return idle_engine_utilization(device, utilization, samplingPeriodUs);
 }
 
-nvmlReturn_t nvmlDeviceGetEncoderStats(nvmlDevice_t device, unsigned long long *sessionCount, unsigned long long *averageFps, unsigned long long *averageLatency) {
+nvmlReturn_t nvmlDeviceGetEncoderStats(nvmlDevice_t device, unsigned int *sessionCount, unsigned int *averageFps, unsigned int *averageLatency) {
     if (!device || !sessionCount || !averageFps || !averageLatency) return NVML_ERROR_INVALID_ARGUMENT;
     *sessionCount = 0;
     *averageFps = 0;
@@ -639,16 +653,16 @@ nvmlReturn_t nvmlDeviceGetHandleByIndex_v2(unsigned int index, nvmlDevice_t *dev
 // System query functions
 nvmlReturn_t nvmlSystemGetDriverVersion(char *version, unsigned int length) {
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "%s", nvml_bridge::enabled() ? "FakeGPU" : kDriverVersion);
-    FGPU_LOG("[FakeNVML] nvmlSystemGetDriverVersion returning: %s\n", version);
-    return NVML_SUCCESS;
+    const char* value = nvml_bridge::enabled() ? "FakeGPU" : kDriverVersion;
+    FGPU_LOG("[FakeNVML] nvmlSystemGetDriverVersion returning: %s\n", value);
+    return copy_string(version, length, value);
 }
 
 nvmlReturn_t nvmlSystemGetNVMLVersion(char *version, unsigned int length) {
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "%s", nvml_bridge::enabled() ? "FakeGPU state bridge v1" : "12.570.195");
-    FGPU_LOG("[FakeNVML] nvmlSystemGetNVMLVersion returning: %s\n", version);
-    return NVML_SUCCESS;
+    const char* value = nvml_bridge::enabled() ? "FakeGPU state bridge v1" : "12.570.195";
+    FGPU_LOG("[FakeNVML] nvmlSystemGetNVMLVersion returning: %s\n", value);
+    return copy_string(version, length, value);
 }
 
 nvmlReturn_t nvmlSystemGetCudaDriverVersion(int *cudaDriverVersion) {
@@ -712,11 +726,10 @@ nvmlReturn_t nvmlDeviceGetMigMode(nvmlDevice_t device, unsigned int *currentMode
 }
 
 nvmlReturn_t nvmlDeviceGetDriverModel(nvmlDevice_t device, unsigned int *current, unsigned int *pending) {
-    if (!device) return NVML_ERROR_INVALID_ARGUMENT;
-    // WDDM (Windows) = 0, TCC = 1, Linux doesn't use this
-    if (current) *current = 0;
-    if (pending) *pending = 0;
-    return NVML_SUCCESS;
+    if (!device || (!current && !pending)) return NVML_ERROR_INVALID_ARGUMENT;
+    // Windows only (WDDM = 0, WDM/TCC = 1); nvml.h returns NOT_SUPPORTED on
+    // other platforms, and this library is built for Linux and macOS.
+    return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetDriverModel_v2(nvmlDevice_t device, unsigned int *current, unsigned int *pending) {
@@ -875,18 +888,14 @@ nvmlReturn_t nvmlDeviceGetMPSComputeRunningProcesses_v3(nvmlDevice_t device, uns
 // Clock-related functions
 nvmlReturn_t nvmlDeviceGetMaxCustomerBoostClock(nvmlDevice_t device, unsigned int clockType, unsigned int *clockMHz) {
     if (!device || !clockMHz) return NVML_ERROR_INVALID_ARGUMENT;
-    Device* dev = (Device*)device;
-    *clockMHz = dev->profile.core_clock_mhz;
+    *clockMHz = profile_clock_mhz((Device*)device, clockType);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetMinMaxClockOfPState(nvmlDevice_t device, unsigned int clockType, unsigned int pState, unsigned int *minClockMHz, unsigned int *maxClockMHz) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     if (minClockMHz) *minClockMHz = 210;
-    if (maxClockMHz) {
-        Device* dev = (Device*)device;
-        *maxClockMHz = dev->profile.core_clock_mhz;
-    }
+    if (maxClockMHz) *maxClockMHz = profile_clock_mhz((Device*)device, clockType);
     return NVML_SUCCESS;
 }
 
@@ -902,25 +911,29 @@ nvmlReturn_t nvmlDeviceGetDefaultApplicationsClock(nvmlDevice_t device, unsigned
 nvmlReturn_t nvmlDeviceGetEnforcedPowerLimit(nvmlDevice_t device, unsigned int *limit) {
     if (!device || !limit) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetEnforcedPowerLimit", device);
-    *limit = default_power_limit_mw((Device*)device);
+    const unsigned int value = default_power_limit_mw((Device*)device);
+    if (!value) return NVML_ERROR_NOT_SUPPORTED;
+    *limit = value;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementLimitConstraints(nvmlDevice_t device, unsigned int *minLimit, unsigned int *maxLimit) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetPowerManagementLimitConstraints", device);
-    if (minLimit) *minLimit = 100000;   // 100W min
-    if (maxLimit) {
-        Device* dev = (Device*)device;
-        *maxLimit = dev->profile.max_power_limit_mw;
-    }
+    unsigned int min_limit = 0, max_limit = 0;
+    const nvmlReturn_t status = power_limit_constraints_mw((Device*)device, min_limit, max_limit);
+    if (status != NVML_SUCCESS) return status;
+    if (minLimit) *minLimit = min_limit;
+    if (maxLimit) *maxLimit = max_limit;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementDefaultLimit(nvmlDevice_t device, unsigned int *defaultLimit) {
     if (!device || !defaultLimit) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetPowerManagementDefaultLimit", device);
-    *defaultLimit = default_power_limit_mw((Device*)device);
+    const unsigned int value = default_power_limit_mw((Device*)device);
+    if (!value) return NVML_ERROR_NOT_SUPPORTED;
+    *defaultLimit = value;
     return NVML_SUCCESS;
 }
 
@@ -949,11 +962,21 @@ nvmlReturn_t nvmlDeviceWorkloadPowerProfileClearRequestedProfiles(nvmlDevice_t d
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
-// Architecture info
+// Architecture info. GpuArch values follow compute capability, not NVML ids.
 nvmlReturn_t nvmlDeviceGetArchitecture(nvmlDevice_t device, unsigned int *arch) {
     if (!device || !arch) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
-    *arch = static_cast<unsigned int>(dev->profile.architecture);
+    switch (dev->profile.architecture) {
+        case GpuArch::Maxwell: *arch = NVML_DEVICE_ARCH_MAXWELL; break;
+        case GpuArch::Pascal: *arch = NVML_DEVICE_ARCH_PASCAL; break;
+        case GpuArch::Volta: *arch = NVML_DEVICE_ARCH_VOLTA; break;
+        case GpuArch::Turing: *arch = NVML_DEVICE_ARCH_TURING; break;
+        case GpuArch::Ampere: *arch = NVML_DEVICE_ARCH_AMPERE; break;
+        case GpuArch::Ada: *arch = NVML_DEVICE_ARCH_ADA; break;
+        case GpuArch::Hopper: *arch = NVML_DEVICE_ARCH_HOPPER; break;
+        case GpuArch::Blackwell: *arch = NVML_DEVICE_ARCH_BLACKWELL; break;
+        default: *arch = NVML_DEVICE_ARCH_UNKNOWN; break;
+    }
     return NVML_SUCCESS;
 }
 
@@ -985,8 +1008,7 @@ nvmlReturn_t nvmlDeviceGetBoardId(nvmlDevice_t device, unsigned int *boardId) {
 
 nvmlReturn_t nvmlDeviceGetSerial(nvmlDevice_t device, char *serial, unsigned int length) {
     if (!device || !serial) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(serial, length, "N/A");
-    return NVML_SUCCESS;
+    return copy_string(serial, length, "N/A");
 }
 
 nvmlReturn_t nvmlDeviceGetBrand(nvmlDevice_t device, unsigned int *type) {
@@ -998,21 +1020,18 @@ nvmlReturn_t nvmlDeviceGetBrand(nvmlDevice_t device, unsigned int *type) {
 // VBIOS
 nvmlReturn_t nvmlDeviceGetVbiosVersion(nvmlDevice_t device, char *version, unsigned int length) {
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "92.00.00.00.00");
-    return NVML_SUCCESS;
+    return copy_string(version, length, "92.00.00.00.00");
 }
 
 // Info ROM
 nvmlReturn_t nvmlDeviceGetInforomVersion(nvmlDevice_t device, unsigned int object, char *version, unsigned int length) {
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "N/A");
-    return NVML_SUCCESS;
+    return copy_string(version, length, "N/A");
 }
 
 nvmlReturn_t nvmlDeviceGetInforomImageVersion(nvmlDevice_t device, char *version, unsigned int length) {
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
-    snprintf(version, length, "N/A");
-    return NVML_SUCCESS;
+    return copy_string(version, length, "N/A");
 }
 
 nvmlReturn_t nvmlDeviceValidateInforom(nvmlDevice_t device) {
@@ -1073,9 +1092,12 @@ nvmlReturn_t nvmlDeviceGetNvLinkRemotePciInfo_v2(
     }
     if (peer.peer_index < 0) {
         memset(pci, 0, sizeof(*pci));
-        snprintf(pci->busIdLegacy, sizeof(pci->busIdLegacy), "%s", kNvSwitchPciBusId);
-        snprintf(pci->busId, sizeof(pci->busId), "%s", kNvSwitchPciBusId);
-        pci->bus = 0xc0;
+        NvmlPciAddress address;
+        parse_nvml_pci_bus_id(kNvSwitchPciBusId, address);
+        format_nvml_pci_bus_id(address, pci->busId, sizeof(pci->busId), pci->busIdLegacy, sizeof(pci->busIdLegacy));
+        pci->domain = address.domain;
+        pci->bus = address.bus;
+        pci->device = address.device;
         return NVML_SUCCESS;
     }
     Device& remote =
@@ -1310,7 +1332,7 @@ nvmlReturn_t nvmlDeviceGetHandleByPciBusId(const char *pciBusId, nvmlDevice_t *d
     const int count = state.get_device_count();
     for (int index = 0; index < count; ++index) {
         Device& dev = state.get_device(index);
-        if (dev.pci_bus_id == pciBusId) {
+        if (nvml_pci_bus_id_matches(dev.pci_bus_id.c_str(), pciBusId)) {
             *device = (nvmlDevice_t)&dev;
             return NVML_SUCCESS;
         }
@@ -1469,24 +1491,27 @@ nvmlReturn_t nvmlDeviceGetPowerSource(nvmlDevice_t device, unsigned int *powerSo
 }
 
 // Supported/enabled clocks
+// One supported clock, returned with NVML's size-query protocol: a count below
+// one (pynvml's first call passes 0 and NULL) yields INSUFFICIENT_SIZE and 1.
+static nvmlReturn_t single_supported_clock(unsigned int clock, unsigned int *count, unsigned int *clocksMHz) {
+    const unsigned int capacity = *count;
+    *count = 1;
+    if (capacity < 1) return NVML_ERROR_INSUFFICIENT_SIZE;
+    if (!clocksMHz) return NVML_ERROR_INVALID_ARGUMENT;
+    clocksMHz[0] = clock;
+    return NVML_SUCCESS;
+}
+
 nvmlReturn_t nvmlDeviceGetSupportedGraphicsClocks(nvmlDevice_t device, unsigned int memoryClockMHz, unsigned int *count, unsigned int *clocksMHz) {
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
-    if (clocksMHz && *count > 0) {
-        Device* dev = (Device*)device;
-        clocksMHz[0] = dev->profile.core_clock_mhz;
-    }
-    *count = 1;
-    return NVML_SUCCESS;
+    Device* dev = (Device*)device;
+    if (memoryClockMHz != profile_clock_mhz(dev, 2)) return NVML_ERROR_NOT_FOUND;
+    return single_supported_clock(profile_clock_mhz(dev, 0), count, clocksMHz);
 }
 
 nvmlReturn_t nvmlDeviceGetSupportedMemoryClocks(nvmlDevice_t device, unsigned int *count, unsigned int *clocksMHz) {
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
-    if (clocksMHz && *count > 0) {
-        Device* dev = (Device*)device;
-        clocksMHz[0] = dev->profile.memory_clock_mhz;
-    }
-    *count = 1;
-    return NVML_SUCCESS;
+    return single_supported_clock(profile_clock_mhz((Device*)device, 2), count, clocksMHz);
 }
 
 // Lock clocks (no-op)
@@ -1557,8 +1582,9 @@ nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvml
         entry.nvmlReturn = NVML_ERROR_NOT_SUPPORTED;
         entry.value.uiVal = 0;
 
-        // NVLink counters take the link index as scope. The modeled traffic
-        // of a GPU is spread evenly over its ports; values are KiB.
+        // NVLink counters take the link index as scope, or UINT_MAX for the
+        // sum over all links. The modeled traffic of a GPU is spread evenly
+        // over its ports; values are KiB.
         if (entry.fieldId == NVML_FI_DEV_NVLINK_LINK_COUNT ||
             entry.fieldId == NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX ||
             entry.fieldId == NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_RX) {
@@ -1570,10 +1596,10 @@ nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvml
             if (entry.fieldId == NVML_FI_DEV_NVLINK_LINK_COUNT) {
                 entry.nvmlReturn = NVML_SUCCESS;
                 entry.value.uiVal = ports;
-            } else if (entry.scopeId < ports) {
+            } else if (entry.scopeId < ports || (ports && entry.scopeId == 0xFFFFFFFFu)) {
                 const uint64_t bytes = entry.fieldId == NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX ? tx : rx;
                 entry.valueType = NVML_VALUE_TYPE_UNSIGNED_LONG_LONG;
-                entry.value.ullVal = bytes / ports / 1024;
+                entry.value.ullVal = entry.scopeId < ports ? bytes / ports / 1024 : bytes / 1024;
                 entry.nvmlReturn = NVML_SUCCESS;
             } else {
                 entry.nvmlReturn = NVML_ERROR_INVALID_ARGUMENT;
@@ -1587,24 +1613,22 @@ nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvml
             continue;
         }
 
+        // Power fields (mW) answer like the matching nvmlDeviceGetPower* calls.
+        unsigned int min_limit_mw = 0, max_limit_mw = 0;
         switch (entry.fieldId) {
             case NVML_FI_DEV_POWER_AVERAGE:
             case NVML_FI_DEV_POWER_INSTANT:
-                entry.nvmlReturn = NVML_SUCCESS;
-                entry.value.uiVal = 1000;  // 1W in mW
+                entry.nvmlReturn = nvmlDeviceGetPowerUsage(device, &entry.value.uiVal);
                 break;
             case NVML_FI_DEV_POWER_MIN_LIMIT:
-                entry.nvmlReturn = NVML_SUCCESS;
-                entry.value.uiVal = 100000;  // 100W in mW
-                break;
             case NVML_FI_DEV_POWER_MAX_LIMIT:
-                entry.nvmlReturn = NVML_SUCCESS;
-                entry.value.uiVal = dev->profile.max_power_limit_mw;
+                entry.nvmlReturn = power_limit_constraints_mw(dev, min_limit_mw, max_limit_mw);
+                entry.value.uiVal = entry.fieldId == NVML_FI_DEV_POWER_MIN_LIMIT ? min_limit_mw : max_limit_mw;
                 break;
             case NVML_FI_DEV_POWER_DEFAULT_LIMIT:
             case NVML_FI_DEV_POWER_CURRENT_LIMIT:
             case NVML_FI_DEV_POWER_REQUESTED_LIMIT:
-                entry.nvmlReturn = NVML_SUCCESS;
+                entry.nvmlReturn = default_limit_mw ? NVML_SUCCESS : NVML_ERROR_NOT_SUPPORTED;
                 entry.value.uiVal = default_limit_mw;
                 break;
             default:

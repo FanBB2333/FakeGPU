@@ -1,0 +1,348 @@
+"""Native NVML answers checked against nvml.h and the nvidia-ml-py (pynvml) bindings.
+
+Expected values come from nvml.h (CUDA 12.9 nvidia-nvml-dev) and pynvml's ctypes
+definitions, not from FakeGPU itself.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+BUILD_DIR = Path(os.environ.get("FAKEGPU_BUILD_DIR", ROOT / "build"))
+LIBRARY = BUILD_DIR / ("libnvidia-ml.dylib" if sys.platform == "darwin" else "libnvidia-ml.so.1")
+
+pytestmark = pytest.mark.skipif(not LIBRARY.exists(), reason="native libraries are not built")
+
+
+def _nvml(tmp_path: Path, body: str, **environment: str):
+    """Run ``body`` with pynvml bound to the native library; return its ``result``."""
+    pytest.importorskip("pynvml")
+    code = textwrap.dedent(
+        """
+        import ctypes, json
+        import pynvml as N
+        lib = ctypes.CDLL({library!r})
+        N.nvmlLib = lib
+        N._nvmlGetFunctionPointer_cache.clear()
+        N.nvmlInit()
+        result = None
+        """
+    ).format(library=str(LIBRARY)) + textwrap.dedent(body) + "\nN.nvmlShutdown()\nprint(json.dumps(result))\n"
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith(("FAKEGPU_", "CUDA_VISIBLE_DEVICES"))
+    }
+    env.update(
+        PYTHONPATH=str(ROOT), FAKEGPU_HOME=str(tmp_path), FAKEGPU_MACHINE="off",
+        FAKEGPU_TERMINAL_REPORT="0", FAKEGPU_REPORT_PATH=str(tmp_path / "report.json"),
+        **environment,
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=env, text=True, capture_output=True, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout.strip().splitlines()[-1])
+
+
+def test_architecture_uses_nvml_device_arch_ids(tmp_path: Path) -> None:
+    profiles = ["gtx980", "p100", "v100", "t4", "a100", "l4", "h100", "b200"]
+    result = _nvml(
+        tmp_path,
+        "result = [N.nvmlDeviceGetArchitecture(N.nvmlDeviceGetHandleByIndex(i)) for i in range(8)]",
+        FAKEGPU_PROFILES=",".join(profiles),
+    )
+    import pynvml
+
+    assert result == [
+        pynvml.NVML_DEVICE_ARCH_MAXWELL, pynvml.NVML_DEVICE_ARCH_PASCAL, pynvml.NVML_DEVICE_ARCH_VOLTA,
+        pynvml.NVML_DEVICE_ARCH_TURING, pynvml.NVML_DEVICE_ARCH_AMPERE, pynvml.NVML_DEVICE_ARCH_ADA,
+        pynvml.NVML_DEVICE_ARCH_HOPPER, pynvml.NVML_DEVICE_ARCH_BLACKWELL,
+    ]
+
+
+def test_encoder_stats_write_unsigned_int_outputs(tmp_path: Path) -> None:
+    # nvml.h: nvmlDeviceGetEncoderStats(device, unsigned int*, unsigned int*, unsigned int*).
+    result = _nvml(
+        tmp_path,
+        """
+        values = (ctypes.c_uint * 4)(11, 22, 33, 0xDEADBEEF)
+        rc = lib.nvmlDeviceGetEncoderStats(N.nvmlDeviceGetHandleByIndex(0),
+                                           *(ctypes.byref(values, 4 * i) for i in range(3)))
+        result = [rc, list(values)]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    assert result == [0, [0, 0, 0, 0xDEADBEEF]]
+
+
+def test_pci_bus_ids_use_nvml_formats_and_lookup_accepts_documented_forms(tmp_path: Path) -> None:
+    # nvml.h: busId "%08X:%02X:%02X.0", busIdLegacy "%04X:%02X:%02X.0"; the lookup
+    # accepts %x:%x:%x.%x, %x:%x:%x and %x:%x.%x.
+    result = _nvml(
+        tmp_path,
+        """
+        pci = N.nvmlDeviceGetPciInfo(N.nvmlDeviceGetHandleByIndex(9))
+        found = []
+        for key in (pci.busId, pci.busIdLegacy, "0:a:0", "a:0.0", "00000000:0a:00.0"):
+            found.append(N.nvmlDeviceGetIndex(N.nvmlDeviceGetHandleByPciBusId(key)))
+        try:
+            N.nvmlDeviceGetHandleByPciBusId("0000:7F:00.0")
+            missing = None
+        except N.NVMLError as exc:
+            missing = exc.value
+        result = [pci.busId, pci.busIdLegacy, pci.domain, pci.bus, pci.device, found, missing]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="10",
+    )
+    assert result == ["00000000:0A:00.0", "0000:0A:00.0", 0, 0x0A, 0, [9] * 5, 6]
+
+
+def test_power_limits_stay_within_constraints_and_unknown_power_is_not_zero_watts(tmp_path: Path) -> None:
+    # nvml.h: limits are in mW and the enforced/default limit is one of the
+    # "possible values of power management limits" bounded by the constraints.
+    # The a100 and l4 catalogs know only the power cap (400 W, 72 W, matching
+    # fakegpu/data/a100_monitor_reference.json for the a100); l2 knows neither.
+    result = _nvml(
+        tmp_path,
+        """
+        def query(fn, *args):
+            try:
+                return fn(*args)
+            except N.NVMLError as exc:
+                return ["error", exc.value]
+        result = []
+        for i in range(3):
+            h = N.nvmlDeviceGetHandleByIndex(i)
+            fields = N.nvmlDeviceGetFieldValues(h, [
+                N.NVML_FI_DEV_POWER_MIN_LIMIT, N.NVML_FI_DEV_POWER_MAX_LIMIT, N.NVML_FI_DEV_POWER_CURRENT_LIMIT])
+            result.append([
+                query(N.nvmlDeviceGetPowerManagementLimit, h), query(N.nvmlDeviceGetPowerManagementDefaultLimit, h),
+                query(N.nvmlDeviceGetEnforcedPowerLimit, h), query(N.nvmlDeviceGetPowerManagementLimitConstraints, h),
+                [[f.nvmlReturn, f.value.uiVal] for f in fields],
+            ])
+        """,
+        FAKEGPU_PROFILES="a100,l4,l2",
+    )
+    not_supported = ["error", 3]
+    assert result == [
+        [400000, 400000, 400000, [100000, 400000], [[0, 100000], [0, 400000], [0, 400000]]],
+        [72000, 72000, 72000, [72000, 72000], [[0, 72000], [0, 72000], [0, 72000]]],
+        [not_supported, not_supported, not_supported, not_supported, [[3, 0], [3, 0], [3, 0]]],
+    ]
+
+
+def test_clock_queries_answer_the_requested_clock_domain(tmp_path: Path) -> None:
+    # nvml.h: applications/boost/P-state clocks take an nvmlClockType_t, and the
+    # supported-clock lists return INSUFFICIENT_SIZE for a too-small count, which
+    # pynvml's first (count 0) call relies on; an unsupported memory clock is NOT_FOUND.
+    result = _nvml(
+        tmp_path,
+        """
+        h = N.nvmlDeviceGetHandleByIndex(0)
+        mem, graphics = N.NVML_CLOCK_MEM, N.NVML_CLOCK_GRAPHICS
+        memory_clock = N.nvmlDeviceGetMaxClockInfo(h, mem)
+        try:
+            N.nvmlDeviceGetSupportedGraphicsClocks(h, memory_clock + 1)
+            unsupported = None
+        except N.NVMLError as exc:
+            unsupported = exc.value
+        result = [
+            memory_clock, N.nvmlDeviceGetMaxClockInfo(h, graphics),
+            N.nvmlDeviceGetApplicationsClock(h, mem), N.nvmlDeviceGetDefaultApplicationsClock(h, mem),
+            N.nvmlDeviceGetMaxCustomerBoostClock(h, mem), N.nvmlDeviceGetMinMaxClockOfPState(h, mem, 0)[1],
+            N.nvmlDeviceGetApplicationsClock(h, graphics),
+            N.nvmlDeviceGetSupportedMemoryClocks(h), N.nvmlDeviceGetSupportedGraphicsClocks(h, memory_clock),
+            unsupported,
+        ]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    memory, graphics = result[0], result[1]
+    assert memory != graphics
+    assert result[2:] == [memory, memory, memory, memory, graphics, [memory], [graphics], 6]
+
+
+def test_driver_model_is_not_supported_off_windows(tmp_path: Path) -> None:
+    # nvml.h nvmlDeviceGetDriverModel_v2: NVML_ERROR_NOT_SUPPORTED if the platform
+    # is not windows. Reporting 0 would read as NVML_DRIVER_WDDM.
+    result = _nvml(
+        tmp_path,
+        """
+        h = N.nvmlDeviceGetHandleByIndex(0)
+        result = []
+        for fn in (N.nvmlDeviceGetDriverModel, N.nvmlDeviceGetDriverModel_v1):
+            try:
+                result.append(fn(h))
+            except N.NVMLError as exc:
+                result.append(exc.value)
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    assert result == [3, 3]
+
+
+def test_short_string_buffers_return_insufficient_size(tmp_path: Path) -> None:
+    # nvml.h: NVML_ERROR_INSUFFICIENT_SIZE if length is too small (no truncation).
+    result = _nvml(
+        tmp_path,
+        """
+        h = N.nvmlDeviceGetHandleByIndex(0)
+        name = N.nvmlDeviceGetName(h)
+        def call(fn, *args, length):
+            buffer = ctypes.create_string_buffer(b"x" * length, length)
+            return [fn(*args, buffer, ctypes.c_uint(length)), buffer.value.decode()]
+        result = [
+            call(lib.nvmlDeviceGetName, h, length=8)[0],
+            call(lib.nvmlDeviceGetName, h, length=len(name) + 1) == [0, name],
+            call(lib.nvmlDeviceGetUUID, h, length=N.NVML_DEVICE_UUID_BUFFER_SIZE)[0],
+            call(lib.nvmlDeviceGetSerial, h, length=1)[0],
+            call(lib.nvmlSystemGetDriverVersion, length=4)[0],
+            call(lib.nvmlSystemGetNVMLVersion, length=4)[0],
+            call(lib.nvmlDeviceGetVbiosVersion, h, length=4)[0],
+        ]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    assert result == [7, True, 0, 7, 7, 7, 7]
+
+
+def test_nvlink_throughput_scope_uint_max_sums_all_links(tmp_path: Path) -> None:
+    # nvml.h NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_*: "A scopeId of UINT_MAX returns
+    # aggregate value summed up across all links"; values are KiB.
+    pytest.importorskip("pynvml")
+    from fakegpu.link_traffic import empty_record
+    from fakegpu.smi import SmiStatePublisher
+
+    record = empty_record("pcie", 31.508)
+    record["links"]["nvlink"].update(tx_bytes=12 * 2**20, rx_bytes=6 * 2**20)
+    state = SmiStatePublisher(
+        tmp_path / "state" / "state.json",
+        lambda: {"devices": [{"index": 0, "name": "Fake A100", "profile_id": "a100",
+                              "total_memory": 80 * 2**30, "transfer": record}]},
+    ).publish_once(running=True)
+    state["devices"][0]["topology"]["nvlink"]["active_links"] = 12
+    (tmp_path / "state" / "state.json").write_text(json.dumps(state))
+    code = textwrap.dedent(
+        f"""
+        import json
+        from fakegpu.nvml import NvmlStateBridge
+        with NvmlStateBridge(state_dir={str(tmp_path / "state")!r}, lib_dir={str(BUILD_DIR)!r}):
+            import pynvml as N
+            N.nvmlInit()
+            fields = N.nvmlDeviceGetFieldValues(N.nvmlDeviceGetHandleByIndex(0), [
+                (N.NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX, 0xFFFFFFFF),
+                (N.NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_RX, 0xFFFFFFFF),
+                (N.NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX, 3),
+            ])
+            print(json.dumps([[f.nvmlReturn, f.value.ullVal] for f in fields]))
+            N.nvmlShutdown()
+        """
+    )
+    env = dict(os.environ, PYTHONPATH=str(ROOT), FAKEGPU_HOME=str(tmp_path), FAKEGPU_MACHINE="off")
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=env, text=True, capture_output=True, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout.strip().splitlines()[-1]) == [[0, 12 * 1024], [0, 6 * 1024], [0, 1024]]
+
+
+def test_versioned_temperature_matches_the_legacy_reading(tmp_path: Path) -> None:
+    # nvml.h: nvmlDeviceGetTemperatureV retrieves the same current temperature
+    # (nvmlTemperature_v1_t, version nvmlTemperature_v1). nvitop prefers it
+    # whenever the symbol exists.
+    result = _nvml(
+        tmp_path,
+        """
+        class Temperature(ctypes.Structure):
+            _fields_ = [("version", ctypes.c_uint), ("sensorType", ctypes.c_uint), ("temperature", ctypes.c_int)]
+        h = N.nvmlDeviceGetHandleByIndex(0)
+        value = Temperature(N.nvmlTemperature_v1, N.NVML_TEMPERATURE_GPU, -1)
+        rc = lib.nvmlDeviceGetTemperatureV(h, ctypes.byref(value))
+        result = [rc, value.temperature, N.nvmlDeviceGetTemperature(h, N.NVML_TEMPERATURE_GPU)]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    assert result[0] == 0 and result[1] == result[2]
+
+
+def test_memory_info_v2_keeps_the_nvml_struct_version(tmp_path: Path) -> None:
+    # nvml.h: nvmlMemory_v2 = NVML_STRUCT_VERSION(Memory, 2) = 0x02000028.
+    result = _nvml(
+        tmp_path,
+        """
+        memory = N.nvmlDeviceGetMemoryInfo(N.nvmlDeviceGetHandleByIndex(0), version=N.nvmlMemory_v2)
+        result = [memory.version, memory.total == memory.free + memory.used + memory.reserved]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    assert result == [0x02000028, True]
+
+
+def test_cuda_pci_bus_id_resolves_to_the_same_nvml_device(tmp_path: Path) -> None:
+    # One GPU has one PCI address: the bus id from cuDeviceGetPCIBusId must find the
+    # same device through nvmlDeviceGetHandleByPciBusId (which accepts its
+    # domain:bus:device.function form), and CU_DEVICE_ATTRIBUTE_PCI_BUS_ID (33)
+    # must equal nvmlPciInfo_t.bus.
+    suffix = ".dylib" if sys.platform == "darwin" else ".so.1"
+    result = _nvml(
+        tmp_path,
+        f"""
+        cuda = ctypes.CDLL({str(BUILD_DIR / ("libcuda" + suffix))!r})
+        assert cuda.cuInit(0) == 0
+        result = []
+        for dev in range(3):
+            bus_id = ctypes.create_string_buffer(64)
+            bus = ctypes.c_int(-1)
+            cuda.cuDeviceGetPCIBusId(bus_id, 64, dev)
+            cuda.cuDeviceGetAttribute(ctypes.byref(bus), 33, dev)
+            handle = N.nvmlDeviceGetHandleByPciBusId(bus_id.value)
+            result.append([N.nvmlDeviceGetIndex(handle), bus.value == N.nvmlDeviceGetPciInfo(handle).bus])
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="3",
+    )
+    assert result == [[0, True], [1, True], [2, True]]
+
+
+def test_bridge_power_fields_follow_power_queries(tmp_path: Path) -> None:
+    # docs/en/fakegpu-smi.md: without reference telemetry the bridge reports
+    # power draw as unavailable; the field-value path must agree.
+    pytest.importorskip("pynvml")
+    from fakegpu.smi import SmiStatePublisher
+
+    SmiStatePublisher(
+        tmp_path / "state" / "state.json",
+        lambda: {"devices": [{"index": 0, "name": "Fake A100", "profile_id": "a100",
+                              "total_memory": 80 * 2**30, "reported_memory": 2**20}]},
+    ).publish_once(running=True)
+    code = textwrap.dedent(
+        f"""
+        import json
+        from fakegpu.nvml import NvmlStateBridge
+        with NvmlStateBridge(state_dir={str(tmp_path / "state")!r}, lib_dir={str(BUILD_DIR)!r}):
+            import pynvml as N
+            N.nvmlInit()
+            h = N.nvmlDeviceGetHandleByIndex(0)
+            try:
+                usage = N.nvmlDeviceGetPowerUsage(h)
+            except N.NVMLError as exc:
+                usage = ["error", exc.value]
+            fields = N.nvmlDeviceGetFieldValues(h, [N.NVML_FI_DEV_POWER_INSTANT, N.NVML_FI_DEV_POWER_CURRENT_LIMIT])
+            print(json.dumps([usage, N.nvmlDeviceGetPowerManagementLimit(h),
+                              [[f.nvmlReturn, f.value.uiVal] for f in fields]]))
+            N.nvmlShutdown()
+        """
+    )
+    env = dict(os.environ, PYTHONPATH=str(ROOT), FAKEGPU_HOME=str(tmp_path), FAKEGPU_MACHINE="off")
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=env, text=True, capture_output=True, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout.strip().splitlines()[-1]) == [["error", 3], 400000, [[3, 0], [0, 400000]]]
