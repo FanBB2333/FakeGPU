@@ -627,12 +627,20 @@ def _divide(raw: torch.Tensor, count: int) -> None:
         raw.div_(count, rounding_mode="trunc")
 
 
+def _not_in_group(group: Any, name: str) -> bool:
+    """Whether this rank is outside ``group``; torch then warns and skips the collective."""
+
+    c10d = torch.distributed.distributed_c10d
+    if not c10d._rank_not_in_group(group):
+        return False
+    c10d._warn_not_in_group(name)
+    return True
+
+
 def _real_all_reduce(raw: torch.Tensor, op: Any, group: Any) -> None:
     """All-reduce a CPU tensor in place; gloo lacks AVG on older PyTorch."""
 
     if _is_avg(op):
-        if torch.distributed.distributed_c10d._rank_not_in_group(group):
-            return
         _ORIG_DIST["all_reduce"](raw, op=_sum_op(), group=group)
         _divide(raw, _ORIG_DIST["get_world_size"](group))
         return
@@ -644,6 +652,8 @@ def _done(async_op: bool) -> Any:
 
 
 def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = None, timeout: Any = None) -> Any:
+    if _not_in_group(group, "barrier"):
+        return None
     if _DIST_REAL:
         options = {"timeout": timeout} if timeout is not None else {}
         return _ORIG_DIST["barrier"](group=group, async_op=async_op, **options)
@@ -651,6 +661,8 @@ def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = N
 
 
 def _dist_all_reduce(tensor: torch.Tensor, op: Any = None, group: Any = None, async_op: bool = False) -> Any:
+    if _not_in_group(group, "all_reduce"):
+        return None
     if _DIST_REAL:
         _real_all_reduce(unwrap_tensor(tensor), op, group)
         return _done(async_op)
@@ -664,6 +676,8 @@ def _dist_broadcast(
     async_op: bool = False,
     group_src: Any = None,
 ) -> Any:
+    if _not_in_group(group, "broadcast"):
+        return None
     if _DIST_REAL:
         options = {"group_src": group_src} if group_src is not None else {"src": src}
         return _ORIG_DIST["broadcast"](unwrap_tensor(tensor), group=group, async_op=async_op, **options)
@@ -676,6 +690,8 @@ def _dist_all_gather(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "all_gather"):
+        return None
     if _DIST_REAL:
         return _ORIG_DIST["all_gather"](
             [unwrap_tensor(item) for item in tensor_list], unwrap_tensor(tensor), group=group, async_op=async_op
@@ -724,6 +740,8 @@ def _dist_all_gather_into_tensor(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "all_gather_into_tensor"):
+        return None
     if _DIST_REAL:
         source = unwrap_tensor(input_tensor).contiguous()
         parts = [torch.empty_like(source) for _ in range(_ORIG_DIST["get_world_size"](group))]
@@ -744,14 +762,14 @@ def _dist_reduce(
     async_op: bool = False,
     group_dst: Any = None,
 ) -> Any:
+    if _not_in_group(group, "reduce"):
+        return None
     if _DIST_REAL:
         raw = unwrap_tensor(tensor)
         if group_dst is not None:
             c10d = torch.distributed.distributed_c10d
             dst = group_dst if group is None else c10d.get_global_rank(group, group_dst)
         if _is_avg(op):
-            if torch.distributed.distributed_c10d._rank_not_in_group(group):
-                return _done(async_op)
             _ORIG_DIST["reduce"](raw, dst=dst, op=_sum_op(), group=group)
             if torch.distributed.distributed_c10d.get_rank() == dst:
                 _divide(raw, _ORIG_DIST["get_world_size"](group))
@@ -768,6 +786,8 @@ def _dist_gather(
     async_op: bool = False,
     group_dst: Any = None,
 ) -> Any:
+    if _not_in_group(group, "gather"):
+        return None
     if _DIST_REAL:
         options = {"group_dst": group_dst} if group_dst is not None else {"dst": dst}
         targets = [unwrap_tensor(item) for item in gather_list] if gather_list else None
@@ -785,6 +805,8 @@ def _dist_scatter(
     async_op: bool = False,
     group_src: Any = None,
 ) -> Any:
+    if _not_in_group(group, "scatter"):
+        return None
     if _DIST_REAL:
         options = {"group_src": group_src} if group_src is not None else {"src": src}
         sources = [unwrap_tensor(item) for item in scatter_list] if scatter_list else None
@@ -801,6 +823,8 @@ def _dist_reduce_scatter(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "reduce_scatter"):
+        return None
     if _DIST_REAL:
         stacked = torch.stack([unwrap_tensor(item).reshape(-1) for item in input_list])
         _real_all_reduce(stacked, op, group)
@@ -819,6 +843,8 @@ def _dist_reduce_scatter_tensor(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "reduce_scatter_tensor"):
+        return None
     if _DIST_REAL:
         reduced = unwrap_tensor(input).clone()
         _real_all_reduce(reduced, op, group)
@@ -836,6 +862,8 @@ def _dist_all_to_all(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "all_to_all"):
+        return None
     if _DIST_REAL:
         return _ORIG_DIST["all_to_all"](
             [unwrap_tensor(item) for item in output_tensor_list],
@@ -856,6 +884,8 @@ def _dist_all_to_all_single(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _not_in_group(group, "all_to_all_single"):
+        return None
     if _DIST_REAL:
         return _ORIG_DIST["all_to_all_single"](
             unwrap_tensor(output),
@@ -877,6 +907,8 @@ def _dist_broadcast_object_list(
     group_src: Any = None,
     weights_only: bool = False,
 ) -> None:
+    if _not_in_group(group, "broadcast_object_list"):
+        return None
     if _DIST_REAL:
         options = {"group_src": group_src} if group_src is not None else {"src": src}
         # The objects travel through gloo on the CPU, whatever device is named.

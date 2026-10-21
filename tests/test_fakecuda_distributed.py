@@ -141,7 +141,38 @@ def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
             dist.broadcast_object_list(sent, src=1, weights_only=True)
             return [gathered, sent]
         probe("weights_only", objects)
+        pair = dist.new_group([0, 1])  # rank 2 is not a member
+        def outside(call):
+            def run():
+                out = t(-1.0)
+                returned = call(out)
+                return [out.tolist(), returned]
+            return run
+        probe("pair/all_gather_into_tensor", outside(
+            lambda out: dist.all_gather_into_tensor(torch.empty(2, device="cuda") if rank < 2 else out,
+                                                    t(rank * 1.0), group=pair)))
+        probe("pair/reduce_scatter_tensor", outside(
+            lambda out: dist.reduce_scatter_tensor(out, t(rank + 1.0, 10.0 * (rank + 1)), group=pair)))
+        probe("pair/reduce_scatter", outside(
+            lambda out: dist.reduce_scatter(out, [t(rank + 1.0), t(10.0 * (rank + 1))], group=pair)))
+        probe("pair/reduce_scatter_avg", outside(
+            lambda out: dist.reduce_scatter(out, [t(rank + 1.0), t(10.0 * (rank + 1))], op=dist.ReduceOp.AVG,
+                                            group=pair)))
+        probe("pair/all_reduce_avg_async", outside(
+            lambda out: dist.all_reduce(out, op=dist.ReduceOp.AVG, group=pair, async_op=True) is None))
+        probe("pair/reduce_avg_async", outside(
+            lambda out: dist.reduce(out, dst=0, op=dist.ReduceOp.AVG, group=pair, async_op=True) is None))
     """)
     for rank in range(3):
         assert ranks[rank]["barrier_timeout"] is None
         assert ranks[rank]["weights_only"] == [[{"r": 0}, {"r": 1}, {"r": 2}], [{"r": 1}]]
+    # gloo without FakeGPU: members exchange values, rank 2 keeps its tensor and gets None.
+    assert ranks[0]["pair/reduce_scatter_tensor"] == [[3.0], None]
+    assert ranks[1]["pair/reduce_scatter_tensor"] == [[30.0], None]
+    assert ranks[0]["pair/reduce_scatter"] == [[3.0], None]
+    assert ranks[1]["pair/reduce_scatter_avg"] == [[15.0], None]
+    for name in ("pair/all_gather_into_tensor", "pair/reduce_scatter_tensor", "pair/reduce_scatter",
+                 "pair/reduce_scatter_avg"):
+        assert ranks[2][name] == [[-1.0], None], name
+    assert ranks[2]["pair/all_reduce_avg_async"] == [[-1.0], True]
+    assert ranks[2]["pair/reduce_avg_async"] == [[-1.0], True]
