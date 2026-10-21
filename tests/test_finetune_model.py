@@ -221,6 +221,17 @@ def test_corrupt_or_uninitialized_packed_parameters_rejected(
         actual_training_config(trainer, _normalized())
 
 
+def test_bitsandbytes_block_size_32_is_accepted(trainer):
+    # bitsandbytes 0.50.2 quantize_4bit accepts block sizes 32 through 4096.
+    trainer, modules, _ = trainer
+    for module in modules:
+        module.weight.blocksize = module.weight.quant_state.blocksize = 32
+    _, details = actual_training_config(trainer, _normalized())
+    assert {
+        module["block_size"] for module in details["quantization"]["modules"].values()
+    } == {32}
+
+
 def test_logical_shape_must_match_linear_dimensions(trainer):
     trainer, modules, _ = trainer
     modules[0].weight.quant_state.shape = (16, 32)

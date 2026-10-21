@@ -1027,11 +1027,82 @@ def test_training_plan_normalizes_deepspeed_zero3_offload() -> None:
     assert report["sharding"]["parameters_sharded"] is True
     assert report["rank_local_storage"]["parameter_bytes"] == 1_000
     assert report["rank_local_storage"]["optimizer_state_bytes"] == 0
-    assert report["cpu_offload"]["optimizer_and_master_parameter_bytes"] == 4_000
+    # 2,000 BF16 parameters over 4 ranks: FP32 master (4 B) plus FP32 Adam
+    # moments (8 B) per parameter, as in DeepSpeed's ZeRO memory estimator.
+    assert report["cpu_offload"]["optimizer_and_master_parameter_bytes"] == 6_000
     assert report["communication"]["gradient_accumulation_steps"] == 8
     assert report["communication"]["reduce_bucket_bytes"] == 400
     assert report["communication"]["allgather_bucket_bytes"] == 600
     assert len(report["memory_timeline"]["phases"]) == 4
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({"bfloat16": {"enabled": True}}, "bf16"),
+        ({"bf16": {"enabled": False}, "bfloat16": {"enabled": True}}, "no"),
+        ({"fp16": {"enabled": True}}, "fp16"),
+    ],
+)
+def test_training_plan_reads_deepspeed_legacy_bfloat16_section(
+    config: dict[str, object],
+    expected: str,
+) -> None:
+    # deepspeed.runtime.precision_config.get_bfloat16_config falls back to the
+    # "bfloat16" key only when "bf16" is absent.
+    normalized = normalize_training_config(
+        {**config, "zero_optimization": {"stage": 2}}
+    )
+
+    assert normalized["mixed_precision"] == expected
+
+
+@pytest.mark.parametrize(
+    ("optimizer", "state_bytes_per_parameter"),
+    [("adamw", 8), ("sgd_momentum", 4), ("sgd", 0)],
+)
+def test_training_plan_keeps_mixed_precision_optimizer_state_in_fp32(
+    optimizer: str,
+    state_bytes_per_parameter: int,
+) -> None:
+    # DeepSpeed builds the ZeRO optimizer over FP32 master partitions; its
+    # estimate_zero2_model_states_mem_needs counts 4 B FP32 parameters plus 8 B
+    # FP32 momentum and variance per parameter, partitioned across ranks.
+    normalized = normalize_training_config(
+        {
+            "world_size": 8,
+            "bf16": {"enabled": True},
+            "zero_optimization": {"stage": 2},
+        }
+    )
+    parameters = 1_000_000_000
+    report = estimate_training_plan(
+        normalized,
+        parameter_bytes=2 * parameters,
+        activation_bytes=0,
+        optimizer=optimizer,
+        parameter_element_bytes=2,
+    )
+
+    storage = report["rank_local_storage"]
+    assert storage["optimizer_state_bytes"] == (
+        state_bytes_per_parameter * parameters // 8
+    )
+    assert storage["master_parameter_bytes"] == (
+        4 * parameters // 8 if optimizer != "sgd" else 0
+    )
+
+    pure_bf16 = estimate_training_plan(
+        {"world_size": 1, "mixed_precision": "no"},
+        parameter_bytes=2 * parameters,
+        activation_bytes=0,
+        optimizer=optimizer,
+        parameter_element_bytes=2,
+    )
+    # Without a master copy torch.optim keeps moments in the parameter dtype.
+    assert pure_bf16["rank_local_storage"]["optimizer_state_bytes"] == (
+        state_bytes_per_parameter // 4 * 2 * parameters
+    )
 
 
 def test_training_plan_handles_accelerate_fsdp_and_auto_deepspeed_values() -> None:
@@ -1172,6 +1243,55 @@ def test_training_plan_maps_hybrid_shard_zero2_to_shard_grad_op() -> None:
     assert report["sharding"]["parameters_sharded"] is False
     assert report["rank_local_storage"]["parameter_bytes"] == 8_000
     assert report["rank_local_storage"]["gradient_bytes"] == 1_000
+
+
+@pytest.mark.parametrize(
+    ("fsdp_config", "framework", "strategy"),
+    [
+        # `accelerate config` (FSDP1) stores the strategy name in
+        # fsdp_reshard_after_forward, using accelerate's FSDP_SHARDING_STRATEGY.
+        ({"fsdp_version": 1, "fsdp_reshard_after_forward": "NO_SHARD"}, "fsdp", "no_shard"),
+        ({"fsdp_version": 1, "fsdp_reshard_after_forward": "SHARD_GRAD_OP"}, "fsdp", "shard_grad_op"),
+        ({"fsdp_sharding_strategy": "HYBRID_SHARD_ZERO2"}, "fsdp", "shard_grad_op"),
+        # torch ShardingStrategy enum values: 2 SHARD_GRAD_OP, 5 _HYBRID_SHARD_ZERO2.
+        ({"fsdp_sharding_strategy": 2}, "fsdp", "shard_grad_op"),
+        ({"fsdp_sharding_strategy": 5}, "fsdp", "shard_grad_op"),
+        # FSDP2 takes a bool; False keeps unsharded parameters after forward.
+        ({"fsdp_version": 2, "fsdp_reshard_after_forward": False}, "fsdp2", "shard_grad_op"),
+        ({"fsdp_version": 2, "fsdp_reshard_after_forward": True}, "fsdp2", "full_shard"),
+        ({"fsdp_version": 2}, "fsdp2", "full_shard"),
+    ],
+)
+def test_training_plan_reads_accelerate_fsdp_version_and_reshard_settings(
+    fsdp_config: dict[str, object],
+    framework: str,
+    strategy: str,
+) -> None:
+    normalized = normalize_training_config(
+        {"distributed_type": "FSDP", "num_processes": 8, "fsdp_config": fsdp_config}
+    )
+
+    assert normalized["framework"] == framework
+    assert normalized["sharding_strategy"] == strategy
+
+
+def test_training_plan_hybrid_shard_defaults_to_accelerate_processes_per_machine() -> None:
+    # accelerate launches num_processes // num_machines per node, and FSDP
+    # HYBRID_SHARD without a process group shards over the intra-node group.
+    normalized = normalize_training_config(
+        {
+            "distributed_type": "FSDP",
+            "num_machines": 2,
+            "num_processes": 16,
+            "fsdp_config": {"fsdp_sharding_strategy": "HYBRID_SHARD"},
+        }
+    )
+    report = estimate_training_plan(
+        normalized, parameter_bytes=16_000, activation_bytes=0
+    )
+
+    assert normalized["shard_group_size"] == 8
+    assert report["rank_local_storage"]["parameter_bytes"] == 2_000
 
 
 def test_hierarchical_topology_routes_across_racks_and_reports_links() -> None:

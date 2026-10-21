@@ -480,7 +480,17 @@ def estimate_decoder_inference(
         if any(decoder_config.get(key) is not None for key in ("dtype", "torch_dtype"))
         else config
     )
-    selected_dtype = _normalize_dtype(dtype, config=dtype_config)
+    auto_fallback = "float32"
+    if dtype == "auto" and not any(
+        dtype_config.get(key) for key in ("dtype", "torch_dtype")
+    ):
+        # transformers' dtype="auto" falls back to the checkpoint's weights.
+        auto_fallback = _first_floating_checkpoint_dtype(root) or auto_fallback
+    selected_dtype = _normalize_dtype(
+        dtype,
+        config=dtype_config,
+        auto_fallback=auto_fallback,
+    )
     element_bytes = _TORCH_DTYPE_TO_BYTES[selected_dtype]
     quantization = _quantization_summary(config, checkpoint)
     base_parameter_bytes = (
@@ -1114,6 +1124,14 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
             "num_attention_heads"
         )
 
+    # Llama 4 dense layers use intermediate_size_mlp, while its experts and
+    # always-present shared expert use intermediate_size.
+    llama4_text = config.get("model_type") == "llama4_text"
+    dense_intermediate_size = (
+        _first_positive_integer(config, ("intermediate_size_mlp",))
+        if llama4_text
+        else 0
+    ) or int(required["intermediate_size"])
     expert_count = _first_positive_integer(
         config,
         ("num_experts", "num_local_experts", "n_routed_experts"),
@@ -1144,7 +1162,7 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
             shared_experts = _first_positive_integer(
                 config,
                 ("n_shared_experts", "num_shared_experts"),
-            ) or 0
+            ) or int(llama4_text)
             shared_expert_intermediate_size = (
                 shared_experts * moe_intermediate_size
             )
@@ -1174,7 +1192,7 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
         "qk_nope_head_dim": qk_nope_head_dim,
         "qk_rope_head_dim": qk_rope_head_dim,
         "v_head_dim": v_head_dim,
-        "intermediate_size": int(required["intermediate_size"]),
+        "intermediate_size": dense_intermediate_size,
         "vocab_size": int(required["vocab_size"]),
         "model_kind": (
             "mixture_of_experts" if expert_count else "dense_decoder"
@@ -1212,6 +1230,25 @@ def _moe_layer_count(
     *,
     layer_count: int,
 ) -> int:
+    # Llama 4 lists its sparse layers explicitly; transformers derives the
+    # list from interleave_moe_layer_step when it is absent.
+    moe_layers = config.get("moe_layers")
+    if isinstance(moe_layers, list):
+        return len(
+            {
+                value
+                for value in moe_layers
+                if isinstance(value, int)
+                and not isinstance(value, bool)
+                and 0 <= value < layer_count
+            }
+        )
+    interleave_step = _first_positive_integer(
+        config,
+        ("interleave_moe_layer_step",),
+    )
+    if interleave_step:
+        return len(range(interleave_step - 1, layer_count, interleave_step))
     mlp_only_layers = config.get("mlp_only_layers")
     dense_layers = (
         {
@@ -1249,9 +1286,35 @@ def _moe_layer_count(
     )
 
 
-def _normalize_dtype(dtype: str, *, config: dict[str, Any]) -> str:
+def _first_floating_checkpoint_dtype(root: Path) -> str | None:
+    """Mirror transformers' dtype="auto" fallback for configs without dtype.
+
+    transformers reads the first shard and returns the dtype of the first
+    floating, non-FP8 tensor in safetensors' sorted key order.
+    """
+    index_path = root / "model.safetensors.index.json"
+    if index_path.is_file():
+        weight_map = json.loads(index_path.read_text(encoding="utf-8"))["weight_map"]
+        first_shard = root / sorted({str(name) for name in weight_map.values()})[0]
+    else:
+        first_shard = sorted(root.glob("*.safetensors"))[0]
+    floating = {"F16": "float16", "BF16": "bfloat16", "F32": "float32", "F64": "float64"}
+    header = _read_safetensors_header(first_shard)
+    for name in sorted(header):
+        metadata = header[name]
+        if name != "__metadata__" and metadata.get("dtype") in floating:
+            return floating[metadata["dtype"]]
+    return None
+
+
+def _normalize_dtype(
+    dtype: str,
+    *,
+    config: dict[str, Any],
+    auto_fallback: str = "float32",
+) -> str:
     value = (
-        str(config.get("dtype") or config.get("torch_dtype") or "float32")
+        str(config.get("dtype") or config.get("torch_dtype") or auto_fallback)
         if dtype == "auto"
         else str(dtype)
     )
@@ -1330,8 +1393,11 @@ def _forward_matmul_flops(
             * (qk_head_dim + dimensions["v_head_dim"])
         )
     else:
+        # q_proj and o_proj span heads * head_dim, which differs from
+        # hidden_size when the config overrides head_dim.
+        query_width = heads * dimensions["head_dim"]
         attention_projection_per_layer = (
-            4 * token_count * hidden * hidden
+            4 * token_count * hidden * query_width
             + 4 * token_count * hidden * kv_width
         )
         attention_per_layer = (

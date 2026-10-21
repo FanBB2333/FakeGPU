@@ -40,7 +40,9 @@ def _write_safetensors(
 ) -> None:
     offset = 0
     normalized: dict[str, object] = {}
-    dtype_bytes = {"BF16": 2, "F16": 2, "F32": 4, "I8": 1, "U8": 1}
+    dtype_bytes = {
+        "BF16": 2, "F16": 2, "F32": 4, "I8": 1, "U8": 1, "F8_E4M3": 1,
+    }
     for name, raw in header.items():
         metadata = dict(raw)
         shape = metadata["shape"]
@@ -267,6 +269,75 @@ def test_c11_qwen2vl_last_token_logits_match_recorded_matrix_work(tmp_path: Path
     # Profiler mm/addmm + analytical dense-equivalent QK/AV. Excludes RoPE bmm.
     assert trailing["compute"]["total_flops"] == 816_235_413_504 + 15_750_389_760
     assert trailing["compute"]["decode_flops_total"] == full["compute"]["decode_flops_total"]
+
+
+@pytest.mark.parametrize(
+    ("tensors", "expected"),
+    [
+        ({"model.embed.weight": "F16", "model.proj.weight": "F16"}, "float16"),
+        # Sorted key order decides; FP8 and integer tensors are skipped.
+        (
+            {
+                "a.weight": "F8_E4M3",
+                "b.weight_scale": "I8",
+                "c.norm.weight": "F32",
+                "d.weight": "BF16",
+            },
+            "float32",
+        ),
+    ],
+)
+def test_auto_dtype_without_config_dtype_follows_checkpoint(
+    tmp_path: Path,
+    tensors: dict[str, str],
+    expected: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir, config_overrides={"torch_dtype": None})
+    (model_dir / "model.safetensors").unlink()
+    _write_safetensors(
+        model_dir,
+        filename="model.safetensors",
+        header={
+            name: {"dtype": dtype, "shape": [8, 8]}
+            for name, dtype in tensors.items()
+        },
+    )
+    # transformers 5 from_pretrained defaults to dtype="auto"; without a
+    # config dtype it loads in the first floating, non-FP8 tensor's dtype
+    # of the first shard (safetensors keys iterate in sorted order).
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+
+    assert report["inputs"]["dtype"] == expected
+
+
+def test_query_and_output_projection_flops_follow_head_dim_override(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    # Qwen3-0.6B decoder dimensions: 16 heads x head_dim 128 = 2048, which is
+    # twice hidden_size, so q_proj is 1024->2048 and o_proj is 2048->1024.
+    config = {
+        "hidden_size": 1024, "num_hidden_layers": 28,
+        "num_attention_heads": 16, "num_key_value_heads": 8, "head_dim": 128,
+        "intermediate_size": 3072, "vocab_size": 151936,
+        "torch_dtype": "bfloat16",
+    }
+    (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+    # transformers Qwen3ForCausalLM on the meta device has per-layer weights
+    # q 2048x1024, k 1024x1024, v 1024x1024, o 1024x2048 and gate/up/down
+    # 3x3072x1024; one token costs two FLOPs per weight, plus the LM head and
+    # QK/AV over one key token.
+    attention_projections = 2 * 28 * (2 * 2048 * 1024 + 2 * 1024 * 1024)
+    mlp = 2 * 28 * 3 * 3072 * 1024
+    lm_head = 2 * 1024 * 151936
+    attention_scores = 4 * 16 * 1 * 1 * 128 * 28
+    assert attention_projections == 352_321_536
+    assert report["compute"]["prefill_flops"] == (
+        attention_projections + mlp + lm_head + attention_scores
+    )
 
 
 @pytest.mark.parametrize("value", [-1, True, 1.5, "1", None])
@@ -866,6 +937,61 @@ def test_moe_layer_count_skips_first_k_dense_layers(
 
     assert report["model"]["moe_layer_count"] == moe_layer_count
     assert report["model"]["dense_layer_count"] == 4 - moe_layer_count
+
+
+@pytest.mark.parametrize(
+    ("layer_selection", "moe_layer_count"),
+    [
+        ({"moe_layers": list(range(1, 48, 2))}, 24),
+        ({"interleave_moe_layer_step": 2}, 24),
+        ({"interleave_moe_layer_step": 1}, 48),
+    ],
+)
+def test_llama4_moe_layers_dense_width_and_shared_expert(
+    tmp_path: Path,
+    layer_selection: dict[str, object],
+    moe_layer_count: int,
+) -> None:
+    model_dir = tmp_path / "llama4"
+    _write_model(model_dir)
+    # Llama-4-Maverick text_config. transformers' Llama4TextDecoderLayer makes
+    # layer i sparse iff i is in config.moe_layers (default
+    # range(step - 1, layers, step)); dense layers use intermediate_size_mlp and
+    # every Llama4TextMoe adds one intermediate_size shared expert.
+    text_config = {
+        "model_type": "llama4_text",
+        "hidden_size": 5120, "num_hidden_layers": 48,
+        "num_attention_heads": 40, "num_key_value_heads": 8, "head_dim": 128,
+        "intermediate_size": 8192, "intermediate_size_mlp": 16384,
+        "num_local_experts": 128, "num_experts_per_tok": 1,
+        "vocab_size": 202048, "torch_dtype": "bfloat16",
+        **layer_selection,
+    }
+    config = {"model_type": "llama4", "text_config": text_config}
+    (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+    model = report["model"]
+
+    dense_layer_count = 48 - moe_layer_count
+    assert model["moe_layer_count"] == moe_layer_count
+    assert model["dense_layer_count"] == dense_layer_count
+    assert model["intermediate_size"] == 16384
+    assert model["moe_intermediate_size"] == 8192
+    assert model["shared_expert_intermediate_size"] == 8192
+    # Two FLOPs per weight of the meta-device module tree for one token:
+    # q/o 5120x5120, k/v 1024x5120, gate/up/down per dense layer, one routed
+    # and one shared expert plus the 5120x128 router per sparse layer.
+    attention = 2 * 48 * (2 * 5120 * 5120 + 2 * 5120 * 1024)
+    dense = 2 * dense_layer_count * 3 * 5120 * 16384
+    sparse = 2 * moe_layer_count * (2 * 3 * 5120 * 8192 + 5120 * 128)
+    lm_head = 2 * 5120 * 202048
+    scores = 4 * 40 * 128 * 48
+    if moe_layer_count == 24:
+        assert dense + sparse == 24_190_648_320
+    assert report["compute"]["prefill_flops"] == (
+        attention + dense + sparse + lm_head + scores
+    )
 
 
 def test_moe_layer_count_rejects_invalid_first_k_dense_replace(
