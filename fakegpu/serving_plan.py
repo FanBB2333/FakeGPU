@@ -873,7 +873,7 @@ def _serving_admission(
             profile_scope=profile_scope,
         )
         kv_cache_capacity_bytes = runtime_report["kv_cache"][
-            "allocatable_bytes"
+            "usable_bytes"
         ]
         if kv_cache_capacity_bytes is None:
             memory_limited_count = None

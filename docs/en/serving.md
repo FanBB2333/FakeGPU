@@ -62,6 +62,8 @@ python3 -m fakegpu plan-serving \
   report shows `num_gpu_blocks`, cache token capacity, whether initialization
   fits, and concurrency at `max_model_len`, separately from the logical KV
   demand of the requests.
+- Like vLLM, one block is held back as the null block. Initialization fails
+  unless one `max_model_len` request fits in the remaining blocks.
 - `--vllm-non-kv-cache-memory-bytes` replaces the modeled non-KV value with
   one from a vLLM startup profile (weights, peak activations, non-torch memory,
   and CUDA graphs).

@@ -1296,10 +1296,11 @@ def test_vllm_runtime_admission_is_limited_by_reserved_kv_pool(
         active_sequences=2,
         **common,
     )
+    # vLLM holds one block back as the null block.
     cache_bytes = max(
         phase["components"]["kv_cache"]
         for phase in two_sequences["memory_timeline"]["phases"]
-    )
+    ) + 16 * 32
 
     report = estimate_serving_plan(
         model_dir,
@@ -1335,10 +1336,11 @@ def test_vllm_runtime_supports_ordered_request_prefix_admission(
         requests[:2],
         max_batch_size=3,
     )
+    # vLLM holds one block back as the null block.
     cache_bytes = max(
         phase["components"]["kv_cache"]
         for phase in prefix["memory_timeline"]["phases"]
-    )
+    ) + 16 * 32
 
     report = estimate_serving_request_set(
         model_dir,
@@ -1358,6 +1360,82 @@ def test_vllm_runtime_supports_ordered_request_prefix_admission(
     assert report["scheduler"]["limiting_factor"] == (
         "vllm_kv_cache_capacity"
     )
+
+
+def test_vllm_runtime_holds_back_the_null_block(tmp_path: Path) -> None:
+    # vLLM v0.32.0 vllm/v1/core/block_pool.py:184-188 pops block 0 as the
+    # null block, so ten blocks hold four 31-token requests (2 blocks each).
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    block_bytes = 16 * 32
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=5,
+        max_batch_size=8,
+        prompt_tokens=16,
+        generated_tokens=16,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=10 * block_bytes,
+        vllm_non_kv_cache_memory_bytes=0,
+    )
+
+    runtime_cache = report["runtime"]["kv_cache"]
+    assert runtime_cache["num_gpu_blocks"] == 10
+    assert runtime_cache["allocatable_bytes"] == 10 * block_bytes
+    assert runtime_cache["usable_bytes"] == 9 * block_bytes
+    assert runtime_cache["logical_requested_fits"] is False
+    assert runtime_cache["headroom_bytes"] == -block_bytes
+    assert report["scheduler"]["admissible_active_sequences"] == 4
+    assert report["scheduler"]["limiting_factor"] == (
+        "vllm_kv_cache_capacity"
+    )
+
+
+@pytest.mark.parametrize(
+    ("cache_blocks", "failure"),
+    [
+        # check_memory = available - one null block must be positive.
+        (1, "no_available_kv_cache_memory"),
+        # max_model_len 33 needs cdiv(33, 16) = 3 blocks beyond the null one.
+        (2, "max_model_len_exceeds_kv_cache"),
+        (3, "max_model_len_exceeds_kv_cache"),
+        (4, None),
+    ],
+)
+def test_vllm_runtime_startup_requires_one_max_model_len_request(
+    tmp_path: Path,
+    cache_blocks: int,
+    failure: str | None,
+) -> None:
+    # vLLM v0.32.0 vllm/v1/core/kv_cache_utils.py:1003-1040 and 2617-2637
+    # raise at startup instead of serving fewer requests.
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=1,
+        prompt_tokens=16,
+        generated_tokens=17,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=cache_blocks * 16 * 32,
+        vllm_non_kv_cache_memory_bytes=0,
+    )
+
+    memory = report["runtime"]["memory"]
+    assert report["runtime"]["kv_cache"]["max_model_len_blocks"] == 3
+    assert memory["initialization_failure"] == failure
+    assert memory["initialization_fits"] is (failure is None)
+    assert report["scheduler"]["requested_fits"] is (failure is None)
+    if failure is not None:
+        assert report["scheduler"]["admissible_active_sequences"] == 0
+        assert report["scheduler"]["limiting_factor"] == (
+            "vllm_model_executor_budget"
+        )
 
 
 def test_vllm_runtime_rejects_unsupported_or_misplaced_options(
